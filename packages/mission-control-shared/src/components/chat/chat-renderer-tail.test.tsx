@@ -67,6 +67,20 @@ async function flushMacroTask(): Promise<void> {
   });
 }
 
+async function waitForRenderedContent(renderer: ReactTestRenderer, expected: string): Promise<void> {
+  let rendered = "";
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await flush();
+    await flushMacroTask();
+    const tree = renderer.toJSON();
+    rendered = `${textOf(tree)} ${JSON.stringify(tree)}`;
+    if (rendered.includes(expected)) {
+      return;
+    }
+  }
+  expect(rendered).toContain(expected);
+}
+
 function artifact(overrides: Partial<ChatGeneratedArtifactRecord> = {}): ChatGeneratedArtifactRecord {
   return {
     artifactId: "artifact-1",
@@ -272,15 +286,11 @@ describe("chat rendering tail coverage", () => {
     renderer.unmount();
     renderer = create(<GeneratedArtifactViewer artifact={artifact({ kind: "mermaid", content: "graph TD; A-->B" })} />);
     expect(textOf(renderer.toJSON())).toContain("Rendering diagram");
-    await flush();
-    await flushMacroTask();
-    expect(JSON.stringify(renderer.toJSON())).toContain("<svg><text>diagram</text></svg>");
+    await waitForRenderedContent(renderer, "<svg><text>diagram</text></svg>");
 
     mermaidMocks.render.mockRejectedValueOnce(new Error("bad diagram"));
     renderer.update(<GeneratedArtifactViewer artifact={artifact({ kind: "mermaid", content: "graph TD; bad" })} />);
-    await flush();
-    await flushMacroTask();
-    expect(textOf(renderer.toJSON())).toContain("Mermaid render failed");
+    await waitForRenderedContent(renderer, "Mermaid render failed");
     expect(textOf(renderer.toJSON())).toContain("bad diagram");
     expect(textOf(renderer.toJSON())).toContain("graph TD; bad");
   });

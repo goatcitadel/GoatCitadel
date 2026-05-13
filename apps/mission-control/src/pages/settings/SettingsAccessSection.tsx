@@ -83,6 +83,10 @@ export function SettingsAccessSection(props: SettingsAccessSectionProps) {
             onCheckedChange={onAllowLoopbackBypassChange}
           />
         </div>
+        <FieldHelp>
+          Leave loopback bypass off unless this is trusted single-machine development and every local process may reach
+          the gateway without normal auth.
+        </FieldHelp>
         {authMode !== "none" ? (
           <div className="controls-row">
             <label htmlFor="authRememberMeToggle">Remember credentials on this browser (less secure)</label>

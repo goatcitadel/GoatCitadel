@@ -6,10 +6,12 @@ import {
   isPlanningModeToggleShortcut,
   useChatComposerInteractions,
 } from "./useChatComposerInteractions";
+import type { CommandSuggestionItem } from "../chat-command-suggestions";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const uploadChatAttachmentMock = vi.hoisted(() => vi.fn());
+const handleSendMock = vi.fn(async () => undefined);
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   uploadChatAttachment: (...args: unknown[]) => uploadChatAttachmentMock(...args),
@@ -57,8 +59,16 @@ function makeFileList(files: File[]) {
   return Object.assign([...files], { item: (index: number) => files[index] ?? null }) as unknown as FileList;
 }
 
-function ComposerHarness(props: { sending?: boolean } = {}) {
-  const [draft, setDraft] = useState("Review this with $rea");
+function ComposerHarness(
+  props: {
+    commandSuggestions?: CommandSuggestionItem[];
+    initialDockOpen?: boolean;
+    initialDraft?: string;
+    lastEditableDraft?: string | null;
+    sending?: boolean;
+  } = {},
+) {
+  const [draft, setDraft] = useState(props.initialDraft ?? "Review this with $rea");
   const [commandIndex, setCommandIndex] = useState(0);
   const [pendingAttachments, setPendingAttachments] = useState<any[]>([
     { attachmentId: "keep", fileName: "keep.txt" },
@@ -66,14 +76,15 @@ function ComposerHarness(props: { sending?: boolean } = {}) {
   ]);
   const [dragActive, setIsDragActive] = useState(false);
   const [editingTurnId, setEditingTurnId] = useState<string | null>("turn-1");
-  const [dockOpen, setDockOpen] = useState(false);
+  const [dockOpen, setDockOpen] = useState(Boolean(props.initialDockOpen));
   const [archiveOpen, setArchiveWorkspaceConfirmOpen] = useState(false);
   const [sending, setSending] = useState(Boolean(props.sending));
   const [error, setError] = useState<string | null>("initial error");
 
   latest = useChatComposerInteractions({
     draft,
-    commandSuggestions: [
+    lastEditableDraft: props.lastEditableDraft ?? null,
+    commandSuggestions: props.commandSuggestions ?? [
       { key: "skill", command: "$react-expert", applyValue: "$react-expert", description: "React" },
       { key: "plan", command: "/plan", applyValue: "/plan on", description: "Plan" },
     ],
@@ -82,7 +93,7 @@ function ComposerHarness(props: { sending?: boolean } = {}) {
     selectedSession: { sessionId: "session-1", projectId: "project-1" } as any,
     messageMode: "cowork",
     ensureSession: vi.fn(async () => ({ sessionId: "session-1" }) as any),
-    handleSend: vi.fn(async () => undefined),
+    handleSend: handleSendMock,
     handleCreateSession: vi.fn(async () => undefined),
     handleArchiveWorkspaceMissionChats: vi.fn(async () => undefined),
     handleRunQuickResearch: vi.fn(async () => undefined),
@@ -119,6 +130,7 @@ describe("useChatComposerInteractions", () => {
   beforeEach(() => {
     latest = null;
     latestState = null;
+    handleSendMock.mockClear();
     uploadChatAttachmentMock.mockReset();
     uploadChatAttachmentMock.mockResolvedValue({ attachmentId: "uploaded", fileName: "notes.txt" });
   });
@@ -148,6 +160,41 @@ describe("useChatComposerInteractions", () => {
       latest?.handleComposerKeyDown(makeKeyEvent("Tab", { shiftKey: true } as any));
     });
     expect(latestState?.draft).toContain("$react-expert");
+  });
+
+  it("supports send escape and previous-draft composer shortcuts", async () => {
+    await act(async () => {
+      create(
+        React.createElement(ComposerHarness, {
+          commandSuggestions: [],
+          initialDockOpen: true,
+          initialDraft: "",
+          lastEditableDraft: "Refine the previous answer",
+        }),
+      );
+    });
+
+    const recallEvent = makeKeyEvent("ArrowUp");
+    await act(async () => {
+      latest?.handleComposerKeyDown(recallEvent);
+    });
+    expect(recallEvent.preventDefault).toHaveBeenCalled();
+    expect(latestState?.draft).toBe("Refine the previous answer");
+
+    const escapeEvent = makeKeyEvent("Escape");
+    await act(async () => {
+      latest?.handleComposerKeyDown(escapeEvent);
+    });
+    expect(escapeEvent.preventDefault).toHaveBeenCalled();
+    expect(latestState?.dockOpen).toBe(false);
+    expect(latestState?.error).toBeNull();
+
+    const sendEvent = makeKeyEvent("Enter", { ctrlKey: true } as any);
+    await act(async () => {
+      latest?.handleComposerKeyDown(sendEvent);
+    });
+    expect(sendEvent.preventDefault).toHaveBeenCalled();
+    expect(handleSendMock).toHaveBeenCalledTimes(1);
   });
 
   it("handles paste drag drop and command callbacks", async () => {

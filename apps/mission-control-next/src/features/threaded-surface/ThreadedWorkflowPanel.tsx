@@ -997,7 +997,7 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
               ["files", "Files"],
               ["selected-diff", "Selected diff"],
               ["repo-diff", "Repo diff"],
-              ["output", "Output"],
+              ["output", "Run log"],
               ["snippets", "Snippets"],
               ...(generatedArtifact ? [["artifact", "Artifact"]] : []),
             ].map(([paneId, label]) => (
@@ -1075,13 +1075,13 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
           {activePane === "output" ? (
             <div className="mc-next-workbench-pane">
               <div className="mc-next-panel-list-head">
-                <strong>Output</strong>
+                <strong>Run log</strong>
                 <span>{output?.helperRuns.length ?? 0} helper runs</span>
               </div>
               {output?.output ? (
                 <WorkbenchMonacoEditor value={output.output} language="markdown" readOnly height={240} />
               ) : (
-                <p>No stdout or helper output yet.</p>
+                <p>No run log or helper output yet.</p>
               )}
               {output?.helperRuns.length ? (
                 <ul className="mc-next-workbench-helper-list">

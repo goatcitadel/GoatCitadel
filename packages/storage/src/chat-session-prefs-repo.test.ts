@@ -114,6 +114,19 @@ describe("ChatSessionPrefsRepository", () => {
     assert.equal(reloaded?.codeAutoApply, "manual");
   });
 
+  it("lists prefs for many sessions in one lookup", () => {
+    const repo = createRepo();
+    repo.patch("sess-1", { mode: "cowork" }, "2026-03-07T00:00:00.000Z");
+    repo.patch("sess-2", { mode: "code" }, "2026-03-07T00:00:01.000Z");
+
+    const listed = repo.listBySessionIds(["sess-2", "missing", "sess-1", "sess-1"]);
+
+    assert.equal(listed.size, 2);
+    assert.equal(listed.get("sess-1")?.mode, "cowork");
+    assert.equal(listed.get("sess-2")?.mode, "code");
+    assert.equal(repo.listBySessionIds([]).size, 0);
+  });
+
   it("preserves existing prefs, clears dependent model fields, and handles legacy nullable controls", () => {
     const repo = createRepo();
     const created = repo.ensure("sess-1", "2026-03-07T00:00:00.000Z");

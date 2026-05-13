@@ -95,12 +95,12 @@ function buildCoworkPanel(onAgenticControl = vi.fn()): Extract<MissionThreadedWo
             {
               id: "pause",
               action: "pause",
-              title: "Pause run",
+              title: "Pause durable run",
               enabled: true,
               status: "available",
-              runtimeEffect: "state_only",
-              meta: "state only",
-              note: "Records a durable pause intent.",
+              runtimeEffect: "runtime_pause",
+              meta: "live durable run",
+              note: "Calls the attached durable run pause path.",
             },
             {
               id: "kill_child",
@@ -287,7 +287,7 @@ describe("ThreadedWorkflowPanel", () => {
     });
 
     const root = renderer!.root;
-    const pauseButton = root.findAllByType("button").find((button) => button.children.includes("Record pause intent"));
+    const pauseButton = root.findAllByType("button").find((button) => button.children.includes("Pause durable run"));
     const killButton = root.findAllByType("button").find((button) => button.children.includes("Record kill intent"));
 
     expect(pauseButton).toBeTruthy();
@@ -295,6 +295,7 @@ describe("ThreadedWorkflowPanel", () => {
     expect(killButton).toBeTruthy();
     expect(killButton?.props.disabled).toBe(true);
     expect(JSON.stringify(renderer!.toJSON())).toContain("State-only: records intent in GoatCitadel state");
+    expect(JSON.stringify(renderer!.toJSON())).not.toContain("Record pause intent");
 
     act(() => {
       pauseButton?.props.onClick();
@@ -688,7 +689,7 @@ describe("ThreadedWorkflowPanel", () => {
             title: "Resume run",
             enabled: true,
             status: "available",
-            runtimeEffect: "executor",
+            runtimeEffect: "runtime_pause",
             meta: "live",
             note: "Executor supports resume.",
           },

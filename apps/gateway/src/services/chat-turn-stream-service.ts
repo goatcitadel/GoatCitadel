@@ -753,7 +753,7 @@ export async function executeDelegatedPlanStep(
   }
 }
 
-function createAsyncProgressQueue<T>() {
+function createAsyncProgressQueue<T>(maxBufferedValues = 256) {
   const values: T[] = [];
   const waiters: Array<(value: T | undefined) => void> = [];
   let closed = false;
@@ -773,6 +773,9 @@ function createAsyncProgressQueue<T>() {
       if (waiter) {
         waiter(value);
         return;
+      }
+      if (values.length >= maxBufferedValues) {
+        values.shift();
       }
       values.push(value);
     },

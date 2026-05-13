@@ -680,7 +680,7 @@ describe("CodeWorkbenchPanel", () => {
     ).not.toHaveLength(0);
 
     act(() => {
-      buttonByText("Output").props.onClick();
+      buttonByText("Run log").props.onClick();
     });
     expect(
       renderer.root.findAll((node) => Array.isArray(node.children) && node.children.join("").includes("vitest failed")),
@@ -812,7 +812,7 @@ describe("CodeWorkbenchPanel", () => {
     expect(callbacks.onDiscardDraft).toHaveBeenCalled();
     expect(callbacks.onSelectFile).toHaveBeenCalledWith("src/other.ts");
 
-    for (const label of ["Selected diff", "Repo diff", "Output", "Draft snippets"]) {
+    for (const label of ["Selected diff", "Repo diff", "Run log", "Draft snippets"]) {
       act(() => {
         buttonByText(label).props.onClick();
       });

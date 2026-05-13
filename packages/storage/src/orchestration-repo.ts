@@ -70,6 +70,7 @@ export class OrchestrationRepository {
   private readonly updateRunStmt;
   private readonly updateRunIfCurrentStateStmt;
   private readonly getRunStmt;
+  private readonly listRunsStmt;
   private readonly getLatestRunByPlanStmt;
   private readonly insertCheckpointStmt;
   private readonly listCheckpointsStmt;
@@ -152,6 +153,7 @@ export class OrchestrationRepository {
     `);
 
     this.getRunStmt = db.prepare("SELECT * FROM orchestration_runs WHERE run_id = ?");
+    this.listRunsStmt = db.prepare("SELECT * FROM orchestration_runs ORDER BY started_at DESC LIMIT @limit");
     this.getLatestRunByPlanStmt = db.prepare(
       "SELECT * FROM orchestration_runs WHERE plan_id = ? ORDER BY started_at DESC LIMIT 1",
     );
@@ -301,6 +303,11 @@ export class OrchestrationRepository {
     return mapRunRow(row);
   }
 
+  public listRuns(limit = 1000): OrchestrationRun[] {
+    const safeLimit = Math.max(1, Math.min(5000, Math.floor(limit)));
+    return toOrchestrationRunRows(this.listRunsStmt.all({ limit: safeLimit })).map(mapRunRow);
+  }
+
   public createCheckpoint(input: Omit<OrchestrationCheckpoint, "checkpointId" | "createdAt">): OrchestrationCheckpoint {
     const checkpoint: OrchestrationCheckpoint = {
       checkpointId: randomUUID(),
@@ -382,6 +389,13 @@ function mapRunRow(row: OrchestrationRunRow): OrchestrationRun {
 
 function toOrchestrationRunRow(value: unknown): OrchestrationRunRow | undefined {
   return isOrchestrationRunRow(value) ? value : undefined;
+}
+
+function toOrchestrationRunRows(value: unknown): OrchestrationRunRow[] {
+  if (!Array.isArray(value) || value.some((row) => !isOrchestrationRunRow(row))) {
+    throw new TypeError("Unexpected orchestration_runs row shape");
+  }
+  return value;
 }
 
 function toOrchestrationCheckpointRows(value: unknown): OrchestrationCheckpointRow[] {

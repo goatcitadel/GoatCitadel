@@ -312,7 +312,7 @@ export function CodeWorkbenchPanel({
               ["file", "File"],
               ["selected-diff", "Selected diff"],
               ["repo-diff", "Repo diff"],
-              ["output", "Output"],
+              ["output", "Run log"],
               ["snippets", "Draft snippets"],
               ...(generatedArtifact ? [["artifact", "Artifact"]] : []),
             ].map(([paneId, label]) => (
@@ -422,7 +422,7 @@ export function CodeWorkbenchPanel({
           {activePane === "output" ? (
             <div className="chat-code-workbench-pane">
               <div className="chat-code-workbench-section-head">
-                <strong>Validation and helper output</strong>
+                <strong>Validation and helper run log</strong>
                 <span>
                   {helperRuns.length} helper run{helperRuns.length === 1 ? "" : "s"}
                 </span>
@@ -454,7 +454,7 @@ export function CodeWorkbenchPanel({
                 </ul>
               ) : !output?.output ? (
                 <div className="chat-code-workbench-empty">
-                  <p>No validation output has landed yet.</p>
+                  <p>No run log output has landed yet.</p>
                   <p>Helper runs from code-mode attach here as non-authoritative artifacts.</p>
                 </div>
               ) : null}

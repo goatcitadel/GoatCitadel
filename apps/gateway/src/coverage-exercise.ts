@@ -271,7 +271,7 @@ async function exerciseChatCommands(app: FastifyInstance, sessionId: string): Pr
         commandText: command,
       },
     );
-    assert.notEqual(viaRoute.statusCode, 500);
+    assertExpectedStatus(`parse command ${command}`, viaRoute, [200, 400, 404]);
   }
 
   const proactiveStatus = await requestJson(
@@ -279,7 +279,7 @@ async function exerciseChatCommands(app: FastifyInstance, sessionId: string): Pr
     "GET",
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/proactive/status`,
   );
-  assert.notEqual(proactiveStatus.statusCode, 500);
+  assertExpectedStatus("proactive status", proactiveStatus, [200]);
   const proactivePolicy = await requestJson(
     app,
     "PATCH",
@@ -295,7 +295,7 @@ async function exerciseChatCommands(app: FastifyInstance, sessionId: string): Pr
       },
     },
   );
-  assert.notEqual(proactivePolicy.statusCode, 500);
+  assertExpectedStatus("proactive policy", proactivePolicy, [200]);
   const proactiveTrigger = await requestJson(
     app,
     "POST",
@@ -305,20 +305,20 @@ async function exerciseChatCommands(app: FastifyInstance, sessionId: string): Pr
       reason: "coverage exercise",
     },
   );
-  assert.notEqual(proactiveTrigger.statusCode, 500);
+  assertExpectedStatus("proactive trigger", proactiveTrigger, [200, 202, 409]);
   const proactiveRuns = await requestJson(
     app,
     "GET",
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/proactive/runs?limit=25`,
   );
-  assert.notEqual(proactiveRuns.statusCode, 500);
+  assertExpectedStatus("proactive runs", proactiveRuns, [200]);
 
   const learned = await requestJson<{ items?: Array<{ itemId: string }> }>(
     app,
     "GET",
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/learned-memory?limit=25`,
   );
-  assert.notEqual(learned.statusCode, 500);
+  assertExpectedStatus("learned memory list", learned, [200]);
   if (Array.isArray(learned.body.items) && learned.body.items.length > 0) {
     const itemId = learned.body.items[0]?.itemId;
     if (itemId) {
@@ -330,7 +330,7 @@ async function exerciseChatCommands(app: FastifyInstance, sessionId: string): Pr
           confidence: 0.75,
         },
       );
-      assert.notEqual(patch.statusCode, 500);
+      assertExpectedStatus("learned memory patch", patch, [200]);
     }
   }
   const rebuild = await requestJson(
@@ -339,7 +339,7 @@ async function exerciseChatCommands(app: FastifyInstance, sessionId: string): Pr
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/learned-memory/rebuild`,
     {},
   );
-  assert.notEqual(rebuild.statusCode, 500);
+  assertExpectedStatus("learned memory rebuild", rebuild, [200, 202]);
 }
 
 async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<ExerciseSeed> {
@@ -437,7 +437,8 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
     name: `Coverage Workspace ${Date.now()}`,
     slug: `coverage-${Math.floor(Math.random() * 100000)}`,
   });
-  assert.notEqual(workspace.statusCode, 500);
+  assertExpectedStatus("workspace create", workspace, [201]);
+  assert.equal(typeof workspace.body.workspaceId, "string");
   const workspaceId = workspace.body.workspaceId ?? "default";
   await requestNotServerError(app, "GET", "/api/v1/workspaces?limit=25");
   await requestNotServerError(app, "GET", `/api/v1/workspaces/${encodeURIComponent(workspaceId)}`);
@@ -460,7 +461,8 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
     description: "exercise task routes",
     priority: "normal",
   });
-  assert.notEqual(task.statusCode, 500);
+  assertExpectedStatus("task create", task, [201]);
+  assert.equal(typeof task.body.taskId, "string");
   const taskId = task.body.taskId;
   await requestNotServerError(app, "GET", "/api/v1/tasks?limit=50");
   if (taskId) {
@@ -483,17 +485,20 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
       "POST",
       `/api/v1/tasks/${encodeURIComponent(taskId)}/subagents`,
       {
-        title: "coverage subagent",
-        roleHint: "architect",
-        mode: "assist",
+        agentSessionId: `coverage-agent-${Date.now()}`,
+        agentName: "coverage architect",
+        metadata: {
+          profileId: "architect",
+          contextMode: "fork",
+        },
       },
     );
-    assert.notEqual(subagent.statusCode, 500);
+    assertExpectedStatus("task subagent create", subagent, [201]);
     await requestNotServerError(app, "GET", `/api/v1/tasks/${encodeURIComponent(taskId)}/subagents`);
     const agentSessionId = subagent.body.agentSessionId;
     if (agentSessionId) {
       await requestNotServerError(app, "PATCH", `/api/v1/subagents/${encodeURIComponent(agentSessionId)}`, {
-        status: "running",
+        status: "active",
       });
     }
     await requestNotServerError(app, "DELETE", `/api/v1/tasks/${encodeURIComponent(taskId)}`, {});
@@ -506,7 +511,10 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
     "GET",
     "/api/v1/memory/items?limit=50",
   );
-  assert.notEqual(memoryItems.statusCode, 500);
+  assertExpectedStatus("memory items list", memoryItems, [200, 409]);
+  if (memoryItems.statusCode === 409) {
+    assert.equal((memoryItems.body as { code?: unknown }).code, "STATE_CONFLICT");
+  }
   if (Array.isArray(memoryItems.body.items) && memoryItems.body.items.length > 0) {
     const itemId = memoryItems.body.items[0]!.itemId;
     await requestNotServerError(app, "PATCH", `/api/v1/memory/items/${encodeURIComponent(itemId)}`, {
@@ -521,10 +529,10 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
   await requestNotServerError(app, "GET", "/api/v1/durable/runs?limit=25");
   await requestNotServerError(app, "GET", "/api/v1/durable/dead-letters?limit=25");
   const durable = await requestJson<{ runId?: string }>(app, "POST", "/api/v1/durable/runs", {
-    workflowType: "coverage",
+    workflowKey: "coverage",
     payload: { note: "coverage run" },
   });
-  assert.notEqual(durable.statusCode, 500);
+  assertExpectedStatus("durable run create", durable, [200, 201, 202]);
   const durableRunId = durable.body.runId;
   if (durableRunId) {
     await requestNotServerError(app, "GET", `/api/v1/durable/runs/${encodeURIComponent(durableRunId)}`);
@@ -539,7 +547,7 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
       reason: "coverage",
     });
     await requestNotServerError(app, "POST", `/api/v1/durable/runs/${encodeURIComponent(durableRunId)}/events/wake`, {
-      eventType: "coverage",
+      eventKey: "coverage",
       payload: {},
     });
     await requestNotServerError(app, "POST", `/api/v1/durable/runs/${encodeURIComponent(durableRunId)}/cancel`, {});
@@ -574,12 +582,13 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
   await requestNotServerError(app, "GET", "/api/v1/mcp/templates/discovery");
   const mcpServer = await requestJson<{ serverId?: string }>(app, "POST", "/api/v1/mcp/servers", {
     label: "Coverage MCP",
-    transport: "http",
-    url: "https://example.com/mcp",
+    transport: "stdio",
+    command: "node",
+    args: ["--version"],
     enabled: true,
     authType: "none",
   });
-  assert.notEqual(mcpServer.statusCode, 500);
+  assertExpectedStatus("mcp server create", mcpServer, [201]);
   const serverId = mcpServer.body.serverId;
   await requestNotServerError(app, "GET", "/api/v1/mcp/servers");
   if (serverId) {
@@ -626,7 +635,7 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
     mode: "push_to_talk",
     sessionId: chat.sessionId,
   });
-  assert.notEqual(talk.statusCode, 500);
+  assertExpectedStatus("voice talk session create", talk, [201]);
   const talkSessionId = talk.body.talkSessionId;
   if (talkSessionId) {
     await requestNotServerError(
@@ -653,7 +662,8 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
       "Acknowledge unknowns clearly.",
     ].join("\n"),
   });
-  assert.notEqual(promptPackImport.statusCode, 500);
+  assertExpectedStatus("prompt pack import", promptPackImport, [200]);
+  assert.equal(typeof promptPackImport.body.pack?.packId, "string");
   const promptPackId = promptPackImport.body.pack?.packId;
   const promptTestId = promptPackImport.body.tests?.[0]?.testId;
   let promptRunId: string | undefined;
@@ -736,7 +746,7 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
     relativePath: `coverage-${Date.now()}.txt`,
     content: "coverage file content",
   });
-  assert.notEqual(upload.statusCode, 500);
+  assertExpectedStatus("file upload", upload, [201]);
   const uploadedPath = upload.body.relativePath;
   if (uploadedPath) {
     await requestNotServerError(app, "GET", `/api/v1/files/download?relativePath=${encodeURIComponent(uploadedPath)}`);
@@ -1233,6 +1243,13 @@ async function requestNotServerError(
     console.warn(`[coverage-exercise] ${method} ${url} returned ${result.statusCode}`);
   }
   return result;
+}
+
+function assertExpectedStatus(label: string, result: RequestResult, expectedStatuses: number[]): void {
+  assert.ok(
+    expectedStatuses.includes(result.statusCode),
+    `${label} returned ${result.statusCode}; expected ${expectedStatuses.join(", ")}. Body: ${JSON.stringify(result.body)}`,
+  );
 }
 
 async function requestJson<T = unknown>(

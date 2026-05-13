@@ -521,24 +521,29 @@ export class ToolPolicyEngine {
     if (policy.approvalMode === "approve_risky" && riskLevel !== "safe") {
       requiresApproval = true;
     }
-    if (policy.approvalMode === "bypass") {
+    if (policy.approvalMode === "bypass" && riskLevel !== "nuclear") {
       requiresApproval = false;
     }
 
     const reasonCodes = ["allowed"];
     if (policy.approvalMode === "bypass") {
       reasonCodes.push("approval_bypass_mode");
+      if (riskLevel === "nuclear") {
+        reasonCodes.push("nuclear_risk_requires_approval");
+      }
     } else if (policy.approvalMode === "approve_all") {
       reasonCodes.push("approval_mode_all");
     } else if (riskLevel !== "safe") {
       reasonCodes.push("approval_mode_risky");
     }
-    let policyReason =
-      policy.approvalMode === "bypass"
-        ? "allowed by bypass approval mode"
-        : requiresApproval
-          ? "approval required by approval mode"
-          : "allowed";
+    let policyReason = "allowed";
+    if (policy.approvalMode === "bypass" && riskLevel === "nuclear") {
+      policyReason = "nuclear-risk tools require approval even when normal approvals are bypassed";
+    } else if (policy.approvalMode === "bypass") {
+      policyReason = "allowed by bypass approval mode";
+    } else if (requiresApproval) {
+      policyReason = "approval required by approval mode";
+    }
     if (shellRisk?.risky) {
       reasonCodes.push("shell_risky_requires_approval");
       policyReason = `risky shell command matched policy pattern "${shellRisk.matchedPattern}"`;

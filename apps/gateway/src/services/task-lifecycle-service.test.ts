@@ -193,6 +193,42 @@ describe("TaskLifecycleService agentic runtime", () => {
     expect(replay).toMatchObject({ status: "rejected", idempotentReplay: true });
   });
 
+  it("applies pause through the attached durable run when one is available", () => {
+    const pauseDurableRun = vi.fn(() => ({ status: "paused" }));
+    const { service, storage } = createService({ pauseDurableRun });
+    const task = service.createTask({
+      workspaceId: "default",
+      title: "Durable Cowork run",
+      description: "A run with an attached durable executor.",
+      status: "in_progress",
+      priority: "normal",
+      agenticContext: {
+        runId: "agentic-run-1",
+        durableRunId: "durable-run-1",
+        surface: "cowork",
+        status: "running",
+      },
+    });
+
+    const tree = service.getAgenticRunTree("agentic-run-1");
+    expect(tree.controls.find((control) => control.action === "pause")).toMatchObject({
+      label: "Pause durable run",
+      runtimeEffect: "runtime_pause",
+    });
+
+    const result = service.invokeAgenticControl("agentic-run-1", {
+      action: "pause",
+      actorId: "operator",
+    });
+    expect(pauseDurableRun).toHaveBeenCalledWith("durable-run-1", "operator");
+    expect(result).toMatchObject({
+      taskId: task.taskId,
+      status: "applied",
+      runtimeEffect: "runtime_pause",
+    });
+    expect(storage.tasks.get(task.taskId).agenticContext?.status).toBe("paused");
+  });
+
   it("bridges explicit diagnostics to the improvement ledger without blocking task truth", () => {
     const bridge = vi.fn();
     const { service } = createService({ recordAgenticDiagnosticSignal: bridge });

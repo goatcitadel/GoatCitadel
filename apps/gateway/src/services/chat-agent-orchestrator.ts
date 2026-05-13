@@ -143,6 +143,7 @@ import {
   promptLabConcreteReadSetMatchesPath,
   selectPromptLabConcreteReadPathsFromSearchResult,
 } from "./chat-agent-prompt-lab-evidence.js";
+import { PROMPT_LAB_LOCAL_SEARCH_QUERIES, PROMPT_LAB_SUGGESTED_FILE_PATHS } from "./chat-agent-prompt-lab-routing.js";
 import {
   buildFetchedContentBudgetFallback,
   buildRecoveredEvidenceAnswer,
@@ -12766,13 +12767,7 @@ function inferPromptLabSuggestedFilePaths(userTask: string | undefined): string[
     ) ||
       /\brelated ui or copy\b/.test(normalizedTask))
   ) {
-    add("apps/gateway/src/routes/memory.ts");
-    add("apps/gateway/src/services/memory-route-service.ts");
-    add("apps/gateway/src/services/memory-context-service.ts");
-    add("apps/gateway/src/services/memory-lifecycle-service.ts");
-    add("packages/storage/src/memory-context-repo.ts");
-    add("apps/mission-control/src/pages/MemoryPage.tsx");
-    add("apps/mission-control/src/pages/memory/MemoryMaintenancePanel.tsx");
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.memoryLifecycleOperatorUi) add(filePath);
   }
 
   if (
@@ -12782,107 +12777,57 @@ function inferPromptLabSuggestedFilePaths(userTask: string | undefined): string[
       /\bruntime guidance\b/.test(normalizedTask) ||
       /\bagents\.md\b/.test(normalizedTask))
   ) {
-    add("apps/gateway/src/services/guidance-doc-files.ts");
-    add("apps/gateway/src/services/guidance-document-helpers.ts");
-    add("apps/gateway/src/services/gateway-service.ts");
-    add("apps/gateway/src/services/chat-turn-prep-service.ts");
-    add("AGENTS.md");
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.guidanceRuntime) add(filePath);
   }
 
   if (looksLikePromptLabApprovalWakeOrderingMinimalTestPrompt(userTask)) {
-    add("apps/gateway/src/services/approval-resolution-effects-service.test.ts");
-    add("apps/gateway/src/services/approval-resolution-effects-service.ts");
-    add("packages/storage/src/approval-effect-repo.ts");
-    add("packages/storage/src/approval-wait-run-repo.ts");
-    add("apps/gateway/src/services/durable-run-service.ts");
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.approvalWakeOrdering) add(filePath);
   }
 
   if (looksLikePromptLabRuntimeLifecycleProvenanceMapPrompt(userTask)) {
-    add("apps/gateway/src/services/runtime-lifecycle-read-service.ts");
-    add("apps/gateway/src/services/approval-lifecycle-service.ts");
-    add("apps/gateway/src/routes/approvals.ts");
-    add("packages/storage/src/approval-wait-run-repo.ts");
-    add("packages/storage/src/chat-session-repo.ts");
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.runtimeLifecycleProvenance) add(filePath);
   }
 
   if (looksLikePromptLabStrictPausedWaitingWakeEvidencePrompt(userTask)) {
-    add("apps/gateway/src/services/durable-run-service.ts");
-    add("apps/gateway/src/services/approval-resolution-effects-service.ts");
-    add("apps/gateway/src/routes/durable.ts");
-    add("apps/gateway/src/services/runtime-lifecycle-read-service.ts");
-    add("packages/contracts/src/durable.ts");
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.strictPausedWaitingWakeEvidence) add(filePath);
   }
 
   if (looksLikePromptLabCronReportCoworkPrompt(userTask)) {
-    add("apps/gateway/src/services/gateway/cron-automation-service.ts");
-    add("apps/gateway/src/services/gateway/update-review.ts");
-    add("apps/gateway/src/routes/prompt-packs.ts");
-    add("packages/storage/src/cron-job-repo.ts");
-    add("packages/mission-control-shared/src/api/prompt-packs.ts");
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.cronReportCowork) add(filePath);
   }
 
   if (looksLikePromptLabTwoWorkerHarnessCoveragePatchPlanPrompt(userTask)) {
-    add("packages/storage/src/durable-run-repo.test.ts");
-    add("packages/storage/src/durable-run-repo.ts");
-    add("apps/gateway/src/services/durable-run-service.ts");
-    add("apps/gateway/src/services/durable-run-service.test.ts");
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.durableWorkerHarnessCoverage) add(filePath);
   }
 
   if (looksLikePromptLabTypedWakeOutcomeEvidencePrompt(userTask)) {
-    add("packages/contracts/src/durable.ts");
-    add("apps/gateway/src/services/durable-run-service.ts");
-    add("apps/gateway/src/services/approval-resolution-effects-service.ts");
-    add("apps/gateway/src/services/durable-run-service.test.ts");
-    add("apps/gateway/src/services/approval-resolution-effects-service.test.ts");
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.typedWakeOutcomeEvidence) add(filePath);
   }
 
   if (looksLikePromptLabEventEnvelopeAuthorityPrompt(userTask)) {
-    add("apps/gateway/src/services/gateway-service.ts");
-    add("apps/gateway/src/services/realtime-event-service.ts");
-    add("apps/gateway/src/services/realtime-events-route-service.ts");
-    add("apps/gateway/src/routes/events.ts");
-    add("packages/storage/src/realtime-event-repo.ts");
-    add("packages/storage/src/realtime-event-repo.test.ts");
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.realtimeEventEnvelope) add(filePath);
   }
 
   if (looksLikePromptLabDurableWakeOutcomePatchPlanPrompt(userTask)) {
-    add("packages/contracts/src/durable.ts");
-    add("apps/gateway/src/services/durable-run-service.ts");
-    add("apps/gateway/src/services/approval-resolution-effects-service.ts");
-    add("apps/gateway/src/routes/durable.ts");
-    add("packages/mission-control-shared/src/api/durable.ts");
-    add("apps/mission-control/src/api/durable.ts");
-    add("apps/gateway/src/services/approval-resolution-effects-service.test.ts");
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.durableWakeOutcomePatchPlan) add(filePath);
   }
 
   if (looksLikePromptLabPromptPackParserRegressionPrompt(userTask)) {
-    add("goatcitadel_prompt_pack_v2.md");
-    add("goatcitadel_prompt_pack.md");
-    add("apps/gateway/src/services/prompt-pack-service.ts");
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.promptPackParserRegression) add(filePath);
   }
 
   if (
     /\bprompt[- ]pack\b/.test(normalizedTask) &&
     /\bsource label|source-label|source_label|source labeling|export rendering\b/.test(normalizedTask)
   ) {
-    add("apps/gateway/src/services/prompt-pack-service.ts");
-    add("apps/gateway/src/services/prompt-pack-service.parser-report.test.ts");
-    add("packages/storage/src/prompt-pack-repo.ts");
-    add("apps/gateway/src/routes/prompt-packs.ts");
-    add("packages/mission-control-shared/src/api/prompt-packs.ts");
-    add("packages/contracts/src/prompt-pack.ts");
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.promptPackSourceLabel) add(filePath);
   }
 
   if (
     looksLikePromptLabPromptPackProductSurfaceTask(userTask) &&
     /\b(?:test|run) records?\b|\bstored\b|\bstorage\b/.test(normalizedTask)
   ) {
-    add("packages/storage/src/prompt-pack-repo.ts");
-    add("packages/storage/src/prompt-pack-run-repo.ts");
-    add("packages/storage/src/prompt-pack-score-repo.ts");
-    add("packages/storage/src/prompt-pack-repo.test.ts");
-    add("packages/storage/src/prompt-pack-run-repo.test.ts");
-    add("apps/gateway/src/services/prompt-pack-service.ts");
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.promptPackStorageProductSurface) add(filePath);
   }
 
   if (
@@ -12891,20 +12836,14 @@ function inferPromptLabSuggestedFilePaths(userTask: string | undefined): string[
       normalizedTask,
     )
   ) {
-    add("apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx");
-    add("apps/mission-control-next/src/features/prompt-packs/prompt-packs-workbench.css");
-    add("packages/mission-control-shared/src/api/prompt-packs.ts");
-    add("packages/contracts/src/prompt-pack.ts");
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.promptPackMissionControlProductSurface) add(filePath);
   }
 
   if (
     looksLikePromptLabPromptPackProductSurfaceTask(userTask) &&
     /\b(?:reports?|exports?|rendered|rendering|markdown report|exported results?)\b/.test(normalizedTask)
   ) {
-    add("apps/gateway/src/services/prompt-pack-service.ts");
-    add("apps/gateway/src/routes/prompt-packs.ts");
-    add("packages/mission-control-shared/src/api/prompt-packs.ts");
-    add("packages/contracts/src/prompt-pack.ts");
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.promptPackExportProductSurface) add(filePath);
   }
 
   if (
@@ -12913,10 +12852,7 @@ function inferPromptLabSuggestedFilePaths(userTask: string | undefined): string[
       normalizedTask,
     )
   ) {
-    add("packages/mission-control-shared/src/api/prompt-packs.ts");
-    add("apps/gateway/src/routes/prompt-packs.ts");
-    add("apps/gateway/src/services/prompt-pack-service.ts");
-    add("packages/contracts/src/prompt-pack.ts");
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.promptPackApiProductSurface) add(filePath);
   }
 
   if (looksLikePromptLabJudgeDefaultsMinimalTestPrompt(userTask)) {
@@ -12933,10 +12869,7 @@ function inferPromptLabSuggestedFilePaths(userTask: string | undefined): string[
       /\bgate runs?\b|\bgate selection\b|\brun-prompt-pack-gates\b|\bfocused[- ]pack\b/.test(normalizedTask) &&
       /\bexpanded\b|\bovernight\b|\bv2\b/.test(normalizedTask))
   ) {
-    add("scripts/run-prompt-pack-gates.ts");
-    add("apps/gateway/src/services/prompt-pack-service.ts");
-    add("apps/gateway/src/routes/prompt-packs.ts");
-    add("packages/mission-control-shared/src/api/prompt-packs.ts");
+    for (const filePath of PROMPT_LAB_SUGGESTED_FILE_PATHS.promptPackGateSelection) add(filePath);
   }
 
   return [...paths];
@@ -13118,22 +13051,13 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
   };
 
   if (looksLikePromptLabPromptPackOperatorSurfacePrompt(taskContent)) {
-    addQuery("prompt-pack-service.ts");
-    addQuery("prompt-packs.ts");
-    addQuery("chat.prompt-pack-benchmark.test.ts");
+    for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.promptPackOperatorSurface) addQuery(query);
   }
   if (looksLikePromptLabApprovalWakeFlowPrompt(taskContent)) {
-    addQuery("approval-resolution-effects-service.ts");
-    addQuery("approval-lifecycle-service.ts");
-    addQuery("approval-wait-run-repo.ts");
-    addQuery("approval-effect-repo.ts");
+    for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.approvalWakeFlow) addQuery(query);
   }
   if (looksLikeWorkspaceRoutesGuidanceCoworkPrompt(taskContent)) {
-    addQuery("workspaces.ts");
-    addQuery("workspaces.test.ts");
-    addQuery("workspace-repo.ts");
-    addQuery("workspace-repo.test.ts");
-    addQuery("guidance");
+    for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.workspaceRoutesGuidance) addQuery(query);
   }
   if (
     /\bglobal docs\b/.test(normalized) &&
@@ -13141,100 +13065,40 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
     /\brepo guidance\b/.test(normalized) &&
     /\bruntime\b/.test(normalized)
   ) {
-    addQuery("guidance-document-helpers.ts");
-    addQuery("guidance-doc-files.ts");
-    addQuery("gateway-service.ts");
-    addQuery("resolveRuntimeGuidance");
-    addQuery("listWorkspaceGuidance");
-    addQuery("AGENTS.md");
+    for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.guidanceRuntime) addQuery(query);
   }
   if (looksLikePromptLabMemoryLifecycleCoworkPrompt(taskContent)) {
-    addQuery("memory.ts");
-    addQuery("memory-context-repo.ts");
-    addQuery("MemoryPage.tsx");
-    addQuery("MemoryMaintenancePanel.tsx");
-    addQuery("memory");
+    for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.memoryLifecycle) addQuery(query);
   }
   if (looksLikePromptLabCronReportCoworkPrompt(taskContent)) {
-    addQuery("cron-job-repo.ts");
-    addQuery("cron-automation-service.ts");
-    addQuery("update-review.ts");
-    addQuery("prompt-packs.ts");
-    addQuery("api/prompt-packs.ts");
-    addQuery("costs.ts");
-    addQuery("costs/summary");
-    addQuery("update-review-daily");
+    for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.cronReport) addQuery(query);
   }
   if (looksLikePromptLabRank1HardeningCoworkPrompt(taskContent)) {
-    addQuery("durable-run-service.ts");
-    addQuery("approval-resolution-effects-service.ts");
-    addQuery("runtime-lifecycle-read-service.ts");
-    addQuery("durable.ts");
-    addQuery("wake");
+    for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.rank1Hardening) addQuery(query);
   }
   if (looksLikePromptLabLifecycleCanonicalLinkagePrompt(taskContent)) {
-    addQuery("runtime-lifecycle-read-service.test.ts");
-    addQuery("runtime-lifecycle-read-service.ts");
-    addQuery("approval_linkage");
-    addQuery("fallback_payload");
-    addQuery("fallback_preview");
+    for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.lifecycleCanonicalLinkage) addQuery(query);
   }
   if (looksLikePromptLabRuntimeLifecycleProvenanceMapPrompt(taskContent)) {
-    addQuery("runtime-lifecycle-read-service.ts");
-    addQuery("approval-lifecycle-service.ts");
-    addQuery("approvals.ts");
-    addQuery("approval_linkage");
-    addQuery("fallback_payload");
-    addQuery("fallback_preview");
-    addQuery("sessionIdSource");
+    for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.runtimeLifecycleProvenance) addQuery(query);
   }
   if (looksLikePromptLabStrictPausedWaitingWakeEvidencePrompt(taskContent)) {
-    addQuery("durable-run-service.ts");
-    addQuery("approval-resolution-effects-service.ts");
-    addQuery("routes/durable.ts");
-    addQuery("runtime-lifecycle-read-service.ts");
-    addQuery("DurableWakeResult");
-    addQuery("wakeDurableRun paused waiting");
+    for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.strictPausedWaitingWakeEvidence) addQuery(query);
   }
   if (looksLikePromptLabRealtimeEventMetadataPropagationPrompt(taskContent)) {
-    addQuery("events.test.ts");
-    addQuery("events.ts");
-    addQuery("gateway-service.ts");
-    addQuery("realtime-event-repo.test.ts");
-    addQuery("realtime-event-repo.ts");
-    addQuery("tool-invocation-coordinator-service.test.ts");
+    for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.realtimeEventMetadata) addQuery(query);
   }
   if (
     looksLikePromptLabEventEnvelopeAuthorityPrompt(taskContent) ||
     looksLikePromptLabEventLinkPropagationCoworkPrompt(taskContent)
   ) {
-    addQuery("eventClass");
-    addQuery("eventAuthority");
-    addQuery("links");
-    addQuery("gateway-service.ts");
-    addQuery("realtime-event-service.ts");
-    addQuery("realtime-events-route-service.ts");
-    addQuery("events.ts");
-    addQuery("realtime-event-repo.ts");
+    for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.realtimeEventEnvelope) addQuery(query);
   }
   if (looksLikePromptLabDurableRunMinimalTestPrompt(taskContent)) {
-    addQuery("durable-run-service.test.ts");
-    addQuery("durable-run-service.ts");
-    addQuery("durable-run-repo.test.ts");
-    addQuery("durable-run-repo.ts");
-    addQuery("approval-resolution-effects-service.test.ts");
-    addQuery("approval-resolution-effects-service.ts");
-    addQuery("approval-effect-repo.ts");
-    addQuery("approval-wait-run-repo.ts");
+    for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.durableRunMinimal) addQuery(query);
   }
   if (looksLikePromptLabPromptPackGateSelectionTestPrompt(taskContent)) {
-    addQuery("run-prompt-pack-gates.ts");
-    addQuery("selectPromptPackTargets");
-    addQuery("resolvePromptPack");
-    addQuery("selectPromptPackGateTargetCodes");
-    addQuery("prompt-pack-service.ts");
-    addQuery("expansion-pack");
-    addQuery("baseline");
+    for (const query of PROMPT_LAB_LOCAL_SEARCH_QUERIES.promptPackGateSelection) addQuery(query);
   }
   if (looksLikePromptLabWrappedDependentsParserTestPrompt(taskContent)) {
     addQuery("update-review.test.ts");

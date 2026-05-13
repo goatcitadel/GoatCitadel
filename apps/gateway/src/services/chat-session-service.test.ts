@@ -158,4 +158,42 @@ describe("chat session service", () => {
       cleanup();
     }
   });
+
+  it("uses caller limits and batch prefs lookup for unfiltered session lists", () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      for (let index = 0; index < 5; index += 1) {
+        const sessionId = `session-${index}`;
+        storage.sessions.upsert({
+          sessionId,
+          sessionKey: `mission:operator:${index}`,
+          kind: "dm",
+          channel: "mission",
+          account: "operator",
+          displayName: `Session ${index}`,
+          timestamp: `2026-05-03T16:0${index}:00.000Z`,
+        });
+        storage.chatSessionMeta.ensure(sessionId, NOW, "default");
+        storage.chatSessionPrefs.ensure(sessionId, NOW);
+      }
+      const listSpy = vi.spyOn(storage.sessions, "list");
+      const getPrefsSpy = vi.spyOn(storage.chatSessionPrefs, "get");
+      const listPrefsSpy = vi.spyOn(storage.chatSessionPrefs, "listBySessionIds");
+
+      const records = listChatSessions(createDeps(storage), {
+        scope: "all",
+        view: "all",
+        includeHidden: true,
+        workspaceId: "default",
+        limit: 2,
+      });
+
+      expect(records).toHaveLength(2);
+      expect(listSpy).toHaveBeenCalledWith(2, undefined);
+      expect(listPrefsSpy).toHaveBeenCalledTimes(1);
+      expect(getPrefsSpy).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+    }
+  });
 });

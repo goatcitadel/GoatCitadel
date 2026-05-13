@@ -1,6 +1,7 @@
 import type { DevDiagnosticsEvent } from "@goatcitadel/contracts";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { writeSseChunk, writeSsePayload } from "./sse-writer.js";
 
 const listQuerySchema = z.object({
   level: z.enum(["debug", "info", "warn", "error"]).optional(),
@@ -78,6 +79,7 @@ export const devDiagnosticsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const raw = reply.raw;
+    const controller = new AbortController();
     raw.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
@@ -85,10 +87,10 @@ export const devDiagnosticsRoutes: FastifyPluginAsync = async (fastify) => {
       "X-Accel-Buffering": "no",
     });
     raw.flushHeaders?.();
-    raw.write(": connected\n\n");
+    await writeSseChunk(raw, ": connected\n\n", controller.signal);
 
     const send = (payload: unknown) => {
-      raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+      return writeSsePayload(raw, payload, { signal: controller.signal });
     };
 
     const replay = fastify.services.devDiagnostics
@@ -105,34 +107,18 @@ export const devDiagnosticsRoutes: FastifyPluginAsync = async (fastify) => {
       })
       .items.reverse();
     for (const item of replay) {
-      send(item);
+      await send(item);
     }
 
-    const unsubscribe = fastify.services.devDiagnostics.subscribeDevDiagnostics((event: DevDiagnosticsEvent) => {
-      if (!matchesDevDiagnosticsRouteFilter(event, parsed.data)) {
-        return;
-      }
-      try {
-        send(event);
-      } catch {
-        cleanup();
-      }
-    });
-
-    const keepAlive = setInterval(() => {
-      try {
-        raw.write(": keep-alive\n\n");
-      } catch {
-        cleanup();
-      }
-    }, 25000);
-
     let closed = false;
-    const cleanup = () => {
+    let writeChain = Promise.resolve();
+    let unsubscribe = () => undefined;
+    function cleanup() {
       if (closed) {
         return;
       }
       closed = true;
+      controller.abort(new Error("dev_diagnostics_sse_closed"));
       clearInterval(keepAlive);
       unsubscribe();
       try {
@@ -140,7 +126,25 @@ export const devDiagnosticsRoutes: FastifyPluginAsync = async (fastify) => {
       } catch {
         // ignore
       }
-    };
+    }
+
+    const keepAlive = setInterval(() => {
+      void writeSseChunk(raw, ": keep-alive\n\n", controller.signal).catch(() => cleanup());
+    }, 25000);
+
+    unsubscribe = fastify.services.devDiagnostics.subscribeDevDiagnostics((event: DevDiagnosticsEvent) => {
+      if (!matchesDevDiagnosticsRouteFilter(event, parsed.data)) {
+        return;
+      }
+      writeChain = writeChain
+        .then(async () => {
+          const wrote = await send(event);
+          if (!wrote) {
+            cleanup();
+          }
+        })
+        .catch(() => cleanup());
+    });
 
     raw.on("close", cleanup);
     request.raw.on("aborted", cleanup);

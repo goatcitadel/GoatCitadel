@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { isGoatError } from "@goatcitadel/contracts";
 import { z } from "zod";
 import { sessionParamsSchema, getPublicChatSseErrorMessage } from "./chat.shared.js";
+import { writeSseChunk, writeSsePayload } from "./sse-writer.js";
 
 const delegateStepSchema = z.object({
   stepId: z.string().min(1).optional(),
@@ -105,15 +106,15 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
       ...(typeof corsVary === "string" ? { Vary: corsVary } : {}),
     });
     raw.flushHeaders?.();
-    raw.write(": connected\n\n");
+    await writeSseChunk(raw, ": connected\n\n", controller.signal);
     raw.on("close", cleanup);
     request.raw.on("aborted", cleanup);
 
-    const send = (payload: unknown) => {
+    const send = async (payload: unknown): Promise<boolean> => {
       if (closed || raw.destroyed || raw.writableEnded || controller.signal.aborted) {
-        return;
+        return false;
       }
-      raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+      return writeSsePayload(raw, payload, { signal: controller.signal });
     };
 
     try {
@@ -124,13 +125,16 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
         if (controller.signal.aborted) {
           break;
         }
-        send(chunk);
+        const wrote = await send(chunk);
+        if (!wrote) {
+          break;
+        }
       }
       finished = !controller.signal.aborted;
     } catch (error) {
       if (!controller.signal.aborted) {
         reply.log.error({ err: error, sessionId: params.data.sessionId }, "chat delegation SSE stream failed");
-        send({ type: "error", error: getPublicChatSseErrorMessage(error) });
+        await send({ type: "error", error: getPublicChatSseErrorMessage(error) });
       }
     } finally {
       if (!finished) {

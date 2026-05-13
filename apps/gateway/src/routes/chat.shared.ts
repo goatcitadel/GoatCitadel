@@ -3,6 +3,7 @@ import type { FastifyReply } from "fastify";
 import { z } from "zod";
 import { isGoatError } from "@goatcitadel/contracts";
 import { sendRouteError } from "./_error-handler.js";
+import { writeSseChunk, writeSsePayload } from "./sse-writer.js";
 
 export const sessionParamsSchema = z.object({
   sessionId: z.string().min(1),
@@ -82,13 +83,13 @@ export async function streamSseReply(
     ...(typeof corsVary === "string" ? { Vary: corsVary } : {}),
   });
   raw.flushHeaders?.();
-  raw.write(": connected\n\n");
+  await writeSseChunk(raw, ": connected\n\n", controller.signal);
   raw.on("close", cleanup);
   request.raw.on("aborted", cleanup);
 
-  const send = (payload: unknown) => {
+  const send = async (payload: unknown): Promise<boolean> => {
     if (closed || raw.destroyed || raw.writableEnded || controller.signal.aborted) {
-      return;
+      return false;
     }
     const eventId =
       typeof payload === "object" &&
@@ -97,10 +98,7 @@ export async function streamSseReply(
       typeof (payload as { eventId?: unknown }).eventId === "string"
         ? (payload as { eventId: string }).eventId
         : undefined;
-    if (eventId) {
-      raw.write(`id: ${eventId}\n`);
-    }
-    raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+    return writeSsePayload(raw, payload, { eventId, signal: controller.signal });
   };
 
   try {
@@ -108,13 +106,16 @@ export async function streamSseReply(
       if (controller.signal.aborted) {
         break;
       }
-      send(chunk);
+      const wrote = await send(chunk);
+      if (!wrote) {
+        break;
+      }
     }
     finished = !controller.signal.aborted;
   } catch (error) {
     if (!controller.signal.aborted) {
       reply.log.error({ err: error, sessionId }, "chat SSE stream failed");
-      send({
+      await send({
         type: "error",
         sessionId,
         eventId: randomUUID(),

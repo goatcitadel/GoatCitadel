@@ -23,6 +23,7 @@ export function applyComposerSuggestion(currentDraft: string, suggestion: string
 
 export function useChatComposerInteractions(input: {
   draft: string;
+  lastEditableDraft?: string | null;
   commandSuggestions: CommandSuggestionItem[];
   commandIndex: number;
   sending: boolean;
@@ -51,6 +52,8 @@ export function useChatComposerInteractions(input: {
   const {
     commandSuggestions,
     commandIndex,
+    draft,
+    lastEditableDraft,
     sending,
     selectedSession,
     messageMode,
@@ -110,6 +113,13 @@ export function useChatComposerInteractions(input: {
         handleTogglePlanningMode();
         return;
       }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setCommandIndex(0);
+        setError(null);
+        setDockOpen(false);
+        return;
+      }
       if (commandSuggestions.length > 0) {
         if (event.key === "ArrowDown") {
           event.preventDefault();
@@ -128,12 +138,28 @@ export function useChatComposerInteractions(input: {
           return;
         }
       }
-      if (event.key === "Enter" && !event.shiftKey) {
+      if (event.key === "ArrowUp" && draft.trim().length === 0 && lastEditableDraft?.trim()) {
+        event.preventDefault();
+        setDraft(lastEditableDraft);
+        return;
+      }
+      if (event.key === "Enter" && (event.metaKey || event.ctrlKey || !event.shiftKey)) {
         event.preventDefault();
         void handleSend();
       }
     },
-    [commandIndex, commandSuggestions, handleSend, handleTogglePlanningMode, setCommandIndex, setDraft],
+    [
+      commandIndex,
+      commandSuggestions,
+      draft,
+      handleSend,
+      handleTogglePlanningMode,
+      lastEditableDraft,
+      setCommandIndex,
+      setDockOpen,
+      setDraft,
+      setError,
+    ],
   );
 
   const handleComposerPaste = useCallback(

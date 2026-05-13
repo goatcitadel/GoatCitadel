@@ -313,7 +313,7 @@ export interface AgenticControlResponse {
   taskId: string;
   runId?: string;
   status: "recorded" | "applied" | "rejected";
-  runtimeEffect: "state_only" | "runtime_cancel" | "approval_resolution" | "navigation";
+  runtimeEffect: "state_only" | "runtime_pause" | "runtime_cancel" | "approval_resolution" | "navigation";
   controlId?: string;
   idempotentReplay?: boolean;
   message: string;

@@ -21,6 +21,27 @@ export interface OrchestrationPhase {
   requiresApproval: boolean;
 }
 
+export interface OrchestrationPhaseExecutionResult {
+  phaseId: string;
+  ownerAgentId: string;
+  status: "completed" | "failed";
+  startedAt: string;
+  finishedAt: string;
+  outputSummary?: string;
+  outputText?: string;
+  childSessionId?: string;
+  childTurnId?: string;
+  childRunId?: string;
+  responseId?: string;
+  model?: string;
+  costUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  citations?: unknown[];
+  artifacts?: unknown[];
+  error?: string;
+}
+
 export interface OrchestrationWave {
   waveId: string;
   verify: string[];

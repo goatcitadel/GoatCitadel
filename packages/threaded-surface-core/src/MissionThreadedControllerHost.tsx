@@ -1961,6 +1961,12 @@ export function MissionThreadedControllerHost({
     },
     [handleSelectBranchTurn],
   );
+  const lastEditableDraft = useMemo(
+    () =>
+      [...(thread?.turns ?? [])].reverse().find((turn) => Boolean(turn.userMessage?.content?.trim()))?.userMessage
+        ?.content ?? null,
+    [thread?.turns],
+  );
   const {
     uploadAttachments,
     handleComposerKeyDown,
@@ -1982,6 +1988,7 @@ export function MissionThreadedControllerHost({
     handleUploadFiles,
   } = useChatComposerInteractions({
     draft,
+    lastEditableDraft,
     commandSuggestions,
     commandIndex,
     sending,

@@ -42,6 +42,7 @@ export interface TaskLifecycleServiceDependencies {
     payload: Record<string, unknown>,
     options?: TaskRealtimeOptions,
   ): void;
+  pauseDurableRun?(runId: string, actorId?: string): { status: string };
   recordAgenticDiagnosticSignal?(input: { task: TaskRecord; diagnostic: AgenticDiagnosticSignal }): void;
   storage: TaskStorage;
 }
@@ -376,6 +377,7 @@ export class TaskLifecycleService {
     let nextStatus: TaskStatus | undefined;
     let nextAgenticStatus: AgenticTaskContext["status"] | undefined;
     let runtimeEffect: AgenticControlResponse["runtimeEffect"] = "state_only";
+    let responseStatus: AgenticControlResponse["status"] = "recorded";
     const currentStatus = task.agenticContext?.status ?? task.status;
     const rejectionReason = validateAgenticControlTransition(currentStatus, input);
 
@@ -413,6 +415,12 @@ export class TaskLifecycleService {
     }
 
     if (input.action === "pause") {
+      const durableRunId = task.agenticContext?.durableRunId?.trim();
+      if (durableRunId && this.deps.pauseDurableRun) {
+        this.deps.pauseDurableRun(durableRunId, input.actorId ?? "operator");
+        runtimeEffect = "runtime_pause";
+        responseStatus = "applied";
+      }
       nextAgenticStatus = "paused";
     } else if (input.action === "cancel") {
       nextStatus = "blocked";
@@ -452,7 +460,7 @@ export class TaskLifecycleService {
         controlId,
         agentSessionId: input.agentSessionId,
         approvalId: input.approvalId,
-        resultStatus: "recorded",
+        resultStatus: responseStatus,
         runtimeEffect,
         recordedAt: now,
       }),
@@ -462,13 +470,15 @@ export class TaskLifecycleService {
       action: input.action,
       taskId: task.taskId,
       runId: task.agenticContext?.runId,
-      status: "recorded",
+      status: responseStatus,
       runtimeEffect,
       controlId,
       message:
         runtimeEffect === "state_only"
-          ? "Control was recorded in the durable board. Runtime cancellation is only applied where a live executor is attached."
-          : "Control was recorded with an operator-visible runtime effect.",
+          ? "Control was recorded in the durable board. Live runtime effects are only applied where an executor is attached."
+          : runtimeEffect === "runtime_pause"
+            ? "Durable run pause was applied and mirrored into the Cowork board."
+            : "Control was recorded with an operator-visible runtime effect.",
     };
   }
 
@@ -720,10 +730,12 @@ function buildAgenticControls(task: TaskRecord): AgenticRunTreeResponse["control
   return [
     {
       action: "pause",
-      label: "Pause run",
+      label: task.agenticContext?.durableRunId ? "Pause durable run" : "Record pause intent",
       enabled: status === "running" || status === "in_progress",
-      runtimeEffect: "state_only",
-      reason: "Records a durable pause intent; a live executor must honor the pause separately.",
+      runtimeEffect: task.agenticContext?.durableRunId ? "runtime_pause" : "state_only",
+      reason: task.agenticContext?.durableRunId
+        ? "Calls the attached durable run pause path and mirrors the result into Cowork state."
+        : "Records local Cowork intent only because no attached durable run is available.",
     },
     {
       action: "cancel",
@@ -862,7 +874,11 @@ function buildIdempotentControlReplay(
 
 function isAgenticRuntimeEffect(value: unknown): value is AgenticControlResponse["runtimeEffect"] {
   return (
-    value === "state_only" || value === "runtime_cancel" || value === "approval_resolution" || value === "navigation"
+    value === "state_only" ||
+    value === "runtime_pause" ||
+    value === "runtime_cancel" ||
+    value === "approval_resolution" ||
+    value === "navigation"
   );
 }
 

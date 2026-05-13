@@ -17,8 +17,9 @@
   "scripts": {
     "build": "tsc -b tsconfig.json",
     "typecheck": "tsc -b tsconfig.json",
-    "test": "tsx --test src/*.test.ts",
-    "test:coverage": "c8 --report-dir=coverage --reporter=json --reporter=text-summary tsx --test src/*.test.ts",
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test:postgres": "tsx --test \"src/postgres/real-postgres.test.ts\"",
+    "test:coverage": "c8 --report-dir=coverage --reporter=json --reporter=text-summary tsx --test \"src/**/*.test.ts\"",
     "lint": "tsc -b tsconfig.json"
   },
   "devDependencies": {

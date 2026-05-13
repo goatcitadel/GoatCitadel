@@ -139,6 +139,20 @@ export class ChatSessionPrefsRepository {
     return row ? mapRow(row) : undefined;
   }
 
+  public listBySessionIds(sessionIds: string[]): Map<string, ChatSessionPrefsRecord> {
+    const uniqueSessionIds = Array.from(new Set(sessionIds.map((sessionId) => sessionId.trim()).filter(Boolean)));
+    if (uniqueSessionIds.length === 0) {
+      return new Map();
+    }
+    const placeholders = uniqueSessionIds.map(() => "?").join(", ");
+    const rows = toChatSessionPrefsRows(
+      this.db
+        .prepare(`SELECT * FROM chat_session_prefs WHERE session_id IN (${placeholders})`)
+        .all(...uniqueSessionIds),
+    );
+    return new Map(rows.map((row) => [row.session_id, mapRow(row)]));
+  }
+
   public ensure(sessionId: string, now = new Date().toISOString()): ChatSessionPrefsRecord {
     const existing = this.get(sessionId);
     if (existing) {
@@ -275,6 +289,13 @@ function normalizeOptional(value: string): string | null {
 
 function toChatSessionPrefsRow(value: unknown): ChatSessionPrefsRow | undefined {
   return isChatSessionPrefsRow(value) ? value : undefined;
+}
+
+function toChatSessionPrefsRows(value: unknown): ChatSessionPrefsRow[] {
+  if (!Array.isArray(value) || value.some((row) => !isChatSessionPrefsRow(row))) {
+    throw new TypeError("Unexpected chat_session_prefs row shape");
+  }
+  return value;
 }
 
 function isChatSessionPrefsRow(value: unknown): value is ChatSessionPrefsRow {

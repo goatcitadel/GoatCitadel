@@ -14,6 +14,20 @@ jobs:
   fast:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: goatcitadel_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d goatcitadel_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,6 +54,14 @@ jobs:
 
       - name: Run fast verification
         run: pnpm verify:fast
+
+      - name: Run real Postgres storage lane
+        env:
+          GOATCITADEL_TEST_POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/goatcitadel_test
+        run: pnpm --filter @goatcitadel/storage test:postgres
+
+      - name: Enforce production coverage gate
+        run: pnpm coverage:collect && pnpm coverage:gate:production
 
       - name: Upload verification artifacts
         if: always()

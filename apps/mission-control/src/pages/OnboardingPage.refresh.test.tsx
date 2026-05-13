@@ -373,4 +373,34 @@ describe("OnboardingPage refresh discipline", () => {
       renderer.unmount();
     }
   });
+
+  it("keeps loopback bypass off for user-facing quickstart profiles unless explicitly enabled", async () => {
+    let renderer: ReactTestRenderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<OnboardingPage />);
+      });
+      await flush();
+
+      expect(renderer.root.findByProps({ id: "wizard-loopback" }).props.checked).toBe(false);
+      expect(JSON.stringify(renderer.toJSON())).toContain("trusted single-machine development");
+
+      const loadProfileButtons = renderer.root
+        .findAllByType("button")
+        .filter((node) => node.props.children === "Load profile");
+      expect(loadProfileButtons.length).toBeGreaterThanOrEqual(2);
+
+      await act(async () => {
+        loadProfileButtons[0]?.props.onClick();
+      });
+      expect(renderer.root.findByProps({ id: "wizard-loopback" }).props.checked).toBe(false);
+
+      await act(async () => {
+        loadProfileButtons[1]?.props.onClick();
+      });
+      expect(renderer.root.findByProps({ id: "wizard-loopback" }).props.checked).toBe(false);
+    } finally {
+      renderer.unmount();
+    }
+  });
 });

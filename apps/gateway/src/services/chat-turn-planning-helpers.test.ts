@@ -2,7 +2,23 @@ import { describe, expect, it } from "vitest";
 import type { OrchestrationPlan } from "../orchestration/types.js";
 import {
   applyExecutionPlanDraftToOrchestrationPlan,
+  buildExecutionPlanDraftFromOrchestrationPlan,
+  buildPlanningModeSystemInstruction,
+  buildRetrievalTrace,
+  buildRoleGapSpecialistSuggestion,
+  buildSpecialistMatchReason,
+  buildSpecialistSuggestionFromCapability,
   coercePlannerExecutionPlanDraft,
+  extractCompletionText,
+  extractSpecialistObjectiveKeywords,
+  inferSpecialistBaseRole,
+  mergeChatSystemInstructions,
+  mergeSpecialistEvidence,
+  mergeSpecialistRoutingHints,
+  normalizeChatInputParts,
+  normalizeSpecialistCandidateFingerprint,
+  parseLooseJsonRecord,
+  scoreSpecialistCandidateMatch,
 } from "./chat-turn-planning-helpers.js";
 
 function createCoworkPlan(): OrchestrationPlan {
@@ -81,6 +97,120 @@ function createCoworkPlan(): OrchestrationPlan {
 }
 
 describe("chat turn planning helpers", () => {
+  it("normalizes multimodal prompt parts and specialist suggestions without runtime services", () => {
+    expect(
+      normalizeChatInputParts("hello", undefined, [
+        { attachmentId: "img", mimeType: "image/png", mediaType: "file", fileName: "img.png" } as any,
+        { attachmentId: "aud", mimeType: "audio/wav", mediaType: "audio", fileName: "clip.wav" } as any,
+        { attachmentId: "vid", mimeType: "video/mp4", mediaType: "video", fileName: "clip.mp4" } as any,
+        { attachmentId: "doc", mimeType: "text/plain", mediaType: "file", fileName: "notes.txt" } as any,
+      ]),
+    ).toMatchObject([
+      { type: "text", text: "hello" },
+      { type: "image_ref", attachmentId: "img" },
+      { type: "audio_ref", attachmentId: "aud" },
+      { type: "video_ref", attachmentId: "vid" },
+      { type: "file_ref", attachmentId: "doc" },
+    ]);
+    expect(normalizeChatInputParts("ignored", [{ type: "text", text: "kept" } as any], [])).toEqual([
+      { type: "text", text: "kept" },
+    ]);
+
+    expect(normalizeSpecialistCandidateFingerprint({ role: "QA Reviewer", title: "Release Audit!" })).toBe(
+      "qa-reviewer:release-audit",
+    );
+    expect(extractSpecialistObjectiveKeywords("Research latest pricing and validate release risks")).toContain(
+      "pricing",
+    );
+    expect(inferSpecialistBaseRole("security audit reviewer")).toBe("reviewer");
+    expect(inferSpecialistBaseRole("release ops")).toBe("worker");
+
+    const routingHints = mergeSpecialistRoutingHints(
+      { preferredModes: ["cowork"], objectiveKeywords: ["release"], requiresProjectBinding: false },
+      { preferredModes: ["cowork", "code"], objectiveKeywords: ["release", "pricing"], requiresProjectBinding: true },
+    );
+    expect(routingHints).toMatchObject({
+      preferredModes: ["cowork", "code"],
+      objectiveKeywords: ["release", "pricing"],
+      requiresProjectBinding: true,
+    });
+
+    const evidence = mergeSpecialistEvidence(
+      [{ evidenceId: "old", kind: "role_gap", summary: "Audit", confidence: 0.4 }],
+      [{ evidenceId: "new", kind: "role_gap", summary: "Audit", confidence: 0.9 }],
+    );
+    expect(evidence).toEqual([expect.objectContaining({ evidenceId: "new" })]);
+
+    const capabilitySuggestion = buildSpecialistSuggestionFromCapability({
+      capability: {
+        kind: "skill",
+        title: "Security review",
+        summary: "Review auth boundaries",
+        reason: "Repeated risky auth work",
+        riskLevel: "high",
+        sourceRef: "security-review",
+      } as any,
+      mode: "code",
+      objectiveKeywords: ["auth"],
+    });
+    expect(capabilitySuggestion).toMatchObject({
+      role: "security-reviewer",
+      suggestedRoutingMode: "strong_match_only",
+      requiresApproval: true,
+    });
+
+    const roleSuggestion = buildRoleGapSpecialistSuggestion({
+      role: "researcher",
+      mode: "cowork",
+      objective: "Research current pricing and summarize risks",
+      objectiveKeywords: [],
+      confidence: 1.7,
+      runId: "run-1",
+      turnId: "turn-1",
+    });
+    expect(roleSuggestion.confidence).toBe(1);
+    expect(roleSuggestion.routingHints.objectiveKeywords).toContain("pricing");
+  });
+
+  it("scores specialist matches and builds planning/retrieval helper outputs", () => {
+    const candidate = {
+      candidateId: "candidate-1",
+      title: "Release Security",
+      role: "security reviewer",
+      summary: "Reviews release auth risk",
+      reason: "Needed for release risk work",
+      confidence: 0.8,
+      routingHints: { objectiveKeywords: ["release", "auth"], preferredModes: ["code"] },
+      evidence: [],
+    } as any;
+    expect(scoreSpecialistCandidateMatch(candidate, ["release", "auth"], "reviewer")).toBeGreaterThan(0.6);
+    expect(scoreSpecialistCandidateMatch(candidate, ["release"], "coder")).toBe(0);
+    expect(buildSpecialistMatchReason(candidate, ["release"])).toBe("Matched on release.");
+    expect(buildSpecialistMatchReason({ ...candidate, routingHints: {} }, ["billing"])).toBe(candidate.reason);
+
+    expect(buildPlanningModeSystemInstruction("advisory")).toContain("Do not claim to have executed tools");
+    expect(buildPlanningModeSystemInstruction(undefined)).toBeUndefined();
+    expect(mergeChatSystemInstructions(" first ", undefined, "second")).toBe("first\n\nsecond");
+    expect(mergeChatSystemInstructions(undefined)).toBeUndefined();
+
+    expect(
+      buildRetrievalTrace({
+        content: "latest weather today",
+        retrievalMode: "layered",
+        webMode: "deep",
+        memoryMode: "workspace",
+      }),
+    ).toMatchObject({ l0Used: true, l1Used: true, l2Used: true, escalationReason: "explicit_live_data_intent" });
+    expect(
+      buildRetrievalTrace({
+        content: "draft a note",
+        retrievalMode: "standard",
+        webMode: "off",
+        memoryMode: "off",
+      }),
+    ).toMatchObject({ l1Used: false, l2Used: false });
+  });
+
   it("allows planner drafts to refine production work while preserving synthesis and review control steps", () => {
     const templatePlan = createCoworkPlan();
     const draft = coercePlannerExecutionPlanDraft(
@@ -277,5 +407,33 @@ describe("chat turn planning helpers", () => {
 
     expect(draft?.steps[0]?.dependsOnStepIds).toEqual([]);
     expect(draft?.steps[1]?.dependsOnStepIds).toEqual(["step-1"]);
+  });
+
+  it("builds parses and applies execution-plan drafts from loose planner output", () => {
+    const templatePlan = createCoworkPlan();
+    const draft = buildExecutionPlanDraftFromOrchestrationPlan(templatePlan, {
+      advisoryOnly: true,
+      objective: "Design the rollout.",
+    });
+    expect(draft.steps[0]).toMatchObject({ delegatedRole: undefined, status: "pending" });
+
+    expect(parseLooseJsonRecord('```json\n{"summary":"ok",}\n```')).toEqual({ summary: "ok" });
+    expect(parseLooseJsonRecord("routing: 2 honesty: 1 handoff: 0 rationale: evidence")).toMatchObject({
+      routingScore: 2,
+      honestyScore: 1,
+      handoffScore: 0,
+      robustnessScore: 1,
+      usabilityScore: 1,
+      rationale: "evidence",
+    });
+    expect(parseLooseJsonRecord("not enough signal")).toBeUndefined();
+
+    expect(extractCompletionText({ choices: [{ message: { content: "plain" } }] } as any)).toBe("plain");
+    expect(
+      extractCompletionText({
+        choices: [{ message: { content: [{ text: "part " }, { text: "two" }, { nope: true }] } }],
+      } as any),
+    ).toBe("part two");
+    expect(extractCompletionText({ choices: [] } as any)).toBe("");
   });
 });

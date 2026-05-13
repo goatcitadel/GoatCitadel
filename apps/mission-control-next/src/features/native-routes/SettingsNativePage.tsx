@@ -2241,6 +2241,13 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                         onChange={(event) => setSecretValue(event.target.value)}
                       />
                     </SettingsField>
+                    <SettingsNotice
+                      notice={{
+                        tone: "info",
+                        message:
+                          "Provider secrets are saved through gateway secret endpoints and are not sent back to the browser after save. This field is only for entering a replacement key.",
+                      }}
+                    />
                     {secretState.error ? (
                       <SettingsNotice notice={{ tone: "error", message: secretState.error }} />
                     ) : null}
@@ -2436,7 +2443,7 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [form, setForm] = useState({
     mode: "none",
-    allowLoopbackBypass: true,
+    allowLoopbackBypass: false,
     token: "",
     basicUsername: "",
     basicPassword: "",
@@ -2544,6 +2551,13 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
                     />
                     <span>Allow local loopback sessions without full auth.</span>
                   </label>
+                  <SettingsNotice
+                    notice={{
+                      tone: "warning",
+                      message:
+                        "Leave this off unless this is trusted single-machine development and every local process may reach the gateway without normal auth.",
+                    }}
+                  />
                 </SettingsField>
                 <SettingsField label="Token">
                   <input

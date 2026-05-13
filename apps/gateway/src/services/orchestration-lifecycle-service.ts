@@ -14,6 +14,8 @@ import {
   NotFoundError,
   type OrchestrationPlan,
   type OrchestrationPlanWorkflowPayload,
+  type OrchestrationPhase,
+  type OrchestrationPhaseExecutionResult,
   type OrchestrationRun,
   type RealtimeEvent,
   ValidationError,
@@ -45,7 +47,7 @@ type OrchestrationPhaseHookPatch = {
 };
 
 type OrchestrationExecutionResult = {
-  outcome: "paused" | "completed";
+  outcome: "paused" | "completed" | "failed";
   checkpointState: Record<string, unknown>;
 };
 
@@ -132,6 +134,17 @@ export interface OrchestrationLifecycleHost {
     eventType: DurableRunTimelineEvent["eventType"],
     payload?: Record<string, unknown>,
   ): void;
+  executeOrchestrationPhase(input: {
+    plan: OrchestrationPlan;
+    run: OrchestrationRun;
+    phase: OrchestrationPhase;
+    durableRun: DurableRunRecord;
+    signal?: AbortSignal;
+  }): Promise<OrchestrationPhaseExecutionResult>;
+  releaseOrchestrationWorktree?(input: {
+    run: OrchestrationRun;
+    reason: "completed" | "failed" | "stopped_by_limit" | "cancelled";
+  }): Promise<void>;
 }
 
 function buildOrchestrationRealtimeLinks(input: {
@@ -172,6 +185,34 @@ function publishOrchestrationRealtime(
       workspaceId: payload.workspaceId,
     }),
   });
+}
+
+function throwIfWorkflowAborted(context?: DurableWorkflowExecutionContext): void {
+  if (!context?.signal?.aborted) {
+    return;
+  }
+  throw context.signal.reason instanceof Error
+    ? context.signal.reason
+    : new Error("Durable orchestration workflow aborted.");
+}
+
+async function releaseOrchestrationWorktreeIfAvailable(
+  host: OrchestrationLifecycleHost,
+  run: OrchestrationRun,
+  reason: "completed" | "failed" | "stopped_by_limit" | "cancelled",
+): Promise<void> {
+  if (!host.releaseOrchestrationWorktree) {
+    return;
+  }
+  try {
+    await host.releaseOrchestrationWorktree({ run, reason });
+  } catch (error) {
+    persistRunEvent(host, run, "run.worktree_cleanup_failed", {
+      reason,
+      worktreePath: run.worktreePath,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 export function parseOrchestrationWorkflowPayload(run: DurableRunRecord): OrchestrationPlanWorkflowPayload | undefined {
@@ -644,11 +685,7 @@ export async function executeDurableOrchestrationRun(
   durableRun: DurableRunRecord,
   context?: DurableWorkflowExecutionContext,
 ): Promise<OrchestrationExecutionResult> {
-  if (context?.signal?.aborted) {
-    throw context.signal.reason instanceof Error
-      ? context.signal.reason
-      : new Error("Durable orchestration workflow aborted.");
-  }
+  throwIfWorkflowAborted(context);
   const payload = parseOrchestrationWorkflowPayload(durableRun);
   if (!payload) {
     throw new Error("Durable orchestration payload is invalid or incomplete.");
@@ -660,14 +697,24 @@ export async function executeDurableOrchestrationRun(
     throw new Error(`Orchestration run ${run.runId} is not linked to durable run ${durableRun.runId}.`);
   }
 
-  const recordUpdate = (next: OrchestrationRun, checkpointKind?: OrchestrationCheckpoint["checkpointKind"]): void => {
+  const recordUpdate = (
+    next: OrchestrationRun,
+    checkpointKind?: OrchestrationCheckpoint["checkpointKind"],
+    checkpointExtras: Record<string, unknown> = {},
+  ): void => {
     run = host.storage.orchestration.updateRun(next);
     host.updateDurableRunState({
       runId: durableRun.runId,
       metadata: buildDurableMetadata(plan, run),
     });
     if (checkpointKind) {
-      persistCheckpoint(host, plan, run, checkpointKind, buildCheckpointDetails(plan, run, durableRun.runId));
+      persistCheckpoint(
+        host,
+        plan,
+        run,
+        checkpointKind,
+        buildCheckpointDetails(plan, run, durableRun.runId, checkpointExtras),
+      );
     }
   };
 
@@ -718,19 +765,97 @@ export async function executeDurableOrchestrationRun(
   }
 
   while (run.status === "running" && run.currentPhaseId) {
+    throwIfWorkflowAborted(context);
     const previousWaveId = run.currentWaveId;
     const previousPhaseId = run.currentPhaseId;
+    const phase = findPhaseInPlan(plan, previousPhaseId);
+    persistRunEvent(host, run, "phase.started", {
+      phaseId: previousPhaseId,
+      waveId: previousWaveId,
+      ownerAgentId: phase.ownerAgentId,
+      specPath: phase.specPath,
+    });
+    publishRunRealtime(host, plan, run, {
+      event: "phase_started",
+    });
+
+    const execution = await host.executeOrchestrationPhase({
+      plan,
+      run,
+      phase,
+      durableRun,
+      signal: context?.signal,
+    });
+    const executionPayload = {
+      phaseId: execution.phaseId,
+      ownerAgentId: execution.ownerAgentId,
+      status: execution.status,
+      startedAt: execution.startedAt,
+      finishedAt: execution.finishedAt,
+      outputSummary: execution.outputSummary,
+      childSessionId: execution.childSessionId,
+      childTurnId: execution.childTurnId,
+      childRunId: execution.childRunId,
+      responseId: execution.responseId,
+      model: execution.model,
+      costUsd: execution.costUsd ?? 0,
+      inputTokens: execution.inputTokens,
+      outputTokens: execution.outputTokens,
+      citations: execution.citations,
+      artifacts: execution.artifacts,
+      error: execution.error,
+    };
+    persistRunEvent(host, run, execution.status === "failed" ? "phase.failed" : "phase.executed", executionPayload);
+
+    if (execution.status === "failed") {
+      recordUpdate(
+        {
+          ...run,
+          status: "failed",
+          executionState: "failed",
+          endedAt: execution.finishedAt,
+          lastError: execution.error ?? `Phase ${previousPhaseId} failed.`,
+        },
+        "run_failed",
+        {
+          failedPhase: executionPayload,
+        },
+      );
+      host.recordDurableTimelineEvent(durableRun.runId, "run_failed", {
+        phaseId: previousPhaseId,
+        error: execution.error ?? `Phase ${previousPhaseId} failed.`,
+      });
+      publishRunRealtime(host, plan, run, {
+        event: "run_failed",
+        error: execution.error ?? `Phase ${previousPhaseId} failed.`,
+      });
+      await releaseOrchestrationWorktreeIfAvailable(host, run, "failed");
+      return {
+        outcome: "failed",
+        checkpointState: buildCheckpointDetails(plan, run, durableRun.runId, {
+          failedPhase: executionPayload,
+        }),
+      };
+    }
+
     recordUpdate(
       {
-        ...host.orchestrationEngine.advancePhase(plan, run, previousPhaseId),
+        ...host.orchestrationEngine.advancePhase(plan, run, previousPhaseId, {
+          costIncrementUsd: execution.costUsd ?? 0,
+        }),
         executionState: "running",
       },
       "phase_executed",
+      {
+        executedPhase: executionPayload,
+      },
     );
-    persistRunEvent(host, run, "phase.executed", {
+    persistRunEvent(host, run, "phase.advanced", {
       phaseId: previousPhaseId,
       nextPhaseId: run.currentPhaseId,
       nextWaveId: run.currentWaveId,
+      costIncrementUsd: execution.costUsd ?? 0,
+      totalCostUsd: run.totalCostUsd,
     });
     publishRunRealtime(host, plan, run, {
       event: "phase_executed",
@@ -786,6 +911,11 @@ export async function executeDurableOrchestrationRun(
   publishRunRealtime(host, plan, run, {
     event: run.status === "stopped_by_limit" ? "run_stopped" : "run_completed",
   });
+  await releaseOrchestrationWorktreeIfAvailable(
+    host,
+    run,
+    run.status === "stopped_by_limit" ? "stopped_by_limit" : "completed",
+  );
   return {
     outcome: "completed",
     checkpointState: buildCheckpointDetails(plan, run, durableRun.runId),

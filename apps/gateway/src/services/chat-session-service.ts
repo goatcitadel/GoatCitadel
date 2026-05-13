@@ -59,14 +59,21 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
   const view = query.view ?? "active";
   const includeHidden = query.includeHidden ?? false;
   const limit = Math.max(1, Math.min(1000, Math.floor(query.limit ?? 200)));
-  const allSessions = deps.storage.sessions.list(20000);
+  const hasPostStorageFilters =
+    scope !== "all" ||
+    view !== "all" ||
+    !includeHidden ||
+    Boolean(query.projectId?.trim()) ||
+    Boolean(query.folderId?.trim()) ||
+    Boolean(query.tag?.trim()) ||
+    Boolean(query.q?.trim());
+  const storageLimit = hasPostStorageFilters ? Math.min(20000, Math.max(limit * 20, 1000)) : limit;
+  const allSessions = deps.storage.sessions.list(storageLimit, query.cursor);
   const projects = deps.storage.chatProjects.list("all", 2000, workspaceId);
   const projectById = new Map(projects.map((project) => [project.projectId, project]));
   const sessionIds = allSessions.map((session) => session.sessionId);
   const metaBySessionId = deps.storage.chatSessionMeta.listBySessionIds(sessionIds);
-  const prefsModeBySessionId = new Map(
-    sessionIds.map((sessionId) => [sessionId, deps.storage.chatSessionPrefs.get(sessionId)?.mode ?? "chat"]),
-  );
+  const prefsBySessionId = deps.storage.chatSessionPrefs.listBySessionIds(sessionIds);
   const projectLinkBySessionId = deps.storage.chatSessionProjects.listBySessionIds(sessionIds);
   const generatedArtifactsBySessionId = deps.storage.chatGeneratedArtifacts.listBySessionIds(sessionIds);
   const delegationParentBySessionId = deps.storage.chatDelegationSteps.listParentsByChildSessionIds(
@@ -86,7 +93,7 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
     const project = link ? projectById.get(link.projectId) : undefined;
     return toChatSessionRecord(
       session,
-      { ...meta, mode: prefsModeBySessionId.get(session.sessionId) ?? "chat" },
+      { ...meta, mode: prefsBySessionId.get(session.sessionId)?.mode ?? "chat" },
       project,
       {
         delegationParent: delegationParentBySessionId.get(session.sessionId),

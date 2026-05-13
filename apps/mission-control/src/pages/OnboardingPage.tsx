@@ -82,7 +82,7 @@ const QUICKSTART_PRESETS = [
     summary: "Fastest path for one machine and one operator.",
     apply: () => ({
       authMode: "none" as const,
-      allowLoopbackBypass: true,
+      allowLoopbackBypass: false,
       defaultToolProfile: "coding",
       budgetMode: "balanced" as const,
       allowlistPreset: "local",
@@ -99,7 +99,7 @@ const QUICKSTART_PRESETS = [
     summary: "Local-first with cloud model access and safer defaults.",
     apply: () => ({
       authMode: "token" as const,
-      allowLoopbackBypass: true,
+      allowLoopbackBypass: false,
       defaultToolProfile: "coding",
       budgetMode: "balanced" as const,
       allowlistPreset: "common",
@@ -911,7 +911,7 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
                     Allow loopback bypass{" "}
                     <HelpHint
                       label="Loopback bypass help"
-                      text="When enabled, localhost access can stay friction-free even if stronger auth is configured for remote access."
+                      text="Leave this off unless this is trusted single-machine development and every local process can be trusted to reach the gateway."
                     />
                   </label>
                   <input
@@ -921,6 +921,10 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
                     onChange={(event) => setAllowLoopbackBypass(event.target.checked)}
                   />
                 </div>
+                <p className="office-subtitle">
+                  Keep loopback bypass off unless this node is trusted single-machine development and local processes
+                  are allowed to reach the gateway without full auth.
+                </p>
                 {authMode === "token" ? (
                   <>
                     <div className="controls-row">

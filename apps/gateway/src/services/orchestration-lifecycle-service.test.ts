@@ -196,6 +196,21 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
       worktreeStatus: "ready" as const,
       worktreeBaseRef: "HEAD",
     })),
+    executeOrchestrationPhase: vi.fn(async () => ({
+      phaseId: "phase-1",
+      ownerAgentId: "agent-1",
+      status: "completed" as const,
+      startedAt: "2026-04-12T00:00:01.000Z",
+      finishedAt: "2026-04-12T00:00:02.000Z",
+      outputSummary: "Phase completed",
+      outputText: "Phase completed",
+      childSessionId: "sess_phase",
+      childTurnId: "turn_phase",
+      costUsd: 0.5,
+      inputTokens: 10,
+      outputTokens: 20,
+    })),
+    releaseOrchestrationWorktree: vi.fn(async () => undefined),
     recordDurableTimelineEvent: vi.fn(),
     ...overrides,
   };
@@ -530,10 +545,18 @@ describe("orchestration-lifecycle-service", () => {
 
     expect(result.outcome).toBe("paused");
     expect(host.orchestrationEngine.startRun).toHaveBeenCalled();
+    expect(host.executeOrchestrationPhase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        phase: expect.objectContaining({ phaseId: "phase-1" }),
+        run: expect.objectContaining({ currentPhaseId: "phase-1" }),
+        durableRun: expect.objectContaining({ runId: "durable-run-1" }),
+      }),
+    );
     expect(host.orchestrationEngine.advancePhase).toHaveBeenCalledWith(
       expect.objectContaining({ planId: "plan-1" }),
       expect.objectContaining({ currentPhaseId: "phase-1" }),
       "phase-1",
+      expect.objectContaining({ costIncrementUsd: 0.5 }),
     );
     expect(host.pauseDurableRun).toHaveBeenCalledWith("durable-run-1", "orchestration");
     expect(host.recordDurableTimelineEvent).toHaveBeenCalledWith("durable-run-1", "run_started", expect.any(Object));

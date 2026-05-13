@@ -170,6 +170,10 @@ describe("ToolPolicyEngine invocation coverage", () => {
           ...policyConfig.tools,
           approvalMode: "bypass",
         },
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["localhost", "api.bankr.bot"],
+        },
       },
       storage,
     );
@@ -281,6 +285,76 @@ describe("ToolPolicyEngine invocation coverage", () => {
         }),
       }),
     );
+  });
+});
+
+describe("ToolPolicyEngine approval bypass safety", () => {
+  it("keeps nuclear-risk tools approval-gated even when normal approvals are bypassed", () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: {
+          ...policyConfig.tools,
+          approvalMode: "bypass",
+        },
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["localhost", "api.bankr.bot"],
+        },
+      },
+      storage,
+      undefined,
+      {
+        isBankrBuiltinEnabled: () => true,
+      },
+    );
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "bankr.write",
+      args: {
+        prompt: "transfer funds",
+        actionType: "transfer",
+        usdEstimate: 10,
+      },
+      agentId: "agent",
+      sessionId: "session",
+    });
+
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.riskLevel).toBe("nuclear");
+    expect(evaluation.requiresApproval).toBe(true);
+    expect(evaluation.reasonCodes).toContain("approval_bypass_mode");
+    expect(evaluation.reasonCodes).toContain("nuclear_risk_requires_approval");
+  });
+
+  it("still bypasses ordinary danger approvals when policy explicitly allows bypass mode", () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: {
+          ...policyConfig.tools,
+          approvalMode: "bypass",
+        },
+      },
+      storage,
+    );
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "fs.write",
+      args: {
+        path: "./workspace/output.txt",
+        content: "ok",
+      },
+      agentId: "agent",
+      sessionId: "session",
+    });
+
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.riskLevel).toBe("danger");
+    expect(evaluation.requiresApproval).toBe(false);
+    expect(evaluation.reasonCodes).toContain("approval_bypass_mode");
   });
 });
 

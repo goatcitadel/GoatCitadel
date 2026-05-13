@@ -3,6 +3,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import type { RealtimeEvent } from "@goatcitadel/contracts";
 import { withRouteAccess } from "./route-access.js";
+import { writeSseChunk, writeSsePayload } from "./sse-writer.js";
 
 const listQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(500).default(100),
@@ -81,6 +82,7 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
     };
 
     const raw = reply.raw;
+    const controller = new AbortController();
     const corsOrigin = reply.getHeader("Access-Control-Allow-Origin");
     const corsCredentials = reply.getHeader("Access-Control-Allow-Credentials");
     const corsVary = reply.getHeader("Vary");
@@ -95,18 +97,17 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       ...(typeof corsVary === "string" ? { Vary: corsVary } : {}),
     });
     raw.flushHeaders?.();
-    raw.write(": connected\n\n");
+    await writeSseChunk(raw, ": connected\n\n", controller.signal);
 
     const send = (payload: unknown, eventId?: number) => {
-      if (typeof eventId === "number" && Number.isFinite(eventId)) {
-        raw.write(`id: ${eventId}\n`);
-      }
-      raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+      return writeSsePayload(raw, payload, {
+        eventId: typeof eventId === "number" && Number.isFinite(eventId) ? eventId : undefined,
+        signal: controller.signal,
+      });
     };
 
     const sendNamedEvent = (eventName: string, payload: unknown) => {
-      raw.write(`event: ${eventName}\n`);
-      raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+      return writeSsePayload(raw, payload, { eventName, signal: controller.signal });
     };
 
     const requestedCursor =
@@ -125,7 +126,7 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       bounds.oldestSequence !== undefined &&
       requestedCursor < bounds.oldestSequence
     ) {
-      sendNamedEvent("replay-gap", {
+      await sendNamedEvent("replay-gap", {
         error: "replay_gap",
         requestedCursor,
         oldestCursor: bounds.oldestSequence,
@@ -151,7 +152,7 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       bounds.newestSequence !== undefined &&
       (latestReplayEvent?.sequence ?? requestedCursor) < bounds.newestSequence
     ) {
-      sendNamedEvent("replay-gap", {
+      await sendNamedEvent("replay-gap", {
         error: "replay_gap",
         reason: "replay_window_truncated",
         requestedCursor,
@@ -170,7 +171,7 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       return;
     }
     for (const event of replay) {
-      send(event, event.sequence);
+      await send(event, event.sequence);
     }
     fastify.services.realtimeEvents.touchRealtimeStreamLease({
       leaseId: lease.leaseId,
@@ -178,7 +179,7 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       lastSentSequence: latestReplayEvent?.sequence,
       lastEventAt: latestReplayEvent?.timestamp,
     });
-    sendNamedEvent("stream-ready", {
+    await sendNamedEvent("stream-ready", {
       leaseId: lease.leaseId,
       clientId: lease.clientId,
       gatewayNodeId: lease.gatewayNodeId,
@@ -187,36 +188,15 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       lastSentSequence: latestReplayEvent?.sequence,
     });
 
-    const unsubscribe = fastify.services.realtimeEvents.subscribeRealtime((event: RealtimeEvent) => {
-      try {
-        send(event, event.sequence);
-        fastify.services.realtimeEvents.touchRealtimeStreamLease({
-          leaseId: lease.leaseId,
-          lastSentSequence: event.sequence,
-          lastEventAt: event.timestamp,
-        });
-      } catch {
-        cleanup("stream_write_error");
-      }
-    });
-
-    const keepAlive = setInterval(() => {
-      try {
-        raw.write(": keep-alive\n\n");
-        fastify.services.realtimeEvents.touchRealtimeStreamLease({
-          leaseId: lease.leaseId,
-        });
-      } catch {
-        cleanup("keepalive_write_error");
-      }
-    }, 25000);
-
     let closed = false;
-    const cleanup = (closeReason = "client_disconnect") => {
+    let writeChain = Promise.resolve();
+    let unsubscribe = () => undefined;
+    function cleanup(closeReason = "client_disconnect") {
       if (closed) {
         return;
       }
       closed = true;
+      controller.abort(new Error(closeReason));
       clearInterval(keepAlive);
       unsubscribe();
       fastify.services.realtimeEvents.closeRealtimeStreamLease({
@@ -229,7 +209,38 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       } catch {
         // ignore
       }
-    };
+    }
+
+    const keepAlive = setInterval(() => {
+      void writeSseChunk(raw, ": keep-alive\n\n", controller.signal)
+        .then((wrote) => {
+          if (!wrote) {
+            cleanup("keepalive_write_error");
+            return;
+          }
+          fastify.services.realtimeEvents.touchRealtimeStreamLease({
+            leaseId: lease.leaseId,
+          });
+        })
+        .catch(() => cleanup("keepalive_write_error"));
+    }, 25000);
+
+    unsubscribe = fastify.services.realtimeEvents.subscribeRealtime((event: RealtimeEvent) => {
+      writeChain = writeChain
+        .then(async () => {
+          const wrote = await send(event, event.sequence);
+          if (!wrote) {
+            cleanup("stream_write_error");
+            return;
+          }
+          fastify.services.realtimeEvents.touchRealtimeStreamLease({
+            leaseId: lease.leaseId,
+            lastSentSequence: event.sequence,
+            lastEventAt: event.timestamp,
+          });
+        })
+        .catch(() => cleanup("stream_write_error"));
+    });
 
     raw.on("close", () => cleanup("client_disconnect"));
     request.raw.on("aborted", () => cleanup("client_aborted"));

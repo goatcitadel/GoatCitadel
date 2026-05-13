@@ -458,6 +458,31 @@ function findInputByPlaceholder(root: ReactTestInstance, placeholder: string): R
   return match;
 }
 
+function findLoopbackCheckbox(root: ReactTestInstance): ReactTestInstance {
+  const match = root.findAll((node) => node.type === "input" && node.props?.type === "checkbox")[0];
+  if (!match) {
+    throw new Error("Unable to find loopback checkbox");
+  }
+  return match;
+}
+
+function mockSettingsLoopback(allowLoopbackBypass: boolean) {
+  mocks.fetchSettings.mockResolvedValueOnce({
+    auth: {
+      mode: "none",
+      allowLoopbackBypass,
+      tokenConfigured: false,
+      basicConfigured: false,
+    },
+    llm: {
+      activeProviderId: "openai",
+      activeModel: "gpt-5.4-mini",
+      providers: [],
+      providerConfigs: [],
+    },
+  });
+}
+
 const OAUTH_STORAGE_KEY = "goatcitadel:openai-codex:oauth-flow";
 
 function setCodexProviderCatalogState(overrides: Record<string, unknown> = {}) {
@@ -1579,6 +1604,27 @@ describe("SettingsNativePage providers", () => {
 
     text = collectText(renderer!.root);
     expect(text).toContain("not verified against your account");
+  });
+});
+
+describe("SettingsNativePage access", () => {
+  it("keeps loopback bypass off by default and mirrors the loaded server posture", async () => {
+    let renderer: ReactTestRenderer | null = null;
+
+    mockSettingsLoopback(false);
+    await act(async () => {
+      renderer = renderPage("access");
+    });
+    expect(findLoopbackCheckbox(renderer!.root).props.checked).toBe(false);
+    expect(collectText(renderer!.root)).toContain("trusted single-machine development");
+    expect(collectText(renderer!.root)).toContain("Disabled");
+
+    mockSettingsLoopback(true);
+    await act(async () => {
+      renderer = renderPage("access");
+    });
+    expect(findLoopbackCheckbox(renderer!.root).props.checked).toBe(true);
+    expect(collectText(renderer!.root)).toContain("Enabled");
   });
 });
 

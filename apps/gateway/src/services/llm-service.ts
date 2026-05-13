@@ -26,6 +26,13 @@ import type {
   LlmRuntimeConfig,
 } from "@goatcitadel/contracts";
 import { findProviderTemplate, inferProviderForModelId, providerAllowsForeignModelIds } from "@goatcitadel/contracts";
+import { anthropicProviderAdapter } from "./llm-provider-anthropic.js";
+import {
+  createLlmProviderAdapterRegistry,
+  type LlmProviderAdapterHost,
+  type LlmProviderAdapterRegistry,
+  type LlmProviderResolution,
+} from "./llm-provider-adapter.js";
 import { applyEstimatedCostToChatResponse, applyEstimatedCostToStreamChunk } from "./llm-pricing.js";
 import {
   OpenAICodexOAuthService,
@@ -58,10 +65,7 @@ export interface LlmRuntimeUpdateInput {
   };
 }
 
-interface ResolvedProvider {
-  provider: LlmProviderConfig;
-  apiKey?: string;
-}
+type ResolvedProvider = LlmProviderResolution;
 
 interface ProviderRequestTarget {
   url: string;
@@ -130,6 +134,12 @@ export class LlmService {
   private readonly openAICodexOAuth: OpenAICodexOAuthService;
   private readonly secretStatusCache = new Map<string, SecretStatusCacheEntry>();
   private readonly requestDispatcherCache = new Map<string, Dispatcher>();
+  private readonly providerAdapters: LlmProviderAdapterRegistry = createLlmProviderAdapterRegistry([
+    anthropicProviderAdapter,
+  ]);
+  private readonly providerAdapterHost: LlmProviderAdapterHost = {
+    buildRequestTarget: (resolved, purpose, endpointUrl) => this.buildRequestTarget(resolved, purpose, endpointUrl),
+  };
   private networkAllowlist: string[];
   private enforceNetworkAllowlist: boolean;
   private activeProviderId: string;
@@ -665,13 +675,15 @@ export class LlmService {
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
     const model = this.resolveRequestModel(resolved.provider, request.model);
     const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
+    const providerAdapter = this.providerAdapters.get(apiStyle);
+    if (providerAdapter) {
+      return providerAdapter.chatCompletions(request, resolved, model, this.providerAdapterHost);
+    }
 
     switch (apiStyle) {
       case "openai-codex-responses":
       case "openai-responses":
         return this.executeOpenAiResponses(request, resolved, model);
-      case "anthropic-messages":
-        return this.executeAnthropicMessages(request, resolved, model);
       default:
         return this.executeChatCompletions(request, resolved, model);
     }
@@ -686,14 +698,16 @@ export class LlmService {
     this.assertProviderHostAllowed(resolved.provider.baseUrl);
     const model = this.resolveRequestModel(resolved.provider, request.model);
     const apiStyle = resolveProviderExecutionApiStyle(resolved.provider, model);
+    const providerAdapter = this.providerAdapters.get(apiStyle);
+    if (providerAdapter) {
+      yield* providerAdapter.chatCompletionsStream(request, resolved, model, this.providerAdapterHost);
+      return;
+    }
 
     switch (apiStyle) {
       case "openai-codex-responses":
       case "openai-responses":
         yield* this.executeOpenAiResponsesStream(request, resolved, model);
-        return;
-      case "anthropic-messages":
-        yield* this.executeAnthropicMessagesStream(request, resolved, model);
         return;
       default:
         yield* this.executeChatCompletionsStream(request, resolved, model);
@@ -979,177 +993,6 @@ export class LlmService {
 
       if (eventType === "response.failed") {
         throw new Error("responses stream failed");
-      }
-    }
-  }
-
-  private async executeAnthropicMessages(
-    request: ChatCompletionRequest,
-    resolved: ResolvedProvider,
-    model: string,
-  ): Promise<ChatCompletionResponse> {
-    const payload = buildAnthropicMessagesPayload(request, model);
-    const target = this.buildRequestTarget(resolved, "messages", `${resolved.provider.baseUrl}/messages`);
-    const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 60000);
-    const response = await postJsonRequest(target, payload, timeoutMs, request.signal);
-
-    if (isRedirect(response.status)) {
-      throw new Error(`messages request blocked redirect (${response.status})`);
-    }
-    if (!response.ok) {
-      throw new Error(await buildHttpError("messages request", response));
-    }
-
-    const json = (await response.json()) as Record<string, unknown>;
-    return applyEstimatedCostToChatResponse(adaptAnthropicMessageResponse(json), {
-      providerId: resolved.provider.providerId,
-      model,
-    });
-  }
-
-  private async *executeAnthropicMessagesStream(
-    request: ChatCompletionRequest,
-    resolved: ResolvedProvider,
-    model: string,
-  ): AsyncGenerator<Record<string, unknown>> {
-    const payload = buildAnthropicMessagesPayload(request, model);
-    payload.stream = true;
-
-    const target = this.buildRequestTarget(resolved, "messages", `${resolved.provider.baseUrl}/messages`);
-    const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 120000);
-    const response = await postJsonRequest(target, payload, timeoutMs, request.signal);
-
-    if (isRedirect(response.status)) {
-      throw new Error(`messages request blocked redirect (${response.status})`);
-    }
-    if (!response.ok) {
-      throw new Error(await buildHttpError("messages request", response));
-    }
-
-    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-    if (!contentType.includes("text/event-stream") || !response.body) {
-      const json = (await response.json()) as Record<string, unknown>;
-      yield applyEstimatedCostToChatResponse(adaptAnthropicMessageResponse(json), {
-        providerId: resolved.provider.providerId,
-        model,
-      });
-      return;
-    }
-
-    const toolUseBuffers = new Map<
-      number,
-      {
-        id: string;
-        name: string;
-        partialJson: string;
-      }
-    >();
-    let messageId: string | undefined;
-    let messageModel: string | undefined;
-    let finishReason: string | undefined;
-    let usage: Record<string, unknown> | undefined;
-
-    for await (const event of streamJsonSseResponse(response)) {
-      const eventType = typeof event.type === "string" ? event.type : "";
-      if (eventType === "message_start" && isRecord(event.message)) {
-        messageId = typeof event.message.id === "string" ? event.message.id : messageId;
-        messageModel = typeof event.message.model === "string" ? event.message.model : messageModel;
-        continue;
-      }
-
-      if (eventType === "content_block_start" && typeof event.index === "number" && isRecord(event.content_block)) {
-        const block = event.content_block;
-        if (block.type === "tool_use") {
-          toolUseBuffers.set(event.index, {
-            id: String(block.id ?? `tool_${event.index}`),
-            name: String(block.name ?? ""),
-            partialJson: typeof block.input === "string" ? block.input : JSON.stringify(block.input ?? {}),
-          });
-        }
-        continue;
-      }
-
-      if (eventType === "content_block_delta" && isRecord(event.delta)) {
-        if (event.delta.type === "text_delta") {
-          yield {
-            id: messageId ?? "message",
-            model: messageModel,
-            choices: [
-              {
-                index: 0,
-                delta: {
-                  content: String(event.delta.text ?? ""),
-                },
-              },
-            ],
-          };
-          continue;
-        }
-
-        if (event.delta.type === "input_json_delta" && typeof event.index === "number") {
-          const existing = toolUseBuffers.get(event.index);
-          if (existing) {
-            existing.partialJson += String(event.delta.partial_json ?? "");
-          }
-        }
-        continue;
-      }
-
-      if (eventType === "content_block_stop" && typeof event.index === "number") {
-        const toolUse = toolUseBuffers.get(event.index);
-        if (toolUse) {
-          toolUseBuffers.delete(event.index);
-          yield {
-            id: messageId ?? toolUse.id,
-            model: messageModel,
-            choices: [
-              {
-                index: 0,
-                delta: {
-                  tool_calls: [
-                    {
-                      index: 0,
-                      id: toolUse.id,
-                      type: "function",
-                      function: {
-                        name: toolUse.name,
-                        arguments: normalizeJsonString(toolUse.partialJson),
-                      },
-                    },
-                  ],
-                },
-              },
-            ],
-          };
-        }
-        continue;
-      }
-
-      if (eventType === "message_delta") {
-        finishReason = typeof event.stop_reason === "string" ? event.stop_reason : finishReason;
-        usage = isRecord(event.usage) ? event.usage : usage;
-        continue;
-      }
-
-      if (eventType === "message_stop") {
-        yield applyEstimatedCostToStreamChunk(
-          {
-            id: messageId,
-            model: messageModel,
-            choices: [
-              {
-                index: 0,
-                delta: {},
-                finish_reason: mapAnthropicStopReason(finishReason),
-              },
-            ],
-            usage: normalizeAnthropicUsage(usage),
-          },
-          {
-            providerId: resolved.provider.providerId,
-            model,
-          },
-        );
       }
     }
   }
@@ -2522,276 +2365,6 @@ function mapOpenAiResponsesFinishReason(json: Record<string, unknown>): string {
   return "stop";
 }
 
-function buildAnthropicMessagesPayload(request: ChatCompletionRequest, model: string): Record<string, unknown> {
-  const { system, messages } = buildAnthropicMessagesInput(request.messages);
-  const payload: Record<string, unknown> = {
-    model,
-    messages,
-  };
-  if (system !== undefined) {
-    payload.system = system;
-  }
-  if (request.temperature !== undefined) payload.temperature = request.temperature;
-  if (request.top_p !== undefined) payload.top_p = request.top_p;
-  if (request.max_tokens !== undefined) payload.max_tokens = request.max_tokens;
-  else payload.max_tokens = 1024;
-  if (request.stop !== undefined) payload.stop_sequences = Array.isArray(request.stop) ? request.stop : [request.stop];
-  const anthropicTools = mapAnthropicTools(request.tools);
-  if (anthropicTools !== undefined) payload.tools = anthropicTools;
-  const anthropicToolChoice = mapAnthropicToolChoice(request.tool_choice);
-  if (anthropicToolChoice !== undefined) payload.tool_choice = anthropicToolChoice;
-  if (request.response_format !== undefined) payload.output_config = { format: request.response_format };
-  if (request.metadata !== undefined) payload.metadata = request.metadata;
-  if (request.reasoning?.effort && request.reasoning.effort !== "none") {
-    payload.thinking = {
-      type: "enabled",
-      budget_tokens: anthropicThinkingBudgetForEffort(request.reasoning.effort),
-    };
-  }
-  return payload;
-}
-
-function mapAnthropicTools(tools: ChatCompletionRequest["tools"]): Array<Record<string, unknown>> | undefined {
-  if (!Array.isArray(tools)) {
-    return undefined;
-  }
-  return tools
-    .map((tool) => {
-      if (!isRecord(tool)) {
-        return undefined;
-      }
-      if (typeof tool.name === "string" && isRecord(tool.input_schema)) {
-        return tool;
-      }
-      if (tool.type !== "function" || !isRecord(tool.function)) {
-        return tool;
-      }
-      const fn = tool.function;
-      const name = typeof fn.name === "string" ? fn.name : "";
-      if (!name) {
-        return undefined;
-      }
-      return {
-        name,
-        description: typeof fn.description === "string" ? fn.description : undefined,
-        input_schema: isRecord(fn.parameters) ? fn.parameters : { type: "object", properties: {} },
-      };
-    })
-    .filter((tool): tool is Record<string, unknown> => Boolean(tool));
-}
-
-function mapAnthropicToolChoice(toolChoice: ChatCompletionRequest["tool_choice"]): Record<string, unknown> | undefined {
-  if (toolChoice === undefined) {
-    return undefined;
-  }
-  if (typeof toolChoice === "string") {
-    if (toolChoice === "none") {
-      return undefined;
-    }
-    if (toolChoice === "required") {
-      return { type: "any" };
-    }
-    return { type: toolChoice };
-  }
-  if (isRecord(toolChoice) && toolChoice.type === "function") {
-    const fn = isRecord(toolChoice.function) ? toolChoice.function : undefined;
-    const name = typeof fn?.name === "string" ? fn.name : typeof toolChoice.name === "string" ? toolChoice.name : "";
-    return name ? { type: "tool", name } : { type: "auto" };
-  }
-  return toolChoice;
-}
-
-function buildAnthropicMessagesInput(messages: ChatCompletionRequest["messages"]): {
-  system?: string | Array<Record<string, unknown>>;
-  messages: Array<Record<string, unknown>>;
-} {
-  const systemStrings: string[] = [];
-  const systemBlocks: Array<Record<string, unknown>> = [];
-  const normalizedMessages: Array<Record<string, unknown>> = [];
-
-  for (const message of messages) {
-    if (message.role === "system" || message.role === "developer") {
-      if (typeof message.content === "string") {
-        systemStrings.push(message.content);
-      } else if (Array.isArray(message.content)) {
-        systemBlocks.push(...message.content.map((block) => mapAnthropicContentBlock(block)).filter(isRecord));
-      }
-      continue;
-    }
-
-    if (message.role === "tool") {
-      normalizedMessages.push({
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: message.tool_call_id,
-            content: normalizeAnthropicToolResultContent(message.content),
-          },
-        ],
-      });
-      continue;
-    }
-
-    if (message.role === "assistant") {
-      const assistantRecord = toPlainRecord(message);
-      const assistantContent = mapAnthropicMessageContent(message.content);
-      if (assistantRecord && Array.isArray(assistantRecord.tool_calls)) {
-        for (const toolCall of assistantRecord.tool_calls) {
-          if (!isRecord(toolCall) || !isRecord(toolCall.function)) {
-            continue;
-          }
-          assistantContent.push({
-            type: "tool_use",
-            id: String(toolCall.id ?? randomToolCallId()),
-            name: String(toolCall.function.name ?? ""),
-            input: parseJsonObject(toolCall.function.arguments),
-          });
-        }
-      }
-      normalizedMessages.push({
-        role: "assistant",
-        content: anthropicContentValue(assistantContent),
-      });
-      continue;
-    }
-
-    normalizedMessages.push({
-      role: "user",
-      content: anthropicContentValue(mapAnthropicMessageContent(message.content)),
-    });
-  }
-
-  const system =
-    systemBlocks.length > 0
-      ? [...systemBlocks, ...systemStrings.filter(Boolean).map((text) => ({ type: "text", text }))]
-      : systemStrings.filter(Boolean).length > 0
-        ? systemStrings.filter(Boolean).join("\n\n")
-        : undefined;
-
-  return { system, messages: normalizedMessages };
-}
-
-function mapAnthropicMessageContent(
-  content: ChatCompletionRequest["messages"][number]["content"],
-): Array<Record<string, unknown>> {
-  if (typeof content === "string") {
-    return content.trim() ? [{ type: "text", text: content }] : [];
-  }
-  if (!Array.isArray(content)) {
-    return [];
-  }
-  return content.map((block) => mapAnthropicContentBlock(block)).filter(isRecord);
-}
-
-function mapAnthropicContentBlock(block: unknown): Record<string, unknown> | undefined {
-  if (!isRecord(block)) {
-    return undefined;
-  }
-  if (block.type === "input_text" || block.type === "output_text") {
-    const text = String(block.text ?? "");
-    return text.trim() ? { type: "text", text } : undefined;
-  }
-  if (block.type === "text" && typeof block.text === "string" && !block.text.trim()) {
-    return undefined;
-  }
-  return block;
-}
-
-function anthropicContentValue(content: Array<Record<string, unknown>>): string | Array<Record<string, unknown>> {
-  if (content.length === 1 && content[0]?.type === "text" && typeof content[0].text === "string") {
-    return String(content[0].text);
-  }
-  return content;
-}
-
-function normalizeAnthropicToolResultContent(
-  content: ChatCompletionRequest["messages"][number]["content"],
-): string | Array<Record<string, unknown>> {
-  if (typeof content === "string") {
-    return content;
-  }
-  const mapped = mapAnthropicMessageContent(content);
-  return anthropicContentValue(mapped);
-}
-
-function adaptAnthropicMessageResponse(json: Record<string, unknown>): ChatCompletionResponse {
-  const content = Array.isArray(json.content) ? json.content.filter(isRecord) : [];
-  const text = content
-    .filter((block) => block.type === "text")
-    .map((block) => String(block.text ?? ""))
-    .join("");
-  const toolCalls = dedupeToolCalls(
-    content
-      .filter((block) => block.type === "tool_use")
-      .map((block) => ({
-        id: String(block.id ?? randomToolCallId()),
-        type: "function",
-        function: {
-          name: String(block.name ?? ""),
-          arguments: JSON.stringify(block.input ?? {}),
-        },
-      })),
-  );
-
-  return {
-    id: typeof json.id === "string" ? json.id : undefined,
-    object: "chat.completion",
-    model: typeof json.model === "string" ? json.model : undefined,
-    choices: [
-      {
-        index: 0,
-        message: {
-          role: "assistant",
-          content: text,
-          ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
-        },
-        finish_reason: mapAnthropicStopReason(typeof json.stop_reason === "string" ? json.stop_reason : undefined),
-      },
-    ],
-    usage: normalizeAnthropicUsage(isRecord(json.usage) ? json.usage : undefined),
-  };
-}
-
-function normalizeAnthropicUsage(usage: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
-  if (!usage) {
-    return undefined;
-  }
-  const inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
-  const outputTokens = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
-  return {
-    prompt_tokens: inputTokens,
-    completion_tokens: outputTokens,
-    total_tokens: inputTokens + outputTokens,
-  };
-}
-
-function mapAnthropicStopReason(stopReason: string | undefined): string {
-  switch (stopReason) {
-    case "tool_use":
-      return "tool_calls";
-    case "max_tokens":
-      return "length";
-    default:
-      return "stop";
-  }
-}
-
-function anthropicThinkingBudgetForEffort(effort: NonNullable<ChatCompletionRequest["reasoning"]>["effort"]): number {
-  switch (effort) {
-    case "low":
-      return 1024;
-    case "medium":
-      return 4096;
-    case "high":
-      return 8192;
-    case "xhigh":
-      return 16384;
-    default:
-      return 1024;
-  }
-}
-
 function normalizeToolOutputContent(
   content: ChatCompletionRequest["messages"][number]["content"],
 ): string | Array<Record<string, unknown>> {
@@ -2824,29 +2397,6 @@ function dedupeToolCalls<T extends { id: string }>(toolCalls: T[]): T[] {
     seen.add(toolCall.id);
     return true;
   });
-}
-
-function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (isRecord(value)) {
-    return value;
-  }
-  if (typeof value !== "string") {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return isRecord(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function normalizeJsonString(value: string): string {
-  try {
-    return JSON.stringify(JSON.parse(value));
-  } catch {
-    return value || "{}";
-  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
