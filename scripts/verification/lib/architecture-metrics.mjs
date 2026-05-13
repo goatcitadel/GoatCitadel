@@ -32,6 +32,8 @@ const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES = [
   "taskLifecycleService",
   "toolInvocationCoordinator",
 ];
+// Matches whitespace, line comments, and non-nested block comments in valid TS/JS source.
+// Nested block comments are invalid JavaScript/TypeScript syntax, so this intentionally does not parse them.
 const WHITESPACE_AND_COMMENTS_PATTERN = String.raw`(?:\s|\/\/[^\r\n]*\r?\n|\/\*[\s\S]*?\*\/)*`;
 const METHOD_LEADING_WHITESPACE_PATTERN_SOURCE = String.raw`^\s*`;
 const METHOD_INTERNAL_MARKER_PATTERN_SOURCE = String.raw`(?<internal>/\*\* @internal \*/\s*)?`;
@@ -947,6 +949,7 @@ function countMatches(content, pattern) {
   while ((match = regex.exec(content)) !== null) {
     count += 1;
     if (match[0] === "") {
+      // Zero-width global matches do not advance lastIndex, so advance manually to avoid an infinite loop.
       regex.lastIndex += 1;
     }
   }
@@ -958,6 +961,7 @@ function deltaOrCurrentFallback(current, baselineValue) {
 }
 
 function countLines(content) {
+  // Empty content has no source lines for architecture-size metrics.
   if (content.length === 0) {
     return 0;
   }
