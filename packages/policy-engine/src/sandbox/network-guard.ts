@@ -3,11 +3,6 @@ import type { EgressDecision } from "@goatcitadel/contracts";
 
 const DISALLOWED_HOSTS = new Set(["0.0.0.0", "169.254.169.254", "metadata.google.internal", "100.100.100.200"]);
 
-function wildcardToRegex(pattern: string): RegExp {
-  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
-  return new RegExp(`^${escaped}$`, "i");
-}
-
 export function isHostAllowed(hostOrUrl: string, allowlist: string[]): boolean {
   return evaluateHostEgress(hostOrUrl, allowlist).allowed;
 }
@@ -28,10 +23,9 @@ export function evaluateHostEgress(hostOrUrl: string, allowlist: string[]): Egre
     };
   }
 
-  const matchedPattern = allowlist.find((pattern) => {
-    const regex = wildcardToRegex(pattern);
-    return regex.test(host) || regex.test(hostname);
-  });
+  const matchedPattern = allowlist.find(
+    (pattern) => matchesAllowlistPattern(host, pattern) || matchesAllowlistPattern(hostname, pattern),
+  );
 
   if (!matchedPattern) {
     return {
@@ -164,6 +158,41 @@ function parseHost(hostOrUrl: string): { host: string; hostname: string } {
       hostname: withoutPath,
     };
   }
+}
+
+function matchesAllowlistPattern(candidate: string, pattern: string): boolean {
+  const normalizedCandidate = candidate.toLowerCase();
+  const normalizedPattern = pattern.trim().toLowerCase();
+
+  if (!normalizedPattern.includes("*")) {
+    return normalizedCandidate === normalizedPattern;
+  }
+
+  if (normalizedPattern === "*") {
+    return true;
+  }
+
+  const segments = normalizedPattern.split("*");
+  const firstSegment = segments[0] ?? "";
+  if (firstSegment && !normalizedCandidate.startsWith(firstSegment)) {
+    return false;
+  }
+  let cursor = firstSegment.length;
+
+  for (let index = 1; index < segments.length; index += 1) {
+    const segment = segments[index] ?? "";
+    if (!segment) {
+      continue;
+    }
+    const nextIndex = normalizedCandidate.indexOf(segment, cursor);
+    if (nextIndex < 0) {
+      return false;
+    }
+    cursor = nextIndex + segment.length;
+  }
+
+  const lastSegment = segments.at(-1) ?? "";
+  return !lastSegment || normalizedCandidate.endsWith(lastSegment);
 }
 
 function isPrivateOrReservedHost(hostname: string): boolean {

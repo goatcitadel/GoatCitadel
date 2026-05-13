@@ -129,14 +129,15 @@ describe("client-core", () => {
     expect(readGatewayAuthHeaders("/api/v1/test")).toEqual({ Authorization: "Bearer token" });
 
     persistGatewayAuthState({ mode: "basic", username: "user", password: " pass " });
-    expect(readStoredGatewayAuthState()).toMatchObject({ mode: "basic", username: "user", password: "pass" });
+    expect(readStoredGatewayAuthState()).toMatchObject({ mode: "basic", username: "user" });
+    expect(readStoredGatewayAuthState()).not.toHaveProperty("password");
     expect(readGatewayAuthHeaders("/api/v1/test")).toEqual({
       Authorization: `Basic ${Buffer.from("user:pass", "utf8").toString("base64")}`,
     });
 
     window.localStorage.removeItem("goatcitadel.gateway.auth");
     setGatewayAuthStorageMode("persistent");
-    expect(window.localStorage.getItem("goatcitadel.gateway.auth")).toContain("pass");
+    expect(window.localStorage.getItem("goatcitadel.gateway.auth")).not.toContain("pass");
     setGatewayAuthStorageMode("session");
     expect(window.localStorage.getItem("goatcitadel.gateway.auth")).toBeNull();
 

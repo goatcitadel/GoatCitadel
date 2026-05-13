@@ -16,6 +16,12 @@ describe("isHostAllowed", () => {
     expect(isHostAllowed(OPENAI_CHAT_URL, [new URL("https://api.openai.com").hostname])).toBe(true);
   });
 
+  it("does not treat dots in exact allowlist hosts as wildcard characters", () => {
+    expect(
+      isHostAllowed("https://apixopenai.com/v1/chat/completions", [new URL("https://api.openai.com").hostname]),
+    ).toBe(false);
+  });
+
   it("matches wildcard host", () => {
     expect(isHostAllowed("https://foo.example.com/path", [EXAMPLE_WILDCARD])).toBe(true);
   });

@@ -29,6 +29,7 @@ export const API_BASE = normalizeGatewayBaseUrl(RAW_API_BASE);
 const AUTH_STORAGE_KEY = "goatcitadel.gateway.auth";
 const AUTH_STORAGE_MODE_KEY = "goatcitadel.gateway.auth.storageMode";
 const LAST_ROUTE_STORAGE_KEY = "goatcitadel.shell.last-route";
+let volatileGatewayBasicAuth: Pick<GatewayAuthState, "mode" | "username" | "password"> | undefined;
 
 export interface GatewayAuthState {
   mode?: "none" | "token" | "basic";
@@ -310,10 +311,10 @@ function readGatewayAuthState(): GatewayAuthState | undefined {
     return undefined;
   }
   migrateLegacyGatewayAuthStorage();
-  return (
+  const stored =
     readStoredGatewayAuthStateFromStorage(window.sessionStorage) ??
-    readStoredGatewayAuthStateFromStorage(window.localStorage)
-  );
+    readStoredGatewayAuthStateFromStorage(window.localStorage);
+  return mergeVolatileGatewayBasicAuth(stored);
 }
 
 export function getGatewayAuthStorageMode(): GatewayAuthStorageMode {
@@ -343,6 +344,7 @@ export function persistGatewayAuthState(state: GatewayAuthState, mode: GatewayAu
   if (typeof window === "undefined") {
     return;
   }
+  volatileGatewayBasicAuth = buildVolatileGatewayBasicAuth(state);
   const payload = buildPersistedGatewayAuthState(state);
   const raw = JSON.stringify(payload);
   window.sessionStorage.setItem(AUTH_STORAGE_KEY, raw);
@@ -358,13 +360,21 @@ export function clearGatewayAuthState(): void {
   if (typeof window === "undefined") {
     return;
   }
+  volatileGatewayBasicAuth = undefined;
   window.sessionStorage.removeItem(AUTH_STORAGE_KEY);
   window.localStorage.removeItem(AUTH_STORAGE_KEY);
   window.localStorage.removeItem(LAST_ROUTE_STORAGE_KEY);
 }
 
 export function readStoredGatewayAuthState(): GatewayAuthState | undefined {
-  return readGatewayAuthState();
+  if (typeof window === "undefined") {
+    return undefined;
+  }
+  migrateLegacyGatewayAuthStorage();
+  return (
+    readStoredGatewayAuthStateFromStorage(window.sessionStorage) ??
+    readStoredGatewayAuthStateFromStorage(window.localStorage)
+  );
 }
 
 export function consumeGatewayAccessBootstrapFromLocation(): GatewayBootstrapResult {
@@ -694,6 +704,36 @@ function buildPersistedGatewayAuthState(state: GatewayAuthState): GatewayAuthSta
     token: trimStoredAuthField(state.token),
     username: trimStoredAuthField(state.username),
     tokenQueryParam: trimStoredAuthField(state.tokenQueryParam) ?? "access_token",
+  };
+}
+
+function buildVolatileGatewayBasicAuth(
+  state: GatewayAuthState,
+): Pick<GatewayAuthState, "mode" | "username" | "password"> | undefined {
+  const username = trimStoredAuthField(state.username);
+  const password = trimStoredAuthField(state.password);
+  if (state.mode !== "basic" || !username || !password) {
+    return undefined;
+  }
+  return {
+    mode: "basic",
+    username,
+    password,
+  };
+}
+
+function mergeVolatileGatewayBasicAuth(stored: GatewayAuthState | undefined): GatewayAuthState | undefined {
+  if (
+    stored?.mode !== "basic" ||
+    !stored.username ||
+    !volatileGatewayBasicAuth?.password ||
+    stored.username !== volatileGatewayBasicAuth.username
+  ) {
+    return stored;
+  }
+  return {
+    ...stored,
+    password: volatileGatewayBasicAuth.password,
   };
 }
 
