@@ -68,6 +68,11 @@ interface GoalLoopResult {
 }
 
 const GOAL_LOOP_ITERATION_TIMEOUT_MS = 5 * 60 * 1000;
+const LEGACY_RESUME_GOAL_OPTIONS: GoalLoopOptions = {
+  maxIterations: 1,
+  budgetUsd: 0.5,
+  surfaceMode: "code",
+};
 const activeGoalLoopSessionIds = new Set<string>();
 
 export async function handleGoalCommand(
@@ -119,7 +124,7 @@ export async function handleGoalCommand(
     deps.updateChatSessionLearnedMemory(sessionId, paused.itemId, { status: "active" });
     const storedGoal = parseStoredGoalMemory(paused.content);
     objective = storedGoal.objective;
-    loopOptions = storedGoal.options ?? parsedGoal.options;
+    loopOptions = storedGoal.options ?? { ...LEGACY_RESUME_GOAL_OPTIONS, surfaceMode: parsedGoal.options.surfaceMode };
     shouldPersistGoalMemory = false;
   }
   if (!objective) {
@@ -162,6 +167,7 @@ async function runGoalLoop(
   const seenChildSessions = new Set<string>();
   let latestOutput: string | undefined;
   let totalCostUsd = 0;
+  let consecutiveUnknownVerdicts = 0;
 
   for (let index = 0; index < options.maxIterations; index += 1) {
     if (totalCostUsd >= options.budgetUsd) {
@@ -226,6 +232,11 @@ async function runGoalLoop(
     const verdict = stepBlocked
       ? { status: "blocked" as const, reason: qaStep?.error }
       : parseGoalVerifierVerdict(latestOutput);
+    if (verdict.status === "unknown") {
+      consecutiveUnknownVerdicts += 1;
+    } else {
+      consecutiveUnknownVerdicts = 0;
+    }
     iterations.push({
       iteration,
       runId: response.runId,
@@ -238,7 +249,7 @@ async function runGoalLoop(
     if (verdict.status === "pass") {
       return buildLoopResult(true, objective, "goal_hit", iterations, totalCostUsd, options, latestOutput);
     }
-    if (verdict.status === "blocked" || verdict.status === "unknown") {
+    if (verdict.status === "blocked" || consecutiveUnknownVerdicts >= 2) {
       return buildLoopResult(false, objective, "blocked", iterations, totalCostUsd, options, latestOutput);
     }
     if (totalCostUsd >= options.budgetUsd) {

@@ -7,9 +7,10 @@ import {
   isHostAllowed,
 } from "./sandbox/network-guard.js";
 
-const OPENAI_HOST = ["api", "openai", "com"].join(".");
+const HOST_DOT = ".";
+const OPENAI_HOST = `api${HOST_DOT}openai${HOST_DOT}com`;
 const OPENAI_CHAT_URL = new URL("/v1/chat/completions", `https://${OPENAI_HOST}`).toString();
-const EXAMPLE_WILDCARD = `*.${["example", "com"].join(".")}`;
+const EXAMPLE_WILDCARD = `*${HOST_DOT}example${HOST_DOT}com`;
 const LOCALHOST_HOST = new URL("http://localhost").hostname;
 
 describe("isHostAllowed", () => {

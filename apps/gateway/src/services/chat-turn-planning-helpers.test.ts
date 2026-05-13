@@ -275,6 +275,7 @@ describe("chat turn planning helpers", () => {
       },
     );
 
+    expect(draft?.steps[0]?.dependsOnStepIds).toEqual([]);
     expect(draft?.steps[1]?.dependsOnStepIds).toEqual(["step-1"]);
   });
 });

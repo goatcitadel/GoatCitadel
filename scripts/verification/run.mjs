@@ -151,31 +151,31 @@ async function main() {
     } else if (lane === "code-mode-sandbox") {
       await runCodeModeSandboxRequiredLane(context, { profile });
     } else if (lane === "agentic-contracts") {
-      await runAgenticContractsLane(context, { profile });
+      await runAgenticContractsLane(context);
     } else if (lane === "agentic-governance") {
-      await runAgenticGovernanceLane(context, { profile });
+      await runAgenticGovernanceLane(context);
     } else if (lane === "agentic-harnesses") {
-      await runAgenticHarnessesLane(context, { profile });
+      await runAgenticHarnessesLane(context);
     } else if (lane === "agentic-workbench-loop") {
-      await runAgenticWorkbenchLoopLane(context, { profile });
+      await runAgenticWorkbenchLoopLane(context);
     } else if (lane === "agentic-channels-runtime") {
-      await runAgenticChannelsRuntimeLane(context, { profile });
+      await runAgenticChannelsRuntimeLane(context);
     } else if (lane === "agentic-harness-availability") {
-      await runAgenticHarnessAvailabilityLane(context, { profile });
+      await runAgenticHarnessAvailabilityLane(context);
     } else if (lane === "agentic-plugins-marketplace") {
-      await runAgenticPluginsMarketplaceLane(context, { profile });
+      await runAgenticPluginsMarketplaceLane(context);
     } else if (lane === "agentic-self-improvement-trust") {
-      await runAgenticSelfImprovementTrustLane(context, { profile });
+      await runAgenticSelfImprovementTrustLane(context);
     } else if (lane === "agentic-proof" || lane === "agentic-parity") {
-      await runAgenticContractsLane(context, { profile });
-      await runAgenticGovernanceLane(context, { profile });
-      await runAgenticHarnessesLane(context, { profile });
+      await runAgenticContractsLane(context);
+      await runAgenticGovernanceLane(context);
+      await runAgenticHarnessesLane(context);
     } else if (lane === "all") {
       await runFastLane(context);
       await runCodeModeSandboxRequiredLane(context, { profile });
-      await runAgenticContractsLane(context, { profile });
-      await runAgenticGovernanceLane(context, { profile });
-      await runAgenticHarnessesLane(context, { profile });
+      await runAgenticContractsLane(context);
+      await runAgenticGovernanceLane(context);
+      await runAgenticHarnessesLane(context);
       await runDeepCoreLane(context, { profile });
       await runDeepEcosystemLane(context, { profile });
       await runCatalogParityLane(context, { profile });

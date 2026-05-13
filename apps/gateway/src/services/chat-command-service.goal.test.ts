@@ -196,9 +196,9 @@ describe("chat goal command", () => {
     expect(runChatDelegation).toHaveBeenCalledTimes(2);
   });
 
-  it("blocks when QA omits a verifier verdict", async () => {
+  it("retries once when QA omits a verifier verdict before blocking", async () => {
     const runChatDelegation = vi.fn(async () => ({
-      runId: "run-unknown",
+      runId: `run-unknown-${runChatDelegation.mock.calls.length + 1}`,
       steps: [
         step({ stepId: "goal-1-implement", role: "coder" }),
         step({ stepId: "goal-1-verify", role: "qa", output: "Looks fine, ship it." }),
@@ -212,7 +212,7 @@ describe("chat goal command", () => {
     expect(result.ok).toBe(false);
     expect(result.message).toContain("Blocked:");
     expect(result.message).toContain("Verifier did not emit GOAL_STATUS.");
-    expect(runChatDelegation).toHaveBeenCalledTimes(1);
+    expect(runChatDelegation).toHaveBeenCalledTimes(2);
   });
 
   it("stops after the iteration that reaches the budget cap", async () => {
@@ -290,6 +290,32 @@ describe("chat goal command", () => {
         surfaceMode: "cowork",
       }),
     );
+  });
+
+  it("uses conservative limits when resuming legacy goals without stored options", async () => {
+    const runChatDelegation = vi.fn(async () => ({
+      runId: "run-legacy-resume",
+      steps: [
+        step({ stepId: "goal-1-implement", role: "coder" }),
+        step({
+          stepId: "goal-1-verify",
+          role: "qa",
+          output: "Still failing.\nGOAL_STATUS: fail\nGOAL_REASON: Needs another pass.",
+        }),
+      ],
+      stitchedOutput: "Still failing.\nGOAL_STATUS: fail\nGOAL_REASON: Needs another pass.",
+    }));
+    const deps = createDeps({
+      items: [goalItem({ status: "disabled", content: "Goal: Resume a legacy stored goal." })],
+      runChatDelegation,
+    });
+
+    const result = await parseChatCommand(deps, "session-1", "/goal resume");
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("Iterations: 1/1");
+    expect(result.message).toContain("Estimated cost: $0.0000 / $0.50");
+    expect(runChatDelegation).toHaveBeenCalledTimes(1);
   });
 
   it("does not treat malformed pause/resume/clear commands as new goals", async () => {

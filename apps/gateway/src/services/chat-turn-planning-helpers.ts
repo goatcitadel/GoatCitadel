@@ -491,7 +491,7 @@ export function coercePlannerExecutionPlanDraft(
       expectedOutput,
       parallelizable:
         !controlStep && typeof raw?.parallelizable === "boolean" ? raw.parallelizable : templateStep.parallelizable,
-      dependsOnStepIds: dependsOnStepIds?.length ? dependsOnStepIds : undefined,
+      dependsOnStepIds,
       delegatedRole,
       status: "pending" as const,
     };

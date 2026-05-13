@@ -4,6 +4,7 @@ import path from "node:path";
 const repoRoot = process.cwd();
 const coveragePolicyPath = path.join(repoRoot, "coverage-policy.json");
 const sourceRoots = ["apps", "packages"];
+const MIN_EXCLUSION_REASON_LENGTH = 20;
 const allowedExclusionCategories = new Set([
   "generated-static-adapter",
   "test-harness-setup",
@@ -116,7 +117,7 @@ async function readCoveragePolicy() {
         `coverage-policy.json exclusions[${index}] has unsupported reasonCategory ${JSON.stringify(entry.reasonCategory)}.`,
       );
     }
-    if (typeof entry.reason !== "string" || entry.reason.trim().length < 10) {
+    if (typeof entry.reason !== "string" || entry.reason.trim().length < MIN_EXCLUSION_REASON_LENGTH) {
       throw new Error(`coverage-policy.json exclusions[${index}] must include a specific reason.`);
     }
     return globToRegExp(normalizePath(pattern));
