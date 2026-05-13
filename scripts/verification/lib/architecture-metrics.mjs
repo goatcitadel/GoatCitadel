@@ -33,10 +33,15 @@ const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES = [
   "taskLifecycleService",
   "toolInvocationCoordinator",
 ];
-const EXPECTED_ROUTE_COMPOSITION_PRIVATE_DEPENDENCIES_ALIAS = `export type GatewayRouteCompositionPrivateDependencies = Pick<
-  GatewayRouteCompositionPort,
-${ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES.map((dependencyName) => `  | "${dependencyName}"`).join("\n")}
->;`;
+const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_UNION_LINES = ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES.map(
+  (dependencyName) => `  | "${dependencyName}"`,
+);
+const EXPECTED_ROUTE_COMPOSITION_PRIVATE_DEPENDENCIES_ALIAS = [
+  "export type GatewayRouteCompositionPrivateDependencies = Pick<",
+  "  GatewayRouteCompositionPort,",
+  ...ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_UNION_LINES,
+  ">;",
+].join("\n");
 
 export async function collectArchitectureMetrics(rootDir = repoRoot) {
   const gatewaySrcDir = path.join(rootDir, "apps", "gateway", "src");
@@ -209,8 +214,15 @@ export async function collectArchitectureMetrics(rootDir = repoRoot) {
 
 export async function readArchitectureMetricsBaseline(rootDir = repoRoot) {
   const baselinePath = path.join(rootDir, "scripts", "verification", "baselines", "architecture-metrics.json");
-  const raw = await fs.readFile(baselinePath, "utf8");
-  return JSON.parse(raw);
+  try {
+    const raw = await fs.readFile(baselinePath, "utf8");
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `Failed to load architecture metrics baseline at "${baselinePath}". Ensure the file exists and contains valid JSON.`,
+      { cause: error },
+    );
+  }
 }
 
 export function compareArchitectureMetrics(metrics, baseline) {
@@ -223,54 +235,69 @@ export function compareArchitectureMetrics(metrics, baseline) {
       metrics.gatewayServiceImportConsumerCount - baseline.gatewayServiceImportConsumerCount,
     fastifyGatewayCallSites: metrics.fastifyGatewayCallSites - baseline.fastifyGatewayCallSites,
     gatewayInternalPublicCount: metrics.gatewayInternalPublicCount - baseline.gatewayInternalPublicCount,
-    gatewayRuntimePortFullStorageCount:
-      metrics.gatewayRuntimePortFullStorageCount -
-      (baseline.gatewayRuntimePortFullStorageCount ?? metrics.gatewayRuntimePortFullStorageCount),
-    gatewayRuntimeFactoryRawServiceReturnCount:
-      metrics.gatewayRuntimeFactoryRawServiceReturnCount -
-      (baseline.gatewayRuntimeFactoryRawServiceReturnCount ?? metrics.gatewayRuntimeFactoryRawServiceReturnCount),
-    fastifyGatewayRuntimeStorageAccessCount:
-      metrics.fastifyGatewayRuntimeStorageAccessCount -
-      (baseline.fastifyGatewayRuntimeStorageAccessCount ?? metrics.fastifyGatewayRuntimeStorageAccessCount),
-    boundGatewayRoutePortMethodCount:
-      metrics.boundGatewayRoutePortMethodCount -
-      (baseline.boundGatewayRoutePortMethodCount ?? metrics.boundGatewayRoutePortMethodCount),
-    chatTurnRuntimeConstructedWithGatewayCount:
-      metrics.chatTurnRuntimeConstructedWithGatewayCount -
-      (baseline.chatTurnRuntimeConstructedWithGatewayCount ?? metrics.chatTurnRuntimeConstructedWithGatewayCount),
-    fastifyGatewayDecoratorReferenceCount:
-      metrics.fastifyGatewayDecoratorReferenceCount -
-      (baseline.fastifyGatewayDecoratorReferenceCount ?? metrics.fastifyGatewayDecoratorReferenceCount),
+    gatewayRuntimePortFullStorageCount: deltaOrCurrentFallback(
+      metrics.gatewayRuntimePortFullStorageCount,
+      baseline.gatewayRuntimePortFullStorageCount,
+    ),
+    gatewayRuntimeFactoryRawServiceReturnCount: deltaOrCurrentFallback(
+      metrics.gatewayRuntimeFactoryRawServiceReturnCount,
+      baseline.gatewayRuntimeFactoryRawServiceReturnCount,
+    ),
+    fastifyGatewayRuntimeStorageAccessCount: deltaOrCurrentFallback(
+      metrics.fastifyGatewayRuntimeStorageAccessCount,
+      baseline.fastifyGatewayRuntimeStorageAccessCount,
+    ),
+    boundGatewayRoutePortMethodCount: deltaOrCurrentFallback(
+      metrics.boundGatewayRoutePortMethodCount,
+      baseline.boundGatewayRoutePortMethodCount,
+    ),
+    chatTurnRuntimeConstructedWithGatewayCount: deltaOrCurrentFallback(
+      metrics.chatTurnRuntimeConstructedWithGatewayCount,
+      baseline.chatTurnRuntimeConstructedWithGatewayCount,
+    ),
+    fastifyGatewayDecoratorReferenceCount: deltaOrCurrentFallback(
+      metrics.fastifyGatewayDecoratorReferenceCount,
+      baseline.fastifyGatewayDecoratorReferenceCount,
+    ),
     serviceContextConsumerCount: metrics.serviceContextConsumerCount - baseline.serviceContextConsumerCount,
-    gatewayRouteCompositionUnsafeCastCount:
-      metrics.gatewayRouteCompositionUnsafeCastCount -
-      (baseline.gatewayRouteCompositionUnsafeCastCount ?? metrics.gatewayRouteCompositionUnsafeCastCount),
-    gatewayRouteCompositionAnyAliasCount:
-      metrics.gatewayRouteCompositionAnyAliasCount -
-      (baseline.gatewayRouteCompositionAnyAliasCount ?? metrics.gatewayRouteCompositionAnyAliasCount),
-    gatewayRouteCompositionWideningCount:
-      metrics.gatewayRouteCompositionWideningCount -
-      (baseline.gatewayRouteCompositionWideningCount ?? metrics.gatewayRouteCompositionWideningCount),
-    gatewayRouteCompositionVariadicAnyMethodCount:
-      metrics.gatewayRouteCompositionVariadicAnyMethodCount -
-      (baseline.gatewayRouteCompositionVariadicAnyMethodCount ?? metrics.gatewayRouteCompositionVariadicAnyMethodCount),
-    gatewayRouteCompositionFactoryExternalConsumerCount:
-      metrics.gatewayRouteCompositionFactoryExternalConsumerCount -
-      (baseline.gatewayRouteCompositionFactoryExternalConsumerCount ??
-        metrics.gatewayRouteCompositionFactoryExternalConsumerCount),
-    gatewayRouteCompositionPortMemberCount:
-      metrics.gatewayRouteCompositionPortMemberCount -
-      (baseline.gatewayRouteCompositionPortMemberCount ?? metrics.gatewayRouteCompositionPortMemberCount),
-    legacyRouteServiceFactoryVariadicAnyCount:
-      metrics.legacyRouteServiceFactoryVariadicAnyCount -
-      (baseline.legacyRouteServiceFactoryVariadicAnyCount ?? metrics.legacyRouteServiceFactoryVariadicAnyCount),
-    legacyRoutePortAliasCount:
-      metrics.legacyRoutePortAliasCount - (baseline.legacyRoutePortAliasCount ?? metrics.legacyRoutePortAliasCount),
+    gatewayRouteCompositionUnsafeCastCount: deltaOrCurrentFallback(
+      metrics.gatewayRouteCompositionUnsafeCastCount,
+      baseline.gatewayRouteCompositionUnsafeCastCount,
+    ),
+    gatewayRouteCompositionAnyAliasCount: deltaOrCurrentFallback(
+      metrics.gatewayRouteCompositionAnyAliasCount,
+      baseline.gatewayRouteCompositionAnyAliasCount,
+    ),
+    gatewayRouteCompositionWideningCount: deltaOrCurrentFallback(
+      metrics.gatewayRouteCompositionWideningCount,
+      baseline.gatewayRouteCompositionWideningCount,
+    ),
+    gatewayRouteCompositionVariadicAnyMethodCount: deltaOrCurrentFallback(
+      metrics.gatewayRouteCompositionVariadicAnyMethodCount,
+      baseline.gatewayRouteCompositionVariadicAnyMethodCount,
+    ),
+    gatewayRouteCompositionFactoryExternalConsumerCount: deltaOrCurrentFallback(
+      metrics.gatewayRouteCompositionFactoryExternalConsumerCount,
+      baseline.gatewayRouteCompositionFactoryExternalConsumerCount,
+    ),
+    gatewayRouteCompositionPortMemberCount: deltaOrCurrentFallback(
+      metrics.gatewayRouteCompositionPortMemberCount,
+      baseline.gatewayRouteCompositionPortMemberCount,
+    ),
+    legacyRouteServiceFactoryVariadicAnyCount: deltaOrCurrentFallback(
+      metrics.legacyRouteServiceFactoryVariadicAnyCount,
+      baseline.legacyRouteServiceFactoryVariadicAnyCount,
+    ),
+    legacyRoutePortAliasCount: deltaOrCurrentFallback(
+      metrics.legacyRoutePortAliasCount,
+      baseline.legacyRoutePortAliasCount,
+    ),
     totalHostCallbacks: metrics.totalHostCallbacks - baseline.totalHostCallbacks,
-    settingsHostCallbackCount:
-      metrics.settingsHostCallbackCount - (baseline.settingsHostCallbackCount ?? metrics.settingsHostCallbackCount),
-    chatHostCallbackCount:
-      metrics.chatHostCallbackCount - (baseline.chatHostCallbackCount ?? metrics.chatHostCallbackCount),
+    settingsHostCallbackCount: deltaOrCurrentFallback(
+      metrics.settingsHostCallbackCount,
+      baseline.settingsHostCallbackCount,
+    ),
+    chatHostCallbackCount: deltaOrCurrentFallback(metrics.chatHostCallbackCount, baseline.chatHostCallbackCount),
     routeFacingServiceCount: metrics.routeFacingServiceCount - baseline.routeFacingServiceCount,
   };
 
@@ -771,12 +798,20 @@ function countGatewayRouteCompositionShapeViolations(routeCompositionSource, gat
 }
 
 function normalizeTypeAlias(source) {
-  return source.replace(/\s+/g, " ").trim();
+  return source
+    .split(/\r?\n/)
+    .map((line) => line.replace(/[^\S\r\n]+/g, " ").trim())
+    .filter((line) => line.length > 0)
+    .join("\n");
 }
 
 function countMatches(content, pattern) {
   const matches = content.match(pattern);
   return Array.isArray(matches) ? matches.length : 0;
+}
+
+function deltaOrCurrentFallback(current, baselineValue) {
+  return current - (baselineValue ?? current);
 }
 
 function countLines(content) {
