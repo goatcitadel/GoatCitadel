@@ -34,7 +34,8 @@ const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES = [
 ];
 // Matches whitespace, line comments, and non-nested block comments in valid TS/JS source.
 // Nested block comments are invalid JavaScript/TypeScript syntax, so this intentionally does not parse them.
-const WHITESPACE_AND_COMMENTS_PATTERN = String.raw`(?:\s|\/\/[^\r\n]*\r?\n|\/\*[\s\S]*?\*\/)*`;
+const WHITESPACE_AND_COMMENTS_PATTERN = String.raw`(?:\s|\/\/[^\r\n]*\r?\n|\/\*[^*]*\*+(?:[^/*][^*]*\*+)*\/)*`;
+const MAX_ARRAY_EXPRESSION_UNWRAP_DEPTH = 100;
 const METHOD_LEADING_WHITESPACE_PATTERN_SOURCE = String.raw`^\s*`;
 const METHOD_INTERNAL_MARKER_PATTERN_SOURCE = String.raw`(?<internal>/\*\* @internal \*/\s*)?`;
 const METHOD_PUBLIC_KEYWORD_PATTERN_SOURCE = String.raw`public\s+`;
@@ -854,18 +855,26 @@ function extractExportedConstArrayInitializer(source, constName) {
 }
 
 function unwrapArrayExpression(expression) {
-  if (ts.isArrayLiteralExpression(expression)) {
-    return expression;
+  let currentExpression = expression;
+  for (let depth = 0; depth < MAX_ARRAY_EXPRESSION_UNWRAP_DEPTH; depth += 1) {
+    if (ts.isArrayLiteralExpression(currentExpression)) {
+      return currentExpression;
+    }
+    if (!isArrayWrapperExpression(currentExpression)) {
+      return undefined;
+    }
+    currentExpression = currentExpression.expression;
   }
-  if (
+  return undefined;
+}
+
+function isArrayWrapperExpression(expression) {
+  return (
     ts.isAsExpression(expression) ||
     ts.isSatisfiesExpression(expression) ||
     ts.isParenthesizedExpression(expression) ||
     ts.isTypeAssertionExpression(expression)
-  ) {
-    return unwrapArrayExpression(expression.expression);
-  }
-  return undefined;
+  );
 }
 
 async function countFastifyGatewayDecoratorReferences(gatewaySrcDir) {
@@ -942,7 +951,9 @@ function normalizeTypeAlias(source) {
 }
 
 function countMatches(content, pattern) {
-  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  const flagSet = new Set(pattern.flags.split(""));
+  flagSet.add("g");
+  const flags = [...flagSet].join("");
   const regex = new RegExp(pattern.source, flags);
   let count = 0;
   let match;
