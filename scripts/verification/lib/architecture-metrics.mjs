@@ -35,6 +35,9 @@ const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES = [
 ];
 const GATEWAY_PUBLIC_METHOD_PATTERN_SOURCE =
   String.raw`^\s*(?<internal>/\*\* @internal \*/\s*)?public\s+(?:async\s+)?(?:(?:get|set)\s+)?(?<name>[$A-Z_a-z][$\w]*)\s*\(`;
+const SETTINGS_AUTH_SERVICE_PATH_KEY = path
+  .join("apps", "gateway", "src", "services", "settings-auth-service.ts")
+  .replaceAll("\\", "/");
 const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_UNION_LINES = ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES.map(
   (dependencyName) => `  | "${dependencyName}"`,
 );
@@ -47,6 +50,11 @@ const EXPECTED_ROUTE_COMPOSITION_PRIVATE_DEPENDENCIES_ALIAS = [
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractExportedTypeAlias(source, aliasName) {
+  const aliasPattern = new RegExp(String.raw`export type ${escapeRegExp(aliasName)}\s*=[\s\S]*?;`);
+  return source.match(aliasPattern)?.[0] ?? "";
 }
 
 function extractInterfaceBody(source, interfaceName) {
@@ -173,9 +181,8 @@ export async function collectArchitectureMetrics(rootDir = repoRoot) {
     /\btype\s+GatewayRouteComposition(?:Source|Port|Service|Callable)\s*=\s*any\b/g,
   );
   const gatewayRouteCompositionTypeAliasSource = [
-    routeCompositionPortSource.match(/export type GatewayRouteCompositionPrivateDependencies\s*=[\s\S]*?;\n/)?.[0] ??
-      "",
-    routeCompositionPortSource.match(/export type GatewayRouteCompositionHost\s*=[\s\S]*?;\n/)?.[0] ?? "",
+    extractExportedTypeAlias(routeCompositionPortSource, "GatewayRouteCompositionPrivateDependencies"),
+    extractExportedTypeAlias(routeCompositionPortSource, "GatewayRouteCompositionHost"),
   ].join("\n");
   const gatewayRouteCompositionWideningCount =
     countMatches(routeCompositionPortSource, /export\s+interface\s+GatewayRouteCompositionPort\s+extends\b/g) +
@@ -238,7 +245,7 @@ export async function collectArchitectureMetrics(rootDir = repoRoot) {
     legacyRoutePortAliasCount,
     totalHostCallbacks,
     hostCallbacksByFile,
-    settingsHostCallbackCount: hostCallbacksByFile["apps/gateway/src/services/settings-auth-service.ts"] ?? 0,
+    settingsHostCallbackCount: hostCallbacksByFile[SETTINGS_AUTH_SERVICE_PATH_KEY] ?? 0,
     chatHostCallbackCount: sumMatchingValues(hostCallbacksByFile, /^apps\/gateway\/src\/services\/chat-/),
     routeFacingServiceCount: routeFacingServiceFiles.length,
     routeFacingServiceFiles: routeFacingServiceFiles
@@ -774,9 +781,10 @@ function sortObjectByKey(record) {
 
 function countGatewayRouteCompositionShapeViolations(routeCompositionSource, gatewayServiceSource) {
   let violations = 0;
-  const privateDependencyAlias =
-    routeCompositionSource.match(/export type GatewayRouteCompositionPrivateDependencies\s*=[\s\S]*?;/)?.[0] ??
-    "";
+  const privateDependencyAlias = extractExportedTypeAlias(
+    routeCompositionSource,
+    "GatewayRouteCompositionPrivateDependencies",
+  );
   if (
     normalizeTypeAlias(privateDependencyAlias) !==
     normalizeTypeAlias(EXPECTED_ROUTE_COMPOSITION_PRIVATE_DEPENDENCIES_ALIAS)
@@ -784,7 +792,7 @@ function countGatewayRouteCompositionShapeViolations(routeCompositionSource, gat
     violations += 1;
   }
 
-  const hostAlias = routeCompositionSource.match(/export type GatewayRouteCompositionHost\s*=[\s\S]*?;/)?.[0] ?? "";
+  const hostAlias = extractExportedTypeAlias(routeCompositionSource, "GatewayRouteCompositionHost");
   const expectedHostAlias = [
     "export type GatewayRouteCompositionHost = Omit<",
     "  GatewayRouteCompositionPort,",
