@@ -33,6 +33,8 @@ const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES = [
   "taskLifecycleService",
   "toolInvocationCoordinator",
 ];
+const GATEWAY_PUBLIC_METHOD_PATTERN_SOURCE =
+  String.raw`^\s*(?<internal>/\*\* @internal \*/\s*)?public\s+(?:async\s+)?(?:(?:get|set)\s+)?(?<name>[$A-Z_a-z][$\w]*)\s*\(`;
 const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_UNION_LINES = ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES.map(
   (dependencyName) => `  | "${dependencyName}"`,
 );
@@ -42,6 +44,34 @@ const EXPECTED_ROUTE_COMPOSITION_PRIVATE_DEPENDENCIES_ALIAS = [
   ...ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_UNION_LINES,
   ">;",
 ].join("\n");
+
+function extractInterfaceBody(source, interfaceName) {
+  const declarationPattern = new RegExp(String.raw`\bexport\s+interface\s+${escapeRegExp(interfaceName)}\b`);
+  const declarationMatch = declarationPattern.exec(source);
+  if (!declarationMatch) {
+    return "";
+  }
+
+  const openBraceIndex = source.indexOf("{", declarationMatch.index);
+  if (openBraceIndex === -1) {
+    return "";
+  }
+
+  let depth = 0;
+  for (let index = openBraceIndex; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(openBraceIndex + 1, index);
+      }
+    }
+  }
+
+  return "";
+}
 
 export async function collectArchitectureMetrics(rootDir = repoRoot) {
   const gatewaySrcDir = path.join(rootDir, "apps", "gateway", "src");
@@ -87,8 +117,7 @@ export async function collectArchitectureMetrics(rootDir = repoRoot) {
   const gatewayInternalPublicCount = countMatches(gatewayServiceSource, /\/\*\* @internal \*\/ public/g);
   const gatewayPublicMethodsByRegion = countGatewayPublicMethodsByRegion(gatewayServiceSource);
   const gatewayInternalPublicByRegion = countGatewayInternalPublicByRegion(gatewayServiceSource);
-  const gatewayRuntimePortSource =
-    gatewayRuntimeFactorySource.match(/export interface GatewayRuntimePort\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
+  const gatewayRuntimePortSource = extractInterfaceBody(gatewayRuntimeFactorySource, "GatewayRuntimePort");
   const gatewayRuntimePortFullStorageCount = countMatches(gatewayRuntimePortSource, /\breadonly\s+storage\b/g);
   const gatewayRuntimeFactoryRawServiceReturnCount = countMatches(
     gatewayRuntimeFactorySource,
@@ -101,7 +130,7 @@ export async function collectArchitectureMetrics(rootDir = repoRoot) {
   const gatewayLineCount = countLines(gatewayServiceSource);
   const gatewayPublicMethodCount = countMatches(
     gatewayServiceSource,
-    /^\s*(?:\/\*\* @internal \*\/\s*)?public\s+(?:async\s+)?(?:get\s+|set\s+)?[$A-Z_a-z][$\w]*\s*\(/gm,
+    new RegExp(GATEWAY_PUBLIC_METHOD_PATTERN_SOURCE, "gm"),
   );
   const boundGatewayRoutePortMethodCount = await countBoundGatewayRoutePortMethods(
     await fs.readFile(path.join(servicesDir, "gateway-route-services.ts"), "utf8"),
@@ -158,8 +187,10 @@ export async function collectArchitectureMetrics(rootDir = repoRoot) {
     excludedPaths: new Set([gatewayServicePath, routeCompositionPath, routeCompositionPortPath]),
     importPattern: /\bcreateGatewayRouteCompositionPort\b/,
   });
-  const gatewayRouteCompositionPortSource =
-    routeCompositionPortSource.match(/export interface GatewayRouteCompositionPort\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
+  const gatewayRouteCompositionPortSource = extractInterfaceBody(
+    routeCompositionPortSource,
+    "GatewayRouteCompositionPort",
+  );
   const gatewayRouteCompositionPortMemberCount = countMatches(
     gatewayRouteCompositionPortSource,
     /^\s+(?:readonly\s+)?[A-Za-z_]\w+\??[:(]/gm,
@@ -574,8 +605,7 @@ function countGatewayInternalPublicByRegion(source) {
 
 function collectGatewayPublicMethods(source) {
   const methods = [];
-  const pattern =
-    /^\s*(?<internal>\/\*\* @internal \*\/\s*)?public\s+(?:async\s+)?(?:(?:get|set)\s+)?(?<name>[$A-Z_a-z][$\w]*)\s*\(/gm;
+  const pattern = new RegExp(GATEWAY_PUBLIC_METHOD_PATTERN_SOURCE, "gm");
   for (const match of source.matchAll(pattern)) {
     const name = match.groups?.name;
     if (!name) {
