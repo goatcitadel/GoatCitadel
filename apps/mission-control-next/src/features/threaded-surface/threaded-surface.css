@@ -9,7 +9,7 @@
   --mc-mode-chat: var(--gc-area-chat, oklch(0.72 0.12 240));
   --mc-mode-cowork: var(--gc-area-cowork, oklch(0.73 0.13 315));
   --mc-mode-code: var(--gc-area-code, oklch(0.74 0.12 175));
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-columns: 196px minmax(0, 1fr);
   gap: 0;
   min-height: calc(100dvh - 58px);
   border-top: 0;
@@ -136,7 +136,7 @@
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-header-copy h1 {
-  font-size: 1.12rem;
+  font-size: 1rem;
   line-height: 1.05;
   letter-spacing: -0.02em;
 }
@@ -153,7 +153,7 @@
 .mc-next-threaded-surface.unified .mc-next-threaded-header-copy span {
   display: block;
   max-width: 36rem;
-  font-size: 0.72rem;
+  font-size: 0.66rem;
   color: var(--text-secondary);
 }
 
@@ -224,18 +224,18 @@
 }
 
 .mc-next-threaded-filters.posture .mc-next-threaded-filter {
-  min-height: 1.7rem;
-  padding: 0.2rem 0.48rem;
+  min-height: 1.46rem;
+  padding: 0.16rem 0.4rem;
   border-radius: 999px;
-  font-size: 0.72rem;
+  font-size: 0.64rem;
   font-weight: 600;
 }
 
 .mc-next-threaded-filters.secondary .mc-next-threaded-filter {
-  min-height: 1.65rem;
-  padding: 0.2rem 0.5rem;
+  min-height: 1.38rem;
+  padding: 0.14rem 0.42rem;
   border-radius: 999px;
-  font-size: 0.7rem;
+  font-size: 0.62rem;
 }
 
 .mc-next-threaded-filters.secondary,
@@ -370,11 +370,11 @@
   --mc-session-mode-color: var(--mc-mode-chat);
   position: relative;
   display: grid;
-  gap: 0.18rem;
+  gap: 0.12rem;
   width: 100%;
   min-width: 0;
-  min-height: 3.05rem;
-  padding: 0.34rem 0.45rem 0.34rem 0.72rem;
+  min-height: 2.55rem;
+  padding: 0.26rem 0.38rem 0.26rem 0.62rem;
   border-radius: 0.34rem;
   border: 1px solid transparent;
   background: transparent;
@@ -492,8 +492,8 @@
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
-  font-size: 0.7rem;
-  line-height: 1.22;
+  font-size: 0.66rem;
+  line-height: 1.18;
 }
 
 .mc-next-threaded-mode-label {
@@ -528,8 +528,8 @@
   text-overflow: ellipsis;
   white-space: normal;
   overflow-wrap: anywhere;
-  font-size: 0.66rem;
-  line-height: 1.24;
+  font-size: 0.6rem;
+  line-height: 1.2;
   color: var(--text-secondary);
 }
 
@@ -559,7 +559,7 @@
   border-radius: 999px;
   background: transparent;
   color: var(--text-muted);
-  font-size: 0.6rem;
+  font-size: 0.56rem;
   font-weight: 650;
   white-space: nowrap;
 }
@@ -581,11 +581,11 @@
 }
 
 .mc-next-threaded-stage.has-cowork-panel {
-  grid-template-columns: minmax(28rem, 0.92fr) minmax(24rem, 1.08fr);
+  grid-template-columns: minmax(34rem, 1fr) minmax(21rem, 0.48fr);
 }
 
 .mc-next-threaded-stage.has-code-panel {
-  grid-template-columns: minmax(27rem, 0.78fr) minmax(34rem, 1.22fr);
+  grid-template-columns: minmax(32rem, 0.92fr) minmax(28rem, 0.72fr);
 }
 
 .mc-next-threaded-stage.has-context {
@@ -605,11 +605,11 @@
 }
 
 .mc-next-threaded-stage.has-cowork-panel.has-context {
-  grid-template-columns: minmax(25rem, 0.82fr) minmax(22rem, 0.96fr) minmax(17rem, 0.62fr);
+  grid-template-columns: minmax(34rem, 1fr) minmax(20rem, 0.44fr) minmax(15rem, 0.32fr);
 }
 
 .mc-next-threaded-stage.has-code-panel.has-context {
-  grid-template-columns: minmax(24rem, 0.72fr) minmax(31rem, 1.08fr) minmax(17rem, 0.58fr);
+  grid-template-columns: minmax(29rem, 0.92fr) minmax(24rem, 0.7fr) minmax(13rem, 0.3fr);
 }
 
 .mc-next-threaded-primary-column {
@@ -666,7 +666,7 @@
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
   gap: 0.55rem;
-  padding: 14px 0 10px;
+  padding: 10px 0 8px;
   border: 0;
   border-bottom: 1px solid var(--mc-border-subtle);
   border-radius: 0;
@@ -712,10 +712,10 @@
 .mc-next-threaded-model-picker .gc-combobox-trigger {
   width: 100%;
   min-width: 0;
-  min-height: 1.65rem;
-  padding: 0.12rem 0.42rem;
+  min-height: 1.45rem;
+  padding: 0.1rem 0.36rem;
   border-radius: 0.34rem;
-  font-size: 0.66rem;
+  font-size: 0.61rem;
 }
 
 .mc-next-threaded-model-picker .gc-combobox-trigger > span {
@@ -755,8 +755,8 @@
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-thread-card {
-  min-height: 20rem;
-  padding: 22px 0;
+  min-height: 15rem;
+  padding: 14px 0;
   border: 0;
 }
 
@@ -764,7 +764,7 @@
   position: sticky;
   bottom: 0;
   z-index: 10;
-  padding: 16px 0;
+  padding: 10px 0;
   border: 0;
   background: linear-gradient(to top, var(--background) 72%, transparent);
 }
@@ -872,8 +872,8 @@
 }
 
 .mc-next-threaded-surface.unified .mc-next-composer {
-  gap: 0.42rem;
-  padding: 0.48rem;
+  gap: 0.34rem;
+  padding: 0.38rem;
   border: 1px solid var(--mc-border-subtle);
   border-radius: 0.46rem;
   background: var(--mc-surface-1);
@@ -883,11 +883,21 @@
 .mc-next-code-source-picker,
 .mc-next-code-source-form {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.52rem;
 }
 
 .mc-next-code-source-picker {
   padding: 0.1rem 0;
+}
+
+.mc-next-code-source-picker .mc-next-panel-list-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.1rem;
+}
+
+.mc-next-code-source-picker .mc-next-panel-list-head span {
+  text-align: left;
 }
 
 .mc-next-code-source-field {
@@ -897,16 +907,16 @@
 
 .mc-next-code-source-field span {
   color: var(--text-secondary);
-  font-size: 0.82rem;
+  font-size: 0.68rem;
   font-weight: 650;
 }
 
 .mc-next-code-source-field input,
 .mc-next-code-source-field select {
   width: 100%;
-  min-height: 2.75rem;
-  padding: 0 0.85rem;
-  border-radius: 0.95rem;
+  min-height: 2rem;
+  padding: 0 0.52rem;
+  border-radius: 0.46rem;
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
@@ -1222,9 +1232,9 @@
 
 .mc-next-thread-bubble article {
   display: grid;
-  gap: 0.45rem;
-  padding: 0.72rem 0.8rem;
-  border-radius: 0.9rem;
+  gap: 0.28rem;
+  padding: 0.42rem 0.5rem;
+  border-radius: 0.48rem;
   border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
 }
@@ -1233,7 +1243,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.55rem;
+  gap: 0.34rem;
   flex-wrap: wrap;
 }
 
@@ -1248,7 +1258,7 @@
 .mc-next-thread-bubble article [aria-live],
 .mc-next-composer-attachment-action-status {
   color: var(--text-secondary);
-  font-size: 0.82rem;
+  font-size: 0.68rem;
 }
 
 .mc-next-thread-bubble article > p {
@@ -1268,16 +1278,16 @@
 .mc-next-thread-bubble article > div:has(> button),
 .mc-next-composer-attachment-actions {
   display: flex;
-  gap: 0.45rem;
+  gap: 0.28rem;
   flex-wrap: wrap;
   align-items: center;
 }
 
 .mc-next-thread-bubble article > div > button {
   appearance: none;
-  min-height: 2rem;
-  padding: 0 0.72rem;
-  border-radius: 0.8rem;
+  min-height: 1.45rem;
+  padding: 0 0.42rem;
+  border-radius: 0.34rem;
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--card) 94%, transparent);
   color: var(--foreground);
@@ -1296,8 +1306,10 @@
 .mc-next-composer-knowledge-chip p {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.9rem;
-  line-height: 1.5;
+  font-size: 0.68rem;
+  line-height: 1.38;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .mc-next-panel-kicker {
@@ -1380,10 +1392,10 @@
 
 .mc-next-threaded-surface.unified .mc-next-thread-inline-button,
 .mc-next-threaded-surface.unified .mc-next-panel-button {
-  min-height: 1.42rem;
-  padding: 0.12rem 0.36rem;
+  min-height: 1.3rem;
+  padding: 0.1rem 0.32rem;
   border-radius: 0.3rem;
-  font-size: 0.64rem;
+  font-size: 0.6rem;
 }
 
 .mc-next-panel-button.primary,
@@ -1408,32 +1420,80 @@
 
 .mc-next-threaded-surface.unified .mc-next-composer-controls {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 0.38rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.26rem 0.34rem;
   align-items: end;
 }
 
+.mc-next-threaded-surface.unified .mc-next-composer-controls-start {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  min-width: 0;
+  gap: 0.28rem;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-multimodal-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.28rem;
+  overflow: hidden;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-controls-end {
+  grid-column: 2;
+  grid-row: 1;
+}
+
 .mc-next-threaded-surface.unified .mc-next-composer-helper {
+  grid-column: 1 / -1;
+  justify-self: end;
+  max-width: 100%;
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.6rem;
+  font-size: 0.56rem;
+  line-height: 1.18;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .mc-next-threaded-surface.unified .mc-next-composer-primary {
-  min-width: 3.1rem;
-  min-height: 1.55rem;
+  min-width: 2.75rem;
+  min-height: 1.36rem;
   border-radius: 0.34rem;
+  font-size: 0.62rem;
   font-weight: 700;
 }
 
+.mc-next-threaded-surface.unified .mc-next-composer-inline-select,
+.mc-next-threaded-surface.unified .mc-next-composer-inline-button {
+  min-height: 1.28rem;
+  padding: 0.08rem 0.3rem;
+  border-radius: 0.28rem;
+  font-size: 0.58rem;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-inline-select {
+  width: auto;
+  max-width: 8.5rem;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-icon-button,
+.mc-next-threaded-surface.unified .chat-plus-trigger {
+  width: 1.36rem;
+  min-width: 1.36rem;
+  min-height: 1.28rem;
+}
+
 .mc-next-threaded-surface.unified .mc-next-composer-chip {
-  min-height: 1.05rem;
+  min-height: 0.95rem;
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--text-secondary);
   font-family: var(--mc-font-mono);
-  font-size: 0.6rem;
+  font-size: 0.56rem;
 }
 
 .chat-plus-popover {
@@ -1491,7 +1551,7 @@
 .mc-next-thread-step-list,
 .mc-next-panel-list ul {
   display: grid;
-  gap: 0.65rem;
+  gap: 0.42rem;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1503,9 +1563,9 @@
 .mc-next-panel-list li,
 .mc-next-cowork-blocker {
   display: grid;
-  gap: 0.45rem;
-  padding: 0.85rem;
-  border-radius: 0.95rem;
+  gap: 0.3rem;
+  padding: 0.54rem;
+  border-radius: 0.48rem;
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
   background: color-mix(in oklab, var(--card) 96%, transparent);
 }
@@ -1545,7 +1605,7 @@
 
 .mc-next-threaded-surface.unified .mc-next-composer-head {
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.45rem;
 }
 
 .mc-next-threaded-surface.unified .mc-next-composer-title h3 {
@@ -1555,7 +1615,7 @@
 .mc-next-threaded-surface.unified .mc-next-composer-kicker {
   margin: 0;
   color: var(--foreground);
-  font-size: 0.66rem;
+  font-size: 0.6rem;
   font-weight: 600;
   letter-spacing: 0;
   text-transform: none;
@@ -1592,7 +1652,7 @@
 }
 
 .mc-next-threaded-surface.unified .mc-next-composer-input-shell textarea {
-  min-height: 3rem;
+  min-height: 2.35rem;
   padding: 0.25rem 0;
   border: 0;
   border-radius: 0;
@@ -1621,7 +1681,7 @@
 .mc-next-cowork-grid,
 .mc-next-workbench-body {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.52rem;
 }
 
 .mc-next-command-item {
@@ -1708,8 +1768,8 @@
 .mc-next-cowork-blockers,
 .mc-next-cowork-run-map,
 .mc-next-workbench-pane {
-  padding: 0.9rem;
-  border-radius: 1rem;
+  padding: 0.5rem;
+  border-radius: 0.42rem;
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
 }
@@ -1732,21 +1792,35 @@
 .mc-next-cowork-blocker-head {
   display: flex;
   justify-content: space-between;
-  gap: 0.75rem;
-  align-items: center;
+  gap: 0.48rem;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.mc-next-panel-list-head > * {
+  min-width: 0;
+}
+
+.mc-next-panel-list-head strong {
+  overflow-wrap: anywhere;
+}
+
+.mc-next-panel-list-head span,
+.mc-next-panel-list-head button {
+  flex: 0 1 auto;
 }
 
 .mc-next-cowork-stage-strip {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 0.65rem;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 0.38rem;
 }
 
 .mc-next-cowork-stage-card {
   display: grid;
-  gap: 0.25rem;
-  padding: 0.75rem 0.8rem;
-  border-radius: 0.95rem;
+  gap: 0.16rem;
+  padding: 0.42rem 0.48rem;
+  border-radius: 0.44rem;
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--card) 96%, transparent);
 }
@@ -1755,11 +1829,11 @@
 .mc-next-cowork-mission-brief dt,
 .mc-next-cowork-facts dt {
   color: var(--text-secondary);
-  font-size: 0.82rem;
+  font-size: 0.66rem;
 }
 
 .mc-next-cowork-mission-brief {
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.6fr);
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
   align-items: start;
 }
 
@@ -1771,14 +1845,14 @@
 .mc-next-cowork-mission-brief dl {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.6rem 0.85rem;
+  gap: 0.35rem 0.5rem;
   margin: 0;
 }
 
 .mc-next-cowork-mission-brief dd {
   margin: 0.1rem 0 0;
   color: var(--foreground);
-  font-size: 0.86rem;
+  font-size: 0.72rem;
   overflow-wrap: anywhere;
 }
 
@@ -1795,7 +1869,7 @@
 
 .mc-next-cowork-run-map {
   display: grid;
-  gap: 0.85rem;
+  gap: 0.45rem;
 }
 
 .mc-next-cowork-run-map-head,
@@ -1830,7 +1904,7 @@
 .mc-next-cowork-run-map-footer span,
 .mc-next-cowork-run-map-node p {
   color: var(--text-secondary);
-  font-size: 0.82rem;
+  font-size: 0.68rem;
 }
 
 .mc-next-cowork-run-map-graph {
@@ -1850,17 +1924,17 @@
 .mc-next-cowork-run-map-node {
   display: grid;
   gap: 0.22rem;
-  width: 10.5rem;
-  min-height: 5.2rem;
-  padding: 0.7rem;
-  border-radius: 0.85rem;
+  width: 8.4rem;
+  min-height: 4rem;
+  padding: 0.46rem;
+  border-radius: 0.46rem;
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--card) 96%, transparent);
 }
 
 .mc-next-cowork-run-map-node span {
   color: var(--accent);
-  font-size: 0.75rem;
+  font-size: 0.62rem;
   text-transform: uppercase;
 }
 
@@ -1891,13 +1965,22 @@
 }
 
 .mc-next-threaded-side-panel.code .mc-next-workbench-body {
-  grid-template-columns: minmax(13rem, 0.58fr) minmax(0, 1.42fr);
+  grid-template-columns: minmax(10rem, 0.5fr) minmax(0, 1.5fr);
   overflow: hidden;
 }
 
 .mc-next-threaded-side-panel.code .mc-next-workbench-sidebar,
 .mc-next-threaded-side-panel.code .mc-next-workbench-main,
 .mc-next-threaded-side-panel.code .mc-next-workbench-pane {
+  overflow: auto;
+}
+
+.mc-next-threaded-side-panel.code .mc-next-workbench-sidebar:last-child {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
+  align-items: start;
+  max-height: 11rem;
   overflow: auto;
 }
 
@@ -1908,12 +1991,12 @@
 .mc-next-workbench-sidebar,
 .mc-next-workbench-main {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.52rem;
 }
 
 .mc-next-workbench-empty {
-  padding: 0.9rem;
-  border-radius: 0.95rem;
+  padding: 0.58rem;
+  border-radius: 0.48rem;
   border: 1px dashed color-mix(in oklab, var(--border) 78%, transparent);
   background: color-mix(in oklab, var(--card) 96%, transparent);
 }
@@ -2043,6 +2126,96 @@
 }
 
 @media (max-width: 767px) {
+  .mc-next-threaded-surface.unified {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage {
+    padding-inline: 0.42rem;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-header {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.45rem;
+    padding: 0.55rem 0 0.65rem;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-header-copy h1 {
+    font-size: 1rem;
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-header-copy span {
+    max-width: none;
+    font-size: 0.68rem;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-header-meta,
+  .mc-next-threaded-surface.unified .mc-next-threaded-header-actions {
+    grid-column: 1;
+    grid-row: auto;
+    width: 100%;
+    justify-items: stretch;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-model-picker .chat-model-picker {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-action-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-chip-row {
+    gap: 0.22rem;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-composer-controls {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-composer-controls-start {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    align-items: start;
+    gap: 0.42rem;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-composer-multimodal-row {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-composer-inline-select,
+  .mc-next-threaded-surface.unified .mc-next-composer-inline-button {
+    width: 100%;
+    max-width: none;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-composer-helper {
+    display: none;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-composer-controls-end {
+    grid-column: 1;
+    grid-row: auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-composer-primary {
+    width: 100%;
+  }
+
   .mc-next-threaded-header,
   .mc-next-threaded-thread-card,
   .mc-next-threaded-composer-card,

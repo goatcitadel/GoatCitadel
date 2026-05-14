@@ -16,7 +16,7 @@
   overflow-x: clip;
   background: var(--mc-shell-bg);
   color: var(--foreground);
-  font-size: 12.5px;
+  font-size: 12px;
 }
 
 .mc-next-shell[data-area="chat"] {

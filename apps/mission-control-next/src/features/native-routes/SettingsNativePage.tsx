@@ -264,7 +264,7 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
   return (
     <SettingsSectionShell loading={loading} error={error}>
       {data ? (
-        <SettingsGrid>
+        <SettingsGrid variant="three-column">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsPanel
             title="Mission Control posture"
@@ -411,7 +411,7 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
     <SettingsSectionShell loading={loading} error={error}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
-        <SettingsGrid>
+        <SettingsGrid variant="detail-wide">
           <DemoStartPanel route={route} navigate={navigate} setActiveWorkspaceId={setActiveWorkspaceId} />
           <SetupCenterPanel route={route} navigate={navigate} onboarding={data} />
           <SettingsPanel
@@ -897,10 +897,12 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
     <SettingsSectionShell loading={loading} error={error}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
-        <SettingsGrid>
+        <SettingsGrid variant="detail-wide">
           <SettingsPanel
             title="Personality catalog"
             subtitle="Built-in presets, custom overlays, and the global Chat default."
+            scrollBody
+            bodyMaxHeight="min(64vh, 38rem)"
             stats={[
               { label: "Presets", value: String(data.items.length) },
               { label: "Custom", value: String(customCount) },
@@ -932,6 +934,7 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
                 setSelectedPersonalityId(id);
               }}
               emptyLabel="No personalities returned from the gateway."
+              maxHeight="min(48vh, 28rem)"
             />
           </SettingsPanel>
           <SettingsPanel
@@ -1899,10 +1902,12 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   return (
     <SettingsSectionShell loading={loading} error={error}>
       {notice ? <SettingsNotice notice={notice} /> : null}
-      <SettingsGrid>
+      <SettingsGrid variant="detail-wide">
         <SettingsPanel
           title="Providers"
           subtitle="Available providers, probe posture, and current catalog coverage."
+          scrollBody
+          bodyMaxHeight="min(62vh, 36rem)"
           stats={[
             { label: "Configured", value: String(providers.length) },
             { label: "Active workspace", value: activeWorkspaceId },
@@ -1940,6 +1945,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
               setSelectedProviderId(providerId);
             }}
             emptyLabel="No providers returned from runtime settings."
+            maxHeight="min(44vh, 25rem)"
           />
         </SettingsPanel>
         <SettingsStack>
@@ -2517,7 +2523,7 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
     <SettingsSectionShell loading={loading} error={error}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
-        <SettingsGrid>
+        <SettingsGrid variant="detail-wide">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsStack>
             <SettingsPanel
@@ -2866,7 +2872,7 @@ function RuntimeSection(_props: SettingsSectionProps) {
               ]}
             />
           </SettingsPanel>
-          <SettingsGrid>
+          <SettingsGrid variant="balanced">
             <SettingsPanel title="Gateway daemon" subtitle="Control the background runtime serving Mission Control.">
               <SettingsMetricGrid
                 items={[
@@ -3332,38 +3338,9 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
             "Workspace lifecycle is archive-based right now. The gateway supports create, edit, archive, and restore; permanent delete is not exposed yet.",
         }}
       />
-      <SettingsGrid>
+      <SettingsGrid variant="detail-wide">
         <SettingsStack>
-          <SettingsPanel
-            title="Workspace directory"
-            subtitle="Switch between active and archived workspaces, then edit the selected one."
-            stats={[
-              { label: "Total", value: String(data?.items.length ?? 0) },
-              { label: "Active workspace", value: activeWorkspaceId },
-            ]}
-          >
-            <SettingsFilterBar
-              options={[
-                { id: "all", label: "All" },
-                { id: "active", label: "Active" },
-                { id: "archived", label: "Archived" },
-              ]}
-              value={view}
-              onChange={(next) => setView(next as "active" | "archived" | "all")}
-            />
-            <SettingsSelectableList
-              items={filtered.map((item) => ({
-                id: item.workspaceId,
-                title: item.name,
-                meta: item.lifecycleStatus,
-                body: item.description || item.slug,
-              }))}
-              selectedId={selectedWorkspaceId}
-              onSelect={setSelectedWorkspaceId}
-              emptyLabel="No workspaces in this view."
-            />
-          </SettingsPanel>
-          <SettingsPanel title="Create workspace" subtitle="Add a new workspace without leaving Settings.">
+          <SettingsPanel title="Create workspace" subtitle="Add a new workspace before digging through the directory.">
             <SettingsFieldGrid>
               <SettingsField label="Name">
                 <input
@@ -3393,6 +3370,38 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
                 Create workspace
               </button>
             </SettingsButtonRow>
+          </SettingsPanel>
+          <SettingsPanel
+            title="Workspace directory"
+            subtitle="Switch between active and archived workspaces, then edit the selected one."
+            scrollBody
+            bodyMaxHeight="min(54vh, 30rem)"
+            stats={[
+              { label: "Total", value: String(data?.items.length ?? 0) },
+              { label: "Active workspace", value: activeWorkspaceId },
+            ]}
+          >
+            <SettingsFilterBar
+              options={[
+                { id: "all", label: "All" },
+                { id: "active", label: "Active" },
+                { id: "archived", label: "Archived" },
+              ]}
+              value={view}
+              onChange={(next) => setView(next as "active" | "archived" | "all")}
+            />
+            <SettingsSelectableList
+              items={filtered.map((item) => ({
+                id: item.workspaceId,
+                title: item.name,
+                meta: item.lifecycleStatus,
+                body: item.description || item.slug,
+              }))}
+              selectedId={selectedWorkspaceId}
+              onSelect={setSelectedWorkspaceId}
+              emptyLabel="No workspaces in this view."
+              maxHeight="min(42vh, 23rem)"
+            />
           </SettingsPanel>
         </SettingsStack>
         <SettingsPanel
@@ -3688,35 +3697,9 @@ function IntegrationsSection(_props: SettingsSectionProps) {
     <SettingsSectionShell loading={loading} error={error}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
-        <SettingsGrid>
+        <SettingsGrid variant="three-column">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsStack>
-            <SettingsPanel
-              title="Connected integrations"
-              subtitle="Review live connections and jump into the selected one."
-              stats={[
-                { label: "Connections", value: String(data.connections.length) },
-                { label: "Catalog", value: String(data.catalog.length) },
-                { label: "Plugins", value: String(data.plugins.length) },
-              ]}
-            >
-              <SettingsSelectableList
-                items={data.connections.map((item) => ({
-                  id: item.connectionId,
-                  title: item.label,
-                  meta: item.status,
-                  body: `${item.key} · ${item.enabled ? "enabled" : "disabled"}`,
-                }))}
-                selectedId={selectedConnectionId}
-                onSelect={(connectionId) => {
-                  setSelectedConnectionId(connectionId);
-                  setDiagnostics(null);
-                }}
-                emptyLabel="No integration connections yet."
-              />
-            </SettingsPanel>
-            <PluginTrustPanel plugins={data.plugins} />
-            <GoogleMeetStatusPanel status={data.meetStatus} sessions={data.meetSessions} />
             <SettingsPanel title="Create connection" subtitle="Create a new integration connection from the catalog.">
               <SettingsFieldGrid>
                 <SettingsField label="Catalog">
@@ -3779,10 +3762,47 @@ function IntegrationsSection(_props: SettingsSectionProps) {
                 </button>
               </SettingsButtonRow>
             </SettingsPanel>
+            <SettingsPanel
+              title="Connected integrations"
+              subtitle="Review live connections and jump into the selected one."
+              scrollBody
+              bodyMaxHeight="min(48vh, 28rem)"
+              stats={[
+                { label: "Connections", value: String(data.connections.length) },
+                { label: "Catalog", value: String(data.catalog.length) },
+                { label: "Plugins", value: String(data.plugins.length) },
+              ]}
+            >
+              <SettingsSelectableList
+                items={data.connections.map((item) => ({
+                  id: item.connectionId,
+                  title: item.label,
+                  meta: item.status,
+                  body: `${item.key} · ${item.enabled ? "enabled" : "disabled"}`,
+                }))}
+                selectedId={selectedConnectionId}
+                onSelect={(connectionId) => {
+                  setSelectedConnectionId(connectionId);
+                  setDiagnostics(null);
+                }}
+                emptyLabel="No integration connections yet."
+                maxHeight="min(36vh, 21rem)"
+              />
+            </SettingsPanel>
+          </SettingsStack>
+          <SettingsStack>
+            <PluginTrustPanel plugins={data.plugins} />
+            <GoogleMeetStatusPanel status={data.meetStatus} sessions={data.meetSessions} />
           </SettingsStack>
           <SettingsPanel
-            title={selectedConnection?.label ?? "Connection detail"}
-            subtitle="Update, diagnose, or remove the selected integration connection."
+            title={selectedConnection?.label ?? "Integration catalog"}
+            subtitle={
+              selectedConnection
+                ? "Update, diagnose, or remove the selected integration connection."
+                : "Available connection definitions stay visible while you decide what to create next."
+            }
+            scrollBody
+            bodyMaxHeight="min(72vh, 42rem)"
           >
             {selectedConnection ? (
               <>
@@ -3880,7 +3900,18 @@ function IntegrationsSection(_props: SettingsSectionProps) {
                 {diagnostics ? <DiagnosticsPanel report={diagnostics} /> : null}
               </>
             ) : (
-              <SettingsEmptyState label="Select a connection or create a new one." />
+              <SettingsActionList
+                items={data.catalog.map((item) => ({
+                  id: item.catalogId,
+                  label: item.label,
+                  description: item.description,
+                  meta: `${item.kind} · ${item.maturity} · ${item.capabilities.length} capabilities`,
+                  actionLabel: createCatalogId === item.catalogId ? "Selected" : "Use",
+                  onClick: () => setCreateCatalogId(item.catalogId),
+                }))}
+                emptyLabel="No integration catalog entries are available."
+                maxHeight="min(58vh, 34rem)"
+              />
             )}
           </SettingsPanel>
         </SettingsGrid>
@@ -4260,12 +4291,14 @@ function ChannelsSection(_props: SettingsSectionProps) {
     <SettingsSectionShell loading={loading} error={error}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
-        <SettingsGrid>
+        <SettingsGrid variant="detail-wide">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsStack>
             <SettingsPanel
               title="Channel definitions"
               subtitle="Available guided setup definitions for supported channel integrations."
+              scrollBody
+              bodyMaxHeight="min(54vh, 30rem)"
               stats={[
                 { label: "Definitions", value: String(data.definitions.length) },
                 { label: "Existing channels", value: String(data.connections.length) },
@@ -4305,6 +4338,7 @@ function ChannelsSection(_props: SettingsSectionProps) {
                   actionLabel: createCatalogId === item.catalog.catalogId ? "Selected" : "Use",
                 }))}
                 emptyLabel="No channel setup definitions returned."
+                maxHeight="min(34vh, 18rem)"
               />
             </SettingsPanel>
             <SettingsPanel title="Drafts" subtitle="Saved setup drafts, validation, testing, and finalization.">
@@ -4553,12 +4587,14 @@ function McpSection(_props: SettingsSectionProps) {
     <SettingsSectionShell loading={loading} error={error}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
-        <SettingsGrid>
+        <SettingsGrid variant="detail-wide">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsStack>
             <SettingsPanel
               title="MCP servers"
               subtitle="Connected and disconnected MCP servers available to the operator."
+              scrollBody
+              bodyMaxHeight="min(48vh, 28rem)"
               stats={[
                 { label: "Servers", value: String(data.servers.length) },
                 { label: "Templates", value: String(data.templates.length) },
@@ -4577,6 +4613,7 @@ function McpSection(_props: SettingsSectionProps) {
                   setHealthReport(null);
                 }}
                 emptyLabel="No MCP servers configured."
+                maxHeight="min(38vh, 22rem)"
               />
             </SettingsPanel>
             <SettingsPanel
@@ -4660,6 +4697,8 @@ function McpSection(_props: SettingsSectionProps) {
           <SettingsPanel
             title={selectedServer?.label ?? "Server detail"}
             subtitle="Edit, connect, diagnose, or delete the selected MCP server."
+            scrollBody
+            bodyMaxHeight="min(72vh, 42rem)"
           >
             {selectedServer ? (
               <>
@@ -4932,7 +4971,7 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
     <SettingsSectionShell loading={loading} error={error}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
-        <SettingsGrid>
+        <SettingsGrid variant="three-column">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsPanel
             title="Approval mode"
@@ -4969,6 +5008,8 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
             <SettingsPanel
               title="Tool catalog"
               subtitle="Review the full catalog instead of a tiny first-page slice."
+              scrollBody
+              bodyMaxHeight="min(64vh, 38rem)"
               stats={[
                 { label: "Tools", value: String(data.tools.length) },
                 { label: "Grants", value: String(data.grants.length) },
@@ -4992,6 +5033,7 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
                 selectedId={selectedToolName}
                 onSelect={setSelectedToolName}
                 emptyLabel="No tools match the current search."
+                maxHeight="min(48vh, 28rem)"
               />
             </SettingsPanel>
             <SettingsPanel
@@ -5066,6 +5108,8 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
           <SettingsPanel
             title={selectedTool?.toolName ?? "Tool detail"}
             subtitle="Selected catalog entry and active grants."
+            scrollBody
+            bodyMaxHeight="min(72vh, 42rem)"
           >
             {selectedTool ? (
               <>
@@ -5100,6 +5144,7 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
                 actionLabel: item.revokedAt ? "Revoked" : "Revoke",
               }))}
               emptyLabel="No tool grants created yet."
+              maxHeight="min(42vh, 24rem)"
             />
           </SettingsPanel>
         </SettingsGrid>
@@ -5231,11 +5276,13 @@ function AddonsSection(_props: SettingsSectionProps) {
     <SettingsSectionShell loading={loading} error={error}>
       {notice ? <SettingsNotice notice={notice} /> : null}
       {data ? (
-        <SettingsGrid>
+        <SettingsGrid variant="three-column">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsPanel
             title="Add-on catalog"
             subtitle="Optional add-on runtimes and their current install posture."
+            scrollBody
+            bodyMaxHeight="min(58vh, 34rem)"
             stats={[
               { label: "Catalog", value: String(data.catalog.length) },
               { label: "Installed", value: String(data.installed.length) },
@@ -5251,11 +5298,14 @@ function AddonsSection(_props: SettingsSectionProps) {
               selectedId={selectedAddonId}
               onSelect={setSelectedAddonId}
               emptyLabel="No add-ons returned from the catalog."
+              maxHeight="min(42vh, 24rem)"
             />
           </SettingsPanel>
           <SettingsPanel
             title={selectedAddon?.label ?? "Add-on detail"}
             subtitle="Install, update, launch, stop, or remove the selected add-on."
+            scrollBody
+            bodyMaxHeight="min(72vh, 42rem)"
           >
             {selectedAddon ? (
               <>
@@ -5372,6 +5422,8 @@ function AddonsSection(_props: SettingsSectionProps) {
           <SettingsPanel
             title="Capability packs"
             subtitle="Bundled review-first packs over skills, add-ons, MCP templates, plugins, and runtime presets."
+            scrollBody
+            bodyMaxHeight="min(72vh, 42rem)"
             stats={[
               { label: "Packs", value: String(data.capabilityPacks.length) },
               { label: "Selected", value: selectedPack?.trustTier ?? "none" },
@@ -5387,6 +5439,7 @@ function AddonsSection(_props: SettingsSectionProps) {
               selectedId={selectedPackId}
               onSelect={setSelectedPackId}
               emptyLabel="No bundled capability packs are available."
+              maxHeight="min(30vh, 17rem)"
             />
             {selectedPack ? (
               <>
@@ -5596,8 +5649,22 @@ function SettingsSectionShell({
   return <>{children}</>;
 }
 
-function SettingsGrid({ children }: { children: ReactNode }) {
-  return <div className="mc-next-settings-grid">{children}</div>;
+function SettingsGrid({
+  children,
+  variant,
+}: {
+  children: ReactNode;
+  variant?: "default" | "balanced" | "detail-wide" | "three-column";
+}) {
+  const variantClass =
+    variant === "balanced"
+      ? "is-balanced"
+      : variant === "detail-wide"
+        ? "is-detail-wide"
+        : variant === "three-column"
+          ? "is-three-column"
+          : "";
+  return <div className={["mc-next-settings-grid", variantClass].filter(Boolean).join(" ")}>{children}</div>;
 }
 
 function SettingsStack({ children }: { children: ReactNode }) {
@@ -5609,14 +5676,20 @@ function SettingsPanel({
   subtitle,
   stats,
   children,
+  compact = true,
+  scrollBody = false,
+  bodyMaxHeight,
 }: {
   title: string;
   subtitle: string;
   stats?: Array<{ label: string; value: string }>;
   children: ReactNode;
+  compact?: boolean;
+  scrollBody?: boolean;
+  bodyMaxHeight?: string;
 }) {
   return (
-    <article className="mc-next-directory-card mc-next-settings-panel">
+    <article className={`mc-next-directory-card mc-next-settings-panel${compact ? " is-compact" : ""}`}>
       <div className="mc-next-directory-card-head">
         <div>
           <h2>{title}</h2>
@@ -5633,7 +5706,13 @@ function SettingsPanel({
           </div>
         ) : null}
       </div>
-      <div className="mc-next-settings-panel-body">{children}</div>
+      <div
+        className={`mc-next-settings-panel-body${scrollBody ? " is-scrollable" : ""}`}
+        data-native-scroll={scrollBody ? "true" : undefined}
+        style={bodyMaxHeight ? { maxHeight: bodyMaxHeight } : undefined}
+      >
+        {children}
+      </div>
     </article>
   );
 }
@@ -5696,17 +5775,27 @@ function SettingsSelectableList({
   selectedId,
   onSelect,
   emptyLabel,
+  maxHeight = "min(56vh, 34rem)",
+  compact = true,
 }: {
   items: Array<{ id: string; title: string; meta?: string; body?: string }>;
   selectedId: string;
   onSelect: (id: string) => void;
   emptyLabel: string;
+  maxHeight?: string;
+  compact?: boolean;
 }) {
   if (!items.length) {
     return <SettingsEmptyState label={emptyLabel} />;
   }
   return (
-    <div className="mc-next-settings-selectable-list">
+    <div
+      className={["mc-next-settings-selectable-list", compact ? "is-compact" : "", maxHeight ? "is-scrollable" : ""]
+        .filter(Boolean)
+        .join(" ")}
+      data-native-scroll={maxHeight ? "true" : undefined}
+      style={maxHeight ? { maxHeight } : undefined}
+    >
       {items.map((item) => (
         <button
           key={item.id}
@@ -5728,6 +5817,8 @@ function SettingsSelectableList({
 function SettingsActionList({
   items,
   emptyLabel = "Nothing here yet.",
+  maxHeight = "min(50vh, 30rem)",
+  compact = true,
 }: {
   items: Array<{
     id?: string;
@@ -5738,12 +5829,20 @@ function SettingsActionList({
     onClick?: () => void;
   }>;
   emptyLabel?: string;
+  maxHeight?: string;
+  compact?: boolean;
 }) {
   if (!items.length) {
     return <SettingsEmptyState label={emptyLabel} />;
   }
   return (
-    <div className="mc-next-settings-action-list">
+    <div
+      className={["mc-next-settings-action-list", compact ? "is-compact" : "", maxHeight ? "is-scrollable" : ""]
+        .filter(Boolean)
+        .join(" ")}
+      data-native-scroll={maxHeight ? "true" : undefined}
+      style={maxHeight ? { maxHeight } : undefined}
+    >
       {items.map((item) => (
         <div key={item.id ?? `${item.label}-${item.meta ?? ""}`} className="mc-next-settings-action-row">
           <div className="mc-next-settings-action-copy">

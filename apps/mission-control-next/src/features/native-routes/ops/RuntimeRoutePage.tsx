@@ -1,16 +1,68 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Activity, RefreshCw, Server, Wallet } from "lucide-react";
+import { createCronJob } from "@goatcitadel/mission-control-shared/api/client";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
 import { useOpsRuntimeSnapshot } from "@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot";
 import type { AppRoute } from "@next/app/route-model";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame, QuickJumpCard } from "../NativeRoutePageLayout";
+import { recordRouteAction } from "../route-diagnostics";
 import type { NativeRoutePagesProps } from "../types";
 import "../native-routes.css";
+
+const CRON_ACTION_OPTIONS = [
+  "task",
+  "improvement",
+  "backup",
+  "memory_flush",
+  "cost_report",
+  "update_review",
+  "watchdog",
+] as const;
+type CronActionOption = (typeof CRON_ACTION_OPTIONS)[number];
 
 export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals, navigate }: NativeRoutePagesProps) {
   const section = (route.section ?? "activity") as NonNullable<AppRoute["section"]>;
   const runtime = useOpsRuntimeSnapshot();
   const data = runtime.data;
+  const [activityFilter, setActivityFilter] = useState<"all" | "errors" | "approvals" | "runtime">("all");
+  const [scheduleDraft, setScheduleDraft] = useState({
+    name: "",
+    schedule: "0 9 * * *",
+    action: "task" as CronActionOption,
+  });
+  const [scheduleCreating, setScheduleCreating] = useState(false);
+  const [scheduleNotice, setScheduleNotice] = useState<string | null>(null);
+
+  const handleCreateSchedule = async () => {
+    const name = scheduleDraft.name.trim();
+    const schedule = scheduleDraft.schedule.trim();
+    if (!name || !schedule) {
+      setScheduleNotice("Name and schedule are required.");
+      return;
+    }
+    setScheduleCreating(true);
+    setScheduleNotice(null);
+    try {
+      const job = await createCronJob({
+        jobId: createScheduleJobId(name),
+        name,
+        schedule,
+        action: scheduleDraft.action,
+        enabled: true,
+      });
+      recordRouteAction("ops/schedules", "schedule.created", {
+        jobId: job.jobId,
+        action: scheduleDraft.action,
+      });
+      setScheduleDraft({ name: "", schedule: "0 9 * * *", action: "task" });
+      setScheduleNotice("Schedule created.");
+      await runtime.reload();
+    } catch (error) {
+      setScheduleNotice(error instanceof Error ? error.message : "Could not create schedule.");
+    } finally {
+      setScheduleCreating(false);
+    }
+  };
 
   const content = useMemo(() => {
     if (!data) {
@@ -57,6 +109,18 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
     const memoryFree = healthSourceUnavailable
       ? "Free unavailable"
       : `Free ${formatBytes(data.health?.systemVitals.memoryFreeBytes ?? 0)}`;
+    const filteredActivityEvents = (data.timeline?.events.items ?? []).filter((item) => {
+      if (activityFilter === "errors") {
+        return /error|failed|failure|degraded/i.test(`${item.eventType} ${item.eventClass ?? ""}`);
+      }
+      if (activityFilter === "approvals") {
+        return /approval|review|decision/i.test(`${item.eventType} ${item.eventClass ?? ""}`);
+      }
+      if (activityFilter === "runtime") {
+        return /runtime|daemon|mcp|gateway|schedule/i.test(`${item.eventType} ${item.source ?? ""}`);
+      }
+      return true;
+    });
 
     switch (section) {
       case "sessions":
@@ -65,25 +129,30 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
             <NativeCard
               title="Session evidence"
               subtitle="Recent session posture, channel mix, and operator-ready evidence."
+              density="compact"
+              scrollBody
+              bodyMaxHeight="min(66vh, 38rem)"
               stats={[
                 { label: "Visible", value: String(data.sessions.length || data.dashboard?.sessions.length || 0) },
                 { label: "Workspace", value: activeWorkspaceName },
               ]}
             >
               <NativeList
-                items={(data.sessions.length ? data.sessions : (data.dashboard?.sessions ?? []))
-                  .slice(0, 14)
-                  .map((item) => ({
-                    title: item.displayName || item.sessionId,
-                    meta: item.channel,
-                    body: `${formatDateTime(item.lastActivityAt)} · ${item.sessionId}`,
-                  }))}
+                items={(data.sessions.length ? data.sessions : (data.dashboard?.sessions ?? [])).map((item) => ({
+                  title: formatHumanSessionTitle(item),
+                  meta: item.channel,
+                  body: `${formatDateTime(item.lastActivityAt)} · ${formatShortSessionId(item.sessionId)}`,
+                }))}
                 emptyLabel="No recent sessions."
+                density="compact"
+                maxHeight="min(54vh, 31rem)"
+                ariaLabel="Session evidence"
               />
             </NativeCard>
             <NativeCard
               title="Session posture"
               subtitle="Keep session truth next to approvals and activity instead of hiding it under a legacy shell."
+              density="compact"
             >
               <MetricGrid
                 items={[
@@ -111,33 +180,101 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
         return (
           <NativeGrid>
             <NativeCard
-              title="Scheduler review"
-              subtitle="Review items waiting on schedule, approvals, or follow-on operator attention."
+              title="Scheduled jobs"
+              subtitle="Current cadence and next-run posture for scheduled operator work."
+              density="compact"
+              scrollBody
+              bodyMaxHeight="min(58vh, 32rem)"
               stats={[
-                { label: "Review queue", value: String(data.timeline?.scheduler.reviewQueue.length ?? 0) },
                 { label: "Jobs", value: String(data.timeline?.scheduler.jobs.length ?? 0) },
+                { label: "Review queue", value: String(data.timeline?.scheduler.reviewQueue.length ?? 0) },
               ]}
             >
               <NativeList
-                items={(data.timeline?.scheduler.reviewQueue ?? []).slice(0, 14).map((item) => ({
-                  title: item.reason || item.itemId,
-                  meta: item.status ?? "queued",
-                  body: item.scheduledFor ? formatDateTime(item.scheduledFor) : "No schedule timestamp",
-                }))}
-                emptyLabel="No scheduler review items."
-              />
-            </NativeCard>
-            <NativeCard
-              title="Scheduled jobs"
-              subtitle="Current cadence and next-run posture for scheduled operator work."
-            >
-              <NativeList
-                items={(data.timeline?.scheduler.jobs ?? []).slice(0, 14).map((item) => ({
+                items={(data.timeline?.scheduler.jobs ?? []).map((item) => ({
                   title: item.name,
                   meta: item.enabled ? "enabled" : "disabled",
                   body: `${item.action} · ${item.nextRunAt ? formatDateTime(item.nextRunAt) : "No next run"}`,
                 }))}
                 emptyLabel="No scheduled jobs."
+                density="compact"
+                maxHeight="min(46vh, 26rem)"
+                ariaLabel="Scheduled jobs"
+              />
+            </NativeCard>
+            <NativeCard
+              title="Add schedule"
+              subtitle="Create a cron-backed job without leaving the schedules route."
+              density="compact"
+            >
+              {scheduleNotice ? <div className="mc-next-runtime-notice">{scheduleNotice}</div> : null}
+              <div className="mc-next-settings-field-grid">
+                <label className="mc-next-settings-field">
+                  <span>Name</span>
+                  <input
+                    className="mc-next-settings-input"
+                    value={scheduleDraft.name}
+                    onChange={(event) => setScheduleDraft((current) => ({ ...current, name: event.target.value }))}
+                    placeholder="Daily workspace review"
+                  />
+                </label>
+                <label className="mc-next-settings-field">
+                  <span>Schedule</span>
+                  <input
+                    className="mc-next-settings-input"
+                    value={scheduleDraft.schedule}
+                    onChange={(event) => setScheduleDraft((current) => ({ ...current, schedule: event.target.value }))}
+                    placeholder="0 9 * * *"
+                  />
+                </label>
+                <label className="mc-next-settings-field span-2">
+                  <span>Action</span>
+                  <select
+                    className="mc-next-settings-input"
+                    value={scheduleDraft.action}
+                    onChange={(event) =>
+                      setScheduleDraft((current) => ({
+                        ...current,
+                        action: event.target.value as CronActionOption,
+                      }))
+                    }
+                  >
+                    {CRON_ACTION_OPTIONS.map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="mc-next-runtime-actions">
+                <button
+                  type="button"
+                  className="gc-button"
+                  onClick={() => void handleCreateSchedule()}
+                  disabled={scheduleCreating}
+                >
+                  {scheduleCreating ? "Creating..." : "Create schedule"}
+                </button>
+              </div>
+            </NativeCard>
+            <NativeCard
+              title="Scheduler review"
+              subtitle="Review items waiting on schedule, approvals, or follow-on operator attention."
+              density="compact"
+              scrollBody
+              bodyMaxHeight="min(50vh, 28rem)"
+            >
+              <NativeList
+                items={(data.timeline?.scheduler.reviewQueue ?? []).map((item) => ({
+                  title: item.reason || item.itemId,
+                  meta: item.status ?? "queued",
+                  body: item.scheduledFor ? formatDateTime(item.scheduledFor) : "No schedule timestamp",
+                }))}
+                emptyLabel="No scheduler review items."
+                density="compact"
+                maxHeight="min(38vh, 22rem)"
+                ariaLabel="Scheduler review"
               />
             </NativeCard>
           </NativeGrid>
@@ -248,6 +385,7 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
             <NativeCard
               title="Runtime posture"
               subtitle="Daemon state, service-manager controls, and backup truth in the canonical shell."
+              density="compact"
               stats={[
                 { label: "Approvals", value: String(data.dashboard?.pendingApprovals ?? pendingApprovals) },
                 { label: "MCP", value: String(data.mcpServers.length) },
@@ -336,23 +474,41 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
               </div>
             </NativeCard>
             <NativeCard
-              title="Backups and integrations"
-              subtitle="Recovery posture and connector runtime should stay visible together."
+              title="Backup posture"
+              subtitle="Recovery state should be inspectable without sharing a connector card."
+              density="compact"
+              scrollBody
+              bodyMaxHeight="min(46vh, 24rem)"
             >
               <NativeList
-                items={[
-                  ...(data.backups.slice(0, 5).map((backup) => ({
-                    title: backup.backupId,
-                    meta: "backup",
-                    body: `${formatDateTime(backup.createdAt)} · ${backup.files.length} files`,
-                  })) ?? []),
-                  ...data.mcpServers.slice(0, 5).map((item) => ({
-                    title: item.label,
-                    meta: item.enabled ? "enabled" : "disabled",
-                    body: `${item.transport} · ${item.category ?? "general"}`,
-                  })),
-                ]}
-                emptyLabel="No backup or connector posture available."
+                items={data.backups.map((backup) => ({
+                  title: backup.backupId,
+                  meta: "backup",
+                  body: `${formatDateTime(backup.createdAt)} · ${backup.files.length} files`,
+                }))}
+                emptyLabel="No backup posture available."
+                density="compact"
+                maxHeight="min(34vh, 18rem)"
+                ariaLabel="Backup posture"
+              />
+            </NativeCard>
+            <NativeCard
+              title="Integration runtime"
+              subtitle="MCP and connector runtime posture stays separate from backups."
+              density="compact"
+              scrollBody
+              bodyMaxHeight="min(46vh, 24rem)"
+            >
+              <NativeList
+                items={data.mcpServers.map((item) => ({
+                  title: item.label,
+                  meta: item.enabled ? "enabled" : "disabled",
+                  body: `${item.transport} · ${item.category ?? "general"}`,
+                }))}
+                emptyLabel="No connector posture available."
+                density="compact"
+                maxHeight="min(34vh, 18rem)"
+                ariaLabel="Integration runtime"
               />
             </NativeCard>
           </NativeGrid>
@@ -469,23 +625,47 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
             <NativeCard
               title="Activity feed"
               subtitle="Recent events, scheduler pressure, and approval signal in one explicit operator view."
+              density="compact"
+              scrollBody
+              bodyMaxHeight="min(66vh, 38rem)"
               stats={[
-                { label: "Recent events", value: String(data.timeline?.events.items.length ?? 0) },
+                { label: "Recent events", value: String(filteredActivityEvents.length) },
                 { label: "Pending approvals", value: String(data.dashboard?.pendingApprovals ?? pendingApprovals) },
               ]}
             >
+              <div className="mc-next-settings-filter-bar" role="radiogroup" aria-label="Activity feed filter">
+                {[
+                  { id: "all", label: "All" },
+                  { id: "errors", label: "Errors" },
+                  { id: "approvals", label: "Approvals" },
+                  { id: "runtime", label: "Runtime" },
+                ].map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={`mc-next-settings-filter${activityFilter === item.id ? " active" : ""}`}
+                    onClick={() => setActivityFilter(item.id as typeof activityFilter)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
               <NativeList
-                items={(data.timeline?.events.items ?? []).slice(0, 14).map((item) => ({
+                items={filteredActivityEvents.map((item) => ({
                   title: item.eventType,
                   meta: item.source,
                   body: formatDateTime(item.timestamp),
                 }))}
                 emptyLabel="No recent events."
+                density="compact"
+                maxHeight="min(52vh, 30rem)"
+                ariaLabel="Activity feed"
               />
             </NativeCard>
             <NativeCard
               title="Operator posture"
               subtitle="Keep the highest-signal runtime facts close to the activity stream."
+              density="compact"
             >
               <MetricGrid
                 items={[
@@ -510,7 +690,19 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
           </NativeGrid>
         );
     }
-  }, [activeWorkspaceName, data, navigate, pendingApprovals, route.theme, runtime, section]);
+  }, [
+    activeWorkspaceName,
+    activityFilter,
+    data,
+    navigate,
+    pendingApprovals,
+    route.theme,
+    runtime,
+    scheduleCreating,
+    scheduleDraft,
+    scheduleNotice,
+    section,
+  ]);
 
   return (
     <NativePageFrame
@@ -538,6 +730,40 @@ function MetricGrid({ items }: { items: Array<{ label: string; value: string; me
       ))}
     </div>
   );
+}
+
+function formatHumanSessionTitle(item: {
+  displayName?: string | null;
+  title?: string | null;
+  sessionId: string;
+  channel?: string | null;
+  lastActivityAt?: string | null;
+}) {
+  const explicit = item.displayName?.trim() || item.title?.trim();
+  if (explicit && !/^sess[_-]/i.test(explicit)) {
+    return explicit;
+  }
+  const channel = item.channel ? `${capitalize(item.channel)} session` : "Session";
+  const when = item.lastActivityAt ? formatDateTime(item.lastActivityAt) : formatShortSessionId(item.sessionId);
+  return `${channel} · ${when}`;
+}
+
+function formatShortSessionId(sessionId: string) {
+  return sessionId.replace(/^sess[_-]?/i, "session ").slice(0, 22);
+}
+
+function createScheduleJobId(name: string) {
+  const slug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 42);
+  return `manual-${slug || "schedule"}-${Date.now().toString(36)}`;
+}
+
+function capitalize(value: string) {
+  return value ? `${value.slice(0, 1).toUpperCase()}${value.slice(1)}` : value;
 }
 
 function labelForOpsSection(section: NonNullable<AppRoute["section"]>) {

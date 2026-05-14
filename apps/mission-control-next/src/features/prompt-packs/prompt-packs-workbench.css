@@ -1,6 +1,6 @@
 .mc-prompt-packs {
   display: grid;
-  gap: 1rem;
+  gap: 0.62rem;
   min-width: 0;
 }
 
@@ -23,9 +23,9 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 1rem;
-  padding: 1.15rem 1.2rem;
-  border-radius: 1.35rem;
+  gap: 0.7rem;
+  padding: 0.62rem 0.72rem;
+  border-radius: 0.55rem;
   border: 1px solid var(--border);
   background: linear-gradient(180deg, color-mix(in oklab, var(--card) 90%, transparent), var(--card));
   box-shadow: var(--mc-shadow-soft);
@@ -33,13 +33,13 @@
 
 .mc-pp-hero-copy {
   display: grid;
-  gap: 0.35rem;
+  gap: 0.16rem;
   max-width: 58rem;
 }
 
 .mc-pp-kicker {
   margin: 0;
-  font-size: 0.82rem;
+  font-size: 0.62rem;
   font-weight: 650;
   letter-spacing: 0.01em;
   color: color-mix(in oklab, var(--mc-area-color) 58%, var(--foreground));
@@ -47,7 +47,7 @@
 
 .mc-pp-hero-copy h3 {
   margin: 0;
-  font-size: clamp(1.35rem, 2vw, 1.7rem);
+  font-size: clamp(1.02rem, 1.4vw, 1.24rem);
   line-height: 1.08;
   letter-spacing: -0.03em;
 }
@@ -55,14 +55,14 @@
 .mc-pp-hero-copy p {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.97rem;
-  line-height: 1.55;
+  font-size: 0.72rem;
+  line-height: 1.38;
 }
 
 .mc-pp-hero-actions,
 .mc-pp-inline-actions {
   display: flex;
-  gap: 0.65rem;
+  gap: 0.35rem;
   align-items: center;
   flex-wrap: wrap;
 }
@@ -73,18 +73,18 @@
 
 .mc-pp-summary-row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(14rem, 18rem));
-  justify-content: start;
-  gap: 0.9rem;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  justify-content: stretch;
+  gap: 0.42rem;
 }
 
 .mc-pp-summary-card,
 .mc-pp-detail-card,
 .mc-pp-metric-card {
   display: grid;
-  gap: 0.25rem;
-  padding: 0.9rem 0.95rem;
-  border-radius: 1.1rem;
+  gap: 0.12rem;
+  padding: 0.46rem 0.5rem;
+  border-radius: 0.46rem;
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--card) 95%, transparent);
   box-shadow: var(--mc-shadow-soft);
@@ -93,7 +93,7 @@
 .mc-pp-summary-card span,
 .mc-pp-detail-card span,
 .mc-pp-metric-card span {
-  font-size: 0.82rem;
+  font-size: 0.58rem;
   font-weight: 600;
   letter-spacing: 0.01em;
   color: var(--text-muted);
@@ -102,7 +102,7 @@
 .mc-pp-summary-card strong,
 .mc-pp-detail-card strong,
 .mc-pp-metric-card strong {
-  font-size: 1.02rem;
+  font-size: 0.74rem;
   line-height: 1.18;
 }
 
@@ -111,18 +111,18 @@
 .mc-pp-metric-card p {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.88rem;
-  line-height: 1.45;
+  font-size: 0.62rem;
+  line-height: 1.32;
 }
 
 .mc-pp-alert,
 .mc-pp-status-pill {
   display: inline-flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.35rem;
   min-width: 0;
-  padding: 0.8rem 0.95rem;
-  border-radius: 1rem;
+  padding: 0.42rem 0.55rem;
+  border-radius: 0.46rem;
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--card) 95%, transparent);
   color: var(--foreground);
@@ -155,8 +155,8 @@
 
 .mc-pp-layout {
   display: grid;
-  grid-template-columns: minmax(17rem, 22rem) minmax(19rem, 23rem) minmax(0, 1fr);
-  gap: 1rem;
+  grid-template-columns: minmax(15rem, 19rem) minmax(17rem, 20rem) minmax(0, 1fr);
+  gap: 0.62rem;
   align-items: start;
   min-width: 0;
 }
@@ -185,7 +185,7 @@
 
 .mc-pp-sidebar {
   display: grid;
-  gap: 0.9rem;
+  gap: 0.55rem;
   align-content: start;
   align-self: start;
   position: sticky;
@@ -201,9 +201,9 @@
 .mc-pp-tests-column,
 .mc-pp-detail {
   display: grid;
-  gap: 0.9rem;
-  padding: 1rem;
-  border-radius: 1.2rem;
+  gap: 0.55rem;
+  padding: 0.62rem;
+  border-radius: 0.55rem;
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--card) 96%, transparent);
   box-shadow: var(--mc-shadow-soft);
@@ -276,12 +276,12 @@
 .mc-pp-field input,
 .mc-pp-field select {
   width: 100%;
-  border-radius: 0.95rem;
+  border-radius: 0.42rem;
   border: 1px solid var(--border);
   background: var(--mc-surface-1);
   color: var(--foreground);
-  min-height: 2.7rem;
-  padding: 0.66rem 0.84rem;
+  min-height: 1.9rem;
+  padding: 0.38rem 0.48rem;
   font: inherit;
   line-height: 1.25;
   box-shadow: inset 0 1px 0 color-mix(in oklab, white 6%, transparent);
@@ -307,7 +307,7 @@
 }
 
 .mc-pp-pack-list {
-  max-height: clamp(13rem, 24dvh, 20rem);
+  max-height: clamp(10rem, 22dvh, 15rem);
   overflow: auto;
   padding-right: 0.15rem;
   scrollbar-gutter: stable;
@@ -921,11 +921,14 @@
     grid-template-columns: minmax(16rem, 20rem) minmax(18rem, 22rem) minmax(0, 1fr);
   }
 
-  .mc-pp-summary-row,
   .mc-pp-detail-summary,
   .mc-pp-assessment-grid,
   .mc-pp-insight-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mc-pp-summary-row {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 }
 
@@ -964,6 +967,10 @@
 
   .mc-pp-test-list {
     max-height: min(34rem, 62dvh);
+  }
+
+  .mc-pp-summary-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .mc-pp-test-row {

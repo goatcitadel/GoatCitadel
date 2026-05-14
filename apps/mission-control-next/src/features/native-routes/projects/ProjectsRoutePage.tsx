@@ -8,6 +8,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import type { AppRoute } from "@next/app/route-model";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
+import { readRouteDiagnosticNow, recordRouteAction, recordRouteDataLoad } from "../route-diagnostics";
 import type { NativeRoutePagesProps } from "../types";
 import "../native-routes.css";
 
@@ -42,9 +43,17 @@ export function ProjectsRoutePage({ route, activeWorkspaceId, activeWorkspaceNam
   const [actionError, setActionError] = useState<string | null>(null);
 
   const loadProjects = useCallback(async () => {
+    const startedAt = readRouteDiagnosticNow();
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
-      setState({ ...(await fetchProjectData(activeWorkspaceId)), loading: false, error: null });
+      const nextData = await fetchProjectData(activeWorkspaceId);
+      setState({ ...nextData, loading: false, error: null });
+      recordRouteDataLoad({
+        route: "projects",
+        label: "Projects",
+        startedAt,
+        itemCount: nextData.projects.length + nextData.sessions.length,
+      });
     } catch (error) {
       setState((current) => ({
         ...current,
@@ -57,6 +66,7 @@ export function ProjectsRoutePage({ route, activeWorkspaceId, activeWorkspaceNam
   useEffect(() => {
     let cancelled = false;
     async function load() {
+      const startedAt = readRouteDiagnosticNow();
       setState((current) => ({ ...current, loading: true, error: null }));
       const nextData = await fetchProjectData(activeWorkspaceId);
       if (cancelled) {
@@ -66,6 +76,12 @@ export function ProjectsRoutePage({ route, activeWorkspaceId, activeWorkspaceNam
         ...nextData,
         loading: false,
         error: null,
+      });
+      recordRouteDataLoad({
+        route: "projects",
+        label: "Projects",
+        startedAt,
+        itemCount: nextData.projects.length + nextData.sessions.length,
       });
     }
     void load().catch((error: Error) => {
@@ -143,6 +159,11 @@ export function ProjectsRoutePage({ route, activeWorkspaceId, activeWorkspaceNam
         },
         { originSurface: mode },
       );
+      recordRouteAction("projects", "session.created", {
+        mode,
+        projectId: selectedProject.projectId,
+        sessionId: session.sessionId,
+      });
       navigate({
         area: mode,
         sessionId: session.sessionId,
@@ -163,16 +184,21 @@ export function ProjectsRoutePage({ route, activeWorkspaceId, activeWorkspaceNam
       loading={state.loading}
       error={state.error}
     >
-      <NativeGrid>
+      <NativeGrid className="mc-next-native-projects-grid">
         <NativeCard
           title="Projects"
           subtitle="Containers that bind Chat, Cowork, and Code work together."
+          density="compact"
           stats={[
             { label: "Projects", value: String(state.projects.length) },
             { label: "Sessions", value: String(state.sessions.filter((session) => session.projectId).length) },
           ]}
         >
-          <div className="mc-next-settings-selectable-list">
+          <div
+            className="mc-next-settings-selectable-list is-compact is-scrollable"
+            data-native-scroll="true"
+            style={{ maxHeight: "min(62vh, 38rem)" }}
+          >
             {state.projects.length ? (
               state.projects.map((project) => {
                 const counts = countsByProject.get(project.projectId) ?? EMPTY_COUNTS;
@@ -213,6 +239,9 @@ export function ProjectsRoutePage({ route, activeWorkspaceId, activeWorkspaceNam
         <NativeCard
           title={selectedProject?.name ?? "Project detail"}
           subtitle={selectedProject?.workspacePath ?? "Select a project to inspect its threads."}
+          density="compact"
+          scrollBody
+          bodyMaxHeight="min(70vh, 42rem)"
           stats={SURFACES.map((surface) => ({
             label: surface.label,
             value: String(

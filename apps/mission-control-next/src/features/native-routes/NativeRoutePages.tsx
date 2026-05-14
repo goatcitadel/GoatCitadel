@@ -80,6 +80,7 @@ import { MemoryRoutePage } from "./library/MemoryRoutePage";
 import { ApprovalsRoutePage } from "./ops/ApprovalsRoutePage";
 import { RuntimeRoutePage } from "./ops/RuntimeRoutePage";
 import { ProjectsRoutePage } from "./projects/ProjectsRoutePage";
+import { readRouteDiagnosticNow, recordRouteAction, recordRouteDataLoad } from "./route-diagnostics";
 import type { NativeRoutePagesProps } from "./types";
 import "./native-routes.css";
 
@@ -180,6 +181,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
   });
 
   const loadCowork = useCallback(async () => {
+    const startedAt = readRouteDiagnosticNow();
     setState((current) => ({ ...current, loading: true, error: null }));
     const [tasks, deletedTasks, operators] = await Promise.all([
       nativeLoad("Cowork tasks", fetchTasksByView("active", undefined, activeWorkspaceId), {
@@ -192,17 +194,25 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
       }),
       nativeLoad("Operators", fetchOperators(), { items: [] }),
     ]);
+    const issues = nativeLoadIssues([tasks, deletedTasks, operators]);
     setState({
       loading: false,
       error: null,
       data: {
-        issues: nativeLoadIssues([tasks, deletedTasks, operators]),
+        issues,
         tasks: tasks.data.items,
         deletedTasks: deletedTasks.data.items,
         operators: operators.data.items,
       },
     });
-  }, [activeWorkspaceId]);
+    recordRouteDataLoad({
+      route: `cowork/${section}`,
+      label: "Cowork",
+      startedAt,
+      itemCount: tasks.data.items.length + deletedTasks.data.items.length + operators.data.items.length,
+      issueCount: issues.length,
+    });
+  }, [activeWorkspaceId, section]);
 
   useEffect(() => {
     let cancelled = false;
@@ -303,6 +313,10 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
         description: createDraft.description.trim() || undefined,
         priority: createDraft.priority,
       });
+      recordRouteAction("cowork/tasks", "task.created", {
+        taskId: created.taskId,
+        priority: createDraft.priority,
+      });
       setNotice({ tone: "success", message: `Task ${created.title} created.` });
       setCreateDraft({ title: "", description: "", priority: "normal" });
       await refreshCowork();
@@ -320,6 +334,11 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
       await updateTask(selectedTask.taskId, {
         title: detailDraft.title.trim() || selectedTask.title,
         description: detailDraft.description.trim() || undefined,
+        status: detailDraft.status,
+        priority: detailDraft.priority,
+      });
+      recordRouteAction("cowork/tasks", "task.updated", {
+        taskId: selectedTask.taskId,
         status: detailDraft.status,
         priority: detailDraft.priority,
       });
@@ -345,6 +364,10 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
         path: deliverableDraft.path.trim() || undefined,
         description: deliverableDraft.description.trim() || undefined,
       });
+      recordRouteAction("cowork/tasks", "task.deliverable_added", {
+        taskId: selectedTask.taskId,
+        deliverableType: deliverableDraft.deliverableType,
+      });
       setNotice({ tone: "success", message: "Deliverable added." });
       setDeliverableDraft({ title: "", deliverableType: "artifact", path: "", description: "" });
       const result = await fetchTaskDeliverables(selectedTask.taskId);
@@ -360,6 +383,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
     }
     try {
       await deleteTask(selectedTask.taskId, { mode: "soft", deletedBy: "operator" });
+      recordRouteAction("cowork/tasks", "task.archived", { taskId: selectedTask.taskId });
       setNotice({ tone: "success", message: "Task moved to trash." });
       await refreshCowork();
     } catch (error) {
@@ -373,6 +397,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
     }
     try {
       await restoreTask(selectedTask.taskId);
+      recordRouteAction("cowork/tasks", "task.restored", { taskId: selectedTask.taskId });
       setNotice({ tone: "success", message: "Task restored." });
       await refreshCowork();
     } catch (error) {
@@ -382,10 +407,13 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
 
   const content =
     section === "board" ? (
-      <NativeGrid>
+      <NativeGrid className="mc-next-native-board-grid">
         <NativeCard
           title="Agent board"
           subtitle="Live operator posture without the old board shell."
+          density="compact"
+          scrollBody
+          bodyMaxHeight="min(62vh, 34rem)"
           stats={[
             { label: "Operators", value: String(operators.length) },
             { label: "Active tasks", value: String(tasks.filter((item) => item.status !== "done").length) },
@@ -398,35 +426,38 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
               body: `${item.sessionCount} sessions · ${formatDateTime(item.lastActivityAt)}`,
             }))}
             emptyLabel="No operator posture available."
+            density="compact"
+            maxHeight="min(52vh, 28rem)"
+            ariaLabel="Operator posture"
           />
         </NativeCard>
-        <NativeCard title="Work distribution" subtitle="Current task flow by status lane.">
+        <NativeCard title="Work distribution" subtitle="Current task flow by status lane." density="compact">
           <div className="mc-next-board-lanes">
             <NativeLane
               title="Planning"
               count={groupedTasks.planning.length}
-              items={groupedTasks.planning.slice(0, 4)}
+              items={groupedTasks.planning}
               selectedTaskId={selectedTaskId}
               onSelect={setSelectedTaskId}
             />
             <NativeLane
               title="Active"
               count={groupedTasks.active.length}
-              items={groupedTasks.active.slice(0, 4)}
+              items={groupedTasks.active}
               selectedTaskId={selectedTaskId}
               onSelect={setSelectedTaskId}
             />
             <NativeLane
               title="Review"
               count={groupedTasks.review.length}
-              items={groupedTasks.review.slice(0, 4)}
+              items={groupedTasks.review}
               selectedTaskId={selectedTaskId}
               onSelect={setSelectedTaskId}
             />
             <NativeLane
               title="Done"
               count={groupedTasks.done.length}
-              items={groupedTasks.done.slice(0, 4)}
+              items={groupedTasks.done}
               selectedTaskId={selectedTaskId}
               onSelect={setSelectedTaskId}
             />
@@ -434,7 +465,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
         </NativeCard>
       </NativeGrid>
     ) : (
-      <NativeGrid>
+      <NativeGrid className="mc-next-cowork-task-grid">
         <QuickJumpCard
           title="Cowork routes"
           subtitle="Keep orchestration surfaces connected without loading the old board pages."
@@ -444,10 +475,15 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
             { label: "Open runtime", route: { area: "ops", section: "runtime", theme: route.theme } },
           ]}
           navigate={navigate}
+          compact
         />
         <NativeCard
           title="Task board"
           subtitle="Create, move, restore, and attach deliverables without leaving Cowork."
+          density="compact"
+          className="mc-next-cowork-task-board-card"
+          scrollBody
+          bodyMaxHeight="min(72vh, 42rem)"
           stats={[
             { label: "Open", value: String(tasks.filter((item) => item.status !== "done").length) },
             { label: "Workspace", value: activeWorkspaceName },
@@ -499,35 +535,35 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
             <NativeLane
               title="Planning"
               count={groupedTasks.planning.length}
-              items={groupedTasks.planning.slice(0, 5)}
+              items={groupedTasks.planning}
               selectedTaskId={selectedTaskId}
               onSelect={setSelectedTaskId}
             />
             <NativeLane
               title="Active"
               count={groupedTasks.active.length}
-              items={groupedTasks.active.slice(0, 5)}
+              items={groupedTasks.active}
               selectedTaskId={selectedTaskId}
               onSelect={setSelectedTaskId}
             />
             <NativeLane
               title="Review"
               count={groupedTasks.review.length}
-              items={groupedTasks.review.slice(0, 5)}
+              items={groupedTasks.review}
               selectedTaskId={selectedTaskId}
               onSelect={setSelectedTaskId}
             />
             <NativeLane
               title="Done"
               count={groupedTasks.done.length}
-              items={groupedTasks.done.slice(0, 5)}
+              items={groupedTasks.done}
               selectedTaskId={selectedTaskId}
               onSelect={setSelectedTaskId}
             />
             <NativeLane
               title="Deleted"
               count={deletedTasks.length}
-              items={deletedTasks.slice(0, 5)}
+              items={deletedTasks}
               selectedTaskId={selectedTaskId}
               onSelect={setSelectedTaskId}
             />
@@ -536,6 +572,9 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
         <NativeCard
           title={selectedTask?.title ?? "Task detail"}
           subtitle={selectedTask ? `${selectedTask.status} · ${selectedTask.priority}` : "Select a task to edit it."}
+          density="compact"
+          scrollBody
+          bodyMaxHeight="min(68vh, 38rem)"
         >
           {selectedTask ? (
             <>
@@ -669,6 +708,9 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
                   body: item.path ?? item.description ?? "No path or description.",
                 }))}
                 emptyLabel={deliverables.loading ? "Loading deliverables..." : "No deliverables attached yet."}
+                density="compact"
+                maxHeight="12rem"
+                ariaLabel="Task deliverables"
               />
             </>
           ) : (
@@ -762,7 +804,7 @@ function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: NativeRout
     ]);
     return {
       issues: nativeLoadIssues([agents, catalog]),
-      agents: agents.data.items,
+      agents: dedupeAgentProfiles(agents.data.items),
       catalog: catalog.data.items,
     };
   }, [activeWorkspaceId]);
@@ -856,6 +898,7 @@ function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: NativeRout
         <NativeCard
           title="Agent profiles"
           subtitle="Reusable profiles you can actually inspect and maintain in the new Library."
+          density="compact"
           stats={[
             { label: "Profiles", value: String(data?.agents.length ?? 0) },
             { label: "Catalog", value: String(data?.catalog.length ?? 0) },
@@ -904,6 +947,24 @@ function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: NativeRout
         </NativeCard>
         <div className="mc-next-settings-stack">
           <NativeCard
+            title="Imported catalog"
+            subtitle="Imported definitions are shown before editing so duplicate or stale agents are obvious."
+            density="compact"
+            scrollBody
+            bodyMaxHeight="min(32vh, 18rem)"
+          >
+            <LibraryActionList
+              items={(data?.catalog ?? []).map((item) => ({
+                id: item.entryId,
+                label: item.definition.frontmatter.name,
+                description: item.definition.frontmatter.description,
+                meta: `${item.division} · ${item.state}`,
+              }))}
+              emptyLabel="No imported agent catalog entries are available for this workspace."
+              maxHeight="min(28vh, 15rem)"
+            />
+          </NativeCard>
+          <NativeCard
             title={createMode ? "Create agent profile" : (selectedAgent?.name ?? "Agent detail")}
             subtitle={
               createMode
@@ -912,6 +973,9 @@ function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: NativeRout
                   ? "Review the selected agent and update editable fields."
                   : "Select an agent profile to inspect or edit it."
             }
+            density="compact"
+            scrollBody
+            bodyMaxHeight="min(58vh, 34rem)"
           >
             {createMode || selectedAgent ? (
               <>
@@ -995,20 +1059,6 @@ function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: NativeRout
             ) : (
               <LibraryEmptyState label="Select an agent profile to inspect it." />
             )}
-          </NativeCard>
-          <NativeCard
-            title="Imported catalog"
-            subtitle="View imported agent definitions and their current lifecycle state."
-          >
-            <LibraryActionList
-              items={(data?.catalog ?? []).slice(0, 8).map((item) => ({
-                id: item.entryId,
-                label: item.definition.frontmatter.name,
-                description: item.definition.frontmatter.description,
-                meta: `${item.division} · ${item.state}`,
-              }))}
-              emptyLabel="No imported agent catalog entries are available for this workspace."
-            />
           </NativeCard>
           <QuickJumpCard
             title="Related routes"
@@ -2493,17 +2543,27 @@ function LibrarySelectableList({
   selectedId,
   onSelect,
   emptyLabel,
+  maxHeight = "min(56vh, 34rem)",
+  compact = true,
 }: {
   items: Array<{ id: string; title: string; meta?: string; body?: string }>;
   selectedId: string;
   onSelect: (id: string) => void;
   emptyLabel: string;
+  maxHeight?: string;
+  compact?: boolean;
 }) {
   if (!items.length) {
     return <LibraryEmptyState label={emptyLabel} />;
   }
   return (
-    <div className="mc-next-settings-selectable-list">
+    <div
+      className={["mc-next-settings-selectable-list", compact ? "is-compact" : "", maxHeight ? "is-scrollable" : ""]
+        .filter(Boolean)
+        .join(" ")}
+      data-native-scroll={maxHeight ? "true" : undefined}
+      style={maxHeight ? { maxHeight } : undefined}
+    >
       {items.map((item) => (
         <button
           key={item.id}
@@ -2525,6 +2585,8 @@ function LibrarySelectableList({
 function LibraryActionList({
   items,
   emptyLabel = "Nothing here yet.",
+  maxHeight = "min(50vh, 30rem)",
+  compact = true,
 }: {
   items: Array<{
     id?: string;
@@ -2535,12 +2597,20 @@ function LibraryActionList({
     onClick?: () => void;
   }>;
   emptyLabel?: string;
+  maxHeight?: string;
+  compact?: boolean;
 }) {
   if (!items.length) {
     return <LibraryEmptyState label={emptyLabel} />;
   }
   return (
-    <div className="mc-next-settings-action-list">
+    <div
+      className={["mc-next-settings-action-list", compact ? "is-compact" : "", maxHeight ? "is-scrollable" : ""]
+        .filter(Boolean)
+        .join(" ")}
+      data-native-scroll={maxHeight ? "true" : undefined}
+      style={maxHeight ? { maxHeight } : undefined}
+    >
       {items.map((item) => (
         <div key={item.id ?? `${item.label}-${item.meta ?? ""}`} className="mc-next-settings-action-row">
           <div className="mc-next-settings-action-copy">
@@ -2622,6 +2692,18 @@ async function nativeLoad<T>(label: string, promise: Promise<T>, fallback: T): P
 
 function nativeLoadIssues(results: Array<NativeLoadResult<unknown>>): NativeLoadIssue[] {
   return results.map((result) => result.issue).filter((issue): issue is NativeLoadIssue => Boolean(issue));
+}
+
+function dedupeAgentProfiles<T extends { agentId: string; roleId?: string; name?: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = `${item.agentId || item.roleId || ""}:${item.name ?? ""}`.toLowerCase();
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function LibraryLoadWarnings({ issues, onRetry }: { issues: NativeLoadIssue[]; onRetry?: () => void }) {
