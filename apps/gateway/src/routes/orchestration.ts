@@ -32,6 +32,10 @@ const phaseApproveBodySchema = z.object({
   costIncrementUsd: z.number().finite().nonnegative().optional(),
   workspaceId: z.string().trim().min(1).max(80).optional(),
 });
+const runCancelBodySchema = z.object({
+  actorId: z.string().trim().min(1).max(128).default("operator"),
+  workspaceId: z.string().trim().min(1).max(80).optional(),
+});
 
 export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
@@ -114,6 +118,24 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
             body.data.workspaceId,
           ),
         );
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/orchestration/runs/:runId/cancel", operatorOnly, async (request, reply) => {
+    const params = runParamsSchema.safeParse(request.params);
+    const body = runCancelBodySchema.safeParse(request.body ?? {});
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    if (!body.success) {
+      return reply.code(400).send({ error: body.error.flatten() });
+    }
+    try {
+      return reply
+        .code(202)
+        .send(await orchestration.cancelRun(params.data.runId, body.data.actorId, body.data.workspaceId));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

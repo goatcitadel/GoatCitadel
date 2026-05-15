@@ -94,6 +94,7 @@ export interface GatewayRouteCompositionPort {
   readonly toolInvocationCoordinator: ToolInvocationCoordinatorService;
   acceptChatDelegation: RouteDependencyMethod<"chatDelegate", "acceptChatDelegation">;
   approvePhase: RouteDependencyMethod<"orchestration", "approvePhase">;
+  cancelOrchestrationRun: RouteDependencyMethod<"orchestration", "cancelOrchestrationRun">;
   assertDeploymentProfileUpdate: settingsAuthService.SettingsRuntimeDependencies["assertDeploymentProfileUpdate"];
   assertFirecrawlRuntimeUpdate: settingsAuthService.SettingsRuntimeDependencies["assertFirecrawlRuntimeUpdate"];
   buildApprovalRealtimeLinks: settingsAuthService.SettingsAuthRuntimeDependencies["buildApprovalRealtimeLinks"];
@@ -280,6 +281,7 @@ export function createGatewayRouteCompositionPort(
     storage: gateway.storage,
     acceptChatDelegation: gateway.acceptChatDelegation.bind(gateway),
     approvePhase: gateway.approvePhase.bind(gateway),
+    cancelOrchestrationRun: gateway.cancelOrchestrationRun.bind(gateway),
     assertDeploymentProfileUpdate: gateway.assertDeploymentProfileUpdate.bind(gateway),
     assertFirecrawlRuntimeUpdate: gateway.assertFirecrawlRuntimeUpdate.bind(gateway),
     buildApprovalRealtimeLinks: gateway.buildApprovalRealtimeLinks.bind(gateway),

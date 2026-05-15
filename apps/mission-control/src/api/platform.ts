@@ -182,13 +182,24 @@ export async function fetchOrchestrationRunCheckpoints(
   );
 }
 
+export async function cancelOrchestrationRun(
+  runId: string,
+  input: { actorId?: string; workspaceId?: string } = {},
+): Promise<{ run: OrchestrationRun; checkpoints: OrchestrationCheckpointRecord[] }> {
+  return request<{ run: OrchestrationRun; checkpoints: OrchestrationCheckpointRecord[] }>(
+    `/api/v1/orchestration/runs/${encodeURIComponent(runId)}/cancel`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
 export async function fetchLlmConfig(): Promise<LlmRuntimeConfigResponse> {
   return request<LlmRuntimeConfigResponse>("/api/v1/llm/config");
 }
 
-export async function fetchLlmModels(
-  providerId?: string,
-): Promise<{
+export async function fetchLlmModels(providerId?: string): Promise<{
   items: Array<{ id: string; ownedBy?: string; created?: number }>;
   source: LlmModelDiscoverySource;
   warning?: string;

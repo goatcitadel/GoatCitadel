@@ -524,6 +524,14 @@ describe("shared API wrappers", () => {
       platform.fetchOrchestrationRunCheckpoints("run/1"),
       "/api/v1/orchestration/runs/run%2F1/checkpoints",
     );
+    await expectCall(
+      platform.cancelOrchestrationRun("run/1", { actorId: "operator", workspaceId: "workspace/1" }),
+      "/api/v1/orchestration/runs/run%2F1/cancel",
+      {
+        method: "POST",
+        body: JSON.stringify({ actorId: "operator", workspaceId: "workspace/1" }),
+      },
+    );
     await expectCall(platform.fetchLlmConfig(), "/api/v1/llm/config");
     await expectCall(platform.fetchLlmModels("openai/codex"), "/api/v1/llm/models?providerId=openai%2Fcodex");
     await expectCall(platform.fetchLlmModels(), "/api/v1/llm/models");

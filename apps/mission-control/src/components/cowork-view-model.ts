@@ -26,6 +26,7 @@ const CHECKPOINT_LABELS: Record<OrchestrationCheckpointRecord["checkpointKind"],
   run_completed: "Run completed",
   run_stopped: "Run stopped by limit",
   run_failed: "Run failed",
+  run_cancelled: "Run cancelled",
 };
 
 const MAX_VISIBLE_PLAN_STEPS = 3;

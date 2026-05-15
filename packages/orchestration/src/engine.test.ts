@@ -221,23 +221,24 @@ describe("OrchestrationEngine", () => {
 
   it("starts hitl runs in paused state and advances phases", () => {
     const engine = new OrchestrationEngine();
-    const run = engine.createRun(plan);
+    const happyPathPlan = { ...plan, maxIterations: 3 };
+    const run = engine.createRun(happyPathPlan);
     expect(run).toMatchObject({
-      planId: plan.planId,
+      planId: happyPathPlan.planId,
       status: "queued",
       totalCostUsd: 0,
       totalIterations: 0,
     });
 
-    const started = engine.startRun(plan, run);
+    const started = engine.startRun(happyPathPlan, run);
     expect(started.status).toBe("paused");
     expect(started.currentPhaseId).toBe("phase-1");
 
-    const afterPhase1 = engine.approvePhase(plan, started, "phase-1", { now: testNow });
+    const afterPhase1 = engine.approvePhase(happyPathPlan, started, "phase-1", { now: testNow });
     expect(afterPhase1.status).toBe("paused");
     expect(afterPhase1.currentPhaseId).toBe("phase-2");
 
-    const afterPhase2 = engine.approvePhase(plan, afterPhase1, "phase-2", { now: testNow });
+    const afterPhase2 = engine.approvePhase(happyPathPlan, afterPhase1, "phase-2", { now: testNow });
     expect(afterPhase2.status).toBe("completed");
     expect(afterPhase2.endedAt).toBe(testNow);
   });
@@ -469,6 +470,60 @@ describe("OrchestrationEngine", () => {
     expect(engine.advancePhase(autoPlan, run, "phase-1", { now: "2026-02-27T00:02:00.000Z" }).status).toBe(
       "stopped_by_limit",
     );
+  });
+
+  it("refuses to start runs that are not queued", () => {
+    const engine = new OrchestrationEngine();
+    const run: OrchestrationRun = {
+      runId: "run-already-running",
+      planId: plan.planId,
+      status: "running",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      currentWaveId: "wave-1",
+      currentPhaseId: "phase-1",
+      totalCostUsd: 0,
+      totalIterations: 0,
+    };
+
+    expect(() => engine.startRun(plan, run)).toThrow("cannot be started from status running");
+  });
+
+  it("stops by limit when the final phase reaches the cost budget", () => {
+    const engine = new OrchestrationEngine();
+    const finalPhasePlan: OrchestrationPlan = {
+      ...plan,
+      mode: "auto",
+      maxIterations: 10,
+      maxCostUsd: 0.25,
+      waves: [
+        {
+          ...plan.waves[0]!,
+          phases: [
+            {
+              ...plan.waves[0]!.phases[0]!,
+              phaseId: "phase-1",
+              requiresApproval: false,
+            },
+          ],
+        },
+      ],
+    };
+    const run: OrchestrationRun = {
+      runId: "run-final-limit",
+      planId: finalPhasePlan.planId,
+      status: "running",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      currentWaveId: "wave-1",
+      currentPhaseId: "phase-1",
+      totalCostUsd: 0,
+      totalIterations: 0,
+    };
+
+    const advanced = engine.advancePhase(finalPhasePlan, run, "phase-1", { costIncrementUsd: 0.25 });
+
+    expect(advanced.status).toBe("stopped_by_limit");
+    expect(advanced.currentPhaseId).toBeUndefined();
+    expect(advanced.endedAt).toBeDefined();
   });
 
   it("advances across waves and exposes direct limit checks", () => {

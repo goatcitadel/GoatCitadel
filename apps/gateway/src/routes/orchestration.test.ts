@@ -264,6 +264,10 @@ describe("orchestration routes", () => {
 
   it("runs plans and exposes checkpoints/context", async () => {
     const runOrchestrationPlan = vi.fn(() => ({ runId: "run-1" }));
+    const cancelRun = vi.fn(() => ({
+      run: { runId: "run-1", status: "cancelled", executionState: "cancelled" },
+      checkpoints: [{ checkpointId: "cp-cancel", checkpointKind: "run_cancelled" }],
+    }));
     const getRun = vi.fn(() => ({ runId: "run-1", workspaceId: "default" }));
     const listRunCheckpoints = vi.fn(() => [{ checkpointId: "cp-1" }]);
     const listRunContexts = vi.fn(() => [{ contextId: "ctx-1" }]);
@@ -271,6 +275,7 @@ describe("orchestration routes", () => {
     app.decorate("services", {
       orchestration: {
         runPlan: runOrchestrationPlan,
+        cancelRun,
         getRun,
         listRunCheckpoints,
         listRunContexts,
@@ -285,6 +290,21 @@ describe("orchestration routes", () => {
     });
     expect(runResponse.statusCode).toBe(200);
     expect(runOrchestrationPlan).toHaveBeenCalledWith("plan-1");
+
+    const cancelResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/orchestration/runs/run-1/cancel",
+      payload: {
+        actorId: "operator-a",
+        workspaceId: "workspace-a",
+      },
+    });
+    expect(cancelResponse.statusCode).toBe(202);
+    expect(cancelRun).toHaveBeenCalledWith("run-1", "operator-a", "workspace-a");
+    expect(cancelResponse.json()).toMatchObject({
+      run: { status: "cancelled", executionState: "cancelled" },
+      checkpoints: [{ checkpointKind: "run_cancelled" }],
+    });
 
     const checkpoints = await app.inject({
       method: "GET",

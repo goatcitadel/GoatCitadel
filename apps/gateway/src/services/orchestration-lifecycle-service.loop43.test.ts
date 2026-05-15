@@ -443,6 +443,7 @@ function createHarness(options: HarnessOptions = {}): {
         return next;
       }),
       findLatestRunByPlan: vi.fn(() => undefined),
+      findActiveRunByPlan: vi.fn(() => undefined),
       updateRun: vi.fn((next: OrchestrationRun) => {
         run = next;
         return next;
@@ -521,6 +522,10 @@ function createHarness(options: HarnessOptions = {}): {
     }),
     resumeDurableRun: vi.fn(() => {
       durableRun = { ...durableRun, status: "queued", version: durableRun.version + 1 };
+      return durableRun;
+    }),
+    cancelDurableRun: vi.fn(() => {
+      durableRun = { ...durableRun, status: "cancelled", version: durableRun.version + 1 };
       return durableRun;
     }),
     updateDurableRunState: vi.fn((input) => {

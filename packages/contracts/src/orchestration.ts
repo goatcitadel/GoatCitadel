@@ -10,7 +10,8 @@ export type OrchestrationExecutionState =
   | "resume_requested"
   | "completed"
   | "failed"
-  | "stopped_by_limit";
+  | "stopped_by_limit"
+  | "cancelled";
 export type OrchestrationWorktreeStatus = "uninitialized" | "allocating" | "ready" | "blocked";
 
 export interface OrchestrationPhase {
@@ -63,7 +64,7 @@ export interface OrchestrationPlan {
 export interface OrchestrationRun {
   runId: string;
   planId: string;
-  status: "queued" | "running" | "paused" | "failed" | "completed" | "stopped_by_limit";
+  status: "queued" | "running" | "paused" | "failed" | "completed" | "stopped_by_limit" | "cancelled";
   startedAt: string;
   endedAt?: string;
   currentWaveId?: string;

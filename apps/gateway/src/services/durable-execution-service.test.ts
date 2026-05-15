@@ -59,7 +59,7 @@ function buildRun(): DurableRunRecord {
   };
 }
 
-function createHosts(outcome: "paused" | "completed"): {
+function createHosts(outcome: "paused" | "completed" | "cancelled"): {
   hosts: DurableWorkflowExecutorHosts;
   durableRuns: {
     getRun: ReturnType<typeof vi.fn>;
@@ -95,7 +95,7 @@ function createHosts(outcome: "paused" | "completed"): {
     outcome,
     checkpointState: {
       orchestrationRunId: "orch-run-1",
-      executionState: outcome === "paused" ? "paused_for_approval" : "completed",
+      executionState: outcome === "paused" ? "paused_for_approval" : outcome,
       worktreeStatus: "ready",
     },
   }));
@@ -742,6 +742,18 @@ describe("durable-execution-service orchestration workflow", () => {
 
   it("registers orchestration.plan.execute and leaves paused runs open", async () => {
     const { hosts, durableRuns, executeDurableOrchestrationRun } = createHosts("paused");
+    const registry = createDurableWorkflowExecutorRegistry(buildDurableWorkflowExecutors(hosts));
+    const run = buildRun();
+
+    await registry.executeWorkflow(run);
+
+    expect(executeDurableOrchestrationRun).toHaveBeenCalledWith(run, undefined);
+    expect(durableRuns.updateRun).not.toHaveBeenCalled();
+    expect(durableRuns.createCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("leaves cancelled orchestration.plan.execute runs terminal without completing them again", async () => {
+    const { hosts, durableRuns, executeDurableOrchestrationRun } = createHosts("cancelled");
     const registry = createDurableWorkflowExecutorRegistry(buildDurableWorkflowExecutors(hosts));
     const run = buildRun();
 

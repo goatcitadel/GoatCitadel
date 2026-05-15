@@ -162,6 +162,7 @@ describe("OrchestrationRepository", () => {
     assert.throws(() => repo.getPlan("missing-plan"), /Orchestration plan missing-plan not found/);
     assert.throws(() => repo.getRun("missing-run"), /Orchestration run missing-run not found/);
     assert.equal(repo.findLatestRunByPlan("missing-plan"), undefined);
+    assert.equal(repo.findActiveRunByPlan("missing-plan"), undefined);
 
     repo.upsertPlan(plan);
     db.prepare("UPDATE orchestration_plans SET plan_json = ? WHERE plan_id = ?").run("{bad", plan.planId);
@@ -182,6 +183,15 @@ describe("OrchestrationRepository", () => {
     };
     repo.createRun(run);
     assert.equal(repo.findLatestRunByPlan("plan-1")?.runId, "run-cursor");
+    assert.equal(repo.findActiveRunByPlan("plan-1")?.runId, "run-cursor");
+
+    repo.updateRun({
+      ...run,
+      status: "cancelled",
+      executionState: "cancelled",
+      endedAt: "2026-02-27T00:11:00.000Z",
+    });
+    assert.equal(repo.findActiveRunByPlan("plan-1"), undefined);
 
     const firstCheckpoint = repo.createCheckpoint({
       runId: run.runId,
@@ -195,7 +205,7 @@ describe("OrchestrationRepository", () => {
     const secondCheckpoint = repo.createCheckpoint({
       runId: run.runId,
       planId: run.planId,
-      checkpointKind: "run_completed",
+      checkpointKind: "run_cancelled",
       details: { ok: true },
     });
     db.prepare("UPDATE orchestration_checkpoints SET created_at = ? WHERE checkpoint_id = ?").run(

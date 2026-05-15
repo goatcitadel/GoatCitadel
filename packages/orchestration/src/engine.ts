@@ -45,6 +45,9 @@ export class OrchestrationEngine {
 
   public startRun(plan: OrchestrationPlan, run: OrchestrationRun): OrchestrationRun {
     this.validate(plan);
+    if (run.status !== "queued") {
+      throw new Error(`Run ${run.runId} cannot be started from status ${run.status}`);
+    }
 
     const first = this.firstPhase(plan);
     return {
@@ -178,7 +181,6 @@ export class OrchestrationEngine {
     const runtimeMinutes = Math.max(0, (Date.parse(now) - Date.parse(run.startedAt)) / 60000);
 
     if (
-      next &&
       this.shouldStopByLimits(plan, {
         iterations: candidate.totalIterations,
         runtimeMinutes,

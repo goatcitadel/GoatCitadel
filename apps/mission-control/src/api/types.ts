@@ -185,7 +185,8 @@ export interface OrchestrationCheckpointRecord {
     | "wave_advanced"
     | "run_completed"
     | "run_stopped"
-    | "run_failed";
+    | "run_failed"
+    | "run_cancelled";
   details: Record<string, unknown>;
   createdAt: string;
 }

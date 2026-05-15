@@ -23,7 +23,8 @@ export interface OrchestrationCheckpoint {
     | "wave_advanced"
     | "run_completed"
     | "run_stopped"
-    | "run_failed";
+    | "run_failed"
+    | "run_cancelled";
   gitRef?: string;
   details: Record<string, unknown>;
   createdAt: string;
@@ -72,6 +73,7 @@ export class OrchestrationRepository {
   private readonly getRunStmt;
   private readonly listRunsStmt;
   private readonly getLatestRunByPlanStmt;
+  private readonly findActiveRunByPlanStmt;
   private readonly insertCheckpointStmt;
   private readonly listCheckpointsStmt;
   private readonly listCheckpointsAfterStmt;
@@ -157,6 +159,13 @@ export class OrchestrationRepository {
     this.getLatestRunByPlanStmt = db.prepare(
       "SELECT * FROM orchestration_runs WHERE plan_id = ? ORDER BY started_at DESC LIMIT 1",
     );
+    this.findActiveRunByPlanStmt = db.prepare(`
+      SELECT * FROM orchestration_runs
+      WHERE plan_id = ?
+        AND status IN ('queued', 'running', 'paused')
+      ORDER BY started_at DESC
+      LIMIT 1
+    `);
 
     this.insertCheckpointStmt = db.prepare(`
       INSERT INTO orchestration_checkpoints (
@@ -297,6 +306,14 @@ export class OrchestrationRepository {
 
   public findLatestRunByPlan(planId: string): OrchestrationRun | undefined {
     const row = toOrchestrationRunRow(this.getLatestRunByPlanStmt.get(planId));
+    if (!row) {
+      return undefined;
+    }
+    return mapRunRow(row);
+  }
+
+  public findActiveRunByPlan(planId: string): OrchestrationRun | undefined {
+    const row = toOrchestrationRunRow(this.findActiveRunByPlanStmt.get(planId));
     if (!row) {
       return undefined;
     }

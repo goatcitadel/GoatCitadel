@@ -180,6 +180,8 @@ export function composeRuntimeAdminRouteDependencies(
       listRecipeTemplates: () => ({ items: workflowRecipes.listTemplates() }),
       previewRecipe: (input) => workflowRecipes.previewRecipe(input),
       runOrchestrationPlan: (planId) => gateway.runOrchestrationPlan(planId),
+      cancelOrchestrationRun: (runId, actorId, workspaceId) =>
+        gateway.cancelOrchestrationRun(runId, actorId, workspaceId),
       approvePhase: (runId, phaseId, approvedBy, costIncrementUsd, workspaceId) =>
         gateway.approvePhase(runId, phaseId, approvedBy, costIncrementUsd, workspaceId),
       getRun: (runId, workspaceId) => gateway.getRun(runId, workspaceId),

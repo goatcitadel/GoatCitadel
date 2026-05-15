@@ -5509,6 +5509,20 @@ export class GatewayService {
     return orchestrationLifecycleService.approvePhase(this, runId, phaseId, approvedBy, costIncrementUsd, workspaceId);
   }
 
+  public async cancelOrchestrationRun(
+    runId: string,
+    actorId = "operator",
+    workspaceId?: string,
+  ): Promise<{ run: OrchestrationRun; checkpoints: OrchestrationCheckpoint[] }> {
+    return orchestrationLifecycleService.cancelOrchestrationRun(
+      this,
+      this.getOrchestrationLifecycleRuntimeDeps(),
+      runId,
+      actorId,
+      workspaceId,
+    );
+  }
+
   public getRun(runId: string, workspaceId?: string): OrchestrationRun {
     return orchestrationLifecycleService.getRun(this, runId, workspaceId);
   }
@@ -5554,7 +5568,7 @@ export class GatewayService {
   /** @internal */ public async executeDurableOrchestrationRun(
     run: DurableRunRecord,
     context?: durableExecutionService.DurableWorkflowExecutionContext,
-  ): Promise<{ outcome: "paused" | "completed" | "failed"; checkpointState: Record<string, unknown> }> {
+  ): Promise<{ outcome: "paused" | "completed" | "failed" | "cancelled"; checkpointState: Record<string, unknown> }> {
     return orchestrationLifecycleService.executeDurableOrchestrationRun(
       this,
       this.getOrchestrationLifecycleRuntimeDeps(),

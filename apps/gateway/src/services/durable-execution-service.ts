@@ -59,7 +59,7 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
   executeDurableOrchestrationRun(
     run: DurableRunRecord,
     context?: DurableWorkflowExecutionContext,
-  ): Promise<{ outcome: "paused" | "completed" | "failed"; checkpointState: Record<string, unknown> }>;
+  ): Promise<{ outcome: "paused" | "completed" | "failed" | "cancelled"; checkpointState: Record<string, unknown> }>;
   prepareAgentChatTurn(
     sessionId: string,
     input: ChatSendMessageRequest,
@@ -473,7 +473,7 @@ export function buildDurableWorkflowExecutors(
     "orchestration.plan.execute": {
       execute: async (run, context) => {
         const result = await hosts.orchestration.executeDurableOrchestrationRun(run, context);
-        if (result.outcome === "paused" || result.outcome === "failed") {
+        if (result.outcome === "paused" || result.outcome === "failed" || result.outcome === "cancelled") {
           return;
         }
         completeDurableWorkflowRun(hosts.orchestration, run.runId, result.checkpointState);

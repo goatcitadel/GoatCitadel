@@ -7,6 +7,7 @@ import {
   executeDurableOrchestrationRun,
   getRun as getOrchestrationRun,
   runOrchestrationPlan,
+  cancelOrchestrationRun,
   type OrchestrationLifecycleHost,
   type OrchestrationLifecycleRuntimeDeps,
 } from "./orchestration-lifecycle-service.js";
@@ -85,6 +86,7 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
         return value;
       }),
       findLatestRunByPlan: vi.fn(() => undefined),
+      findActiveRunByPlan: vi.fn(() => undefined),
       updateRun: vi.fn((value: OrchestrationRun) => {
         run = value;
         return value;
@@ -115,18 +117,18 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
       validate: vi.fn(),
       createRun: vi.fn(() => run),
       startRun: vi.fn(
-        () =>
+        (_currentPlan, currentRun) =>
           ({
-            ...run,
+            ...currentRun,
             status: "running",
             currentWaveId: "wave-1",
             currentPhaseId: "phase-1",
           }) as OrchestrationRun,
       ),
       approvePhase: vi.fn(
-        () =>
+        (_currentPlan, currentRun) =>
           ({
-            ...run,
+            ...currentRun,
             status: "completed",
             currentWaveId: undefined,
             currentPhaseId: undefined,
@@ -135,9 +137,9 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
           }) as OrchestrationRun,
       ),
       advancePhase: vi.fn(
-        () =>
+        (_currentPlan, currentRun) =>
           ({
-            ...run,
+            ...currentRun,
             status: "paused",
             currentWaveId: "wave-1",
             currentPhaseId: "phase-1",
@@ -177,6 +179,16 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
         status: "queued",
         version: durableRun.version + 1,
         updatedAt: "2026-04-12T00:00:00.000Z",
+      };
+      return durableRun;
+    }),
+    cancelDurableRun: vi.fn(() => {
+      durableRun = {
+        ...durableRun,
+        status: "cancelled",
+        finishedAt: "2026-04-12T00:00:00.000Z",
+        updatedAt: "2026-04-12T00:00:00.000Z",
+        version: durableRun.version + 1,
       };
       return durableRun;
     }),
@@ -306,6 +318,32 @@ describe("orchestration-lifecycle-service", () => {
         },
       }),
     );
+  });
+
+  it("returns the active run for a plan instead of creating duplicate active orchestration runs", async () => {
+    const activeRun: OrchestrationRun = {
+      ...buildRun(),
+      runId: "run-active",
+      durableRunId: "durable-active",
+      executionState: "queued",
+    };
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          findActiveRunByPlan: vi.fn(() => activeRun),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+    const runtime = createRuntimeDeps();
+
+    const result = await runOrchestrationPlan(host, runtime, "plan-1");
+
+    expect(result).toBe(activeRun);
+    expect(host.storage.orchestration.createRun).not.toHaveBeenCalled();
+    expect(runtime.worktrees.allocate).not.toHaveBeenCalled();
+    expect(host.requestDurableRunProcessing).toHaveBeenCalledWith("durable-active");
   });
 
   it("marks orchestration runs failed when worktree allocation fails", async () => {
@@ -583,5 +621,100 @@ describe("orchestration-lifecycle-service", () => {
     );
     expect(host.pauseDurableRun).toHaveBeenCalledWith("durable-run-1", "orchestration");
     expect(host.recordDurableTimelineEvent).toHaveBeenCalledWith("durable-run-1", "run_started", expect.any(Object));
+  });
+
+  it("cancels orchestration runs with durable, checkpoint, realtime, and worktree cleanup truth", async () => {
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            status: "running",
+            executionState: "running",
+            currentWaveId: "wave-1",
+            currentPhaseId: "phase-1",
+            durableRunId: "durable-run-1",
+            worktreeStatus: "ready",
+            worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+    const runtime = createRuntimeDeps();
+
+    const result = await cancelOrchestrationRun(host, runtime, "run-1", "operator-a");
+
+    expect(result.run.status).toBe("cancelled");
+    expect(result.run.executionState).toBe("cancelled");
+    expect(host.cancelDurableRun).toHaveBeenCalledWith("durable-run-1", "operator-a");
+    expect(host.updateDurableRunState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "durable-run-1",
+        metadata: expect.objectContaining({
+          orchestration: expect.objectContaining({
+            lifecycleState: "cancelled",
+            runId: "run-1",
+          }),
+        }),
+      }),
+    );
+    expect(runtime.worktrees.release).toHaveBeenCalledWith({
+      run: expect.objectContaining({ status: "cancelled" }),
+      reason: "cancelled",
+    });
+    expect(host.createCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        checkpointKind: "run_cancelled",
+      }),
+    );
+    expect(host.publishRealtime).toHaveBeenCalledWith(
+      "orchestration_event",
+      "orchestration",
+      expect.objectContaining({
+        event: "run_cancelled",
+        status: "cancelled",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("marks durable orchestration execution cancelled when the workflow aborts during a phase", async () => {
+    const base = createHost();
+    const abortController = new AbortController();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            durableRunId: "durable-run-1",
+            executionState: "queued",
+            worktreeStatus: "ready",
+            worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+    const runtime = createRuntimeDeps({
+      phaseExecutor: {
+        execute: vi.fn(async () => {
+          abortController.abort(new Error("operator cancelled"));
+          throw new Error("operator cancelled");
+        }),
+      },
+    });
+
+    const result = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"), {
+      signal: abortController.signal,
+    });
+
+    expect(result.outcome).toBe("cancelled");
+    expect(host.cancelDurableRun).toHaveBeenCalledWith("durable-run-1", "durable-worker");
+    expect(runtime.worktrees.release).toHaveBeenCalledWith({
+      run: expect.objectContaining({ status: "cancelled" }),
+      reason: "cancelled",
+    });
   });
 });

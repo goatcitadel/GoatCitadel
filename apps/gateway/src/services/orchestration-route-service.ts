@@ -16,6 +16,11 @@ export interface OrchestrationRoutePort {
   listRecipeTemplates(): WorkflowRecipeTemplatesResponse;
   previewRecipe(input: WorkflowRecipePreviewRequest): WorkflowRecipePreviewResponse;
   runOrchestrationPlan(planId: string): Promise<OrchestrationRun>;
+  cancelOrchestrationRun(
+    runId: string,
+    actorId?: string,
+    workspaceId?: string,
+  ): Promise<{ run: OrchestrationRun; checkpoints: OrchestrationCheckpoint[] }>;
   approvePhase(
     runId: string,
     phaseId: string,
@@ -49,6 +54,14 @@ export class OrchestrationRouteService {
 
   public async runPlan(planId: string): Promise<OrchestrationRun> {
     return this.orchestration.runOrchestrationPlan(planId);
+  }
+
+  public async cancelRun(
+    runId: string,
+    actorId?: string,
+    workspaceId?: string,
+  ): Promise<{ run: OrchestrationRun; checkpoints: OrchestrationCheckpoint[] }> {
+    return this.orchestration.cancelOrchestrationRun(runId, actorId, workspaceId);
   }
 
   public async approvePhase(
