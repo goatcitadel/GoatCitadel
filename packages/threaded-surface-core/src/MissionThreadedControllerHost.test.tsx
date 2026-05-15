@@ -1,10 +1,14 @@
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatMode, ChatThreadResponse } from "@goatcitadel/contracts";
 import {
   MissionThreadedControllerHost,
+  formatFallbackSummary,
+  formatRoutingTargetSummary,
+  formatRuntimeSummary,
   reconcilePendingAttachmentModes,
+  requiresBoundaryAcknowledgment,
   resolveExecutionRoutePrefs,
   runWithSelectedSession,
   runWithSelectedSessionId,
@@ -54,6 +58,7 @@ let mockCompact = false;
 let latestSurfaceInput: MissionThreadedRenderSurfaceInput | null = null;
 let confirmModalProps: any[] = [];
 let mockSelectedTurn: any = null;
+const mountedRenderers: ReactTestRenderer[] = [];
 
 const selectedSession = {
   sessionId: "session-1",
@@ -696,6 +701,29 @@ async function flushEffects(times = 4) {
   }
 }
 
+async function commitDraft(value: string) {
+  await act(async () => {
+    latestSurfaceInput?.activeSessionSurfaceProps?.onDraftChange(value);
+    await flushEffects(8);
+  });
+  expect(latestSurfaceInput?.activeSessionSurfaceProps?.draft).toBe(value);
+}
+
+async function cleanupRenderedHosts() {
+  const renderers = mountedRenderers.splice(0);
+  if (renderers.length === 0) {
+    latestSurfaceInput = null;
+    return;
+  }
+  await act(async () => {
+    for (const renderer of renderers) {
+      renderer.unmount();
+    }
+    await flushEffects(4);
+  });
+  latestSurfaceInput = null;
+}
+
 async function renderHost(props: Partial<React.ComponentProps<typeof MissionThreadedControllerHost>> = {}) {
   let renderer: ReactTestRenderer | undefined;
   const renderSurface = vi.fn((input: MissionThreadedRenderSurfaceInput) => {
@@ -714,6 +742,7 @@ async function renderHost(props: Partial<React.ComponentProps<typeof MissionThre
     );
     await flushEffects();
   });
+  mountedRenderers.push(renderer!);
   return { renderer: renderer!, renderSurface };
 }
 
@@ -736,7 +765,72 @@ describe("MissionThreadedControllerHost", () => {
     setupMocks();
   });
 
+  afterEach(async () => {
+    await cleanupRenderedHosts();
+  });
+
   it("covers package-local host helpers", () => {
+    const labels = new Map([
+      ["openai", "OpenAI"],
+      ["local", "Local Runtime"],
+    ]);
+    expect(formatRoutingTargetSummary(labels, undefined, "gpt-5.5")).toBe("gpt-5.5");
+    expect(formatRoutingTargetSummary(labels, "openai", "gpt-5.5")).toBe("OpenAI / gpt-5.5");
+    expect(formatRoutingTargetSummary(labels, "custom-provider", undefined)).toBe("custom-provider");
+
+    expect(formatFallbackSummary(null)).toEqual({ summary: "Fallback off", tone: "muted" });
+    expect(formatFallbackSummary({ fallbackPolicy: "off" } as any)).toEqual({
+      summary: "Fallback off",
+      tone: "muted",
+    });
+    expect(formatFallbackSummary({ fallbackPolicy: "auto", fallbackResult: "local_to_cloud" } as any)).toEqual({
+      summary: "Fallback armed · local to cloud",
+      tone: "warning",
+    });
+    expect(formatFallbackSummary({ fallbackPolicy: "auto", fallbackResult: "cloud_to_local" } as any)).toEqual({
+      summary: "Fallback armed · cloud to local",
+      tone: "warning",
+    });
+    expect(formatFallbackSummary({ fallbackPolicy: "auto", fallbackResult: "none" } as any)).toEqual({
+      summary: "Fallback armed",
+      tone: "warning",
+    });
+
+    expect(formatRuntimeSummary(null)).toEqual({ summary: "Runtime not checked", tone: "muted" });
+    expect(formatRuntimeSummary({ runtimeReachability: "not_checked" } as any)).toEqual({
+      summary: "Runtime not checked",
+      tone: "muted",
+    });
+    expect(formatRuntimeSummary({ runtimeReachability: "reachable", runtimeClass: "local" } as any)).toEqual({
+      summary: "Runtime reachable",
+      tone: "success",
+    });
+    expect(formatRuntimeSummary({ runtimeReachability: "reachable", runtimeClass: "cloud" } as any)).toEqual({
+      summary: "Provider reachable",
+      tone: "success",
+    });
+    expect(formatRuntimeSummary({ runtimeReachability: "unreachable", runtimeClass: "local" } as any)).toEqual({
+      summary: "Runtime unreachable",
+      tone: "critical",
+    });
+    expect(formatRuntimeSummary({ runtimeReachability: "unreachable", runtimeClass: "cloud" } as any)).toEqual({
+      summary: "Provider unreachable",
+      tone: "critical",
+    });
+    expect(formatRuntimeSummary({ runtimeReachability: "models_unavailable", runtimeClass: "local" } as any)).toEqual({
+      summary: "Models unavailable",
+      tone: "warning",
+    });
+    expect(formatRuntimeSummary({ runtimeReachability: "models_unavailable", runtimeClass: "cloud" } as any)).toEqual({
+      summary: "Provider degraded",
+      tone: "warning",
+    });
+
+    expect(requiresBoundaryAcknowledgment(null)).toBe(false);
+    expect(requiresBoundaryAcknowledgment({ fallbackResult: "local_to_cloud" } as any)).toBe(true);
+    expect(requiresBoundaryAcknowledgment({ fallbackResult: "cloud_to_local" } as any)).toBe(true);
+    expect(requiresBoundaryAcknowledgment({ fallbackResult: "none" } as any)).toBe(false);
+
     expect(
       reconcilePendingAttachmentModes(
         {
@@ -767,6 +861,94 @@ describe("MissionThreadedControllerHost", () => {
       docRetrieval: "retrieval",
       docFullText: "full_text",
       docPendingFullText: "message",
+    });
+
+    expect(
+      reconcilePendingAttachmentModes(
+        {
+          pdfByMime: "full_text",
+          jsonByMime: "full_text",
+          xmlByMime: "full_text",
+          yamlByMime: "full_text",
+          csvByMime: "full_text",
+          mdByMime: "full_text",
+          previewOnly: "full_text",
+          ocrOnly: "full_text",
+          transcriptOnly: "full_text",
+          audioIgnored: "retrieval",
+          videoIgnored: "retrieval",
+        },
+        [
+          {
+            attachmentId: "pdfByMime",
+            fileName: "paper.bin",
+            mediaType: "file",
+            mimeType: "application/pdf",
+            extractPreview: "preview",
+          } as any,
+          {
+            attachmentId: "jsonByMime",
+            fileName: "data.bin",
+            mediaType: "file",
+            mimeType: "application/json",
+            ocrText: "ocr",
+          } as any,
+          {
+            attachmentId: "xmlByMime",
+            fileName: "feed.bin",
+            mediaType: "file",
+            mimeType: "application/xml",
+            transcriptText: "transcript",
+          } as any,
+          {
+            attachmentId: "yamlByMime",
+            fileName: "config.bin",
+            mediaType: "file",
+            mimeType: "application/yaml",
+            extractStatus: "ready",
+          } as any,
+          { attachmentId: "csvByMime", fileName: "rows.bin", mediaType: "file", mimeType: "text/csv" } as any,
+          {
+            attachmentId: "mdByMime",
+            fileName: "notes.bin",
+            mediaType: "file",
+            mimeType: "text/markdown",
+          } as any,
+          {
+            attachmentId: "previewOnly",
+            fileName: "preview.bin",
+            mediaType: "file",
+            mimeType: "application/octet-stream",
+            extractPreview: "preview",
+          } as any,
+          {
+            attachmentId: "ocrOnly",
+            fileName: "scan.bin",
+            mediaType: "file",
+            mimeType: "application/octet-stream",
+            ocrText: "ocr",
+          } as any,
+          {
+            attachmentId: "transcriptOnly",
+            fileName: "audio.txt",
+            mediaType: "file",
+            mimeType: "application/octet-stream",
+            transcriptText: "transcript",
+          } as any,
+          { attachmentId: "audioIgnored", fileName: "audio.mp3", mediaType: "audio", mimeType: "audio/mpeg" } as any,
+          { attachmentId: "videoIgnored", fileName: "video.mp4", mediaType: "video", mimeType: "video/mp4" } as any,
+        ],
+      ),
+    ).toEqual({
+      pdfByMime: "full_text",
+      jsonByMime: "full_text",
+      xmlByMime: "full_text",
+      yamlByMime: "full_text",
+      csvByMime: "message",
+      mdByMime: "message",
+      previewOnly: "full_text",
+      ocrOnly: "full_text",
+      transcriptOnly: "full_text",
     });
 
     expect(resolveExecutionRoutePrefs(null, "cowork", undefined, undefined)).toBeNull();
@@ -1969,16 +2151,14 @@ describe("MissionThreadedControllerHost", () => {
     useChatMultimodalControlsMock.mockReturnValue(busyImageControls);
     await renderHost();
     await selectDefaultSession();
-    await act(async () => {
-      latestSurfaceInput?.activeSessionSurfaceProps?.onDraftChange("generate an image of a clean command console");
-      await flushEffects(2);
-    });
+    await commitDraft("generate an image of a clean command console");
     await act(async () => {
       latestSurfaceInput?.activeSessionSurfaceProps?.onSend();
-      await flushEffects(4);
+      await flushEffects(8);
     });
     expect(handleSend).not.toHaveBeenCalled();
 
+    await cleanupRenderedHosts();
     setupMocks();
     useChatMultimodalControlsMock.mockReturnValue({
       ...useChatMultimodalControlsMock(),
@@ -1986,15 +2166,13 @@ describe("MissionThreadedControllerHost", () => {
     });
     await renderHost();
     await selectDefaultSession();
-    await act(async () => {
-      latestSurfaceInput?.activeSessionSurfaceProps?.onDraftChange("generate an image of a clean command console");
-      await flushEffects(2);
-    });
+    await commitDraft("generate an image of a clean command console");
     await act(async () => {
       latestSurfaceInput?.activeSessionSurfaceProps?.onSend();
-      await flushEffects(4);
+      await flushEffects(8);
     });
 
+    await cleanupRenderedHosts();
     setupMocks();
     const handleGenerateImage = vi.fn(async () => generatedArtifact);
     useChatMultimodalControlsMock.mockReturnValue({
@@ -2003,16 +2181,14 @@ describe("MissionThreadedControllerHost", () => {
     });
     await renderHost();
     await selectDefaultSession();
-    await act(async () => {
-      latestSurfaceInput?.activeSessionSurfaceProps?.onDraftChange("generate an image of a clean command console");
-      await flushEffects(2);
-    });
+    await commitDraft("generate an image of a clean command console");
     await act(async () => {
       latestSurfaceInput?.activeSessionSurfaceProps?.onSend();
-      await flushEffects(4);
+      await flushEffects(8);
     });
     expect(handleGenerateImage).toHaveBeenCalledWith({ clearDraftOnSuccess: true, trigger: "auto_send" });
 
+    await cleanupRenderedHosts();
     setupMocks();
     const nullImage = vi.fn(async () => null);
     useChatMultimodalControlsMock.mockReturnValue({
@@ -2021,13 +2197,10 @@ describe("MissionThreadedControllerHost", () => {
     });
     await renderHost();
     await selectDefaultSession();
-    await act(async () => {
-      latestSurfaceInput?.activeSessionSurfaceProps?.onDraftChange("generate an image of a clean command console");
-      await flushEffects(2);
-    });
+    await commitDraft("generate an image of a clean command console");
     await act(async () => {
       latestSurfaceInput?.activeSessionSurfaceProps?.onSend();
-      await flushEffects(4);
+      await flushEffects(8);
     });
     expect(nullImage).toHaveBeenCalled();
   });
@@ -2220,5 +2393,162 @@ describe("MissionThreadedControllerHost", () => {
       await flushEffects(4);
     });
     expect(updateChatSessionPrefsMock).not.toHaveBeenCalled();
+  });
+
+  it("covers host rail, empty-state, attach, and modal cancel callbacks", async () => {
+    const showProjectCreateSetter = vi.fn();
+    const createProject = vi.fn(async () => undefined);
+    const archiveSession = vi.fn(async () => undefined);
+    const deleteCancel = vi.fn();
+    const archiveCancel = vi.fn();
+    useChatSessionControlsMock.mockReturnValue({
+      ...useChatSessionControlsMock(),
+      setShowProjectCreate: showProjectCreateSetter,
+      handleCreateProject: createProject,
+      handleToggleArchiveSession: archiveSession,
+      sessionDeleteConfirm: { sessionId: "session-1", label: "Launch plan" },
+      setSessionDeleteConfirm: deleteCancel,
+      archiveWorkspaceConfirmOpen: true,
+      setArchiveWorkspaceConfirmOpen: archiveCancel,
+    });
+    const capabilityCancel = vi.fn();
+    useChatContextActionsMock.mockReturnValue({
+      ...useChatContextActionsMock(),
+      capabilitySuggestionConfirm: { kind: "skill", title: "Skill", recommendedAction: "connect_mcp" },
+      setCapabilitySuggestionConfirm: capabilityCancel,
+      capabilityConfirmationCopy: {
+        title: "Confirm skill",
+        message: "Connect the skill.",
+        confirmLabel: "Connect",
+      },
+    });
+
+    await renderHost();
+    await selectDefaultSession();
+
+    await act(async () => {
+      const sessionControlsInput = useChatSessionControlsMock.mock.calls.at(-1)?.[0] as any;
+      const surfaceOrchestrationInput = useChatSurfaceOrchestrationMock.mock.calls.at(-1)?.[0] as any;
+      const outboundInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as any;
+      sessionControlsInput?.setQueuedOutbound([]);
+      surfaceOrchestrationInput?.setPendingApproval(null);
+      await outboundInput?.ensureFreshRoutePreflight({ content: "refresh route" });
+      expect(outboundInput?.isRoutePreflightAcknowledged("route-hash")).toBe(false);
+      latestSurfaceInput?.activeSessionSurfaceProps?.onAcknowledgeRouteBoundary();
+      await flushEffects(4);
+      const acknowledgedOutboundInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as any;
+      acknowledgedOutboundInput?.isRoutePreflightAcknowledged("route-hash");
+      latestSurfaceInput?.sessionRail.onToggleProjectCreate();
+      latestSurfaceInput?.sessionRail.onCreateProject();
+      latestSurfaceInput?.activeSessionSurfaceProps?.onToggleArchiveSession();
+      latestSurfaceInput?.activeSessionSurfaceProps?.onDismissPresetWarning?.();
+      latestSurfaceInput?.activeSessionSurfaceProps?.onAttachFiles?.();
+      latestSurfaceInput?.dropTargetProps.onAttachFiles();
+      latestSurfaceInput?.sessionRail.renderSessionLabel("unknown-session-abcdef");
+      for (const props of confirmModalProps.filter((item) => item.open)) {
+        props.onCancel?.();
+      }
+      await flushEffects(8);
+    });
+
+    expect(showProjectCreateSetter).toHaveBeenCalled();
+    expect(createProject).toHaveBeenCalled();
+    expect(archiveSession).toHaveBeenCalled();
+    expect(capabilityCancel).toHaveBeenCalledWith(null);
+    expect(deleteCancel).toHaveBeenCalledWith(null);
+    expect(archiveCancel).toHaveBeenCalledWith(false);
+
+    await cleanupRenderedHosts();
+    setupMocks();
+    useChatThreadControllerMock.mockReturnValue({
+      ...useChatThreadControllerMock(),
+      selectedSession: null,
+      messages: [],
+      missionSessions: [],
+      externalSessions: [],
+      workspaceMissionSessionCount: 0,
+      boundMissionSessionCount: 0,
+    });
+    useChatSessionDataMock.mockReturnValue({
+      ...useChatSessionDataMock(),
+      thread: null,
+      prefs: null,
+    });
+
+    await renderHost();
+    await act(async () => {
+      latestSurfaceInput?.emptyStateProps.onOpenCowork();
+      latestSurfaceInput?.emptyStateProps.onOpenCode();
+      latestSurfaceInput?.emptyStateProps.onOpenTasks();
+      latestSurfaceInput?.emptyStateProps.onOpenApprovals();
+      await flushEffects(4);
+    });
+
+    await cleanupRenderedHosts();
+    setupMocks();
+    mockSurfaceMode = "code";
+    const discardWorkbenchDraft = vi.fn();
+    useChatDockWorkbenchControllerMock.mockReturnValue({
+      ...useChatDockWorkbenchControllerMock(),
+      hasDirtyWorkbenchDraft: true,
+      discardWorkbenchDraft,
+    });
+    await renderHost({ surface: "code", lockSurface: true });
+    await selectDefaultSession();
+    await act(async () => {
+      latestSurfaceInput?.activeSessionSurfaceProps?.onNavigateSurface("chat");
+      await flushEffects(4);
+    });
+    const discardModal = confirmModalProps.find(
+      (props) => props.open && props.title === "Discard unsaved workbench changes?",
+    );
+    await act(async () => {
+      discardModal?.onCancel?.();
+      await flushEffects(4);
+    });
+
+    await cleanupRenderedHosts();
+    setupMocks();
+    await renderHost();
+    await selectDefaultSession();
+    await act(async () => {
+      latestSurfaceInput?.activeSessionSurfaceProps?.onRequestModelChange("claude-4");
+      await flushEffects(4);
+    });
+    const modelSwitchModal = confirmModalProps.find((props) => props.open && props.title === "Switch thread model?");
+    await act(async () => {
+      modelSwitchModal?.onCancel?.();
+      await flushEffects(4);
+    });
+  });
+
+  it("covers empty agentic run refreshes and unlabeled selected session fallbacks", async () => {
+    fetchAgenticRunsMock.mockResolvedValue({ items: [] });
+    useChatThreadControllerMock.mockReturnValue({
+      ...useChatThreadControllerMock(),
+      selectedSession: { ...selectedSession, title: "" },
+      selectedProject: null,
+      visibleSessionLabelById: new Map(),
+    });
+    useChatSessionDataMock.mockReturnValue({
+      ...useChatSessionDataMock(),
+      projects: null,
+      thread: { ...thread, selectedTurnId: null },
+    });
+
+    await renderHost({ lockSurface: true, surface: "cowork", routeSearch: "?artifactId=%20%20%20" });
+    await selectDefaultSession();
+
+    const props = latestSurfaceInput?.workflowPanel?.kind === "cowork" ? latestSurfaceInput.workflowPanel.props : null;
+    await act(async () => {
+      props?.onRefreshRunState();
+      latestSurfaceInput?.activeSessionSurfaceProps?.onSelectTurn("turn-1");
+      latestSurfaceInput?.activeSessionSurfaceProps?.onSwitchBranch("turn-1");
+      await flushEffects(8);
+    });
+
+    expect(fetchAgenticRunTreeMock).not.toHaveBeenCalled();
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.summary).toContain("Chat sion-1");
+    expect(latestSurfaceInput?.contextDockProps?.projectOptions).toEqual([{ value: "none", label: "Unassigned" }]);
   });
 });

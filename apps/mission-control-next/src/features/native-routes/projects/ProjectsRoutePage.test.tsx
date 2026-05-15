@@ -182,6 +182,11 @@ describe("ProjectsRoutePage", () => {
     expect(text).toContain("Unknown");
 
     act(() => {
+      findButton(renderer.root, "Beta").props.onClick();
+    });
+    expect(navigate).toHaveBeenCalledWith({ area: "projects", projectId: "project-beta", theme: "ops" });
+
+    act(() => {
       findButton(renderer.root, "Cowork run").props.onClick();
     });
     expect(navigate).toHaveBeenCalledWith({

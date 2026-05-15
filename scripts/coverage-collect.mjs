@@ -129,11 +129,16 @@ if (moduleLoadSmokeTests.length > 0) {
 
 let coveredFiles = 0;
 let uncoveredFiles = 0;
+let executableSourceFiles = 0;
+let nonExecutableSourceFiles = 0;
 let lineTotal = 0;
 let lineCovered = 0;
 let branchTotal = 0;
 let branchCovered = 0;
+let functionTotal = 0;
+let functionCovered = 0;
 const uncoveredSample = [];
+const nonExecutableSample = [];
 const topUncoveredFiles = [];
 const packageBuckets = new Map();
 const riskTierBuckets = new Map(PRODUCTION_RISK_TIERS.map((tier) => [tier.id, createCoverageBucket()]));
@@ -145,25 +150,38 @@ for (const filePath of includedSourceFiles) {
   const metrics = entry
     ? computeCoverageMetrics(entry)
     : {
-      lineTotal: await countRelevantLines(filePath),
-      lineCovered: 0,
-    branchTotal: 0,
-      branchCovered: 0,
-  };
-  const fileCovered = metrics.lineCovered > 0 || metrics.branchCovered > 0;
+        lineTotal: await countRelevantLines(filePath),
+        lineCovered: 0,
+        branchTotal: 0,
+        branchCovered: 0,
+        functionTotal: 0,
+        functionCovered: 0,
+      };
+  const executableFile = isExecutableCoverageFile(metrics);
+  const fileCovered = executableFile && isFileCovered(metrics);
   const uncoveredLines = Math.max(0, metrics.lineTotal - metrics.lineCovered);
 
   lineTotal += metrics.lineTotal;
   lineCovered += metrics.lineCovered;
   branchTotal += metrics.branchTotal;
   branchCovered += metrics.branchCovered;
+  functionTotal += metrics.functionTotal;
+  functionCovered += metrics.functionCovered;
 
-  if (fileCovered) {
-    coveredFiles += 1;
+  if (executableFile) {
+    executableSourceFiles += 1;
+    if (fileCovered) {
+      coveredFiles += 1;
+    } else {
+      uncoveredFiles += 1;
+      if (uncoveredSample.length < 200) {
+        uncoveredSample.push(relativePath);
+      }
+    }
   } else {
-    uncoveredFiles += 1;
-    if (uncoveredSample.length < 200) {
-      uncoveredSample.push(relativePath);
+    nonExecutableSourceFiles += 1;
+    if (nonExecutableSample.length < 200) {
+      nonExecutableSample.push(relativePath);
     }
   }
 
@@ -180,14 +198,14 @@ for (const filePath of includedSourceFiles) {
   const packageKey = getPackageKey(relativePath);
   if (packageKey) {
     const packageBucket = ensureBucket(packageBuckets, packageKey);
-    addFileMetrics(packageBucket, metrics, fileCovered, relativePath);
+    addFileMetrics(packageBucket, metrics, executableFile, fileCovered, relativePath);
   }
 
   for (const tier of PRODUCTION_RISK_TIERS) {
     if (!tier.sourcePrefixes.some((prefix) => relativePath.startsWith(prefix))) {
       continue;
     }
-    addFileMetrics(riskTierBuckets.get(tier.id), metrics, fileCovered, relativePath);
+    addFileMetrics(riskTierBuckets.get(tier.id), metrics, executableFile, fileCovered, relativePath);
   }
 }
 
@@ -200,15 +218,18 @@ topUncoveredFiles.sort((left, right) => {
 
 const excludedSourceFiles = await buildExcludedSourceFileSummary(coveragePolicy.excludedFiles, coverageMap);
 
-const fileCoveragePercent = includedSourceFiles.length === 0
-  ? 0
-  : Number(((coveredFiles / includedSourceFiles.length) * 100).toFixed(2));
+const fileCoveragePercent = executableSourceFiles === 0
+  ? 100
+  : Number(((coveredFiles / executableSourceFiles) * 100).toFixed(2));
 const linePercent = lineTotal === 0
   ? 0
   : Number(((lineCovered / lineTotal) * 100).toFixed(2));
 const branchPercent = branchTotal === 0
   ? 100
   : Number(((branchCovered / branchTotal) * 100).toFixed(2));
+const functionPercent = functionTotal === 0
+  ? 100
+  : Number(((functionCovered / functionTotal) * 100).toFixed(2));
 
 const resolvedThresholds = resolveThresholds(warnings);
 const packageCoverage = [...packageBuckets.entries()]
@@ -240,11 +261,14 @@ const summary = {
   sourceFiles: includedSourceFiles.length,
   totalSourceFiles: sourceFiles.length,
   excludedSourceFiles,
+  executableSourceFiles,
+  nonExecutableSourceFiles,
   coveredFiles,
   uncoveredFiles,
   fileCoveragePercent,
   linePercent,
   branchPercent,
+  functionPercent,
   lineTotals: {
     covered: lineCovered,
     total: lineTotal,
@@ -252,6 +276,10 @@ const summary = {
   branchTotals: {
     covered: branchCovered,
     total: branchTotal,
+  },
+  functionTotals: {
+    covered: functionCovered,
+    total: functionTotal,
   },
   effectiveThresholds: {
     line: resolvedThresholds.line.value,
@@ -270,6 +298,7 @@ const summary = {
   warnings,
   coverageFinalFiles: coverageFiles.map((filePath) => path.relative(repoRoot, filePath).replaceAll("\\", "/")),
   uncoveredSample,
+  nonExecutableSample,
   topUncoveredFiles: topUncoveredFiles.slice(0, 100),
   coveragePolicy: {
     path: path.relative(repoRoot, coveragePolicyPath).replaceAll("\\", "/"),
@@ -285,8 +314,10 @@ const summary = {
 await writeSummary(summary);
 
 console.log(`[coverage] summary written to ${path.relative(repoRoot, summaryJsonPath)}`);
+console.log(`[coverage] file coverage: ${summary.fileCoveragePercent}% (${summary.coveredFiles}/${summary.executableSourceFiles} executable files; ${summary.nonExecutableSourceFiles} non-executable source files)`);
 console.log(`[coverage] line coverage: ${summary.linePercent}% (${summary.lineTotals.covered}/${summary.lineTotals.total})`);
 console.log(`[coverage] branch coverage: ${summary.branchPercent}% (${summary.branchTotals.covered}/${summary.branchTotals.total})`);
+console.log(`[coverage] function coverage: ${summary.functionPercent}% (${summary.functionTotals.covered}/${summary.functionTotals.total})`);
 
 async function removeCoverageDirectories(root) {
   const entries = await safeReadDir(root);
@@ -373,6 +404,7 @@ function mergeCoverageEntries(left, right) {
     ...right,
     s: mergeHitMap(left.s, right.s),
     l: mergeHitMap(left.l, right.l),
+    f: mergeHitMap(left.f, right.f),
     b: mergeBranchMap(left.b, right.b),
     statementMap: {
       ...(left.statementMap ?? {}),
@@ -536,24 +568,56 @@ function computeCoverageMetrics(entry) {
     branchCovered += counts.filter((count) => Number(count) > 0).length;
   }
 
+  const functionCounts = entry && typeof entry === "object" && "f" in entry
+    ? entry.f ?? {}
+    : {};
+  const functionMap = entry && typeof entry === "object" && "fnMap" in entry
+    ? entry.fnMap ?? {}
+    : {};
+  const functionIds = new Set([
+    ...Object.keys(functionMap),
+    ...Object.keys(functionCounts),
+  ]);
+  let coveredFunctions = 0;
+  for (const functionId of functionIds) {
+    if (Number(functionCounts[functionId] ?? 0) > 0) {
+      coveredFunctions += 1;
+    }
+  }
+
   return {
     lineTotal,
     lineCovered,
     branchTotal,
     branchCovered,
+    functionTotal: functionIds.size,
+    functionCovered: coveredFunctions,
   };
+}
+
+function isExecutableCoverageFile(metrics) {
+  return metrics.lineTotal > 0 || metrics.branchTotal > 0 || metrics.functionTotal > 0;
+}
+
+function isFileCovered(metrics) {
+  return metrics.lineCovered > 0 || metrics.branchCovered > 0 || metrics.functionCovered > 0;
 }
 
 function createCoverageBucket() {
   return {
     sourceFiles: 0,
+    executableSourceFiles: 0,
+    nonExecutableSourceFiles: 0,
     coveredFiles: 0,
     uncoveredFiles: 0,
     lineTotal: 0,
     lineCovered: 0,
     branchTotal: 0,
     branchCovered: 0,
+    functionTotal: 0,
+    functionCovered: 0,
     uncoveredSample: [],
+    nonExecutableSample: [],
   };
 }
 
@@ -567,7 +631,7 @@ function ensureBucket(map, id) {
   return next;
 }
 
-function addFileMetrics(bucket, metrics, fileCovered, relativePath) {
+function addFileMetrics(bucket, metrics, executableFile, fileCovered, relativePath) {
   if (!bucket) {
     return;
   }
@@ -576,12 +640,22 @@ function addFileMetrics(bucket, metrics, fileCovered, relativePath) {
   bucket.lineCovered += metrics.lineCovered;
   bucket.branchTotal += metrics.branchTotal;
   bucket.branchCovered += metrics.branchCovered;
-  if (fileCovered) {
-    bucket.coveredFiles += 1;
+  bucket.functionTotal += metrics.functionTotal;
+  bucket.functionCovered += metrics.functionCovered;
+  if (executableFile) {
+    bucket.executableSourceFiles += 1;
+    if (fileCovered) {
+      bucket.coveredFiles += 1;
+    } else {
+      bucket.uncoveredFiles += 1;
+      if (bucket.uncoveredSample.length < 50) {
+        bucket.uncoveredSample.push(relativePath);
+      }
+    }
   } else {
-    bucket.uncoveredFiles += 1;
-    if (bucket.uncoveredSample.length < 50) {
-      bucket.uncoveredSample.push(relativePath);
+    bucket.nonExecutableSourceFiles += 1;
+    if (bucket.nonExecutableSample.length < 50) {
+      bucket.nonExecutableSample.push(relativePath);
     }
   }
 }
@@ -589,15 +663,19 @@ function addFileMetrics(bucket, metrics, fileCovered, relativePath) {
 function formatCoverageBucket(id, label, bucket) {
   const lineUncovered = Math.max(0, bucket.lineTotal - bucket.lineCovered);
   const branchUncovered = Math.max(0, bucket.branchTotal - bucket.branchCovered);
+  const functionUncovered = Math.max(0, bucket.functionTotal - bucket.functionCovered);
   return {
     id,
     label,
     sourceFiles: bucket.sourceFiles,
+    executableSourceFiles: bucket.executableSourceFiles,
+    nonExecutableSourceFiles: bucket.nonExecutableSourceFiles,
     coveredFiles: bucket.coveredFiles,
     uncoveredFiles: bucket.uncoveredFiles,
-    fileCoveragePercent: percent(bucket.coveredFiles, bucket.sourceFiles, 0),
+    fileCoveragePercent: percent(bucket.coveredFiles, bucket.executableSourceFiles, 100),
     linePercent: percent(bucket.lineCovered, bucket.lineTotal, 0),
     branchPercent: percent(bucket.branchCovered, bucket.branchTotal, 100),
+    functionPercent: percent(bucket.functionCovered, bucket.functionTotal, 100),
     lineTotals: {
       covered: bucket.lineCovered,
       uncovered: lineUncovered,
@@ -608,7 +686,13 @@ function formatCoverageBucket(id, label, bucket) {
       uncovered: branchUncovered,
       total: bucket.branchTotal,
     },
+    functionTotals: {
+      covered: bucket.functionCovered,
+      uncovered: functionUncovered,
+      total: bucket.functionTotal,
+    },
     uncoveredSample: bucket.uncoveredSample,
+    nonExecutableSample: bucket.nonExecutableSample,
   };
 }
 
@@ -737,6 +821,8 @@ async function buildExcludedSourceFileSummary(excludedFiles, coverageMap) {
         lineCovered: 0,
         branchTotal: 0,
         branchCovered: 0,
+        functionTotal: 0,
+        functionCovered: 0,
       };
     out.push({
       ...item,
@@ -749,6 +835,11 @@ async function buildExcludedSourceFileSummary(excludedFiles, coverageMap) {
         covered: metrics.branchCovered,
         uncovered: Math.max(0, metrics.branchTotal - metrics.branchCovered),
         total: metrics.branchTotal,
+      },
+      functionTotals: {
+        covered: metrics.functionCovered,
+        uncovered: Math.max(0, metrics.functionTotal - metrics.functionCovered),
+        total: metrics.functionTotal,
       },
     });
   }
@@ -921,6 +1012,7 @@ function buildMarkdownSummary(summary) {
   const topUncoveredFiles = Array.isArray(summary.topUncoveredFiles) ? summary.topUncoveredFiles : [];
   const lineTotals = summary.lineTotals ?? { covered: 0, total: 0 };
   const branchTotals = summary.branchTotals ?? { covered: 0, total: 0 };
+  const functionTotals = summary.functionTotals ?? { covered: 0, total: 0 };
   const effectiveThresholds = summary.effectiveThresholds ?? { line: DEFAULT_LINE_THRESHOLD, branch: DEFAULT_BRANCH_THRESHOLD };
   const thresholdSource = summary.thresholdSource ?? { line: "default", branch: "default" };
   const coverageFiles = coverageFinalFiles.length > 0
@@ -928,6 +1020,10 @@ function buildMarkdownSummary(summary) {
     : "- none";
   const uncovered = uncoveredSample.length > 0
     ? uncoveredSample.map((item) => `- \`${item}\``).join("\n")
+    : "- none";
+  const nonExecutableSample = Array.isArray(summary.nonExecutableSample) ? summary.nonExecutableSample : [];
+  const nonExecutable = nonExecutableSample.length > 0
+    ? nonExecutableSample.map((item) => `- \`${item}\``).join("\n")
     : "- none";
   const warningsSection = summary.warnings.length > 0
     ? summary.warnings.map((item) => `- ${item}`).join("\n")
@@ -938,19 +1034,20 @@ function buildMarkdownSummary(summary) {
     : "- none";
   const packageSection = packageCoverage.length > 0
     ? [
-      "| Package | Files | Lines | Branches |",
-      "| --- | ---: | ---: | ---: |",
+      "| Package | Executable Files | Lines | Branches | Functions | Non-Executable Source |",
+      "| --- | ---: | ---: | ---: | ---: | ---: |",
       ...packageCoverage.map((item) => {
         const lines = item.lineTotals ?? { covered: 0, total: 0 };
         const branches = item.branchTotals ?? { covered: 0, total: 0 };
-        return `| \`${item.id}\` | ${item.coveredFiles ?? 0}/${item.sourceFiles ?? 0} (${item.fileCoveragePercent ?? 0}%) | ${item.linePercent ?? 0}% (${lines.covered}/${lines.total}, ${lines.uncovered ?? 0} uncovered) | ${item.branchPercent ?? 0}% (${branches.covered}/${branches.total}, ${branches.uncovered ?? 0} uncovered) |`;
+        const functions = item.functionTotals ?? { covered: 0, total: 0 };
+        return `| \`${item.id}\` | ${item.coveredFiles ?? 0}/${item.executableSourceFiles ?? item.sourceFiles ?? 0} (${item.fileCoveragePercent ?? 0}%) | ${item.linePercent ?? 0}% (${lines.covered}/${lines.total}, ${lines.uncovered ?? 0} uncovered) | ${item.branchPercent ?? 0}% (${branches.covered}/${branches.total}, ${branches.uncovered ?? 0} uncovered) | ${item.functionPercent ?? 0}% (${functions.covered}/${functions.total}, ${functions.uncovered ?? 0} uncovered) | ${item.nonExecutableSourceFiles ?? 0}/${item.sourceFiles ?? 0} |`;
       }),
     ].join("\n")
     : "- none";
   const riskTierSection = riskTierCoverage.length > 0
     ? [
-      "| Risk Tier | Lines | Branches | Target | Status |",
-      "| --- | ---: | ---: | --- | --- |",
+      "| Risk Tier | Executable Files | Lines | Branches | Functions | Target | Status |",
+      "| --- | ---: | ---: | ---: | ---: | --- | --- |",
       ...riskTierCoverage.map((item) => {
         const nextTarget = item.ratchet?.nextLineThreshold
           ? `, next ratchet ${item.ratchet.nextLineThreshold}% lines`
@@ -960,17 +1057,19 @@ function buildMarkdownSummary(summary) {
           : "";
         const target = `${item.lineThreshold ?? "n/a"}% lines / ${item.branchThreshold ?? "n/a"}% branches${nextTarget}${productionTarget}`;
         const status = item.passes ? "pass" : "below target";
-        return `| \`${item.id}\` | ${item.linePercent ?? 0}% | ${item.branchPercent ?? 0}% | ${target} | ${status} |`;
+        return `| \`${item.id}\` | ${item.fileCoveragePercent ?? 0}% (${item.coveredFiles ?? 0}/${item.executableSourceFiles ?? item.sourceFiles ?? 0}) | ${item.linePercent ?? 0}% | ${item.branchPercent ?? 0}% | ${item.functionPercent ?? 0}% | ${target} | ${status} |`;
       }),
     ].join("\n")
     : "- none";
   const excludedSection = excludedSourceFiles.length > 0
     ? [
-      "| File | Reason | Lines removed |",
-      "| --- | --- | ---: |",
+      "| File | Reason | Lines removed | Branches removed | Functions removed |",
+      "| --- | --- | ---: | ---: | ---: |",
       ...excludedSourceFiles.map((item) => {
         const lines = item.lineTotals ?? { total: 0 };
-        return `| \`${item.path}\` | ${item.reasonCategory}: ${item.reason} | ${lines.total ?? 0} |`;
+        const branches = item.branchTotals ?? { total: 0 };
+        const functions = item.functionTotals ?? { total: 0 };
+        return `| \`${item.path}\` | ${item.reasonCategory}: ${item.reason} | ${lines.total ?? 0} | ${branches.total ?? 0} | ${functions.total ?? 0} |`;
       }),
     ].join("\n")
     : "- none";
@@ -992,9 +1091,10 @@ function buildMarkdownSummary(summary) {
     `- Run ID: ${summary.sourceRunId ?? "unknown"}`,
     `- Run started: ${summary.runStartedAt ?? "unknown"}`,
     `- Run finished: ${summary.runFinishedAt ?? "n/a"}`,
-    `- File coverage: ${summary.fileCoveragePercent ?? 0}% (${summary.coveredFiles ?? 0}/${summary.sourceFiles ?? 0} included; ${summary.totalSourceFiles ?? summary.sourceFiles ?? 0} total source files)`,
+    `- File coverage: ${summary.fileCoveragePercent ?? 0}% (${summary.coveredFiles ?? 0}/${summary.executableSourceFiles ?? summary.sourceFiles ?? 0} executable; ${summary.nonExecutableSourceFiles ?? 0} non-executable; ${summary.totalSourceFiles ?? summary.sourceFiles ?? 0} total source files)`,
     `- Line coverage: ${summary.linePercent ?? 0}% (${lineTotals.covered}/${lineTotals.total})`,
     `- Branch coverage: ${summary.branchPercent ?? 0}% (${branchTotals.covered}/${branchTotals.total})`,
+    `- Function coverage: ${summary.functionPercent ?? 0}% (${functionTotals.covered}/${functionTotals.total})`,
     `- Effective thresholds: line ${effectiveThresholds.line}%, branch ${effectiveThresholds.branch}%`,
     `- Threshold source: line=${thresholdSource.line}, branch=${thresholdSource.branch}`,
     "",
@@ -1024,6 +1124,9 @@ function buildMarkdownSummary(summary) {
     "",
     "## Uncovered Sample (first 200)",
     uncovered,
+    "",
+    "## Non-Executable Source Sample (first 200)",
+    nonExecutable,
     "",
   ].join("\n");
 }

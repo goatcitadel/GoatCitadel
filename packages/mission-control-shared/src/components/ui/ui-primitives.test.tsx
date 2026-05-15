@@ -10,6 +10,7 @@ import { GlobalFreshnessPill } from "../GlobalFreshnessPill";
 import { RemoteApprovalActionModal } from "../RemoteApprovalActionModal";
 import {
   Alert,
+  AlertAction,
   AlertDescription,
   AlertTitle,
   Avatar,
@@ -436,6 +437,7 @@ describe("shared UI primitives", () => {
         <Alert variant="destructive">
           <AlertTitle>Alert</AlertTitle>
           <AlertDescription>Description</AlertDescription>
+          <AlertAction>Retry</AlertAction>
         </Alert>
         <GCAlert tone="warning" title="Heads up">
           Check this
@@ -597,6 +599,13 @@ describe("shared UI primitives", () => {
         >
           Body
         </GCModal>
+        <GCModal
+          open
+          title="Locked"
+          dismissDisabled
+          onOpenChange={modalCallbacks.onOpenChange}
+          onConfirm={modalCallbacks.onConfirm}
+        />
         <DeviceAccessApprovalModal
           open
           prompt={{
@@ -632,7 +641,17 @@ describe("shared UI primitives", () => {
       </>,
     );
 
+    const dialogRoots = modal.root
+      .findAllByProps({ "data-primitive": "Root" })
+      .filter((node) => typeof node.props.onOpenChange === "function");
+    const unlockedRoot = dialogRoots[0]!;
+    const lockedRoot = dialogRoots[1]!;
     act(() => {
+      unlockedRoot.props.onOpenChange(false);
+      const callsBeforeLockedDismiss = modalCallbacks.onOpenChange.mock.calls.length;
+      lockedRoot.props.onOpenChange(false);
+      expect(modalCallbacks.onOpenChange).toHaveBeenCalledTimes(callsBeforeLockedDismiss);
+      lockedRoot.props.onOpenChange(true);
       for (const button of modal.root.findAllByType("button")) {
         if (typeof button.props.onClick === "function") {
           button.props.onClick();
@@ -640,6 +659,7 @@ describe("shared UI primitives", () => {
       }
     });
     expect(modalCallbacks.onOpenChange).toHaveBeenCalledWith(false);
+    expect(modalCallbacks.onOpenChange).toHaveBeenCalledWith(true);
     expect(modalCallbacks.onConfirm).toHaveBeenCalled();
     expect(modalCallbacks.onApprove).toHaveBeenCalled();
     expect(modalCallbacks.onReject).toHaveBeenCalled();
@@ -659,6 +679,9 @@ describe("shared UI primitives", () => {
       </ChatComposerPlusMenu>,
     );
     act(() => {
+      plusMenu.root.findByProps({ className: "chat-plus-popover" }).props.onOpenAutoFocus({
+        preventDefault: modalCallbacks.onDismiss,
+      });
       for (const label of ["Add files or photos", "Quick web research", "Custom"]) {
         plusMenu.root
           .findAllByType("button")
@@ -669,6 +692,7 @@ describe("shared UI primitives", () => {
     expect(plusCallbacks.onAttachFiles).toHaveBeenCalled();
     expect(plusCallbacks.onRunQuickResearch).toHaveBeenCalled();
     expect(plusCallbacks.onSelect).toHaveBeenCalled();
+    expect(modalCallbacks.onDismiss).toHaveBeenCalled();
 
     const modelCallbacks = {
       onChangeProvider: vi.fn(),
@@ -695,6 +719,13 @@ describe("shared UI primitives", () => {
       <ActionButton label="Run" pendingLabel="Running" pending onClick={modalCallbacks.onConfirm} />,
     );
     expect(JSON.stringify(action.toJSON())).toContain("Running");
+    const readyAction = create(
+      <ActionButton label="Run" className="extra-action" onClick={modalCallbacks.onConfirm} />,
+    );
+    act(() => {
+      readyAction.root.findByType("button").props.onClick();
+    });
+    expect(JSON.stringify(readyAction.toJSON())).toContain("extra-action");
   });
 
   it("covers combobox keyboard fallbacks, filtering, and disabled state", () => {
@@ -816,6 +847,104 @@ describe("shared UI primitives", () => {
       disabledOnly.root.findByType("button").props.onClick();
     });
     expect(JSON.stringify(renderer.toJSON())).toContain("custom-segments");
+  });
+
+  it("focuses input-group controls from addons and preserves embedded button clicks", () => {
+    const focus = vi.fn();
+    const querySelector = vi.fn(() => ({ focus }));
+    const renderer = create(
+      <InputGroup>
+        <InputGroupAddon>Search</InputGroupAddon>
+        <InputGroupInput value="" onChange={() => undefined} />
+      </InputGroup>,
+    );
+    const addon = renderer.root.findByProps({ "data-slot": "input-group-addon" });
+
+    act(() => {
+      addon.props.onClick({
+        target: { closest: () => null },
+        currentTarget: { parentElement: { querySelector } },
+      });
+    });
+    expect(querySelector).toHaveBeenCalledWith("input");
+    expect(focus).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      addon.props.onClick({
+        target: { closest: (selector: string) => (selector === "button" ? {} : null) },
+        currentTarget: { parentElement: { querySelector } },
+      });
+    });
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-focuses the combobox search input when the popover opens", () => {
+    const focus = vi.fn();
+    const renderer = create(
+      <GCCombobox
+        value="beta"
+        onChange={vi.fn()}
+        options={[
+          { value: "alpha", label: "Alpha" },
+          { value: "beta", label: "Beta" },
+        ]}
+      />,
+      {
+        createNodeMock: (element) => (element.props.role === "combobox" ? { focus } : null),
+      },
+    );
+
+    act(() => {
+      renderer.root.findByProps({ "aria-haspopup": "dialog" }).props.onKeyDown({
+        key: "ArrowDown",
+        preventDefault: vi.fn(),
+      });
+    });
+
+    const content = renderer.root.find(
+      (node) => typeof node.props.className === "string" && node.props.className.includes("gc-combobox-content"),
+    );
+    const preventDefault = vi.fn();
+    act(() => {
+      content.props.onOpenAutoFocus({ preventDefault });
+    });
+    expect(preventDefault).toHaveBeenCalled();
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps combobox highlighting stable for current and empty option sets", () => {
+    const preventDefault = vi.fn();
+    const current = create(
+      <GCCombobox
+        value="beta"
+        onChange={vi.fn()}
+        options={[
+          { value: "alpha", label: "Alpha" },
+          { value: "beta", label: "Beta" },
+        ]}
+      />,
+    );
+    act(() => {
+      current.root.findByProps({ "aria-haspopup": "dialog" }).props.onKeyDown({ key: "ArrowDown", preventDefault });
+    });
+    expect(
+      current.root.findAllByProps({ role: "option" }).some((option) => option.props["data-checked"] === true),
+    ).toBe(true);
+
+    const empty = create(
+      <GCCombobox value={undefined as unknown as string} onChange={vi.fn()} options={[]} placeholder="Pick" />,
+    );
+    act(() => {
+      empty.root.findByProps({ "aria-haspopup": "dialog" }).props.onKeyDown({ key: "ArrowDown", preventDefault });
+    });
+    const input = empty.root.findByProps({ role: "combobox" });
+    act(() => {
+      input.props.onKeyDown({ key: "ArrowDown", preventDefault });
+      input.props.onKeyDown({ key: "ArrowUp", preventDefault });
+      input.props.onKeyDown({ key: "Home", preventDefault });
+      input.props.onKeyDown({ key: "End", preventDefault });
+    });
+    expect(JSON.stringify(empty.toJSON())).toContain("Pick");
   });
 
   it("renders freshness states from the shared event stream store", () => {

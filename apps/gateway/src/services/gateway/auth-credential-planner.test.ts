@@ -3,7 +3,13 @@ import path from "node:path";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import type { GatewayRuntimeConfig } from "../../config.js";
-import { buildGatewayAuthCredentialPlan, resolveGatewayInstallToken } from "./auth-credential-planner.js";
+import {
+  buildGatewayAuthCredentialPlan,
+  createGatewayAuthCredentialPlan,
+  readAssistantAuthConfigSnapshotSync,
+  resolveGatewayInstallToken,
+  trimCredentialToUndefined,
+} from "./auth-credential-planner.js";
 
 const TEMP_ROOTS: string[] = [];
 
@@ -128,6 +134,181 @@ describe("auth credential planner", () => {
     expect(resolution.source).toBe("none");
     expect(resolution.token).toBeUndefined();
     expect(resolution.unavailableReason).toContain("basic");
+  });
+
+  it("classifies inline, runtime, and inactive credentials with operator warnings", async () => {
+    const root = await createTempRoot({
+      auth: {
+        mode: "basic",
+        allowLoopbackBypass: false,
+        token: {
+          value: "inline-token",
+          queryParam: "access_token",
+        },
+        basic: {
+          username: "inline-user",
+        },
+      },
+    });
+    const runtimeConfig = createRuntimeConfig(root, {
+      mode: "basic",
+      allowLoopbackBypass: false,
+      token: {
+        value: "runtime-token",
+        queryParam: "access_token",
+      },
+      basic: {
+        username: "runtime-user",
+        password: "runtime-password",
+      },
+    });
+
+    const plan = createGatewayAuthCredentialPlan({
+      runtimeConfig,
+      env: {
+        GOATCITADEL_AUTH_MODE: "token",
+        GOATCITADEL_AUTH_BASIC_PASSWORD: "env-password",
+      },
+      configAuth: {
+        mode: "basic",
+        token: {
+          value: "inline-token",
+        },
+        basic: {
+          username: "inline-user",
+          password: "inline-password",
+        },
+      },
+    });
+
+    expect(plan.mode).toBe("basic");
+    expect(plan.token.source).toBe("inline");
+    expect(plan.basicUsername.source).toBe("inline");
+    expect(plan.basicPassword.source).toBe("env");
+    expect(plan.warnings).toEqual(
+      expect.arrayContaining([
+        "GOATCITADEL_AUTH_MODE overrides assistant.config.json auth.mode.",
+        "GOATCITADEL_AUTH_BASIC_PASSWORD overrides assistant.config.json basic password.",
+      ]),
+    );
+
+    const inactivePlan = createGatewayAuthCredentialPlan({
+      runtimeConfig: createRuntimeConfig(root, {
+        mode: "none",
+        allowLoopbackBypass: true,
+        token: {
+          value: "runtime-token",
+          queryParam: "access_token",
+        },
+        basic: {
+          username: "",
+          password: "",
+        },
+      }),
+      env: {},
+      configAuth: {},
+    });
+    expect(inactivePlan.warnings).toContain(
+      "Gateway auth mode is none while credentials are still present and inactive.",
+    );
+
+    const incompleteBasicPlan = createGatewayAuthCredentialPlan({
+      runtimeConfig: createRuntimeConfig(root, {
+        mode: "basic",
+        allowLoopbackBypass: false,
+        token: {
+          queryParam: "access_token",
+        },
+        basic: {
+          username: "runtime-user",
+          password: "",
+        },
+      }),
+      env: {},
+      configAuth: {},
+    });
+    expect(incompleteBasicPlan.warnings).toContain(
+      "Gateway auth mode is basic, but the username/password pair is incomplete.",
+    );
+  });
+
+  it("resolves install tokens from explicit, env, inline, and runtime sources without forcing persistence", async () => {
+    const root = await createTempRoot({
+      auth: {
+        mode: "token",
+        allowLoopbackBypass: false,
+        token: {
+          value: "inline-token",
+          queryParam: "access_token",
+        },
+        basic: {},
+      },
+    });
+    const runtimeConfig = createRuntimeConfig(root, {
+      mode: "token",
+      allowLoopbackBypass: false,
+      token: {
+        value: "runtime-token",
+        queryParam: "access_token",
+      },
+      basic: {},
+    });
+
+    await expect(
+      resolveGatewayInstallToken({
+        runtimeConfig,
+        env: {},
+        explicitToken: " explicit-token ",
+      }),
+    ).resolves.toMatchObject({ source: "explicit", token: "explicit-token", persistedToEnv: false });
+    await expect(
+      resolveGatewayInstallToken({
+        runtimeConfig,
+        env: { GOATCITADEL_AUTH_TOKEN: " env-token " },
+      }),
+    ).resolves.toMatchObject({ source: "env", token: "env-token" });
+    await expect(
+      resolveGatewayInstallToken({
+        runtimeConfig,
+        env: {},
+        configAuth: { token: { value: " inline-token " } },
+      }),
+    ).resolves.toMatchObject({ source: "inline", token: "inline-token" });
+    await expect(
+      resolveGatewayInstallToken({
+        runtimeConfig: createRuntimeConfig(root, {
+          mode: "token",
+          allowLoopbackBypass: false,
+          token: {
+            value: "runtime-token",
+            queryParam: "access_token",
+          },
+          basic: {},
+        }),
+        env: {},
+        configAuth: { token: {}, basic: {} },
+      }),
+    ).resolves.toMatchObject({ source: "runtime", token: "runtime-token" });
+
+    expect(trimCredentialToUndefined(" ${GOATCITADEL_AUTH_TOKEN} ")).toBeUndefined();
+    expect(trimCredentialToUndefined(" token ")).toBe("token");
+    expect(trimCredentialToUndefined(42)).toBeUndefined();
+  });
+
+  it("returns empty config snapshots for missing or invalid assistant auth files", async () => {
+    const root = await createTempRoot({
+      auth: {
+        mode: "token",
+        token: {
+          value: "inline-token",
+        },
+        basic: {},
+      },
+    });
+    expect(readAssistantAuthConfigSnapshotSync(path.join(root, "missing"))).toEqual({});
+
+    await writeFile(path.join(root, "config", "assistant.config.json"), "{not json", "utf8");
+    expect(readAssistantAuthConfigSnapshotSync(root)).toEqual({});
   });
 });
 

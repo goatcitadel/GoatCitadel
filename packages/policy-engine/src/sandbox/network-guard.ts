@@ -175,16 +175,18 @@ function parseHost(hostOrUrl: string): { host: string; hostname: string; invalid
   }
   const colonCount = (withoutPath.match(/:/g) ?? []).length;
   if (colonCount === 1) {
-    const [hostname, port] = withoutPath.split(":");
+    const parts = withoutPath.split(":");
+    const hostname = parts[0]!;
+    const port = parts[1]!;
     if (port && !/^\d+$/.test(port)) {
       return invalidHost(hostOrUrl, "Host port is malformed.");
     }
-    if (isMalformedIpv4Literal(hostname ?? "")) {
+    if (isMalformedIpv4Literal(hostname)) {
       return invalidHost(hostOrUrl, "IPv4 host is malformed.");
     }
     return {
       host: withoutPath,
-      hostname: hostname ?? withoutPath,
+      hostname,
     };
   }
 
@@ -223,14 +225,14 @@ function matchesAllowlistPattern(candidate: string, pattern: string): boolean {
   }
 
   const segments = normalizedPattern.split("*");
-  const firstSegment = segments[0] ?? "";
+  const firstSegment = segments[0]!;
   if (firstSegment && !normalizedCandidate.startsWith(firstSegment)) {
     return false;
   }
   let cursor = firstSegment.length;
 
   for (let index = 1; index < segments.length; index += 1) {
-    const segment = segments[index] ?? "";
+    const segment = segments[index]!;
     if (!segment) {
       continue;
     }
@@ -241,7 +243,7 @@ function matchesAllowlistPattern(candidate: string, pattern: string): boolean {
     cursor = nextIndex + segment.length;
   }
 
-  const lastSegment = segments.at(-1) ?? "";
+  const lastSegment = segments[segments.length - 1]!;
   return !lastSegment || normalizedCandidate.endsWith(lastSegment);
 }
 

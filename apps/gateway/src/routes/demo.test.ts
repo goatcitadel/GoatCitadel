@@ -85,6 +85,76 @@ describe("demo routes", () => {
     expect(services.__state.tasks).toHaveLength(2);
     expect(services.knowledge.knowledgeMemoryWrite).toHaveBeenCalledTimes(1);
   });
+
+  it("restores archived demo workspaces and reports state as partial until required artifacts exist", async () => {
+    const services = createDemoServices();
+    services.__state.workspaces.push({
+      workspaceId: "workspace-archived",
+      name: "GoatCitadel Demo",
+      slug: "goatcitadel-demo",
+      lifecycleStatus: "archived",
+    });
+    app = Fastify();
+    app.decorate("services", services as never);
+    await app.register(demoRoutes);
+
+    const stateBefore = await app.inject({ method: "GET", url: "/api/v1/demo/state" });
+    expect(stateBefore.statusCode).toBe(200);
+    expect(stateBefore.json()).toMatchObject({
+      status: "not_started",
+      nextRoute: "/settings/onboarding",
+    });
+
+    const bootstrap = await app.inject({ method: "POST", url: "/api/v1/demo/bootstrap" });
+    expect(bootstrap.statusCode).toBe(200);
+    expect(services.workspaces.restoreWorkspace).toHaveBeenCalledWith("workspace-archived");
+    expect(bootstrap.json()).toMatchObject({
+      status: "ready",
+      workspace: { workspaceId: "workspace-archived" },
+      notes: expect.arrayContaining(["Restored the existing archived demo workspace."]),
+      created: {
+        workspace: false,
+        project: true,
+        chatSession: true,
+        coworkSession: true,
+        codeSession: true,
+      },
+    });
+
+    services.__state.sessions.pop();
+    const stateAfterMissingCodeSession = await app.inject({ method: "GET", url: "/api/v1/demo/state" });
+    expect(stateAfterMissingCodeSession.json()).toMatchObject({
+      status: "partial",
+      nextRoute: "/cowork?sessionId=session-2",
+      notes: ["Demo state is read-only until you press Start demo."],
+    });
+  });
+
+  it("returns partial bootstrap status when optional demo memory seeding fails", async () => {
+    const services = createDemoServices();
+    services.knowledge.knowledgeMemoryWrite.mockRejectedValueOnce(new Error("secure memory unavailable"));
+    app = Fastify();
+    app.decorate("services", services as never);
+    await app.register(demoRoutes);
+
+    const response = await app.inject({ method: "POST", url: "/api/v1/demo/bootstrap" });
+
+    expect(response.statusCode).toBe(207);
+    expect(response.json()).toMatchObject({
+      status: "partial",
+      created: {
+        workspace: true,
+        project: true,
+        chatSession: true,
+        coworkSession: true,
+        codeSession: true,
+        coworkTask: true,
+        codeTask: true,
+        memorySeed: false,
+      },
+      notes: ["Memory seed skipped: secure memory unavailable"],
+    });
+  });
 });
 
 function createDemoServices() {

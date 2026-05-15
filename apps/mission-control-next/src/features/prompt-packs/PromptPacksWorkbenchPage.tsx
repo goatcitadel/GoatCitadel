@@ -276,23 +276,10 @@ export function PromptPacksWorkbenchPage({
     void loadPack(selectedPackId).catch((err: Error) => setError(err.message));
   }, [loadPack, selectedPackId]);
 
-  const latestRunByTest = useMemo(() => {
-    const map = new Map<string, PromptPackRunRecord>();
-    const orderedRuns = [...(report?.runs ?? [])].sort((left, right) => {
-      const leftTs = Date.parse(left.startedAt || left.finishedAt || "1970-01-01T00:00:00.000Z");
-      const rightTs = Date.parse(right.startedAt || right.finishedAt || "1970-01-01T00:00:00.000Z");
-      return rightTs - leftTs;
-    });
-    for (const run of orderedRuns) {
-      if (!map.has(run.testId)) {
-        map.set(run.testId, run);
-      }
-    }
-    return map;
-  }, [report?.runs]);
+  const latestRunByTest = useMemo(() => buildLatestPromptPackRunByTest(report?.runs), [report?.runs]);
 
   const latestAssessmentByTest = useMemo(
-    () => new Map((report?.latestAssessments ?? []).map((assessment) => [assessment.testId, assessment] as const)),
+    () => buildLatestPromptPackAssessmentByTest(report?.latestAssessments),
     [report?.latestAssessments],
   );
 
@@ -302,12 +289,14 @@ export function PromptPacksWorkbenchPage({
   const selectedRunModelUsage = useMemo(() => resolvePromptPackRunModelUsage(selectedRun), [selectedRun]);
   const selectedRunRoute = useMemo(() => buildPromptPackRunRoute(selectedRun), [selectedRun]);
   const selectedRunHref = useMemo(() => (selectedRunRoute ? buildAppHref(selectedRunRoute) : null), [selectedRunRoute]);
-  const selectedRunLink = useMemo(() => {
-    if (!selectedRunHref || typeof window === "undefined") {
-      return selectedRunHref;
-    }
-    return new URL(selectedRunHref, window.location.origin).toString();
-  }, [selectedRunHref]);
+  const selectedRunLink = useMemo(
+    () =>
+      buildPromptPackSelectedRunLink(
+        selectedRunHref,
+        typeof window === "undefined" ? undefined : window.location.origin,
+      ),
+    [selectedRunHref],
+  );
   const latestSavedLogPath = exportInfo?.latestSnapshotPath ?? exportInfo?.path ?? "";
   const passThreshold = report?.summary.passThreshold ?? PROMPT_PACK_PASS_THRESHOLD;
   const selectedPlaceholders = useMemo(
@@ -339,57 +328,13 @@ export function PromptPacksWorkbenchPage({
     [latestAssessmentByTest, latestRunByTest, tests],
   );
 
-  const testOutcomeSummary = useMemo(() => {
-    let runFailureCount = 0;
-    let approvalPausedCount = 0;
-    let scoreFailureCount = 0;
-    let needsScoreCount = 0;
-    let notRunCount = 0;
-    let passingCount = 0;
-    let reviewCount = 0;
-
-    for (const test of tests) {
-      const category = classifyTestResultCategory(
-        latestRunByTest.get(test.testId),
-        latestAssessmentByTest.get(test.testId),
-      );
-      if (category === "approval_paused") {
-        approvalPausedCount += 1;
-      } else if (category === "run_failed") {
-        runFailureCount += 1;
-      } else if (category === "score_failed") {
-        scoreFailureCount += 1;
-      } else if (category === "review") {
-        reviewCount += 1;
-      } else if (category === "needs_score") {
-        needsScoreCount += 1;
-      } else if (category === "not_run") {
-        notRunCount += 1;
-      } else if (category === "passing") {
-        passingCount += 1;
-      }
-    }
-
-    return {
-      approvalPausedCount,
-      runFailureCount,
-      scoreFailureCount,
-      needsScoreCount,
-      notRunCount,
-      passingCount,
-      reviewCount,
-    };
-  }, [latestAssessmentByTest, latestRunByTest, tests]);
+  const testOutcomeSummary = useMemo(
+    () => summarizePromptPackTestOutcomes(tests, latestRunByTest, latestAssessmentByTest),
+    [latestAssessmentByTest, latestRunByTest, tests],
+  );
 
   const filteredTests = useMemo(
-    () =>
-      tests.filter((test) =>
-        matchesTestResultFilter(
-          testResultFilter,
-          latestRunByTest.get(test.testId),
-          latestAssessmentByTest.get(test.testId),
-        ),
-      ),
+    () => filterPromptPackTestsByResult(tests, testResultFilter, latestRunByTest, latestAssessmentByTest),
     [latestAssessmentByTest, latestRunByTest, testResultFilter, tests],
   );
 
@@ -642,14 +587,7 @@ export function PromptPacksWorkbenchPage({
     if (!selectedPackId || tests.length === 0) {
       return;
     }
-    const nextNotRun = tests.find((test) => !latestRunByTest.get(test.testId));
-    const nextFailed = tests.find((test) => latestRunByTest.get(test.testId)?.status === "failed");
-    const nextUnscoredCompleted = tests.find((test) => {
-      const run = latestRunByTest.get(test.testId);
-      const assessment = latestAssessmentByTest.get(test.testId);
-      return run?.status === "completed" && !assessment?.autoScore;
-    });
-    const next = nextNotRun ?? nextFailed ?? nextUnscoredCompleted ?? tests[0];
+    const next = chooseNextPromptPackTest(tests, latestRunByTest, latestAssessmentByTest);
     if (!next) {
       return;
     }
@@ -2335,7 +2273,111 @@ export function PromptPacksWorkbenchPage({
   );
 }
 
-function DiagnosticChipGroup({ label, values }: { label: string; values: string[] | undefined }) {
+export function buildLatestPromptPackRunByTest(
+  runs: PromptPackRunRecord[] | undefined,
+): Map<string, PromptPackRunRecord> {
+  const map = new Map<string, PromptPackRunRecord>();
+  const orderedRuns = [...(runs ?? [])].sort((left, right) => {
+    const leftTs = Date.parse(left.startedAt || left.finishedAt || "1970-01-01T00:00:00.000Z");
+    const rightTs = Date.parse(right.startedAt || right.finishedAt || "1970-01-01T00:00:00.000Z");
+    return rightTs - leftTs;
+  });
+  for (const run of orderedRuns) {
+    if (!map.has(run.testId)) {
+      map.set(run.testId, run);
+    }
+  }
+  return map;
+}
+
+export function buildLatestPromptPackAssessmentByTest(
+  assessments: PromptPackLatestAssessmentRecordV2[] | undefined,
+): Map<string, PromptPackLatestAssessmentRecordV2> {
+  return new Map((assessments ?? []).map((assessment) => [assessment.testId, assessment] as const));
+}
+
+export function summarizePromptPackTestOutcomes(
+  tests: PromptPackTestRecord[],
+  latestRunByTest: Map<string, PromptPackRunRecord>,
+  latestAssessmentByTest: Map<string, PromptPackLatestAssessmentRecordV2>,
+): {
+  approvalPausedCount: number;
+  runFailureCount: number;
+  scoreFailureCount: number;
+  reviewCount: number;
+  needsScoreCount: number;
+  notRunCount: number;
+  passingCount: number;
+} {
+  const summary = {
+    approvalPausedCount: 0,
+    runFailureCount: 0,
+    scoreFailureCount: 0,
+    reviewCount: 0,
+    needsScoreCount: 0,
+    notRunCount: 0,
+    passingCount: 0,
+  };
+
+  for (const test of tests) {
+    const category = classifyTestResultCategory(
+      latestRunByTest.get(test.testId),
+      latestAssessmentByTest.get(test.testId),
+    );
+    if (category === "approval_paused") {
+      summary.approvalPausedCount += 1;
+    } else if (category === "run_failed") {
+      summary.runFailureCount += 1;
+    } else if (category === "score_failed") {
+      summary.scoreFailureCount += 1;
+    } else if (category === "review") {
+      summary.reviewCount += 1;
+    } else if (category === "needs_score") {
+      summary.needsScoreCount += 1;
+    } else if (category === "not_run") {
+      summary.notRunCount += 1;
+    } else if (category === "passing") {
+      summary.passingCount += 1;
+    }
+  }
+
+  return summary;
+}
+
+export function filterPromptPackTestsByResult(
+  tests: PromptPackTestRecord[],
+  filter: TestResultFilter,
+  latestRunByTest: Map<string, PromptPackRunRecord>,
+  latestAssessmentByTest: Map<string, PromptPackLatestAssessmentRecordV2>,
+): PromptPackTestRecord[] {
+  return tests.filter((test) =>
+    matchesTestResultFilter(filter, latestRunByTest.get(test.testId), latestAssessmentByTest.get(test.testId)),
+  );
+}
+
+export function chooseNextPromptPackTest(
+  tests: PromptPackTestRecord[],
+  latestRunByTest: Map<string, PromptPackRunRecord>,
+  latestAssessmentByTest: Map<string, PromptPackLatestAssessmentRecordV2>,
+): PromptPackTestRecord | undefined {
+  const nextNotRun = tests.find((test) => !latestRunByTest.get(test.testId));
+  const nextFailed = tests.find((test) => latestRunByTest.get(test.testId)?.status === "failed");
+  const nextUnscoredCompleted = tests.find((test) => {
+    const run = latestRunByTest.get(test.testId);
+    const assessment = latestAssessmentByTest.get(test.testId);
+    return run?.status === "completed" && !assessment?.autoScore;
+  });
+  return nextNotRun ?? nextFailed ?? nextUnscoredCompleted ?? tests[0];
+}
+
+export function buildPromptPackSelectedRunLink(selectedRunHref: string | null, origin?: string): string | null {
+  if (!selectedRunHref || !origin) {
+    return selectedRunHref;
+  }
+  return new URL(selectedRunHref, origin).toString();
+}
+
+export function DiagnosticChipGroup({ label, values }: { label: string; values: string[] | undefined }) {
   const normalized = values?.filter(Boolean) ?? [];
   return (
     <div className="mc-pp-diagnostic-group">
@@ -2355,7 +2397,7 @@ function DiagnosticChipGroup({ label, values }: { label: string; values: string[
   );
 }
 
-function formatPromptPackExecutionStyle(style?: PromptPackExecutionStyle): string {
+export function formatPromptPackExecutionStyle(style?: PromptPackExecutionStyle): string {
   return style === "agentic_surface" ? "Agentic" : "Harness";
 }
 
@@ -2387,11 +2429,11 @@ const PROMPT_PACK_V3_DIMENSION_LABELS = [
   ["recoveryQuality", "Recovery quality"],
 ] as const;
 
-function getPromptPackScoreDimensionLabels(schemaVersion: PromptPackScoringSchemaVersion) {
+export function getPromptPackScoreDimensionLabels(schemaVersion: PromptPackScoringSchemaVersion) {
   return schemaVersion === "v3" ? PROMPT_PACK_V3_DIMENSION_LABELS : PROMPT_PACK_V2_DIMENSION_LABELS;
 }
 
-function readPromptPackScoreDimension(
+export function readPromptPackScoreDimension(
   scores: PromptPackAutoScoreRecord["finalScores"] | PromptPackAutoScoreRecord["ruleScores"] | undefined,
   dimension: string,
 ): string | number {
@@ -2402,7 +2444,7 @@ function readPromptPackScoreDimension(
   return value ?? "-";
 }
 
-function formatPromptPackAttribution(value: string): string {
+export function formatPromptPackAttribution(value: string): string {
   return value
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
@@ -2447,7 +2489,7 @@ const FILTER_OPTIONS: Array<{
   { value: "passing", label: "Passing", count: (summary) => summary.passingCount },
 ];
 
-function statusChipClass(status?: PromptPackRunRecord["status"]): string {
+export function statusChipClass(status?: PromptPackRunRecord["status"]): string {
   if (!status) {
     return "run-not-run";
   }
@@ -2463,7 +2505,7 @@ function statusChipClass(status?: PromptPackRunRecord["status"]): string {
   return "run-not-run";
 }
 
-function resultCategoryClass(category: Exclude<TestResultFilter, "all">): string {
+export function resultCategoryClass(category: Exclude<TestResultFilter, "all">): string {
   if (category === "approval_paused") {
     return "result-run-paused";
   }
@@ -2485,7 +2527,7 @@ function resultCategoryClass(category: Exclude<TestResultFilter, "all">): string
   return "result-not-run";
 }
 
-function computeDraftWeightedScore(scoreDraft: ScoreDraft): number | null {
+export function computeDraftWeightedScore(scoreDraft: ScoreDraft): number | null {
   if (DIMENSION_ROWS.some((dimension) => scoreDraft[dimension.key] === null)) {
     return null;
   }
@@ -2496,7 +2538,7 @@ function computeDraftWeightedScore(scoreDraft: ScoreDraft): number | null {
   return total / 4;
 }
 
-function computeDraftVerdict(
+export function computeDraftVerdict(
   scoreDraft: ScoreDraft,
   overrideVerdict: ScoreDraft["overrideVerdict"],
 ): "pass" | "review" | "fail" | "incomplete" {
@@ -2516,7 +2558,7 @@ function computeDraftVerdict(
   return "fail";
 }
 
-function buildPromptPackRunRoute(run?: PromptPackRunRecord): AppRoute | null {
+export function buildPromptPackRunRoute(run?: PromptPackRunRecord): AppRoute | null {
   if (!run?.sessionId) {
     return null;
   }
@@ -2526,7 +2568,7 @@ function buildPromptPackRunRoute(run?: PromptPackRunRecord): AppRoute | null {
   };
 }
 
-function isPromptPackV2UiEnabled(): boolean {
+export function isPromptPackV2UiEnabled(): boolean {
   const raw = (import.meta.env.VITE_PROMPT_PACK_V2_UI_ENABLED as string | undefined)?.trim().toLowerCase();
   if (!raw) {
     return true;

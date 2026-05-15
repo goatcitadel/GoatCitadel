@@ -13,7 +13,6 @@ const allowedExclusionCategories = new Set([
 const ignoredDirs = new Set([
   ".git",
   ".turbo",
-  "coverage",
   "dist",
   "node_modules",
 ]);
@@ -53,21 +52,41 @@ if (coverageFiles.length === 0) {
     rows.push(...await collectUncoveredRows(coverageFile, policy));
   }
 
-  rows.sort((left, right) => right.uncoveredLines - left.uncoveredLines || left.path.localeCompare(right.path));
+  rows.sort((left, right) => right.totalMisses - left.totalMisses || left.path.localeCompare(right.path));
   const selectedRows = rows.slice(0, limit);
 
   if (json) {
     console.log(JSON.stringify(selectedRows, null, 2));
   } else {
     const totalUncovered = rows.reduce((sum, row) => sum + row.uncoveredLines, 0);
+    const totalBranches = rows.reduce((sum, row) => sum + row.uncoveredBranches, 0);
+    const totalFunctions = rows.reduce((sum, row) => sum + row.uncoveredFunctions, 0);
     console.log(
-      `[coverage:uncovered] ${rows.length} files with ${totalUncovered} uncovered lines`
+      `[coverage:uncovered] ${rows.length} files with ${totalUncovered} uncovered lines, `
+      + `${totalBranches} uncovered branches, ${totalFunctions} uncovered functions`
       + (Number.isFinite(limit) ? ` (showing ${selectedRows.length})` : ""),
     );
     for (const row of selectedRows) {
-      console.log(`\n${row.path}: ${row.uncoveredLines} uncovered lines (${row.linePercent}% lines covered)`);
+      console.log(
+        `\n${row.path}: ${row.uncoveredLines} uncovered lines, `
+        + `${row.uncoveredBranches} uncovered branches, `
+        + `${row.uncoveredFunctions} uncovered functions`,
+      );
+      console.log(`  lines: ${row.linePercent}% covered`);
       for (const line of wrapRanges(row.uncoveredRanges)) {
-        console.log(`  ${line}`);
+        console.log(`    ${line}`);
+      }
+      if (row.branchMisses.length > 0) {
+        console.log("  branches:");
+        for (const miss of row.branchMisses) {
+          console.log(`    ${miss.location} ${miss.type} path ${miss.branchIndex + 1}/${miss.branchCount}`);
+        }
+      }
+      if (row.functionMisses.length > 0) {
+        console.log("  functions:");
+        for (const miss of row.functionMisses) {
+          console.log(`    ${miss.location} ${miss.name}`);
+        }
       }
     }
   }
@@ -203,7 +222,9 @@ async function collectUncoveredRows(coverageFile, policy) {
       .filter(([, covered]) => !covered)
       .map(([line]) => line)
       .sort((left, right) => left - right);
-    if (uncovered.length === 0) {
+    const branchMisses = collectBranchMisses(entry);
+    const functionMisses = collectFunctionMisses(entry);
+    if (uncovered.length === 0 && branchMisses.length === 0 && functionMisses.length === 0) {
       continue;
     }
 
@@ -213,10 +234,15 @@ async function collectUncoveredRows(coverageFile, policy) {
       coverageFile: normalizePath(path.relative(repoRoot, coverageFile)),
       path: relativePath,
       uncoveredLines: uncovered.length,
+      uncoveredBranches: branchMisses.length,
+      uncoveredFunctions: functionMisses.length,
+      totalMisses: uncovered.length + branchMisses.length + functionMisses.length,
       coveredLines,
       totalLines,
       linePercent: totalLines > 0 ? roundPercent(coveredLines, totalLines) : 100,
       uncoveredRanges: compressRanges(uncovered),
+      branchMisses,
+      functionMisses,
     });
   }
   return rows;
@@ -243,6 +269,78 @@ function collectLineCoverage(entry) {
   }
 
   return lines;
+}
+
+function collectBranchMisses(entry) {
+  const misses = [];
+  for (const [branchId, rawCounts] of Object.entries(entry.b ?? {})) {
+    const counts = Array.isArray(rawCounts) ? rawCounts : [];
+    const branch = entry.branchMap?.[branchId] ?? {};
+    const locations = Array.isArray(branch.locations) ? branch.locations : [];
+    for (let index = 0; index < counts.length; index += 1) {
+      if (Number(counts[index] ?? 0) > 0) {
+        continue;
+      }
+      const loc = locations[index] ?? branch.loc ?? {};
+      misses.push({
+        id: branchId,
+        type: String(branch.type ?? "unknown"),
+        branchIndex: index,
+        branchCount: counts.length,
+        location: formatLocation(loc),
+      });
+    }
+  }
+  return misses.sort((left, right) => compareLocations(left.location, right.location));
+}
+
+function collectFunctionMisses(entry) {
+  const misses = [];
+  const functionMap = entry.fnMap ?? {};
+  const functionIds = new Set([
+    ...Object.keys(functionMap),
+    ...Object.keys(entry.f ?? {}),
+  ]);
+  for (const functionId of functionIds) {
+    if (Number(entry.f?.[functionId] ?? 0) > 0) {
+      continue;
+    }
+    const fn = functionMap[functionId] ?? {};
+    misses.push({
+      id: functionId,
+      name: String(fn.name || "(anonymous)"),
+      location: formatLocation(fn.loc ?? fn.decl ?? { start: { line: fn.line, column: 0 } }),
+    });
+  }
+  return misses.sort((left, right) => compareLocations(left.location, right.location));
+}
+
+function formatLocation(loc) {
+  const startLine = Number(loc?.start?.line);
+  const startColumn = Number(loc?.start?.column);
+  const endLine = Number(loc?.end?.line);
+  const endColumn = Number(loc?.end?.column);
+  if (!Number.isFinite(startLine) || startLine <= 0) {
+    return "unknown";
+  }
+  const start = Number.isFinite(startColumn) ? `${startLine}:${startColumn + 1}` : String(startLine);
+  if (!Number.isFinite(endLine) || endLine <= 0) {
+    return start;
+  }
+  const end = Number.isFinite(endColumn) ? `${endLine}:${endColumn + 1}` : String(endLine);
+  return `${start}-${end}`;
+}
+
+function compareLocations(left, right) {
+  return locationSortKey(left) - locationSortKey(right) || left.localeCompare(right);
+}
+
+function locationSortKey(value) {
+  const match = /^(\d+)(?::(\d+))?/.exec(value);
+  if (!match) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  return Number(match[1]) * 100000 + Number(match[2] ?? 0);
 }
 
 function isRuntimeSourcePath(relativePath) {

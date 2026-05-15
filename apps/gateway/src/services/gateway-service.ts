@@ -9,7 +9,7 @@ import { EventIngestService, logger } from "@goatcitadel/gateway-core";
 
 const log = logger.child("gateway-service");
 import { MeshService } from "@goatcitadel/mesh-core";
-import { OrchestrationEngine, WorktreeManager, type TurnRuntime } from "@goatcitadel/orchestration";
+import { OrchestrationEngine, type TurnRuntime } from "@goatcitadel/orchestration";
 import {
   ToolPolicyEngine,
   assertWritePathInJail,
@@ -203,8 +203,6 @@ import type {
   NpuModelManifest,
   NpuRuntimeStatus,
   OperatorSummary,
-  OrchestrationPhase,
-  OrchestrationPhaseExecutionResult,
   OrchestrationPlan,
   OrchestrationRun,
   PendingApprovalAction,
@@ -351,6 +349,8 @@ import {
   UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./gateway/cron-automation-service.js";
 import * as orchestrationLifecycleService from "./orchestration-lifecycle-service.js";
+import { OrchestrationPhaseExecutionService } from "./orchestration-phase-execution-service.js";
+import { OrchestrationWorktreeService } from "./orchestration-worktree-service.js";
 import { OperatorSummaryCache } from "./gateway/operator-summary-cache.js";
 import { DiscordRuntimeService } from "./discord-runtime-service.js";
 import { createDailyUpdateReview, renderUpdateReviewMarkdown } from "./gateway/update-review.js";
@@ -582,6 +582,8 @@ export class GatewayService {
   public readonly policyEngine: ToolPolicyEngine;
   private readonly skillsService: SkillsService;
   public readonly orchestrationEngine: OrchestrationEngine;
+  private readonly orchestrationWorktreeService: OrchestrationWorktreeService;
+  private readonly orchestrationPhaseExecutionService: OrchestrationPhaseExecutionService;
   public readonly llmService: LlmService;
   private readonly assemblyService: AssemblyService;
   private readonly memoryContextService: MemoryContextService;
@@ -753,6 +755,10 @@ export class GatewayService {
       },
     });
     this.orchestrationEngine = new OrchestrationEngine();
+    this.orchestrationWorktreeService = new OrchestrationWorktreeService({
+      config,
+      orchestrationRuns: this.storage.orchestration,
+    });
     this.llmService = new LlmService(config.llm, process.env, {
       networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
       enforceNetworkAllowlist: true,
@@ -1012,6 +1018,13 @@ export class GatewayService {
         this.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord),
     });
     this.chatTurnRuntime = new ChatTurnRuntimeService(createChatTurnRuntimeHost(this));
+    this.orchestrationPhaseExecutionService = new OrchestrationPhaseExecutionService({
+      rootDir: this.config.rootDir,
+      createChatSession: (input) => this.createChatSession(input),
+      updateChatSessionPrefs: (sessionId, input) => this.updateChatSessionPrefs(sessionId, input),
+      agentSendChatMessage: (sessionId, input) => this.chatTurnRuntime.agentSendChatMessage(sessionId, input),
+      normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
+    });
     this.chatDelegationService = new ChatDelegationService({
       storage: this.storage,
       gatewaySql: this.gatewaySql,
@@ -5346,11 +5359,19 @@ export class GatewayService {
   }
 
   public async createOrchestrationPlan(plan: OrchestrationPlan): Promise<OrchestrationRun> {
-    return orchestrationLifecycleService.createOrchestrationPlan(this, plan);
+    return orchestrationLifecycleService.createOrchestrationPlan(
+      this,
+      this.getOrchestrationLifecycleRuntimeDeps(),
+      plan,
+    );
   }
 
   public async runOrchestrationPlan(planId: string): Promise<OrchestrationRun> {
-    return orchestrationLifecycleService.runOrchestrationPlan(this, planId);
+    return orchestrationLifecycleService.runOrchestrationPlan(
+      this,
+      this.getOrchestrationLifecycleRuntimeDeps(),
+      planId,
+    );
   }
 
   public async approvePhase(
@@ -5369,6 +5390,13 @@ export class GatewayService {
 
   public listRunCheckpoints(runId: string, workspaceId?: string): OrchestrationCheckpoint[] {
     return orchestrationLifecycleService.listRunCheckpoints(this, runId, workspaceId);
+  }
+
+  private getOrchestrationLifecycleRuntimeDeps(): orchestrationLifecycleService.OrchestrationLifecycleRuntimeDeps {
+    return {
+      worktrees: this.orchestrationWorktreeService,
+      phaseExecutor: this.orchestrationPhaseExecutionService,
+    };
   }
 
   /** @internal */ public requestDurableRunProcessing(runId: string): void {
@@ -5398,245 +5426,16 @@ export class GatewayService {
     });
   }
 
-  /** @internal */ public async allocateOrchestrationWorktree(input: {
-    runId: string;
-    workspaceId: string;
-    baseRef?: string;
-  }): Promise<{
-    worktreePath: string;
-    worktreeStatus: NonNullable<OrchestrationRun["worktreeStatus"]>;
-    worktreeBaseRef: string;
-  }> {
-    const baseRef = input.baseRef?.trim() || "HEAD";
-    const worktreesRoot = path.resolve(this.config.rootDir, this.config.assistant.worktreesDir, "orchestration");
-    const targetPath = path.resolve(worktreesRoot, input.runId);
-    await fs.mkdir(worktreesRoot, { recursive: true });
-    assertWritePathInJail(targetPath, this.config.toolPolicy.sandbox.writeJailRoots);
-    const gitDirPath = path.join(targetPath, ".git");
-    if (fsSync.existsSync(targetPath) && !fsSync.existsSync(gitDirPath)) {
-      throw new ValidationError({
-        message:
-          "Orchestration worktree path already exists but is not a valid git worktree. Clean it up before retrying.",
-      });
-    }
-    if (!fsSync.existsSync(targetPath)) {
-      const manager = new WorktreeManager({
-        repoRoot: this.config.rootDir,
-        worktreesRoot,
-      });
-      await manager.create(input.runId, baseRef);
-    }
-    return {
-      worktreePath: targetPath,
-      worktreeStatus: "ready",
-      worktreeBaseRef: baseRef,
-    };
-  }
-
-  /** @internal */ public async executeOrchestrationPhase(input: {
-    plan: OrchestrationPlan;
-    run: OrchestrationRun;
-    phase: OrchestrationPhase;
-    durableRun: DurableRunRecord;
-    signal?: AbortSignal;
-  }): Promise<OrchestrationPhaseExecutionResult> {
-    if (input.signal?.aborted) {
-      throw input.signal.reason instanceof Error ? input.signal.reason : new Error("Orchestration phase aborted.");
-    }
-    const startedAt = new Date().toISOString();
-    const workspaceId = this.normalizeWorkspaceId(input.run.workspaceId ?? DEFAULT_WORKSPACE_ID);
-    const specText = await this.readOrchestrationPhaseSpec(input.run, input.phase);
-    const childSession = this.createChatSession({
-      workspaceId,
-      mode: "cowork",
-      origin: "system",
-      includeInHistory: false,
-      title: `[Orchestration] ${input.run.runId}/${input.phase.phaseId}`,
-    });
-    this.updateChatSessionPrefs(childSession.sessionId, {
-      mode: "cowork",
-      planningMode: "off",
-      memoryMode: "auto",
-      toolAutonomy: "safe_auto",
-      orchestrationEnabled: false,
-    });
-
-    const prompt = [
-      "You are executing one GoatCitadel Cowork orchestration phase.",
-      "",
-      `Goal: ${input.plan.goal}`,
-      `Run: ${input.run.runId}`,
-      `Durable run: ${input.durableRun.runId}`,
-      `Phase: ${input.phase.phaseId}`,
-      `Owner agent: ${input.phase.ownerAgentId}`,
-      `Loop mode: ${input.phase.loopMode}`,
-      `Spec path: ${input.phase.specPath}`,
-      "",
-      "Phase spec:",
-      specText || "(The phase spec file was not readable; proceed from the plan metadata above.)",
-      "",
-      "Return the concrete phase output. Include decisions, files or artifacts touched, validation performed, blockers, and the next handoff if applicable. Do not claim later phases are complete.",
-    ].join("\n");
-
-    try {
-      const response = await this.agentSendChatMessage(childSession.sessionId, {
-        content: prompt,
-        mode: "cowork",
-        memoryMode: "auto",
-        prefsOverride: {
-          mode: "cowork",
-          planningMode: "off",
-          memoryMode: "auto",
-          toolAutonomy: "safe_auto",
-          orchestrationEnabled: false,
-        },
-        signal: input.signal,
-      });
-      const assistantText = response.assistantMessage?.content?.trim() ?? "";
-      const finishedAt = new Date().toISOString();
-      const costUsd = response.assistantMessage?.costUsd;
-      const inputTokens = response.assistantMessage?.tokenInput;
-      const outputTokens = response.assistantMessage?.tokenOutput;
-      const traceStatus = response.trace?.status;
-      const failure = response.trace?.failure?.message ?? response.trace?.failure?.failureClass;
-      return {
-        phaseId: input.phase.phaseId,
-        ownerAgentId: input.phase.ownerAgentId,
-        status: traceStatus === "failed" || !assistantText ? "failed" : "completed",
-        startedAt,
-        finishedAt,
-        outputSummary: summarizeOrchestrationPhaseOutput(assistantText || failure),
-        outputText: assistantText || failure,
-        childSessionId: response.sessionId,
-        childTurnId: response.turnId,
-        childRunId: response.trace?.durable?.runId,
-        model: response.model ?? response.trace?.model,
-        costUsd,
-        inputTokens,
-        outputTokens,
-        citations: response.citations,
-        error: traceStatus === "failed" ? (failure ?? "Phase chat turn failed.") : undefined,
-      };
-    } catch (error) {
-      return {
-        phaseId: input.phase.phaseId,
-        ownerAgentId: input.phase.ownerAgentId,
-        status: "failed",
-        startedAt,
-        finishedAt: new Date().toISOString(),
-        childSessionId: childSession.sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-  }
-
-  private async readOrchestrationPhaseSpec(run: OrchestrationRun, phase: OrchestrationPhase): Promise<string> {
-    const basePath = path.resolve(run.worktreePath ?? this.config.rootDir);
-    const targetPath = path.resolve(basePath, phase.specPath);
-    const relative = path.relative(basePath, targetPath);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-      return `Spec path ${phase.specPath} resolves outside the orchestration workspace and was not read.`;
-    }
-    try {
-      const text = await fs.readFile(targetPath, "utf8");
-      return text.length > 24000 ? `${text.slice(0, 24000)}\n\n[Spec truncated after 24000 characters.]` : text;
-    } catch (error) {
-      return `Unable to read ${phase.specPath}: ${error instanceof Error ? error.message : String(error)}`;
-    }
-  }
-
-  /** @internal */ public async releaseOrchestrationWorktree(input: {
-    run: OrchestrationRun;
-    reason: "completed" | "failed" | "stopped_by_limit" | "cancelled";
-  }): Promise<void> {
-    const worktreePath = input.run.worktreePath?.trim();
-    if (!worktreePath) {
-      return;
-    }
-    const worktreesRoot = path.resolve(this.config.rootDir, this.config.assistant.worktreesDir, "orchestration");
-    const resolvedPath = path.resolve(worktreePath);
-    const relative = path.relative(worktreesRoot, resolvedPath);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-      throw new Error(`Refusing to clean orchestration worktree outside worktrees root: ${worktreePath}`);
-    }
-    assertWritePathInJail(resolvedPath, this.config.toolPolicy.sandbox.writeJailRoots);
-    if (!fsSync.existsSync(resolvedPath)) {
-      return;
-    }
-    const manager = new WorktreeManager({
-      repoRoot: this.config.rootDir,
-      worktreesRoot,
-    });
-    try {
-      await manager.remove(resolvedPath);
-    } catch (error) {
-      log.warn("git worktree remove failed; falling back to filesystem cleanup", {
-        runId: input.run.runId,
-        reason: input.reason,
-        worktreePath: resolvedPath,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      await fs.rm(resolvedPath, { recursive: true, force: true });
-    }
-  }
-
-  /** @internal */ public async reapOrphanedOrchestrationWorktrees(
-    input: {
-      dryRun?: boolean;
-      minAgeMs?: number;
-    } = {},
-  ): Promise<{ dryRun: boolean; scanned: number; removed: string[]; skippedActive: string[] }> {
-    const dryRun = input.dryRun ?? true;
-    const minAgeMs = Math.max(0, input.minAgeMs ?? 60 * 60 * 1000);
-    const worktreesRoot = path.resolve(this.config.rootDir, this.config.assistant.worktreesDir, "orchestration");
-    if (!fsSync.existsSync(worktreesRoot)) {
-      return { dryRun, scanned: 0, removed: [], skippedActive: [] };
-    }
-
-    const activeStatuses = new Set<OrchestrationRun["status"]>(["queued", "running", "paused"]);
-    const activeWorktreePaths = new Set(
-      this.storage.orchestration
-        .listRuns(5000)
-        .filter((run) => activeStatuses.has(run.status))
-        .map((run) => (run.worktreePath ? path.resolve(run.worktreePath).toLowerCase() : undefined))
-        .filter((value): value is string => Boolean(value)),
-    );
-    const entries = await fs.readdir(worktreesRoot, { withFileTypes: true });
-    const removed: string[] = [];
-    const skippedActive: string[] = [];
-    const now = Date.now();
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      const candidatePath = path.resolve(worktreesRoot, entry.name);
-      const relative = path.relative(worktreesRoot, candidatePath);
-      if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-        continue;
-      }
-      if (activeWorktreePaths.has(candidatePath.toLowerCase())) {
-        skippedActive.push(candidatePath);
-        continue;
-      }
-      const stat = await fs.stat(candidatePath);
-      if (now - stat.mtimeMs < minAgeMs) {
-        continue;
-      }
-      removed.push(candidatePath);
-      if (!dryRun) {
-        await fs.rm(candidatePath, { recursive: true, force: true });
-      }
-    }
-
-    return { dryRun, scanned: entries.length, removed, skippedActive };
-  }
-
   /** @internal */ public async executeDurableOrchestrationRun(
     run: DurableRunRecord,
     context?: durableExecutionService.DurableWorkflowExecutionContext,
   ): Promise<{ outcome: "paused" | "completed" | "failed"; checkpointState: Record<string, unknown> }> {
-    return orchestrationLifecycleService.executeDurableOrchestrationRun(this, run, context);
+    return orchestrationLifecycleService.executeDurableOrchestrationRun(
+      this,
+      this.getOrchestrationLifecycleRuntimeDeps(),
+      run,
+      context,
+    );
   }
 
   public getBankrOptionalMigrationMessage(): string {
@@ -7777,14 +7576,6 @@ function readRequiredString(value: unknown, label: string): string {
 
 function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-
-function summarizeOrchestrationPhaseOutput(value: string | undefined): string | undefined {
-  const normalized = value?.replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return undefined;
-  }
-  return normalized.length > 320 ? `${normalized.slice(0, 317)}...` : normalized;
 }
 
 function toSkillStateRows(value: unknown): SkillStateRecord[] {

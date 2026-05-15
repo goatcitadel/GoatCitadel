@@ -21,12 +21,16 @@ import { ChatSessionPrefsRepository } from "./chat-session-prefs-repo.js";
 import { ChatSessionProjectRepository } from "./chat-session-project-repo.js";
 import { ChatSessionWorkbenchRepository } from "./chat-session-workbench-repo.js";
 import { ChatStreamEventRepository } from "./chat-stream-event-repo.js";
+import { ChatTurnTraceRepository } from "./chat-turn-trace-repo.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
 import { IdempotencyRepository } from "./idempotency-repo.js";
 import { ChannelSetupDraftRepository } from "./channel-setup-draft-repo.js";
 import { MemoryMaintenanceRepository } from "./memory-maintenance-repo.js";
 import { MemoryQmdRunRepository } from "./memory-qmd-run-repo.js";
+import { OrchestrationRepository } from "./orchestration-repo.js";
 import { PendingApprovalActionRepository } from "./pending-approval-action-repo.js";
+import { PromptPackRepository } from "./prompt-pack-repo.js";
+import { PromptPackRunRepository } from "./prompt-pack-run-repo.js";
 import { RealtimeEventRepository } from "./realtime-event-repo.js";
 import { ResearchRunRepository } from "./research-run-repo.js";
 import { ResearchSourceRepository } from "./research-source-repo.js";
@@ -150,6 +154,37 @@ describe("storage defensive tail coverage", () => {
       "chat/default/attachments/copy.txt",
       "chat/default/attachments/note.txt",
     ]);
+  });
+
+  it("commits and rolls back explicit sqlite transaction modes", () => {
+    const db = createDb("sqlite-transaction-modes");
+    db.exec("CREATE TABLE tx_tail (id TEXT PRIMARY KEY, value TEXT NOT NULL)");
+
+    const deferredResult = db.transaction("deferred", () => {
+      db.prepare("INSERT INTO tx_tail (id, value) VALUES (?, ?)").run("deferred", "ok");
+      return "deferred-ok";
+    });
+    const exclusiveResult = db.transaction("exclusive", () => {
+      db.prepare("INSERT INTO tx_tail (id, value) VALUES (?, ?)").run("exclusive", "ok");
+      return "exclusive-ok";
+    });
+    assert.equal(deferredResult, "deferred-ok");
+    assert.equal(exclusiveResult, "exclusive-ok");
+
+    assert.throws(
+      () =>
+        db.transaction("immediate", () => {
+          db.prepare("INSERT INTO tx_tail (id, value) VALUES (?, ?)").run("rolled-back", "nope");
+          throw new Error("rollback branch");
+        }),
+      /rollback branch/,
+    );
+
+    const rows = db.prepare("SELECT id FROM tx_tail ORDER BY id").all<{ id: string }>();
+    assert.deepEqual(
+      rows.map((row) => row.id),
+      ["deferred", "exclusive"],
+    );
   });
 
   it("waits for failed transcript writes before deleting", async () => {
@@ -529,5 +564,251 @@ describe("storage defensive tail coverage", () => {
 
     const qmd = new MemoryQmdRunRepository(createDb("qmd-tail"));
     assert.equal(qmd.stats("2026-05-01T00:00:00.000Z", "2026-05-02T00:00:00.000Z").efficiencyLabel, "neutral");
+  });
+
+  it("preserves and clears chat turn trace optional fields through patch branches", () => {
+    const repo = new ChatTurnTraceRepository(createDb("chat-turn-trace-tail"));
+    repo.create({
+      turnId: "turn-tail",
+      sessionId: "sess-tail",
+      userMessageId: "message-user",
+      assistantMessageId: "message-assistant",
+      executionPlanId: "plan-tail",
+      mode: "cowork",
+      webMode: "deep",
+      memoryMode: "on",
+      thinkingLevel: "extended",
+      routing: { effectiveProviderId: "openai", effectiveModel: "gpt-5" },
+      effectiveToolAutonomy: "safe_auto",
+      retrieval: { l0Used: true, l1Used: false, l2Used: false },
+      reflection: { attempted: true, attemptCount: 1 },
+      proactive: { runId: "proactive-tail" },
+      completion: { finishReason: "stop", status: "complete", repaired: false },
+      durable: { runId: "durable-tail" },
+      orchestration: {
+        runId: "orch-tail",
+        objective: "Preserve trace tails",
+        workflowTemplate: "qa",
+        status: "running",
+        modePolicy: "cowork",
+        visibility: "explicit",
+        routeDecision: {
+          modePolicy: "cowork",
+          workflowTemplate: "qa",
+          hidden: false,
+          visibility: "explicit",
+          intensity: "balanced",
+          providerPreference: "balanced",
+          reviewDepth: "standard",
+          parallelism: "sequential",
+          selectedRoles: [],
+          selectedProviders: [],
+          triggerReason: "coverage",
+        },
+        steps: [],
+      },
+      guidance: { workspaceId: "workspace-tail", globalFilesUsed: [], workspaceFilesUsed: [], truncated: false },
+      loopGuard: { enabled: true, historySize: 1, events: [] },
+      pendingUserInput: {
+        promptId: "prompt-tail",
+        turnId: "turn-tail",
+        kind: "text",
+        title: "Input",
+        question: "Continue?",
+        required: false,
+      },
+      citations: [{ citationId: "cite-tail", title: "Source", url: "https://example.test/source", sourceType: "web" }],
+      failure: { failureClass: "tool_failed", message: "old failure" },
+      capabilityUpgradeSuggestions: [
+        {
+          kind: "skill_import",
+          title: "Skill",
+          summary: "Summary",
+          reason: "Useful for validation",
+          recommendedAction: "install_skill_enable",
+          requiresUserApproval: true,
+        },
+      ],
+      specialistCandidateSuggestions: [
+        {
+          candidateId: "candidate-tail",
+          title: "QA",
+          role: "QA",
+          summary: "Checks release evidence",
+          reason: "Coverage loop",
+          source: "runtime_gap",
+          confidence: 0.8,
+          suggestedStatus: "suggested",
+          suggestedRoutingMode: "manual_only",
+          requiresApproval: true,
+          routingHints: { preferredModes: ["cowork"] },
+          evidence: [],
+        },
+      ],
+      startedAt: "2026-05-01T00:00:00.000Z",
+      finishedAt: "2026-05-01T00:01:00.000Z",
+    });
+
+    const preserved = repo.patch("turn-tail", {
+      status: "running",
+      model: "gpt-5.1",
+      parentTurnId: undefined,
+      sourceTurnId: undefined,
+      finishedAt: undefined,
+    });
+    assert.equal(preserved.assistantMessageId, "message-assistant");
+    assert.equal(preserved.executionPlanId, "plan-tail");
+    assert.equal(preserved.parentTurnId, undefined);
+    assert.equal(preserved.sourceTurnId, undefined);
+    assert.equal(preserved.model, "gpt-5.1");
+    assert.equal(preserved.finishedAt, "2026-05-01T00:01:00.000Z");
+    assert.deepEqual(preserved.routing, { effectiveProviderId: "openai", effectiveModel: "gpt-5" });
+    assert.equal(preserved.effectiveToolAutonomy, "safe_auto");
+
+    const cleared = repo.patch("turn-tail", {
+      assistantMessageId: null,
+      executionPlanId: null,
+      model: null,
+      pendingUserInput: null,
+      failure: null,
+      citations: [],
+      capabilityUpgradeSuggestions: [],
+      specialistCandidateSuggestions: [],
+      finishedAt: null,
+    } as unknown as Parameters<ChatTurnTraceRepository["patch"]>[1]);
+    assert.equal(cleared.assistantMessageId, undefined);
+    assert.equal(cleared.executionPlanId, undefined);
+    assert.equal(cleared.model, undefined);
+    assert.equal(cleared.pendingUserInput, undefined);
+    assert.equal(cleared.failure, undefined);
+    assert.deepEqual(cleared.citations, []);
+    assert.deepEqual(cleared.capabilityUpgradeSuggestions, []);
+    assert.deepEqual(cleared.specialistCandidateSuggestions, []);
+    assert.equal(cleared.finishedAt, undefined);
+  });
+
+  it("round-trips orchestration run optional tails through create, update, and compare-and-swap", () => {
+    const repo = new OrchestrationRepository(createDb("orchestration-tail"));
+    const plan = {
+      planId: "plan-tail",
+      goal: "tail coverage",
+      mode: "hitl" as const,
+      maxIterations: 3,
+      maxRuntimeMinutes: 10,
+      maxCostUsd: 1,
+      waves: [],
+    };
+    repo.upsertPlan(plan);
+    const run = {
+      runId: "run-tail",
+      planId: plan.planId,
+      status: "queued" as const,
+      startedAt: "2026-05-01T00:00:00.000Z",
+      totalCostUsd: 0,
+      totalIterations: 0,
+      endedAt: undefined,
+      currentWaveId: undefined,
+      currentPhaseId: undefined,
+      workspaceId: undefined,
+      durableRunId: undefined,
+      executionState: undefined,
+      worktreePath: undefined,
+      worktreeStatus: undefined,
+      worktreeBaseRef: undefined,
+      pendingApprovalPhaseId: undefined,
+      pendingApprovedBy: undefined,
+      pendingCostIncrementUsd: undefined,
+      lastError: undefined,
+    };
+
+    assert.equal(repo.createRun(run).workspaceId, undefined);
+    const updated = repo.updateRun({
+      ...run,
+      status: "running",
+      endedAt: "2026-05-01T00:10:00.000Z",
+      currentWaveId: "wave-tail",
+      currentPhaseId: "phase-tail",
+      workspaceId: "workspace-tail",
+      durableRunId: "durable-tail",
+      executionState: "running",
+      worktreePath: "F:/code/personal-ai/.worktrees/run-tail",
+      worktreeStatus: "ready",
+      worktreeBaseRef: "main",
+      pendingApprovalPhaseId: "phase-tail",
+      pendingApprovedBy: "operator",
+      pendingCostIncrementUsd: 0.25,
+      lastError: "needs approval",
+    });
+    assert.equal(updated.currentWaveId, "wave-tail");
+    assert.equal(updated.pendingCostIncrementUsd, 0.25);
+
+    assert.equal(
+      repo.updateRunIfCurrentState(
+        { ...updated, status: "completed" },
+        { status: "queued", executionState: undefined },
+      ),
+      undefined,
+    );
+    const completed = repo.updateRunIfCurrentState(
+      {
+        ...updated,
+        status: "completed",
+        executionState: undefined,
+        pendingApprovalPhaseId: undefined,
+        pendingApprovedBy: undefined,
+        pendingCostIncrementUsd: undefined,
+        lastError: undefined,
+      },
+      { status: "running", executionState: "running" },
+    );
+    assert.equal(completed?.status, "completed");
+    assert.equal(completed?.executionState, undefined);
+    assert.equal(completed?.lastError, undefined);
+  });
+
+  it("covers prompt-pack default and patch fallback branches without changing policy baselines", () => {
+    const packs = new PromptPackRepository(createDb("prompt-pack-tail"));
+    packs.replacePackTests({
+      packId: "pack-tail",
+      name: "Tail Pack",
+      tests: [
+        {
+          code: "TEST-TAIL",
+          title: "Tail test",
+          prompt: "Check tail defaults",
+          orderIndex: 0,
+          mode: "chat",
+          toolTier: "implicit-tools",
+          diagnosticMetadata: undefined,
+        },
+      ],
+      policySource: undefined,
+      policyV2: undefined,
+    });
+    assert.equal(packs.getPack("pack-tail").policySource, "inherited_default");
+    assert.equal(packs.listTests("pack-tail")[0]?.diagnosticMetadata, undefined);
+
+    const runs = new PromptPackRunRepository(createDb("prompt-pack-run-tail"));
+    const created = runs.create({
+      runId: "run-tail",
+      packId: "pack-tail",
+      testId: "TEST-TAIL",
+      status: "running",
+      startedAt: "2026-05-01T00:00:00.000Z",
+    });
+    assert.equal(created.responseText, undefined);
+    assert.equal(created.derivedResponseSignals, undefined);
+
+    const patched = runs.patch("run-tail", {
+      finishedAt: "2026-05-01T00:01:00.000Z",
+      responseText: "",
+      derivedResponseText: "",
+      derivedResponseSignals: [],
+      diagnosticMetadata: undefined,
+    });
+    assert.equal(patched.finishedAt, "2026-05-01T00:01:00.000Z");
+    assert.equal(patched.responseText, "");
+    assert.equal(patched.derivedResponseText, "");
+    assert.deepEqual(patched.derivedResponseSignals, []);
   });
 });

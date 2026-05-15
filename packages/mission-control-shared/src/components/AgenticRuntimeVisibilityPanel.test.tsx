@@ -64,6 +64,13 @@ describe("AgenticRuntimeVisibilityPanel", () => {
           reasons: ["Denied by policy."],
           executablePath: "pwsh.exe",
         },
+        {
+          harnessId: "manual",
+          label: "Manual harness",
+          status: "callable",
+          callable: false,
+          reasons: [],
+        },
       ],
       plugins: [
         {
@@ -102,6 +109,7 @@ describe("AgenticRuntimeVisibilityPanel", () => {
       ],
       channels: [
         { capabilityId: "email", label: "Email", status: "blocked", callable: false, reasons: ["No account."] },
+        { capabilityId: "chat", label: "Chat", status: "callable", callable: false, reasons: [] },
       ],
     });
     apiMocks.fetchAgenticChannelDeliveries.mockResolvedValue({
@@ -134,6 +142,14 @@ describe("AgenticRuntimeVisibilityPanel", () => {
           maxAttempts: 3,
           error: "Provider rejected message.",
         },
+        {
+          deliveryId: "delivery-4",
+          channelKey: "webhook",
+          target: "ops-hook",
+          status: "cancelled",
+          attempts: 1,
+          maxAttempts: 1,
+        },
       ],
     });
   });
@@ -154,6 +170,8 @@ describe("AgenticRuntimeVisibilityPanel", () => {
     expect(rendered).toContain("2026-01-01T00:00:00.000Z");
     expect(rendered).toContain("Sandbox posture is not satisfied.");
     expect(rendered).toContain("Executable pwsh.exe.");
+    expect(rendered).toContain("Manual harness");
+    expect(rendered).toContain("Runtime checks did not prove it callable.");
     expect(rendered).toContain("Permissions: files.write.");
     expect(rendered).toContain("Rollback v1.");
     expect(rendered).toContain("Integrity is corrupt.");
@@ -164,6 +182,8 @@ describe("AgenticRuntimeVisibilityPanel", () => {
     expect(rendered).toContain("provider msg-1");
     expect(rendered).toContain("Backoff");
     expect(rendered).toContain("Provider rejected message.");
+    expect(rendered).toContain("webhook");
+    expect(rendered).toContain("cancelled");
   });
 
   it("renders empty loading groups and surfaces load failures", async () => {

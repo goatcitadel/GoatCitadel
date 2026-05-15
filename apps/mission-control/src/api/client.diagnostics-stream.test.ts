@@ -51,6 +51,8 @@ class MockEventSource {
   }
 }
 
+const streamCleanups: Array<() => void> = [];
+
 function installMockWindow(): void {
   Object.defineProperty(globalThis, "window", {
     configurable: true,
@@ -71,15 +73,22 @@ function installMockWindow(): void {
 describe("connectDevDiagnosticsStream", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
     installMockWindow();
     MockEventSource.instances = [];
     vi.stubGlobal("EventSource", MockEventSource);
   });
 
   afterEach(() => {
+    for (const cleanup of streamCleanups.splice(0)) {
+      cleanup();
+    }
+    MockEventSource.instances = [];
+    vi.clearAllTimers();
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    vi.resetModules();
   });
 
   it("requests a diagnostics SSE token when gateway auth is configured", async () => {
@@ -106,7 +115,8 @@ describe("connectDevDiagnosticsStream", () => {
 
     const { connectDevDiagnosticsStream } = await import("./client");
     const close = connectDevDiagnosticsStream(() => undefined);
-    await vi.runAllTimersAsync();
+    streamCleanups.push(close);
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/api/v1/auth/sse-token"),
@@ -119,21 +129,24 @@ describe("connectDevDiagnosticsStream", () => {
     expect(MockEventSource.instances[0]?.url).toContain("sse_token=diag-token-1");
 
     close();
+    streamCleanups.pop();
   });
 
   it("reconnects after the diagnostics stream errors", async () => {
     vi.stubGlobal("fetch", vi.fn());
     const { connectDevDiagnosticsStream } = await import("./client");
     const close = connectDevDiagnosticsStream(() => undefined);
-    await vi.runAllTimersAsync();
+    streamCleanups.push(close);
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(MockEventSource.instances).toHaveLength(1);
     MockEventSource.instances[0]?.onerror?.();
 
-    await vi.advanceTimersByTimeAsync(31_000);
+    await vi.advanceTimersByTimeAsync(1_000);
 
     expect(MockEventSource.instances.length).toBeGreaterThanOrEqual(2);
 
     close();
+    streamCleanups.pop();
   });
 });

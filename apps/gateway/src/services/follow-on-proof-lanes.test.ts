@@ -31,7 +31,8 @@ function buildBaseReport(): FollowOnParityReport {
       totalToolCount: 5,
       readToolCount: 3,
       controlToolCount: 2,
-      guardrailSummary: "Trusted-local posture allows the full browser family, including cookie and storage tools, with normal guardrails.",
+      guardrailSummary:
+        "Trusted-local posture allows the full browser family, including cookie and storage tools, with normal guardrails.",
       stateToolRuntime: {
         restrictedToProfile: "trusted_local",
         registeredTools: ["browser.storage.get"],
@@ -163,13 +164,7 @@ function buildBaseReport(): FollowOnParityReport {
           "request_signing",
           "replay_protection",
         ],
-        serverPrerequisites: [
-          "device_pairing",
-          "token_rotation",
-          "request_signing",
-          "sse_resume",
-          "per_device_audit",
-        ],
+        serverPrerequisites: ["device_pairing", "token_rotation", "request_signing", "sse_resume", "per_device_audit"],
         bootstrapFeatures: ["dashboard", "chat", "approvals", "tasks", "settings", "event_feed"],
         notes: ["Gateway proof is done; Android runtime proof is next."],
       },
@@ -196,13 +191,15 @@ describe("follow-on proof lane builders", () => {
 
     expect(draft.checklistPath).toBe(FOLLOW_ON_PROOF_LANE_SPECS.browser.checklistPath);
     expect(draft.templatePath).toBe(FOLLOW_ON_PROOF_LANE_SPECS.browser.templatePath);
-    expect(draft.steps).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        stepId: "bundle",
-        status: "ready",
-        instructions: expect.stringContaining(FOLLOW_ON_PROOF_LANE_SPECS.browser.templatePath),
-      }),
-    ]));
+    expect(draft.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stepId: "bundle",
+          status: "ready",
+          instructions: expect.stringContaining(FOLLOW_ON_PROOF_LANE_SPECS.browser.templatePath),
+        }),
+      ]),
+    );
     expect(buildBrowserProofLaneArtifactPath(draft)).toBe(
       "artifacts/follow-on-parity/browser/2026-03-31/browser-control-proof-bundle-trusted_local-2026-03-31T18-10-00-000Z.md",
     );
@@ -219,7 +216,8 @@ describe("follow-on proof lane builders", () => {
       deploymentProfile: "local_dev",
       browser: {
         ...buildBaseReport().browser,
-        guardrailSummary: "Local-dev posture allows browser read/control flows with guardrails, but cookie/storage state tools are still restricted to trusted_local.",
+        guardrailSummary:
+          "Local-dev posture allows browser read/control flows with guardrails, but cookie/storage state tools are still restricted to trusted_local.",
         stateToolRuntime: {
           restrictedToProfile: "trusted_local",
           registeredTools: ["browser.storage.get"],
@@ -230,12 +228,14 @@ describe("follow-on proof lane builders", () => {
     });
 
     expect(draft.summary).toContain("1 state tool(s) intentionally blocked");
-    expect(draft.steps).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        stepId: "control-path",
-        instructions: expect.stringContaining("browser.storage.get"),
-      }),
-    ]));
+    expect(draft.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stepId: "control-path",
+          instructions: expect.stringContaining("browser.storage.get"),
+        }),
+      ]),
+    );
     expect(draft.markdown).toContain("State tools blocked in local_dev: browser.storage.get");
 
     vi.useRealTimers();
@@ -263,16 +263,18 @@ describe("follow-on proof lane builders", () => {
     expect(draft.checklistPath).toBe(FOLLOW_ON_PROOF_LANE_SPECS.packaging.checklistPath);
     expect(draft.templatePath).toBe(FOLLOW_ON_PROOF_LANE_SPECS.packaging.templatePath);
     expect(draft.summary).toContain("partially blocked");
-    expect(draft.steps).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        stepId: "remote-hardened",
-        status: "blocked",
-      }),
-      expect.objectContaining({
-        stepId: "bundle",
-        status: "blocked",
-      }),
-    ]));
+    expect(draft.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stepId: "remote-hardened",
+          status: "blocked",
+        }),
+        expect.objectContaining({
+          stepId: "bundle",
+          status: "blocked",
+        }),
+      ]),
+    );
     expect(buildPackagingProofLaneArtifactPath(draft)).toBe(
       "artifacts/follow-on-parity/packaging/2026-03-31/packaging-deployment-proof-bundle-local_dev-2026-03-31T18-11-00-000Z.md",
     );
@@ -298,12 +300,14 @@ describe("follow-on proof lane builders", () => {
       },
     });
 
-    expect(draft.steps).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        stepId: "preflight",
-        instructions: expect.stringContaining("9 day(s) old"),
-      }),
-    ]));
+    expect(draft.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stepId: "preflight",
+          instructions: expect.stringContaining("9 day(s) old"),
+        }),
+      ]),
+    );
     expect(draft.markdown).toContain("Latest proof artifact: stale (9 day(s) old)");
 
     vi.useRealTimers();
@@ -362,19 +366,104 @@ describe("follow-on proof lane builders", () => {
 
     expect(draft.checklistPath).toBe(FOLLOW_ON_PROOF_LANE_SPECS.a2ui.checklistPath);
     expect(draft.templatePath).toBe(FOLLOW_ON_PROOF_LANE_SPECS.a2ui.templatePath);
-    expect(draft.steps).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        stepId: "mission-control",
-        status: "blocked",
-      }),
-      expect.objectContaining({
-        stepId: "boundary",
-        status: "ready",
-      }),
-    ]));
+    expect(draft.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stepId: "mission-control",
+          status: "blocked",
+        }),
+        expect.objectContaining({
+          stepId: "boundary",
+          status: "ready",
+        }),
+      ]),
+    );
     expect(buildA2UIProofLaneArtifactPath(draft)).toBe(
       "artifacts/follow-on-parity/a2ui/2026-03-31/a2ui-proof-bundle-trusted_local-2026-03-31T18-13-00-000Z.md",
     );
+
+    vi.useRealTimers();
+  });
+
+  it("marks A2UI current when Mission Control and Android proof are both on file", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-31T18:14:00.000Z"));
+
+    const draft = buildA2UIProofLaneDraft({
+      ...buildBaseReport(),
+      canvas: {
+        ...buildBaseReport().canvas,
+        artifactStatus: {
+          hasArtifact: true,
+          freshness: "current",
+          matchedCurrentProfile: true,
+        },
+      },
+    });
+
+    expect(draft.summary).toContain("Android Canvas proof is on file");
+    expect(draft.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stepId: "mission-control",
+          status: "ready",
+        }),
+        expect.objectContaining({
+          stepId: "boundary",
+          status: "ready",
+          instructions: expect.stringContaining("Android-resident companion proof is now on file"),
+        }),
+        expect.objectContaining({
+          stepId: "bundle",
+          status: "ready",
+        }),
+      ]),
+    );
+    expect(draft.markdown).toContain("- Contract: a2ui.v1");
+
+    vi.useRealTimers();
+  });
+
+  it("keeps A2UI blocked when contract and companion targets are missing", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-31T18:15:00.000Z"));
+
+    const draft = buildA2UIProofLaneDraft({
+      ...buildBaseReport(),
+      canvas: {
+        ...buildBaseReport().canvas,
+        contract: undefined,
+        platformTargets: [],
+      },
+    });
+
+    expect(draft.summary).toContain("blocked until the live contract");
+    expect(draft.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stepId: "preflight",
+          status: "blocked",
+          instructions: "Resolve the missing A2UI contract before attempting any proof-lane claim.",
+        }),
+        expect.objectContaining({
+          stepId: "mission-control",
+          status: "blocked",
+          instructions: "Mission Control canvas scope is not currently resolved in the contract.",
+        }),
+        expect.objectContaining({
+          stepId: "boundary",
+          status: "blocked",
+          instructions:
+            "No companion-capable platform targets are declared, so platform boundary proof cannot be recorded yet.",
+        }),
+        expect.objectContaining({
+          stepId: "bundle",
+          status: "blocked",
+        }),
+      ]),
+    );
+    expect(draft.markdown).toContain("- Contract: missing");
+    expect(draft.markdown).toContain("- Platform targets: 0");
 
     vi.useRealTimers();
   });

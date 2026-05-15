@@ -491,7 +491,7 @@ export function normalizePromptLabEvidenceContent(content: string): string {
       .replace(/\\r/g, "\n")
       .replace(/\\t/g, "\t");
   }
-  return normalized.replace(/\\'/g, "'").replace(/\\"/g, '"');
+  return normalized.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\\'/g, "'").replace(/\\"/g, '"');
 }
 
 export function extractPromptLabEvidenceTextFromSerializedPayload(content: string): string | undefined {
@@ -671,7 +671,9 @@ export function looksLikePromptLabConcreteFileCandidate(path: string, type?: str
     type === "dir" ||
     !normalized ||
     /\/$/.test(normalized) ||
-    /(?:^|\/)(?:\.codex-tmp|\.worktrees|data\/tool-artifacts)(?:\/|$)/i.test(normalized)
+    /(?:^|\/)(?:\.codex-tmp|\.worktrees|data\/tool-artifacts|node_modules|dist|build|coverage|vendor|third_party)(?:\/|$)/i.test(
+      normalized,
+    )
   ) {
     return false;
   }

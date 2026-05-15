@@ -26,9 +26,9 @@ import { pageCopy } from "../content/copy";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 
 type CronAction = "task" | "improvement" | "backup" | "memory_flush" | "cost_report" | "update_review";
-type ScheduleFrequency = "hourly" | "daily" | "weekly";
+export type ScheduleFrequency = "hourly" | "daily" | "weekly";
 
-interface CronScheduleDraft {
+export interface CronScheduleDraft {
   frequency: ScheduleFrequency;
   intervalHours: number;
   hour: number;
@@ -867,7 +867,7 @@ export function CronPage() {
   );
 }
 
-function slugifyJobId(value: string): string {
+export function slugifyJobId(value: string): string {
   return value
     .trim()
     .toLowerCase()
@@ -876,7 +876,7 @@ function slugifyJobId(value: string): string {
     .slice(0, 64);
 }
 
-function parseScheduleExpression(schedule: string, endAt?: string): CronScheduleDraft {
+export function parseScheduleExpression(schedule: string, endAt?: string): CronScheduleDraft {
   const parts = schedule.trim().split(/\s+/).filter(Boolean);
   const minute = clampNumber(parts[0] ?? "0", 0, 59, DEFAULT_SCHEDULE_DRAFT.minute);
   const hourToken = parts[1] ?? "2";
@@ -922,7 +922,7 @@ function parseScheduleExpression(schedule: string, endAt?: string): CronSchedule
   };
 }
 
-function buildScheduleExpression(draft: CronScheduleDraft): string {
+export function buildScheduleExpression(draft: CronScheduleDraft): string {
   const timeZone = draft.timeZone.trim() || DEFAULT_TIME_ZONE;
   if (draft.frequency === "hourly") {
     const hourToken = draft.intervalHours <= 1 ? "*" : `*/${draft.intervalHours}`;
@@ -935,7 +935,7 @@ function buildScheduleExpression(draft: CronScheduleDraft): string {
   return `${draft.minute} ${draft.hour} * * * ${timeZone}`;
 }
 
-function describeScheduleExpression(schedule: string, endDate?: string): string {
+export function describeScheduleExpression(schedule: string, endDate?: string): string {
   const draft = parseScheduleExpression(schedule, endDate);
   const timeText =
     draft.frequency === "hourly"
@@ -960,11 +960,11 @@ function describeScheduleExpression(schedule: string, endDate?: string): string 
   return `${summary} (${draft.timeZone})`;
 }
 
-function toTimeInputValue(hour: number, minute: number): string {
+export function toTimeInputValue(hour: number, minute: number): string {
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
-function clampNumber(rawValue: string, min: number, max: number, fallback: number): number {
+export function clampNumber(rawValue: string, min: number, max: number, fallback: number): number {
   const parsed = Number.parseInt(rawValue, 10);
   if (!Number.isFinite(parsed)) {
     return fallback;
@@ -972,11 +972,11 @@ function clampNumber(rawValue: string, min: number, max: number, fallback: numbe
   return Math.max(min, Math.min(max, parsed));
 }
 
-function endDateToIso(value: string): string {
+export function endDateToIso(value: string): string {
   return new Date(`${value}T23:59:59`).toISOString();
 }
 
-function toDateInputValue(value: string): string {
+export function toDateInputValue(value: string): string {
   const parsed = new Date(value);
   const year = parsed.getFullYear();
   const month = String(parsed.getMonth() + 1).padStart(2, "0");

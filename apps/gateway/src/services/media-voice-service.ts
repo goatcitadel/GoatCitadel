@@ -113,6 +113,17 @@ function safeJsonParse<T>(raw: string, fallback: T): T {
   }
 }
 
+export const __mediaVoiceServiceInternals = {
+  extFromMimeType,
+  isMediaJobRow,
+  isRecord,
+  mapMediaJobRow,
+  normalizeAudioForWhisper,
+  parseVoiceCliArgs,
+  safeJsonParse,
+  toMediaJobRows,
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }

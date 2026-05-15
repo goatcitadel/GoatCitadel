@@ -58,6 +58,55 @@ test("builds Postgres worker pool config for connection strings and discrete opt
     application_name: "goatcitadel-sync-worker",
     ssl: undefined,
   });
+
+  assert.deepEqual(
+    buildPostgresSyncWorkerPoolConfig({
+      connectionString: "postgres://user:pass@example.test/minimal",
+      database: "ignored",
+    }),
+    {
+      connectionString: "postgres://user:pass@example.test/minimal",
+      options: "-c client_encoding=UTF8",
+      max: 10,
+      min: 0,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 5_000,
+      application_name: "goatcitadel-sync-worker",
+      ssl: undefined,
+    },
+  );
+
+  assert.deepEqual(
+    buildPostgresSyncWorkerPoolConfig({
+      host: "db.internal",
+      port: 15432,
+      database: "goatcitadel",
+      user: "operator",
+      password: "secret",
+      sslMode: "require",
+      applicationName: "custom-worker",
+      pool: {
+        min: 1,
+        max: 4,
+        idleTimeoutMs: 111,
+        connectionTimeoutMs: 222,
+      },
+    }),
+    {
+      host: "db.internal",
+      port: 15432,
+      database: "goatcitadel",
+      user: "operator",
+      password: "secret",
+      options: "-c client_encoding=UTF8",
+      max: 4,
+      min: 1,
+      idleTimeoutMillis: 111,
+      connectionTimeoutMillis: 222,
+      application_name: "custom-worker",
+      ssl: { rejectUnauthorized: false },
+    },
+  );
 });
 
 test("handles query modes with cached server encoding and pool execution", async () => {
@@ -109,6 +158,45 @@ test("handles query modes with cached server encoding and pool execution", async
   assert.deepEqual(execResult, { changes: 3, lastInsertRowid: undefined });
   assert.equal(calls.filter((call) => call.sql.includes("current_setting")).length, 1);
   assert.equal(calls.at(-1)?.sql, "VACUUM");
+});
+
+test("handles empty query results and null row counts", async () => {
+  const runtime = createPostgresSyncWorkerRuntime(
+    { database: "goatcitadel" },
+    {
+      pool: createFakePool({
+        onQuery: async (sql) => {
+          if (sql.includes("current_setting")) {
+            return { rowCount: 1, rows: [{ server_encoding: "UTF8" }] };
+          }
+          return { rowCount: null, rows: [] };
+        },
+      }),
+    },
+  );
+
+  assert.equal(
+    await handlePostgresSyncWorkerRequest(runtime, {
+      kind: "query",
+      sql: "SELECT * FROM missing",
+      params: [],
+      mode: "one",
+    }),
+    undefined,
+  );
+  assert.deepEqual(
+    await handlePostgresSyncWorkerRequest(runtime, {
+      kind: "query",
+      sql: "UPDATE missing SET ok = true",
+      params: [],
+      mode: "run",
+    }),
+    { changes: 0, lastInsertRowid: undefined },
+  );
+  assert.deepEqual(await handlePostgresSyncWorkerRequest(runtime, { kind: "exec", sql: "VACUUM" }), {
+    changes: 0,
+    lastInsertRowid: undefined,
+  });
 });
 
 test("falls back when server encoding detection fails", async () => {
@@ -291,6 +379,19 @@ test("posts success and serialized error responses to sync message ports", async
     name: "Error",
     message: "plain failure",
   });
+  assert.deepEqual(serializePostgresSyncWorkerError("plain failure", "SELECT 1"), {
+    name: "Error",
+    message: "plain failure\nSQL: SELECT 1",
+  });
+
+  const queryFailure = await postToWorkerHandler(errorRuntime, {
+    kind: "query",
+    sql: "BROKEN QUERY",
+    params: [],
+    mode: "all",
+  });
+  assert.equal(queryFailure.ok, false);
+  assert.match(queryFailure.error.message, /cannot run BROKEN QUERY\nSQL: BROKEN QUERY/);
 });
 
 test("registers a message handler that delegates to the response helper", async () => {

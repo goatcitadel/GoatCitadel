@@ -26,6 +26,13 @@ describe("isHostAllowed", () => {
     expect(isHostAllowed("https://foo.example.com/path", [EXAMPLE_WILDCARD])).toBe(true);
   });
 
+  it("requires wildcard patterns to satisfy ordered prefixes and suffixes", () => {
+    expect(isHostAllowed("https://api.eu.example.com/path", ["api.*.example.com"])).toBe(true);
+    expect(isHostAllowed("https://cdn.example.net/path", ["api.*.example.com"])).toBe(false);
+    expect(isHostAllowed("https://api.example.net/path", ["api.*.example.com"])).toBe(false);
+    expect(isHostAllowed("https://foo.example.com.evil.test/path", [EXAMPLE_WILDCARD])).toBe(false);
+  });
+
   it("rejects host not on allowlist", () => {
     expect(isHostAllowed("evil.com", [EXAMPLE_WILDCARD])).toBe(false);
   });
@@ -101,19 +108,34 @@ describe("isHostAllowed", () => {
 
   it("fails closed for malformed URL-like and hostname inputs", () => {
     for (const host of [
+      "https://",
+      "https://:443/path",
+      "file:///tmp/workspace.txt",
       "https://exa mple.com/path",
       "http://999.999.999.999/path",
+      "999.999.999.999:443",
       "999.999.999.999",
       "1.2.3.999",
       "1.2.3.4.5",
       "example.com:not-a-port",
       "exa mple.com:443/v1/models",
+      "[::1]:not-a-port",
     ]) {
       expect(evaluateHostEgress(host, ["*"]), host).toMatchObject({
         allowed: false,
         approvalState: "blocked",
       });
     }
+  });
+
+  it("rejects malformed protocol URLs and wildcard segment mismatches", () => {
+    expect(evaluateHostEgress("http://", ["*"])).toMatchObject({
+      allowed: false,
+      approvalState: "blocked",
+      reason: expect.stringContaining("malformed"),
+    });
+    expect(isHostAllowed("https://api.example.com", ["cdn*example.com"])).toBe(false);
+    expect(isHostAllowed("https://api.example.com", ["api.**.example.com"])).toBe(false);
   });
 
   it("blocks every private, malformed, multicast, and unique-local address family", () => {
@@ -177,5 +199,14 @@ describe("isHostAllowed", () => {
     expect(() => assertHostAllowedInDangerProfile("http://169.254.169.254/latest", ["*"])).toThrow(
       /metadata|reserved|private/i,
     );
+  });
+
+  it("treats parsed empty hostnames as blocked private targets", () => {
+    expect(evaluateHostEgress(":443", ["*"])).toMatchObject({
+      hostname: "",
+      allowed: false,
+      approvalState: "blocked",
+      reason: "Private, metadata, or reserved host is blocked: :443",
+    });
   });
 });

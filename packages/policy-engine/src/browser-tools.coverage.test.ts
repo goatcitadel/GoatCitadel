@@ -1256,6 +1256,57 @@ describe("browser tools coverage sweep", () => {
     expect(clearedCookies.removed).toBe(1);
   });
 
+  it("accepts browser session ids from tool args and session aliases", async () => {
+    const config = createConfig(tempRoot);
+
+    await executeBrowserTool(
+      "browser.context.configure",
+      { browserSessionId: "sess-arg-state", locale: "en-GB" },
+      config,
+    );
+    await executeBrowserTool(
+      "browser.storage.set",
+      {
+        browserSessionId: "sess-arg-state",
+        origin: "https://example.com",
+        storage: "local",
+        key: "theme",
+        value: "arg",
+      },
+      config,
+    );
+    expect(
+      (
+        await executeBrowserTool(
+          "browser.storage.get",
+          { browserSessionId: "sess-arg-state", origin: "https://example.com" },
+          config,
+        )
+      ).localStorage,
+    ).toEqual({ theme: "arg" });
+
+    await executeBrowserTool(
+      "browser.storage.set",
+      {
+        sessionId: "sess-alias-state",
+        origin: "https://example.com",
+        storage: "session",
+        key: "token",
+        value: "alias",
+      },
+      config,
+    );
+    expect(
+      (
+        await executeBrowserTool(
+          "browser.storage.get",
+          { sessionId: "sess-alias-state", origin: "https://example.com", storage: "session" },
+          config,
+        )
+      ).sessionStorage,
+    ).toEqual({ token: "alias" });
+  });
+
   it("validates cookie input and filters cookies by domain, path, and URL", async () => {
     const config = createConfig(tempRoot);
     const executionContext = { sessionId: "sess-browser-cookie-filter" };

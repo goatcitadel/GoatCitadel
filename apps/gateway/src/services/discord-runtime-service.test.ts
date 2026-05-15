@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DiscordPairingRecord, IntegrationConnection } from "@goatcitadel/contracts";
-import { DiscordRuntimeService } from "./discord-runtime-service.js";
+import { DiscordRuntimeService, __discordRuntimeServiceInternals } from "./discord-runtime-service.js";
 
 function createConnection(config: Record<string, unknown> = {}): IntegrationConnection {
   return {
@@ -773,3 +773,322 @@ describe("DiscordRuntimeService", () => {
     expect(status?.lastReconnectAt).toMatch(/^20/);
   });
 });
+
+describe("DiscordRuntimeService internals", () => {
+  it("normalizes runtime config, target, guild, typing, and error helper decisions", () => {
+    process.env.DISCORD_RUNTIME_SECRET_FOR_TEST = "  env-token  ";
+    try {
+      expect(__discordRuntimeServiceInternals.readConfigString({ token: "  direct-token  " }, "token")).toBe(
+        "direct-token",
+      );
+      expect(
+        __discordRuntimeServiceInternals.readDiscordSecret(
+          { tokenEnv: "DISCORD_RUNTIME_SECRET_FOR_TEST" },
+          "token",
+          "tokenEnv",
+        ),
+      ).toBe("env-token");
+      expect(
+        __discordRuntimeServiceInternals.readDiscordSecret(
+          { token: " direct-wins ", tokenEnv: "DISCORD_RUNTIME_SECRET_FOR_TEST" },
+          "token",
+          "tokenEnv",
+        ),
+      ).toBe("direct-wins");
+    } finally {
+      delete process.env.DISCORD_RUNTIME_SECRET_FOR_TEST;
+    }
+
+    expect(__discordRuntimeServiceInternals.normalizeDiscordRuntimeTarget("<#123>")).toEqual({
+      kind: "channel",
+      id: "123",
+    });
+    expect(__discordRuntimeServiceInternals.normalizeDiscordRuntimeTarget("<@!456>")).toEqual({
+      kind: "user",
+      id: "456",
+    });
+    expect(__discordRuntimeServiceInternals.normalizeDiscordRuntimeTarget("channel:789")).toEqual({
+      kind: "channel",
+      id: "789",
+    });
+    expect(__discordRuntimeServiceInternals.normalizeDiscordRuntimeTarget("discord:abc")).toEqual({
+      kind: "user",
+      id: "abc",
+    });
+    expect(__discordRuntimeServiceInternals.normalizeDiscordRuntimeTarget("plain-channel")).toEqual({
+      kind: "channel",
+      id: "plain-channel",
+    });
+
+    expect(__discordRuntimeServiceInternals.getDiscordRuntimeMode({ runtimeMode: "gateway" })).toBe("gateway");
+    expect(__discordRuntimeServiceInternals.getDiscordRuntimeMode({ runtimeMode: "bridge" })).toBe("bridge");
+    expect(__discordRuntimeServiceInternals.getDiscordInboundDmPolicy({ inboundDmPolicy: "open" })).toBe("open");
+    expect(__discordRuntimeServiceInternals.getDiscordInboundDmPolicy({ inboundDmPolicy: "disabled" })).toBe(
+      "disabled",
+    );
+    expect(__discordRuntimeServiceInternals.getDiscordInboundDmPolicy({ inboundDmPolicy: "invalid" })).toBe("pairing");
+    expect(__discordRuntimeServiceInternals.getDiscordGuildPolicy({ guildPolicy: "off" })).toBe("off");
+    expect(__discordRuntimeServiceInternals.getDiscordGuildPolicy({ guildPolicy: "allowlist" })).toBe("allowlist");
+
+    const config = {
+      defaultGuildId: "guild-default",
+      defaultChannelId: "channel-default",
+      guilds: {
+        "guild-1": {
+          requireMention: false,
+          users: [" user-1 ", "", 10],
+          channels: [" channel-1 "],
+        },
+        ignored: "not-a-rule",
+      },
+    };
+    expect(__discordRuntimeServiceInternals.resolveDiscordGuildRule(config, "guild-1")).toEqual({
+      requireMention: false,
+      users: ["user-1"],
+      channels: ["channel-1"],
+    });
+    expect(__discordRuntimeServiceInternals.resolveDiscordGuildRule(config, "guild-default")).toEqual({
+      requireMention: true,
+      channels: ["channel-default"],
+    });
+    expect(__discordRuntimeServiceInternals.resolveDiscordGuildRule(config, null)).toBeUndefined();
+    expect(__discordRuntimeServiceInternals.readGuildRuleMap(config)).toHaveProperty("guild-1");
+    expect(__discordRuntimeServiceInternals.sanitizeGuildRules(undefined)).toEqual({});
+    expect(__discordRuntimeServiceInternals.sanitizeStringArray([" a ", "", 1, "b"])).toEqual(["a", "b"]);
+
+    const channelWithTyping = { sendTyping: vi.fn() };
+    expect(__discordRuntimeServiceInternals.supportsTyping(channelWithTyping as never)).toBe(true);
+    expect(__discordRuntimeServiceInternals.supportsTyping({} as never)).toBe(false);
+    expect(__discordRuntimeServiceInternals.truncateDiscordResponse("")).toBe("Done.");
+    expect(__discordRuntimeServiceInternals.truncateDiscordResponse(` ${"x".repeat(1905)} `)).toHaveLength(1900);
+    expect(__discordRuntimeServiceInternals.formatDiscordModelChoiceLabel("gpt-5.4", "OpenAI")).toBe(
+      "gpt-5.4 · OpenAI",
+    );
+    expect(
+      __discordRuntimeServiceInternals.formatDiscordModelChoiceLabel(`${"model-".repeat(30)}`, "Provider"),
+    ).toHaveLength(100);
+    expect(__discordRuntimeServiceInternals.getErrorMessage(new Error("typed failure"))).toBe("typed failure");
+    expect(__discordRuntimeServiceInternals.getErrorMessage("plain failure")).toBe("plain failure");
+
+    expect(() => __discordRuntimeServiceInternals.throwIfDiscordRuntimeAborted()).not.toThrow();
+    expect(() =>
+      __discordRuntimeServiceInternals.throwIfDiscordRuntimeAborted(AbortSignal.abort("operator stopped")),
+    ).toThrow("operator stopped");
+  });
+
+  it("builds the complete Discord slash-command definition set", () => {
+    const definitions = __discordRuntimeServiceInternals.buildDiscordSlashCommandDefinitions();
+
+    expect(definitions.map((definition) => definition.name)).toEqual(
+      expect.arrayContaining(["help", "status", "new", "mode", "model", "skill", "mcp", "run", "approve", "deny"]),
+    );
+    expect(definitions.length).toBe(31);
+    expect(JSON.stringify(definitions.find((definition) => definition.name === "model"))).toContain(
+      '"autocomplete":true',
+    );
+    expect(JSON.stringify(definitions.find((definition) => definition.name === "score"))).toContain('"max_value":10');
+  });
+
+  it("maps Discord slash interactions into chat command text", () => {
+    const cases: Array<{
+      name: string;
+      input: ReturnType<typeof createSlashInteraction>;
+      expected: string;
+    }> = [
+      { name: "help", input: createSlashInteraction("help"), expected: "/help" },
+      { name: "status", input: createSlashInteraction("status"), expected: "/status" },
+      { name: "new blank", input: createSlashInteraction("new"), expected: "/new" },
+      {
+        name: "new titled",
+        input: createSlashInteraction("new", { strings: { title: "Fresh ops" } }),
+        expected: "/new Fresh ops",
+      },
+      { name: "sethome", input: createSlashInteraction("sethome"), expected: "/sethome" },
+      {
+        name: "mode",
+        input: createSlashInteraction("mode", { strings: { mode: "cowork" } }),
+        expected: "/mode cowork",
+      },
+      { name: "plan unset", input: createSlashInteraction("plan"), expected: "/plan" },
+      { name: "plan set", input: createSlashInteraction("plan", { strings: { state: "off" } }), expected: "/plan off" },
+      {
+        name: "model",
+        input: createSlashInteraction("model", { strings: { model: "gpt-5.4" } }),
+        expected: "/model gpt-5.4",
+      },
+      { name: "web", input: createSlashInteraction("web", { strings: { mode: "deep" } }), expected: "/web deep" },
+      {
+        name: "memory",
+        input: createSlashInteraction("memory", { strings: { mode: "auto" } }),
+        expected: "/memory auto",
+      },
+      { name: "goal blank", input: createSlashInteraction("goal"), expected: "/goal" },
+      {
+        name: "goal set",
+        input: createSlashInteraction("goal", { strings: { goal: "Ship loop 6" } }),
+        expected: "/goal Ship loop 6",
+      },
+      {
+        name: "think",
+        input: createSlashInteraction("think", { strings: { level: "extended" } }),
+        expected: "/think extended",
+      },
+      {
+        name: "tool",
+        input: createSlashInteraction("tool", { strings: { mode: "manual" } }),
+        expected: "/tool manual",
+      },
+      {
+        name: "proactive",
+        input: createSlashInteraction("proactive", { strings: { mode: "auto_safe" } }),
+        expected: "/proactive auto_safe",
+      },
+      {
+        name: "retrieval",
+        input: createSlashInteraction("retrieval", { strings: { mode: "layered" } }),
+        expected: "/retrieval layered",
+      },
+      {
+        name: "reflect",
+        input: createSlashInteraction("reflect", { strings: { mode: "on" } }),
+        expected: "/reflect on",
+      },
+      {
+        name: "research",
+        input: createSlashInteraction("research", { strings: { query: "coverage" } }),
+        expected: "/research coverage",
+      },
+      {
+        name: "delegate",
+        input: createSlashInteraction("delegate", { strings: { roles: "Coder,QA", objective: "tighten tests" } }),
+        expected: "/delegate Coder,QA :: tighten tests",
+      },
+      {
+        name: "pipeline",
+        input: createSlashInteraction("pipeline", { strings: { template: "release", objective: "ship" } }),
+        expected: "/pipeline release :: ship",
+      },
+      {
+        name: "score",
+        input: createSlashInteraction("score", {
+          strings: { test: "CHAT-01", notes: "solid" },
+          integers: { routing: 9, honesty: 8, handoff: 7, robustness: 6, usability: 5 },
+        }),
+        expected: "/score CHAT-01 9 8 7 6 5 solid",
+      },
+      { name: "pack default", input: createSlashInteraction("pack"), expected: "/pack run all" },
+      {
+        name: "pack selector",
+        input: createSlashInteraction("pack", { strings: { selector: "CHAT-01" } }),
+        expected: "/pack run CHAT-01",
+      },
+      { name: "skills", input: createSlashInteraction("skills"), expected: "/skills" },
+      {
+        name: "skill enable",
+        input: createSlashInteraction("skill", { subcommand: "enable", strings: { skill_id: "researcher" } }),
+        expected: "/skill enable researcher",
+      },
+      {
+        name: "skill search",
+        input: createSlashInteraction("skill", { subcommand: "search", strings: { query: "browser" } }),
+        expected: "/skill search browser",
+      },
+      {
+        name: "skill install confirm",
+        input: createSlashInteraction("skill", {
+          subcommand: "install",
+          strings: { source_ref: "github:user/skill" },
+          booleans: { confirm_high_risk: true },
+        }),
+        expected: "/skill install github:user/skill --confirm-high-risk",
+      },
+      { name: "mcp list", input: createSlashInteraction("mcp", { subcommand: "list" }), expected: "/mcp" },
+      {
+        name: "mcp templates",
+        input: createSlashInteraction("mcp", { subcommand: "templates", strings: { query: "browser" } }),
+        expected: "/mcp templates browser",
+      },
+      {
+        name: "mcp add-template",
+        input: createSlashInteraction("mcp", { subcommand: "add-template", strings: { template_id: "tpl-1" } }),
+        expected: "/mcp add-template tpl-1",
+      },
+      {
+        name: "mcp connect",
+        input: createSlashInteraction("mcp", { subcommand: "connect", strings: { server_id: "server-1" } }),
+        expected: "/mcp connect server-1",
+      },
+      {
+        name: "project",
+        input: createSlashInteraction("project", { strings: { project_id: "project-1" } }),
+        expected: "/project project-1",
+      },
+      {
+        name: "attach",
+        input: createSlashInteraction("attach", { strings: { attachment_id: "attachment-1" } }),
+        expected: "/attach attachment-1",
+      },
+      { name: "tools", input: createSlashInteraction("tools"), expected: "/tools" },
+      { name: "personality blank", input: createSlashInteraction("personality"), expected: "/personality" },
+      {
+        name: "personality set",
+        input: createSlashInteraction("personality", { strings: { name: "ops" } }),
+        expected: "/personality ops",
+      },
+      { name: "stop", input: createSlashInteraction("stop"), expected: "/stop" },
+      {
+        name: "run details",
+        input: createSlashInteraction("run", { subcommand: "details", strings: { run_id: "run-1" } }),
+        expected: "/run details run-1",
+      },
+      {
+        name: "run research fallback",
+        input: createSlashInteraction("run", { throwSubcommand: true, strings: { query: "release notes" } }),
+        expected: "/run research release notes",
+      },
+      {
+        name: "approve",
+        input: createSlashInteraction("approve", { strings: { action_token: " grat_secret " } }),
+        expected: "/approve grat_secret",
+      },
+      {
+        name: "deny",
+        input: createSlashInteraction("deny", { strings: { approval_id: "approval-1" } }),
+        expected: "/deny approval-1",
+      },
+      { name: "default", input: createSlashInteraction("unknown"), expected: "/unknown" },
+    ];
+
+    for (const item of cases) {
+      expect(__discordRuntimeServiceInternals.buildCommandTextFromInteraction(item.input as never), item.name).toBe(
+        item.expected,
+      );
+    }
+  });
+});
+
+function createSlashInteraction(
+  commandName: string,
+  options: {
+    strings?: Record<string, string>;
+    integers?: Record<string, number>;
+    booleans?: Record<string, boolean>;
+    subcommand?: string;
+    throwSubcommand?: boolean;
+  } = {},
+) {
+  return {
+    commandName,
+    options: {
+      getString: vi.fn((name: string) => options.strings?.[name] ?? null),
+      getInteger: vi.fn((name: string) => options.integers?.[name] ?? null),
+      getBoolean: vi.fn((name: string) => options.booleans?.[name] ?? null),
+      getSubcommand: vi.fn(() => {
+        if (options.throwSubcommand) {
+          throw new Error("no subcommand");
+        }
+        return options.subcommand ?? "";
+      }),
+    },
+  };
+}

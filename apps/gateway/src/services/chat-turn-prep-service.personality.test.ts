@@ -1,8 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChatSessionPrefsRecord } from "@goatcitadel/contracts";
-import { prepareAgentChatTurn, type ChatTurnPrepHost } from "./chat-turn-prep-service.js";
+import type { ChatMessageRecord, ChatSessionPrefsRecord } from "@goatcitadel/contracts";
+import {
+  applyApprovedSpecialistsToPlan,
+  buildChatOrchestrationSummary,
+  generatePreparedExecutionPlanDraft,
+  prepareAgentChatTurn,
+  resolvePreparedTurnOrchestration,
+  type ChatTurnPrepHost,
+} from "./chat-turn-prep-service.js";
 
-function createPrefs(mode: ChatSessionPrefsRecord["mode"]): ChatSessionPrefsRecord {
+function createPrefs(
+  mode: ChatSessionPrefsRecord["mode"],
+  overrides: Partial<ChatSessionPrefsRecord> = {},
+): ChatSessionPrefsRecord {
   return {
     sessionId: "session-1",
     mode,
@@ -18,12 +28,13 @@ function createPrefs(mode: ChatSessionPrefsRecord["mode"]): ChatSessionPrefsReco
     subagentPolicy: "ask_when_useful",
     createdAt: "2026-05-04T00:00:00.000Z",
     updatedAt: "2026-05-04T00:00:00.000Z",
+    ...overrides,
   } as ChatSessionPrefsRecord;
 }
 
-function createHost(mode: ChatSessionPrefsRecord["mode"]) {
+function createHost(mode: ChatSessionPrefsRecord["mode"], prefsOverrides: Partial<ChatSessionPrefsRecord> = {}) {
   let guidanceSystemInstruction = "";
-  const prefs = createPrefs(mode);
+  const prefs = createPrefs(mode, prefsOverrides);
   const host = {
     storage: {
       chatSessionMeta: {
@@ -41,6 +52,9 @@ function createHost(mode: ChatSessionPrefsRecord["mode"]) {
       },
       chatSessionProjects: {
         get: vi.fn(() => undefined),
+      },
+      chatSpecialistCandidates: {
+        listAutoRoutable: vi.fn(() => []),
       },
     },
     llmService: {
@@ -108,4 +122,587 @@ describe("prepareAgentChatTurn personality overlay", () => {
     expect(cowork.readGuidance()).not.toContain("Chat personality overlay:");
     expect(cowork.host.buildDefaultChatPersonalityOverlay).not.toHaveBeenCalled();
   });
+
+  it("ingests attachment references, applies autonomy overrides, and keeps unbound Code mode manual", async () => {
+    const harness = createHost("code", { mode: "code", toolAutonomy: "safe_auto" });
+    vi.mocked(harness.host.storage.chatAttachments.listByIds).mockReturnValue([
+      {
+        attachmentId: "attachment-1",
+        sessionId: "session-1",
+        workspaceId: "default",
+        fileName: "notes.md",
+        mimeType: "text/markdown",
+        mediaType: "text",
+        sizeBytes: 42,
+        sha256: "sha",
+        storageRelPath: "chat/default/attachments/notes.md",
+        extractStatus: "ready",
+        analysisStatus: "ready",
+        createdAt: "2026-05-04T00:00:00.000Z",
+      },
+    ]);
+
+    const prepared = await prepareAgentChatTurn(harness.host, "session-1", {
+      content: "Please inspect this repo note.",
+      attachments: ["attachment-1"],
+      parts: [{ type: "text", text: "Attached note" }],
+      prefsOverride: {
+        retrievalMode: "layered",
+      },
+    });
+
+    expect(harness.host.patchSessionAutonomyPrefs).toHaveBeenCalledWith("session-1", {
+      retrievalMode: "layered",
+    });
+    expect(prepared.userMessage.attachments).toEqual([
+      {
+        attachmentId: "attachment-1",
+        fileName: "notes.md",
+        mimeType: "text/markdown",
+        sizeBytes: 42,
+      },
+    ]);
+    expect(prepared.effectiveToolAutonomy).toBe("manual");
+    expect(harness.readGuidance()).toContain("Code mode requires a bound project");
+    expect(harness.host.ingestEvent).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        message: expect.objectContaining({
+          attachments: [
+            {
+              attachmentId: "attachment-1",
+              fileName: "notes.md",
+              mimeType: "text/markdown",
+              sizeBytes: 42,
+            },
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("reuses existing retry user messages without ingesting or retitling", async () => {
+    const harness = createHost("chat");
+    const existingUserMessage = {
+      messageId: "user-existing",
+      sessionId: "session-1",
+      role: "user",
+      actorType: "user",
+      actorId: "operator",
+      content: "Retry the previous answer.",
+      timestamp: "2026-05-04T00:00:00.000Z",
+    } as ChatMessageRecord;
+
+    const prepared = await prepareAgentChatTurn(
+      harness.host,
+      "session-1",
+      { content: "ignored when existing message is supplied" },
+      {
+        branchKind: "retry",
+        existingUserMessage,
+        ingestUserMessage: false,
+        turnId: "turn-fixed",
+        assistantMessageId: "assistant-fixed",
+      },
+    );
+
+    expect(prepared.userEventId).toBe("user-existing");
+    expect(prepared.userMessage).toBe(existingUserMessage);
+    expect(prepared.branchKind).toBe("retry");
+    expect(prepared.turnId).toBe("turn-fixed");
+    expect(prepared.assistantMessageId).toBe("assistant-fixed");
+    expect(harness.host.ingestEvent).not.toHaveBeenCalled();
+    expect(harness.host.maybeAutoTitleChatSession).not.toHaveBeenCalled();
+  });
+
+  it("builds conversation context from the active branch and rejects empty content", async () => {
+    const harness = createHost("chat");
+    const priorUser = {
+      messageId: "user-prior",
+      sessionId: "session-1",
+      role: "user",
+      actorType: "user",
+      actorId: "operator",
+      content: "Earlier question",
+      timestamp: "2026-05-04T00:00:00.000Z",
+    } as ChatMessageRecord;
+    const priorAssistant = {
+      messageId: "assistant-prior",
+      sessionId: "session-1",
+      role: "assistant",
+      actorType: "agent",
+      actorId: "assistant",
+      content: "Earlier answer",
+      timestamp: "2026-05-04T00:00:01.000Z",
+    } as ChatMessageRecord;
+    vi.mocked(harness.host.loadChatTurnSessionState).mockResolvedValue({
+      activeLeafTurnId: "turn-prior",
+      traces: [],
+      tracesById: new Map([
+        [
+          "turn-prior",
+          {
+            turnId: "turn-prior",
+            sessionId: "session-1",
+            userMessageId: "user-prior",
+            assistantMessageId: "assistant-prior",
+          },
+        ],
+      ]),
+      messages: [],
+      messagesById: new Map([
+        ["user-prior", priorUser],
+        ["assistant-prior", priorAssistant],
+      ]),
+      childrenByTurnId: new Map(),
+      turnLineageById: new Map([["turn-prior", { turnId: "turn-prior" }]]),
+    } as never);
+
+    const prepared = await prepareAgentChatTurn(harness.host, "session-1", { content: "Continue" });
+
+    expect(prepared.parentTurnId).toBe("turn-prior");
+    expect(prepared.conversationMessages.map((message) => message.messageId)).toEqual([
+      "user-prior",
+      "assistant-prior",
+      prepared.userMessage.messageId,
+    ]);
+    await expect(prepareAgentChatTurn(harness.host, "session-1", { content: "   " })).rejects.toThrow(
+      /content is required/i,
+    );
+  });
+
+  it("skips missing branch traces while preparing retry context", async () => {
+    const harness = createHost("chat");
+    vi.mocked(harness.host.loadChatTurnSessionState).mockResolvedValue({
+      activeLeafTurnId: "turn-missing",
+      traces: [],
+      tracesById: new Map(),
+      messages: [],
+      messagesById: new Map(),
+      childrenByTurnId: new Map(),
+      turnLineageById: new Map([["turn-missing", { turnId: "turn-missing" }]]),
+    } as never);
+
+    const prepared = await prepareAgentChatTurn(harness.host, "session-1", { content: "Continue anyway" });
+
+    expect(prepared.parentTurnId).toBe("turn-missing");
+    expect(prepared.conversationMessages).toEqual([prepared.userMessage]);
+  });
+
+  it("leaves dynamic Cowork plans unchanged when no fresh specialist matches", () => {
+    const harness = createHost("cowork");
+    const plan = createPlan({
+      steps: [createStep({ stepId: "research", role: "researcher", objective: "Research release evidence" })],
+    });
+    const prepared = {
+      session: { sessionId: "session-1" },
+      workspaceId: "default",
+      content: "Research release evidence",
+      normalized: { mode: "cowork" },
+      prefs: createPrefs("cowork"),
+    };
+
+    expect(applyApprovedSpecialistsToPlan(harness.host, prepared as never, plan as never)).toBe(plan);
+
+    vi.mocked(harness.host.storage.chatSpecialistCandidates.listAutoRoutable).mockReturnValue([
+      {
+        candidateId: "candidate-wrong-role",
+        sessionId: "session-1",
+        workspaceId: "default",
+        title: "Ops helper",
+        role: "ops",
+        summary: "Deploy releases.",
+        reason: "ops gap",
+        source: "runtime_gap",
+        status: "approved",
+        routingMode: "strong_match_only",
+        confidence: 0.99,
+        requiresApproval: false,
+        routingHints: { objectiveKeywords: ["release"] },
+        evidence: [],
+        createdAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: "2026-05-03T00:00:00.000Z",
+      },
+    ]);
+
+    expect(applyApprovedSpecialistsToPlan(harness.host, prepared as never, plan as never)).toBe(plan);
+  });
+
+  it("injects approved fresh specialists into matching dynamic Cowork steps", () => {
+    vi.setSystemTime(new Date("2026-05-04T00:00:00.000Z"));
+    const harness = createHost("cowork");
+    vi.mocked(harness.host.storage.chatSpecialistCandidates.listAutoRoutable).mockReturnValue([
+      {
+        candidateId: "candidate-research",
+        sessionId: "session-1",
+        workspaceId: "default",
+        title: "Research release analyst",
+        role: "research analyst",
+        summary: "Find release notes and source evidence.",
+        reason: "release research gap",
+        source: "runtime_gap",
+        status: "approved",
+        routingMode: "strong_match_only",
+        confidence: 0.95,
+        requiresApproval: false,
+        routingHints: { objectiveKeywords: ["release", "research"] },
+        evidence: [],
+        createdAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: "2026-05-03T00:00:00.000Z",
+      },
+      {
+        candidateId: "candidate-stale",
+        sessionId: "session-1",
+        workspaceId: "default",
+        title: "QA helper",
+        role: "qa",
+        summary: "Validate old things.",
+        reason: "stale",
+        source: "runtime_gap",
+        status: "approved",
+        routingMode: "strong_match_only",
+        confidence: 1,
+        requiresApproval: false,
+        routingHints: { objectiveKeywords: ["release"] },
+        evidence: [],
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "not-a-date",
+      },
+      {
+        candidateId: "candidate-qa",
+        sessionId: "session-1",
+        workspaceId: "default",
+        title: "Release QA validator",
+        role: "qa",
+        summary: "Validate release evidence.",
+        reason: "release QA gap",
+        source: "runtime_gap",
+        status: "approved",
+        routingMode: "strong_match_only",
+        confidence: 0.95,
+        requiresApproval: false,
+        routingHints: { objectiveKeywords: ["release"] },
+        evidence: [],
+        createdAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: "2026-05-03T00:00:00.000Z",
+      },
+      {
+        candidateId: "candidate-extra-review",
+        sessionId: "session-1",
+        workspaceId: "default",
+        title: "Release review critic",
+        role: "reviewer",
+        summary: "Review release evidence.",
+        reason: "release review gap",
+        source: "runtime_gap",
+        status: "approved",
+        routingMode: "strong_match_only",
+        confidence: 0.95,
+        requiresApproval: false,
+        routingHints: { objectiveKeywords: ["release"] },
+        evidence: [],
+        createdAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: "2026-05-03T00:00:00.000Z",
+      },
+    ]);
+
+    const plan = createPlan({
+      steps: [
+        createStep({ stepId: "research", role: "researcher", objective: "Research release evidence" }),
+        createStep({ stepId: "qa", role: "qa-validator", objective: "Validate release evidence" }),
+        createStep({ stepId: "review", role: "reviewer", objective: "Review release evidence" }),
+      ],
+    });
+    const prepared = {
+      session: { sessionId: "session-1" },
+      workspaceId: "default",
+      content: "Research release evidence",
+      normalized: { mode: "cowork" },
+      prefs: createPrefs("cowork"),
+    };
+
+    const updated = applyApprovedSpecialistsToPlan(harness.host, prepared as never, plan as never);
+
+    expect(updated.routeDecision.specialistCandidates).toEqual([
+      expect.objectContaining({
+        candidateId: "candidate-research",
+        baseRole: "researcher",
+        routingMode: "strong_match_only",
+      }),
+      expect.objectContaining({
+        candidateId: "candidate-qa",
+        baseRole: "qa-validator",
+        routingMode: "strong_match_only",
+      }),
+    ]);
+    expect(updated.steps[0]?.specialistCandidate).toEqual(
+      expect.objectContaining({ candidateId: "candidate-research" }),
+    );
+    expect(updated.steps[1]?.specialistCandidate).toEqual(expect.objectContaining({ candidateId: "candidate-qa" }));
+    expect(updated.steps[2]?.specialistCandidate).toBeUndefined();
+    vi.useRealTimers();
+  });
+
+  it("falls back to the template execution draft when planner completion fails", async () => {
+    const harness = createHost("cowork");
+    vi.mocked(harness.host.createChatCompletion).mockRejectedValue(new Error("planner unavailable"));
+    const templatePlan = createPlan({
+      steps: [createStep({ stepId: "research", role: "researcher", objective: "Research release notes" })],
+    });
+    const prepared = {
+      content: "Research release notes",
+      prefs: createPrefs("cowork"),
+    };
+    const routerInput = {
+      task: {
+        mode: "cowork",
+      },
+    };
+
+    const draft = await generatePreparedExecutionPlanDraft(
+      harness.host,
+      prepared as never,
+      routerInput as never,
+      templatePlan as never,
+      false,
+    );
+
+    expect(harness.host.createChatCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: "openai",
+        model: "gpt-5.4-mini",
+        stream: false,
+        memory: { enabled: false, mode: "off" },
+        response_format: { type: "json_object" },
+      }),
+    );
+    expect(draft.steps[0]).toEqual(expect.objectContaining({ stepId: "research", delegatedRole: "researcher" }));
+  });
+
+  it("uses a valid planner completion draft before falling back to template defaults", async () => {
+    const harness = createHost("cowork");
+    vi.mocked(harness.host.createChatCompletion).mockResolvedValue({
+      model: "gpt-5.4-mini",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: JSON.stringify({
+              summary: "Planner refined the concrete release workflow.",
+              steps: [
+                {
+                  objective: "Find the release notes and changelog deltas.",
+                  successCriteria: "Return source-linked release evidence.",
+                  suggestedTools: ["browser.search", "http.get", "browser.search"],
+                  expectedOutput: "Release evidence handoff",
+                  parallelizable: true,
+                  dependsOnStepIds: [],
+                },
+              ],
+            }),
+          },
+          finish_reason: "stop",
+        },
+      ],
+    } as never);
+    const templatePlan = createPlan({
+      steps: [createStep({ stepId: "research", role: "researcher", objective: "Research release notes" })],
+    });
+    const prepared = {
+      content: "Research release notes",
+      prefs: createPrefs("cowork"),
+    };
+
+    const draft = await generatePreparedExecutionPlanDraft(
+      harness.host,
+      prepared as never,
+      { task: { mode: "cowork" } } as never,
+      templatePlan as never,
+      false,
+    );
+
+    expect(draft).toEqual(
+      expect.objectContaining({
+        source: "planner",
+        summary: "Planner refined the concrete release workflow.",
+        steps: [
+          expect.objectContaining({
+            stepId: "research",
+            objective: "Find the release notes and changelog deltas.",
+            suggestedTools: ["browser.search", "http.get"],
+            expectedOutput: "Release evidence handoff",
+            parallelizable: true,
+            delegatedRole: "researcher",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("skips orchestration for normal Chat turns and resolves advisory planning turns", async () => {
+    const harness = createHost("chat");
+    const normalPrepared = createPreparedTurnForOrchestration({ planningMode: "off" });
+    const advisoryPrepared = createPreparedTurnForOrchestration({ planningMode: "advisory" });
+
+    await expect(resolvePreparedTurnOrchestration(harness.host, normalPrepared as never)).resolves.toBeUndefined();
+    const advisory = await resolvePreparedTurnOrchestration(harness.host, advisoryPrepared as never);
+
+    expect(advisory).toEqual(
+      expect.objectContaining({
+        routerInput: expect.objectContaining({
+          task: expect.objectContaining({
+            mode: "chat",
+            objective: "Draft a launch note",
+          }),
+        }),
+        orchestrationPlan: expect.objectContaining({
+          routeDecision: expect.objectContaining({
+            modePolicy: "chat",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("maps orchestration summary status and step evidence for running, failed, partial, and advisory outcomes", () => {
+    const routeDecision = createPlan({ steps: [] }).routeDecision;
+    expect(
+      buildChatOrchestrationSummary({
+        runId: "run-running",
+        objective: "Do work",
+        modePolicy: "cowork",
+        routeDecision,
+        stepResults: [],
+      }).status,
+    ).toBe("running");
+    expect(
+      buildChatOrchestrationSummary({
+        runId: "run-advisory",
+        objective: "Plan work",
+        modePolicy: "cowork",
+        routeDecision,
+        stepResults: [],
+        finalized: true,
+        advisoryOnly: true,
+      }).status,
+    ).toBe("completed");
+    expect(
+      buildChatOrchestrationSummary({
+        runId: "run-failed",
+        objective: "Do work",
+        modePolicy: "cowork",
+        routeDecision,
+        stepResults: [createStepResult({ stepId: "failed", status: "failed", error: "no provider" })],
+        finalized: true,
+      }).status,
+    ).toBe("failed");
+    expect(
+      buildChatOrchestrationSummary({
+        runId: "run-completed",
+        objective: "Do work",
+        modePolicy: "cowork",
+        routeDecision,
+        stepResults: [createStepResult({ stepId: "completed", status: "completed", summary: "done" })],
+        finalized: true,
+      }).status,
+    ).toBe("completed");
+    const partial = buildChatOrchestrationSummary({
+      runId: "run-partial",
+      objective: "Do work",
+      modePolicy: "cowork",
+      routeDecision,
+      stepResults: [
+        createStepResult({ stepId: "completed", status: "completed", summary: "done" }),
+        createStepResult({ stepId: "failed", status: "failed", error: "timeout" }),
+      ],
+      finalSummary: "partial result",
+      integritySignals: ["Synthesis Incomplete"],
+      finalized: true,
+    });
+
+    expect(partial).toEqual(
+      expect.objectContaining({
+        status: "partial",
+        finalSummary: "partial result",
+        integritySignals: ["Synthesis Incomplete"],
+      }),
+    );
+    expect(partial.steps).toEqual([
+      expect.objectContaining({ stepId: "completed", status: "completed", summary: "done" }),
+      expect.objectContaining({ stepId: "failed", status: "failed", error: "timeout" }),
+    ]);
+  });
 });
+
+function createPreparedTurnForOrchestration(overrides: { planningMode: ChatSessionPrefsRecord["planningMode"] }) {
+  return {
+    session: { sessionId: "session-1" },
+    workspaceId: "default",
+    content: "Draft a launch note",
+    conversationMessages: [],
+    history: [],
+    normalized: { mode: "chat" },
+    prefs: createPrefs("chat", { planningMode: overrides.planningMode }),
+  };
+}
+
+function createPlan(overrides: { steps: ReturnType<typeof createStep>[] }) {
+  return {
+    workflowTemplate: "cowork.plan.work.synthesize",
+    summary: "Plan summary",
+    routeDecision: {
+      modePolicy: "cowork",
+      workflowTemplate: "cowork.plan.work.synthesize",
+      hidden: false,
+      visibility: "explicit",
+      intensity: "balanced",
+      providerPreference: "balanced",
+      reviewDepth: "standard",
+      parallelism: "sequential",
+      selectedRoles: ["Researcher"],
+      selectedProviders: [],
+      triggerReason: "test",
+    },
+    steps: overrides.steps,
+  };
+}
+
+function createStep(overrides: { stepId: string; role: string; objective: string }) {
+  return {
+    stepId: overrides.stepId,
+    index: 0,
+    role: overrides.role,
+    label: overrides.role,
+    stage: 1,
+    objective: overrides.objective,
+    successCriteria: "Return a useful handoff.",
+    suggestedTools: ["browser.search"],
+    expectedOutput: "handoff",
+    parallelizable: false,
+    dependsOnStepIds: [],
+    delegatedRole: overrides.role,
+  };
+}
+
+function createStepResult(overrides: {
+  stepId: string;
+  status: "completed" | "failed";
+  summary?: string;
+  error?: string;
+}) {
+  return {
+    stepId: overrides.stepId,
+    role: "researcher",
+    label: "Researcher",
+    index: 0,
+    status: overrides.status,
+    providerId: "openai",
+    model: "gpt-5.4-mini",
+    startedAt: "2026-05-04T00:00:00.000Z",
+    finishedAt: "2026-05-04T00:00:01.000Z",
+    durationMs: 1000,
+    summary: overrides.summary,
+    error: overrides.error,
+  };
+}

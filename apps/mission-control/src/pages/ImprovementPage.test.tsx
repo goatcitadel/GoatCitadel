@@ -429,4 +429,131 @@ describe("ImprovementPage", () => {
       renderer.unmount();
     }
   });
+
+  it("renders the empty ledger state when improvement lists are available but blank", async () => {
+    apiMocks.fetchImprovementReports.mockResolvedValueOnce({ items: [] });
+    apiMocks.fetchImprovementReplayRuns.mockResolvedValueOnce({ items: [] });
+    apiMocks.fetchImprovementSignals.mockResolvedValueOnce({ items: [] });
+    apiMocks.fetchImprovementCandidates.mockResolvedValueOnce({ items: [] });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<ImprovementPage workspaceId="default" />);
+      });
+      await flush();
+
+      const text = rendererText(renderer);
+      expect(text).toContain("No ledger signals yet.");
+      expect(text).toContain("No improvement candidates yet.");
+      expect(text).toContain("No replay runs yet.");
+      expect(text).toContain("No report selected yet.");
+      expect(text).toContain("No run data available.");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("surfaces initial improvement load failures after the loading state clears", async () => {
+    apiMocks.fetchImprovementReports.mockRejectedValueOnce(new Error("improvement-service-down"));
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<ImprovementPage workspaceId="default" />);
+      });
+      await flush();
+
+      const text = rendererText(renderer);
+      expect(text).toContain("improvement-service-down");
+      expect(text).toContain("No ledger signals yet.");
+      expect(text).toContain("No improvement candidates yet.");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("runs replay actions, validates override form state, and renders replay diffs", async () => {
+    apiMocks.fetchReplayDiff.mockResolvedValue({
+      replayRunId: "override-run-1",
+      baselineRunId: "run-1",
+      candidateRunId: "override-run-1",
+      summary: {
+        latencyDeltaMs: 15,
+        inputTokensDelta: 4,
+        outputTokensDelta: -2,
+        costUsdDelta: 0.0012,
+        errorChanged: true,
+      },
+      changedItems: [],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<ImprovementPage workspaceId="default" />);
+      });
+      await flush();
+
+      await clickButton(renderer, "Run Replay Now");
+      await flush();
+      expect(apiMocks.runImprovementReplay).toHaveBeenCalledWith({ sampleSize: 500 });
+      expect(rendererText(renderer)).toContain("Replay run run-2 completed.");
+
+      await clickButton(renderer, "Draft replay");
+      await flush();
+      expect(rendererText(renderer)).toContain("Step key is required for replay override.");
+
+      await act(async () => {
+        renderer.root
+          .findByProps({ id: "overrideStepKey" })
+          .props.onChange({ target: { value: "tool:memory.search" } });
+        renderer.root.findByProps({ id: "overrideJson" }).props.onChange({ target: { value: "[]" } });
+      });
+      await clickButton(renderer, "Draft replay");
+      await flush();
+      expect(rendererText(renderer)).toContain("Override payload must be a JSON object.");
+
+      await act(async () => {
+        renderer.root.findByProps({ id: "overrideJson" }).props.onChange({
+          target: { value: '{"replacement":"fresh memory"}' },
+        });
+      });
+      await clickButton(renderer, "Draft replay");
+      await flush();
+      expect(apiMocks.draftReplayOverride).toHaveBeenCalledWith("run-1", {
+        overrides: [
+          {
+            stepKey: "tool:memory.search",
+            overrideKind: "tool_output",
+            override: { replacement: "fresh memory" },
+          },
+        ],
+      });
+      expect(rendererText(renderer)).toContain("Replay draft draft-1 created");
+
+      await act(async () => {
+        renderer.root.findByProps({ id: "overrideKind" }).props.onChange("prompt_patch");
+      });
+      await clickButton(renderer, "Execute replay");
+      await flush();
+
+      expect(apiMocks.executeReplayOverride).toHaveBeenCalledWith("run-1", {
+        overrides: [
+          {
+            stepKey: "tool:memory.search",
+            overrideKind: "prompt_patch",
+            override: { replacement: "fresh memory" },
+          },
+        ],
+      });
+      expect(apiMocks.fetchReplayDiff).toHaveBeenCalledWith("draft-2");
+      const text = rendererText(renderer);
+      expect(text).toContain("Replay override executed");
+      expect(text).toContain("Latest replay diff");
+      expect(text).toContain("Error changed: yes");
+    } finally {
+      renderer.unmount();
+    }
+  });
 });

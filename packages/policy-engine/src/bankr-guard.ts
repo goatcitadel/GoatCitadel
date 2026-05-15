@@ -10,30 +10,11 @@ import type { Storage } from "@goatcitadel/storage";
 
 export const BANKR_POLICY_SETTINGS_KEY = "bankr_policy_v1";
 
-const BANKR_SUPPORTED_CHAINS = [
-  "base",
-  "ethereum",
-  "polygon",
-  "solana",
-  "unichain",
-] as const;
+const BANKR_SUPPORTED_CHAINS = ["base", "ethereum", "polygon", "solana", "unichain"] as const;
 
-const BANKR_ACTION_TYPES: BankrActionType[] = [
-  "read",
-  "trade",
-  "transfer",
-  "sign",
-  "submit",
-  "deploy",
-];
+const BANKR_ACTION_TYPES: BankrActionType[] = ["read", "trade", "transfer", "sign", "submit", "deploy"];
 
-const WRITE_ACTION_TYPES = new Set<BankrActionType>([
-  "trade",
-  "transfer",
-  "sign",
-  "submit",
-  "deploy",
-]);
+const WRITE_ACTION_TYPES = new Set<BankrActionType>(["trade", "transfer", "sign", "submit", "deploy"]);
 
 const DEFAULT_BANKR_POLICY: BankrSafetyPolicy = {
   enabled: true,
@@ -55,10 +36,7 @@ export function readBankrSafetyPolicy(storage: Storage): BankrSafetyPolicy {
   return normalizeBankrSafetyPolicy(stored);
 }
 
-export function writeBankrSafetyPolicy(
-  storage: Storage,
-  input: Partial<BankrSafetyPolicy>,
-): BankrSafetyPolicy {
+export function writeBankrSafetyPolicy(storage: Storage, input: Partial<BankrSafetyPolicy>): BankrSafetyPolicy {
   const current = readBankrSafetyPolicy(storage);
   const next = normalizeBankrSafetyPolicy(input, current);
   storage.systemSettings.set(BANKR_POLICY_SETTINGS_KEY, next);
@@ -70,32 +48,15 @@ export function normalizeBankrSafetyPolicy(
   current?: BankrSafetyPolicy,
 ): BankrSafetyPolicy {
   const base = current ?? getDefaultBankrSafetyPolicy();
-  const allowedChains = normalizeStringArray(
-    input?.allowedChains,
-    base.allowedChains,
-    "lower",
-  );
-  const allowedActionTypes = normalizeActionTypes(
-    input?.allowedActionTypes,
-    base.allowedActionTypes,
-  );
-  const blockedSymbols = normalizeStringArray(
-    input?.blockedSymbols,
-    base.blockedSymbols ?? [],
-    "upper",
-  );
+  const allowedChains = normalizeStringArray(input?.allowedChains, base.allowedChains, "lower");
+  const allowedActionTypes = normalizeActionTypes(input?.allowedActionTypes, base.allowedActionTypes);
+  const blockedSymbols = normalizeStringArray(input?.blockedSymbols, base.blockedSymbols as string[], "upper");
 
   return {
     enabled: input?.enabled ?? base.enabled,
     mode: input?.mode ?? base.mode,
-    dailyUsdCap: normalizeCurrency(
-      input?.dailyUsdCap,
-      base.dailyUsdCap,
-    ),
-    perActionUsdCap: normalizeCurrency(
-      input?.perActionUsdCap,
-      base.perActionUsdCap,
-    ),
+    dailyUsdCap: normalizeCurrency(input?.dailyUsdCap, base.dailyUsdCap),
+    perActionUsdCap: normalizeCurrency(input?.perActionUsdCap, base.perActionUsdCap),
     // Locked on in high-safety mode: every write path stays approval-gated.
     requireApprovalEveryWrite: true,
     allowedChains: allowedChains.length > 0 ? allowedChains : [...BANKR_SUPPORTED_CHAINS],
@@ -104,16 +65,9 @@ export function normalizeBankrSafetyPolicy(
   };
 }
 
-export function normalizeBankrAction(
-  input: Record<string, unknown>,
-): BankrActionPreviewResponse["normalized"] {
-  const prompt = asString(input.prompt)
-    ?? asString(input.content)
-    ?? asString(input.text);
-  const actionType = normalizeActionType(
-    asString(input.actionType) ?? asString(input.action),
-    prompt,
-  );
+export function normalizeBankrAction(input: Record<string, unknown>): BankrActionPreviewResponse["normalized"] {
+  const prompt = asString(input.prompt) ?? asString(input.content) ?? asString(input.text);
+  const actionType = normalizeActionType(asString(input.actionType) ?? asString(input.action), prompt);
   const chain = normalizeChain(asString(input.chain), prompt);
   const symbol = normalizeSymbol(asString(input.symbol), prompt);
   const usdEstimate = normalizeUsdEstimate(input.usdEstimate, prompt);
@@ -161,10 +115,8 @@ export function evaluateBankrActionPreview(
     );
   }
 
-  if (
-    normalized.symbol
-    && (policy.blockedSymbols ?? []).includes(normalized.symbol)
-  ) {
+  const blockedSymbols = policy.blockedSymbols as string[];
+  if (normalized.symbol && blockedSymbols.includes(normalized.symbol)) {
     return blocked(
       "symbol_blocked",
       `Symbol ${normalized.symbol} is blocked by Bankr policy.`,
@@ -194,7 +146,8 @@ export function evaluateBankrActionPreview(
         dailyUsageUsd,
       );
     }
-    if ((normalized.usdEstimate ?? 0) > policy.perActionUsdCap) {
+    const usdEstimate = normalized.usdEstimate as number;
+    if (usdEstimate > policy.perActionUsdCap) {
       return blocked(
         "per_action_cap_exceeded",
         `Estimated USD amount exceeds per-action cap ($${policy.perActionUsdCap}).`,
@@ -203,7 +156,7 @@ export function evaluateBankrActionPreview(
         dailyUsageUsd,
       );
     }
-    if (dailyUsageUsd + (normalized.usdEstimate ?? 0) > policy.dailyUsdCap) {
+    if (dailyUsageUsd + usdEstimate > policy.dailyUsdCap) {
       return blocked(
         "daily_cap_exceeded",
         `Estimated USD amount exceeds remaining daily cap ($${Math.max(0, policy.dailyUsdCap - dailyUsageUsd)}).`,
@@ -214,21 +167,13 @@ export function evaluateBankrActionPreview(
     }
   }
 
-  const remainingDailyUsd = Math.max(
-    0,
-    policy.dailyUsdCap - dailyUsageUsd - (isWrite ? (normalized.usdEstimate ?? 0) : 0),
-  );
-  const remainingPerActionUsd = Math.max(
-    0,
-    policy.perActionUsdCap - (normalized.usdEstimate ?? 0),
-  );
+  const remainingDailyUsd = Math.max(0, policy.dailyUsdCap - dailyUsageUsd - (isWrite ? normalized.usdEstimate! : 0));
+  const remainingPerActionUsd = Math.max(0, policy.perActionUsdCap - (normalized.usdEstimate ?? 0));
 
   return {
     allowed: true,
     reasonCode: "allowed",
-    reason: isWrite
-      ? "Bankr write action passed policy and budget checks."
-      : "Bankr read action passed policy checks.",
+    reason: isWrite ? "Bankr write action passed policy and budget checks." : "Bankr read action passed policy checks.",
     policy,
     normalized,
     dailyUsageUsd,
@@ -237,27 +182,27 @@ export function evaluateBankrActionPreview(
   };
 }
 
-export function applyBankrBudgetUsage(
-  storage: Storage,
-  usdEstimate: number,
-  at = new Date(),
-): number {
+export function applyBankrBudgetUsage(storage: Storage, usdEstimate: number, at = new Date()): number {
   if (!Number.isFinite(usdEstimate) || usdEstimate <= 0) {
     return readBankrDailyUsage(storage, currentDayKey(at));
   }
   const day = currentDayKey(at);
   const now = at.toISOString();
-  storage.db.prepare(`
+  storage.db
+    .prepare(
+      `
     INSERT INTO bankr_budget_usage_daily (day, usd_total, updated_at)
     VALUES (@day, @usdTotal, @updatedAt)
     ON CONFLICT(day) DO UPDATE SET
       usd_total = usd_total + excluded.usd_total,
       updated_at = excluded.updated_at
-  `).run({
-    day,
-    usdTotal: usdEstimate,
-    updatedAt: now,
-  });
+  `,
+    )
+    .run({
+      day,
+      usdTotal: usdEstimate,
+      updatedAt: now,
+    });
   return readBankrDailyUsage(storage, day);
 }
 
@@ -294,28 +239,28 @@ export function reserveBankrBudget(
       return { reserved: false, dailyTotal: currentTotal };
     }
 
-    storage.db.prepare(`
+    storage.db
+      .prepare(
+        `
       INSERT INTO bankr_budget_usage_daily (day, usd_total, updated_at)
       VALUES (@day, @usdTotal, @updatedAt)
       ON CONFLICT(day) DO UPDATE SET
         usd_total = usd_total + excluded.usd_total,
         updated_at = excluded.updated_at
-    `).run({
-      day,
-      usdTotal: usdEstimate,
-      updatedAt: now,
-    });
+    `,
+      )
+      .run({
+        day,
+        usdTotal: usdEstimate,
+        updatedAt: now,
+      });
 
     const newTotal = readBankrDailyUsage(storage, day);
     return { reserved: true, dailyTotal: newTotal };
   });
 }
 
-export function releaseBankrBudgetReservation(
-  storage: Storage,
-  usdEstimate: number,
-  at = new Date(),
-): number {
+export function releaseBankrBudgetReservation(storage: Storage, usdEstimate: number, at = new Date()): number {
   if (!Number.isFinite(usdEstimate) || usdEstimate <= 0) {
     return readBankrDailyUsage(storage, currentDayKey(at));
   }
@@ -326,27 +271,35 @@ export function releaseBankrBudgetReservation(
   return storage.runImmediateTransaction(() => {
     const currentTotal = readBankrDailyUsage(storage, day);
     const nextTotal = Math.max(0, currentTotal - usdEstimate);
-    storage.db.prepare(`
+    storage.db
+      .prepare(
+        `
       INSERT INTO bankr_budget_usage_daily (day, usd_total, updated_at)
       VALUES (@day, @usdTotal, @updatedAt)
       ON CONFLICT(day) DO UPDATE SET
         usd_total = @usdTotal,
         updated_at = excluded.updated_at
-    `).run({
-      day,
-      usdTotal: nextTotal,
-      updatedAt: now,
-    });
+    `,
+      )
+      .run({
+        day,
+        usdTotal: nextTotal,
+        updatedAt: now,
+      });
     return readBankrDailyUsage(storage, day);
   });
 }
 
 export function readBankrDailyUsage(storage: Storage, day = currentDayKey()): number {
-  const row = storage.db.prepare(`
+  const row = storage.db
+    .prepare(
+      `
     SELECT usd_total AS usdTotal
     FROM bankr_budget_usage_daily
     WHERE day = @day
-  `).get({ day }) as { usdTotal?: number } | undefined;
+  `,
+    )
+    .get({ day }) as { usdTotal?: number } | undefined;
   return Number.isFinite(row?.usdTotal) ? Number(row?.usdTotal) : 0;
 }
 
@@ -373,10 +326,11 @@ export function appendBankrActionAudit(
     details: input.details,
     createdAt,
   };
-  const usdEstimate = typeof record.usdEstimate === "number" && Number.isFinite(record.usdEstimate)
-    ? record.usdEstimate
-    : null;
-  storage.db.prepare(`
+  const usdEstimate =
+    typeof record.usdEstimate === "number" && Number.isFinite(record.usdEstimate) ? record.usdEstimate : null;
+  storage.db
+    .prepare(
+      `
     INSERT INTO bankr_action_audit (
       action_id,
       session_id,
@@ -404,20 +358,22 @@ export function appendBankrActionAudit(
       @detailsJson,
       @createdAt
     )
-  `).run({
-    actionId: record.actionId,
-    sessionId: record.sessionId,
-    actorId: record.actorId,
-    actionType: record.actionType,
-    chain: record.chain ?? null,
-    symbol: record.symbol ?? null,
-    usdEstimate,
-    status: record.status,
-    approvalId: record.approvalId ?? null,
-    policyReason: record.policyReason ?? null,
-    detailsJson: record.details ? JSON.stringify(record.details) : null,
-    createdAt: record.createdAt,
-  });
+  `,
+    )
+    .run({
+      actionId: record.actionId,
+      sessionId: record.sessionId,
+      actorId: record.actorId,
+      actionType: record.actionType,
+      chain: record.chain ?? null,
+      symbol: record.symbol ?? null,
+      usdEstimate,
+      status: record.status,
+      approvalId: record.approvalId ?? null,
+      policyReason: record.policyReason ?? null,
+      detailsJson: record.details ? JSON.stringify(record.details) : null,
+      createdAt: record.createdAt,
+    });
   return record;
 }
 
@@ -437,15 +393,12 @@ function blocked(
     dailyUsageUsd,
     remainingDailyUsd: Math.max(0, policy.dailyUsdCap - dailyUsageUsd),
     remainingPerActionUsd: Number.isFinite(normalized.usdEstimate)
-      ? Math.max(0, policy.perActionUsdCap - (normalized.usdEstimate ?? 0))
+      ? Math.max(0, policy.perActionUsdCap - normalized.usdEstimate!)
       : policy.perActionUsdCap,
   };
 }
 
-function normalizeActionType(
-  raw: string | undefined,
-  prompt: string | undefined,
-): BankrActionType {
+function normalizeActionType(raw: string | undefined, prompt: string | undefined): BankrActionType {
   if (raw) {
     const normalized = raw.trim().toLowerCase();
     if (BANKR_ACTION_TYPES.includes(normalized as BankrActionType)) {
@@ -475,10 +428,7 @@ function normalizeActionType(
   return "read";
 }
 
-function normalizeChain(
-  rawChain: string | undefined,
-  prompt: string | undefined,
-): string | undefined {
+function normalizeChain(rawChain: string | undefined, prompt: string | undefined): string | undefined {
   const value = rawChain?.trim().toLowerCase();
   if (value) {
     return value === "mainnet" ? "ethereum" : value;
@@ -495,10 +445,7 @@ function normalizeChain(
   return undefined;
 }
 
-function normalizeSymbol(
-  rawSymbol: string | undefined,
-  prompt: string | undefined,
-): string | undefined {
+function normalizeSymbol(rawSymbol: string | undefined, prompt: string | undefined): string | undefined {
   if (rawSymbol?.trim()) {
     return rawSymbol.trim().toUpperCase();
   }
@@ -507,10 +454,7 @@ function normalizeSymbol(
   return match?.[0]?.toUpperCase();
 }
 
-function normalizeUsdEstimate(
-  raw: unknown,
-  prompt: string | undefined,
-): number | undefined {
+function normalizeUsdEstimate(raw: unknown, prompt: string | undefined): number | undefined {
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
     return raw;
   }
@@ -522,7 +466,7 @@ function normalizeUsdEstimate(
   }
   const source = prompt ?? "";
   const match = source.match(/\$([0-9]+(?:\.[0-9]+)?)/);
-  if (!match?.[1]) {
+  if (!match) {
     return undefined;
   }
   const parsed = Number(match[1]);
@@ -542,10 +486,7 @@ function normalizeCurrency(value: unknown, fallback: number): number {
   return fallback;
 }
 
-function normalizeActionTypes(
-  value: unknown,
-  fallback: BankrActionType[],
-): BankrActionType[] {
+function normalizeActionTypes(value: unknown, fallback: BankrActionType[]): BankrActionType[] {
   if (!Array.isArray(value)) {
     return [...fallback];
   }
@@ -560,11 +501,7 @@ function normalizeActionTypes(
   return [...allowed];
 }
 
-function normalizeStringArray(
-  value: unknown,
-  fallback: string[],
-  mode: "lower" | "upper",
-): string[] {
+function normalizeStringArray(value: unknown, fallback: string[], mode: "lower" | "upper"): string[] {
   if (!Array.isArray(value)) {
     return [...fallback];
   }

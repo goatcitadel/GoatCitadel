@@ -108,4 +108,73 @@ describe("ChatAttachmentPreviewStack", () => {
     expect(container?.textContent).toContain("Open");
     expect(container?.textContent).toContain("Download");
   });
+
+  it("renders nothing for empty attachment lists", async () => {
+    await act(async () => {
+      root?.render(<ChatAttachmentPreviewStack attachments={[]} />);
+      await Promise.resolve();
+    });
+
+    expect(fetchChatAttachmentPreviewMock).not.toHaveBeenCalled();
+    expect(container?.textContent).toBe("");
+  });
+
+  it("surfaces fetch errors and prefers transcript text over OCR or extract previews", async () => {
+    fetchChatAttachmentPreviewMock.mockRejectedValueOnce(new Error("preview service offline")).mockResolvedValueOnce({
+      attachmentId: "attachment-transcript",
+      fileName: "attachment-transcript.pdf",
+      mimeType: "application/pdf",
+      mediaType: "binary",
+      transcriptText: "Transcript text wins",
+      analysisStatus: "ready",
+    });
+
+    await act(async () => {
+      root?.render(<ChatAttachmentPreviewStack attachments={[makeAttachment("attachment-error")]} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container?.textContent).toContain("Preview unavailable: preview service offline");
+
+    await act(async () => {
+      root?.render(<ChatAttachmentPreviewStack attachments={[makeAttachment("attachment-transcript")]} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container?.textContent).toContain("Transcript");
+    expect(container?.textContent).toContain("Transcript text wins");
+    expect(container?.textContent).not.toContain("Preview text loses");
+  });
+
+  it("serves fresh cached previews without another request", async () => {
+    fetchChatAttachmentPreviewMock.mockResolvedValueOnce({
+      attachmentId: "attachment-cache",
+      fileName: "attachment-cache.pdf",
+      mimeType: "application/pdf",
+      mediaType: "binary",
+      ocrText: "Cached OCR text",
+      analysisStatus: "ready",
+    });
+
+    await act(async () => {
+      root?.render(<ChatAttachmentPreviewStack attachments={[makeAttachment("attachment-cache")]} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container?.textContent).toContain("OCR");
+    expect(container?.textContent).toContain("Cached OCR text");
+
+    await act(async () => {
+      root?.render(<ChatAttachmentPreviewStack attachments={[]} />);
+      await Promise.resolve();
+      root?.render(<ChatAttachmentPreviewStack attachments={[makeAttachment("attachment-cache")]} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchChatAttachmentPreviewMock).toHaveBeenCalledTimes(1);
+    expect(container?.textContent).toContain("Cached OCR text");
+  });
 });

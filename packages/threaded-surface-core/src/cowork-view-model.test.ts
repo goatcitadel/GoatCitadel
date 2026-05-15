@@ -520,4 +520,49 @@ describe("deriveCoworkRunViewModel", () => {
     expect(viewModel.agenticRuntime?.controls[0]?.status).toBe("disabled");
     expect(viewModel.agenticRuntime?.controls[0]?.meta).toBe("approval required");
   });
+
+  it("covers metric-rich gates, unknown checkpoints, objective fallbacks, and active-turn fallbacks", () => {
+    const viewModel = deriveCoworkRunViewModel({
+      items: [],
+      orchestrationCheckpoints: [
+        checkpoint("continuation_gate", {
+          continuationGate: {
+            decision: "continue",
+            reasonCodes: ["ok", 7],
+            metrics: {
+              stepsSinceCheckpoint: 2,
+              toolRunCount: 3,
+              failedToolRunCount: 1,
+              retryFailureStreak: 0,
+              approvalWait: false,
+              userInputWait: false,
+              elapsedMs: 2500,
+              tokenTotal: 1200,
+              costUsd: 0.42,
+              evidenceGapCount: 0,
+            },
+            createdAt: "2026-05-04T01:00:00.000Z",
+          },
+        }),
+        checkpoint("custom_checkpoint"),
+      ],
+      workbenchState: { worktreeStatus: "ready", validationStatus: "passed" } as never,
+    });
+
+    expect(viewModel.continuationGate.metrics).toEqual(
+      expect.objectContaining({ elapsedMs: 2500, tokenTotal: 1200, costUsd: 0.42 }),
+    );
+    expect(viewModel.continuationGate.reasonCodes).toEqual(["ok"]);
+    expect(viewModel.timelineItems.items[0]?.title).toBe("custom checkpoint");
+    expect(viewModel.runMap.checkpoints[0]?.title).toBe("custom checkpoint");
+    expect(viewModel.runMap.objective).toBe("Cowork objective");
+    expect(viewModel.stateGaps).not.toContain("Manual UI proof not attached");
+
+    expect(
+      resolveActiveWorkflowTurn({
+        activeLeafTurnId: "missing",
+        turns: [{ turnId: "turn-1" }, { turnId: "turn-last" }],
+      } as never),
+    ).toEqual({ turnId: "turn-last" });
+  });
 });

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 import { loadGatewayConfig } from "./config.js";
 import {
   assertCodeModeSandboxAvailable,
@@ -11,8 +12,8 @@ interface CliOptions {
   output?: string;
 }
 
-async function main() {
-  const options = parseCliOptions(process.argv.slice(2));
+export async function main(args = process.argv.slice(2)) {
+  const options = parseCliOptions(args);
   const rootDir = path.resolve(process.env.GOATCITADEL_ROOT_DIR?.trim() || process.cwd());
   const config = await loadGatewayConfig(rootDir);
   const metadata = resolveCurrentCodeModeSandboxMetadata(config.assistant.capabilities.codeModeSandbox);
@@ -37,7 +38,7 @@ async function main() {
   process.stdout.write(`${JSON.stringify(proof, null, 2)}\n`);
 }
 
-function parseCliOptions(args: string[]): CliOptions {
+export function parseCliOptions(args: string[]): CliOptions {
   const options: CliOptions = {};
   for (let index = 0; index < args.length; index += 1) {
     const item = args[index];
@@ -51,7 +52,9 @@ function parseCliOptions(args: string[]): CliOptions {
   return options;
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
+    process.exitCode = 1;
+  });
+}

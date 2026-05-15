@@ -425,7 +425,7 @@ export function OfficePage({ variant = "stable", onOpenLab }: OfficePageProps) {
   );
 }
 
-function deriveOfficeAgents(directory: AgentDirectoryRecord[], events: RealtimeEvent[]): OfficeAgentModel[] {
+export function deriveOfficeAgents(directory: AgentDirectoryRecord[], events: RealtimeEvent[]): OfficeAgentModel[] {
   const byRole = new Map<string, OfficeAgentModel>();
   const runtimeLookup = new Map<string, string>();
 
@@ -575,7 +575,7 @@ function deriveOfficeAgents(directory: AgentDirectoryRecord[], events: RealtimeE
   });
 }
 
-function deriveCollaborationEdges(agents: OfficeAgentModel[]): OfficeCollaborationEdge[] {
+export function deriveCollaborationEdges(agents: OfficeAgentModel[]): OfficeCollaborationEdge[] {
   const byRole = new Map(agents.map((agent) => [agent.roleId, agent]));
   const edgeMap = new Map<string, OfficeCollaborationEdge>();
 
@@ -635,7 +635,7 @@ function deriveCollaborationEdges(agents: OfficeAgentModel[]): OfficeCollaborati
     .slice(0, MAX_VISIBLE_COLLAB_EDGES);
 }
 
-function resolveEventRoleId(event: RealtimeEvent, runtimeLookup: Map<string, string>): string | undefined {
+export function resolveEventRoleId(event: RealtimeEvent, runtimeLookup: Map<string, string>): string | undefined {
   const payload = asRecord(event.payload);
   const activity = asRecord(payload.activity);
   const session = asRecord(payload.session);
@@ -665,7 +665,7 @@ function resolveEventRoleId(event: RealtimeEvent, runtimeLookup: Map<string, str
   return undefined;
 }
 
-function describeAgentEvent(event: RealtimeEvent): {
+export function describeAgentEvent(event: RealtimeEvent): {
   action: string;
   thought: string;
   taskId?: string;
@@ -807,7 +807,7 @@ function describeAgentEvent(event: RealtimeEvent): {
 // summarizeEvent, extractTaskId, extractSessionId, attentionLabel, attentionPillClass
 // extracted to ./office/office-page-helpers.ts (Step 10 round 3).
 
-function deriveAttentionLevel(
+export function deriveAttentionLevel(
   agent: Pick<OfficeAgentModel, "risk" | "activityState" | "status">,
 ): OfficeAttentionLevel {
   if (agent.activityState === "alert_response" || agent.risk === "blocked" || agent.risk === "error") {
@@ -819,7 +819,7 @@ function deriveAttentionLevel(
   return "stable";
 }
 
-function deriveBehaviorDirective(
+export function deriveBehaviorDirective(
   agent: Pick<OfficeAgentModel, "risk" | "activityState" | "status">,
   peerCount: number,
 ): string {
@@ -844,7 +844,7 @@ function deriveBehaviorDirective(
   return "Patrol the event rail, preserve context, and be ready to absorb the next signal.";
 }
 
-function deriveCurrentTaskLabel(agent: Pick<OfficeAgentModel, "taskId" | "sessionId" | "status">): string {
+export function deriveCurrentTaskLabel(agent: Pick<OfficeAgentModel, "taskId" | "sessionId" | "status">): string {
   if (agent.taskId) {
     return agent.taskId;
   }
@@ -860,7 +860,7 @@ function deriveCurrentTaskLabel(agent: Pick<OfficeAgentModel, "taskId" | "sessio
   return "Standby slot";
 }
 
-function deriveWorkloadScore(
+export function deriveWorkloadScore(
   agent: Pick<OfficeAgentModel, "status" | "risk" | "activityState" | "attentionLevel">,
   ageMs: number,
   peerCount: number,
@@ -893,7 +893,7 @@ function deriveWorkloadScore(
   return Math.max(0.12, Math.min(1, score));
 }
 
-function buildAgentHandoffs(
+export function buildAgentHandoffs(
   agent: Pick<OfficeAgentModel, "collabPeers" | "eventTrail" | "currentTaskLabel" | "risk">,
   officeAgentNamesByRole: Map<string, string>,
 ): AgentHandoff[] {
@@ -943,7 +943,7 @@ function buildAgentHandoffs(
   return handoffs.slice(0, 4);
 }
 
-function deriveZoneActivityLanes(agents: OfficeAgentModel[]): OfficeZoneActivityLane[] {
+export function deriveZoneActivityLanes(agents: OfficeAgentModel[]): OfficeZoneActivityLane[] {
   const byRole = new Map(agents.map((agent) => [agent.roleId, agent]));
   const lanes = new Map<string, OfficeZoneActivityLane>();
 
@@ -988,7 +988,7 @@ function deriveZoneActivityLanes(agents: OfficeAgentModel[]): OfficeZoneActivity
     .slice(0, MAX_VISIBLE_ZONE_LANES);
 }
 
-function deriveSignalRoutes(agents: OfficeAgentModel[]): OfficeSignalRoute[] {
+export function deriveSignalRoutes(agents: OfficeAgentModel[]): OfficeSignalRoute[] {
   return agents
     .filter((agent) => agent.risk !== "none")
     .map((agent) => {
@@ -1006,7 +1006,7 @@ function deriveSignalRoutes(agents: OfficeAgentModel[]): OfficeSignalRoute[] {
     .slice(0, 6);
 }
 
-function deriveZoneTelemetry(
+export function deriveZoneTelemetry(
   agents: OfficeAgentModel[],
   zoneActivityLanes: OfficeZoneActivityLane[],
 ): OfficeZoneTelemetry[] {
@@ -1059,7 +1059,7 @@ function deriveZoneTelemetry(
   });
 }
 
-function zoneLandmark(zoneId: OfficeZoneId): string {
+export function zoneLandmark(zoneId: OfficeZoneId): string {
   if (zoneId === "command") {
     return "Command spire";
   }
@@ -1075,7 +1075,7 @@ function zoneLandmark(zoneId: OfficeZoneId): string {
   return "Relay gantry";
 }
 
-function zoneArchitectureNote(zoneId: OfficeZoneId, workloadScore: number): string {
+export function zoneArchitectureNote(zoneId: OfficeZoneId, workloadScore: number): string {
   const loadLabel =
     workloadScore >= 0.72 ? "running hot" : workloadScore >= 0.42 ? "holding live pressure" : "idling cool";
   if (zoneId === "command") {
@@ -1123,7 +1123,7 @@ export function describeGoatAssetStatus(assetPack: OfficeAssetPack): {
   };
 }
 
-function scheduleSceneActivation(callback: () => void): () => void {
+export function scheduleSceneActivation(callback: () => void): () => void {
   if (typeof window === "undefined") {
     callback();
     return () => undefined;

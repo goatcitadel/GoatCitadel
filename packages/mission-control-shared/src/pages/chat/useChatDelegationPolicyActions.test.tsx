@@ -290,7 +290,7 @@ function Harness(props: {
 
   const result = useChatDelegationPolicyActions({
     selectedSession,
-    thread: props.thread ?? makeThread(),
+    thread: props.thread === undefined ? makeThread() : props.thread,
     selectedTurnId: "turn-1",
     draft: props.draft ?? "Coordinate the launch research",
     messages: props.messages ?? makeMessages(),
@@ -795,5 +795,44 @@ describe("useChatDelegationPolicyActions", () => {
       expect.objectContaining({ objective: expect.stringContaining("Review the release branch") }),
     );
     expect(latestHarness?.errors).toContain("delegation down");
+  });
+
+  it("accepts role-only delegation without a selected thread and preserves empty-step status fallback", async () => {
+    runChatDelegationMock.mockResolvedValueOnce({
+      runId: "run-empty-steps",
+      taskId: "task-empty-steps",
+      executionPlanId: "plan-empty-steps",
+      steps: [],
+      stitchedOutput: "Delegation completed without recorded steps.",
+    });
+
+    await act(async () => {
+      create(<Harness thread={null} prefs={makePrefs({ subagentPolicy: "off" })} />);
+      await flushEffects();
+    });
+    await act(async () => {
+      latestHarness?.result.setDelegationSuggestion({
+        objective: "Review the empty-step fallback",
+        mode: "parallel",
+        roles: ["Researcher"],
+        rationale: "The backend can finish before step rows hydrate.",
+      } as any);
+      await flushEffects();
+    });
+    await act(async () => {
+      await latestHarness?.result.handleAcceptDelegation();
+    });
+
+    expect(runChatDelegationMock).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        objective: "Review the empty-step fallback",
+        roles: ["Researcher"],
+        mode: "parallel",
+      }),
+    );
+    expect(runChatDelegationMock.mock.calls.at(-1)?.[1]).not.toHaveProperty("steps");
+    expect(latestHarness?.result.activeDelegationRun?.steps).toEqual([]);
+    expect(latestHarness?.result.activeDelegationRun?.status).toBe("running");
   });
 });

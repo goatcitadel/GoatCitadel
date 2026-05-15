@@ -225,5 +225,16 @@ describe("OrchestrationRepository", () => {
         .get<{ count: number }>(run.runId)?.count,
       1,
     );
+
+    assert.deepEqual(
+      repo.listRuns(0).map((item) => item.runId),
+      ["run-cursor"],
+    );
+
+    const internal = repo as unknown as {
+      listRunsStmt: { all: (...args: unknown[]) => unknown };
+    };
+    internal.listRunsStmt = { all: () => [null] };
+    assert.throws(() => repo.listRuns(), /Unexpected orchestration_runs row shape/);
   });
 });

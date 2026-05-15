@@ -1,0 +1,194 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildCompactToolResultMetadata,
+  compactToolResultForTurn,
+  extractPersistableToolArtifactContent,
+  safeSerializeToolResult,
+  summarizeVirtualizedToolResult,
+  type PersistedToolArtifactSummary,
+} from "./chat-agent-tool-result-compaction.js";
+
+describe("chat-agent-tool-result-compaction", () => {
+  it("keeps small textual results inline", () => {
+    expect(extractPersistableToolArtifactContent("browser.fetch", { body: "short" })).toBeUndefined();
+    expect(extractPersistableToolArtifactContent("browser.search", { text: "short" })).toBeUndefined();
+  });
+
+  it("virtualizes large body output with content type, snippet, and summary evidence", () => {
+    const content = "x".repeat(12_001);
+
+    const artifact = extractPersistableToolArtifactContent("browser.fetch", {
+      body: content,
+      bodySnippet: "preview",
+      contentType: "text/html",
+      status: 200,
+    });
+
+    expect(artifact).toMatchObject({
+      content,
+      contentType: "text/html",
+      snippet: "preview",
+      summary: "preview HTTP 200",
+      virtualized: true,
+      compactMode: "textual",
+    });
+  });
+
+  it("uses the body prefix when no body snippet is supplied", () => {
+    const content = "abcdef".repeat(3000);
+
+    expect(extractPersistableToolArtifactContent("browser.fetch", { body: content })).toMatchObject({
+      snippet: content.slice(0, 4000),
+      contentType: undefined,
+    });
+  });
+
+  it("virtualizes large text output as plain text", () => {
+    const content = "result\n".repeat(3000);
+
+    const artifact = extractPersistableToolArtifactContent("shell.exec", {
+      text: content,
+      textSnippet: "stdout preview",
+    });
+
+    expect(artifact).toMatchObject({
+      content,
+      contentType: "text/plain; charset=utf-8",
+      snippet: content.slice(0, 4000),
+      summary: "stdout preview",
+      compactMode: "textual",
+    });
+  });
+
+  it("virtualizes large structured output and ignores circular records", () => {
+    const large = { results: Array.from({ length: 700 }, (_, index) => ({ index, value: "x".repeat(20) })) };
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    expect(safeSerializeToolResult(circular)).toBeUndefined();
+    expect(extractPersistableToolArtifactContent("browser.search", circular)).toBeUndefined();
+    expect(extractPersistableToolArtifactContent("browser.search", large)).toMatchObject({
+      contentType: "application/json; charset=utf-8",
+      summary: "700 results returned.",
+      compactMode: "structured",
+    });
+  });
+
+  it("summarizes preferred diagnostics before falling back to generic artifact wording", () => {
+    expect(summarizeVirtualizedToolResult("browser.fetch", { message: "failed", status: 503 })).toBe("failed HTTP 503");
+    expect(summarizeVirtualizedToolResult("tool.large", {})).toBe(
+      "Stored tool.large output as an artifact to keep live context compact.",
+    );
+  });
+
+  it("keeps scalar metadata and result counts for structured compaction", () => {
+    expect(
+      buildCompactToolResultMetadata({
+        url: "https://example.test",
+        finalUrl: "https://example.test/final",
+        status: 200,
+        browserFailureClass: "none",
+        ignored: { nested: true },
+        results: [{ title: "one" }],
+        fallbackChain: ["primary", "fallback"],
+      }),
+    ).toEqual({
+      url: "https://example.test",
+      finalUrl: "https://example.test/final",
+      status: 200,
+      browserFailureClass: "none",
+      resultCount: 1,
+      fallbackChain: ["primary", "fallback"],
+    });
+  });
+
+  it("compacts textual artifacts without carrying the original body", () => {
+    const compacted = compactToolResultForTurn(
+      {
+        body: "x".repeat(5000),
+        text: "y".repeat(5001),
+        bodySnippet: "body preview",
+        contentType: "text/html",
+      },
+      artifact({ compactMode: "textual", snippet: undefined, contentType: undefined }),
+    );
+
+    expect(compacted.body).toBeUndefined();
+    expect(compacted.text).toBe("y".repeat(4000));
+    expect(compacted.snippet).toBe("body preview");
+    expect(compacted.bodySnippet).toBe("body preview");
+    expect(compacted).toMatchObject({
+      artifactId: "artifact-1",
+      artifactPath: "artifacts/tool-output.json",
+      byteLength: 12001,
+      originalByteLength: 12001,
+      contentType: "text/html",
+      virtualized: true,
+      storedAsArtifact: true,
+    });
+  });
+
+  it("compacts structured artifacts down to metadata and removes text payloads", () => {
+    const compacted = compactToolResultForTurn(
+      {
+        text: "large text",
+        url: "https://example.test",
+        results: [{ title: "one" }, { title: "two" }],
+      },
+      artifact({ compactMode: "structured", snippet: "artifact preview", contentType: "application/json" }),
+    );
+
+    expect(compacted).toEqual({
+      url: "https://example.test",
+      resultCount: 2,
+      artifactId: "artifact-1",
+      artifactPath: "artifacts/tool-output.json",
+      byteLength: 12001,
+      originalByteLength: 12001,
+      contentType: "application/json",
+      snippet: "artifact preview",
+      artifactSummary: "stored summary",
+      virtualized: true,
+      storedAsArtifact: true,
+      bodySnippet: "artifact preview",
+    });
+  });
+
+  it("removes text from structured compaction when artifact snippets fall back to result text", () => {
+    const compacted = compactToolResultForTurn(
+      {
+        text: "structured text",
+        title: "Result",
+      },
+      artifact({ compactMode: "structured", snippet: undefined }),
+    );
+
+    expect(compacted.text).toBeUndefined();
+    expect(compacted.snippet).toBe("structured text");
+    expect(compacted.bodySnippet).toBe("structured text");
+  });
+
+  it("keeps short text on textual compaction when no truncation is needed", () => {
+    const compacted = compactToolResultForTurn(
+      {
+        text: "short text",
+      },
+      artifact({ compactMode: "textual", snippet: undefined }),
+    );
+
+    expect(compacted.text).toBe("short text");
+    expect(compacted.snippet).toBe("short text");
+  });
+});
+
+function artifact(overrides: Partial<PersistedToolArtifactSummary>): PersistedToolArtifactSummary {
+  return {
+    artifactId: "artifact-1",
+    storageRelPath: "artifacts/tool-output.json",
+    byteLength: 12001,
+    summary: "stored summary",
+    virtualized: true,
+    compactMode: "textual",
+    ...overrides,
+  };
+}

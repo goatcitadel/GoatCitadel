@@ -46,6 +46,16 @@ async function flush() {
   });
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("useOpsRuntimeSnapshot", () => {
   let renderer: ReactTestRenderer | null = null;
   let latest: HookValue | null = null;
@@ -239,6 +249,98 @@ describe("useOpsRuntimeSnapshot", () => {
     expect(apiMocks.restartDaemon).toHaveBeenCalledTimes(1);
     expect(apiMocks.fetchDashboardState).toHaveBeenCalledTimes(2);
     expect(latest?.notice).toEqual({ tone: "success", message: "Restarted" });
+    expect(latest?.daemonBusy).toBeNull();
+  });
+
+  it("ignores late load resolution and rejection after unmount", async () => {
+    const lateSuccess = createDeferred<Awaited<ReturnType<typeof apiMocks.fetchDashboardState>>>();
+    apiMocks.fetchDashboardState.mockReturnValueOnce(lateSuccess.promise);
+
+    await act(async () => {
+      renderer = create(
+        <Harness
+          onValue={(value) => {
+            latest = value;
+          }}
+        />,
+      );
+    });
+    const observedBeforeSuccess = latest;
+    act(() => {
+      renderer?.unmount();
+      renderer = null;
+    });
+    await act(async () => {
+      lateSuccess.resolve({
+        timestamp: "2026-04-22T00:00:00.000Z",
+        sessions: [],
+        pendingApprovals: 0,
+        activeSubagents: 0,
+        taskStatusCounts: [],
+        recentEvents: [],
+        dailyCostUsd: 0,
+      });
+      await Promise.resolve();
+    });
+    expect(latest).toBe(observedBeforeSuccess);
+
+    const lateFailure = createDeferred<Awaited<ReturnType<typeof apiMocks.fetchDashboardState>>>();
+    apiMocks.fetchDashboardState.mockReturnValueOnce(lateFailure.promise);
+    await act(async () => {
+      renderer = create(
+        <Harness
+          onValue={(value) => {
+            latest = value;
+          }}
+        />,
+      );
+    });
+    const observedBeforeFailure = latest;
+    act(() => {
+      renderer?.unmount();
+      renderer = null;
+    });
+    await act(async () => {
+      lateFailure.reject(new Error("late dashboard failure"));
+      await Promise.resolve();
+    });
+    expect(latest).toBe(observedBeforeFailure);
+  });
+
+  it("surfaces daemon warnings, clears notices, and reports non-error action failures", async () => {
+    apiMocks.startDaemon.mockResolvedValueOnce({
+      accepted: false,
+      reason: "Already running",
+      status: { running: true, host: "localhost" },
+    });
+    apiMocks.stopDaemon.mockRejectedValueOnce("not an error object");
+    await act(async () => {
+      renderer = create(
+        <Harness
+          onValue={(value) => {
+            latest = value;
+          }}
+        />,
+      );
+    });
+    await flush();
+
+    await act(async () => {
+      await latest?.runDaemonAction("start");
+    });
+    expect(apiMocks.startDaemon).toHaveBeenCalledTimes(1);
+    expect(latest?.notice).toEqual({ tone: "warning", message: "Already running" });
+
+    act(() => {
+      latest?.clearNotice();
+    });
+    expect(latest?.notice).toBeNull();
+
+    await act(async () => {
+      await latest?.runDaemonAction("stop");
+    });
+    expect(apiMocks.stopDaemon).toHaveBeenCalledTimes(1);
+    expect(latest?.notice).toEqual({ tone: "error", message: "Something went wrong." });
     expect(latest?.daemonBusy).toBeNull();
   });
 });

@@ -1108,7 +1108,7 @@ const OPENAI_CODEX_AUTH_HOST = "auth.openai.com";
 const OPENAI_CODEX_MIN_POLL_MS = 1_000;
 const OPENAI_CODEX_DEFAULT_POLL_MS = 5_000;
 
-function createEmptyProviderEditorDraft(): ProviderEditorDraft {
+export function createEmptyProviderEditorDraft(): ProviderEditorDraft {
   return {
     providerId: "",
     label: "",
@@ -1119,7 +1119,7 @@ function createEmptyProviderEditorDraft(): ProviderEditorDraft {
   };
 }
 
-function buildProviderEditorDraft(
+export function buildProviderEditorDraft(
   provider?: {
     providerId: string;
     label: string;
@@ -1140,7 +1140,7 @@ function buildProviderEditorDraft(
   };
 }
 
-function buildChatGptOAuthProviderDraft(): ProviderEditorDraft {
+export function buildChatGptOAuthProviderDraft(): ProviderEditorDraft {
   const template = providerTemplates.find((item) => item.providerId === "openai-codex");
   return {
     providerId: template?.providerId ?? "openai-codex",
@@ -1152,7 +1152,7 @@ function buildChatGptOAuthProviderDraft(): ProviderEditorDraft {
   };
 }
 
-function isTrustedOpenAICodexVerificationUrl(value: string): boolean {
+export function isTrustedOpenAICodexVerificationUrl(value: string): boolean {
   try {
     const url = new URL(value);
     return url.protocol === "https:" && url.hostname === OPENAI_CODEX_AUTH_HOST;
@@ -1161,13 +1161,13 @@ function isTrustedOpenAICodexVerificationUrl(value: string): boolean {
   }
 }
 
-function normalizeOpenAICodexPollDelayMs(value: unknown): number {
+export function normalizeOpenAICodexPollDelayMs(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.max(value, OPENAI_CODEX_MIN_POLL_MS)
     : OPENAI_CODEX_DEFAULT_POLL_MS;
 }
 
-function isStoredOpenAICodexOAuthFlow(value: unknown): value is OpenAICodexDeviceStartResponse {
+export function isStoredOpenAICodexOAuthFlow(value: unknown): value is OpenAICodexDeviceStartResponse {
   const candidate = value as OpenAICodexDeviceStartResponse;
   const expiresAt = Date.parse(candidate?.expiresAt);
   const userCode = candidate?.userCode;
@@ -1187,7 +1187,7 @@ function isStoredOpenAICodexOAuthFlow(value: unknown): value is OpenAICodexDevic
   );
 }
 
-function removeStoredOpenAICodexOAuthFlow(storage: Storage | undefined): void {
+export function removeStoredOpenAICodexOAuthFlow(storage: Storage | undefined): void {
   try {
     storage?.removeItem(OPENAI_CODEX_OAUTH_FLOW_STORAGE_KEY);
   } catch {
@@ -1203,7 +1203,9 @@ function getBrowserStorage(kind: "localStorage" | "sessionStorage"): Storage | u
   }
 }
 
-function readStoredOpenAICodexOAuthFlowFrom(storage: Storage | undefined): OpenAICodexDeviceStartResponse | null {
+export function readStoredOpenAICodexOAuthFlowFrom(
+  storage: Storage | undefined,
+): OpenAICodexDeviceStartResponse | null {
   try {
     const raw = storage?.getItem(OPENAI_CODEX_OAUTH_FLOW_STORAGE_KEY);
     if (!raw) {
@@ -1221,13 +1223,13 @@ function readStoredOpenAICodexOAuthFlowFrom(storage: Storage | undefined): OpenA
   }
 }
 
-function readStoredOpenAICodexOAuthFlow(): OpenAICodexDeviceStartResponse | null {
+export function readStoredOpenAICodexOAuthFlow(): OpenAICodexDeviceStartResponse | null {
   const sessionFlow = readStoredOpenAICodexOAuthFlowFrom(getBrowserStorage("sessionStorage"));
   const localFlow = readStoredOpenAICodexOAuthFlowFrom(getBrowserStorage("localStorage"));
   return sessionFlow ?? localFlow;
 }
 
-function writeStoredOpenAICodexOAuthFlow(flow: OpenAICodexDeviceStartResponse): void {
+export function writeStoredOpenAICodexOAuthFlow(flow: OpenAICodexDeviceStartResponse): void {
   try {
     getBrowserStorage("localStorage")?.setItem(OPENAI_CODEX_OAUTH_FLOW_STORAGE_KEY, JSON.stringify(flow));
     getBrowserStorage("sessionStorage")?.setItem(OPENAI_CODEX_OAUTH_FLOW_STORAGE_KEY, JSON.stringify(flow));
@@ -1236,12 +1238,12 @@ function writeStoredOpenAICodexOAuthFlow(flow: OpenAICodexDeviceStartResponse): 
   }
 }
 
-function clearStoredOpenAICodexOAuthFlow(): void {
+export function clearStoredOpenAICodexOAuthFlow(): void {
   removeStoredOpenAICodexOAuthFlow(getBrowserStorage("localStorage"));
   removeStoredOpenAICodexOAuthFlow(getBrowserStorage("sessionStorage"));
 }
 
-function formatOpenAICodexOAuthExpiry(flow: OpenAICodexDeviceStartResponse | null): string | null {
+export function formatOpenAICodexOAuthExpiry(flow: OpenAICodexDeviceStartResponse | null): string | null {
   if (!flow) {
     return null;
   }
@@ -1256,12 +1258,14 @@ function formatOpenAICodexOAuthExpiry(flow: OpenAICodexDeviceStartResponse | nul
   return `${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
 
-function isLikelyLocalProviderBaseUrl(baseUrl: string | undefined): boolean {
+export function isLikelyLocalProviderBaseUrl(baseUrl: string | undefined): boolean {
   const normalized = (baseUrl ?? "").trim().toLowerCase();
   return /https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(normalized);
 }
 
-function formatProviderProbeStateLabel(value?: "not_checked" | "ready" | "fallback" | "empty" | "error"): string {
+export function formatProviderProbeStateLabel(
+  value?: "not_checked" | "ready" | "fallback" | "empty" | "error",
+): string {
   switch (value) {
     case "ready":
       return "Verified";
@@ -1276,7 +1280,7 @@ function formatProviderProbeStateLabel(value?: "not_checked" | "ready" | "fallba
   }
 }
 
-function formatProviderProbeSourceMeta(provider?: {
+export function formatProviderProbeSourceMeta(provider?: {
   modelProbeState?: "not_checked" | "ready" | "fallback" | "empty" | "error";
   modelProbeSource?: "live" | "template_fallback" | "error_fallback";
   modelProbeCheckedAt?: string;
@@ -1296,7 +1300,7 @@ function formatProviderProbeSourceMeta(provider?: {
   return formatCheckedAtLabel(provider.modelProbeCheckedAt);
 }
 
-function formatCheckedAtLabel(value?: string): string {
+export function formatCheckedAtLabel(value?: string): string {
   if (!value) {
     return "Not checked yet";
   }
@@ -1307,7 +1311,7 @@ function formatCheckedAtLabel(value?: string): string {
   return `Checked ${parsed.toLocaleString()}`;
 }
 
-function formatProviderCredentialLabel(
+export function formatProviderCredentialLabel(
   providerId: string,
   hasApiKey: boolean | undefined,
   codexOAuthStatus: OpenAICodexOAuthStatus | null,
@@ -5922,7 +5926,7 @@ function DiagnosticsPanel({ report }: { report: ConnectorDiagnosticReport }) {
   );
 }
 
-function collectDefinitionFieldHints(definition: ChannelSetupDefinition) {
+export function collectDefinitionFieldHints(definition: ChannelSetupDefinition) {
   const fields = definition.wizard.steps.flatMap((step) => step.fields ?? []);
   return fields.slice(0, 10).map((field) => ({
     label: field.label,
@@ -5931,7 +5935,7 @@ function collectDefinitionFieldHints(definition: ChannelSetupDefinition) {
   }));
 }
 
-function matchesToolGrant(grant: ToolGrantRecord, toolName: string) {
+export function matchesToolGrant(grant: ToolGrantRecord, toolName: string) {
   if (grant.toolPattern === toolName) {
     return true;
   }
@@ -5941,7 +5945,7 @@ function matchesToolGrant(grant: ToolGrantRecord, toolName: string) {
   return false;
 }
 
-function parseJsonObject(value: string, fallback: Record<string, unknown> = {}) {
+export function parseJsonObject(value: string, fallback: Record<string, unknown> = {}) {
   const trimmed = value.trim();
   if (!trimmed) {
     return fallback;
@@ -5953,21 +5957,21 @@ function parseJsonObject(value: string, fallback: Record<string, unknown> = {}) 
   return parsed as Record<string, unknown>;
 }
 
-function splitCommaList(value: string) {
+export function splitCommaList(value: string) {
   return value
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
 }
 
-function splitLineList(value: string) {
+export function splitLineList(value: string) {
   return value
     .split(/\r?\n/)
     .map((item) => item.trim())
     .filter(Boolean);
 }
 
-function deriveSetupCenterItems(onboarding: OnboardingState): Array<{
+export function deriveSetupCenterItems(onboarding: OnboardingState): Array<{
   label: string;
   description: string;
   state: SettingsWizardStepState;
@@ -6011,14 +6015,16 @@ function deriveSetupCenterItems(onboarding: OnboardingState): Array<{
   ];
 }
 
-function wizardStateForChecklist(status?: OnboardingState["checklist"][number]["status"]): SettingsWizardStepState {
+export function wizardStateForChecklist(
+  status?: OnboardingState["checklist"][number]["status"],
+): SettingsWizardStepState {
   if (status === "complete") {
     return "complete";
   }
   return status === "needs_input" ? "active" : "pending";
 }
 
-function setupMeta(status?: OnboardingState["checklist"][number]["status"]): string {
+export function setupMeta(status?: OnboardingState["checklist"][number]["status"]): string {
   if (status === "complete") {
     return "Pass";
   }
@@ -6028,11 +6034,11 @@ function setupMeta(status?: OnboardingState["checklist"][number]["status"]): str
   return "Optional";
 }
 
-function normalizeToolApprovalMode(value: string | undefined): ToolApprovalMode {
+export function normalizeToolApprovalMode(value: string | undefined): ToolApprovalMode {
   return TOOL_APPROVAL_MODE_OPTIONS.includes(value as ToolApprovalMode) ? (value as ToolApprovalMode) : "approve_risky";
 }
 
-function describeToolApprovalMode(value: ToolApprovalMode): string {
+export function describeToolApprovalMode(value: ToolApprovalMode): string {
   if (value === "approve_all") {
     return "Ask every time";
   }
@@ -6042,13 +6048,13 @@ function describeToolApprovalMode(value: ToolApprovalMode): string {
   return "Ask for risky work";
 }
 
-function normalizeBudgetMode(value: string | undefined): OnboardingState["settings"]["budgetMode"] {
+export function normalizeBudgetMode(value: string | undefined): OnboardingState["settings"]["budgetMode"] {
   return BUDGET_MODE_OPTIONS.includes(value as OnboardingState["settings"]["budgetMode"])
     ? (value as OnboardingState["settings"]["budgetMode"])
     : "balanced";
 }
 
-function applyIntegrationDefaults(
+export function applyIntegrationDefaults(
   schema: IntegrationFormSchema,
   current: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -6063,21 +6069,24 @@ function applyIntegrationDefaults(
   );
 }
 
-function isRuntimeInvokableMcpServer(server: { transport: string; url?: string }) {
+export function isRuntimeInvokableMcpServer(server: { transport: string; url?: string }) {
   return server.transport === "stdio" || server.url?.trim().toLowerCase() === INTERNAL_APPROVAL_INBOX_URL;
 }
 
-function readDraftString(record: Record<string, unknown>, key: string): string | undefined {
+export function readDraftString(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function readConnectionConfigString(record: Record<string, unknown> | undefined, key: string): string | undefined {
+export function readConnectionConfigString(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
   const value = record?.[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function preferredChannelDefinition(definitions: ChannelSetupDefinition[]): ChannelSetupDefinition | undefined {
+export function preferredChannelDefinition(definitions: ChannelSetupDefinition[]): ChannelSetupDefinition | undefined {
   return (
     definitions.find((item) => item.catalog.catalogId === "channel.slack") ??
     definitions.find((item) => item.catalog.catalogId === "channel.telegram") ??
@@ -6085,15 +6094,15 @@ function preferredChannelDefinition(definitions: ChannelSetupDefinition[]): Chan
   );
 }
 
-function delay(ms: number): Promise<void> {
+export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-function formatJson(value: Record<string, unknown>) {
+export function formatJson(value: Record<string, unknown>) {
   return JSON.stringify(value, null, 2);
 }
 
-function formatCapabilities(
+export function formatCapabilities(
   capabilities:
     | {
         vision?: boolean;
@@ -6120,11 +6129,11 @@ function formatCapabilities(
   return enabled.length ? enabled.join(", ") : "No advertised capabilities";
 }
 
-function getErrorMessage(error: unknown) {
+export function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong.";
 }
 
-function deriveLlamaCppAlias(input: string) {
+export function deriveLlamaCppAlias(input: string) {
   const trimmed = input.trim();
   if (!trimmed) {
     return "";
@@ -6133,7 +6142,7 @@ function deriveLlamaCppAlias(input: string) {
   return filename.replace(/\.(gguf|bin)$/i, "") || trimmed;
 }
 
-function createEmptyPersonalityEditorDraft(): PersonalityEditorDraft {
+export function createEmptyPersonalityEditorDraft(): PersonalityEditorDraft {
   return {
     id: "",
     label: "",
@@ -6146,7 +6155,7 @@ function createEmptyPersonalityEditorDraft(): PersonalityEditorDraft {
   };
 }
 
-function createPersonalityEditorDraft(personality: PersonalityPreset | null): PersonalityEditorDraft {
+export function createPersonalityEditorDraft(personality: PersonalityPreset | null): PersonalityEditorDraft {
   if (!personality) {
     return createEmptyPersonalityEditorDraft();
   }
@@ -6162,7 +6171,7 @@ function createPersonalityEditorDraft(personality: PersonalityPreset | null): Pe
   };
 }
 
-function personalityDraftToMutationInput(draft: PersonalityEditorDraft) {
+export function personalityDraftToMutationInput(draft: PersonalityEditorDraft) {
   return {
     id: draft.id.trim() || undefined,
     label: draft.label.trim(),
@@ -6175,7 +6184,7 @@ function personalityDraftToMutationInput(draft: PersonalityEditorDraft) {
   };
 }
 
-function formatPersonalityStatus(personality: PersonalityPreset, defaultPersonalityId: string): string {
+export function formatPersonalityStatus(personality: PersonalityPreset, defaultPersonalityId: string): string {
   const tags = [personality.builtin ? "Built-in" : "Custom"];
   if (personality.modified) {
     tags.push("Modified");
@@ -6189,14 +6198,14 @@ function formatPersonalityStatus(personality: PersonalityPreset, defaultPersonal
   return tags.join(" · ");
 }
 
-function formatPersonalityCategoryLabel(category: PersonalityPresetCategory): string {
+export function formatPersonalityCategoryLabel(category: PersonalityPresetCategory): string {
   return category
     .split("_")
     .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
     .join(" ");
 }
 
-function normalizePersonalityEditorId(input: string | undefined): string {
+export function normalizePersonalityEditorId(input: string | undefined): string {
   return (
     input
       ?.trim()
@@ -6206,7 +6215,7 @@ function normalizePersonalityEditorId(input: string | undefined): string {
   );
 }
 
-function formatDateTime(value?: string | null) {
+export function formatDateTime(value?: string | null) {
   if (!value) {
     return "Unknown";
   }
@@ -6250,7 +6259,7 @@ function iconForSettingsSection(section: string) {
   }
 }
 
-function labelForSettingsSection(section: string) {
+export function labelForSettingsSection(section: string) {
   switch (section) {
     case "general":
       return "General";
@@ -6283,7 +6292,7 @@ function labelForSettingsSection(section: string) {
   }
 }
 
-function descriptionForSettingsSection(section: string) {
+export function descriptionForSettingsSection(section: string) {
   switch (section) {
     case "general":
       return "Focused next-native settings instead of placeholder summaries.";

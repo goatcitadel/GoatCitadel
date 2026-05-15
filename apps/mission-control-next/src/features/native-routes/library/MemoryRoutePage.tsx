@@ -700,7 +700,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   );
 }
 
-function readMemoryWriteDecision(envelope: EvidenceEnvelope): string {
+export function readMemoryWriteDecision(envelope: EvidenceEnvelope): string {
   const metadata = asRecord(envelope.metadata);
   const decision = metadata?.decision;
   if (!decision || typeof decision !== "object" || Array.isArray(decision)) {
@@ -745,12 +745,12 @@ function MemoryProvenancePanel({ item, writeEnvelopeCount }: { item: MemoryItemR
   );
 }
 
-function readMetadataString(metadata: unknown, key: string): string | undefined {
+export function readMetadataString(metadata: unknown, key: string): string | undefined {
   const value = asRecord(metadata)?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
+export function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 

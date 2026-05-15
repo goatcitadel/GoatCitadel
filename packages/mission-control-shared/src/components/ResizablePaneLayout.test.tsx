@@ -282,4 +282,85 @@ describe("ResizablePaneLayout", () => {
     expect(rootMock.querySelector).toHaveBeenCalledWith(":scope > .reflex-container");
     expect(window.localStorage.setItem).not.toHaveBeenCalled();
   });
+
+  it("uses the inert fallback when browser storage is unavailable", async () => {
+    const { ResizablePaneLayout } = await loadLayout("development");
+
+    const renderer = create(
+      <ResizablePaneLayout
+        panes={[
+          { id: "left", children: "Left" },
+          { id: "right", children: "Right" },
+        ]}
+        storageKey="workbench"
+      />,
+    );
+
+    expect(String(renderer.root.findByType("div").props.className)).toContain("gc-resizable-layout-fallback");
+  });
+
+  it("persists only positive measured panes and ignores zero-sized layouts", async () => {
+    const storage = installWindow();
+    const { ResizablePaneLayout } = await loadLayout("development");
+    const sparseRootMock = {
+      querySelector: vi.fn(() => ({
+        children: [new FakeHTMLElement(["gc-resizable-pane"], 40)],
+      })),
+    };
+
+    const sparseRenderer = create(
+      <ResizablePaneLayout
+        panes={[
+          { id: "left", children: "Left" },
+          { id: "right", children: "Right" },
+        ]}
+        storageKey="workbench"
+      />,
+      {
+        createNodeMock: (element) => {
+          if (element.type === "div" && String(element.props.className).includes("gc-resizable-layout")) {
+            return sparseRootMock;
+          }
+          return null;
+        },
+      },
+    );
+
+    act(() => {
+      sparseRenderer.root.findAllByProps({ className: "gc-resizable-pane" })[0]!.props.onStopResize();
+    });
+    expect(JSON.parse(storage.get("goatcitadel.layout.workbench") ?? "{}")).toEqual({
+      version: 3,
+      panes: { left: 1 },
+    });
+
+    vi.mocked(window.localStorage.setItem).mockClear();
+    const zeroRootMock = {
+      querySelector: vi.fn(() => ({
+        children: [new FakeHTMLElement(["gc-resizable-pane"], 0), new FakeHTMLElement(["gc-resizable-pane"], 0)],
+      })),
+    };
+    const zeroRenderer = create(
+      <ResizablePaneLayout
+        panes={[
+          { id: "left", children: "Left" },
+          { id: "right", children: "Right" },
+        ]}
+        storageKey="zero"
+      />,
+      {
+        createNodeMock: (element) => {
+          if (element.type === "div" && String(element.props.className).includes("gc-resizable-layout")) {
+            return zeroRootMock;
+          }
+          return null;
+        },
+      },
+    );
+
+    act(() => {
+      zeroRenderer.root.findAllByProps({ className: "gc-resizable-pane" })[0]!.props.onStopResize();
+    });
+    expect(window.localStorage.setItem).not.toHaveBeenCalled();
+  });
 });

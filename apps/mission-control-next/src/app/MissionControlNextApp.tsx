@@ -811,7 +811,7 @@ export function MissionControlNextApp() {
   );
 }
 
-function renderRouteContent(input: {
+export function renderRouteContent(input: {
   route: AppRoute;
   activeWorkspaceId: string;
   activeWorkspaceName: string;
@@ -920,7 +920,7 @@ function renderRouteContent(input: {
   return <LazyNativeRoutePages {...input} route={route} />;
 }
 
-function RouteSurfaceFallback({ label, description }: { label: string; description: string }) {
+export function RouteSurfaceFallback({ label, description }: { label: string; description: string }) {
   return (
     <section className="mc-next-route-fallback" aria-live="polite">
       <BlocksShuffleLoader label={`Loading ${label}`} />
@@ -930,7 +930,7 @@ function RouteSurfaceFallback({ label, description }: { label: string; descripti
   );
 }
 
-function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSection[] {
+export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSection[] {
   if (area === "settings") {
     return [
       {
@@ -1025,11 +1025,11 @@ function StatusPill({ icon, label, value }: { icon: ReactNode; label: string; va
   );
 }
 
-function resolveShellThemeClass(theme: "dark" | "light"): "theme-signal-noir" | "theme-citadel-light" {
+export function resolveShellThemeClass(theme: "dark" | "light"): "theme-signal-noir" | "theme-citadel-light" {
   return theme === "light" ? "theme-citadel-light" : "theme-signal-noir";
 }
 
-function describeRealtimeTruthUi(
+export function describeRealtimeTruthUi(
   streamState: EventStreamConnectionState,
   truthMode: RealtimeTruthMode,
 ): {
@@ -1083,11 +1083,11 @@ function describeRealtimeTruthUi(
   };
 }
 
-function isImmersiveRoute(route: AppRoute): boolean {
+export function isImmersiveRoute(route: AppRoute): boolean {
   return route.area === "library" && route.section === "prompt-packs";
 }
 
-function usesEmbeddedRouteHeader(route: AppRoute): boolean {
+export function usesEmbeddedRouteHeader(route: AppRoute): boolean {
   return (
     route.area === "library" ||
     route.area === "projects" ||
@@ -1097,7 +1097,7 @@ function usesEmbeddedRouteHeader(route: AppRoute): boolean {
   );
 }
 
-function formatUsd(value: number): string {
+export function formatUsd(value: number): string {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",

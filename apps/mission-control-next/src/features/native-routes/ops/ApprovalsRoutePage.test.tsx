@@ -267,6 +267,7 @@ describe("ApprovalsRoutePage", () => {
     });
 
     await act(async () => {
+      findButton(renderer!.root, "Pending").props.onClick();
       findButton(renderer!.root, "History").props.onClick();
       findButton(renderer!.root, "Recovery").props.onClick();
       findButton(renderer!.root, "tool.invoke").props.onClick();
@@ -278,6 +279,7 @@ describe("ApprovalsRoutePage", () => {
       findButton(renderer!.root, "Refresh trace detail").props.onClick();
     });
 
+    expect(approvalHarness.setView).toHaveBeenCalledWith("pending");
     expect(approvalHarness.setView).toHaveBeenCalledWith("history");
     expect(approvalHarness.setView).toHaveBeenCalledWith("recovery");
     expect(approvalHarness.setSelectedApprovalId).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
@@ -305,7 +307,15 @@ describe("ApprovalsRoutePage", () => {
     const modal = renderer!.root.findByType(ConfirmModal);
     expect(modal.props.open).toBe(true);
     await act(async () => {
-      await modal.props.onConfirm();
+      modal.props.onCancel();
+    });
+    expect(renderer!.root.findByType(ConfirmModal).props.open).toBe(false);
+
+    await act(async () => {
+      findButton(renderer!.root, "Reject all pending").props.onClick();
+    });
+    await act(async () => {
+      await renderer!.root.findByType(ConfirmModal).props.onConfirm();
     });
     expect(approvalHarness.onRejectAllPending).toHaveBeenCalledTimes(1);
   });

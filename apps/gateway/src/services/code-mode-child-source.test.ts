@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CODE_MODE_CHILD_SOURCE } from "./code-mode-child-source.js";
 
 const TEMP_ROOTS: string[] = [];
+const CHILD_CLOSES = new WeakMap<ChildProcess, Promise<CloseResult>>();
 
 async function createHarnessPath(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "goat-code-mode-child-"));
@@ -166,7 +167,10 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
       },
     });
 
-    await waitForChildMessage(child, (message) => isCapabilityInvoke(message) && message.params?.wrapperName === "fs.read");
+    await waitForChildMessage(
+      child,
+      (message) => isCapabilityInvoke(message) && message.params?.wrapperName === "fs.read",
+    );
 
     child.send({
       jsonrpc: "2.0",
@@ -226,10 +230,17 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
 
 async function spawnHarness(): Promise<ChildProcess> {
   const harnessPath = await createHarnessPath();
-  return spawn(process.execPath, [harnessPath], {
+  const child = spawn(process.execPath, [harnessPath], {
     shell: false,
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
+  CHILD_CLOSES.set(
+    child,
+    new Promise((resolve) => {
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    }),
+  );
+  return child;
 }
 
 function waitForChildMessage(
@@ -274,7 +285,13 @@ function waitForChildMessage(
   });
 }
 
-function waitForClose(child: ChildProcess): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+type CloseResult = { code: number | null; signal: NodeJS.Signals | null };
+
+function waitForClose(child: ChildProcess): Promise<CloseResult> {
+  const trackedClose = CHILD_CLOSES.get(child);
+  if (trackedClose) {
+    return trackedClose;
+  }
   return new Promise((resolve, reject) => {
     child.once("close", (code, signal) => resolve({ code, signal }));
     child.once("error", reject);
@@ -299,6 +316,10 @@ function isResponseMessage(message: JsonRpcMessage): message is JsonRpcMessage &
 
 function isCapabilityInvoke(
   message: JsonRpcMessage,
-): message is JsonRpcMessage & { id: string; method: "capability.invoke"; params: { wrapperName: string; deadlineAt?: number } } {
+): message is JsonRpcMessage & {
+  id: string;
+  method: "capability.invoke";
+  params: { wrapperName: string; deadlineAt?: number };
+} {
   return typeof message.id === "string" && message.method === "capability.invoke" && typeof message.params === "object";
 }

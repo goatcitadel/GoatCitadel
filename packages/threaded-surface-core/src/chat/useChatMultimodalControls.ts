@@ -60,7 +60,7 @@ function blobToBase64(blob: Blob): Promise<string> {
       const comma = result.indexOf(",");
       resolve(comma >= 0 ? result.slice(comma + 1) : result);
     };
-    reader.onerror = () => reject(new Error("Unable to read binary content."));
+    reader.onerror = reject.bind(null, new Error("Unable to read binary content."));
     reader.readAsDataURL(blob);
   });
 }

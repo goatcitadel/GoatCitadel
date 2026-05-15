@@ -408,4 +408,211 @@ describe("comms routes", () => {
     expect(response.statusCode).toBe(200);
     expect(runIntegrationConnectionDiagnostics).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
   });
+
+  it("rejects malformed comms payloads before invoking channel services", async () => {
+    const methods = {
+      listChannelDeliveryRuntime: vi.fn(),
+      commsSend: vi.fn(),
+      commsReply: vi.fn(),
+      commsReact: vi.fn(),
+      commsUnsend: vi.fn(),
+      commsTyping: vi.fn(),
+      commsGmailRead: vi.fn(),
+      commsCalendarList: vi.fn(),
+    };
+    app = Fastify();
+    decorateComms(app, methods);
+    await app.register(commsRoutes);
+
+    const cases = [
+      { method: "GET", url: "/api/v1/comms/deliveries?limit=500" },
+      {
+        method: "POST",
+        url: "/api/v1/comms/send",
+        payload: { connectionId: "11111111-1111-4111-8111-111111111111", target: "channel:123", message: "   " },
+      },
+      {
+        method: "POST",
+        url: "/api/v1/comms/reply",
+        payload: {
+          connectionId: "11111111-1111-4111-8111-111111111111",
+          target: "channel:123",
+          replyToMessageId: "msg-1",
+          message: "",
+        },
+      },
+      {
+        method: "POST",
+        url: "/api/v1/comms/react",
+        payload: { connectionId: "not-a-uuid", messageId: "", reaction: "" },
+      },
+      {
+        method: "POST",
+        url: "/api/v1/comms/unsend",
+        payload: { connectionId: "not-a-uuid", messageId: "" },
+      },
+      {
+        method: "POST",
+        url: "/api/v1/comms/typing",
+        payload: {
+          connectionId: "11111111-1111-4111-8111-111111111111",
+          target: "channel:123",
+          durationMs: 120_000,
+        },
+      },
+      {
+        method: "POST",
+        url: "/api/v1/comms/gmail/read",
+        payload: { connectionId: "not-a-uuid", maxResults: 101 },
+      },
+      {
+        method: "POST",
+        url: "/api/v1/comms/calendar/list",
+        payload: { connectionId: "not-a-uuid", maxResults: 500 },
+      },
+      {
+        method: "POST",
+        url: "/api/v1/comms/calendar/create",
+        payload: {
+          connectionId: "11111111-1111-4111-8111-111111111111",
+          title: "Review",
+          startIso: "not-a-date",
+          endIso: "also-not-a-date",
+        },
+      },
+    ] as const;
+
+    for (const item of cases) {
+      const response = await app.inject(item);
+      expect(response.statusCode).toBe(400);
+    }
+
+    for (const method of Object.values(methods)) {
+      expect(method).not.toHaveBeenCalled();
+    }
+  });
+
+  it("normalizes comms lookup failures into not-found and conflict responses", async () => {
+    app = Fastify();
+    decorateComms(app, {
+      getIntegrationConnectionChannelCapabilities: vi
+        .fn()
+        .mockImplementationOnce(() => {
+          throw new Error("unknown integration connection conn-1");
+        })
+        .mockImplementationOnce(() => {
+          throw new Error("capability probe failed");
+        }),
+      getIntegrationConnectionChannelRuntimeStatus: vi.fn(() => {
+        throw new Error("runtime probe failed");
+      }),
+      runIntegrationConnectionDiagnostics: vi.fn(async () => {
+        throw new Error("unknown integration connection conn-1");
+      }),
+    });
+    await app.register(commsRoutes);
+
+    const invalidParams = await app.inject({
+      method: "GET",
+      url: "/api/v1/comms/capabilities/not-a-uuid",
+    });
+    expect(invalidParams.statusCode).toBe(400);
+
+    const notFound = await app.inject({
+      method: "GET",
+      url: "/api/v1/comms/capabilities/11111111-1111-4111-8111-111111111111",
+    });
+    expect(notFound.statusCode).toBe(404);
+
+    const conflict = await app.inject({
+      method: "GET",
+      url: "/api/v1/comms/capabilities/11111111-1111-4111-8111-111111111111",
+    });
+    expect(conflict.statusCode).toBe(409);
+
+    const runtimeConflict = await app.inject({
+      method: "GET",
+      url: "/api/v1/comms/runtime/11111111-1111-4111-8111-111111111111",
+    });
+    expect(runtimeConflict.statusCode).toBe(409);
+
+    const diagnosticsNotFound = await app.inject({
+      method: "GET",
+      url: "/api/v1/comms/diagnostics/11111111-1111-4111-8111-111111111111",
+    });
+    expect(diagnosticsNotFound.statusCode).toBe(404);
+  });
+
+  it("forwards remaining successful comms productivity requests", async () => {
+    const commsGmailRead = vi.fn(async () => ({ messages: [] }));
+    const commsGmailSend = vi.fn(async () => ({ messageId: "gmail-1" }));
+    const commsCalendarList = vi.fn(async () => ({ items: [] }));
+    app = Fastify();
+    decorateComms(app, { commsGmailRead, commsGmailSend, commsCalendarList });
+    await app.register(commsRoutes);
+
+    const gmailRead = await app.inject({
+      method: "POST",
+      url: "/api/v1/comms/gmail/read",
+      payload: {
+        connectionId: "11111111-1111-4111-8111-111111111111",
+        query: "from:ops@example.test",
+        maxResults: 10,
+      },
+    });
+    expect(gmailRead.statusCode).toBe(200);
+    expect(commsGmailRead).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "from:ops@example.test", maxResults: 10 }),
+    );
+
+    const gmailSend = await app.inject({
+      method: "POST",
+      url: "/api/v1/comms/gmail/send",
+      payload: {
+        connectionId: "11111111-1111-4111-8111-111111111111",
+        to: ["ops@example.test"],
+        subject: "Status",
+        bodyText: "Ready",
+      },
+    });
+    expect(gmailSend.statusCode).toBe(200);
+    expect(commsGmailSend).toHaveBeenCalledWith(expect.objectContaining({ subject: "Status" }));
+
+    const calendarList = await app.inject({
+      method: "POST",
+      url: "/api/v1/comms/calendar/list",
+      payload: {
+        connectionId: "11111111-1111-4111-8111-111111111111",
+        fromIso: "2026-03-05T10:00:00.000Z",
+        toIso: "2026-03-05T11:00:00.000Z",
+      },
+    });
+    expect(calendarList.statusCode).toBe(200);
+    expect(commsCalendarList).toHaveBeenCalledWith(expect.objectContaining({ fromIso: "2026-03-05T10:00:00.000Z" }));
+  });
+
+  it("rejects malformed runtime and diagnostics params before service lookup", async () => {
+    const getIntegrationConnectionChannelRuntimeStatus = vi.fn();
+    const runIntegrationConnectionDiagnostics = vi.fn();
+    app = Fastify();
+    decorateComms(app, {
+      getIntegrationConnectionChannelRuntimeStatus,
+      runIntegrationConnectionDiagnostics,
+    });
+    await app.register(commsRoutes);
+
+    const runtime = await app.inject({
+      method: "GET",
+      url: "/api/v1/comms/runtime/not-a-uuid",
+    });
+    expect(runtime.statusCode).toBe(400);
+
+    const diagnostics = await app.inject({
+      method: "GET",
+      url: "/api/v1/comms/diagnostics/not-a-uuid",
+    });
+    expect(diagnostics.statusCode).toBe(400);
+    expect(getIntegrationConnectionChannelRuntimeStatus).not.toHaveBeenCalled();
+    expect(runIntegrationConnectionDiagnostics).not.toHaveBeenCalled();
+  });
 });

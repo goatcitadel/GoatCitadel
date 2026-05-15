@@ -20,6 +20,7 @@ import { StatusChip } from "../components/StatusChip";
 import { CardSkeleton } from "../components/CardSkeleton";
 import { pageCopy } from "../content/copy";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
+import { formatDashboardBytes } from "./dashboard-page-helpers";
 
 type DashboardTab = "approvals" | "tasks" | "sessions" | "settings" | "integrations" | "office" | "chat";
 
@@ -267,12 +268,12 @@ export function DashboardPage({ onNavigate }: { onNavigate?: (tab: DashboardTab)
               </div>
               <div>
                 <p className="dashboard-vitals-label">Memory used</p>
-                <p className="dashboard-vitals-value">{formatBytes(vitals.memoryUsedBytes)}</p>
-                <FieldHelp>{formatBytes(vitals.memoryTotalBytes)} total</FieldHelp>
+                <p className="dashboard-vitals-value">{formatDashboardBytes(vitals.memoryUsedBytes)}</p>
+                <FieldHelp>{formatDashboardBytes(vitals.memoryTotalBytes)} total</FieldHelp>
               </div>
               <div>
                 <p className="dashboard-vitals-label">Process RSS</p>
-                <p className="dashboard-vitals-value">{formatBytes(vitals.processRssBytes)}</p>
+                <p className="dashboard-vitals-value">{formatDashboardBytes(vitals.processRssBytes)}</p>
               </div>
               <div>
                 <p className="dashboard-vitals-label">Memory artifacts</p>
@@ -395,17 +396,4 @@ export function DashboardPage({ onNavigate }: { onNavigate?: (tab: DashboardTab)
       />
     </section>
   );
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024 * 1024) {
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-  }
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-  }
-  if (bytes >= 1024) {
-    return `${(bytes / 1024).toFixed(2)} KB`;
-  }
-  return `${bytes} B`;
 }

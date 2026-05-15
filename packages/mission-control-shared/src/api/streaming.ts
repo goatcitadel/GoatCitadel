@@ -116,7 +116,7 @@ function createAbortError(): Error {
 }
 
 function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException
+  return typeof DOMException === "function" && error instanceof DOMException
     ? error.name === "AbortError"
     : typeof error === "object" &&
         error !== null &&

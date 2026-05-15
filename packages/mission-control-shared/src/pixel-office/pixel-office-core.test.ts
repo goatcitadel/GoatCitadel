@@ -402,6 +402,90 @@ describe("pixel office core modules", () => {
     expect(getOrientationInGroup("BOOKSHELF")).toBeUndefined();
   });
 
+  it("keeps two-way rotations and powered rotation variants linked", () => {
+    const catalog = [
+      {
+        id: "CONSOLE_FRONT_OFF",
+        label: "Console - Front - Off",
+        category: "electronics",
+        width: 2,
+        height: 2,
+        footprintW: 2,
+        footprintH: 1,
+        isDesk: false,
+        groupId: "CONSOLE",
+        orientation: "front",
+        state: "off",
+        rotationScheme: "2-way",
+      },
+      {
+        id: "CONSOLE_RIGHT_OFF",
+        label: "Console - Right - Off",
+        category: "electronics",
+        width: 2,
+        height: 2,
+        footprintW: 1,
+        footprintH: 2,
+        isDesk: false,
+        groupId: "CONSOLE",
+        orientation: "right",
+        state: "off",
+        rotationScheme: "2-way",
+      },
+      {
+        id: "CONSOLE_BACK_OFF",
+        label: "Console - Back - Off",
+        category: "electronics",
+        width: 2,
+        height: 2,
+        footprintW: 2,
+        footprintH: 1,
+        isDesk: false,
+        groupId: "CONSOLE",
+        orientation: "back",
+        state: "off",
+        rotationScheme: "2-way",
+      },
+      {
+        id: "CONSOLE_FRONT_ON",
+        label: "Console - Front - On",
+        category: "electronics",
+        width: 2,
+        height: 2,
+        footprintW: 2,
+        footprintH: 1,
+        isDesk: false,
+        groupId: "CONSOLE",
+        orientation: "front",
+        state: "on",
+      },
+      {
+        id: "CONSOLE_RIGHT_ON",
+        label: "Console - Right - On",
+        category: "electronics",
+        width: 2,
+        height: 2,
+        footprintW: 1,
+        footprintH: 2,
+        isDesk: false,
+        groupId: "CONSOLE",
+        orientation: "right",
+        state: "on",
+      },
+    ] satisfies LoadedAssetData["catalog"];
+
+    expect(
+      buildDynamicCatalog({ catalog, sprites: Object.fromEntries(catalog.map((entry) => [entry.id, sprite])) }),
+    ).toBe(true);
+
+    expect(getRotatedType("CONSOLE_FRONT_OFF", "cw")).toBe("CONSOLE_RIGHT_OFF");
+    expect(getRotatedType("CONSOLE_RIGHT_OFF", "cw")).toBe("CONSOLE_FRONT_OFF");
+    expect(getRotatedType("CONSOLE_BACK_OFF", "cw")).toBeNull();
+    expect(getRotatedType("CONSOLE_FRONT_ON", "cw")).toBe("CONSOLE_RIGHT_ON");
+    expect(getRotatedType("CONSOLE_RIGHT_ON", "ccw")).toBe("CONSOLE_FRONT_ON");
+    expect(getOrientationInGroup("CONSOLE_RIGHT_ON")).toBe("right");
+  });
+
   it("serializes layouts, seats, furniture instances, and pathable tiles", () => {
     const layout = testLayout();
     const tileMap = layoutToTileMap(layout);

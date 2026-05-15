@@ -58,6 +58,8 @@ export class EvidenceEnvelopeRepository {
   private readonly latestStmt;
 
   public constructor(private readonly db: DatabaseClient) {
+    const optionalTextFilter = (column: string, param: string) =>
+      buildOptionalTextFilterSql(this.db.dialect, column, param);
     this.insertStmt = db.prepare(`
       INSERT INTO runtime_evidence_envelopes (
         envelope_id, event_kind, session_id, turn_id, run_id, approval_id,
@@ -77,9 +79,9 @@ export class EvidenceEnvelopeRepository {
     `);
     this.listStmt = db.prepare(`
       SELECT * FROM runtime_evidence_envelopes
-      WHERE (@sessionId IS NULL OR session_id = @sessionId)
-        AND (@turnId IS NULL OR turn_id = @turnId)
-        AND (@runId IS NULL OR run_id = @runId)
+      WHERE ${optionalTextFilter("session_id", "@sessionId")}
+        AND ${optionalTextFilter("turn_id", "@turnId")}
+        AND ${optionalTextFilter("run_id", "@runId")}
       ORDER BY created_at DESC, envelope_id DESC
       LIMIT @limit
     `);
@@ -183,4 +185,11 @@ function mapInput(input: EvidenceEnvelopeCreateInput, createdAt: string): Eviden
     metadata: input.metadata ?? {},
     createdAt,
   };
+}
+
+function buildOptionalTextFilterSql(dialect: DatabaseClient["dialect"], column: string, param: string): string {
+  if (dialect === "postgres") {
+    return `(${param}::text IS NULL OR ${column} = ${param}::text)`;
+  }
+  return `(${param} IS NULL OR ${column} = ${param})`;
 }

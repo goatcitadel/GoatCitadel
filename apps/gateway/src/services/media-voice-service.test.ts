@@ -1,8 +1,100 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { VoiceTalkSessionRecord } from "@goatcitadel/contracts";
-import { MediaVoiceService } from "./media-voice-service.js";
+import { MediaVoiceService, __mediaVoiceServiceInternals } from "./media-voice-service.js";
 
 describe("MediaVoiceService", () => {
+  it("normalizes media helper inputs and maps durable media job rows", async () => {
+    const row = {
+      job_id: "job-1",
+      session_id: "session-1",
+      attachment_id: "attachment-1",
+      job_type: "audio_transcribe",
+      status: "ready",
+      input_json: '{"language":"en"}',
+      output_json: "{not-json",
+      error: null,
+      created_at: "2026-05-14T20:00:00.000Z",
+      updated_at: "2026-05-14T20:01:00.000Z",
+      completed_at: "2026-05-14T20:01:00.000Z",
+    };
+
+    expect(__mediaVoiceServiceInternals.isRecord(row)).toBe(true);
+    expect(__mediaVoiceServiceInternals.isRecord([])).toBe(false);
+    expect(__mediaVoiceServiceInternals.isMediaJobRow(row)).toBe(true);
+    expect(__mediaVoiceServiceInternals.isMediaJobRow({ ...row, job_id: 1 })).toBe(false);
+    expect(__mediaVoiceServiceInternals.toMediaJobRows([row, { bad: true }])).toEqual([row]);
+    expect(__mediaVoiceServiceInternals.toMediaJobRows({ not: "rows" })).toEqual([]);
+    expect(__mediaVoiceServiceInternals.mapMediaJobRow(row)).toMatchObject({
+      jobId: "job-1",
+      sessionId: "session-1",
+      attachmentId: "attachment-1",
+      type: "audio_transcribe",
+      status: "ready",
+      inputJson: { language: "en" },
+      outputJson: {},
+      completedAt: "2026-05-14T20:01:00.000Z",
+    });
+    expect(__mediaVoiceServiceInternals.safeJsonParse("{bad", { fallback: true })).toEqual({ fallback: true });
+    expect(__mediaVoiceServiceInternals.parseVoiceCliArgs("  --threads 4   --no-gpu  ")).toEqual([
+      "--threads",
+      "4",
+      "--no-gpu",
+    ]);
+    expect(__mediaVoiceServiceInternals.parseVoiceCliArgs("   ")).toEqual([]);
+    expect(__mediaVoiceServiceInternals.extFromMimeType("audio/wav")).toBe(".wav");
+    expect(__mediaVoiceServiceInternals.extFromMimeType("audio/mpeg")).toBe(".mp3");
+    expect(__mediaVoiceServiceInternals.extFromMimeType("audio/ogg")).toBe(".ogg");
+    expect(__mediaVoiceServiceInternals.extFromMimeType("video/mp4")).toBe(".mp4");
+    expect(__mediaVoiceServiceInternals.extFromMimeType("video/webm")).toBe(".webm");
+    expect(__mediaVoiceServiceInternals.extFromMimeType("application/octet-stream")).toBe(".bin");
+    await expect(
+      __mediaVoiceServiceInternals.normalizeAudioForWhisper({
+        inputPath: "recording.wav",
+        outputPath: "recording-normalized.wav",
+        mimeType: "audio/wav",
+      }),
+    ).resolves.toBe("recording.wav");
+    await expect(
+      __mediaVoiceServiceInternals.normalizeAudioForWhisper({
+        inputPath: "recording.mp3",
+        outputPath: "recording-normalized.wav",
+        mimeType: "audio/mpeg",
+      }),
+    ).rejects.toThrow("Audio normalization helper is not configured");
+  });
+
+  it("creates previews and reports missing media jobs without starting background work when closing", () => {
+    const getChatAttachment = vi.fn(() => ({
+      attachmentId: "attachment-1",
+      fileName: "capture.bin",
+      mimeType: "application/json",
+      analysisStatus: "pending",
+      extractPreview: '{"ok":true}',
+    }));
+    const service = new MediaVoiceService(
+      createDeps({
+        getChatAttachment,
+        gatewaySql: {
+          prepare: vi.fn(() => ({
+            get: vi.fn(() => undefined),
+            run: vi.fn(),
+          })),
+        } as never,
+        isClosing: () => true,
+      }),
+    );
+
+    expect(service.getChatAttachmentPreview("attachment-1")).toMatchObject({
+      attachmentId: "attachment-1",
+      mediaType: "text",
+      analysisStatus: "queued",
+    });
+    expect(() => service.getMediaJob("missing")).toThrow("Unknown media job: missing");
+  });
+
   it("lists media jobs without binding unused parameters when no session filter is provided", () => {
     const all = vi.fn(() => []);
     const prepare = vi.fn((_sql: string) => ({
@@ -67,6 +159,187 @@ describe("MediaVoiceService", () => {
     expect(prepare.mock.calls[0]?.[0]).toContain("voice_session_id DESC");
     expect(prepare.mock.calls[0]?.[0]).not.toContain("rowid");
     expect(all).toHaveBeenCalledWith(8);
+  });
+
+  it("creates queued media jobs and completes no-attachment jobs in the background queue", async () => {
+    const jobs = new Map<string, Record<string, unknown>>();
+    const run = vi.fn((params: Record<string, unknown>) => {
+      if ("jobType" in params) {
+        jobs.set(String(params.jobId), {
+          job_id: params.jobId,
+          session_id: params.sessionId,
+          attachment_id: params.attachmentId,
+          job_type: params.jobType,
+          status: params.status,
+          input_json: params.inputJson,
+          output_json: null,
+          error: null,
+          created_at: params.createdAt,
+          updated_at: params.updatedAt,
+          completed_at: null,
+        });
+        return;
+      }
+      const row = jobs.get(String(params.jobId));
+      if (!row) {
+        return;
+      }
+      if (String(params.outputJson ?? "").includes("No attachment supplied")) {
+        row.status = "ready";
+        row.output_json = params.outputJson;
+        row.updated_at = params.updatedAt;
+        row.completed_at = params.completedAt;
+        return;
+      }
+      if ("updatedAt" in params) {
+        row.status = "running";
+        row.updated_at = params.updatedAt;
+      }
+    });
+    const get = vi.fn((jobId: string) => jobs.get(jobId));
+    const backgroundTasks = new Set<Promise<unknown>>();
+    const service = new MediaVoiceService(
+      createDeps({
+        backgroundTasks,
+        gatewaySql: {
+          prepare: vi.fn(() => ({
+            get,
+            run,
+          })),
+        } as never,
+      }),
+    );
+
+    const created = service.createMediaJob({
+      type: "ocr",
+      input: { reason: "coverage" },
+    });
+    expect(created).toMatchObject({
+      type: "ocr",
+      status: "queued",
+      inputJson: { reason: "coverage" },
+    });
+
+    await Promise.allSettled([...backgroundTasks]);
+    expect(service.getMediaJob(created.jobId)).toMatchObject({
+      status: "ready",
+      outputJson: { message: "No attachment supplied." },
+    });
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ status: "queued" }));
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ outputJson: expect.stringContaining("No attachment") }));
+  });
+
+  it("starts and stops voice talk and wake sessions when the managed runtime is ready", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gc-media-voice-"));
+    const runtimeBin = path.join(tempDir, "whisper.exe");
+    const modelPath = path.join(tempDir, "model.bin");
+    await fs.writeFile(runtimeBin, "bin", "utf8");
+    await fs.writeFile(modelPath, "model", "utf8");
+    const env = {
+      GOATCITADEL_WHISPER_CPP_BIN: process.env.GOATCITADEL_WHISPER_CPP_BIN,
+      GOATCITADEL_WHISPER_CPP_MODEL_PATH: process.env.GOATCITADEL_WHISPER_CPP_MODEL_PATH,
+    };
+    process.env.GOATCITADEL_WHISPER_CPP_BIN = runtimeBin;
+    process.env.GOATCITADEL_WHISPER_CPP_MODEL_PATH = modelPath;
+    try {
+      const voiceRows = new Map<string, { payload_json: string }>();
+      const run = vi.fn((params: Record<string, unknown>) => {
+        if ("payloadJson" in params && "voiceSessionId" in params) {
+          voiceRows.set(String(params.talkSessionId), { payload_json: String(params.payloadJson) });
+          return;
+        }
+        if ("payloadJson" in params && "talkSessionId" in params) {
+          voiceRows.set(String(params.talkSessionId), { payload_json: String(params.payloadJson) });
+        }
+      });
+      const get = vi.fn((talkSessionId: string) => voiceRows.get(talkSessionId));
+      const all = vi.fn(() => [...voiceRows.values()]);
+      const publishRealtime = vi.fn();
+      const service = new MediaVoiceService(
+        createDeps({
+          publishRealtime,
+          gatewaySql: {
+            prepare: vi.fn((sql: string) => ({
+              all,
+              get,
+              run: sql.includes("UPDATE voice_sessions") || sql.includes("INSERT INTO voice_sessions") ? run : vi.fn(),
+            })),
+          } as never,
+        }),
+      );
+
+      const talk = await service.startTalkSession({ mode: "wake", sessionId: "session-1" });
+      expect(talk).toMatchObject({
+        mode: "wake",
+        state: "running",
+        sessionId: "session-1",
+      });
+      expect(service.listVoiceTalkSessions(5)).toHaveLength(1);
+      expect(service.stopTalkSession(talk.talkSessionId)).toMatchObject({
+        talkSessionId: talk.talkSessionId,
+        state: "stopped",
+      });
+
+      await expect(service.startVoiceWake()).resolves.toMatchObject({
+        enabled: true,
+        state: "running",
+      });
+      expect(service.stopVoiceWake()).toMatchObject({
+        enabled: false,
+        state: "stopped",
+      });
+      expect(publishRealtime).toHaveBeenCalledWith(
+        "system",
+        "voice",
+        expect.objectContaining({ type: "voice_talk_started" }),
+      );
+      expect(publishRealtime).toHaveBeenCalledWith(
+        "system",
+        "voice",
+        expect.objectContaining({ type: "voice_wake_stopped" }),
+      );
+    } finally {
+      process.env.GOATCITADEL_WHISPER_CPP_BIN = env.GOATCITADEL_WHISPER_CPP_BIN;
+      process.env.GOATCITADEL_WHISPER_CPP_MODEL_PATH = env.GOATCITADEL_WHISPER_CPP_MODEL_PATH;
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records voice transcription diagnostics and rejects empty or unconfigured audio", async () => {
+    const recordDevDiagnostic = vi.fn();
+    const systemSettings = createSystemSettings();
+    const service = new MediaVoiceService(createDeps({ recordDevDiagnostic, systemSettings }));
+    const env = {
+      GOATCITADEL_WHISPER_CPP_BIN: process.env.GOATCITADEL_WHISPER_CPP_BIN,
+    };
+    process.env.GOATCITADEL_WHISPER_CPP_BIN = process.execPath;
+
+    try {
+      await expect(service.transcribeVoice({ bytesBase64: "" })).rejects.toThrow("Audio payload is empty");
+      await expect(
+        service.transcribeVoice({
+          bytesBase64: Buffer.from("not-audio").toString("base64"),
+          mimeType: "audio/wav",
+          language: " en ",
+        }),
+      ).rejects.toThrow("Local STT failed");
+    } finally {
+      process.env.GOATCITADEL_WHISPER_CPP_BIN = env.GOATCITADEL_WHISPER_CPP_BIN;
+    }
+
+    expect(recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        category: "voice",
+        event: "voice.transcribe.start",
+      }),
+    );
+    expect(systemSettings.set).toHaveBeenCalledWith(
+      "voice_status_v1",
+      expect.objectContaining({
+        state: "error",
+        lastError: expect.stringContaining("Command failed"),
+      }),
+    );
   });
 
   it("keeps Google Meet voice sessions blocked until auth and transport prerequisites are ready", () => {
@@ -198,22 +471,26 @@ function createDeps(
     systemSettings?: ReturnType<typeof createSystemSettings>;
     publishRealtime?: ReturnType<typeof vi.fn>;
     recordDevDiagnostic?: ReturnType<typeof vi.fn>;
+    getChatAttachment?: ReturnType<typeof vi.fn>;
+    backgroundTasks?: Set<Promise<unknown>>;
+    gatewaySql?: never;
+    isClosing?: () => boolean;
   } = {},
 ) {
   return {
-    gatewaySql: { prepare: vi.fn() } as never,
+    gatewaySql: overrides.gatewaySql ?? ({ prepare: vi.fn() } as never),
     storage: {
       systemSettings: overrides.systemSettings ?? createSystemSettings(),
       chatAttachments: {
         get: vi.fn(),
       },
     },
-    backgroundTasks: new Set(),
-    isClosing: () => false,
+    backgroundTasks: overrides.backgroundTasks ?? new Set(),
+    isClosing: overrides.isClosing ?? (() => false),
     publishRealtime: overrides.publishRealtime ?? vi.fn(),
     recordDevDiagnostic: overrides.recordDevDiagnostic ?? vi.fn(),
     readChatAttachmentContent: vi.fn(),
-    getChatAttachment: vi.fn(),
+    getChatAttachment: overrides.getChatAttachment ?? vi.fn(),
   };
 }
 

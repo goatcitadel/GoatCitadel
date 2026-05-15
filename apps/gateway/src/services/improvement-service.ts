@@ -2279,21 +2279,20 @@ export class ImprovementService {
       .prepare(
         `
       INSERT INTO replay_override_runs (
-        replay_run_id, source_run_id, status, override_summary_json, diff_summary_json, created_at, updated_at
+        replay_run_id, source_run_id, status, overrides_json, diff_json, started_at, finished_at, error_text
       ) VALUES (
-        @replayRunId, @sourceRunId, 'draft', @overrideSummaryJson, NULL, @createdAt, @updatedAt
+        @replayRunId, @sourceRunId, 'draft', @overridesJson, NULL, @startedAt, NULL, NULL
       )
     `,
       )
       .run({
         replayRunId,
         sourceRunId,
-        overrideSummaryJson: JSON.stringify({
+        overridesJson: JSON.stringify({
           count: normalized.length,
           stepKeys: normalized.map((item) => item.stepKey),
         }),
-        createdAt: now,
-        updatedAt: now,
+        startedAt: now,
       });
     this.replaceReplayOverrideSteps(replayRunId, normalized);
     return {
@@ -2313,18 +2312,16 @@ export class ImprovementService {
   ): ReplayOverrideDraft {
     this.ctx.requireFeatureEnabled("replayOverridesV1Enabled");
     const draft = this.createReplayOverrideDraft(sourceRunId, overrides, links);
-    const runningAt = new Date().toISOString();
     this.ctx.gatewaySql
       .prepare(
         `
       UPDATE replay_override_runs
-      SET status = 'running', updated_at = @updatedAt
+      SET status = 'running'
       WHERE replay_run_id = @replayRunId
     `,
       )
       .run({
         replayRunId: draft.replayRunId,
-        updatedAt: runningAt,
       });
 
     const summary = this.computeReplayDiffSummary(sourceRunId, draft.replayRunId, draft.overrides);
@@ -2334,15 +2331,15 @@ export class ImprovementService {
         `
       UPDATE replay_override_runs
       SET status = 'completed',
-          diff_summary_json = @diffSummaryJson,
-          updated_at = @updatedAt
+          diff_json = @diffJson,
+          finished_at = @finishedAt
       WHERE replay_run_id = @replayRunId
     `,
       )
       .run({
         replayRunId: draft.replayRunId,
-        diffSummaryJson: JSON.stringify(summary),
-        updatedAt: finishedAt,
+        diffJson: JSON.stringify(summary),
+        finishedAt,
       });
     this.ctx.publishRealtime("system", "improvement", {
       type: "replay_override_completed",
@@ -2362,7 +2359,7 @@ export class ImprovementService {
     const row = this.ctx.gatewaySql
       .prepare(
         `
-      SELECT replay_run_id, source_run_id, status, diff_summary_json, updated_at
+      SELECT replay_run_id, source_run_id, status, diff_json, started_at, finished_at
       FROM replay_override_runs
       WHERE replay_run_id = ?
     `,
@@ -2372,14 +2369,15 @@ export class ImprovementService {
           replay_run_id: string;
           source_run_id: string;
           status: ReplayOverrideDraft["status"];
-          diff_summary_json: string | null;
-          updated_at: string;
+          diff_json: string | null;
+          started_at: string;
+          finished_at: string | null;
         }
       | undefined;
     if (!row) {
       throw new Error(`Replay override run not found: ${replayRunId}`);
     }
-    const parsed = safeJsonParse<Record<string, unknown>>(row.diff_summary_json ?? "", {});
+    const parsed = safeJsonParse<Record<string, unknown>>(row.diff_json ?? "", {});
     return {
       replayRunId: row.replay_run_id,
       sourceRunId: row.source_run_id,
@@ -2394,7 +2392,7 @@ export class ImprovementService {
         costUsdDelta: Number.isFinite(Number(parsed.costUsdDelta)) ? Number(parsed.costUsdDelta) : 0,
         errorChanged: Boolean(parsed.errorChanged),
       },
-      comparedAt: row.updated_at,
+      comparedAt: row.finished_at ?? row.started_at,
     };
   }
 
@@ -2413,8 +2411,8 @@ export class ImprovementService {
   private replaceReplayOverrideSteps(replayRunId: string, overrides: ReplayOverrideStep[]): void {
     this.ctx.gatewaySql.prepare("DELETE FROM replay_override_steps WHERE replay_run_id = ?").run(replayRunId);
     const insert = this.ctx.gatewaySql.prepare(`
-      INSERT INTO replay_override_steps (step_id, replay_run_id, step_key, override_type, override_payload_json, created_at)
-      VALUES (@stepId, @replayRunId, @stepKey, @overrideType, @overridePayloadJson, @createdAt)
+      INSERT INTO replay_override_steps (step_id, replay_run_id, step_key, override_kind, override_json, created_at)
+      VALUES (@stepId, @replayRunId, @stepKey, @overrideKind, @overrideJson, @createdAt)
     `);
     const now = new Date().toISOString();
     for (const override of overrides) {
@@ -2422,8 +2420,8 @@ export class ImprovementService {
         stepId: randomUUID(),
         replayRunId,
         stepKey: override.stepKey,
-        overrideType: override.overrideKind,
-        overridePayloadJson: JSON.stringify(override.override ?? {}),
+        overrideKind: override.overrideKind,
+        overrideJson: JSON.stringify(override.override ?? {}),
         createdAt: now,
       });
     }

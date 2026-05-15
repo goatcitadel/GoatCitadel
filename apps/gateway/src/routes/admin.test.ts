@@ -61,6 +61,77 @@ describe("admin routes", () => {
     expect(pruneRetention).toHaveBeenCalledWith({ dryRun: false });
   });
 
+  it("normalizes retention patches and maps backup create errors without changing route contracts", async () => {
+    const updateRetentionPolicy = vi.fn((patch: Record<string, unknown>) => ({ ...patch, updated: true }));
+    const listBackups = vi.fn(async () => [{ backupId: "backup-1" }]);
+    const createBackup = vi.fn(async (input: Record<string, unknown>) => {
+      if (input.name === "bad") {
+        throw new Error("backup rejected");
+      }
+      return { backupId: "backup-2", ...input };
+    });
+    app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    app.decorate("services", { authAdmin: { updateRetentionPolicy, listBackups, createBackup } } as never);
+    await app.register(adminRoutes);
+
+    const patch = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/retention",
+      payload: {
+        realtimeEventsDays: 30,
+        backupsKeep: 9,
+        transcriptsDays: "off",
+        auditDays: null,
+      },
+    });
+    expect(patch.statusCode).toBe(200);
+    expect(updateRetentionPolicy).toHaveBeenCalledWith({
+      realtimeEventsDays: 30,
+      backupsKeep: 9,
+      transcriptsDays: undefined,
+      auditDays: undefined,
+    });
+
+    const invalidPatch = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/retention",
+      payload: { backupsKeep: 0 },
+    });
+    expect(invalidPatch.statusCode).toBe(400);
+
+    const list = await app.inject({ method: "GET", url: "/api/v1/admin/backups?limit=2" });
+    expect(list.statusCode).toBe(200);
+    expect(list.json()).toEqual({ items: [{ backupId: "backup-1" }] });
+    expect(listBackups).toHaveBeenCalledWith(2);
+
+    const invalidList = await app.inject({ method: "GET", url: "/api/v1/admin/backups?limit=0" });
+    expect(invalidList.statusCode).toBe(400);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/backups/create",
+      payload: { name: "manual", outputPath: "manual.backup" },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(createBackup).toHaveBeenCalledWith({ name: "manual", outputPath: "manual.backup" });
+
+    const invalidCreate = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/backups/create",
+      payload: { name: 123 },
+    });
+    expect(invalidCreate.statusCode).toBe(400);
+
+    const rejectedCreate = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/backups/create",
+      payload: { name: "bad" },
+    });
+    expect(rejectedCreate.statusCode).toBe(400);
+    expect(rejectedCreate.json()).toEqual({ error: "backup rejected" });
+  });
+
   it("rejects backup restore traversal before reaching the gateway", async () => {
     const restoreBackup = vi.fn(async () => {
       throw new Error("restore blocked: file path outside workspace");

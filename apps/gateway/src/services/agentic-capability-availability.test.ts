@@ -90,6 +90,24 @@ describe("normalizeAgenticCapabilityAvailability", () => {
       checkedAt: "2026-05-05T00:00:00.000Z",
     });
   });
+
+  it("marks inspectable capabilities unavailable when the runtime supplies an unavailable reason", () => {
+    expect(
+      normalizeAgenticCapabilityAvailability({
+        capabilityId: "tool:browser-state",
+        label: "Browser State",
+        family: "tool",
+        inspectable: true,
+        callable: false,
+        unavailableReason: "State tools are restricted to trusted-local mode.",
+        checkedAt: "2026-05-05T00:00:00.000Z",
+      }),
+    ).toMatchObject({
+      status: "unavailable",
+      callable: false,
+      reasons: ["State tools are restricted to trusted-local mode."],
+    });
+  });
 });
 
 describe("normalizeAgenticCapabilityAvailabilitySet", () => {
@@ -190,6 +208,163 @@ describe("buildAgenticRuntimeAvailability", () => {
       ["provider:openai", "not_configured", false],
       ["plugin:broken", "unavailable", false],
       ["channel:telegram", "not_configured", false],
+    ]);
+  });
+
+  it("preserves callable OAuth providers, plugin trust posture, and blocked channel reasons", () => {
+    const response = buildAgenticRuntimeAvailability({
+      generatedAt: "2026-05-05T00:00:00.000Z",
+      providers: [
+        {
+          providerId: "codex",
+          label: "Codex",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "codex-mini",
+          hasApiKey: false,
+          apiKeySource: "none",
+          oauthStatus: { connected: true },
+        },
+      ],
+      plugins: [
+        {
+          pluginId: "local",
+          label: "Local Plugin",
+          version: "1.0.0",
+          enabled: true,
+          installedAt: "2026-05-05T00:00:00.000Z",
+          updatedAt: "2026-05-05T00:00:00.000Z",
+          capabilities: ["channel.send"],
+          source: "plugins/local",
+          sourceMetadata: {
+            type: "local",
+            display: "Local: plugin",
+            integrityStatus: "not_applicable",
+          },
+        },
+        {
+          pluginId: "unknown",
+          label: "Unknown Plugin",
+          version: "1.0.0",
+          enabled: true,
+          installedAt: "2026-05-05T00:00:00.000Z",
+          updatedAt: "2026-05-05T00:00:00.000Z",
+          capabilities: ["channel.send"],
+          source: "manual",
+          integrityStatus: "unknown",
+        },
+        {
+          pluginId: "critical",
+          label: "Critical Plugin",
+          version: "1.0.0",
+          enabled: true,
+          installedAt: "2026-05-05T00:00:00.000Z",
+          updatedAt: "2026-05-05T00:00:00.000Z",
+          capabilities: ["channel.send"],
+          source: "manual",
+          integrityStatus: "verified",
+          trustWarnings: [
+            {
+              code: "critical_warning",
+              message: "Critical trust failure.",
+              severity: "critical",
+            },
+          ],
+        },
+      ],
+      channelCatalog: [
+        {
+          catalogId: "channel.slack",
+          kind: "channel",
+          key: "slack",
+          label: "Slack",
+          description: "Slack",
+          maturity: "native",
+          runtimeAvailability: "runnable",
+          authMethods: ["oauth"],
+          capabilities: ["channel.send"],
+        },
+        {
+          catalogId: "channel.discord",
+          kind: "channel",
+          key: "discord",
+          label: "Discord",
+          description: "Discord",
+          maturity: "native",
+          runtimeAvailability: "runnable",
+          authMethods: ["token"],
+          capabilities: ["channel.send"],
+        },
+        {
+          catalogId: "channel.web",
+          kind: "channel",
+          key: "web",
+          label: "Web",
+          description: "Web",
+          maturity: "planned",
+          runtimeAvailability: "catalog",
+          authMethods: [],
+          capabilities: ["channel.send"],
+        },
+        {
+          catalogId: "integration.obsidian",
+          kind: "integration",
+          key: "obsidian",
+          label: "Obsidian",
+          description: "Obsidian",
+          maturity: "native",
+          runtimeAvailability: "runnable",
+          authMethods: [],
+          capabilities: ["note.read"],
+        },
+      ],
+      channelConnections: [
+        {
+          connectionId: "slack-1",
+          catalogId: "channel.slack",
+          enabled: false,
+          status: "connected",
+          createdAt: "2026-05-05T00:00:00.000Z",
+          updatedAt: "2026-05-05T00:00:00.000Z",
+        },
+        {
+          connectionId: "discord-1",
+          catalogId: "channel.discord",
+          enabled: true,
+          status: "error",
+          lastError: "Token rejected.",
+          createdAt: "2026-05-05T00:00:00.000Z",
+          updatedAt: "2026-05-05T00:00:00.000Z",
+        },
+      ],
+    });
+
+    expect(response.items.map((item) => [item.capabilityId, item.status, item.callable, item.reasons])).toEqual([
+      ["provider:codex", "callable", true, []],
+      ["plugin:local", "callable", true, []],
+      [
+        "plugin:unknown",
+        "blocked",
+        false,
+        ["Integrity: unverified", "Runtime status: blocked", "Runtime health probe has not passed."],
+      ],
+      [
+        "plugin:critical",
+        "not_configured",
+        false,
+        [
+          "Runtime status: not_configured",
+          "Plugin has a critical trust warning and is excluded from callable runtime.",
+        ],
+      ],
+      ["channel:slack", "blocked", false, ["Channel connection is disabled."]],
+      ["channel:discord", "blocked", false, ["Token rejected."]],
+      [
+        "channel:web",
+        "unavailable",
+        false,
+        ["Channel runtime is catalog-only or blocked.", "No channel connection is configured."],
+      ],
     ]);
   });
 });

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { CommsSendResult } from "@goatcitadel/contracts";
 import {
   ChannelDeliveryRuntimeService,
+  classifyChannelDeliveryFailure,
   type ChannelDeliveryRuntimeRepository,
 } from "./channel-delivery-runtime-service.js";
 
@@ -126,6 +127,70 @@ describe("ChannelDeliveryRuntimeService", () => {
     expect(repository.created).toHaveLength(0);
   });
 
+  it("rejects persisted idempotency-key reuse when stored fingerprints disagree", () => {
+    const repository = {
+      ...createRepository(),
+      findByIdempotencyKey: vi.fn(() => ({
+        deliveryId: "persisted-1",
+        connectionId: "conn-1",
+        channelKey: "slack",
+        target: "C123",
+        status: "queued" as const,
+        payloadHash: "different-fingerprint",
+        createdAt: "2026-05-05T00:00:00.000Z",
+        updatedAt: "2026-05-05T00:00:00.000Z",
+      })),
+    };
+    const service = new ChannelDeliveryRuntimeService({
+      repository,
+      send: vi.fn(),
+      now: () => new Date("2026-05-05T00:00:00.000Z"),
+    });
+
+    expect(() =>
+      service.enqueue({
+        connectionId: "conn-1",
+        channelKey: "slack",
+        target: "C123",
+        payload: { message: "fresh payload" },
+        idempotencyKey: "restart-idempotency-key",
+      }),
+    ).toThrow(/different payload/);
+  });
+
+  it("returns defensive copies from get/list and normalizes low attempt and timing options", () => {
+    const repository = createRepository();
+    const service = new ChannelDeliveryRuntimeService({
+      repository,
+      send: vi.fn(),
+      now: () => new Date("2026-05-05T00:00:00.000Z"),
+    });
+
+    expect(service.get("missing")).toBeUndefined();
+    const queued = service.enqueue({
+      connectionId: "conn-1",
+      channelKey: "line",
+      target: "Utarget",
+      payload: { b: 2, a: [3, 1] },
+      maxAttempts: 0,
+      baseBackoffMs: 0,
+      maxBackoffMs: 0,
+      staleAfterMs: 0,
+    });
+    const copy = service.get(queued.deliveryId);
+    expect(copy).toMatchObject({
+      maxAttempts: 1,
+      attempts: 0,
+    });
+    if (copy) {
+      copy.status = "failed";
+    }
+    expect(service.list()[0]).toMatchObject({
+      deliveryId: queued.deliveryId,
+      status: "queued",
+    });
+  });
+
   it("backs off retryable delivery failures and later marks sent", async () => {
     const repository = createRepository();
     let now = new Date("2026-05-05T00:00:00.000Z");
@@ -229,6 +294,51 @@ describe("ChannelDeliveryRuntimeService", () => {
     });
   });
 
+  it("skips duplicate or payload-less persisted due records during drain hydration", async () => {
+    const repository = createRepository();
+    const send = vi.fn(async () => ({ providerMessageId: "provider-1" }));
+    const service = new ChannelDeliveryRuntimeService({
+      repository: {
+        ...repository,
+        listDue: vi.fn(() => [
+          {
+            deliveryId: "delivery-1",
+            connectionId: "conn-1",
+            channelKey: "telegram",
+            target: "chat-1",
+            status: "queued",
+            payload: { message: "already queued" },
+            createdAt: "2026-05-05T00:00:00.000Z",
+            updatedAt: "2026-05-05T00:00:00.000Z",
+          },
+          {
+            deliveryId: "payload-missing",
+            connectionId: "conn-1",
+            channelKey: "telegram",
+            target: "chat-1",
+            status: "queued",
+            createdAt: "2026-05-05T00:00:00.000Z",
+            updatedAt: "2026-05-05T00:00:00.000Z",
+          },
+        ]),
+      },
+      send,
+      now: () => new Date("2026-05-05T00:00:01.000Z"),
+    });
+    const queued = service.enqueue({
+      connectionId: "conn-1",
+      channelKey: "telegram",
+      target: "chat-1",
+      payload: { message: "already queued" },
+    });
+
+    const drained = await service.drainDue(0);
+
+    expect(drained).toHaveLength(1);
+    expect(drained[0]?.deliveryId).toBe(queued.deliveryId);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it("fails non-retryable blocked deliveries immediately", async () => {
     const repository = createRepository();
     const service = new ChannelDeliveryRuntimeService({
@@ -260,6 +370,35 @@ describe("ChannelDeliveryRuntimeService", () => {
       "blocked",
       undefined,
     );
+  });
+
+  it("marks retryable delivery failures final when max attempts are exhausted", async () => {
+    const repository = createRepository();
+    const service = new ChannelDeliveryRuntimeService({
+      repository,
+      send: vi.fn(async () => {
+        throw new Error("network timeout");
+      }),
+      now: () => new Date("2026-05-05T00:00:00.000Z"),
+    });
+    const queued = service.enqueue({
+      connectionId: "conn-1",
+      channelKey: "telegram",
+      target: "chat-1",
+      payload: { message: "hello" },
+      maxAttempts: 1,
+    });
+
+    const [failed] = await service.drainDue();
+
+    expect(failed).toMatchObject({
+      deliveryId: queued.deliveryId,
+      status: "failed",
+      deliveryStatus: "degraded",
+      attempts: 1,
+      fallbackReason: "network timeout",
+    });
+    expect(repository.markRetrying).not.toHaveBeenCalled();
   });
 
   it("marks overdue queued deliveries stale without sending", async () => {
@@ -295,5 +434,13 @@ describe("ChannelDeliveryRuntimeService", () => {
       "degraded",
       "Delivery became stale before it could be sent.",
     );
+  });
+
+  it("classifies channel delivery failures for operator-facing fallback labels", () => {
+    expect(classifyChannelDeliveryFailure("HTTP 429 temporarily unavailable")).toBe("degraded");
+    expect(classifyChannelDeliveryFailure("permission denied")).toBe("blocked");
+    expect(classifyChannelDeliveryFailure("missing webhook url")).toBe("not_available");
+    expect(classifyChannelDeliveryFailure("connector does not support attachments")).toBe("not_available");
+    expect(classifyChannelDeliveryFailure("unexpected provider error")).toBe("degraded");
   });
 });

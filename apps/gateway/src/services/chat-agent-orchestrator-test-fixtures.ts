@@ -145,6 +145,26 @@ export function createToolCatalog(toolNames: string[] = ["browser.search"]): Too
         preferredForIntents: ["local_file", "inspect_code", "targeted_read"],
       };
     }
+    if (toolName === "fs.list" || toolName === "fs.stat") {
+      return {
+        toolName,
+        category: "fs",
+        riskLevel: "safe",
+        requiresApproval: false,
+        description: toolName === "fs.list" ? "List files and directories" : "Read file metadata",
+        argSchema: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+          },
+          required: ["path"],
+        },
+        examples: [],
+        pack: "devops",
+        recommendedContexts: ["cowork", "code", "project_bound"],
+        preferredForIntents: ["local_file", "inspect_code", "read_file"],
+      };
+    }
     if (toolName === "file.find") {
       return {
         toolName: "file.find",

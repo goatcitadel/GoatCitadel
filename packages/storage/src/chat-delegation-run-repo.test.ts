@@ -167,5 +167,14 @@ describe("ChatDelegationRunRepository", () => {
     setRawField(db, "run-a", "visibility", null);
     setRawField(db, "run-a", "status", "cancelled");
     assert.throws(() => repo.get("run-a"), /corrupt or uses unsupported persisted values/);
+
+    const internal = repo as unknown as {
+      listBySessionStmt: { all: (...args: unknown[]) => unknown };
+    };
+    internal.listBySessionStmt = { all: () => null };
+    assert.throws(() => repo.listBySession("session-a"), /Delegation run list for session session-a is corrupt/);
+
+    internal.listBySessionStmt = { all: () => [null] };
+    assert.throws(() => repo.listBySession("session-a"), /Delegation run list row 0 for session session-a is corrupt/);
   });
 });

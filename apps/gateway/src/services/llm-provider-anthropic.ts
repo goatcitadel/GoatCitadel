@@ -17,10 +17,10 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
     request: ChatCompletionRequest,
     resolved: LlmProviderResolution,
     model: string,
-    host: LlmProviderAdapterHost,
+    adapterHost: LlmProviderAdapterHost,
   ): Promise<ChatCompletionResponse> {
     const payload = buildAnthropicMessagesPayload(request, model);
-    const target = host.buildRequestTarget(resolved, "messages", `${resolved.provider.baseUrl}/messages`);
+    const target = adapterHost.buildRequestTarget(resolved, "messages", `${resolved.provider.baseUrl}/messages`);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 60000);
     const response = await postJsonRequest(target, payload, timeoutMs, request.signal);
 
@@ -42,12 +42,12 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
     request: ChatCompletionRequest,
     resolved: LlmProviderResolution,
     model: string,
-    host: LlmProviderAdapterHost,
+    adapterHost: LlmProviderAdapterHost,
   ): AsyncGenerator<Record<string, unknown>> {
     const payload = buildAnthropicMessagesPayload(request, model);
     payload.stream = true;
 
-    const target = host.buildRequestTarget(resolved, "messages", `${resolved.provider.baseUrl}/messages`);
+    const target = adapterHost.buildRequestTarget(resolved, "messages", `${resolved.provider.baseUrl}/messages`);
     const timeoutMs = resolveChatCompletionTimeoutMs(request.timeoutMs, 120000);
     const response = await postJsonRequest(target, payload, timeoutMs, request.signal);
 

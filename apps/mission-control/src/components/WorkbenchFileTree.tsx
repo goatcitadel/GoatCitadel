@@ -3,7 +3,7 @@ import { Tree } from "react-arborist";
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 
-interface WorkbenchFileTreeNode {
+export interface WorkbenchFileTreeNode {
   id: string;
   path: string;
   name: string;
@@ -19,9 +19,10 @@ interface WorkbenchFileTreeProps {
   expandedPaths: string[];
   onExpandedPathsChange: (nextPaths: string[]) => void;
   onSelectFile: (path: string) => void;
+  unstableForceArboristForTest?: boolean;
 }
 
-function buildWorkbenchTreeNodes(items: ChatSessionWorkbenchTreeResponse["items"]): WorkbenchFileTreeNode[] {
+export function buildWorkbenchTreeNodes(items: ChatSessionWorkbenchTreeResponse["items"]): WorkbenchFileTreeNode[] {
   const root: WorkbenchFileTreeNode[] = [];
   const stack: Array<{ depth: number; node: WorkbenchFileTreeNode }> = [];
 
@@ -54,17 +55,20 @@ function buildWorkbenchTreeNodes(items: ChatSessionWorkbenchTreeResponse["items"
   return root;
 }
 
-function toOpenState(paths: string[]): Record<string, boolean> {
+export function toOpenState(paths: string[]): Record<string, boolean> {
   return Object.fromEntries(paths.map((path) => [path, true]));
 }
 
-function nextExpandedPaths(current: string[], path: string): string[] {
+export function nextExpandedPaths(current: string[], path: string): string[] {
   return current.includes(path)
     ? current.filter((item) => item !== path)
     : [...current, path].sort((left, right) => left.localeCompare(right));
 }
 
-function shouldRenderArborist(): boolean {
+function shouldRenderArborist(forceArboristForTest?: boolean): boolean {
+  if (forceArboristForTest) {
+    return true;
+  }
   return typeof window !== "undefined" && import.meta.env.MODE !== "test";
 }
 
@@ -75,6 +79,7 @@ export function WorkbenchFileTree({
   expandedPaths,
   onExpandedPathsChange,
   onSelectFile,
+  unstableForceArboristForTest,
 }: WorkbenchFileTreeProps) {
   const nodes = useMemo(() => buildWorkbenchTreeNodes(items), [items]);
   const [treeKey, setTreeKey] = useState(0);
@@ -84,7 +89,7 @@ export function WorkbenchFileTree({
     setTreeKey((current) => current + 1);
   }, [storageScopeKey]);
 
-  if (!shouldRenderArborist()) {
+  if (!shouldRenderArborist(unstableForceArboristForTest)) {
     return (
       <ul className="chat-code-workbench-tree" aria-label="Workbench file tree">
         {items

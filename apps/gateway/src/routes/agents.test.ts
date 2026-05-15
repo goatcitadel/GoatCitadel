@@ -13,6 +13,59 @@ describe("agents routes", () => {
     app = null;
   });
 
+  function createAgentsService(overrides: Record<string, unknown> = {}) {
+    return {
+      listAgents: vi.fn((view: string, limit: number) => [
+        {
+          roleId: `agent-${view}`,
+          name: `Agent ${view}`,
+          title: "Operator",
+          summary: `Limit ${limit}`,
+          lifecycleStatus: view === "archived" ? "archived" : "active",
+        },
+      ]),
+      listImportedAgentCatalog: vi.fn(() => ({ items: [] })),
+      getImportedAgentCatalogEntry: vi.fn((entryId: string) => ({
+        entryId,
+        state: "disabled",
+      })),
+      importAgencyAgentCatalog: vi.fn(async () => ({ importedCount: 0 })),
+      patchImportedAgentCatalogEntryState: vi.fn((entryId: string, patch: Record<string, unknown>) => ({
+        entryId,
+        ...patch,
+      })),
+      activateImportedAgentCatalogEntryForSession: vi.fn(),
+      getAgent: vi.fn((agentId: string) => ({ roleId: agentId, name: "Goatherder" })),
+      createAgentProfile: vi.fn((input: Record<string, unknown>) => ({
+        lifecycleStatus: "active",
+        ...input,
+      })),
+      updateAgentProfile: vi.fn((agentId: string, input: Record<string, unknown>) => ({
+        roleId: agentId,
+        ...input,
+      })),
+      archiveAgentProfile: vi.fn((agentId: string, input: Record<string, unknown>) => ({
+        roleId: agentId,
+        lifecycleStatus: "archived",
+        ...input,
+      })),
+      restoreAgentProfile: vi.fn((agentId: string) => ({
+        roleId: agentId,
+        lifecycleStatus: "active",
+      })),
+      hardDeleteAgentProfile: vi.fn(() => true),
+      ...overrides,
+    };
+  }
+
+  async function registerAgentsService(overrides: Record<string, unknown> = {}) {
+    const service = createAgentsService(overrides);
+    app = Fastify();
+    app.decorate("services", { agents: service } as never);
+    await app.register(agentsRoutes);
+    return service;
+  }
+
   it("lists imported catalog entries with workspace filters", async () => {
     const listImportedAgentCatalog = vi.fn(() => ({
       workspaceId: "default",
@@ -151,5 +204,199 @@ describe("agents routes", () => {
         routingMode: "manual_only",
       },
     });
+  });
+
+  it("lists active agents with default route filters", async () => {
+    const service = await registerAgentsService();
+
+    const response = await app!.inject({
+      method: "GET",
+      url: "/api/v1/agents",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(service.listAgents).toHaveBeenCalledWith("active", 300);
+    expect(response.json()).toMatchObject({
+      view: "active",
+      items: [{ roleId: "agent-active" }],
+    });
+  });
+
+  it("reads and patches imported catalog entries by id", async () => {
+    const service = await registerAgentsService();
+
+    const detailResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/agents/catalog/catalog-frontend",
+    });
+    const patchResponse = await app!.inject({
+      method: "PATCH",
+      url: "/api/v1/agents/catalog/catalog-frontend/state",
+      payload: {
+        state: "approved",
+      },
+    });
+
+    expect(detailResponse.statusCode).toBe(200);
+    expect(patchResponse.statusCode).toBe(200);
+    expect(service.getImportedAgentCatalogEntry).toHaveBeenCalledWith("catalog-frontend");
+    expect(service.patchImportedAgentCatalogEntryState).toHaveBeenCalledWith("catalog-frontend", {
+      state: "approved",
+    });
+    expect(detailResponse.json()).toMatchObject({ entryId: "catalog-frontend" });
+    expect(patchResponse.json()).toMatchObject({
+      entryId: "catalog-frontend",
+      state: "approved",
+    });
+  });
+
+  it("creates, updates, archives, restores, and hard-deletes agent profiles", async () => {
+    const service = await registerAgentsService();
+
+    const createResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/agents",
+      payload: {
+        roleId: "custom-agent",
+        name: "Custom Agent",
+        title: "Custom Operator",
+        summary: "A custom operator profile.",
+        specialties: ["testing"],
+      },
+    });
+    const updateResponse = await app!.inject({
+      method: "PATCH",
+      url: "/api/v1/agents/custom-agent",
+      payload: {
+        title: "Updated Operator",
+      },
+    });
+    const archiveResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/agents/custom-agent/archive",
+      payload: {
+        archivedBy: "operator",
+        archiveReason: "not needed",
+      },
+    });
+    const restoreResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/agents/custom-agent/restore",
+    });
+    const deleteResponse = await app!.inject({
+      method: "DELETE",
+      url: "/api/v1/agents/custom-agent?mode=hard",
+    });
+
+    expect(createResponse.statusCode).toBe(201);
+    expect(updateResponse.statusCode).toBe(200);
+    expect(archiveResponse.statusCode).toBe(200);
+    expect(restoreResponse.statusCode).toBe(200);
+    expect(deleteResponse.statusCode).toBe(200);
+    expect(service.createAgentProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        roleId: "custom-agent",
+        title: "Custom Operator",
+      }),
+    );
+    expect(service.updateAgentProfile).toHaveBeenCalledWith("custom-agent", {
+      title: "Updated Operator",
+    });
+    expect(service.archiveAgentProfile).toHaveBeenCalledWith("custom-agent", {
+      archivedBy: "operator",
+      archiveReason: "not needed",
+    });
+    expect(service.restoreAgentProfile).toHaveBeenCalledWith("custom-agent");
+    expect(service.hardDeleteAgentProfile).toHaveBeenCalledWith("custom-agent");
+    expect(deleteResponse.json()).toEqual({
+      deleted: true,
+      agentId: "custom-agent",
+      mode: "hard",
+    });
+  });
+
+  it("rejects malformed agent route inputs before calling services", async () => {
+    const service = await registerAgentsService();
+
+    const listResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/agents?limit=0",
+    });
+    const importResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/agents/catalog/import/agency-agents",
+      payload: {
+        workspaceId: "",
+      },
+    });
+    const stateResponse = await app!.inject({
+      method: "PATCH",
+      url: "/api/v1/agents/catalog/catalog-frontend/state",
+      payload: {
+        state: "published",
+      },
+    });
+    const activationResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/agents/catalog/catalog-frontend/activate-session",
+      payload: {},
+    });
+    const createResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/agents",
+      payload: {
+        roleId: "custom-agent",
+      },
+    });
+    const deleteResponse = await app!.inject({
+      method: "DELETE",
+      url: "/api/v1/agents/custom-agent",
+    });
+
+    expect(listResponse.statusCode).toBe(400);
+    expect(importResponse.statusCode).toBe(400);
+    expect(stateResponse.statusCode).toBe(400);
+    expect(activationResponse.statusCode).toBe(400);
+    expect(createResponse.statusCode).toBe(400);
+    expect(deleteResponse.statusCode).toBe(400);
+    expect(service.listAgents).not.toHaveBeenCalled();
+    expect(service.importAgencyAgentCatalog).not.toHaveBeenCalled();
+    expect(service.patchImportedAgentCatalogEntryState).not.toHaveBeenCalled();
+    expect(service.activateImportedAgentCatalogEntryForSession).not.toHaveBeenCalled();
+    expect(service.createAgentProfile).not.toHaveBeenCalled();
+    expect(service.hardDeleteAgentProfile).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when hard-deleting an unknown agent profile", async () => {
+    const service = await registerAgentsService({
+      hardDeleteAgentProfile: vi.fn(() => false),
+    });
+
+    const response = await app!.inject({
+      method: "DELETE",
+      url: "/api/v1/agents/missing-agent?mode=hard",
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(service.hardDeleteAgentProfile).toHaveBeenCalledWith("missing-agent");
+    expect(response.json()).toEqual({
+      error: "Agent profile missing-agent not found",
+    });
+  });
+
+  it("uses the shared route error envelope for untyped service failures", async () => {
+    await registerAgentsService({
+      getAgent: vi.fn(() => {
+        throw new Error("plain failure");
+      }),
+    });
+
+    const response = await app!.inject({
+      method: "GET",
+      url: "/api/v1/agents/custom-agent",
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ error: "Internal server error" });
   });
 });

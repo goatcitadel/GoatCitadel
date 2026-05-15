@@ -171,6 +171,140 @@ describe("CapabilitySystemService", () => {
     expect(proposalDetail.events[0]?.eventType).toBe("created");
   });
 
+  it("lists catalog snapshots, runs, proposals, and inline approval queue items", async () => {
+    const harness = await createHarness({
+      toolCatalog: [createTool("tool.safe_read"), createTool("tool.write", { readOnly: false })],
+    });
+
+    expect(harness.service.listCatalog("callable").map((entry) => entry.capabilityId)).toEqual([
+      "tool:tool.safe_read",
+      "tool:tool.write",
+    ]);
+
+    const snapshot = harness.service.freezeCatalogSnapshot();
+    expect(harness.service.getCatalogSnapshot(snapshot.snapshotId)).toBe(snapshot);
+    expect(snapshot.callableEntries.map((entry) => entry.toolName)).toEqual(["tool.safe_read", "tool.write"]);
+
+    const runRecord: CodeModeRunRecord = {
+      runId: "code-run-list",
+      status: "approval_pending",
+      language: "typescript",
+      requestedOutputIntent: "Listable run",
+      saveCandidateOnSuccess: false,
+      capabilitySnapshotId: snapshot.snapshotId,
+      wrapperManifestHash: "wrapper-hash",
+      policySnapshotHash: "policy-hash",
+      codeHash: "code-hash",
+      approvalId: "approval-live",
+      sandbox: {
+        runnerId: "goatcitadel.best-effort-host",
+        runnerVersion: "0.1.0",
+        platform: "win32",
+        isolationProfile: "best_effort_host/temp_only/no_network",
+        required: true,
+        available: false,
+        checksPassed: [],
+        checksFailed: ["best_effort_host_disabled"],
+      },
+      codeArtifact: createArtifact("list-code.ts"),
+      wrapperManifestArtifact: createArtifact("list-wrapper.json"),
+      policySnapshotArtifact: createArtifact("list-policy.json"),
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      createdAt: "2026-04-10T00:00:00.000Z",
+    };
+    harness.storage.codeModeRuns.upsert(runRecord);
+    expect(harness.service.listCodeModeRuns(5)).toEqual([runRecord]);
+    expect(harness.service.getCodeModeRun("code-run-list")).toBe(runRecord);
+
+    const proposal = harness.service.createProposal({
+      proposalKind: "skill",
+      title: "Review generated skill",
+      summary: "Promote once validated",
+      payload: { runId: "code-run-list" },
+    });
+    expect(harness.service.listProposals(10)).toEqual([proposal]);
+
+    const liveApproval: ApprovalRequest = {
+      approvalId: "approval-live",
+      kind: "tool.invoke",
+      riskLevel: "caution",
+      status: "pending",
+      payload: {},
+      preview: {
+        toolName: "fs.write",
+        description: "Write the generated candidate.",
+        reason: "Operator requested Code Mode execution.",
+      },
+      linkage: { sessionId: "session-1", toolName: "fs.write" },
+      createdAt: "2026-04-10T00:00:01.000Z",
+      expiresAt: "2999-01-01T00:00:00.000Z",
+      explanationStatus: "not_requested",
+    };
+    const resolvedApproval: ApprovalRequest = {
+      ...liveApproval,
+      approvalId: "approval-resolved",
+      status: "approved",
+      expiresAt: "2999-01-01T00:00:00.000Z",
+    };
+    vi.mocked(harness.storage.approvals.get).mockImplementation((approvalId: string) => {
+      if (approvalId === "approval-live") {
+        return liveApproval;
+      }
+      if (approvalId === "approval-resolved") {
+        return resolvedApproval;
+      }
+      throw new Error(`Missing approval ${approvalId}`);
+    });
+    vi.mocked(harness.storage.chatInlineApprovals.listBySession).mockReturnValue([
+      {
+        approvalId: "approval-live",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        status: "pending",
+        createdAt: "2026-04-10T00:00:01.000Z",
+        details: {},
+      },
+      {
+        approvalId: "approval-resolved",
+        sessionId: "session-1",
+        turnId: "turn-2",
+        status: "pending",
+        createdAt: "2026-04-10T00:00:02.000Z",
+        details: {},
+      },
+      {
+        approvalId: "approval-orphan",
+        sessionId: "session-1",
+        turnId: "turn-3",
+        status: "failed",
+        createdAt: "2026-04-10T00:00:03.000Z",
+        details: { toolName: "code_mode.run", description: "Missing durable approval row" },
+      },
+    ] as never);
+
+    expect(harness.service.listChatPendingApprovals("session-1")).toEqual([
+      expect.objectContaining({
+        approvalId: "approval-live",
+        toolName: "fs.write",
+        reason: "Write the generated candidate.",
+        stale: false,
+      }),
+      expect.objectContaining({
+        approvalId: "approval-resolved",
+        stale: true,
+        staleReason: "approved",
+      }),
+      expect.objectContaining({
+        approvalId: "approval-orphan",
+        toolName: "code_mode.run",
+        reason: "Missing durable approval row",
+        stale: true,
+        staleReason: "failed",
+      }),
+    ]);
+  });
+
   it("publishes an explicit advisory event when Code Mode runs without available host isolation", async () => {
     const harness = await createHarness({
       sandboxConfig: {
@@ -462,6 +596,11 @@ function createFakeStorage() {
       listByProposalId(proposalId: string) {
         return proposalEvents.get(proposalId) ?? [];
       },
+    },
+    approvals: {
+      get: vi.fn((approvalId: string) => {
+        throw new Error(`Missing approval ${approvalId}`);
+      }),
     },
     codeModeRuns: {
       upsert(record: CodeModeRunRecord) {

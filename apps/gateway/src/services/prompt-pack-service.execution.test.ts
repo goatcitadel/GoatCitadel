@@ -1,3 +1,6 @@
+import fsSync from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("node:sqlite", () => ({
@@ -6,8 +9,11 @@ vi.mock("node:sqlite", () => ({
 }));
 
 import type {
+  PromptPackAutoScoreRecord,
   PromptPackBenchmarkStatusRecord,
+  PromptPackHumanReviewRecordV2,
   PromptPackRunRecord,
+  PromptPackScoreRecord,
   PromptPackTestRecord,
 } from "@goatcitadel/contracts";
 import {
@@ -16,7 +22,15 @@ import {
   promptPackExecutionRequiresDurable,
   ensurePromptPackDurableReadiness,
 } from "./prompt-pack-service.js";
-import { createRun, createTest, createTrace } from "./prompt-pack-service-test-fixtures.js";
+import {
+  buildPromptPackMarkdown,
+  createPromptPackExportService,
+  createPack,
+  createRun,
+  createScore,
+  createTest,
+  createTrace,
+} from "./prompt-pack-service-test-fixtures.js";
 
 describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
   it("treats shipped chat, cowork, and code prompt-pack runs as durable-owned", () => {
@@ -230,6 +244,752 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
         totalItems: 2,
       }),
     );
+  });
+
+  it("imports prompt packs, exposes list APIs, and rejects markdown without tests", () => {
+    const tests = [createTest("test-imported", "TEST-C901")];
+    const pack = createPack("pack-imported");
+    const replacePackTests = vi.fn(() => ({ pack, tests }));
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            replacePackTests,
+            listPacks: () => [pack],
+            getPack: () => pack,
+            listTests: () => tests,
+          },
+        },
+        config: {
+          rootDir: "F:/code/personal-ai",
+          assistant: {
+            workspaceDir: ".",
+          },
+        },
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+    vi.spyOn(service as never, "refreshPromptPackExportFile").mockImplementation(() => undefined);
+
+    const imported = service.importPromptPack({
+      name: " Imported Pack ",
+      sourceLabel: "prompt-pack-fixture.md",
+      content: buildPromptPackMarkdown([
+        {
+          mode: "chat",
+          toolTier: "no-tools",
+          tests: [{ code: "TEST-C901", title: "Imported", prompt: "Answer from the prompt only." }],
+        },
+      ]),
+    });
+
+    expect(imported.pack).toBe(pack);
+    expect(replacePackTests).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Imported Pack",
+        sourceLabel: "prompt-pack-fixture.md",
+        tests: expect.arrayContaining([expect.objectContaining({ code: "TEST-C901" })]),
+      }),
+    );
+    expect(service.listPromptPacks()).toEqual([pack]);
+    expect(service.listPromptPackTests(pack.packId)).toEqual(tests);
+    expect(() => service.importPromptPack({ content: "# Empty" })).toThrow(/No tests found/);
+  });
+
+  it("exports prompt-pack reports with latest and immutable snapshot metadata", () => {
+    const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-prompt-pack-export-"));
+    try {
+      const pack = createPack("pack-1");
+      const test = createTest("test-export", "TEST-EXPORT");
+      const run: PromptPackRunRecord = {
+        ...createRun("run-export", "completed", "2026-03-14T00:00:01.000Z"),
+        testId: test.testId,
+        responseText: "Exported prompt-pack answer.",
+      };
+      const service = createPromptPackExportService({
+        rootDir,
+        pack,
+        tests: [test],
+        runs: [run],
+      });
+
+      const missing = service.getPromptPackExport(pack.packId);
+      expect(missing.exists).toBe(false);
+      expect(missing.latestSnapshotExists).toBe(false);
+
+      const exported = service.exportPromptPack(pack.packId);
+      expect(exported.exists).toBe(true);
+      expect(exported.latestSnapshotExists).toBe(true);
+      expect(exported.snapshotCount).toBe(1);
+      expect(fsSync.existsSync(exported.path)).toBe(true);
+      expect(fsSync.existsSync(exported.latestSnapshotPath ?? "")).toBe(true);
+
+      const noOpReset = service.resetPromptPackRunsAndScores(pack.packId, {
+        clearRuns: false,
+        clearScores: false,
+      });
+      expect(noOpReset.deletedRuns).toBe(0);
+      expect(noOpReset.deletedScores).toBe(0);
+      expect(noOpReset.export.exists).toBe(true);
+      expect(noOpReset.export.snapshotCount).toBe(1);
+    } finally {
+      fsSync.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("stores manual score reviews and lists them only for matching pack tests", () => {
+    const test = createTest("test-review", "TEST-REVIEW");
+    const run: PromptPackRunRecord = {
+      ...createRun("run-review", "completed", "2026-03-14T00:00:01.000Z"),
+      testId: test.testId,
+      responseText: "Reviewed answer with enough concrete detail.",
+    };
+    const reviews: PromptPackHumanReviewRecordV2[] = [];
+    const createReview = vi.fn((input: Omit<PromptPackHumanReviewRecordV2, "createdAt"> & { createdAt?: string }) => {
+      const review: PromptPackHumanReviewRecordV2 = {
+        ...input,
+        createdAt: input.createdAt ?? "2026-03-14T00:00:02.000Z",
+      };
+      reviews.push(review);
+      return review;
+    });
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            getTest: (testId: string) =>
+              testId === "other-test" ? { ...test, testId: "other-test", packId: "other-pack" } : test,
+          },
+          promptPackRuns: {
+            get: () => run,
+          },
+          promptPackAutoScoresV2: {
+            listByRun: () => [],
+          },
+          promptPackHumanReviewsV2: {
+            create: createReview,
+            listByTest: (testId: string) => reviews.filter((review) => review.testId === testId),
+          },
+        },
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+    vi.spyOn(service as never, "refreshPromptPackExportFile").mockImplementation(() => undefined);
+
+    const review = service.scorePromptPackTest({
+      packId: "pack-1",
+      testId: test.testId,
+      runId: run.runId,
+      reviewerId: " qa-operator ",
+      routingScore: 2,
+      honestyScore: 1,
+      handoffScore: 2,
+      robustnessScore: 1,
+      usabilityScore: 2,
+      notes: " Manual scoring from operator review. ",
+    });
+
+    expect(review.reviewerId).toBe("qa-operator");
+    expect(review.scores).toMatchObject({
+      taskSuccess: 4,
+      honesty: 2,
+      executionQuality: 4,
+      robustness: 2,
+      usability: 4,
+    });
+    expect(review.notes).toBe("Manual scoring from operator review.");
+    expect(createReview).toHaveBeenCalledWith(expect.objectContaining({ packId: "pack-1", testId: test.testId }));
+    expect(service.listPromptPackTestReviews("pack-1", test.testId)).toEqual([review]);
+    expect(() => service.listPromptPackTestReviews("pack-1", "other-test")).toThrow(/does not belong/);
+  });
+
+  it("scores the latest matching prompt-pack run by code and session", async () => {
+    const test = createTest("test-latest-code", "TEST-LATEST");
+    const selectedRun: PromptPackRunRecord = {
+      ...createRun("run-selected-latest", "completed", "2026-03-14T00:00:02.000Z"),
+      testId: test.testId,
+      sessionId: "sess-target",
+      responseText: "Selected session answer.",
+    };
+    const otherRun: PromptPackRunRecord = {
+      ...createRun("run-other-session", "completed", "2026-03-14T00:00:03.000Z"),
+      testId: test.testId,
+      sessionId: "sess-other",
+      responseText: "Other session answer.",
+    };
+    const createdReviews: PromptPackHumanReviewRecordV2[] = [];
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            listPacks: () => [createPack("pack-1")],
+            listTests: () => [test],
+            getTest: () => test,
+          },
+          promptPackRuns: {
+            listByTest: () => [otherRun, selectedRun],
+            get: (runId: string) => (runId === selectedRun.runId ? selectedRun : otherRun),
+          },
+          promptPackAutoScoresV2: {
+            listByRun: () => [],
+          },
+          promptPackHumanReviewsV2: {
+            create: (input: PromptPackHumanReviewRecordV2) => {
+              createdReviews.push(input);
+              return input;
+            },
+          },
+        },
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+    vi.spyOn(service as never, "refreshPromptPackExportFile").mockImplementation(() => undefined);
+
+    const review = await service.scorePromptPackLatestRunByCode({
+      sessionId: "sess-target",
+      testCode: "test-latest",
+      routingScore: 2,
+      honestyScore: 2,
+      handoffScore: 1,
+      robustnessScore: 1,
+      usabilityScore: 2,
+      notes: " latest session review ",
+    });
+
+    expect(review.runId).toBe(selectedRun.runId);
+    expect(review.notes).toBe("latest session review");
+    expect(createdReviews).toHaveLength(1);
+    await expect(
+      service.scorePromptPackLatestRunByCode({
+        sessionId: "missing-session",
+        testCode: "TEST-LATEST",
+        routingScore: 2,
+        honestyScore: 2,
+        handoffScore: 2,
+        robustnessScore: 2,
+        usabilityScore: 2,
+      }),
+    ).rejects.toThrow(/No run found/);
+  });
+
+  it("runs prompt-pack selectors from an existing chat session with runner defaults", async () => {
+    const firstTest = createTest("test-chat-first", "TEST-CHAT-1");
+    const secondTest = createTest("test-chat-second", "TEST-CHAT-2");
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            listPacks: () => [createPack("pack-1")],
+            listTests: () => [firstTest, secondTest],
+          },
+        },
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "runner-provider", model: "runner-model" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "judge-provider", model: "judge-model" }),
+        backgroundTasks: new Set(),
+      },
+    );
+    const runPromptPackTest = vi.spyOn(service, "runPromptPackTest").mockImplementation(
+      async (_packId: string, testId: string, options?: { sessionId?: string; providerId?: string; model?: string }) =>
+        ({
+          ...createRun(`run-${testId}`, "completed", "2026-03-14T00:00:02.000Z"),
+          testId,
+          sessionId: options?.sessionId ?? "missing-session",
+          providerId: options?.providerId,
+          model: options?.model,
+          responseText: `Ran ${testId}.`,
+        }) satisfies PromptPackRunRecord,
+    );
+
+    const selected = await service.runPromptPackFromChat("sess-chat", "TEST-CHAT-2");
+    expect(selected).toHaveLength(1);
+    expect(selected[0]?.testId).toBe(secondTest.testId);
+    expect(selected[0]).toMatchObject({
+      sessionId: "sess-chat",
+      providerId: "runner-provider",
+      model: "runner-model",
+    });
+
+    const allRuns = await service.runPromptPackFromChat("sess-chat", "all");
+    expect(allRuns.map((run) => run.testId)).toEqual([firstTest.testId, secondTest.testId]);
+    expect(runPromptPackTest).toHaveBeenCalledTimes(3);
+    await expect(service.runPromptPackFromChat("sess-chat", "missing")).rejects.toThrow(/did not match/);
+  });
+
+  it("maps prompt-pack execution trace terminal states to persisted run status and errors", async () => {
+    const cases: Array<{
+      label: string;
+      trace: PromptPackRunRecord["trace"];
+      content: string;
+      expectedStatus: PromptPackRunRecord["status"];
+      expectedError: RegExp;
+    }> = [
+      {
+        label: "approval",
+        trace: createTrace("sess-approval", { status: "waiting_for_approval" }),
+        content: "Waiting for approval.",
+        expectedStatus: "approval_paused",
+        expectedError: /approval/i,
+      },
+      {
+        label: "user-input",
+        trace: createTrace("sess-user-input", { status: "waiting_for_user_input" }),
+        content: "Waiting for user input.",
+        expectedStatus: "approval_paused",
+        expectedError: /user input/i,
+      },
+      {
+        label: "failed-trace",
+        trace: createTrace("sess-failed-trace", { status: "failed" }),
+        content: "Trace failed.",
+        expectedStatus: "failed",
+        expectedError: /failed state/i,
+      },
+      {
+        label: "failed-durable",
+        trace: createTrace("sess-failed-durable", {
+          durable: { status: "failed", runId: "durable-failed" } as never,
+        }),
+        content: "Durable failed.",
+        expectedStatus: "failed",
+        expectedError: /Durable execution/i,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const patchRun = vi.fn((_runId: string, patch: Partial<PromptPackRunRecord>) => ({
+        ...createRun(`run-${testCase.label}`, patch.status ?? "completed", "2026-03-14T00:00:01.000Z"),
+        testId: `test-${testCase.label}`,
+        responseText: patch.responseText,
+        trace: patch.trace,
+        integrity: patch.integrity,
+        error: patch.error,
+      }));
+      const service = new PromptPackService(
+        {
+          storage: {
+            promptPacks: {
+              getPack: () => ({ packId: "pack-1", name: "Pack 1" }),
+              getTest: () =>
+                ({
+                  ...createTest(`test-${testCase.label}`, `TEST-${testCase.label.toUpperCase()}`),
+                  toolTier: "no-tools",
+                  prompt: "Answer from the prompt only.",
+                }) satisfies PromptPackTestRecord,
+            },
+            promptPackRuns: {
+              create: vi.fn(),
+              patch: patchRun,
+            },
+            toolGrants: {
+              list: () => [],
+              create: vi.fn(),
+            },
+          },
+          gatewaySql: {
+            prepare: () => ({
+              get: () => undefined,
+            }),
+          } as never,
+          config: {
+            rootDir: "F:/code/personal-ai",
+            assistant: {
+              workspaceDir: ".",
+              durable: {
+                enabled: true,
+                executionEnabled: true,
+                chatAutoPromoteEnabled: true,
+              },
+            },
+          } as never,
+          normalizeWorkspaceId: () => "default",
+          isFeatureEnabled: () => true,
+          requireFeatureEnabled: () => undefined,
+          publishRealtime: () => undefined,
+        } as never,
+        {
+          createChatSession: vi.fn(() => ({ sessionId: `sess-${testCase.label}` })),
+          agentSendChatMessage: vi.fn(async () => ({
+            sessionId: `sess-${testCase.label}`,
+            turnId: `turn-sess-${testCase.label}`,
+            userMessage: {} as never,
+            assistantMessage: {
+              messageId: `assistant-${testCase.label}`,
+              sessionId: `sess-${testCase.label}`,
+              role: "assistant",
+              actorType: "agent",
+              actorId: "assistant",
+              content: testCase.content,
+              timestamp: "2026-03-14T00:00:01.000Z",
+            },
+            transport: "llm",
+            trace: testCase.trace,
+            citations: [],
+            routing: {},
+          })),
+          createChatCompletion: vi.fn(),
+          getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+          getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+          backgroundTasks: new Set(),
+        },
+      );
+      vi.spyOn(service as never, "refreshPromptPackExportFile").mockImplementation(() => undefined);
+
+      const result = await service.runPromptPackTest("pack-1", `test-${testCase.label}`);
+
+      expect(result.status).toBe(testCase.expectedStatus);
+      expect(result.error).toMatch(testCase.expectedError);
+      expect(patchRun).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ status: result.status }));
+    }
+  });
+
+  it("marks prompt-pack runs failed when the agent returns no assistant output", async () => {
+    const patchRun = vi.fn((_runId: string, patch: Partial<PromptPackRunRecord>) => ({
+      ...createRun("run-empty-output", patch.status ?? "completed", "2026-03-14T00:00:01.000Z"),
+      responseText: patch.responseText,
+      error: patch.error,
+    }));
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            getPack: () => ({ packId: "pack-1", name: "Pack 1" }),
+            getTest: () => ({
+              ...createTest("test-empty-output", "TEST-C902"),
+              toolTier: "no-tools",
+              prompt: "Answer from the prompt only.",
+            }),
+          },
+          promptPackRuns: {
+            create: vi.fn(),
+            patch: patchRun,
+          },
+          toolGrants: {
+            list: () => [],
+            create: vi.fn(),
+          },
+        },
+        gatewaySql: {
+          prepare: () => ({
+            get: () => undefined,
+          }),
+        } as never,
+        config: {
+          rootDir: "F:/code/personal-ai",
+          assistant: {
+            workspaceDir: ".",
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => true,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime: () => undefined,
+      } as never,
+      {
+        createChatSession: vi.fn(() => ({ sessionId: "sess-empty-output" })),
+        agentSendChatMessage: vi.fn(async () => ({
+          sessionId: "sess-empty-output",
+          turnId: undefined,
+          userMessage: {} as never,
+          assistantMessage: {
+            messageId: "assistant-empty-output",
+            sessionId: "sess-empty-output",
+            role: "assistant",
+            actorType: "agent",
+            actorId: "assistant",
+            content: "   ",
+            timestamp: "2026-03-14T00:00:01.000Z",
+          },
+          transport: "llm",
+          trace: createTrace("sess-empty-output"),
+          citations: [],
+          routing: {},
+        })),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+    vi.spyOn(service as never, "refreshPromptPackExportFile").mockImplementation(() => undefined);
+
+    const result = await service.runPromptPackTest("pack-1", "test-empty-output");
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toMatch(/No assistant output/);
+  });
+
+  it("persists a failed run when the prompt-pack agent call throws", async () => {
+    const patchRun = vi.fn((_runId: string, patch: Partial<PromptPackRunRecord>) => ({
+      ...createRun("run-agent-throws", patch.status ?? "completed", "2026-03-14T00:00:01.000Z"),
+      error: patch.error,
+    }));
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            getPack: () => ({ packId: "pack-1", name: "Pack 1" }),
+            getTest: () => createTest("test-agent-throws", "TEST-AGENT-THROWS"),
+          },
+          promptPackRuns: {
+            create: vi.fn(),
+            patch: patchRun,
+          },
+          toolGrants: {
+            list: () => [],
+            create: vi.fn(),
+          },
+        },
+        gatewaySql: {
+          prepare: () => ({
+            get: () => undefined,
+          }),
+        } as never,
+        config: {
+          rootDir: "F:/code/personal-ai",
+          assistant: {
+            workspaceDir: ".",
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => true,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime: () => undefined,
+      } as never,
+      {
+        createChatSession: vi.fn(() => ({ sessionId: "sess-agent-throws" })),
+        agentSendChatMessage: vi.fn(async () => {
+          throw new Error("runner exploded");
+        }),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+    vi.spyOn(service as never, "refreshPromptPackExportFile").mockImplementation(() => undefined);
+
+    const result = await service.runPromptPackTest("pack-1", "test-agent-throws");
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toBe("runner exploded");
+    expect(patchRun).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ status: "failed", error: "runner exploded" }),
+    );
+  });
+
+  it("runs replay regression comparisons and emits improvement signals for each capability delta", () => {
+    const test = createTest("test-1", "TEST-C777");
+    const currentScore: PromptPackScoreRecord = {
+      ...createScore("score-current", "run-current", "2026-03-16T00:00:00.000Z", 1),
+      testId: test.testId,
+    };
+    const baselineScore: PromptPackScoreRecord = {
+      ...createScore("score-baseline", "run-baseline", "2026-03-15T00:00:00.000Z", 2),
+      testId: test.testId,
+    };
+    const regressionRows: Array<Record<string, unknown>> = [];
+    let regressionRun: Record<string, unknown> | undefined;
+    const publishRealtime = vi.fn();
+    const recordImprovementRegressionSignal = vi.fn();
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            getPack: () => ({ packId: "pack-1", name: "Pack 1" }),
+            listTests: () => [test],
+          },
+          promptPackRuns: {
+            listByPack: () => [
+              { ...createRun("run-current", "completed", "2026-03-16T00:00:02.000Z"), testId: test.testId },
+              { ...createRun("run-baseline", "completed", "2026-03-15T00:00:01.000Z"), testId: test.testId },
+            ],
+          },
+          promptPackScores: {
+            listByPack: () => [currentScore, baselineScore],
+          },
+        },
+        gatewaySql: {
+          prepare: (sql: string) => ({
+            get: (runId: string) => {
+              if (sql.includes("FROM replay_regression_runs") && regressionRun?.regression_run_id === runId) {
+                return regressionRun;
+              }
+              return undefined;
+            },
+            all: (runId: string) => {
+              if (sql.includes("FROM replay_regression_results")) {
+                return regressionRows.filter((row) => row.regression_run_id === runId);
+              }
+              return [];
+            },
+            run: (params: Record<string, unknown>) => {
+              if (sql.includes("INSERT INTO replay_regression_runs")) {
+                regressionRun = {
+                  regression_run_id: params.regressionRunId,
+                  pack_id: params.packId,
+                  status: "running",
+                  test_codes_json: params.testCodesJson,
+                  baseline_ref: params.baselineRef,
+                  summary_json: params.summaryJson,
+                  started_at: params.startedAt,
+                  finished_at: null,
+                  error_text: null,
+                };
+              } else if (sql.includes("INSERT INTO replay_regression_results")) {
+                regressionRows.push({
+                  result_id: params.resultId,
+                  regression_run_id: params.regressionRunId,
+                  test_code: params.testCode,
+                  capability: params.capability,
+                  score_delta: params.scoreDelta,
+                  pass_delta: params.passDelta,
+                  latency_delta_ms: params.latencyDeltaMs,
+                  created_at: params.createdAt,
+                });
+              } else if (sql.includes("UPDATE replay_regression_runs")) {
+                regressionRun = {
+                  ...regressionRun,
+                  status: "completed",
+                  summary_json: params.summaryJson,
+                  finished_at: params.finishedAt,
+                };
+              }
+              return { changes: 1 };
+            },
+          }),
+        } as never,
+        config: {
+          assistant: {
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => true,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime,
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+        recordImprovementRegressionSignal,
+      },
+    );
+
+    const { regressionRunId } = service.runPromptPackReplayRegression("pack-1", {
+      testCodes: ["TEST-C777"],
+    });
+    const status = service.getPromptPackReplayRegressionStatus(regressionRunId);
+
+    expect(status.run.status).toBe("completed");
+    expect(status.results).toHaveLength(5);
+    expect(status.results.every((result) => result.scoreDelta === -1)).toBe(true);
+    expect(status.results.every((result) => result.passDelta === -1)).toBe(true);
+    expect(recordImprovementRegressionSignal).toHaveBeenCalledTimes(5);
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "prompt_pack_regression_completed",
+      "promptLab",
+      expect.objectContaining({ regressionRunId, packId: "pack-1", testCodes: ["TEST-C777"] }),
+    );
+  });
+
+  it("builds prompt-pack capability trends and threshold breaches from v3 scores and run failures", () => {
+    const score: PromptPackAutoScoreRecord = {
+      autoScoreId: "auto-trend",
+      packId: "pack-1",
+      testId: "test-trend",
+      runId: "run-trend-failed",
+      scoringSchemaVersion: "v3",
+      finalScores: {
+        taskSuccess: 2,
+        truthfulness: 4,
+        evidenceGrounding: 4,
+        formatAdherence: 4,
+        operatorUsefulness: 2,
+        toolUseQuality: 1,
+        orchestrationQuality: 1,
+        efficiency: 1,
+        recoveryQuality: 1,
+      },
+      autoVerdict: "review",
+      createdAt: "2026-03-16T00:00:00.000Z",
+    } as PromptPackAutoScoreRecord;
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            getPack: () => createPack("pack-1"),
+          },
+          promptPackAutoScoresV2: {
+            listByPack: () => [score],
+          },
+          promptPackRuns: {
+            listByPack: () => [
+              createRun("run-trend-failed", "failed", "2026-03-16T00:00:01.000Z"),
+              createRun("run-trend-completed", "completed", "2026-03-16T00:00:02.000Z"),
+            ],
+          },
+        },
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+
+    const trends = service.getPromptPackCapabilityTrends("pack-1");
+
+    expect(trends.items.find((item) => item.capability === "taskSuccess")?.breached).toBe(true);
+    expect(trends.items.find((item) => item.capability === "run_failure_rate")?.breached).toBe(true);
+    expect(trends.items.find((item) => item.capability === "review_rate")?.breached).toBe(false);
   });
 
   it("uses prompt-runner defaults for prompt execution instead of judge defaults", async () => {

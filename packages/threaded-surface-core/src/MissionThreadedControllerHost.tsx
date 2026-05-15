@@ -229,11 +229,11 @@ function formatSelectionSourceSummary(source?: RoutingPreflightResult["selection
   }
 }
 
-function formatRoutingTargetSummary(labels: Map<string, string>, providerId?: string, model?: string): string {
+export function formatRoutingTargetSummary(labels: Map<string, string>, providerId?: string, model?: string): string {
   return formatWorkProviderModelSummary(providerId ? (labels.get(providerId) ?? providerId) : undefined, model);
 }
 
-function formatFallbackSummary(preflight: RoutingPreflightResult | null): {
+export function formatFallbackSummary(preflight: RoutingPreflightResult | null): {
   summary: string;
   tone: WorkTrustDescriptor["fallbackTone"];
 } {
@@ -261,7 +261,7 @@ function formatFallbackSummary(preflight: RoutingPreflightResult | null): {
   };
 }
 
-function formatRuntimeSummary(preflight: RoutingPreflightResult | null): {
+export function formatRuntimeSummary(preflight: RoutingPreflightResult | null): {
   summary: string;
   tone: WorkTrustDescriptor["runtimeTone"];
 } {
@@ -290,7 +290,7 @@ function formatRuntimeSummary(preflight: RoutingPreflightResult | null): {
   }
 }
 
-function requiresBoundaryAcknowledgment(preflight: RoutingPreflightResult | null): boolean {
+export function requiresBoundaryAcknowledgment(preflight: RoutingPreflightResult | null): boolean {
   return preflight?.fallbackResult === "local_to_cloud" || preflight?.fallbackResult === "cloud_to_local";
 }
 

@@ -1,18 +1,6 @@
 import { useState } from "react";
 import { fetchChatToolArtifact } from "../../api/client";
-
-function formatBytes(value?: number): string | null {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return null;
-  }
-  if (value < 1024) {
-    return `${value} B`;
-  }
-  if (value < 1024 * 1024) {
-    return `${(value / 1024).toFixed(1)} KB`;
-  }
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-}
+import { formatChatToolArtifactBytes } from "./chat-tool-artifact-inspector-helpers";
 
 export function ChatToolArtifactInspector(props: {
   artifactId: string;
@@ -56,7 +44,7 @@ export function ChatToolArtifactInspector(props: {
       </button>
       {artifactPath || originalByteLength ? (
         <span className="chat-tool-artifact-caption">
-          {[artifactPath, formatBytes(originalByteLength)].filter(Boolean).join(" · ")}
+          {[artifactPath, formatChatToolArtifactBytes(originalByteLength)].filter(Boolean).join(" · ")}
         </span>
       ) : null}
       {open ? (

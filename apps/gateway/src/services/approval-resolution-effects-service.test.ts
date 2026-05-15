@@ -815,6 +815,203 @@ describe("approval-resolution-effects-service", () => {
       vi.useRealTimers();
     }
   });
+
+  it("completes remote inbox follow-up effects when the inbox item is missing", async () => {
+    const completeEffect = vi.fn();
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: { failEffect: vi.fn(), completeEffect },
+          approvalInbox: {
+            get: vi.fn(),
+            findByApprovalAndToken: vi.fn(() => undefined),
+          },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      {
+        backgroundTasks: new Set(),
+        wakeDurableRun: vi.fn(),
+        requestRunProcessing: vi.fn(),
+        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+        executeCodeModePendingApproval: vi.fn(),
+        executeApprovedPendingAction: vi.fn(),
+        enqueueAfterHooks: vi.fn(),
+        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+      },
+    );
+
+    await (
+      service as unknown as {
+        handleApprovalInboxFollowUp(effect: ApprovalEffectRecord): Promise<void>;
+      }
+    ).handleApprovalInboxFollowUp(
+      createEffect({
+        effectKind: "approval_inbox_follow_up",
+        targetKind: "remote_token",
+        targetId: "token-1",
+        payload: {
+          decision: "edit",
+          approvalStatus: "unexpected",
+          resolvedBy: "operator:test",
+        },
+      }),
+    );
+
+    expect(completeEffect).toHaveBeenCalledWith(
+      "effect-1",
+      expect.any(String),
+      1,
+      expect.objectContaining({
+        result: {
+          tokenId: "token-1",
+          inboxItemId: undefined,
+          state: "missing",
+        },
+      }),
+    );
+  });
+
+  it("falls back from stale inbox ids and persists pending inbox follow-up resolution", async () => {
+    const completeEffect = vi.fn();
+    const markResolved = vi.fn(() => ({
+      inboxItemId: "inbox-live",
+      state: "approved",
+      approvalStatus: "approved",
+    }));
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: { failEffect: vi.fn(), completeEffect },
+          approvalInbox: {
+            get: vi.fn(() => {
+              throw new Error("stale inbox id");
+            }),
+            findByApprovalAndToken: vi.fn(() => ({
+              inboxItemId: "inbox-live",
+              state: "pending",
+              approvalStatus: "pending",
+            })),
+            markResolved,
+          },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      {
+        backgroundTasks: new Set(),
+        wakeDurableRun: vi.fn(),
+        requestRunProcessing: vi.fn(),
+        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+        executeCodeModePendingApproval: vi.fn(),
+        executeApprovedPendingAction: vi.fn(),
+        enqueueAfterHooks: vi.fn(),
+        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+      },
+    );
+
+    await (
+      service as unknown as {
+        handleApprovalInboxFollowUp(effect: ApprovalEffectRecord): Promise<void>;
+      }
+    ).handleApprovalInboxFollowUp(
+      createEffect({
+        effectKind: "approval_inbox_follow_up",
+        targetKind: "remote_token",
+        targetId: "token-1",
+        payload: {
+          inboxItemId: "inbox-stale",
+          decision: "approve",
+          approvalStatus: "approved",
+          resolvedBy: "operator:test",
+        },
+      }),
+    );
+
+    expect(markResolved).toHaveBeenCalledWith(
+      "inbox-live",
+      expect.objectContaining({
+        state: "approved",
+        approvalStatus: "approved",
+        resolvedBy: "operator:test",
+      }),
+    );
+    expect(completeEffect).toHaveBeenCalledWith(
+      "effect-1",
+      expect.any(String),
+      1,
+      expect.objectContaining({
+        result: {
+          inboxItemId: "inbox-live",
+          tokenId: "token-1",
+          state: "approved",
+        },
+      }),
+    );
+  });
+
+  it("fails remote inbox follow-up effects when an already-resolved item disagrees", async () => {
+    const failEffect = vi.fn();
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: { failEffect, completeEffect: vi.fn() },
+          approvalInbox: {
+            get: vi.fn(() => ({
+              inboxItemId: "inbox-1",
+              state: "rejected",
+              approvalStatus: "rejected",
+            })),
+            findByApprovalAndToken: vi.fn(),
+          },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      {
+        backgroundTasks: new Set(),
+        wakeDurableRun: vi.fn(),
+        requestRunProcessing: vi.fn(),
+        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+        executeCodeModePendingApproval: vi.fn(),
+        executeApprovedPendingAction: vi.fn(),
+        enqueueAfterHooks: vi.fn(),
+        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+      },
+    );
+
+    await (
+      service as unknown as {
+        handleApprovalInboxFollowUp(effect: ApprovalEffectRecord): Promise<void>;
+      }
+    ).handleApprovalInboxFollowUp(
+      createEffect({
+        effectKind: "approval_inbox_follow_up",
+        targetKind: "remote_token",
+        targetId: "token-1",
+        payload: {
+          inboxItemId: "inbox-1",
+          decision: "approve",
+          approvalStatus: "approved",
+        },
+      }),
+    );
+
+    expect(failEffect).toHaveBeenCalledWith(
+      "effect-1",
+      expect.any(String),
+      1,
+      expect.objectContaining({
+        lastError: "Approval inbox item inbox-1 is already rejected; expected approved.",
+        result: expect.objectContaining({
+          inboxItemId: "inbox-1",
+          tokenId: "token-1",
+          observedState: "rejected",
+          expectedState: "approved",
+          observedApprovalStatus: "rejected",
+          expectedApprovalStatus: "approved",
+        }),
+      }),
+    );
+  });
 });
 
 function createEffect(overrides: Partial<ApprovalEffectRecord>): ApprovalEffectRecord {

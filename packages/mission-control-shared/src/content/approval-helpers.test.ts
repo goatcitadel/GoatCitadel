@@ -41,10 +41,14 @@ describe("approval helpers", () => {
 
   it("finds trace metadata nested inside arbitrary payloads", () => {
     expect(findTraceMetadata(null)).toBeNull();
+    expect(findTraceMetadata({ request: [0, "skip", { nested: false }] })).toBeNull();
     expect(findTraceMetadata({ request: { nested: [{ traceId: "trace-1" }] } })).toEqual({ traceId: "trace-1" });
     expect(findTraceMetadata({ context: { correlationId: "corr-1", traceId: "trace-2" } })).toEqual({
       correlationId: "corr-1",
       traceId: "trace-2",
+    });
+    expect(findTraceMetadata({ context: { correlationId: "corr-only" } })).toEqual({
+      correlationId: "corr-only",
     });
     expect(findTraceMetadata({ context: { unrelated: true } })).toBeNull();
   });
@@ -67,6 +71,9 @@ describe("approval helpers", () => {
 
     expect(mergeApprovals([[oldApproval], [otherApproval, newerApproval]])).toMatchObject([
       { approvalId: "approval-2" },
+      { approvalId: "approval-1", summary: "new" },
+    ]);
+    expect(mergeApprovals([[newerApproval], [oldApproval]])).toMatchObject([
       { approvalId: "approval-1", summary: "new" },
     ]);
   });
@@ -94,10 +101,27 @@ describe("approval helpers", () => {
     expect(
       isExpiredApproval(
         approval({
+          approvalId: "pending-without-expiry",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isExpiredApproval(
+        approval({
           approvalId: "resolved",
           status: "approved",
           createdAt: "2026-01-01T00:00:00.000Z",
           expiresAt: "2026-01-01T11:59:59.000Z",
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isExpiredApproval(
+        approval({
+          approvalId: "invalid-expiry",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          expiresAt: "not-a-date",
         }),
       ),
     ).toBe(false);
@@ -124,15 +148,19 @@ describe("approval helpers", () => {
   it("builds bounded evidence models from nested approval payloads", () => {
     const repeatedPatch = "diff --git a/file.ts b/file.ts\n+const answer = 42;";
     const model = buildApprovalEvidenceModel(
+      null,
+      "ignore primitive",
       {
         path: "src/index.ts",
         command: "pnpm test -- --runInBand --watch=false",
         reason: "Operator requested validation",
-        patches: [repeatedPatch, repeatedPatch],
+        emptyPatch: "\n\t",
+        patches: [repeatedPatch, repeatedPatch, "no newline patch"],
         nested: {
           targetFiles: ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts"],
           scripts: ["pnpm lint", "pnpm typecheck", "pnpm test", "pnpm build"],
           prompt: "Review the changes",
+          urls: ["http://localhost:8787/status", "https://example.test/a", "https://example.test/b", "extra"],
         },
       },
       {
@@ -150,7 +178,13 @@ describe("approval helpers", () => {
       expect.stringMatching(/^Scripts: pnpm lint \| pnpm typecheck \| pnpm test\u2026$/),
     ]);
     expect(model?.supporting).toEqual(
-      expect.arrayContaining(["Reason: Operator requested validation", "Prompt: Review the changes"]),
+      expect.arrayContaining([
+        "Reason: Operator requested validation",
+        "Prompt: Review the changes",
+        expect.stringMatching(
+          /^Urls: http:\/\/localhost:8787\/status, https:\/\/example\.test\/a, https:\/\/example\.test\/b/,
+        ),
+      ]),
     );
     expect(model?.changes).toEqual(
       expect.arrayContaining([

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { DatabaseClient, DbStatement, DbTransactionMode } from "./db.js";
 import { PostgresAuditLog } from "./postgres-audit-log.js";
+import { runWithRequestAttribution } from "./request-attribution.js";
 
 interface StoredAuditRow {
   stream_name: string;
@@ -81,6 +82,39 @@ test("PostgresAuditLog appends without actor attribution and sanitizes arrays", 
   assert.equal(String(db.rows[0]?.payload).includes("\\u0000"), false);
 });
 
+test("PostgresAuditLog fills request attribution and falls back when sequence rows are missing", async () => {
+  const db = new InMemoryAuditDb();
+  db.omitNextSequenceRow = true;
+  const log = new PostgresAuditLog(db);
+
+  await runWithRequestAttribution(
+    {
+      correlationId: "corr-attribution",
+      traceId: "trace-attribution",
+      originSurface: "code",
+      actorId: "operator-1",
+      deviceId: "device-1",
+      grantId: "grant-1",
+      companionSessionId: "companion-1",
+    },
+    () =>
+      log.append("tool_invocations", {
+        eventId: "event-attribution",
+        detail: "from attribution",
+      }),
+  );
+
+  assert.equal(db.rows[0]?.event_sequence, 1);
+  assert.equal(db.rows[0]?.actor_id, "operator-1");
+  const payload = JSON.parse(String(db.rows[0]?.payload)) as Record<string, unknown>;
+  assert.equal(payload.correlationId, "corr-attribution");
+  assert.equal(payload.traceId, "trace-attribution");
+  assert.equal(payload.originSurface, "code");
+  assert.equal(payload.deviceId, "device-1");
+  assert.equal(payload.grantId, "grant-1");
+  assert.equal(payload.companionSessionId, "companion-1");
+});
+
 function auditRow(overrides: Partial<StoredAuditRow>): StoredAuditRow {
   return {
     stream_name: "tool_invocations",
@@ -96,18 +130,24 @@ function auditRow(overrides: Partial<StoredAuditRow>): StoredAuditRow {
 class InMemoryAuditDb implements DatabaseClient {
   public readonly dialect = "postgres" as const;
   public readonly rows: StoredAuditRow[] = [];
+  public omitNextSequenceRow = false;
 
   public prepare(sql: string): DbStatement {
     if (sql.includes("COALESCE(MAX(event_sequence), 0) + 1")) {
       return {
         run: () => ({ changes: 0 }),
-        get: <T = unknown>(streamName: unknown) =>
-          ({
+        get: <T = unknown>(streamName: unknown) => {
+          if (this.omitNextSequenceRow) {
+            this.omitNextSequenceRow = false;
+            return undefined as T;
+          }
+          return {
             next_sequence:
               this.rows
                 .filter((row) => row.stream_name === streamName)
                 .reduce((max, row) => Math.max(max, row.event_sequence), 0) + 1,
-          }) as T,
+          } as T;
+        },
         all: () => [],
       };
     }

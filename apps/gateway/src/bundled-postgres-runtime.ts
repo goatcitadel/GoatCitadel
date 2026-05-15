@@ -374,3 +374,10 @@ function wait(ms: number): Promise<void> {
     setTimeout(resolve, Math.max(0, ms));
   });
 }
+
+export const __bundledPostgresRuntimeInternals = {
+  isDockerPostgresDataDirectory,
+  quoteIdentifier,
+  resolveNativePostgresCommands,
+  sameFilesystemPath,
+};

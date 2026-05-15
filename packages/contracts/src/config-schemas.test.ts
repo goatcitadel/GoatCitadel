@@ -51,6 +51,18 @@ describe("ToolPolicyConfigSchema", () => {
     expect(result.tools.approvalMode).toBe("approve_risky");
   });
 
+  it("maps the legacy danger profile to bypass approval mode", () => {
+    const input = {
+      profiles: {},
+      tools: { profile: "danger", allow: [], deny: [] },
+      agents: {},
+      sandbox: { writeJailRoots: [], readOnlyRoots: [] },
+    };
+
+    const result = ToolPolicyConfigSchema.parse(input);
+    expect(result.tools.approvalMode).toBe("bypass");
+  });
+
   it("allows unknown keys via passthrough", () => {
     const input = {
       profiles: {},
@@ -94,6 +106,47 @@ describe("ToolPolicyConfigSchema", () => {
         ping_pong: true,
       },
     });
+  });
+
+  it("rejects loop detection thresholds that invert warning or global ordering", () => {
+    const base = {
+      profiles: {},
+      tools: { allow: [], deny: [] },
+      agents: {},
+      sandbox: { writeJailRoots: [], readOnlyRoots: [] },
+    };
+
+    expect(() =>
+      ToolPolicyConfigSchema.parse({
+        ...base,
+        tools: {
+          ...base.tools,
+          loopDetection: {
+            enabled: true,
+            historySize: 8,
+            warningThreshold: 5,
+            criticalThreshold: 4,
+            globalThreshold: 6,
+          },
+        },
+      }),
+    ).toThrow(/warningThreshold/);
+
+    expect(() =>
+      ToolPolicyConfigSchema.parse({
+        ...base,
+        tools: {
+          ...base.tools,
+          loopDetection: {
+            enabled: true,
+            historySize: 8,
+            warningThreshold: 3,
+            criticalThreshold: 7,
+            globalThreshold: 6,
+          },
+        },
+      }),
+    ).toThrow(/criticalThreshold/);
   });
 });
 
@@ -231,6 +284,28 @@ describe("LlmConfigFileSchema", () => {
     expect(() => LlmConfigFileSchema.parse(input)).toThrow(/clientCertPath and clientKeyPath/i);
   });
 
+  it("rejects incomplete TLS client key config", () => {
+    const input = {
+      activeProviderId: "test",
+      providers: [
+        {
+          providerId: "test",
+          label: "Test",
+          baseUrl: "http://localhost",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "m",
+          request: {
+            tls: {
+              clientKeyPath: "/tmp/client.key",
+            },
+          },
+        },
+      ],
+    };
+
+    expect(() => LlmConfigFileSchema.parse(input)).toThrow(/clientCertPath and clientKeyPath/i);
+  });
+
   it("rejects conflicting TLS verification modes", () => {
     const input = {
       activeProviderId: "test",
@@ -252,6 +327,29 @@ describe("LlmConfigFileSchema", () => {
     };
 
     expect(() => LlmConfigFileSchema.parse(input)).toThrow(/cannot be combined with insecureSkipVerify/i);
+  });
+
+  it("accepts query auth for direct provider requests", () => {
+    const input = {
+      activeProviderId: "test",
+      providers: [
+        {
+          providerId: "test",
+          label: "Test",
+          baseUrl: "http://localhost",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "m",
+          request: {
+            auth: { type: "query", queryParam: "api_key", valueEnv: "TEST_API_KEY", prefix: "Bearer " },
+          },
+        },
+      ],
+    };
+
+    expect(LlmConfigFileSchema.parse(input).providers[0]?.request?.auth).toMatchObject({
+      type: "query",
+      queryParam: "api_key",
+    });
   });
 });
 

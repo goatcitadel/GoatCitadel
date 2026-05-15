@@ -12,6 +12,16 @@ import {
   setGoatcitadelTerminalTitle,
 } from "./runtime-ux.js";
 import {
+  buildGatewayStartCommandForPlatform,
+  formatSignatureEntry,
+  isWatchableSourceFile,
+  pruneFailureTimestamps,
+  readPositiveInt,
+  resolveGatewayHealthHost,
+  sanitizeSpawnOutput,
+  shouldIgnoreWatchedEntryName,
+} from "./dev-supervisor-helpers.js";
+import {
   INSECURE_LOCAL_ONLY_OVERRIDE_ENV,
   isLoopbackHost,
   resolveAllowUnauthNetwork,
@@ -272,19 +282,7 @@ function ensureGatewayProjectReferencesBuilt(): boolean {
 }
 
 function buildGatewayStartCommand(): { command: string; args: string[] } {
-  if (process.platform === "win32") {
-    // Node 24 on Windows can throw spawn EINVAL when launching *.cmd directly.
-    // Using cmd /c is stable and keeps behavior identical for local dev usage.
-    const comspec = process.env.ComSpec || "cmd.exe";
-    return {
-      command: comspec,
-      args: ["/d", "/s", "/c", "pnpm exec tsx src/main.ts"],
-    };
-  }
-  return {
-    command: "pnpm",
-    args: ["exec", "tsx", "src/main.ts"],
-  };
+  return buildGatewayStartCommandForPlatform(process.platform, process.env.ComSpec);
 }
 
 async function stopChild(reason: string): Promise<void> {
@@ -391,22 +389,6 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-function sanitizeSpawnOutput(value: string | Buffer | null | undefined): string | undefined {
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  const text = String(value).trim();
-  return text.length > 0 ? text.slice(-1200) : undefined;
-}
-
-function readPositiveInt(value: string | undefined, fallback: number): number {
-  if (!value?.trim()) {
-    return fallback;
-  }
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
 async function computeSignature(): Promise<string> {
   const entries: string[] = [];
   for (const watchRoot of watchRoots) {
@@ -427,7 +409,7 @@ async function collectPathSignature(targetPath: string, out: string[]): Promise<
   if (stat.isDirectory()) {
     const items = await fs.readdir(targetPath, { withFileTypes: true });
     for (const item of items) {
-      if (item.name === "node_modules" || item.name === "dist" || item.name === ".git") {
+      if (shouldIgnoreWatchedEntryName(item.name)) {
         continue;
       }
       await collectPathSignature(path.join(targetPath, item.name), out);
@@ -435,13 +417,11 @@ async function collectPathSignature(targetPath: string, out: string[]): Promise<
     return;
   }
 
-  const ext = path.extname(targetPath).toLowerCase();
-  if (![".ts", ".tsx", ".json"].includes(ext)) {
+  if (!isWatchableSourceFile(targetPath)) {
     return;
   }
 
-  const relative = path.relative(repoRoot, targetPath).replaceAll("\\", "/");
-  out.push(`${relative}:${stat.mtimeMs}`);
+  out.push(formatSignatureEntry(repoRoot, targetPath, stat.mtimeMs));
 }
 
 async function shutdown(signal: string): Promise<void> {
@@ -500,9 +480,7 @@ function clearRestartTimer(): void {
 }
 
 function pruneFailures(now = Date.now()): void {
-  while (failureTimestamps.length > 0 && now - (failureTimestamps[0] ?? now) > restartWindowMs) {
-    failureTimestamps.shift();
-  }
+  pruneFailureTimestamps(failureTimestamps, now, restartWindowMs);
 }
 
 function resetFailureBudget(): void {
@@ -512,14 +490,6 @@ function resetFailureBudget(): void {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function resolveGatewayHealthHost(host: string): string {
-  const normalized = host.trim().toLowerCase();
-  if (normalized === "0.0.0.0" || normalized === "::" || normalized === "[::]") {
-    return "127.0.0.1";
-  }
-  return host;
 }
 
 function assertGatewayBindIsSafeForDev(host: string): void {

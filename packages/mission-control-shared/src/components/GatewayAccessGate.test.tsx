@@ -489,4 +489,72 @@ describe("GatewayAccessGate", () => {
       "Polling failed",
     );
   });
+
+  it("covers dark theme query, manual retry, credential mode changes, and cancelled polling", async () => {
+    installBrowser("?theme=signal-noir");
+    const onRetry = vi.fn();
+    const retryRenderer = create(
+      <GatewayAccessGate
+        gatewayBaseUrl="http://localhost:8787"
+        access={{ status: "misconfigured", message: "Gateway auth is misconfigured" } as never}
+        busy={false}
+        onRetry={onRetry}
+      />,
+    );
+
+    expect(
+      retryRenderer.root
+        .findAllByType("section")
+        .some((node) => String(node.props.className ?? "").includes("theme-signal-noir")),
+    ).toBe(true);
+    await act(async () => {
+      findButtonByText(retryRenderer.root, "Retry gateway check")!.props.onClick();
+    });
+    expect(onRetry).toHaveBeenCalled();
+    retryRenderer.unmount();
+
+    const authRenderer = create(
+      <GatewayAccessGate
+        gatewayBaseUrl="http://localhost:8787"
+        access={needsAuthAccess()}
+        busy={false}
+        onRetry={() => undefined}
+      />,
+    );
+    await flushAsync();
+    await act(async () => {
+      authRenderer.root.findByProps({ id: "gateway-access-mode" }).props.onChange("basic");
+    });
+    expect(authRenderer.root.findByProps({ id: "gateway-access-username" })).toBeTruthy();
+    authRenderer.unmount();
+
+    let resolvePoll: (value: unknown) => void = () => undefined;
+    shellMocks.createGatewayDeviceAccessRequest.mockResolvedValue(pendingDeviceApproval({ status: "pending" }));
+    shellMocks.pollGatewayDeviceAccessRequestStatus.mockReturnValue(
+      new Promise((resolve) => {
+        resolvePoll = resolve;
+      }),
+    );
+    const pollingRenderer = create(
+      <GatewayAccessGate
+        gatewayBaseUrl="http://localhost:8787"
+        access={needsAuthAccess()}
+        busy={false}
+        onRetry={() => undefined}
+      />,
+    );
+    await flushAsync();
+    await act(async () => {
+      findButtonByText(pollingRenderer.root, "Request approval from another device")!.props.onClick();
+    });
+    pollingRenderer.unmount();
+    await act(async () => {
+      resolvePoll({ status: "approved", deviceToken: "late-token", message: "Late approval" });
+      await Promise.resolve();
+    });
+    expect(shellMocks.persistGatewayAuthState).not.toHaveBeenCalledWith(
+      expect.objectContaining({ token: "late-token" }),
+      expect.anything(),
+    );
+  });
 });

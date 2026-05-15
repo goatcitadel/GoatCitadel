@@ -1,4 +1,5 @@
 import React from "react";
+import type { ChannelSetupDefinition } from "@goatcitadel/contracts";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -75,7 +76,7 @@ vi.mock("../components/ui/GCEmptyState", () => ({
   ),
 }));
 
-import { ChannelSetupPage } from "./ChannelSetupPage";
+import { ChannelSetupPage, formatConnectionTargetSummary, readConnectionString } from "./ChannelSetupPage";
 
 function rendererText(renderer: ReactTestRenderer): string {
   return JSON.stringify(renderer.toJSON());
@@ -91,7 +92,7 @@ function catalogButton(renderer: ReactTestRenderer, label: string) {
   )[0];
 }
 
-function createDefinition(catalogId: string, label: string) {
+function createDefinition(catalogId: string, label: string): ChannelSetupDefinition {
   return {
     catalog: {
       catalogId,
@@ -174,6 +175,41 @@ function createSetupDefinitionList(...items: Array<{ catalogId: string; label: s
   return {
     items: items.map((item) => createDefinition(item.catalogId, item.label)),
   };
+}
+
+function createDraft(overrides: Record<string, unknown> = {}) {
+  return {
+    draftId: "22222222-2222-2222-2222-222222222222",
+    catalogId: "channel.slack",
+    lifecycleMode: "create",
+    label: "Slack",
+    enabled: true,
+    draft: {
+      defaultChannel: "#ops",
+    },
+    contentVersion: "content.v1",
+    adapterVersion: "adapter.v1",
+    validationVersion: "validation.v1",
+    testVersion: "test.v1",
+    createdAt: "2026-05-14T00:00:00.000Z",
+    updatedAt: "2026-05-14T00:05:00.000Z",
+    ...overrides,
+  };
+}
+
+function findButton(renderer: ReactTestRenderer, label: string) {
+  return renderer.root.findAllByType("button").find((button) => {
+    const children = button.props.children;
+    return Array.isArray(children) ? children.includes(label) : children === label;
+  });
+}
+
+async function flush(): Promise<void> {
+  await act(async () => {
+    for (let index = 0; index < 6; index += 1) {
+      await Promise.resolve();
+    }
+  });
 }
 
 describe("ChannelSetupPage", () => {
@@ -286,6 +322,7 @@ describe("ChannelSetupPage", () => {
       await act(async () => {
         renderer = create(<ChannelSetupPage />);
       });
+      await flush();
 
       const text = rendererText(renderer);
       expect(text).toContain("Slack");
@@ -315,6 +352,7 @@ describe("ChannelSetupPage", () => {
       await act(async () => {
         renderer = create(<ChannelSetupPage />);
       });
+      await flush();
 
       const resumeButton = renderer.root.findAllByType("button").find((node) => {
         const children = node.props.children;
@@ -494,5 +532,720 @@ describe("ChannelSetupPage", () => {
     } finally {
       renderer.unmount();
     }
+  });
+
+  it("runs the guided draft save, validate, test, and finalize lifecycle", async () => {
+    const createdDraft = createDraft();
+    const updatedDraft = createDraft({
+      draft: {
+        defaultChannel: "#alerts",
+      },
+      updatedAt: "2026-05-14T00:06:00.000Z",
+    });
+    apiMocks.createChannelSetupDraft.mockResolvedValue(createdDraft);
+    apiMocks.updateChannelSetupDraft.mockResolvedValue(updatedDraft);
+    apiMocks.validateChannelSetupDraft.mockResolvedValue({
+      status: "ok",
+      checkedAt: "2026-05-14T00:07:00.000Z",
+      issues: [],
+    });
+    apiMocks.testChannelSetupDraft.mockResolvedValue({
+      status: "ok",
+      checkedAt: "2026-05-14T00:08:00.000Z",
+      issues: [],
+      probe: {
+        steps: [{ key: "auth", label: "Auth", status: "ok", message: "Connected." }],
+      },
+    });
+    apiMocks.finalizeChannelSetupDraft.mockResolvedValue({
+      connection: {
+        connectionId: "connection-slack",
+        catalogId: "channel.slack",
+        label: "Slack Ops",
+        status: "connected",
+        config: { defaultChannel: "#alerts" },
+      },
+      validation: {
+        status: "ok",
+        checkedAt: "2026-05-14T00:09:00.000Z",
+        issues: [],
+      },
+      test: {
+        status: "ok",
+        checkedAt: "2026-05-14T00:10:00.000Z",
+        issues: [],
+      },
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<ChannelSetupPage />);
+      });
+
+      await act(async () => {
+        findButton(renderer, "Set up Slack")?.props.onClick();
+      });
+
+      expect(apiMocks.createChannelSetupDraft).toHaveBeenCalledWith({
+        catalogId: "channel.slack",
+        connectionId: undefined,
+        lifecycleMode: "create",
+      });
+      expect(rendererText(renderer)).toContain("Guided setup started for Slack.");
+
+      await act(async () => {
+        renderer.root.findByProps({ id: "channel-setup-defaultChannel" }).props.onChange({
+          target: { value: "#alerts" },
+        });
+      });
+
+      await act(async () => {
+        findButton(renderer, "Save Draft")?.props.onClick();
+      });
+      expect(apiMocks.updateChannelSetupDraft).toHaveBeenLastCalledWith(createdDraft.draftId, {
+        label: "Slack",
+        enabled: true,
+        draft: { defaultChannel: "#alerts" },
+      });
+      expect(rendererText(renderer)).toContain("Draft saved.");
+
+      await act(async () => {
+        findButton(renderer, "Validate")?.props.onClick();
+      });
+      expect(apiMocks.validateChannelSetupDraft).toHaveBeenCalledWith(createdDraft.draftId);
+      expect(rendererText(renderer)).toContain("Validation passed.");
+
+      await act(async () => {
+        findButton(renderer, "Test")?.props.onClick();
+      });
+      expect(apiMocks.testChannelSetupDraft).toHaveBeenCalledWith(createdDraft.draftId);
+      expect(rendererText(renderer)).toContain("Live test passed.");
+
+      await act(async () => {
+        findButton(renderer, "Finalize")?.props.onClick();
+      });
+      expect(apiMocks.finalizeChannelSetupDraft).toHaveBeenCalledWith(createdDraft.draftId);
+      expect(rendererText(renderer)).toContain("Slack Ops is ready.");
+      expect(recordClientDiagnosticMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "channel_finalize_succeeded",
+        }),
+      );
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("applies manual JSON and discovers Telegram targets into the active draft", async () => {
+    apiMocks.fetchIntegrationCatalog.mockResolvedValue({
+      items: [
+        {
+          catalogId: "channel.telegram",
+          label: "Telegram",
+          description: "Telegram",
+          kind: "channel",
+          capabilities: [],
+          maturity: "beta",
+          key: "telegram",
+        },
+      ],
+    });
+    apiMocks.fetchChannelSetupDefinitions.mockResolvedValue(
+      createSetupDefinitionList({ catalogId: "channel.telegram", label: "Telegram" }),
+    );
+    apiMocks.fetchChannelSetupDefinition.mockResolvedValue(createDefinition("channel.telegram", "Telegram"));
+    apiMocks.createChannelSetupDraft.mockResolvedValue(
+      createDraft({
+        catalogId: "channel.telegram",
+        label: "Telegram",
+        draft: {
+          botToken: "telegram-token",
+          setupCode: "goat-setup",
+        },
+      }),
+    );
+    apiMocks.discoverTelegramTargets.mockResolvedValue({
+      items: [
+        { id: "ops", label: "Ops", chatId: "100", kind: "group" },
+        { id: "alerts", label: "Alerts", chatId: "200", kind: "channel" },
+      ],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<ChannelSetupPage />);
+      });
+
+      await act(async () => {
+        findButton(renderer, "Set up Telegram")?.props.onClick();
+      });
+      expect(rendererText(renderer)).toContain("Guided setup started for Telegram.");
+
+      await act(async () => {
+        findButton(renderer, "Manual JSON")?.props.onClick();
+      });
+      await act(async () => {
+        renderer.root.findByProps({ id: "channel-manual-json" }).props.onChange({
+          target: { value: "{" },
+        });
+      });
+      await act(async () => {
+        findButton(renderer, "Apply JSON")?.props.onClick();
+      });
+      expect(rendererText(renderer)).toContain("Expected property name");
+
+      await act(async () => {
+        renderer.root.findByProps({ id: "channel-manual-json" }).props.onChange({
+          target: { value: '{"setupCode":"manual-code"}' },
+        });
+      });
+      await act(async () => {
+        findButton(renderer, "Apply JSON")?.props.onClick();
+      });
+      expect(rendererText(renderer)).toContain("Manual JSON applied to the draft.");
+
+      await act(async () => {
+        findButton(renderer, "Detect Telegram Chats")?.props.onClick();
+      });
+      expect(apiMocks.discoverTelegramTargets).toHaveBeenCalledWith({
+        botToken: undefined,
+        botTokenEnv: undefined,
+        setupCode: "manual-code",
+      });
+      expect(rendererText(renderer)).toContain("Found 2 Telegram targets.");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("runs guided edit, repair, rotate-secret, and re-test actions for existing connections", async () => {
+    apiMocks.fetchIntegrationConnections.mockResolvedValue({
+      items: [
+        {
+          connectionId: "connection-slack",
+          catalogId: "channel.slack",
+          label: "Slack Ops",
+          status: "connected",
+          config: { defaultChannel: "#ops" },
+        },
+      ],
+    });
+    apiMocks.createChannelSetupDraft.mockResolvedValue(createDraft({ lifecycleMode: "edit" }));
+    apiMocks.createChannelRepairDraft.mockResolvedValue(
+      createDraft({ draftId: "repair-draft", lifecycleMode: "repair", label: "Slack repair" }),
+    );
+    apiMocks.createChannelRotateSecretDraft.mockResolvedValue(
+      createDraft({ draftId: "rotate-draft", lifecycleMode: "rotate_secret", label: "Slack rotate" }),
+    );
+    apiMocks.retestChannelConnection.mockResolvedValue({
+      status: "error",
+      checkedAt: "2026-05-14T00:11:00.000Z",
+      issues: [{ key: "scope", message: "Missing scope", failureCategory: "oauth_scope" }],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<ChannelSetupPage />);
+      });
+
+      await act(async () => {
+        findButton(renderer, "Re-test")?.props.onClick();
+      });
+      expect(apiMocks.retestChannelConnection).toHaveBeenCalledWith("connection-slack");
+      expect(rendererText(renderer)).toContain("Re-test completed for Slack Ops.");
+      expect(recordClientDiagnosticMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "channel_test_failed",
+        }),
+      );
+
+      await act(async () => {
+        findButton(renderer, "Edit")?.props.onClick();
+      });
+      expect(apiMocks.createChannelSetupDraft).toHaveBeenCalledWith({
+        catalogId: "channel.slack",
+        connectionId: "connection-slack",
+        lifecycleMode: "edit",
+      });
+
+      await act(async () => {
+        findButton(renderer, "Repair")?.props.onClick();
+      });
+      expect(apiMocks.createChannelRepairDraft).toHaveBeenCalledWith("connection-slack");
+      expect(rendererText(renderer)).toContain("Repair draft ready for Slack Ops.");
+
+      await act(async () => {
+        findButton(renderer, "Rotate Secret")?.props.onClick();
+      });
+      expect(apiMocks.createChannelRotateSecretDraft).toHaveBeenCalledWith("connection-slack");
+      expect(rendererText(renderer)).toContain("Rotate Secret draft ready for Slack Ops.");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("opens Slack OAuth and resumes the connected workspace into target setup", async () => {
+    vi.useFakeTimers();
+    const openSpy = vi.fn(() => null);
+    vi.stubGlobal("window", {
+      open: openSpy,
+      setTimeout,
+      clearTimeout,
+    });
+    apiMocks.fetchSlackOAuthStatus
+      .mockResolvedValueOnce({
+        configured: true,
+        mode: "self_owned",
+        scopes: ["chat:write"],
+        missing: [],
+        connections: [],
+      })
+      .mockResolvedValueOnce({
+        configured: true,
+        mode: "self_owned",
+        scopes: ["chat:write"],
+        missing: [],
+        connections: [
+          {
+            connection: {
+              connectionId: "connection-slack-oauth",
+              catalogId: "channel.slack",
+              label: "Slack OAuth",
+              status: "connected",
+              config: {
+                oauthConnectedAt: "2026-05-14T00:12:00.000Z",
+                defaultChannel: "#ops",
+              },
+            },
+          },
+        ],
+      });
+    apiMocks.startSlackOAuth.mockResolvedValue({
+      authorizationUrl: "https://slack.test/oauth",
+    });
+    apiMocks.createChannelSetupDraft.mockResolvedValueOnce(createDraft()).mockResolvedValueOnce(
+      createDraft({
+        lifecycleMode: "edit",
+        connectionId: "connection-slack-oauth",
+        label: "Slack OAuth",
+        draft: {
+          defaultChannel: "#ops",
+        },
+      }),
+    );
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<ChannelSetupPage />);
+      });
+
+      await act(async () => {
+        findButton(renderer, "Set up Slack")?.props.onClick();
+      });
+      expect(rendererText(renderer)).toContain("Guided setup started for Slack.");
+
+      await act(async () => {
+        findButton(renderer, "Connect Slack")?.props.onClick();
+      });
+
+      expect(apiMocks.startSlackOAuth).toHaveBeenCalledTimes(1);
+      expect(openSpy).toHaveBeenCalledWith("https://slack.test/oauth", "_blank", "noopener,noreferrer");
+      expect(rendererText(renderer)).toContain("Slack authorization opened.");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+
+      expect(apiMocks.createChannelSetupDraft).toHaveBeenLastCalledWith({
+        catalogId: "channel.slack",
+        connectionId: "connection-slack-oauth",
+        lifecycleMode: "edit",
+      });
+      expect(rendererText(renderer)).toContain("Edit draft ready for Slack OAuth.");
+      expect(rendererText(renderer)).toContain("Slack OAuth");
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+      renderer.unmount();
+    }
+  });
+
+  it("surfaces initial catalog and guided-definition loading failures", async () => {
+    apiMocks.fetchIntegrationCatalog.mockRejectedValueOnce(new Error("catalog unavailable"));
+
+    let renderer = create(<div />);
+    let text: string;
+    try {
+      await act(async () => {
+        renderer = create(<ChannelSetupPage />);
+      });
+      await flush();
+
+      text = rendererText(renderer);
+      expect(text).toContain("catalog unavailable");
+      expect(text).toContain("No guided channel setup available");
+    } finally {
+      renderer.unmount();
+    }
+
+    apiMocks.fetchChannelSetupDefinition.mockRejectedValueOnce(new Error("definition unavailable"));
+    renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<ChannelSetupPage />);
+      });
+      await flush();
+
+      text = rendererText(renderer);
+      expect(text).toContain("Couldn't load this guided channel");
+      expect(text).toContain("definition unavailable");
+      expect(findButton(renderer, "Set up Slack")?.props.disabled).toBe(true);
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("keeps the wizard visible while surfacing save, validation, test, finalize, retest, and OAuth failures", async () => {
+    apiMocks.fetchIntegrationConnections.mockResolvedValue({
+      items: [
+        {
+          connectionId: "connection-slack",
+          catalogId: "channel.slack",
+          label: "Slack Ops",
+          status: "connected",
+          config: { defaultChannel: "#ops" },
+        },
+      ],
+    });
+    apiMocks.createChannelSetupDraft.mockResolvedValue(createDraft());
+    apiMocks.updateChannelSetupDraft.mockRejectedValueOnce(new Error("save failed"));
+    apiMocks.validateChannelSetupDraft.mockRejectedValueOnce(new Error("validation failed"));
+    apiMocks.testChannelSetupDraft.mockRejectedValueOnce(new Error("test failed"));
+    apiMocks.finalizeChannelSetupDraft.mockRejectedValueOnce(new Error("finalize failed"));
+    apiMocks.retestChannelConnection.mockRejectedValueOnce(new Error("retest failed"));
+    apiMocks.startSlackOAuth.mockRejectedValueOnce(new Error("oauth failed"));
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<ChannelSetupPage />);
+      });
+      await flush();
+
+      await act(async () => {
+        findButton(renderer, "Set up Slack")?.props.onClick();
+      });
+      await flush();
+      expect(rendererText(renderer)).toContain("Guided setup started for Slack.");
+
+      await act(async () => {
+        findButton(renderer, "Save Draft")?.props.onClick();
+      });
+      await flush();
+      expect(rendererText(renderer)).toContain("save failed");
+
+      apiMocks.updateChannelSetupDraft.mockResolvedValue(createDraft());
+
+      await act(async () => {
+        findButton(renderer, "Validate")?.props.onClick();
+      });
+      await flush();
+      expect(rendererText(renderer)).toContain("validation failed");
+
+      await act(async () => {
+        findButton(renderer, "Test")?.props.onClick();
+      });
+      await flush();
+      expect(rendererText(renderer)).toContain("test failed");
+
+      await act(async () => {
+        findButton(renderer, "Finalize")?.props.onClick();
+      });
+      await flush();
+      expect(rendererText(renderer)).toContain("finalize failed");
+
+      await act(async () => {
+        findButton(renderer, "Re-test")?.props.onClick();
+      });
+      await flush();
+      expect(rendererText(renderer)).toContain("retest failed");
+
+      await act(async () => {
+        findButton(renderer, "Connect Slack")?.props.onClick();
+      });
+      await flush();
+      expect(rendererText(renderer)).toContain("oauth failed");
+      expect(rendererText(renderer)).toContain("Slack setup wizard");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("reports the no-target Telegram discovery state and uses token env fallbacks", async () => {
+    apiMocks.fetchIntegrationCatalog.mockResolvedValue({
+      items: [
+        {
+          catalogId: "channel.telegram",
+          label: "Telegram",
+          description: "Telegram",
+          kind: "channel",
+          capabilities: [],
+          maturity: "beta",
+          key: "telegram",
+        },
+      ],
+    });
+    apiMocks.fetchChannelSetupDefinitions.mockResolvedValue(
+      createSetupDefinitionList({ catalogId: "channel.telegram", label: "Telegram" }),
+    );
+    apiMocks.fetchChannelSetupDefinition.mockResolvedValue(createDefinition("channel.telegram", "Telegram"));
+    apiMocks.createChannelSetupDraft.mockResolvedValue(
+      createDraft({
+        catalogId: "channel.telegram",
+        label: "Telegram",
+        draft: {
+          tokenEnv: "TELEGRAM_BOT_TOKEN",
+          setupCode: "goat-setup",
+        },
+      }),
+    );
+    apiMocks.discoverTelegramTargets.mockResolvedValue({ items: [] });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<ChannelSetupPage />);
+      });
+      await flush();
+
+      await act(async () => {
+        findButton(renderer, "Set up Telegram")?.props.onClick();
+      });
+      await flush();
+      await act(async () => {
+        findButton(renderer, "Detect Telegram Chats")?.props.onClick();
+      });
+      await flush();
+
+      expect(apiMocks.discoverTelegramTargets).toHaveBeenCalledWith({
+        botToken: undefined,
+        botTokenEnv: "TELEGRAM_BOT_TOKEN",
+        setupCode: "goat-setup",
+      });
+      expect(rendererText(renderer)).toContain(
+        "No Telegram chats were found yet. Send /start or your setup code in Telegram, then try again.",
+      );
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("starts field collection from the preview and renders guidance, warnings, and successful retests", async () => {
+    const richSlackDefinition = createDefinition("channel.slack", "Slack");
+    richSlackDefinition.wizard.prerequisites = ["Create a Slack app"];
+    richSlackDefinition.wizard.steps = [
+      {
+        id: "intro",
+        kind: "intro",
+        title: "Review Slack setup",
+        body: [{ kind: "paragraph", text: "Use this before collecting values." }],
+      },
+      {
+        id: "collect-values",
+        kind: "field-collection",
+        title: "Paste Slack values",
+        description: "Collect the default Slack channel.",
+        troubleshooting: [
+          {
+            id: "missing-scope",
+            title: "Missing scope",
+            body: "Reinstall the Slack app with chat:write.",
+            nextSteps: ["Open OAuth settings", "Reinstall app"],
+          },
+        ],
+        fields: [
+          {
+            key: "defaultChannel",
+            label: "Default Channel",
+            type: "text",
+            required: true,
+            explanation: "Channel",
+          },
+        ],
+      },
+      {
+        id: "finish",
+        kind: "confirm",
+        title: "Finish",
+      },
+    ];
+    richSlackDefinition.volatility = {
+      ...richSlackDefinition.volatility,
+      officialDocsUrl: "https://api.slack.com/apps",
+      volatility: "medium",
+      deprecationRisk: "low",
+    };
+    apiMocks.fetchChannelSetupDefinition.mockResolvedValue(richSlackDefinition);
+    apiMocks.createChannelSetupDraft.mockResolvedValue(
+      createDraft({
+        hydration: {
+          warnings: ["Existing connection omitted an optional channel target."],
+          fieldState: {},
+        },
+      }),
+    );
+    apiMocks.fetchIntegrationConnections.mockResolvedValue({
+      items: [
+        {
+          connectionId: "connection-slack-ok",
+          catalogId: "channel.slack",
+          label: "Slack Live",
+          status: "degraded",
+          config: { defaultChannel: "#ops" },
+        },
+      ],
+    });
+    apiMocks.retestChannelConnection.mockResolvedValue({
+      status: "ok",
+      checkedAt: "2026-05-14T00:11:00.000Z",
+      issues: [],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<ChannelSetupPage />);
+      });
+      await flush();
+
+      expect(rendererText(renderer)).toContain("Create a Slack app");
+      expect(rendererText(renderer)).toContain("https://api.slack.com/apps");
+
+      await act(async () => {
+        findButton(renderer, "I already have the values")?.props.onClick();
+      });
+      await flush();
+
+      expect(apiMocks.createChannelSetupDraft).toHaveBeenCalledWith({
+        catalogId: "channel.slack",
+        connectionId: undefined,
+        lifecycleMode: "create",
+      });
+      const textAfterDraft = rendererText(renderer);
+      expect(textAfterDraft).toContain("Paste Slack values");
+      expect(textAfterDraft).toContain("Missing scope");
+      expect(textAfterDraft).toContain("Existing connection omitted an optional channel target.");
+
+      await act(async () => {
+        findButton(renderer, "Re-test")?.props.onClick();
+      });
+      await flush();
+
+      expect(apiMocks.retestChannelConnection).toHaveBeenCalledWith("connection-slack-ok");
+      expect(rendererText(renderer)).toContain("Re-test passed for Slack Live.");
+      expect(recordClientDiagnosticMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "channel_retest_completed",
+        }),
+      );
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("keeps setup usable when recent drafts fail to load and Slack OAuth never reports a new workspace", async () => {
+    vi.useFakeTimers();
+    const openSpy = vi.fn(() => null);
+    vi.stubGlobal("window", {
+      open: openSpy,
+      setTimeout,
+      clearTimeout,
+    });
+    apiMocks.fetchChannelSetupDrafts.mockRejectedValue(new Error("drafts unavailable"));
+    apiMocks.startSlackOAuth.mockResolvedValue({
+      authorizationUrl: "https://slack.test/oauth",
+    });
+    apiMocks.fetchSlackOAuthStatus.mockResolvedValue({
+      configured: true,
+      mode: "self_owned",
+      scopes: ["chat:write"],
+      missing: [],
+      connections: [],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<ChannelSetupPage />);
+      });
+      await flush();
+
+      expect(rendererText(renderer)).toContain("Set up Slack");
+      expect(rendererText(renderer)).not.toContain("Resume Draft");
+
+      await act(async () => {
+        findButton(renderer, "Connect Slack")?.props.onClick();
+      });
+      expect(openSpy).toHaveBeenCalledWith("https://slack.test/oauth", "_blank", "noopener,noreferrer");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      await flush();
+
+      expect(rendererText(renderer)).toContain(
+        "Slack authorization opened. If approval finished, refresh connections or start an edit draft for Slack.",
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+      renderer.unmount();
+    }
+  });
+
+  it("summarizes channel connection targets from structured config", () => {
+    expect(
+      formatConnectionTargetSummary({
+        connectionId: "connection-1",
+        catalogId: "channel.telegram",
+        label: "Telegram",
+        status: "connected",
+        config: {
+          targets: [
+            { label: "Ops", chatId: "100", default: true },
+            { label: "Alerts", chatId: "200" },
+            "invalid-target",
+          ],
+        },
+      } as any),
+    ).toBe("channel.telegram · 2 targets · default Ops");
+    expect(
+      formatConnectionTargetSummary({
+        connectionId: "connection-2",
+        catalogId: "channel.slack",
+        label: "Slack",
+        status: "connected",
+        config: {
+          targets: [{ chatId: "C123" }],
+        },
+      } as any),
+    ).toBe("channel.slack · 1 target · default C123");
+    expect(
+      formatConnectionTargetSummary({
+        connectionId: "connection-3",
+        catalogId: "channel.discord",
+        label: "Discord",
+        status: "connected",
+        config: {
+          defaultChannel: "ops",
+        },
+      } as any),
+    ).toBe("channel.discord · default ops");
+    expect(readConnectionString({ key: "  value  ", empty: " " }, "key")).toBe("value");
+    expect(readConnectionString({ key: "  value  ", empty: " " }, "empty")).toBeUndefined();
   });
 });

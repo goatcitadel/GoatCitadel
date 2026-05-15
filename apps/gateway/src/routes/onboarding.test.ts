@@ -89,6 +89,51 @@ describe("onboarding routes", () => {
     expect(bootstrapOnboarding).not.toHaveBeenCalled();
   });
 
+  it("rejects invalid TLS combinations in bootstrap payloads", async () => {
+    const bootstrapOnboarding = vi.fn();
+    app = Fastify();
+    app.decorate("services", { onboarding: { bootstrapOnboarding } } as never);
+    await app.register(onboardingRoutes);
+
+    const mismatchedClientCert = await app.inject({
+      method: "POST",
+      url: "/api/v1/onboarding/bootstrap",
+      payload: {
+        llm: {
+          upsertProvider: {
+            providerId: "local",
+            request: {
+              tls: {
+                clientCertPath: "client.crt",
+              },
+            },
+          },
+        },
+      },
+    });
+    const conflictingCaMode = await app.inject({
+      method: "POST",
+      url: "/api/v1/onboarding/bootstrap",
+      payload: {
+        llm: {
+          upsertProvider: {
+            providerId: "local",
+            request: {
+              tls: {
+                caCertPath: "ca.crt",
+                insecureSkipVerify: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(mismatchedClientCert.statusCode).toBe(400);
+    expect(conflictingCaMode.statusCode).toBe(400);
+    expect(bootstrapOnboarding).not.toHaveBeenCalled();
+  });
+
   it("accepts explicit env-backed provider persistence in bootstrap payloads", async () => {
     const bootstrapOnboarding = vi.fn((input) => input);
     app = Fastify();
@@ -135,6 +180,26 @@ describe("onboarding routes", () => {
     );
   });
 
+  it("maps bootstrap service failures to bad requests", async () => {
+    const bootstrapOnboarding = vi.fn(() => {
+      throw new Error("bootstrap rejected");
+    });
+    app = Fastify();
+    app.decorate("services", { onboarding: { bootstrapOnboarding } } as never);
+    await app.register(onboardingRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/onboarding/bootstrap",
+      payload: {
+        budgetMode: "balanced",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "bootstrap rejected" });
+  });
+
   it("marks onboarding complete", async () => {
     const markOnboardingComplete = vi.fn(() => ({ completed: true }));
     app = Fastify();
@@ -151,5 +216,23 @@ describe("onboarding routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(markOnboardingComplete).toHaveBeenCalledWith("operator");
+  });
+
+  it("validates onboarding completion payloads", async () => {
+    const markOnboardingComplete = vi.fn();
+    app = Fastify();
+    app.decorate("services", { onboarding: { markOnboardingComplete } } as never);
+    await app.register(onboardingRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/onboarding/complete",
+      payload: {
+        completedBy: 123,
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(markOnboardingComplete).not.toHaveBeenCalled();
   });
 });

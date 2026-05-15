@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { adminRoutes } from "./admin.js";
 import { approvalsRoutes } from "./approvals.js";
@@ -160,5 +160,88 @@ describe("route access manifest", () => {
     expect(response.json()).toMatchObject({
       error: "Operator authentication is not installed for this route.",
     });
+  });
+
+  it("enforces read, SSE, and actor-source specific access classes", async () => {
+    app = Fastify();
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+        },
+      },
+    } as never);
+    app.decorate(
+      "requireOperatorAuth",
+      vi.fn(async () => undefined),
+    );
+    app.addHook("onRequest", async (request) => {
+      const source = request.headers["x-auth-source"];
+      (request as { authActorSource?: string }).authActorSource = typeof source === "string" ? source : "none";
+    });
+    app.get("/read", withRouteAccess(app, "authenticated-read"), async () => ({ ok: true }));
+    app.get("/sse", withRouteAccess(app, "sse-read"), async () => ({ ok: true }));
+    app.get("/loopback", withRouteAccess(app, "loopback"), async () => ({ ok: true }));
+    app.get("/device", withRouteAccess(app, "device"), async () => ({ ok: true }));
+    app.get("/companion", withRouteAccess(app, "companion"), async () => ({ ok: true }));
+
+    expect((await app.inject({ method: "GET", url: "/read" })).statusCode).toBe(403);
+    expect((await app.inject({ method: "GET", url: "/read", headers: { "x-auth-source": "token" } })).statusCode).toBe(
+      200,
+    );
+
+    expect((await app.inject({ method: "GET", url: "/sse" })).statusCode).toBe(403);
+    expect((await app.inject({ method: "GET", url: "/sse", headers: { "x-auth-source": "sse" } })).statusCode).toBe(
+      200,
+    );
+
+    expect((await app.inject({ method: "GET", url: "/loopback" })).statusCode).toBe(403);
+    expect(
+      (await app.inject({ method: "GET", url: "/loopback", headers: { "x-auth-source": "loopback" } })).statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ method: "GET", url: "/device", headers: { "x-auth-source": "device" } })).statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ method: "GET", url: "/companion", headers: { "x-auth-source": "companion" } })).statusCode,
+    ).toBe(200);
+  });
+
+  it("merges local prehandlers and ignores untracked or non-runtime manifest misses", async () => {
+    app = Fastify();
+    installRouteAccessTracking(app);
+    app.decorate("gatewayConfig", {
+      assistant: {
+        auth: {
+          mode: "none",
+        },
+      },
+    } as never);
+    const localPreHandler = vi.fn(async () => undefined);
+    app.get(
+      "/api/v1/events",
+      withRouteAccess(app, "authenticated-read", {
+        preHandler: localPreHandler,
+      }),
+      async () => ({ ok: true }),
+    );
+    app.head("/api/v1/unclassified/head-only", async () => undefined);
+    app.options("/api/v1/unclassified/options-only", async () => undefined);
+    app.get("/internal/status", async () => ({ ok: true }));
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/events" });
+
+    expect(response.statusCode).toBe(200);
+    expect(localPreHandler).toHaveBeenCalled();
+    expect(listMissingTrackedRouteAccessClasses(app)).toEqual([]);
+    expect(app.routeAccessManifest).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ method: "GET", url: "/api/v1/events", accessClass: "authenticated-read" }),
+        expect.objectContaining({ method: "HEAD", url: "/api/v1/unclassified/head-only", tracked: true }),
+        expect.objectContaining({ method: "OPTIONS", url: "/api/v1/unclassified/options-only", tracked: true }),
+        expect.objectContaining({ method: "GET", url: "/internal/status", tracked: false }),
+      ]),
+    );
   });
 });

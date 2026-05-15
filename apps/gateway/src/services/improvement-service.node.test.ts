@@ -437,9 +437,374 @@ describe("ImprovementService ledger lifecycle", () => {
     assert.equal(passed.validationStatus, "passed");
     assert.equal(passed.validationSummary, "validated by replay");
   });
+
+  it("exposes scheduler, replay-run, and signal read paths without mutating disabled jobs", () => {
+    const harness = createHarness();
+
+    harness.service.startScheduler();
+    harness.service.startScheduler();
+    harness.service.stopScheduler();
+    harness.service.stopScheduler();
+
+    harness.service.ensureWeeklyImprovementCronJob();
+    const cronJob = harness.storage.cronJobs.get("improvement_weekly");
+    assert.equal(cronJob?.enabled, true);
+    assert.equal(cronJob?.schedule, "0 2 * * 0 America/Los_Angeles");
+
+    const startedAt = "2026-05-10T02:00:00.000Z";
+    harness.storage.gatewaySql
+      .prepare(
+        `
+        INSERT INTO decision_replay_runs (
+          run_id, trigger_mode, sample_size, window_start, window_end, status,
+          report_id, total_candidates, total_scored, likely_wrong_count, model_judged_count,
+          error_text, started_at, finished_at
+        ) VALUES (
+          'run-interrupted', 'scheduled', 500, '2026-05-03T00:00:00.000Z',
+          '2026-05-10T00:00:00.000Z', 'running', NULL, 3, 1, 1, 0,
+          NULL, @startedAt, NULL
+        )
+      `,
+      )
+      .run({ startedAt });
+
+    harness.service.markInterruptedDecisionReplayRuns();
+    const [run] = harness.service.listDecisionReplayRuns(5);
+
+    assert.equal(run.runId, "run-interrupted");
+    assert.equal(run.status, "failed");
+    assert.match(run.error ?? "", /Replay interrupted/);
+    assert.equal(
+      harness.published.some((event) => event.eventType === "system" && event.payload.recoveredCount === 1),
+      true,
+    );
+
+    const signal = harness.service.recordPromptLabRegressionCompletionSignal({
+      regressionRunId: "regression-signal-read",
+      packId: "pack-routing",
+      capability: "provider-balance",
+      scoreDelta: -0.6,
+      passDelta: -0.2,
+      latencyDeltaMs: 35,
+    });
+    assert.ok(signal);
+
+    assert.equal(harness.service.getImprovementSignal(signal.signalId).signalId, signal.signalId);
+    assert.equal(
+      harness.service.listImprovementSignals(10, "prompt-lab").some((item) => item.signalId === signal.signalId),
+      true,
+    );
+    assert.equal(harness.service.listImprovementCandidates(10, "prompt-lab").length >= 1, true);
+    assert.throws(() => harness.service.getImprovementSignal("missing-signal"), /Improvement signal not found/);
+  });
+
+  it("enriches weekly reports with routing gaps, strategy tags, proposals, and specialists", () => {
+    const harness = createHarness();
+    const runId = "run-report-enrichment";
+    const reportId = "report-enrichment";
+    const createdAt = "2026-05-10T03:00:00.000Z";
+    const finding = {
+      findingId: "finding-context",
+      runId,
+      fingerprint: "retrieval:miss",
+      causeClass: "retrieval_miss",
+      clusterKey: "retrieval",
+      severity: "high",
+      recurrenceCount: 3,
+      impactedSessions: 2,
+      impactedTurns: 2,
+      avgWrongness: 0.82,
+      title: "Context evidence missing",
+      summary: "Runs missed required context evidence.",
+      recommendation: "Add a context recovery checklist.",
+      isDuplicate: false,
+      createdAt,
+    };
+
+    harness.service.recordCapabilityGapEvent({
+      sessionId: "sess-gap-report",
+      causeClass: "tool_exists_but_not_in_profile",
+      requestedTool: "browser.search",
+      toolProfile: "chat",
+      providerId: "openai",
+      configArea: "toolPolicy",
+      recoveryOptions: ["switch_tool_profile"],
+      confidence: 0.9,
+    });
+    harness.storage.gatewaySql
+      .prepare(
+        `
+        INSERT INTO decision_replay_runs (
+          run_id, trigger_mode, sample_size, window_start, window_end, status,
+          report_id, total_candidates, total_scored, likely_wrong_count, model_judged_count,
+          error_text, started_at, finished_at
+        ) VALUES (
+          @runId, 'manual', 50, '2026-05-01T00:00:00.000Z', '2026-05-10T00:00:00.000Z',
+          'completed', @reportId, 10, 8, 3, 1, NULL, @createdAt, @createdAt
+        )
+      `,
+      )
+      .run({ runId, reportId, createdAt });
+    harness.storage.gatewaySql
+      .prepare(
+        `
+        INSERT INTO improvement_reports (
+          report_id, run_id, week_start, week_end, summary_json, top_findings_json,
+          applied_tunes_json, queued_tunes_json, week_over_week_json, previous_report_id, created_at
+        ) VALUES (
+          @reportId, @runId, '2000-01-01T00:00:00.000Z', '2999-01-01T00:00:00.000Z',
+          @summaryJson, @topFindingsJson, '[]', '[]', @weekOverWeekJson, NULL, @createdAt
+        )
+      `,
+      )
+      .run({
+        reportId,
+        runId,
+        summaryJson: JSON.stringify({
+          sampledDecisions: 10,
+          likelyWrongCount: 3,
+          wrongnessRate: 0.3,
+          topCauseClasses: [{ causeClass: "retrieval_miss", count: 3 }],
+          duplicateSuppressedCount: 0,
+          improvedCount: 1,
+          regressedCount: 2,
+        }),
+        topFindingsJson: JSON.stringify([finding]),
+        weekOverWeekJson: JSON.stringify({ improved: ["routing"], regressed: ["context"], unchanged: [] }),
+        createdAt,
+      });
+
+    const report = harness.service.getImprovementReport(reportId);
+
+    assert.equal(report.routingGapSummary?.totalEvents, 1);
+    assert.deepEqual(report.routingGapSummary?.topRequestedTools, ["browser.search"]);
+    assert.equal(
+      report.specialistCandidateSuggestions?.some((item) => item.title === "Routing Harness Specialist"),
+      true,
+    );
+    assert.equal(
+      report.specialistCandidateSuggestions?.some((item) => item.title === "Context Recovery Specialist"),
+      true,
+    );
+    assert.equal(
+      report.proposalDrafts?.some((item) => item.kind === "routing_rule"),
+      true,
+    );
+    assert.equal(
+      report.proposalDrafts?.some((item) => item.kind === "playbook"),
+      true,
+    );
+    assert.equal(
+      report.strategyTags?.some((item) => item.tag === "repair"),
+      true,
+    );
+    assert.equal(harness.service.listImprovementReports(10)[0]?.reportId, reportId);
+    assert.equal(harness.service.getDecisionReplayRun(runId).report?.reportId, reportId);
+    assert.throws(() => harness.service.getImprovementReport("missing-report"), /not found/);
+  });
+
+  it("routes curator lifecycle actions through review-first state transitions", async () => {
+    const harness = createHarness();
+    const candidate = createRoutingCandidate(harness.service);
+
+    const validated = harness.service.validateImprovementCandidate(candidate.candidateId, {
+      actorId: "qa-operator",
+      reason: "ready for approval",
+    });
+    assert.equal(validated.status, "validated");
+    assert.equal(validated.mutationApplied, false);
+
+    const approved = harness.service.approveImprovementCandidate(candidate.candidateId, {
+      actorId: "qa-operator",
+      reason: "evaluation passed",
+    });
+    assert.equal(approved.status, "approved");
+
+    assert.throws(() => harness.service.promoteImprovementCandidate(candidate.candidateId), /Promotion is review-only/);
+
+    const activated = await harness.service.activateImprovementCandidate(candidate.candidateId, {
+      actorId: "qa-operator",
+    });
+    assert.equal(activated.status, "approval_pending");
+    assert.ok(activated.approvalId);
+
+    const rejectCandidate = createRoutingCandidate(harness.service, "reject");
+    const rejected = harness.service.rejectImprovementCandidate(rejectCandidate.candidateId, {
+      actorId: "qa-operator",
+      reason: "not useful",
+    });
+    assert.equal(rejected.status, "rejected");
+
+    const snoozeCandidate = createRoutingCandidate(harness.service, "snooze");
+    const snoozed = harness.service.snoozeImprovementCandidate(snoozeCandidate.candidateId, {
+      actorId: "qa-operator",
+      reason: "wait for more evidence",
+    });
+    assert.equal(snoozed.status, "snoozed");
+    assert.ok(snoozed.review.candidate.suppressionUntil);
+    assert.equal(
+      harness.service.getCuratorReviewItem(snoozeCandidate.candidateId).candidate.candidateId,
+      snoozeCandidate.candidateId,
+    );
+  });
+
+  it("runs manual replay against persisted traces with model judge scores and report events", async () => {
+    const chatCompletionRequests: unknown[] = [];
+    const harness = createHarness({
+      createChatCompletion: async (request) => {
+        chatCompletionRequests.push(request);
+        return {
+          id: "judge-replay",
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  correctnessLikelihood: 0.22,
+                  missedToolProbability: 0.81,
+                  betterResponsePotential: 0.76,
+                  rationale: "The trace failed with live-data intent and no completed recovery.",
+                }),
+              },
+            },
+          ],
+        } as never;
+      },
+      readTranscriptOrEmpty: async () =>
+        [
+          {
+            type: "message.user",
+            eventId: "user-replay",
+            payload: { message: { content: "Find the current provider release notes and cite them." } },
+          },
+          {
+            type: "message.assistant",
+            eventId: "assistant-replay",
+            payload: { message: { content: "I could not complete the lookup." } },
+          },
+        ] as never,
+    });
+    const occurredAt = new Date().toISOString();
+    harness.storage.gatewaySql
+      .prepare(
+        `
+        INSERT INTO chat_turn_traces (
+          turn_id, session_id, user_message_id, assistant_message_id, status, mode, model,
+          web_mode, memory_mode, thinking_level, routing_json, retrieval_json, reflection_json,
+          started_at, finished_at
+        ) VALUES (
+          'turn-replay', 'sess-replay', 'user-replay', 'assistant-replay', 'failed', 'chat', 'gpt-5.4',
+          'quick', 'off', 'standard', @routingJson, @retrievalJson, @reflectionJson,
+          @occurredAt, @occurredAt
+        )
+      `,
+      )
+      .run({
+        routingJson: JSON.stringify({ liveDataIntent: true, selectedProviderId: "openai" }),
+        retrievalJson: JSON.stringify({ l2Used: false }),
+        reflectionJson: JSON.stringify({ attemptCount: 0 }),
+        occurredAt,
+      });
+    harness.storage.gatewaySql
+      .prepare(
+        `
+        INSERT INTO chat_tool_runs (
+          tool_run_id, turn_id, session_id, tool_name, status, args_json, result_json, error, started_at, finished_at
+        ) VALUES (
+          'tool-replay', 'turn-replay', 'sess-replay', 'browser.search', 'failed',
+          @argsJson, NULL, 'provider timeout', @occurredAt, @occurredAt
+        )
+      `,
+      )
+      .run({
+        argsJson: JSON.stringify({ query: "provider release notes" }),
+        occurredAt,
+      });
+
+    const result = await harness.service.runImprovementReplayManually({ sampleSize: 5 });
+    const detail = harness.service.getDecisionReplayRun(result.run.runId);
+
+    assert.equal(detail.run.status, "completed");
+    assert.equal(detail.run.totalCandidates, 2);
+    assert.equal(detail.run.totalScored, 2);
+    assert.equal(detail.run.modelJudgedCount, 2);
+    assert.equal(detail.items.length, 2);
+    assert.equal(
+      detail.items.every((item) => item.modelScores),
+      true,
+    );
+    assert.equal(
+      detail.items.some((item) => item.evidence.includes("model_judged")),
+      true,
+    );
+    assert.ok(detail.findings.length >= 1);
+    assert.equal(detail.report?.reportId, result.report?.reportId);
+    assert.equal(result.report?.summary.sampledDecisions, 2);
+    assert.equal(chatCompletionRequests.length, 2);
+    assert.equal(
+      harness.published.some((event) => event.eventType === "improvement_replay_started"),
+      true,
+    );
+    assert.equal(
+      harness.published.some((event) => event.eventType === "improvement_replay_progress"),
+      true,
+    );
+    assert.equal(
+      harness.published.some(
+        (event) =>
+          event.eventType === "improvement_replay_completed" &&
+          event.payload.runId === result.run.runId &&
+          event.payload.reportId === result.report?.reportId,
+      ),
+      true,
+    );
+  });
+
+  it("persists failed replay status and emits failure events when replay scoring crashes", async () => {
+    const harness = createHarness({
+      readTranscriptOrEmpty: async () => {
+        throw new Error("transcript store offline");
+      },
+    });
+    const occurredAt = new Date().toISOString();
+    harness.storage.gatewaySql
+      .prepare(
+        `
+        INSERT INTO chat_turn_traces (
+          turn_id, session_id, user_message_id, assistant_message_id, status, mode, model,
+          web_mode, memory_mode, thinking_level, routing_json, retrieval_json, reflection_json,
+          started_at, finished_at
+        ) VALUES (
+          'turn-replay-fail', 'sess-replay-fail', 'user-replay-fail', 'assistant-replay-fail',
+          'failed', 'chat', 'gpt-5.4', 'off', 'off', 'standard',
+          '{}', '{}', '{}', @occurredAt, @occurredAt
+        )
+      `,
+      )
+      .run({ occurredAt });
+
+    await assert.rejects(
+      () => harness.service.runImprovementReplayManually({ sampleSize: 1 }),
+      /transcript store offline/,
+    );
+    const [failedRun] = harness.service.listDecisionReplayRuns(1);
+
+    assert.ok(failedRun);
+    assert.equal(failedRun.status, "failed");
+    assert.match(failedRun.error ?? "", /transcript store offline/);
+    assert.equal(
+      harness.published.some(
+        (event) =>
+          event.eventType === "improvement_replay_failed" &&
+          event.payload.runId === failedRun.runId &&
+          /transcript store offline/.test(String(event.payload.message)),
+      ),
+      true,
+    );
+  });
 });
 
-function createHarness(): Harness {
+function createHarness(callbackOverrides: Partial<ImprovementServiceCallbacks> = {}): Harness {
   const rootDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-improvement-ledger-"));
   const transcriptsDir = path.join(rootDir, "transcripts");
   const auditDir = path.join(rootDir, "audit");
@@ -501,6 +866,7 @@ function createHarness(): Harness {
     retryChatTurn: async () => ({ sessionId: "retry-session", turnId: "retry-turn" }) as never,
     backgroundTasks: new Set<Promise<void>>(),
     closing: false,
+    ...callbackOverrides,
   };
 
   const service = new ImprovementService(ctx, callbacks);
@@ -517,11 +883,11 @@ function createHarness(): Harness {
   return harness;
 }
 
-function createRoutingCandidate(service: ImprovementService) {
+function createRoutingCandidate(service: ImprovementService, suffix = "1") {
   service.recordPromptLabRegressionCompletionSignal({
-    regressionRunId: "regression-seed-1",
+    regressionRunId: `regression-seed-${suffix}`,
     packId: "pack-routing",
-    capability: "provider-balance",
+    capability: suffix === "1" ? "provider-balance" : `provider-balance-${suffix}`,
     scoreDelta: -0.6,
     passDelta: -0.2,
     latencyDeltaMs: 35,

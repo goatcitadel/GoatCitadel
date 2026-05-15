@@ -72,18 +72,19 @@ export async function loadResolvedProfile(options: {
   if (envMode === "none" || envMode === "token" || envMode === "basic") {
     profile.authMode = envMode;
   }
+  const resolvedProfile = sanitizeProfile(profile);
 
   const auth: TuiResolvedAuth = {
-    mode: profile.authMode,
+    mode: resolvedProfile.authMode,
     token: process.env.GOATCITADEL_AUTH_TOKEN?.trim() || undefined,
-    username: process.env.GOATCITADEL_AUTH_BASIC_USERNAME?.trim() || profile.username,
+    username: process.env.GOATCITADEL_AUTH_BASIC_USERNAME?.trim() || resolvedProfile.username,
     password: process.env.GOATCITADEL_AUTH_BASIC_PASSWORD || undefined,
   };
 
   return {
     profileName,
     filePath,
-    profile,
+    profile: resolvedProfile,
     auth,
   };
 }

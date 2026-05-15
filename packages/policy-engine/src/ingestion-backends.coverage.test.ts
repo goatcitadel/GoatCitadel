@@ -180,6 +180,225 @@ describe("ingestion backend coverage", () => {
     expect(result.document.text).toBe("");
     expect(result.chunksSaved).toBe(0);
   });
+
+  it("uses firecrawl defaults, env overrides, and payload content fallbacks", async () => {
+    const priorBaseUrl = process.env.FIRECRAWL_BASE_URL;
+    const priorApiKey = process.env.FIRECRAWL_API_KEY;
+    const priorFetch = globalThis.fetch;
+    process.env.FIRECRAWL_BASE_URL = "https://firecrawl.example/";
+    process.env.FIRECRAWL_API_KEY = "firecrawl-key";
+    const storage = createKnowledgeStorage();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              content: "## Firecrawl content",
+              metadata: {},
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const result = await ingestDocumentViaBackend({
+        request: createRequest({
+          sourceType: "url",
+          source: "https://example.com/firecrawl",
+          namespace: "web",
+          backend: "firecrawl",
+          title: "Provided Title",
+        }),
+        storage,
+        fetchUrl: vi.fn(),
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://firecrawl.example/v2/scrape",
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: "Bearer firecrawl-key",
+          }),
+        }),
+      );
+      expect(result.fetchResult).toMatchObject({
+        rawText: "## Firecrawl content",
+        title: "Provided Title",
+        contentType: "text/markdown",
+      });
+    } finally {
+      if (priorBaseUrl === undefined) {
+        delete process.env.FIRECRAWL_BASE_URL;
+      } else {
+        process.env.FIRECRAWL_BASE_URL = priorBaseUrl;
+      }
+      if (priorApiKey === undefined) {
+        delete process.env.FIRECRAWL_API_KEY;
+      } else {
+        process.env.FIRECRAWL_API_KEY = priorApiKey;
+      }
+      globalThis.fetch = priorFetch;
+    }
+  });
+
+  it("covers firecrawl request defaults and html-only response fallback", async () => {
+    const priorBaseUrl = process.env.FIRECRAWL_BASE_URL;
+    const priorApiKey = process.env.FIRECRAWL_API_KEY;
+    const priorFetch = globalThis.fetch;
+    delete process.env.FIRECRAWL_BASE_URL;
+    delete process.env.FIRECRAWL_API_KEY;
+    const storage = createKnowledgeStorage();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              html: "<main><h1>HTML only</h1></main>",
+              title: "Firecrawl Data Title",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const result = await ingestDocumentViaBackend({
+        request: createRequest({
+          sourceType: "url",
+          source: "https://example.com/firecrawl-html",
+          namespace: "web",
+          backend: "firecrawl",
+          firecrawlTimeoutMs: 1_000,
+        }),
+        storage,
+        fetchUrl: vi.fn(),
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://127.0.0.1:3002/v2/scrape",
+        expect.objectContaining({
+          signal: expect.any(AbortSignal),
+        }),
+      );
+      expect(result.fetchResult).toMatchObject({
+        rawText: "<main><h1>HTML only</h1></main>",
+        title: "Firecrawl Data Title",
+        contentType: "text/html",
+      });
+    } finally {
+      if (priorBaseUrl === undefined) {
+        delete process.env.FIRECRAWL_BASE_URL;
+      } else {
+        process.env.FIRECRAWL_BASE_URL = priorBaseUrl;
+      }
+      if (priorApiKey === undefined) {
+        delete process.env.FIRECRAWL_API_KEY;
+      } else {
+        process.env.FIRECRAWL_API_KEY = priorApiKey;
+      }
+      globalThis.fetch = priorFetch;
+    }
+  });
+
+  it("uses firecrawl empty payload and invalid timeout fallbacks", async () => {
+    const priorFetch = globalThis.fetch;
+    const storage = createKnowledgeStorage();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ data: {} }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const result = await ingestDocumentViaBackend({
+        request: createRequest({
+          sourceType: "url",
+          source: "https://example.com/firecrawl-empty",
+          namespace: "web",
+          backend: "firecrawl",
+          firecrawlBaseUrl: "https://firecrawl-empty.example",
+          firecrawlTimeoutMs: 0,
+        }),
+        storage,
+        fetchUrl: vi.fn(),
+      });
+
+      expect(result.fetchResult).toMatchObject({
+        rawText: "",
+        contentType: "text/html",
+      });
+    } finally {
+      globalThis.fetch = priorFetch;
+    }
+  });
+
+  it("scores cached native documents with missing ingestion metadata and sparse embeddings", () => {
+    const storage = createKnowledgeStorage([
+      {
+        docId: "doc-native-default",
+        namespace: "research",
+        sourceType: "url",
+        sourceRef: "https://example.com/default-backend",
+        title: "Default Backend",
+        metadata: {},
+      },
+    ]);
+    storage.knowledge.appendChunks("doc-native-default", [
+      { content: "alpha beta", embedding: [1, undefined, 0.5] as unknown as number[] },
+    ]);
+
+    const result = searchIngestedContext({
+      storage,
+      namespace: "research",
+      query: "alpha",
+    });
+
+    expect(result.items[0]).toMatchObject({ content: "alpha beta" });
+  });
+
+  it("returns cached native documents when ingestion metadata omits backend", async () => {
+    const storage = createKnowledgeStorage([
+      {
+        docId: "doc-native-default",
+        namespace: "web",
+        sourceType: "url",
+        sourceRef: "https://example.com/cached",
+        title: "Cached Default",
+        metadata: {
+          ingestion: {
+            fetchedAt: "2026-03-22T12:00:00.000Z",
+          },
+        },
+      },
+    ]);
+    storage.knowledge.appendChunks("doc-native-default", [{ content: "cached text" }]);
+
+    const result = await ingestDocumentViaBackend({
+      request: createRequest({
+        sourceType: "url",
+        source: "https://example.com/cached",
+        namespace: "web",
+        backend: "native",
+      }),
+      storage,
+      fetchUrl: vi.fn(),
+    });
+
+    expect(result.cached).toBe(true);
+    expect(result.document.text).toBe("cached text");
+  });
 });
 
 function createRequest(args: Record<string, unknown>): ToolInvokeRequest {

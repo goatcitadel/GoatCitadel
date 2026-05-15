@@ -29,6 +29,10 @@ interface StoredWorkbenchUiState {
   selectedFilePath?: string;
 }
 
+export function describeWorkbenchActionError(cause: unknown, fallback: string): string {
+  return cause instanceof Error ? cause.message : fallback;
+}
+
 const WORKBENCH_UI_STORAGE_PREFIX = "goatcitadel.chat.workbench.ui.";
 
 function normalizeWorkbenchPaths(paths: string[]): string[] {
@@ -261,7 +265,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
         return true;
       } catch (cause) {
         if (isCurrentSession(requestSessionId)) {
-          setError(cause instanceof Error ? cause.message : "Unable to load workbench file.");
+          setError(describeWorkbenchActionError(cause, "Unable to load workbench file."));
         }
         return false;
       } finally {
@@ -351,11 +355,11 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
         setSelectedFile(null);
         setSelectedFileDiff(null);
         setDraftContent("");
-        setError(lastError instanceof Error ? lastError.message : "Unable to load the active workbench file.");
+        setError(describeWorkbenchActionError(lastError, "Unable to load the active workbench file."));
       }
     } catch (cause) {
       if (isCurrentSession(requestSessionId)) {
-        setError(cause instanceof Error ? cause.message : "Unable to load workbench.");
+        setError(describeWorkbenchActionError(cause, "Unable to load workbench."));
       }
     } finally {
       if (isCurrentSession(requestSessionId)) {
@@ -402,7 +406,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
       return true;
     } catch (cause) {
       if (isCurrentSession(requestSessionId)) {
-        setError(cause instanceof Error ? cause.message : "Unable to save the active workbench file.");
+        setError(describeWorkbenchActionError(cause, "Unable to save the active workbench file."));
       }
       return false;
     } finally {
@@ -430,7 +434,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
         await refresh();
       } catch (cause) {
         if (isCurrentSession(requestSessionId)) {
-          setError(cause instanceof Error ? cause.message : "Unable to create worktree.");
+          setError(describeWorkbenchActionError(cause, "Unable to create worktree."));
         }
       } finally {
         if (isCurrentSession(requestSessionId)) {
@@ -468,7 +472,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
         return true;
       } catch (cause) {
         if (isCurrentSession(requestSessionId)) {
-          setError(cause instanceof Error ? cause.message : "Unable to run workbench validation.");
+          setError(describeWorkbenchActionError(cause, "Unable to run workbench validation."));
         }
         return false;
       } finally {
@@ -502,7 +506,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
         return response.applied;
       } catch (cause) {
         if (isCurrentSession(requestSessionId)) {
-          setError(cause instanceof Error ? cause.message : "Unable to apply the workbench patch.");
+          setError(describeWorkbenchActionError(cause, "Unable to apply the workbench patch."));
         }
         return false;
       } finally {
@@ -531,7 +535,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
       return response;
     } catch (cause) {
       if (isCurrentSession(requestSessionId)) {
-        setError(cause instanceof Error ? cause.message : "Unable to export the workbench patch.");
+        setError(describeWorkbenchActionError(cause, "Unable to export the workbench patch."));
       }
       return null;
     } finally {
@@ -564,7 +568,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
         return true;
       } catch (cause) {
         if (isCurrentSession(requestSessionId)) {
-          setError(cause instanceof Error ? cause.message : "Unable to revert the selected workbench file.");
+          setError(describeWorkbenchActionError(cause, "Unable to revert the selected workbench file."));
         }
         return false;
       } finally {
@@ -597,7 +601,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
       return true;
     } catch (cause) {
       if (isCurrentSession(requestSessionId)) {
-        setError(cause instanceof Error ? cause.message : "Unable to revert workbench changes.");
+        setError(describeWorkbenchActionError(cause, "Unable to revert workbench changes."));
       }
       return false;
     } finally {

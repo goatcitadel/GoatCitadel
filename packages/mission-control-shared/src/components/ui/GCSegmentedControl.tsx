@@ -46,40 +46,28 @@ export function GCSegmentedControl<TValue extends string>({
     }
 
     if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-      const nextIndex = enabledIndices[(currentEnabledIndex + 1) % enabledIndices.length];
-      if (typeof nextIndex !== "number") {
-        return;
-      }
+      const nextIndex = enabledIndices[(currentEnabledIndex + 1) % enabledIndices.length]!;
       event.preventDefault();
       moveSelection(nextIndex);
       return;
     }
 
     if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-      const previousIndex = enabledIndices[(currentEnabledIndex - 1 + enabledIndices.length) % enabledIndices.length];
-      if (typeof previousIndex !== "number") {
-        return;
-      }
+      const previousIndex = enabledIndices[(currentEnabledIndex - 1 + enabledIndices.length) % enabledIndices.length]!;
       event.preventDefault();
       moveSelection(previousIndex);
       return;
     }
 
     if (event.key === "Home") {
-      const firstIndex = enabledIndices[0];
-      if (typeof firstIndex !== "number") {
-        return;
-      }
+      const firstIndex = enabledIndices[0]!;
       event.preventDefault();
       moveSelection(firstIndex);
       return;
     }
 
     if (event.key === "End") {
-      const lastIndex = enabledIndices[enabledIndices.length - 1];
-      if (typeof lastIndex !== "number") {
-        return;
-      }
+      const lastIndex = enabledIndices[enabledIndices.length - 1]!;
       event.preventDefault();
       moveSelection(lastIndex);
     }

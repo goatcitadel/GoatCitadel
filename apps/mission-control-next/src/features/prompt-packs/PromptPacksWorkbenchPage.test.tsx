@@ -23,6 +23,13 @@ const promptPackMocks = vi.hoisted(() => ({
   runPromptPackReplayRegression: vi.fn(),
   runPromptPackTest: vi.fn(),
   scorePromptPackTest: vi.fn(),
+  providerCatalog: {
+    config: { activeProviderId: "openai" },
+    providers: [
+      { providerId: "openai", label: "OpenAI", models: ["gpt-5", "gpt-5-mini"] },
+      { providerId: "anthropic", label: "Anthropic", models: ["claude-opus-5"] },
+    ],
+  },
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
@@ -47,11 +54,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
 
 vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () => ({
   useProviderModelCatalog: () => ({
-    config: { activeProviderId: "openai" },
-    providers: [
-      { providerId: "openai", label: "OpenAI", models: ["gpt-5", "gpt-5-mini"] },
-      { providerId: "anthropic", label: "Anthropic", models: ["claude-opus-5"] },
-    ],
+    config: promptPackMocks.providerCatalog.config,
+    providers: promptPackMocks.providerCatalog.providers,
     loadModelsForProvider: promptPackMocks.loadModelsForProvider,
   }),
 }));
@@ -559,6 +563,13 @@ describe("PromptPacksWorkbenchPage", () => {
     vi.clearAllMocks();
     promptPackMocks.refreshCallback = undefined;
     promptPackMocks.refreshFallback = undefined;
+    promptPackMocks.providerCatalog = {
+      config: { activeProviderId: "openai" },
+      providers: [
+        { providerId: "openai", label: "OpenAI", models: ["gpt-5", "gpt-5-mini"] },
+        { providerId: "anthropic", label: "Anthropic", models: ["claude-opus-5"] },
+      ],
+    };
     installBrowser();
     setupApiSuccess();
   });
@@ -606,6 +617,13 @@ describe("PromptPacksWorkbenchPage", () => {
     await click(findButton(renderer, "Copy run link"));
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith("http://localhost:5173/chat?sessionId=session-1");
 
+    const scoreButtons = renderer.root
+      .findAllByType("button")
+      .filter((node) => String(node.props.className).includes("mc-pp-score-button"));
+    await click(scoreButtons.find((node) => readNodeText(node) === "--")!);
+    expect(readNodeText(renderer.root)).toContain("4/5 dimensions set");
+    await click(scoreButtons.find((node) => readNodeText(node) === "4")!);
+    expect(readNodeText(renderer.root)).toContain("5/5 dimensions set");
     await click(findButton(renderer, "Fill pass defaults"));
     await change(findSelectContaining(renderer, "No override"), "review");
     await change(findTextarea(renderer, "Optional notes..."), "Needs one more evidence note.");
@@ -661,6 +679,8 @@ describe("PromptPacksWorkbenchPage", () => {
     await click(findButton(renderer, "Run all"));
     expect(promptPackMocks.runPromptPackBenchmark).toHaveBeenCalledTimes(2);
 
+    await click(findButton(renderer, "Reset pack"));
+    await click(findButton(renderer, "Cancel"));
     await click(findButton(renderer, "Reset pack"));
     await click(findButton(renderer, "Confirm reset"));
     expect(promptPackMocks.resetPromptPack).toHaveBeenCalledWith("pack-1", {
@@ -725,5 +745,220 @@ describe("PromptPacksWorkbenchPage", () => {
     await click(findButton(renderer, "Reset pack"));
     await click(findButton(renderer, "Confirm reset"));
     expect(readNodeText(renderer.root)).toContain("Select at least one reset option");
+  });
+
+  it("handles empty pack lists and pack export fallback metadata", async () => {
+    promptPackMocks.fetchPromptPacks.mockResolvedValueOnce({ items: [] });
+    const emptyRenderer = await renderWorkbench();
+    expect(readNodeText(emptyRenderer.root)).toContain("No tests match this filter.");
+    expect(promptPackMocks.fetchPromptPackTests).not.toHaveBeenCalled();
+
+    setupApiSuccess();
+    promptPackMocks.fetchPromptPackExport.mockRejectedValueOnce(new Error("export metadata offline"));
+    const fallbackRenderer = await renderWorkbench();
+
+    expect(readNodeText(fallbackRenderer.root)).toContain("Operator trust pack");
+    expect(readNodeText(fallbackRenderer.root)).not.toContain("artifacts/prompt-packs/archive/snapshot.json");
+    expect(promptPackMocks.fetchPromptPackExport).toHaveBeenCalledWith("pack-1");
+  });
+
+  it("covers failed run, auto-score, export, terminal benchmark, and keyboard selection branches", async () => {
+    const renderer = await renderWorkbench();
+
+    await click(findButton(renderer, "Secondary pack"));
+    expect(promptPackMocks.fetchPromptPackTests).toHaveBeenCalledWith("pack-2");
+
+    const testRow = renderer.root
+      .findAll((node) => node.props.role === "button")
+      .find((node) => readNodeText(node).includes("TEST-02"));
+    expect(testRow).toBeTruthy();
+    await act(async () => {
+      testRow!.props.onKeyDown({ key: "Enter", preventDefault: vi.fn() });
+    });
+    await flush();
+
+    promptPackMocks.runPromptPackTest.mockResolvedValueOnce({ ...failedRun, runId: "run-failed-new" });
+    await click(findButton(renderer, "Run selected"));
+    expect(readNodeText(renderer.root)).toContain("Ran TEST-02, but it failed: Tool failed");
+
+    promptPackMocks.runPromptPackTest.mockRejectedValueOnce(new Error("run offline"));
+    await click(findButton(renderer, "Run selected"));
+    expect(readNodeText(renderer.root)).toContain("run offline");
+
+    const thirdRow = renderer.root
+      .findAll((node) => node.props.role === "button")
+      .find((node) => readNodeText(node).includes("TEST-03"));
+    await act(async () => {
+      thirdRow!.props.onClick();
+    });
+    await flush();
+
+    promptPackMocks.runPromptPackTest.mockResolvedValueOnce({ ...unscoredRun, runId: "run-autoscore-error" });
+    promptPackMocks.autoScorePromptPackTest.mockRejectedValueOnce(new Error("judge offline"));
+    await click(findButton(renderer, "Run selected"));
+    expect(readNodeText(renderer.root)).toContain("auto-score failed: judge offline");
+
+    promptPackMocks.runPromptPackTest.mockResolvedValueOnce({ ...unscoredRun, runId: "run-export-error" });
+    promptPackMocks.exportPromptPackReport.mockRejectedValueOnce(new Error("disk full"));
+    await click(findButton(renderer, "Run selected"));
+    expect(readNodeText(renderer.root)).toContain("saving the run log failed: disk full");
+
+    promptPackMocks.fetchPromptPackBenchmark.mockResolvedValueOnce({
+      ...benchmarkStatus,
+      run: {
+        ...benchmarkStatus.run,
+        status: "completed",
+        finishedAt: "2026-04-22T00:15:00.000Z",
+      },
+      progress: { totalItems: 2, completedItems: 2 },
+    });
+    promptPackMocks.exportPromptPackReport.mockRejectedValueOnce(new Error("benchmark archive offline"));
+    await click(findButton(renderer, "Run all"));
+    expect(promptPackMocks.runPromptPackBenchmark).toHaveBeenCalledWith(
+      "pack-2",
+      expect.objectContaining({ testCodes: ["TEST-02", "TEST-03"] }),
+    );
+    expect(readNodeText(renderer.root)).toContain("Benchmark completed, but saving the run log failed");
+  });
+
+  it("surfaces prompt-pack mutation failures and import guards", async () => {
+    const renderer = await renderWorkbench();
+
+    await click(findButton(renderer, "Import pack"));
+    expect(readNodeText(renderer.root)).toContain("Paste prompt-pack markdown first.");
+
+    promptPackMocks.importPromptPack.mockRejectedValueOnce(new Error("import failed"));
+    await change(findTextarea(renderer, "Paste prompt-pack markdown here..."), "# Broken pack");
+    await click(findButton(renderer, "Import pack"));
+    expect(readNodeText(renderer.root)).toContain("import failed");
+
+    promptPackMocks.exportPromptPackReport.mockRejectedValueOnce(new Error("export failed"));
+    await click(findButton(renderer, "Export report"));
+    expect(readNodeText(renderer.root)).toContain("export failed");
+
+    promptPackMocks.autoScorePromptPackBatch.mockRejectedValueOnce(new Error("batch score failed"));
+    await click(findButton(renderer, "Auto-score"));
+    expect(readNodeText(renderer.root)).toContain("batch score failed");
+
+    promptPackMocks.scorePromptPackTest.mockRejectedValueOnce(new Error("review save failed"));
+    await click(findTab(renderer, "Review"));
+    await click(findButton(renderer, "Save review"));
+    expect(readNodeText(renderer.root)).toContain("review save failed");
+
+    promptPackMocks.runPromptPackBenchmark.mockRejectedValueOnce(new Error("benchmark failed"));
+    await click(findButton(renderer, "Start benchmark"));
+    expect(readNodeText(renderer.root)).toContain("benchmark failed");
+
+    promptPackMocks.runPromptPackReplayRegression.mockRejectedValueOnce(new Error("regression failed"));
+    await click(findButton(renderer, "Replay regression"));
+    expect(readNodeText(renderer.root)).toContain("regression failed");
+  });
+
+  it("surfaces no-provider run guards in the ops workbench variant", async () => {
+    promptPackMocks.providerCatalog = {
+      config: { activeProviderId: "" },
+      providers: [],
+    };
+    const renderer = await renderWorkbench({ variant: "ops", navigate: undefined });
+
+    const reuseLastModelCheckbox = renderer.root
+      .findAllByType("input")
+      .find((node) => node.props.type === "checkbox" && node.props.checked === true);
+    expect(reuseLastModelCheckbox).toBeTruthy();
+    await change(reuseLastModelCheckbox!, "", false);
+    expect(readNodeText(renderer.root)).toContain("Select a provider and model to start running this pack.");
+    await click(findButton(renderer, "Run all"));
+    expect(readNodeText(renderer.root)).toContain("Run all needs a selected provider/model lane.");
+
+    await click(findTab(renderer, "Insights"));
+    await change(findTextarea(renderer, "openai/gpt-5.4-mini\nmoonshot/kimi-k2.5"), "");
+    await click(findButton(renderer, "Start benchmark"));
+    expect(readNodeText(renderer.root)).toContain("Benchmark needs at least one provider/model entry");
+
+    expect(readNodeText(renderer.root)).toContain("Quality workbench");
+  });
+
+  it("updates provider and model lanes in both V2 and legacy run settings", async () => {
+    const renderer = await renderWorkbench();
+    const providerSelect = findSelectContaining(renderer, "Anthropic");
+    await change(providerSelect, "anthropic");
+    expect(promptPackMocks.loadModelsForProvider).toHaveBeenCalledWith("anthropic");
+
+    const modelSelect = findSelectContaining(renderer, "claude-opus-5");
+    await change(modelSelect, "claude-opus-5");
+    expect(readNodeText(renderer.root)).toContain("New runs request anthropic/claude-opus-5.");
+
+    const runSettingToggles = renderer.root
+      .findAllByType("input")
+      .filter(
+        (node) =>
+          node.props.type === "checkbox" &&
+          (readNodeText(node.parent as ReactTestInstance).includes("Reuse the last successful model") ||
+            readNodeText(node.parent as ReactTestInstance).includes("Auto-score completed runs")),
+      );
+    expect(runSettingToggles).toHaveLength(2);
+    for (const toggle of runSettingToggles) {
+      await change(toggle, "", false);
+    }
+
+    vi.stubEnv("VITE_PROMPT_PACK_V2_UI_ENABLED", "false");
+    vi.resetModules();
+    setupApiSuccess();
+    const legacyRenderer = await renderWorkbench();
+
+    await change(findSelectContaining(legacyRenderer, "Anthropic"), "anthropic");
+    await change(findSelectContaining(legacyRenderer, "claude-opus-5"), "claude-opus-5");
+    await click(findButton(legacyRenderer, "Harness"));
+    await click(findButton(legacyRenderer, "Agentic"));
+    await click(findTab(legacyRenderer, "Review"));
+
+    expect(promptPackMocks.loadModelsForProvider).toHaveBeenCalledWith("anthropic");
+    expect(readNodeText(legacyRenderer.root)).toContain("New runs request anthropic/claude-opus-5.");
+    expect(readNodeText(legacyRenderer.root)).toContain("Prompt Pack Scoring V2 UI is disabled in this build.");
+  });
+
+  it("updates ops execution lane controls and row-level run actions", async () => {
+    const opsRenderer = await renderWorkbench({ variant: "ops" });
+
+    await change(findSelectContaining(opsRenderer, "Anthropic"), "anthropic");
+    await change(findSelectContaining(opsRenderer, "claude-opus-5"), "claude-opus-5");
+
+    const executionToggles = opsRenderer.root
+      .findAllByType("input")
+      .filter(
+        (node) =>
+          node.props.type === "checkbox" &&
+          (readNodeText(node.parent as ReactTestInstance).includes("Reuse the last successful model") ||
+            readNodeText(node.parent as ReactTestInstance).includes("Auto-score completed runs")),
+      );
+    expect(executionToggles).toHaveLength(2);
+    for (const toggle of executionToggles) {
+      await change(toggle, "", false);
+    }
+    await click(findButton(opsRenderer, "Harness"));
+    await click(findButton(opsRenderer, "Agentic"));
+
+    expect(readNodeText(opsRenderer.root)).toContain("New runs request anthropic/claude-opus-5.");
+
+    const rowRunButton = opsRenderer.root
+      .findAllByType("button")
+      .find(
+        (node) =>
+          String(node.props.className).includes("mc-pp-run-button") &&
+          readNodeText(node.parent as ReactTestInstance).includes("TEST-02"),
+      );
+    expect(rowRunButton).toBeTruthy();
+
+    promptPackMocks.runPromptPackTest.mockClear();
+    await click(rowRunButton!);
+    expect(promptPackMocks.runPromptPackTest).toHaveBeenCalledWith(
+      "pack-1",
+      "test-2",
+      expect.objectContaining({
+        executionStyle: "agentic_surface",
+        providerId: "anthropic",
+        model: "claude-opus-5",
+      }),
+    );
   });
 });

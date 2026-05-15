@@ -80,4 +80,39 @@ describe("retireMissionControlServiceWorkers", () => {
 
     expect(unregister).not.toHaveBeenCalled();
   });
+
+  it("matches waiting and installing Mission Control workers when active script metadata is absent", async () => {
+    const unregisterWaiting = vi.fn<() => Promise<boolean>>().mockResolvedValue(true);
+    const unregisterInstalling = vi.fn<() => Promise<boolean>>().mockResolvedValue(true);
+    vi.stubGlobal("location", { origin: "http://127.0.0.1:5173" });
+    vi.stubGlobal("navigator", {
+      serviceWorker: {
+        getRegistrations: vi.fn().mockResolvedValue([
+          {
+            active: undefined,
+            waiting: { scriptURL: "http://127.0.0.1:5173/sw.js" },
+            installing: undefined,
+            scope: "http://127.0.0.1:5173/",
+            unregister: unregisterWaiting,
+          },
+          {
+            active: undefined,
+            waiting: undefined,
+            installing: { scriptURL: "http://127.0.0.1:5173/sw.js" },
+            scope: "http://127.0.0.1:5173/",
+            unregister: unregisterInstalling,
+          },
+        ]),
+      },
+    });
+    vi.stubGlobal("caches", {
+      keys: vi.fn().mockResolvedValue([]),
+      delete: vi.fn(),
+    });
+
+    await retireMissionControlServiceWorkers();
+
+    expect(unregisterWaiting).toHaveBeenCalledTimes(1);
+    expect(unregisterInstalling).toHaveBeenCalledTimes(1);
+  });
 });

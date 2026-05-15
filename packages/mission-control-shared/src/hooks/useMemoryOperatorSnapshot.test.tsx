@@ -58,6 +58,16 @@ async function flush() {
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 async function mountHook(onValue: (value: HookValue) => void) {
   let mounted!: ReactTestRenderer;
   await act(async () => {
@@ -404,6 +414,17 @@ describe("useMemoryOperatorSnapshot", () => {
     expect(latest?.selectedRun).toBeNull();
   });
 
+  it("surfaces invalid settings truth from the initial load effect", async () => {
+    apiMocks.fetchSettings.mockResolvedValueOnce({});
+
+    renderer = await mountHook((value) => {
+      latest = value;
+    });
+
+    expect(latest?.loading).toBe(false);
+    expect(latest?.error).toContain("memoryLifecycleAdminV1Enabled");
+  });
+
   it("handles maintenance runs without durable linkage and no-op item or policy actions", async () => {
     apiMocks.fetchMemoryItems.mockResolvedValue({ items: [] });
     apiMocks.fetchMemoryMaintenanceRuns.mockResolvedValue({
@@ -566,5 +587,65 @@ describe("useMemoryOperatorSnapshot", () => {
     });
     expect(apiMocks.rejectMemoryMaintenanceRecommendation).toHaveBeenCalledWith("rec-1");
     expect(latest?.notice).toEqual({ tone: "success", message: "Recommendation rejected." });
+  });
+
+  it("ignores late initial load and selected-detail completions after unmount", async () => {
+    const settings = deferred<Awaited<ReturnType<typeof apiMocks.fetchSettings>>>();
+    apiMocks.fetchSettings.mockReturnValueOnce(settings.promise);
+
+    await act(async () => {
+      renderer = create(<Harness onValue={(value) => (latest = value)} />);
+    });
+    await act(async () => {
+      renderer?.unmount();
+    });
+    settings.resolve({
+      features: {
+        memoryLifecycleAdminV1Enabled: true,
+        memoryLifecycleAutoForgetEnabled: true,
+        memoryMaintenanceV1Enabled: true,
+        durableKernelV1Enabled: true,
+      },
+    });
+    await flush();
+
+    const provenance = deferred<{ run: { runId: string }; sources: never[]; changes: never[] }>();
+    apiMocks.fetchMemoryMaintenanceRunProvenance.mockReturnValueOnce(provenance.promise);
+    renderer = await mountHook((value) => {
+      latest = value;
+    });
+    await act(async () => {
+      renderer?.unmount();
+    });
+    provenance.resolve({ run: { runId: "run-1" }, sources: [], changes: [] });
+    await flush();
+  });
+
+  it("ignores late memory-history success and failure completions after selection changes", async () => {
+    renderer = await mountHook((value) => {
+      latest = value;
+    });
+
+    const historySuccess = deferred<{ items: never[] }>();
+    apiMocks.fetchMemoryItemHistory.mockReturnValueOnce(historySuccess.promise);
+    await act(async () => {
+      latest?.setSelectedItemId("mem-late-success");
+    });
+    await act(async () => {
+      latest?.setSelectedItemId(null);
+    });
+    historySuccess.resolve({ items: [] });
+    await flush();
+
+    const historyFailure = deferred<{ items: never[] }>();
+    apiMocks.fetchMemoryItemHistory.mockReturnValueOnce(historyFailure.promise);
+    await act(async () => {
+      latest?.setSelectedItemId("mem-late-failure");
+    });
+    await act(async () => {
+      latest?.setSelectedItemId(null);
+    });
+    historyFailure.reject(new Error("late history failed"));
+    await flush();
   });
 });

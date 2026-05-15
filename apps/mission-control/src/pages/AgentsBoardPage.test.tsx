@@ -279,6 +279,32 @@ function rendererText(renderer: ReactTestRenderer): string {
   return collectText(renderer.toJSON()).replace(/\s+/g, " ").trim();
 }
 
+function button(renderer: ReactTestRenderer, label: string) {
+  const node = renderer.root
+    .findAllByType("button")
+    .find((candidate) => rendererTextFromNode(candidate).includes(label));
+  if (!node) {
+    throw new Error(`Unable to find button ${label}`);
+  }
+  return node;
+}
+
+function rendererTextFromNode(node: { children?: unknown[] }): string {
+  return (node.children ?? [])
+    .map((child) => {
+      if (typeof child === "string") {
+        return child;
+      }
+      if (child && typeof child === "object" && "children" in child) {
+        return rendererTextFromNode(child as { children?: unknown[] });
+      }
+      return "";
+    })
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 async function flush(): Promise<void> {
   await act(async () => {
     for (let index = 0; index < 8; index += 1) {
@@ -326,6 +352,92 @@ describe("AgentsBoardPage", () => {
         expect.objectContaining({ taskId: "task-architect" }),
       );
       expect(apiMocks.connectEventStream).toHaveBeenCalled();
+    } finally {
+      renderer.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows loading, degraded stream, empty lanes, and the empty trace inspector", async () => {
+    let resolveAgents: (value: { items: [] }) => void = () => undefined;
+    apiMocks.fetchAgents.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveAgents = resolve;
+        }),
+    );
+    apiMocks.fetchApprovals.mockResolvedValueOnce({ items: [] });
+    apiMocks.fetchTasksByView.mockResolvedValueOnce({ view: "active", items: [] });
+    apiMocks.fetchRealtimeEvents.mockResolvedValueOnce({ items: [] });
+    apiMocks.connectEventStream.mockImplementationOnce((_onEvent, onStateChange) => {
+      onStateChange?.("error");
+      return () => undefined;
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<AgentsBoardPage />);
+      });
+
+      expect(rendererText(renderer)).not.toContain("Select a task");
+
+      await act(async () => {
+        resolveAgents({ items: [] });
+      });
+      await flush();
+
+      const text = rendererText(renderer);
+      expect(text).toContain("0 tasks");
+      expect(text).toContain("Stream degraded");
+      expect(text).toContain("No tasks in this lane.");
+      expect(text).toContain("Select a task");
+      expect(text).toContain("Pick a card on the board to inspect its assignee");
+    } finally {
+      renderer.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it("cycles priority filters, toggles density, refreshes the board, and reports lifecycle errors", async () => {
+    apiMocks.fetchRuntimeLifecycle.mockRejectedValueOnce(new Error("runtime lineage unavailable"));
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<AgentsBoardPage />);
+      });
+      await flush();
+
+      expect(rendererText(renderer)).toContain("runtime lineage unavailable");
+
+      await act(async () => {
+        button(renderer, "All priorities").props.onClick();
+      });
+      await flush();
+      expect(rendererText(renderer)).toContain("Urgent only");
+      expect(rendererText(renderer)).toContain("0 tasks");
+      expect(rendererText(renderer)).toContain("Select a task");
+
+      await act(async () => {
+        button(renderer, "Urgent only").props.onClick();
+      });
+      await flush();
+      expect(rendererText(renderer)).toContain("High only");
+      expect(rendererText(renderer)).toContain("Design board inspector");
+
+      await act(async () => {
+        button(renderer, "Comfortable").props.onClick();
+      });
+      expect(rendererText(renderer)).toContain("Compact");
+
+      await act(async () => {
+        button(renderer, "Refresh board").props.onClick();
+      });
+      await flush();
+
+      expect(apiMocks.fetchAgents).toHaveBeenCalledWith("all", 300);
+      expect(apiMocks.fetchTasksByView).toHaveBeenCalledWith("active");
     } finally {
       renderer.unmount();
       vi.useRealTimers();

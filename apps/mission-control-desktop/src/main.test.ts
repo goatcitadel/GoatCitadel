@@ -121,6 +121,35 @@ describe("desktop shell bootstrap", () => {
     expect(tauriMocks.invoke).toHaveBeenCalledWith("open_install_folder");
   });
 
+  it("covers browser fallback and packaged runtime metadata branches", async () => {
+    tauriMocks.invoke.mockResolvedValueOnce(
+      createRuntimeStatus({
+        status: "ready",
+        packaged: true,
+        targetUrl: "",
+        uiUrl: "http://127.0.0.1:5173/",
+      }),
+    );
+
+    await import("./main.js");
+    await flushPromises();
+    element("open-browser-button").click();
+
+    expect(element("runtime-meta").textContent).toBe("Gateway ready / UI ready / packaged install");
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("open_browser", { url: "http://127.0.0.1:5173/" });
+  });
+
+  it("does not open a browser before a runtime URL is known", async () => {
+    tauriMocks.invoke.mockRejectedValueOnce(new Error("launch failed"));
+
+    await import("./main.js");
+    await flushPromises();
+    tauriMocks.invoke.mockClear();
+    element("open-browser-button").click();
+
+    expect(tauriMocks.invoke).not.toHaveBeenCalled();
+  });
+
   it("retries launch from the shell button", async () => {
     tauriMocks.invoke
       .mockResolvedValueOnce(createRuntimeStatus({ status: "degraded" }))
@@ -241,6 +270,69 @@ describe("desktop shell bootstrap", () => {
     expect(element("desktop-toast").classList.contains("is-hidden")).toBe(true);
   });
 
+  it("shows Error refresh failures and ready refresh status branches", async () => {
+    const listeners = new Map<string, () => void>();
+    tauriMocks.listen.mockImplementation((eventName: string, callback: () => void) => {
+      listeners.set(eventName, callback);
+      return Promise.resolve(() => undefined);
+    });
+    tauriMocks.invoke
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready" }))
+      .mockRejectedValueOnce(new Error("status unavailable"))
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready", readiness: { gateway: true, ui: true } }));
+
+    await import("./main.js");
+    await flushPromises();
+
+    listeners.get("desktop://runtime-status-requested")?.();
+    await flushPromises();
+    expect(element("desktop-toast").textContent).toBe("status unavailable");
+
+    listeners.get("desktop://runtime-status-requested")?.();
+    await flushPromises();
+    expect(element("desktop-toast").textContent).toBe("Runtime ready: gateway ready, UI ready.");
+  });
+
+  it("renders stopped status with mixed readiness from the last runtime", async () => {
+    const listeners = new Map<string, () => void>();
+    tauriMocks.listen.mockImplementation((eventName: string, callback: () => void) => {
+      listeners.set(eventName, callback);
+      return Promise.resolve(() => undefined);
+    });
+    tauriMocks.invoke.mockResolvedValueOnce(
+      createRuntimeStatus({
+        status: "degraded",
+        readiness: { gateway: false, ui: true },
+      }),
+    );
+
+    await import("./main.js");
+    await flushPromises();
+    listeners.get("desktop://runtime-stopped")?.();
+
+    expect(element("runtime-meta").textContent).toBe("Gateway not ready / UI ready");
+  });
+
+  it("renders stopped status with ready gateway metadata", async () => {
+    const listeners = new Map<string, () => void>();
+    tauriMocks.listen.mockImplementation((eventName: string, callback: () => void) => {
+      listeners.set(eventName, callback);
+      return Promise.resolve(() => undefined);
+    });
+    tauriMocks.invoke.mockResolvedValueOnce(
+      createRuntimeStatus({
+        status: "degraded",
+        readiness: { gateway: true, ui: false },
+      }),
+    );
+
+    await import("./main.js");
+    await flushPromises();
+    listeners.get("desktop://runtime-stopped")?.();
+
+    expect(element("runtime-meta").textContent).toBe("Gateway ready / UI not ready");
+  });
+
   it("ignores approval deep-links before runtime status is available", async () => {
     const listeners = new Map<string, (event?: { payload?: unknown }) => void>();
     let notificationClick: (() => void) | undefined;
@@ -287,6 +379,15 @@ describe("desktop shell bootstrap", () => {
     expect(element("runtime-meta").textContent).toBe(
       "Runtime did not return a status payload. Open logs for the captured launcher output.",
     );
+  });
+
+  it("surfaces non-Error launch failures", async () => {
+    tauriMocks.invoke.mockRejectedValueOnce("launcher string failure");
+
+    await import("./main.js");
+    await flushPromises();
+
+    expect(element("status-copy").textContent).toBe("launcher string failure");
   });
 
   it("fails fast when required shell elements are missing", async () => {

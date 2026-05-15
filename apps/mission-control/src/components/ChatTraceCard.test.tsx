@@ -200,4 +200,108 @@ describe("ChatTraceCard", () => {
     expect(text).toContain("completed · glm · glm-5");
     expect(text).toContain("Requested openai · gpt-4.1-mini -> Effective glm · glm-5 · primary blocked by remote site");
   });
+
+  it("toggles expanded trace detail with citations and orchestration context", async () => {
+    const trace: ChatTurnTraceRecord = {
+      ...makeTrace(),
+      startedAt: "not-a-date",
+      finishedAt: undefined,
+      failure: undefined,
+      loopGuard: undefined,
+      executionPlan: undefined,
+      toolRuns: [],
+      routing: {
+        liveDataIntent: false,
+        fallbackUsed: false,
+        primaryProviderId: "openai",
+        primaryModel: "gpt-5.4",
+        effectiveProviderId: "openai",
+        effectiveModel: "gpt-5.4",
+      },
+      citations: [
+        {
+          citationId: "citation-1",
+          title: "OpenAI Docs",
+          url: "https://platform.openai.com/docs",
+          snippet: "Official model documentation.",
+          knowledge: {
+            attachmentId: "attachment-1",
+            sourceRef: "docs/openai.md",
+            title: "OpenAI Docs",
+            sectionLabel: "Models",
+            retrievalMode: "full_text",
+          },
+        },
+        {
+          citationId: "citation-2",
+          title: "Workspace Note",
+          url: "memory://workspace-note",
+          snippet: "Stored workspace guidance.",
+          knowledge: {
+            attachmentId: "attachment-2",
+            sourceRef: "memory/workspace",
+            title: "Workspace Note",
+            retrievalMode: "retrieval",
+          },
+        },
+      ],
+      orchestration: {
+        workflowTemplate: "research-review",
+        visibility: "operator_visible",
+        status: "completed",
+        routeDecision: {
+          selectedRoles: ["Researcher", "QA"],
+          specialistCandidates: [{ title: "Web Scout", baseRole: "Researcher" }],
+        },
+        finalSummary: "Synthesis ready.",
+        steps: [
+          {
+            stepId: "orchestration-step-1",
+            role: "Researcher",
+            providerId: "openai",
+            model: "gpt-5.4",
+            status: "completed",
+            specialistTitle: "Web Scout",
+            specialistRole: "researcher",
+          },
+        ],
+      } as any,
+    };
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChatTraceCard trace={trace} workspaceId="default" />);
+    });
+
+    expect(collectText(renderer.toJSON())).toContain("Show trace");
+    expect(collectText(renderer.toJSON())).not.toContain("Citations");
+
+    const toggle = renderer.root.findByType("button");
+    await act(async () => {
+      toggle.props.onClick();
+    });
+
+    const expandedText = collectText(renderer.toJSON()).replace(/\s+/g, " ").trim();
+    expect(expandedText).toContain("Hide trace");
+    expect(expandedText).toContain("Started: not-a-date");
+    expect(expandedText).toContain("Finished: n/a");
+    expect(expandedText).toContain("Fallback tiers attempted: none");
+    expect(expandedText).toContain("Citations");
+    expect(expandedText).toContain("OpenAI Docs");
+    expect(expandedText).toContain("Workspace Note");
+    expect(expandedText).toContain("docs/openai.md · Models · full text");
+    expect(expandedText).toContain("memory/workspace · retrieval");
+    expect(expandedText).toContain("research-review");
+    expect(expandedText).toContain("Researcher -> QA");
+    expect(expandedText).toContain("Specialists: Web Scout (Researcher)");
+    expect(expandedText).toContain("Synthesis ready.");
+    expect(
+      renderer.root.findAll((node) => node.type === "a" && node.props.href === "https://platform.openai.com/docs"),
+    ).toHaveLength(1);
+
+    await act(async () => {
+      renderer.root.findByType("button").props.onClick();
+    });
+
+    expect(collectText(renderer.toJSON())).not.toContain("Citations");
+  });
 });

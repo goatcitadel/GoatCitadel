@@ -25,7 +25,8 @@ const REQUIRED_SPLIT_CONFIG_FILES = [
   "cron-jobs.json",
 ] as const;
 
-interface JsonFileState<T = unknown> {
+/** @internal */
+export interface JsonFileState<T = unknown> {
   path: string;
   exists: boolean;
   valid: boolean;
@@ -33,7 +34,8 @@ interface JsonFileState<T = unknown> {
   error?: string;
 }
 
-interface DoctorRuntimeContext {
+/** @internal */
+export interface DoctorRuntimeContext {
   rootDir: string;
   configDir: string;
   gatewayBaseUrl: string;
@@ -51,7 +53,8 @@ interface DoctorRuntimeContext {
   promptConfirm?: (message: string) => Promise<boolean>;
 }
 
-interface GatewayHealthResult {
+/** @internal */
+export interface GatewayHealthResult {
   reachable: boolean;
   statusText: string;
   detail: string;
@@ -1489,3 +1492,18 @@ async function isDirectoryWritable(dirPath: string): Promise<boolean> {
     return false;
   }
 }
+
+export const __doctorEngineInternals = {
+  buildRemoteMissionControlUrl,
+  collectConfigIssues,
+  commandLooksLikeRepoRoot,
+  cryptoRandomHex,
+  inspectManagedWorkspaceTooling,
+  isLoopbackHost,
+  isPathInsideRoot,
+  normalizeBaseUrl,
+  rebuildUnifiedFromSplit,
+  requestGuardedRepairApproval,
+  resolveDoctorRootDir,
+  summarizeDoctor,
+};

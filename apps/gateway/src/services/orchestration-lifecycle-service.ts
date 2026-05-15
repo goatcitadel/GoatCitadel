@@ -51,6 +51,29 @@ type OrchestrationExecutionResult = {
   checkpointState: Record<string, unknown>;
 };
 
+export interface OrchestrationLifecycleRuntimeDeps {
+  readonly worktrees: {
+    allocate(input: { runId: string; workspaceId: string; baseRef?: string }): Promise<{
+      worktreePath: string;
+      worktreeStatus: NonNullable<OrchestrationRun["worktreeStatus"]>;
+      worktreeBaseRef: string;
+    }>;
+    release(input: {
+      run: OrchestrationRun;
+      reason: "completed" | "failed" | "stopped_by_limit" | "cancelled";
+    }): Promise<void>;
+  };
+  readonly phaseExecutor: {
+    execute(input: {
+      plan: OrchestrationPlan;
+      run: OrchestrationRun;
+      phase: OrchestrationPhase;
+      durableRun: DurableRunRecord;
+      signal?: AbortSignal;
+    }): Promise<OrchestrationPhaseExecutionResult>;
+  };
+}
+
 export interface OrchestrationLifecycleHost {
   readonly config: {
     assistant: {
@@ -124,27 +147,11 @@ export interface OrchestrationLifecycleHost {
     finishedAt?: string;
     clearFinishedAt?: boolean;
   }): DurableRunRecord;
-  allocateOrchestrationWorktree(input: { runId: string; workspaceId: string; baseRef?: string }): Promise<{
-    worktreePath: string;
-    worktreeStatus: NonNullable<OrchestrationRun["worktreeStatus"]>;
-    worktreeBaseRef: string;
-  }>;
   recordDurableTimelineEvent(
     runId: string,
     eventType: DurableRunTimelineEvent["eventType"],
     payload?: Record<string, unknown>,
   ): void;
-  executeOrchestrationPhase(input: {
-    plan: OrchestrationPlan;
-    run: OrchestrationRun;
-    phase: OrchestrationPhase;
-    durableRun: DurableRunRecord;
-    signal?: AbortSignal;
-  }): Promise<OrchestrationPhaseExecutionResult>;
-  releaseOrchestrationWorktree?(input: {
-    run: OrchestrationRun;
-    reason: "completed" | "failed" | "stopped_by_limit" | "cancelled";
-  }): Promise<void>;
 }
 
 function buildOrchestrationRealtimeLinks(input: {
@@ -197,15 +204,13 @@ function throwIfWorkflowAborted(context?: DurableWorkflowExecutionContext): void
 }
 
 async function releaseOrchestrationWorktreeIfAvailable(
+  runtime: OrchestrationLifecycleRuntimeDeps,
   host: OrchestrationLifecycleHost,
   run: OrchestrationRun,
   reason: "completed" | "failed" | "stopped_by_limit" | "cancelled",
 ): Promise<void> {
-  if (!host.releaseOrchestrationWorktree) {
-    return;
-  }
   try {
-    await host.releaseOrchestrationWorktree({ run, reason });
+    await runtime.worktrees.release({ run, reason });
   } catch (error) {
     persistRunEvent(host, run, "run.worktree_cleanup_failed", {
       reason,
@@ -345,6 +350,7 @@ function publishRunRealtime(
 
 async function allocateOrchestrationOwnership(
   host: OrchestrationLifecycleHost,
+  runtime: OrchestrationLifecycleRuntimeDeps,
   plan: OrchestrationPlan,
   run: OrchestrationRun,
 ): Promise<OrchestrationRun> {
@@ -388,7 +394,7 @@ async function allocateOrchestrationOwnership(
   publishRunRealtime(host, plan, linked, { event: "durable_run_linked" });
 
   try {
-    const worktree = await host.allocateOrchestrationWorktree({
+    const worktree = await runtime.worktrees.allocate({
       runId: linked.runId,
       workspaceId,
       baseRef: linked.worktreeBaseRef ?? DEFAULT_WORKTREE_BASE_REF,
@@ -457,6 +463,7 @@ async function allocateOrchestrationOwnership(
 
 export async function createOrchestrationPlan(
   host: OrchestrationLifecycleHost,
+  runtime: OrchestrationLifecycleRuntimeDeps,
   plan: OrchestrationPlan,
 ): Promise<OrchestrationRun> {
   host.storage.orchestration.upsertPlan(plan);
@@ -476,16 +483,17 @@ export async function createOrchestrationPlan(
   });
   publishRunRealtime(host, plan, persisted, { event: "run_created" });
 
-  return allocateOrchestrationOwnership(host, plan, persisted);
+  return allocateOrchestrationOwnership(host, runtime, plan, persisted);
 }
 
 export async function runOrchestrationPlan(
   host: OrchestrationLifecycleHost,
+  runtime: OrchestrationLifecycleRuntimeDeps,
   planId: string,
 ): Promise<OrchestrationRun> {
   let plan = host.storage.orchestration.getPlan(planId);
   host.orchestrationEngine.validate(plan);
-  const run = await createOrchestrationPlan(host, plan);
+  const run = await createOrchestrationPlan(host, runtime, plan);
   if (run.status === "failed") {
     return run;
   }
@@ -682,6 +690,7 @@ export async function approvePhase(
 
 export async function executeDurableOrchestrationRun(
   host: OrchestrationLifecycleHost,
+  runtime: OrchestrationLifecycleRuntimeDeps,
   durableRun: DurableRunRecord,
   context?: DurableWorkflowExecutionContext,
 ): Promise<OrchestrationExecutionResult> {
@@ -779,7 +788,7 @@ export async function executeDurableOrchestrationRun(
       event: "phase_started",
     });
 
-    const execution = await host.executeOrchestrationPhase({
+    const execution = await runtime.phaseExecutor.execute({
       plan,
       run,
       phase,
@@ -829,7 +838,7 @@ export async function executeDurableOrchestrationRun(
         event: "run_failed",
         error: execution.error ?? `Phase ${previousPhaseId} failed.`,
       });
-      await releaseOrchestrationWorktreeIfAvailable(host, run, "failed");
+      await releaseOrchestrationWorktreeIfAvailable(runtime, host, run, "failed");
       return {
         outcome: "failed",
         checkpointState: buildCheckpointDetails(plan, run, durableRun.runId, {
@@ -912,6 +921,7 @@ export async function executeDurableOrchestrationRun(
     event: run.status === "stopped_by_limit" ? "run_stopped" : "run_completed",
   });
   await releaseOrchestrationWorktreeIfAvailable(
+    runtime,
     host,
     run,
     run.status === "stopped_by_limit" ? "stopped_by_limit" : "completed",

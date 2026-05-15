@@ -1,0 +1,203 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import Fastify, { type FastifyInstance } from "fastify";
+import { chatRoutes } from "./chat.js";
+
+describe("chat message route-decision tails", () => {
+  let app: FastifyInstance | null = null;
+
+  afterEach(async () => {
+    if (app) {
+      await app.close();
+      app = null;
+    }
+  });
+
+  it("replays session-selected provider preferences before retrying a turn", async () => {
+    const decision = routeDecision({
+      action: "retry",
+      turnId: "turn-1",
+      selectionSource: "session",
+      requestedProviderId: "anthropic",
+      requestedModel: "claude-sonnet-4-6",
+      effectiveProviderId: "anthropic",
+      effectiveModel: "claude-sonnet-4-6",
+      fingerprint: "session-route",
+    });
+    const routePreflight = vi.fn(async () => ({ decision }));
+    const retryChatTurn = vi.fn(async () => ({ turnId: "retry-1", status: "queued" }));
+    app = buildApp({ routePreflight, retryChatTurn });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/turns/turn-1/retry",
+      payload: {
+        providerId: "anthropic",
+        model: "claude-sonnet-4-6",
+        routeDecision: decision,
+        prefsOverride: {
+          mode: "cowork",
+          webMode: "deep",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(routePreflight).toHaveBeenCalledWith("sess-1", {
+      action: "retry",
+      turnId: "turn-1",
+      providerId: undefined,
+      model: undefined,
+      mode: undefined,
+      webMode: undefined,
+      thinkingLevel: undefined,
+      speedMode: undefined,
+      subagentPolicy: undefined,
+      prefsOverride: {
+        mode: "cowork",
+        webMode: "deep",
+        providerId: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
+    });
+    expect(retryChatTurn).toHaveBeenCalledWith(
+      "sess-1",
+      "turn-1",
+      expect.objectContaining({
+        providerId: "anthropic",
+        model: "claude-sonnet-4-6",
+      }),
+    );
+  });
+
+  it("replays manual selections before editing a turn", async () => {
+    const decision = routeDecision({
+      action: "edit",
+      turnId: "turn-2",
+      selectionSource: "manual",
+      requestedProviderId: "openai",
+      requestedModel: "gpt-5.4",
+      effectiveProviderId: "openai",
+      effectiveModel: "gpt-5.4",
+      fingerprint: "manual-route",
+    });
+    const routePreflight = vi.fn(async () => ({ decision }));
+    const editChatTurn = vi.fn(async () => ({ turnId: "turn-2", status: "queued" }));
+    app = buildApp({ routePreflight, editChatTurn });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/turns/turn-2/edit",
+      payload: {
+        content: "edited",
+        providerId: "openai",
+        model: "gpt-5.4",
+        mode: "code",
+        webMode: "off",
+        thinkingLevel: "minimal",
+        speedMode: "fast",
+        subagentPolicy: "off",
+        routeDecision: decision,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(routePreflight).toHaveBeenCalledWith("sess-1", {
+      action: "edit",
+      turnId: "turn-2",
+      providerId: "openai",
+      model: "gpt-5.4",
+      mode: "code",
+      webMode: "off",
+      thinkingLevel: "minimal",
+      speedMode: "fast",
+      subagentPolicy: "off",
+      prefsOverride: undefined,
+    });
+    expect(editChatTurn).toHaveBeenCalledWith("sess-1", "turn-2", expect.objectContaining({ content: "edited" }));
+  });
+
+  it("rejects action, turn, invalid expiry, and route-preflight failures before mutating", async () => {
+    const routePreflight = vi.fn(async () => {
+      throw new Error("preflight unavailable");
+    });
+    const retryChatTurn = vi.fn();
+    app = buildApp({ routePreflight, retryChatTurn });
+
+    const actionMismatch = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/turns/turn-1/retry",
+      payload: {
+        routeDecision: routeDecision({ action: "send", fingerprint: "wrong-action" }),
+      },
+    });
+    expect(actionMismatch.statusCode).toBe(409);
+    expect(actionMismatch.json().error.reason).toBe("route_action_mismatch");
+
+    const turnMismatch = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/turns/turn-1/retry",
+      payload: {
+        routeDecision: routeDecision({ action: "retry", turnId: "turn-2", fingerprint: "wrong-turn" }),
+      },
+    });
+    expect(turnMismatch.statusCode).toBe(409);
+    expect(turnMismatch.json().error.reason).toBe("route_action_mismatch");
+
+    const invalidExpiry = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/turns/turn-1/retry",
+      payload: {
+        routeDecision: {
+          ...routeDecision({ action: "retry", turnId: "turn-1", fingerprint: "invalid-expiry" }),
+          expiresAt: "not-a-date",
+        },
+      },
+    });
+    expect(invalidExpiry.statusCode).toBe(400);
+
+    const failedPreflight = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/turns/turn-1/retry",
+      payload: {
+        providerId: "openai",
+        model: "gpt-5.4",
+        routeDecision: routeDecision({ action: "retry", turnId: "turn-1", fingerprint: "preflight-error" }),
+      },
+    });
+    expect(failedPreflight.statusCode).toBe(400);
+    expect(failedPreflight.json().error).toBe("Chat write failed. Check gateway diagnostics and retry.");
+    expect(retryChatTurn).not.toHaveBeenCalled();
+  });
+});
+
+function buildApp(chatMessages: Record<string, unknown>): FastifyInstance {
+  const next = Fastify();
+  next.decorate("services", { chatMessages } as never);
+  void next.register(chatRoutes);
+  return next;
+}
+
+function routeDecision(overrides: Record<string, unknown> = {}) {
+  return {
+    ...routeDecisionShape(),
+    ...overrides,
+  };
+}
+
+function routeDecisionShape() {
+  return {
+    action: "send" as const,
+    issuedAt: new Date(Date.now() - 1000).toISOString(),
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    requestedProviderId: "openai",
+    requestedModel: "gpt-5.4",
+    effectiveProviderId: "openai",
+    effectiveModel: "gpt-5.4",
+    selectionSource: "manual" as const,
+    fallbackPolicy: "off" as const,
+    fallbackResult: "not_applicable" as const,
+    runtimeReachability: "not_checked" as const,
+    runtimeClass: "cloud" as const,
+    fingerprint: "route-fingerprint",
+  };
+}

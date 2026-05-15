@@ -99,6 +99,29 @@ describe("CostLedgerRepository", () => {
     assert.equal(availability.unknownEvents, 1);
   });
 
+  it("uses zero availability defaults when aggregate rows are missing or nullish", () => {
+    const repo = createRepo();
+    const internal = repo as unknown as {
+      summaryUsageAvailabilityStmt: { get: () => unknown };
+    };
+
+    internal.summaryUsageAvailabilityStmt = { get: () => undefined };
+    assert.deepEqual(repo.usageAvailability("2026-02-27T00:00:00.000Z", "2026-02-27T23:59:59.999Z"), {
+      trackedEvents: 0,
+      unknownEvents: 0,
+      totalAgentEvents: 0,
+    });
+
+    internal.summaryUsageAvailabilityStmt = {
+      get: () => ({ tracked_events: null, unknown_events: null, total_agent_events: null }),
+    };
+    assert.deepEqual(repo.usageAvailability("2026-02-27T00:00:00.000Z", "2026-02-27T23:59:59.999Z"), {
+      trackedEvents: 0,
+      unknownEvents: 0,
+      totalAgentEvents: 0,
+    });
+  });
+
   it("rolls back the insert when prune fails on the 50th write", () => {
     const repo = createRepo();
     const internal = repo as unknown as {

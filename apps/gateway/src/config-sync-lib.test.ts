@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildUnifiedConfigPayload, syncUnifiedConfig } from "./config-sync-lib.js";
 
@@ -9,6 +9,7 @@ const TEMP_ROOTS: string[] = [];
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  delete process.env.GOATCITADEL_VERBOSE;
   while (TEMP_ROOTS.length > 0) {
     const next = TEMP_ROOTS.pop();
     if (next) {
@@ -114,17 +115,9 @@ describe("syncUnifiedConfig", () => {
       assistant: assistantPayload,
     };
 
-    await writeFile(
-      path.join(configDir, "goatcitadel.json"),
-      `${JSON.stringify(unifiedPayload, null, 2)}\n`,
-      "utf8",
-    );
+    await writeFile(path.join(configDir, "goatcitadel.json"), `${JSON.stringify(unifiedPayload, null, 2)}\n`, "utf8");
     const splitPath = path.join(configDir, "assistant.config.json");
-    await writeFile(
-      splitPath,
-      `${JSON.stringify(assistantPayload, null, 2).replace(/\n/g, "\r\n")}\r\n`,
-      "utf8",
-    );
+    await writeFile(splitPath, `${JSON.stringify(assistantPayload, null, 2).replace(/\n/g, "\r\n")}\r\n`, "utf8");
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const before = await stat(splitPath);
@@ -159,11 +152,7 @@ describe("syncUnifiedConfig", () => {
       llm: llmPayload,
     };
 
-    await writeFile(
-      path.join(configDir, "goatcitadel.json"),
-      `${JSON.stringify(unifiedPayload, null, 2)}\n`,
-      "utf8",
-    );
+    await writeFile(path.join(configDir, "goatcitadel.json"), `${JSON.stringify(unifiedPayload, null, 2)}\n`, "utf8");
     const splitPath = path.join(configDir, "llm-providers.json");
     await writeFile(splitPath, JSON.stringify(llmPayload, null, 2), "utf8");
 
@@ -195,8 +184,64 @@ describe("syncUnifiedConfig", () => {
       "cron-jobs.json",
     ]);
 
-    await expect(readFile(path.join(root, "config", "assistant.config.json"), "utf8")).resolves.toContain("\"defaultToolProfile\"");
-    await expect(readFile(path.join(root, "config", "goatcitadel.json"), "utf8")).resolves.toContain("\"version\"");
+    await expect(readFile(path.join(root, "config", "assistant.config.json"), "utf8")).resolves.toContain(
+      '"defaultToolProfile"',
+    );
+    await expect(readFile(path.join(root, "config", "goatcitadel.json"), "utf8")).resolves.toContain('"version"');
+  });
+
+  it("leaves split config alone when unified config is missing and creation is disabled", async () => {
+    const root = await makeTempRoot();
+    await seedSplitFiles(root);
+
+    await expect(syncUnifiedConfig(root)).resolves.toEqual({
+      unifiedPath: path.join(root, "config", "goatcitadel.json"),
+      createdUnified: false,
+      materializedExamples: [],
+      syncedSections: [],
+    });
+    await expect(readFile(path.join(root, "config", "goatcitadel.json"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("rejects malformed unified config payloads before writing split files", async () => {
+    const root = await makeTempRoot();
+    const unifiedPath = path.join(root, "config", "goatcitadel.json");
+
+    await writeFile(unifiedPath, "[]", "utf8");
+    await expect(syncUnifiedConfig(root)).rejects.toThrow("Unified config must be a JSON object");
+
+    await writeFile(unifiedPath, JSON.stringify({ assistant: [] }), "utf8");
+    await expect(syncUnifiedConfig(root)).rejects.toThrow("Invalid section for assistant.config.json");
+
+    await writeFile(unifiedPath, JSON.stringify({ cronJobs: "bad" }), "utf8");
+    await expect(syncUnifiedConfig(root)).rejects.toThrow("Invalid section for cron-jobs.json");
+  });
+
+  it("warns before overriding a newer split config with unified values", async () => {
+    const root = await makeTempRoot();
+    const configDir = path.join(root, "config");
+    const unifiedPath = path.join(configDir, "goatcitadel.json");
+    const splitPath = path.join(configDir, "assistant.config.json");
+    await writeFile(
+      unifiedPath,
+      JSON.stringify({ version: 1, assistant: { defaultToolProfile: "unified" } }, null, 2),
+      "utf8",
+    );
+    await writeFile(splitPath, JSON.stringify({ defaultToolProfile: "split-newer" }, null, 2), "utf8");
+    const future = new Date(Date.now() + 60_000);
+    await utimes(splitPath, future, future);
+    process.env.GOATCITADEL_VERBOSE = "true";
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await syncUnifiedConfig(root);
+
+    expect(result.syncedSections).toEqual(["assistant.config.json"]);
+    expect(JSON.parse(await readFile(splitPath, "utf8"))).toEqual({ defaultToolProfile: "unified" });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[goatcitadel:config] warning: assistant.config.json is newer"),
+    );
   });
 });
 

@@ -454,4 +454,36 @@ describe("useChatSessionData", () => {
       }),
     );
   });
+
+  it("covers default session-load options, no-thread core refreshes, and secondary defaults", async () => {
+    await act(async () => {
+      create(<Harness workspaceId="workspace-load-defaults" initialSelectedSessionId="session-1" />);
+      await flushEffects();
+    });
+    await act(async () => {
+      await flushEffects();
+    });
+
+    const threadFetchCount = fetchChatThreadMock.mock.calls.length;
+    await act(async () => {
+      await latestHarness?.result.loadSessionCoreState("session-1", { includeThread: false });
+    });
+    expect(fetchChatThreadMock).toHaveBeenCalledTimes(threadFetchCount);
+    expect(fetchChatSessionBindingMock).toHaveBeenLastCalledWith("session-1");
+
+    await act(async () => {
+      await latestHarness?.result.loadSessionCoreState("session-1");
+      await latestHarness?.result.loadSessionSecondaryState("session-1");
+      await latestHarness?.result.loadSessionState("session-1");
+    });
+
+    expect(fetchChatThreadMock).toHaveBeenCalledWith("session-1");
+    expect(fetchChatGeneratedArtifactsMock).toHaveBeenLastCalledWith({ sessionId: "session-1", limit: 200 });
+
+    fetchChatSessionsMock.mockResolvedValueOnce({ items: [] });
+    await act(async () => {
+      await latestHarness?.result.loadSidebar("active", { bypassCache: true });
+    });
+    expect(latestHarness?.selectedSessionId).toBeNull();
+  });
 });

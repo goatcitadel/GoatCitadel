@@ -79,4 +79,149 @@ describe("chat message routes", () => {
     expect(response.statusCode).toBe(400);
     expect(sendChatMessage).not.toHaveBeenCalled();
   });
+
+  it("preflights routes and requires a fresh route decision before agent sends", async () => {
+    const routeDecision = {
+      action: "send" as const,
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      requestedProviderId: "openai",
+      requestedModel: "gpt-5.4",
+      effectiveProviderId: "openai",
+      effectiveModel: "gpt-5.4",
+      selectionSource: "manual" as const,
+      fallbackPolicy: "off" as const,
+      fallbackResult: "not_applicable" as const,
+      runtimeReachability: "not_checked" as const,
+      runtimeClass: "cloud" as const,
+      fingerprint: "route-fingerprint",
+    };
+    const routePreflight = vi.fn(async () => ({ decision: routeDecision }));
+    const agentSendChatMessage = vi.fn(async () => ({
+      sessionId: "sess-1",
+      turnId: "turn-1",
+      assistantMessage: { messageId: "assistant-1", content: "ok" },
+    }));
+    app = Fastify();
+    app.decorate("services", { chatMessages: { routePreflight, agentSendChatMessage } } as never);
+    await app.register(chatRoutes);
+
+    const preflight = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/route-preflight",
+      payload: { action: "send", providerId: "openai", model: "gpt-5.4", mode: "chat" },
+    });
+    expect(preflight.statusCode).toBe(200);
+    expect(routePreflight).toHaveBeenCalledWith("sess-1", {
+      action: "send",
+      providerId: "openai",
+      model: "gpt-5.4",
+      mode: "chat",
+    });
+
+    const missingDecision = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send",
+      payload: { content: "hello", providerId: "openai", model: "gpt-5.4" },
+    });
+    expect(missingDecision.statusCode).toBe(409);
+    expect(agentSendChatMessage).not.toHaveBeenCalled();
+
+    const sent = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send",
+      payload: {
+        content: "hello",
+        providerId: "openai",
+        model: "gpt-5.4",
+        routeDecision,
+      },
+    });
+    expect(sent.statusCode).toBe(200);
+    expect(agentSendChatMessage).toHaveBeenCalledWith(
+      "sess-1",
+      expect.objectContaining({
+        content: "hello",
+        providerId: "openai",
+        model: "gpt-5.4",
+      }),
+    );
+  });
+
+  it("rejects stale, mismatched, blocked, and changed route decisions", async () => {
+    const baseDecision = {
+      action: "send" as const,
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      effectiveProviderId: "openai",
+      effectiveModel: "gpt-5.4",
+      selectionSource: "global" as const,
+      fallbackPolicy: "off" as const,
+      fallbackResult: "not_applicable" as const,
+      runtimeReachability: "not_checked" as const,
+      runtimeClass: "cloud" as const,
+      fingerprint: "accepted",
+    };
+    const routePreflight = vi
+      .fn()
+      .mockResolvedValueOnce({ decision: { ...baseDecision, fingerprint: "new" } })
+      .mockResolvedValueOnce({ decision: baseDecision, blockedReason: "No model configured" });
+    const agentSendChatMessage = vi.fn();
+    app = Fastify();
+    app.decorate("services", { chatMessages: { routePreflight, agentSendChatMessage } } as never);
+    await app.register(chatRoutes);
+
+    const expired = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send",
+      payload: {
+        content: "hello",
+        providerId: "openai",
+        model: "gpt-5.4",
+        routeDecision: { ...baseDecision, expiresAt: new Date(Date.now() - 1000).toISOString() },
+      },
+    });
+    expect(expired.statusCode).toBe(409);
+    expect(expired.json().error.reason).toBe("route_decision_expired");
+
+    const effectiveMismatch = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send",
+      payload: {
+        content: "hello",
+        providerId: "anthropic",
+        model: "claude-sonnet-4-6",
+        routeDecision: baseDecision,
+      },
+    });
+    expect(effectiveMismatch.statusCode).toBe(409);
+    expect(effectiveMismatch.json().error.reason).toBe("route_effective_mismatch");
+
+    const fingerprintMismatch = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send",
+      payload: {
+        content: "hello",
+        providerId: "openai",
+        model: "gpt-5.4",
+        routeDecision: baseDecision,
+      },
+    });
+    expect(fingerprintMismatch.statusCode).toBe(409);
+    expect(fingerprintMismatch.json().error.reason).toBe("route_fingerprint_mismatch");
+
+    const blocked = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send",
+      payload: {
+        content: "hello",
+        providerId: "openai",
+        model: "gpt-5.4",
+        routeDecision: baseDecision,
+      },
+    });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json().error.reason).toBe("route_blocked");
+    expect(agentSendChatMessage).not.toHaveBeenCalled();
+  });
 });

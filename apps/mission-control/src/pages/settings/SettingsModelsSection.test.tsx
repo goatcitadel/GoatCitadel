@@ -1,4 +1,4 @@
-import { create, type ReactTestInstance } from "react-test-renderer";
+import { act, create, type ReactTestInstance } from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
 import { createEmptyLlmTransportDraft } from "../../components/LlmTransportFields";
 import { SettingsModelsSection, type SettingsModelsSectionProps } from "./SettingsModelsSection";
@@ -94,6 +94,16 @@ function collectText(node: ReactTestInstance): string {
     .join(" ");
 }
 
+function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
+  const button = root.findAll(
+    (node) => node.type === "button" && collectText(node).replace(/\s+/g, " ").includes(label),
+  )[0];
+  if (!button) {
+    throw new Error(`Button not found: ${label}`);
+  }
+  return button;
+}
+
 describe("SettingsModelsSection", () => {
   it("shows ChatGPT OAuth controls for OpenAI Codex instead of API-key controls", () => {
     const renderer = create(<SettingsModelsSection {...makeProps()} />);
@@ -110,5 +120,135 @@ describe("SettingsModelsSection", () => {
     expect(text).not.toContain("API Key (optional)");
     expect(text).not.toContain("Save Key to Secure Store");
     expect(text).not.toContain("API Key Env (optional)");
+  });
+
+  it("wires local provider presets, model refresh, save, and advanced toggle actions", async () => {
+    const applyLocalProviderPreset = vi.fn();
+    const onLoadModels = vi.fn();
+    const onSaveActiveLlm = vi.fn();
+    const onToggleAdvanced = vi.fn();
+    const renderer = create(
+      <SettingsModelsSection
+        {...makeProps({
+          applyLocalProviderPreset,
+          loadingModels: true,
+          models: [],
+          onLoadModels,
+          onSaveActiveLlm,
+          onToggleAdvanced,
+          showAdvanced: false,
+        })}
+      />,
+    );
+
+    expect(collectText(renderer.root)).toContain("Loading...");
+    expect(collectText(renderer.root)).not.toContain("Add / Update Provider");
+
+    await act(async () => {
+      findButton(renderer.root, "Use LM Studio Preset").props.onClick();
+      findButton(renderer.root, "Use Ollama Preset").props.onClick();
+      findButton(renderer.root, "Use llama.cpp Preset").props.onClick();
+      findButton(renderer.root, "Loading...").props.onClick();
+      findButton(renderer.root, "Save Active Provider/Model").props.onClick();
+      findButton(renderer.root, "Show advanced settings").props.onClick();
+    });
+
+    expect(applyLocalProviderPreset).toHaveBeenNthCalledWith(1, "lmstudio");
+    expect(applyLocalProviderPreset).toHaveBeenNthCalledWith(2, "ollama");
+    expect(applyLocalProviderPreset).toHaveBeenNthCalledWith(3, "llamacpp");
+    expect(onLoadModels).toHaveBeenCalledTimes(1);
+    expect(onSaveActiveLlm).toHaveBeenCalledTimes(1);
+    expect(onToggleAdvanced).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows API-key controls for non-OAuth providers and propagates credential actions", async () => {
+    const onProviderApiKeyChange = vi.fn();
+    const onSaveProviderKeyToSecureStore = vi.fn();
+    const onDeleteProviderKeyFromSecureStore = vi.fn();
+    const onSaveProvider = vi.fn();
+    const renderer = create(
+      <SettingsModelsSection
+        {...makeProps({
+          activeProviderId: "glm",
+          providerId: "glm",
+          providerLabel: "GLM",
+          providerBaseUrl: "https://open.bigmodel.cn/api/paas/v4",
+          providerApiStyle: "openai-chat-completions",
+          providerDefaultModel: "glm-5",
+          providerApiKey: "secret",
+          providerSecretStatus: { providerId: "glm", configured: true, source: "secure-store" } as any,
+          codexOAuthStatus: null,
+          onProviderApiKeyChange,
+          onSaveProviderKeyToSecureStore,
+          onDeleteProviderKeyFromSecureStore,
+          onSaveProvider,
+        })}
+      />,
+    );
+
+    const text = collectText(renderer.root);
+    expect(text).toContain("API Key (optional)");
+    expect(text).toContain("Key source:");
+    expect(text).toContain("secure-store");
+    expect(text).not.toContain("OpenAI Codex uses ChatGPT OAuth");
+
+    const apiKeyInput = renderer.root.findByProps({ id: "providerApiKey" });
+    await act(async () => {
+      apiKeyInput.props.onChange({ target: { value: "next-secret" } });
+      findButton(renderer.root, "Save Key to Secure Store").props.onClick();
+      findButton(renderer.root, "Remove Secure Key").props.onClick();
+      findButton(renderer.root, "Save Provider Settings").props.onClick();
+    });
+
+    expect(onProviderApiKeyChange).toHaveBeenCalledWith("next-secret");
+    expect(onSaveProviderKeyToSecureStore).toHaveBeenCalledTimes(1);
+    expect(onDeleteProviderKeyFromSecureStore).toHaveBeenCalledTimes(1);
+    expect(onSaveProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders OAuth device pairing detail and wires connect, poll, and disconnect controls", async () => {
+    const onStartCodexOAuthDeviceFlow = vi.fn();
+    const onPollCodexOAuthDeviceFlow = vi.fn();
+    const onDisconnectCodexOAuth = vi.fn();
+    const renderer = create(
+      <SettingsModelsSection
+        {...makeProps({
+          codexOAuthStatus: {
+            providerId: "openai-codex",
+            available: true,
+            connected: true,
+            requiresReauth: false,
+            accountLabel: "operator@example.test",
+            expiresAt: "2026-05-14T12:00:00.000Z",
+          },
+          codexOAuthFlow: {
+            providerId: "openai-codex",
+            flowId: "flow-1",
+            userCode: "USER-CODE",
+            verificationUrl: "https://chatgpt.com/activate",
+            expiresAt: "2026-05-14T12:00:00.000Z",
+            pollAfterMs: 5_000,
+          },
+          onStartCodexOAuthDeviceFlow,
+          onPollCodexOAuthDeviceFlow,
+          onDisconnectCodexOAuth,
+        })}
+      />,
+    );
+
+    const text = collectText(renderer.root);
+    expect(text).toContain("connected as operator@example.test");
+    expect(text).toContain("https://chatgpt.com/activate");
+    expect(text).toContain("USER-CODE");
+
+    await act(async () => {
+      findButton(renderer.root, "Reconnect ChatGPT OAuth").props.onClick();
+      findButton(renderer.root, "Check Device Pairing").props.onClick();
+      findButton(renderer.root, "Disconnect OAuth").props.onClick();
+    });
+
+    expect(onStartCodexOAuthDeviceFlow).toHaveBeenCalledTimes(1);
+    expect(onPollCodexOAuthDeviceFlow).toHaveBeenCalledTimes(1);
+    expect(onDisconnectCodexOAuth).toHaveBeenCalledTimes(1);
   });
 });

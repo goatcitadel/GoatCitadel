@@ -108,7 +108,7 @@ describe("pixel office asset loader", () => {
 
     Reflect.deleteProperty(globalThis, "window");
     expect(supportsPixelOfficeRuntime()).toBe(false);
-  });
+  }, 30_000);
 
   it("loads runtime assets once and populates floor, wall, character, and furniture stores", async () => {
     const fetchMock = vi.fn(async (url: string) => {

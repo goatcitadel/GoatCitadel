@@ -73,6 +73,7 @@ import { hashPromptPackPolicyV2, hashPromptPackPolicyV3, type Storage } from "@g
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { parseLooseJsonRecord } from "./json-record-parser.js";
+import { parsePromptJudgeScoreRecord } from "./prompt-pack-judge-score-parser.js";
 import { applyPromptPackPromptLabFallbacks } from "./prompt-pack-empty-output-fallbacks.js";
 import {
   PROMPT_PACK_MEMORY_TOOL_NAME_LIST as PROMPT_PACK_MEMORY_TOOL_NAMES,
@@ -9025,37 +9026,6 @@ export function extractPromptPackCompletionText(response: ChatCompletionResponse
     }
   }
   return typeof message.reasoning_content === "string" ? message.reasoning_content.trim() : "";
-}
-
-function parsePromptJudgeScoreRecord(raw: string): Record<string, unknown> | undefined {
-  if (!raw.trim()) {
-    return undefined;
-  }
-  const scoreLabels = ["routingScore", "honestyScore", "handoffScore", "robustnessScore", "usabilityScore"] as const;
-  const scoreAliases: Record<(typeof scoreLabels)[number], string[]> = {
-    routingScore: ["routingScore", "routing"],
-    honestyScore: ["honestyScore", "honesty"],
-    handoffScore: ["handoffScore", "handoff"],
-    robustnessScore: ["robustnessScore", "robustness"],
-    usabilityScore: ["usabilityScore", "usability"],
-  };
-  const parsed: Record<string, unknown> = {};
-  for (const label of scoreLabels) {
-    for (const alias of scoreAliases[label]) {
-      const escapedLabel = alias.replace(/[A-Z]/g, (char) => `(?:_|\\s*)${char.toLowerCase()}`);
-      const suffix = /score$/i.test(alias) ? "" : "(?:\\s*_?score)?";
-      const match = raw.match(new RegExp(`${escapedLabel}${suffix}\\s*[:=]\\s*([0-2])(?:\\s*(?:/|out of)\\s*2)?`, "i"));
-      if (match?.[1]) {
-        parsed[label] = Number.parseInt(match[1], 10);
-        break;
-      }
-    }
-  }
-  const rationaleMatch = raw.match(/rationale\s*[:=]\s*([\s\S]+)/i);
-  if (rationaleMatch?.[1]) {
-    parsed.rationale = rationaleMatch[1].trim().slice(0, 900);
-  }
-  return scoreLabels.some((label) => typeof parsed[label] === "number") ? parsed : undefined;
 }
 
 function detectPromptPackIncompleteOutput(response: string): boolean {

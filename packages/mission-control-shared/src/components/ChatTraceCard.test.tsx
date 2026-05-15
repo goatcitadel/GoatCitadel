@@ -333,4 +333,68 @@ describe("ChatTraceCard", () => {
     expect(text).toContain("specialist");
     expect(renderer.root.findByType("a").props.href).toBe("https://example.com/final");
   });
+
+  it("keeps sparse citations and orchestration metadata readable without optional fields", async () => {
+    const trace = {
+      ...makeTrace(),
+      model: undefined,
+      routing: {
+        liveDataIntent: false,
+        fallbackUsed: true,
+      },
+      failure: {
+        failureClass: "unknown",
+        message: "No retry metadata was attached.",
+      },
+      toolRuns: [
+        {
+          toolRunId: "tool-sparse",
+          turnId: "turn-1",
+          sessionId: "session-1",
+          toolName: "browser.open",
+          status: "completed",
+          startedAt: undefined,
+          result: {
+            url: "https://example.com/same",
+            finalUrl: "https://example.com/same",
+            engineLabel: "Browser",
+            engineTier: "",
+          },
+        },
+      ],
+      citations: [
+        {
+          citationId: "citation-sparse",
+        },
+      ],
+      orchestration: {
+        workflowTemplate: "solo",
+        visibility: "hidden",
+        status: "running",
+        routeDecision: {
+          selectedRoles: [],
+        },
+        steps: [
+          {
+            stepId: "step-sparse",
+            role: "Coder",
+            status: "pending",
+          },
+        ],
+      },
+    } as unknown as ChatTurnTraceRecord;
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChatTraceCard trace={trace} workspaceId="default" defaultCollapsed={false} />);
+    });
+    const text = collectText(renderer.toJSON()).replace(/\s+/g, " ").trim();
+
+    expect(text).toContain("Requested auto -> Effective not recorded");
+    expect(text).toContain("Retryable: yes");
+    expect(text).toContain("source");
+    expect(text).toContain("solo · hidden · running");
+    expect(text).toContain("provider auto");
+    expect(text).not.toContain("Final URL: https://example.com/same");
+    expect(text).not.toContain("Specialists:");
+  });
 });

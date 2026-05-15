@@ -1,7 +1,7 @@
 import React from "react";
 import { act, create } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useChatWorkbench } from "./useChatWorkbench";
+import { describeWorkbenchActionError, useChatWorkbench } from "./useChatWorkbench";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -184,6 +184,12 @@ describe("useChatWorkbench", () => {
     );
   });
 
+  it("normalizes workbench action error causes", () => {
+    expect(describeWorkbenchActionError(new Error("specific failure"), "fallback")).toBe("specific failure");
+    expect(describeWorkbenchActionError("string failure", "fallback")).toBe("fallback");
+    expect(describeWorkbenchActionError(null, "fallback")).toBe("fallback");
+  });
+
   it("saves dirty drafts and protects unsaved work with beforeunload", async () => {
     await act(async () => {
       create(<Harness />);
@@ -351,6 +357,30 @@ describe("useChatWorkbench", () => {
     });
     expect(apiMocks.fetchChatSessionWorkbenchFile).toHaveBeenCalledWith("session-fallback", "bad.ts");
     expect(apiMocks.fetchChatSessionWorkbenchFile).toHaveBeenCalledWith("session-fallback", "src/index.ts");
+    expect(latest!.selectedWorkbenchFile?.path).toBe("src/index.ts");
+  });
+
+  it("normalizes sparse persisted UI state without selecting a blank file path", async () => {
+    storage.set(
+      "goatcitadel.chat.workbench.ui.session-1",
+      JSON.stringify({ expandedPaths: "not-an-array", selectedFilePath: "   " }),
+    );
+    apiMocks.fetchChatSessionWorkbenchTree.mockResolvedValueOnce({
+      state: { ...workbenchState, activeFilePath: "" },
+      changedFiles: [],
+      items: [{ path: "README.md", kind: "file" }],
+    });
+    apiMocks.fetchChatSessionWorkbenchOutput.mockResolvedValueOnce({
+      state: { ...workbenchState, activeFilePath: "" },
+      output: "",
+    });
+
+    await act(async () => {
+      create(<Harness />);
+      await flushAsyncEffects();
+    });
+
+    expect(latest!.workbenchExpandedPaths).toEqual(["src"]);
     expect(latest!.selectedWorkbenchFile?.path).toBe("src/index.ts");
   });
 

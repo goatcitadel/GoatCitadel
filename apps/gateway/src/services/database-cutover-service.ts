@@ -23,27 +23,31 @@ export interface DatabaseCutoverServiceDeps {
   readonly persistAssistantConfig?: () => void;
 }
 
-interface SourceSnapshot {
+/** @internal */
+export interface SourceSnapshot {
   rootDir: string;
   sqlitePath: string;
   transcriptsDir: string;
   auditDir: string;
 }
 
-interface SqliteSnapshotColumn {
+/** @internal */
+export interface SqliteSnapshotColumn {
   name: string;
   type: string;
   primaryKeyPosition: number;
   autoIncrement: boolean;
 }
 
-interface SqliteSnapshotForeignKey {
+/** @internal */
+export interface SqliteSnapshotForeignKey {
   id: number;
   seq: number;
   referencedTable: string;
 }
 
-interface SqliteSnapshotTable {
+/** @internal */
+export interface SqliteSnapshotTable {
   name: string;
   sql: string;
   rowCount: number;
@@ -51,11 +55,13 @@ interface SqliteSnapshotTable {
   foreignKeys: SqliteSnapshotForeignKey[];
 }
 
-interface SqliteSnapshotSchema {
+/** @internal */
+export interface SqliteSnapshotSchema {
   tables: SqliteSnapshotTable[];
 }
 
-interface SourceSummary {
+/** @internal */
+export interface SourceSummary {
   sessions: number;
   transcriptEvents: number;
   auditEvents: number;
@@ -904,3 +910,26 @@ function blockStep(steps: DatabaseCutoverStepRecord[], id: string, detail: strin
   step.status = "blocked";
   step.detail = detail;
 }
+
+export const __databaseCutoverServiceInternals = {
+  countAuditEvents,
+  countNonEmptyLines,
+  countTranscriptEvents,
+  importSqliteRuntimeTables,
+  importEventLogs,
+  inspectSqliteSnapshot,
+  insertRowsIntoPostgresTable,
+  parseJsonLine,
+  quoteIdentifier,
+  recordCutoverRun,
+  resetPostgresSequences,
+  resolveExplicitSnapshot,
+  resolveSnapshotFromBackup,
+  summarizeSourceSnapshot,
+  topologicallySortTables,
+  verifyAgainstSource,
+  completeStep,
+  skipStep,
+  failStep,
+  blockStep,
+};

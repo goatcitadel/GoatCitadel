@@ -17,18 +17,15 @@ type ChannelRule = {
   inboundModes?: ChannelInboundMode[];
   resolveInboundModes?: (config: Record<string, unknown>) => ChannelInboundMode[];
   threadCapabilities?: Partial<ChannelThreadCapabilities>;
-  resolveThreadCapabilities?: (config: Record<string, unknown>) => Partial<ChannelThreadCapabilities>;
   runtimePolicy?: Partial<ChannelRuntimePolicy>;
   resolveRuntimePolicy?: (config: Record<string, unknown>) => Partial<ChannelRuntimePolicy>;
   runtimePosture?: ChannelRuntimePosture;
   resolveRuntimePosture?: (config: Record<string, unknown>) => ChannelRuntimePosture;
-  chunkingMode?: ChannelChunkingMode;
-  resolveChunkingMode?: (config: Record<string, unknown>) => ChannelChunkingMode;
-  supportsStreaming?: boolean;
-  resolveSupportsStreaming?: (config: Record<string, unknown>) => boolean;
+  chunkingMode: ChannelChunkingMode;
+  supportsStreaming: boolean;
   supportNotes?: string[];
   resolveSupportNotes?: (config: Record<string, unknown>) => string[];
-  requiredAnyOf?: string[][];
+  requiredAnyOf: string[][];
 };
 
 const DEFAULT_THREAD_CAPABILITIES: ChannelThreadCapabilities = {
@@ -493,11 +490,19 @@ export function describeChannelCapabilities(channelKey: string, config: Record<s
     inboundModes: ["none"],
     chunkingMode: "fallback",
     supportsStreaming: false,
+    runtimePosture: {
+      outboundTransport: "api",
+      lifecycle: "stateless",
+      inboundReadiness: "unsupported",
+      operatorSummary: "This channel is currently normalized as an outbound-only bridge.",
+    },
     requiredAnyOf: [],
   };
 
   const supportedActions = uniqueActions([
-    ...(rule.resolveSupportedActions?.(config) ?? rule.supportedActions ?? ["channel.send"]),
+    ...(rule.resolveSupportedActions
+      ? rule.resolveSupportedActions(config)
+      : (rule.supportedActions as ChannelActionName[])),
   ]);
   const supportedAttachmentSources = uniqueAttachmentSources([
     ...(rule.resolveSupportedAttachmentSources?.(config) ?? rule.supportedAttachmentSources ?? []),
@@ -505,7 +510,7 @@ export function describeChannelCapabilities(channelKey: string, config: Record<s
   const inboundModes = uniqueInboundModes([...(rule.resolveInboundModes?.(config) ?? rule.inboundModes ?? ["none"])]);
   const threadCapabilities: ChannelThreadCapabilities = {
     ...DEFAULT_THREAD_CAPABILITIES,
-    ...(rule.resolveThreadCapabilities?.(config) ?? rule.threadCapabilities ?? {}),
+    ...(rule.threadCapabilities ?? {}),
   };
   const runtimePolicy: ChannelRuntimePolicy = {
     ...DEFAULT_RUNTIME_POLICY,
@@ -513,8 +518,9 @@ export function describeChannelCapabilities(channelKey: string, config: Record<s
   };
   runtimePolicy.typing ||= supportedActions.includes("channel.typing");
   runtimePolicy.presence ||= supportedActions.includes("channel.presence");
-  const runtimePosture =
-    rule.resolveRuntimePosture?.(config) ?? rule.runtimePosture ?? buildDefaultRuntimePosture(inboundModes);
+  const runtimePosture = rule.resolveRuntimePosture
+    ? rule.resolveRuntimePosture(config)
+    : (rule.runtimePosture as ChannelRuntimePosture);
   const setupDiagnostics = buildSetupDiagnostics(rule, config);
 
   return {
@@ -526,8 +532,8 @@ export function describeChannelCapabilities(channelKey: string, config: Record<s
     threadCapabilities,
     runtimePolicy,
     runtimePosture,
-    chunkingMode: rule.resolveChunkingMode?.(config) ?? rule.chunkingMode ?? "fallback",
-    supportsStreaming: rule.resolveSupportsStreaming?.(config) ?? rule.supportsStreaming ?? false,
+    chunkingMode: rule.chunkingMode,
+    supportsStreaming: rule.supportsStreaming,
     supportNotes: [...(rule.resolveSupportNotes?.(config) ?? rule.supportNotes ?? [])],
     setupDiagnostics,
     setupReady: setupDiagnostics.length === 0,
@@ -536,7 +542,7 @@ export function describeChannelCapabilities(channelKey: string, config: Record<s
 
 function buildSetupDiagnostics(rule: ChannelRule, config: Record<string, unknown>): string[] {
   const diagnostics: string[] = [];
-  for (const group of rule.requiredAnyOf ?? []) {
+  for (const group of rule.requiredAnyOf) {
     if (group.some((key) => readConfigString(config, key))) {
       continue;
     }
@@ -555,17 +561,6 @@ function uniqueAttachmentSources(values: ChannelAttachmentSource[]): ChannelAtta
 
 function uniqueInboundModes(values: ChannelInboundMode[]): ChannelInboundMode[] {
   return [...new Set(values)];
-}
-
-function buildDefaultRuntimePosture(inboundModes: ChannelInboundMode[]): ChannelRuntimePosture {
-  const inboundTransport = inboundModes.find((mode): mode is Exclude<ChannelInboundMode, "none"> => mode !== "none");
-  return {
-    outboundTransport: "api",
-    inboundTransport,
-    lifecycle: "stateless",
-    inboundReadiness: inboundTransport ? "ready" : "unsupported",
-    operatorSummary: "This channel is currently normalized as an outbound-only bridge.",
-  };
 }
 
 function readConfigString(config: Record<string, unknown>, key: string): string | undefined {

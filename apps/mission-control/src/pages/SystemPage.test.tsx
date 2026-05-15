@@ -202,6 +202,65 @@ describe("SystemPage", () => {
     }
   });
 
+  it("runs daemon lifecycle actions and updates the visible state", async () => {
+    apiMocks.fetchDaemonStatus.mockResolvedValueOnce({
+      state: "stopped",
+      running: false,
+      pid: 0,
+      uptimeSeconds: 0,
+      host: "goat-box",
+      supported: true,
+      controllable: true,
+      controlMessage: "Daemon stopped.",
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<SystemPage />);
+      });
+      await flush();
+
+      await clickButton(renderer, "Start");
+      await flush();
+      expect(apiMocks.startDaemon).toHaveBeenCalledTimes(1);
+      expect(rendererText(renderer)).toContain("Gateway process running");
+
+      await clickButton(renderer, "Stop");
+      await flush();
+      expect(apiMocks.stopDaemon).toHaveBeenCalledTimes(1);
+      expect(rendererText(renderer)).toContain("Gateway process unavailable");
+
+      await clickButton(renderer, "Restart");
+      await flush();
+      expect(apiMocks.restartDaemon).toHaveBeenCalledTimes(1);
+      expect(rendererText(renderer)).toContain("PID 4343");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("reports lifecycle action errors and clears the busy state", async () => {
+    apiMocks.restartDaemon.mockRejectedValue(new Error("restart denied"));
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<SystemPage />);
+      });
+      await flush();
+
+      await clickButton(renderer, "Restart");
+      await flush();
+
+      const text = rendererText(renderer);
+      expect(text).toContain("restart denied");
+      expect(apiMocks.restartDaemon).toHaveBeenCalledTimes(1);
+    } finally {
+      renderer.unmount();
+    }
+  });
+
   it("shows an error when the initial vitals load fails", async () => {
     apiMocks.fetchSystemVitals.mockRejectedValue(new Error("vitals unavailable"));
 

@@ -158,7 +158,7 @@ export function inferDelegationRunStatus(
   return fallback;
 }
 
-function createSeedDelegationSteps(request: ChatDelegateRequest): ActiveChatDelegationStep[] {
+export function createSeedDelegationSteps(request: ChatDelegateRequest): ActiveChatDelegationStep[] {
   if (request.steps?.length) {
     return request.steps
       .map((step, index) => ({
@@ -175,6 +175,21 @@ function createSeedDelegationSteps(request: ChatDelegateRequest): ActiveChatDele
     status: "pending" as const,
     index,
   }));
+}
+
+export function resolveDelegationMode(mode: ChatDelegateRequest["mode"]): NonNullable<ChatDelegateRequest["mode"]> {
+  return mode ?? "sequential";
+}
+
+export function resolveDelegationRoute(
+  prefs: ChatSessionPrefsRecord | null,
+  selectedProviderId: string | undefined,
+  selectedModel: string | undefined,
+) {
+  return {
+    providerId: prefs?.providerId ?? selectedProviderId,
+    model: prefs?.model ?? selectedModel,
+  };
 }
 
 function mergeDelegationStep(
@@ -483,11 +498,12 @@ export function useChatDelegationPolicyActions(input: {
   const runDelegationAction = useCallback(
     async (sessionId: string, request: ChatDelegateRequest, label: string) => {
       const attachedTurnId = selectedTurn?.turnId ?? null;
+      const mode = resolveDelegationMode(request.mode);
       setActiveDelegationRun({
         attachedTurnId,
         label,
         objective: request.objective,
-        mode: request.mode ?? "sequential",
+        mode,
         status: "running",
         steps: createSeedDelegationSteps(request),
       });
@@ -501,7 +517,7 @@ export function useChatDelegationPolicyActions(input: {
           attachedTurnId,
           label,
           objective: request.objective,
-          mode: request.mode ?? "sequential",
+          mode,
           status: inferDelegationRunStatus(result.steps.map(toActiveDelegationStep)),
           steps: result.steps.map(toActiveDelegationStep).sort((left, right) => left.index - right.index),
           stitchedOutput: result.stitchedOutput,
@@ -570,7 +586,7 @@ export function useChatDelegationPolicyActions(input: {
               attachedTurnId: current?.attachedTurnId ?? attachedTurnId,
               label: current?.label ?? label,
               objective: current?.objective ?? request.objective,
-              mode: current?.mode ?? request.mode ?? "sequential",
+              mode: current?.mode ?? mode,
               status: inferDelegationRunStatus(steps),
               steps,
               stitchedOutput: chunk.result!.stitchedOutput,
@@ -593,13 +609,14 @@ export function useChatDelegationPolicyActions(input: {
   const buildDelegationRequest = useCallback(
     (objective: string, roles: string[], mode: NonNullable<ChatDelegateRequest["mode"]>) => {
       const graph = buildDelegationGraph(selectedTurn, roles);
+      const route = resolveDelegationRoute(prefs, selectedProviderId, selectedModel);
       return {
         objective,
         roles: graph.roles,
         mode,
         surfaceMode,
-        providerId: prefs?.providerId ?? selectedProviderId,
-        model: prefs?.model ?? selectedModel,
+        providerId: route.providerId,
+        model: route.model,
         ...(graph.steps?.length ? { steps: graph.steps } : {}),
       } satisfies ChatDelegateRequest;
     },

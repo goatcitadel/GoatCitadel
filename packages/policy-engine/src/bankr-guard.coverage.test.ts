@@ -496,4 +496,19 @@ describe("bankr guard coverage sweep", () => {
 
     expect(auditRows[0]?.usdEstimate).toBeNull();
   });
+
+  it("covers final normalization fallbacks for empty rows, aliases, and blank strings", () => {
+    const storage = {
+      db: {
+        prepare: () => ({
+          get: () => undefined,
+        }),
+      },
+    } as unknown as Storage;
+
+    expect(readBankrDailyUsage(storage, "2026-03-31")).toBe(0);
+    expect(normalizeBankrAction({ chain: "mainnet" })).toMatchObject({ chain: "ethereum" });
+    expect(normalizeBankrAction({ prompt: "buy ETH with $0" })).toMatchObject({ usdEstimate: undefined });
+    expect(normalizeBankrAction({ prompt: "   " })).toMatchObject({ prompt: undefined });
+  });
 });

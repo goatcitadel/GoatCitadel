@@ -102,5 +102,23 @@ describe("chat-pending-approval", () => {
       toolName: "shell.exec",
       reason: "Next reason",
     });
+    expect(
+      mergePendingApproval(current, {
+        approvalId: "approval-1",
+        toolName: undefined,
+        reason: undefined,
+        riskLevel: undefined,
+        expiresAt: undefined,
+        codeHash: undefined,
+        wrapperManifestHash: undefined,
+        capabilitySnapshotId: undefined,
+        inspectPath: undefined,
+        requestedOutputIntent: undefined,
+        saveCandidateOnSuccess: undefined,
+        remainingCount: undefined,
+        affectedResources: undefined,
+        codePreview: undefined,
+      }),
+    ).toEqual(current);
   });
 });

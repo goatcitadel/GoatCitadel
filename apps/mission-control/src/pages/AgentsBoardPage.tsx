@@ -740,7 +740,7 @@ export function AgentsBoardPage() {
   );
 }
 
-function buildAgentLookup(agents: AgentDirectoryRecord[]): Map<string, AgentDirectoryRecord> {
+export function buildAgentLookup(agents: AgentDirectoryRecord[]): Map<string, AgentDirectoryRecord> {
   const lookup = new Map<string, AgentDirectoryRecord>();
   for (const agent of agents) {
     for (const hint of buildAgentHints(agent)) {
@@ -750,7 +750,7 @@ function buildAgentLookup(agents: AgentDirectoryRecord[]): Map<string, AgentDire
   return lookup;
 }
 
-function buildAgentHints(agent: AgentDirectoryRecord): Set<string> {
+export function buildAgentHints(agent: AgentDirectoryRecord): Set<string> {
   return new Set(
     [agent.agentId, agent.roleId, agent.name, agent.title, agent.runtimeAgentId, agent.runtimeName, ...agent.aliases]
       .filter(Boolean)
@@ -759,7 +759,7 @@ function buildAgentHints(agent: AgentDirectoryRecord): Set<string> {
   );
 }
 
-function buildTaskHints(task: TaskRecord): Set<string> {
+export function buildTaskHints(task: TaskRecord): Set<string> {
   return mergeHintSets(
     collectStrings(task.taskId),
     collectStrings(task.assignedAgentId),
@@ -768,7 +768,7 @@ function buildTaskHints(task: TaskRecord): Set<string> {
   );
 }
 
-function resolveAssignedAgent(
+export function resolveAssignedAgent(
   task: TaskRecord,
   agentLookup: Map<string, AgentDirectoryRecord>,
 ): AgentDirectoryRecord | undefined {
@@ -783,7 +783,7 @@ function resolveAssignedAgent(
   return undefined;
 }
 
-function matchesHints(left: Set<string>, right: Set<string>): boolean {
+export function matchesHints(left: Set<string>, right: Set<string>): boolean {
   if (left.size === 0 || right.size === 0) {
     return false;
   }
@@ -795,7 +795,7 @@ function matchesHints(left: Set<string>, right: Set<string>): boolean {
   return false;
 }
 
-function collectStrings(input: unknown, depth = 0): Set<string> {
+export function collectStrings(input: unknown, depth = 0): Set<string> {
   const values = new Set<string>();
   if (input == null || depth > 2) {
     return values;
@@ -825,7 +825,7 @@ function collectStrings(input: unknown, depth = 0): Set<string> {
   return values;
 }
 
-function mergeHintSets(...sets: Set<string>[]): Set<string> {
+export function mergeHintSets(...sets: Set<string>[]): Set<string> {
   const merged = new Set<string>();
   for (const set of sets) {
     for (const value of set) {
@@ -835,14 +835,14 @@ function mergeHintSets(...sets: Set<string>[]): Set<string> {
   return merged;
 }
 
-function normalizeToken(value: string | undefined): string {
+export function normalizeToken(value: string | undefined): string {
   return (value ?? "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
 }
 
-function taskPriorityLevel(priority: TaskRecord["priority"]): PriorityLevel {
+export function taskPriorityLevel(priority: TaskRecord["priority"]): PriorityLevel {
   if (priority === "urgent") {
     return "urgent";
   }
@@ -855,26 +855,26 @@ function taskPriorityLevel(priority: TaskRecord["priority"]): PriorityLevel {
   return "medium";
 }
 
-function priorityLabel(priority: PriorityLevel): string {
+export function priorityLabel(priority: PriorityLevel): string {
   if (priority === "urgent") return "Urgent";
   if (priority === "high") return "High";
   if (priority === "low") return "Low";
   return "Medium";
 }
 
-function priorityFilterLabel(filter: PriorityFilter): string {
+export function priorityFilterLabel(filter: PriorityFilter): string {
   if (filter === "all") {
     return "All priorities";
   }
   return `${priorityLabel(filter)} only`;
 }
 
-function nextPriorityFilter(current: PriorityFilter): PriorityFilter {
+export function nextPriorityFilter(current: PriorityFilter): PriorityFilter {
   const index = PRIORITY_FILTER_ORDER.indexOf(current);
   return PRIORITY_FILTER_ORDER[(index + 1) % PRIORITY_FILTER_ORDER.length] ?? "all";
 }
 
-function deriveTaskLane(task: TaskRecord): LaneId {
+export function deriveTaskLane(task: TaskRecord): LaneId {
   if (task.status === "done") {
     return "done";
   }
@@ -890,7 +890,7 @@ function deriveTaskLane(task: TaskRecord): LaneId {
   return "backlog";
 }
 
-function sortTaskCards(left: TaskBoardCard, right: TaskBoardCard): number {
+export function sortTaskCards(left: TaskBoardCard, right: TaskBoardCard): number {
   const laneDelta = LANE_ORDER.indexOf(left.laneId) - LANE_ORDER.indexOf(right.laneId);
   if (laneDelta !== 0) {
     return laneDelta;
@@ -909,7 +909,7 @@ function sortTaskCards(left: TaskBoardCard, right: TaskBoardCard): number {
   );
 }
 
-function selectionScore(card: TaskBoardCard): number {
+export function selectionScore(card: TaskBoardCard): number {
   const laneScore =
     card.laneId === "review"
       ? 5
@@ -923,14 +923,18 @@ function selectionScore(card: TaskBoardCard): number {
   return laneScore * 100 + PRIORITY_SCORE[card.priorityLevel] * 10 + Math.min(card.approvals.length, 9);
 }
 
-function formatTaskIdentifier(taskId: string): string {
+export function formatTaskIdentifier(taskId: string): string {
   if (/^[a-z0-9-]+$/i.test(taskId) && taskId.length <= 20) {
     return taskId.toUpperCase();
   }
   return `GC-${compactId(taskId).toUpperCase()}`;
 }
 
-function describeTaskSignal(task: TaskRecord, latestEvent: RealtimeEvent | undefined, approvalCount: number): string {
+export function describeTaskSignal(
+  task: TaskRecord,
+  latestEvent: RealtimeEvent | undefined,
+  approvalCount: number,
+): string {
   if (latestEvent) {
     return describeBoardEvent(latestEvent);
   }
@@ -952,7 +956,7 @@ function describeTaskSignal(task: TaskRecord, latestEvent: RealtimeEvent | undef
   return "No recent task traffic yet.";
 }
 
-function buildTraceQuery(card: TaskBoardCard): TraceQuery | null {
+export function buildTraceQuery(card: TaskBoardCard): TraceQuery | null {
   const linkedEvent = card.recentEvents.find(
     (event) =>
       event.links?.taskId ||
@@ -973,7 +977,7 @@ function buildTraceQuery(card: TaskBoardCard): TraceQuery | null {
   return Object.values(query).some(Boolean) ? query : null;
 }
 
-function buildTraceNodes(card: TaskBoardCard | null, lifecycle: RuntimeLifecycleResponse | null): TraceNode[] {
+export function buildTraceNodes(card: TaskBoardCard | null, lifecycle: RuntimeLifecycleResponse | null): TraceNode[] {
   if (!card) {
     return [];
   }
@@ -1134,7 +1138,7 @@ function buildTraceNodes(card: TaskBoardCard | null, lifecycle: RuntimeLifecycle
   return nodes.slice(0, 36);
 }
 
-function shouldRefreshBoardFromEvent(event: RealtimeEvent): boolean {
+export function shouldRefreshBoardFromEvent(event: RealtimeEvent): boolean {
   return (
     event.eventType.startsWith("approval_") ||
     event.eventType.startsWith("task_") ||
@@ -1147,7 +1151,7 @@ function shouldRefreshBoardFromEvent(event: RealtimeEvent): boolean {
   );
 }
 
-function mergeRealtimeEvents(current: RealtimeEvent[], incoming: RealtimeEvent[]): RealtimeEvent[] {
+export function mergeRealtimeEvents(current: RealtimeEvent[], incoming: RealtimeEvent[]): RealtimeEvent[] {
   const deduped = new Map<string, RealtimeEvent>();
   for (const event of [...incoming, ...current]) {
     deduped.set(event.eventId, event);
@@ -1157,7 +1161,7 @@ function mergeRealtimeEvents(current: RealtimeEvent[], incoming: RealtimeEvent[]
     .slice(0, MAX_EVENT_COUNT);
 }
 
-function formatRelativeTime(timestamp: string): string {
+export function formatRelativeTime(timestamp: string): string {
   const deltaMs = Math.max(0, Date.now() - new Date(timestamp).getTime());
   const minutes = Math.floor(deltaMs / 60_000);
   if (minutes < 1) return "just now";
@@ -1167,7 +1171,7 @@ function formatRelativeTime(timestamp: string): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-function taskCardTone(card: TaskBoardCard): DetailTone {
+export function taskCardTone(card: TaskBoardCard): DetailTone {
   if (card.task.status === "blocked" || card.approvals.length > 0) {
     return "critical";
   }
@@ -1183,7 +1187,7 @@ function taskCardTone(card: TaskBoardCard): DetailTone {
   return "muted";
 }
 
-function taskStatusTone(status: TaskRecord["status"]): DetailTone {
+export function taskStatusTone(status: TaskRecord["status"]): DetailTone {
   if (status === "blocked") {
     return "critical";
   }
@@ -1199,7 +1203,7 @@ function taskStatusTone(status: TaskRecord["status"]): DetailTone {
   return "muted";
 }
 
-function eventTone(event: RealtimeEvent): DetailTone {
+export function eventTone(event: RealtimeEvent): DetailTone {
   if (event.eventType.includes("approval")) {
     return "critical";
   }
@@ -1215,7 +1219,7 @@ function eventTone(event: RealtimeEvent): DetailTone {
   return "muted";
 }
 
-function describeBoardEvent(event: RealtimeEvent): string {
+export function describeBoardEvent(event: RealtimeEvent): string {
   if (event.eventType === "activity_logged") {
     return (
       readFirstString(event.payload.activity, ["message", "summary", "label"]) ??
@@ -1235,7 +1239,7 @@ function describeBoardEvent(event: RealtimeEvent): string {
   return buildRealtimeEventSummary(event);
 }
 
-function isActiveEvent(event: RealtimeEvent | undefined): boolean {
+export function isActiveEvent(event: RealtimeEvent | undefined): boolean {
   if (!event) {
     return false;
   }
@@ -1247,14 +1251,14 @@ function isActiveEvent(event: RealtimeEvent | undefined): boolean {
   );
 }
 
-function formatEventLabel(eventType: string): string {
+export function formatEventLabel(eventType: string): string {
   return eventType
     .split("_")
     .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
     .join(" ");
 }
 
-function buildEventMeta(event: RealtimeEvent): string[] {
+export function buildEventMeta(event: RealtimeEvent): string[] {
   const items = [`event ${compactId(event.eventId)}`, `source ${event.source}`];
   if (event.links?.taskId) {
     items.push(`task ${compactId(event.links.taskId)}`);
@@ -1268,7 +1272,7 @@ function buildEventMeta(event: RealtimeEvent): string[] {
   return items;
 }
 
-function readFirstString(input: unknown, keys: string[]): string | undefined {
+export function readFirstString(input: unknown, keys: string[]): string | undefined {
   if (!input || typeof input !== "object") {
     return undefined;
   }
@@ -1282,11 +1286,11 @@ function readFirstString(input: unknown, keys: string[]): string | undefined {
   return undefined;
 }
 
-function truncateText(value: string, maxLength: number): string {
+export function truncateText(value: string, maxLength: number): string {
   return value.length > maxLength ? `${value.slice(0, maxLength - 1).trimEnd()}…` : value;
 }
 
-function avatarInitials(name: string): string {
+export function avatarInitials(name: string): string {
   return name
     .split(/\s+/)
     .slice(0, 2)
@@ -1294,7 +1298,7 @@ function avatarInitials(name: string): string {
     .join("");
 }
 
-function streamTone(streamState: EventStreamState): DetailTone {
+export function streamTone(streamState: EventStreamState): DetailTone {
   if (streamState === "open") {
     return "success";
   }
@@ -1304,7 +1308,7 @@ function streamTone(streamState: EventStreamState): DetailTone {
   return "muted";
 }
 
-function streamLabel(streamState: EventStreamState): string {
+export function streamLabel(streamState: EventStreamState): string {
   if (streamState === "open") {
     return "Stream live";
   }
@@ -1317,18 +1321,18 @@ function streamLabel(streamState: EventStreamState): string {
   return "Stream idle";
 }
 
-function compactId(value: string | undefined): string {
+export function compactId(value: string | undefined): string {
   if (!value) {
     return "unknown";
   }
   return value.length > 10 ? value.slice(-8) : value;
 }
 
-function countTraceLinks(traceQuery: TraceQuery | null): number {
+export function countTraceLinks(traceQuery: TraceQuery | null): number {
   return traceQuery ? Object.values(traceQuery).filter(Boolean).length : 0;
 }
 
-function safeJson(value: unknown): string {
+export function safeJson(value: unknown): string {
   try {
     return JSON.stringify(value, null, 2);
   } catch {

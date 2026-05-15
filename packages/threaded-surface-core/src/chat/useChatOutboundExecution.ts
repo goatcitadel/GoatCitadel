@@ -69,6 +69,18 @@ export function abortActiveChatStream(stream: ActiveChatStreamState | null): voi
   stream.controller.abort();
 }
 
+export function resolveOutboundExecutionPrefs(prefs: ChatSessionPrefsRecord | null | undefined) {
+  const memoryMode = prefs?.memoryMode ?? "auto";
+  return {
+    useMemory: memoryMode !== "off",
+    webMode: prefs?.webMode ?? "auto",
+    memoryMode,
+    thinkingLevel: prefs?.thinkingLevel ?? "standard",
+    speedMode: prefs?.speedMode ?? "standard",
+    subagentPolicy: prefs?.subagentPolicy ?? "ask_when_useful",
+  };
+}
+
 export function useChatOutboundExecution(input: {
   surfaceMode?: ChatSessionPrefsRecord["mode"];
   selectedSessionId: string | null;
@@ -528,6 +540,7 @@ export function useChatOutboundExecution(input: {
       const effectiveMode = surfaceMode ?? currentPrefs?.mode ?? "chat";
       const executionProviderId = currentPrefs?.providerId ?? selectedProviderId;
       const executionModel = currentPrefs?.model ?? selectedModel;
+      const outboundPrefs = resolveOutboundExecutionPrefs(currentPrefs);
       const optimisticPrefs =
         currentPrefs && (executionProviderId || executionModel)
           ? {
@@ -825,16 +838,11 @@ export function useChatOutboundExecution(input: {
                   {
                     content: trimmedContent,
                     attachments: attachmentIds,
-                    useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
+                    ...outboundPrefs,
                     mode: effectiveMode,
                     providerId: routeExecutionProviderId,
                     model: routeExecutionModel,
                     routeDecision: routeExecutionDecision,
-                    webMode: currentPrefs?.webMode ?? "auto",
-                    memoryMode: currentPrefs?.memoryMode ?? "auto",
-                    thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
-                    speedMode: currentPrefs?.speedMode ?? "standard",
-                    subagentPolicy: currentPrefs?.subagentPolicy ?? "ask_when_useful",
                   },
                   onChunk,
                   { signal: controller.signal, originSurface: effectiveMode },
@@ -845,16 +853,11 @@ export function useChatOutboundExecution(input: {
                   {
                     content: trimmedContent,
                     attachments: attachmentIds,
-                    useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
+                    ...outboundPrefs,
                     mode: effectiveMode,
                     providerId: routeExecutionProviderId,
                     model: routeExecutionModel,
                     routeDecision: routeExecutionDecision,
-                    webMode: currentPrefs?.webMode ?? "auto",
-                    memoryMode: currentPrefs?.memoryMode ?? "auto",
-                    thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
-                    speedMode: currentPrefs?.speedMode ?? "standard",
-                    subagentPolicy: currentPrefs?.subagentPolicy ?? "ask_when_useful",
                   },
                   onChunk,
                   { signal: controller.signal, originSurface: effectiveMode },
@@ -911,16 +914,11 @@ export function useChatOutboundExecution(input: {
                     {
                       content: trimmedContent,
                       attachments: attachmentIds,
-                      useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
+                      ...outboundPrefs,
                       mode: effectiveMode,
                       providerId: routeExecutionProviderId,
                       model: routeExecutionModel,
                       routeDecision: routeExecutionDecision,
-                      webMode: currentPrefs?.webMode ?? "auto",
-                      memoryMode: currentPrefs?.memoryMode ?? "auto",
-                      thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
-                      speedMode: currentPrefs?.speedMode ?? "standard",
-                      subagentPolicy: currentPrefs?.subagentPolicy ?? "ask_when_useful",
                     },
                     { originSurface: effectiveMode },
                   )
@@ -929,16 +927,11 @@ export function useChatOutboundExecution(input: {
                     {
                       content: trimmedContent,
                       attachments: attachmentIds,
-                      useMemory: (currentPrefs?.memoryMode ?? "auto") !== "off",
+                      ...outboundPrefs,
                       mode: effectiveMode,
                       providerId: routeExecutionProviderId,
                       model: routeExecutionModel,
                       routeDecision: routeExecutionDecision,
-                      webMode: currentPrefs?.webMode ?? "auto",
-                      memoryMode: currentPrefs?.memoryMode ?? "auto",
-                      thinkingLevel: currentPrefs?.thinkingLevel ?? "standard",
-                      speedMode: currentPrefs?.speedMode ?? "standard",
-                      subagentPolicy: currentPrefs?.subagentPolicy ?? "ask_when_useful",
                     },
                     { originSurface: effectiveMode },
                   );

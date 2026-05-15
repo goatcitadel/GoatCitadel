@@ -1,0 +1,151 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ToolPolicyConfig } from "@goatcitadel/contracts";
+import type { Storage } from "@goatcitadel/storage";
+import { ToolPolicyEngine } from "./engine.js";
+import { resolveExecutableCommand, resolveRestrictedCommand } from "./tool-executor.js";
+
+const createdDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of createdDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function createRoot(): string {
+  const root = path.join(os.tmpdir(), `goatcitadel-policy-loop13-${randomUUID()}`);
+  fs.mkdirSync(root, { recursive: true });
+  createdDirs.push(root);
+  return root;
+}
+
+function createConfig(
+  root: string,
+  approvalMode: ToolPolicyConfig["tools"]["approvalMode"] = "approve_risky",
+): ToolPolicyConfig {
+  return {
+    profiles: { danger: ["*"] },
+    tools: { profile: "danger", approvalMode, allow: [], deny: [] },
+    agents: {},
+    sandbox: {
+      writeJailRoots: [root],
+      readOnlyRoots: [root],
+      networkAllowlist: ["example.com"],
+      riskyShellPatterns: ["Remove-Item"],
+      requireApprovalForRiskyShell: true,
+    },
+  };
+}
+
+function createStorageStub(): Storage {
+  return {
+    approvals: {
+      create: vi.fn((input) => ({
+        approvalId: "approval-loop13",
+        kind: input.kind,
+        riskLevel: input.riskLevel,
+        status: "pending",
+        payload: input.payload,
+        preview: input.preview,
+        createdAt: "2026-05-14T00:00:00.000Z",
+        expiresAt: input.expiresAt,
+        explanationStatus: "not_requested",
+      })),
+    },
+    approvalEvents: { append: vi.fn() },
+    audit: { append: vi.fn(async () => undefined) },
+    db: { prepare: vi.fn(() => ({ run: vi.fn() })) },
+    pendingApprovalActions: {
+      find: vi.fn(() => undefined),
+      markResolved: vi.fn(),
+      upsertPending: vi.fn(),
+    },
+    toolAccessDecisions: {
+      countToolCallsInLastHourInScope: vi.fn(() => 0),
+      countWritesInLastHourInScope: vi.fn(() => 0),
+      record: vi.fn(),
+    },
+    toolGrants: {
+      consumeOne: vi.fn(),
+      list: vi.fn(() => []),
+    },
+  } as unknown as Storage;
+}
+
+function request(toolName: string, args: Record<string, unknown> = {}) {
+  return {
+    toolName,
+    args,
+    agentId: "agent-loop13",
+    sessionId: "session-loop13",
+  };
+}
+
+describe("policy engine loop13 branch tails", () => {
+  it("executes low-risk tools and evaluates write targets from to/from fallback paths", async () => {
+    const root = createRoot();
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(createConfig(root), storage);
+
+    await expect(engine.invoke(request("session.status"))).resolves.toMatchObject({
+      outcome: "executed",
+      result: { sessionId: "session-loop13", status: "ok" },
+    });
+
+    expect(engine.evaluateAccess(request("fs.move", { to: path.join(root, "dest.txt") }))).toMatchObject({
+      allowed: true,
+    });
+    expect(engine.evaluateAccess(request("fs.delete", { from: path.join(root, "obsolete.txt") }))).toMatchObject({
+      allowed: true,
+    });
+    expect(engine.evaluateAccess(request("fs.delete"))).toMatchObject({
+      allowed: false,
+      reasonCodes: expect.arrayContaining(["structural_safety_block"]),
+    });
+  });
+
+  it("builds approval previews from target and command fallbacks without executing risky tools", async () => {
+    const root = createRoot();
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(createConfig(root), storage);
+
+    await expect(engine.invoke(request("shell.exec", { command: "Remove-Item old.txt" }))).resolves.toMatchObject({
+      outcome: "approval_required",
+    });
+    expect(storage.approvals.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preview: expect.objectContaining({
+          command: "Remove-Item old.txt",
+        }),
+      }),
+    );
+
+    await expect(engine.invoke(request("http.post", { host: "example.com" }))).resolves.toMatchObject({
+      outcome: "approval_required",
+    });
+    expect(storage.approvals.create).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        preview: expect.objectContaining({
+          target: "example.com",
+        }),
+      }),
+    );
+  });
+
+  it("quotes Windows package-manager commands and leaves non-package managers untouched", () => {
+    const win = resolveRestrictedCommand("pnpm", ["--filter", "@scope/pkg name", "run", "test"], "win32");
+    expect(win.file.toLowerCase()).toMatch(/cmd\.exe$/);
+    expect(win.args.join(" ")).toContain('"@scope/pkg name"');
+
+    const npm = resolveExecutableCommand("npm", ["run", "build&check", "C:\\temp tail\\"], "win32");
+    expect(npm.args.join(" ")).toContain('"build^&check"');
+    expect(npm.args.join(" ")).toContain('"C:\\temp tail\\\\"');
+
+    expect(resolveExecutableCommand("git", ["status"], "win32")).toEqual({ file: "git", args: ["status"] });
+    expect(resolveExecutableCommand("pnpm", ["test"], "linux")).toEqual({ file: "pnpm", args: ["test"] });
+  });
+});

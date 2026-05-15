@@ -63,18 +63,29 @@ describe("prompt lab helpers", () => {
       "openai",
     );
     expect(resolvePromptLabActiveProvider(providers, { selectedProviderId: "missing" })?.providerId).toBe("openai");
+    expect(
+      resolvePromptLabActiveProvider(providers, {
+        selectedProviderId: "missing",
+        preferredProviderId: "missing",
+        runtimeActiveProviderId: null,
+      })?.providerId,
+    ).toBe("openai");
   });
 
   it("extracts, normalizes, and parses prompt lab text inputs", () => {
     expect(
       extractPromptPlaceholders(
-        "Use <LOCAL_FILE_PATH> and <topic> but ignore <xy> and <plainword> then <PASTE EXAMPLE>.",
+        "Use <LOCAL_FILE_PATH> and <topic> but ignore <xy> and <plainword> then <   > and <PASTE EXAMPLE>.",
       ),
     ).toEqual(["<LOCAL_FILE_PATH>", "<topic>", "<PASTE EXAMPLE>"]);
     expect(normalizePromptPlaceholderKey(" <LOCAL FILE PATH> ")).toBe("local file path");
     expect(normalizePromptPlaceholderKey("")).toBe("");
     expect(parseBenchmarkTestCodes(" A-1, A-1\nB-2   C-3 ")).toEqual(["A-1", "B-2", "C-3"]);
-    expect(parseBenchmarkProviders("openai/gpt-5\nbad-line\nanthropic/claude\nopenai/gpt-5\n/missing\nx/")).toEqual([
+    expect(
+      parseBenchmarkProviders(
+        "openai/gpt-5\n\nbad-line\nanthropic/claude\nopenai/gpt-5\n/missing\nx/\nopenai/   \n  /model",
+      ),
+    ).toEqual([
       { providerId: "openai", model: "gpt-5" },
       { providerId: "anthropic", model: "claude" },
     ]);

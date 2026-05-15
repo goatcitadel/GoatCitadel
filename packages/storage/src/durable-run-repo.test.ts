@@ -325,6 +325,167 @@ describe("DurableRunRepository", () => {
     internal.countRunsStmt = { get: () => ({ count: "bad" }) };
     assert.equal(repo.countRuns(), 0);
   });
+
+  it("preserves existing run fields when optional update inputs are omitted", () => {
+    const repo = createRepo();
+    const run = repo.createRun({
+      runId: "run-preserve",
+      workflowKey: "workflow.preserve",
+      status: "running",
+      attemptCount: 2,
+      maxAttempts: 5,
+      payload: { step: "execute" },
+      metadata: { source: "test" },
+      startedAt: "2026-04-22T00:00:00.000Z",
+      finishedAt: "2026-04-22T00:05:00.000Z",
+      lastError: "previous warning",
+      leaseOwnerId: "worker-a",
+      leaseHeartbeatAt: "2026-04-22T00:01:00.000Z",
+      leaseExpiresAt: "2026-04-22T00:10:00.000Z",
+      now: "2026-04-22T00:00:00.000Z",
+    });
+
+    const updated = repo.updateRun({
+      runId: run.runId,
+      status: "waiting",
+      expectedVersion: run.version,
+    });
+
+    assert.equal(updated.status, "waiting");
+    assert.equal(updated.attemptCount, 2);
+    assert.equal(updated.maxAttempts, 5);
+    assert.deepEqual(updated.payload, { step: "execute" });
+    assert.deepEqual(updated.metadata, { source: "test" });
+    assert.equal(updated.startedAt, "2026-04-22T00:00:00.000Z");
+    assert.equal(updated.finishedAt, "2026-04-22T00:05:00.000Z");
+    assert.equal(updated.lastError, "previous warning");
+    assert.equal(updated.leaseOwnerId, "worker-a");
+    assert.equal(updated.leaseHeartbeatAt, "2026-04-22T00:01:00.000Z");
+    assert.equal(updated.leaseExpiresAt, "2026-04-22T00:10:00.000Z");
+    assert.ok(updated.updatedAt);
+  });
+
+  it("uses existing start time and default timestamps during lease transitions", () => {
+    const repo = createRepo();
+    const run = repo.createRun({
+      runId: "run-lease-defaults",
+      workflowKey: "workflow.lease",
+      startedAt: "2026-04-23T00:00:00.000Z",
+      now: "2026-04-23T00:00:00.000Z",
+    });
+
+    const claimed = repo.tryClaimQueuedRun(leaseInput(run.runId, "worker-a"));
+    assert.equal(claimed?.startedAt, "2026-04-23T00:00:00.000Z");
+    assert.equal(claimed?.updatedAt, "2026-04-21T00:03:00.000Z");
+
+    const renewed = repo.renewLease({
+      ...leaseInput(run.runId, "worker-a"),
+      leaseHeartbeatAt: "2026-04-23T00:01:00.000Z",
+      leaseExpiresAt: "2026-04-23T00:11:00.000Z",
+    });
+    assert.equal(renewed?.updatedAt, "2026-04-23T00:01:00.000Z");
+
+    const released = repo.releaseLease(run.runId, "worker-a");
+    assert.equal(released?.leaseOwnerId, undefined);
+    assert.ok(released?.updatedAt);
+  });
+
+  it("filters malformed durable rows from list helpers", () => {
+    const repo = createRepo();
+    const internal = repo as unknown as {
+      listRunsStmt: { all: (...args: unknown[]) => unknown };
+      listCheckpointsStmt: { all: (...args: unknown[]) => unknown };
+      listRetriesStmt: { all: (...args: unknown[]) => unknown };
+      listDeadLettersStmt: { all: (...args: unknown[]) => unknown };
+      getDeadLetterByRunStmt: { get: (...args: unknown[]) => unknown };
+    };
+
+    internal.listRunsStmt = { all: () => ({ not: "an array" }) };
+    internal.listCheckpointsStmt = { all: () => ({ not: "an array" }) };
+    internal.listRetriesStmt = { all: () => [null, { retry_id: 1 }] };
+    internal.listDeadLettersStmt = { all: () => [null, { dead_letter_id: 1 }] };
+    internal.getDeadLetterByRunStmt = { get: () => ({ dead_letter_id: 1 }) };
+
+    assert.deepEqual(repo.listRuns(), []);
+    assert.deepEqual(repo.listCheckpoints("run-missing"), []);
+    assert.deepEqual(repo.listRetries("run-missing"), []);
+    assert.deepEqual(repo.listDeadLetters(), []);
+    assert.equal(repo.getDeadLetterByRun("run-missing"), undefined);
+  });
+
+  it("falls back for affected-row and post-write lookup edge cases", () => {
+    const repo = createRepo();
+    const run = repo.createRun({
+      runId: "run-tail-branches",
+      workflowKey: "workflow.tail",
+      now: "2026-04-24T00:00:00.000Z",
+    });
+
+    const internal = repo as unknown as {
+      updateRunStmt: { run: (...args: unknown[]) => unknown };
+      listRetries: (runId: string, limit?: number) => ReturnType<DurableRunRepository["listRetries"]>;
+      getDeadLetterByRun: (runId: string) => ReturnType<DurableRunRepository["getDeadLetterByRun"]>;
+      listDeadLettersStmt: { all: (...args: unknown[]) => unknown };
+    };
+    internal.updateRunStmt = { run: () => ({}) };
+    assert.throws(
+      () => repo.updateRun({ runId: run.runId, status: "running", expectedVersion: run.version }),
+      /update conflict/,
+    );
+
+    const claimRepo = createRepo();
+    const claimRun = claimRepo.createRun({
+      runId: "run-claim-no-change-count",
+      workflowKey: "workflow.claim",
+    });
+    const claimInternal = claimRepo as unknown as {
+      updateRunStmt: { run: (...args: unknown[]) => unknown };
+    };
+    claimInternal.updateRunStmt = { run: () => ({}) };
+    assert.equal(claimRepo.tryClaimQueuedRun(leaseInput(claimRun.runId, "worker-a")), undefined);
+
+    const retryRepo = createRepo();
+    const retryRun = retryRepo.createRun({ runId: "run-retry-fallback", workflowKey: "workflow.retry" });
+    const retryInternal = retryRepo as unknown as {
+      listRetries: (runId: string, limit?: number) => ReturnType<DurableRunRepository["listRetries"]>;
+    };
+    retryInternal.listRetries = () => [];
+    const retry = retryRepo.upsertRetry({
+      retryId: "retry-fallback",
+      runId: retryRun.runId,
+      attemptNo: 2,
+      reason: "fallback row",
+    });
+    assert.equal(retry.retryId, "retry-fallback");
+
+    const deadLetterRepo = createRepo();
+    const deadRun = deadLetterRepo.createRun({ runId: "run-dead-fallback", workflowKey: "workflow.dead" });
+    const deadInternal = deadLetterRepo as unknown as {
+      getDeadLetterByRun: (runId: string) => ReturnType<DurableRunRepository["getDeadLetterByRun"]>;
+      listDeadLettersStmt: { all: (...args: unknown[]) => unknown };
+    };
+    deadInternal.getDeadLetterByRun = () => undefined;
+    const deadLetter = deadLetterRepo.upsertDeadLetter({
+      deadLetterId: "dead-fallback",
+      runId: deadRun.runId,
+      reason: "fallback row",
+    });
+    assert.equal(deadLetter.deadLetterId, "dead-fallback");
+
+    deadInternal.listDeadLettersStmt = { all: () => ({ not: "rows" }) };
+    assert.deepEqual(deadLetterRepo.listDeadLetters(), []);
+
+    const resolvable = createRepo();
+    const resolveRun = resolvable.createRun({ runId: "run-resolve-defaults", workflowKey: "workflow.resolve" });
+    const inserted = resolvable.upsertDeadLetter({
+      deadLetterId: "dead-resolve-defaults",
+      runId: resolveRun.runId,
+      reason: "needs default resolution fields",
+    });
+    const resolved = resolvable.resolveDeadLetter(inserted.deadLetterId);
+    assert.ok(resolved.resolvedAt);
+    assert.equal(resolved.resolutionNote, undefined);
+  });
 });
 
 function leaseInput(runId: string, workerId: string) {

@@ -7,6 +7,24 @@ import { CommandPalette, type CommandPaletteItem } from "./CommandPalette";
 
 class FakeElement {
   readonly focus = vi.fn();
+
+  hasAttribute() {
+    return false;
+  }
+}
+
+class FakeDialogElement extends FakeElement {
+  constructor(private readonly focusables: FakeElement[]) {
+    super();
+  }
+
+  querySelectorAll() {
+    return this.focusables;
+  }
+
+  contains(value: unknown) {
+    return this.focusables.includes(value as FakeElement);
+  }
 }
 
 function installDocument(activeElement: unknown = null) {
@@ -30,6 +48,32 @@ function keyboardEvent(key: string, shiftKey = false) {
     shiftKey,
     preventDefault: vi.fn(),
     stopPropagation: vi.fn(),
+  };
+}
+
+function installFocusableCommandPalette() {
+  const previous = new FakeElement();
+  const inputNode = new FakeElement();
+  const actionNode = new FakeElement();
+  const dialogNode = new FakeDialogElement([inputNode, actionNode]);
+  installDocument(previous);
+  return {
+    actionNode,
+    dialogNode,
+    inputNode,
+    previous,
+    createNodeMock: (element: { type: string; props: { className?: string } }) => {
+      if (element.type === "input") {
+        return inputNode;
+      }
+      if (element.type === "button") {
+        return actionNode;
+      }
+      if (element.type === "div" && element.props.className === "modal-card command-palette") {
+        return dialogNode;
+      }
+      return new FakeElement();
+    },
   };
 }
 
@@ -162,5 +206,98 @@ describe("CommandPalette", () => {
     expect(tab.preventDefault).toHaveBeenCalled();
     expect(escape.preventDefault).toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it("covers invalid activation, dialog escape, arrow-up movement, and forward tab trapping", async () => {
+    const nodes = installFocusableCommandPalette();
+    const runFirst = vi.fn();
+    const runSecond = vi.fn();
+    const onClose = vi.fn();
+    const renderer = create(
+      <CommandPalette
+        open
+        onClose={onClose}
+        items={[
+          { id: "first", label: "First Action", run: runFirst },
+          { id: "second", label: "Second Action", run: runSecond },
+        ]}
+      />,
+      { createNodeMock: nodes.createNodeMock },
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const input = renderer.root.findByType("input");
+    const dialog = renderer.root.findByProps({ className: "modal-card command-palette" });
+
+    act(() => {
+      input.props.onKeyDown(keyboardEvent("ArrowDown"));
+      input.props.onKeyDown(keyboardEvent("ArrowUp"));
+    });
+    const enterFirst = keyboardEvent("Enter");
+    act(() => {
+      input.props.onKeyDown(enterFirst);
+    });
+    expect(runFirst).toHaveBeenCalledTimes(1);
+
+    Object.defineProperty(globalThis.document, "activeElement", {
+      configurable: true,
+      value: nodes.actionNode,
+    });
+    const tab = keyboardEvent("Tab");
+    act(() => {
+      dialog.props.onKeyDown(tab);
+    });
+    expect(tab.preventDefault).toHaveBeenCalled();
+    expect(nodes.inputNode.focus).toHaveBeenCalled();
+
+    const escape = keyboardEvent("Escape");
+    act(() => {
+      dialog.props.onKeyDown(escape);
+    });
+    expect(escape.preventDefault).toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      renderer.update(<CommandPalette open onClose={onClose} items={[]} />);
+    });
+    const enterEmpty = keyboardEvent("Enter");
+    act(() => {
+      renderer.root.findByType("input").props.onKeyDown(enterEmpty);
+    });
+    expect(enterEmpty.preventDefault).toHaveBeenCalled();
+    expect(runSecond).not.toHaveBeenCalled();
+  });
+
+  it("focuses the search field, traps shift-tab, and restores prior focus on close", async () => {
+    const nodes = installFocusableCommandPalette();
+    const onClose = vi.fn();
+    const renderer = create(
+      <CommandPalette open onClose={onClose} items={[{ id: "chat", label: "Open Chat", run: vi.fn() }]} />,
+      { createNodeMock: nodes.createNodeMock },
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(nodes.inputNode.focus).toHaveBeenCalledTimes(1);
+
+    Object.defineProperty(globalThis.document, "activeElement", {
+      configurable: true,
+      value: nodes.inputNode,
+    });
+    const dialog = renderer.root.findByProps({ className: "modal-card command-palette" });
+    const shiftTab = keyboardEvent("Tab", true);
+    act(() => {
+      dialog.props.onKeyDown(shiftTab);
+    });
+    expect(shiftTab.preventDefault).toHaveBeenCalled();
+    expect(nodes.actionNode.focus).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      renderer.update(
+        <CommandPalette open={false} onClose={onClose} items={[{ id: "chat", label: "Open Chat", run: vi.fn() }]} />,
+      );
+    });
+    expect(nodes.previous.focus).toHaveBeenCalledTimes(1);
   });
 });

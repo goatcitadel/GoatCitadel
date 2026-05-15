@@ -144,7 +144,37 @@ describe("EvidenceEnvelopeRepository", () => {
     });
     assert.deepEqual(fallbackRepo.list(), []);
   });
+
+  it("casts optional list filters for postgres null parameters", () => {
+    const db = new EvidenceSqlCaptureDatabase("postgres");
+    new EvidenceEnvelopeRepository(db);
+
+    const listSql = db.sql.find((sql) => sql.includes("session_id") && sql.includes("ORDER BY created_at"));
+    assert.ok(listSql);
+    assert.match(listSql, /\(@sessionId::text IS NULL OR session_id = @sessionId::text\)/);
+    assert.match(listSql, /\(@turnId::text IS NULL OR turn_id = @turnId::text\)/);
+    assert.match(listSql, /\(@runId::text IS NULL OR run_id = @runId::text\)/);
+  });
 });
+
+class EvidenceSqlCaptureDatabase implements DatabaseClient {
+  public readonly sql: string[] = [];
+
+  public constructor(public readonly dialect: DatabaseClient["dialect"]) {}
+
+  public prepare(sql: string): DbStatement {
+    this.sql.push(sql);
+    return new EvidenceFakeStatement({});
+  }
+
+  public exec(): void {}
+
+  public close(): void {}
+
+  public transaction<T>(_mode: "deferred" | "immediate" | "exclusive", callback: () => T): T {
+    return callback();
+  }
+}
 
 class EvidenceFallbackDatabase implements DatabaseClient {
   public readonly dialect = "sqlite" as const;

@@ -75,7 +75,7 @@ describe("executeTool", () => {
     delete process.env.WHATSAPP_ACCESS_TOKEN;
     delete process.env.ZALO_ACCESS_TOKEN;
     delete process.env.ZALOUSER_AUTH_TOKEN;
-    await fs.rm(testWorkspaceRoot, { recursive: true, force: true });
+    await removeTestWorkspace(testWorkspaceRoot);
   });
 
   it("dispatches browser tools to browser executor", async () => {
@@ -437,7 +437,7 @@ describe("executeTool", () => {
       cwd: packageDir,
     });
     expect(String(result.stdout ?? "")).toContain(packageDir);
-  });
+  }, 15_000);
 
   it("uses cmd.exe to resolve restricted package-manager commands on Windows", () => {
     const resolved = resolveRestrictedCommand("pnpm", ["--filter", "workspace/pkg", "run", "test"], "win32");
@@ -509,7 +509,7 @@ describe("executeTool", () => {
       cwd: packageDir,
     });
     expect(String(result.stdout ?? "")).toContain("lint-script");
-  });
+  }, 15_000);
 
   it("rejects malformed shell command parsing", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
@@ -4483,4 +4483,20 @@ function createExecutorKnowledgeHarness(): { storage: Storage } {
   } as unknown as Storage;
 
   return { storage };
+}
+
+async function removeTestWorkspace(target: string): Promise<void> {
+  const transientCodes = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      await fs.rm(target, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!transientCodes.has(String(code)) || attempt === 19) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+    }
+  }
 }

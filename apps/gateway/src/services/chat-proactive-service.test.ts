@@ -117,6 +117,57 @@ describe("ChatProactiveService", () => {
     expect(triggerSpy).not.toHaveBeenCalled();
   });
 
+  it("does not schedule work while closing and uses default off prefs when none are stored", async () => {
+    const closingHarness = createHarness({ callbacks: { closing: true } });
+    const closingTriggerSpy = vi.spyOn(closingHarness.service, "triggerChatSessionProactive");
+
+    await (closingHarness.service as unknown as { runSchedulerTick: () => Promise<void> }).runSchedulerTick();
+
+    expect(closingTriggerSpy).not.toHaveBeenCalled();
+    expect(closingHarness.state.durableRuns.size).toBe(0);
+
+    const missingPrefsHarness = createHarness();
+    missingPrefsHarness.state.prefs.delete(missingPrefsHarness.state.session.sessionId);
+    const missingPrefsTriggerSpy = vi.spyOn(missingPrefsHarness.service, "triggerChatSessionProactive");
+
+    await (missingPrefsHarness.service as unknown as { runSchedulerTick: () => Promise<void> }).runSchedulerTick();
+
+    expect(missingPrefsTriggerSpy).not.toHaveBeenCalled();
+    expect(missingPrefsHarness.state.durableRuns.size).toBe(0);
+  });
+
+  it("publishes scheduler interval errors and keeps startScheduler idempotent", async () => {
+    vi.useFakeTimers();
+    try {
+      const listChatSessions = vi.fn(() => {
+        throw new Error("session query failed");
+      });
+      const harness = createHarness({
+        callbacks: {
+          listChatSessions,
+        },
+      });
+
+      harness.service.startScheduler();
+      harness.service.startScheduler();
+      await vi.advanceTimersByTimeAsync(120_000);
+      await Promise.allSettled([...harness.backgroundTasks]);
+      harness.service.stopScheduler();
+
+      expect(listChatSessions).toHaveBeenCalledTimes(1);
+      expect(harness.publishRealtime).toHaveBeenCalledWith(
+        "system",
+        "chat",
+        expect.objectContaining({
+          type: "proactive_scheduler_error",
+          message: "session query failed",
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("skips scheduler ticks when the session has no activity since the last proactive tick", async () => {
     const harness = createHarness();
     const triggerSpy = vi.spyOn(harness.service, "triggerChatSessionProactive");
@@ -140,6 +191,25 @@ describe("ChatProactiveService", () => {
     harness.state.prefs.set(harness.state.session.sessionId, {
       ...prefs,
       lastProactiveAt: "2026-04-04T18:54:00.000Z",
+      lastProactiveRunId: "previous-run",
+    });
+
+    await (harness.service as unknown as { runSchedulerTick: () => Promise<void> }).runSchedulerTick();
+
+    expect(triggerSpy).toHaveBeenCalledWith(
+      harness.state.session.sessionId,
+      expect.objectContaining({ source: "scheduler" }),
+    );
+    expect(harness.state.durableRuns.size).toBe(1);
+  });
+
+  it("treats invalid proactive timestamps as eligible instead of stale", async () => {
+    const harness = createHarness();
+    const triggerSpy = vi.spyOn(harness.service, "triggerChatSessionProactive");
+    const prefs = harness.state.prefs.get(harness.state.session.sessionId)!;
+    harness.state.prefs.set(harness.state.session.sessionId, {
+      ...prefs,
+      lastProactiveAt: "not-a-date",
       lastProactiveRunId: "previous-run",
     });
 
@@ -406,9 +476,302 @@ describe("ChatProactiveService", () => {
     expect(actions).toHaveLength(1);
     expect(actions[0]?.status).toBe("suggested");
   });
+
+  it("propagates string abort reasons before starting durable proactive work", async () => {
+    const harness = createHarness();
+    const { service, state, invokeTool } = harness;
+    const started = await service.triggerChatSessionProactive(state.session.sessionId, { source: "manual" });
+    const durableRunId = started.linkedDurableRunId!;
+    const controller = new AbortController();
+    controller.abort("lease released");
+
+    await expect(
+      service.executeDurableProactiveTickRun(state.durableRuns.get(durableRunId)!, {
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("lease released");
+
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(actionsForRun(state, started.runId)).toEqual([]);
+  });
+
+  it("marks thrown proactive tool failures as terminal run failures", async () => {
+    const harness = createHarness();
+    const { service, state, invokeTool, publishRealtime } = harness;
+    const planSpy = vi.spyOn(
+      service as unknown as { planProactiveActions: (sessionId: string) => Promise<unknown> },
+      "planProactiveActions",
+    );
+    planSpy.mockResolvedValue({
+      confidence: 0.81,
+      reasoningSummary: "Need to inspect current time before continuing.",
+      actions: [{ kind: "tool", toolName: "time.now", args: { timezone: "UTC" } }],
+    });
+    invokeTool.mockRejectedValueOnce(new Error("tool runtime unavailable"));
+
+    const started = await service.triggerChatSessionProactive(state.session.sessionId, { source: "manual" });
+    const durableRunId = started.linkedDurableRunId!;
+    await service.executeDurableProactiveTickRun(state.durableRuns.get(durableRunId)!);
+
+    const failedRun = readRun(state, started.runId);
+    const actions = actionsForRun(state, started.runId);
+
+    expect(failedRun.status).toBe("failed");
+    expect(failedRun.stopReason).toBe("terminal_failure");
+    expect(failedRun.error).toBe("tool runtime unavailable");
+    expect(actions).toEqual([
+      expect.objectContaining({
+        status: "failed",
+        linkedDurableRunId: durableRunId,
+        error: "tool runtime unavailable",
+      }),
+    ]);
+    expect(state.durableRuns.get(durableRunId)?.status).toBe("completed");
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "task_updated",
+      "tasks",
+      expect.objectContaining({
+        task: expect.objectContaining({
+          status: "blocked",
+          proactiveContext: expect.objectContaining({
+            proactiveRunId: started.runId,
+            durableRunId,
+            stopReason: "terminal_failure",
+          }),
+        }),
+      }),
+      expect.objectContaining({
+        eventClass: "domain_fact",
+        eventAuthority: "retained_stream",
+      }),
+    );
+  });
+
+  it("completes suggest-mode durable ticks with suggested actions but no linked task", async () => {
+    const harness = createHarness();
+    const { service, state, publishRealtime } = harness;
+    state.prefs.set(state.session.sessionId, {
+      ...state.prefs.get(state.session.sessionId)!,
+      proactiveMode: "suggest",
+    });
+    vi.spyOn(
+      service as unknown as { planProactiveActions: (sessionId: string) => Promise<unknown> },
+      "planProactiveActions",
+    ).mockResolvedValue({
+      confidence: 0.74,
+      reasoningSummary: "Suggest a follow-up without executing it.",
+      actions: [{ kind: "note", note: "Consider asking Cowork for a plan." }],
+    });
+
+    const started = await service.triggerChatSessionProactive(state.session.sessionId, { source: "manual" });
+    await service.executeDurableProactiveTickRun(state.durableRuns.get(started.linkedDurableRunId!)!);
+
+    const completed = readRun(state, started.runId);
+    const actions = actionsForRun(state, started.runId);
+    expect(completed).toMatchObject({
+      status: "suggested",
+      linkedTaskId: undefined,
+      stopReason: "no_action",
+      reasoningSummary: "Suggest a follow-up without executing it.",
+    });
+    expect(actions).toEqual([
+      expect.objectContaining({
+        kind: "note",
+        status: "suggested",
+        result: { note: "Consider asking Cowork for a plan." },
+      }),
+    ]);
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "proactive_suggestion_created",
+      "chat",
+      expect.objectContaining({ actionCount: 1 }),
+      expect.objectContaining({ eventAuthority: "retained_stream" }),
+    );
+  });
+
+  it("skips durable ticks during cooldown and records the next wake", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-04T19:00:00.000Z"));
+    try {
+      const harness = createHarness();
+      const { service, state, invokeTool } = harness;
+      state.prefs.set(state.session.sessionId, {
+        ...state.prefs.get(state.session.sessionId)!,
+        cooldownSeconds: 120,
+        lastProactiveAt: "2026-04-04T18:59:30.000Z",
+      });
+      const planSpy = vi.spyOn(
+        service as unknown as { planProactiveActions: (sessionId: string) => Promise<unknown> },
+        "planProactiveActions",
+      );
+
+      const started = await service.triggerChatSessionProactive(state.session.sessionId, { source: "manual" });
+      await service.executeDurableProactiveTickRun(state.durableRuns.get(started.linkedDurableRunId!)!);
+
+      const completed = readRun(state, started.runId);
+      expect(completed).toMatchObject({
+        status: "no_action",
+        stopReason: "cooldown",
+        nextWakeAt: "2026-04-04T19:01:30.000Z",
+      });
+      expect(completed.reasoningSummary).toContain("90s remaining");
+      expect(planSpy).not.toHaveBeenCalled();
+      expect(invokeTool).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("blocks non-allowlisted auto_safe actions as policy conflicts", async () => {
+    const harness = createHarness();
+    const { service, state, invokeTool, publishRealtime } = harness;
+    state.prefs.set(state.session.sessionId, {
+      ...state.prefs.get(state.session.sessionId)!,
+      proactiveMode: "auto_safe",
+    });
+    vi.spyOn(
+      service as unknown as { planProactiveActions: (sessionId: string) => Promise<unknown> },
+      "planProactiveActions",
+    ).mockResolvedValue({
+      confidence: 0.9,
+      reasoningSummary: "Need a shell command, but safe mode should block it.",
+      actions: [{ kind: "tool", toolName: "shell.exec", args: { command: "pnpm test" } }],
+    });
+
+    const started = await service.triggerChatSessionProactive(state.session.sessionId, { source: "manual" });
+    await service.executeDurableProactiveTickRun(state.durableRuns.get(started.linkedDurableRunId!)!);
+
+    const completed = readRun(state, started.runId);
+    const actions = actionsForRun(state, started.runId);
+    expect(completed).toMatchObject({
+      status: "blocked",
+      stopReason: "policy_conflict",
+    });
+    expect(actions).toEqual([
+      expect.objectContaining({
+        status: "blocked",
+        error: "Tool shell.exec is not allowlisted for auto_safe mode.",
+      }),
+    ]);
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "proactive_action_blocked",
+      "chat",
+      expect.objectContaining({
+        actionId: actions[0]?.actionId,
+        reason: "Tool shell.exec is not allowlisted for auto_safe mode.",
+      }),
+      expect.objectContaining({ eventClass: "operational_signal" }),
+    );
+  });
+
+  it("reports proactive status and publishes policy updates from autonomy prefs", () => {
+    const harness = createHarness();
+    const { service, state, publishRealtime } = harness;
+    state.proactiveRuns.set(
+      "run-latest",
+      createProactiveRunRow({
+        runId: "run-latest",
+        linkedDurableRunId: "durable-latest",
+        approvalId: "approval-latest",
+        startedAt: "2026-04-04T21:00:00.000Z",
+      }),
+    );
+    state.proactiveActions.set("action-suggested", {
+      action_id: "action-suggested",
+      run_id: "run-latest",
+      session_id: state.session.sessionId,
+      linked_task_id: null,
+      linked_durable_run_id: null,
+      approval_id: null,
+      kind: "note",
+      status: "suggested",
+      trigger_source: "manual",
+      origin_surface: "chat",
+      tool_name: null,
+      args_json: null,
+      result_json: null,
+      error: null,
+      external_reference_roots_json: null,
+      created_at: "2026-04-04T21:00:00.000Z",
+      updated_at: null,
+    });
+    state.proactiveActions.set("action-executed", {
+      ...state.proactiveActions.get("action-suggested")!,
+      action_id: "action-executed",
+      status: "executed",
+      created_at: new Date().toISOString(),
+    });
+
+    const status = service.getChatSessionProactiveStatus(state.session.sessionId);
+    expect(status).toEqual(
+      expect.objectContaining({
+        policy: expect.objectContaining({
+          sessionId: state.session.sessionId,
+          mode: "auto_full",
+          autonomyBudget: {
+            maxActionsPerHour: 10,
+            maxActionsPerTurn: 5,
+            cooldownSeconds: 0,
+          },
+          retrievalMode: "standard",
+          reflectionMode: "off",
+        }),
+        idleSeconds: 600,
+        hasRunningTurn: false,
+        pendingSuggestions: 1,
+        actionsLastHour: 1,
+        lastRun: expect.objectContaining({ runId: "run-latest" }),
+      }),
+    );
+
+    const updated = service.updateChatSessionProactivePolicy(state.session.sessionId, {
+      proactiveMode: "suggest",
+      autonomyBudget: {
+        maxActionsPerHour: 3,
+        maxActionsPerTurn: 2,
+        cooldownSeconds: 30,
+      },
+      retrievalMode: "layered",
+      reflectionMode: "on",
+    });
+
+    expect(updated).toEqual(
+      expect.objectContaining({
+        mode: "suggest",
+        autonomyBudget: {
+          maxActionsPerHour: 3,
+          maxActionsPerTurn: 2,
+          cooldownSeconds: 30,
+        },
+        retrievalMode: "layered",
+        reflectionMode: "on",
+      }),
+    );
+    expect(state.prefs.get(state.session.sessionId)).toMatchObject({
+      proactiveMode: "suggest",
+      maxActionsPerHour: 3,
+      maxActionsPerTurn: 2,
+      cooldownSeconds: 30,
+      retrievalMode: "layered",
+      reflectionMode: "on",
+    });
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "system",
+      "chat",
+      expect.objectContaining({
+        type: "proactive_policy_updated",
+        sessionId: state.session.sessionId,
+        policy: updated,
+      }),
+    );
+  });
 });
 
-function createHarness(options?: { durableKernelV1Enabled?: boolean }) {
+function createHarness(options?: {
+  durableKernelV1Enabled?: boolean;
+  callbacks?: Partial<ChatProactiveServiceCallbacks>;
+}) {
   const session: SessionMeta = {
     sessionId: "session-1",
     sessionKey: "chat:session-1",
@@ -489,6 +852,7 @@ function createHarness(options?: { durableKernelV1Enabled?: boolean }) {
     backgroundTasks,
     closing: false,
   };
+  Object.assign(callbacks, options?.callbacks);
   return {
     state,
     storage,
@@ -496,6 +860,8 @@ function createHarness(options?: { durableKernelV1Enabled?: boolean }) {
     durableRunService,
     invokeTool,
     publishRealtime,
+    callbacks,
+    backgroundTasks,
   };
 }
 
@@ -805,6 +1171,12 @@ function createStatement(sql: string, state: HarnessState) {
         return {
           count: [...state.proactiveActions.values()].filter(
             (row) => row.session_id === args[0] && row.status === "executed" && row.created_at >= String(args[1]),
+          ).length,
+        };
+      if (query.includes("FROM proactive_actions") && query.includes("status = 'suggested'"))
+        return {
+          count: [...state.proactiveActions.values()].filter(
+            (row) => row.session_id === args[0] && row.status === "suggested",
           ).length,
         };
       return undefined;

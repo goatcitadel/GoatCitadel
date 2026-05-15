@@ -60,6 +60,12 @@ describe("GoatError hierarchy", () => {
     expect(err.message).toBe("slug contains unsupported characters");
   });
 
+  it("ValidationError without field or message uses generic copy", () => {
+    const err = new ValidationError({});
+    expect(err.message).toBe("Validation failed");
+    expect(err.toJSON()).toEqual({ error: "Validation failed", code: "FIELD_INVALID" });
+  });
+
   it("ConflictError defaults to STATE_CONFLICT", () => {
     const err = new ConflictError({ message: "Approval already resolved" });
     expect(err.code).toBe("STATE_CONFLICT");
@@ -87,10 +93,29 @@ describe("GoatError hierarchy", () => {
     expect(err.code).toBe("PATH_OUTSIDE_JAIL");
   });
 
+  it("PolicyViolationError with HOST_NOT_ALLOWED", () => {
+    const err = new PolicyViolationError({
+      code: "HOST_NOT_ALLOWED",
+      message: "Host is not allowlisted",
+      details: { hostname: "metadata.google.internal" },
+    });
+    expect(err.code).toBe("HOST_NOT_ALLOWED");
+    expect(err.toJSON().details).toEqual({ hostname: "metadata.google.internal" });
+  });
+
   it("ToolExecutionError defaults to TOOL_EXEC_FAILED", () => {
     const err = new ToolExecutionError({ message: "shell.exec timed out" });
     expect(err.code).toBe("TOOL_EXEC_FAILED");
     expect(err.httpStatus).toBe(500);
+  });
+
+  it("ToolExecutionError supports unsupported and missing credential codes", () => {
+    expect(new ToolExecutionError({ code: "TOOL_UNSUPPORTED", message: "tool disabled" }).code).toBe(
+      "TOOL_UNSUPPORTED",
+    );
+    expect(new ToolExecutionError({ code: "TOOL_MISSING_CREDENTIAL", message: "missing key" }).code).toBe(
+      "TOOL_MISSING_CREDENTIAL",
+    );
   });
 
   it("ExternalServiceError", () => {

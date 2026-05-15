@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ConfigFormBuilder } from "./ConfigFormBuilder";
 import { ConfigureHubLayout } from "./ConfigureHubLayout";
+import { EmbeddedPageChromeProvider } from "./EmbeddedPageChrome";
 import { buildRealtimeEventSummary, EventCard } from "./EventCard";
 import { PageGuideCard } from "./PageGuideCard";
 import { PageTabs } from "./PageTabs";
@@ -14,6 +15,7 @@ import { cycleShellNavMode, ShellNavRail } from "./ShellNavRail";
 import { SmartPathInput } from "./SmartPathInput";
 import { ChatQueueBar, buildVisibleQueueItems } from "./chat/ChatQueueBar";
 import { SurfaceReconnectBanner } from "./chat/SurfaceReconnectBanner";
+import { UiPreferencesProvider } from "../state/ui-preferences";
 
 const apiMocks = vi.hoisted(() => ({
   fetchPathSuggestions: vi.fn(),
@@ -357,6 +359,71 @@ describe("shared component tail coverage", () => {
     expect(onOpen).toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
     expect(findText(renderer.toJSON() as never, "Use this page")).toBe(true);
+
+    renderer.update(
+      <ShellDetailPanelProvider
+        isOpen={false}
+        onOpenPanel={onOpen}
+        onClosePanel={onClose}
+        onActiveEntryChange={(entry) => activeEntries.push(entry)}
+      >
+        <EntryControls />
+        <PageGuideCard what="Compact page" when="When compact" actions={["Inspect"]} compact={false} />
+      </ShellDetailPanelProvider>,
+    );
+    expect(findText(renderer.toJSON() as never, "Compact page")).toBe(true);
+    expect(findText(renderer.toJSON() as never, "Most common action")).toBe(false);
+  });
+
+  it("registers page guides while respecting embedded and advanced chrome modes", async () => {
+    const activeEntries: Array<ShellDetailPanelEntry | null> = [];
+    const localStorageMock = {
+      getItem: vi.fn((key: string) => (key === "goatcitadel.ui.mode.v1" ? "advanced" : null)),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    };
+    vi.stubGlobal("window", {
+      localStorage: localStorageMock,
+      matchMedia: vi.fn(() => ({
+        matches: false,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    });
+
+    let renderer: ReturnType<typeof create>;
+    await act(async () => {
+      renderer = create(
+        <UiPreferencesProvider>
+          <ShellDetailPanelProvider
+            isOpen={false}
+            onOpenPanel={() => undefined}
+            onClosePanel={() => undefined}
+            onActiveEntryChange={(entry) => activeEntries.push(entry)}
+          >
+            <EmbeddedPageChromeProvider>
+              <PageGuideCard what="Embedded guide" when="When embedded" actions={["Confirm"]} />
+            </EmbeddedPageChromeProvider>
+            <PageGuideCard
+              pageId="advanced"
+              what="Advanced guide"
+              when="When advanced"
+              mostCommonAction="Audit"
+              actions={["Audit"]}
+              compact={false}
+            />
+          </ShellDetailPanelProvider>
+        </UiPreferencesProvider>,
+      );
+    });
+
+    expect(findText(renderer!.toJSON() as never, "Embedded guide")).toBe(false);
+    expect(findText(renderer!.toJSON() as never, "Advanced guide")).toBe(true);
+    expect(findText(renderer!.toJSON() as never, "Guidance stays in the detail panel")).toBe(false);
+    expect(activeEntries.at(-1)?.subtitle).toBe("Advanced guide");
+    expect(JSON.stringify(activeEntries.at(-1)?.actions)).toContain(
+      "Advanced mode keeps the main workspace tight and shifts rationale into the inspector.",
+    );
   });
 
   it("summarizes events, queues, reconnect banners, and smart path input state", async () => {
@@ -420,6 +487,53 @@ describe("shared component tail coverage", () => {
     expect(findText(eventCard.toJSON() as never, "task-1")).toBe(true);
     eventCard.update(<EventCard event={event as never} summary="Summary" onLoadTracePreview={onTrace} />);
     expect(findText(eventCard.toJSON() as never, "Load trace detail")).toBe(true);
+    eventCard.update(
+      <EventCard
+        event={
+          { ...event, traceId: undefined, correlationId: undefined, links: { approvalId: "approval-only" } } as never
+        }
+        summary="Summary"
+      />,
+    );
+    expect(findText(eventCard.toJSON() as never, "approval-only")).toBe(true);
+    eventCard.update(
+      <EventCard
+        event={
+          {
+            ...event,
+            traceId: undefined,
+            correlationId: undefined,
+            links: { proactiveRunId: "proactive-only" },
+          } as never
+        }
+        summary="Summary"
+      />,
+    );
+    expect(findText(eventCard.toJSON() as never, "proactive-only")).toBe(true);
+    eventCard.update(
+      <EventCard
+        event={{ ...event, traceId: undefined, correlationId: undefined, links: { taskId: "task-only" } } as never}
+        summary="Summary"
+      />,
+    );
+    expect(findText(eventCard.toJSON() as never, "task-only")).toBe(true);
+    eventCard.update(
+      <EventCard
+        event={{ ...event, traceId: undefined, correlationId: undefined, links: { runId: "run-only" } } as never}
+        summary="Summary"
+      />,
+    );
+    expect(findText(eventCard.toJSON() as never, "run-only")).toBe(true);
+    eventCard.update(
+      <EventCard
+        event={{ ...event, traceId: undefined, correlationId: undefined, links: undefined } as never}
+        summary="Summary"
+        tracePreview={[]}
+        onLoadTracePreview={onTrace}
+      />,
+    );
+    expect(findText(eventCard.toJSON() as never, "event-card-links")).toBe(false);
+    expect(findText(eventCard.toJSON() as never, "Trace detail")).toBe(false);
 
     const queueItems = [
       { id: "1", action: "send", label: "First", createdAt: "2026-01-01T12:00:00.000Z" },

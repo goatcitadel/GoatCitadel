@@ -1,0 +1,281 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChatCompletionRequest } from "@goatcitadel/contracts";
+import type { LlmProviderAdapterHost, LlmProviderResolution } from "./llm-provider-adapter.js";
+import { anthropicProviderAdapter } from "./llm-provider-anthropic.js";
+
+const resolved: LlmProviderResolution = {
+  provider: {
+    providerId: "anthropic",
+    label: "Anthropic",
+    baseUrl: "https://api.anthropic.test/v1",
+    apiStyle: "anthropic-messages",
+    apiKeyEnv: "ANTHROPIC_API_KEY",
+    models: ["claude-test"],
+  } as never,
+  apiKey: "test-key",
+};
+
+const host: LlmProviderAdapterHost = {
+  buildRequestTarget: (_resolved, purpose, endpointUrl) => ({
+    url: endpointUrl,
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": "test-key",
+      "anthropic-version": "2023-06-01",
+      "x-purpose": purpose,
+    },
+  }),
+};
+
+describe("anthropicProviderAdapter", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("maps chat requests into Anthropic Messages payloads and adapts text/tool responses", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "msg_1",
+          model: "claude-test",
+          stop_reason: "tool_use",
+          content: [
+            { type: "text", text: "Need a lookup." },
+            { type: "tool_use", id: "tool_1", name: "lookup", input: { query: "goat" } },
+            { type: "tool_use", id: "tool_1", name: "lookup", input: { query: "duplicate" } },
+          ],
+          usage: { input_tokens: 10, output_tokens: 5 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const request: ChatCompletionRequest = {
+      messages: [
+        { role: "system", content: "Be exact." },
+        { role: "developer", content: [{ type: "input_text", text: "Use tools only when needed." }] as never },
+        { role: "user", content: [{ type: "input_text", text: "Find the answer." }] as never },
+        {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              id: "call_existing",
+              type: "function",
+              function: { name: "lookup", arguments: '{"query":"goat"}' },
+            },
+          ],
+        } as never,
+        { role: "tool", tool_call_id: "call_existing", content: [{ type: "text", text: "found" }] as never },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "lookup",
+            description: "Lookup a thing",
+            parameters: { type: "object", properties: { query: { type: "string" } } },
+          },
+        },
+      ],
+      tool_choice: { type: "function", function: { name: "lookup" } } as never,
+      response_format: { type: "json_object" },
+      metadata: { route: "anthropic-test" },
+      temperature: 0.2,
+      top_p: 0.9,
+      max_tokens: 64,
+      stop: ["STOP"],
+      reasoning: { effort: "high" },
+      timeoutMs: 123.9,
+    };
+
+    const response = await anthropicProviderAdapter.chatCompletions(request, resolved, "claude-test", host);
+
+    const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.anthropic.test/v1/messages");
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: "POST",
+      redirect: "manual",
+      headers: expect.objectContaining({
+        "x-api-key": "test-key",
+        "x-purpose": "messages",
+      }),
+    });
+    expect(payload).toMatchObject({
+      model: "claude-test",
+      max_tokens: 64,
+      temperature: 0.2,
+      top_p: 0.9,
+      stop_sequences: ["STOP"],
+      metadata: { route: "anthropic-test" },
+      output_config: { format: { type: "json_object" } },
+      tool_choice: { type: "tool", name: "lookup" },
+      thinking: { type: "enabled", budget_tokens: 8192 },
+    });
+    expect(payload.system).toEqual([
+      { type: "text", text: "Use tools only when needed." },
+      { type: "text", text: "Be exact." },
+    ]);
+    expect(payload.tools).toEqual([
+      {
+        name: "lookup",
+        description: "Lookup a thing",
+        input_schema: { type: "object", properties: { query: { type: "string" } } },
+      },
+    ]);
+    expect(payload.messages).toContainEqual({
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: "call_existing",
+          name: "lookup",
+          input: { query: "goat" },
+        },
+      ],
+    });
+    expect(response).toMatchObject({
+      id: "msg_1",
+      model: "claude-test",
+      choices: [
+        {
+          finish_reason: "tool_calls",
+          message: {
+            role: "assistant",
+            content: "Need a lookup.",
+            tool_calls: [
+              {
+                id: "tool_1",
+                type: "function",
+                function: { name: "lookup", arguments: '{"query":"goat"}' },
+              },
+            ],
+          },
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    });
+  });
+
+  it("normalizes streaming text, tool-call deltas, usage, and malformed SSE frames", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            [
+              `data: ${JSON.stringify({ type: "message_start", message: { id: "msg_stream", model: "claude-test" } })}`,
+              "",
+              `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "hello " } })}`,
+              "",
+              `data: ${JSON.stringify({
+                type: "content_block_start",
+                index: 1,
+                content_block: { type: "tool_use", id: "tool_stream", name: "lookup", input: '{"query"' },
+              })}`,
+              "",
+              "data: {not json",
+              "",
+              `data: ${JSON.stringify({
+                type: "content_block_delta",
+                index: 1,
+                delta: { type: "input_json_delta", partial_json: ':"goat"}' },
+              })}`,
+              "",
+              `data: ${JSON.stringify({ type: "content_block_stop", index: 1 })}`,
+              "",
+              `data: ${JSON.stringify({
+                type: "message_delta",
+                stop_reason: "max_tokens",
+                usage: { input_tokens: 7, output_tokens: 3 },
+              })}`,
+              "",
+              `data: ${JSON.stringify({ type: "message_stop" })}`,
+              "",
+              "data: [DONE]",
+              "",
+            ].join("\n"),
+          ),
+        );
+        controller.close();
+      },
+    });
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } }));
+
+    const chunks: Array<Record<string, unknown>> = [];
+    for await (const chunk of anthropicProviderAdapter.chatCompletionsStream(
+      {
+        messages: [{ role: "user", content: "stream" }],
+        tool_choice: "required",
+        timeoutMs: -1,
+      },
+      resolved,
+      "claude-test",
+      host,
+    )) {
+      chunks.push(chunk);
+    }
+
+    const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(payload).toMatchObject({
+      model: "claude-test",
+      stream: true,
+      tool_choice: { type: "any" },
+      max_tokens: 1024,
+    });
+    expect(chunks).toEqual([
+      {
+        id: "msg_stream",
+        model: "claude-test",
+        choices: [{ index: 0, delta: { content: "hello " } }],
+      },
+      {
+        id: "msg_stream",
+        model: "claude-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "tool_stream",
+                  type: "function",
+                  function: { name: "lookup", arguments: '{"query":"goat"}' },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      expect.objectContaining({
+        id: "msg_stream",
+        model: "claude-test",
+        choices: [{ index: 0, delta: {}, finish_reason: "length" }],
+        usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 },
+      }),
+    ]);
+  });
+
+  it("blocks redirects and includes provider error snippets for Anthropic failures", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response("moved", { status: 307 }));
+    await expect(
+      anthropicProviderAdapter.chatCompletions(
+        { messages: [{ role: "user", content: "hello" }] },
+        resolved,
+        "claude-test",
+        host,
+      ),
+    ).rejects.toThrow(/blocked redirect \(307\)/);
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response("bad key".repeat(100), { status: 401, statusText: "Unauthorized" }),
+    );
+    await expect(
+      anthropicProviderAdapter
+        .chatCompletionsStream({ messages: [{ role: "user", content: "hello" }] }, resolved, "claude-test", host)
+        .next(),
+    ).rejects.toThrow(/messages request failed \(401 Unauthorized\): bad key/);
+  });
+});

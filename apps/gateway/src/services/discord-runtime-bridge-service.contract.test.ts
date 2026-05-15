@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatSessionRecord } from "@goatcitadel/contracts";
 import {
+  ensureDiscordChatSession,
   handleDiscordRuntimeSlashCommand,
   handleDiscordRuntimeInbound,
+  resolveDiscordInboundRoute,
   startNewDiscordRouteSession,
   type DiscordRouteSessionRecord,
   type DiscordRuntimeBridgeHost,
@@ -218,6 +220,61 @@ describe("discord-runtime-bridge-service contract behavior", () => {
     expect(host.updateSessionMock).toHaveBeenCalledWith(session.sessionId, { title: "Fresh thread" });
   });
 
+  it("ensures Discord chat sessions, bindings, and route-session thread isolation", () => {
+    const host = createHost();
+
+    const first = ensureDiscordChatSession(host, {
+      connectionId: "discord-1",
+      target: "channel-1",
+      displayName: "Ops Channel",
+    });
+
+    expect(first.sessionId).toMatch(/^sess_/);
+    expect(host.operatorSummaryCache.invalidate).toHaveBeenCalled();
+    expect(host.ensureChatSessionRuntimeGrants).toHaveBeenCalledWith(first.sessionId);
+    expect(host.storage.chatSessionBindings.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: first.sessionId,
+        workspaceId: "default",
+        transport: "integration",
+        connectionId: "discord-1",
+        target: "channel-1",
+        writable: true,
+      }),
+      expect.any(String),
+    );
+
+    host.storage.systemSettings.set("discord_route_sessions_v1", [
+      {
+        connectionId: "discord-1",
+        target: "channel-1",
+        logicalSessionKey: "logical123",
+        sessionId: first.sessionId,
+        createdAt: "2026-04-08T00:00:00.000Z",
+        updatedAt: "2026-04-08T00:00:00.000Z",
+      },
+    ]);
+
+    expect(
+      resolveDiscordInboundRoute(host, {
+        connectionId: "discord-1",
+        target: "channel-1",
+        room: "room-1",
+        threadId: "thread-1",
+      }),
+    ).toEqual({
+      room: "room-1",
+      threadId: "discord_thread-1_logical123",
+    });
+    expect(
+      resolveDiscordInboundRoute(host, {
+        connectionId: "discord-1",
+        target: "other-channel",
+        peer: "user-1",
+      }),
+    ).toEqual({ peer: "user-1", room: "other-channel", threadId: undefined });
+  });
+
   it("resolves Discord approval commands with remote action token semantics", async () => {
     const host = createHost();
 
@@ -236,6 +293,101 @@ describe("discord-runtime-bridge-service contract behavior", () => {
     });
     expect(host.parseChatCommand).not.toHaveBeenCalled();
     expect(response).toContain("Approved approval-1");
+  });
+
+  it("renders shared Discord command views and updates home/personality settings", async () => {
+    const host = createHost();
+    host.getPersonalityCatalog = undefined;
+    host.storage.integrationConnections.update("discord-1", {
+      config: {
+        channelSkillBindings: [
+          { skillId: "researcher", alias: "Researcher", enabled: true },
+          { skillId: "hidden", alias: "Hidden", enabled: false },
+        ],
+      },
+    });
+
+    await expect(
+      handleDiscordRuntimeSlashCommand(host, {
+        connectionId: "discord-1",
+        target: "channel-1",
+        actorId: "user-1",
+        commandText: "/sethome",
+        sourceCommandId: "cmd-home",
+      }),
+    ).resolves.toContain("Home channel set");
+
+    await expect(
+      handleDiscordRuntimeSlashCommand(host, {
+        connectionId: "discord-1",
+        target: "channel-1",
+        actorId: "user-1",
+        commandText: "/status",
+        sourceCommandId: "cmd-status",
+      }),
+    ).resolves.toContain("Home channel: this channel");
+
+    await expect(
+      handleDiscordRuntimeSlashCommand(host, {
+        connectionId: "discord-1",
+        target: "channel-1",
+        actorId: "user-1",
+        commandText: "/skills",
+        sourceCommandId: "cmd-skills",
+      }),
+    ).resolves.toContain("Researcher: researcher");
+    await expect(
+      handleDiscordRuntimeSlashCommand(host, {
+        connectionId: "discord-1",
+        target: "channel-1",
+        actorId: "user-1",
+        commandText: "/skill Researcher",
+        sourceCommandId: "cmd-skill",
+      }),
+    ).resolves.toContain('Skill "Researcher" is available');
+    await expect(
+      handleDiscordRuntimeSlashCommand(host, {
+        connectionId: "discord-1",
+        target: "channel-1",
+        actorId: "user-1",
+        commandText: "/tools",
+        sourceCommandId: "cmd-tools",
+      }),
+    ).resolves.toContain("Channel tool posture");
+    await expect(
+      handleDiscordRuntimeSlashCommand(host, {
+        connectionId: "discord-1",
+        target: "channel-1",
+        actorId: "user-1",
+        commandText: "/personality concise",
+        sourceCommandId: "cmd-personality",
+      }),
+    ).resolves.toContain("Personality set");
+    await expect(
+      handleDiscordRuntimeSlashCommand(host, {
+        connectionId: "discord-1",
+        target: "channel-1",
+        actorId: "user-1",
+        commandText: "/personality none",
+        sourceCommandId: "cmd-personality-clear",
+      }),
+    ).resolves.toContain("Personality cleared");
+  });
+
+  it("blocks Discord slash work when an active run is already bound to the channel", async () => {
+    const host = createHost();
+    host.hasRunningTurn = vi.fn(() => true);
+
+    const response = await handleDiscordRuntimeSlashCommand(host, {
+      connectionId: "discord-1",
+      target: "channel-1",
+      actorId: "user-1",
+      commandText: "/model gpt-5.4",
+      sourceCommandId: "cmd-model",
+    });
+
+    expect(response).toContain("already active");
+    expect(host.parseChatCommand).not.toHaveBeenCalled();
   });
 
   it("records a conflict diagnostic after exhausting reply retries for an inbound discord message", async () => {
@@ -262,6 +414,30 @@ describe("discord-runtime-bridge-service contract behavior", () => {
           connectionId: "discord-1",
           sourceMessageId: "msg-1",
           attempt: 3,
+        }),
+      }),
+    );
+  });
+
+  it("records active-run guard diagnostics for deduped-safe Discord inbound messages", async () => {
+    const host = createHost();
+    host.hasRunningTurn = vi.fn(() => true);
+
+    await handleDiscordRuntimeInbound(host, {
+      connectionId: "discord-1",
+      target: "dm_1",
+      actorId: "user-1",
+      content: "hello while running",
+      sourceMessageId: "msg-active",
+    });
+
+    expect(host.respondMock).not.toHaveBeenCalled();
+    expect(host.diagnostics).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "discord.gateway.active_run_guard",
+        context: expect.objectContaining({
+          connectionId: "discord-1",
+          sourceMessageId: "msg-active",
         }),
       }),
     );

@@ -6,6 +6,7 @@ import {
   getRouteDescription,
   getRouteLabel,
   isRailItemActive,
+  normalizeAppRoute,
   parseAppRoute,
 } from "./route-model";
 import { adaptLegacyUrl, coerceLegacyHrefToNext, resolveRouteFromLocation } from "./legacy-route-adapter";
@@ -52,6 +53,10 @@ describe("legacy route adapter", () => {
   });
 
   it("maps legacy operate routes into task and approval destinations", () => {
+    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=operate&page=surface&surface=cowork")).toBe(
+      "/cowork",
+    );
+    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=operate&page=surface&surface=code")).toBe("/code");
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=operate&page=tasks")).toBe("/cowork/tasks");
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=operate&page=approvals")).toBe("/ops/approvals");
   });
@@ -304,5 +309,24 @@ describe("mission-control-next route model", () => {
     expect(resolveRouteFromLocation("http://goatcitadel.local/?tab=unknown")).toMatchObject({ area: "chat" });
     expect(resolveRouteFromLocation(new URL("http://goatcitadel.local/settings"))).toMatchObject({ area: "settings" });
     expect(parseAppRoute("http://goatcitadel.local/projects").projectId).toBeUndefined();
+  });
+
+  it("covers native route defaults and fallback branches without changing contracts", () => {
+    expect(normalizeAppRoute({ area: "library" })).toMatchObject({ area: "library", section: "agents" });
+    expect(normalizeAppRoute({ area: "ops" })).toMatchObject({ area: "ops", section: "activity" });
+    expect(normalizeAppRoute({ area: "settings" })).toMatchObject({ area: "settings", section: "general" });
+    expect(parseAppRoute("http://goatcitadel.local/not-a-real-area?projectId=project-1")).toMatchObject({
+      area: "chat",
+      projectId: "project-1",
+    });
+    expect(parseAppRoute("http://goatcitadel.local/projects?projectId=Project From Query").projectId).toBe(
+      "Project From Query",
+    );
+    expect(buildAppHref({ area: "projects" })).toBe("/projects");
+    expect(buildAppHref({ area: "library", projectId: "project-1", view: "catalog", theme: "light" })).toBe(
+      "/library/agents?projectId=project-1&view=catalog&theme=light",
+    );
+    expect(buildAppHref({ area: "library", section: undefined as any })).toBe("/library/agents");
+    expect(getRouteLabel({ area: "library", section: "missing" as any })).toBe("Library");
   });
 });

@@ -631,7 +631,7 @@ function PanelList({
   );
 }
 
-function extractCodeBlocks(content: string): Array<{ id: string; language: string; content: string }> {
+export function extractCodeBlocks(content: string): Array<{ id: string; language: string; content: string }> {
   return Array.from(content.matchAll(/```([\w.+-]*)\n([\s\S]*?)```/g))
     .map((match, index) => ({
       id: `code-block-${index}`,
@@ -641,7 +641,7 @@ function extractCodeBlocks(content: string): Array<{ id: string; language: strin
     .filter((block) => block.content.length > 0);
 }
 
-function isPendingPatchBlock(block: { language: string; content: string }): boolean {
+export function isPendingPatchBlock(block: { language: string; content: string }): boolean {
   const language = block.language.trim().toLowerCase();
   const content = block.content.trim();
   return (
@@ -651,7 +651,7 @@ function isPendingPatchBlock(block: { language: string; content: string }): bool
   );
 }
 
-function validationStatusTone(status?: string | null): "success" | "warning" | "critical" {
+export function validationStatusTone(status?: string | null): "success" | "warning" | "critical" {
   if (status === "passed") {
     return "success";
   }
@@ -661,7 +661,7 @@ function validationStatusTone(status?: string | null): "success" | "warning" | "
   return "warning";
 }
 
-function shortId(value: string): string {
+export function shortId(value: string): string {
   return value.length <= 12 ? value : `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
 
@@ -672,7 +672,7 @@ const VALIDATION_COMMAND_PRESETS = [
   { label: "Fast verify", command: "pnpm verify:fast" },
 ];
 
-function describeAgenticControlCopy(control: AgenticControlItem): { buttonLabel: string; intentNote?: string } {
+export function describeAgenticControlCopy(control: AgenticControlItem): { buttonLabel: string; intentNote?: string } {
   if (control.runtimeEffect !== "state_only") {
     return { buttonLabel: control.title };
   }

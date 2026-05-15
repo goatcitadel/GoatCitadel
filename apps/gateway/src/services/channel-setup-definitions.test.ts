@@ -595,6 +595,191 @@ describe("channel setup definitions", () => {
     );
   });
 
+  it("hydrates and normalizes the bridge and webhook tails without exposing saved secrets", () => {
+    const googleChat = requireChannelSetupDefinition("channel.google-chat");
+    const googleHydrated = googleChat.hydrate(
+      createConnection({
+        catalogId: "channel.google-chat",
+        key: "google-chat",
+        config: {
+          webhookUrl: "https://chat.googleapis.com/v1/spaces/AAA/messages?key=key&token=token",
+          defaultThreadKey: "ops-thread",
+        },
+      }),
+    );
+    expect(googleHydrated.hydration.status).toBe("opaque-secret");
+    expect(googleHydrated.hydration.fieldState.webhookUrl).toBe("configured");
+    expect(googleHydrated.draft).toEqual({ defaultThreadKey: "ops-thread" });
+    expect(
+      googleChat.normalize(
+        createDraft("channel.google-chat", {
+          webhookUrl: "https://chat.googleapis.com/v1/spaces/AAA/messages?key=key&token=token",
+          defaultThreadKey: "ops-thread",
+        }),
+      ),
+    ).toEqual({
+      webhookUrl: "https://chat.googleapis.com/v1/spaces/AAA/messages?key=key&token=token",
+      defaultThreadKey: "ops-thread",
+    });
+    expect(
+      googleChat.validate(
+        createDraft("channel.google-chat", {
+          webhookUrl: "https://chat.googleapis.com/v1/spaces/AAA/messages?key=key&token=token",
+        }),
+      ),
+    ).toEqual([]);
+
+    const signal = requireChannelSetupDefinition("channel.signal");
+    const signalHydrated = signal.hydrate(
+      createConnection({
+        catalogId: "channel.signal",
+        key: "signal",
+        config: {
+          bridgeUrl: "http://127.0.0.1:8080",
+          accountId: "+15551234567",
+          defaultRecipient: "+15557654321",
+        },
+      }),
+    );
+    expect(signalHydrated.hydration.status).toBe("clean");
+    expect(signalHydrated.hydration.fieldState.baseUrl).toBe("configured");
+    expect(
+      signal.normalize({
+        ...createDraft("channel.signal", { defaultRecipient: "+15557654321" }, "edit"),
+        hydration: signalHydrated.hydration,
+      }),
+    ).toEqual({
+      baseUrl: "http://127.0.0.1:8080",
+      defaultRecipient: "+15557654321",
+    });
+    expect(
+      signal.validate({
+        ...createDraft("channel.signal", { defaultRecipient: "+15557654321" }, "edit"),
+        hydration: signalHydrated.hydration,
+      }),
+    ).toEqual([]);
+
+    const zalo = requireChannelSetupDefinition("channel.zalo");
+    const zaloHydrated = zalo.hydrate(
+      createConnection({
+        catalogId: "channel.zalo",
+        key: "zalo",
+        config: {
+          tokenEnv: "ZALO_ACCESS_TOKEN",
+          defaultRecipientId: "oa-user-1",
+        },
+      }),
+    );
+    expect(zaloHydrated.hydration.status).toBe("opaque-secret");
+    expect(zaloHydrated.hydration.fieldState.accessToken).toBe("configured");
+    expect(
+      zalo.normalize({
+        ...createDraft("channel.zalo", { defaultRecipientId: "oa-user-1" }, "edit"),
+        hydration: zaloHydrated.hydration,
+      }),
+    ).toEqual({
+      accessTokenEnv: "ZALO_ACCESS_TOKEN",
+      defaultRecipientId: "oa-user-1",
+    });
+    expect(
+      zalo.validate({
+        ...createDraft("channel.zalo", { defaultRecipientId: "oa-user-1" }, "edit"),
+        hydration: zaloHydrated.hydration,
+      }),
+    ).toEqual([]);
+
+    const zaloUser = requireChannelSetupDefinition("channel.zalouser");
+    const zaloUserHydrated = zaloUser.hydrate(
+      createConnection({
+        catalogId: "channel.zalouser",
+        key: "zalouser",
+        config: {
+          bridgeUrl: "http://127.0.0.1:56789",
+          authorizationEnv: "ZALOUSER_AUTHORIZATION",
+          profile: "work",
+          defaultTarget: "user:u-123456789",
+        },
+      }),
+    );
+    expect(zaloUserHydrated.hydration.status).toBe("opaque-secret");
+    expect(zaloUserHydrated.hydration.fieldState.authToken).toBe("configured");
+    expect(
+      zaloUser.normalize({
+        ...createDraft("channel.zalouser", { defaultTarget: "user:u-123456789" }, "edit"),
+        hydration: zaloUserHydrated.hydration,
+      }),
+    ).toEqual({
+      baseUrl: "http://127.0.0.1:56789",
+      authorizationEnv: "ZALOUSER_AUTHORIZATION",
+      defaultTarget: "user:u-123456789",
+    });
+    expect(
+      zaloUser.validate({
+        ...createDraft("channel.zalouser", { defaultTarget: "user:u-123456789" }, "edit"),
+        hydration: zaloUserHydrated.hydration,
+      }),
+    ).toEqual([]);
+  });
+
+  it("normalizes target arrays and legacy targets used by Slack and Telegram setup", () => {
+    const slack = requireChannelSetupDefinition("channel.slack");
+    const slackNormalized = slack.normalize(
+      createDraft("channel.slack", {
+        botTokenEnv: "SLACK_BOT_TOKEN",
+        targets: JSON.stringify([
+          {
+            target: "#ops",
+            threadTs: "1712109984.100000",
+            default: "true",
+          },
+        ]),
+      }),
+    );
+    expect(slackNormalized).toEqual(
+      expect.objectContaining({
+        botTokenEnv: "SLACK_BOT_TOKEN",
+        targets: [
+          expect.objectContaining({
+            id: "slack-target-1",
+            label: "#ops",
+            channel: "#ops",
+            threadTs: "1712109984.100000",
+            default: true,
+          }),
+        ],
+      }),
+    );
+
+    const telegram = requireChannelSetupDefinition("channel.telegram");
+    const telegramNormalized = telegram.normalize(
+      createDraft("channel.telegram", {
+        botTokenEnv: "TELEGRAM_BOT_TOKEN",
+        targets: [
+          {
+            defaultChatId: "ops_channel",
+            messageThreadId: "42",
+            kind: "topic",
+          },
+        ],
+      }),
+    );
+    expect(telegramNormalized).toEqual(
+      expect.objectContaining({
+        botTokenEnv: "TELEGRAM_BOT_TOKEN",
+        targets: [
+          expect.objectContaining({
+            id: "telegram-target-1",
+            label: "ops_channel",
+            chatId: "ops_channel",
+            threadId: "42",
+            kind: "topic",
+            default: true,
+          }),
+        ],
+      }),
+    );
+  });
+
   it("advertises live-send testing for the guided smoke-probe channels", () => {
     const channels = [
       "channel.discord",

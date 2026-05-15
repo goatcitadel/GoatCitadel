@@ -17,4 +17,13 @@ describe("monaco runtime gate", () => {
     setMonacoTestRuntimeEnabled(true);
     expect(shouldRenderMonacoRuntime()).toBe(true);
   });
+
+  it("allows Monaco outside test mode and ignores the test-only runtime flag setter", () => {
+    vi.stubEnv("MODE", "development");
+    vi.stubGlobal("window", {});
+
+    expect(shouldRenderMonacoRuntime()).toBe(true);
+    setMonacoTestRuntimeEnabled(false);
+    expect(shouldRenderMonacoRuntime()).toBe(true);
+  });
 });

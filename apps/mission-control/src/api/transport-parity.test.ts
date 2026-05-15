@@ -55,6 +55,8 @@ class MockEventSource {
   public close(): void {}
 }
 
+const streamCleanups: Array<() => void> = [];
+
 function installMockWindow(): void {
   Object.defineProperty(globalThis, "window", {
     configurable: true,
@@ -135,6 +137,7 @@ describe("Mission Control transport parity", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
     installMockWindow();
     MockEventSource.instances = [];
     vi.stubGlobal("EventSource", MockEventSource);
@@ -144,9 +147,15 @@ describe("Mission Control transport parity", () => {
   });
 
   afterEach(() => {
+    for (const cleanup of streamCleanups.splice(0)) {
+      cleanup();
+    }
+    MockEventSource.instances = [];
+    vi.clearAllTimers();
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.resetModules();
   });
 
   it("uses the same auth and retry semantics through client-core and shell-client request paths", async () => {
@@ -166,14 +175,14 @@ describe("Mission Control transport parity", () => {
 
     diagnostics.clearClientDiagnostics();
     const coreRequest = core.request<{ items: unknown[]; view: string }>("/api/v1/workspaces?view=active&limit=200");
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(250);
     await coreRequest;
     const coreHeaders = toHeaderRecord(fetchMock.mock.calls[1]?.[1]?.headers);
     const coreEvents = diagnostics.listClientDiagnostics({ category: "api", limit: 3 });
 
     diagnostics.clearClientDiagnostics();
     const shellRequest = shell.fetchWorkspaces();
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(250);
     await shellRequest;
     const shellHeaders = toHeaderRecord(fetchMock.mock.calls[3]?.[1]?.headers);
     const shellEvents = diagnostics.listClientDiagnostics({ category: "api", limit: 3 });
@@ -203,7 +212,8 @@ describe("Mission Control transport parity", () => {
     expect(shell.connectEventStream).toBe(client.connectEventStream);
 
     const stop = shell.connectEventStream(() => undefined);
-    await vi.runAllTimersAsync();
+    streamCleanups.push(stop);
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/api/v1/auth/sse-token"),
@@ -214,10 +224,11 @@ describe("Mission Control transport parity", () => {
     expect(MockEventSource.instances[0]?.url).toContain("sse_token=stream-token-1");
 
     MockEventSource.instances[0]?.onerror?.();
-    await vi.advanceTimersByTimeAsync(31_000);
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(MockEventSource.instances.length).toBeGreaterThanOrEqual(2);
 
     stop();
+    streamCleanups.pop();
   });
 
   it("keeps legacy and shared chat artifact routes workspace-scoped", async () => {

@@ -2673,7 +2673,7 @@ function LibraryNotice({ notice }: { notice: Notice }) {
   return <div className={`mc-next-settings-notice ${notice.tone}`}>{notice.message}</div>;
 }
 
-async function nativeLoad<T>(label: string, promise: Promise<T>, fallback: T): Promise<NativeLoadResult<T>> {
+export async function nativeLoad<T>(label: string, promise: Promise<T>, fallback: T): Promise<NativeLoadResult<T>> {
   try {
     return {
       data: await promise,
@@ -2690,11 +2690,11 @@ async function nativeLoad<T>(label: string, promise: Promise<T>, fallback: T): P
   }
 }
 
-function nativeLoadIssues(results: Array<NativeLoadResult<unknown>>): NativeLoadIssue[] {
+export function nativeLoadIssues(results: Array<NativeLoadResult<unknown>>): NativeLoadIssue[] {
   return results.map((result) => result.issue).filter((issue): issue is NativeLoadIssue => Boolean(issue));
 }
 
-function dedupeAgentProfiles<T extends { agentId: string; roleId?: string; name?: string }>(items: T[]): T[] {
+export function dedupeAgentProfiles<T extends { agentId: string; roleId?: string; name?: string }>(items: T[]): T[] {
   const seen = new Set<string>();
   return items.filter((item) => {
     const key = `${item.agentId || item.roleId || ""}:${item.name ?? ""}`.toLowerCase();
@@ -2764,11 +2764,11 @@ function useAsyncLoad<T>(loader: () => Promise<T>, deps: ReadonlyArray<unknown>)
   return { ...state, reload };
 }
 
-function routeSectionWithDefault(route: AppRoute, fallback: NonNullable<AppRoute["section"]>) {
+export function routeSectionWithDefault(route: AppRoute, fallback: NonNullable<AppRoute["section"]>) {
   return (route.section ?? fallback) as NonNullable<AppRoute["section"]>;
 }
 
-function mergeCapabilities(
+export function mergeCapabilities(
   inspectable: CapabilityCatalogEntry[],
   callable: CapabilityCatalogEntry[],
 ): CapabilityCatalogEntry[] {
@@ -2782,7 +2782,7 @@ function mergeCapabilities(
   return Array.from(merged.values()).sort((left, right) => left.title.localeCompare(right.title));
 }
 
-function deriveCapabilityStatus(item: CapabilityCatalogEntry): {
+export function deriveCapabilityStatus(item: CapabilityCatalogEntry): {
   status: CapabilityStatusFilter;
   label: string;
   reason: string;
@@ -2809,7 +2809,7 @@ function deriveCapabilityStatus(item: CapabilityCatalogEntry): {
   return { status: "unavailable", label: "Unavailable", reason: "No callable runtime path is available." };
 }
 
-function summarizeCapabilityCounts(items: CapabilityCatalogEntry[]): Record<CapabilityStatusFilter, number> {
+export function summarizeCapabilityCounts(items: CapabilityCatalogEntry[]): Record<CapabilityStatusFilter, number> {
   const counts: Record<CapabilityStatusFilter, number> = {
     all: items.length,
     available: 0,
@@ -2883,24 +2883,24 @@ function descriptionForLibrarySection(section: NonNullable<AppRoute["section"]>,
   }
 }
 
-function splitCommaList(value: string) {
+export function splitCommaList(value: string) {
   return value
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
 }
 
-function serializeScenarioDrafts(items: SkillEvaluationRunRecord["scenarios"]) {
+export function serializeScenarioDrafts(items: SkillEvaluationRunRecord["scenarios"]) {
   return items.map((item) => `${item.title} | ${item.prompt} | ${item.expectedOutcome}`).join("\n");
 }
 
-function serializeCriterionDrafts(items: SkillEvaluationRunRecord["criteria"]) {
+export function serializeCriterionDrafts(items: SkillEvaluationRunRecord["criteria"]) {
   return items
     .map((item) => `${item.label} | ${item.description} | ${(item.requiredTerms ?? []).join(", ")}`)
     .join("\n");
 }
 
-function parseScenarioDrafts(value: string): SkillEvaluationScenarioDraft[] | undefined {
+export function parseScenarioDrafts(value: string): SkillEvaluationScenarioDraft[] | undefined {
   const lines = value
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -2921,7 +2921,7 @@ function parseScenarioDrafts(value: string): SkillEvaluationScenarioDraft[] | un
   });
 }
 
-function parseCriterionDrafts(value: string): SkillEvaluationCriterionDraft[] | undefined {
+export function parseCriterionDrafts(value: string): SkillEvaluationCriterionDraft[] | undefined {
   const lines = value
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -2942,7 +2942,7 @@ function parseCriterionDrafts(value: string): SkillEvaluationCriterionDraft[] | 
   });
 }
 
-function readPayloadString(payload: unknown, paths: string[]): string | undefined {
+export function readPayloadString(payload: unknown, paths: string[]): string | undefined {
   for (const path of paths) {
     const value = readPayloadPath(payload, path);
     if (typeof value === "string" && value.trim()) {
@@ -2955,7 +2955,7 @@ function readPayloadString(payload: unknown, paths: string[]): string | undefine
   return undefined;
 }
 
-function readPayloadPath(payload: unknown, path: string): unknown {
+export function readPayloadPath(payload: unknown, path: string): unknown {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return undefined;
   }
@@ -2967,7 +2967,7 @@ function readPayloadPath(payload: unknown, path: string): unknown {
   }, payload);
 }
 
-function readPayloadEvidenceRefs(payload: unknown) {
+export function readPayloadEvidenceRefs(payload: unknown) {
   const refs = readPayloadPath(payload, "evidenceRefs");
   if (!Array.isArray(refs)) {
     return [];
@@ -2996,7 +2996,7 @@ function readPayloadEvidenceRefs(payload: unknown) {
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
 }
 
-function formatEvidenceMetadata(metadata?: Record<string, unknown>) {
+export function formatEvidenceMetadata(metadata?: Record<string, unknown>) {
   if (!metadata) {
     return undefined;
   }
@@ -3006,21 +3006,21 @@ function formatEvidenceMetadata(metadata?: Record<string, unknown>) {
   return entries.length ? entries.join(" · ") : undefined;
 }
 
-function formatPercent(value: number) {
+export function formatPercent(value: number) {
   if (!Number.isFinite(value)) {
     return "n/a";
   }
   return `${Math.round(value * 100)}%`;
 }
 
-function truncateText(value: string, limit: number) {
+export function truncateText(value: string, limit: number) {
   if (value.length <= limit) {
     return value;
   }
   return `${value.slice(0, limit).trimEnd()}\n\n…`;
 }
 
-function formatDateTime(value?: string | null) {
+export function formatDateTime(value?: string | null) {
   if (!value) {
     return "Unknown";
   }
@@ -3036,7 +3036,7 @@ function formatDateTime(value?: string | null) {
   });
 }
 
-function formatBytes(value: number) {
+export function formatBytes(value: number) {
   if (!Number.isFinite(value) || value <= 0) {
     return "0 B";
   }
@@ -3046,7 +3046,7 @@ function formatBytes(value: number) {
   return `${scaled.toFixed(scaled >= 10 || exponent === 0 ? 0 : 1)} ${units[exponent]}`;
 }
 
-function formatTaskStatus(value: string) {
+export function formatTaskStatus(value: string) {
   return value
     .split("_")
     .filter(Boolean)
@@ -3054,7 +3054,7 @@ function formatTaskStatus(value: string) {
     .join(" ");
 }
 
-function getErrorMessage(error: unknown) {
+export function getErrorMessage(error: unknown) {
   if (error instanceof Error && error.message) {
     return error.message;
   }

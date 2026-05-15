@@ -736,6 +736,36 @@ describe("tool executor edge coverage", () => {
     ).resolves.toMatchObject({ deleted: true });
   });
 
+  it("normalizes shell failures and restricted command defaults", async () => {
+    mocked.execFileAsync.mockRejectedValueOnce(Object.assign(new Error("boom"), { code: "ENOEXEC" }));
+
+    await expect(
+      executeTool(request("shell.exec", { command: "node fail.js" }), config, storageStub()),
+    ).resolves.toMatchObject({
+      executable: "node",
+      argv: ["fail.js"],
+      stdout: "",
+      stderr: "boom",
+      exitCode: -1,
+    });
+
+    mocked.execFileAsync.mockResolvedValue({ stdout: "restricted-ok", stderr: "" });
+    await expect(executeTool(request("tests.run", {}), config, storageStub())).resolves.toMatchObject({
+      manager: "pnpm",
+      kind: "test",
+    });
+    await expect(executeTool(request("lint.run", { manager: "npm" }), config, storageStub())).resolves.toMatchObject({
+      manager: "npm",
+      kind: "lint",
+    });
+    await expect(
+      executeTool(request("build.run", { manager: "pnpm", filter: "bad;filter" }), config, storageStub()),
+    ).rejects.toThrow(/invalid filter/i);
+    await expect(executeTool(request("tests.run", { manager: "yarn" }), config, storageStub())).rejects.toThrow(
+      /only pnpm\/npm/i,
+    );
+  });
+
   it("covers content search skips, code-only filtering, and full-disk read bypass", async () => {
     const searchRoot = path.join(tempRoot, "content-search");
     await fs.mkdir(path.join(searchRoot, ".git"), { recursive: true });

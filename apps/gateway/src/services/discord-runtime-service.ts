@@ -1406,3 +1406,25 @@ function buildDiscordSlashCommandDefinitions(): RESTPostAPIApplicationCommandsJS
       ),
   ].map((builder) => builder.toJSON());
 }
+
+export const __discordRuntimeServiceInternals = {
+  buildCommandTextFromInteraction,
+  buildDiscordSlashCommandDefinitions,
+  formatDiscordModelChoiceLabel,
+  getDiscordGuildPolicy,
+  getDiscordInboundDmPolicy,
+  getDiscordRuntimeMode,
+  getErrorMessage,
+  normalizeDiscordRuntimeTarget,
+  readConfigString,
+  readDiscordApprovalToken,
+  readDiscordSecret,
+  readDiscordSubcommand,
+  readGuildRuleMap,
+  resolveDiscordGuildRule,
+  sanitizeGuildRules,
+  sanitizeStringArray,
+  supportsTyping,
+  throwIfDiscordRuntimeAborted,
+  truncateDiscordResponse,
+};

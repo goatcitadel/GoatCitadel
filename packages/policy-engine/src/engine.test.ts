@@ -356,6 +356,36 @@ describe("ToolPolicyEngine approval bypass safety", () => {
     expect(evaluation.requiresApproval).toBe(false);
     expect(evaluation.reasonCodes).toContain("approval_bypass_mode");
   });
+
+  it("keeps outside-root reads approval-gated even when normal approvals are bypassed", () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: {
+          ...policyConfig.tools,
+          approvalMode: "bypass",
+        },
+        sandbox: {
+          ...policyConfig.sandbox,
+          readAccessMode: "approval_required",
+        },
+      },
+      storage,
+    );
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "fs.list",
+      args: { path: "C:/Users/spurn/Desktop/Chrome Downloads" },
+      agentId: "agent",
+      sessionId: "session",
+    });
+
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.requiresApproval).toBe(true);
+    expect(evaluation.reasonCodes).toContain("approval_bypass_mode");
+    expect(evaluation.reasonCodes).toContain("outside_roots_read_requires_approval");
+  });
 });
 
 describe("ToolPolicyEngine policy edge coverage", () => {
@@ -1009,6 +1039,129 @@ describe("ToolPolicyEngine policy edge coverage", () => {
         ],
       }),
     );
+  });
+
+  it("covers approval, read-candidate, and bypass-network defensive defaults", async () => {
+    const approvalStorage = createStorageStub();
+    vi.mocked(approvalStorage.approvals.create).mockImplementation((input) => ({
+      approvalId: "approval-without-expiry",
+      kind: input.kind,
+      riskLevel: input.riskLevel,
+      status: "pending",
+      payload: input.payload,
+      preview: input.preview,
+      createdAt: "2026-03-22T12:00:00.000Z",
+      expiresAt: undefined,
+      explanationStatus: "not_requested",
+    }));
+    const approvalEngine = new ToolPolicyEngine(policyConfig, approvalStorage);
+
+    await approvalEngine.invoke({
+      toolName: "shell.exec",
+      args: { command: "echo approval" },
+      agentId: "agent",
+      sessionId: "session",
+    });
+
+    expect(approvalStorage.pendingApprovalActions.upsertPending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expiresAt: expect.any(String),
+      }),
+    );
+
+    const readCandidates = approvalEngine as unknown as {
+      validateStructuralSafety: (request: {
+        toolName: string;
+        args: Record<string, unknown>;
+        agentId: string;
+        sessionId: string;
+      }) => string | undefined;
+      evaluateShellRisk: (request: {
+        toolName: string;
+        args: Record<string, unknown>;
+        agentId: string;
+        sessionId: string;
+      }) => { risky: boolean; matchedPattern: string } | undefined;
+      recordDangerProfileNetworkBypassIfNeeded: (
+        auditEventId: string,
+        request: { toolName: string; args: Record<string, unknown>; agentId: string; sessionId: string },
+      ) => Promise<void>;
+    };
+
+    expect(
+      readCandidates.validateStructuralSafety({
+        toolName: "fs.read",
+        args: {},
+        agentId: "agent",
+        sessionId: "session",
+      }),
+    ).toBeUndefined();
+    expect(
+      readCandidates.validateStructuralSafety({
+        toolName: "fs.copy",
+        args: {},
+        agentId: "agent",
+        sessionId: "session",
+      }),
+    ).toBeUndefined();
+    expect(
+      readCandidates.validateStructuralSafety({
+        toolName: "docs.ingest",
+        args: { sourceType: "file" },
+        agentId: "agent",
+        sessionId: "session",
+      }),
+    ).toBeUndefined();
+
+    const riskyEngine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          riskyShellPatterns: ["rm -rf"],
+        },
+      },
+      createStorageStub(),
+    ) as unknown as {
+      evaluateShellRisk: (request: {
+        toolName: string;
+        args: Record<string, unknown>;
+        agentId: string;
+        sessionId: string;
+      }) => { risky: boolean; matchedPattern: string } | undefined;
+    };
+    expect(
+      riskyEngine.evaluateShellRisk({
+        toolName: "shell.exec",
+        args: { command: "rm -rf ./workspace/tmp" },
+        agentId: "agent",
+        sessionId: "session",
+      }),
+    ).toMatchObject({ matchedPattern: "rm -rf" });
+
+    const bypassStorage = createStorageStub();
+    const bypassEngine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: {
+          ...policyConfig.tools,
+          approvalMode: "approve_risky",
+        },
+      },
+      bypassStorage,
+    ) as unknown as {
+      recordDangerProfileNetworkBypassIfNeeded: (
+        auditEventId: string,
+        request: { toolName: string; args: Record<string, unknown>; agentId: string; sessionId: string },
+      ) => Promise<void>;
+    };
+    await bypassEngine.recordDangerProfileNetworkBypassIfNeeded("audit-skip", {
+      toolName: "http.get",
+      args: { url: "https://example.com/api" },
+      agentId: "agent",
+      sessionId: "session",
+    });
+    expect(bypassStorage.audit.append).not.toHaveBeenCalled();
   });
 });
 
@@ -2032,6 +2185,121 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
     expect(JSON.stringify(vi.mocked(storage.audit.append).mock.calls)).not.toContain(
       "sk_test_1234567890abcdefghijklmnop",
     );
+  });
+});
+
+describe("ToolPolicyEngine branch-tail coverage", () => {
+  it("evaluates structural safety fallbacks for sparse shell, docs, browser, and file requests", () => {
+    const priorFirecrawlBaseUrl = process.env.FIRECRAWL_BASE_URL;
+    process.env.FIRECRAWL_BASE_URL = "https://example.com/firecrawl";
+    try {
+      const engine = new ToolPolicyEngine(
+        {
+          ...policyConfig,
+          tools: {
+            ...policyConfig.tools,
+            approvalMode: "bypass",
+          },
+          sandbox: {
+            ...policyConfig.sandbox,
+            networkAllowlist: [EXAMPLE_HOST, "localhost"],
+          },
+        },
+        createStorageStub(),
+      );
+
+      const evaluations = [
+        engine.evaluateAccess({
+          toolName: "shell.exec",
+          args: { command: 7 },
+          agentId: "agent",
+          sessionId: "session",
+        } as never),
+        engine.evaluateAccess({
+          toolName: "fs.move",
+          args: { from: "./workspace/from.txt" },
+          agentId: "agent",
+          sessionId: "session",
+        }),
+        engine.evaluateAccess({
+          toolName: "docs.ingest",
+          args: { sourceType: "url", source: "", backend: "firecrawl" },
+          agentId: "agent",
+          sessionId: "session",
+        }),
+        engine.evaluateAccess({
+          toolName: "browser.navigate",
+          args: { url: "" },
+          agentId: "agent",
+          sessionId: "session",
+        }),
+      ];
+
+      expect(evaluations.map((evaluation) => evaluation.allowed)).toEqual([true, true, true, true]);
+      expect(evaluations.every((evaluation) => evaluation.requiresApproval === false)).toBe(true);
+    } finally {
+      if (priorFirecrawlBaseUrl === undefined) {
+        delete process.env.FIRECRAWL_BASE_URL;
+      } else {
+        process.env.FIRECRAWL_BASE_URL = priorFirecrawlBaseUrl;
+      }
+    }
+  });
+
+  it("marks approved actions failed when policy still allows the request but execution fails", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-21T00:05:00.000Z"));
+    try {
+      const storage = createStorageStub();
+      vi.mocked(storage.pendingApprovalActions.find).mockReturnValue(
+        createPendingApprovalAction({
+          approvalId: "apr-custom-failure",
+          expiresAt: "2026-03-21T00:10:00.000Z",
+          request: {
+            toolName: "custom.allowed",
+            args: {},
+            agentId: "agent",
+            sessionId: "session",
+            taskId: "task-1",
+            dryRun: false,
+            consentContext: {
+              operatorId: "operator-1",
+              source: "agent",
+              reason: "preapproved",
+            },
+          },
+        }),
+      );
+      const engine = new ToolPolicyEngine(
+        {
+          ...policyConfig,
+          tools: {
+            ...policyConfig.tools,
+            approvalMode: "bypass",
+          },
+        },
+        storage,
+      );
+
+      const result = await engine.executeApprovedAction("apr-custom-failure");
+
+      expect(result).toMatchObject({
+        outcome: "blocked",
+        internalResult: {
+          outcome: "blocked",
+          errorKind: "execution_error",
+        },
+      });
+      expect(storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+        "apr-custom-failure",
+        "failed",
+        expect.objectContaining({
+          outcome: "blocked",
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

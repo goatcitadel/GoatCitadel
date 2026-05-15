@@ -132,18 +132,18 @@ const QUICKSTART_PRESETS = [
 
 type StepId = 0 | 1 | 2 | 3 | 4;
 
-function isAbortError(error: unknown): boolean {
+export function isAbortError(error: unknown): boolean {
   return (error as { name?: string } | null)?.name === "AbortError";
 }
 
-function readOnboardingActiveProvider(
+export function readOnboardingActiveProvider(
   state: OnboardingRuntimeState | null,
   providerId: string,
 ): OnboardingRuntimeState["settings"]["llm"]["providers"][number] | undefined {
   return state?.settings.llm.providers.find((provider) => provider.providerId === providerId);
 }
 
-function hasUnsavedOnboardingDraft(params: {
+export function hasUnsavedOnboardingDraft(params: {
   state: OnboardingRuntimeState | null;
   authMode: "none" | "token" | "basic";
   allowLoopbackBypass: boolean;
@@ -1366,14 +1366,14 @@ export function OnboardingPage({ onCompleted }: { onCompleted?: () => void } = {
   );
 }
 
-function parseMultiline(value: string): string[] {
+export function parseMultiline(value: string): string[] {
   return value
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
 }
 
-function matchAllowlistPreset(allowlist: string[]): string {
+export function matchAllowlistPreset(allowlist: string[]): string {
   for (const preset of ALLOWLIST_PRESETS) {
     if (preset.hosts.length !== allowlist.length) {
       continue;

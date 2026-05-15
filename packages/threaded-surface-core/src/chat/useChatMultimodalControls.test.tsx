@@ -110,7 +110,7 @@ function installWindow() {
 function Harness(props: {
   draft?: string;
   providerOptions?: (typeof openaiProvider)[];
-  selectedProviderId?: string;
+  selectedProviderId?: string | null;
   routePreflight?: any;
   selectedSessionId?: string | null;
   activeThreadSessionId?: string | null;
@@ -127,7 +127,7 @@ function Harness(props: {
   const noticesRef = React.useRef<Array<{ message: string; tone?: string }>>([]);
   const controls = useChatMultimodalControls({
     providerOptions: (props.providerOptions ?? [openaiProvider, googleProvider]) as never,
-    selectedProviderId: props.selectedProviderId ?? "openai",
+    selectedProviderId: props.selectedProviderId === undefined ? "openai" : (props.selectedProviderId ?? undefined),
     preferredImageProviderId: props.preferredImageProviderId,
     preferredImageModel: props.preferredImageModel,
     routePreflight: props.routePreflight ?? null,
@@ -461,6 +461,91 @@ describe("useChatMultimodalControls", () => {
     expect(latest!.controls.imageGenerationAvailable).toBe(false);
   });
 
+  it("covers route fallback selection, non-image attachments, null session voice start, and plain base64 reads", async () => {
+    class PlainBase64FileReader {
+      result: string | ArrayBuffer | null = "plainbase64";
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      readAsDataURL() {
+        this.onload?.();
+      }
+    }
+    Object.defineProperty(globalThis, "FileReader", {
+      configurable: true,
+      value: PlainBase64FileReader,
+    });
+
+    await act(async () => {
+      create(
+        <Harness
+          providerOptions={[openaiProvider] as never}
+          selectedProviderId={null}
+          selectedSessionId={null}
+          routePreflight={{ effectiveProviderId: undefined }}
+          pendingAttachments={[
+            {
+              attachmentId: "attachment-doc",
+              fileName: "notes.txt",
+              mimeType: "text/plain",
+              mediaType: "document",
+              sizeBytes: 10,
+              createdAt: "2026-05-01T00:00:00.000Z",
+            } as ChatAttachmentRecord,
+            {
+              attachmentId: "attachment-image",
+              fileName: "source.bin",
+              mimeType: "application/octet-stream",
+              mediaType: "image",
+              sizeBytes: 10,
+              createdAt: "2026-05-01T00:00:00.000Z",
+            } as ChatAttachmentRecord,
+          ]}
+        />,
+      );
+      await flushAsyncEffects();
+    });
+
+    expect(latest!.controls.imageEditAvailable).toBe(true);
+    await act(async () => {
+      await latest!.controls.handleToggleVoiceTalk();
+    });
+    expect(apiMocks.startVoiceTalkSession).toHaveBeenCalledWith({ mode: "push_to_talk", sessionId: undefined });
+
+    await act(async () => {
+      await expect(latest!.controls.handleEditImage()).resolves.toBe(true);
+    });
+    expect(apiMocks.generateLlmImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        referenceImages: [
+          {
+            bytesBase64: "plainbase64",
+            fileName: "input.png",
+            mimeType: "image/png",
+          },
+        ],
+      }),
+    );
+
+    await act(async () => {
+      create(
+        <Harness
+          pendingAttachments={[
+            {
+              attachmentId: "attachment-doc-only",
+              fileName: "notes.txt",
+              mimeType: "text/plain",
+              mediaType: "document",
+              sizeBytes: 10,
+              createdAt: "2026-05-01T00:00:00.000Z",
+            } as ChatAttachmentRecord,
+          ]}
+        />,
+      );
+      await flushAsyncEffects();
+    });
+    expect(latest!.controls.imageEditAvailable).toBe(false);
+  });
+
   it("covers voice runtime failures, unavailable states, cleanup, audio guards, and voice errors", async () => {
     apiMocks.fetchVoiceRuntimeStatus.mockRejectedValueOnce(new Error("voice down"));
     await act(async () => {
@@ -624,6 +709,48 @@ describe("useChatMultimodalControls", () => {
           pendingAttachments={[
             {
               attachmentId: "attachment-binary",
+              fileName: "source.png",
+              mimeType: "image/png",
+              mediaType: "image",
+              sizeBytes: 10,
+              createdAt: "2026-05-01T00:00:00.000Z",
+            } as ChatAttachmentRecord,
+          ]}
+        />,
+      );
+      await flushAsyncEffects();
+    });
+    await act(async () => {
+      await expect(latest!.controls.handleEditImage()).resolves.toBe(false);
+    });
+    expect(latest!.snapshot().errors).toContainEqual({
+      value: "Unable to read binary content.",
+      source: "image_edit",
+    });
+  });
+
+  it("reports FileReader errors while preparing image edit references", async () => {
+    class ErrorFileReader {
+      result: string | ArrayBuffer | null = null;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      readAsDataURL() {
+        this.onerror?.();
+      }
+    }
+    Object.defineProperty(globalThis, "FileReader", {
+      configurable: true,
+      value: ErrorFileReader,
+    });
+    await act(async () => {
+      create(
+        <Harness
+          draft="edit failure"
+          preferredImageProviderId="openai"
+          preferredImageModel="gpt-image-2"
+          pendingAttachments={[
+            {
+              attachmentId: "attachment-reader-error",
               fileName: "source.png",
               mimeType: "image/png",
               mediaType: "image",

@@ -69,23 +69,37 @@ vi.mock("../../hooks/useRefreshSubscription", () => ({
 
 let latest: ReturnType<typeof useChatDockWorkbenchController> | null = null;
 
-function Harness(props: { mode: "chat" | "cowork" | "code" }) {
+function Harness(props: {
+  mode: "chat" | "cowork" | "code";
+  selectedSession?: { projectId?: string | null } | null;
+  selectedTurn?: any;
+  thread?: any;
+  messages?: any[];
+  localNotices?: any[];
+  dockSectionOrder?: any[];
+}) {
   latest = useChatDockWorkbenchController({
     messageMode: props.mode,
     selectedSessionId: "session-1",
-    selectedSession: { projectId: "project-1" },
-    selectedTurn: {
-      turnId: "turn-1",
-      trace: {
-        orchestration: { phase: "active", runId: "orch-run-1", steps: [] },
-      },
-    } as any,
-    thread: {
-      turns: [],
-    } as any,
-    messages: [],
-    localNotices: [],
-    dockSectionOrder: ["workflow", "surface", "trace"],
+    selectedSession: props.selectedSession === undefined ? { projectId: "project-1" } : props.selectedSession,
+    selectedTurn:
+      props.selectedTurn === undefined
+        ? ({
+            turnId: "turn-1",
+            trace: {
+              orchestration: { phase: "active", runId: "orch-run-1", steps: [] },
+            },
+          } as any)
+        : props.selectedTurn,
+    thread:
+      props.thread === undefined
+        ? ({
+            turns: [],
+          } as any)
+        : props.thread,
+    messages: props.messages ?? [],
+    localNotices: props.localNotices ?? [],
+    dockSectionOrder: props.dockSectionOrder ?? ["workflow", "surface", "trace"],
   });
   return null;
 }
@@ -150,6 +164,64 @@ describe("useChatDockWorkbenchController", () => {
     expect(latest?.orchestrationRun?.durableRunId).toBe("durable-run-1");
     expect(latest?.orchestrationCheckpoints).toHaveLength(1);
     expect(latest?.orchestrationLoading).toBe(false);
+  });
+
+  it("clears orchestration state outside cowork mode or without a canonical run", async () => {
+    await act(async () => {
+      create(<Harness mode="chat" />);
+    });
+    expect(latest?.orchestrationRun).toBeNull();
+    expect(latest?.orchestrationCheckpoints).toEqual([]);
+    expect(latest?.orchestrationError).toBeNull();
+    expect(refreshSubscriptionMocks.options?.enabled).toBe(false);
+
+    await act(async () => {
+      create(
+        <Harness
+          mode="cowork"
+          selectedTurn={{ turnId: "turn-empty", trace: {} }}
+          thread={{ turns: [{ turnId: "turn-empty", trace: {} }] }}
+        />,
+      );
+    });
+    expect(platformMocks.fetchOrchestrationRun).not.toHaveBeenCalled();
+    expect(latest?.orchestrationRun).toBeNull();
+  });
+
+  it("falls back to thread orchestration, cowork items, project defaults, and dock ordering", async () => {
+    await act(async () => {
+      create(
+        <Harness
+          mode="cowork"
+          selectedSession={{ projectId: null }}
+          selectedTurn={{ turnId: "turn-selected", trace: {} }}
+          thread={{
+            turns: [
+              {
+                turnId: "turn-latest",
+                trace: {
+                  orchestration: {
+                    phase: "active",
+                    runId: "orch-run-1",
+                    steps: [{ id: "step-1", label: "Review", status: "running" }],
+                  },
+                },
+              },
+            ],
+          }}
+          messages={[{ messageId: "message-1", role: "assistant", content: "Working" }]}
+          localNotices={[{ id: "notice-1", content: "Queued", tone: "neutral" }]}
+          dockSectionOrder={["trace", "workflow"]}
+        />,
+      );
+    });
+
+    expect(latest?.activeWorkflowTurn?.turnId).toBe("turn-latest");
+    expect(latest?.latestOrchestration?.runId).toBe("orch-run-1");
+    expect(latest?.selectedSessionProjectValue).toBe("none");
+    expect(latest?.dockSectionStyle("trace" as any)).toEqual({ order: 0 });
+    expect(latest?.dockSectionStyle("surface" as any)).toEqual({ order: 0 });
+    expect(latest?.coworkItems.length).toBeGreaterThan(0);
   });
 
   it("refreshes orchestration state on chat refresh events while cowork is active", async () => {
@@ -262,5 +334,21 @@ describe("useChatDockWorkbenchController", () => {
     } finally {
       renderer?.unmount();
     }
+  });
+
+  it("reports a full orchestration refresh failure when run and checkpoints fail together", async () => {
+    await act(async () => {
+      create(<Harness mode="cowork" />);
+    });
+
+    platformMocks.fetchOrchestrationRun.mockRejectedValueOnce(new Error("run fetch failed"));
+    platformMocks.fetchOrchestrationRunCheckpoints.mockRejectedValueOnce(new Error("checkpoint fetch failed"));
+
+    await act(async () => {
+      await latest?.refreshOrchestrationRun();
+    });
+
+    expect(latest?.orchestrationError).toBe("Orchestration refresh failed while loading run data and checkpoints.");
+    expect(latest?.orchestrationLoading).toBe(false);
   });
 });

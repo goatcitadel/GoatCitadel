@@ -20,7 +20,7 @@ export function stripHtmlNoiseTags(input: string, tags: readonly string[]): stri
 
     const tagName = matchNoiseTag(lower, openTagIndex, tags);
     if (!tagName) {
-      output += input[openTagIndex] ?? "";
+      output += input[openTagIndex];
       cursor = openTagIndex + 1;
       continue;
     }

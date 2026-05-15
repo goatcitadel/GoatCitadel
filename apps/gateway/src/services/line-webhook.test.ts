@@ -14,11 +14,12 @@ describe("line webhook helpers", () => {
   });
 
   it("signs and verifies raw webhook payloads", () => {
-    const rawBody = Buffer.from("{\"destination\":\"U123\"}", "utf8");
+    const rawBody = Buffer.from('{"destination":"U123"}', "utf8");
     const signature = buildLineWebhookSignature(rawBody, "line-channel-secret");
 
     expect(verifyLineWebhookSignature(signature, rawBody, "line-channel-secret")).toBe(true);
     expect(verifyLineWebhookSignature("bad-signature", rawBody, "line-channel-secret")).toBe(false);
+    expect(verifyLineWebhookSignature(undefined, rawBody, "line-channel-secret")).toBe(false);
   });
 
   it("normalizes inbound text messages", () => {
@@ -90,6 +91,80 @@ describe("line webhook helpers", () => {
     });
   });
 
+  it("normalizes room, user, media, and malformed LINE messages without inventing content", () => {
+    expect(
+      normalizeLineWebhookPayload({
+        connectionId: "conn-line",
+        payload: {},
+      }),
+    ).toEqual({
+      kind: "ignore",
+      reason: "No LINE webhook events were present",
+    });
+
+    expect(
+      normalizeLineWebhookPayload({
+        connectionId: "conn-line",
+        payload: {
+          events: [
+            {
+              type: "message",
+              source: { type: "room", roomId: "Rroom123" },
+              message: { id: "media-1", type: "image" },
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      kind: "message",
+      actorId: "Rroom123",
+      room: "Rroom123",
+      content: "[line image]",
+      metadata: {
+        sourceType: "room",
+      },
+    });
+
+    expect(
+      normalizeLineWebhookPayload({
+        connectionId: "conn-line",
+        payload: {
+          events: [
+            {
+              type: "message",
+              source: { type: "user", userId: "Uuser123" },
+              message: { id: "sticker-1", type: "sticker" },
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      kind: "message",
+      actorId: "Uuser123",
+      peer: "Uuser123",
+      content: "[line sticker]",
+    });
+
+    expect(
+      normalizeLineWebhookPayload({
+        connectionId: "conn-line",
+        payload: {
+          events: [
+            {
+              type: "message",
+              source: { type: "user", userId: "Uuser123" },
+              message: { id: "unknown-1", type: "template" },
+            },
+          ],
+        },
+      }),
+    ).toEqual({
+      kind: "ignore",
+      eventType: "message",
+      reason: "Missing LINE actor, message id, or content",
+    });
+  });
+
   it("derives a stable idempotency key from the LINE webhook event id", () => {
     const payload = {
       events: [
@@ -102,12 +177,16 @@ describe("line webhook helpers", () => {
       ],
     };
 
-    expect(
-      deriveLineWebhookIdempotencyKey(
-        "conn-line",
-        payload,
-        Buffer.from(JSON.stringify(payload), "utf8"),
-      ),
-    ).toBe("line:conn-line:01HV5R0EVTQ6AY9QX4QFTRMNY9");
+    expect(deriveLineWebhookIdempotencyKey("conn-line", payload, Buffer.from(JSON.stringify(payload), "utf8"))).toBe(
+      "line:conn-line:01HV5R0EVTQ6AY9QX4QFTRMNY9",
+    );
+
+    const messageOnly = { events: [{ message: { id: "message-id" } }] };
+    expect(deriveLineWebhookIdempotencyKey("conn-line", messageOnly, Buffer.from("{}", "utf8"))).toBe(
+      "line:conn-line:message-id",
+    );
+    expect(deriveLineWebhookIdempotencyKey("conn-line", { events: [] }, Buffer.from("{}", "utf8"))).toMatch(
+      /^line:conn-line:/,
+    );
   });
 });

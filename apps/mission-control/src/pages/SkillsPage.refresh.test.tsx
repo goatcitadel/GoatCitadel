@@ -126,6 +126,32 @@ async function flush(): Promise<void> {
   });
 }
 
+function rendererText(renderer: ReactTestRenderer): string {
+  return JSON.stringify(renderer.toJSON());
+}
+
+function control(renderer: ReactTestRenderer, id: string) {
+  const node = renderer.root
+    .findAll(
+      (candidate) =>
+        (candidate.type === "input" || candidate.type === "select" || candidate.type === "textarea") &&
+        candidate.props.id === id,
+    )
+    .at(0);
+  if (!node) {
+    throw new Error(`Unable to find control ${id}`);
+  }
+  return node;
+}
+
+function button(renderer: ReactTestRenderer, label: string) {
+  const node = renderer.root.findAllByType("button").find((candidate) => candidate.props.children === label);
+  if (!node) {
+    throw new Error(`Unable to find button ${label}`);
+  }
+  return node;
+}
+
 describe("SkillsPage refresh discipline", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -208,6 +234,205 @@ describe("SkillsPage refresh discipline", () => {
       expect(apiMocks.fetchSkillActivationPolicies).toHaveBeenCalledTimes(1);
       expect(apiMocks.fetchSkillImportHistory).toHaveBeenCalledTimes(1);
       expect(renderer.root.findByProps({ placeholder: "Optional reason" }).props.value).toBe("Keep this local note");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("saves visible skill and policy forms, imports a source, and inspects review entries", async () => {
+    apiMocks.fetchCapabilityCatalog.mockResolvedValue({
+      scope: "inspectable",
+      items: [
+        {
+          capabilityId: "cap-browser",
+          kind: "candidate_skill",
+          title: "Browser Skill",
+          candidateId: "candidate-1",
+          lifecycleState: "candidate",
+          trustLabel: "Candidate",
+        },
+      ],
+    });
+    apiMocks.fetchCapabilityProposals.mockResolvedValue({
+      items: [
+        {
+          proposalId: "proposal-1",
+          title: "Promote Browser Skill",
+          proposalKind: "activation",
+          status: "pending",
+          summary: "Promote the browser skill.",
+          candidateId: "candidate-1",
+        },
+      ],
+    });
+    const sourceResult = {
+      canonicalKey: "clawhub:browser",
+      name: "Browser Skill",
+      description: "Browser automation",
+      tags: ["browser"],
+      skillFamily: "browser_automation",
+      sourceProvider: "clawhub",
+      alternateProviders: [],
+      sourceKind: "marketplace",
+      installability: "installable",
+      alreadyInstalled: false,
+      combinedScore: 0.91,
+      matchReason: "browser match",
+      sourceUrl: "https://example.test/browser",
+      repositoryUrl: undefined,
+      upstreamUrl: undefined,
+    };
+    apiMocks.fetchSkillLookup.mockResolvedValue({
+      items: [sourceResult],
+      providers: [{ provider: "clawhub", providerLabel: "ClawHub", status: "available", available: true }],
+      bestMatch: sourceResult,
+      parsedSource: undefined,
+    });
+    const validation = {
+      valid: true,
+      riskLevel: "low",
+      reviewDisposition: "installable",
+      inferredSkillName: "Browser Skill",
+      declaredTools: ["browser.search"],
+      networkSignals: [],
+      suspiciousSignals: [],
+      requires: [],
+      licenseFiles: ["LICENSE"],
+      nativeOverlaps: [],
+    };
+    apiMocks.validateSkillImport.mockResolvedValue(validation);
+    apiMocks.installSkillImport.mockResolvedValue({
+      installedSkillId: "skill-browser",
+      validation,
+    });
+    apiMocks.fetchCapabilityCandidate.mockResolvedValue({
+      candidateId: "candidate-1",
+      activeVersion: { versionId: "version-1" },
+      versions: [
+        {
+          versionId: "version-1",
+          title: "Browser Skill v1",
+          lifecycleState: "candidate",
+          updatedAt: "2026-05-14T00:00:00.000Z",
+          proofArtifact: { relPath: "proof.md" },
+          manifestArtifact: { relPath: "SKILL.md" },
+        },
+      ],
+      relatedProposals: [{ proposalId: "proposal-1", title: "Promote Browser Skill", status: "pending" }],
+      activationBlocked: false,
+      activationBlockers: [],
+      originatingRun: {
+        runId: "run-1",
+        sandbox: { available: false, failClosedReason: "sandbox unavailable" },
+      },
+    });
+    apiMocks.fetchCapabilityProposal.mockResolvedValue({
+      proposal: {
+        proposalId: "proposal-1",
+        title: "Promote Browser Skill",
+        proposalKind: "activation",
+        status: "pending",
+        summary: "Promote the browser skill.",
+        candidateId: "candidate-1",
+      },
+      candidate: null,
+      events: [
+        { eventId: "event-1", eventType: "created", actorId: "operator", createdAt: "2026-05-14T00:00:00.000Z" },
+      ],
+    });
+    apiMocks.updateSkillState.mockResolvedValue({});
+    apiMocks.patchSkillActivationPolicies.mockResolvedValue({
+      guardedAutoThreshold: 0.9,
+      requireFirstUseConfirmation: true,
+    });
+
+    let renderer: ReactTestRenderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<SkillsPage />);
+      });
+      await flush();
+
+      await act(async () => {
+        control(renderer, "selectedSkillState").props.onChange({ target: { value: "sleep" } });
+        control(renderer, "selectedSkillNote").props.onChange({ target: { value: "Needs guarded activation" } });
+      });
+      await act(async () => {
+        button(renderer, "Save").props.onClick();
+      });
+      await flush();
+
+      expect(apiMocks.updateSkillState).toHaveBeenCalledWith("skill-1", {
+        state: "sleep",
+        note: "Needs guarded activation",
+      });
+
+      await act(async () => {
+        control(renderer, "skillsThreshold").props.onChange({ target: { value: "0.9" } });
+      });
+      await act(async () => {
+        button(renderer, "Save policy").props.onClick();
+      });
+      await flush();
+
+      expect(apiMocks.patchSkillActivationPolicies).toHaveBeenCalledWith({
+        guardedAutoThreshold: 0.9,
+        requireFirstUseConfirmation: true,
+      });
+
+      await act(async () => {
+        control(renderer, "skillSourceQuery").props.onChange({ target: { value: "browser" } });
+      });
+      await act(async () => {
+        button(renderer, "Lookup").props.onClick();
+      });
+      await flush();
+
+      expect(apiMocks.fetchSkillLookup).toHaveBeenCalledWith({ q: "browser", limit: 25 });
+      expect(rendererText(renderer)).toContain("Best fit:");
+
+      await act(async () => {
+        control(renderer, "importSourceRef").props.onChange({ target: { value: "F:\\skills\\browser" } });
+      });
+      await act(async () => {
+        button(renderer, "Validate import").props.onClick();
+      });
+      await flush();
+      await act(async () => {
+        button(renderer, "Install (disabled by default)").props.onClick();
+      });
+      await flush();
+
+      expect(apiMocks.validateSkillImport).toHaveBeenCalledWith({
+        sourceRef: "F:\\skills\\browser",
+        sourceType: "local_path",
+        sourceProvider: "local",
+      });
+      expect(apiMocks.installSkillImport).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceRef: "F:\\skills\\browser",
+          confirmHighRisk: false,
+          force: false,
+        }),
+      );
+
+      const inspectButtons = renderer.root
+        .findAllByType("button")
+        .filter((candidate) => candidate.props.children === "Inspect");
+      await act(async () => {
+        inspectButtons[0]?.props.onClick();
+      });
+      await flush();
+      expect(rendererText(renderer)).toContain("Candidate detail");
+
+      await act(async () => {
+        inspectButtons[1]?.props.onClick();
+      });
+      await flush();
+
+      expect(apiMocks.fetchCapabilityCandidate).toHaveBeenCalledWith("candidate-1");
+      expect(apiMocks.fetchCapabilityProposal).toHaveBeenCalledWith("proposal-1");
+      expect(rendererText(renderer)).toContain("Proposal detail");
     } finally {
       renderer.unmount();
     }

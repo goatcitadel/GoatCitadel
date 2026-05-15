@@ -342,6 +342,15 @@ describe("streaming and HTTP helpers", () => {
     controller.abort();
     await expect(collectSsePayloads(sseStream(['data: {"type":"delta"}\n\n']), controller.signal)).resolves.toEqual([]);
 
+    const originalDomException = globalThis.DOMException;
+    vi.stubGlobal("DOMException", undefined);
+    const fallbackController = new AbortController();
+    fallbackController.abort();
+    await expect(
+      collectSsePayloads(sseStream(['data: {"type":"delta"}\n\n']), fallbackController.signal),
+    ).resolves.toEqual([]);
+    vi.stubGlobal("DOMException", originalDomException);
+
     await expect(collectSsePayloads(sseStream(['data: {"a":1}\ndata: {"b":2}\n\n']))).resolves.toEqual([
       '{"a":1}\n{"b":2}',
     ]);

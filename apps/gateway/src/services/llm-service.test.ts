@@ -5,9 +5,75 @@ import { describe, expect, it, vi } from "vitest";
 import type { LlmConfigFile } from "@goatcitadel/contracts";
 import { Agent, ProxyAgent } from "undici";
 import { LlmService } from "./llm-service.js";
-import { SecretStoreService } from "./secret-store-service.js";
+import { SecretStoreService, SecretStoreUnavailableError } from "./secret-store-service.js";
 
 describe("LlmService", () => {
+  it("rejects empty configs and unknown configured active providers", () => {
+    expect(
+      () =>
+        new LlmService(
+          {
+            activeProviderId: "",
+            providers: [],
+          },
+          process.env,
+          { secretStore: createNoopSecretStore() },
+        ),
+    ).toThrow(/must include at least one provider/i);
+
+    expect(
+      () =>
+        new LlmService(
+          {
+            activeProviderId: "missing",
+            providers: [
+              {
+                providerId: "openai",
+                label: "OpenAI",
+                baseUrl: "https://api.openai.com/v1",
+                apiStyle: "openai-chat-completions",
+                defaultModel: "gpt-4.1-mini",
+              },
+            ],
+          },
+          process.env,
+          { secretStore: createNoopSecretStore() },
+        ),
+    ).toThrow(/Unknown LLM provider: missing/);
+  });
+
+  it("rejects runtime provider calls until activation and then falls back to the provider default model", async () => {
+    const service = new LlmService(
+      {
+        activeProviderId: "",
+        providers: [
+          {
+            providerId: "openai",
+            label: "OpenAI",
+            baseUrl: "https://api.openai.com/v1",
+            apiStyle: "openai-chat-completions",
+            defaultModel: "gpt-4.1-mini",
+          },
+        ],
+      },
+      process.env,
+      { secretStore: createNoopSecretStore() },
+    );
+
+    await expect(service.listModels()).rejects.toThrow(/No active LLM provider/);
+    await expect(
+      service.chatCompletions({
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    ).rejects.toThrow(/No active LLM provider/);
+    await expect(service.listModels("missing")).rejects.toThrow(/Unknown LLM provider: missing/);
+
+    expect(service.updateRuntimeConfig({ activeProviderId: "openai" })).toMatchObject({
+      activeProviderId: "openai",
+      activeModel: "gpt-4.1-mini",
+    });
+  });
+
   it("blocks private metadata endpoints as provider baseUrl", () => {
     const config: LlmConfigFile = {
       activeProviderId: "bad",
@@ -1691,6 +1757,53 @@ describe("LlmService", () => {
     expect(requestUrl).toBe("https://api.openai.com/v1/models");
   });
 
+  it("updates the outbound network allowlist and can disable enforcement at runtime", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-4.1-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, {
+      secretStore: createNoopSecretStore(),
+      networkAllowlist: ["example.com"],
+    });
+    await expect(service.listModels()).rejects.toThrowError(/allowlist/i);
+
+    const originalFetch = globalThis.fetch;
+    let requestUrl = "";
+    globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+      requestUrl = String(url);
+      return new Response(
+        JSON.stringify({
+          data: [{ id: "gpt-4.1-mini", object: "model", created: 0, owned_by: "openai" }],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      service.updateNetworkAllowlist(["api.openai.com"]);
+      await expect(service.listModels()).resolves.toEqual([expect.objectContaining({ id: "gpt-4.1-mini" })]);
+      expect(requestUrl).toBe("https://api.openai.com/v1/models");
+
+      service.updateNetworkAllowlist(["example.com"], { enforce: false });
+      await expect(service.listModels()).resolves.toEqual([expect.objectContaining({ id: "gpt-4.1-mini" })]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("probes keychain only for the active provider when building runtime settings", () => {
     const config: LlmConfigFile = {
       activeProviderId: "openai",
@@ -1739,6 +1852,39 @@ describe("LlmService", () => {
     });
     expect(secretStore.getCalls()).toBe(2);
     expect(explicitMoonshot.apiKeySource).toBe("keychain");
+  });
+
+  it("clears inline provider API keys without touching keychain-backed providers", () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-4.1-mini",
+          apiKey: "inline-secret",
+        },
+        {
+          providerId: "moonshot",
+          label: "Moonshot",
+          baseUrl: "https://api.moonshot.ai/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "kimi-k2.5",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    expect(service.getProviderSecretStatus("openai", { includeKeychain: false }).apiKeySource).toBe("inline");
+
+    service.clearInlineProviderApiKey("moonshot");
+    expect(service.getProviderSecretStatus("moonshot", { includeKeychain: false }).apiKeySource).toBe("none");
+
+    service.clearInlineProviderApiKey("openai");
+    expect(service.getProviderSecretStatus("openai", { includeKeychain: false }).apiKeySource).toBe("none");
+    expect(() => service.clearInlineProviderApiKey("missing")).toThrowError(/Unknown LLM provider/);
   });
 
   it("does not probe the keychain when resolving execution api style", () => {
@@ -3104,6 +3250,119 @@ describe("LlmService", () => {
 
     expect(dispatcher).toBeInstanceOf(Agent);
     expect(dispatcher).not.toBeInstanceOf(ProxyAgent);
+  });
+
+  it("stores submitted provider keys in the secret store and clears plaintext runtime config", () => {
+    const secretStore = createTrackedSecretStore({});
+    const service = new LlmService(
+      {
+        activeProviderId: "openai",
+        providers: [
+          {
+            providerId: "openai",
+            label: "OpenAI",
+            baseUrl: "https://api.openai.com/v1",
+            apiStyle: "openai-responses",
+            defaultModel: "gpt-5.4-mini",
+          },
+        ],
+      },
+      process.env,
+      { secretStore },
+    );
+
+    const runtime = service.updateRuntimeConfig({
+      upsertProvider: {
+        providerId: "openai",
+        apiKey: " sk-live ",
+      },
+    });
+
+    expect(secretStore.getProviderApiKey("openai")).toBe("sk-live");
+    expect(runtime.providers[0]).toMatchObject({
+      providerId: "openai",
+      hasApiKey: true,
+      apiKeySource: "keychain",
+    });
+    expect(service.exportConfigFile().providers[0]?.apiKey).toBeUndefined();
+  });
+
+  it("reports keychain failures and rejects active model selection without a provider", () => {
+    const unavailableSecretStore = {
+      ...createNoopSecretStore(),
+      setProviderApiKey: () => {
+        throw new SecretStoreUnavailableError("PasswordVault unavailable");
+      },
+    } as SecretStoreService;
+    const service = new LlmService(
+      {
+        activeProviderId: "",
+        providers: [
+          {
+            providerId: "openai",
+            label: "OpenAI",
+            baseUrl: "https://api.openai.com/v1",
+            apiStyle: "openai-responses",
+            defaultModel: "gpt-5.4-mini",
+          },
+        ],
+      },
+      process.env,
+      { secretStore: unavailableSecretStore },
+    );
+
+    expect(() => service.setProviderApiKey("openai", "sk-live")).toThrow(/Secure keychain is unavailable/);
+    expect(() => service.updateRuntimeConfig({ activeModel: "gpt-5.4-mini" })).toThrow(
+      "Select an active LLM provider before choosing a model.",
+    );
+
+    expect(service.updateRuntimeConfig({ activeModel: "   " })).toMatchObject({
+      activeProviderId: "",
+      activeModel: "",
+    });
+  });
+
+  it("falls back to default model catalogs when provider model discovery fails or returns empty", async () => {
+    const service = new LlmService(
+      {
+        activeProviderId: "openai",
+        providers: [
+          {
+            providerId: "openai",
+            label: "OpenAI",
+            baseUrl: "https://api.openai.com/v1",
+            apiStyle: "openai-responses",
+            defaultModel: "gpt-5.4-mini",
+            apiKey: "inline-key",
+          },
+        ],
+      },
+      process.env,
+      { secretStore: createNoopSecretStore() },
+    );
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("models offline");
+    }) as unknown as typeof fetch;
+
+    try {
+      await expect(service.listModelsWithSource("openai")).resolves.toMatchObject({
+        source: "error_fallback",
+        warning: "models offline",
+        items: expect.arrayContaining([expect.objectContaining({ id: "gpt-5.4-mini" })]),
+      });
+
+      globalThis.fetch = vi.fn(
+        async () => new Response(JSON.stringify({ data: [] }), { status: 200 }),
+      ) as unknown as typeof fetch;
+      await expect(service.listModelsWithSource("openai")).resolves.toMatchObject({
+        source: "template_fallback",
+        warning: "Provider returned no models. Falling back to GoatCitadel's provider template.",
+        items: expect.arrayContaining([expect.objectContaining({ id: "gpt-5.4-mini" })]),
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 

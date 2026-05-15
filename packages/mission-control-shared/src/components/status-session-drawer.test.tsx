@@ -221,6 +221,41 @@ describe("status/session/drawer components", () => {
     expect(renderer.root.findAllByProps({ className: "chat-v11-empty-item" })).toHaveLength(2);
   });
 
+  it("renders chat-mode session metadata without cowork or code framing", () => {
+    const renderer = create(
+      <ChatSessionRail
+        missionSessions={[
+          {
+            sessionId: "mission-chat",
+            projectName: "Atlas",
+            lastActivityAt: "2026-01-01T11:45:00.000Z",
+          },
+        ]}
+        externalSessions={[
+          {
+            sessionId: "external-chat",
+            channel: "Discord",
+            account: "ops",
+            lastActivityAt: "2025-12-30T12:00:00.000Z",
+          },
+        ]}
+        selectedSessionId={null}
+        selectedTag={null}
+        onSelectSession={vi.fn()}
+        onSelectTag={vi.fn()}
+        renderSessionLabel={(sessionId) => `Session ${sessionId}`}
+        mode="chat"
+      />,
+    );
+
+    const renderedText = JSON.stringify(renderer.toJSON());
+    expect(renderedText).toContain("15m ago");
+    expect(renderedText).toContain("Discord / ops");
+    expect(renderedText).toContain("2d ago");
+    expect(renderedText).not.toContain("Task ready");
+    expect(renderedText).not.toContain("Readback context");
+  });
+
   it("renders drawer controls, closed state, and drag guard behavior", () => {
     const onClose = vi.fn();
     const onTogglePinned = vi.fn();

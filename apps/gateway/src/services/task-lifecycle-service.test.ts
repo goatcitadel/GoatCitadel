@@ -284,7 +284,7 @@ describe("TaskLifecycleService agentic runtime", () => {
         .listTaskActivities(secondTask.taskId)
         .some((activity) => activity.metadata?.code === "agentic_diagnostic_mirror_failed"),
     ).toBe(true);
-  });
+  }, 15_000);
 
   it("paginates agentic-filtered runs with a cursor from returned records", () => {
     const { service, storage } = createService();

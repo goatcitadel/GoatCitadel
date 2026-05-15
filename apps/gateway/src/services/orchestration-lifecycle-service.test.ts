@@ -8,6 +8,7 @@ import {
   getRun as getOrchestrationRun,
   runOrchestrationPlan,
   type OrchestrationLifecycleHost,
+  type OrchestrationLifecycleRuntimeDeps,
 } from "./orchestration-lifecycle-service.js";
 
 function buildPlan(): OrchestrationPlan {
@@ -191,37 +192,54 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
       };
       return durableRun;
     }),
-    allocateOrchestrationWorktree: vi.fn(async () => ({
-      worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
-      worktreeStatus: "ready" as const,
-      worktreeBaseRef: "HEAD",
-    })),
-    executeOrchestrationPhase: vi.fn(async () => ({
-      phaseId: "phase-1",
-      ownerAgentId: "agent-1",
-      status: "completed" as const,
-      startedAt: "2026-04-12T00:00:01.000Z",
-      finishedAt: "2026-04-12T00:00:02.000Z",
-      outputSummary: "Phase completed",
-      outputText: "Phase completed",
-      childSessionId: "sess_phase",
-      childTurnId: "turn_phase",
-      costUsd: 0.5,
-      inputTokens: 10,
-      outputTokens: 20,
-    })),
-    releaseOrchestrationWorktree: vi.fn(async () => undefined),
     recordDurableTimelineEvent: vi.fn(),
     ...overrides,
+  };
+}
+
+type RuntimeDepsOverrides = {
+  worktrees?: Partial<OrchestrationLifecycleRuntimeDeps["worktrees"]>;
+  phaseExecutor?: Partial<OrchestrationLifecycleRuntimeDeps["phaseExecutor"]>;
+};
+
+function createRuntimeDeps(overrides: RuntimeDepsOverrides = {}): OrchestrationLifecycleRuntimeDeps {
+  return {
+    worktrees: {
+      allocate: vi.fn(async () => ({
+        worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+        worktreeStatus: "ready" as const,
+        worktreeBaseRef: "HEAD",
+      })),
+      release: vi.fn(async () => undefined),
+      ...overrides.worktrees,
+    },
+    phaseExecutor: {
+      execute: vi.fn(async () => ({
+        phaseId: "phase-1",
+        ownerAgentId: "agent-1",
+        status: "completed" as const,
+        startedAt: "2026-04-12T00:00:01.000Z",
+        finishedAt: "2026-04-12T00:00:02.000Z",
+        outputSummary: "Phase completed",
+        outputText: "Phase completed",
+        childSessionId: "sess_phase",
+        childTurnId: "turn_phase",
+        costUsd: 0.5,
+        inputTokens: 10,
+        outputTokens: 20,
+      })),
+      ...overrides.phaseExecutor,
+    },
   };
 }
 
 describe("orchestration-lifecycle-service", () => {
   it("creates a run with durable and worktree ownership", async () => {
     const host = createHost();
+    const runtime = createRuntimeDeps();
     const plan = buildPlan();
 
-    const result = await createOrchestrationPlan(host, plan);
+    const result = await createOrchestrationPlan(host, runtime, plan);
 
     expect(result.runId).toBe("run-1");
     expect(result.durableRunId).toBe("durable-run-1");
@@ -229,7 +247,7 @@ describe("orchestration-lifecycle-service", () => {
     expect(host.storage.orchestration.upsertPlan).toHaveBeenCalledWith(plan);
     expect(host.createDurableRun).toHaveBeenCalled();
     expect(host.pauseDurableRun).toHaveBeenCalledWith("durable-run-1", "orchestration");
-    expect(host.allocateOrchestrationWorktree).toHaveBeenCalled();
+    expect(runtime.worktrees.allocate).toHaveBeenCalled();
     expect(host.createCheckpoint).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "run-1",
@@ -257,8 +275,9 @@ describe("orchestration-lifecycle-service", () => {
 
   it("queues plans for durable execution and schedules orchestration memory context when enabled", async () => {
     const host = createHost();
+    const runtime = createRuntimeDeps();
 
-    const result = await runOrchestrationPlan(host, "plan-1");
+    const result = await runOrchestrationPlan(host, runtime, "plan-1");
 
     expect(result.status).toBe("queued");
     expect(result.executionState).toBe("queued");
@@ -290,13 +309,16 @@ describe("orchestration-lifecycle-service", () => {
   });
 
   it("marks orchestration runs failed when worktree allocation fails", async () => {
-    const host = createHost({
-      allocateOrchestrationWorktree: vi.fn(async () => {
-        throw new Error("worktree allocation unavailable");
-      }),
+    const host = createHost();
+    const runtime = createRuntimeDeps({
+      worktrees: {
+        allocate: vi.fn(async () => {
+          throw new Error("worktree allocation unavailable");
+        }),
+      },
     });
 
-    const result = await createOrchestrationPlan(host, buildPlan());
+    const result = await createOrchestrationPlan(host, runtime, buildPlan());
 
     expect(result.status).toBe("failed");
     expect(result.executionState).toBe("failed");
@@ -539,13 +561,14 @@ describe("orchestration-lifecycle-service", () => {
         },
       } as OrchestrationLifecycleHost["storage"],
     });
+    const runtime = createRuntimeDeps();
 
     const durableRun = host.getDurableRun("durable-run-1");
-    const result = await executeDurableOrchestrationRun(host, durableRun);
+    const result = await executeDurableOrchestrationRun(host, runtime, durableRun);
 
     expect(result.outcome).toBe("paused");
     expect(host.orchestrationEngine.startRun).toHaveBeenCalled();
-    expect(host.executeOrchestrationPhase).toHaveBeenCalledWith(
+    expect(runtime.phaseExecutor.execute).toHaveBeenCalledWith(
       expect.objectContaining({
         phase: expect.objectContaining({ phaseId: "phase-1" }),
         run: expect.objectContaining({ currentPhaseId: "phase-1" }),

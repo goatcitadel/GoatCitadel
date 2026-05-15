@@ -34,8 +34,30 @@ describe("ChatPendingApprovalPanel", () => {
 
     await act(async () => {
       renderer.update(
+        <ChatPendingApprovalPanel pendingApproval={null} pending={false} onApprove={onApprove} onDeny={onDeny} />,
+      );
+    });
+
+    expect(renderer.toJSON()).toBeNull();
+  });
+
+  it("routes approval scopes, denial, and workspace confirmation decisions", async () => {
+    const onApprove = vi.fn();
+    const onDeny = vi.fn();
+    let renderer: ReactTestRenderer = create(<div />);
+
+    await act(async () => {
+      renderer = create(
         <ChatPendingApprovalPanel
-          pendingApproval={null}
+          pendingApproval={{
+            approvalId: "approval-2",
+            kind: "tool",
+            toolName: "filesystem.write",
+            reason: "Write release notes",
+            riskLevel: "caution",
+            affectedResources: ["README.md"],
+          }}
+          workspaceId="workspace-1"
           pending={false}
           onApprove={onApprove}
           onDeny={onDeny}
@@ -43,6 +65,29 @@ describe("ChatPendingApprovalPanel", () => {
       );
     });
 
-    expect(renderer.toJSON()).toBeNull();
+    const clickButton = async (label: string) => {
+      const button = renderer.root.findAllByType("button").find((candidate) => candidate.props.children === label);
+      expect(button).toBeDefined();
+      await act(async () => {
+        button?.props.onClick?.();
+      });
+    };
+
+    await clickButton("Allow once");
+    await clickButton("Allow in session");
+    await clickButton("Allow in workspace");
+    expect(JSON.stringify(renderer.toJSON())).toContain("Workspace allow is broader than session allow");
+
+    await clickButton("Cancel");
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("Workspace allow is broader than session allow");
+
+    await clickButton("Allow in workspace");
+    await clickButton("Confirm workspace allow");
+    await clickButton("Deny");
+
+    expect(onApprove).toHaveBeenNthCalledWith(1, "once");
+    expect(onApprove).toHaveBeenNthCalledWith(2, "session");
+    expect(onApprove).toHaveBeenNthCalledWith(3, "workspace");
+    expect(onDeny).toHaveBeenCalledTimes(1);
   });
 });

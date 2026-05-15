@@ -507,6 +507,151 @@ describe("EventIngestService", () => {
     );
   });
 
+  it("continues a fresh ingest when the pending insert loses without a visible concurrent row", async () => {
+    const session: SessionMeta = {
+      sessionId: "sess_plain",
+      sessionKey: "chat:local:operator",
+      kind: "dm",
+      channel: "chat",
+      account: "local",
+      lastActivityAt: "2026-03-22T00:00:00.000Z",
+      updatedAt: "2026-03-22T00:00:00.000Z",
+      health: "healthy",
+      tokenInput: 0,
+      tokenOutput: 0,
+      tokenCachedInput: 0,
+      tokenTotal: 0,
+      costUsdTotal: 0,
+      budgetState: "ok",
+    };
+    const storage = {
+      runImmediateTransaction: vi.fn((callback: () => unknown) => callback()),
+      idempotency: {
+        find: vi.fn(() => undefined),
+        insertPendingIfAbsent: vi.fn(() => false),
+        markProcessed: vi.fn(),
+      },
+      sessions: {
+        upsert: vi.fn(),
+        getBySessionId: vi.fn(() => session),
+        applyUsage: vi.fn(),
+      },
+      chatMessages: {
+        upsert: vi.fn(),
+      },
+      costLedger: {
+        insert: vi.fn(),
+      },
+      transcriptOutbox: {
+        enqueue: vi.fn(),
+        listPending: vi.fn(() => []),
+      },
+      transcripts: {
+        append: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const service = new EventIngestService(storage);
+    const result = await service.ingest({
+      endpoint: "/api/v1/gateway/events",
+      idempotencyKey: "idem-plain",
+      payload: {
+        ...buildPayload(),
+        eventId: "evt-plain",
+        message: {
+          role: "user",
+          content: { text: "object content falls back to empty text" } as never,
+          parts: { bad: true } as never,
+          attachments: { bad: true } as never,
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ accepted: true, deduped: false, transcriptOffset: 0 });
+    expect(storage.idempotency.find).toHaveBeenCalledTimes(2);
+    expect(storage.sessions.upsert).toHaveBeenCalledTimes(1);
+    expect(storage.chatMessages.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: "user",
+        content: "",
+        parts: undefined,
+        attachments: undefined,
+      }),
+    );
+  });
+
+  it("flushes each pending session only once when multiple rows share a session", async () => {
+    const firstEvent = {
+      eventId: "evt-a",
+      sessionId: "sess_shared",
+      sessionKey: "chat:local:operator",
+      timestamp: "2026-03-22T00:00:00.000Z",
+      actionId: "action-a",
+      idempotencyKey: "idem-a",
+      type: "message.user",
+      actorType: "user",
+      actorId: "operator",
+      payload: { message: { role: "user", content: "a" } },
+    } as TranscriptEvent;
+    const secondEvent = {
+      ...firstEvent,
+      eventId: "evt-b",
+      actionId: "action-b",
+      idempotencyKey: "idem-b",
+    } as TranscriptEvent;
+    const storage = {
+      transcriptOutbox: {
+        listPending: vi
+          .fn()
+          .mockReturnValueOnce([
+            {
+              eventId: firstEvent.eventId,
+              sessionId: firstEvent.sessionId,
+              event: firstEvent,
+              enqueuedAt: firstEvent.timestamp,
+              attemptCount: 0,
+            },
+            {
+              eventId: secondEvent.eventId,
+              sessionId: secondEvent.sessionId,
+              event: secondEvent,
+              enqueuedAt: secondEvent.timestamp,
+              attemptCount: 0,
+            },
+          ])
+          .mockReturnValueOnce([
+            {
+              eventId: firstEvent.eventId,
+              sessionId: firstEvent.sessionId,
+              event: firstEvent,
+              enqueuedAt: firstEvent.timestamp,
+              attemptCount: 0,
+            },
+            {
+              eventId: secondEvent.eventId,
+              sessionId: secondEvent.sessionId,
+              event: secondEvent,
+              enqueuedAt: secondEvent.timestamp,
+              attemptCount: 0,
+            },
+          ]),
+        markDelivered: vi.fn(),
+      },
+      transcripts: {
+        append: vi.fn().mockResolvedValueOnce(1).mockResolvedValueOnce(2),
+      },
+      costLedger: {
+        insert: vi.fn(),
+      },
+    } as unknown as Storage;
+
+    const service = new EventIngestService(storage);
+
+    await expect(service.flushPendingTranscriptOutbox()).resolves.toBe(2);
+    expect(storage.transcriptOutbox.listPending).toHaveBeenNthCalledWith(2, 200, "sess_shared");
+    expect(storage.transcripts.append).toHaveBeenCalledTimes(2);
+  });
+
   it("stops outbox flush after non-Error append failures", async () => {
     const event = {
       eventId: "evt-fail",

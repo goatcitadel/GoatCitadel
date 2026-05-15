@@ -226,6 +226,7 @@ describe("OfficeCanvas coverage", () => {
   });
 
   it("renders command bridge scene with procedural geometry", async () => {
+    const onSelect = vi.fn();
     let renderer = create(<div />);
     await act(async () => {
       renderer = create(
@@ -233,7 +234,7 @@ describe("OfficeCanvas coverage", () => {
           operator={operator}
           agents={agents}
           selectedEntityId="agent-1"
-          onSelect={() => undefined}
+          onSelect={onSelect}
           assetPack={{ operatorModelPath: "/assets/operator.glb", goatModelPath: "/assets/goat.glb" }}
           motionMode="cinematic"
           focusMode={false}
@@ -252,8 +253,12 @@ describe("OfficeCanvas coverage", () => {
     });
     runFrameCallbacks();
     await act(async () => {
-      renderer.root.findByType("div").props.onClick?.();
+      renderer.root
+        .findAllByType("div")
+        .find((node) => typeof node.props.onClick === "function")
+        ?.props.onClick();
     });
+    expect(onSelect).toHaveBeenCalledWith("operator");
     expect(renderer.toJSON()).toBeTruthy();
     renderer.unmount();
   });
@@ -439,6 +444,39 @@ describe("OfficeCanvas coverage", () => {
       );
     });
     runFrameCallbacks(6);
+    expect(renderer.toJSON()).toBeTruthy();
+    renderer.unmount();
+  });
+
+  it("keeps animation frames safe when three refs are not attached", async () => {
+    let renderer = create(<div />);
+    await act(async () => {
+      renderer = create(
+        <OfficeCanvas
+          operator={{ ...operator, preset: "trailblazer", activityState: "transitioning_to_desk" }}
+          agents={[
+            { ...silhouetteAgents[0]!, activityState: "transitioning_to_desk", attentionLevel: "watch" },
+            { ...silhouetteAgents[1]!, activityState: "working_seated", attentionLevel: "stable" },
+            { ...silhouetteAgents[2]!, activityState: "collaborating", attentionLevel: "priority" },
+          ]}
+          selectedEntityId="r3-ko8c"
+          onSelect={() => undefined}
+          motionMode="balanced"
+          focusMode={false}
+          quietMode={false}
+          followSelection={false}
+          sceneBusy={false}
+          showCollabOverlay
+          idleMillingEnabled
+          collaborationEdges={[]}
+          zoneTelemetry={fullZoneTelemetry}
+          activityLanes={[]}
+          signalRoutes={[]}
+        />,
+      );
+    });
+
+    expect(() => runFrameCallbacks(8.4)).not.toThrow();
     expect(renderer.toJSON()).toBeTruthy();
     renderer.unmount();
   });

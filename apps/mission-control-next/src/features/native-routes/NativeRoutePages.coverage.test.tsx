@@ -1,6 +1,12 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { NativeRoutePages } from "./NativeRoutePages";
+import {
+  getErrorMessage,
+  NativeRoutePages,
+  readPayloadEvidenceRefs,
+  readPayloadPath,
+  readPayloadString,
+} from "./NativeRoutePages";
 
 const routeMocks = vi.hoisted(() => {
   const fn = (value: unknown = {}) => vi.fn(async () => value);
@@ -548,9 +554,13 @@ function exactButton(root: ReactTestInstance, label: string) {
 }
 
 function field(root: ReactTestInstance, label: string, control: "input" | "textarea" | "select") {
-  const wrapper = root.findAll((node) => node.type === "label" && collectText(node).includes(label))[0];
+  return fieldAt(root, label, control, 0);
+}
+
+function fieldAt(root: ReactTestInstance, label: string, control: "input" | "textarea" | "select", index: number) {
+  const wrapper = root.findAll((node) => node.type === "label" && collectText(node).includes(label))[index];
   if (!wrapper) {
-    throw new Error(`Missing field ${label}`);
+    throw new Error(`Missing field ${label} at index ${index}`);
   }
   return wrapper.findByType(control);
 }
@@ -575,14 +585,66 @@ beforeEach(() => {
 });
 
 describe("NativeRoutePages library coverage", () => {
+  it("normalizes capability proposal payload helpers defensively", () => {
+    const payload = {
+      observedIssue: "  Repeated model fallback  ",
+      nested: { score: 0.82, empty: "   " },
+      evidenceRefs: [
+        {
+          refType: "skill_evaluation_run",
+          refId: "eval-1",
+          hash: "abc123",
+          metadata: { passRate: 0.82 },
+        },
+        { refType: "memory_item" },
+        ["bad"],
+        null,
+      ],
+    };
+
+    expect(readPayloadString(payload, ["nested.empty", "observedIssue"])).toBe("Repeated model fallback");
+    expect(readPayloadString(payload, ["nested.score"])).toBe("0.82");
+    expect(readPayloadString(payload, ["missing", "nested.empty"])).toBeUndefined();
+    expect(readPayloadString(null, ["observedIssue"])).toBeUndefined();
+    expect(readPayloadPath(payload, "nested.score")).toBe(0.82);
+    expect(readPayloadPath(null, "nested.score")).toBeUndefined();
+    expect(readPayloadPath(["bad"], "nested.score")).toBeUndefined();
+    expect(readPayloadPath({ nested: [] }, "nested.score")).toBeUndefined();
+    expect(readPayloadEvidenceRefs(payload)).toEqual([
+      {
+        refType: "skill_evaluation_run",
+        refId: "eval-1",
+        hash: "abc123",
+        metadata: { passRate: 0.82 },
+      },
+    ]);
+    expect(readPayloadEvidenceRefs({ evidenceRefs: "bad" })).toEqual([]);
+    expect(readPayloadEvidenceRefs({ evidenceRefs: [{ refType: "run", refId: "eval-2", metadata: [] }] })).toEqual([
+      { refType: "run", refId: "eval-2", hash: undefined, metadata: undefined },
+    ]);
+    expect(getErrorMessage(new Error("Gateway offline"))).toBe("Gateway offline");
+    expect(getErrorMessage(new Error(""))).toBe("Something went wrong.");
+    expect(getErrorMessage("plain failure")).toBe("Something went wrong.");
+  });
+
   it("covers agent profile maintenance and route dispatch fallbacks", async () => {
     const navigate = vi.fn();
     const agents = await mount("library", "agents", { navigate });
     expect(collectText(agents.root)).toContain("Agent profiles");
+    await click(findButton(agents.root, "Architect"));
+    await click(findButton(agents.root, "Refresh"));
+    await change(field(agents.root, "Specialties", "input"), "architecture, test coverage");
+    await change(field(agents.root, "Aliases", "input"), "design, review");
+    await change(field(agents.root, "Default tools", "input"), "browser.search, shell.run");
     await click(findButton(agents.root, "Save changes"));
     expect(routeMocks.updateAgentProfile).toHaveBeenCalledWith(
       "agent-1",
-      expect.objectContaining({ name: "Architect" }),
+      expect.objectContaining({
+        name: "Architect",
+        specialties: ["architecture", "test coverage"],
+        aliases: ["design", "review"],
+        defaultTools: ["browser.search", "shell.run"],
+      }),
     );
     await click(findButton(agents.root, "Archive"));
     expect(routeMocks.archiveAgentProfile).toHaveBeenCalledWith("agent-1");
@@ -639,6 +701,9 @@ describe("NativeRoutePages library coverage", () => {
     const files = await mount("library", "files");
     await flush();
     expect(collectText(files.root)).toContain("Workspace files");
+    await change(files.root.findByProps({ placeholder: "Search relative path" }), "brief");
+    expect(collectText(files.root)).toContain("docs/brief.md");
+    await change(field(files.root, "Template", "select"), "brief");
     await change(files.root.findByProps({ placeholder: "Optional target path override" }), "docs/new-brief.md");
     await click(findButton(files.root, "Create file"));
     expect(routeMocks.createFileFromTemplate).toHaveBeenCalledWith("brief", "docs/new-brief.md");
@@ -659,6 +724,11 @@ describe("NativeRoutePages library coverage", () => {
     expect(collectText(cowork.root)).toContain("Task board");
     expect(collectText(cowork.root)).toContain("Plan coverage");
 
+    routeMocks.fetchTasksByView.mockClear();
+    await click(findButton(cowork.root, "Refresh"));
+    expect(routeMocks.fetchTasksByView).toHaveBeenCalledWith("active", undefined, "default");
+    expect(routeMocks.fetchTasksByView).toHaveBeenCalledWith("trash", undefined, "default");
+
     await click(findButton(cowork.root, "Create task"));
     expect(collectText(cowork.root)).toContain("Task title is required.");
 
@@ -672,11 +742,17 @@ describe("NativeRoutePages library coverage", () => {
 
     await change(field(cowork.root, "Title", "input"), "Plan coverage updated");
     await change(field(cowork.root, "Status", "select"), "testing");
-    await change(field(cowork.root, "Priority", "select"), "urgent");
+    await change(fieldAt(cowork.root, "Priority", "select", 1), "urgent");
+    await change(fieldAt(cowork.root, "Description", "textarea", 1), "Updated coverage plan.");
     await click(findButton(cowork.root, "Save task"));
     expect(routeMocks.updateTask).toHaveBeenCalledWith(
       "task-planning",
-      expect.objectContaining({ title: "Plan coverage updated", status: "testing", priority: "normal" }),
+      expect.objectContaining({
+        title: "Plan coverage updated",
+        description: "Updated coverage plan.",
+        status: "testing",
+        priority: "urgent",
+      }),
     );
 
     await click(findButton(cowork.root, "Add deliverable"));
@@ -733,10 +809,15 @@ describe("NativeRoutePages library coverage", () => {
     await click(findButton(skills.root, "Generate scenarios"));
     expect(routeMocks.previewSkillEvaluation).toHaveBeenCalledWith("skill-1");
 
+    await change(field(skills.root, "Scenarios", "textarea"), "Traceability | Prove the source | Evidence is cited");
+    await change(field(skills.root, "Criteria", "textarea"), "Grounded | Uses citations | evidence, source");
     await click(findButton(skills.root, "Run baseline"));
     expect(routeMocks.previewSkillEvaluation).toHaveBeenCalledWith(
       "skill-1",
-      expect.objectContaining({ scenarios: expect.any(Array), criteria: expect.any(Array) }),
+      expect.objectContaining({
+        scenarios: [{ title: "Traceability", prompt: "Prove the source", expectedOutcome: "Evidence is cited" }],
+        criteria: [{ label: "Grounded", description: "Uses citations", requiredTerms: ["evidence", "source"] }],
+      }),
     );
 
     await click(findButton(skills.root, "Run improvement"));
@@ -787,5 +868,92 @@ describe("NativeRoutePages library coverage", () => {
       "candidate-1",
       expect.objectContaining({ reason: expect.stringContaining("promote") }),
     );
+
+    setupResponses();
+    routeMocks.fetchSkillEvaluations.mockResolvedValue({ items: [evaluationRunWithoutProposal, evaluationRun] });
+    const skillsWithStoredRun = await mount("library", "skills");
+    await click(exactButton(skillsWithStoredRun.root, "Open"));
+    expect(collectText(skillsWithStoredRun.root)).toContain("proposal_created");
+  });
+
+  it("surfaces action failures and proposal payload fallbacks without mutating hidden state", async () => {
+    routeMocks.fetchTaskDeliverables.mockRejectedValueOnce(new Error("deliverables offline"));
+    routeMocks.updateTask.mockRejectedValueOnce(new Error("task save failed"));
+    routeMocks.addTaskDeliverable.mockRejectedValueOnce(new Error("deliverable add failed"));
+    routeMocks.deleteTask.mockRejectedValueOnce(new Error("task delete failed"));
+
+    const cowork = await mount("cowork");
+    expect(collectText(cowork.root)).toContain("deliverables offline");
+    await click(findButton(cowork.root, "Save task"));
+    expect(collectText(cowork.root)).toContain("task save failed");
+    await change(field(cowork.root, "Deliverable title", "input"), "Failed deliverable");
+    await click(findButton(cowork.root, "Add deliverable"));
+    expect(collectText(cowork.root)).toContain("deliverable add failed");
+    await click(findButton(cowork.root, "Move to trash"));
+    expect(collectText(cowork.root)).toContain("task delete failed");
+
+    setupResponses();
+    routeMocks.fetchAgents.mockResolvedValueOnce({ items: [{ ...agent, lifecycleStatus: "archived" }] });
+    routeMocks.restoreAgentProfile.mockRejectedValueOnce(new Error("restore failed"));
+    const agents = await mount("library", "agents");
+    await click(findButton(agents.root, "Restore"));
+    expect(collectText(agents.root)).toContain("restore failed");
+
+    setupResponses();
+    routeMocks.reloadSkills.mockRejectedValueOnce(new Error("reload failed"));
+    routeMocks.updateSkillState.mockRejectedValueOnce(new Error("state failed"));
+    routeMocks.fetchSkillEvaluations.mockRejectedValueOnce(new Error("runs offline"));
+    const skillsWithFailures = await mount("library", "skills");
+    expect(collectText(skillsWithFailures.root)).toContain("runs offline");
+    await click(findButton(skillsWithFailures.root, "Reload skills"));
+    expect(collectText(skillsWithFailures.root)).toContain("reload failed");
+    await click(exactButton(skillsWithFailures.root, "Enable"));
+    expect(collectText(skillsWithFailures.root)).toContain("state failed");
+
+    setupResponses();
+    routeMocks.fetchFilesList.mockRejectedValueOnce(new Error("files offline"));
+    const filesWithWarning = await mount("library", "files");
+    expect(collectText(filesWithWarning.root)).toContain("files offline");
+    await click(findButton(filesWithWarning.root, "Retry"));
+    expect(routeMocks.fetchFilesList).toHaveBeenCalledTimes(2);
+
+    setupResponses();
+    routeMocks.fetchSkillEvaluations.mockResolvedValue({
+      items: [
+        {
+          ...evaluationRun,
+          runId: "eval-payload",
+          proposalId: "proposal-payload",
+          improvementCandidateId: undefined,
+        },
+      ],
+    });
+    routeMocks.fetchCapabilityProposal.mockResolvedValue({
+      proposal: {
+        proposalId: "proposal-payload",
+        candidateId: undefined,
+        status: "draft",
+        title: "Payload proposal",
+        summary: "Payload summary",
+        activationTargetId: "skill-1",
+        payload: {
+          observedIssue: "Payload issue",
+          mutation: { summary: "Payload change" },
+          risk: "low",
+          callableImpact: "none",
+          rollbackRef: "rollback-payload",
+          evidenceRefs: [{ refType: "run", refId: "eval-payload", hash: "hash-payload" }],
+        },
+      },
+      events: [{ eventId: "event-1" }],
+      candidate: undefined,
+    } as never);
+    const proposalFallback = await mount("library", "skills");
+    await click(findButton(proposalFallback.root, "Open proposal"));
+    const proposalText = collectText(proposalFallback.root);
+    expect(proposalText).toContain("Payload issue");
+    expect(proposalText).toContain("Payload change");
+    expect(proposalText).toContain("rollback-payload");
+    expect(proposalText).toContain("Open the trust review to see action guards and lifecycle state.");
   });
 });

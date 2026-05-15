@@ -212,6 +212,41 @@ describe("client event stream", () => {
     cleanup();
   });
 
+  it("falls back to replay when stored cursors are invalid and ignores non-positive event cursors", async () => {
+    window.localStorage.setItem("goatcitadel.events.client.v1", "client-existing");
+    for (const invalidCursor of ["0", "-1", "abc"]) {
+      FakeEventSource.instances = [];
+      window.localStorage.setItem("goatcitadel.events.cursor.v1", invalidCursor);
+
+      const cleanup = connectEventStream(() => undefined);
+      await flushAsync();
+
+      const streamUrl = new URL(FakeEventSource.instances[0]!.url);
+      expect(streamUrl.searchParams.get("clientId")).toBe("client-existing");
+      expect(streamUrl.searchParams.get("replay")).toBe("20");
+      expect(streamUrl.searchParams.has("afterCursor")).toBe(false);
+      cleanup();
+    }
+
+    window.localStorage.removeItem("goatcitadel.events.cursor.v1");
+    FakeEventSource.instances = [];
+    const cleanup = connectEventStream(() => undefined);
+    await flushAsync();
+    const source = FakeEventSource.instances[0]!;
+
+    source.onmessage?.({
+      data: JSON.stringify({
+        eventId: "event-zero",
+        sequence: 0,
+        eventType: "workspace.updated",
+        source: "gateway",
+        timestamp: "2026-01-01T12:01:00.000Z",
+      }),
+    });
+    expect(window.localStorage.getItem("goatcitadel.events.cursor.v1")).toBeNull();
+    cleanup();
+  });
+
   it("bridges stored auth for EventSource URLs and clears auth when the gateway says the bridge is not needed", async () => {
     window.sessionStorage.setItem(
       "goatcitadel.gateway.auth",
@@ -256,6 +291,28 @@ describe("client event stream", () => {
     await flushAsync();
 
     expect(new URL(FakeEventSource.instances[0]!.url).searchParams.get("sse_token")).toBe("sse-token");
+    cleanup();
+  });
+
+  it("bridges token-only stored auth for EventSource URLs", async () => {
+    window.sessionStorage.setItem(
+      "goatcitadel.gateway.auth",
+      JSON.stringify({ token: "token-only", tokenQueryParam: "access_token" }),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ success: true, data: { token: "token-only-sse", scope: "events:stream" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    const cleanup = connectEventStream(() => undefined);
+    await flushAsync();
+
+    expect(new URL(FakeEventSource.instances[0]!.url).searchParams.get("sse_token")).toBe("token-only-sse");
     cleanup();
   });
 

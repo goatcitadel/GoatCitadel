@@ -134,6 +134,51 @@ describe("integration plugin author contract", () => {
       "url",
     );
   });
+
+  it("normalizes install source displays for empty, git, npm, manual, and invalid-url overrides", () => {
+    expect(resolveIntegrationPluginInstallMetadata("   ")).toMatchObject({
+      sourceMetadata: {
+        type: "unknown",
+        display: "Unknown source",
+        integrityStatus: "unknown",
+      },
+      trustWarnings: [expect.objectContaining({ code: "unverified_source" })],
+    });
+    expect(resolveIntegrationPluginInstallMetadata("git@github.com:goat/plugin.git")).toMatchObject({
+      sourceMetadata: {
+        type: "git",
+        display: "Git source",
+      },
+      trustWarnings: [],
+    });
+    expect(resolveIntegrationPluginInstallMetadata("goat-plugin")).toMatchObject({
+      sourceMetadata: {
+        type: "npm",
+        display: "goat-plugin",
+      },
+      trustWarnings: [],
+    });
+    expect(resolveIntegrationPluginInstallMetadata("npm:@goat/plugin", { sourceType: "npm" })).toMatchObject({
+      sourceMetadata: {
+        type: "npm",
+        display: "@goat/plugin",
+      },
+    });
+    expect(resolveIntegrationPluginInstallMetadata("plugin bundle", { sourceType: "manual" })).toMatchObject({
+      sourceMetadata: {
+        type: "manual",
+        display: "Manual source",
+      },
+      trustWarnings: [expect.objectContaining({ code: "unverified_source" })],
+    });
+    expect(resolveIntegrationPluginInstallMetadata("not a url", { sourceType: "url" })).toMatchObject({
+      sourceMetadata: {
+        type: "url",
+        display: "URL source",
+      },
+      trustWarnings: [expect.objectContaining({ code: "unverified_source" })],
+    });
+  });
 });
 
 function referencePluginSource(): string {

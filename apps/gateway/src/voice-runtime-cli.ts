@@ -1,5 +1,6 @@
 /* eslint-disable no-console -- CLI entrypoint intentionally writes structured output to stdout and stderr. */
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 import { loadLocalEnvFile } from "./env-file.js";
 import {
   installManagedVoiceRuntime,
@@ -9,38 +10,60 @@ import {
 import { getManagedVoiceRuntimeStatus } from "./voice-runtime/status.js";
 import { MANAGED_VOICE_MODELS } from "./voice-runtime/catalog.js";
 
-loadLocalEnvFile();
+type ManagedVoiceRuntimeModel = (typeof MANAGED_VOICE_MODELS)[number];
 
-async function main(): Promise<void> {
-  const [action, ...args] = process.argv.slice(2);
+export interface VoiceRuntimeCliDeps {
+  loadLocalEnvFile: typeof loadLocalEnvFile;
+  installManagedVoiceRuntime: typeof installManagedVoiceRuntime;
+  removeManagedVoiceModel: typeof removeManagedVoiceModel;
+  selectManagedVoiceModel: typeof selectManagedVoiceModel;
+  getManagedVoiceRuntimeStatus: typeof getManagedVoiceRuntimeStatus;
+  models: readonly ManagedVoiceRuntimeModel[];
+  log: (message: string) => void;
+  error: (message: string) => void;
+}
+
+const defaultVoiceRuntimeCliDeps: VoiceRuntimeCliDeps = {
+  loadLocalEnvFile,
+  installManagedVoiceRuntime,
+  removeManagedVoiceModel,
+  selectManagedVoiceModel,
+  getManagedVoiceRuntimeStatus,
+  models: MANAGED_VOICE_MODELS,
+  log: console.log.bind(console),
+  error: console.error.bind(console),
+};
+
+export async function runVoiceRuntimeCli(
+  argv = process.argv.slice(2),
+  deps: VoiceRuntimeCliDeps = defaultVoiceRuntimeCliDeps,
+): Promise<void> {
+  deps.loadLocalEnvFile();
+  const [action, ...args] = argv;
   if (!action || action === "--help" || action === "-h") {
-    printUsage();
+    printVoiceRuntimeUsage(deps);
     return;
   }
 
   if (action === "install") {
-    const modelId = readFlag(args, "--model") ?? undefined;
+    const modelId = readVoiceRuntimeFlag(args, "--model") ?? undefined;
     const activate = !args.includes("--no-activate");
-    const status = await installManagedVoiceRuntime(undefined, {
+    const status = await deps.installManagedVoiceRuntime(undefined, {
       modelId,
       activate,
     });
-    console.log(JSON.stringify(status, null, 2));
+    deps.log(JSON.stringify(status, null, 2));
     return;
   }
 
   if (action === "status") {
-    console.log(JSON.stringify(await getManagedVoiceRuntimeStatus(), null, 2));
+    deps.log(JSON.stringify(await deps.getManagedVoiceRuntimeStatus(), null, 2));
     return;
   }
 
   if (action === "models") {
-    console.log(
-      JSON.stringify(
-        { items: MANAGED_VOICE_MODELS.map(({ url: _u, sha256: _s, fileName: _f, ...item }) => item) },
-        null,
-        2,
-      ),
+    deps.log(
+      JSON.stringify({ items: deps.models.map(({ url: _u, sha256: _s, fileName: _f, ...item }) => item) }, null, 2),
     );
     return;
   }
@@ -50,7 +73,7 @@ async function main(): Promise<void> {
     if (!modelId) {
       throw new Error("Missing model id for voice select.");
     }
-    console.log(JSON.stringify(await selectManagedVoiceModel(undefined, modelId), null, 2));
+    deps.log(JSON.stringify(await deps.selectManagedVoiceModel(undefined, modelId), null, 2));
     return;
   }
 
@@ -59,14 +82,26 @@ async function main(): Promise<void> {
     if (!modelId) {
       throw new Error("Missing model id for voice remove.");
     }
-    console.log(JSON.stringify(await removeManagedVoiceModel(undefined, modelId), null, 2));
+    deps.log(JSON.stringify(await deps.removeManagedVoiceModel(undefined, modelId), null, 2));
     return;
   }
 
   throw new Error(`Unknown voice command: ${action}`);
 }
 
-function readFlag(args: string[], flag: string): string | null {
+export async function runVoiceRuntimeCliMain(
+  argv = process.argv.slice(2),
+  deps: VoiceRuntimeCliDeps = defaultVoiceRuntimeCliDeps,
+): Promise<void> {
+  try {
+    await runVoiceRuntimeCli(argv, deps);
+  } catch (error) {
+    deps.error((error as Error).message);
+    process.exitCode = 1;
+  }
+}
+
+export function readVoiceRuntimeFlag(args: string[], flag: string): string | null {
   const index = args.indexOf(flag);
   if (index < 0) {
     return null;
@@ -74,8 +109,10 @@ function readFlag(args: string[], flag: string): string | null {
   return args[index + 1] ?? null;
 }
 
-function printUsage(): void {
-  console.log(`Usage:
+export function printVoiceRuntimeUsage(
+  deps: Pick<VoiceRuntimeCliDeps, "log" | "models"> = defaultVoiceRuntimeCliDeps,
+): void {
+  deps.log(`Usage:
   goat voice install [--model <modelId>] [--no-activate]
   goat voice status
   goat voice models
@@ -83,10 +120,17 @@ function printUsage(): void {
   goat voice remove <modelId>
 
 Supported managed model ids:
-  ${MANAGED_VOICE_MODELS.map((item) => item.id).join(", ")}`);
+  ${deps.models.map((item) => item.id).join(", ")}`);
 }
 
-main().catch((error) => {
-  console.error((error as Error).message);
-  process.exitCode = 1;
-});
+function isDirectVoiceRuntimeCli(): boolean {
+  const entrypoint = process.argv[1];
+  if (!entrypoint) {
+    return false;
+  }
+  return import.meta.url === pathToFileURL(entrypoint).href;
+}
+
+if (isDirectVoiceRuntimeCli()) {
+  void runVoiceRuntimeCliMain();
+}

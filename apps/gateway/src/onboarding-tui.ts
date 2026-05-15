@@ -1,6 +1,4 @@
 /* eslint-disable no-console */
-import fs from "node:fs";
-import path from "node:path";
 import process from "node:process";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -12,6 +10,13 @@ import type {
   OnboardingState,
 } from "@goatcitadel/contracts";
 import { providerTemplates } from "@goatcitadel/contracts";
+import {
+  buildWindowsCommand,
+  clampOption,
+  parseCommaSeparated,
+  resolvePnpmCommandForPlatform,
+  safeHostnameFromUrl,
+} from "./onboarding-tui-helpers.js";
 import { resolveGoatCitadelAppDir } from "./onboarding-tui-paths.js";
 import { renderBox, renderBulletList, renderKeyValueSummary, renderSection } from "./tui/render.js";
 import { tuiTheme } from "./tui/theme.js";
@@ -900,29 +905,7 @@ async function startLocalGatewayProcess(gatewayBaseUrl: string): Promise<void> {
 }
 
 function resolvePnpmCommand(appDir: string): { cmd: string; prefix: string[] } {
-  const baseDir = path.dirname(appDir);
-  const localCandidates =
-    process.platform === "win32"
-      ? [path.join(baseDir, "bin", "pnpm.cmd"), path.join(baseDir, "bin", "pnpm.ps1")]
-      : [path.join(baseDir, "bin", "pnpm")];
-
-  for (const candidate of localCandidates) {
-    if (!fs.existsSync(candidate)) {
-      continue;
-    }
-    if (candidate.endsWith(".ps1")) {
-      return {
-        cmd: "powershell.exe",
-        prefix: ["-ExecutionPolicy", "Bypass", "-File", candidate],
-      };
-    }
-    return {
-      cmd: candidate,
-      prefix: [],
-    };
-  }
-
-  return process.platform === "win32" ? { cmd: "pnpm.cmd", prefix: [] } : { cmd: "pnpm", prefix: [] };
+  return resolvePnpmCommandForPlatform(appDir, process.platform);
 }
 
 function spawnCommand(cmd: string, args: string[], options: Parameters<typeof spawn>[2] = {}) {
@@ -930,20 +913,6 @@ function spawnCommand(cmd: string, args: string[], options: Parameters<typeof sp
     return spawn(WINDOWS_CMD_PATH, ["/d", "/s", "/c", buildWindowsCommand([cmd, ...args])], options);
   }
   return spawn(cmd, args, options);
-}
-
-function buildWindowsCommand(parts: string[]): string {
-  return parts.map((value) => quoteWindowsCommandArg(value)).join(" ");
-}
-
-function quoteWindowsCommandArg(value: string): string {
-  if (value.length === 0) {
-    return '""';
-  }
-  if (!/[\s"&()^<>|]/.test(value)) {
-    return value;
-  }
-  return `"${value.replace(/(["\\])/g, "\\$1")}"`;
 }
 
 async function waitForGatewayHealth(baseUrl: string, timeoutMs: number): Promise<void> {
@@ -971,25 +940,6 @@ function isLoopbackGatewayUrl(baseUrl: string): boolean {
     return host === "127.0.0.1" || host === "localhost" || host === "::1";
   } catch {
     return false;
-  }
-}
-
-function clampOption<const T extends readonly string[]>(value: string, options: T, fallback: T[number]): T[number] {
-  return (options.find((option) => option === value) ?? fallback) as T[number];
-}
-
-function parseCommaSeparated(value: string): string[] {
-  return value
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
-}
-
-function safeHostnameFromUrl(value: string): string | undefined {
-  try {
-    return new URL(value).hostname;
-  } catch {
-    return undefined;
   }
 }
 

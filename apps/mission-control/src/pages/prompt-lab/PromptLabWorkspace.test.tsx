@@ -8,7 +8,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { PromptLabWorkspace } from "./PromptLabWorkspace";
 import { matchesTestResultFilter, type TestResultFilter } from "./prompt-lab-helpers";
-import type { ScoreDraft } from "./prompt-lab-types";
+import type { ActiveRunState, ScoreDraft } from "./prompt-lab-types";
 
 vi.mock("../../components/ActionButton", () => ({
   ActionButton: ({
@@ -234,30 +234,42 @@ const DEFAULT_SCORE_DRAFT: ScoreDraft = {
 };
 
 function PromptLabWorkspaceHarness(props: {
+  v2UiEnabled?: boolean;
+  tests?: PromptPackTestRecord[];
+  runs?: Map<string, PromptPackRunRecord>;
+  assessments?: Map<string, PromptPackLatestAssessmentRecordV2>;
+  initialSelectedTestId?: string | null;
+  selectedRunModelUsage?: React.ComponentProps<typeof PromptLabWorkspace>["selectedRunModelUsage"];
+  runOne?: (test: PromptPackTestRecord, mode?: ActiveRunState["mode"]) => Promise<void>;
   submitScore?: () => Promise<void>;
   autoScoreSelected?: () => Promise<void>;
 }) {
   const [testResultFilter, setTestResultFilter] = useState<TestResultFilter>("all");
-  const [selectedTestId, setSelectedTestId] = useState<string | null>("test-1");
+  const [selectedTestId, setSelectedTestId] = useState<string | null>(
+    props.initialSelectedTestId === undefined ? "test-1" : props.initialSelectedTestId,
+  );
   const [scoreDraft, setScoreDraft] = useState<ScoreDraft>(DEFAULT_SCORE_DRAFT);
   const [placeholderValues, setPlaceholderValues] = useState<Record<string, string>>({});
+  const tests = props.tests ?? TESTS;
+  const runs = props.runs ?? RUNS;
+  const assessments = props.assessments ?? ASSESSMENTS;
 
   const filteredTests = useMemo(
     () =>
-      TESTS.filter((test) =>
-        matchesTestResultFilter(testResultFilter, RUNS.get(test.testId), ASSESSMENTS.get(test.testId)),
+      tests.filter((test) =>
+        matchesTestResultFilter(testResultFilter, runs.get(test.testId), assessments.get(test.testId)),
       ),
-    [testResultFilter],
+    [assessments, runs, testResultFilter, tests],
   );
 
-  const selectedTest = TESTS.find((test) => test.testId === selectedTestId) ?? null;
-  const selectedRun = selectedTest ? RUNS.get(selectedTest.testId) : undefined;
-  const selectedAssessment = selectedTest ? ASSESSMENTS.get(selectedTest.testId) : undefined;
+  const selectedTest = tests.find((test) => test.testId === selectedTestId) ?? null;
+  const selectedRun = selectedTest ? runs.get(selectedTest.testId) : undefined;
+  const selectedAssessment = selectedTest ? assessments.get(selectedTest.testId) : undefined;
 
   return (
     <PromptLabWorkspace
-      v2UiEnabled
-      tests={TESTS}
+      v2UiEnabled={props.v2UiEnabled ?? true}
+      tests={tests}
       filteredTests={filteredTests}
       testResultFilter={testResultFilter}
       onTestResultFilterChange={setTestResultFilter}
@@ -270,13 +282,13 @@ function PromptLabWorkspaceHarness(props: {
         notRunCount: 0,
         passingCount: 0,
       }}
-      latestRunByTest={RUNS}
-      latestAssessmentByTest={ASSESSMENTS}
+      latestRunByTest={runs}
+      latestAssessmentByTest={assessments}
       selectedTestId={selectedTestId}
       onSelectedTestIdChange={setSelectedTestId}
       activeRun={null}
       running={false}
-      runOne={vi.fn(async () => undefined)}
+      runOne={props.runOne ?? vi.fn(async () => undefined)}
       selectedTest={selectedTest}
       selectedPlaceholders={selectedTest?.testId === "test-1" ? ["<FILE_PATH>"] : []}
       placeholderValues={placeholderValues}
@@ -285,17 +297,19 @@ function PromptLabWorkspaceHarness(props: {
         selectedTest?.testId === "test-1" && !placeholderValues.file_path ? ["<FILE_PATH>"] : []
       }
       selectedRun={selectedRun}
-      selectedRunModelUsage={{
-        requestedProviderId: "openai",
-        requestedModel: "gpt-5.4",
-        actualProviderId: "openai",
-        actualModel: "gpt-4.1-mini",
-        actualApiStyle: "openai-responses",
-        fallbackUsed: true,
-        fallbackProviderId: "openai",
-        fallbackModel: "gpt-4.1-mini",
-        fallbackReason: "primary failed (timeout)",
-      }}
+      selectedRunModelUsage={
+        props.selectedRunModelUsage ?? {
+          requestedProviderId: "openai",
+          requestedModel: "gpt-5.4",
+          actualProviderId: "openai",
+          actualModel: "gpt-4.1-mini",
+          actualApiStyle: "openai-responses",
+          fallbackUsed: true,
+          fallbackProviderId: "openai",
+          fallbackModel: "gpt-4.1-mini",
+          fallbackReason: "primary failed (timeout)",
+        }
+      }
       selectedAssessment={selectedAssessment}
       scoreDraft={scoreDraft}
       onScoreDraftChange={setScoreDraft}
@@ -392,5 +406,143 @@ describe("PromptLabWorkspace", () => {
     expect(submitScore).toHaveBeenCalledTimes(1);
     expect(autoScoreSelected).toHaveBeenCalledTimes(1);
     expect(textContent(renderer.root)).toContain("Draft verdictpass");
+  });
+
+  it("updates placeholder state and runs the selected test with the single-run mode", async () => {
+    const runOne = vi.fn(async () => undefined);
+    let renderer: ReactTestRenderer = create(<div />);
+
+    await act(async () => {
+      renderer = create(<PromptLabWorkspaceHarness runOne={runOne} />);
+    });
+
+    expect(textContent(renderer.root)).toContain("Missing: <FILE_PATH>");
+
+    const placeholderInput = renderer.root.findByProps({ placeholder: "Value for <FILE_PATH>" });
+    await act(async () => {
+      placeholderInput.props.onChange({ target: { value: "F:/code/personal-ai/.env.example" } });
+    });
+
+    expect(textContent(renderer.root)).toContain("All placeholders set for this test.");
+
+    await act(async () => {
+      findButton(renderer.root, "Run selected test").props.onClick();
+    });
+
+    expect(runOne).toHaveBeenCalledWith(expect.objectContaining({ testId: "test-1" }), "single");
+  });
+
+  it("renders empty detail and empty filter states without selecting a test", async () => {
+    let renderer: ReactTestRenderer = create(<div />);
+
+    await act(async () => {
+      renderer = create(<PromptLabWorkspaceHarness initialSelectedTestId={null} />);
+    });
+
+    expect(textContent(renderer.root)).toContain("Select a test");
+
+    await act(async () => {
+      findButton(renderer.root, "Run failed").props.onClick();
+    });
+
+    expect(findTestRows(renderer.root)).toHaveLength(0);
+    expect(textContent(renderer.root)).toContain("No tests match this filter.");
+  });
+
+  it("renders disabled V2 controls, failed run guidance, and unscored evidence", async () => {
+    const failedRun = {
+      runId: "run-failed",
+      packId: "pack-a",
+      testId: "test-1",
+      status: "failed",
+      error: "Tool grant denied",
+      startedAt: "not-a-date",
+    } as PromptPackRunRecord;
+    let renderer: ReactTestRenderer = create(<div />);
+
+    await act(async () => {
+      renderer = create(
+        <PromptLabWorkspaceHarness
+          v2UiEnabled={false}
+          runs={new Map([["test-1", failedRun]])}
+          assessments={new Map()}
+          selectedRunModelUsage={{
+            fallbackUsed: false,
+          }}
+        />,
+      );
+    });
+
+    const text = textContent(renderer.root);
+    expect(text).toContain("started not-a-date");
+    expect(text).toContain("Run still in progress");
+    expect(text).toContain("Not used");
+    expect(text).toContain("No fallback reason recorded");
+    expect(text).toContain("Tool grant denied");
+    expect(text).toContain("No output available for the latest run.");
+    expect(text).toContain("Protocol evidence arrives with V2 auto-score");
+    expect(text).toContain("Prompt Pack Scoring V2 UI is disabled");
+    expect(text).toContain("Latest run failed. Try running again");
+    expect(findButton(renderer.root, "Fill pass defaults").props.disabled).toBe(true);
+    expect(findButton(renderer.root, "Save review").props.disabled).toBe(true);
+    expect(findButton(renderer.root, "Auto score this run").props.disabled).toBe(true);
+  });
+
+  it("renders V3 score dimensions and lets manual override and notes update the draft", async () => {
+    const v3Assessment = {
+      ...ASSESSMENTS.get("test-1"),
+      autoScore: {
+        ...ASSESSMENTS.get("test-1")!.autoScore!,
+        scoringSchemaVersion: "v3",
+        protocol: {
+          protocolPass: true,
+          reasonCodes: [],
+        },
+        ruleScores: undefined,
+        judgeScores: {
+          taskSuccess: 4,
+          truthfulness: 3,
+        },
+        finalScores: {
+          taskSuccess: 4,
+          truthfulness: 3,
+          evidenceGrounding: 2,
+          formatAdherence: 4,
+          operatorUsefulness: 3,
+          toolUseQuality: 2,
+          orchestrationQuality: 3,
+          efficiency: 4,
+          recoveryQuality: 2,
+        },
+        disagreement: undefined,
+        hardFailReasons: [],
+        reviewReasons: [],
+        degradedReasons: [],
+      },
+      effectiveVerdict: "pass",
+      humanReview: undefined,
+    } as unknown as PromptPackLatestAssessmentRecordV2;
+    let renderer: ReactTestRenderer = create(<div />);
+
+    await act(async () => {
+      renderer = create(<PromptLabWorkspaceHarness assessments={new Map([["test-1", v3Assessment]])} />);
+    });
+
+    expect(textContent(renderer.root)).toContain("Truthfulness");
+    expect(textContent(renderer.root)).toContain("Evidence grounding");
+    expect(textContent(renderer.root)).toContain("No human override on the latest assessment");
+    expect(textContent(renderer.root)).not.toContain("Hard-fail reasons");
+
+    const selects = renderer.root.findAllByType("select");
+    const overrideSelect = selects[selects.length - 1];
+    const notesInput = renderer.root.findByProps({ placeholder: "Optional notes..." });
+
+    await act(async () => {
+      overrideSelect?.props.onChange({ target: { value: "fail" } });
+      notesInput.props.onChange({ target: { value: "Rejecting this run after review." } });
+    });
+
+    expect(textContent(renderer.root)).toContain("Draft verdictfail");
+    expect(textContent(renderer.root)).toContain("Override active: fail");
   });
 });

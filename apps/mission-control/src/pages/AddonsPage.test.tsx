@@ -26,7 +26,15 @@ vi.mock("../api/client", () => ({
   isApiRequestError: (error: unknown) => Boolean(error && typeof error === "object" && "__apiRequestError" in error),
 }));
 vi.mock("../components/PageHeader", () => ({
-  PageHeader: ({ title, subtitle, actions }: { title?: React.ReactNode; subtitle?: React.ReactNode; actions?: React.ReactNode }) => (
+  PageHeader: ({
+    title,
+    subtitle,
+    actions,
+  }: {
+    title?: React.ReactNode;
+    subtitle?: React.ReactNode;
+    actions?: React.ReactNode;
+  }) => (
     <header>
       <h1>{title}</h1>
       <p>{subtitle}</p>
@@ -44,16 +52,49 @@ vi.mock("../components/PageGuideCard", () => ({
 }));
 vi.mock("../components/ActionButton", () => ({
   ActionButton: ({ label, onClick, disabled }: { label: string; onClick?: () => void; disabled?: boolean }) => (
-    <button type="button" disabled={disabled} onClick={onClick}>{label}</button>
+    <button type="button" disabled={disabled} onClick={onClick}>
+      {label}
+    </button>
   ),
 }));
 vi.mock("../components/ConfirmModal", () => ({
-  ConfirmModal: ({ open, title, message }: { open?: boolean; title?: string; message?: string }) => (
-    open ? <div>{title}{message}</div> : null
-  ),
+  ConfirmModal: ({
+    open,
+    title,
+    message,
+    confirmLabel,
+    cancelLabel,
+    onConfirm,
+    onCancel,
+  }: {
+    open?: boolean;
+    title?: string;
+    message?: string;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    onConfirm?: () => void;
+    onCancel?: () => void;
+  }) =>
+    open ? (
+      <div>
+        {title}
+        {message}
+        <button type="button" onClick={onConfirm}>
+          {confirmLabel ?? "Confirm"}
+        </button>
+        <button type="button" onClick={onCancel}>
+          {cancelLabel ?? "Cancel"}
+        </button>
+      </div>
+    ) : null,
 }));
 vi.mock("../components/HelpHint", () => ({
-  HelpHint: ({ label, text }: { label?: string; text?: string }) => <span>{label}{text}</span>,
+  HelpHint: ({ label, text }: { label?: string; text?: string }) => (
+    <span>
+      {label}
+      {text}
+    </span>
+  ),
 }));
 vi.mock("../components/StatusChip", () => ({
   StatusChip: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
@@ -67,7 +108,12 @@ vi.mock("../components/OperatorSplitLayout", () => ({
     primary?: React.ReactNode;
     inspector?: React.ReactNode;
     emptyInspector?: React.ReactNode;
-  }) => <div>{primary}{inspector ?? emptyInspector}</div>,
+  }) => (
+    <div>
+      {primary}
+      {inspector ?? emptyInspector}
+    </div>
+  ),
 }));
 vi.mock("../components/ui/GCEmptyState", () => ({
   GCEmptyState: ({
@@ -80,7 +126,14 @@ vi.mock("../components/ui/GCEmptyState", () => ({
     subtitle?: React.ReactNode;
     action?: React.ReactNode;
     meta?: React.ReactNode;
-  }) => <div>{title}{subtitle}{action}{meta}</div>,
+  }) => (
+    <div>
+      {title}
+      {subtitle}
+      {action}
+      {meta}
+    </div>
+  ),
 }));
 
 import { AddonsPage } from "./AddonsPage";
@@ -176,15 +229,20 @@ async function flush(): Promise<void> {
   });
 }
 
-async function clickButton(renderer: ReactTestRenderer, label: string): Promise<void> {
-  const button = renderer.root.find((candidate) => {
+async function clickButton(renderer: ReactTestRenderer, label: string, occurrence = 0): Promise<void> {
+  const button = renderer.root.findAll((candidate) => {
     if (candidate.type !== "button") {
       return false;
     }
-    return collectText(candidate.props.children as ReactTestRendererJSON | ReactTestRendererJSON[] | string | null)
-      .replace(/\s+/g, " ")
-      .trim() === label;
-  });
+    return (
+      collectText(candidate.props.children as ReactTestRendererJSON | ReactTestRendererJSON[] | string | null)
+        .replace(/\s+/g, " ")
+        .trim() === label
+    );
+  })[occurrence];
+  if (!button) {
+    throw new Error(`Button not found: ${label}`);
+  }
   await act(async () => {
     button.props.onClick?.({
       preventDefault: () => undefined,
@@ -196,6 +254,7 @@ async function clickButton(renderer: ReactTestRenderer, label: string): Promise<
 describe("AddonsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubGlobal("window", { open: vi.fn() });
   });
 
   it("shows retry guidance for transient catalog fetch failures and recovers on retry", async () => {
@@ -203,9 +262,7 @@ describe("AddonsPage", () => {
     apiMocks.fetchAddonsCatalog
       .mockRejectedValueOnce(makeNetworkError("/api/v1/addons/catalog"))
       .mockResolvedValueOnce({ items: [arena] });
-    apiMocks.fetchInstalledAddons
-      .mockResolvedValueOnce({ items: [] })
-      .mockResolvedValueOnce({ items: [] });
+    apiMocks.fetchInstalledAddons.mockResolvedValueOnce({ items: [] }).mockResolvedValueOnce({ items: [] });
     apiMocks.fetchAddonStatus.mockResolvedValueOnce(makeStatus(arena, { installed: undefined }));
 
     let renderer = create(<div />);
@@ -215,7 +272,9 @@ describe("AddonsPage", () => {
       });
       await flush();
 
-      expect(rendererText(renderer)).toContain("Add-ons data could not be loaded because the browser lost contact with the gateway.");
+      expect(rendererText(renderer)).toContain(
+        "Add-ons data could not be loaded because the browser lost contact with the gateway.",
+      );
       expect(rendererText(renderer)).toContain("Retry");
 
       await clickButton(renderer, "Retry");
@@ -255,6 +314,121 @@ describe("AddonsPage", () => {
       expect(text).toContain("Arena");
       expect(text).toContain("Forge");
       expect(text).toContain("Some add-on readiness checks could not be refreshed (1/2).");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("confirms install and uninstall while preserving trust and runtime posture details", async () => {
+    const arena = makeAddon({
+      sameOwnerAsGoatCitadel: false,
+      trustTier: "community",
+      webEntryMode: "embedded_proxy",
+      launchUrl: undefined,
+      healthChecks: [{ key: "proxy", status: "warn", message: "Proxy not started." }],
+    });
+    const installedArena = makeInstalled(arena, {
+      runtimeStatus: "stopped",
+      launchUrl: undefined,
+      installedPath: undefined,
+    });
+
+    apiMocks.fetchAddonsCatalog.mockResolvedValue({ items: [arena] });
+    apiMocks.fetchInstalledAddons.mockResolvedValueOnce({ items: [] }).mockResolvedValue({ items: [installedArena] });
+    apiMocks.fetchAddonStatus
+      .mockResolvedValueOnce(makeStatus(arena, { installed: undefined, status: "not_installed" }))
+      .mockResolvedValue(makeStatus(arena, { installed: installedArena, status: "stopped" }));
+    apiMocks.installAddon.mockResolvedValue(installedArena);
+    apiMocks.uninstallAddon.mockResolvedValue({ ok: true });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<AddonsPage />);
+      });
+      await flush();
+
+      expect(rendererText(renderer)).toContain("This add-on comes from a separate repository");
+      expect(rendererText(renderer)).toContain("GoatCitadel-managed embedded proxy surface");
+      expect(rendererText(renderer)).toContain("~/.GoatCitadel/addons/<addonId>");
+
+      await clickButton(renderer, "Install");
+      expect(rendererText(renderer)).toContain("Install Arena");
+      await clickButton(renderer, "Cancel");
+      expect(apiMocks.installAddon).not.toHaveBeenCalled();
+
+      await clickButton(renderer, "Install");
+      await clickButton(renderer, "Download and install");
+      await flush();
+
+      expect(apiMocks.installAddon).toHaveBeenCalledWith("arena", {
+        confirmRepoDownload: true,
+        actorId: "operator",
+      });
+      expect(rendererText(renderer)).toContain("Arena installed.");
+
+      await clickButton(renderer, "Uninstall");
+      expect(rendererText(renderer)).toContain("Uninstall Arena");
+      await clickButton(renderer, "Uninstall", 1);
+      await flush();
+
+      expect(apiMocks.uninstallAddon).toHaveBeenCalledWith("arena");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("drives installed runtime controls, external launch, action failures, and auth load errors", async () => {
+    const arena = makeAddon();
+    const installedArena = makeInstalled(arena, { runtimeStatus: "running" });
+
+    apiMocks.fetchAddonsCatalog.mockResolvedValue({ items: [arena] });
+    apiMocks.fetchInstalledAddons.mockResolvedValue({ items: [installedArena] });
+    apiMocks.fetchAddonStatus.mockResolvedValue(makeStatus(arena, { installed: installedArena, status: "running" }));
+    apiMocks.updateAddon.mockResolvedValue(installedArena);
+    apiMocks.stopAddon.mockRejectedValueOnce(new Error("stop failed"));
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<AddonsPage />);
+      });
+      await flush();
+
+      await clickButton(renderer, "Update");
+      await flush();
+      expect(apiMocks.updateAddon).toHaveBeenCalledWith("arena");
+      expect(rendererText(renderer)).toContain("Add-on updated.");
+
+      await clickButton(renderer, "Open Arena");
+      expect(window.open).toHaveBeenCalledWith("http://127.0.0.1:4173", "_blank", "noopener,noreferrer");
+
+      await clickButton(renderer, "Stop");
+      await flush();
+      expect(apiMocks.stopAddon).toHaveBeenCalledWith("arena");
+      expect(rendererText(renderer)).toContain("stop failed");
+    } finally {
+      renderer.unmount();
+    }
+
+    const authError = {
+      __apiRequestError: true,
+      kind: "http",
+      status: 401,
+      method: "GET",
+      path: "/api/v1/addons/catalog",
+      message: "Unauthorized",
+    };
+    apiMocks.fetchAddonsCatalog.mockRejectedValueOnce(authError);
+
+    renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<AddonsPage />);
+      });
+      await flush();
+
+      expect(rendererText(renderer)).toContain("gateway authentication is no longer valid");
     } finally {
       renderer.unmount();
     }

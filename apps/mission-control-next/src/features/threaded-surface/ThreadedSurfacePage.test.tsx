@@ -1,8 +1,21 @@
 import React from "react";
 import { createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
-import { ThreadedSurfacePage } from "./ThreadedSurfacePage";
+import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ThreadedSurfacePage, formatRelativeTime, getArchiveActionLabel } from "./ThreadedSurfacePage";
+
+vi.mock("./ThreadedWorkflowPanel", () => ({
+  ThreadedWorkflowPanel: ({ panel }: { panel: { kind: string } }) => (
+    <div className="mock-threaded-workflow-panel">{panel.kind}</div>
+  ),
+}));
+
+vi.mock("./ThreadedContextDrawer", () => ({
+  ThreadedContextDrawer: ({ surface }: { surface: string }) => (
+    <div className="mock-threaded-context-drawer">{surface}</div>
+  ),
+}));
 
 function buildInput() {
   const noop = vi.fn();
@@ -253,7 +266,74 @@ function buildActiveSessionProps(overrides: Partial<any> = {}) {
   };
 }
 
+function collectText(node: ReactTestInstance): string {
+  return node.children
+    .map((child) => {
+      if (typeof child === "string" || typeof child === "number") {
+        return String(child);
+      }
+      return collectText(child);
+    })
+    .join(" ");
+}
+
+function normalizeText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
+  const normalizedLabel = normalizeText(label);
+  const button = root.findAll(
+    (node) => node.type === "button" && normalizeText(collectText(node)).includes(normalizedLabel),
+  )[0];
+  if (!button) {
+    const available = root
+      .findAll((node) => node.type === "button")
+      .map((node) => collectText(node) || node.props["aria-label"])
+      .join(", ");
+    throw new Error(`Unable to find button: ${label}. Available: ${available}`);
+  }
+  return button;
+}
+
+function findExactButton(root: ReactTestInstance, label: string): ReactTestInstance {
+  const button = root.findAll((node) => node.type === "button" && normalizeText(collectText(node)) === label)[0];
+  if (!button) {
+    throw new Error(`Unable to find exact button: ${label}`);
+  }
+  return button;
+}
+
+function findExactButtons(root: ReactTestInstance, label: string): ReactTestInstance[] {
+  return root.findAll((node) => node.type === "button" && normalizeText(collectText(node)) === label);
+}
+
+function findButtonByAriaLabel(root: ReactTestInstance, ariaLabel: string): ReactTestInstance {
+  return root.findByProps({ "aria-label": ariaLabel });
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
 describe("ThreadedSurfacePage", () => {
+  it("formats archive labels and session relative-time fallbacks", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-14T12:00:00.000Z"));
+
+    expect(getArchiveActionLabel("active", false)).toBe("Archive");
+    expect(getArchiveActionLabel("archived", false)).toBe("Restore");
+    expect(getArchiveActionLabel("active", true)).toBe("Archiving...");
+    expect(getArchiveActionLabel("archived", true)).toBe("Restoring...");
+    expect(formatRelativeTime()).toBe("Recent");
+    expect(formatRelativeTime("not-a-date")).toBe("Recent");
+    expect(formatRelativeTime("2026-05-14T11:45:00.000Z")).toBe("15m ago");
+    expect(formatRelativeTime("2026-05-14T09:00:00.000Z")).toBe("3h ago");
+    expect(formatRelativeTime("2026-05-12T12:00:00.000Z")).toBe("2d ago");
+  });
+
   it("hides delegated child sessions under a collapsed parent by default", () => {
     const markup = renderToStaticMarkup(<ThreadedSurfacePage surface="cowork" input={buildInput() as any} />);
 
@@ -296,5 +376,467 @@ describe("ThreadedSurfacePage", () => {
     );
 
     expect(markup).toContain(">Restore<");
+  });
+
+  it("wires session rail filters, project creation, file upload, and archive confirmation", async () => {
+    const input = buildInput() as any;
+    input.onSessionRailOpenChange = vi.fn();
+    input.dropTargetProps.onUploadFiles = vi.fn();
+    Object.assign(input.sessionRail, {
+      onToggleProjectCreate: vi.fn(),
+      onCreateSession: vi.fn(),
+      onSearchChange: vi.fn(),
+      onProjectNameChange: vi.fn(),
+      onProjectPathChange: vi.fn(),
+      onCreateProject: vi.fn(),
+      onHistoryViewChange: vi.fn(),
+      onSelectProjectId: vi.fn(),
+      onSelectFolderId: vi.fn(),
+      onSelectTag: vi.fn(),
+    });
+    input.sessionRail.showProjectCreate = true;
+    input.sessionRail.availableFolders = [{ folderId: "folder-1", name: "Ops", count: 2 }];
+    input.sessionRail.selectedFolderId = "folder-1";
+    input.sessionRail.selectedTag = "release";
+    input.sessionRail.archiveWorkspaceEnabled = true;
+    input.sessionRail.archiveWorkspaceCount = 3;
+    input.sessionRail.archiveWorkspacePending = false;
+    input.sessionRail.onConfirmArchiveWorkspace = vi.fn();
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("window", { confirm });
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="cowork" input={input} />);
+    });
+
+    await act(async () => {
+      renderer!.root.findByProps({ className: "mc-next-threaded-scrim open" }).props.onClick();
+      findButtonByAriaLabel(renderer!.root, "Close session rail").props.onClick();
+      findButton(renderer!.root, "New session").props.onClick();
+      findButton(renderer!.root, "Hide project").props.onClick();
+      findButton(renderer!.root, "All").props.onClick();
+      findButton(renderer!.root, "Chat").props.onClick();
+      findButton(renderer!.root, "Active").props.onClick();
+      findButton(renderer!.root, "Archived").props.onClick();
+      findButton(renderer!.root, "All projects").props.onClick();
+      findButton(renderer!.root, "Unassigned").props.onClick();
+      findButton(renderer!.root, "All folders").props.onClick();
+      findButton(renderer!.root, "No folder").props.onClick();
+      findButton(renderer!.root, "Ops").props.onClick();
+      findButton(renderer!.root, "release").props.onClick();
+      findButton(renderer!.root, "Create project").props.onClick();
+      findButton(renderer!.root, "Archive workspace chats").props.onClick();
+    });
+
+    const inputs = renderer!.root.findAllByType("input");
+    await act(async () => {
+      inputs
+        .find((inputNode) => inputNode.props.placeholder === "Search sessions")
+        ?.props.onChange({
+          target: { value: "deploy" },
+        });
+      inputs
+        .find((inputNode) => inputNode.props.placeholder === "Project name")
+        ?.props.onChange({
+          target: { value: "Release" },
+        });
+      inputs
+        .find((inputNode) => inputNode.props.placeholder === "Project path (optional)")
+        ?.props.onChange({
+          target: { value: "F:/code/release" },
+        });
+      inputs
+        .find((inputNode) => inputNode.props.type === "file")
+        ?.props.onChange({
+          target: { files: ["artifact"] },
+        });
+    });
+
+    expect(input.onSessionRailOpenChange).toHaveBeenCalledWith(false);
+    expect(input.sessionRail.onCreateSession).toHaveBeenCalledTimes(1);
+    expect(input.sessionRail.onToggleProjectCreate).toHaveBeenCalledTimes(1);
+    expect(input.sessionRail.onSearchChange).toHaveBeenCalledWith("deploy");
+    expect(input.sessionRail.onProjectNameChange).toHaveBeenCalledWith("Release");
+    expect(input.sessionRail.onProjectPathChange).toHaveBeenCalledWith("F:/code/release");
+    expect(input.sessionRail.onCreateProject).toHaveBeenCalledTimes(1);
+    expect(input.sessionRail.onHistoryViewChange).toHaveBeenCalledWith("active");
+    expect(input.sessionRail.onHistoryViewChange).toHaveBeenCalledWith("archived");
+    expect(input.sessionRail.onSelectProjectId).toHaveBeenCalledWith("all");
+    expect(input.sessionRail.onSelectProjectId).toHaveBeenCalledWith("none");
+    expect(input.sessionRail.onSelectFolderId).toHaveBeenCalledWith("all");
+    expect(input.sessionRail.onSelectFolderId).toHaveBeenCalledWith("none");
+    expect(input.sessionRail.onSelectFolderId).toHaveBeenCalledWith("folder-1");
+    expect(input.sessionRail.onSelectTag).toHaveBeenCalledWith(null);
+    expect(input.dropTargetProps.onUploadFiles).toHaveBeenCalledWith(["artifact"]);
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Archive 3 active mission chats"));
+    expect(input.sessionRail.onConfirmArchiveWorkspace).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps archive disabled when confirmation is declined or unavailable", async () => {
+    const declined = buildInput() as any;
+    declined.sessionRail.archiveWorkspaceEnabled = true;
+    declined.sessionRail.archiveWorkspaceCount = 0;
+    declined.sessionRail.onConfirmArchiveWorkspace = vi.fn();
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("window", { confirm });
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="cowork" input={declined} />);
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Archive workspace chats").props.onClick();
+    });
+    expect(declined.sessionRail.onConfirmArchiveWorkspace).not.toHaveBeenCalled();
+
+    const unavailable = buildInput() as any;
+    unavailable.sessionRail.archiveWorkspaceEnabled = true;
+    unavailable.sessionRail.archiveWorkspacePending = true;
+    unavailable.sessionRail.onConfirmArchiveWorkspace = vi.fn();
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="cowork" input={unavailable} />);
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Archiving...").props.onClick();
+    });
+    expect(unavailable.sessionRail.onConfirmArchiveWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("wires active conversation route actions, dock toggles, uploads, and empty-state actions", async () => {
+    vi.stubGlobal("HTMLElement", class HTMLElement {});
+    const activeProps = buildActiveSessionProps({
+      mode: "code",
+      dockOpen: false,
+      trust: {
+        ...buildActiveSessionProps().trust,
+        fallbackSummary: "Fallback in use",
+        selectionSourceSummary: null,
+        runStateSummary: null,
+      },
+      activeGeneratedArtifact: {
+        artifactId: "artifact-1",
+        title: "Run report",
+        kind: "markdown",
+        content: "# Report",
+        sourceSurface: "code",
+        version: 1,
+      },
+      onCloseGeneratedArtifact: vi.fn(),
+      onNavigateSurface: vi.fn(),
+      onToggleArchiveSession: vi.fn(),
+    });
+    const input = {
+      ...buildInput(),
+      messageMode: "code",
+      dockOpen: false,
+      activeSessionSurfaceProps: activeProps,
+      emptyStateProps: null,
+      dropTargetProps: {
+        ...(buildInput() as any).dropTargetProps,
+        isDragActive: true,
+        onDragEnter: vi.fn(),
+        onDragOver: vi.fn(),
+        onDragLeave: vi.fn(),
+        onDrop: vi.fn(),
+      },
+    } as any;
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="code" input={input} />);
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Open in Cowork").props.onClick();
+      findButton(renderer!.root, "Back to Chat").props.onClick();
+      findExactButton(renderer!.root, "Archive").props.onClick();
+      findButton(renderer!.root, "Show context").props.onClick();
+      findButton(renderer!.root, "Context").props.onClick();
+      const dropzone = renderer!.root.findAll(
+        (node) =>
+          typeof node.props.className === "string" && node.props.className.includes("mc-next-threaded-dropzone"),
+      )[0]!;
+      dropzone.props.onDragEnter();
+      dropzone.props.onDragOver();
+      dropzone.props.onDragLeave();
+      dropzone.props.onDrop();
+    });
+
+    expect(activeProps.onNavigateSurface).toHaveBeenCalledWith("cowork");
+    expect(activeProps.onNavigateSurface).toHaveBeenCalledWith("chat");
+    expect(activeProps.onToggleArchiveSession).toHaveBeenCalledTimes(1);
+    expect(input.onDockOpenChange).toHaveBeenCalledWith(true);
+    expect(input.dropTargetProps.onDragEnter).toHaveBeenCalledTimes(1);
+    expect(input.dropTargetProps.onDragOver).toHaveBeenCalledTimes(1);
+    expect(input.dropTargetProps.onDragLeave).toHaveBeenCalledTimes(1);
+    expect(input.dropTargetProps.onDrop).toHaveBeenCalledTimes(1);
+
+    const emptyInput = {
+      ...buildInput(),
+      messageMode: "chat",
+      activeSessionSurfaceProps: null,
+      emptyStateProps: {
+        ...(buildInput() as any).emptyStateProps,
+        mode: "chat",
+        onCreateSession: vi.fn(),
+        onOpenCowork: vi.fn(),
+        onOpenCode: vi.fn(),
+      },
+      dropTargetProps: {
+        ...(buildInput() as any).dropTargetProps,
+        isDragActive: true,
+        onAttachFiles: vi.fn(),
+      },
+    } as any;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="chat" input={emptyInput} />);
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Start chat").props.onClick();
+      findButton(renderer!.root, "Attach files").props.onClick();
+      findButton(renderer!.root, "Open Cowork").props.onClick();
+      findButton(renderer!.root, "Open Code").props.onClick();
+    });
+
+    expect(emptyInput.emptyStateProps.onCreateSession).toHaveBeenCalledTimes(1);
+    expect(emptyInput.dropTargetProps.onAttachFiles).toHaveBeenCalledTimes(1);
+    expect(emptyInput.emptyStateProps.onOpenCowork).toHaveBeenCalledTimes(1);
+    expect(emptyInput.emptyStateProps.onOpenCode).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the session rail from mobile and routes chat sessions into cowork or code", async () => {
+    vi.stubGlobal("HTMLElement", class HTMLElement {});
+    const activeProps = buildActiveSessionProps({
+      mode: "chat",
+      onNavigateSurface: vi.fn(),
+    });
+    const input = {
+      ...buildInput(),
+      messageMode: "chat",
+      sessionRailOpen: false,
+      onSessionRailOpenChange: vi.fn(),
+      activeSessionSurfaceProps: activeProps,
+      emptyStateProps: null,
+    } as any;
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="chat" input={input} />);
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Sessions").props.onClick();
+      findButton(renderer!.root, "Continue in Cowork").props.onClick();
+      findButton(renderer!.root, "Open in Code").props.onClick();
+    });
+
+    expect(input.onSessionRailOpenChange).toHaveBeenCalledWith(true);
+    expect(activeProps.onNavigateSurface).toHaveBeenCalledWith("cowork");
+    expect(activeProps.onNavigateSurface).toHaveBeenCalledWith("code");
+  });
+
+  it("toggles the code workbench from mobile and conversation controls", async () => {
+    vi.stubGlobal("HTMLElement", class HTMLElement {});
+    vi.stubGlobal("window", {
+      matchMedia: vi.fn((query: string) => ({
+        matches: query.includes("1180px"),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    });
+    const activeProps = buildActiveSessionProps({
+      mode: "code",
+      onNavigateSurface: vi.fn(),
+      onExportRunBundle: vi.fn(),
+    });
+    const input = {
+      ...buildInput(),
+      messageMode: "code",
+      activeSessionSurfaceProps: activeProps,
+      emptyStateProps: null,
+      workflowPanel: {
+        kind: "code",
+        props: {},
+      },
+      contextDockProps: {
+        session: null,
+        memory: null,
+        runTrace: null,
+        suggestions: null,
+      },
+      dockOpen: true,
+      onDockOpenChange: vi.fn(),
+    } as any;
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="code" input={input} />);
+      await Promise.resolve();
+    });
+
+    expect(collectText(renderer!.root)).toContain("code");
+    await act(async () => {
+      findButton(renderer!.root, "Hide editor").props.onClick();
+    });
+    expect(collectText(renderer!.root)).toContain("Code editor");
+
+    await act(async () => {
+      const conversationWorkbenchButton = findExactButtons(renderer!.root, "Code editor").find(
+        (button) => button.props.className === "mc-next-threaded-secondary",
+      );
+      expect(conversationWorkbenchButton).toBeDefined();
+      conversationWorkbenchButton!.props.onClick();
+      findButton(renderer!.root, "Hide context").props.onClick();
+      findButton(renderer!.root, "Export run bundle").props.onClick();
+    });
+
+    expect(activeProps.onExportRunBundle).toHaveBeenCalledTimes(1);
+    expect(input.onDockOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("wires cowork active-session actions, project drafts, tag filters, and compact artifact dismissal", async () => {
+    vi.stubGlobal("HTMLElement", class HTMLElement {});
+    vi.stubGlobal("window", {
+      matchMedia: vi.fn((query: string) => ({
+        matches: query.includes("840px"),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    });
+    const activeProps = buildActiveSessionProps({
+      mode: "cowork",
+      activeGeneratedArtifact: {
+        artifactId: "artifact-2",
+        title: "Compact brief",
+        kind: "markdown",
+        content: "# Compact",
+        sourceSurface: "cowork",
+        version: 2,
+      },
+      onCloseGeneratedArtifact: vi.fn(),
+      onNavigateSurface: vi.fn(),
+    });
+    const input = {
+      ...buildInput(),
+      showProjectCreate: true,
+      activeSessionSurfaceProps: activeProps,
+      emptyStateProps: null,
+      sessionRail: {
+        ...(buildInput() as any).sessionRail,
+        showProjectCreate: true,
+        selectedTag: "coverage",
+        availableFolders: [{ id: "folder-1", name: "Pinned", count: 2 }],
+        onProjectNameChange: vi.fn(),
+        onProjectPathChange: vi.fn(),
+        onCreateProject: vi.fn(),
+        onSelectTag: vi.fn(),
+        onSelectFolderId: vi.fn(),
+      },
+    } as any;
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="cowork" input={input} />);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Open in Code").props.onClick();
+      findButton(renderer!.root, "Back to Chat").props.onClick();
+    });
+    expect(activeProps.onNavigateSurface).toHaveBeenCalledWith("code");
+    expect(activeProps.onNavigateSurface).toHaveBeenCalledWith("chat");
+
+    const projectInputs = renderer!.root.findAllByType("input");
+    await act(async () => {
+      projectInputs
+        .find((inputNode) => inputNode.props.placeholder === "Project name")
+        ?.props.onChange({
+          target: { value: "Coverage Project" },
+        });
+      projectInputs
+        .find((inputNode) => inputNode.props.placeholder?.includes("Project path"))
+        ?.props.onChange({
+          target: { value: "F:\\code\\coverage" },
+        });
+      findButton(renderer!.root, "Create project").props.onClick();
+      findButton(renderer!.root, "coverage").props.onClick();
+    });
+    expect(input.sessionRail.onProjectNameChange).toHaveBeenCalledWith("Coverage Project");
+    expect(input.sessionRail.onProjectPathChange).toHaveBeenCalledWith("F:\\code\\coverage");
+    expect(input.sessionRail.onCreateProject).toHaveBeenCalledTimes(1);
+    expect(input.sessionRail.onSelectTag).toHaveBeenCalledWith(null);
+
+    const sheet = renderer!.root.findAll(
+      (node) => node.props.open === true && typeof node.props.onOpenChange === "function",
+    )[0];
+    expect(sheet).toBeDefined();
+    await act(async () => {
+      sheet!.props.onOpenChange(false);
+    });
+    expect((activeProps as any).onCloseGeneratedArtifact).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-expands the selected delegated session and renders orphan delegated tasks", async () => {
+    const input = buildInput() as any;
+    input.sessionRail.selectedSessionId = "child-1";
+    input.sessionRail.missionSessions = [
+      ...input.sessionRail.missionSessions,
+      {
+        sessionId: "orphan-1",
+        sessionKey: "mission:operator:orphan",
+        scope: "mission",
+        mode: "code",
+        includeInHistory: true,
+        title: "",
+        pinned: false,
+        lifecycleStatus: "active",
+        channel: "",
+        account: "operator",
+        updatedAt: "not-a-date",
+        lastActivityAt: "not-a-date",
+        tokenTotal: 0,
+        costUsdTotal: 0,
+        delegationParent: {
+          parentSessionId: "missing-parent",
+          runId: "run-2",
+          stepId: "step-2",
+          role: "coder",
+          label: "",
+          index: 1,
+        },
+      },
+    ];
+    input.sessionRail.renderSessionLabel = (sessionId: string) =>
+      sessionId === "orphan-1" ? "Rendered orphan label" : sessionId;
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="cowork" input={input} />);
+      await Promise.resolve();
+    });
+
+    expect(collectText(renderer!.root)).toContain("Delegate · Work");
+    expect(collectText(renderer!.root)).toContain("Delegated tasks");
+    expect(collectText(renderer!.root)).toContain("Rendered orphan label");
+    expect(collectText(renderer!.root)).toContain("Delegated task · coder");
+
+    await act(async () => {
+      renderer!.root.findByProps({ title: "Delegate · Work" }).props.onClick();
+      renderer!.root.findByProps({ title: "Rendered orphan label" }).props.onClick();
+      findButtonByAriaLabel(renderer!.root, "Collapse delegated chats").props.onClick();
+    });
+    expect(input.sessionRail.onSelectSession).toHaveBeenCalledWith("child-1");
+    expect(input.sessionRail.onSelectSession).toHaveBeenCalledWith("orphan-1");
+    expect(collectText(renderer!.root)).not.toContain("Delegate · Work");
+
+    input.sessionRail.missionSessions = [];
+    input.sessionRail.externalSessions = [];
+    await act(async () => {
+      renderer!.update(<ThreadedSurfacePage surface="cowork" input={input} />);
+      await Promise.resolve();
+    });
+    expect(collectText(renderer!.root)).toContain("No sessions in this lane yet.");
   });
 });

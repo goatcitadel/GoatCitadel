@@ -1,0 +1,524 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChatCompletionResponse, MemoryContextPack, TranscriptEvent } from "@goatcitadel/contracts";
+import { MemoryContextService } from "./memory-context-service.js";
+
+const tempRoots: string[] = [];
+
+afterEach(async () => {
+  for (const root of tempRoots.splice(0)) {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+describe("MemoryContextService", () => {
+  it("short-circuits to fallback context when QMD is disabled or the prompt is too short", async () => {
+    const storage = createStorage();
+    const publishRealtime = vi.fn();
+    const service = new MemoryContextService(
+      storage as never,
+      createLlmService() as never,
+      createConfig(await createWorkspaceRoot(), {
+        memoryEnabled: false,
+      }) as never,
+      publishRealtime,
+    );
+
+    const pack = await service.compose({
+      scope: "chat",
+      prompt: "short",
+      sessionId: "session-1",
+      maxContextTokens: 80,
+    });
+
+    expect(pack).toMatchObject({
+      scope: "chat",
+      sessionId: "session-1",
+      relationScope: "self",
+      contextText: "Fallback Context:",
+      citations: [],
+      quality: {
+        status: "fallback",
+        reason: "qmd_disabled_or_prompt_too_short",
+      },
+      originalTokenEstimate: 0,
+    });
+    expect(storage.memoryQmdRuns.records).toEqual([
+      expect.objectContaining({
+        status: "fallback",
+        candidateCount: 0,
+        citationsCount: 0,
+      }),
+    ]);
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "memory_qmd_fallback",
+      expect.objectContaining({
+        contextId: pack.contextId,
+        reason: "qmd_disabled_or_prompt_too_short",
+      }),
+    );
+  });
+
+  it("distills workspace and transcript candidates, annotates provenance, and reuses fresh cache hits", async () => {
+    const rootDir = await createWorkspaceRoot();
+    await fs.mkdir(path.join(rootDir, "workspace", "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "workspace", "memory", "alpha.md"),
+      "Alpha diagnostics mention gateway readiness, test evidence, and release risk.",
+      "utf8",
+    );
+    const transcript = createTranscriptEvent({
+      eventId: "event-1",
+      sessionId: "session-parent",
+      timestamp: new Date().toISOString(),
+      message: "The operator asked about Alpha gateway diagnostics.",
+    });
+    const childTranscript = createTranscriptEvent({
+      eventId: "event-2",
+      sessionId: "session-child",
+      timestamp: "2026-01-01T00:00:00.000Z",
+      message: "Child worker confirmed release evidence was captured.",
+    });
+    const storage = createStorage({
+      transcripts: {
+        "session-parent": [transcript],
+        "session-child": [childTranscript],
+      },
+      delegationSteps: [
+        {
+          runId: "run-1",
+          childSessionId: "session-child",
+        },
+      ],
+    });
+    const llmService = createLlmService({
+      chatCompletions: vi.fn(
+        async (): Promise<ChatCompletionResponse> => ({
+          id: "chatcmpl-memory",
+          object: "chat.completion",
+          created: 1,
+          model: "gpt-test",
+          choices: [
+            {
+              index: 0,
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  summary: "Alpha diagnostics need release evidence.",
+                  facts: [
+                    {
+                      text: "The memory file links Alpha diagnostics to gateway readiness.",
+                      citationIds: ["f:memory/alpha.md#0"],
+                    },
+                  ],
+                  risks: ["Release risk remains if evidence is missing."],
+                  openQuestions: ["Is the final gate green?"],
+                  saferNextSteps: ["Keep citations attached to the handoff."],
+                  citations: [
+                    {
+                      candidateId: "f:memory/alpha.md#0",
+                      sourceType: "file",
+                      sourceRef: "memory/alpha.md",
+                      snippet: "Alpha diagnostics mention gateway readiness",
+                      score: 0.91,
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        }),
+      ),
+    });
+    const publishRealtime = vi.fn();
+    const service = new MemoryContextService(
+      storage as never,
+      llmService as never,
+      createConfig(rootDir) as never,
+      publishRealtime,
+    );
+    const input = {
+      scope: "orchestration" as const,
+      prompt: "Explain Alpha gateway diagnostics release evidence.",
+      sessionId: "session-parent",
+      runId: "run-1",
+      phaseId: "phase-1",
+      workspace: "memory",
+      maxContextTokens: 360,
+    };
+
+    const generated = await service.compose(input);
+    const cached = await service.compose(input);
+
+    expect(llmService.chatCompletions).toHaveBeenCalledTimes(1);
+    expect(llmService.chatCompletions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: "openai",
+        model: "gpt-test",
+        response_format: { type: "json_object" },
+      }),
+    );
+    expect(generated).toMatchObject({
+      scope: "orchestration",
+      sessionId: "session-parent",
+      runId: "run-1",
+      phaseId: "phase-1",
+      relationScope: "project",
+      quality: { status: "generated" },
+    });
+    expect(generated.contextText).toContain("Alpha diagnostics need release evidence.");
+    expect(generated.contextText).toContain("Citations:");
+    expect(generated.citations).toEqual([
+      expect.objectContaining({
+        candidateId: "f:memory/alpha.md#0",
+        sourceType: "file",
+        sourceRef: "memory/alpha.md",
+        provenance: expect.objectContaining({
+          relationScope: "project",
+          freshness: "fresh",
+          selectionReason: expect.stringContaining("lexical/recency score"),
+        }),
+      }),
+    ]);
+    expect(cached.contextId).toBe(generated.contextId);
+    expect(storage.memoryQmdRuns.records.map((record) => record.status)).toEqual(["generated", "cache_hit"]);
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "memory_qmd_generated",
+      expect.objectContaining({
+        contextId: generated.contextId,
+        providerId: "openai",
+        model: "gpt-test",
+      }),
+    );
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "memory_qmd_cache_hit",
+      expect.objectContaining({
+        contextId: generated.contextId,
+        runId: "run-1",
+      }),
+    );
+  });
+
+  it("falls back with ranked candidates when the distiller returns invalid citations", async () => {
+    const rootDir = await createWorkspaceRoot();
+    await fs.mkdir(path.join(rootDir, "workspace", "memory"), { recursive: true });
+    await fs.writeFile(path.join(rootDir, "workspace", "memory", "beta.md"), "Beta release notes are risky.", "utf8");
+    const storage = createStorage();
+    const service = new MemoryContextService(
+      storage as never,
+      createLlmService({
+        chatCompletions: vi.fn(
+          async (): Promise<ChatCompletionResponse> => ({
+            id: "chatcmpl-memory-invalid",
+            object: "chat.completion",
+            created: 1,
+            model: "gpt-test",
+            choices: [
+              {
+                index: 0,
+                finish_reason: "stop",
+                message: {
+                  role: "assistant",
+                  content: JSON.stringify({
+                    summary: "Invalid citation",
+                    citations: [
+                      {
+                        candidateId: "missing-candidate",
+                        sourceType: "file",
+                        sourceRef: "memory/missing.md",
+                        score: 0.5,
+                      },
+                    ],
+                  }),
+                },
+              },
+            ],
+          }),
+        ),
+      }) as never,
+      createConfig(rootDir) as never,
+      vi.fn(),
+    );
+
+    const pack = await service.compose({
+      scope: "chat",
+      prompt: "What does Beta say about release risk?",
+      workspace: "memory",
+      forceRefresh: true,
+    });
+
+    expect(pack.quality).toEqual({
+      status: "fallback",
+      reason: "distiller returned invalid citations: missing-candidate",
+    });
+    expect(pack.contextText).toContain("Fallback Context:");
+    expect(pack.citations[0]).toMatchObject({
+      candidateId: "f:memory/beta.md#0",
+      provenance: expect.objectContaining({
+        relationScope: "self",
+      }),
+    });
+    expect(storage.memoryQmdRuns.records[0]).toEqual(
+      expect.objectContaining({
+        status: "fallback",
+        errorText: "distiller returned invalid citations: missing-candidate",
+      }),
+    );
+  });
+
+  it("records a no-candidates fallback when the workspace and transcript sources are empty", async () => {
+    const rootDir = await createWorkspaceRoot();
+    const storage = createStorage();
+    const publishRealtime = vi.fn();
+    const service = new MemoryContextService(
+      storage as never,
+      createLlmService() as never,
+      createConfig(rootDir) as never,
+      publishRealtime,
+    );
+
+    const pack = await service.compose({
+      scope: "chat",
+      prompt: "Find evidence that has not been captured yet.",
+      sessionId: "missing-session",
+      workspace: "missing-memory",
+    });
+
+    expect(pack).toMatchObject({
+      quality: {
+        status: "fallback",
+        reason: "no_candidates",
+      },
+      contextText: "Fallback Context:",
+      originalTokenEstimate: 0,
+      citations: [],
+    });
+    expect(storage.memoryQmdRuns.records[0]).toEqual(
+      expect.objectContaining({
+        status: "fallback",
+        candidateCount: 0,
+        savingsPercent: 0,
+      }),
+    );
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "memory_qmd_fallback",
+      expect.objectContaining({
+        reason: "no_candidates",
+      }),
+    );
+  });
+
+  it("passes through read APIs to the memory context repositories", async () => {
+    const storage = createStorage();
+    const service = new MemoryContextService(
+      storage as never,
+      createLlmService() as never,
+      createConfig(await createWorkspaceRoot()) as never,
+      vi.fn(),
+    );
+    const pack = storage.memoryContexts.upsert({
+      cacheKey: "cache-1",
+      scope: "chat",
+      queryHash: "query",
+      sourcesHash: "sources",
+      contextText: "context",
+      citations: [],
+      quality: { status: "fallback" },
+      originalTokenEstimate: 2,
+      distilledTokenEstimate: 1,
+      expiresAt: "2026-05-15T00:00:00.000Z",
+    });
+
+    expect(service.get(pack.contextId)).toBe(pack);
+    expect(service.listRecent()).toEqual([pack]);
+    expect(service.listByRun("run-missing")).toEqual([]);
+    expect(service.stats("2026-05-01", "2026-05-15")).toEqual({
+      from: "2026-05-01",
+      to: "2026-05-15",
+      totalRuns: 0,
+      generatedRuns: 0,
+      cacheHitRuns: 0,
+      fallbackRuns: 0,
+      failedRuns: 0,
+      originalTokenEstimate: 0,
+      distilledTokenEstimate: 0,
+      savingsPercent: 0,
+      netTokenDelta: 0,
+      compressionPercent: 0,
+      expansionPercent: 0,
+      efficiencyLabel: "neutral",
+    });
+  });
+});
+
+async function createWorkspaceRoot(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-memory-context-"));
+  tempRoots.push(root);
+  await fs.mkdir(path.join(root, "workspace"), { recursive: true });
+  return root;
+}
+
+function createConfig(
+  rootDir: string,
+  options: { memoryEnabled?: boolean; qmdEnabled?: boolean } = {},
+): Record<string, unknown> {
+  return {
+    rootDir,
+    assistant: {
+      workspaceDir: "workspace",
+      memory: {
+        enabled: options.memoryEnabled ?? true,
+        qmd: {
+          enabled: options.qmdEnabled ?? true,
+          maxContextTokens: 420,
+          minPromptChars: 8,
+          cacheTtlSeconds: 300,
+          maxTranscriptEvents: 5,
+          maxMemoryFiles: 8,
+          maxBytesPerFile: 8_000,
+          allowedExtensions: [".md", ".txt"],
+          distiller: {
+            fallbackCheapModel: "gpt-cheap",
+            timeoutMs: 1_000,
+          },
+        },
+      },
+    },
+    toolPolicy: {
+      sandbox: {
+        writeJailRoots: [path.join(rootDir, "workspace")],
+      },
+    },
+  };
+}
+
+function createLlmService(
+  overrides: {
+    chatCompletions?: ReturnType<typeof vi.fn>;
+  } = {},
+) {
+  return {
+    getRuntimeConfig: vi.fn(() => ({
+      activeProviderId: "openai",
+      activeModel: "gpt-test",
+    })),
+    chatCompletions: overrides.chatCompletions ?? vi.fn(),
+  };
+}
+
+function createStorage(
+  options: {
+    transcripts?: Record<string, TranscriptEvent[]>;
+    delegationSteps?: Array<{ runId: string; childSessionId?: string }>;
+  } = {},
+) {
+  const contexts = new Map<string, MemoryContextPack & { cacheKey: string }>();
+  const runs: Array<Record<string, unknown>> = [];
+  return {
+    memoryContexts: {
+      upsert(input: Omit<MemoryContextPack, "contextId" | "createdAt"> & { cacheKey: string }) {
+        const existing = [...contexts.values()].find((context) => context.cacheKey === input.cacheKey);
+        if (existing) {
+          const next = {
+            ...existing,
+            ...input,
+          };
+          contexts.set(existing.contextId, next);
+          return next;
+        }
+        const context: MemoryContextPack & { cacheKey: string } = {
+          ...input,
+          contextId: `ctx-${contexts.size + 1}`,
+          createdAt: "2026-05-15T00:00:00.000Z",
+        };
+        contexts.set(context.contextId, context);
+        return context;
+      },
+      findFreshByCacheKey(input: { cacheKey: string }) {
+        return [...contexts.values()].find((context) => context.cacheKey === input.cacheKey);
+      },
+      get(contextId: string) {
+        const context = contexts.get(contextId);
+        if (!context) {
+          throw new Error(`missing context ${contextId}`);
+        }
+        return context;
+      },
+      listRecent(limit = 60) {
+        return [...contexts.values()].slice(0, limit);
+      },
+      listByRun(runId: string) {
+        return [...contexts.values()].filter((context) => context.runId === runId);
+      },
+    },
+    memoryQmdRuns: {
+      records: runs,
+      append(input: Record<string, unknown>) {
+        runs.push({
+          ...input,
+          runEventId: `run-event-${runs.length + 1}`,
+          createdAt: "2026-05-15T00:00:00.000Z",
+        });
+      },
+      stats(from: string, to: string) {
+        return {
+          from,
+          to,
+          totalRuns: 0,
+          generatedRuns: 0,
+          cacheHitRuns: 0,
+          fallbackRuns: 0,
+          failedRuns: 0,
+          originalTokenEstimate: 0,
+          distilledTokenEstimate: 0,
+          savingsPercent: 0,
+          netTokenDelta: 0,
+          compressionPercent: 0,
+          expansionPercent: 0,
+          efficiencyLabel: "neutral" as const,
+        };
+      },
+    },
+    transcripts: {
+      async read(sessionId: string) {
+        const events = options.transcripts?.[sessionId];
+        if (!events) {
+          const error = new Error("missing transcript") as NodeJS.ErrnoException;
+          error.code = "ENOENT";
+          throw error;
+        }
+        return events;
+      },
+    },
+    chatDelegationSteps: {
+      listByRun(runId: string) {
+        return (options.delegationSteps ?? []).filter((step) => step.runId === runId);
+      },
+    },
+  };
+}
+
+function createTranscriptEvent(input: {
+  eventId: string;
+  sessionId: string;
+  timestamp: string;
+  message: string;
+}): TranscriptEvent {
+  return {
+    eventId: input.eventId,
+    actionId: `action-${input.eventId}`,
+    idempotencyKey: `idem-${input.eventId}`,
+    sessionId: input.sessionId,
+    sessionKey: input.sessionId,
+    timestamp: input.timestamp,
+    type: "message.user",
+    actorType: "user",
+    actorId: "operator",
+    payload: {
+      message: input.message,
+    },
+  };
+}

@@ -29,7 +29,10 @@ const streamQuerySchema = z.object({
 
 type DevDiagnosticsRouteFilter = Omit<z.infer<typeof streamQuerySchema>, "replay">;
 
-function matchesDevDiagnosticsRouteFilter(event: DevDiagnosticsEvent, filter: DevDiagnosticsRouteFilter): boolean {
+export function matchesDevDiagnosticsRouteFilter(
+  event: DevDiagnosticsEvent,
+  filter: DevDiagnosticsRouteFilter,
+): boolean {
   if (filter.level && event.level !== filter.level) {
     return false;
   }

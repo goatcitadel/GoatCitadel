@@ -3,10 +3,11 @@ import React from "react";
 import { act } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createRoot, type Root } from "react-dom/client";
+import TestRenderer from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ThreadedTimeline } from "./ThreadedTimeline";
 
-function buildProps(overrides: Partial<any> = {}) {
+function buildProps(overrides: Partial<any> = {}): any {
   return {
     mode: "cowork",
     loading: false,
@@ -116,6 +117,13 @@ function buildProps(overrides: Partial<any> = {}) {
     onSubmitUserInput: vi.fn(),
     ...overrides,
   };
+}
+
+function renderedText(renderer: TestRenderer.ReactTestRenderer): string {
+  return renderer.root
+    .findAll((node) => Array.isArray(node.children))
+    .map((node) => node.children.join(""))
+    .join(" ");
 }
 
 describe("ThreadedTimeline", () => {
@@ -232,5 +240,389 @@ describe("ThreadedTimeline", () => {
     expect(composerCard?.getAttribute("aria-disabled")).toBe("true");
     expect(composerCard?.dataset.blockedByInlinePrompt).toBe("true");
     expect(composerCard?.inert).toBe(true);
+
+    await act(async () => {
+      root?.render(
+        <div>
+          <div className="mc-next-threaded-thread-card">
+            <ThreadedTimeline props={buildProps() as any} />
+          </div>
+          <div className="mc-next-threaded-composer-card">
+            <textarea aria-label="composer" />
+          </div>
+        </div>,
+      );
+      await Promise.resolve();
+    });
+
+    expect(composerCard?.hasAttribute("aria-disabled")).toBe(false);
+    expect(composerCard?.dataset.blockedByInlinePrompt).toBeUndefined();
+    expect(composerCard?.inert).toBe(false);
+  });
+
+  it("shows deterministic empty and no-output labels across chat and cowork modes", () => {
+    expect(renderToStaticMarkup(<ThreadedTimeline props={buildProps({ loading: true }) as any} />)).toContain(
+      "Loading thread",
+    );
+    expect(renderToStaticMarkup(<ThreadedTimeline props={buildProps({ thread: null }) as any} />)).toContain(
+      "Cowork will create a visible run plan",
+    );
+    expect(
+      renderToStaticMarkup(
+        <ThreadedTimeline
+          props={buildProps({ mode: "chat", thread: { sessionId: "session-empty", turns: [] } }) as any}
+        />,
+      ),
+    ).toContain("Start with a plain request");
+
+    const cases = [
+      ["queued", "Queued"],
+      ["running", "Working"],
+      ["waiting_for_tool", "Using tools"],
+      ["waiting_for_approval", "Waiting for approval"],
+      ["waiting_for_user_input", "Waiting for your answer"],
+      ["cancelled", "Turn cancelled"],
+      ["partial", "No assistant output yet"],
+      ["completed", "No assistant output yet"],
+    ] as const;
+
+    for (const [status, label] of cases) {
+      const props = buildProps();
+      props.thread.turns[0].assistantMessage = undefined;
+      props.thread.turns[0].trace.status = status;
+      const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+      expect(renderedText(renderer)).toContain(label);
+    }
+
+    const failed = buildProps();
+    failed.thread.turns[0].assistantMessage = undefined;
+    failed.thread.turns[0].trace.status = "failed";
+    failed.thread.turns[0].trace.failure = {
+      failureClass: "provider_timeout",
+      message: "Provider timed out.",
+      retryable: true,
+      recommendedAction: "retry",
+    };
+    const renderer = TestRenderer.create(<ThreadedTimeline props={failed as any} />);
+    expect(renderedText(renderer)).toContain("Provider timed out.");
+    expect(renderedText(renderer)).toContain("Retry the turn");
+  });
+
+  it("handles turn selection, keyboard activation, branch switching, and artifact version actions", () => {
+    const props = buildProps({
+      selectedTurnId: null,
+      onSelectTurn: vi.fn(),
+      onSwitchBranch: vi.fn(),
+      onCreateGeneratedArtifactVersion: vi.fn(),
+    });
+    props.thread.turns[0].branch = {
+      siblingTurnIds: ["turn-a", "turn-1", "turn-c"],
+      siblingCount: 3,
+      activeSiblingIndex: 1,
+      isSelectedPath: true,
+      newestLeafTurnId: "turn-c",
+    };
+    props.thread.turns[0].generatedArtifacts = [
+      {
+        artifactId: "artifact-1",
+        kind: "markdown",
+        title: "Artifact",
+        sourceSurface: "cowork",
+        version: 1,
+        turnId: "turn-1",
+        createdAt: "2026-04-30T00:00:02.000Z",
+      },
+    ];
+    props.thread.turns[0].trace.capabilityUpgradeSuggestions = [
+      {
+        kind: "skill_import",
+        title: "Install browser skill",
+        summary: "Adds browser automation.",
+        reason: "The turn needs browser access.",
+        recommendedAction: "enable_skill",
+      },
+      {
+        kind: "mcp_template",
+        title: "Connect Gmail",
+        summary: "Adds inbox access.",
+        reason: "The turn references email.",
+        recommendedAction: "install_mcp_template",
+      },
+      {
+        kind: "existing_but_disabled",
+        title: "Enable memory",
+        summary: "Adds memory access.",
+        reason: "The turn asks for prior context.",
+        recommendedAction: "enable_skill",
+      },
+    ];
+
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+    expect(renderedText(renderer)).toContain("Suggested next move: Install browser skill");
+    expect(renderedText(renderer)).toContain("Connect Gmail");
+    expect(renderedText(renderer)).not.toContain("Enable memory");
+
+    const turnSurface = renderer.root.findByProps({ className: "mc-next-thread-turn-surface" });
+    TestRenderer.act(() => {
+      turnSurface.props.onClick();
+    });
+    expect(props.onSelectTurn).toHaveBeenCalledWith("turn-1");
+
+    const preventDefault = vi.fn();
+    TestRenderer.act(() => {
+      turnSurface.props.onKeyDown({
+        key: "Enter",
+        currentTarget: "surface",
+        target: "surface",
+        preventDefault,
+      });
+    });
+    expect(preventDefault).toHaveBeenCalled();
+    expect(props.onSelectTurn).toHaveBeenCalledWith("turn-1");
+
+    TestRenderer.act(() => {
+      turnSurface.props.onKeyDown({
+        key: " ",
+        currentTarget: "surface",
+        target: "child",
+        preventDefault: vi.fn(),
+      });
+    });
+    expect(props.onSelectTurn).toHaveBeenCalledTimes(2);
+
+    const previous = renderer.root.find((node) => node.type === "button" && node.children.join("") === "Previous");
+    const next = renderer.root.find((node) => node.type === "button" && node.children.join("") === "Next");
+    const details = renderer.root.find((node) => node.type === "button" && node.children.join("") === "Run details");
+    const retry = renderer.root.find((node) => node.type === "button" && node.children.join("") === "Retry run step");
+    TestRenderer.act(() => {
+      previous.props.onClick();
+      next.props.onClick();
+      details.props.onClick();
+      retry.props.onClick();
+    });
+    expect(props.onSwitchBranch).toHaveBeenCalledWith("turn-a");
+    expect(props.onSwitchBranch).toHaveBeenCalledWith("turn-c");
+    expect(props.onOpenRunDetails).toHaveBeenCalledWith("turn-1");
+    expect(props.onRetryTurn).toHaveBeenCalledWith("turn-1");
+
+    const version = renderer.root.find((node) => node.type === "button" && node.children.join("") === "New version");
+    TestRenderer.act(() => {
+      version.props.onClick();
+    });
+    expect(props.onCreateGeneratedArtifactVersion).toHaveBeenCalledWith("turn-1");
+  });
+
+  it("distinguishes create and open artifact actions", () => {
+    const onCreateGeneratedArtifact = vi.fn();
+    const onOpenGeneratedArtifact = vi.fn();
+    const props = buildProps({ onCreateGeneratedArtifact, onOpenGeneratedArtifact });
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+
+    const createButton = renderer.root.find(
+      (node) => node.type === "button" && node.children.join("") === "Create artifact",
+    );
+    TestRenderer.act(() => {
+      createButton.props.onClick();
+    });
+    expect(onCreateGeneratedArtifact).toHaveBeenCalledWith("turn-1");
+    expect(onOpenGeneratedArtifact).not.toHaveBeenCalled();
+
+    props.thread.turns[0].generatedArtifacts = [
+      {
+        artifactId: "artifact-1",
+        kind: "markdown",
+        title: "Artifact",
+        sourceSurface: "cowork",
+        version: 1,
+        turnId: "turn-1",
+        createdAt: "2026-04-30T00:00:02.000Z",
+      },
+    ];
+    const withArtifact = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+    const openButton = withArtifact.root.find(
+      (node) => node.type === "button" && node.children.join("") === "Open artifact",
+    );
+    TestRenderer.act(() => {
+      openButton.props.onClick();
+    });
+    expect(onOpenGeneratedArtifact).toHaveBeenCalledWith("turn-1");
+  });
+
+  it("renders non-cowork delegation lineage and follows output to the bottom marker", () => {
+    const onBottomStateChange = vi.fn();
+    const scrollIntoView = vi.fn();
+    const props = buildProps({
+      mode: "chat",
+      followOutput: true,
+      streamStatus: "idle",
+      queuedCount: 2,
+      streamError: "Stream dropped.",
+      onBottomStateChange,
+      delegationRun: {
+        label: "Delegation",
+        objective: "Ship the patch",
+        mode: "parallel",
+        status: "partial",
+        runId: "run-1",
+        steps: [
+          {
+            stepId: "step-1",
+            role: "architect_lead",
+            status: "completed",
+            index: 0,
+            output: "Design locked.",
+          },
+          {
+            stepId: "step-2",
+            role: "qa",
+            label: "QA",
+            status: "failed",
+            index: 1,
+            error: "Could not validate source freshness.",
+          },
+        ],
+        stitchedOutput: "Final synthesis",
+      },
+      notices: [
+        {
+          id: "notice-1",
+          tone: "warning",
+          content: "Tool queue is backed up.",
+          timestamp: "2026-04-30T00:00:03.000Z",
+        },
+      ],
+    });
+
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />, {
+      createNodeMock: (element) =>
+        element.type === "div" && (element.props as any)["aria-hidden"] === "true" ? { scrollIntoView } : null,
+    });
+
+    expect(renderedText(renderer)).toContain("Delegation run");
+    expect(renderedText(renderer)).toContain("run-1");
+    expect(renderedText(renderer)).toContain("Architect Lead");
+    expect(renderedText(renderer)).toContain("Could not validate source freshness.");
+    expect(renderedText(renderer)).toContain("Final synthesis");
+    expect(renderedText(renderer)).toContain("Tool queue is backed up.");
+    expect(onBottomStateChange).toHaveBeenCalledWith(true);
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "end", behavior: "auto" });
+    vi.unstubAllGlobals();
+  });
+
+  it("covers repaired output, requested routing, fallback reasons, and empty delegation summaries", () => {
+    const props = buildProps();
+    props.thread.turns[0].trace.completion = { repaired: true };
+    props.thread.turns[0].trace.routing = {
+      primaryProviderId: "openai",
+      primaryModel: "gpt-5",
+      effectiveProviderId: "anthropic",
+      effectiveModel: "claude-sonnet",
+      effectiveApiStyle: "messages",
+      fallbackReason: "primary rate limited",
+    };
+    props.delegationRun = {
+      label: "Delegation",
+      objective: "Coordinate the release pass",
+      mode: "sequential",
+      status: "completed",
+      runId: "run-empty",
+      steps: [],
+    };
+
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+    const text = renderedText(renderer);
+
+    expect(text).toContain("Repaired");
+    expect(text).toContain("used anthropic · claude-sonnet · messages");
+    expect(text).toContain("requested openai · gpt-5");
+    expect(text).toContain("fallback: primary rate limited");
+    expect(text).toContain("Completed 0 · Running 0 · Failed 0 · Skipped 0");
+    expect(text).not.toContain("Now:");
+  });
+
+  it("cancels pending follow-output scrolling when the timeline unmounts", () => {
+    const cancelAnimationFrame = vi.fn();
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn(() => 99),
+    );
+    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
+
+    const renderer = TestRenderer.create(<ThreadedTimeline props={buildProps({ followOutput: true }) as any} />);
+    renderer.unmount();
+
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(99);
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps cowork delegation compact while exposing detail handoff and expansion state", () => {
+    const onOpenRunDetails = vi.fn();
+    const props = buildProps({
+      mode: "cowork",
+      onOpenRunDetails,
+      delegationRun: {
+        label: "Delegation",
+        objective: "Coordinate the release pass",
+        mode: "sequential",
+        status: "running",
+        runId: "run-1",
+        attachedTurnId: "turn-delegated",
+        steps: [
+          {
+            stepId: "step-1",
+            role: "architect_lead",
+            status: "completed",
+            index: 0,
+            summary: "Plan accepted.",
+            output: "Architecture summary.",
+          },
+          {
+            stepId: "step-2",
+            role: "qa",
+            label: "QA",
+            status: "running",
+            index: 1,
+            summary: "Validation in progress.",
+          },
+          {
+            stepId: "step-3",
+            role: "ops",
+            status: "skipped",
+            index: 2,
+            error: "Waiting for QA.",
+          },
+        ],
+        stitchedOutput: "Final synthesis pending.",
+      },
+    });
+
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+    expect(renderedText(renderer)).toContain("Cowork activity");
+    expect(renderedText(renderer)).toContain("Completed 1 · Running 1 · Failed 0 · Skipped 1");
+    expect(renderedText(renderer)).toContain("Now: QA");
+
+    const openDetails = renderer.root.find(
+      (node) => node.type === "button" && node.children.join("") === "Open details",
+    );
+    const preventDefault = vi.fn();
+    const stopPropagation = vi.fn();
+    TestRenderer.act(() => {
+      openDetails.props.onClick({ preventDefault, stopPropagation });
+    });
+    expect(preventDefault).toHaveBeenCalled();
+    expect(stopPropagation).toHaveBeenCalled();
+    expect(onOpenRunDetails).toHaveBeenCalledWith("turn-delegated");
+
+    const details = renderer.root.findByType("details");
+    TestRenderer.act(() => {
+      details.props.onToggle({ currentTarget: { open: true } });
+    });
+    expect(renderer.root.findByType("details").props.open).toBe(true);
+    expect(renderedText(renderer)).toContain("Final synthesized answer is shown in the main assistant message.");
   });
 });

@@ -71,6 +71,99 @@ describe("MemoryLifecycleService", () => {
     await expect(service.executeMaintenanceDurableRun({ runId: "run-1" } as never)).resolves.toEqual({ ok: true });
   });
 
+  it("forwards context, learned-memory, and maintenance accessors with caller arguments", async () => {
+    const context = {
+      compose: vi.fn(async () => ({ contextId: "ctx-compose" })),
+      get: vi.fn(() => ({ contextId: "ctx-get" })),
+      listByRun: vi.fn(() => [{ contextId: "ctx-run" }]),
+      listRecent: vi.fn(() => [{ contextId: "ctx-recent" }]),
+      stats: vi.fn(() => ({ totalRuns: 2 })),
+    };
+    const learned = {
+      extractAndPersistLearnedMemory: vi.fn(),
+      listChatSessionLearnedMemory: vi.fn(() => ({ items: [{ itemId: "learned-1" }], conflicts: [] })),
+      updateChatSessionLearnedMemory: vi.fn(() => ({ itemId: "learned-1", content: "updated" })),
+      rebuildChatSessionLearnedMemory: vi.fn(async () => ({ rebuiltAt: "now", items: [], conflicts: [] })),
+    };
+    const maintenance = {
+      getPolicy: vi.fn(() => ({ workspaceId: "workspace-1" })),
+      patchPolicy: vi.fn(() => ({ workspaceId: "workspace-1", enabled: false })),
+      getStatus: vi.fn(() => ({ workspaceId: "workspace-1", state: "idle" })),
+      listRuns: vi.fn(() => [{ runId: "maint-run-1" }]),
+      runNow: vi.fn(() => ({ runId: "maint-run-now" })),
+      getRunProvenance: vi.fn(() => ({ run: { runId: "maint-run-1" }, sources: [], changes: [] })),
+      listRecommendations: vi.fn(() => [{ recommendationId: "rec-1" }]),
+      acceptRecommendation: vi.fn(() => ({
+        recommendation: { recommendationId: "rec-1" },
+        policy: { workspaceId: "workspace-1" },
+      })),
+      rejectRecommendation: vi.fn(() => ({ recommendationId: "rec-1", status: "rejected" })),
+      runDueEvaluation: vi.fn(async () => undefined),
+      noteSuccessfulRootTurn: vi.fn(async () => undefined),
+      parseWorkflowPayload: vi
+        .fn()
+        .mockReturnValueOnce({ workspaceId: "workspace-1", ignored: true })
+        .mockReturnValueOnce({}),
+      syncFromDurableRun: vi.fn(),
+      executeDurableRun: vi.fn(async () => ({ ok: true })),
+    };
+    const service = new MemoryLifecycleService({
+      context: context as never,
+      learned: learned as never,
+      maintenance: maintenance as never,
+      admin: {
+        gatewaySql: {} as never,
+        tryParseJson: vi.fn(),
+        requireFeatureEnabled: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+      resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" })),
+      readTranscriptOrEmpty: vi.fn(async () => []),
+    });
+
+    expect(service.getContext("ctx-1")).toEqual({ contextId: "ctx-get" });
+    expect(service.listRunContexts("run-1")).toEqual([{ contextId: "ctx-run" }]);
+    expect(service.listRecentContexts(7)).toEqual([{ contextId: "ctx-recent" }]);
+    expect(service.getContextStats("2026-05-01", "2026-05-14")).toEqual({ totalRuns: 2 });
+    expect(service.updateSessionLearnedMemory("session-1", "learned-1", { content: "updated" } as never)).toEqual({
+      itemId: "learned-1",
+      content: "updated",
+    });
+    expect(service.patchMaintenancePolicy("workspace-1", { enabled: false } as never)).toMatchObject({
+      workspaceId: "workspace-1",
+    });
+    expect(service.getMaintenanceStatus("workspace-1")).toMatchObject({ state: "idle" });
+    expect(service.listMaintenanceRuns("workspace-1", 3)).toEqual([{ runId: "maint-run-1" }]);
+    expect(service.runMaintenanceNow({ workspaceId: "workspace-1", reason: "operator" } as never)).toMatchObject({
+      runId: "maint-run-now",
+    });
+    expect(service.getMaintenanceRunProvenance("maint-run-1")).toMatchObject({ run: { runId: "maint-run-1" } });
+    expect(service.listMaintenanceRecommendations("workspace-1", 4)).toEqual([{ recommendationId: "rec-1" }]);
+    expect(service.acceptMaintenanceRecommendation("rec-1").recommendation).toMatchObject({
+      recommendationId: "rec-1",
+    });
+    expect(service.rejectMaintenanceRecommendation("rec-1")).toMatchObject({ status: "rejected" });
+    await expect(service.runDueEvaluation()).resolves.toBeUndefined();
+    await expect(service.noteSuccessfulRootTurn("session-1")).resolves.toBeUndefined();
+    expect(service.parseMaintenanceWorkflowPayload({ runId: "durable-1" } as never)).toEqual({
+      workspaceId: "workspace-1",
+    });
+    expect(service.parseMaintenanceWorkflowPayload({ runId: "durable-2" } as never)).toBeUndefined();
+    service.syncMaintenanceFromDurableRun({ runId: "durable-3" } as never);
+
+    expect(context.get).toHaveBeenCalledWith("ctx-1");
+    expect(context.listByRun).toHaveBeenCalledWith("run-1");
+    expect(context.listRecent).toHaveBeenCalledWith(7);
+    expect(context.stats).toHaveBeenCalledWith("2026-05-01", "2026-05-14");
+    expect(learned.updateChatSessionLearnedMemory).toHaveBeenCalledWith("session-1", "learned-1", {
+      content: "updated",
+    });
+    expect(maintenance.patchPolicy).toHaveBeenCalledWith("workspace-1", { enabled: false });
+    expect(maintenance.listRuns).toHaveBeenCalledWith("workspace-1", 3);
+    expect(maintenance.runNow).toHaveBeenCalledWith({ workspaceId: "workspace-1", reason: "operator" });
+    expect(maintenance.syncFromDurableRun).toHaveBeenCalledWith({ runId: "durable-3" });
+  });
+
   it("owns memory item admin list, update, forget, and history flows", () => {
     const publishRealtime = vi.fn();
     const requireFeatureEnabled = vi.fn();
@@ -454,5 +547,115 @@ describe("MemoryLifecycleService", () => {
     });
 
     expect(extractAndPersistLearnedMemory).not.toHaveBeenCalled();
+  });
+
+  it("records memory write-gate evidence and blocks non-allowed learned-memory writes", () => {
+    const extractAndPersistLearnedMemory = vi.fn();
+    const evaluate = vi.fn(() => ({
+      decision: "blocked",
+      authority: "agent_proposed",
+      reasons: ["secret_like_content"],
+      contradictionHints: [],
+      redactionStatus: "blocked_secret",
+      createdAt: "2026-05-14T00:00:00.000Z",
+    }));
+    const createEnvelope = vi.fn();
+    const service = new MemoryLifecycleService({
+      context: {} as never,
+      learned: {
+        extractAndPersistLearnedMemory,
+        listChatSessionLearnedMemory: vi.fn(() => ({
+          items: [{ content: "Remember that billing uses card ending 1111." }],
+          conflicts: [],
+        })),
+      } as never,
+      maintenance: {} as never,
+      admin: {
+        gatewaySql: {} as never,
+        tryParseJson: vi.fn(),
+        requireFeatureEnabled: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+      resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" })),
+      writeGate: { evaluate } as never,
+      evidence: { createEnvelope } as never,
+      readTranscriptOrEmpty: vi.fn(async () => []),
+    });
+
+    service.extractLearnedMemory("session-1", "Remember my api_key is sk-secret-token-1234567890.", {
+      role: "assistant",
+      sourceRef: "turn-1",
+    });
+
+    expect(evaluate).toHaveBeenCalledWith({
+      authority: "agent_proposed",
+      content: "Remember my api_key is sk-secret-token-1234567890.",
+      existingClaims: ["Remember that billing uses card ending 1111."],
+    });
+    expect(createEnvelope).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventKind: "memory_write",
+        sessionId: "session-1",
+        memoryLineage: ["turn-1"],
+        metadata: expect.objectContaining({
+          sourceRole: "assistant",
+          sourceRef: "turn-1",
+          claimPreview: "[redacted]",
+          decision: expect.objectContaining({
+            decision: "blocked",
+            redactionStatus: "blocked_secret",
+          }),
+        }),
+      }),
+    );
+    expect(extractAndPersistLearnedMemory).not.toHaveBeenCalled();
+  });
+
+  it("allows operator-authority learned-memory writes after the write gate approves", () => {
+    const extractAndPersistLearnedMemory = vi.fn();
+    const gateDecision = {
+      decision: "allowed",
+      authority: "operator",
+      reasons: ["trusted_authority"],
+      contradictionHints: [],
+      redactionStatus: "none",
+      createdAt: "2026-05-14T00:00:00.000Z",
+    };
+    const service = new MemoryLifecycleService({
+      context: {} as never,
+      learned: {
+        extractAndPersistLearnedMemory,
+        listChatSessionLearnedMemory: vi.fn(() => ({ items: [], conflicts: [] })),
+      } as never,
+      maintenance: {} as never,
+      admin: {
+        gatewaySql: {} as never,
+        tryParseJson: vi.fn(),
+        requireFeatureEnabled: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+      resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" })),
+      writeGate: {
+        evaluate: vi.fn(() => gateDecision),
+      } as never,
+      evidence: {
+        createEnvelope: vi.fn(),
+      } as never,
+      readTranscriptOrEmpty: vi.fn(async () => []),
+    });
+
+    service.extractLearnedMemory("session-1", "Remember that I prefer terse status updates.", {
+      role: "user",
+      sourceRef: "turn-2",
+    });
+
+    expect(extractAndPersistLearnedMemory).toHaveBeenCalledWith(
+      "session-1",
+      "Remember that I prefer terse status updates.",
+      expect.objectContaining({
+        role: "user",
+        sourceRef: "turn-2",
+      }),
+    );
   });
 });

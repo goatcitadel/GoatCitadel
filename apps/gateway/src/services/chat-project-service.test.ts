@@ -1,0 +1,303 @@
+import fsPromises from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ValidationError, type ChatProjectRecord } from "@goatcitadel/contracts";
+import { ChatProjectService, type ChatProjectServiceContext } from "./chat-project-service.js";
+
+const execFileMock = vi.hoisted(() => vi.fn());
+let tempRoot: string;
+let published: Array<{ channel: string; topic: string; payload: Record<string, unknown> }>;
+
+vi.mock("node:child_process", () => ({
+  execFile: execFileMock,
+}));
+
+describe("ChatProjectService", () => {
+  beforeEach(async () => {
+    execFileMock.mockImplementation((command: string, args: string[], options: unknown, callback: unknown) => {
+      const cb = callback as (error: Error | null, result: { stdout: string; stderr: string }) => void;
+      cb(null, { stdout: `${command} ${args.join(" ")}`, stderr: "" });
+    });
+    tempRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "goatcitadel-chat-project-service-"));
+    published = [];
+  });
+
+  afterEach(async () => {
+    execFileMock.mockReset();
+    await fsPromises.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  it("wraps project CRUD with normalized workspace ids and realtime events", () => {
+    const { service, storage } = createService();
+
+    expect(service.listChatProjects("active", 5, " ws-a ")).toEqual([]);
+
+    const created = service.createChatProject({
+      workspaceId: " ws-a ",
+      name: "Control Plane",
+      workspacePath: "apps/gateway",
+      color: "teal",
+    });
+    expect(created).toMatchObject({
+      projectId: "project-1",
+      workspaceId: "ws-a",
+      name: "Control Plane",
+    });
+    expect(published.at(-1)?.payload).toMatchObject({
+      type: "chat_project_created",
+      projectId: "project-1",
+      workspaceId: "ws-a",
+    });
+
+    const updated = service.updateChatProject("project-1", {
+      workspaceId: " ws-b ",
+      name: "Gateway",
+    });
+    expect(updated).toMatchObject({ projectId: "project-1", workspaceId: "ws-b", name: "Gateway" });
+
+    expect(service.archiveChatProject("project-1").archivedAt).toBeTruthy();
+    expect(service.restoreChatProject("project-1").archivedAt).toBeUndefined();
+    expect(service.hardDeleteChatProject("project-1")).toBe(true);
+    expect(service.hardDeleteChatProject("project-missing")).toBe(false);
+    expect(storage.chatProjects.hardDelete).toHaveBeenCalledWith("project-missing");
+    expect(published.map((event) => event.payload.type)).toEqual([
+      "chat_project_created",
+      "chat_project_updated",
+      "chat_project_archived",
+      "chat_project_restored",
+      "chat_project_deleted",
+    ]);
+  });
+
+  it("imports an existing workspace folder in place and initializes git when needed", async () => {
+    const workspaceRoot = path.join(tempRoot, "workspace");
+    const sourcePath = path.join(workspaceRoot, "Manual Project");
+    await fsPromises.mkdir(sourcePath, { recursive: true });
+    await fsPromises.writeFile(path.join(sourcePath, "README.md"), "hello");
+    const { service } = createService({ workspaceDir: "workspace" });
+
+    const result = await service.importChatProject({
+      workspaceId: " ws-a ",
+      sourceType: "local_folder",
+      sourcePath,
+    });
+
+    expect(result).toMatchObject({
+      sourceType: "local_folder",
+      materializedPath: "Manual Project",
+      imported: false,
+      repoReady: false,
+    });
+    expect(result.project).toMatchObject({
+      name: "Manual Project",
+      workspaceId: "ws-a",
+      workspacePath: "Manual Project",
+    });
+    expect(execFileMock).toHaveBeenCalledWith(
+      "git",
+      ["init", "-b", "main"],
+      expect.objectContaining({ cwd: sourcePath }),
+      expect.any(Function),
+    );
+    expect(published.at(-1)?.payload).toMatchObject({
+      type: "chat_project_imported",
+      sourceType: "local_folder",
+      workspacePath: "Manual Project",
+    });
+  });
+
+  it("copies an external local folder into a slugged import target", async () => {
+    const sourcePath = path.join(tempRoot, "external source");
+    await fsPromises.mkdir(sourcePath, { recursive: true });
+    await fsPromises.writeFile(path.join(sourcePath, "file.txt"), "copied");
+    const { service } = createService({ workspaceDir: "workspace" });
+
+    const result = await service.importChatProject({
+      workspaceId: "ws-a",
+      name: "My Imported Project!",
+      sourceType: "local_folder",
+      sourcePath,
+    });
+
+    expect(result).toMatchObject({
+      imported: true,
+      materializedPath: "imports/my-imported-project",
+    });
+    await expect(
+      fsPromises.readFile(path.join(tempRoot, "workspace", result.materializedPath, "file.txt"), "utf8"),
+    ).resolves.toBe("copied");
+    expect(execFileMock).toHaveBeenCalledWith(
+      "git",
+      [
+        "-c",
+        "user.name=GoatCitadel",
+        "-c",
+        "user.email=goatcitadel@local",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "Initial import of external source",
+      ],
+      expect.any(Object),
+      expect.any(Function),
+    );
+  });
+
+  it("clones local git folders and github repos with collision-safe targets", async () => {
+    const sourcePath = path.join(tempRoot, "source.git");
+    await fsPromises.mkdir(path.join(sourcePath, ".git"), { recursive: true });
+    const workspaceRoot = path.join(tempRoot, "workspace");
+    await fsPromises.mkdir(path.join(workspaceRoot, "imports", "shared-name"), { recursive: true });
+    const { service } = createService({ workspaceDir: "workspace" });
+
+    const localResult = await service.importChatProject({
+      sourceType: "local_folder",
+      name: "Shared Name",
+      sourcePath,
+    });
+    expect(localResult.materializedPath).toBe("imports/shared-name-2");
+    expect(execFileMock).toHaveBeenCalledWith(
+      "git",
+      ["clone", "--no-local", sourcePath, path.join(workspaceRoot, "imports", "shared-name-2")],
+      expect.objectContaining({ cwd: path.join(workspaceRoot, "imports") }),
+      expect.any(Function),
+    );
+
+    const githubResult = await service.importChatProject({
+      sourceType: "github_repo",
+      repoUrl: "https://github.com/example/goat-demo.git",
+      ref: "main",
+    });
+    expect(githubResult.project.description).toBe("Imported from https://github.com/example/goat-demo.git");
+    expect(execFileMock).toHaveBeenCalledWith(
+      "git",
+      [
+        "clone",
+        "--depth",
+        "1",
+        "--branch",
+        "main",
+        "https://github.com/example/goat-demo.git",
+        expect.stringContaining("goat-demo"),
+      ],
+      expect.objectContaining({ cwd: workspaceRoot }),
+      expect.any(Function),
+    );
+  });
+
+  it("updates existing imported project records and validates missing or unsafe sources", async () => {
+    const workspaceRoot = path.join(tempRoot, "workspace");
+    const existingPath = path.join(workspaceRoot, "Existing");
+    await fsPromises.mkdir(path.join(existingPath, ".git"), { recursive: true });
+    const { service, projects } = createService({ workspaceDir: "workspace" });
+    projects.push({
+      projectId: "project-existing",
+      workspaceId: "ws-a",
+      name: "Existing",
+      workspacePath: "Existing",
+      createdAt: "2026-03-22T12:00:00.000Z",
+      updatedAt: "2026-03-22T12:00:00.000Z",
+    });
+
+    await expect(service.importChatProject({ sourceType: "local_folder" })).rejects.toThrow(ValidationError);
+    await expect(service.importChatProject({ sourceType: "github_repo" })).rejects.toThrow(ValidationError);
+    await expect(
+      service.importChatProject({
+        sourceType: "local_folder",
+        sourcePath: path.join(tempRoot, "missing"),
+      }),
+    ).rejects.toThrow("Local folder does not exist");
+
+    const result = await service.importChatProject({
+      workspaceId: "ws-a",
+      name: "Fresh Name",
+      sourceType: "local_folder",
+      sourcePath: existingPath,
+    });
+
+    expect(result.project).toMatchObject({
+      projectId: "project-existing",
+      name: "Fresh Name",
+      workspacePath: "Existing",
+    });
+  });
+});
+
+function createService(input: { workspaceDir?: string } = {}): {
+  service: ChatProjectService;
+  storage: ChatProjectServiceContext["storage"];
+  projects: ChatProjectRecord[];
+} {
+  const projects: ChatProjectRecord[] = [];
+  const now = "2026-03-22T12:00:00.000Z";
+  const storage = {
+    chatProjects: {
+      list: vi.fn((_view: string, _limit: number, workspaceId?: string) =>
+        projects.filter((project) => !workspaceId || project.workspaceId === workspaceId),
+      ),
+      create: vi.fn((input: Partial<ChatProjectRecord>) => {
+        const project = {
+          projectId: `project-${projects.length + 1}`,
+          workspaceId: input.workspaceId,
+          name: input.name ?? "Untitled",
+          description: input.description,
+          workspacePath: input.workspacePath ?? "workspace",
+          color: input.color,
+          createdAt: now,
+          updatedAt: now,
+        } as ChatProjectRecord;
+        projects.push(project);
+        return project;
+      }),
+      update: vi.fn((projectId: string, patch: Partial<ChatProjectRecord>) => {
+        const project = projects.find((item) => item.projectId === projectId);
+        if (!project) {
+          throw new Error(`missing ${projectId}`);
+        }
+        Object.assign(project, patch, { updatedAt: now });
+        return project;
+      }),
+      archive: vi.fn((projectId: string) => {
+        const project = projects.find((item) => item.projectId === projectId);
+        if (!project) {
+          throw new Error(`missing ${projectId}`);
+        }
+        project.archivedAt = now;
+        return project;
+      }),
+      restore: vi.fn((projectId: string) => {
+        const project = projects.find((item) => item.projectId === projectId);
+        if (!project) {
+          throw new Error(`missing ${projectId}`);
+        }
+        delete project.archivedAt;
+        return project;
+      }),
+      hardDelete: vi.fn((projectId: string) => {
+        const index = projects.findIndex((item) => item.projectId === projectId);
+        if (index === -1) {
+          return false;
+        }
+        projects.splice(index, 1);
+        return true;
+      }),
+    },
+  } satisfies ChatProjectServiceContext["storage"];
+
+  return {
+    service: new ChatProjectService({
+      storage,
+      config: {
+        rootDir: tempRoot,
+        assistant: { workspaceDir: input.workspaceDir ?? "workspace" },
+      } as ChatProjectServiceContext["config"],
+      normalizeWorkspaceId: (workspaceId?: string) => workspaceId?.trim() || "default-workspace",
+      publishRealtime: (channel, topic, payload) => {
+        published.push({ channel, topic, payload });
+      },
+    }),
+    storage,
+    projects,
+  };
+}

@@ -217,4 +217,14 @@ describe("ChatSessionPrefsRepository", () => {
 
     assert.throws(() => repo.ensure("sess-unreadable", "2026-03-07T00:00:00.000Z"), /chat session prefs/);
   });
+
+  it("rejects malformed list rows from the adapter", () => {
+    const repo = createRepo();
+    const internal = repo as unknown as {
+      db: { prepare: (...args: unknown[]) => { all: (...args: unknown[]) => unknown } };
+    };
+    internal.db.prepare = () => ({ all: () => [null] });
+
+    assert.throws(() => repo.listBySessionIds(["sess-corrupt"]), /Unexpected chat_session_prefs row shape/);
+  });
 });

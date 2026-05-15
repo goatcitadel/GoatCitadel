@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ImportedAgentCatalogRecord } from "@goatcitadel/contracts";
-import { buildCatalogSpecialistSuggestion, importAgencyCatalog } from "./agency-agent-catalog-service.js";
+import {
+  buildCatalogSpecialistSuggestion,
+  importAgencyCatalog,
+  suggestImportedCatalogEntries,
+} from "./agency-agent-catalog-service.js";
 
 const tempRoots: string[] = [];
 
@@ -139,5 +143,58 @@ describe("agency-agent-catalog-service", () => {
     expect(suggestion.suggestedRoutingMode).toBe("manual_only");
     expect(suggestion.suggestedStatus).toBe("drafted");
     expect(suggestion.evidence[0]?.skillRef).toBe(`catalog:${entry.entryId}`);
+  });
+
+  it("suggests matching imported catalog entries and filters retired or unsupported entries", async () => {
+    const repoRoot = await createFixtureRepo();
+    const storage = createStorage();
+    await importAgencyCatalog({
+      storage: storage as never,
+      workspaceId: "default",
+      repoUrl: repoRoot,
+      ref: "fixture",
+      now: "2026-04-20T15:00:00.000Z",
+    });
+    const entries = storage.importedAgentCatalog.list({ workspaceId: "default", limit: 10 });
+    const retired = {
+      ...entries[0]!,
+      entryId: "retired-entry",
+      state: "retired" as const,
+    };
+    const unsupported = {
+      ...entries[1]!,
+      entryId: "unsupported-entry",
+      definition: {
+        ...entries[1]!.definition,
+        parseStatus: "unsupported" as const,
+      },
+    };
+
+    const suggestions = suggestImportedCatalogEntries({
+      entries: [...entries, retired, unsupported],
+      content: "Need frontend developer help with clean UI performance and interface polish",
+      mode: "code",
+      limit: 1,
+    });
+
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0]).toMatchObject({
+      title: "Frontend Developer",
+      role: "frontend-developer",
+      source: "catalog",
+      suggestedRoutingMode: "manual_only",
+    });
+    expect(suggestions[0]?.candidateId).not.toBe("retired-entry");
+    expect(suggestions[0]?.candidateId).not.toBe("unsupported-entry");
+  });
+
+  it("returns no imported catalog suggestions when the request has no useful keywords", () => {
+    expect(
+      suggestImportedCatalogEntries({
+        entries: [],
+        content: "to and for the",
+        mode: "chat",
+      }),
+    ).toEqual([]);
   });
 });

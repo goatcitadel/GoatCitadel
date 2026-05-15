@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { preflightChatRoute, resolveChatRouteDescriptor } from "./chat-route-resolution.js";
+import {
+  createRoutingDecisionFingerprint,
+  preflightChatRoute,
+  resolveChatRouteDescriptor,
+} from "./chat-route-resolution.js";
 
 function createHost(input?: {
   sessionPrefs?: {
@@ -153,5 +157,326 @@ describe("chat-route-resolution", () => {
     });
 
     expect(host.requireChatTurnContext).toHaveBeenCalledWith("session-1", "turn-1");
+  });
+
+  it("blocks missing, unknown, unauthenticated, and model-less provider routes before dispatch", () => {
+    expect(
+      resolveChatRouteDescriptor(
+        createHost({
+          sessionPrefs: { providerId: undefined, model: undefined },
+          runtime: {
+            activeProviderId: "",
+            activeModel: "",
+            providers: [],
+          },
+        }) as never,
+        "session-1",
+        { action: "send" },
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        runtimeClass: "unknown",
+        blockedReason: expect.stringContaining("No model provider is configured"),
+      }),
+    );
+
+    expect(
+      resolveChatRouteDescriptor(createHost() as never, "session-1", {
+        action: "send",
+        providerId: "missing-provider",
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        effectiveProviderId: "missing-provider",
+        runtimeClass: "unknown",
+        blockedReason: "Unknown model provider: missing-provider.",
+      }),
+    );
+
+    expect(
+      resolveChatRouteDescriptor(
+        createHost({
+          runtime: {
+            activeProviderId: "anthropic",
+            activeModel: "claude-sonnet-4-6",
+            providers: [
+              {
+                providerId: "anthropic",
+                label: "Anthropic",
+                defaultModel: "claude-sonnet-4-6",
+                hasApiKey: false,
+                baseUrl: "https://api.anthropic.com/v1",
+              },
+            ],
+          },
+        }) as never,
+        "session-1",
+        { action: "send" },
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        runtimeClass: "cloud",
+        blockedReason: "Anthropic is not configured yet. Add an API key before using it.",
+      }),
+    );
+
+    expect(
+      resolveChatRouteDescriptor(
+        createHost({
+          sessionPrefs: { providerId: "openai", model: "claude-sonnet-4-6" },
+          runtime: {
+            activeProviderId: "openai",
+            activeModel: "",
+            providers: [
+              {
+                providerId: "openai",
+                label: "OpenAI",
+                hasApiKey: true,
+                baseUrl: "https://api.openai.com/v1",
+              },
+            ],
+          },
+        }) as never,
+        "session-1",
+        { action: "send", providerId: "openai", model: "claude-sonnet-4-6" },
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        effectiveModel: undefined,
+        blockedReason: "Model claude-sonnet-4-6 belongs to anthropic; choose a openai model first.",
+      }),
+    );
+  });
+
+  it("normalizes google model ids and reports fallback boundary direction", () => {
+    const google = resolveChatRouteDescriptor(
+      createHost({
+        runtime: {
+          activeProviderId: "google",
+          activeModel: "gemini-2.5-flash",
+          providers: [
+            {
+              providerId: "google",
+              label: "Google",
+              defaultModel: "gemini-2.5-flash",
+              hasApiKey: true,
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            },
+          ],
+        },
+      }) as never,
+      "session-1",
+      { action: "send", providerId: "google", model: "gemini-2.5-pro" },
+    );
+    expect(google.effectiveModel).toBe("models/gemini-2.5-pro");
+
+    const googlePrefixed = resolveChatRouteDescriptor(
+      createHost({
+        runtime: {
+          activeProviderId: "google",
+          activeModel: "models/gemini-2.5-flash",
+          providers: [
+            {
+              providerId: "google",
+              label: "Google",
+              defaultModel: "models/gemini-2.5-flash",
+              hasApiKey: true,
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            },
+          ],
+        },
+      }) as never,
+      "session-1",
+      { action: "send", providerId: "google", model: "models/gemini-2.5-flash" },
+    );
+    expect(googlePrefixed.effectiveModel).toBe("models/gemini-2.5-flash");
+
+    const googleNonGemini = resolveChatRouteDescriptor(
+      createHost({
+        runtime: {
+          activeProviderId: "google",
+          activeModel: "text-bison",
+          providers: [
+            {
+              providerId: "google",
+              label: "Google",
+              defaultModel: "text-bison",
+              hasApiKey: true,
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            },
+          ],
+        },
+      }) as never,
+      "session-1",
+      { action: "send", providerId: "google", model: " text-bison " },
+    );
+    expect(googleNonGemini.effectiveModel).toBe("text-bison");
+
+    const providerDefaultWhenInactive = resolveChatRouteDescriptor(
+      createHost({
+        sessionPrefs: { providerId: "anthropic" },
+        runtime: {
+          activeProviderId: "openai",
+          activeModel: "gpt-5.4",
+          providers: [
+            {
+              providerId: "openai",
+              label: "OpenAI",
+              defaultModel: "gpt-5.4",
+              hasApiKey: true,
+              baseUrl: "https://api.openai.com/v1",
+            },
+            {
+              providerId: "anthropic",
+              label: "Anthropic",
+              defaultModel: "claude-sonnet-4-6",
+              hasApiKey: true,
+              baseUrl: "https://api.anthropic.com/v1",
+            },
+          ],
+        },
+      }) as never,
+      "session-1",
+      { action: "send", providerId: "anthropic" },
+    );
+    expect(providerDefaultWhenInactive.effectiveModel).toBe("claude-sonnet-4-6");
+
+    const missingModel = resolveChatRouteDescriptor(
+      createHost({
+        runtime: {
+          activeProviderId: "openai",
+          activeModel: "",
+          providers: [
+            {
+              providerId: "openai",
+              label: "OpenAI",
+              hasApiKey: true,
+              baseUrl: "https://api.openai.com/v1",
+            },
+          ],
+        },
+      }) as never,
+      "session-1",
+      { action: "send" },
+    );
+    expect(missingModel.blockedReason).toBe("No model is configured for OpenAI. Select a model first.");
+
+    const sameBoundary = resolveChatRouteDescriptor(
+      createHost({
+        runtime: {
+          activeProviderId: "openai",
+          activeModel: "gpt-5.4",
+          providers: [
+            {
+              providerId: "openai",
+              label: "OpenAI",
+              defaultModel: "gpt-5.4",
+              hasApiKey: true,
+              baseUrl: "https://api.openai.com/v1",
+            },
+            {
+              providerId: "anthropic",
+              label: "Anthropic",
+              defaultModel: "claude-sonnet-4-6",
+              hasApiKey: true,
+              baseUrl: "https://api.anthropic.com/v1",
+            },
+          ],
+        },
+        fallbacks: [{ providerId: "anthropic", model: "claude-sonnet-4-6" }],
+      }) as never,
+      "session-1",
+      { action: "send" },
+    );
+    expect(sameBoundary).toEqual(
+      expect.objectContaining({
+        fallbackPolicy: "armed",
+        fallbackResult: "same_boundary",
+        degradedReason: "Fallback is armed if the primary route fails.",
+      }),
+    );
+
+    const cloudToLocal = resolveChatRouteDescriptor(
+      createHost({
+        runtime: {
+          activeProviderId: "openai",
+          activeModel: "gpt-5.4",
+          providers: [
+            {
+              providerId: "openai",
+              label: "OpenAI",
+              defaultModel: "gpt-5.4",
+              hasApiKey: true,
+              baseUrl: "https://api.openai.com/v1",
+            },
+            {
+              providerId: "ollama",
+              label: "Ollama",
+              defaultModel: "llama3.2",
+              hasApiKey: false,
+              baseUrl: "http://127.0.0.1:11434/v1",
+            },
+          ],
+        },
+        fallbacks: [{ providerId: "ollama", model: "llama3.2" }],
+      }) as never,
+      "session-1",
+      { action: "send" },
+    );
+    expect(cloudToLocal).toEqual(
+      expect.objectContaining({
+        fallbackPolicy: "armed",
+        fallbackResult: "cloud_to_local",
+        degradedReason: expect.stringContaining("cloud to local"),
+      }),
+    );
+  });
+
+  it("preflights local runtimes with empty model lists and uses stable fingerprints", async () => {
+    const host = createHost({
+      runtime: {
+        activeProviderId: "ollama",
+        activeModel: "llama3.2",
+      },
+      listModels: [],
+    });
+
+    const preflight = await preflightChatRoute(host as never, "session-1", { action: "send" });
+
+    expect(preflight).toEqual(
+      expect.objectContaining({
+        runtimeClass: "local",
+        runtimeReachability: "models_unavailable",
+        blockedReason: "No models are currently available for Ollama.",
+      }),
+    );
+
+    const base = {
+      action: "send" as const,
+      requestedProviderId: "openai",
+      requestedModel: "gpt-5.4",
+      effectiveProviderId: "openai",
+      effectiveModel: "gpt-5.4",
+      selectionSource: "manual" as const,
+      fallbackPolicy: "off" as const,
+      fallbackResult: "not_applicable" as const,
+      runtimeReachability: "not_checked" as const,
+      runtimeClass: "cloud" as const,
+      issuedAt: "2026-05-14T00:00:00.000Z",
+      expiresAt: "2026-05-14T00:00:30.000Z",
+    };
+    expect(createRoutingDecisionFingerprint(base)).toBe(
+      createRoutingDecisionFingerprint({
+        ...base,
+        issuedAt: "2026-05-14T00:01:00.000Z",
+        expiresAt: "2026-05-14T00:01:30.000Z",
+      }),
+    );
+    expect(
+      createRoutingDecisionFingerprint({
+        ...base,
+        requestedModel: ["gpt-5.4", "backup"] as never,
+      }),
+    ).toEqual(expect.any(String));
   });
 });

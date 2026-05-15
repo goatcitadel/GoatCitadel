@@ -171,7 +171,7 @@ const PRELOAD_ROUTE_MODULES = [
 const GATEWAY_ACCESS_AUTO_RETRY_MS = 300;
 const OPERATE_STATUS_STALE_AFTER_MS = 45_000;
 
-function getStartupMonotonicNow(): number {
+export function getStartupMonotonicNow(): number {
   if (typeof performance !== "undefined" && typeof performance.now === "function") {
     return performance.now();
   }
@@ -233,12 +233,12 @@ type ViewTransitionDocument = Document & {
   startViewTransition?: (updateCallback: () => void) => { finished: Promise<void> };
 };
 
-function resolveShellThemeClass(theme: "dark" | "light"): "theme-signal-noir" | "theme-citadel-light" {
+export function resolveShellThemeClass(theme: "dark" | "light"): "theme-signal-noir" | "theme-citadel-light" {
   const forcedTheme = readThemeOverrideFromLocation();
   return (forcedTheme ?? theme) === "light" ? "theme-citadel-light" : "theme-signal-noir";
 }
 
-function readThemeOverrideFromLocation(): "dark" | "light" | null {
+export function readThemeOverrideFromLocation(): "dark" | "light" | null {
   if (typeof window === "undefined") {
     return null;
   }
@@ -252,7 +252,7 @@ function readThemeOverrideFromLocation(): "dark" | "light" | null {
   return null;
 }
 
-function isEditableTarget(target: EventTarget | null): boolean {
+export function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false;
   }
@@ -264,7 +264,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
   );
 }
 
-function deriveTimelineTab(route: ResolvedRoute): TimelineTab {
+export function deriveTimelineTab(route: ResolvedRoute): TimelineTab {
   if (route.space !== "observe") {
     return "activity";
   }
@@ -280,11 +280,11 @@ function deriveTimelineTab(route: ResolvedRoute): TimelineTab {
   return "activity";
 }
 
-function deriveHealthTab(route: ResolvedRoute): HealthTab {
+export function deriveHealthTab(route: ResolvedRoute): HealthTab {
   return route.space === "observe" && route.page === "system" ? "system" : "costs";
 }
 
-function deriveGeneralTab(route: ResolvedRoute): GeneralTab {
+export function deriveGeneralTab(route: ResolvedRoute): GeneralTab {
   if (
     route.space === "configure" &&
     route.page === "settings" &&
@@ -295,11 +295,11 @@ function deriveGeneralTab(route: ResolvedRoute): GeneralTab {
   return "general";
 }
 
-function deriveWorkspacesTab(route: ResolvedRoute): WorkspacesTab {
+export function deriveWorkspacesTab(route: ResolvedRoute): WorkspacesTab {
   return route.space === "configure" && route.page === "settings" && route.tab === "addons" ? "addons" : "workspaces";
 }
 
-function resolveShellRailDefaultSize(navMode: "expanded" | "compact" | "icon"): number {
+export function resolveShellRailDefaultSize(navMode: "expanded" | "compact" | "icon"): number {
   switch (navMode) {
     case "compact":
       return 176;
@@ -1896,7 +1896,7 @@ export function App() {
   );
 }
 
-function parseDeviceAccessPrompt(event: RealtimeEvent): DeviceAccessApprovalPrompt | undefined {
+export function parseDeviceAccessPrompt(event: RealtimeEvent): DeviceAccessApprovalPrompt | undefined {
   const approvalId = readDeviceAccessPromptField(event.payload, "approvalId");
   const requestId = readDeviceAccessPromptField(event.payload, "requestId");
   if (!approvalId || !requestId) {
@@ -1914,7 +1914,7 @@ function parseDeviceAccessPrompt(event: RealtimeEvent): DeviceAccessApprovalProm
   };
 }
 
-function upsertDeviceAccessPrompt(
+export function upsertDeviceAccessPrompt(
   current: DeviceAccessApprovalPrompt[],
   incoming: DeviceAccessApprovalPrompt,
 ): DeviceAccessApprovalPrompt[] {
@@ -1922,7 +1922,7 @@ function upsertDeviceAccessPrompt(
   return [incoming, ...withoutMatch];
 }
 
-function parseRemoteApprovalActionPrompt(event: RealtimeEvent): RemoteApprovalActionPrompt | undefined {
+export function parseRemoteApprovalActionPrompt(event: RealtimeEvent): RemoteApprovalActionPrompt | undefined {
   const nested = event.payload.payload;
   if (!nested || typeof nested !== "object" || Array.isArray(nested)) {
     return undefined;
@@ -1951,7 +1951,7 @@ function parseRemoteApprovalActionPrompt(event: RealtimeEvent): RemoteApprovalAc
   };
 }
 
-function upsertRemoteApprovalPrompt(
+export function upsertRemoteApprovalPrompt(
   current: RemoteApprovalActionPrompt[],
   incoming: RemoteApprovalActionPrompt,
 ): RemoteApprovalActionPrompt[] {
@@ -1959,12 +1959,12 @@ function upsertRemoteApprovalPrompt(
   return [incoming, ...withoutMatch];
 }
 
-function readDeviceAccessPromptField(payload: Record<string, unknown>, key: string): string | undefined {
+export function readDeviceAccessPromptField(payload: Record<string, unknown>, key: string): string | undefined {
   const value = payload[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function buildMissionControlResolverId(): string {
+export function buildMissionControlResolverId(): string {
   if (typeof window === "undefined") {
     return "mission-control";
   }

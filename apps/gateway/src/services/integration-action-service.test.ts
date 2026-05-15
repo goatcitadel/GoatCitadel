@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { invokeIntegrationConnectionAction, type IntegrationActionHost } from "./integration-action-service.js";
 
@@ -47,6 +47,10 @@ function createHost(
 }
 
 describe("integration-action-service", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("dispatches local bridge actions through the configured bridge endpoint", async () => {
     const connection = createConnection({
       config: {
@@ -130,6 +134,42 @@ describe("integration-action-service", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("falls back between local bridge endpoints and reports the final bridge failure context", async () => {
+    const connection = createConnection({
+      config: {
+        bridgeUrl: "http://127.0.0.1:4040/",
+      },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: "legacy endpoint unavailable" }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(new Response("bridge offline", { status: 503 }));
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: fetchMock,
+    });
+
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "read", {
+      input: { limit: 2 },
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      message: "bridge offline",
+      output: {
+        bridgeUrl: "http://127.0.0.1:4040/",
+      },
+    });
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "http://127.0.0.1:4040/v1/integrations/actions",
+      "http://127.0.0.1:4040/api/v1/integrations/actions",
+    ]);
+  });
+
   it("returns readable blocked output when GIF search is visible but not configured", async () => {
     const connection = createConnection({
       catalogId: "automation.gif-search",
@@ -149,6 +189,100 @@ describe("integration-action-service", () => {
     expect(result.status).toBe("blocked");
     expect(result.blockedReason).toBe("gif_api_key_missing");
     expect(result.message).toContain("API key");
+  });
+
+  it("normalizes Tenor and Giphy GIF search results from provider-specific payloads", async () => {
+    vi.stubEnv("GOATCITADEL_TENOR_API_BASE_URL", "https://tenor.example.test");
+    vi.stubEnv("GOATCITADEL_GIPHY_API_BASE_URL", "https://giphy.example.test");
+    const tenorConnection = createConnection({
+      catalogId: "automation.gif-search",
+      key: "gif-search",
+      kind: "automation",
+      label: "GIF Search",
+      config: {
+        provider: "tenor",
+        apiKey: "tenor-key",
+        defaultLocale: "en_GB",
+      },
+    });
+    const giphyConnection = createConnection({
+      ...tenorConnection,
+      connectionId: "22222222-2222-2222-2222-222222222222",
+      config: {
+        provider: "giphy",
+        apiKey: "giphy-key",
+      },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            results: [
+              {
+                id: "tenor-1",
+                content_description: "Goat wave",
+                media_formats: {
+                  tinygif: { url: "https://cdn.example.test/tiny.gif" },
+                  gif: { url: "https://cdn.example.test/full.gif" },
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "giphy-1",
+                title: "Goat salute",
+                images: {
+                  fixed_height: { url: "https://cdn.example.test/fixed.gif" },
+                  original: { url: "https://cdn.example.test/original.gif" },
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+
+    const tenor = await invokeIntegrationConnectionAction(
+      createHost(tenorConnection, { fetchWithDiagnosticsTimeout: fetchMock }),
+      tenorConnection.connectionId,
+      "search",
+      { input: { query: "ops check" } },
+    );
+    const giphy = await invokeIntegrationConnectionAction(
+      createHost(giphyConnection, { fetchWithDiagnosticsTimeout: fetchMock }),
+      giphyConnection.connectionId,
+      "search",
+      { input: { query: "ops check" } },
+    );
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://tenor.example.test/v2/search?key=tenor-key&q=ops+check&limit=5&locale=en_GB",
+    );
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "https://giphy.example.test/v1/gifs/search?api_key=giphy-key&q=ops+check&limit=5&rating=pg-13",
+    );
+    expect(tenor.output?.items).toEqual([
+      {
+        id: "tenor-1",
+        title: "Goat wave",
+        url: "https://cdn.example.test/full.gif",
+      },
+    ]);
+    expect(giphy.output?.items).toEqual([
+      {
+        id: "giphy-1",
+        title: "Goat salute",
+        url: "https://cdn.example.test/original.gif",
+      },
+    ]);
   });
 
   it("executes Gmail read and write actions through the core-native Gmail runtime", async () => {
@@ -194,5 +328,38 @@ describe("integration-action-service", () => {
     expect(readResult.output?.items).toEqual(expect.arrayContaining([expect.objectContaining({ id: "msg-1" })]));
     expect(writeResult.status).toBe("executed");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("blocks incomplete Gmail writes and surfaces provider read failures", async () => {
+    const connection = createConnection({
+      catalogId: "automation.gmail",
+      key: "gmail",
+      kind: "automation",
+      label: "Gmail",
+      config: {
+        accessToken: "gmail-token",
+      },
+    });
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: vi.fn(async () => new Response("quota exceeded", { status: 429 })),
+    });
+
+    await expect(
+      invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+        input: {
+          to: "ops@example.com",
+        },
+      }),
+    ).resolves.toMatchObject({
+      status: "blocked",
+      blockedReason: "gmail_message_incomplete",
+    });
+    await expect(invokeIntegrationConnectionAction(host, connection.connectionId, "read")).resolves.toMatchObject({
+      status: "failed",
+      message: "quota exceeded",
+      output: {
+        provider: "gmail",
+      },
+    });
   });
 });

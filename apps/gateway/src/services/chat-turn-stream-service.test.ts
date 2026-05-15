@@ -19,9 +19,213 @@ vi.mock("./chat-turn-realtime.js", () => ({
   buildChatTurnRealtimeOptions: () => undefined,
 }));
 
-const { streamPreparedAgentChatTurn } = await import("./chat-turn-stream-service.js");
+const {
+  collectOrchestrationToolRuns,
+  executeDelegatedPlanStep,
+  executePreparedModeOrchestration,
+  streamPreparedAgentChatTurn,
+} = await import("./chat-turn-stream-service.js");
 
 describe("streamPreparedAgentChatTurn", () => {
+  it("collects child turn tool runs in delegation step order", () => {
+    const host = createHost();
+    host.storage.chatDelegationSteps.listByRun = vi.fn(() => [
+      { stepId: "step-1", childTurnId: "child-2" },
+      { stepId: "step-2" },
+      { stepId: "step-3", childTurnId: "child-1" },
+    ]) as never;
+    host.storage.chatToolRuns.listByTurnIds = vi.fn(
+      () =>
+        new Map([
+          ["child-1", [{ toolRunId: "run-child-1", toolName: "browser.search", status: "executed" }]],
+          ["child-2", [{ toolRunId: "run-child-2", toolName: "memory.search", status: "executed" }]],
+        ]),
+    ) as never;
+
+    expect(collectOrchestrationToolRuns(host, "run-1").map((toolRun) => toolRun.toolRunId)).toEqual([
+      "run-child-2",
+      "run-child-1",
+    ]);
+  });
+
+  it("executes delegated steps through a child session with filtered prompt-lab local tools", async () => {
+    const host = createHost();
+    host.agentSendChatMessage = vi.fn(async () => ({
+      sessionId: "delegate-session",
+      userMessage: { messageId: "delegate-user" },
+      assistantMessage: {
+        messageId: "delegate-assistant",
+        content: "Reviewed the release notes and produced the final synthesis.",
+      },
+      turnId: "delegate-turn",
+      trace: {
+        turnId: "delegate-turn",
+        sessionId: "delegate-session",
+        status: "completed",
+        model: "delegate-model",
+        routing: { effectiveProviderId: "delegate-provider" },
+      },
+      citations: [{ citationId: "citation-1", title: "Release notes" }],
+      routing: { effectiveProviderId: "delegate-provider" },
+    })) as never;
+    const prepared = createPreparedTurn({ mode: "cowork", normalizationProfile: "prompt_pack_harness" });
+
+    const result = await executeDelegatedPlanStep(host, prepared, {
+      ...createDelegatedStepInput(),
+      priorSteps: [
+        {
+          stepId: "planner",
+          role: "planner",
+          index: 0,
+          status: "completed",
+          output: "Planner output with concrete handoff.",
+          summary: "Planner summary",
+        },
+      ],
+    } as never);
+
+    const delegatedRequest = vi.mocked(host.agentSendChatMessage).mock.calls[0]?.[1] as { content: string };
+    expect(host.createChatSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "default",
+        title: "Delegate · synthesis",
+        mode: "cowork",
+      }),
+    );
+    expect(host.updateChatSessionPrefs).toHaveBeenCalledWith(
+      "delegate-session",
+      expect.objectContaining({
+        orchestrationEnabled: false,
+        subagentPolicy: "off",
+        providerId: "delegate-provider",
+        model: "delegate-model",
+      }),
+    );
+    expect(delegatedRequest.content).toContain("Prior handoffs");
+    expect(delegatedRequest.content).toContain("browser.search");
+    expect(delegatedRequest.content).not.toContain("file.find");
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        providerId: "delegate-provider",
+        model: "delegate-model",
+        childSessionId: "delegate-session",
+        childTurnId: "delegate-turn",
+        citations: [expect.objectContaining({ citationId: "citation-1" })],
+      }),
+    );
+  });
+
+  it("labels delegated timeout failures before provider results with recovery guidance", async () => {
+    const host = createHost();
+    host.agentSendChatMessage = vi.fn(async () => {
+      throw new Error("deadline exceeded before provider result");
+    }) as never;
+
+    const result = await executeDelegatedPlanStep(host, createPreparedTurn({ mode: "cowork" }), {
+      ...createDelegatedStepInput(),
+      step: {
+        ...createDelegatedStepInput().step,
+        role: "researcher",
+        delegatedRole: "researcher",
+      },
+    } as never);
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        summary: "researcher failed",
+        error: "deadline exceeded before provider result",
+        failureGuidance: "fallback guidance",
+        childSessionId: "delegate-session",
+      }),
+    );
+    expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "orchestration.step.timeout_without_provider_result",
+        runtimeError: expect.objectContaining({
+          retryable: true,
+        }),
+        context: expect.objectContaining({
+          delegatedDispatchStarted: true,
+          delegatedResponseReceived: false,
+          timeoutClassification: "timeout_without_provider_result",
+        }),
+      }),
+    );
+  });
+
+  it("converts delegated child failure responses into failed step results with guidance", async () => {
+    const host = createHost();
+    host.agentSendChatMessage = vi.fn(async () => ({
+      sessionId: "delegate-session",
+      userMessage: { messageId: "delegate-user" },
+      assistantMessage: undefined,
+      turnId: "delegate-turn-failed",
+      trace: {
+        turnId: "delegate-turn-failed",
+        sessionId: "delegate-session",
+        status: "failed",
+        model: "delegate-model",
+        failure: {
+          failureClass: "tool_failed",
+          message: "delegate tool failed",
+          retryable: true,
+        },
+      },
+      citations: [],
+      routing: { effectiveProviderId: "delegate-provider" },
+    })) as never;
+
+    const result = await executeDelegatedPlanStep(host, createPreparedTurn({ mode: "cowork" }), {
+      ...createDelegatedStepInput(),
+      step: {
+        ...createDelegatedStepInput().step,
+        role: "qa-validator",
+        delegatedRole: "qa-validator",
+      },
+    } as never);
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        output: "delegate tool failed",
+        error: "delegate tool failed",
+        failureGuidance: "fallback guidance",
+        childTurnId: "delegate-turn-failed",
+      }),
+    );
+  });
+
+  it("records delegated aborts before dispatch without calling the child turn runtime", async () => {
+    const host = createHost();
+    const controller = new AbortController();
+    controller.abort(new Error("operator stopped delegation"));
+
+    const result = await executeDelegatedPlanStep(host, createPreparedTurn({ mode: "cowork" }), {
+      ...createDelegatedStepInput(),
+      signal: controller.signal,
+    } as never);
+
+    expect(host.agentSendChatMessage).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        error: "turn-1",
+        childSessionId: "delegate-session",
+      }),
+    );
+    expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "orchestration.step.failed_before_result",
+        context: expect.objectContaining({
+          delegatedDispatchStarted: false,
+          delegatedResponseReceived: false,
+        }),
+      }),
+    );
+  });
+
   it("marks empty-output stream recovery as repaired in both the trace and message_done", async () => {
     const host = createHost();
     const chunks = [];
@@ -164,6 +368,227 @@ describe("streamPreparedAgentChatTurn", () => {
       }),
     );
   });
+
+  it("persists advisory-only orchestration plans without delegated execution", async () => {
+    const host = createHost();
+    const progress: Array<Record<string, unknown>> = [];
+    const resolution = createModeOrchestrationResolution() as any;
+    resolution.executionPlanDraft.advisoryOnly = true;
+
+    const result = await executePreparedModeOrchestration(
+      host,
+      createPreparedTurn({ mode: "cowork" }),
+      { content: "plan dinner", mode: "cowork" } as never,
+      undefined,
+      (summary) => {
+        progress.push(summary);
+      },
+      resolution,
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        finalOutput: "execution plan",
+        finalSummary: "Dinner planning workflow.",
+        citations: [],
+        stepResults: [],
+        executionPlanId: "plan-1",
+      }),
+    );
+    expect(progress).toHaveLength(2);
+    expect(host.createChatCompletion).not.toHaveBeenCalled();
+    expect(host.storage.chatDelegationRuns.patch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        status: "completed",
+        finalSummary: "Dinner planning workflow.",
+        stitchedOutput: "execution plan",
+        citations: [],
+      }),
+    );
+    expect(host.storage.chatExecutionPlans.patch).toHaveBeenCalledWith(
+      "plan-1",
+      expect.objectContaining({
+        status: "ready",
+        summary: "Dinner planning workflow.",
+      }),
+    );
+  });
+
+  it("rejects prepared mode orchestration when the prepared turn no longer resolves", async () => {
+    await expect(
+      executePreparedModeOrchestration(createHost(), createPreparedTurn({ mode: "cowork" }), {
+        content: "plan dinner",
+        mode: "cowork",
+      } as never),
+    ).rejects.toThrow("Prepared chat turn is not eligible for orchestration");
+  });
+
+  it("finalizes approval-required streams without writing an assistant message", async () => {
+    const host = createHost();
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield {
+        type: "approval_required",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        approvalId: "approval-1",
+      };
+    }) as never;
+    host.storage.chatToolRuns.listByTurn = vi.fn(() => [
+      {
+        toolRunId: "tool-1",
+        turnId: "turn-1",
+        toolName: "shell.exec",
+        status: "approval_required",
+        approvalId: "approval-1",
+      },
+    ]) as never;
+    host.collectCapabilityUpgradeSuggestions = vi.fn(async () => [
+      {
+        suggestionId: "capability-1",
+        capabilityId: "shell.exec",
+        label: "Shell execution",
+        reason: "Approval is waiting on a shell command.",
+      },
+    ]) as never;
+
+    const chunks = [];
+    for await (const chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "run command", mode: "code" } as never,
+      createPreparedTurn({ mode: "code" }),
+      "chat_thread_turn_appended",
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.map((chunk) => chunk.type)).toEqual([
+      "message_start",
+      "approval_required",
+      "capability_upgrade_suggestion",
+      "trace_update",
+    ]);
+    expect(host.ingestEvent).not.toHaveBeenCalled();
+    expect(host.updateActiveLeafOrThrow).toHaveBeenCalledWith("session-1", "turn-0", "turn-1");
+    expect(host.recordCapabilityGapFromTrace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        turnId: "turn-1",
+      }),
+    );
+    expect(host.hooksService.enqueueAfterHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: "agent_end",
+        payload: expect.objectContaining({
+          turnId: "turn-1",
+          approvalId: "approval-1",
+          toolRunCount: 1,
+          stream: true,
+        }),
+      }),
+    );
+  });
+
+  it("finalizes user-input-required streams without done or assistant persistence", async () => {
+    const host = createHost();
+    const prompt = {
+      promptId: "clarify-1",
+      message: "Which repository should I inspect?",
+      choices: ["gateway", "mission-control"],
+    };
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield {
+        type: "user_input_required",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        prompt,
+      };
+    }) as never;
+
+    const chunks = [];
+    for await (const chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "inspect it", mode: "chat" } as never,
+      createPreparedTurn(),
+      "chat_thread_turn_appended",
+      undefined,
+      { skipMessageStart: true },
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.map((chunk) => chunk.type)).toEqual(["user_input_required", "trace_update"]);
+    expect(chunks[1]).toEqual(
+      expect.objectContaining({
+        trace: expect.objectContaining({
+          status: "waiting_for_user_input",
+          pendingUserInput: prompt,
+        }),
+      }),
+    );
+    expect(host.ingestEvent).not.toHaveBeenCalled();
+    expect(chunks.some((chunk) => chunk.type === "done")).toBe(false);
+  });
+
+  it("marks an aborted stream as cancelled and still ends the active execution", async () => {
+    const host = createHost();
+    let controller: AbortController | undefined;
+    host.beginActiveChatTurnExecution = vi.fn((_sessionId, _turnId, _eventType) => {
+      controller = new AbortController();
+      return controller;
+    }) as never;
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield* [] as Iterable<never>;
+      controller?.abort();
+      throw new Error("aborted during provider stream");
+    }) as never;
+    host.markChatTurnCancelled = vi.fn(() => ({
+      turnId: "turn-1",
+      sessionId: "session-1",
+      userMessageId: "user-1",
+      parentTurnId: "turn-0",
+      branchKind: "append",
+      status: "cancelled",
+      mode: "chat",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      startedAt: "2026-04-18T00:00:00.000Z",
+      toolRuns: [],
+      citations: [],
+      routing: {},
+      failure: {
+        failureClass: "cancelled",
+        message: "Cancelled by operator.",
+        retryable: true,
+      },
+    })) as never;
+
+    const chunks = [];
+    for await (const chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "cancel", mode: "chat" } as never,
+      createPreparedTurn(),
+      "chat_thread_turn_appended",
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.map((chunk) => chunk.type)).toEqual(["message_start", "trace_update"]);
+    expect(chunks.at(-1)).toEqual(
+      expect.objectContaining({
+        trace: expect.objectContaining({
+          status: "cancelled",
+          failure: expect.objectContaining({ failureClass: "cancelled" }),
+        }),
+      }),
+    );
+    expect(host.markChatTurnCancelled).toHaveBeenCalledWith("session-1", "turn-1");
+    expect(host.endActiveChatTurnExecution).toHaveBeenCalledWith("turn-1", controller);
+  });
 });
 
 function createHost(): ChatTurnStreamHost & {
@@ -279,7 +704,21 @@ function createHost(): ChatTurnStreamHost & {
         error: step.error,
       })),
     })),
-    createChatSession: vi.fn(),
+    createChatSession: vi.fn(() => ({
+      sessionId: "delegate-session",
+      sessionKey: "mission:operator:delegate-session",
+      workspaceId: "default",
+      scope: "mission",
+      includeInHistory: true,
+      pinned: false,
+      lifecycleStatus: "active",
+      channel: "mission",
+      account: "operator",
+      updatedAt: "2026-04-18T00:00:00.000Z",
+      lastActivityAt: "2026-04-18T00:00:00.000Z",
+      tokenTotal: 0,
+      costUsdTotal: 0,
+    })),
     inheritDelegatedSessionToolGrants: vi.fn(),
     updateChatSessionPrefs: vi.fn(),
     agentSendChatMessage: vi.fn(),
@@ -309,7 +748,7 @@ function createHost(): ChatTurnStreamHost & {
   };
 }
 
-function createPreparedTurn(overrides: { mode?: "chat" | "cowork" | "code" } = {}) {
+function createPreparedTurn(overrides: { mode?: "chat" | "cowork" | "code"; normalizationProfile?: string } = {}) {
   const mode = overrides.mode ?? "chat";
   return {
     session: {
@@ -331,6 +770,7 @@ function createPreparedTurn(overrides: { mode?: "chat" | "cowork" | "code" } = {
       webMode: "off",
       memoryMode: "off",
       thinkingLevel: "standard",
+      normalizationProfile: overrides.normalizationProfile,
     },
     prefs: {
       mode,
@@ -344,6 +784,7 @@ function createPreparedTurn(overrides: { mode?: "chat" | "cowork" | "code" } = {
     autonomy: {
       proactiveMode: "off",
       lastProactiveRunId: undefined,
+      retrievalMode: "off",
     },
     effectiveToolAutonomy: "manual",
     retrievalTrace: undefined,
@@ -354,6 +795,64 @@ function createPreparedTurn(overrides: { mode?: "chat" | "cowork" | "code" } = {
       truncated: false,
     },
   } as never;
+}
+
+function createDelegatedStepInput() {
+  const step = {
+    stepId: "orch-step-synthesis",
+    index: 1,
+    role: "synthesizer",
+    delegatedRole: "synthesis",
+    label: "Synthesis",
+    stage: 1,
+    objective: "Synthesize the final answer.",
+    successCriteria: "Return a concise final handoff.",
+    expectedOutput: "Final answer",
+    dependsOnStepIds: ["planner"],
+    suggestedTools: ["browser.search", "file.find", "code.search"],
+    providerId: "delegate-provider",
+    model: "delegate-model",
+  };
+  return {
+    task: {
+      sessionId: "session-1",
+      workspaceId: "default",
+      mode: "cowork",
+      objective: "review release notes",
+      prefs: {
+        mode: "cowork",
+        providerId: "openai",
+        model: "gpt-5.4",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+      },
+      conversation: [{ role: "user", content: "Please review the release notes." }],
+      historyMessages: [],
+    },
+    plan: {
+      workflowTemplate: "cowork.plan.work.synthesize",
+      summary: "Review then synthesize.",
+      routeDecision: {
+        modePolicy: "cowork",
+        workflowTemplate: "cowork.plan.work.synthesize",
+        hidden: false,
+        visibility: "explicit",
+        intensity: "balanced",
+        providerPreference: "balanced",
+        reviewDepth: "standard",
+        parallelism: "sequential",
+        selectedRoles: ["Planner", "Synthesis"],
+        selectedProviders: [],
+        triggerReason: "test",
+      },
+      steps: [step],
+    },
+    priorSteps: [],
+    step,
+    stepIndex: 1,
+    runId: "run-1",
+  };
 }
 
 function createModeOrchestrationResolution() {

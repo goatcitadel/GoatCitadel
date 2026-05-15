@@ -59,6 +59,14 @@ import {
   extractPersistableToolArtifactContent,
 } from "./chat-agent-tool-result-compaction.js";
 import {
+  buildLocalFileAccessProbeFailure,
+  buildLocalFileAccessProbeSuccess,
+  detectLocalFileAccessCheckIntent,
+  extractExplicitLocalAccessPaths,
+  inferLocalFileAccessCheckPath,
+  looksLikeExplicitLocalAccessPath,
+} from "./chat-agent-local-file-access.js";
+import {
   buildTurnBudgetExceededFallbackMessage,
   buildTurnBudgetExceededReason,
   buildUserSafeFailureMessage,
@@ -265,6 +273,13 @@ const TOOL_REQUIRED_ARGS: Record<string, string[]> = {
   "browser.interact": ["url", "steps"],
   "http.get": ["url"],
   "http.post": ["url"],
+  "fs.read": ["path"],
+  "fs.list": ["path"],
+  "fs.stat": ["path"],
+  "fs.copy": ["from", "to"],
+  "fs.write": ["path", "content"],
+  "fs.move": ["from", "to"],
+  "fs.delete": ["path"],
   "file.read_range": ["path", "startLine", "endLine"],
   "file.find": ["path", "pattern"],
   "code.search": ["path", "query"],
@@ -512,6 +527,7 @@ export class ChatAgentOrchestrator {
     const memoryLookupIntent = detectMemoryLookupIntent(input.content) || explicitMemoryOnlyPrompt;
     const promptSpecificWebLookupTurn = input.mode !== "code" && Boolean(derivePromptSpecificWebQuery(input.content));
     const canUseMemorySearchTool = toolSchema.canonicalToModel.has("memory.search");
+    const canUseFilesystemListTool = toolSchema.canonicalToModel.has("fs.list");
     const localFileIntent = intents.localFile;
     const citations: ChatCitationRecord[] = [];
     const toolRuns: ChatToolRunRecord[] = [];
@@ -599,6 +615,81 @@ export class ChatAgentOrchestrator {
     ) {
       assistantContent = buildLocalFileAccessFallback(input.content);
     }
+
+    if (
+      !assistantContent &&
+      localFileIntent &&
+      detectLocalFileAccessCheckIntent(input.content) &&
+      canUseFilesystemListTool &&
+      input.toolAutonomy !== "manual" &&
+      !promptLabContract.toolUseSuppressed
+    ) {
+      const accessCheckPath = inferLocalFileAccessCheckPath({
+        content: input.content,
+        historyMessages: input.historyMessages,
+        promptPathExtractor: extractExplicitPromptPath,
+      });
+      if (accessCheckPath) {
+        throwIfChatTurnCancelled(input);
+        this.deps.storage.chatTurnTraces.patch(input.turnId, {
+          status: "waiting_for_tool",
+        });
+        ensureChatTurnBudgetRemaining(turnBudgetDeadline, input.webMode, effectiveTurnBudgetMs);
+        const syntheticRun = await this.executeToolCall({
+          input,
+          turnId: input.turnId,
+          toolName: "fs.list",
+          rawArgs: {
+            path: accessCheckPath,
+          },
+          localFileIntent,
+          priorToolRuns: toolRuns,
+          turnBudgetDeadline,
+        });
+        toolRunCount += 1;
+        toolRuns.push(syntheticRun.record);
+        yield {
+          type: "tool_start",
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          toolRun: {
+            ...syntheticRun.record,
+            status: "started",
+          },
+        };
+        if (syntheticRun.chunk) {
+          yield syntheticRun.chunk;
+        }
+        if (syntheticRun.record.status === "approval_required" && syntheticRun.record.approvalId) {
+          finalStatus = "waiting_for_approval";
+          finalFailure = {
+            failureClass: "approval_required",
+            message: "Approval required by policy.",
+            retryable: true,
+            recommendedAction: getChatTurnRecoveryAction("approval_required"),
+          };
+          approvalPayload = {
+            approvalId: syntheticRun.record.approvalId,
+            toolName: syntheticRun.record.toolName,
+            reason: "Approval required by policy.",
+            expiresAt: syntheticRun.approvalExpiresAt,
+          };
+          this.deps.storage.chatInlineApprovals.upsert({
+            approvalId: syntheticRun.record.approvalId,
+            sessionId: input.sessionId,
+            turnId: input.turnId,
+            toolName: syntheticRun.record.toolName,
+            status: "pending",
+            reason: "Approval required by policy.",
+            expiresAt: syntheticRun.approvalExpiresAt,
+          });
+        } else if (syntheticRun.record.status === "executed") {
+          assistantContent = buildLocalFileAccessProbeSuccess(accessCheckPath, syntheticRun.record.result);
+        } else {
+          assistantContent = buildLocalFileAccessProbeFailure(accessCheckPath, syntheticRun.record);
+        }
+      }
+    }
     const promptLabHarnessTurn = isPromptLabHarnessContent(input.content);
     const delegatedOrchestrationPrompt = looksLikeDelegatedOrchestrationPrompt(input.content);
     if (!assistantContent && !promptLabHarnessTurn && !delegatedOrchestrationPrompt) {
@@ -613,7 +704,7 @@ export class ChatAgentOrchestrator {
         assistantContent = clarificationPrompt;
       }
     }
-    if (!assistantContent) {
+    if (!assistantContent && !approvalPayload) {
       const settingsConflict = buildLiveDataSettingsConflictMessage({
         mode: input.mode,
         webLookupIntent: intents.webLookup,
@@ -1656,7 +1747,7 @@ export class ChatAgentOrchestrator {
       } as ChatCompletionMessage);
     }
 
-    if (!assistantContent) {
+    if (!assistantContent && !approvalPayload) {
       try {
         for (let loop = 0; loop < executionBudget.maxToolLoops; loop += 1) {
           throwIfChatTurnCancelled(input);
@@ -2481,6 +2572,7 @@ export class ChatAgentOrchestrator {
     const delegatedPromptLabNonCodeWithoutFileIntent =
       input.mode !== "code" &&
       !promptLabFileInspectionIntent &&
+      !intents.localFile &&
       looksLikePromptLabDelegatedNonCodeTurn(input.content, promptLabTask);
     const nonCodeWebLookupWithoutFileIntent =
       input.mode !== "code" &&
@@ -3656,6 +3748,7 @@ export class ChatAgentOrchestrator {
     if (
       input.mode !== "code" &&
       LOCAL_PATH_TOOL_NAMES.has(input.toolName) &&
+      !(input.localFileIntent ?? false) &&
       looksLikePromptLabDelegatedNonCodeTurn(input.userContent, extractPrimaryUserTaskContent(input.userContent)) &&
       !promptLabTaskSuggestsRepoInspection(input.userContent)
     ) {
@@ -4224,6 +4317,8 @@ function buildEssentialToolSet(input: {
     tools.add("http.get");
   }
   if (!input.suppressLocalPathTools && (input.localFileIntent || input.projectBound || input.mode === "code")) {
+    tools.add("fs.list");
+    tools.add("fs.stat");
     tools.add("file.read_range");
     tools.add("file.find");
     tools.add("code.search");
@@ -4736,6 +4831,9 @@ function detectLocalFileIntent(content: string): boolean {
   if (/[a-z]:[\\/]/i.test(content) || /\\\\/.test(content)) {
     return true;
   }
+  if (extractExplicitLocalAccessPaths(content).length > 0) {
+    return true;
+  }
   if (extractExplicitLocalFilePathsFromPrompt(content).length > 0) {
     return true;
   }
@@ -4752,18 +4850,6 @@ function detectLocalFileIntent(content: string): boolean {
     normalized.includes("read it and tell me what services") ||
     normalized.includes("what services i'm running") ||
     /\bread\s+.*\.(?:yml|yaml|json|md|txt|ts|tsx|js|jsx|mjs|cjs|go|rs|py|java|kt|swift|cs|sql|sh)\b/.test(normalized)
-  );
-}
-
-function detectLocalFileAccessCheckIntent(content: string): boolean {
-  const normalized = content.toLowerCase();
-  return (
-    normalized.includes("check whether you can access") ||
-    normalized.includes("confirm whether you can access") ||
-    normalized.includes("verify whether you can access") ||
-    /\b(can|could|do)\s+you\s+(?:directly\s+)?access\s+(?:my\s+)?local project files\b/.test(normalized) ||
-    /\b(can|could|do)\s+you\s+(?:directly\s+)?read\s+(?:my\s+)?local project files\b/.test(normalized) ||
-    /\b(can|could)\s+you\s+(?:actually\s+)?open\b.*\blocal project files\b/.test(normalized)
   );
 }
 
@@ -13587,11 +13673,17 @@ function extractExplicitPromptPath(content: string): string | undefined {
       return;
     }
     const normalized = normalizePromptPathCandidate(value);
-    if (!looksLikePromptPathCandidate(normalized) || candidates.includes(normalized)) {
+    if (!looksLikeExplicitLocalAccessPath(normalized) && !looksLikePromptPathCandidate(normalized)) {
+      return;
+    }
+    if (candidates.includes(normalized)) {
       return;
     }
     candidates.push(normalized);
   };
+  for (const candidate of extractExplicitLocalAccessPaths(content)) {
+    pushCandidate(candidate);
+  }
   for (const match of content.matchAll(/`([^`\r\n]+)`/g)) {
     pushCandidate(match[1]);
   }

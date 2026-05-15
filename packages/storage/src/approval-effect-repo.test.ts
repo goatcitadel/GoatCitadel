@@ -265,4 +265,129 @@ describe("ApprovalEffectRepository", () => {
       detail: "legacy detail",
     });
   });
+
+  it("honors explicit idempotency keys and default completion payloads", () => {
+    const { repo, db } = createRepoWithDb();
+    insertApproval(db, "approval-defaults");
+
+    const explicit = repo.upsert({
+      approvalId: "approval-defaults",
+      effectKind: "approval_inbox_follow_up",
+      targetKind: "approval",
+      targetId: "approval-defaults",
+      idempotencyKey: "custom-key",
+      status: "running",
+      attemptCount: 3,
+      result: { previous: true },
+      lastError: "old failure",
+      claimedBy: "worker-defaults",
+      claimedAt: "2026-03-22T10:00:00.000Z",
+      leaseExpiresAt: "2026-03-22T10:10:00.000Z",
+      version: 7,
+      completedAt: "2026-03-22T10:01:00.000Z",
+    });
+
+    assert.equal(explicit.idempotencyKey, "custom-key");
+    assert.equal(explicit.status, "running");
+    assert.equal(explicit.attemptCount, 3);
+    assert.deepEqual(explicit.result, { previous: true });
+    assert.equal(explicit.lastError, "old failure");
+    assert.equal(explicit.claimedBy, "worker-defaults");
+    assert.equal(explicit.claimedAt, "2026-03-22T10:00:00.000Z");
+    assert.equal(explicit.leaseExpiresAt, "2026-03-22T10:10:00.000Z");
+    assert.equal(explicit.version, 7);
+    assert.equal(explicit.completedAt, "2026-03-22T10:01:00.000Z");
+
+    assert.equal(repo.completeEffect(explicit.effectId, "worker-mismatch", 7, {}), undefined);
+    const completed = repo.completeEffect(explicit.effectId, "worker-defaults", 7, {});
+    assert.equal(completed?.status, "completed");
+    assert.deepEqual(completed?.result, {});
+    assert.ok(completed?.completedAt);
+
+    const skippedBase = repo.upsert({
+      approvalId: "approval-defaults",
+      effectKind: "pending_action_execute",
+      targetKind: "pending_action",
+      targetId: "action-defaults",
+      status: "running",
+      claimedBy: "worker-skip",
+      version: 1,
+    });
+    const skipped = repo.skipEffect(skippedBase.effectId, "worker-skip", 1, {});
+    assert.equal(skipped?.status, "skipped");
+    assert.deepEqual(skipped?.result, {});
+    assert.ok(skipped?.completedAt);
+
+    const failedBase = repo.upsert({
+      approvalId: "approval-defaults",
+      effectKind: "linked_chat_turn_wake",
+      targetKind: "chat_turn",
+      targetId: "turn-defaults",
+      status: "running",
+      claimedBy: "worker-fail",
+      version: 1,
+    });
+    const failed = repo.failEffect(failedBase.effectId, "worker-fail", 1, {
+      lastError: "still failing",
+    });
+    assert.equal(failed?.status, "failed");
+    assert.deepEqual(failed?.result, {});
+    assert.equal(failed?.lastError, "still failing");
+  });
+
+  it("continues past stale claim candidates and maps malformed legacy result fallbacks", () => {
+    const { repo } = createRepoWithDb();
+    const internal = repo as unknown as {
+      claimCandidatesStmt: { all: (...args: unknown[]) => unknown };
+      claimEffectStmt: { run: (...args: unknown[]) => { changes?: number } };
+      getByIdStmt: { get: (...args: unknown[]) => unknown };
+    };
+
+    internal.claimCandidatesStmt = {
+      all: () => [
+        {
+          effect_id: "effect-stale",
+          version: null,
+        },
+      ],
+    };
+    internal.claimEffectStmt = { run: () => ({}) };
+    assert.equal(
+      repo.claimNextPendingEffect("worker", "2026-03-22T12:00:00.000Z", "2026-03-22T12:05:00.000Z"),
+      undefined,
+    );
+
+    internal.getByIdStmt = {
+      get: () => ({
+        effect_id: "effect-legacy-empty",
+        approval_id: "approval-legacy",
+        effect_kind: "approval_wait_wake",
+        target_kind: "durable_run",
+        target_id: "run-legacy",
+        idempotency_key: "legacy-key",
+        status: "pending",
+        outcome: null,
+        detail: null,
+        details_json: "{bad",
+        attempt_count: null,
+        payload_json: "{bad",
+        result_json: null,
+        last_error: null,
+        claimed_by: null,
+        claimed_at: null,
+        lease_expires_at: null,
+        version: null,
+        created_at: "2026-03-22T12:00:00.000Z",
+        updated_at: "2026-03-22T12:00:00.000Z",
+        completed_at: null,
+      }),
+    };
+
+    const legacy = repo.get("effect-legacy-empty");
+    assert.equal(legacy.idempotencyKey, "legacy-key");
+    assert.deepEqual(legacy.payload, {});
+    assert.deepEqual(legacy.result, {});
+    assert.equal(legacy.attemptCount, 0);
+    assert.equal(legacy.version, 1);
+  });
 });

@@ -33,18 +33,25 @@ const PREFS = {
   updatedAt: "2026-04-20T00:00:00.000Z",
 } as any;
 
-function Harness(props: { sessionId?: string | null; editingTurnId?: string | null }) {
+function Harness(props: {
+  sessionId?: string | null;
+  editingTurnId?: string | null;
+  enabled?: boolean;
+  prefs?: typeof PREFS | null;
+}) {
   latest = useChatRoutePreflight({
-    sessionId: props.sessionId ?? "session-1",
-    prefs: PREFS,
+    sessionId: props.sessionId === undefined ? "session-1" : props.sessionId,
+    prefs: props.prefs === undefined ? PREFS : props.prefs,
     displayAction: props.editingTurnId ? "edit" : "send",
     displayTurnId: props.editingTurnId ?? undefined,
+    enabled: props.enabled,
   });
   return null;
 }
 
 describe("useChatRoutePreflight", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     latest = null;
     preflightChatRoute.mockReset();
   });
@@ -107,5 +114,100 @@ describe("useChatRoutePreflight", () => {
         turnId: "turn-2",
       }),
     );
+  });
+
+  it("clears display state when disabled or missing a session", async () => {
+    preflightChatRoute.mockResolvedValue({
+      selectionSource: "session",
+      fallbackPolicy: "off",
+      fallbackResult: "not_applicable",
+      runtimeReachability: "reachable",
+      runtimeClass: "local",
+    });
+
+    await act(async () => {
+      create(<Harness enabled={false} />);
+      await Promise.resolve();
+    });
+
+    expect(preflightChatRoute).not.toHaveBeenCalled();
+    expect(latest?.result).toBeNull();
+    expect(latest?.loading).toBe(false);
+
+    await act(async () => {
+      create(<Harness sessionId={null} />);
+      await Promise.resolve();
+    });
+
+    expect(latest?.resultHash).toBeNull();
+    await act(async () => {
+      await expect(latest?.ensureFreshPreflight({ action: "send" })).resolves.toBeNull();
+    });
+  });
+
+  it("surfaces load errors and reuses fresh cached display results", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-04T00:00:00.000Z"));
+    preflightChatRoute.mockRejectedValueOnce("route unavailable").mockResolvedValue({
+      selectionSource: "session",
+      fallbackPolicy: "off",
+      fallbackResult: "not_applicable",
+      runtimeReachability: "reachable",
+      runtimeClass: "local",
+    });
+
+    await act(async () => {
+      create(<Harness />);
+      await Promise.resolve();
+    });
+
+    expect(latest?.error).toBe("route unavailable");
+
+    await act(async () => {
+      await latest?.ensureFreshPreflight({ action: "send" });
+    });
+    expect(preflightChatRoute).toHaveBeenCalledTimes(2);
+    expect(latest?.error).toBeNull();
+    expect(latest?.resultHash).toContain("reachable");
+
+    await act(async () => {
+      await latest?.ensureFreshPreflight({ action: "send" });
+    });
+    expect(preflightChatRoute).toHaveBeenCalledTimes(2);
+
+    vi.advanceTimersByTime(30_000);
+    await act(async () => {
+      await latest?.ensureFreshPreflight({ action: "send" });
+    });
+    expect(preflightChatRoute).toHaveBeenCalledTimes(3);
+    vi.useRealTimers();
+  });
+
+  it("does not update state after an in-flight display request is cancelled", async () => {
+    let resolvePreflight!: (value: unknown) => void;
+    preflightChatRoute.mockReturnValue(
+      new Promise((resolve) => {
+        resolvePreflight = resolve;
+      }),
+    );
+
+    let renderer!: ReturnType<typeof create>;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    await act(async () => {
+      renderer.update(<Harness enabled={false} />);
+      resolvePreflight({
+        selectionSource: "session",
+        fallbackPolicy: "off",
+        fallbackResult: "not_applicable",
+        runtimeReachability: "reachable",
+        runtimeClass: "local",
+      });
+      await Promise.resolve();
+    });
+
+    expect(latest?.result).toBeNull();
+    expect(latest?.loading).toBe(false);
   });
 });

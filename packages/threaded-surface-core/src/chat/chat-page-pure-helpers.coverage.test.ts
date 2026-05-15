@@ -54,6 +54,10 @@ describe("chat-page-pure-helpers coverage", () => {
       refreshSidebar: false,
       refreshSession: "light",
     });
+    expect(resolveChatRefreshPlan({} as never, true)).toEqual({
+      refreshSidebar: false,
+      refreshSession: "none",
+    });
     expect(
       resolveChatRefreshPlan({ eventType: "chat_thread_updated", reason: "mode echo", source: "prefs" }, true),
     ).toEqual({
@@ -202,6 +206,8 @@ describe("chat-page-pure-helpers coverage", () => {
     expect(resolveSelectedTurnId({ turns: [{ turnId: "turn-1" }, { turnId: "turn-2" }] }, null, "turn-2")).toBe(
       "turn-2",
     );
+    expect(resolveSelectedTurnId({ turns: [{ turnId: "turn-1" }, { turnId: "turn-2" }] }, "turn-1")).toBe("turn-1");
+    expect(resolveSelectedTurnId({ turns: [{ turnId: "turn-1" }] }, "missing", "also-missing")).toBe("turn-1");
     expect(
       resolveSelectedTurnId(
         { selectedTurnId: "missing", activeLeafTurnId: "turn-1", turns: [{ turnId: "turn-1" }] },

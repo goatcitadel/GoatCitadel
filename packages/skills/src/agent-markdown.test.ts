@@ -157,6 +157,28 @@ custom: kept
     expect(missingRequired.parseWarnings.join(" ")).toContain("Frontmatter description is required");
   });
 
+  it("normalizes services from mixed arrays without preserving empty or duplicate entries", () => {
+    const parsed = parseRichAgentMarkdown(`---
+name: Mixed Services
+description: Normalizes service metadata
+services:
+  - " research "
+  - 42
+  - ""
+  - code
+  - research
+---
+
+## Your Identity & Memory
+- Persona
+
+## Your Core Mission
+- Work`);
+
+    expect(parsed.parseStatus).toBe("supported");
+    expect(parsed.frontmatter?.services).toEqual(["research", "code"]);
+  });
+
   it("tracks duplicate canonical sections and reference groups", () => {
     const parsed = parseRichAgentMarkdown(`---
 name: Operations Lead

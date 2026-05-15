@@ -1322,7 +1322,7 @@ function WizardStepPanel(props: Parameters<typeof ChannelSetupContent>[0]) {
   );
 }
 
-function formatConnectionTargetSummary(connection: IntegrationConnection): string {
+export function formatConnectionTargetSummary(connection: IntegrationConnection): string {
   const config = connection.config ?? {};
   const targets = Array.isArray(config.targets) ? config.targets : [];
   const targetRecords = targets.filter((target): target is Record<string, unknown> => {
@@ -1341,7 +1341,7 @@ function formatConnectionTargetSummary(connection: IntegrationConnection): strin
   return `${connection.catalogId}${defaultLabel ? ` · default ${defaultLabel}` : ""}`;
 }
 
-function readConnectionString(record: Record<string, unknown> | undefined, key: string): string | undefined {
+export function readConnectionString(record: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = record?.[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }

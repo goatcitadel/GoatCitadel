@@ -118,6 +118,22 @@ function createMemoryStorage(): Storage {
 
 const activeTimeoutHandles = new Set<ReturnType<typeof globalThis.setTimeout>>();
 const activeIntervalHandles = new Set<ReturnType<typeof globalThis.setInterval>>();
+const browserGlobalKeys = [
+  "window",
+  "document",
+  "navigator",
+  "history",
+  "confirm",
+  "prompt",
+  "EventSource",
+  "DocumentFragment",
+] as const;
+type BrowserGlobalKey = (typeof browserGlobalKeys)[number];
+const originalBrowserGlobals = new Map<BrowserGlobalKey, PropertyDescriptor | undefined>(
+  browserGlobalKeys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
+);
+const originalCreateObjectURL = Object.getOwnPropertyDescriptor(URL, "createObjectURL");
+const originalRevokeObjectURL = Object.getOwnPropertyDescriptor(URL, "revokeObjectURL");
 
 function trackedSetTimeout(
   callback: (...args: never[]) => void,
@@ -166,6 +182,27 @@ function clearTrackedTimers(): void {
     globalThis.clearTimeout(handle);
   }
   activeTimeoutHandles.clear();
+}
+
+function restoreBrowserGlobals(): void {
+  for (const key of browserGlobalKeys) {
+    const descriptor = originalBrowserGlobals.get(key);
+    if (descriptor) {
+      Object.defineProperty(globalThis, key, descriptor);
+    } else {
+      Reflect.deleteProperty(globalThis, key);
+    }
+  }
+  if (originalCreateObjectURL) {
+    Object.defineProperty(URL, "createObjectURL", originalCreateObjectURL);
+  } else {
+    Reflect.deleteProperty(URL, "createObjectURL");
+  }
+  if (originalRevokeObjectURL) {
+    Object.defineProperty(URL, "revokeObjectURL", originalRevokeObjectURL);
+  } else {
+    Reflect.deleteProperty(URL, "revokeObjectURL");
+  }
 }
 
 class TestBoundary extends React.Component<
@@ -858,12 +895,15 @@ const targets: SmokeTarget[] = [
 
 describe("mission-control interaction coverage", () => {
   beforeEach(() => {
+    clearTrackedTimers();
     installWindowAndFetch();
   });
 
   afterEach(() => {
     clearTrackedTimers();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    restoreBrowserGlobals();
   });
 
   it.each(targets)("renders $name without crashing", async ({ load, props }) => {

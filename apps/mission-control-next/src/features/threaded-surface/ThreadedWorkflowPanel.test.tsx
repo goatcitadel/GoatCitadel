@@ -7,7 +7,14 @@ import {
 } from "@goatcitadel/mission-control-shared/api/agentic";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { WorkbenchFileTree } from "@goatcitadel/mission-control-shared/components/WorkbenchFileTree";
-import { ThreadedWorkflowPanel } from "./ThreadedWorkflowPanel";
+import {
+  ThreadedWorkflowPanel,
+  describeAgenticControlCopy,
+  extractCodeBlocks,
+  isPendingPatchBlock,
+  shortId,
+  validationStatusTone,
+} from "./ThreadedWorkflowPanel";
 
 vi.mock("@goatcitadel/mission-control-shared/api/agentic", () => ({
   fetchAgenticChannelDeliveries: vi.fn(),
@@ -28,6 +35,10 @@ function instanceText(value: unknown): string {
     return "";
   }
   return value.map(instanceText).join("");
+}
+
+function findButton(renderer: ReactTestRenderer, label: string) {
+  return renderer.root.findAllByType("button").find((button) => instanceText(button.children).includes(label));
 }
 
 function buildCoworkPanel(onAgenticControl = vi.fn()): Extract<MissionThreadedWorkflowPanel, { kind: "cowork" }> {
@@ -461,7 +472,17 @@ describe("ThreadedWorkflowPanel", () => {
     const openConfirm = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
     expect(openConfirm?.props.title).toBe("Discard unsaved file changes?");
     act(() => {
-      openConfirm?.props.onConfirm();
+      openConfirm?.props.onCancel();
+    });
+    expect(onDiscardDraft).not.toHaveBeenCalled();
+    expect(onSelectFile).not.toHaveBeenCalled();
+
+    act(() => {
+      fileTree.props.onSelectFile("src/other.ts");
+    });
+    const reopenedConfirm = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
+    act(() => {
+      reopenedConfirm?.props.onConfirm();
     });
     expect(onDiscardDraft).toHaveBeenCalled();
     expect(onSelectFile).toHaveBeenCalledWith("src/other.ts");
@@ -486,6 +507,19 @@ describe("ThreadedWorkflowPanel", () => {
     const openConfirm = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
     expect(openConfirm).toBeTruthy();
     expect(openConfirm?.props.title).toBe("Revert all worktree changes?");
+    act(() => {
+      openConfirm?.props.onCancel();
+    });
+    expect(onRevertAll).not.toHaveBeenCalled();
+
+    act(() => {
+      revertButton?.props.onClick();
+    });
+    const reopenedConfirm = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
+    act(() => {
+      reopenedConfirm?.props.onConfirm();
+    });
+    expect(onRevertAll).toHaveBeenCalledTimes(1);
   });
 
   it("binds existing projects and imports code sources from the unbound workbench state", async () => {
@@ -597,6 +631,539 @@ describe("ThreadedWorkflowPanel", () => {
       ref: "feature/coverage",
       name: "Goat App",
     });
+  });
+
+  it("keeps unbound source actions inert when required inputs or handlers are missing", async () => {
+    const onImportProjectSource = vi.fn(async () => undefined);
+    let renderer: ReactTestRenderer | undefined;
+
+    await act(async () => {
+      renderer = create(
+        <ThreadedWorkflowPanel
+          panel={buildCodePanel({
+            needsProjectBinding: true,
+            workbenchState: null,
+            workbenchTree: null,
+            diff: null,
+            output: null,
+            availableProjects: [],
+            sourceBindingBusy: true,
+            onBindExistingProject: undefined,
+            onImportProjectSource,
+          } as any)}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(JSON.stringify(renderer!.toJSON())).toContain("import a local folder");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("GitHub repo");
+
+    const buttons = renderer!.root.findAllByType("button");
+    await act(async () => {
+      buttons.find((button) => button.children.includes("Importing…"))?.props.onClick();
+      buttons.find((button) => button.children.includes("GitHub repo"))?.props.onClick();
+    });
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Cloning…"))
+        ?.props.onClick();
+      await Promise.resolve();
+    });
+    expect(onImportProjectSource).not.toHaveBeenCalled();
+  });
+
+  it("covers selected project candidates and empty workbench pane fallbacks", async () => {
+    const onBindExistingProject = vi.fn(async () => undefined);
+    let renderer: ReactTestRenderer | undefined;
+
+    await act(async () => {
+      renderer = create(
+        <ThreadedWorkflowPanel
+          panel={buildCodePanel({
+            needsProjectBinding: true,
+            workbenchState: null,
+            workbenchTree: null,
+            diff: null,
+            output: null,
+            availableProjects: [
+              { projectId: "project-1", name: "Existing one", workspacePath: "F:\\code\\one" },
+              { projectId: "project-2", name: "Existing two", workspacePath: "F:\\code\\two" },
+            ],
+            selectedProjectCandidateId: "project-2",
+            onBindExistingProject,
+          } as any)}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(renderer!.root.findByType("select").props.value).toBe("project-2");
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Bind project"))
+        ?.props.onClick();
+      await Promise.resolve();
+    });
+    expect(onBindExistingProject).toHaveBeenCalledWith("project-2");
+
+    await act(async () => {
+      renderer = create(
+        <ThreadedWorkflowPanel
+          panel={buildCodePanel({
+            diff: null,
+            selectedFileDiff: {
+              originalContent: "old",
+              modifiedContent: "new",
+              language: "typescript",
+            } as any,
+            selectedTurn: {
+              ...(buildCodePanel().props.selectedTurn as any),
+              assistantMessage: {
+                messageId: "assistant-1",
+                role: "assistant",
+                content: "No snippets here.",
+                createdAt: "2026-05-05T12:00:01.000Z",
+              },
+            } as any,
+          })}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Selected diff"))
+        ?.props.onClick();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Choose a repo file to compare");
+
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Repo diff"))
+        ?.props.onClick();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Create a worktree or refresh the session");
+
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Snippets"))
+        ?.props.onClick();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Code snippets from the latest assistant turn");
+  });
+
+  it("covers delayed project defaults, file-selection guards, auto panes, and null panels", async () => {
+    const onBindExistingProject = vi.fn(async () => undefined);
+    let renderer: ReactTestRenderer | undefined;
+
+    await act(async () => {
+      renderer = create(
+        <ThreadedWorkflowPanel
+          panel={buildCodePanel({
+            needsProjectBinding: true,
+            workbenchState: null,
+            workbenchTree: null,
+            diff: null,
+            output: null,
+            availableProjects: [],
+            onBindExistingProject,
+          } as any)}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      renderer!.update(
+        <ThreadedWorkflowPanel
+          panel={buildCodePanel({
+            needsProjectBinding: true,
+            workbenchState: null,
+            workbenchTree: null,
+            diff: null,
+            output: null,
+            availableProjects: [{ projectId: "project-delayed", name: "Delayed", workspacePath: "F:\\code\\delayed" }],
+            onBindExistingProject,
+          } as any)}
+        />,
+      );
+      await Promise.resolve();
+    });
+    await act(async () => {
+      findButton(renderer!, "Existing project")?.props.onClick();
+      await Promise.resolve();
+    });
+    expect(renderer!.root.findByType("select").props.value).toBe("project-delayed");
+    await act(async () => {
+      findButton(renderer!, "Bind project")?.props.onClick();
+      await Promise.resolve();
+    });
+    expect(onBindExistingProject).toHaveBeenCalledWith("project-delayed");
+
+    await act(async () => {
+      renderer = create(
+        <ThreadedWorkflowPanel
+          panel={buildCodePanel({
+            needsProjectBinding: true,
+            workbenchState: null,
+            workbenchTree: null,
+            diff: null,
+            output: null,
+            availableProjects: [],
+            onBindExistingProject: undefined,
+          } as any)}
+        />,
+      );
+      await Promise.resolve();
+    });
+    await act(async () => {
+      findButton(renderer!, "Existing project")?.props.onClick();
+      findButton(renderer!, "Bind project")?.props.onClick();
+      await Promise.resolve();
+    });
+    expect(onBindExistingProject).toHaveBeenCalledTimes(1);
+
+    const onSelectFile = vi.fn();
+    const onDiscardDraft = vi.fn();
+    await act(async () => {
+      renderer = create(
+        <ThreadedWorkflowPanel
+          panel={buildCodePanel({
+            onSelectFile,
+            onDiscardDraft,
+            selectedFile: {
+              state: buildCodePanel().props.workbenchState,
+              path: "src/app.ts",
+              name: "app.ts",
+              language: "typescript",
+              content: "console.log('ready');",
+              changed: true,
+            } as any,
+            workbenchTree: {
+              state: buildCodePanel().props.workbenchState,
+              rootPath: "F:\\code\\personal-ai",
+              changedFiles: ["src/app.ts", "src/other.ts"],
+              items: [
+                { path: "src/app.ts", name: "app.ts", kind: "file", depth: 1, changed: true },
+                { path: "src/other.ts", name: "other.ts", kind: "file", depth: 1, changed: false },
+              ],
+            } as any,
+          })}
+        />,
+      );
+      await Promise.resolve();
+    });
+    const fileTree = renderer!.root.findByType(WorkbenchFileTree);
+    act(() => {
+      fileTree.props.onSelectFile("");
+      fileTree.props.onSelectFile("src/app.ts");
+      fileTree.props.onSelectFile("src/other.ts");
+    });
+    expect(onSelectFile).toHaveBeenCalledTimes(1);
+    expect(onSelectFile).toHaveBeenCalledWith("src/other.ts");
+    act(() => {
+      renderer!.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.title === "Discard unsaved file changes?")
+        ?.props.onConfirm();
+    });
+    expect(onDiscardDraft).not.toHaveBeenCalled();
+
+    await act(async () => {
+      renderer = create(
+        <ThreadedWorkflowPanel
+          panel={buildCodePanel({
+            diff: null,
+            output: {
+              state: buildCodePanel().props.workbenchState,
+              output: "Auto-selected run output.",
+              helperRuns: [],
+            } as any,
+          })}
+        />,
+      );
+      await Promise.resolve();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Auto-selected run output.");
+
+    await act(async () => {
+      renderer = create(
+        <ThreadedWorkflowPanel
+          panel={buildCodePanel({
+            diff: null,
+            output: null,
+            selectedTurn: {
+              ...(buildCodePanel().props.selectedTurn as any),
+              assistantMessage: {
+                messageId: "assistant-1",
+                role: "assistant",
+                content: "```ts\nconsole.log('auto snippet');\n```",
+                createdAt: "2026-05-05T12:00:01.000Z",
+              },
+            } as any,
+          })}
+        />,
+      );
+      await Promise.resolve();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Snippet helper");
+
+    await act(async () => {
+      renderer = create(
+        <ThreadedWorkflowPanel
+          panel={buildCodePanel({
+            workbenchState: {
+              ...(buildCodePanel().props.workbenchState as any),
+              worktreeStatus: "creating",
+            },
+            workbenchTree: null,
+            diff: null,
+          } as any)}
+        />,
+      );
+      await Promise.resolve();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain(
+      "Project-bound workbench for GoatCitadel. Create a worktree to begin repo operations.",
+    );
+
+    const nullRenderer = create(<ThreadedWorkflowPanel panel={null as any} />);
+    expect(nullRenderer.toJSON()).toBeNull();
+  });
+
+  it("runs validation presets and custom commands while respecting blocked states", async () => {
+    const onRunValidationCommand = vi.fn();
+    let renderer: ReactTestRenderer | undefined;
+
+    await act(async () => {
+      renderer = create(<ThreadedWorkflowPanel panel={buildCodePanel({ onRunValidationCommand })} />);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.props.title === "pnpm typecheck")
+        ?.props.onClick();
+    });
+    expect(onRunValidationCommand).toHaveBeenCalledWith({ command: "pnpm", args: ["typecheck"] });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("No run log or helper output yet.");
+
+    await act(async () => {
+      renderer!.root.findByProps({ "aria-label": "Validation command" }).props.onChange({
+        target: { value: "  pnpm --filter @goatcitadel/mission-control-next test -- ThreadedWorkflowPanel.test.tsx  " },
+      });
+    });
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Test") && button.props.title === undefined)
+        ?.props.onClick();
+    });
+    expect(onRunValidationCommand).toHaveBeenLastCalledWith({
+      command: "pnpm",
+      args: ["--filter", "@goatcitadel/mission-control-next", "test", "--", "ThreadedWorkflowPanel.test.tsx"],
+    });
+
+    await act(async () => {
+      renderer!.root.findByProps({ "aria-label": "Validation command" }).props.onChange({
+        target: { value: "   " },
+      });
+    });
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Test") && button.props.title === undefined)
+        ?.props.onClick();
+    });
+    expect(onRunValidationCommand).toHaveBeenCalledTimes(2);
+
+    const blockedRunner = vi.fn();
+    await act(async () => {
+      renderer = create(
+        <ThreadedWorkflowPanel
+          panel={buildCodePanel({
+            hasDirtyDraft: true,
+            onRunValidationCommand: blockedRunner,
+          })}
+        />,
+      );
+      await Promise.resolve();
+    });
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.props.title === "Save or discard the file draft before running repo operations.")
+        ?.props.onClick();
+    });
+    expect(blockedRunner).not.toHaveBeenCalled();
+
+    const busyRunner = vi.fn();
+    await act(async () => {
+      renderer = create(
+        <ThreadedWorkflowPanel panel={buildCodePanel({ busy: true, onRunValidationCommand: busyRunner })} />,
+      );
+      await Promise.resolve();
+    });
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Test") && button.props.title === undefined)
+        ?.props.onClick();
+    });
+    expect(busyRunner).not.toHaveBeenCalled();
+  });
+
+  it("renders selected file, diff, repo diff, output, snippets, and artifact panes", async () => {
+    const onDraftChange = vi.fn();
+    const onExportPatch = vi.fn();
+    const onRevertFile = vi.fn();
+    const onRunHelperSnippet = vi.fn();
+    const onCloseGeneratedArtifact = vi.fn();
+    let renderer: ReactTestRenderer | undefined;
+
+    await act(async () => {
+      renderer = create(
+        <ThreadedWorkflowPanel
+          panel={buildCodePanel({
+            selectedFile: {
+              state: buildCodePanel().props.workbenchState,
+              path: "src/app.ts",
+              name: "app.ts",
+              language: "typescript",
+              content: "console.log('original');",
+              changed: true,
+            } as any,
+            selectedFileDiff: {
+              originalContent: "console.log('original');",
+              modifiedContent: "console.log('changed');",
+            } as any,
+            draftContent: "console.log('draft');",
+            output: {
+              state: buildCodePanel().props.workbenchState,
+              output: "Validation passed.",
+              helperRuns: [
+                {
+                  runId: "helper-1",
+                  language: "typescript",
+                  status: "passed",
+                  stdoutPreview: "ok",
+                  stderrPreview: "warn",
+                  createdAt: "2026-05-05T12:00:00.000Z",
+                },
+              ],
+            } as any,
+            selectedTurn: {
+              ...(buildCodePanel().props.selectedTurn as any),
+              assistantMessage: {
+                messageId: "assistant-1",
+                role: "assistant",
+                content: "```ts\nconsole.log('snippet');\n```",
+                createdAt: "2026-05-05T12:00:01.000Z",
+              },
+            } as any,
+            onDraftChange,
+            onExportPatch,
+            onRevertFile,
+            onRunHelperSnippet,
+          })}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(JSON.stringify(renderer!.toJSON())).toContain("src/app.ts");
+    renderer!.root.findByProps({ height: 520 }).props.onChange("console.log('next');");
+    expect(onDraftChange).toHaveBeenCalledWith("console.log('next');");
+
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Selected diff"))
+        ?.props.onClick();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Selected-file diff");
+
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Repo diff"))
+        ?.props.onClick();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Repo diff");
+
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Export"))
+        ?.props.onClick();
+    });
+    expect(onExportPatch).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Validation passed.");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("warn");
+
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Snippets"))
+        ?.props.onClick();
+    });
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Run helper snippet"))
+        ?.props.onClick();
+    });
+    expect(onRunHelperSnippet).toHaveBeenCalledWith("ts", "console.log('snippet');");
+
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Revert file"))
+        ?.props.onClick();
+    });
+    expect(onRevertFile).toHaveBeenCalledWith("src/app.ts");
+
+    renderer!.unmount();
+    await act(async () => {
+      renderer = create(
+        <ThreadedWorkflowPanel
+          panel={buildCodePanel({
+            generatedArtifact: {
+              id: "artifact-1",
+              title: "Review artifact",
+              kind: "markdown",
+              sourceSurface: "code",
+              content: "# Artifact",
+            } as any,
+            onCloseGeneratedArtifact,
+          })}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Artifact"))
+        ?.props.onClick();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Review artifact");
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Close artifact"))
+        ?.props.onClick();
+    });
+    expect(onCloseGeneratedArtifact).toHaveBeenCalledTimes(1);
   });
 
   it("renders cowork run maps, blockers, tabs, and operator action callbacks", async () => {
@@ -743,5 +1310,165 @@ describe("ThreadedWorkflowPanel", () => {
         ?.props.onClick();
     });
     expect(JSON.stringify(renderer!.toJSON())).toContain("Review output");
+  });
+
+  it("invokes cowork next-action variants and stop callbacks without runtime visibility", async () => {
+    const cases = [
+      { kind: "retry_turn", label: "Retry turn", prop: "onRetryTurn" },
+      { kind: "open_tasks", label: "Open tasks", prop: "onOpenTasks" },
+      { kind: "focus_composer", label: "Focus composer", prop: "onFocusComposer" },
+      { kind: "inspect_details", label: "Inspect details", prop: "onOpenDetails" },
+    ] as const;
+
+    for (const item of cases) {
+      const callback = vi.fn();
+      const onStopTurn = vi.fn();
+      const panel = buildCoworkPanel();
+      Object.assign(panel.props, {
+        [item.prop]: callback,
+        onStopTurn,
+      });
+      Object.assign(panel.props.viewModel, {
+        agenticRuntime: null,
+        roleItems: { items: [{ id: "role-1", title: "QA", status: "active" }], overflow: 1 },
+        nextAction: {
+          kind: item.kind,
+          label: item.label,
+          note: "Operator action is available.",
+        },
+      });
+
+      let renderer: ReactTestRenderer | undefined;
+      await act(async () => {
+        renderer = create(<ThreadedWorkflowPanel panel={panel} />);
+        await Promise.resolve();
+      });
+
+      expect(JSON.stringify(renderer!.toJSON())).toContain("1+ visible roles");
+      await act(async () => {
+        findButton(renderer!, "Stop run")?.props.onClick();
+        findButton(renderer!, item.label)?.props.onClick();
+      });
+      expect(onStopTurn).toHaveBeenCalledTimes(1);
+      expect(callback).toHaveBeenCalledTimes(1);
+    }
+
+    const noDetailsPanel = buildCoworkPanel();
+    Object.assign(noDetailsPanel.props.viewModel, {
+      blockers: [{ id: "blocker-1", title: "Waiting on proof", summary: "No details callback is wired." }],
+      runMap: {
+        objective: "No details",
+        currentState: "Waiting",
+        nextAction: "Review manually",
+        planNodes: [],
+        checkpoints: [],
+      },
+    });
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(<ThreadedWorkflowPanel panel={noDetailsPanel} />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      findButton(renderer!, "Run Map")?.props.onClick();
+      await Promise.resolve();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("No details callback is wired.");
+    expect(findButton(renderer!, "Inspect evidence")).toBeUndefined();
+
+    const runtimeWithoutControls = buildCoworkPanel();
+    Object.assign(runtimeWithoutControls.props, { onAgenticControl: undefined });
+    Object.assign(runtimeWithoutControls.props.viewModel, {
+      agenticRuntime: {
+        ...runtimeWithoutControls.props.viewModel.agenticRuntime!,
+        controls: [],
+      },
+    });
+    await act(async () => {
+      renderer = create(<ThreadedWorkflowPanel panel={runtimeWithoutControls} />);
+      await Promise.resolve();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("No runtime controls are available.");
+
+    const runtimeWithoutHandler = buildCoworkPanel();
+    Object.assign(runtimeWithoutHandler.props, { onAgenticControl: undefined });
+    await act(async () => {
+      renderer = create(<ThreadedWorkflowPanel panel={runtimeWithoutHandler} />);
+      await Promise.resolve();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Pause durable run");
+    expect(findButton(renderer!, "Pause")).toBeUndefined();
+  });
+
+  it("covers workbench helper parsing, tone, short id, and agentic control copy branches", () => {
+    const blocks = extractCodeBlocks(
+      "Text\n```ts\nconsole.log('helper')\n```\n```diff\ndiff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@\n+one\n```",
+    );
+
+    expect(blocks).toEqual([
+      { id: "code-block-0", language: "ts", content: "console.log('helper')" },
+      { id: "code-block-1", language: "diff", content: "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@\n+one" },
+    ]);
+    expect(extractCodeBlocks("plain text")).toEqual([]);
+    expect(isPendingPatchBlock(blocks[0]!)).toBe(false);
+    expect(isPendingPatchBlock(blocks[1]!)).toBe(true);
+    expect(isPendingPatchBlock({ language: "patch", content: "--- a/a.ts\n+++ b/a.ts" })).toBe(true);
+    expect(isPendingPatchBlock({ language: "diff", content: "diff --git a/a.ts b/a.ts\n--- a/a.ts" })).toBe(false);
+    expect(extractCodeBlocks("```\ncontent\n```\n```ts\n   \n```")).toEqual([
+      { id: "code-block-0", language: "text", content: "content" },
+    ]);
+    expect(validationStatusTone("passed")).toBe("success");
+    expect(validationStatusTone(null)).toBe("warning");
+    expect(validationStatusTone("ready")).toBe("warning");
+    expect(validationStatusTone("failed")).toBe("critical");
+    expect(validationStatusTone("blocked")).toBe("warning");
+    expect(validationStatusTone("running")).toBe("warning");
+    expect(shortId("abc123456789")).toBe("abc123456789");
+    expect(shortId("abcdefghijklmnopqrstuvwxyz")).toBe("abcdef...wxyz");
+
+    expect(
+      describeAgenticControlCopy({
+        action: "pause",
+        runtimeEffect: "runtime_pause",
+        title: "Pause",
+      } as any),
+    ).toEqual({ buttonLabel: "Pause" });
+    expect(
+      describeAgenticControlCopy({
+        action: "kill_child",
+        runtimeEffect: "state_only",
+        title: "Kill child",
+      } as any),
+    ).toEqual({
+      buttonLabel: "Record kill intent",
+      intentNote: "State-only: records intent in GoatCitadel state; it is not a live pause or kill signal by itself.",
+    });
+    expect(
+      describeAgenticControlCopy({
+        action: "resume",
+        runtimeEffect: "durable_resume",
+        title: "Resume",
+      } as any),
+    ).toEqual({ buttonLabel: "Resume" });
+    expect(
+      describeAgenticControlCopy({
+        action: "pause",
+        runtimeEffect: "state_only",
+        title: "Pause durable run",
+      } as any),
+    ).toEqual({
+      buttonLabel: "Record pause intent",
+      intentNote: "State-only: records intent in GoatCitadel state; it is not a live pause or kill signal by itself.",
+    });
+    expect(
+      describeAgenticControlCopy({
+        action: "resume",
+        runtimeEffect: "state_only",
+        title: "Resume durable run",
+      } as any),
+    ).toEqual({
+      buttonLabel: "Record resume durable run intent",
+      intentNote: "State-only: records intent in GoatCitadel state; it is not a live pause or kill signal by itself.",
+    });
   });
 });

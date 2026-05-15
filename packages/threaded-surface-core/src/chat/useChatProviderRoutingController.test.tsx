@@ -158,6 +158,39 @@ describe("useChatProviderRoutingController", () => {
     expect(latest!.commandSuggestions[0]?.command).toBe("/memory");
   });
 
+  it("uses settings routing when runtime config and session prefs are absent", async () => {
+    await act(async () => {
+      create(
+        <Harness
+          draft="/model local"
+          prefs={null}
+          runtimeLlmConfig={null}
+          settings={{ llm: { activeProviderId: "local", activeModel: "settings-local" } }}
+          catalog={[
+            {
+              providerId: "local",
+              label: "Local Runtime",
+              baseUrl: "http://127.0.0.1:8080",
+              hasApiKey: false,
+              models: [],
+              modelProbeState: "ready",
+            },
+          ]}
+          getCachedModels={() => []}
+        />,
+      );
+    });
+
+    expect(latest).toMatchObject({
+      selectedProviderId: "local",
+      selectedModel: "settings-local",
+      selectionSource: "global",
+      runtimeStatus: "reachable",
+      runtimeTone: "success",
+    });
+    expect(latest!.commandSuggestions[0]?.command).toBe("/model local/settings-local");
+  });
+
   it("covers manual selection, disabled providers, and runtime probe variants", async () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {
@@ -303,5 +336,62 @@ describe("useChatProviderRoutingController", () => {
       runtimeSummary: "Runtime not checked",
       runtimeTone: "muted",
     });
+  });
+
+  it("covers provider fallback defaults and empty-query suggestion branches", async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <Harness
+          draft="$"
+          prefs={{ sessionId: "session-1", providerId: "missing-provider", model: "missing-model" }}
+          runtimeLlmConfig={{ activeProviderId: "fallback-provider", activeModel: "fallback-model" }}
+          settings={{ llm: { activeProviderId: "settings-provider", activeModel: "settings-model" } }}
+          catalog={[
+            {
+              providerId: "fallback-provider",
+              label: "Fallback",
+              hasApiKey: true,
+              models: ["fallback-model"],
+              modelProbeState: "ready",
+            },
+          ]}
+          getCachedModels={() => ["fallback-model"]}
+        />,
+      );
+    });
+
+    expect(latest).toMatchObject({
+      requestedProviderLabel: "Provider auto",
+      requestedModelLabel: "missing-model",
+      selectedProviderId: undefined,
+      selectedProviderLabel: "Provider auto",
+      selectedModelLabel: "Model auto",
+      runtimeStatus: "not_checked",
+    });
+    expect(latest!.commandSuggestions.map((item) => item.command)).toEqual(["$reviewer", "$writer"]);
+
+    await act(async () => {
+      renderer.update(<Harness draft="/skill enable " />);
+    });
+    expect(latest!.commandSuggestions.map((item) => item.command)).toEqual([
+      "/skill enable reviewer",
+      "/skill enable writer",
+    ]);
+
+    await act(async () => {
+      renderer.update(<Harness draft="/mcp connect " />);
+    });
+    expect(latest!.commandSuggestions.map((item) => item.command)).toEqual(["/mcp connect github"]);
+
+    await act(async () => {
+      renderer.update(<Harness draft="/mcp add-template " />);
+    });
+    expect(latest!.commandSuggestions.map((item) => item.command)).toEqual(["/mcp add-template figma"]);
+
+    await act(async () => {
+      renderer.update(<Harness draft="/" />);
+    });
+    expect(latest!.commandSuggestions.map((item) => item.command)).toEqual(["/model", "/memory"]);
   });
 });

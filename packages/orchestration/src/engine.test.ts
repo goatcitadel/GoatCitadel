@@ -291,6 +291,9 @@ describe("OrchestrationEngine", () => {
       engine.approvePhase(autoPlan, { ...waitingForApproval, currentPhaseId: "phase-1" }, "phase-2"),
     ).toThrow("expected phase phase-1");
     expect(() =>
+      engine.approvePhase(autoPlan, { ...waitingForApproval, currentPhaseId: undefined }, "phase-2"),
+    ).toThrow("expected phase <none> but received approval for phase-2");
+    expect(() =>
       engine.approvePhase(autoPlan, { ...waitingForApproval, currentPhaseId: "phase-1" }, "phase-1"),
     ).toThrow("is not approval-gated");
   });
@@ -338,6 +341,9 @@ describe("OrchestrationEngine", () => {
       "not actively running",
     );
     expect(() => engine.advancePhase(autoPlan, started, "phase-2")).toThrow("expected phase phase-1");
+    expect(() => engine.advancePhase(autoPlan, { ...started, currentPhaseId: undefined }, "phase-1")).toThrow(
+      "expected phase <none> but received advancement for phase-1",
+    );
   });
 
   it("rejects advancing approval-gated phases without approval", () => {

@@ -60,6 +60,16 @@ describe("MeshService", () => {
       }),
     ).toThrow(/tlsFingerprint/);
     expect(storage.mesh.join).not.toHaveBeenCalled();
+
+    expect(() =>
+      service.join({
+        token: "join-token",
+        nodeId: "node-peer",
+        label: "Peer",
+        transport: "tailnet",
+        tlsFingerprint: "   ",
+      }),
+    ).toThrow(/tlsFingerprint/);
   });
 
   it("accepts joins and exposes status/listing delegates", () => {
@@ -131,18 +141,31 @@ describe("MeshService", () => {
     expect(storage.mesh.upsertNode).toHaveBeenLastCalledWith(expect.objectContaining({ nodeId: "node-next" }));
   });
 
+  it("retains the existing enabled flag when an update omits it", () => {
+    const storage = createMeshStorage();
+    const service = new MeshService(storage as never, { ...baseOptions, enabled: false });
+
+    service.updateOptions({ localNodeLabel: "Still Disabled" });
+
+    expect(storage.mesh.buildStatus).not.toHaveBeenCalled();
+    service.status();
+    expect(storage.mesh.buildStatus).toHaveBeenCalledWith(false, "tailnet", "node-local");
+  });
+
   it("uses the service default lease ttl unless the request overrides it", () => {
     const storage = createMeshStorage();
     const service = new MeshService(storage as never, baseOptions);
 
     service.acquireLease({ leaseKey: "session:1", holderNodeId: "node-local" });
     service.renewLease({ leaseKey: "session:1", holderNodeId: "node-local", fencingToken: 7, ttlSeconds: 120 });
+    service.renewLease({ leaseKey: "session:2", holderNodeId: "node-local", fencingToken: 8 });
     service.releaseLease({ leaseKey: "session:1", holderNodeId: "node-local", fencingToken: 7 });
     service.listLeases();
     service.listLeases(20);
 
     expect(storage.mesh.acquireLease).toHaveBeenCalledWith("session:1", "node-local", 60);
     expect(storage.mesh.renewLease).toHaveBeenCalledWith("session:1", "node-local", 7, 120);
+    expect(storage.mesh.renewLease).toHaveBeenCalledWith("session:2", "node-local", 8, 60);
     expect(storage.mesh.releaseLease).toHaveBeenCalledWith("session:1", "node-local", 7);
     expect(storage.mesh.listLeases).toHaveBeenCalledWith(200);
     expect(storage.mesh.listLeases).toHaveBeenCalledWith(20);

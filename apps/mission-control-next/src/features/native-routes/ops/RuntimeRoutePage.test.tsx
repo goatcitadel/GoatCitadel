@@ -1,7 +1,27 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { RuntimeRoutePage } from "./RuntimeRoutePage";
+import {
+  capitalize,
+  createScheduleJobId,
+  describeQmdImpact,
+  descriptionForOpsSection,
+  formatBytes,
+  formatDateTime,
+  formatDuration,
+  formatHumanSessionTitle,
+  formatLoadAverage,
+  formatShortSessionId,
+  formatTokenDelta,
+  formatUsd,
+  labelForOpsSection,
+  RuntimeRoutePage,
+  sourceFailed,
+} from "./RuntimeRoutePage";
+
+const runtimeApiMocks = vi.hoisted(() => ({
+  createCronJob: vi.fn(),
+}));
 
 const runtimeSnapshotOverrides = vi.hoisted(() => ({
   sourceStatus: null as null | Record<string, { status: "ok" | "error"; error?: string }>,
@@ -12,6 +32,10 @@ const runtimeSnapshotOverrides = vi.hoisted(() => ({
   notice: undefined as unknown,
   reload: vi.fn(),
   runDaemonAction: vi.fn(),
+}));
+
+vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
+  createCronJob: runtimeApiMocks.createCronJob,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () => ({
@@ -217,6 +241,14 @@ function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
   return button;
 }
 
+function findExactButton(root: ReactTestInstance, label: string): ReactTestInstance {
+  const button = root.findAll((node) => node.type === "button" && collectText(node).trim() === label)[0];
+  if (!button) {
+    throw new Error(`Missing exact button ${label}`);
+  }
+  return button;
+}
+
 describe("RuntimeRoutePage", () => {
   afterEach(() => {
     runtimeSnapshotOverrides.sourceStatus = null;
@@ -225,6 +257,7 @@ describe("RuntimeRoutePage", () => {
     runtimeSnapshotOverrides.data = undefined;
     runtimeSnapshotOverrides.daemonBusy = null;
     runtimeSnapshotOverrides.notice = undefined;
+    runtimeApiMocks.createCronJob.mockReset();
     runtimeSnapshotOverrides.reload.mockClear();
     runtimeSnapshotOverrides.runDaemonAction.mockClear();
   });
@@ -245,6 +278,142 @@ describe("RuntimeRoutePage", () => {
     expect(markup).toContain("Daemon running");
     expect(markup).toContain("Start daemon");
     expect(markup).toContain("Restart daemon");
+  });
+
+  it("covers runtime route formatting and schedule helper edges", () => {
+    vi.setSystemTime(new Date("2026-05-14T12:00:00.000Z"));
+
+    expect(formatHumanSessionTitle({ sessionId: "sess_abc123", displayName: "  Planning " })).toBe("Planning");
+    expect(
+      formatHumanSessionTitle({
+        sessionId: "sess_abc123456789",
+        displayName: "sess_placeholder",
+        channel: "cowork",
+        lastActivityAt: "2026-05-14T11:30:00.000Z",
+      }),
+    ).toContain("Cowork session");
+    expect(formatHumanSessionTitle({ sessionId: "sess_abc123456789" })).toContain("session abc");
+    expect(formatShortSessionId("sess_abcdefghijklmnopqrstuvwxyz")).toBe("session abcdefghijklmn");
+    expect(createScheduleJobId("  Daily Review! ")).toMatch(/^manual-daily-review-[a-z0-9]+$/);
+    expect(createScheduleJobId(" !!! ")).toMatch(/^manual-schedule-[a-z0-9]+$/);
+    expect(capitalize("runtime")).toBe("Runtime");
+    expect(capitalize("")).toBe("");
+    expect(labelForOpsSection("schedules" as any)).toBe("Schedules");
+    expect(labelForOpsSection("sessions" as any)).toBe("Sessions");
+    expect(labelForOpsSection("improvement" as any)).toBe("Improvement");
+    expect(labelForOpsSection("notifications" as any)).toBe("Notifications");
+    expect(labelForOpsSection("costs" as any)).toBe("Costs");
+    expect(labelForOpsSection("runtime" as any)).toBe("Runtime");
+    expect(labelForOpsSection("unknown" as any)).toBe("Activity");
+    expect(descriptionForOpsSection("sessions" as any)).toContain("Recent session");
+    expect(descriptionForOpsSection("schedules" as any)).toContain("Scheduled work");
+    expect(descriptionForOpsSection("improvement" as any)).toContain("Replay");
+    expect(descriptionForOpsSection("notifications" as any)).toContain("Operator-facing");
+    expect(descriptionForOpsSection("costs" as any)).toContain("Spend");
+    expect(descriptionForOpsSection("runtime" as any)).toContain("Daemon controls");
+    expect(descriptionForOpsSection("diagnostics" as any)).toContain("System vitals");
+    expect(descriptionForOpsSection("unknown" as any)).toContain("Operational signal");
+    expect(describeQmdImpact("reduced")).toBe("Reduced");
+    expect(describeQmdImpact("expanded")).toBe("Expanded");
+    expect(describeQmdImpact("neutral")).toBe("Stable");
+    expect(formatTokenDelta(42.4)).toBe("+42 tokens");
+    expect(formatTokenDelta(-42.6)).toBe("-43 tokens");
+    expect(formatTokenDelta(Number.NaN)).toBe("no token delta");
+    expect(formatDuration(0)).toBe("0m");
+    expect(formatDuration(Number.NaN)).toBe("0m");
+    expect(formatDuration(125)).toBe("2m");
+    expect(formatDuration(3720)).toBe("1h 2m");
+    expect(sourceFailed({ sourceStatus: { daemon: { status: "error" } } }, "daemon")).toBe(true);
+    expect(sourceFailed({ sourceStatus: { daemon: { status: "ok" } } }, "daemon")).toBe(false);
+    expect(sourceFailed({ sourceStatus: {} }, "daemon")).toBe(false);
+    expect(formatBytes(0)).toBe("0 B");
+    expect(formatBytes(Number.POSITIVE_INFINITY)).toBe("0 B");
+    expect(formatBytes(1024 * 1024 * 12)).toBe("12 MB");
+    expect(formatBytes(1536)).toBe("1.5 KB");
+    expect(formatUsd(Number.NaN)).toBe("$0.00");
+    expect(formatUsd(1.23456)).toBe("$1.2346");
+    expect(formatDateTime(null)).toBe("Unknown");
+    expect(formatDateTime("bad-date")).toBe("Unknown");
+    expect(formatDateTime("2026-05-14T12:00:00.000Z")).toContain("2026");
+    expect(formatLoadAverage([])).toBe("n/a");
+    expect(formatLoadAverage([1, 2.345, 3.456, 4])).toBe("1.00 / 2.35 / 3.46");
+  });
+
+  it("creates schedules from the native schedules route and validates required fields", async () => {
+    runtimeApiMocks.createCronJob.mockResolvedValue({ jobId: "manual-daily-review-test" });
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <RuntimeRoutePage
+          route={{ area: "ops", section: "schedules", theme: "ops" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={2}
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Create schedule").props.onClick();
+    });
+    expect(collectText(renderer!.root)).toContain("Name and schedule are required.");
+
+    const inputs = renderer!.root.findAllByType("input");
+    const actionSelect = renderer!.root.findByType("select");
+    await act(async () => {
+      inputs[0]!.props.onChange({ target: { value: "Daily review" } });
+      inputs[1]!.props.onChange({ target: { value: "0 10 * * *" } });
+      actionSelect.props.onChange({ target: { value: "backup" } });
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Create schedule").props.onClick();
+    });
+
+    expect(runtimeApiMocks.createCronJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Daily review",
+        schedule: "0 10 * * *",
+        action: "backup",
+        enabled: true,
+      }),
+    );
+    expect(runtimeSnapshotOverrides.reload).toHaveBeenCalled();
+    expect(collectText(renderer!.root)).toContain("Schedule created.");
+  });
+
+  it("surfaces schedule creation failures without clearing the draft", async () => {
+    runtimeApiMocks.createCronJob.mockRejectedValueOnce(new Error("cron backend offline"));
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <RuntimeRoutePage
+          route={{ area: "ops", section: "schedules", theme: "ops" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={2}
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+    });
+
+    const inputs = renderer!.root.findAllByType("input");
+    await act(async () => {
+      inputs[0]!.props.onChange({ target: { value: "Daily review" } });
+      inputs[1]!.props.onChange({ target: { value: "0 10 * * *" } });
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Create schedule").props.onClick();
+    });
+
+    expect(runtimeApiMocks.createCronJob).toHaveBeenCalledWith(expect.objectContaining({ name: "Daily review" }));
+    expect(runtimeSnapshotOverrides.reload).not.toHaveBeenCalled();
+    expect(collectText(renderer!.root)).toContain("cron backend offline");
+    expect(renderer!.root.findAllByType("input")[0]!.props.value).toBe("Daily review");
   });
 
   it("runs daemon controls and refreshes runtime posture from the canonical shell", async () => {
@@ -329,6 +498,103 @@ describe("RuntimeRoutePage", () => {
     );
     expect(noDataMarkup).toContain("Activity");
     expect(noDataMarkup).not.toContain("Activity feed");
+  });
+
+  it("filters the activity feed by error, approval, and runtime signals", async () => {
+    runtimeSnapshotOverrides.data = {
+      dashboard: {
+        timestamp: "2026-04-22T00:00:00.000Z",
+        sessions: [],
+        pendingApprovals: 0,
+        activeSubagents: 0,
+        taskStatusCounts: [],
+        recentEvents: [],
+        dailyCostUsd: 0,
+      },
+      timeline: {
+        generatedAt: "2026-04-22T00:00:00.000Z",
+        events: {
+          items: [
+            {
+              eventId: "evt-error",
+              sequence: 1,
+              eventType: "tool.failed",
+              eventClass: "error",
+              source: "worker",
+              timestamp: "2026-04-22T00:00:00.000Z",
+              payload: {},
+            },
+            {
+              eventId: "evt-approval",
+              sequence: 2,
+              eventType: "approval.created",
+              eventClass: "decision",
+              source: "policy",
+              timestamp: "2026-04-22T00:01:00.000Z",
+              payload: {},
+            },
+            {
+              eventId: "evt-runtime",
+              sequence: 3,
+              eventType: "daemon.started",
+              eventClass: "info",
+              source: "runtime",
+              timestamp: "2026-04-22T00:02:00.000Z",
+              payload: {},
+            },
+          ],
+        },
+        sessions: { items: [] },
+        scheduler: { jobs: [], reviewQueue: [] },
+        improvement: { reports: [], replayRuns: [] },
+      },
+      health: null,
+      cost: null,
+      daemon: null,
+      backups: [],
+      sessions: [],
+      mcpServers: [],
+      sourceStatus: {
+        dashboard: { status: "ok" },
+        timeline: { status: "ok" },
+        health: { status: "ok" },
+        cost: { status: "ok" },
+        daemon: { status: "ok" },
+        backups: { status: "ok" },
+        sessions: { status: "ok" },
+        mcpServers: { status: "ok" },
+      },
+    } as any;
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <RuntimeRoutePage
+          route={{ area: "ops", section: "activity", theme: "ops" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={0}
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+    });
+
+    expect(collectText(renderer!.root)).toContain("tool.failed");
+    expect(collectText(renderer!.root)).toContain("approval.created");
+    expect(collectText(renderer!.root)).toContain("daemon.started");
+
+    await act(async () => findExactButton(renderer!.root, "Errors").props.onClick());
+    expect(collectText(renderer!.root)).toContain("tool.failed");
+    expect(collectText(renderer!.root)).not.toContain("approval.created");
+
+    await act(async () => findExactButton(renderer!.root, "Approvals").props.onClick());
+    expect(collectText(renderer!.root)).toContain("approval.created");
+    expect(collectText(renderer!.root)).not.toContain("daemon.started");
+
+    await act(async () => findExactButton(renderer!.root, "Runtime").props.onClick());
+    expect(collectText(renderer!.root)).toContain("daemon.started");
+    expect(collectText(renderer!.root)).not.toContain("tool.failed");
   });
 
   it("navigates with canonical next-route objects instead of legacy URL strings", async () => {

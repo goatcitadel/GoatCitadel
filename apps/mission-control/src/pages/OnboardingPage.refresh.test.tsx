@@ -75,7 +75,18 @@ vi.mock("../hooks/useRefreshSubscription", () => ({
 }));
 
 vi.mock("../components/ChangeReviewPanel", () => ({
-  ChangeReviewPanel: () => <div>ChangeReviewPanel</div>,
+  ChangeReviewPanel: (props: {
+    overall?: string;
+    criticalConfirmed?: boolean;
+    onCriticalConfirmChange?: (checked: boolean) => void;
+  }) => (
+    <div>
+      ChangeReviewPanel:{props.overall}
+      <button type="button" onClick={() => props.onCriticalConfirmChange?.(!props.criticalConfirmed)}>
+        Confirm critical
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("../components/HelpHint", () => ({
@@ -113,7 +124,7 @@ vi.mock("../components/SelectOrCustom", () => ({
   },
 }));
 
-import { OnboardingPage } from "./OnboardingPage";
+import { isAbortError, OnboardingPage } from "./OnboardingPage";
 
 function makeProvider(input: {
   providerId: string;
@@ -177,7 +188,7 @@ function makeOnboardingState(
         mode: "lan",
         nodeId: "",
         mdns: true,
-        staticPeers: [],
+        staticPeers: [] as string[],
         requireMtls: true,
         tailnetEnabled: false,
       },
@@ -203,6 +214,27 @@ async function flush(): Promise<void> {
       await Promise.resolve();
     }
   });
+}
+
+function findButton(renderer: ReactTestRenderer, label: string) {
+  return renderer.root.findAllByType("button").find((button) => button.props.children === label);
+}
+
+function nodeText(node: unknown): string {
+  if (typeof node === "string" || typeof node === "number") {
+    return String(node);
+  }
+  if (Array.isArray(node)) {
+    return node.map((child) => nodeText(child)).join(" ");
+  }
+  if (node && typeof node === "object" && "props" in node) {
+    return nodeText((node as { props?: { children?: unknown } }).props?.children);
+  }
+  return "";
+}
+
+function findButtonContaining(renderer: ReactTestRenderer, label: string) {
+  return renderer.root.findAllByType("button").find((button) => nodeText(button.props.children).includes(label));
 }
 
 describe("OnboardingPage refresh discipline", () => {
@@ -402,5 +434,433 @@ describe("OnboardingPage refresh discipline", () => {
     } finally {
       renderer.unmount();
     }
+  });
+
+  it("resolves an install token, restarts the daemon, and submits onboarding", async () => {
+    const completedState = makeOnboardingState();
+    completedState.completed = true;
+    completedState.settings.auth.mode = "token";
+    completedState.settings.llm.activeProviderId = "openai";
+    completedState.settings.llm.activeModel = "gpt-5.4";
+    apiMocks.resolveGatewayInstallToken.mockResolvedValue({
+      source: "generated",
+      token: "install-token",
+      warnings: ["Persist it before exposing the gateway."],
+    });
+    apiMocks.restartDaemon.mockResolvedValue({
+      accepted: true,
+      status: {
+        running: true,
+        controllable: true,
+        state: "running",
+        host: "127.0.0.1",
+        pid: 8788,
+        uptimeSeconds: 1,
+        controlMessage: "Restarted.",
+      },
+    });
+    apiMocks.bootstrapOnboarding.mockResolvedValue({
+      state: completedState,
+    });
+    const onCompleted = vi.fn();
+
+    let renderer: ReactTestRenderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<OnboardingPage onCompleted={onCompleted} />);
+      });
+      await flush();
+
+      await act(async () => {
+        renderer.root.findByProps({ id: "wizard-auth-mode" }).props.onChange({ target: { value: "token" } });
+      });
+      await act(async () => {
+        findButton(renderer, "Generate install token")?.props.onClick();
+      });
+      await flush();
+
+      expect(apiMocks.resolveGatewayInstallToken).toHaveBeenCalledWith({
+        generateWhenMissing: true,
+        persistToEnv: false,
+      });
+      expect(JSON.stringify(renderer.toJSON())).toContain("install-token");
+
+      await act(async () => {
+        findButton(renderer, "Restart daemon")?.props.onClick();
+      });
+      await flush();
+      expect(apiMocks.restartDaemon).toHaveBeenCalledTimes(1);
+
+      for (let index = 0; index < 4; index += 1) {
+        await act(async () => {
+          findButton(renderer, "Next")?.props.onClick();
+        });
+      }
+
+      await act(async () => {
+        renderer.root.findByProps({ id: "wizard-mark-complete" }).props.onChange({ target: { checked: true } });
+      });
+      await act(async () => {
+        findButton(renderer, "Apply onboarding")?.props.onClick();
+      });
+      await flush();
+
+      expect(apiMocks.bootstrapOnboarding).toHaveBeenCalledWith(
+        expect.objectContaining({
+          auth: expect.objectContaining({
+            mode: "token",
+            token: "",
+          }),
+          llm: expect.objectContaining({
+            activeProviderId: "openai",
+            activeModel: "gpt-5.4",
+          }),
+          markComplete: true,
+          completedBy: "mission-control",
+        }),
+      );
+      expect(providerCatalogMocks.reloadProviderCatalog).toHaveBeenCalled();
+      expect(onCompleted).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(renderer.toJSON())).toContain("Apply complete. Active provider: openai");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("submits basic auth and mesh form edits without losing user-entered values", async () => {
+    const completedState = makeOnboardingState();
+    completedState.completed = true;
+    completedState.settings.auth.mode = "basic";
+    completedState.settings.mesh.enabled = true;
+    completedState.settings.mesh.mode = "tailnet";
+    completedState.settings.mesh.nodeId = "node-alpha";
+    completedState.settings.mesh.staticPeers = ["https://peer-a.local"];
+    completedState.settings.mesh.requireMtls = false;
+    completedState.settings.mesh.tailnetEnabled = true;
+    apiMocks.bootstrapOnboarding.mockResolvedValue({
+      state: completedState,
+    });
+
+    let renderer: ReactTestRenderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<OnboardingPage />);
+      });
+      await flush();
+
+      await act(async () => {
+        renderer.root.findByProps({ id: "wizard-auth-mode" }).props.onChange({ target: { value: "basic" } });
+      });
+      await act(async () => {
+        renderer.root.findByProps({ id: "wizard-basic-username" }).props.onChange({
+          target: { value: "operator" },
+        });
+        renderer.root.findByProps({ id: "wizard-basic-password" }).props.onChange({
+          target: { value: "correct-horse" },
+        });
+      });
+
+      for (let index = 0; index < 3; index += 1) {
+        await act(async () => {
+          findButton(renderer, "Next")?.props.onClick();
+        });
+      }
+
+      await act(async () => {
+        renderer.root.findByProps({ id: "wizard-mesh-enabled" }).props.onChange({ target: { checked: true } });
+      });
+      await act(async () => {
+        renderer.root.findByProps({ id: "wizard-mesh-mode" }).props.onChange({ target: { value: "tailnet" } });
+        renderer.root.findByProps({ id: "wizard-mesh-node-id" }).props.onChange({
+          target: { value: "node-alpha" },
+        });
+        renderer.root.findByProps({ id: "wizard-mesh-mdns" }).props.onChange({ target: { checked: false } });
+        renderer.root.findByProps({ id: "wizard-mesh-mtls" }).props.onChange({ target: { checked: false } });
+        renderer.root.findByProps({ id: "wizard-mesh-tailnet" }).props.onChange({ target: { checked: true } });
+        renderer.root.findByProps({ id: "wizard-mesh-peers" }).props.onChange({
+          target: { value: "https://peer-a.local\nhttps://peer-b.local" },
+        });
+      });
+
+      await act(async () => {
+        findButton(renderer, "Next")?.props.onClick();
+      });
+      await act(async () => {
+        renderer.root.findByProps({ id: "wizard-mark-complete" }).props.onChange({ target: { checked: true } });
+      });
+      await act(async () => {
+        findButton(renderer, "Apply onboarding")?.props.onClick();
+      });
+      await flush();
+
+      expect(apiMocks.bootstrapOnboarding).toHaveBeenCalledWith(
+        expect.objectContaining({
+          auth: expect.objectContaining({
+            mode: "basic",
+            basicUsername: "operator",
+            basicPassword: "correct-horse",
+          }),
+          mesh: {
+            enabled: true,
+            mode: "tailnet",
+            nodeId: "node-alpha",
+            mdns: false,
+            staticPeers: ["https://peer-a.local", "https://peer-b.local"],
+            requireMtls: false,
+            tailnetEnabled: true,
+          },
+          markComplete: true,
+        }),
+      );
+      expect(JSON.stringify(renderer.toJSON())).toContain("Apply complete. Active provider: openai");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("applies quickstart and allowlist presets while surfacing daemon start failures", async () => {
+    apiMocks.fetchDaemonStatus.mockResolvedValue({
+      running: false,
+      controllable: true,
+      state: "stopped",
+      host: "127.0.0.1",
+      pid: undefined,
+      uptimeSeconds: 0,
+      controlMessage: "Stopped.",
+    });
+    apiMocks.startDaemon.mockResolvedValue({
+      accepted: false,
+      reason: "daemon start refused",
+      status: {
+        running: false,
+        controllable: true,
+        state: "stopped",
+        host: "127.0.0.1",
+        controlMessage: "Stopped.",
+      },
+    });
+
+    let renderer: ReactTestRenderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<OnboardingPage />);
+      });
+      await flush();
+
+      await act(async () => {
+        findButton(renderer, "Start daemon")?.props.onClick();
+      });
+      await flush();
+      expect(apiMocks.startDaemon).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(renderer.toJSON())).toContain("daemon start refused");
+
+      const loadProfileButtons = renderer.root
+        .findAllByType("button")
+        .filter((node) => node.props.children === "Load profile");
+      await act(async () => {
+        loadProfileButtons[2]?.props.onClick();
+      });
+      expect(JSON.stringify(renderer.toJSON())).toContain("Loaded Remote Hardened defaults.");
+
+      await act(async () => {
+        findButton(renderer, "Next")?.props.onClick();
+      });
+      await act(async () => {
+        findButton(renderer, "Next")?.props.onClick();
+      });
+
+      const allowlistPreset = renderer.root.findByProps({ id: "wizard-allowlist-preset" });
+      await act(async () => {
+        allowlistPreset.props.onChange("common");
+      });
+
+      expect(renderer.root.findByProps({ id: "wizard-allowlist" }).props.value).toContain("api.openai.com");
+      expect(renderer.root.findByProps({ id: "wizard-allowlist" }).props.value).toContain("openrouter.ai");
+
+      await act(async () => {
+        allowlistPreset.props.onChange("custom");
+      });
+      expect(renderer.root.findByProps({ id: "wizard-allowlist-preset" }).props.value).toBe("custom");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("runs debounced risk review and live model discovery without overwriting provider choices", async () => {
+    vi.useFakeTimers();
+    try {
+      window.setTimeout = globalThis.setTimeout as typeof setTimeout;
+      window.clearTimeout = globalThis.clearTimeout as typeof clearTimeout;
+      providerCatalogMocks.previewProviderModels.mockResolvedValueOnce({
+        items: ["gpt-5.5", "gpt-5.4"],
+        source: "remote",
+        warning: "catalog warning",
+      });
+
+      let renderer: ReactTestRenderer = create(<div />);
+      try {
+        await act(async () => {
+          renderer = create(<OnboardingPage />);
+        });
+        await flush();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(400);
+        });
+        await flush();
+
+        expect(apiMocks.evaluateUiChangeRisk).toHaveBeenCalledWith(
+          expect.objectContaining({ pageId: "onboarding" }),
+          expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        );
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(600);
+        });
+        await flush();
+
+        expect(providerCatalogMocks.previewProviderModels).toHaveBeenCalledWith(
+          expect.objectContaining({
+            providerId: "openai",
+            baseUrl: "https://api.openai.com/v1",
+            fallbackModel: "gpt-5.4",
+          }),
+          expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        );
+
+        await act(async () => {
+          findButton(renderer, "Next")?.props.onClick();
+        });
+        await flush();
+
+        const text = JSON.stringify(renderer.toJSON());
+        expect(text).toContain("Model discovery:");
+        expect(text).toContain("live provider list");
+        expect(text).toContain("catalog warning");
+        expect(renderer.root.findByProps({ id: "wizard-model" }).props.value).toBe("gpt-5.4");
+      } finally {
+        renderer.unmount();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("surfaces initial onboarding load failures", async () => {
+    apiMocks.fetchOnboardingState.mockRejectedValueOnce(new Error("onboarding unavailable"));
+
+    let renderer: ReactTestRenderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<OnboardingPage />);
+      });
+      await flush();
+
+      const text = JSON.stringify(renderer.toJSON());
+      expect(text).toContain("onboarding unavailable");
+      expect(text).toContain("Gateway");
+      expect(text).toContain("needs attention");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("blocks invalid provider transport config and surfaces apply failures", async () => {
+    let renderer: ReactTestRenderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<OnboardingPage />);
+      });
+      await flush();
+
+      await act(async () => {
+        findButton(renderer, "Next")?.props.onClick();
+      });
+      await act(async () => {
+        renderer.root.findByProps({ id: "wizard-provider-transport-request-headers" }).props.onChange({
+          target: { value: "{" },
+        });
+      });
+      for (let index = 0; index < 3; index += 1) {
+        await act(async () => {
+          findButton(renderer, "Next")?.props.onClick();
+        });
+      }
+      await act(async () => {
+        renderer.root.findByProps({ id: "wizard-mark-complete" }).props.onChange({ target: { checked: true } });
+      });
+      await act(async () => {
+        findButton(renderer, "Apply onboarding")?.props.onClick();
+      });
+      await flush();
+
+      expect(JSON.stringify(renderer.toJSON())).toContain("Custom headers must be valid JSON.");
+      expect(apiMocks.bootstrapOnboarding).not.toHaveBeenCalled();
+    } finally {
+      renderer.unmount();
+    }
+
+    apiMocks.bootstrapOnboarding.mockRejectedValueOnce(new Error("bootstrap refused"));
+    renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<OnboardingPage />);
+      });
+      await flush();
+
+      for (let index = 0; index < 4; index += 1) {
+        await act(async () => {
+          findButton(renderer, "Next")?.props.onClick();
+        });
+      }
+      await act(async () => {
+        renderer.root.findByProps({ id: "wizard-mark-complete" }).props.onChange({ target: { checked: true } });
+      });
+      await act(async () => {
+        findButton(renderer, "Apply onboarding")?.props.onClick();
+      });
+      await flush();
+
+      expect(apiMocks.bootstrapOnboarding).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(renderer.toJSON())).toContain("bootstrap refused");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("supports direct step navigation and explicit side-panel refresh actions", async () => {
+    let renderer: ReactTestRenderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(<OnboardingPage />);
+      });
+      await flush();
+
+      await act(async () => {
+        findButtonContaining(renderer, "Runtime Defaults")?.props.onClick();
+      });
+      await flush();
+      expect(JSON.stringify(renderer.toJSON())).toContain("Step 3: Runtime Defaults");
+
+      const callsAfterInitialLoad = apiMocks.fetchOnboardingState.mock.calls.length;
+      await act(async () => {
+        findButton(renderer, "Refresh readiness")?.props.onClick();
+      });
+      await flush();
+      await act(async () => {
+        findButton(renderer, "Refresh")?.props.onClick();
+      });
+      await flush();
+
+      expect(apiMocks.fetchOnboardingState.mock.calls.length).toBeGreaterThanOrEqual(callsAfterInitialLoad + 2);
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("classifies abort errors without treating ordinary failures as aborts", () => {
+    expect(isAbortError({ name: "AbortError" })).toBe(true);
+    expect(isAbortError(new Error("network failed"))).toBe(false);
+    expect(isAbortError(null)).toBe(false);
   });
 });

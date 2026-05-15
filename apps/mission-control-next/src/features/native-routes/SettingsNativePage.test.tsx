@@ -33,6 +33,10 @@ const mocks = vi.hoisted(() => ({
       revokedAt: "2026-05-02T19:00:00.000Z",
     },
   })),
+  resolveGatewayInstallToken: vi.fn(async () => ({
+    token: "install-token-1",
+    source: "generated",
+  })),
   patchSettings: vi.fn(async () => ({})),
   fetchPersonalities: vi.fn(async () => ({
     defaultPersonalityId: "operator",
@@ -390,6 +394,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     fetchSettings: mocks.fetchSettings,
     fetchDeviceAccessGrants: mocks.fetchDeviceAccessGrants,
     revokeDeviceAccessGrant: mocks.revokeDeviceAccessGrant,
+    resolveGatewayInstallToken: mocks.resolveGatewayInstallToken,
     bootstrapOnboarding: mocks.bootstrapOnboarding,
     completeOnboarding: mocks.completeOnboarding,
     fetchOnboardingState: mocks.fetchOnboardingState,
@@ -456,6 +461,33 @@ function findInputByPlaceholder(root: ReactTestInstance, placeholder: string): R
     throw new Error(`Unable to find input: ${placeholder}`);
   }
   return match;
+}
+
+function findInputsByPlaceholder(root: ReactTestInstance, placeholder: string): ReactTestInstance[] {
+  const matches = root.findAll(
+    (node) =>
+      node.type === "input" && typeof node.props?.placeholder === "string" && node.props.placeholder === placeholder,
+  );
+  if (!matches.length) {
+    throw new Error(`Unable to find inputs: ${placeholder}`);
+  }
+  return matches;
+}
+
+function findFirstSelect(root: ReactTestInstance): ReactTestInstance {
+  const match = root.findAllByType("select")[0];
+  if (!match) {
+    throw new Error("Unable to find select");
+  }
+  return match;
+}
+
+function findTextareas(root: ReactTestInstance): [ReactTestInstance, ReactTestInstance, ReactTestInstance] {
+  const matches = root.findAllByType("textarea");
+  if (matches.length < 3) {
+    throw new Error("Unable to find personality textareas");
+  }
+  return [matches[0]!, matches[1]!, matches[2]!];
 }
 
 function findLoopbackCheckbox(root: ReactTestInstance): ReactTestInstance {
@@ -539,6 +571,13 @@ function collectText(node: ReactTestInstance): string {
       return collectText(child);
     })
     .join(" ");
+}
+
+async function flushAsyncUpdates() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
 }
 
 function installBrowserStorageMock(
@@ -739,6 +778,10 @@ beforeEach(async () => {
       revokedAt: "2026-05-02T19:00:00.000Z",
     },
   });
+  mocks.resolveGatewayInstallToken.mockResolvedValue({
+    token: "install-token-1",
+    source: "generated",
+  });
   globalThis.localStorage?.clear();
   globalThis.sessionStorage?.clear();
   mocks.fetchOpenAICodexOAuthStatus.mockResolvedValue({
@@ -821,14 +864,54 @@ describe("SettingsNativePage personalities", () => {
       expect(text).toContain("Add custom personality");
 
       await act(async () => {
+        findButton(renderer!.root, "Refresh").props.onClick();
+      });
+      expect(mocks.fetchPersonalities).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        findInputByPlaceholder(renderer!.root, "Direct Operator").props.onChange({
+          target: { value: "Operator Prime" },
+        });
+      });
+      await act(async () => {
+        findInputByPlaceholder(renderer!.root, "Composed").props.onChange({
+          target: { value: "Measured" },
+        });
+      });
+      await act(async () => {
+        findInputByPlaceholder(renderer!.root, "Operational and compact").props.onChange({
+          target: { value: "Brief and directive" },
+        });
+      });
+      const [operatorDescription, operatorOverlay, operatorSafety] = findTextareas(renderer!.root);
+      await act(async () => {
+        operatorDescription.props.onChange({
+          target: { value: "Updated built-in operator framing." },
+        });
+      });
+      await act(async () => {
+        operatorOverlay.props.onChange({
+          target: { value: "Use updated operator-prime language." },
+        });
+      });
+      await act(async () => {
+        operatorSafety.props.onChange({
+          target: { value: "Never override approvals.\nNever hide uncertainty." },
+        });
+      });
+      await act(async () => {
         findButton(renderer!.root, "Save edits").props.onClick();
       });
       expect(mocks.updatePersonality).toHaveBeenCalledWith(
         "operator",
         expect.objectContaining({
           id: "operator",
-          label: "Operator",
-          systemOverlay: "Use crisp mission-control language.",
+          label: "Operator Prime",
+          description: "Updated built-in operator framing.",
+          tone: "Measured",
+          style: "Brief and directive",
+          systemOverlay: "Use updated operator-prime language.",
+          safetyNotes: ["Never override approvals.", "Never hide uncertainty."],
         }),
       );
 
@@ -865,18 +948,125 @@ describe("SettingsNativePage personalities", () => {
         });
       });
       await act(async () => {
+        findFirstSelect(renderer!.root).props.onChange({
+          target: { value: "execution" },
+        });
+      });
+      await act(async () => {
+        findInputByPlaceholder(renderer!.root, "Composed").props.onChange({
+          target: { value: "Steady" },
+        });
+      });
+      await act(async () => {
+        findInputByPlaceholder(renderer!.root, "Operational and compact").props.onChange({
+          target: { value: "Checklist first" },
+        });
+      });
+      const [customDescription, customOverlay, customSafety] = findTextareas(renderer!.root);
+      await act(async () => {
+        customDescription.props.onChange({
+          target: { value: "Keeps late work direct and calm." },
+        });
+      });
+      await act(async () => {
+        customOverlay.props.onChange({
+          target: { value: "Prefer short status-first answers." },
+        });
+      });
+      await act(async () => {
+        customSafety.props.onChange({
+          target: { value: "Do not bypass policy.\nAsk before risky actions." },
+        });
+      });
+      await act(async () => {
         findButton(renderer!.root, "Create personality").props.onClick();
       });
       expect(mocks.createPersonality).toHaveBeenCalledWith(
         expect.objectContaining({
           id: "night-shift",
           label: "Night Shift",
-          category: "core",
+          category: "execution",
+          description: "Keeps late work direct and calm.",
+          tone: "Steady",
+          style: "Checklist first",
+          systemOverlay: "Prefer short status-first answers.",
+          safetyNotes: ["Do not bypass policy.", "Ask before risky actions."],
         }),
       );
 
       text = collectText(renderer!.root);
       expect(text).toContain("Personality overlays affect Chat tone and framing only");
+    } finally {
+      Object.assign(globalThis, { window: previousWindow });
+    }
+  });
+
+  it("covers personality validation, locked rows, clear-default, and remove failure branches", async () => {
+    const previousWindow = globalThis.window;
+    const confirmSpy = vi.fn(() => false);
+    Object.assign(globalThis, {
+      window: {
+        confirm: confirmSpy,
+      },
+    });
+    let renderer: ReactTestRenderer | null = null;
+
+    try {
+      await act(async () => {
+        renderer = renderPage("personalities");
+      });
+
+      await act(async () => {
+        findButton(renderer!.root, "Add custom personality").props.onClick();
+      });
+      await act(async () => {
+        findButton(renderer!.root, "Create personality").props.onClick();
+      });
+      expect(collectText(renderer!.root)).toContain("Personality label is required.");
+      expect(mocks.createPersonality).not.toHaveBeenCalled();
+
+      await act(async () => {
+        findButton(renderer!.root, "Cancel").props.onClick();
+      });
+      expect(collectText(renderer!.root)).toContain("Operator");
+
+      mocks.updatePersonality.mockRejectedValueOnce(new Error("save failed"));
+      await act(async () => {
+        findButton(renderer!.root, "Save edits").props.onClick();
+      });
+      expect(collectText(renderer!.root)).toContain("save failed");
+
+      await act(async () => {
+        findButton(renderer!.root, "Default").props.onClick();
+      });
+      const lockedSave = findButton(renderer!.root, "Save edits");
+      expect(lockedSave.props.disabled).toBe(true);
+      await act(async () => {
+        lockedSave.props.onClick();
+      });
+      expect(collectText(renderer!.root)).toContain("This personality cannot be edited.");
+
+      await act(async () => {
+        findButton(renderer!.root, "Clear Chat default").props.onClick();
+      });
+      expect(mocks.setDefaultPersonality).toHaveBeenCalledWith("default");
+      expect(collectText(renderer!.root)).toContain("Chat personality cleared.");
+
+      await act(async () => {
+        findButton(renderer!.root, "Direct Custom").props.onClick();
+      });
+      await act(async () => {
+        findButton(renderer!.root, "Remove custom").props.onClick();
+      });
+      expect(confirmSpy).toHaveBeenCalledWith("Remove Direct Custom?");
+      expect(mocks.deletePersonality).not.toHaveBeenCalled();
+
+      confirmSpy.mockReturnValue(true);
+      mocks.deletePersonality.mockRejectedValueOnce(new Error("remove failed"));
+      await act(async () => {
+        findButton(renderer!.root, "Remove custom").props.onClick();
+      });
+      expect(collectText(renderer!.root)).toContain("remove failed");
     } finally {
       Object.assign(globalThis, { window: previousWindow });
     }
@@ -1227,6 +1417,59 @@ describe("SettingsNativePage providers", () => {
     expect(text).toContain("Restart login");
     expect(text).not.toContain("Use this exact OpenAI code");
     expect(text).not.toContain("Current code");
+  });
+
+  it("surfaces invalid and expired ChatGPT OAuth pairing branches", async () => {
+    setCodexProviderCatalogState({ hasApiKey: false });
+    mocks.startOpenAICodexOAuthDeviceFlow.mockResolvedValueOnce({
+      providerId: "wrong-provider",
+      flowId: "bad-flow",
+      verificationUrl: "https://auth.openai.com/codex/device",
+      userCode: "BAD-CODE",
+      expiresAt: "2099-04-24T12:00:00.000Z",
+      pollAfterMs: 5000,
+    } as any);
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage();
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Start ChatGPT login").props.onClick();
+    });
+    expect(collectText(renderer!.root)).toContain("OpenAI Codex OAuth start returned an invalid login flow.");
+    renderer!.unmount();
+
+    mocks.pollOpenAICodexOAuthDeviceFlow.mockResolvedValueOnce({
+      providerId: "openai-codex",
+      flowId: "expired-flow",
+      status: "expired",
+    } as any);
+    const restoreBrowserStorage = installBrowserStorageMock({
+      session: {
+        [OAUTH_STORAGE_KEY]: JSON.stringify({
+          providerId: "openai-codex",
+          flowId: "expired-flow",
+          verificationUrl: "https://auth.openai.com/codex/device",
+          userCode: "EXPD-CODE",
+          expiresAt: "2099-04-24T12:00:00.000Z",
+          pollAfterMs: 5000,
+        }),
+      },
+    });
+
+    try {
+      await act(async () => {
+        renderer = renderPage();
+      });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(collectText(renderer!.root)).toContain("OpenAI Codex OAuth login expired. Start ChatGPT login again.");
+    } finally {
+      restoreBrowserStorage();
+    }
   });
 
   it("keeps connected ChatGPT OAuth status from being overwritten by a stale status read", async () => {
@@ -1605,6 +1848,136 @@ describe("SettingsNativePage providers", () => {
     text = collectText(renderer!.root);
     expect(text).toContain("not verified against your account");
   });
+
+  it("covers empty provider catalogs, editor guards, and probe failures", async () => {
+    mocks.providerCatalogState = {
+      config: null,
+      providers: [],
+      loading: false,
+      error: null,
+    };
+    mocks.patchSettings.mockRejectedValueOnce(new Error("provider save failed"));
+    mocks.loadModelsForProvider.mockRejectedValueOnce(new Error("probe failed"));
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage();
+    });
+
+    expect(collectText(renderer!.root)).toContain("No providers returned from runtime settings.");
+    expect(collectText(renderer!.root)).toContain("Choose a provider to inspect routing and secret posture.");
+
+    await act(async () => {
+      findButton(renderer!.root, "Save routing").props.onClick();
+    });
+    expect(collectText(renderer!.root)).toContain("Choose both a provider and a model before saving routing.");
+
+    await act(async () => {
+      findButton(renderer!.root, "Probe from editor").props.onClick();
+    });
+    expect(collectText(renderer!.root)).toContain("Choose or save a provider before probing models.");
+
+    await act(async () => {
+      findButton(renderer!.root, "Save provider").props.onClick();
+    });
+    expect(collectText(renderer!.root)).toContain("Provide both a provider id and base URL before saving.");
+
+    await act(async () => {
+      findButton(renderer!.root, "New provider draft").props.onClick();
+    });
+    await act(async () => {
+      findInputByPlaceholder(renderer!.root, "openai-compatible").props.onChange({ target: { value: "local" } });
+      findInputByPlaceholder(renderer!.root, "https://llm.example.test/v1").props.onChange({
+        target: { value: "http://127.0.0.1:11434/v1" },
+      });
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Save provider").props.onClick();
+    });
+    await flushAsyncUpdates();
+    expect(collectText(renderer!.root)).toContain("provider save failed");
+
+    await act(async () => {
+      findButton(renderer!.root, "Probe from editor").props.onClick();
+    });
+    await flushAsyncUpdates();
+    expect(collectText(renderer!.root)).toContain("probe failed");
+  });
+
+  it("covers provider secret failure, routing save errors, and delete cancellation", async () => {
+    mocks.fetchProviderSecretStatus.mockRejectedValueOnce(new Error("secret status offline"));
+    mocks.patchSettings.mockRejectedValueOnce(new Error("routing save failed"));
+    mocks.saveProviderSecret.mockRejectedValueOnce(new Error("secret save failed"));
+    mocks.deleteProviderSecret.mockRejectedValueOnce(new Error("secret delete failed"));
+    mocks.loadModelsForProvider.mockResolvedValueOnce([]);
+    mocks.getCachedModelProbe.mockReturnValueOnce({
+      items: [],
+      state: "fallback",
+      source: "error_fallback",
+      warning: "401",
+    });
+
+    const previousWindow = globalThis.window;
+    const confirmSpy = vi.fn(() => false);
+    Object.assign(globalThis, {
+      window: {
+        confirm: confirmSpy,
+      },
+    });
+
+    try {
+      let renderer: ReactTestRenderer | null = null;
+      await act(async () => {
+        renderer = renderPage();
+      });
+      await act(async () => undefined);
+
+      expect(collectText(renderer!.root)).toContain("secret status offline");
+
+      await act(async () => {
+        findButton(renderer!.root, "Save routing").props.onClick();
+      });
+      await flushAsyncUpdates();
+      expect(collectText(renderer!.root)).toContain("routing save failed");
+
+      await act(async () => {
+        findButton(renderer!.root, "Save secret").props.onClick();
+      });
+      expect(collectText(renderer!.root)).toContain("Enter a provider secret before saving.");
+
+      await act(async () => {
+        findInputByPlaceholder(renderer!.root, "Paste a new API key to save").props.onChange({
+          target: { value: "sk-error-secret" },
+        });
+      });
+      await act(async () => {
+        findButton(renderer!.root, "Save secret").props.onClick();
+      });
+      await flushAsyncUpdates();
+      expect(collectText(renderer!.root)).toContain("secret save failed");
+
+      await act(async () => {
+        findButton(renderer!.root, "Refresh models").props.onClick();
+      });
+      await flushAsyncUpdates();
+      expect(collectText(renderer!.root)).toContain("live discovery failed: 401");
+
+      await act(async () => {
+        findButton(renderer!.root, "Delete secret").props.onClick();
+      });
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      expect(mocks.deleteProviderSecret).not.toHaveBeenCalled();
+
+      confirmSpy.mockReturnValue(true);
+      await act(async () => {
+        findButton(renderer!.root, "Delete secret").props.onClick();
+      });
+      await flushAsyncUpdates();
+      expect(collectText(renderer!.root)).toContain("secret delete failed");
+    } finally {
+      Object.assign(globalThis, { window: previousWindow });
+    }
+  });
 });
 
 describe("SettingsNativePage access", () => {
@@ -1625,6 +1998,85 @@ describe("SettingsNativePage access", () => {
     });
     expect(findLoopbackCheckbox(renderer!.root).props.checked).toBe(true);
     expect(collectText(renderer!.root)).toContain("Enabled");
+  });
+
+  it("saves edited access credentials, resolves install tokens, and revokes device grants", async () => {
+    mocks.fetchDeviceAccessGrants.mockResolvedValue({
+      items: [
+        {
+          grantId: "grant-active",
+          requestId: "request-active",
+          actorId: "operator",
+          deviceLabel: "Operator tablet",
+          deviceType: "tablet",
+          platform: "Windows",
+          grantedBy: "operator",
+          createdAt: "2026-05-02T18:00:00.000Z",
+          metadata: { origin: "LAN" },
+        },
+      ],
+    });
+    const previousWindow = globalThis.window;
+    const confirmSpy = vi.fn(() => true);
+    Object.assign(globalThis, {
+      window: {
+        confirm: confirmSpy,
+      },
+    });
+    let renderer: ReactTestRenderer | null = null;
+
+    try {
+      await act(async () => {
+        renderer = renderPage("access");
+      });
+
+      await act(async () => {
+        findFirstSelect(renderer!.root).props.onChange({ target: { value: "basic" } });
+        findLoopbackCheckbox(renderer!.root).props.onChange({ target: { checked: false } });
+        findInputByPlaceholder(renderer!.root, "Only enter a new token when rotating credentials").props.onChange({
+          target: { value: "rotated-token" },
+        });
+        const optionalInputs = findInputsByPlaceholder(renderer!.root, "Optional");
+        optionalInputs[0]!.props.onChange({ target: { value: "goat-admin" } });
+        optionalInputs[1]!.props.onChange({ target: { value: "basic-secret" } });
+      });
+
+      await act(async () => {
+        findButton(renderer!.root, "Save access settings").props.onClick();
+      });
+      await flushAsyncUpdates();
+
+      expect(mocks.patchSettings).toHaveBeenCalledWith({
+        auth: {
+          mode: "basic",
+          allowLoopbackBypass: false,
+          token: "rotated-token",
+          basicUsername: "goat-admin",
+          basicPassword: "basic-secret",
+        },
+      });
+      expect(collectText(renderer!.root)).toContain("Access posture updated.");
+
+      await act(async () => {
+        findButton(renderer!.root, "Generate install token").props.onClick();
+      });
+      await flushAsyncUpdates();
+      expect(mocks.resolveGatewayInstallToken).toHaveBeenCalledWith({
+        generateWhenMissing: true,
+        persistToEnv: false,
+      });
+      expect(collectText(renderer!.root)).toContain("install-token-1");
+
+      await act(async () => {
+        findButton(renderer!.root, "Revoke").props.onClick();
+      });
+      await flushAsyncUpdates();
+      expect(confirmSpy).toHaveBeenCalledWith("Revoke this device access grant?");
+      expect(mocks.revokeDeviceAccessGrant).toHaveBeenCalledWith("grant-active");
+      expect(collectText(renderer!.root)).toContain("Device access revoked.");
+    } finally {
+      Object.assign(globalThis, { window: previousWindow });
+    }
   });
 });
 

@@ -1,5 +1,11 @@
 export const LOCAL_PATH_TOOL_NAME_LIST = [
   "fs.read",
+  "fs.list",
+  "fs.stat",
+  "fs.copy",
+  "fs.write",
+  "fs.move",
+  "fs.delete",
   "file.read_range",
   "file.find",
   "code.search",

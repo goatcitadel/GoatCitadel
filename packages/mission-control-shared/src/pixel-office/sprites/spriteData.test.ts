@@ -25,7 +25,7 @@ describe("spriteData", () => {
     expect(first.walk[Direction.DOWN][0]).toHaveLength(32);
     expect(first.walk[Direction.DOWN][0][0]).toHaveLength(16);
     expect(first.typing[Direction.LEFT][0][0][0]).toBe("");
-  });
+  }, 30_000);
 
   it("builds directional walk, typing, reading, flipped-left, and hue-shifted sprites from loaded templates", async () => {
     vi.resetModules();

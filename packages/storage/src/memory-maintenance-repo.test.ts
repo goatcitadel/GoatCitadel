@@ -463,4 +463,195 @@ describe("MemoryMaintenanceRepository", () => {
     assert.deepEqual(repo.updateRecommendation(updatedRecommendation), updatedRecommendation);
     assert.deepEqual(repo.listRecommendations("workspace-1", 1000), [updatedRecommendation]);
   });
+
+  it("preserves maintenance defaults and filters malformed adapter rows", () => {
+    const { repo } = createRepoWithDb();
+    const policy = repo.upsertPolicy(basePolicy());
+
+    const preservedPolicy = repo.patchPolicy("workspace-1", {}, basePolicy(), "2026-03-21T00:00:00.000Z");
+    assert.deepEqual(preservedPolicy, {
+      ...policy,
+      providerId: "openai",
+      model: "gpt-5.2",
+      updatedAt: "2026-03-21T00:00:00.000Z",
+    });
+
+    const clearedPolicy = repo.patchPolicy(
+      "workspace-1",
+      {
+        providerId: null,
+        model: null,
+        schedule: null,
+      },
+      basePolicy(),
+      "2026-03-21T00:05:00.000Z",
+    );
+    assert.equal(clearedPolicy.providerId, undefined);
+    assert.equal(clearedPolicy.model, undefined);
+    assert.equal(clearedPolicy.schedule, undefined);
+
+    const state = repo.upsertState({
+      workspaceId: "workspace-1",
+      lastEligibilityAt: "2026-03-21T00:00:00.000Z",
+      lastSuccessfulRunAt: "2026-03-21T00:01:00.000Z",
+      changedSessionCount: 4,
+      activeRunId: "run-active",
+      lastRecommendationAt: "2026-03-21T00:02:00.000Z",
+      createdAt: "2026-03-21T00:00:00.000Z",
+      updatedAt: "2026-03-21T00:03:00.000Z",
+    });
+    assert.equal(state.activeRunId, "run-active");
+
+    const run = repo.createRun({
+      runId: "run-defaults",
+      durableRunId: "durable-defaults",
+      workspaceId: "workspace-1",
+      triggerSource: "manual",
+      status: "running",
+      providerId: "openai",
+      model: "gpt-5.2",
+      policySnapshot: undefined as unknown as Record<string, unknown>,
+      sourceSessionCount: 0,
+      changedArtifactCount: 0,
+      summary: "running",
+      error: undefined,
+      createdAt: "2026-03-21T00:10:00.000Z",
+      startedAt: "2026-03-21T00:10:00.000Z",
+      updatedAt: "2026-03-21T00:10:00.000Z",
+    });
+    assert.deepEqual(run.policySnapshot, {});
+    assert.deepEqual(
+      repo.updateRun({
+        ...run,
+        policySnapshot: undefined as unknown as Record<string, unknown>,
+        sourceSessionCount: 0,
+        changedArtifactCount: 0,
+        startedAt: undefined,
+        finishedAt: undefined,
+        updatedAt: "2026-03-21T00:11:00.000Z",
+      }),
+      {
+        ...run,
+        policySnapshot: {},
+        sourceSessionCount: 0,
+        changedArtifactCount: 0,
+        startedAt: undefined,
+        finishedAt: undefined,
+        updatedAt: "2026-03-21T00:11:00.000Z",
+      },
+    );
+    assert.deepEqual(
+      repo.replaceRunSources("run-defaults", [
+        {
+          sourceId: "source-defaults",
+          runId: "run-defaults",
+          sourceKind: "transcript",
+          sourceRef: "session-defaults",
+          modifiedAt: undefined,
+          excerpt: "   ",
+          tokenEstimate: undefined,
+          createdAt: "2026-03-21T00:12:00.000Z",
+        },
+      ]),
+      [
+        {
+          sourceId: "source-defaults",
+          runId: "run-defaults",
+          sourceKind: "transcript",
+          sourceRef: "session-defaults",
+          modifiedAt: undefined,
+          excerpt: undefined,
+          tokenEstimate: undefined,
+          createdAt: "2026-03-21T00:12:00.000Z",
+        },
+      ],
+    );
+    assert.deepEqual(
+      repo.replaceRunChanges("run-defaults", [
+        {
+          changeId: "change-defaults",
+          runId: "run-defaults",
+          changeKind: "updated",
+          targetKind: "memory_item",
+          targetRef: "memory-defaults",
+          beforeRef: "   ",
+          afterRef: undefined,
+          summary: "Updated memory defaults",
+          createdAt: "2026-03-21T00:13:00.000Z",
+        },
+      ]),
+      [
+        {
+          changeId: "change-defaults",
+          runId: "run-defaults",
+          changeKind: "updated",
+          targetKind: "memory_item",
+          targetRef: "memory-defaults",
+          beforeRef: undefined,
+          afterRef: undefined,
+          summary: "Updated memory defaults",
+          createdAt: "2026-03-21T00:13:00.000Z",
+        },
+      ],
+    );
+
+    const recommendation = repo.createRecommendation({
+      recommendationId: "rec-defaults",
+      workspaceId: "workspace-1",
+      kind: "threshold_adjustment",
+      status: "queued",
+      summary: "Patch policy",
+      proposedPatch: undefined as unknown as Record<string, unknown>,
+      rationale: "  ",
+      createdAt: "2026-03-21T00:15:00.000Z",
+      updatedAt: "2026-03-21T00:15:00.000Z",
+    });
+    assert.deepEqual(recommendation.proposedPatch, {});
+    assert.equal(recommendation.rationale, undefined);
+    assert.deepEqual(
+      repo.updateRecommendation({
+        ...recommendation,
+        proposedPatch: undefined as unknown as Record<string, unknown>,
+        appliedAt: undefined,
+        updatedAt: "2026-03-21T00:16:00.000Z",
+      }),
+      {
+        ...recommendation,
+        proposedPatch: {},
+        appliedAt: undefined,
+        updatedAt: "2026-03-21T00:16:00.000Z",
+      },
+    );
+
+    const internal = repo as unknown as {
+      getPolicyStmt: { get: (...args: unknown[]) => unknown };
+      getStateStmt: { get: (...args: unknown[]) => unknown };
+      getRunStmt: { get: (...args: unknown[]) => unknown };
+      getRunByDurableRunStmt: { get: (...args: unknown[]) => unknown };
+      listRunsStmt: { all: (...args: unknown[]) => unknown };
+      listRunSourcesStmt: { all: (...args: unknown[]) => unknown };
+      listRunChangesStmt: { all: (...args: unknown[]) => unknown };
+      getRecommendationStmt: { get: (...args: unknown[]) => unknown };
+      listRecommendationsStmt: { all: (...args: unknown[]) => unknown };
+    };
+    internal.getPolicyStmt = { get: () => ({ workspace_id: 1 }) };
+    internal.getStateStmt = { get: () => ({ workspace_id: 1 }) };
+    internal.getRunStmt = { get: () => ({ run_id: 1 }) };
+    internal.getRunByDurableRunStmt = { get: () => ({ run_id: 1 }) };
+    internal.listRunsStmt = { all: () => ({ not: "an array" }) };
+    internal.listRunSourcesStmt = { all: () => [null, { source_id: 1 }] };
+    internal.listRunChangesStmt = { all: () => [null, { change_id: 1 }] };
+    internal.getRecommendationStmt = { get: () => ({ recommendation_id: 1 }) };
+    internal.listRecommendationsStmt = { all: () => ({ not: "an array" }) };
+
+    assert.equal(repo.findPolicy("workspace-1"), undefined);
+    assert.equal(repo.findState("workspace-1"), undefined);
+    assert.throws(() => repo.getRun("run-defaults"), /Memory maintenance run/);
+    assert.equal(repo.findRunByDurableRunId("durable-defaults"), undefined);
+    assert.deepEqual(repo.listRuns("workspace-1"), []);
+    assert.deepEqual(repo.listRunSources("run-defaults"), []);
+    assert.deepEqual(repo.listRunChanges("run-defaults"), []);
+    assert.throws(() => repo.getRecommendation("rec-defaults"), /Memory maintenance recommendation/);
+    assert.deepEqual(repo.listRecommendations("workspace-1"), []);
+  });
 });

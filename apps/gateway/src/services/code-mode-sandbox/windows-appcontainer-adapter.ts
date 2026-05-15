@@ -69,16 +69,14 @@ export class WindowsAppContainerSandboxAdapter implements CodeModeHostSandboxAda
         ],
       }),
     );
-    if (!powershellPath) {
-      throw new Error("Code Mode Windows sandbox is unavailable: win32_powershell_missing.");
-    }
+    const launchPowerShellPath = powershellPath as string;
 
     await fs.mkdir(input.runTempRoot, { recursive: true });
     const launcherPath = path.join(input.runTempRoot, "code-mode-appcontainer-launcher.ps1");
     await fs.writeFile(launcherPath, buildPowerShellLauncher(input), "utf8");
 
     return {
-      executable: powershellPath,
+      executable: launchPowerShellPath,
       args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", launcherPath],
       cwd: input.runTempRoot,
       env: input.env,

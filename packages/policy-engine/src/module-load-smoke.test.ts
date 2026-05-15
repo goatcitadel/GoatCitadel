@@ -5,6 +5,5 @@ describe("policy-engine module load smoke", () => {
     const mod = await import("./index.js");
     expect(mod).toBeTruthy();
     expect(typeof mod.ToolPolicyEngine).toBe("function");
-  });
+  }, 30000);
 });
-

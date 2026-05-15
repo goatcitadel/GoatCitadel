@@ -483,7 +483,9 @@ export function SessionsPage() {
   );
 }
 
-function sessionHealthTone(health: SessionsResponse["items"][number]["health"]): "success" | "warning" | "critical" {
+export function sessionHealthTone(
+  health: SessionsResponse["items"][number]["health"],
+): "success" | "warning" | "critical" {
   switch (health) {
     case "healthy":
       return "success";
@@ -496,7 +498,7 @@ function sessionHealthTone(health: SessionsResponse["items"][number]["health"]):
   }
 }
 
-function sessionBudgetTone(
+export function sessionBudgetTone(
   budgetState: SessionsResponse["items"][number]["budgetState"],
 ): "muted" | "warning" | "critical" {
   switch (budgetState) {

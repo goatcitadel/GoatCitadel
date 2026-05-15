@@ -1,14 +1,16 @@
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderDoctorReport, runDoctor } from "./engine.js";
+import { renderDoctorReport, runDoctor, __doctorEngineInternals } from "./engine.js";
 
 const TEMP_ROOTS: string[] = [];
 
 afterEach(async () => {
   vi.unstubAllGlobals();
   delete process.env.MISSION_CONTROL_ORIGIN;
+  delete process.env.GOATCITADEL_ROOT_DIR;
+  delete process.env.GATEWAY_HOST;
 
   while (TEMP_ROOTS.length > 0) {
     const next = TEMP_ROOTS.pop();
@@ -171,6 +173,229 @@ describe("doctor summary behavior", () => {
 
     expect(settingsAttempts).toBe(2);
     expect(report.checks.find((check) => check.id === "gateway.deep-runtime")?.status).toBe("ok");
+  });
+
+  it("repairs missing runtime directories and policy jail roots when guarded repair is approved", async () => {
+    const rootDir = await createDoctorFixture();
+    await rm(path.join(rootDir, "workspace"), { recursive: true, force: true });
+    await rm(path.join(rootDir, "data"), { recursive: true, force: true });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ status: "ok" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ) as typeof fetch,
+    );
+
+    const report = await runDoctor({
+      rootDir,
+      gatewayBaseUrl: "http://127.0.0.1:8787",
+      yes: true,
+    });
+
+    expect(report.checks.find((check) => check.id === "policy.paths")).toMatchObject({
+      status: "fixed",
+      repairable: true,
+    });
+    expect(report.checks.find((check) => check.id === "storage.paths")).toMatchObject({
+      status: "fixed",
+      repairable: true,
+    });
+    expect(report.repairs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy.paths",
+          applied: true,
+        }),
+        expect.objectContaining({
+          checkId: "storage.paths",
+          applied: true,
+        }),
+      ]),
+    );
+    await expect(readFile(path.join(rootDir, "workspace", ".doctor-write-test"), "utf8")).rejects.toThrow();
+  });
+
+  it("hardens weak auth on non-loopback hosts when guarded repair is approved", async () => {
+    const rootDir = await createDoctorFixture();
+    const assistantPath = path.join(rootDir, "config", "assistant.config.json");
+    const assistant = JSON.parse(await readFile(assistantPath, "utf8")) as Record<string, unknown>;
+    assistant.auth = {
+      mode: "none",
+      allowLoopbackBypass: true,
+      token: {},
+      basic: {},
+    };
+    await writeJson(assistantPath, assistant);
+    process.env.GATEWAY_HOST = "0.0.0.0";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ status: "ok" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ) as typeof fetch,
+    );
+
+    const report = await runDoctor({
+      rootDir,
+      gatewayBaseUrl: "http://127.0.0.1:8787",
+      yes: true,
+    });
+
+    expect(report.checks.find((check) => check.id === "security.auth-host-posture")).toMatchObject({
+      status: "fixed",
+      repairable: true,
+    });
+    const repairedAssistant = JSON.parse(await readFile(assistantPath, "utf8")) as {
+      auth: { mode: string; allowLoopbackBypass: boolean; token: { value?: string } };
+    };
+    expect(repairedAssistant.auth.mode).toBe("token");
+    expect(repairedAssistant.auth.allowLoopbackBypass).toBe(false);
+    expect(repairedAssistant.auth.token.value).toMatch(/^gc_/);
+  });
+});
+
+describe("doctor internal helpers", () => {
+  it("normalizes links, host checks, path boundaries, and warning-only summaries", () => {
+    expect(__doctorEngineInternals.normalizeBaseUrl("http://127.0.0.1:8787///")).toBe("http://127.0.0.1:8787");
+    expect(__doctorEngineInternals.buildRemoteMissionControlUrl("http://mc.local/app", "token with spaces")).toBe(
+      "http://mc.local/app?tab=dashboard#access_token=token%20with%20spaces",
+    );
+    expect(__doctorEngineInternals.isLoopbackHost("[::1]")).toBe(true);
+    expect(__doctorEngineInternals.isLoopbackHost("0.0.0.0")).toBe(false);
+    expect(__doctorEngineInternals.isPathInsideRoot("C:/workspace", "C:/workspace/config/file.json")).toBe(true);
+    expect(__doctorEngineInternals.isPathInsideRoot("C:/workspace", "C:/other/file.json")).toBe(false);
+
+    expect(
+      __doctorEngineInternals.summarizeDoctor(
+        [
+          {
+            id: "warning",
+            group: "runtime",
+            title: "Warning",
+            status: "warn",
+            severity: "warning",
+            detail: "operator attention needed",
+            repairable: false,
+          },
+        ],
+        [{ checkId: "warning", applied: false, skipped: true }],
+      ),
+    ).toMatchObject({
+      warn: 1,
+      hardFailures: 0,
+      exitCode: 0,
+      repairedCount: 0,
+    });
+  });
+
+  it("resolves the doctor root from explicit input and environment fallback", async () => {
+    const rootDir = await createDoctorFixture();
+    const nestedDir = path.join(rootDir, "apps", "gateway");
+    await mkdir(nestedDir, { recursive: true });
+
+    expect(__doctorEngineInternals.resolveDoctorRootDir(` ${nestedDir} `)).toBe(path.resolve(nestedDir));
+
+    process.env.GOATCITADEL_ROOT_DIR = rootDir;
+    expect(__doctorEngineInternals.resolveDoctorRootDir()).toBe(path.resolve(rootDir));
+  });
+
+  it("detects repo roots, generates repair tokens, and gates guarded repairs", async () => {
+    const rootDir = await createDoctorFixture();
+    const nonRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-not-root-"));
+    TEMP_ROOTS.push(nonRoot);
+
+    expect(__doctorEngineInternals.commandLooksLikeRepoRoot(rootDir)).toBe(true);
+    expect(__doctorEngineInternals.commandLooksLikeRepoRoot(nonRoot)).toBe(false);
+    expect(__doctorEngineInternals.cryptoRandomHex(8)).toMatch(/^[a-f0-9]{16}$/);
+    await expect(__doctorEngineInternals.requestGuardedRepairApproval({ yes: true } as never, "repair?")).resolves.toBe(
+      true,
+    );
+    await expect(__doctorEngineInternals.requestGuardedRepairApproval({} as never, "repair?")).resolves.toBe(false);
+
+    const promptConfirm = vi.fn(async () => true);
+    await expect(
+      __doctorEngineInternals.requestGuardedRepairApproval({ promptConfirm } as never, "repair?"),
+    ).resolves.toBe(true);
+    expect(promptConfirm).toHaveBeenCalledWith("repair?");
+  });
+
+  it("collects config issues and rebuilds unified config from valid split files", async () => {
+    const rootDir = await createDoctorFixture();
+    const configDir = path.join(rootDir, "config");
+    const unifiedPath = path.join(configDir, "goatcitadel.json");
+    await writeFile(unifiedPath, "{not-json", "utf8");
+
+    const issues = __doctorEngineInternals.collectConfigIssues(
+      {
+        path: unifiedPath,
+        exists: true,
+        valid: false,
+        error: "Unexpected token",
+      },
+      [
+        {
+          path: path.join(configDir, "assistant.config.json"),
+          exists: false,
+          valid: false,
+          error: "file not found",
+        },
+      ],
+    );
+    expect(issues).toEqual(["Unified config is invalid JSON (Unexpected token).", "assistant.config.json is missing."]);
+
+    const rebuilt = await __doctorEngineInternals.rebuildUnifiedFromSplit({
+      rootDir,
+      configDir,
+    } as never);
+    expect(rebuilt).toEqual({
+      rebuilt: true,
+      message: "Rebuilt unified config from split config files.",
+    });
+
+    const rootConfig = JSON.parse(await readFile(unifiedPath, "utf8"));
+    expect(rootConfig).toMatchObject({
+      version: 1,
+      assistant: {
+        auth: {
+          mode: "token",
+        },
+      },
+      cronJobs: {
+        jobs: [],
+      },
+    });
+  });
+
+  it("detects managed workspace tooling presence and missing binaries", async () => {
+    const rootDir = await createDoctorFixture();
+    expect(__doctorEngineInternals.inspectManagedWorkspaceTooling(path.join(rootDir, "missing"))).toEqual({
+      isWorkspace: false,
+      missing: [],
+    });
+
+    let tooling = __doctorEngineInternals.inspectManagedWorkspaceTooling(rootDir);
+    expect(tooling.isWorkspace).toBe(true);
+    expect(tooling.missing.map((item) => item.label)).toContain("workspace dependencies");
+
+    const binDir = path.join(rootDir, "node_modules", ".bin");
+    await mkdir(binDir, { recursive: true });
+    const extension = process.platform === "win32" ? ".cmd" : "";
+    await writeFile(path.join(binDir, `tsc${extension}`), "", "utf8");
+    await writeFile(path.join(binDir, `tsx${extension}`), "", "utf8");
+    await writeFile(path.join(binDir, `vitest${extension}`), "", "utf8");
+
+    tooling = __doctorEngineInternals.inspectManagedWorkspaceTooling(rootDir);
+    expect(tooling).toEqual({
+      isWorkspace: true,
+      missing: [],
+    });
   });
 });
 

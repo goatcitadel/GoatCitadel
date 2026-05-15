@@ -24,6 +24,7 @@ import {
   resetProviderModelCatalogCacheForTests,
   useProviderModelCatalog,
 } from "./useProviderModelCatalog";
+import { useRefreshSubscription } from "./useRefreshSubscription";
 
 const baseConfig: RuntimeSettingsResponse["llm"] = {
   activeProviderId: "openai",
@@ -275,5 +276,128 @@ describe("useProviderModelCatalog", () => {
       source: "fallback",
       warning: "preview unavailable",
     });
+  });
+
+  it("handles config errors, blank provider ids, and refresh subscription filtering", async () => {
+    apiMocks.fetchLlmConfig.mockRejectedValueOnce(new Error("settings unavailable")).mockResolvedValue(baseConfig);
+
+    await act(async () => {
+      renderer = create(
+        <Harness
+          onValue={(value) => {
+            latest = value;
+          }}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(latest?.error).toBe("settings unavailable");
+    await expect(latest?.loadModelsForProvider("   ")).resolves.toEqual([]);
+    expect(latest?.getCachedModels("   ")).toEqual([]);
+
+    const refreshHandler = vi.mocked(useRefreshSubscription).mock.calls.at(-1)?.[1];
+    expect(refreshHandler).toBeTypeOf("function");
+
+    await act(async () => {
+      await refreshHandler?.({ reason: "other event", source: "test" } as never);
+    });
+    expect(apiMocks.fetchLlmConfig).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await refreshHandler?.({ reason: "model settings changed", source: "test" } as never);
+      await Promise.resolve();
+    });
+    expect(apiMocks.fetchLlmConfig).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await refreshHandler?.({ reason: "poll", eventType: "fallback_poll", source: "test" } as never);
+      await Promise.resolve();
+    });
+    expect(apiMocks.fetchLlmConfig).toHaveBeenCalledTimes(3);
+  });
+
+  it("coalesces in-flight model loads, supports force refresh, and expires cached results", async () => {
+    vi.setSystemTime(new Date("2026-05-04T00:00:00.000Z"));
+    let resolveModels!: (value: { items: Array<{ id: string }>; source: "live"; warning?: string }) => void;
+    apiMocks.fetchLlmModels.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveModels = resolve;
+      }),
+    );
+
+    await act(async () => {
+      renderer = create(
+        <Harness
+          onValue={(value) => {
+            latest = value;
+          }}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    const firstLoad = latest!.loadModelsForProvider("glm");
+    const secondLoad = latest!.loadModelsForProvider("glm");
+    expect(apiMocks.fetchLlmModels).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveModels({ items: [{ id: "glm-5-air" }, { id: "glm-5-air" }], source: "live" });
+      await Promise.all([firstLoad, secondLoad]);
+    });
+
+    expect(await firstLoad).toEqual(["glm-5-air"]);
+    expect(await secondLoad).toEqual(["glm-5-air"]);
+    expect(latest?.getCachedModels("glm")).toEqual(["glm-5-air"]);
+
+    apiMocks.fetchLlmModels.mockResolvedValueOnce({
+      items: [{ id: "glm-5-flash" }],
+      source: "live",
+    });
+    await act(async () => {
+      await latest?.loadModelsForProvider("glm", { force: true });
+    });
+    expect(apiMocks.fetchLlmModels).toHaveBeenCalledTimes(2);
+    expect(latest?.getCachedModels("glm")).toEqual(["glm-5-flash"]);
+
+    vi.setSystemTime(new Date("2026-05-04T00:06:00.000Z"));
+    expect(latest?.getCachedModels("glm")).toEqual([]);
+  });
+
+  it("can load a provider before config has hydrated", async () => {
+    let resolveConfig!: (value: typeof baseConfig) => void;
+    apiMocks.fetchLlmConfig.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveConfig = resolve;
+      }),
+    );
+    apiMocks.fetchLlmModels.mockResolvedValueOnce({
+      items: [],
+      source: "live",
+      warning: "No models returned",
+    });
+
+    await act(async () => {
+      renderer = create(
+        <Harness
+          onValue={(value) => {
+            latest = value;
+          }}
+        />,
+      );
+    });
+
+    await act(async () => {
+      await latest?.loadModelsForProvider("glm");
+    });
+
+    expect(latest?.providers).toEqual([]);
+
+    await act(async () => {
+      resolveConfig(baseConfig);
+      await Promise.resolve();
+    });
+
+    expect(latest?.providers.find((provider) => provider.providerId === "glm")?.modelProbeState).toBe("empty");
   });
 });

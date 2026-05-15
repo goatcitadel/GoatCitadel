@@ -32,6 +32,38 @@ describe("describeChannelCapabilities", () => {
     expect(capabilities.setupReady).toBe(true);
   });
 
+  it("supports permissive Discord gateway policy variants", () => {
+    const capabilities = describeChannelCapabilities("discord", {
+      runtimeMode: "gateway",
+      botToken: "token",
+      inboundDmPolicy: "closed",
+      guildPolicy: "open",
+    });
+
+    expect(capabilities.runtimePolicy).toMatchObject({
+      pairing: false,
+      allowlist: false,
+      mentionGating: false,
+      typing: true,
+      presence: true,
+    });
+  });
+
+  it("defaults Discord gateway policy to paired DMs and allowlisted guilds", () => {
+    const capabilities = describeChannelCapabilities("discord", {
+      runtimeMode: "gateway",
+      botToken: "token",
+    });
+
+    expect(capabilities.runtimePolicy).toMatchObject({
+      pairing: true,
+      allowlist: true,
+      mentionGating: true,
+      typing: true,
+      presence: true,
+    });
+  });
+
   it("keeps webhook-only Discord connections outbound-only", () => {
     const capabilities = describeChannelCapabilities("discord", {
       webhookUrl: "https://discord.com/api/webhooks/123/test",
@@ -248,11 +280,28 @@ describe("describeChannelCapabilities", () => {
 
     expect(capabilities.supportedActions).toEqual(["channel.send"]);
     expect(capabilities.inboundModes).toEqual(["none"]);
+    expect(capabilities.threadCapabilities).toMatchObject({
+      rooms: false,
+      threads: false,
+      replies: false,
+      direct: false,
+      groups: false,
+    });
     expect(capabilities.runtimePosture).toMatchObject({
       outboundTransport: "api",
       lifecycle: "stateless",
       inboundReadiness: "unsupported",
     });
     expect(capabilities.setupReady).toBe(true);
+  });
+
+  it("treats whitespace-only config values as missing setup fields", () => {
+    const capabilities = describeChannelCapabilities("signal", {
+      baseUrl: "   ",
+      bridgeUrl: "\t",
+    });
+
+    expect(capabilities.setupReady).toBe(false);
+    expect(capabilities.setupDiagnostics).toEqual(["Missing one of: config.baseUrl, config.bridgeUrl."]);
   });
 });

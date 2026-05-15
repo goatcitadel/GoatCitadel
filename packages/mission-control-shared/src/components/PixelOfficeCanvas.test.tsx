@@ -52,6 +52,7 @@ const officeMocks = vi.hoisted(() => {
     subagentKeys = new Set<string>();
     removed: number[] = [];
     commands: string[] = [];
+    walkResult = true;
 
     constructor() {
       instances.push(this);
@@ -136,7 +137,7 @@ const officeMocks = vi.hoisted(() => {
 
     walkToTile(id: number, col: number, row: number) {
       this.commands.push(`walk:${id}:${col}:${row}`);
-      return true;
+      return this.walkResult;
     }
 
     dismissBubble(id: number) {
@@ -212,6 +213,20 @@ function flush() {
   });
 }
 
+function nodeText(node: { children?: unknown[] }): string {
+  return (
+    node.children
+      ?.map((child) =>
+        typeof child === "string" || typeof child === "number"
+          ? String(child)
+          : child && typeof child === "object" && "children" in child
+            ? nodeText(child as { children?: unknown[] })
+            : "",
+      )
+      .join("") ?? ""
+  );
+}
+
 function deferredAssetLoad() {
   let resolve!: (value: { defaultLayout: { cols: number; rows: number; tiles: never[]; furniture: never[] } }) => void;
   let reject!: (error: Error) => void;
@@ -239,6 +254,41 @@ function createWithNodeMocks(element: React.ReactElement) {
       if (type === "div") {
         return {
           getBoundingClientRect: () => ({ left: 0, top: 0, width: 160, height: 120 }),
+        };
+      }
+      return {};
+    },
+  });
+}
+
+function createWithoutCanvasNodeMocks(element: React.ReactElement) {
+  return create(element, {
+    createNodeMock: ({ type }) => {
+      if (type === "div") {
+        return {
+          getBoundingClientRect: () => ({ left: 0, top: 0, width: 160, height: 120 }),
+        };
+      }
+      return null;
+    },
+  });
+}
+
+function createWithUnstableGeometryNodeMocks(element: React.ReactElement) {
+  return create(element, {
+    createNodeMock: ({ type }) => {
+      if (type === "canvas") {
+        return {
+          width: 0,
+          height: 0,
+          style: {},
+          getBoundingClientRect: () => ({ left: 0, top: 0, width: Number.NaN, height: Number.NaN }),
+          getContext: () => ({ clearRect: vi.fn() }),
+        };
+      }
+      if (type === "div") {
+        return {
+          getBoundingClientRect: () => ({ left: 0, top: 0, width: Number.NaN, height: Number.NaN }),
         };
       }
       return {};
@@ -301,6 +351,28 @@ describe("PixelOfficeCanvas", () => {
       renderer!.root.findAllByType("button")[1].props.onClick();
     });
     expect(onSelectZone).toHaveBeenCalledWith("research");
+  });
+
+  it("renders zoom fallback copy when no zone is selected", () => {
+    renderer = createWithNodeMocks(
+      <PixelOfficeCanvas
+        zones={[]}
+        selectedAgentId={null}
+        selectedZoneId={null}
+        recentEvents={[
+          {
+            eventId: "event-1",
+            eventType: "message.created",
+            timestamp: "2026-05-12T00:00:00.000Z",
+            payload: {},
+          } as never,
+        ]}
+        onSelectAgent={vi.fn()}
+        onSelectZone={vi.fn()}
+      />,
+    );
+
+    expect(nodeText(renderer.root.findByProps({ className: "pixel-office-readout" }))).toContain("Zoom 2x");
   });
 
   it("loads the runtime, maps agents, renders frames, and emits movement commands", async () => {
@@ -368,6 +440,42 @@ describe("PixelOfficeCanvas", () => {
       );
     });
     expect(state.removed).toContain(2);
+  });
+
+  it("tolerates a ready runtime before the canvas ref is available", async () => {
+    assetMocks.supported = true;
+
+    await act(async () => {
+      renderer = createWithoutCanvasNodeMocks(
+        <PixelOfficeCanvas
+          zones={zones}
+          selectedAgentId="agent-a"
+          selectedZoneId="command"
+          recentEvents={[
+            {
+              eventId: "null-payload",
+              eventType: "subagent_registered",
+              timestamp: "2026-05-12T00:00:00.000Z",
+              payload: null,
+            } as never,
+          ]}
+          onSelectAgent={vi.fn()}
+          onSelectZone={vi.fn()}
+        />,
+      );
+    });
+    await flush();
+
+    const canvas = renderer.root.findByType("canvas");
+    act(() => {
+      canvas.props.onMouseDown({ button: 0, clientX: 20, clientY: 20 });
+      canvas.props.onMouseMove({ clientX: 20, clientY: 20 });
+      canvas.props.onMouseUp({ clientX: 20, clientY: 20 });
+      canvas.props.onContextMenu({ preventDefault: vi.fn(), clientX: 20, clientY: 20 });
+    });
+
+    expect(loopMocks.startGameLoop).not.toHaveBeenCalled();
+    expect(officeMocks.instances[0]?.commands).toEqual(expect.arrayContaining(["active:1:true"]));
   });
 
   it("ignores late asset load settlement after unmount", async () => {
@@ -579,5 +687,62 @@ describe("PixelOfficeCanvas", () => {
     expect(renderer.root.findByProps({ className: "pixel-office-loading" }).children.join("")).toBe(
       "asset load failed",
     );
+  });
+
+  it("keeps pointer fallbacks deterministic when geometry, handlers, and agent mappings are missing", async () => {
+    assetMocks.supported = true;
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      writable: true,
+      value: {},
+    });
+
+    const commands: PixelOfficeCanvasCommand[] = [];
+    const unusualZones = [
+      {
+        ...zones[0],
+        agents: [
+          {
+            ...zones[0].agents[0],
+            zoneId: "unmapped-zone" as OfficeZoneId,
+            zoneLabel: "Unmapped",
+            pendingApprovalCount: 0,
+          },
+        ],
+      },
+    ];
+
+    await act(async () => {
+      renderer = createWithUnstableGeometryNodeMocks(
+        <PixelOfficeCanvas
+          zones={unusualZones}
+          selectedAgentId={null}
+          selectedZoneId={"unmapped-zone" as OfficeZoneId}
+          recentEvents={[]}
+          onSelectAgent={vi.fn()}
+          onSelectZone={vi.fn()}
+          onAgentCommand={(command) => commands.push(command)}
+        />,
+      );
+    });
+    await flush();
+
+    const state = officeMocks.instances[0];
+    expect(state.commands).toContain("tool:1:null");
+
+    const canvas = renderer.root.findByType("canvas");
+    state.walkResult = false;
+    state.selectedAgentId = 1;
+    act(() => {
+      canvas.props.onMouseUp({ clientX: 100, clientY: 80 });
+    });
+    expect(commands.some((command) => command.kind === "move")).toBe(false);
+
+    state.walkResult = true;
+    state.selectedAgentId = 99;
+    act(() => {
+      canvas.props.onContextMenu({ preventDefault: vi.fn(), clientX: 32, clientY: 32 });
+    });
+    expect(commands.some((command) => command.agentId === "missing")).toBe(false);
   });
 });

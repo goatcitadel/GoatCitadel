@@ -31,7 +31,13 @@ import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import { pageCopy } from "../content/copy";
 import {
   buildApprovalEvidenceModel,
+  formatInferredIds,
   findTraceMetadata,
+  getCanonicalDurableRunId,
+  hasRecoveryLinkage,
+  isBlockedDurableStatus,
+  isExpiredApproval,
+  mergeApprovals,
   type ApprovalEvidenceBlock,
   type ApprovalEvidenceModel,
 } from "./approvals/approvals-page-helpers";
@@ -1110,29 +1116,6 @@ function ApprovalEvidence(props: { approvalId: string; evidence: ApprovalEvidenc
   );
 }
 
-function mergeApprovals(groups: ApprovalsResponse["items"][]): ApprovalsResponse["items"] {
-  const byId = new Map<string, ApprovalsResponse["items"][number]>();
-  for (const items of groups) {
-    for (const item of items) {
-      const current = byId.get(item.approvalId);
-      if (!current || Date.parse(item.createdAt) >= Date.parse(current.createdAt)) {
-        byId.set(item.approvalId, item);
-      }
-    }
-  }
-  return Array.from(byId.values()).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-}
-
-function hasRecoveryLinkage(approval: ApprovalsResponse["items"][number]): boolean {
-  return Boolean(
-    approval.linkage?.durableRunId ||
-    approval.linkage?.proactiveRunId ||
-    approval.linkage?.taskId ||
-    approval.linkage?.correlationId ||
-    approval.linkage?.traceId,
-  );
-}
-
 function buildLiveLaneHref(
   approval: ApprovalsResponse["items"][number],
 ): { href: string; route: ResolvedRoute } | null {
@@ -1155,25 +1138,4 @@ function buildLiveLaneHref(
     href: buildRouteSearch(route),
     route,
   };
-}
-
-function isExpiredApproval(approval: ApprovalsResponse["items"][number]): boolean {
-  if (approval.status !== "pending" || !approval.expiresAt) {
-    return false;
-  }
-  const expiresAtMs = Date.parse(approval.expiresAt);
-  return Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now();
-}
-
-function getCanonicalDurableRunId(lifecycle: RuntimeLifecycleResponse): string | null {
-  return lifecycle.canonical?.runId ?? lifecycle.approval?.linkage?.durableRunId ?? null;
-}
-
-function isBlockedDurableStatus(status: string): boolean {
-  return status === "paused" || status === "waiting";
-}
-
-function formatInferredIds(ids: string[], canonicalId?: string | null): string {
-  const inferred = ids.filter((id) => id !== canonicalId);
-  return inferred.length > 0 ? inferred.join(", ") : "none";
 }

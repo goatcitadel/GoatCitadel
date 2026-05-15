@@ -492,7 +492,7 @@ function ThreadConversationSurface({
   );
 }
 
-function getArchiveActionLabel(lifecycleStatus: string, pending: boolean) {
+export function getArchiveActionLabel(lifecycleStatus: string, pending: boolean) {
   if (pending) return lifecycleStatus === "archived" ? "Restoring..." : "Archiving...";
   return lifecycleStatus === "archived" ? "Restore" : "Archive";
 }
@@ -756,7 +756,7 @@ function FilterChip({ active, onClick, children }: { active?: boolean; onClick: 
   );
 }
 
-function formatRelativeTime(value?: string): string {
+export function formatRelativeTime(value?: string): string {
   if (!value) {
     return "Recent";
   }

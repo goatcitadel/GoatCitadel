@@ -473,13 +473,13 @@ export function assignChatSessionProject(
 
 function resetWorkbenchForProjectChange(deps: ChatSessionDependencies, sessionId: string, projectId?: string): void {
   deps.storage.chatSessionWorkbench.patch(sessionId, {
-    projectId,
-    baseRef: undefined,
-    worktreePath: undefined,
+    projectId: projectId ?? "",
+    baseRef: "",
+    worktreePath: "",
     worktreeStatus: "uninitialized",
-    activeFilePath: undefined,
-    diffArtifactId: undefined,
-    outputArtifactId: undefined,
+    activeFilePath: "",
+    diffArtifactId: "",
+    outputArtifactId: "",
     validationStatus: "idle",
   });
 }

@@ -56,4 +56,36 @@ describe("resolveEffectivePolicy", () => {
     expect(isToolAllowed(policy, "session.inspect")).toBe(false);
     expect(isToolAllowed(policy, "fs.read")).toBe(true);
   });
+
+  it("defaults missing profile selection to all tools and danger profile to bypass approval", () => {
+    const allToolsPolicy = resolveEffectivePolicy(
+      {
+        ...config,
+        tools: {
+          allow: [],
+          deny: ["shell.exec"],
+        },
+        agents: {},
+      } as ToolPolicyConfig,
+      "missing-agent",
+    );
+    expect(isToolAllowed(allToolsPolicy, "fs.read")).toBe(true);
+    expect(isToolAllowed(allToolsPolicy, "shell.exec")).toBe(false);
+
+    const policy = resolveEffectivePolicy(
+      {
+        ...config,
+        profiles: {},
+        tools: {
+          profile: "danger",
+          allow: [],
+          deny: ["shell.exec"],
+        },
+        agents: {},
+      },
+      "missing-agent",
+    );
+
+    expect(policy.approvalMode).toBe("bypass");
+  });
 });

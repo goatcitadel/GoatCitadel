@@ -1,7 +1,7 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
-import { MemoryRoutePage } from "./MemoryRoutePage";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { asRecord, MemoryRoutePage, readMemoryWriteDecision, readMetadataString } from "./MemoryRoutePage";
 
 const memorySnapshot = vi.hoisted(() => ({
   loading: false,
@@ -175,11 +175,74 @@ const memorySnapshot = vi.hoisted(() => ({
   },
 }));
 
+const evidenceApiMocks = vi.hoisted(() => ({
+  fetchEvidenceEnvelopes: vi.fn(),
+}));
+
+vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
+  fetchEvidenceEnvelopes: evidenceApiMocks.fetchEvidenceEnvelopes,
+}));
+
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMemoryOperatorSnapshot", () => ({
   useMemoryOperatorSnapshot: () => memorySnapshot,
 }));
 
+function collectText(node: ReactTestInstance): string {
+  return node.children
+    .map((child) => {
+      if (typeof child === "string" || typeof child === "number") {
+        return String(child);
+      }
+      return collectText(child);
+    })
+    .join(" ");
+}
+
+function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
+  const button = root.findAll((node) => node.type === "button" && collectText(node).includes(label))[0];
+  if (!button) {
+    throw new Error(`Unable to find button: ${label}`);
+  }
+  return button;
+}
+
+function findButtons(root: ReactTestInstance, label: string): ReactTestInstance[] {
+  return root.findAll((node) => node.type === "button" && collectText(node).includes(label));
+}
+
 describe("MemoryRoutePage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    evidenceApiMocks.fetchEvidenceEnvelopes.mockResolvedValue({
+      items: [
+        {
+          envelopeId: "env-1",
+          eventKind: "memory_write",
+          signatureStatus: "signed_hmac",
+          contentHash: "hash-123456789",
+          createdAt: "2026-04-22T00:00:00.000Z",
+          metadata: { decision: { decision: "approved" } },
+        },
+      ],
+    });
+  });
+
+  it("reads memory provenance and evidence metadata defensively", () => {
+    expect(asRecord({ source: "operator" })).toEqual({ source: "operator" });
+    expect(asRecord(null)).toBeUndefined();
+    expect(asRecord(["source"])).toBeUndefined();
+    expect(readMetadataString({ reason: "  Useful context " }, "reason")).toBe("Useful context");
+    expect(readMetadataString({ reason: "   " }, "reason")).toBeUndefined();
+    expect(readMetadataString({ reason: 42 }, "reason")).toBeUndefined();
+    expect(
+      readMemoryWriteDecision({ metadata: { decision: { decision: "approved" } }, signatureStatus: "signed" } as any),
+    ).toBe("approved");
+    expect(readMemoryWriteDecision({ metadata: { decision: ["bad"] }, signatureStatus: "signed" } as any)).toBe(
+      "signed",
+    );
+    expect(readMemoryWriteDecision({ metadata: null, signatureStatus: "unsigned" } as any)).toBe("unsigned");
+  });
+
   it("renders lifecycle-aware memory operator truth in the next shell", () => {
     const markup = renderToStaticMarkup(
       <MemoryRoutePage
@@ -235,5 +298,257 @@ describe("MemoryRoutePage", () => {
       theme: "library",
     });
     expect(navigate.mock.calls[0]?.[0]).not.toHaveProperty("page");
+  });
+
+  it("wires memory item edits, maintenance policy controls, recommendation actions, and run selection", async () => {
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <MemoryRoutePage
+          route={{ area: "library", section: "memory", theme: "library" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={0}
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Deployment note").props.onClick();
+    });
+
+    const inputs = renderer!.root.findAllByType("input");
+    const selects = renderer!.root.findAllByType("select");
+    const policyEnabledLabel = renderer!.root.findAll(
+      (node) => node.type === "label" && collectText(node).includes("Enabled"),
+    )[0];
+    expect(policyEnabledLabel).toBeDefined();
+    const policyEnabledSelect = policyEnabledLabel!.findByType("select");
+    const textarea = renderer!.root.findByType("textarea");
+
+    await act(async () => {
+      inputs
+        .find((node) => node.props.placeholder === "Namespace, title, or content")
+        ?.props.onChange({
+          target: { value: "ship" },
+        });
+      inputs
+        .find((node) => node.props.value === "Deployment note")
+        ?.props.onChange({
+          target: { value: "Deployment note updated" },
+        });
+      inputs
+        .find((node) => node.props.placeholder === "empty = default")
+        ?.props.onChange({
+          target: { value: "7200" },
+        });
+      textarea.props.onChange({ target: { value: "Ship after the coverage lane." } });
+      selects.find((node) => node.props.value === "true")?.props.onChange({ target: { value: "false" } });
+      policyEnabledSelect.props.onChange({ target: { value: "false" } });
+      selects.find((node) => node.props.value === "manual")?.props.onChange({ target: { value: "scheduled" } });
+      inputs.find((node) => node.props.value === "openai")?.props.onChange({ target: { value: "anthropic" } });
+      inputs.find((node) => node.props.value === "gpt-5")?.props.onChange({ target: { value: "claude-sonnet" } });
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Save item").props.onClick();
+      findButton(renderer!.root, "Forget item").props.onClick();
+      findButton(renderer!.root, "Run maintenance now").props.onClick();
+      findButton(renderer!.root, "Save policy").props.onClick();
+      findButtons(renderer!.root, "Refresh").at(-1)!.props.onClick();
+      findButton(renderer!.root, "Accept").props.onClick();
+      findButton(renderer!.root, "Reject").props.onClick();
+      findButton(renderer!.root, "completed").props.onClick();
+    });
+
+    expect(memorySnapshot.setSelectedItemId).toHaveBeenCalledWith("mem-1");
+    expect(memorySnapshot.saveItemPatch).toHaveBeenCalledWith("mem-1", {
+      title: "Deployment note updated",
+      content: "Ship after the coverage lane.",
+      pinned: false,
+      ttlOverrideSeconds: 7200,
+    });
+    expect(memorySnapshot.forgetSelectedItem).toHaveBeenCalledTimes(1);
+    expect(memorySnapshot.setPolicyDirty).toHaveBeenCalledWith(true);
+    expect(memorySnapshot.setPolicyDraft).toHaveBeenCalledTimes(4);
+    const policyUpdaters = memorySnapshot.setPolicyDraft.mock.calls
+      .map(([updater]) => updater)
+      .filter((updater) => typeof updater === "function") as Array<
+      (current: typeof memorySnapshot.policyDraft | null) => typeof memorySnapshot.policyDraft | null
+    >;
+    expect(policyUpdaters[0]?.(null)).toBeNull();
+    const policyResults = policyUpdaters.map((updater) => updater(memorySnapshot.policyDraft));
+    expect(policyResults).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ enabled: false }),
+        expect.objectContaining({ runMode: "scheduled" }),
+        expect.objectContaining({ providerId: "anthropic" }),
+        expect.objectContaining({ model: "claude-sonnet" }),
+      ]),
+    );
+    expect(memorySnapshot.runMaintenance).toHaveBeenCalledTimes(1);
+    expect(memorySnapshot.savePolicy).toHaveBeenCalledTimes(1);
+    expect(memorySnapshot.reload).toHaveBeenCalledTimes(1);
+    expect(memorySnapshot.resolveRecommendation).toHaveBeenCalledWith("rec-1", "accept");
+    expect(memorySnapshot.resolveRecommendation).toHaveBeenCalledWith("rec-1", "reject");
+    expect(memorySnapshot.setSelectedRunId).toHaveBeenCalledWith("run-1");
+  });
+
+  it("refreshes memory write-gate evidence and surfaces envelope load failures", async () => {
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <MemoryRoutePage
+          route={{ area: "library", section: "memory", theme: "library" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={0}
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(evidenceApiMocks.fetchEvidenceEnvelopes).toHaveBeenCalledWith({ limit: 12 });
+    expect(collectText(renderer!.root)).toContain("approved");
+
+    evidenceApiMocks.fetchEvidenceEnvelopes.mockRejectedValueOnce(new Error("evidence route offline"));
+    await act(async () => {
+      findButton(renderer!.root, "Refresh evidence").props.onClick();
+      await Promise.resolve();
+    });
+
+    expect(collectText(renderer!.root)).toContain("Evidence envelopes unavailable: evidence route offline");
+    expect(collectText(renderer!.root)).toContain("No memory write-gate envelopes recorded yet.");
+  });
+
+  it("renders disabled and unknown memory truth without enabling mutation controls", () => {
+    const original = {
+      selectedItemId: memorySnapshot.selectedItemId,
+      selectedRunId: memorySnapshot.selectedRunId,
+      selectedItem: memorySnapshot.selectedItem,
+      selectedRun: memorySnapshot.selectedRun,
+      policyDraft: memorySnapshot.policyDraft,
+      policyDirty: memorySnapshot.policyDirty,
+      data: memorySnapshot.data,
+      notice: memorySnapshot.notice,
+    };
+
+    try {
+      memorySnapshot.selectedItemId = "";
+      memorySnapshot.selectedRunId = "";
+      memorySnapshot.selectedItem = null as any;
+      memorySnapshot.selectedRun = null as any;
+      memorySnapshot.policyDraft = null as any;
+      memorySnapshot.policyDirty = false;
+      memorySnapshot.notice = { tone: "warning", message: "Memory settings degraded." } as any;
+      memorySnapshot.data = {
+        ...original.data,
+        files: [],
+        qmdStats: null,
+        memoryItems: [],
+        memoryHistory: [],
+        maintenanceStatus: null,
+        maintenanceRuns: [],
+        maintenanceRecommendations: [],
+        selectedRunProvenance: null,
+        selectedDurableRun: null,
+        selectedDurableTimeline: [],
+        memoryAdminEnabled: false,
+        memoryAdminState: "unknown",
+        maintenanceEnabled: false,
+        maintenanceDurableReady: false,
+        sectionErrors: {
+          settings: "settings failed",
+          files: "files failed",
+          qmdStats: "qmd failed",
+          memoryItems: null,
+          memoryHistory: "history failed",
+          maintenanceStatus: null,
+          maintenanceRuns: null,
+          maintenanceRecommendations: null,
+          selectedRunProvenance: "provenance failed",
+          selectedDurableRun: null,
+          selectedDurableTimeline: null,
+        },
+      } as any;
+
+      const markup = renderToStaticMarkup(
+        <MemoryRoutePage
+          route={{ area: "library", section: "memory", theme: "library" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={0}
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+
+      expect(markup).toContain("Memory settings degraded.");
+      expect(markup).toContain("Memory settings truth is unavailable");
+      expect(markup).toContain("Memory item truth is unavailable until backend settings truth reloads.");
+      expect(markup).toContain("Select a memory item to inspect lifecycle state");
+      expect(markup).toContain("Memory maintenance truth is unavailable until backend settings truth reloads.");
+      expect(markup).toContain("No maintenance recommendations.");
+      expect(markup).toContain("No maintenance runs yet.");
+      expect(markup).toContain("Select a maintenance run to inspect provenance.");
+      expect(markup).toContain("No recent context packs.");
+      expect(markup).toContain("No memory file subspaces discovered.");
+    } finally {
+      Object.assign(memorySnapshot, original);
+    }
+  });
+
+  it("renders disabled memory admin truth with selected item reset through mounted effects", async () => {
+    const original = {
+      selectedItemId: memorySnapshot.selectedItemId,
+      selectedItem: memorySnapshot.selectedItem,
+      selectedRun: memorySnapshot.selectedRun,
+      data: memorySnapshot.data,
+    };
+
+    try {
+      memorySnapshot.selectedItemId = "";
+      memorySnapshot.selectedItem = null as any;
+      memorySnapshot.selectedRun = null as any;
+      memorySnapshot.data = {
+        ...original.data,
+        memoryItems: [],
+        memoryHistory: [],
+        maintenanceEnabled: false,
+        maintenanceDurableReady: false,
+        memoryAdminState: "disabled",
+        maintenanceRecommendations: [],
+        maintenanceRuns: [],
+      } as any;
+
+      let renderer: ReactTestRenderer | null = null;
+      await act(async () => {
+        renderer = create(
+          <MemoryRoutePage
+            route={{ area: "library", section: "memory", theme: "library" } as any}
+            activeWorkspaceId="default"
+            activeWorkspaceName="Default"
+            pendingApprovals={0}
+            navigate={vi.fn()}
+            setActiveWorkspaceId={vi.fn()}
+          />,
+        );
+        await Promise.resolve();
+      });
+
+      const text = collectText(renderer!.root);
+      expect(text).toContain("Memory lifecycle admin is disabled in settings.");
+      expect(text).toContain("Memory maintenance is not enabled in this workspace.");
+      expect(text).toContain("Select a memory item to inspect lifecycle state");
+    } finally {
+      Object.assign(memorySnapshot, original);
+    }
   });
 });

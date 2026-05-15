@@ -65,6 +65,71 @@ describe("approval bypass support", () => {
 
     expect(hasVerifiedApprovalBypass(request, storage)).toBe(false);
   });
+
+  it("honors explicit pending approval expiry timestamps", () => {
+    const request = createToolInvokeRequest();
+
+    expect(
+      hasVerifiedApprovalBypass(
+        request,
+        createStorageWithPendingApproval({
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          request: request as unknown as Record<string, unknown>,
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      hasVerifiedApprovalBypass(
+        request,
+        createStorageWithPendingApproval({
+          expiresAt: "not-a-date",
+          request: request as unknown as Record<string, unknown>,
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects missing approval reasons and mismatched pending approval records", () => {
+    const request = createToolInvokeRequest();
+
+    expect(
+      hasVerifiedApprovalBypass({ ...request, consentContext: undefined }, createStorageWithPendingApproval()),
+    ).toBe(false);
+    expect(
+      hasVerifiedApprovalBypass(
+        request,
+        createStorageWithPendingApproval({ actionType: "chat.message" as PendingApprovalAction["actionType"] }),
+      ),
+    ).toBe(false);
+    expect(
+      hasVerifiedApprovalBypass(
+        request,
+        createStorageWithPendingApproval({ resolutionStatus: "executed" as PendingApprovalAction["resolutionStatus"] }),
+      ),
+    ).toBe(false);
+    expect(
+      hasVerifiedApprovalBypass(
+        request,
+        createStorageWithPendingApproval({
+          request: {
+            ...request,
+            taskId: undefined,
+          } as unknown as Record<string, unknown>,
+        }),
+      ),
+    ).toBe(false);
+
+    expect(
+      hasVerifiedApprovalBypass(
+        createToolInvokeRequest({ args: undefined as unknown as Record<string, unknown> }),
+        createStorageWithPendingApproval({
+          request: createToolInvokeRequest({
+            args: undefined as unknown as Record<string, unknown>,
+          }) as unknown as Record<string, unknown>,
+        }),
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("HTML noise stripping", () => {
@@ -77,6 +142,7 @@ describe("HTML noise stripping", () => {
   it("handles malformed and boundary-sensitive noise tags", () => {
     expect(stripHtmlNoiseTags("before<script", ["script"])).toBe("before ");
     expect(stripHtmlNoiseTags("before<script>evil after", ["script"])).toBe("before evil after");
+    expect(stripHtmlNoiseTags("before<custom>x</custom", ["custom"])).toBe("before ");
     expect(stripHtmlNoiseTags("<scriptx>keep</scriptx>", ["script"])).toBe("<scriptx>keep</scriptx>");
     expect(stripHtmlNoiseTags("a<script>x</scripted>still hidden</script>b", ["script"])).toBe("a b");
   });
@@ -146,6 +212,23 @@ describe("tool security support", () => {
     expect(call.args).toEqual({
       body: "token [REDACTED]",
     });
+
+    expect(
+      buildInternalToolCall(
+        createToolInvokeRequest({
+          toolName: "fs.read",
+          authContext: {
+            boundary: "provider_boundary",
+            secretRefs: ["secret-1"],
+          },
+        }),
+        deriveToolCapabilityPolicy("fs.read"),
+        "2026-03-22T12:00:00.000Z",
+      ).authContext,
+    ).toEqual({
+      boundary: "provider_boundary",
+      secretRefs: ["secret-1"],
+    });
   });
 
   it("collects leak detections from strings and handles non-serializable inputs", () => {
@@ -154,6 +237,19 @@ describe("tool security support", () => {
 
     expect(collectLeakDetections("Bearer abcdefghijklmnopqrstuvwxyz")).toEqual(["bearer_token"]);
     expect(collectLeakDetections(circular)).toEqual([]);
+  });
+
+  it("derives capability families for category-only and browser-control tools", () => {
+    expect(deriveToolCapabilityPolicy("custom.research", { category: "research" }).family).toBe("network_read");
+    expect(deriveToolCapabilityPolicy("memory.search").family).toBe("memory");
+    expect(deriveToolCapabilityPolicy("mcp.invoke").family).toBe("mcp");
+    expect(deriveToolCapabilityPolicy("browser.cookies.clear").family).toBe("browser_control");
+    expect(deriveToolCapabilityPolicy("custom.comms", { category: "comms" })).toMatchObject({
+      family: "comms",
+      usesNetwork: true,
+    });
+    expect(deriveToolCapabilityPolicy("custom.git", { category: "git" }).family).toBe("git");
+    expect(deriveToolCapabilityPolicy("custom.ops", { category: "ops" }).family).toBe("ops");
   });
 });
 

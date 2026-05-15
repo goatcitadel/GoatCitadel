@@ -521,7 +521,12 @@ export class ToolPolicyEngine {
     if (policy.approvalMode === "approve_risky" && riskLevel !== "safe") {
       requiresApproval = true;
     }
-    if (policy.approvalMode === "bypass" && riskLevel !== "nuclear") {
+    if (
+      policy.approvalMode === "bypass" &&
+      riskLevel !== "nuclear" &&
+      !shellRisk?.risky &&
+      !outsideRootsReadRequiresApproval
+    ) {
       requiresApproval = false;
     }
 

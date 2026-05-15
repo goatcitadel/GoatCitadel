@@ -732,7 +732,7 @@ function MetricGrid({ items }: { items: Array<{ label: string; value: string; me
   );
 }
 
-function formatHumanSessionTitle(item: {
+export function formatHumanSessionTitle(item: {
   displayName?: string | null;
   title?: string | null;
   sessionId: string;
@@ -748,11 +748,11 @@ function formatHumanSessionTitle(item: {
   return `${channel} · ${when}`;
 }
 
-function formatShortSessionId(sessionId: string) {
+export function formatShortSessionId(sessionId: string) {
   return sessionId.replace(/^sess[_-]?/i, "session ").slice(0, 22);
 }
 
-function createScheduleJobId(name: string) {
+export function createScheduleJobId(name: string) {
   const slug = name
     .trim()
     .toLowerCase()
@@ -762,11 +762,11 @@ function createScheduleJobId(name: string) {
   return `manual-${slug || "schedule"}-${Date.now().toString(36)}`;
 }
 
-function capitalize(value: string) {
+export function capitalize(value: string) {
   return value ? `${value.slice(0, 1).toUpperCase()}${value.slice(1)}` : value;
 }
 
-function labelForOpsSection(section: NonNullable<AppRoute["section"]>) {
+export function labelForOpsSection(section: NonNullable<AppRoute["section"]>) {
   switch (section) {
     case "sessions":
       return "Sessions";
@@ -787,7 +787,7 @@ function labelForOpsSection(section: NonNullable<AppRoute["section"]>) {
   }
 }
 
-function descriptionForOpsSection(section: NonNullable<AppRoute["section"]>) {
+export function descriptionForOpsSection(section: NonNullable<AppRoute["section"]>) {
   switch (section) {
     case "sessions":
       return "Recent session evidence and operator posture in the canonical next shell.";
@@ -808,7 +808,7 @@ function descriptionForOpsSection(section: NonNullable<AppRoute["section"]>) {
   }
 }
 
-function describeQmdImpact(efficiencyLabel?: "reduced" | "expanded" | "neutral") {
+export function describeQmdImpact(efficiencyLabel?: "reduced" | "expanded" | "neutral") {
   switch (efficiencyLabel) {
     case "reduced":
       return "Reduced";
@@ -819,7 +819,7 @@ function describeQmdImpact(efficiencyLabel?: "reduced" | "expanded" | "neutral")
   }
 }
 
-function formatTokenDelta(value: number) {
+export function formatTokenDelta(value: number) {
   if (!Number.isFinite(value) || value === 0) {
     return "no token delta";
   }
@@ -827,7 +827,7 @@ function formatTokenDelta(value: number) {
   return rounded > 0 ? `+${rounded} tokens` : `${rounded} tokens`;
 }
 
-function formatDuration(seconds: number) {
+export function formatDuration(seconds: number) {
   if (!Number.isFinite(seconds) || seconds <= 0) {
     return "0m";
   }
@@ -839,7 +839,7 @@ function formatDuration(seconds: number) {
   return `${minutes}m`;
 }
 
-function formatDateTime(value?: string | null) {
+export function formatDateTime(value?: string | null) {
   if (!value) {
     return "Unknown";
   }
@@ -850,11 +850,14 @@ function formatDateTime(value?: string | null) {
   return new Date(parsed).toLocaleString();
 }
 
-function sourceFailed(data: { sourceStatus: Record<string, { status: "ok" | "error" }> }, source: string): boolean {
+export function sourceFailed(
+  data: { sourceStatus: Record<string, { status: "ok" | "error" }> },
+  source: string,
+): boolean {
   return data.sourceStatus[source]?.status === "error";
 }
 
-function formatBytes(value: number) {
+export function formatBytes(value: number) {
   if (!Number.isFinite(value) || value <= 0) {
     return "0 B";
   }
@@ -868,7 +871,7 @@ function formatBytes(value: number) {
   return `${current.toFixed(current >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
-function formatUsd(value: number) {
+export function formatUsd(value: number) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
@@ -877,7 +880,7 @@ function formatUsd(value: number) {
   }).format(Number.isFinite(value) ? value : 0);
 }
 
-function formatLoadAverage(values: number[]) {
+export function formatLoadAverage(values: number[]) {
   if (!values.length) {
     return "n/a";
   }

@@ -8,39 +8,28 @@ import { renderDoctorReport, runDoctor as runSharedDoctor } from "../doctor/engi
 import { loadLocalEnvFile } from "../env-file.js";
 import { TuiApiClient } from "./api-client.js";
 import { TuiLiveFeed } from "./live-feed.js";
+import {
+  HOME_VIEW_CHOICES,
+  MANUAL_SESSION_ENTRY,
+  MAX_TUI_SESSION_CHOICES,
+  asRecord,
+  buildHeaderSummaryRows,
+  buildSessionChoices,
+  formatSessionSummary,
+  formatTimestamp,
+  parseTuiArgs,
+  summarizeText,
+  toText,
+  type HomeView,
+} from "./main-helpers.js";
 import { loadResolvedProfile, saveProfile, type TuiResolvedAuth } from "./profile.js";
 import { renderBox, renderBulletList, renderKeyValueSummary, renderOperatorSection, renderSection } from "./render.js";
 import { tuiTheme } from "./theme.js";
 
-type HomeView =
-  | "dashboard"
-  | "chat"
-  | "approvals"
-  | "promptlab"
-  | "memory"
-  | "files"
-  | "cron"
-  | "improvement"
-  | "sessions"
-  | "costs"
-  | "tools"
-  | "tasks"
-  | "skills"
-  | "integrations"
-  | "mesh"
-  | "npu"
-  | "system"
-  | "onboarding"
-  | "settings"
-  | "exit";
-
-const MANUAL_SESSION_ENTRY = "__manual_session__";
-const MAX_TUI_SESSION_CHOICES = 14;
-
 loadLocalEnvFile();
 
 async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
+  const args = parseTuiArgs(process.argv.slice(2));
   const resolved = await loadResolvedProfile({
     profileName: args.profile,
     gatewayOverride: args.gateway,
@@ -132,72 +121,6 @@ async function main(): Promise<void> {
   live.stop();
 }
 
-function parseArgs(argv: string[]): {
-  profile?: string;
-  gateway?: string;
-  readOnly: boolean;
-  doctor: boolean;
-  deep: boolean;
-  yes: boolean;
-  json: boolean;
-  auditOnly: boolean;
-  noRepair: boolean;
-} {
-  let profile: string | undefined;
-  let gateway: string | undefined;
-  let readOnly = false;
-  let doctor = false;
-  let deep = false;
-  let yes = false;
-  let json = false;
-  let auditOnly = false;
-  let noRepair = false;
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const value = argv[index];
-    if (value === "--profile") {
-      profile = argv[index + 1];
-      index += 1;
-      continue;
-    }
-    if (value === "--gateway") {
-      gateway = argv[index + 1];
-      index += 1;
-      continue;
-    }
-    if (value === "--read-only") {
-      readOnly = true;
-      continue;
-    }
-    if (value === "doctor" || value === "--doctor") {
-      doctor = true;
-      continue;
-    }
-    if (value === "--deep") {
-      deep = true;
-      continue;
-    }
-    if (value === "--yes" || value === "-y") {
-      yes = true;
-      continue;
-    }
-    if (value === "--json") {
-      json = true;
-      continue;
-    }
-    if (value === "--audit-only") {
-      auditOnly = true;
-      continue;
-    }
-    if (value === "--no-repair") {
-      noRepair = true;
-      continue;
-    }
-  }
-
-  return { profile, gateway, readOnly, doctor, deep, yes, json, auditOnly, noRepair };
-}
-
 async function resolveAuth(auth: TuiResolvedAuth): Promise<TuiResolvedAuth> {
   if (auth.mode === "token" && !auth.token) {
     const token = await password({
@@ -280,44 +203,14 @@ function printHeader(input: {
   console.log(
     renderSection("GoatCitadel Terminal Mission Control", "Operator console for local-first runtime control."),
   );
-  console.log(
-    renderKeyValueSummary([
-      { key: "Profile", value: input.profile },
-      { key: "Gateway", value: input.gateway },
-      { key: "Live", value: input.liveState },
-      { key: "Mode", value: input.readOnly ? "read-only" : "read+safe-write" },
-      { key: "Last event", value: input.lastEventAt ? new Date(input.lastEventAt).toLocaleString() : "none yet" },
-      ...(input.liveNote ? [{ key: "Feed note", value: summarizeText(input.liveNote, 100) }] : []),
-    ]),
-  );
+  console.log(renderKeyValueSummary(buildHeaderSummaryRows(input)));
   console.log("");
 }
 
 async function chooseNextView(): Promise<HomeView> {
   return await select<HomeView>({
     message: "Navigate",
-    choices: [
-      { name: "Dashboard", value: "dashboard" },
-      { name: "Chat", value: "chat" },
-      { name: "Approvals", value: "approvals" },
-      { name: "Prompt Lab", value: "promptlab" },
-      { name: "Memory", value: "memory" },
-      { name: "Files", value: "files" },
-      { name: "Cron", value: "cron" },
-      { name: "Improvement", value: "improvement" },
-      { name: "Sessions", value: "sessions" },
-      { name: "Costs", value: "costs" },
-      { name: "Tools", value: "tools" },
-      { name: "Tasks", value: "tasks" },
-      { name: "Skills", value: "skills" },
-      { name: "Integrations", value: "integrations" },
-      { name: "Mesh", value: "mesh" },
-      { name: "NPU", value: "npu" },
-      { name: "System", value: "system" },
-      { name: "Onboarding", value: "onboarding" },
-      { name: "Settings", value: "settings" },
-      { name: "Exit", value: "exit" },
-    ],
+    choices: [...HOME_VIEW_CHOICES],
   });
 }
 
@@ -2436,84 +2329,22 @@ async function pause(): Promise<void> {
   await input({ message: "Press Enter to continue" });
 }
 
-function toText(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (value == null) {
-    return "";
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return "";
-  }
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  return value as Record<string, unknown>;
-}
-
 async function chooseSessionId(sessionItems: Array<Record<string, unknown>>, message: string): Promise<string> {
-  const available = sessionItems
-    .map((session) => ({
-      sessionId: toText(session.sessionId),
-      summary: formatSessionSummary(session),
-    }))
-    .filter((session) => session.sessionId);
+  const choices = buildSessionChoices(sessionItems);
 
-  if (available.length === 0) {
+  if (choices.length === 1) {
     return (await input({ message: "Session ID" })).trim();
   }
 
   const selected = await select<string>({
     message,
-    choices: [
-      ...available.slice(0, MAX_TUI_SESSION_CHOICES).map((session) => ({
-        name: session.summary,
-        value: session.sessionId,
-      })),
-      { name: "Enter session ID manually", value: MANUAL_SESSION_ENTRY },
-    ],
+    choices,
   });
 
   if (selected === MANUAL_SESSION_ENTRY) {
     return (await input({ message: "Session ID" })).trim();
   }
   return selected.trim();
-}
-
-function formatSessionSummary(session: Record<string, unknown>): string {
-  const sessionId = toText(session.sessionId) || "unknown";
-  const title = toText(session.title) || "(untitled)";
-  const kind = toText(session.kind) || "chat";
-  const updatedAt = formatTimestamp(toText(session.updatedAt));
-  return `${title} [${sessionId}] · ${kind} · updated ${updatedAt}`;
-}
-
-function formatTimestamp(value: string): string {
-  if (!value) {
-    return "unknown";
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleString();
-}
-
-function summarizeText(value: string, limit = 120): string {
-  const compact = value.replace(/\s+/g, " ").trim();
-  if (compact.length <= limit) {
-    return compact || "(empty)";
-  }
-  return `${compact.slice(0, limit - 3)}...`;
 }
 
 main().catch((error) => {

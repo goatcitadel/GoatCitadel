@@ -360,15 +360,29 @@ describe("memory cache keys and token estimator edge cases", () => {
     expect(hashText("same")).toBe(hashText("same"));
     expect(buildQueryHash("  Mixed CASE  ")).toBe(buildQueryHash("mixed case"));
     expect(buildSourcesHash(candidates)).toBe(buildSourcesHash(candidates));
-    expect(
-      buildCacheKey({
-        scope: "chat",
-        prompt: "Prompt",
-        maxContextTokens: 100,
-        relationScope: "self",
-        candidates,
-      }),
-    ).toBeTypeOf("string");
+    const baseKey = buildCacheKey({
+      scope: "chat",
+      prompt: "Prompt",
+      maxContextTokens: 100,
+      relationScope: "self",
+      candidates,
+    });
+    const scopedKey = buildCacheKey({
+      scope: "chat",
+      prompt: "Prompt",
+      sessionId: "session-1",
+      taskId: "task-1",
+      runId: "run-1",
+      phaseId: "phase-1",
+      maxContextTokens: 100,
+      candidates,
+    });
+    expect(baseKey).toBeTypeOf("string");
+    expect(scopedKey).toBeTypeOf("string");
+    expect(scopedKey).not.toBe(baseKey);
+    expect(buildSourcesHash(candidates)).not.toBe(
+      buildSourcesHash([candidate("one", "text", { timestamp: undefined, rankScore: 0.123451 })]),
+    );
   });
 
   it("handles estimator registration replacement, invalid plugins, and truncation edge cases", () => {

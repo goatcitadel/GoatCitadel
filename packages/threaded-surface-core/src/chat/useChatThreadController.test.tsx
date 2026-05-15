@@ -81,6 +81,11 @@ function Harness(props: {
   selectedProjectId?: string;
   selectedFolderId?: string;
   selectedTag?: string | null;
+  sessions?: ChatSessionRecord[];
+  projects?: { projectId: string; name: string }[];
+  thread?: ChatThreadResponse | null;
+  surfaceMode?: "chat" | "cowork" | "code";
+  useUndefinedCollections?: boolean;
 }) {
   const [selectedProjectId, setSelectedProjectId] = useState(props.selectedProjectId ?? "all");
   const [selectedFolderId, setSelectedFolderId] = useState(props.selectedFolderId ?? "all");
@@ -91,12 +96,14 @@ function Harness(props: {
   const [search, setSearch] = useState("");
   const [followThreadOutput, setFollowThreadOutput] = useState(false);
   latest = useChatThreadController({
-    surfaceMode: "chat",
+    surfaceMode: props.surfaceMode ?? "chat",
     showAllModes: props.showAllModes,
     routeSearch: props.routeSearch ?? "",
-    sessions,
-    projects: [{ projectId: "project-1", name: "Launch Project" }],
-    thread,
+    sessions: props.useUndefinedCollections ? undefined : (props.sessions ?? sessions),
+    projects: props.useUndefinedCollections
+      ? undefined
+      : (props.projects ?? [{ projectId: "project-1", name: "Launch Project" }]),
+    thread: props.thread === undefined ? thread : props.thread,
     selectedProjectId,
     setSelectedProjectId,
     selectedFolderId,
@@ -179,5 +186,55 @@ describe("useChatThreadController", () => {
     });
     expect(latest!.visibleSessions.map((session) => session.sessionId)).toContain("session-3");
     expect(latest!.visibleSessions.map((session) => session.sessionId)).not.toContain("session-1");
+  });
+
+  it("covers default collections, route resets, tag misses, and empty turn selections", async () => {
+    await act(async () => {
+      create(<Harness routeSearch="" useUndefinedCollections thread={null} selectedTag="missing" />);
+    });
+
+    expect(latest!.selectedSession).toBeNull();
+    expect(latest!.selectedProject).toBeNull();
+    expect(latest!.availableFolders).toEqual([]);
+    expect(latest!.availableTags).toEqual([]);
+    expect(latest!.visibleSessions).toEqual([]);
+    expect(latest!.messages).toEqual([]);
+    expect(latest!.boundMissionSessionCount).toBe(0);
+
+    await act(async () => {
+      create(
+        <Harness
+          routeSearch="?sessionId=session-1"
+          sessions={[
+            {
+              ...sessions[0],
+              mode: undefined,
+              folderId: "folder-1",
+              folderName: "Launch",
+              tags: undefined,
+            } as ChatSessionRecord,
+            {
+              ...sessions[1],
+              mode: "cowork",
+              lifecycleStatus: "active",
+              folderId: "folder-1",
+              folderName: "Launch",
+              tags: ["Beta"],
+            } as ChatSessionRecord,
+          ]}
+          projects={[]}
+          thread={{ sessionId: "session-1", turns: [] } as ChatThreadResponse}
+          selectedFolderId="folder-1"
+          selectedTag="beta"
+          surfaceMode="cowork"
+          showAllModes={false}
+        />,
+      );
+    });
+
+    expect(latest!.selectedTurnId).toBeNull();
+    expect(latest!.availableFolders).toEqual([{ folderId: "folder-1", name: "Launch", count: 2 }]);
+    expect(latest!.visibleSessions.map((session) => session.sessionId)).toEqual(["session-2"]);
+    expect(latest!.workspaceMissionSessionCount).toBe(1);
   });
 });

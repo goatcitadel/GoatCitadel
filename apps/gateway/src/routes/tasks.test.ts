@@ -141,6 +141,195 @@ describe("tasks routes", () => {
     expect(response.statusCode).toBe(400);
     expect(registerTaskSubagent).not.toHaveBeenCalled();
   });
+
+  it("creates, updates, soft-deletes, restores, and hard-deletes tasks through the service contract", async () => {
+    const createTask = vi.fn((input: Record<string, unknown>) => ({ taskId: "task-1", ...input }));
+    const updateTask = vi.fn((taskId: string, input: Record<string, unknown>) => ({ taskId, ...input }));
+    const softDeleteTask = vi.fn(() => true);
+    const restoreTask = vi.fn(() => true);
+    const hardDeleteTask = vi.fn(() => true);
+
+    app = buildApp({ createTask, updateTask, softDeleteTask, restoreTask, hardDeleteTask });
+    await app.register(tasksRoutes);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/tasks",
+      payload: {
+        workspaceId: "default",
+        title: "Runtime validation",
+        status: "planning",
+        priority: "high",
+      },
+    });
+    const updated = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/tasks/task-1",
+      payload: {
+        title: "Runtime validation updated",
+        assignedAgentId: null,
+      },
+    });
+    const softDeleted = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/tasks/task-1",
+      payload: {
+        deletedBy: "operator",
+        deleteReason: "cleanup",
+      },
+    });
+    const restored = await app.inject({
+      method: "POST",
+      url: "/api/v1/tasks/task-1/restore",
+    });
+    const hardDeleted = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/tasks/task-1?mode=hard",
+      payload: {
+        confirmToken: "PERMANENT_DELETE",
+      },
+    });
+
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ taskId: "task-1", title: "Runtime validation" });
+    expect(updateTask).toHaveBeenCalledWith("task-1", {
+      title: "Runtime validation updated",
+      assignedAgentId: null,
+    });
+    expect(updated.json()).toMatchObject({ taskId: "task-1", title: "Runtime validation updated" });
+    expect(softDeleted.json()).toEqual({ deleted: true, taskId: "task-1", mode: "soft" });
+    expect(softDeleteTask).toHaveBeenCalledWith("task-1", "operator", "cleanup");
+    expect(restored.json()).toEqual({ restored: true, taskId: "task-1" });
+    expect(hardDeleted.json()).toEqual({ deleted: true, taskId: "task-1", mode: "hard" });
+  });
+
+  it("returns not-found responses for task delete and restore misses", async () => {
+    app = buildApp({
+      softDeleteTask: vi.fn(() => false),
+      restoreTask: vi.fn(() => false),
+    });
+    await app.register(tasksRoutes);
+
+    await expect(app.inject({ method: "DELETE", url: "/api/v1/tasks/missing", payload: {} })).resolves.toMatchObject({
+      statusCode: 404,
+    });
+    await expect(app.inject({ method: "POST", url: "/api/v1/tasks/missing/restore" })).resolves.toMatchObject({
+      statusCode: 404,
+    });
+  });
+
+  it("dispatches deliverables, subagent updates, agentic runs, controls, and diagnostics", async () => {
+    const appendTaskDeliverable = vi.fn((_taskId: string, input: Record<string, unknown>) => ({
+      deliverableId: "deliverable-1",
+      ...input,
+    }));
+    const updateTaskSubagent = vi.fn((_agentSessionId: string, input: Record<string, unknown>) => ({
+      agentSessionId: "agent-session-1",
+      ...input,
+    }));
+    const listAgenticRuns = vi.fn(() => ({ items: [{ runId: "run-1" }] }));
+    const getAgenticRunTree = vi.fn(() => ({ runId: "run-1", children: [] }));
+    const invokeAgenticControl = vi.fn((_runId: string, input: Record<string, unknown>) => ({
+      accepted: true,
+      ...input,
+    }));
+    const appendTaskDiagnostic = vi.fn((_taskId: string, input: Record<string, unknown>) => ({
+      diagnosticId: "diagnostic-1",
+      ...input,
+    }));
+
+    app = buildApp({
+      appendTaskDeliverable,
+      updateTaskSubagent,
+      listAgenticRuns,
+      getAgenticRunTree,
+      invokeAgenticControl,
+      appendTaskDiagnostic,
+    });
+    await app.register(tasksRoutes);
+
+    const deliverable = await app.inject({
+      method: "POST",
+      url: "/api/v1/tasks/task-1/deliverables",
+      payload: {
+        deliverableType: "file",
+        title: "Proof file",
+        path: "artifacts/proof.md",
+      },
+    });
+    const subagent = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/subagents/agent-session-1",
+      payload: {
+        status: "completed",
+        metadata: null,
+      },
+    });
+    const runs = await app.inject({
+      method: "GET",
+      url: "/api/v1/agentic/runs?workspaceId=default&status=running&surface=code&limit=25",
+    });
+    const tree = await app.inject({ method: "GET", url: "/api/v1/agentic/runs/run-1/tree" });
+    const control = await app.inject({
+      method: "POST",
+      url: "/api/v1/agentic/runs/run-1/control",
+      payload: {
+        action: "steer",
+        instruction: "stay scoped",
+      },
+    });
+    const diagnostic = await app.inject({
+      method: "POST",
+      url: "/api/v1/tasks/task-1/agentic/diagnostics",
+      payload: {
+        code: "missing_claimed_test",
+        severity: "warning",
+        title: "Missing proof",
+        summary: "The worker claimed a test that was not present.",
+      },
+    });
+
+    expect(deliverable.statusCode).toBe(201);
+    expect(subagent.statusCode).toBe(200);
+    expect(runs.json()).toEqual({ items: [{ runId: "run-1" }] });
+    expect(listAgenticRuns).toHaveBeenCalledWith({
+      workspaceId: "default",
+      status: "running",
+      surface: "code",
+      limit: 25,
+    });
+    expect(tree.json()).toEqual({ runId: "run-1", children: [] });
+    expect(control.json()).toMatchObject({ accepted: true, action: "steer", instruction: "stay scoped" });
+    expect(diagnostic.statusCode).toBe(201);
+    expect(appendTaskDiagnostic).toHaveBeenCalledWith(
+      "task-1",
+      expect.objectContaining({
+        code: "missing_claimed_test",
+        severity: "warning",
+      }),
+    );
+  });
+
+  it("validates agentic controls and maps thrown service errors through route error handling", async () => {
+    app = buildApp({
+      getAgenticRunTree: vi.fn(() => {
+        throw new Error("run tree unavailable");
+      }),
+      invokeAgenticControl: vi.fn(),
+      appendTaskDiagnostic: vi.fn(),
+    });
+    await app.register(tasksRoutes);
+
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/agentic/runs/run-1/control", payload: { action: "not-real" } }),
+    ).resolves.toMatchObject({ statusCode: 400 });
+    await expect(app.inject({ method: "GET", url: "/api/v1/agentic/runs/run-1/tree" })).resolves.toMatchObject({
+      statusCode: 500,
+    });
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/tasks/task-1/agentic/diagnostics", payload: { code: "bad" } }),
+    ).resolves.toMatchObject({ statusCode: 400 });
+  });
 });
 
 function buildApp(taskOverrides: Record<string, unknown>): FastifyInstance {
@@ -156,6 +345,10 @@ function buildApp(taskOverrides: Record<string, unknown>): FastifyInstance {
       listTaskDeliverables: vi.fn(() => []),
       listTasks: vi.fn(() => []),
       listTaskSubagents: vi.fn(() => []),
+      listAgenticRuns: vi.fn(() => ({ items: [] })),
+      getAgenticRunTree: vi.fn(() => ({ runId: "run-1", children: [] })),
+      invokeAgenticControl: vi.fn(() => ({ accepted: true })),
+      appendTaskDiagnostic: vi.fn(),
       registerTaskSubagent: vi.fn(),
       restoreTask: vi.fn(),
       softDeleteTask: vi.fn(),

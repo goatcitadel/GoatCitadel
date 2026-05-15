@@ -11,7 +11,10 @@ import {
   applyDelegationStatusChunk,
   applyDelegationStepChunk,
   applyDelegationStreamFailure,
+  createSeedDelegationSteps,
   inferDelegationRunStatus,
+  resolveDelegationMode,
+  resolveDelegationRoute,
   resolveSelectedTurn,
   useChatDelegationPolicyActions,
 } from "./useChatDelegationPolicyActions";
@@ -375,12 +378,54 @@ describe("useChatDelegationPolicyActions", () => {
     });
 
     expect(latestHarness?.errors).toContain("Enter a query first or send a user message before research.");
+
+    await act(async () => {
+      create(<Harness draft="fallback provider research" prefs={null} sendingInitial />);
+      await flushEffects();
+    });
+    await act(async () => {
+      await latestHarness?.result.handleRunQuickResearch();
+    });
+    expect(runChatResearchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      create(<Harness draft="fallback provider research" prefs={null} />);
+      await flushEffects();
+    });
+    await act(async () => {
+      await latestHarness?.result.handleRunQuickResearch();
+    });
+    expect(runChatResearchMock).toHaveBeenLastCalledWith("session-1", {
+      query: "fallback provider research",
+      mode: "quick",
+      providerId: "anthropic",
+      model: "claude-4",
+    });
   });
 
   it("covers delegation status and selected-turn fallback helpers", () => {
     expect(inferDelegationRunStatus([], "partial")).toBe("partial");
     expect(inferDelegationRunStatus([{ status: "blocked" }] as never, "running")).toBe("running");
     expect(resolveSelectedTurn(null, "turn-1")).toBeNull();
+    expect(resolveDelegationMode(undefined)).toBe("sequential");
+    expect(resolveDelegationMode("parallel")).toBe("parallel");
+    expect(resolveDelegationRoute(null, "anthropic", "claude-4")).toEqual({
+      providerId: "anthropic",
+      model: "claude-4",
+    });
+    expect(
+      resolveDelegationRoute(makePrefs({ providerId: "openai", model: "gpt-5.5" }), "anthropic", "claude-4"),
+    ).toEqual({ providerId: "openai", model: "gpt-5.5" });
+    expect(
+      createSeedDelegationSteps({
+        objective: "Seed defaults",
+        roles: ["Architect"],
+        steps: [{ role: "Coder" }, { stepId: "qa", role: "QA", index: -1 }],
+      } as any),
+    ).toEqual([
+      { stepId: "qa", role: "QA", status: "pending", index: -1 },
+      { stepId: "delegation-step-1", role: "Coder", status: "pending", index: 0 },
+    ]);
 
     const activeRun = {
       label: "Delegation",
@@ -394,10 +439,25 @@ describe("useChatDelegationPolicyActions", () => {
       runId: "run-1",
       taskId: "task-1",
     });
+    expect(
+      applyDelegationStatusChunk({ ...activeRun, runId: "existing-run", taskId: "existing-task" }, {}),
+    ).toMatchObject({
+      runId: "existing-run",
+      taskId: "existing-task",
+    });
     expect(applyDelegationStepChunk(null, { runId: "ignored" }, activeRun.steps[0])).toBeNull();
     expect(
       applyDelegationStepChunk(activeRun, { runId: "run-2" }, { ...activeRun.steps[0], status: "completed" }),
     ).toMatchObject({ runId: "run-2", status: "completed" });
+    expect(
+      applyDelegationStepChunk({ ...activeRun, runId: "existing-run", taskId: "existing-task" }, {}, {
+        stepId: "step-2",
+        role: "QA",
+        status: "pending",
+        index: 2,
+      } as any),
+    ).toMatchObject({ runId: "existing-run", taskId: "existing-task" });
+    expect(resolveSelectedTurn({ turns: [] } as any, "missing")).toBeNull();
     expect(applyDelegationStreamFailure(null)).toBeNull();
     expect(
       applyDelegationStreamFailure({ ...activeRun, steps: [{ ...activeRun.steps[0], status: "completed" }] }),
@@ -899,5 +959,157 @@ describe("useChatDelegationPolicyActions", () => {
       expect.objectContaining({ objective: expect.stringContaining("Review the release branch") }),
     );
     expect(latestHarness?.errors).toContain("delegation down");
+  });
+
+  it("auto-suggests for cowork surfaces and long chat tasks with few explicit complexity terms", async () => {
+    await act(async () => {
+      create(
+        <Harness
+          draft=""
+          surfaceMode="cowork"
+          prefs={makePrefs({ subagentPolicy: "ask_when_useful" })}
+          messages={makeMessages("summarize")}
+        />,
+      );
+      await flushEffects();
+    });
+    expect(suggestChatDelegationMock).toHaveBeenCalledWith("session-1", { objective: "summarize" });
+
+    suggestChatDelegationMock.mockClear();
+    await act(async () => {
+      create(
+        <Harness
+          draft=""
+          prefs={makePrefs({ subagentPolicy: "ask_when_useful" })}
+          messages={makeMessages(Array.from({ length: 60 }, (_unused, index) => `word${index}`).join(" "))}
+        />,
+      );
+      await flushEffects();
+    });
+    expect(suggestChatDelegationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses request metadata fallbacks when a delegation stream only emits a final payload", async () => {
+    streamChatDelegationMock.mockImplementationOnce(async (_sessionId, _request, onChunk) => {
+      onChunk({
+        type: "done",
+        result: {
+          runId: "run-done-only",
+          taskId: "task-done-only",
+          executionPlanId: "plan-done-only",
+          steps: [{ stepId: "done-step", runId: "run-done-only", role: "Architect", status: "completed", index: 0 }],
+          stitchedOutput: "Done-only stream output",
+        },
+      });
+    });
+
+    await act(async () => {
+      create(
+        <Harness
+          streamEnabled
+          thread={{ sessionId: "session-1", selectedTurnId: null, activeLeafTurnId: null, turns: [] } as any}
+          prefs={makePrefs({ subagentPolicy: "off" })}
+        />,
+      );
+      await flushEffects();
+    });
+    await act(async () => {
+      latestHarness?.result.setDelegationSuggestion({
+        objective: "Done-only objective",
+        mode: "parallel",
+        roles: ["Architect"],
+        rationale: "Covers final chunk fallbacks.",
+      } as any);
+      await flushEffects();
+    });
+    await act(async () => {
+      await latestHarness?.result.handleAcceptDelegation();
+      await flushEffects();
+    });
+
+    expect(latestHarness?.result.activeDelegationRun).toMatchObject({
+      runId: "run-done-only",
+      taskId: "task-done-only",
+      executionPlanId: "plan-done-only",
+      attachedTurnId: null,
+      label: "Delegation",
+      objective: "Done-only objective",
+      mode: "parallel",
+      status: "completed",
+      stitchedOutput: "Done-only stream output",
+    });
+  });
+
+  it("keeps auto-subagent recommendation guards explicit for draft, policy, session, and simple chat cases", async () => {
+    await act(async () => {
+      create(
+        <Harness
+          draft="unsent operator draft"
+          prefs={makePrefs({ subagentPolicy: "ask_when_useful" })}
+          messages={makeMessages("Please implement, refactor, test, and review this end-to-end.")}
+        />,
+      );
+      await flushEffects();
+    });
+    expect(suggestChatDelegationMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      create(
+        <Harness
+          draft=""
+          prefs={makePrefs({ subagentPolicy: "off" })}
+          messages={makeMessages("Please implement, refactor, test, and review this end-to-end.")}
+        />,
+      );
+      await flushEffects();
+    });
+    expect(suggestChatDelegationMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      create(
+        <Harness
+          draft=""
+          selectedSession={null}
+          prefs={makePrefs({ subagentPolicy: "ask_when_useful" })}
+          messages={makeMessages("Please implement, refactor, test, and review this end-to-end.")}
+        />,
+      );
+      await flushEffects();
+    });
+    expect(suggestChatDelegationMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      create(
+        <Harness
+          draft=""
+          sendingInitial
+          prefs={makePrefs({ subagentPolicy: "ask_when_useful" })}
+          messages={makeMessages("Please implement, refactor, test, and review this end-to-end.")}
+        />,
+      );
+      await flushEffects();
+    });
+    expect(suggestChatDelegationMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      create(
+        <Harness draft="" prefs={makePrefs({ subagentPolicy: "ask_when_useful" })} messages={makeMessages("simple")} />,
+      );
+      await flushEffects();
+    });
+    expect(suggestChatDelegationMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      create(
+        <Harness
+          draft=""
+          prefs={makePrefs({ subagentPolicy: "ask_when_useful" })}
+          messages={[]}
+          selectedSession={{ ...makeSession(), title: "Session fallback is not user intent" }}
+        />,
+      );
+      await flushEffects();
+    });
+    expect(suggestChatDelegationMock).not.toHaveBeenCalled();
   });
 });

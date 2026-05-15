@@ -144,6 +144,9 @@ describe("client-core", () => {
     persistGatewayAuthState({ token: " fallback-token " });
     expect(readGatewayAuthHeaders("/api/v1/test")).toEqual({ Authorization: "Bearer fallback-token" });
 
+    persistGatewayAuthState({ mode: "none" });
+    expect(readGatewayAuthHeaders("/api/v1/test")).toEqual({});
+
     window.sessionStorage.clear();
     window.localStorage.setItem(
       "goatcitadel.gateway.auth",
@@ -354,5 +357,15 @@ describe("client-core", () => {
 
     const error = new ApiRequestError("x", { kind: "http", method: "GET", path: "/x", status: 400 });
     expect(error.kind).toBe("http");
+  });
+
+  it("preflights without performance timing support", async () => {
+    vi.stubGlobal("performance", undefined);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ success: true, data: { completed: false } })));
+
+    await expect(preflightGatewayAccess()).resolves.toMatchObject({
+      status: "ready",
+      startupTiming: { outcome: "ready" },
+    });
   });
 });

@@ -13,6 +13,60 @@ describe("workspace and guidance routes", () => {
     app = null;
   });
 
+  function createWorkspaceService(overrides: Record<string, unknown> = {}) {
+    return {
+      listWorkspaces: vi.fn(() => []),
+      createWorkspace: vi.fn((input: Record<string, unknown>) => ({
+        workspaceId: "workspace-created",
+        lifecycleStatus: "active",
+        ...input,
+      })),
+      getWorkspace: vi.fn((workspaceId: string) => ({
+        workspaceId,
+        name: "Default",
+        slug: "default",
+        lifecycleStatus: "active",
+      })),
+      updateWorkspace: vi.fn((workspaceId: string, input: Record<string, unknown>) => ({
+        workspaceId,
+        ...input,
+      })),
+      archiveWorkspace: vi.fn((workspaceId: string) => ({
+        workspaceId,
+        lifecycleStatus: "archived",
+      })),
+      restoreWorkspace: vi.fn((workspaceId: string) => ({
+        workspaceId,
+        lifecycleStatus: "active",
+      })),
+      listGlobalGuidance: vi.fn(async () => [{ docType: "goatcitadel", scope: "global" }]),
+      updateGlobalGuidance: vi.fn(async (docType: string, content: string) => ({
+        docType,
+        scope: "global",
+        content,
+      })),
+      listWorkspaceGuidance: vi.fn(async (workspaceId: string) => ({
+        workspaceId,
+        items: [{ docType: "agents", scope: "workspace" }],
+      })),
+      updateWorkspaceGuidance: vi.fn(async (workspaceId: string, docType: string, content: string) => ({
+        workspaceId,
+        docType,
+        scope: "workspace",
+        content,
+      })),
+      ...overrides,
+    };
+  }
+
+  async function registerWorkspaceService(overrides: Record<string, unknown> = {}) {
+    const service = createWorkspaceService(overrides);
+    app = Fastify();
+    app.decorate("services", { workspaces: service } as never);
+    await app.register(workspacesRoutes);
+    return service;
+  }
+
   it("lists workspaces through gateway service", async () => {
     const listWorkspaces = vi.fn(() => [
       {
@@ -78,5 +132,223 @@ describe("workspace and guidance routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(updateGlobalGuidance).toHaveBeenCalledWith("security", "# Security Policy");
+  });
+
+  it("creates, reads, updates, archives, and restores workspaces", async () => {
+    const service = await registerWorkspaceService();
+
+    const createResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/workspaces",
+      payload: {
+        name: "Research",
+        slug: "research",
+        description: "Research workspace",
+        workspacePrefs: {
+          density: "compact",
+        },
+      },
+    });
+    const getResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/workspaces/workspace-created",
+    });
+    const updateResponse = await app!.inject({
+      method: "PATCH",
+      url: "/api/v1/workspaces/workspace-created",
+      payload: {
+        name: "Research Lab",
+      },
+    });
+    const archiveResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/workspaces/workspace-created/archive",
+    });
+    const restoreResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/workspaces/workspace-created/restore",
+    });
+
+    expect(createResponse.statusCode).toBe(201);
+    expect(getResponse.statusCode).toBe(200);
+    expect(updateResponse.statusCode).toBe(200);
+    expect(archiveResponse.statusCode).toBe(200);
+    expect(restoreResponse.statusCode).toBe(200);
+    expect(service.createWorkspace).toHaveBeenCalledWith({
+      name: "Research",
+      slug: "research",
+      description: "Research workspace",
+      workspacePrefs: {
+        density: "compact",
+      },
+    });
+    expect(service.getWorkspace).toHaveBeenCalledWith("workspace-created");
+    expect(service.updateWorkspace).toHaveBeenCalledWith("workspace-created", {
+      name: "Research Lab",
+    });
+    expect(service.archiveWorkspace).toHaveBeenCalledWith("workspace-created");
+    expect(service.restoreWorkspace).toHaveBeenCalledWith("workspace-created");
+    expect(archiveResponse.json()).toMatchObject({ lifecycleStatus: "archived" });
+    expect(restoreResponse.json()).toMatchObject({ lifecycleStatus: "active" });
+  });
+
+  it("lists and updates global and workspace guidance documents", async () => {
+    const service = await registerWorkspaceService();
+
+    const globalListResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/guidance/global",
+    });
+    const globalUpdateResponse = await app!.inject({
+      method: "PUT",
+      url: "/api/v1/guidance/global/contributing",
+      payload: {
+        content: "# Contributing",
+      },
+    });
+    const workspaceListResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/workspaces/default/guidance",
+    });
+    const workspaceUpdateResponse = await app!.inject({
+      method: "PUT",
+      url: "/api/v1/workspaces/default/guidance/agents",
+      payload: {
+        content: "# Workspace Agents",
+      },
+    });
+
+    expect(globalListResponse.statusCode).toBe(200);
+    expect(globalUpdateResponse.statusCode).toBe(200);
+    expect(workspaceListResponse.statusCode).toBe(200);
+    expect(workspaceUpdateResponse.statusCode).toBe(200);
+    expect(service.listGlobalGuidance).toHaveBeenCalledWith();
+    expect(service.updateGlobalGuidance).toHaveBeenCalledWith("contributing", "# Contributing");
+    expect(service.listWorkspaceGuidance).toHaveBeenCalledWith("default");
+    expect(service.updateWorkspaceGuidance).toHaveBeenCalledWith("default", "agents", "# Workspace Agents");
+    expect(globalListResponse.json()).toEqual({
+      items: [{ docType: "goatcitadel", scope: "global" }],
+    });
+    expect(workspaceListResponse.json()).toMatchObject({
+      workspaceId: "default",
+      items: [{ docType: "agents" }],
+    });
+  });
+
+  it("maps workspace service failures to route error responses", async () => {
+    await registerWorkspaceService({
+      createWorkspace: vi.fn(() => {
+        throw new Error("duplicate slug");
+      }),
+      getWorkspace: vi.fn(() => {
+        throw new Error("missing workspace");
+      }),
+      updateWorkspace: vi.fn(() => {
+        throw new Error("invalid workspace");
+      }),
+      archiveWorkspace: vi.fn(() => {
+        throw new Error("archive blocked");
+      }),
+      restoreWorkspace: vi.fn(() => {
+        throw new Error("restore blocked");
+      }),
+      listWorkspaceGuidance: vi.fn(async () => {
+        throw new Error("guidance missing");
+      }),
+      updateWorkspaceGuidance: vi.fn(async () => {
+        throw new Error("guidance update blocked");
+      }),
+    });
+
+    const createResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/workspaces",
+      payload: {
+        name: "Research",
+      },
+    });
+    const getResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/workspaces/missing",
+    });
+    const updateResponse = await app!.inject({
+      method: "PATCH",
+      url: "/api/v1/workspaces/missing",
+      payload: {
+        name: "Research",
+      },
+    });
+    const archiveResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/workspaces/missing/archive",
+    });
+    const restoreResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/workspaces/missing/restore",
+    });
+    const workspaceGuidanceResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/workspaces/missing/guidance",
+    });
+    const workspaceGuidanceUpdateResponse = await app!.inject({
+      method: "PUT",
+      url: "/api/v1/workspaces/missing/guidance/agents",
+      payload: {
+        content: "# Agents",
+      },
+    });
+
+    expect(createResponse.statusCode).toBe(400);
+    expect(getResponse.statusCode).toBe(404);
+    expect(updateResponse.statusCode).toBe(400);
+    expect(archiveResponse.statusCode).toBe(400);
+    expect(restoreResponse.statusCode).toBe(400);
+    expect(workspaceGuidanceResponse.statusCode).toBe(400);
+    expect(workspaceGuidanceUpdateResponse.statusCode).toBe(400);
+    expect(createResponse.json()).toEqual({ error: "duplicate slug" });
+    expect(getResponse.json()).toEqual({ error: "missing workspace" });
+  });
+
+  it("rejects malformed workspace and guidance inputs before calling services", async () => {
+    const service = await registerWorkspaceService();
+
+    const createResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/workspaces",
+      payload: {
+        name: "",
+      },
+    });
+    const getResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/workspaces/",
+    });
+    const updateResponse = await app!.inject({
+      method: "PATCH",
+      url: "/api/v1/workspaces/default",
+      payload: {
+        name: "",
+      },
+    });
+    const globalGuidanceResponse = await app!.inject({
+      method: "PUT",
+      url: "/api/v1/guidance/global/security",
+      payload: {},
+    });
+    const workspaceGuidanceResponse = await app!.inject({
+      method: "PUT",
+      url: "/api/v1/workspaces/default/guidance/agents",
+      payload: {},
+    });
+
+    expect(createResponse.statusCode).toBe(400);
+    expect(getResponse.statusCode).toBe(400);
+    expect(updateResponse.statusCode).toBe(400);
+    expect(globalGuidanceResponse.statusCode).toBe(400);
+    expect(workspaceGuidanceResponse.statusCode).toBe(400);
+    expect(service.createWorkspace).not.toHaveBeenCalled();
+    expect(service.updateWorkspace).not.toHaveBeenCalled();
+    expect(service.updateGlobalGuidance).not.toHaveBeenCalled();
+    expect(service.updateWorkspaceGuidance).not.toHaveBeenCalled();
   });
 });

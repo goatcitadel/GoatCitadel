@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { connectEventStream, fetchTimelineSummary, type RealtimeEvent, type TimelineSummaryResponse } from "../api/client";
+import {
+  connectEventStream,
+  fetchTimelineSummary,
+  type RealtimeEvent,
+  type TimelineSummaryResponse,
+} from "../api/client";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 
-function mergeLiveEvents(existing: RealtimeEvent[], incoming: RealtimeEvent): RealtimeEvent[] {
+export function mergeLiveEvents(existing: RealtimeEvent[], incoming: RealtimeEvent): RealtimeEvent[] {
   const deduped = [incoming, ...existing.filter((event) => event.eventId !== incoming.eventId)];
   deduped.sort((left, right) => {
     const sequenceDelta = (right.sequence ?? -1) - (left.sequence ?? -1);

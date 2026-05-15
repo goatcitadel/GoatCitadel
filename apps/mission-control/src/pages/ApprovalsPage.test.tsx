@@ -112,6 +112,35 @@ async function flush(): Promise<void> {
   });
 }
 
+function makeApproval(overrides: Record<string, unknown> = {}) {
+  return {
+    approvalId: "approval-1",
+    kind: "shell.exec",
+    riskLevel: "danger",
+    status: "pending",
+    preview: {
+      toolName: "shell.exec",
+      sessionId: "sess-1",
+    },
+    payload: {
+      toolName: "shell.exec",
+      sessionId: "sess-1",
+    },
+    explanationStatus: "not_requested",
+    explanation: null,
+    explanationError: null,
+    createdAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+    updatedAt: new Date("2026-03-29T18:00:00.000Z").toISOString(),
+    ...overrides,
+  };
+}
+
+function mockApprovalStatuses(statuses: Record<string, unknown[]>) {
+  apiMocks.fetchApprovals.mockImplementation(async (status?: string) => ({
+    items: statuses[status ?? "pending"] ?? [],
+  }));
+}
+
 describe("ApprovalsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -737,6 +766,486 @@ describe("ApprovalsPage", () => {
       expect(apiMocks.resolveApproval).toHaveBeenCalledWith("approval-1", "approve");
       expect(text).toContain("Approve Action");
       expect(text).toContain("network down");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("resolves a pending approval, applies replay metadata, and moves the record into history", async () => {
+    const approved = makeApproval({
+      status: "approved",
+      resolvedAt: "2026-03-29T18:10:00.000Z",
+      linkage: {
+        durableRunId: "durable-run-approve",
+        sessionId: "sess-1",
+        taskId: "task-1",
+      },
+    });
+    apiMocks.resolveApproval.mockResolvedValueOnce({
+      approval: approved,
+      replay: {
+        approval: approved,
+        events: [
+          {
+            eventId: "replay-1",
+            eventType: "approval_resolved",
+            timestamp: "2026-03-29T18:10:00.000Z",
+          },
+        ],
+        effects: [
+          {
+            effectId: "effect-1",
+            effectKind: "resume_durable_run",
+            targetKind: "durable_run",
+            targetId: "durable-run-approve",
+            status: "queued",
+            attemptCount: 0,
+          },
+        ],
+      },
+      effects: [
+        {
+          effectId: "effect-1",
+          effectKind: "resume_durable_run",
+          targetKind: "durable_run",
+          targetId: "durable-run-approve",
+          status: "queued",
+          attemptCount: 0,
+        },
+      ],
+      durableRunId: "durable-run-approve",
+      executedAction: {
+        outcome: "executed",
+        policyReason: "operator approved",
+      },
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(
+          <EmbeddedPageChromeProvider>
+            <ApprovalsPage />
+          </EmbeddedPageChromeProvider>,
+        );
+      });
+      await flush();
+
+      await clickButton(renderer, "Approve now");
+      await flush();
+      await clickButton(renderer, "Approve", 1);
+      await flush();
+
+      let text = rendererText(renderer);
+      expect(apiMocks.resolveApproval).toHaveBeenCalledWith("approval-1", "approve");
+      expect(text).toContain("Approval approval-1 resolved and action executed: operator approved");
+      expect(text).toContain("No pending approvals");
+
+      await clickButton(renderer, "History (1)");
+      await flush();
+
+      text = rendererText(renderer);
+      expect(text).toContain("approved");
+      expect(text).toContain("Run: durable-run-approve | Status: approved");
+      expect(text).toContain("Approval effects");
+      expect(text).toContain("resume_durable_run");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("bulk rejects pending approvals through the confirmation path and refreshes the queue", async () => {
+    let pendingFetches = 0;
+    apiMocks.fetchApprovals.mockImplementation(async (status?: string) => {
+      if (status === "pending") {
+        pendingFetches += 1;
+        return { items: pendingFetches === 1 ? [makeApproval()] : [] };
+      }
+      return { items: [] };
+    });
+    apiMocks.resolveApprovalsBulk.mockResolvedValueOnce({
+      decision: "reject",
+      resolvedCount: 1,
+      skippedCount: 0,
+      failedCount: 0,
+      approvals: [],
+      failures: [],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(
+          <EmbeddedPageChromeProvider>
+            <ApprovalsPage />
+          </EmbeddedPageChromeProvider>,
+        );
+      });
+      await flush();
+
+      await clickButton(renderer, "Reject all pending");
+      await flush();
+      expect(rendererText(renderer)).toContain("Reject All Pending Approvals");
+
+      await clickButton(renderer, "Reject all pending", 1);
+      await flush();
+
+      expect(apiMocks.resolveApprovalsBulk).toHaveBeenCalledWith({
+        decision: "reject",
+        status: "pending",
+        resolutionNote: "Bulk rejected from the approvals queue.",
+      });
+      expect(rendererText(renderer)).toContain("Rejected 1 pending approvals. Skipped 0. Failed 0.");
+      expect(rendererText(renderer)).toContain("No pending approvals");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("loads a trace preview from approval correlation metadata", async () => {
+    mockApprovalStatuses({
+      pending: [
+        makeApproval({
+          approvalId: "approval-trace",
+          linkage: {
+            correlationId: "corr-approval-1",
+            traceId: "trace-approval-1",
+          },
+        }),
+      ],
+    });
+    apiMocks.fetchDevDiagnostics.mockResolvedValueOnce({
+      items: [
+        {
+          timestamp: "2026-03-29T18:02:00.000Z",
+          event: "approval.trace",
+          message: "Trace lane captured the pending tool call.",
+        },
+      ],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(
+          <EmbeddedPageChromeProvider>
+            <ApprovalsPage />
+          </EmbeddedPageChromeProvider>,
+        );
+      });
+      await flush();
+
+      expect(rendererText(renderer)).toContain("trace: trace-approval-1");
+      await clickButton(renderer, "Load trace detail");
+      await flush();
+
+      expect(apiMocks.fetchDevDiagnostics).toHaveBeenCalledWith({
+        correlationId: "corr-approval-1",
+        limit: 12,
+      });
+      expect(rendererText(renderer)).toContain("Trace lane captured the pending tool call.");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("surfaces replay, durable lookup, resume, and bulk-resolution failures", async () => {
+    apiMocks.fetchApprovalReplay.mockRejectedValueOnce(new Error("replay unavailable"));
+    apiMocks.fetchRuntimeLifecycle.mockResolvedValue({
+      canonical: {
+        approvalId: "approval-1",
+      },
+      query: {
+        approvalId: "approval-1",
+      },
+      linked: {
+        sessionIds: [],
+        turnIds: [],
+        runIds: [],
+        proactiveRunIds: [],
+        approvalIds: ["approval-1"],
+        taskIds: [],
+        workspaceIds: [],
+      },
+      turns: [],
+      toolRuns: [],
+    });
+    apiMocks.resolveApprovalsBulk.mockRejectedValueOnce(new Error("bulk reject failed"));
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(
+          <EmbeddedPageChromeProvider>
+            <ApprovalsPage />
+          </EmbeddedPageChromeProvider>,
+        );
+      });
+      await flush();
+
+      await clickButton(renderer, "Load replay trail");
+      await flush();
+      expect(rendererText(renderer)).toContain("replay unavailable");
+
+      await clickButton(renderer, "Load durable status");
+      await flush();
+      expect(rendererText(renderer)).toContain("No canonical durable run is linked to this approval yet.");
+
+      await clickButton(renderer, "Resume paused run");
+      await flush();
+      await clickButton(renderer, "Resume");
+      await flush();
+      expect(apiMocks.resumeDurableRun).not.toHaveBeenCalled();
+      expect(rendererText(renderer)).toContain("No canonical durable run is linked to this approval yet.");
+
+      await clickButton(renderer, "Reject all pending");
+      await flush();
+      await clickButton(renderer, "Reject all pending", 1);
+      await flush();
+      expect(rendererText(renderer)).toContain("bulk reject failed");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("summarizes queued follow-on effects when resolution does not execute immediately", async () => {
+    const rejected = makeApproval({
+      status: "rejected",
+      resolvedAt: "2026-03-29T18:11:00.000Z",
+    });
+    apiMocks.resolveApproval.mockResolvedValueOnce({
+      approval: rejected,
+      replay: {
+        approval: rejected,
+        events: [],
+        effects: [],
+      },
+      effects: [
+        {
+          effectId: "effect-queued-1",
+          effectKind: "notify_operator",
+          targetKind: "approval",
+          targetId: "approval-1",
+          status: "queued",
+          attemptCount: 0,
+        },
+        {
+          effectId: "effect-queued-2",
+          effectKind: "refresh_dashboard",
+          targetKind: "dashboard",
+          targetId: "shell",
+          status: "queued",
+          attemptCount: 0,
+        },
+      ],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(
+          <EmbeddedPageChromeProvider>
+            <ApprovalsPage />
+          </EmbeddedPageChromeProvider>,
+        );
+      });
+      await flush();
+
+      await clickButton(renderer, "Reject", 1);
+      await flush();
+      await clickButton(renderer, "Reject", 2);
+      await flush();
+
+      expect(apiMocks.resolveApproval).toHaveBeenCalledWith("approval-1", "reject");
+      expect(rendererText(renderer)).toContain("Approval approval-1 resolved. 2 follow-on effects queued.");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("renders rich recovery lineage and explanation error states", async () => {
+    mockApprovalStatuses({
+      approved: [
+        makeApproval({
+          approvalId: "approval-recovery-rich",
+          kind: "browser.use",
+          status: "approved",
+          riskLevel: "nuclear",
+          explanationStatus: "failed",
+          explanationError: "explainer timed out",
+          linkage: {
+            durableRunId: "run-rich",
+            sessionId: "session-rich",
+            taskId: "task-rich",
+            proactiveRunId: "proactive-link",
+            originSurface: "cowork",
+            externalReferenceRoots: [{ label: "Research Vault", access: "read" }],
+          },
+        }),
+      ],
+    });
+    apiMocks.fetchRuntimeLifecycle.mockResolvedValue({
+      canonical: {
+        approvalId: "approval-recovery-rich",
+        sessionId: "session-rich",
+        taskId: "task-rich",
+        runId: "run-rich",
+      },
+      query: {
+        approvalId: "approval-recovery-rich",
+        runId: "run-rich",
+      },
+      linked: {
+        sessionIds: ["session-rich", "session-inferred"],
+        turnIds: [],
+        runIds: ["run-rich", "run-inferred"],
+        proactiveRunIds: ["proactive-link"],
+        approvalIds: ["approval-recovery-rich"],
+        taskIds: ["task-rich", "task-inferred"],
+        workspaceIds: ["workspace-rich"],
+      },
+      approval: {
+        linkage: {
+          sessionId: "session-rich",
+          taskId: "task-rich",
+          durableRunId: "run-rich",
+        },
+      },
+      durableRun: {
+        runId: "run-rich",
+        status: "paused",
+        updatedAt: "2026-03-29T18:20:00.000Z",
+      },
+      resolution: {
+        sessionIdSource: "canonical",
+        turnIdSource: "inferred",
+        runIdSource: "canonical",
+        taskIdSource: "canonical",
+      },
+      executionPlans: [
+        {
+          planId: "plan-rich",
+          status: "active",
+          objective: "Resume the browser workflow",
+        },
+      ],
+      delegationRuns: [{ runId: "delegation-run-1" }],
+      delegationSteps: [
+        {
+          stepId: "delegation-step-1",
+          role: "Researcher",
+          status: "completed",
+          durableRunId: "child-run",
+          childSessionId: "child-session",
+          childTurnId: "child-turn",
+        },
+      ],
+      proactiveRuns: [
+        {
+          runId: "proactive-link",
+          status: "waiting",
+          originSurface: "cowork",
+          linkedDurableRunId: "run-rich",
+          nextWakeAt: "2026-03-29T19:00:00.000Z",
+          stopReason: "approval_required",
+        },
+      ],
+      approvalEffects: [
+        {
+          effectId: "effect-rich",
+          effectKind: "resume_durable_run",
+          targetKind: "durable_run",
+          targetId: "run-rich",
+          status: "queued",
+          attemptCount: 2,
+          lastError: "worker busy",
+        },
+      ],
+      turns: [],
+      toolRuns: [],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(
+          <EmbeddedPageChromeProvider>
+            <ApprovalsPage />
+          </EmbeddedPageChromeProvider>,
+        );
+      });
+      await flush();
+
+      await clickButton(renderer, "Recovery (1)");
+      await flush();
+      await clickButton(renderer, "Load durable status");
+      await flush();
+
+      const text = rendererText(renderer);
+      expect(text).toContain("Explanation failed");
+      expect(text).toContain("Explainer error: explainer timed out");
+      expect(text).toContain("nuclear risk");
+      expect(text).toContain("Provenance: session canonical");
+      expect(text).toContain("Proactive run: proactive-link");
+      expect(text).toContain("Reference roots: Research Vault (read)");
+      expect(text).toContain("Execution plans: 1 | Delegation runs: 1 | Delegation steps: 1");
+      expect(text).toContain("Resume the browser workflow");
+      expect(text).toContain("Researcher");
+      expect(text).toContain("attempts 2 | error worker busy");
+    } finally {
+      renderer.unmount();
+    }
+  });
+
+  it("keeps operator cancel paths local for resolve, resume, and bulk modals", async () => {
+    mockApprovalStatuses({
+      approved: [
+        makeApproval({
+          approvalId: "approval-recovery-cancel",
+          status: "approved",
+          linkage: {
+            durableRunId: "run-cancel",
+          },
+        }),
+      ],
+      pending: [makeApproval()],
+    });
+
+    let renderer = create(<div />);
+    try {
+      await act(async () => {
+        renderer = create(
+          <EmbeddedPageChromeProvider>
+            <ApprovalsPage />
+          </EmbeddedPageChromeProvider>,
+        );
+      });
+      await flush();
+
+      await clickButton(renderer, "Approve now");
+      await flush();
+      await clickButton(renderer, "Cancel");
+      await flush();
+      expect(rendererText(renderer)).not.toContain("Approve Action");
+      expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
+
+      await clickButton(renderer, "Recovery (1)");
+      await flush();
+      await clickButton(renderer, "Resume paused run");
+      await flush();
+      expect(rendererText(renderer)).toContain("Resume Durable Run");
+      await clickButton(renderer, "Cancel");
+      await flush();
+      expect(apiMocks.resumeDurableRun).not.toHaveBeenCalled();
+
+      await clickButton(renderer, "Pending (1)");
+      await flush();
+      await clickButton(renderer, "Reject all pending");
+      await flush();
+      expect(rendererText(renderer)).toContain("Reject All Pending Approvals");
+      await clickButton(renderer, "Cancel");
+      await flush();
+      expect(apiMocks.resolveApprovalsBulk).not.toHaveBeenCalled();
     } finally {
       renderer.unmount();
     }

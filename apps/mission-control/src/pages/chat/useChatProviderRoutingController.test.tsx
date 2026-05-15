@@ -5,10 +5,7 @@ import { useChatProviderRoutingController } from "./useChatProviderRoutingContro
 
 let latest: ReturnType<typeof useChatProviderRoutingController> | null = null;
 
-function Harness(props: {
-  draft?: string;
-  onLoadModels?: (providerId: string) => Promise<string[]>;
-}) {
+function Harness(props: { draft?: string; onLoadModels?: (providerId: string) => Promise<string[]> }) {
   const [draft, setDraft] = useState(props.draft ?? "/mcp connect alpha");
   latest = useChatProviderRoutingController({
     runtimeLlmConfig: {
@@ -55,7 +52,11 @@ function Harness(props: {
     mcpTemplates: [],
   });
 
-  return <button type="button" onClick={() => setDraft("/help")}>reset</button>;
+  return (
+    <button type="button" onClick={() => setDraft("/help")}>
+      reset
+    </button>
+  );
 }
 
 describe("useChatProviderRoutingController", () => {
@@ -125,5 +126,74 @@ describe("useChatProviderRoutingController", () => {
     expect(latest?.selectedProviderId).toBeUndefined();
     expect(latest?.selectedProviderLabel).toBe("Provider auto");
     expect(latest?.selectedModelLabel).toBe("Model auto");
+  });
+
+  it("keeps disabled remote providers and local runtime failures explicit", async () => {
+    const loadModelsForProvider = vi.fn(async () => ["remote-model"]);
+
+    function EdgeHarness(props: { providerId: string; model: string }) {
+      latest = useChatProviderRoutingController({
+        runtimeLlmConfig: null,
+        runtimeProviderCatalog: [
+          {
+            providerId: "remote",
+            label: "Remote Missing Key",
+            defaultModel: "remote-model",
+            hasApiKey: false,
+            models: ["remote-model"],
+            modelProbeState: "ready",
+          },
+          {
+            providerId: "local",
+            label: "Local Runtime",
+            baseUrl: "http://127.0.0.1:11434/v1",
+            hasApiKey: false,
+            models: ["llama-local"],
+            modelProbeState: "error",
+          },
+        ],
+        getCachedModels: vi.fn((providerId: string) => (providerId === "local" ? ["llama-local"] : ["remote-model"])),
+        loadModelsForProvider,
+        prefs: {
+          providerId: props.providerId,
+          model: props.model,
+        } as any,
+        settings: null,
+        draft: "/model",
+        commandCatalog: [],
+        installedSkills: [],
+        mcpServers: [],
+        mcpTemplates: [],
+      });
+
+      return null;
+    }
+
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<EdgeHarness providerId="remote" model="remote-model" />);
+    });
+
+    expect(latest?.selectedProviderId).toBe("remote");
+    expect(latest?.selectionSource).toBe("session");
+    expect(latest?.runtimeStatus).toBe("degraded");
+    expect(latest?.runtimeSummary).toBe("Provider setup required");
+    expect(latest?.runtimeTone).toBe("critical");
+    expect(latest?.providerOptions.find((provider) => provider.providerId === "remote")).toMatchObject({
+      disabled: true,
+      availabilityLabel: "Remote Missing Key · setup required",
+    });
+    expect(loadModelsForProvider).toHaveBeenCalledWith("remote");
+
+    await act(async () => {
+      renderer.update(<EdgeHarness providerId="local" model="llama-local" />);
+    });
+
+    expect(latest?.selectedProviderId).toBe("local");
+    expect(latest?.runtimeStatus).toBe("unreachable");
+    expect(latest?.runtimeSummary).toBe("Runtime unreachable");
+    expect(latest?.runtimeTone).toBe("critical");
+    expect(latest?.providerOptions.find((provider) => provider.providerId === "local")?.disabled).toBe(false);
+    expect(loadModelsForProvider).toHaveBeenCalledWith("local");
   });
 });

@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { McpServerRecord } from "@goatcitadel/contracts";
-import { discoverMcpTools, invokeMcpRuntimeTool } from "./mcp-runtime.js";
+import {
+  collectMcpBrowserFallbackTargets,
+  discoverMcpTools,
+  inferMcpToolsForServer,
+  invokeMcpRuntimeTool,
+} from "./mcp-runtime.js";
 
 function createTestServer(script: string, extraArgs: string[] = []): McpServerRecord {
   const now = new Date().toISOString();
@@ -166,7 +171,158 @@ rl.on("line", (line) => {
 });
 `;
 
+const MCP_TOOL_ERROR_SCRIPT = String.raw`
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+function reply(id, payload) {
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, ...payload }) + "\n");
+}
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    reply(message.id, {
+      result: {
+        protocolVersion: "2024-11-05",
+        capabilities: { tools: {} },
+        serverInfo: { name: "test-mcp", version: "1.0.0" },
+      },
+    });
+    return;
+  }
+  if (message.method === "tools/call") {
+    reply(message.id, {
+      error: {
+        code: -32000,
+        message: "authorization token: secret-token-value-1234567890",
+        data: {
+          url: "https://user:super-secret-password@example.test",
+          apiKey: "sk-abcdefghijklmnopqrstuvwxyz",
+        },
+      },
+    });
+  }
+});
+`;
+
 describe("mcp runtime", () => {
+  it("infers browser and research tool records when discovery has not populated tools yet", () => {
+    const now = new Date().toISOString();
+    const browserServer = {
+      ...createTestServer(""),
+      label: "Chrome DevTools Bridge",
+      command: "npx",
+      args: ["@modelcontextprotocol/server-playwright"],
+      category: "browser",
+      createdAt: now,
+      updatedAt: now,
+    };
+    const researchServer = {
+      ...browserServer,
+      serverId: "srv-fetch",
+      label: "HTTP Fetch MCP",
+      command: "fetch-mcp",
+      args: [],
+      category: "research",
+    };
+
+    expect(inferMcpToolsForServer(browserServer, []).map((tool) => tool.toolName)).toEqual([
+      "browser.search",
+      "browser.navigate",
+      "browser.extract",
+    ]);
+    expect(inferMcpToolsForServer(researchServer, []).map((tool) => tool.toolName)).toEqual([
+      "browser.search",
+      "browser.extract",
+      "http.get",
+    ]);
+    expect(
+      inferMcpToolsForServer(browserServer, [{ ...inferMcpToolsForServer(browserServer, [])[0]!, toolName: "custom" }]),
+    ).toEqual([expect.objectContaining({ toolName: "custom" })]);
+  });
+
+  it("selects approved browser fallback tools and prefers Playwright targets", () => {
+    const now = new Date().toISOString();
+    const baseServer = createTestServer("");
+    const servers: McpServerRecord[] = [
+      {
+        ...baseServer,
+        serverId: "chrome",
+        label: "Chrome Browser",
+        category: "browser",
+        policy: {
+          ...baseServer.policy,
+          requireFirstToolApproval: true,
+        },
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        ...baseServer,
+        serverId: "playwright",
+        label: "Playwright MCP",
+        args: ["@playwright/mcp"],
+        category: "automation",
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        ...baseServer,
+        serverId: "quarantined",
+        label: "Quarantined Browser",
+        trustTier: "quarantined",
+        createdAt: now,
+        updatedAt: now,
+      },
+    ];
+    const tools = [
+      { serverId: "chrome", toolName: "page.open", description: "Open a page", enabled: true, updatedAt: now },
+      { serverId: "chrome", toolName: "content.read", description: "Read content", enabled: true, updatedAt: now },
+      { serverId: "chrome", toolName: "web.search", description: "Find results", enabled: false, updatedAt: now },
+      {
+        serverId: "playwright",
+        toolName: "browser.navigate",
+        description: "Navigate browser",
+        enabled: true,
+        updatedAt: now,
+      },
+      {
+        serverId: "playwright",
+        toolName: "browser.snapshot",
+        description: "Extract page snapshot",
+        enabled: true,
+        updatedAt: now,
+      },
+      { serverId: "quarantined", toolName: "browser.navigate", description: "Navigate", enabled: true, updatedAt: now },
+    ];
+
+    const targets = collectMcpBrowserFallbackTargets(
+      servers,
+      tools,
+      (serverId, toolName) => serverId === "chrome" && toolName === "page.open",
+    );
+
+    expect(targets).toEqual([
+      {
+        serverId: "playwright",
+        label: "Playwright MCP",
+        tier: "playwright_mcp",
+        navigateToolName: "browser.navigate",
+        extractToolName: "browser.snapshot",
+        searchToolName: undefined,
+        fetchToolName: "browser.snapshot",
+      },
+      {
+        serverId: "chrome",
+        label: "Chrome Browser",
+        tier: "browser_mcp",
+        navigateToolName: "page.open",
+        searchToolName: undefined,
+        extractToolName: "page.open",
+        fetchToolName: "page.open",
+      },
+    ]);
+  });
+
   it("discovers tools from a stdio MCP server", async () => {
     const server = createTestServer(MCP_TEST_SCRIPT);
 
@@ -263,5 +419,58 @@ describe("mcp runtime", () => {
         name: undefined,
       },
     ]);
+  });
+
+  it("keeps non-stdio and missing-command invocation failures structured", async () => {
+    await expect(
+      invokeMcpRuntimeTool(
+        {
+          ...createTestServer(""),
+          transport: "http",
+          url: "https://mcp.example.test",
+        },
+        { toolName: "browser.navigate", arguments: {} },
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      output: {
+        transport: "http",
+        liveness: "url_configured",
+      },
+      contentItems: [
+        {
+          type: "error",
+          text: expect.stringContaining("HTTP"),
+        },
+      ],
+    });
+
+    await expect(
+      invokeMcpRuntimeTool(
+        {
+          ...createTestServer(""),
+          command: "  ",
+        },
+        { toolName: "browser.navigate", arguments: {} },
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      error: "MCP stdio command is missing.",
+    });
+  });
+
+  it("redacts provider secrets from MCP tool error payloads", async () => {
+    const result = await invokeMcpRuntimeTool(createTestServer(MCP_TOOL_ERROR_SCRIPT), {
+      toolName: "browser.navigate",
+      arguments: {},
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("token=[REDACTED]");
+    expect(result.error).toContain("[REDACTED]@example.test");
+    expect(result.error).toContain("[REDACTED]");
+    expect(result.error).not.toContain("secret-token-value");
+    expect(result.error).not.toContain("super-secret-password");
+    expect(result.error).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
   });
 });

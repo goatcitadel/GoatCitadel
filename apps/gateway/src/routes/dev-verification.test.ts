@@ -778,4 +778,139 @@ describe("dev verification routes", () => {
       },
     });
   });
+
+  it("returns disabled status consistently across verification endpoints", async () => {
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    decorateDevVerification(app, {
+      isDevDiagnosticsEnabled: () => false,
+    });
+    app.decorate("gatewayConfig", {
+      rootDir: "f:/tmp/goatcitadel-dev",
+    } as never);
+    await app.register(devVerificationRoutes);
+
+    const endpoints = [
+      { method: "GET", url: "/api/v1/dev/verification/status" },
+      { method: "GET", url: "/api/v1/dev/verification/diagnostics-snapshot" },
+      { method: "GET", url: "/api/v1/dev/verification/route-access-manifest" },
+      { method: "POST", url: "/api/v1/dev/verification/seed", payload: {} },
+      { method: "POST", url: "/api/v1/dev/verification/provider-exercise", payload: { scenario: "simple" } },
+    ] as const;
+
+    for (const endpoint of endpoints) {
+      const response = await app.inject(endpoint);
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toEqual({ error: "Development verification endpoints are disabled." });
+    }
+  });
+
+  it("validates diagnostics snapshot and provider exercise payloads before service calls", async () => {
+    const listDevDiagnostics = vi.fn();
+    const createChatCompletion = vi.fn();
+
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    decorateDevVerification(app, {
+      isDevDiagnosticsEnabled: () => true,
+      listDevDiagnostics,
+      createChatCompletion,
+      createChatCompletionStream: vi.fn(),
+    });
+    app.decorate("gatewayConfig", {
+      rootDir: "f:/tmp/goatcitadel-dev",
+    } as never);
+    await app.register(devVerificationRoutes);
+
+    const diagnostics = await app.inject({
+      method: "GET",
+      url: "/api/v1/dev/verification/diagnostics-snapshot?limit=0",
+    });
+    const provider = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/provider-exercise",
+      payload: {
+        scenario: "not-real",
+      },
+    });
+
+    expect(diagnostics.statusCode).toBe(400);
+    expect(provider.statusCode).toBe(400);
+    expect(listDevDiagnostics).not.toHaveBeenCalled();
+    expect(createChatCompletion).not.toHaveBeenCalled();
+  });
+
+  it("exercises stream and tool provider verification payloads", async () => {
+    async function* streamChunks() {
+      yield { choices: [{ delta: { content: "first" } }] };
+      yield { choices: [{ delta: { content: "second" } }] };
+    }
+    const createChatCompletionStream = vi.fn(() => streamChunks());
+    const createChatCompletion = vi.fn(async () => ({
+      choices: [{ message: { content: [{ text: "tool ready" }] } }],
+    }));
+
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    decorateDevVerification(app, {
+      isDevDiagnosticsEnabled: () => true,
+      createChatCompletion,
+      createChatCompletionStream,
+    });
+    app.decorate("gatewayConfig", {
+      rootDir: "f:/tmp/goatcitadel-dev",
+    } as never);
+    await app.register(devVerificationRoutes);
+
+    const stream = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/provider-exercise",
+      payload: {
+        scenario: "stream",
+        providerId: "openai",
+        model: "gpt-test",
+      },
+    });
+    const tools = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/provider-exercise",
+      payload: {
+        scenario: "tools",
+        providerId: "openai",
+        model: "gpt-test",
+      },
+    });
+
+    expect(stream.statusCode).toBe(200);
+    expect(stream.json()).toMatchObject({
+      ok: true,
+      scenario: "stream",
+      chunkCount: 2,
+      outputPreview: expect.stringContaining("first"),
+    });
+    expect(createChatCompletionStream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: "openai",
+        model: "gpt-test",
+        stream: true,
+      }),
+    );
+    expect(tools.statusCode).toBe(200);
+    expect(tools.json()).toMatchObject({
+      ok: true,
+      scenario: "tools",
+      outputPreview: expect.stringContaining("tool ready"),
+    });
+    expect(createChatCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: [
+          expect.objectContaining({
+            type: "function",
+            function: expect.objectContaining({ name: "echo_status" }),
+          }),
+        ],
+        tool_choice: "auto",
+      }),
+    );
+  });
 });

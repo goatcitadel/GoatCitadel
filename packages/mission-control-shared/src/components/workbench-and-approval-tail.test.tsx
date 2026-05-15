@@ -343,4 +343,41 @@ describe("workbench tree, inspector drawer, and approval prompt tails", () => {
     );
     expect(textOf(renderer.toJSON())).toContain("Caution risk");
   });
+
+  it("keeps invalid inline approval expiries passive and lets workspace confirmation be cancelled", () => {
+    vi.useFakeTimers();
+    const callbacks = {
+      onApproveOnce: vi.fn(),
+      onApproveInSession: vi.fn(),
+      onApproveInWorkspace: vi.fn(),
+      onDeny: vi.fn(),
+    };
+
+    renderer = create(
+      <InlineApprovalPrompt
+        approvalId="approval-invalid-expiry"
+        expiresAt="not-a-date"
+        workspaceAllowAvailable
+        {...callbacks}
+      />,
+    );
+
+    expect(textOf(renderer.toJSON())).not.toContain("Expires in");
+    act(() => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => textOf(button.props.children).includes("Allow in workspace"))!
+        .props.onClick();
+    });
+    expect(textOf(renderer.toJSON())).toContain("Confirm workspace allow");
+
+    act(() => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => textOf(button.props.children).includes("Cancel"))!
+        .props.onClick();
+    });
+    expect(textOf(renderer.toJSON())).not.toContain("Confirm workspace allow");
+    expect(callbacks.onApproveInWorkspace).not.toHaveBeenCalled();
+  });
 });

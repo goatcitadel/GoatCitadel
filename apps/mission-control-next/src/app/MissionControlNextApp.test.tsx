@@ -88,8 +88,13 @@ vi.mock("@goatcitadel/mission-control-shared/components/NotificationStack", () =
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/components/PageErrorBoundary", () => ({
-  PageErrorBoundary: ({ children }: { children: ReactNode }) =>
-    createElement("div", { className: "mock-error-boundary" }, children),
+  PageErrorBoundary: ({ children, onReturnToChat }: { children: ReactNode; onReturnToChat: () => void }) =>
+    createElement(
+      "div",
+      { className: "mock-error-boundary" },
+      children,
+      createElement("button", { type: "button", onClick: onReturnToChat }, "Boundary return to chat"),
+    ),
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/components/SideInspectorDrawer", () => ({
@@ -118,8 +123,22 @@ vi.mock("@goatcitadel/mission-control-shared/components/SideInspectorDrawer", ()
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/components/ShellDetailPanelContext", () => ({
-  ShellDetailPanelProvider: ({ children }: { children: ReactNode }) =>
-    createElement("div", { className: "mock-detail-provider" }, children),
+  ShellDetailPanelProvider: ({
+    children,
+    onOpenPanel,
+    onClosePanel,
+  }: {
+    children: ReactNode;
+    onOpenPanel: () => void;
+    onClosePanel: () => void;
+  }) =>
+    createElement(
+      "div",
+      { className: "mock-detail-provider" },
+      createElement("button", { type: "button", onClick: onOpenPanel }, "Detail provider open"),
+      createElement("button", { type: "button", onClick: onClosePanel }, "Detail provider close"),
+      children,
+    ),
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
@@ -352,7 +371,7 @@ describe("MissionControlNextApp", () => {
     await act(async () => {
       findButton(renderer, "Guided").props.onClick();
       findButton(renderer, "Light theme").props.onClick();
-      findButton(renderer, "Open Context").props.onClick();
+      findButton(renderer, "Search sessions").props.onClick();
     });
     expect(appMocks.setMode).toHaveBeenCalledWith("advanced");
     expect(appMocks.setTheme).toHaveBeenCalledWith("light");
@@ -367,6 +386,55 @@ describe("MissionControlNextApp", () => {
     );
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith("# Trust\n\nReady.");
 
+    await act(async () => {
+      findButton(renderer, "Detail provider close").props.onClick();
+    });
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("Copy trust report");
+
+    await act(async () => {
+      findButton(renderer, "Detail provider open").props.onClick();
+    });
+    expect(JSON.stringify(renderer.toJSON())).toContain("Copy trust report");
+
+    await act(async () => {
+      findButton(renderer, "Pin").props.onClick();
+      findButton(renderer, "Close").props.onClick();
+    });
+    expect(appMocks.setDetailPanelPinned).toHaveBeenCalledWith(true);
+
+    await act(async () => {
+      findButton(renderer, "Open Context").props.onClick();
+      renderer.root
+        .findAllByType("button")
+        .find((node) => String(node.props.className).includes("mc-next-inspector-scrim"))
+        ?.props.onClick();
+    });
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("Copy trust report");
+
+    await act(async () => {
+      renderer.root
+        .findAllByType("button")
+        .find((node) => String(node.props.className).includes("mc-next-nav-toggle"))
+        ?.props.onClick();
+      renderer.root
+        .findAllByType("button")
+        .find(
+          (node) =>
+            String(node.props.className).includes("mc-next-rail-link") &&
+            !String(node.props.className).includes("active"),
+        )
+        ?.props.onClick();
+      renderer.root
+        .findAllByType("button")
+        .find((node) => String(node.props.className).includes("mc-next-rail-close"))
+        ?.props.onClick();
+      renderer.root
+        .findAllByType("button")
+        .find((node) => node.props["aria-label"] === "Open notifications")
+        ?.props.onClick();
+    });
+    expect(window.location.pathname).toBe("/ops/notifications");
+
     const workspaceSelect = renderer.root.findByType("select");
     await act(async () => {
       workspaceSelect.props.onChange({ target: { value: "workspace-2" } });
@@ -374,9 +442,58 @@ describe("MissionControlNextApp", () => {
     expect(appMocks.setActiveWorkspaceId).toHaveBeenCalledWith("workspace-2");
 
     await act(async () => {
+      renderer.root
+        .findAllByType("button")
+        .find(
+          (node) =>
+            String(node.props.className).includes("mc-next-primary-link") && readNodeText(node).includes("Code"),
+        )
+        ?.props.onClick();
+    });
+    expect(window.location.pathname).toBe("/code");
+
+    await act(async () => {
       findButton(renderer, "Start Here").props.onClick();
     });
     expect(window.location.pathname).toBe("/settings/onboarding");
+
+    await act(async () => {
+      findButton(renderer, "Boundary return to chat").props.onClick();
+    });
+    expect(window.location.pathname).toBe("/chat");
+
+    const popstateHandler = (window.addEventListener as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([eventName]) => eventName === "popstate",
+    )?.[1] as (() => void) | undefined;
+    window.history.pushState(null, "", "/chat?sessionId=session-2");
+    await act(async () => {
+      popstateHandler?.();
+    });
+    expect(JSON.stringify(renderer.toJSON())).toContain("Threaded chat");
+  });
+
+  it("covers shell fallback and trust-report warning/error branches", async () => {
+    appMocks.activeWorkspaceId = "missing-workspace";
+    const noSessionRenderer = await renderApp("http://localhost:5173/chat");
+    expect(appMocks.setActiveWorkspaceId).toHaveBeenCalledWith("workspace-2");
+    noSessionRenderer.unmount();
+
+    appMocks.fetchRuntimeLifecycleExport.mockRejectedValueOnce(new Error("export offline"));
+    const failingRenderer = await renderApp("http://localhost:5173/chat?sessionId=session-err");
+    await act(async () => {
+      findButton(failingRenderer, "Open Context").props.onClick();
+    });
+    await act(async () => {
+      findButton(failingRenderer, "Copy trust report").props.onClick();
+    });
+    await flush();
+
+    expect(JSON.stringify(failingRenderer.toJSON())).toContain("Trust report export failed: export offline");
+
+    await act(async () => {
+      findButton(failingRenderer, "Trust report export failed: export offline").props.onClick();
+    });
+    expect(JSON.stringify(failingRenderer.toJSON())).not.toContain("Trust report export failed: export offline");
   });
 
   it("dispatches route content for native, prompt-pack, and threaded areas", async () => {
@@ -395,5 +512,29 @@ describe("MissionControlNextApp", () => {
     renderer = await renderApp("http://localhost:5173/projects/Project-1");
     expect(JSON.stringify(renderer.toJSON())).toContain("Native projects/root");
     renderer.unmount();
+  });
+
+  it("covers shell realtime fallback, redirect, and status failure branches", async () => {
+    const warningRenderer = await renderApp("http://localhost:5173/chat?sessionId=session-1");
+    await act(async () => {
+      appMocks.streamCallbacks.onStateChange?.("closed");
+    });
+    expect(JSON.stringify(warningRenderer.toJSON())).toContain("Polling fallback");
+    warningRenderer.unmount();
+
+    appMocks.fetchDashboardState.mockRejectedValueOnce(new Error("status offline"));
+    const statusRenderer = await renderApp("http://localhost:5173/settings/providers");
+    expect(appMocks.fetchDashboardState).toHaveBeenCalled();
+    expect(JSON.stringify(statusRenderer.toJSON())).toContain("Native settings/providers");
+    statusRenderer.unmount();
+
+    appMocks.fetchWorkspaces.mockRejectedValueOnce(new Error("workspace offline"));
+    const workspaceRenderer = await renderApp("http://localhost:5173/settings/access");
+    expect(JSON.stringify(workspaceRenderer.toJSON())).toContain("Native settings/access");
+    workspaceRenderer.unmount();
+
+    const redirectRenderer = await renderApp("http://localhost:5173/ops/quality?sessionId=session-1&theme=light");
+    expect(window.location.pathname).toBe("/library/prompt-packs");
+    expect(JSON.stringify(redirectRenderer.toJSON())).toContain("Prompt packs library");
   });
 });

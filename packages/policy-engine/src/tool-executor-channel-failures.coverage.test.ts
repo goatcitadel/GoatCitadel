@@ -1994,12 +1994,26 @@ describe("tool executor channel failure coverage", () => {
     );
   });
 
-  it("covers Zalo User target, attachment classification, fallback IDs, and attachment failures", async () => {
+  it("covers Zalo User target, attachment classification, auth headers, fallback IDs, and attachment failures", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
+    const zcaHeaders: Array<Record<string, string>> = [];
     const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
       const url = String(input);
       const body = String(init?.body ?? "");
+      zcaHeaders.push(Object.fromEntries(new Headers(init?.headers).entries()));
       if (url.endsWith("/messages/text")) {
+        if (body.includes("empty-error")) {
+          return new Response("", { status: 500 });
+        }
+        if (body.includes("plain-error")) {
+          return new Response("plain text denied", { status: 500 });
+        }
+        if (body.includes("nested-result-id")) {
+          return new Response(JSON.stringify({ result: { message_id: "nested-result-message" } }), { status: 200 });
+        }
+        if (body.includes("numeric-id")) {
+          return new Response(JSON.stringify({ message: { id: 8675309 } }), { status: 200 });
+        }
         return new Response(JSON.stringify({ ok: true }), { status: 200 });
       }
       if (url.endsWith("/messages/image")) {
@@ -2007,6 +2021,18 @@ describe("tool executor channel failure coverage", () => {
           return new Response(JSON.stringify({ error: { message: "image denied" } }), { status: 500 });
         }
         return new Response(JSON.stringify({ data: { messageId: "image-1" } }), { status: 200 });
+      }
+      if (url.endsWith("/messages/video")) {
+        if (body.includes("attachment-fallback")) {
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ msgId: "video-1" }), { status: 200 });
+      }
+      if (url.endsWith("/messages/voice")) {
+        return new Response(JSON.stringify({ msg_id: "voice-1" }), { status: 200 });
+      }
+      if (url.endsWith("/messages/link")) {
+        return new Response(JSON.stringify({ id: "link-1" }), { status: 200 });
       }
       throw new Error(`Unexpected Zalo User edge URL: ${url}`);
     });
@@ -2026,6 +2052,27 @@ describe("tool executor channel failure coverage", () => {
       /Zalo User target is required/i,
     );
 
+    for (const [connectionId, target, expectedError] of [
+      ["zca-empty-group", "zlu:group:", /Zalo User target is required/i],
+      ["zca-empty-group-alias", "zlu:g:", /Zalo User target is required/i],
+      ["zca-empty-user", "zlu:user:", /Zalo User target is required/i],
+      ["zca-empty-dm-alias", "zlu:dm:", /Zalo User target is required/i],
+      ["zca-empty-user-alias", "zlu:u:", /Zalo User target is required/i],
+    ] as const) {
+      await expectFailed(
+        executeTool(
+          request("zalouser.send", { connectionId, message: "empty alias", target }),
+          commsConfig,
+          commsStorage({
+            connectionId,
+            key: "zalouser",
+            config: { baseUrl: "https://zca.example.com" },
+          }),
+        ),
+        expectedError,
+      );
+    }
+
     const fallbackText = await executeTool(
       request("zalouser.send", { connectionId: "zca-fallback-id", message: "fallback", target: "friend-raw" }),
       commsConfig,
@@ -2037,6 +2084,83 @@ describe("tool executor channel failure coverage", () => {
     );
     expect(fallbackText).toMatchObject({ status: "sent" });
     expect(String(fallbackText.providerMessageId)).toMatch(/^zalouser-/);
+
+    for (const [connectionId, target, configOverride, expectedAuthorization] of [
+      [
+        "zca-group-alias",
+        "zlu:g:team-alias",
+        { baseUrl: "https://zca.example.com", authorization: "  Token explicit  " },
+        "Token explicit",
+      ],
+      [
+        "zca-user-alias",
+        "zlu:u:friend-alias",
+        { baseUrl: "https://zca.example.com", authToken: "bearer-token" },
+        "Bearer bearer-token",
+      ],
+      [
+        "zca-dm-alias",
+        "zlu:dm:friend-dm",
+        { baseUrl: "https://zca.example.com", basicAuth: "user:pass" },
+        `Basic ${Buffer.from("user:pass", "utf8").toString("base64")}`,
+      ],
+      [
+        "zca-raw-group-prefix",
+        "g-raw-team",
+        { baseUrl: "https://zca.example.com", basicAuth: "Basic already-encoded" },
+        "Basic already-encoded",
+      ],
+      ["zca-raw-user-prefix", "u-raw-friend", { baseUrl: "https://zca.example.com" }, undefined],
+    ] as const) {
+      const sent = await executeTool(
+        request("zalouser.send", {
+          connectionId,
+          message: connectionId === "zca-user-alias" ? "nested-result-id" : "alias",
+          target,
+        }),
+        commsConfig,
+        commsStorage({
+          connectionId,
+          key: "zalouser",
+          config: configOverride,
+        }),
+      );
+      expect(sent).toMatchObject({ status: "sent" });
+      if (connectionId === "zca-user-alias") {
+        expect(sent.providerMessageId).toBe("nested-result-message");
+      }
+      if (expectedAuthorization) {
+        expect(zcaHeaders.some((headers) => headers.authorization === expectedAuthorization)).toBe(true);
+      }
+    }
+
+    const numericId = await executeTool(
+      request("zalouser.send", { connectionId: "zca-numeric-id", message: "numeric-id", target: "friend-number" }),
+      commsConfig,
+      commsStorage({
+        connectionId: "zca-numeric-id",
+        key: "zalouser",
+        config: { baseUrl: "https://zca.example.com" },
+      }),
+    );
+    expect(numericId).toMatchObject({ status: "sent", providerMessageId: "8675309" });
+
+    await expectFailed(
+      executeTool(
+        request("zalouser.send", {
+          connectionId: "zca-empty-provider-error",
+          message: "empty-error",
+          target: "friend-empty-error",
+        }),
+        commsConfig,
+        commsStorage({
+          connectionId: "zca-empty-provider-error",
+          key: "zalouser",
+          config: { baseUrl: "https://zca.example.com" },
+        }),
+      ),
+      /zalouser\.send failed \(500\)$/i,
+    );
 
     const image = await executeTool(
       request("zalouser.send", {
@@ -2054,6 +2178,35 @@ describe("tool executor channel failure coverage", () => {
     );
     expect(image).toMatchObject({ status: "sent", providerMessageId: "image-1" });
 
+    for (const [connectionId, attachment, providerMessageId] of [
+      ["zca-image-extension", { url: "https://example.com/picture.gif" }, "image-1"],
+      ["zca-video-extension", { url: "https://example.com/movie.mov" }, "video-1"],
+      ["zca-attachment-fallback", { url: "https://example.com/attachment-fallback.mp4" }, /^zalouser-/],
+      ["zca-audio-extension", { url: "https://example.com/voice.mp3" }, "voice-1"],
+      ["zca-link-extension", { url: "https://example.com/file.txt" }, "link-1"],
+    ] as const) {
+      const attachmentResult = await executeTool(
+        request("zalouser.send", {
+          connectionId,
+          message: "attachment",
+          target: "friend-attachment",
+          attachments: [attachment],
+        }),
+        commsConfig,
+        commsStorage({
+          connectionId,
+          key: "zalouser",
+          config: { baseUrl: "https://zca.example.com" },
+        }),
+      );
+      expect(attachmentResult).toMatchObject({ status: "sent" });
+      if (providerMessageId instanceof RegExp) {
+        expect(String(attachmentResult.providerMessageId)).toMatch(providerMessageId);
+      } else {
+        expect(attachmentResult.providerMessageId).toBe(providerMessageId);
+      }
+    }
+
     await expectFailed(
       executeTool(
         request("zalouser.send", {
@@ -2070,6 +2223,23 @@ describe("tool executor channel failure coverage", () => {
         }),
       ),
       /image denied/i,
+    );
+
+    await expectFailed(
+      executeTool(
+        request("zalouser.send", {
+          connectionId: "zca-plain-text-fail",
+          message: "plain-error",
+          target: "friend-plain",
+        }),
+        commsConfig,
+        commsStorage({
+          connectionId: "zca-plain-text-fail",
+          key: "zalouser",
+          config: { baseUrl: "https://zca.example.com" },
+        }),
+      ),
+      /plain text denied/i,
     );
   });
 
@@ -2949,6 +3119,144 @@ describe("tool executor channel failure coverage", () => {
       ),
       /chatGuid not found/i,
     );
+  });
+
+  it("covers LINE request-id fallbacks and generic webhook delivery branches", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    let lineMode: "with-header" | "without-header" = "with-header";
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url === "https://api.line.me/v2/bot/message/push") {
+        return lineMode === "with-header"
+          ? new Response("{}", { status: 200, headers: { "x-line-request-id": "line-request-1" } })
+          : new Response("{}", { status: 200 });
+      }
+      if (url === "https://example.com/generic-ok") {
+        return new Response("ok", { status: 200 });
+      }
+      if (url === "https://example.com/generic-fail") {
+        return new Response("down", { status: 503 });
+      }
+      throw new Error(`Unexpected LINE/webhook URL: ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const commsConfig = withAllowlist(config, "api.line.me", "example.com");
+
+    const lineWithHeader = await executeTool(
+      request("line.send", { connectionId: "line-with-header", message: "line message" }),
+      commsConfig,
+      commsStorage({
+        connectionId: "line-with-header",
+        key: "line",
+        config: { channelAccessToken: "line-token", defaultTarget: "line:user:U123" },
+      }),
+    );
+    expect(lineWithHeader).toMatchObject({ status: "sent", providerMessageId: "line-request-1" });
+
+    lineMode = "without-header";
+    const lineWithoutHeader = await executeTool(
+      request("channel.send", { connectionId: "line-without-header", message: "line fallback id" }),
+      commsConfig,
+      commsStorage({
+        connectionId: "line-without-header",
+        key: "line",
+        config: { channelAccessToken: "line-token", defaultTarget: "line:user:U123" },
+      }),
+    );
+    expect(lineWithoutHeader).toMatchObject({ status: "sent" });
+    expect(String(lineWithoutHeader.providerMessageId)).toMatch(/^line-/);
+
+    const genericWebhook = await executeTool(
+      request("channel.send", {
+        connectionId: "generic-ok",
+        message: "generic",
+        payload: { severity: "info" },
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "generic-ok",
+        key: "custom",
+        config: { webhookUrl: "https://example.com/generic-ok", defaultTarget: "ops" },
+      }),
+    );
+    expect(genericWebhook).toMatchObject({ status: "sent" });
+    expect(String(genericWebhook.providerMessageId)).toMatch(/^channel\.send-/);
+
+    await expectFailed(
+      executeTool(
+        request("channel.send", { connectionId: "generic-missing-url", message: "missing url" }),
+        commsConfig,
+        commsStorage({
+          connectionId: "generic-missing-url",
+          key: "custom",
+          config: {},
+        }),
+      ),
+      /Missing webhook URL/i,
+    );
+
+    await expectFailed(
+      executeTool(
+        request("channel.send", { connectionId: "generic-fail", message: "fail" }),
+        commsConfig,
+        commsStorage({
+          connectionId: "generic-fail",
+          key: "custom",
+          config: { webhookUrl: "https://example.com/generic-fail" },
+        }),
+      ),
+      /channel\.send failed \(503\)/i,
+    );
+  });
+
+  it("covers Gmail and Calendar empty-provider-id fallbacks", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.startsWith("https://gmail.googleapis.com/gmail/v1/users/me/messages/send")) {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      if (url.includes("/calendar/v3/calendars/primary/events") && !url.includes("singleEvents=true")) {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      throw new Error(`Unexpected Google fallback URL: ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const commsConfig = withAllowlist(config, "gmail.googleapis.com", "www.googleapis.com");
+
+    const gmailFallback = await executeTool(
+      request("gmail.send", {
+        connectionId: "gmail-fallback-id",
+        to: ["ops@example.com"],
+        subject: "Fallback",
+        bodyText: "No provider id.",
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "gmail-fallback-id",
+        key: "gmail",
+        config: { accessToken: "gmail-token" },
+      }),
+    );
+    expect(gmailFallback).toMatchObject({ status: "sent" });
+    expect(String(gmailFallback.providerMessageId)).toMatch(/^gmail-/);
+
+    const calendarFallback = await executeTool(
+      request("calendar.create_event", {
+        connectionId: "calendar-fallback-id",
+        title: "Fallback",
+        startIso: "2026-03-22T17:00:00.000Z",
+        endIso: "2026-03-22T17:30:00.000Z",
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "calendar-fallback-id",
+        key: "calendar",
+        config: { accessToken: "calendar-token" },
+      }),
+    );
+    expect(calendarFallback).toMatchObject({ status: "sent" });
+    expect(String(calendarFallback.providerMessageId)).toMatch(/^calendar-/);
   });
 });
 

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   cancelLlamaCppHuggingFaceDownload,
@@ -85,7 +86,7 @@ type RecentLlamaCppDownload = {
   completedAt: string;
 };
 
-function isAbortError(error: unknown): boolean {
+export function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
@@ -127,7 +128,9 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [setupMode, setSetupMode] = useState<"beginner" | "advanced">("beginner");
   const [profilePreset, setProfilePreset] = useState<LlamaCppProfilePresetId>(DEFAULT_TEXT_PROFILE);
-  const [savedProfiles, setSavedProfiles] = useState<Partial<Record<LlamaCppProfilePresetId, SavedLlamaCppProfile>>>({});
+  const [savedProfiles, setSavedProfiles] = useState<Partial<Record<LlamaCppProfilePresetId, SavedLlamaCppProfile>>>(
+    {},
+  );
   const [recentDownloads, setRecentDownloads] = useState<RecentLlamaCppDownload[]>([]);
   const [installDetection, setInstallDetection] = useState<LlamaCppInstallDetection | null>(null);
   const [hfRepo, setHfRepo] = useState("");
@@ -789,7 +792,11 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
         </div>
         <div className="row-actions">
           <ActionButton label="Apply Recommended Profile" onClick={onApplyRecommendedProfile} disabled={busy} />
-          <ActionButton label="Load Saved Preset" onClick={onLoadSavedPreset} disabled={!savedProfiles[profilePreset]} />
+          <ActionButton
+            label="Load Saved Preset"
+            onClick={onLoadSavedPreset}
+            disabled={!savedProfiles[profilePreset]}
+          />
           <ActionButton
             label="Apply Preset + Save"
             onClick={() => void onLoadSavedPresetAndSave()}
@@ -801,8 +808,8 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
         <FieldHelp>
           {profilePreset === "multimodal" ? (
             <>
-              Multimodal preset keeps loopback defaults but drops to a lower context window for safer image/mmproj
-              work. Treat it as a separate runtime profile from your normal text server.
+              Multimodal preset keeps loopback defaults but drops to a lower context window for safer image/mmproj work.
+              Treat it as a separate runtime profile from your normal text server.
             </>
           ) : profilePreset === "text-long" ? (
             <>
@@ -990,7 +997,8 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
             ) : null}
             {hfDownloadStatus.mmprojPath && hfDownloadStatus.mmprojBytes ? (
               <p>
-                mmproj ready at <code>{hfDownloadStatus.mmprojPath}</code> ({formatGiB(hfDownloadStatus.mmprojBytes)} GiB).
+                mmproj ready at <code>{hfDownloadStatus.mmprojPath}</code> ({formatGiB(hfDownloadStatus.mmprojBytes)}{" "}
+                GiB).
               </p>
             ) : null}
             {hfDownloadStatus.error ? <p className="error">{hfDownloadStatus.error}</p> : null}
@@ -1111,7 +1119,11 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
               </label>
               <label className="field" htmlFor="llamaCppBatchSize">
                 Batch Size
-                <input id="llamaCppBatchSize" value={batchSize} onChange={(event) => setBatchSize(event.target.value)} />
+                <input
+                  id="llamaCppBatchSize"
+                  value={batchSize}
+                  onChange={(event) => setBatchSize(event.target.value)}
+                />
               </label>
               <label className="field" htmlFor="llamaCppUbatchSize">
                 Ubatch Size
@@ -1245,11 +1257,11 @@ export function LlamaCppPage({ settings }: LlamaCppPageProps) {
   );
 }
 
-function canLoadModels(status: LlamaCppStatusRecord | null): boolean {
+export function canLoadModels(status: LlamaCppStatusRecord | null): boolean {
   return Boolean(status?.healthy);
 }
 
-function parseOptionalNumberForPatch(value: string): number | null {
+export function parseOptionalNumberForPatch(value: string): number | null {
   const trimmed = value.trim();
   if (!trimmed) {
     return null;
@@ -1258,30 +1270,30 @@ function parseOptionalNumberForPatch(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function toOptionalString(value: number | undefined): string {
+export function toOptionalString(value: number | undefined): string {
   return value === undefined ? "" : String(value);
 }
 
-function parseExtraArgs(value: string): string[] {
+export function parseExtraArgs(value: string): string[] {
   return value
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
 }
 
-function formatExtraArgs(args: string[]): string {
+export function formatExtraArgs(args: string[]): string {
   return args.join("\n");
 }
 
-function hasReasoningOverride(args: readonly string[]): boolean {
+export function hasReasoningOverride(args: readonly string[]): boolean {
   return args.some((arg) => arg === "--reasoning" || arg === "-rea");
 }
 
-function ensureReasoningDefault(args: string[]): string[] {
+export function ensureReasoningDefault(args: string[]): string[] {
   return hasReasoningOverride(args) ? args : [...args, "--reasoning", "off"];
 }
 
-function upsertFlagValue(args: string[], flag: string, value: string): string[] {
+export function upsertFlagValue(args: string[], flag: string, value: string): string[] {
   const next: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
     if (args[index] === flag) {
@@ -1294,20 +1306,20 @@ function upsertFlagValue(args: string[], flag: string, value: string): string[] 
   return next.filter(Boolean);
 }
 
-function appendOptionalFlag(flag: string, value: string): string[] {
+export function appendOptionalFlag(flag: string, value: string): string[] {
   const trimmed = value.trim();
   return trimmed ? [flag, trimmed] : [];
 }
 
-function appendOptionalFlashAttention(mode: "auto" | "on" | "off"): string[] {
+export function appendOptionalFlashAttention(mode: "auto" | "on" | "off"): string[] {
   return mode === "auto" ? [] : ["--flash-attn", mode];
 }
 
-function quoteSegment(value: string): string {
+export function quoteSegment(value: string): string {
   return /\s/.test(value) ? `"${value.replaceAll('"', '\\"')}"` : value;
 }
 
-function baseUrlToHost(baseUrl: string): string {
+export function baseUrlToHost(baseUrl: string): string {
   try {
     return new URL(baseUrl.replace(/\/v1$/i, "")).hostname;
   } catch {
@@ -1315,7 +1327,7 @@ function baseUrlToHost(baseUrl: string): string {
   }
 }
 
-function baseUrlToPort(baseUrl: string): string {
+export function baseUrlToPort(baseUrl: string): string {
   try {
     const parsed = new URL(baseUrl.replace(/\/v1$/i, ""));
     return parsed.port || (parsed.protocol === "https:" ? "443" : "80");
@@ -1324,7 +1336,7 @@ function baseUrlToPort(baseUrl: string): string {
   }
 }
 
-function createEmptyStatus(baseUrl: string): LlamaCppStatusRecord {
+export function createEmptyStatus(baseUrl: string): LlamaCppStatusRecord {
   return {
     enabled: false,
     desiredState: "stopped",
@@ -1335,11 +1347,11 @@ function createEmptyStatus(baseUrl: string): LlamaCppStatusRecord {
   };
 }
 
-function formatGiB(bytes: number): string {
+export function formatGiB(bytes: number): string {
   return (bytes / 1024 ** 3).toFixed(2);
 }
 
-function formatProgress(downloadedBytes: number, totalBytes?: number): string {
+export function formatProgress(downloadedBytes: number, totalBytes?: number): string {
   if (!totalBytes || totalBytes <= 0) {
     return `${formatGiB(downloadedBytes)} GiB downloaded`;
   }
@@ -1347,7 +1359,7 @@ function formatProgress(downloadedBytes: number, totalBytes?: number): string {
   return `${percent}% (${formatGiB(downloadedBytes)} / ${formatGiB(totalBytes)} GiB)`;
 }
 
-function readSavedLlamaCppProfiles(): Partial<Record<LlamaCppProfilePresetId, SavedLlamaCppProfile>> {
+export function readSavedLlamaCppProfiles(): Partial<Record<LlamaCppProfilePresetId, SavedLlamaCppProfile>> {
   if (typeof window === "undefined" || !window.localStorage) {
     return {};
   }
@@ -1391,14 +1403,16 @@ function readSavedLlamaCppProfiles(): Partial<Record<LlamaCppProfilePresetId, Sa
   }
 }
 
-function writeSavedLlamaCppProfiles(profiles: Partial<Record<LlamaCppProfilePresetId, SavedLlamaCppProfile>>): void {
+export function writeSavedLlamaCppProfiles(
+  profiles: Partial<Record<LlamaCppProfilePresetId, SavedLlamaCppProfile>>,
+): void {
   if (typeof window === "undefined" || !window.localStorage) {
     return;
   }
   window.localStorage.setItem(LLAMACPP_PROFILE_STORAGE_KEY, JSON.stringify(profiles));
 }
 
-function readRecentLlamaCppDownloads(): RecentLlamaCppDownload[] {
+export function readRecentLlamaCppDownloads(): RecentLlamaCppDownload[] {
   if (typeof window === "undefined" || !window.localStorage) {
     return [];
   }
@@ -1414,14 +1428,14 @@ function readRecentLlamaCppDownloads(): RecentLlamaCppDownload[] {
   }
 }
 
-function writeRecentLlamaCppDownloads(items: RecentLlamaCppDownload[]): void {
+export function writeRecentLlamaCppDownloads(items: RecentLlamaCppDownload[]): void {
   if (typeof window === "undefined" || !window.localStorage) {
     return;
   }
   window.localStorage.setItem(LLAMACPP_DOWNLOAD_HISTORY_STORAGE_KEY, JSON.stringify(items));
 }
 
-function upsertRecentLlamaCppDownload(
+export function upsertRecentLlamaCppDownload(
   existing: RecentLlamaCppDownload[],
   nextItem: RecentLlamaCppDownload,
 ): RecentLlamaCppDownload[] {
@@ -1430,4 +1444,3 @@ function upsertRecentLlamaCppDownload(
   );
   return [nextItem, ...remaining].slice(0, 6);
 }
-

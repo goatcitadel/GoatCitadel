@@ -2,7 +2,11 @@ import React, { useCallback, useMemo, useRef, useState } from "react";
 import { act, create } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatThreadResponse } from "@goatcitadel/contracts";
-import { useChatOutboundExecution, type ActiveChatStreamState } from "./useChatOutboundExecution";
+import {
+  resolveOutboundExecutionPrefs,
+  useChatOutboundExecution,
+  type ActiveChatStreamState,
+} from "./useChatOutboundExecution";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -47,7 +51,9 @@ type HarnessState = {
   setPendingUserInput: React.Dispatch<React.SetStateAction<any>>;
   getSnapshot: () => {
     activeStream: ActiveChatStreamState | null;
+    draft: string;
     error: string | null;
+    pendingAttachments: any[];
     pendingApproval: any;
     pendingUserInput: any;
     streamStatus: string;
@@ -103,6 +109,9 @@ function Harness(props: {
   ensureSession?: () => Promise<any>;
   handleCommandExecution?: (sessionId: string, commandText: string) => Promise<void>;
   initialError?: string | null;
+  initialDraft?: string;
+  initialPendingAttachments?: any[];
+  initialActiveStream?: ActiveChatStreamState | null;
   initialSending?: boolean;
   initialThread?: ChatThreadResponse | null;
   isRoutePreflightAcknowledged?: (hash: string) => boolean;
@@ -118,13 +127,16 @@ function Harness(props: {
   const [thread, setThread] = useState<ChatThreadResponse | null>(
     props.initialThread === undefined ? makeThread() : props.initialThread,
   );
-  const [, setDraft] = useState("");
-  const [, setPendingAttachments] = useState<any[]>([]);
+  const [draft, setDraft] = useState(props.initialDraft ?? "");
+  const [pendingAttachments, setPendingAttachments] = useState<any[]>(props.initialPendingAttachments ?? []);
   const [, setCapabilitySuggestions] = useState<any[]>([]);
   const [, setSpecialistSuggestions] = useState<any[]>([]);
   const [sending, setSending] = useState(Boolean(props.initialSending));
   const [error, setErrorState] = useState<string | null>(props.initialError ?? null);
   const activeStreamRef = useRef<ActiveChatStreamState | null>(null);
+  if (activeStreamRef.current === null && props.initialActiveStream) {
+    activeStreamRef.current = props.initialActiveStream;
+  }
   const executeOutboundItemRef = useRef(async (_item: unknown) => undefined);
   const tryBeginOutboundExecutionRef = useRef(() => true);
   const applyFetchedThreadRef = useRef((_thread: ChatThreadResponse, _requestVersion: number | null) => false);
@@ -238,7 +250,9 @@ function Harness(props: {
     setPendingUserInput: outbound.setPendingUserInput,
     getSnapshot: () => ({
       activeStream: activeStreamRef.current,
+      draft,
       error,
+      pendingAttachments,
       pendingApproval: outbound.pendingApproval,
       pendingUserInput: outbound.pendingUserInput,
       streamStatus: outbound.streamStatus,
@@ -356,6 +370,33 @@ describe("useChatOutboundExecution", () => {
         capabilityUpgradeSuggestions: [],
         specialistCandidateSuggestions: [],
       },
+    });
+  });
+
+  it("resolves outbound execution preference defaults", () => {
+    expect(resolveOutboundExecutionPrefs(null)).toEqual({
+      useMemory: true,
+      webMode: "auto",
+      memoryMode: "auto",
+      thinkingLevel: "standard",
+      speedMode: "standard",
+      subagentPolicy: "ask_when_useful",
+    });
+    expect(
+      resolveOutboundExecutionPrefs({
+        memoryMode: "off",
+        webMode: "deep",
+        thinkingLevel: "deep",
+        speedMode: "fast",
+        subagentPolicy: "off",
+      } as any),
+    ).toEqual({
+      useMemory: false,
+      webMode: "deep",
+      memoryMode: "off",
+      thinkingLevel: "deep",
+      speedMode: "fast",
+      subagentPolicy: "off",
     });
   });
 
@@ -1569,5 +1610,196 @@ describe("useChatOutboundExecution", () => {
       includeThread: true,
     });
     vi.useRealTimers();
+  });
+
+  it("covers fetched-thread reconciliation fallbacks without a live active stream", async () => {
+    await act(async () => {
+      create(<Harness />);
+      await Promise.resolve();
+    });
+
+    expect(latest?.applyFetchedThread(makeThread(), 999)).toBe(false);
+    expect(latest?.applyFetchedThread({ ...makeThread(), activeLeafTurnId: "turn-1" }, null)).toBe(true);
+
+    await act(async () => {
+      latest?.setActiveStream({
+        sessionId: "session-1",
+        streamToken: "stream-missing-turn",
+        controller: new AbortController(),
+        turnId: "turn-not-in-thread",
+      });
+      await Promise.resolve();
+    });
+    expect(latest?.applyFetchedThread(makeThread(), null)).toBe(false);
+
+    await act(async () => {
+      latest?.setActiveStream({
+        sessionId: "session-1",
+        streamToken: "stream-included-turn",
+        controller: new AbortController(),
+        turnId: "turn-1",
+      });
+      await Promise.resolve();
+    });
+    expect(latest?.applyFetchedThread(makeThread(), 99)).toBe(false);
+    expect(latest?.applyFetchedThread(makeThread(), null)).toBe(true);
+  });
+
+  it("covers route-null sends, default stream chunk fallbacks, and non-Error sidebar failures", async () => {
+    sendAgentChatMessageMock.mockResolvedValueOnce({
+      sessionId: "session-1",
+      turnId: "turn-no-trace",
+      trace: {},
+    });
+    const loadSidebar = vi.fn(async () => {
+      throw "sidebar string failure";
+    });
+    await act(async () => {
+      create(<Harness prefs={null} ensureFreshRoutePreflight={vi.fn(async () => null)} loadSidebar={loadSidebar} />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await latest?.execute({
+        id: "queue-null-route",
+        action: "send",
+        content: "Send with default prefs",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+      await Promise.resolve();
+    });
+    expect(sendAgentChatMessageMock).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        content: "Send with default prefs",
+        mode: "chat",
+      }),
+      { originSurface: "chat" },
+    );
+
+    streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+      onChunk({
+        type: "message_start",
+        eventId: "evt-defaults",
+        sessionId: "session-1",
+        turnId: "turn-defaults",
+        messageId: "assistant-defaults",
+        branchKind: "append",
+        parentTurnId: "turn-1",
+      });
+      onChunk({ type: "capability_upgrade_suggestion" });
+      onChunk({
+        type: "error",
+        eventId: "evt-error-default",
+        sessionId: "session-1",
+        turnId: "turn-defaults",
+      });
+    });
+    await act(async () => {
+      create(<Harness streamEnabled />);
+    });
+    await act(async () => {
+      await latest?.execute({
+        id: "queue-stream-defaults",
+        action: "send",
+        content: "Stream default chunk fallbacks",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+    });
+    expect(latest?.getSnapshot().error).toBe("Streaming request failed.");
+  });
+
+  it("preserves existing composer recovery state and reports failures before a session exists", async () => {
+    sendAgentChatMessageMock.mockRejectedValueOnce(new Error("send failed"));
+    const existingAttachment = {
+      attachmentId: "existing-file",
+      fileName: "existing.txt",
+      mimeType: "text/plain",
+      sizeBytes: 8,
+    };
+    await act(async () => {
+      create(
+        <Harness
+          initialDraft="keep this draft"
+          initialPendingAttachments={[existingAttachment]}
+          ensureFreshRoutePreflight={vi.fn(async () => null)}
+        />,
+      );
+    });
+    await act(async () => {
+      await latest?.execute({
+        id: "queue-send-failure",
+        action: "send",
+        content: "restore only when empty",
+        attachments: [{ attachmentId: "new-file", fileName: "new.txt", mimeType: "text/plain", sizeBytes: 3 }],
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+    });
+    expect(latest?.getSnapshot()).toMatchObject({
+      draft: "keep this draft",
+      pendingAttachments: [existingAttachment],
+      error: "send failed",
+    });
+
+    await act(async () => {
+      create(
+        <Harness
+          ensureSession={vi.fn(async () => {
+            throw new Error("session unavailable");
+          })}
+        />,
+      );
+    });
+    await act(async () => {
+      await latest?.execute({
+        id: "queue-no-session",
+        sessionId: "queued-session",
+        action: "send",
+        content: "cannot resolve session",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+    });
+    expect(latest?.getSnapshot().error).toBe("session unavailable");
+
+    await act(async () => {
+      create(
+        <Harness
+          ensureSession={vi.fn(async () => {
+            throw { name: "AbortError" };
+          })}
+        />,
+      );
+    });
+    await act(async () => {
+      await latest?.execute({
+        id: "queue-abort-before-session",
+        sessionId: "queued-session",
+        action: "send",
+        content: "abort before session",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+    });
+    expect(latest?.getSnapshot().error).toBeNull();
+  });
+
+  it("reports streaming status when a send is active with a live stream", async () => {
+    await act(async () => {
+      create(
+        <Harness
+          initialSending
+          initialActiveStream={{
+            sessionId: "session-1",
+            streamToken: "stream-active",
+            controller: new AbortController(),
+            turnId: "turn-1",
+          }}
+        />,
+      );
+    });
+
+    expect(latest?.getSnapshot().streamStatus).toBe("streaming");
   });
 });

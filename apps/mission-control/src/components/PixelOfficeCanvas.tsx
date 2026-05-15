@@ -2,7 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import type { RealtimeEvent } from "../api/client";
 import type { OfficeZoneId } from "../data/office-zones";
-import { CAMERA_FOLLOW_LERP, CAMERA_FOLLOW_SNAP_THRESHOLD, TILE_SIZE, ZOOM_MAX, ZOOM_MIN } from "../pixel-office/constants";
+import {
+  CAMERA_FOLLOW_LERP,
+  CAMERA_FOLLOW_SNAP_THRESHOLD,
+  TILE_SIZE,
+  ZOOM_MAX,
+  ZOOM_MIN,
+} from "../pixel-office/constants";
 import { loadPixelOfficeRuntimeAssets, supportsPixelOfficeRuntime } from "../pixel-office/assetLoader";
 import { startGameLoop } from "../pixel-office/engine/gameLoop";
 import { OfficeState } from "../pixel-office/engine/officeState";
@@ -198,7 +204,7 @@ export function PixelOfficeCanvas({
       return;
     }
 
-    const numericId = selectedAgentId ? agentIdMapRef.current.get(selectedAgentId) ?? null : null;
+    const numericId = selectedAgentId ? (agentIdMapRef.current.get(selectedAgentId) ?? null) : null;
     officeState.selectedAgentId = numericId;
     officeState.cameraFollowId = numericId;
   }, [selectedAgentId]);
@@ -296,10 +302,7 @@ export function PixelOfficeCanvas({
             const deltaX = targetX - panRef.current.x;
             const deltaY = targetY - panRef.current.y;
 
-            if (
-              Math.abs(deltaX) < CAMERA_FOLLOW_SNAP_THRESHOLD &&
-              Math.abs(deltaY) < CAMERA_FOLLOW_SNAP_THRESHOLD
-            ) {
+            if (Math.abs(deltaX) < CAMERA_FOLLOW_SNAP_THRESHOLD && Math.abs(deltaY) < CAMERA_FOLLOW_SNAP_THRESHOLD) {
               panRef.current = { x: targetX, y: targetY };
             } else {
               panRef.current = {
@@ -361,230 +364,249 @@ export function PixelOfficeCanvas({
     };
   }, []);
 
-  const screenToTile = useCallback((clientX: number, clientY: number) => {
-    const officeState = officeStateRef.current;
-    const pos = screenToWorld(clientX, clientY);
-    if (!officeState || !pos) {
-      return null;
-    }
-    const col = Math.floor(pos.worldX / TILE_SIZE);
-    const row = Math.floor(pos.worldY / TILE_SIZE);
-    const layout = officeState.getLayout();
-    if (col < 0 || col >= layout.cols || row < 0 || row >= layout.rows) {
-      return null;
-    }
-    return { col, row };
-  }, [screenToWorld]);
-
-  const updateHoverState = useCallback((event: ReactMouseEvent<HTMLCanvasElement>) => {
-    const officeState = officeStateRef.current;
-    const pos = screenToWorld(event.clientX, event.clientY);
-    if (!officeState || !pos) {
-      return;
-    }
-
-    const hitId = officeState.getCharacterAt(pos.worldX, pos.worldY);
-    const tile = screenToTile(event.clientX, event.clientY);
-    officeState.hoveredAgentId = hitId;
-    officeState.hoveredTile = tile;
-
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      return;
-    }
-
-    let cursor = "default";
-    if (hitId !== null) {
-      cursor = "pointer";
-    } else if (officeState.selectedAgentId !== null && tile) {
-      const seatId = officeState.getSeatAtTile(tile.col, tile.row);
-      if (seatId) {
-        const seat = officeState.seats.get(seatId);
-        const selectedCharacter = officeState.characters.get(officeState.selectedAgentId);
-        if (seat && (!seat.assigned || selectedCharacter?.seatId === seatId)) {
-          cursor = "pointer";
-        }
+  const screenToTile = useCallback(
+    (clientX: number, clientY: number) => {
+      const officeState = officeStateRef.current;
+      const pos = screenToWorld(clientX, clientY);
+      if (!officeState || !pos) {
+        return null;
       }
-    }
-    canvas.style.cursor = cursor;
-  }, [screenToTile, screenToWorld]);
-
-  const selectNumericAgent = useCallback((numericId: number | null) => {
-    const officeState = officeStateRef.current;
-    if (!officeState) {
-      return;
-    }
-
-    officeState.selectedAgentId = numericId;
-    officeState.cameraFollowId = numericId;
-
-    if (numericId == null) {
-      if (selectedZoneId) {
-        onSelectZone(selectedZoneId);
+      const col = Math.floor(pos.worldX / TILE_SIZE);
+      const row = Math.floor(pos.worldY / TILE_SIZE);
+      const layout = officeState.getLayout();
+      if (col < 0 || col >= layout.cols || row < 0 || row >= layout.rows) {
+        return null;
       }
-      return;
-    }
+      return { col, row };
+    },
+    [screenToWorld],
+  );
 
-    const agent = reverseAgentMapRef.current.get(numericId);
-    if (agent) {
-      onSelectAgent(agent.agentId, agent.zoneId);
-    }
-  }, [onSelectAgent, onSelectZone, selectedZoneId]);
-
-  const emitAgentCommand = useCallback((
-    numericId: number,
-    kind: PixelOfficeCanvasCommand["kind"],
-    targetLabel: string,
-    summary: string,
-  ) => {
-    const agent = reverseAgentMapRef.current.get(numericId);
-    if (!agent || !onAgentCommand) {
-      return;
-    }
-    onAgentCommand({
-      agentId: agent.agentId,
-      agentName: agent.name,
-      zoneId: agent.zoneId,
-      zoneLabel: agent.zoneLabel,
-      kind,
-      targetLabel,
-      summary,
-      issuedAt: new Date().toISOString(),
-    });
-  }, [onAgentCommand]);
-
-  const commandAgentToTile = useCallback((numericId: number, col: number, row: number) => {
-    const officeState = officeStateRef.current;
-    if (!officeState) {
-      return false;
-    }
-
-    const agent = reverseAgentMapRef.current.get(numericId);
-    const agentName = agent?.name ?? "agent";
-    const zoneLabel = agent?.zoneLabel ?? "the current zone";
-
-    const seatId = officeState.getSeatAtTile(col, row);
-    if (seatId) {
-      const seat = officeState.seats.get(seatId);
-      const character = officeState.characters.get(numericId);
-      if (seat && character) {
-        if (character.seatId === seatId) {
-          officeState.sendToSeat(numericId);
-          emitAgentCommand(
-            numericId,
-            "return_to_seat",
-            `seat ${seat.seatCol},${seat.seatRow}`,
-            `Directed ${agentName} back to seat ${seat.seatCol},${seat.seatRow} in ${zoneLabel}.`,
-          );
-          return true;
-        }
-        if (!seat.assigned) {
-          officeState.reassignSeat(numericId, seatId);
-          emitAgentCommand(
-            numericId,
-            "reassign_seat",
-            `seat ${seat.seatCol},${seat.seatRow}`,
-            `Reassigned ${agentName} to seat ${seat.seatCol},${seat.seatRow} in ${zoneLabel}.`,
-          );
-          return true;
-        }
-      }
-    }
-
-    const moved = officeState.walkToTile(numericId, col, row);
-    if (moved) {
-      emitAgentCommand(
-        numericId,
-        "move",
-        `tile ${col},${row}`,
-        `Directed ${agentName} to tile ${col},${row} in ${zoneLabel}.`,
-      );
-    }
-    return moved;
-  }, [emitAgentCommand]);
-
-  const handleMouseDown = useCallback((event: ReactMouseEvent<HTMLCanvasElement>) => {
-    if (event.button !== 0) {
-      return;
-    }
-
-    const officeState = officeStateRef.current;
-    const pos = screenToWorld(event.clientX, event.clientY);
-    if (!officeState || !pos) {
-      return;
-    }
-
-    const hitId = officeState.getCharacterAt(pos.worldX, pos.worldY);
-    if (hitId !== null) {
-      pointerDragRef.current = {
-        agentId: hitId,
-        startX: event.clientX,
-        startY: event.clientY,
-        active: false,
-      };
-    } else {
-      pointerDragRef.current = null;
-    }
-  }, [screenToWorld]);
-
-  const handleMouseMove = useCallback((event: ReactMouseEvent<HTMLCanvasElement>) => {
-    updateHoverState(event);
-
-    const drag = pointerDragRef.current;
-    if (!drag) {
-      return;
-    }
-
-    const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
-    if (distance >= DRAG_THRESHOLD_PX) {
-      drag.active = true;
-      pointerDragRef.current = drag;
-    }
-  }, [updateHoverState]);
-
-  const handleMouseUp = useCallback((event: ReactMouseEvent<HTMLCanvasElement>) => {
-    const officeState = officeStateRef.current;
-    const drag = pointerDragRef.current;
-    pointerDragRef.current = null;
-    if (!officeState) {
-      return;
-    }
-
-    const pos = screenToWorld(event.clientX, event.clientY);
-    const tile = screenToTile(event.clientX, event.clientY);
-    if (!pos) {
-      return;
-    }
-
-    if (drag) {
-      if (drag.active) {
-        if (tile) {
-          commandAgentToTile(drag.agentId, tile.col, tile.row);
-        }
-        selectNumericAgent(drag.agentId);
+  const updateHoverState = useCallback(
+    (event: ReactMouseEvent<HTMLCanvasElement>) => {
+      const officeState = officeStateRef.current;
+      const pos = screenToWorld(event.clientX, event.clientY);
+      if (!officeState || !pos) {
         return;
       }
 
       const hitId = officeState.getCharacterAt(pos.worldX, pos.worldY);
-      if (hitId === drag.agentId) {
-        if (officeState.selectedAgentId === hitId) {
-          selectNumericAgent(null);
-        } else {
-          officeState.dismissBubble(hitId);
-          selectNumericAgent(hitId);
+      const tile = screenToTile(event.clientX, event.clientY);
+      officeState.hoveredAgentId = hitId;
+      officeState.hoveredTile = tile;
+
+      const canvas = canvasRef.current;
+      if (!canvas) {
+        return;
+      }
+
+      let cursor = "default";
+      if (hitId !== null) {
+        cursor = "pointer";
+      } else if (officeState.selectedAgentId !== null && tile) {
+        const seatId = officeState.getSeatAtTile(tile.col, tile.row);
+        if (seatId) {
+          const seat = officeState.seats.get(seatId);
+          const selectedCharacter = officeState.characters.get(officeState.selectedAgentId);
+          if (seat && (!seat.assigned || selectedCharacter?.seatId === seatId)) {
+            cursor = "pointer";
+          }
+        }
+      }
+      canvas.style.cursor = cursor;
+    },
+    [screenToTile, screenToWorld],
+  );
+
+  const selectNumericAgent = useCallback(
+    (numericId: number | null) => {
+      const officeState = officeStateRef.current;
+      if (!officeState) {
+        return;
+      }
+
+      officeState.selectedAgentId = numericId;
+      officeState.cameraFollowId = numericId;
+
+      if (numericId == null) {
+        if (selectedZoneId) {
+          onSelectZone(selectedZoneId);
         }
         return;
       }
-    }
 
-    if (officeState.selectedAgentId !== null && tile) {
-      if (commandAgentToTile(officeState.selectedAgentId, tile.col, tile.row)) {
+      const agent = reverseAgentMapRef.current.get(numericId);
+      if (agent) {
+        onSelectAgent(agent.agentId, agent.zoneId);
+      }
+    },
+    [onSelectAgent, onSelectZone, selectedZoneId],
+  );
+
+  const emitAgentCommand = useCallback(
+    (numericId: number, kind: PixelOfficeCanvasCommand["kind"], targetLabel: string, summary: string) => {
+      const agent = reverseAgentMapRef.current.get(numericId);
+      if (!agent || !onAgentCommand) {
         return;
       }
-    }
+      onAgentCommand({
+        agentId: agent.agentId,
+        agentName: agent.name,
+        zoneId: agent.zoneId,
+        zoneLabel: agent.zoneLabel,
+        kind,
+        targetLabel,
+        summary,
+        issuedAt: new Date().toISOString(),
+      });
+    },
+    [onAgentCommand],
+  );
 
-    selectNumericAgent(null);
-  }, [commandAgentToTile, screenToTile, screenToWorld, selectNumericAgent]);
+  const commandAgentToTile = useCallback(
+    (numericId: number, col: number, row: number) => {
+      const officeState = officeStateRef.current;
+      if (!officeState) {
+        return false;
+      }
+
+      const agent = reverseAgentMapRef.current.get(numericId);
+      const agentName = agent?.name ?? "agent";
+      const zoneLabel = agent?.zoneLabel ?? "the current zone";
+
+      const seatId = officeState.getSeatAtTile(col, row);
+      if (seatId) {
+        const seat = officeState.seats.get(seatId);
+        const character = officeState.characters.get(numericId);
+        if (seat && character) {
+          if (character.seatId === seatId) {
+            officeState.sendToSeat(numericId);
+            emitAgentCommand(
+              numericId,
+              "return_to_seat",
+              `seat ${seat.seatCol},${seat.seatRow}`,
+              `Directed ${agentName} back to seat ${seat.seatCol},${seat.seatRow} in ${zoneLabel}.`,
+            );
+            return true;
+          }
+          if (!seat.assigned) {
+            officeState.reassignSeat(numericId, seatId);
+            emitAgentCommand(
+              numericId,
+              "reassign_seat",
+              `seat ${seat.seatCol},${seat.seatRow}`,
+              `Reassigned ${agentName} to seat ${seat.seatCol},${seat.seatRow} in ${zoneLabel}.`,
+            );
+            return true;
+          }
+        }
+      }
+
+      const moved = officeState.walkToTile(numericId, col, row);
+      if (moved) {
+        emitAgentCommand(
+          numericId,
+          "move",
+          `tile ${col},${row}`,
+          `Directed ${agentName} to tile ${col},${row} in ${zoneLabel}.`,
+        );
+      }
+      return moved;
+    },
+    [emitAgentCommand],
+  );
+
+  const handleMouseDown = useCallback(
+    (event: ReactMouseEvent<HTMLCanvasElement>) => {
+      if (event.button !== 0) {
+        return;
+      }
+
+      const officeState = officeStateRef.current;
+      const pos = screenToWorld(event.clientX, event.clientY);
+      if (!officeState || !pos) {
+        return;
+      }
+
+      const hitId = officeState.getCharacterAt(pos.worldX, pos.worldY);
+      if (hitId !== null) {
+        pointerDragRef.current = {
+          agentId: hitId,
+          startX: event.clientX,
+          startY: event.clientY,
+          active: false,
+        };
+      } else {
+        pointerDragRef.current = null;
+      }
+    },
+    [screenToWorld],
+  );
+
+  const handleMouseMove = useCallback(
+    (event: ReactMouseEvent<HTMLCanvasElement>) => {
+      updateHoverState(event);
+
+      const drag = pointerDragRef.current;
+      if (!drag) {
+        return;
+      }
+
+      const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+      if (distance >= DRAG_THRESHOLD_PX) {
+        drag.active = true;
+        pointerDragRef.current = drag;
+      }
+    },
+    [updateHoverState],
+  );
+
+  const handleMouseUp = useCallback(
+    (event: ReactMouseEvent<HTMLCanvasElement>) => {
+      const officeState = officeStateRef.current;
+      const drag = pointerDragRef.current;
+      pointerDragRef.current = null;
+      if (!officeState) {
+        return;
+      }
+
+      const pos = screenToWorld(event.clientX, event.clientY);
+      const tile = screenToTile(event.clientX, event.clientY);
+      if (!pos) {
+        return;
+      }
+
+      if (drag) {
+        if (drag.active) {
+          if (tile) {
+            commandAgentToTile(drag.agentId, tile.col, tile.row);
+          }
+          selectNumericAgent(drag.agentId);
+          return;
+        }
+
+        const hitId = officeState.getCharacterAt(pos.worldX, pos.worldY);
+        if (hitId === drag.agentId) {
+          if (officeState.selectedAgentId === hitId) {
+            selectNumericAgent(null);
+          } else {
+            officeState.dismissBubble(hitId);
+            selectNumericAgent(hitId);
+          }
+          return;
+        }
+      }
+
+      if (officeState.selectedAgentId !== null && tile) {
+        if (commandAgentToTile(officeState.selectedAgentId, tile.col, tile.row)) {
+          return;
+        }
+      }
+
+      selectNumericAgent(null);
+    },
+    [commandAgentToTile, screenToTile, screenToWorld, selectNumericAgent],
+  );
 
   const handleMouseLeave = useCallback(() => {
     pointerDragRef.current = null;
@@ -600,26 +622,29 @@ export function PixelOfficeCanvas({
     }
   }, []);
 
-  const handleContextMenu = useCallback((event: ReactMouseEvent<HTMLCanvasElement>) => {
-    event.preventDefault();
-    const officeState = officeStateRef.current;
-    if (!officeState || officeState.selectedAgentId == null) {
-      return;
-    }
-    const tile = screenToTile(event.clientX, event.clientY);
-    if (tile) {
-      const moved = officeState.walkToTile(officeState.selectedAgentId, tile.col, tile.row);
-      if (moved) {
-        const agent = reverseAgentMapRef.current.get(officeState.selectedAgentId);
-        emitAgentCommand(
-          officeState.selectedAgentId,
-          "move",
-          `tile ${tile.col},${tile.row}`,
-          `Directed ${agent?.name ?? "agent"} to tile ${tile.col},${tile.row} in ${agent?.zoneLabel ?? "the current zone"}.`,
-        );
+  const handleContextMenu = useCallback(
+    (event: ReactMouseEvent<HTMLCanvasElement>) => {
+      event.preventDefault();
+      const officeState = officeStateRef.current;
+      if (!officeState || officeState.selectedAgentId == null) {
+        return;
       }
-    }
-  }, [emitAgentCommand, screenToTile]);
+      const tile = screenToTile(event.clientX, event.clientY);
+      if (tile) {
+        const moved = officeState.walkToTile(officeState.selectedAgentId, tile.col, tile.row);
+        if (moved) {
+          const agent = reverseAgentMapRef.current.get(officeState.selectedAgentId);
+          emitAgentCommand(
+            officeState.selectedAgentId,
+            "move",
+            `tile ${tile.col},${tile.row}`,
+            `Directed ${agent?.name ?? "agent"} to tile ${tile.col},${tile.row} in ${agent?.zoneLabel ?? "the current zone"}.`,
+          );
+        }
+      }
+    },
+    [emitAgentCommand, screenToTile],
+  );
 
   return (
     <div className="pixel-office">
@@ -645,13 +670,14 @@ export function PixelOfficeCanvas({
         </div>
         <div className="pixel-office-readout">
           <div>
-          <p className="pixel-office-kicker">Citadel One</p>
-          <strong>{selectedAgent ? selectedAgent.name : selectedZone?.label ?? "Office Floor"}</strong>
-        </div>
+            <p className="pixel-office-kicker">Citadel One</p>
+            <strong>{selectedAgent ? selectedAgent.name : (selectedZone?.label ?? "Office Floor")}</strong>
+          </div>
           <p>
             {selectedAgent
-              ? selectedAgentReadoutOverride ?? selectedAgent.latestAction
-              : selectedZone?.leadAction ?? `Zoom ${zoom}x${recentEvents?.length ? ` • ${recentEvents.length} live events` : ""}`}
+              ? (selectedAgentReadoutOverride ?? selectedAgent.latestAction)
+              : (selectedZone?.leadAction ??
+                `Zoom ${zoom}x${recentEvents?.length ? ` • ${recentEvents.length} live events` : ""}`)}
           </p>
         </div>
         <div className="pixel-office-deck-strip" aria-label="Deck map">
@@ -659,7 +685,9 @@ export function PixelOfficeCanvas({
             <button
               key={zone.zoneId}
               type="button"
-              className={["gc-button", (`pixel-office-deck-chip${zone.zoneId === selectedZoneId ? " is-selected" : ""}`)].filter(Boolean).join(" ")}
+              className={["gc-button", `pixel-office-deck-chip${zone.zoneId === selectedZoneId ? " is-selected" : ""}`]
+                .filter(Boolean)
+                .join(" ")}
               onClick={() => onSelectZone(zone.zoneId)}
             >
               {zone.label}
@@ -671,7 +699,7 @@ export function PixelOfficeCanvas({
   );
 }
 
-function extractStringHint(payload: unknown, keys: string[]): string | null {
+export function extractStringHint(payload: unknown, keys: string[]): string | null {
   if (!payload || typeof payload !== "object") {
     return null;
   }

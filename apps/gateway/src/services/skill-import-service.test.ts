@@ -33,16 +33,19 @@ describe("SkillImportService lookup", () => {
   });
 
   it("resolves SkillsMP listing URLs into review-only lookup results", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
-      const url = String(input);
-      if (url.includes("skillsmp.com/skills/")) {
-        return new Response(
-          '<html><body><a href="https://github.com/example/notebooklm-skill">repo</a></body></html>',
-          { status: 200 },
-        );
-      }
-      throw new Error(`Unexpected fetch ${url}`);
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes("skillsmp.com/skills/")) {
+          return new Response(
+            '<html><body><a href="https://github.com/example/notebooklm-skill">repo</a></body></html>',
+            { status: 200 },
+          );
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      }),
+    );
 
     const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
     const result = await service.lookupSources("https://skillsmp.com/skills/example-notebooklm-skill", 5);
@@ -145,9 +148,12 @@ describe("SkillImportService lookup", () => {
   });
 
   it("ranks Chrome Devtools MCP first for a 'chrome' query", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => {
-      return new Response("<html><body></body></html>", { status: 200 });
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response("<html><body></body></html>", { status: 200 });
+      }),
+    );
 
     const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
     const result = await service.listSources("chrome", 5);
@@ -159,11 +165,13 @@ describe("SkillImportService lookup", () => {
   });
 
   it("finds capability-style queries using deterministic ranking", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
-      const url = String(input);
-      if (url === "https://skillsmp.com/") {
-        return new Response(
-          `
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url === "https://skillsmp.com/") {
+          return new Response(
+            `
             <html>
               <body>
                 <a href="/skills/playwright-interactive">Playwright</a>
@@ -171,23 +179,24 @@ describe("SkillImportService lookup", () => {
               </body>
             </html>
           `,
-          { status: 200 },
-        );
-      }
-      if (url === "https://agentskill.sh/") {
-        return new Response(
-          `
+            { status: 200 },
+          );
+        }
+        if (url === "https://agentskill.sh/") {
+          return new Response(
+            `
             <html>
               <body>
                 <a href="/skills/doc-writer">Docs</a>
               </body>
             </html>
           `,
-          { status: 200 },
-        );
-      }
-      throw new Error(`Unexpected fetch ${url}`);
-    }));
+            { status: 200 },
+          );
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      }),
+    );
 
     const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
     const result = await service.listSources("browser automation", 5);
@@ -195,6 +204,51 @@ describe("SkillImportService lookup", () => {
     expect(result.items[0]).toMatchObject({
       skillFamily: "browser_automation",
       matchReason: "Capability match",
+    });
+  });
+
+  it("returns an empty lookup for blank queries and marks installed fallback sources", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("marketplace offline");
+      }),
+    );
+    const extraSkillDir = path.join(rootDir, "skills", "extra", "chrome-devtools-mcp");
+    fs.mkdirSync(extraSkillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(extraSkillDir, "source.json"),
+      JSON.stringify({
+        candidate: {
+          canonicalKey: "clawhub.ai/aiwithabidi/chrome-devtools-mcp",
+          sourceRef: "https://clawhub.ai/aiwithabidi/chrome-devtools-mcp",
+          sourceUrl: "https://clawhub.ai/aiwithabidi/chrome-devtools-mcp",
+          repositoryUrl: "https://github.com/aiwithabidi/chrome-devtools-mcp",
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(rootDir, "skills", "extra", "ignored-file.txt"), "not a skill directory");
+    fs.mkdirSync(path.join(rootDir, "skills", "extra", "broken-manifest"), { recursive: true });
+    fs.writeFileSync(path.join(rootDir, "skills", "extra", "broken-manifest", "source.json"), "{bad json");
+
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+
+    await expect(service.lookupSources("   ", 5)).resolves.toMatchObject({
+      query: "",
+      items: [],
+    });
+    const listed = await service.listSources(undefined, 500);
+    const chrome = listed.items.find((item) => item.name === "Chrome Devtools Mcp");
+
+    expect(listed.providers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ provider: "agentskill", status: "degraded" }),
+        expect.objectContaining({ provider: "skillsmp", status: "degraded" }),
+      ]),
+    );
+    expect(chrome).toMatchObject({
+      alreadyInstalled: true,
+      sourceUrl: "https://clawhub.ai/aiwithabidi/chrome-devtools-mcp",
     });
   });
 });
@@ -234,15 +288,18 @@ describe("SkillImportService validation", () => {
   it("warns when the security scan skips oversized files", async () => {
     const skillDir = path.join(rootDir, "oversized-skill");
     fs.mkdirSync(skillDir, { recursive: true });
-    fs.writeFileSync(path.join(skillDir, "SKILL.md"), [
-      "---",
-      "name: Oversized Audit Skill",
-      "description: Valid fixture for security scan coverage.",
-      "---",
-      "",
-      "Use this skill to validate import scanning.",
-      "",
-    ].join("\n"));
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: Oversized Audit Skill",
+        "description: Valid fixture for security scan coverage.",
+        "---",
+        "",
+        "Use this skill to validate import scanning.",
+        "",
+      ].join("\n"),
+    );
     fs.writeFileSync(path.join(skillDir, "LICENSE"), "MIT\n");
     fs.writeFileSync(path.join(skillDir, "bundle.js"), "a".repeat(230_000));
 
@@ -255,24 +312,29 @@ describe("SkillImportService validation", () => {
 
     expect(result.valid).toBe(true);
     expect(result.riskLevel).toBe("medium");
-    expect(result.warnings).toEqual(expect.arrayContaining([
-      expect.stringContaining("Security scan skipped large files"),
-      expect.stringContaining("bundle.js"),
-    ]));
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Security scan skipped large files"),
+        expect.stringContaining("bundle.js"),
+      ]),
+    );
   });
 
   it("hard-blocks imports that overlap GoatCitadel native capability families", async () => {
     const skillDir = path.join(rootDir, "self-improving-agent-skill");
     fs.mkdirSync(skillDir, { recursive: true });
-    fs.writeFileSync(path.join(skillDir, "SKILL.md"), [
-      "---",
-      "name: Self Improving Agent",
-      "description: Keeps improving itself through continuous memory and rule updates.",
-      "---",
-      "",
-      "Use this skill to improve future execution quality.",
-      "",
-    ].join("\n"));
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: Self Improving Agent",
+        "description: Keeps improving itself through continuous memory and rule updates.",
+        "---",
+        "",
+        "Use this skill to improve future execution quality.",
+        "",
+      ].join("\n"),
+    );
     fs.writeFileSync(path.join(skillDir, "LICENSE"), "MIT\n");
 
     const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
@@ -283,9 +345,9 @@ describe("SkillImportService validation", () => {
     });
 
     expect(result.valid).toBe(false);
-    expect(result.errors).toEqual(expect.arrayContaining([
-      expect.stringContaining("native bounded memory-maintenance path for this family"),
-    ]));
+    expect(result.errors).toEqual(
+      expect.arrayContaining([expect.stringContaining("native bounded memory-maintenance path for this family")]),
+    );
     expect(result.nativeOverlaps).toEqual([
       expect.objectContaining({
         overlapFamily: "safe_self_improvement",
@@ -296,24 +358,30 @@ describe("SkillImportService validation", () => {
   });
 
   it("validates hosted skill bundles fetched from a raw skill.md URL", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
-      const url = String(input);
-      if (url === "https://www.moltbook.com/skill.md") {
-        return new Response([
-          "---",
-          "name: Moltbook",
-          "description: Hosted skill bundle for joining and using Moltbook safely.",
-          "---",
-          "",
-          "Follow the hosted instructions and store credentials locally.",
-          "",
-        ].join("\n"), { status: 200 });
-      }
-      if (url === "https://www.moltbook.com/skill.json") {
-        return new Response('{"name":"moltbook"}', { status: 200 });
-      }
-      return new Response("", { status: 404 });
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url === "https://www.moltbook.com/skill.md") {
+          return new Response(
+            [
+              "---",
+              "name: Moltbook",
+              "description: Hosted skill bundle for joining and using Moltbook safely.",
+              "---",
+              "",
+              "Follow the hosted instructions and store credentials locally.",
+              "",
+            ].join("\n"),
+            { status: 200 },
+          );
+        }
+        if (url === "https://www.moltbook.com/skill.json") {
+          return new Response('{"name":"moltbook"}', { status: 200 });
+        }
+        return new Response("", { status: 404 });
+      }),
+    );
 
     const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
     const result = await service.validateImport({
@@ -332,50 +400,58 @@ describe("SkillImportService validation", () => {
   it("rejects curated overlap with GoatCitadel's bundled safe self-improvement skill", async () => {
     const skillDir = path.join(rootDir, "self-improving");
     fs.mkdirSync(skillDir, { recursive: true });
-    fs.writeFileSync(path.join(skillDir, "SKILL.md"), [
-      "---",
-      "name: Self Improving",
-      "description: Iteratively review and improve the runtime by replaying prior work.",
-      "---",
-      "",
-      "Review the repo and replay improvement cycles.",
-      "",
-    ].join("\n"));
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: Self Improving",
+        "description: Iteratively review and improve the runtime by replaying prior work.",
+        "---",
+        "",
+        "Review the repo and replay improvement cycles.",
+        "",
+      ].join("\n"),
+    );
     fs.writeFileSync(path.join(skillDir, "LICENSE"), "MIT\n");
 
     const service = new SkillImportService("F:/code/personal-ai", createSystemSettingsRepo() as never);
-    await expect(service.validateImport({
-      sourceRef: skillDir,
-      sourceType: "local_path",
-      sourceProvider: "local",
-    })).resolves.toMatchObject({
+    await expect(
+      service.validateImport({
+        sourceRef: skillDir,
+        sourceType: "local_path",
+        sourceProvider: "local",
+      }),
+    ).resolves.toMatchObject({
       valid: false,
-      errors: expect.arrayContaining([
-        expect.stringContaining("native safe self-improvement bundle"),
-      ]),
+      errors: expect.arrayContaining([expect.stringContaining("native safe self-improvement bundle")]),
     });
   });
 
   it("marks Harness Engineer as reference-only with a native harness alternative", async () => {
     const skillDir = path.join(rootDir, "harness-engineer");
     fs.mkdirSync(skillDir, { recursive: true });
-    fs.writeFileSync(path.join(skillDir, "SKILL.md"), [
-      "---",
-      "name: Harness Engineer",
-      "description: Audit and improve the harness around skills, routing, memory, permissions, and trust.",
-      "---",
-      "",
-      "Review the local harness and propose improvements.",
-      "",
-    ].join("\n"));
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: Harness Engineer",
+        "description: Audit and improve the harness around skills, routing, memory, permissions, and trust.",
+        "---",
+        "",
+        "Review the local harness and propose improvements.",
+        "",
+      ].join("\n"),
+    );
     fs.writeFileSync(path.join(skillDir, "LICENSE"), "MIT\n");
 
     const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
-    await expect(service.validateImport({
-      sourceRef: skillDir,
-      sourceType: "local_path",
-      sourceProvider: "local",
-    })).resolves.toMatchObject({
+    await expect(
+      service.validateImport({
+        sourceRef: skillDir,
+        sourceType: "local_path",
+        sourceProvider: "local",
+      }),
+    ).resolves.toMatchObject({
       valid: false,
       reviewDisposition: "reference_only",
       reviewMessage: expect.stringContaining("reference pattern only"),
@@ -391,57 +467,66 @@ describe("SkillImportService validation", () => {
   it("rejects Capability Evolver-style autonomous self-modification imports", async () => {
     const skillDir = path.join(rootDir, "capability-evolver");
     fs.mkdirSync(skillDir, { recursive: true });
-    fs.writeFileSync(path.join(skillDir, "SKILL.md"), [
-      "---",
-      "name: Capability Evolver",
-      "description: Analyze runtime history and evolve the agent by autonomously updating memory and code.",
-      "---",
-      "",
-      "Run an autonomous evolution loop over prior traces.",
-      "",
-    ].join("\n"));
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: Capability Evolver",
+        "description: Analyze runtime history and evolve the agent by autonomously updating memory and code.",
+        "---",
+        "",
+        "Run an autonomous evolution loop over prior traces.",
+        "",
+      ].join("\n"),
+    );
     fs.writeFileSync(path.join(skillDir, "LICENSE"), "MIT\n");
 
     const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
-    await expect(service.validateImport({
-      sourceRef: skillDir,
-      sourceType: "local_path",
-      sourceProvider: "local",
-    })).resolves.toMatchObject({
+    await expect(
+      service.validateImport({
+        sourceRef: skillDir,
+        sourceType: "local_path",
+        sourceProvider: "local",
+      }),
+    ).resolves.toMatchObject({
       valid: false,
       reviewDisposition: "reject",
       reviewMessage: expect.stringContaining("autonomous self-modification"),
-      errors: expect.arrayContaining([
-        expect.stringContaining("trust posture"),
-      ]),
+      errors: expect.arrayContaining([expect.stringContaining("trust posture")]),
     });
   });
 
   it("blocks overlapping Cloudflare-family installs into skills/extra", async () => {
     const firstSkillDir = path.join(rootDir, "cloudflare-api");
     fs.mkdirSync(firstSkillDir, { recursive: true });
-    fs.writeFileSync(path.join(firstSkillDir, "SKILL.md"), [
-      "---",
-      "name: Cloudflare API",
-      "description: Manage Cloudflare zones and DNS records through a focused skill.",
-      "---",
-      "",
-      "Use Cloudflare APIs to inspect and update DNS records.",
-      "",
-    ].join("\n"));
+    fs.writeFileSync(
+      path.join(firstSkillDir, "SKILL.md"),
+      [
+        "---",
+        "name: Cloudflare API",
+        "description: Manage Cloudflare zones and DNS records through a focused skill.",
+        "---",
+        "",
+        "Use Cloudflare APIs to inspect and update DNS records.",
+        "",
+      ].join("\n"),
+    );
     fs.writeFileSync(path.join(firstSkillDir, "LICENSE"), "MIT\n");
 
     const secondSkillDir = path.join(rootDir, "cloudflare-manager");
     fs.mkdirSync(secondSkillDir, { recursive: true });
-    fs.writeFileSync(path.join(secondSkillDir, "SKILL.md"), [
-      "---",
-      "name: Cloudflare Manager",
-      "description: Alternate Cloudflare management workflow for DNS and zone changes.",
-      "---",
-      "",
-      "Manage Cloudflare resources and DNS state.",
-      "",
-    ].join("\n"));
+    fs.writeFileSync(
+      path.join(secondSkillDir, "SKILL.md"),
+      [
+        "---",
+        "name: Cloudflare Manager",
+        "description: Alternate Cloudflare management workflow for DNS and zone changes.",
+        "---",
+        "",
+        "Manage Cloudflare resources and DNS state.",
+        "",
+      ].join("\n"),
+    );
     fs.writeFileSync(path.join(secondSkillDir, "LICENSE"), "MIT\n");
 
     const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
@@ -458,24 +543,29 @@ describe("SkillImportService validation", () => {
     });
 
     expect(validation.valid).toBe(false);
-    expect(validation.errors).toEqual(expect.arrayContaining([
-      expect.stringContaining('Duplicate skill family "cloudflare_dns"'),
-      expect.stringContaining("skills/extra/cloudflare-api"),
-    ]));
+    expect(validation.errors).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Duplicate skill family "cloudflare_dns"'),
+        expect.stringContaining("skills/extra/cloudflare-api"),
+      ]),
+    );
   });
 
   it("writes enriched source metadata for repo-managed installs", async () => {
     const skillDir = path.join(rootDir, "cloudflare-api");
     fs.mkdirSync(skillDir, { recursive: true });
-    fs.writeFileSync(path.join(skillDir, "SKILL.md"), [
-      "---",
-      "name: Cloudflare API",
-      "description: Manage Cloudflare zones and DNS records through a focused skill.",
-      "---",
-      "",
-      "Use Cloudflare APIs to inspect and update DNS records.",
-      "",
-    ].join("\n"));
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: Cloudflare API",
+        "description: Manage Cloudflare zones and DNS records through a focused skill.",
+        "---",
+        "",
+        "Use Cloudflare APIs to inspect and update DNS records.",
+        "",
+      ].join("\n"),
+    );
     fs.writeFileSync(path.join(skillDir, "LICENSE"), "MIT\n");
 
     const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
@@ -493,5 +583,52 @@ describe("SkillImportService validation", () => {
     expect(typeof manifest.lastReviewedAt).toBe("string");
     expect(typeof manifest.lastCheckedAt).toBe("string");
     expect(manifest).toHaveProperty("resolvedUpstream");
+  });
+
+  it("requires explicit confirmation before installing high-risk local skills", async () => {
+    const skillDir = path.join(rootDir, "dangerous-skill");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: Dangerous Skill",
+        "description: Valid fixture that deliberately trips script risk detection.",
+        "---",
+        "",
+        "Use this skill to validate import risk handling.",
+        "",
+      ].join("\n"),
+    );
+    fs.writeFileSync(path.join(skillDir, "LICENSE"), "MIT\n");
+    fs.writeFileSync(path.join(skillDir, "install.sh"), "rm -rf /tmp/goatcitadel-risk-fixture\n");
+
+    const settings = createSystemSettingsRepo();
+    const service = new SkillImportService(rootDir, settings as never);
+
+    await expect(
+      service.installImport({
+        sourceRef: skillDir,
+        sourceType: "local_path",
+        sourceProvider: "local",
+      }),
+    ).rejects.toThrow(/High-risk skill import requires explicit confirmation/);
+
+    expect(service.listHistory(5)).toEqual([
+      expect.objectContaining({
+        action: "install",
+        outcome: "failed",
+        details: expect.objectContaining({
+          error: "High-risk skill import requires explicit confirmation.",
+        }),
+      }),
+      expect.objectContaining({
+        action: "install",
+        outcome: "rejected",
+        riskLevel: "high",
+        details: { error: "high_risk_confirmation_required" },
+      }),
+    ]);
+    expect(fs.existsSync(path.join(rootDir, "skills", "extra", "dangerous-skill"))).toBe(false);
   });
 });

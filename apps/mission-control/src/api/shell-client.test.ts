@@ -3,7 +3,9 @@ import {
   clearGatewayAuthState,
   createGatewayDeviceAccessRequest,
   fetchWorkspaces,
+  pollGatewayDeviceAccessRequestStatus,
   resolveApproval,
+  resolveApprovalWithRemoteToken,
   setGatewayAuthStorageMode,
 } from "./shell-client";
 
@@ -74,16 +76,18 @@ describe("shell-client request parity", () => {
   });
 
   it("adds browser mutation intent on write requests", async () => {
-    const fetchMock = vi.fn(async () => jsonResponse({
-      data: {
-        requestId: "req-1",
-        verificationUri: "https://example.test/verify",
-        userCode: "ABC-123",
-        requestSecret: "secret",
-        expiresAt: "2026-03-22T12:15:00.000Z",
-        pollIntervalSeconds: 5,
-      },
-    }));
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        data: {
+          requestId: "req-1",
+          verificationUri: "https://example.test/verify",
+          userCode: "ABC-123",
+          requestSecret: "secret",
+          expiresAt: "2026-03-22T12:15:00.000Z",
+          pollIntervalSeconds: 5,
+        },
+      }),
+    );
     Object.defineProperty(globalThis, "fetch", {
       configurable: true,
       writable: true,
@@ -104,12 +108,14 @@ describe("shell-client request parity", () => {
   });
 
   it("does not add browser mutation intent on safe reads", async () => {
-    const fetchMock = vi.fn(async () => jsonResponse({
-      data: {
-        items: [],
-        view: "active",
-      },
-    }));
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        data: {
+          items: [],
+          view: "active",
+        },
+      }),
+    );
     Object.defineProperty(globalThis, "fetch", {
       configurable: true,
       writable: true,
@@ -126,14 +132,17 @@ describe("shell-client request parity", () => {
   });
 
   it("retries transient safe read failures once", async () => {
-    const fetchMock = vi.fn()
+    const fetchMock = vi
+      .fn()
       .mockResolvedValueOnce(jsonResponse({ error: "temporarily unavailable" }, { status: 503 }))
-      .mockResolvedValueOnce(jsonResponse({
-        data: {
-          items: [],
-          view: "active",
-        },
-      }));
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: {
+            items: [],
+            view: "active",
+          },
+        }),
+      );
     Object.defineProperty(globalThis, "fetch", {
       configurable: true,
       writable: true,
@@ -148,7 +157,8 @@ describe("shell-client request parity", () => {
   });
 
   it("does not retry unsafe writes automatically", async () => {
-    const fetchMock = vi.fn()
+    const fetchMock = vi
+      .fn()
       .mockResolvedValueOnce(jsonResponse({ error: "temporarily unavailable" }, { status: 503 }));
     Object.defineProperty(globalThis, "fetch", {
       configurable: true,
@@ -156,10 +166,61 @@ describe("shell-client request parity", () => {
       value: fetchMock,
     });
 
-    await expect(resolveApproval("approval-1", { decision: "approve", resolvedBy: "operator" }))
-      .rejects
-      .toThrow(/503/);
+    await expect(resolveApproval("approval-1", { decision: "approve", resolvedBy: "operator" })).rejects.toThrow(/503/);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("polls device access status with the request secret header", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        data: {
+          requestId: "request 1",
+          status: "pending",
+        },
+      }),
+    );
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      writable: true,
+      value: fetchMock,
+    });
+
+    await pollGatewayDeviceAccessRequestStatus("request 1", "secret-value");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(url).toContain("/api/v1/auth/device-requests/request%201/status");
+    expect(headers["x-goatcitadel-device-request-secret"]).toBe("secret-value");
+    expect(headers["x-goatcitadel-browser-intent"]).toBeUndefined();
+  });
+
+  it("resolves remote approvals with a single-use token as an unsafe mutation", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        data: {
+          approval: {
+            approvalId: "approval-remote",
+            status: "approved",
+          },
+        },
+      }),
+    );
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      writable: true,
+      value: fetchMock,
+    });
+
+    await resolveApprovalWithRemoteToken("remote-token", "approve");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(url).toContain("/api/v1/approvals/remote-resolve");
+    expect(init.method).toBe("POST");
+    expect(headers["x-goatcitadel-browser-intent"]).toBe("mutation");
+    expect(init.body).toBe(JSON.stringify({ token: "remote-token", decision: "approve" }));
   });
 });

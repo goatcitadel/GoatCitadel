@@ -13,6 +13,76 @@ describe("capabilities routes", () => {
     app = null;
   });
 
+  function createCapabilitiesService(overrides: Record<string, unknown> = {}) {
+    return {
+      listCapabilityCatalog: vi.fn((scope: "inspectable" | "callable") => [
+        {
+          capabilityId: `cap-${scope}`,
+          name: `Catalog ${scope}`,
+          kind: "tool",
+          category: "built_in",
+          callable: scope === "callable",
+        },
+      ]),
+      getCapabilityCatalogSnapshot: vi.fn((snapshotId: string) => ({
+        snapshotId,
+        items: [],
+      })),
+      getCapabilityCandidateDetail: vi.fn((candidateId: string) => ({
+        candidateId,
+        versions: [],
+        relatedProposals: [],
+        activationBlocked: false,
+        activationBlockers: [],
+      })),
+      getCapabilityProposalDetail: vi.fn((proposalId: string) => ({
+        proposalId,
+        status: "proposal",
+      })),
+      promoteCapabilityCandidate: vi.fn((candidateId: string, versionId?: string) => ({
+        action: "promote",
+        candidateId,
+        selectedVersionId: versionId,
+      })),
+      revokeCapabilityCandidate: vi.fn((candidateId: string, versionId?: string) => ({
+        action: "revoke",
+        candidateId,
+        selectedVersionId: versionId,
+      })),
+      rollbackCapabilityCandidate: vi.fn((candidateId: string, targetVersionId: string) => ({
+        action: "rollback",
+        candidateId,
+        targetVersionId,
+      })),
+      createCapabilityProposal: vi.fn((payload: Record<string, unknown>) => ({
+        proposalId: "proposal-created",
+        ...payload,
+      })),
+      listCapabilityProposals: vi.fn((limit: number) => [{ proposalId: `proposal-${limit}` }]),
+      listCodeModeRuns: vi.fn((limit: number) => [{ runId: `code-run-${limit}` }]),
+      getCodeModeRun: vi.fn((runId: string) => ({
+        runId,
+        status: "completed",
+      })),
+      createCodeModeRun: vi.fn(async (payload: Record<string, unknown>) => ({
+        runId: "code-run-created",
+        status: "completed",
+        ...payload,
+      })),
+      ...overrides,
+    };
+  }
+
+  async function registerCapabilitiesService(overrides: Record<string, unknown> = {}) {
+    const service = createCapabilitiesService(overrides);
+    app = Fastify();
+    app.decorate("services", {
+      capabilities: service,
+    } as never);
+    await app.register(capabilitiesRoutes);
+    return service;
+  }
+
   it("returns the requested catalog scope from the capability route service", async () => {
     const listCapabilityCatalog = vi.fn((scope: "inspectable" | "callable") => [
       {
@@ -276,5 +346,167 @@ describe("capabilities routes", () => {
       candidateId: "candidate-1",
       selectedVersionId: "version-2",
     });
+  });
+
+  it("uses default read scopes and forwards list limits", async () => {
+    const service = await registerCapabilitiesService();
+
+    const catalogResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/capabilities/catalog",
+    });
+    const proposalsResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/capabilities/proposals?limit=2",
+    });
+    const runsResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/code-mode/runs?limit=3",
+    });
+
+    expect(catalogResponse.statusCode).toBe(200);
+    expect(proposalsResponse.statusCode).toBe(200);
+    expect(runsResponse.statusCode).toBe(200);
+    expect(service.listCapabilityCatalog).toHaveBeenCalledWith("inspectable");
+    expect(service.listCapabilityProposals).toHaveBeenCalledWith(2);
+    expect(service.listCodeModeRuns).toHaveBeenCalledWith(3);
+    expect(catalogResponse.json()).toMatchObject({
+      scope: "inspectable",
+      items: [{ capabilityId: "cap-inspectable" }],
+    });
+    expect(proposalsResponse.json()).toEqual({ items: [{ proposalId: "proposal-2" }] });
+    expect(runsResponse.json()).toEqual({ items: [{ runId: "code-run-3" }] });
+  });
+
+  it("reads snapshot, proposal, and Code Mode details by id", async () => {
+    const service = await registerCapabilitiesService();
+
+    const snapshotResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/capabilities/snapshots/snapshot-1",
+    });
+    const proposalResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/capabilities/proposals/proposal-1",
+    });
+    const runResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/code-mode/runs/code-run-1",
+    });
+
+    expect(snapshotResponse.statusCode).toBe(200);
+    expect(proposalResponse.statusCode).toBe(200);
+    expect(runResponse.statusCode).toBe(200);
+    expect(service.getCapabilityCatalogSnapshot).toHaveBeenCalledWith("snapshot-1");
+    expect(service.getCapabilityProposalDetail).toHaveBeenCalledWith("proposal-1");
+    expect(service.getCodeModeRun).toHaveBeenCalledWith("code-run-1");
+    expect(snapshotResponse.json()).toEqual({ snapshotId: "snapshot-1", items: [] });
+    expect(proposalResponse.json()).toMatchObject({ proposalId: "proposal-1" });
+    expect(runResponse.json()).toMatchObject({ runId: "code-run-1" });
+  });
+
+  it("maps missing read details to 404 responses", async () => {
+    await registerCapabilitiesService({
+      getCapabilityCatalogSnapshot: vi.fn(() => {
+        throw new Error("snapshot missing");
+      }),
+      getCapabilityProposalDetail: vi.fn(() => {
+        throw new Error("proposal missing");
+      }),
+      getCodeModeRun: vi.fn(() => {
+        throw new Error("run missing");
+      }),
+    });
+
+    const snapshotResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/capabilities/snapshots/missing",
+    });
+    const proposalResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/capabilities/proposals/missing",
+    });
+    const runResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/code-mode/runs/missing",
+    });
+
+    expect(snapshotResponse.statusCode).toBe(404);
+    expect(proposalResponse.statusCode).toBe(404);
+    expect(runResponse.statusCode).toBe(404);
+    expect(snapshotResponse.json()).toMatchObject({ error: "snapshot missing" });
+    expect(proposalResponse.json()).toMatchObject({ error: "proposal missing" });
+    expect(runResponse.json()).toMatchObject({ error: "run missing" });
+  });
+
+  it("revokes and rolls back capability candidates with selected versions", async () => {
+    const service = await registerCapabilitiesService();
+
+    const revokeResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/capabilities/candidates/candidate-1/revoke",
+      payload: {
+        versionId: "version-2",
+      },
+    });
+    const rollbackResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/capabilities/candidates/candidate-1/rollback",
+      payload: {
+        targetVersionId: "version-1",
+      },
+    });
+
+    expect(revokeResponse.statusCode).toBe(200);
+    expect(rollbackResponse.statusCode).toBe(200);
+    expect(service.revokeCapabilityCandidate).toHaveBeenCalledWith("candidate-1", "version-2");
+    expect(service.rollbackCapabilityCandidate).toHaveBeenCalledWith("candidate-1", "version-1");
+    expect(revokeResponse.json()).toMatchObject({
+      action: "revoke",
+      selectedVersionId: "version-2",
+    });
+    expect(rollbackResponse.json()).toMatchObject({
+      action: "rollback",
+      targetVersionId: "version-1",
+    });
+  });
+
+  it("rejects malformed capability route inputs before calling services", async () => {
+    const service = await registerCapabilitiesService();
+
+    const catalogResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/capabilities/catalog?scope=runtime",
+    });
+    const proposalResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/capabilities/proposals",
+      payload: {
+        proposalKind: "skill",
+        title: "",
+        summary: "bad proposal",
+      },
+    });
+    const rollbackResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/capabilities/candidates/candidate-1/rollback",
+      payload: {},
+    });
+    const runResponse = await app!.inject({
+      method: "POST",
+      url: "/api/v1/code-mode/runs",
+      payload: {
+        language: "python",
+        source: "print('nope')",
+      },
+    });
+
+    expect(catalogResponse.statusCode).toBe(400);
+    expect(proposalResponse.statusCode).toBe(400);
+    expect(rollbackResponse.statusCode).toBe(400);
+    expect(runResponse.statusCode).toBe(400);
+    expect(service.createCapabilityProposal).not.toHaveBeenCalled();
+    expect(service.rollbackCapabilityCandidate).not.toHaveBeenCalled();
+    expect(service.createCodeModeRun).not.toHaveBeenCalled();
   });
 });

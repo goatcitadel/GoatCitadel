@@ -203,6 +203,13 @@ describe("LlmTransportFields", () => {
     expect(() =>
       requestConfigFromDraft({
         ...createEmptyLlmTransportDraft(),
+        proxyUrl: "http://proxy.internal",
+        proxyAuth: { ...createEmptyLlmTransportDraft().proxyAuth, mode: "header", headerName: "X-Proxy" },
+      }),
+    ).toThrow("Proxy header auth requires either a value");
+    expect(() =>
+      requestConfigFromDraft({
+        ...createEmptyLlmTransportDraft(),
         tls: { ...createEmptyLlmTransportDraft().tls, clientCertPath: "/client.crt" },
       }),
     ).toThrow("client cert and client key");
@@ -212,6 +219,72 @@ describe("LlmTransportFields", () => {
         tls: { ...createEmptyLlmTransportDraft().tls, insecureSkipVerify: true, caCertPath: "/ca.pem" },
       }),
     ).toThrow("cannot combine");
+  });
+
+  it("hydrates empty, bearer, query, and proxy-header request configs into drafts", () => {
+    expect(draftFromRequestConfig()).toEqual(createEmptyLlmTransportDraft());
+
+    expect(
+      draftFromRequestConfig({
+        auth: {
+          type: "bearer",
+          token: "token",
+          tokenEnv: "TOKEN_ENV",
+          headerName: "Authorization",
+        },
+      }),
+    ).toMatchObject({
+      auth: {
+        mode: "bearer",
+        token: "token",
+        tokenEnv: "TOKEN_ENV",
+        headerName: "Authorization",
+      },
+    });
+
+    expect(
+      draftFromRequestConfig({
+        auth: {
+          type: "query",
+          queryParam: "api_key",
+          value: "inline",
+          valueEnv: "API_KEY",
+          prefix: "Bearer ",
+        },
+      }),
+    ).toMatchObject({
+      auth: {
+        mode: "query",
+        queryParam: "api_key",
+        value: "inline",
+        valueEnv: "API_KEY",
+        prefix: "Bearer ",
+      },
+    });
+
+    expect(
+      draftFromRequestConfig({
+        proxy: {
+          url: "http://proxy.internal",
+          auth: {
+            type: "header",
+            headerName: "X-Proxy",
+            value: "proxy",
+            valueEnv: "PROXY_VALUE",
+            scheme: "Token",
+          },
+        },
+      }),
+    ).toMatchObject({
+      proxyUrl: "http://proxy.internal",
+      proxyAuth: {
+        mode: "header",
+        headerName: "X-Proxy",
+        value: "proxy",
+        valueEnv: "PROXY_VALUE",
+        scheme: "Token",
+      },
+    });
   });
 
   it("renders every conditional field group and patches nested draft state", () => {

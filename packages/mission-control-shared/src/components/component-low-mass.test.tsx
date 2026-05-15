@@ -7,9 +7,13 @@ import { ChatModeSwitch } from "./ChatModeSwitch";
 import { ClockBadge } from "./ClockBadge";
 import { HelpHint } from "./HelpHint";
 import { PageHeader } from "./PageHeader";
+import { ShellActionGroup } from "./ShellActionGroup";
+import { ShellDetailPanelProvider, useShellDetailPanel } from "./ShellDetailPanelContext";
 import { ShellStatusCenter } from "./ShellStatusCenter";
 import { TableSkeleton } from "./TableSkeleton";
+import { ConfigureHubLayout } from "./ConfigureHubLayout";
 import { ChatPlanningPill } from "./chat/ChatPlanningPill";
+import { IDLE_ACTION_STATE, isPending } from "../state/action-state";
 import type { ShellStatusSummary } from "./shell-status-model";
 
 function textOf(node: unknown): string {
@@ -51,6 +55,32 @@ function summary(overrides: Partial<ShellStatusSummary> = {}): ShellStatusSummar
     ],
     ...overrides,
   };
+}
+
+function ShellDetailHarness({
+  entries,
+  onSnapshot,
+}: {
+  entries: Array<{ id: string; title: string; priority?: number }>;
+  onSnapshot: (value: ReturnType<typeof useShellDetailPanel>) => void;
+}) {
+  const context = useShellDetailPanel();
+  const { registerEntry } = context;
+  React.useEffect(() => {
+    const cleanups = entries.map((entry) =>
+      registerEntry({
+        ...entry,
+        body: <span>{entry.title} body</span>,
+      }),
+    );
+    return () => {
+      for (const cleanup of cleanups) {
+        cleanup();
+      }
+    };
+  }, [entries, registerEntry]);
+  onSnapshot(context);
+  return <button onClick={context.openPanel}>{context.activeEntry?.title ?? "none"}</button>;
 }
 
 describe("small shared shell components", () => {
@@ -158,6 +188,115 @@ describe("small shared shell components", () => {
     expect(
       textOf(create(<ChatPlanningPill planningMode="advisory" effectiveToolAutonomy="manual" />).toJSON()),
     ).toContain("manual tools");
+  });
+
+  it("renders action groups, pending state helpers, and configure hub tab behavior", () => {
+    expect(isPending(IDLE_ACTION_STATE)).toBe(false);
+    expect(isPending({ state: "pending", startedAt: "2026-05-14T00:00:00.000Z" })).toBe(true);
+
+    const actionGroup = create(
+      <ShellActionGroup className="extra-actions">
+        <button type="button">Run check</button>
+      </ShellActionGroup>,
+    );
+    const actionGroupJson = JSON.stringify(actionGroup.toJSON());
+    expect(actionGroupJson).toContain("shell-action-group extra-actions");
+    expect(actionGroupJson).toContain("Run check");
+
+    const onTabChange = vi.fn();
+    const onActiveEntryChange = vi.fn();
+    const renderer = create(
+      <ShellDetailPanelProvider
+        isOpen={false}
+        onOpenPanel={vi.fn()}
+        onClosePanel={vi.fn()}
+        onActiveEntryChange={onActiveEntryChange}
+      >
+        <ConfigureHubLayout
+          title="Providers"
+          subtitle="Model routing"
+          className="providers-hub"
+          guideTitle="Provider guide"
+          guideBody="Configure provider truth."
+          summaries={[
+            { label: "Ready", value: "2", note: "healthy", tone: "success" },
+            { label: "Hidden", value: null },
+          ]}
+          summaryMode="posture"
+          showSummaryNotes
+          tabItems={[
+            { id: "overview", label: "Overview" },
+            { id: "secrets", label: "Secrets" },
+          ]}
+          activeTab="overview"
+          onTabChange={onTabChange}
+          tabAriaLabel="Provider sections"
+        >
+          Body
+        </ConfigureHubLayout>
+      </ShellDetailPanelProvider>,
+    );
+
+    const rendered = JSON.stringify(renderer.toJSON());
+    expect(rendered).toContain("providers-hub");
+    expect(rendered).toContain("healthy");
+    expect(rendered).not.toContain("Hidden");
+
+    act(() => {
+      renderer.root
+        .findAllByType("button")
+        .find((button) => button.children.join("") === "Secrets")!
+        .props.onClick();
+    });
+    expect(onTabChange).toHaveBeenCalledWith("secrets");
+    expect(onActiveEntryChange).toHaveBeenCalledWith(expect.objectContaining({ title: "Provider guide" }));
+  });
+
+  it("selects shell detail entries by priority, order, and unregister callbacks", () => {
+    const onOpen = vi.fn();
+    const onClose = vi.fn();
+    const onActiveEntryChange = vi.fn();
+    const snapshots: Array<ReturnType<typeof useShellDetailPanel>> = [];
+    const renderer = create(
+      <ShellDetailPanelProvider
+        isOpen={false}
+        onOpenPanel={onOpen}
+        onClosePanel={onClose}
+        onActiveEntryChange={onActiveEntryChange}
+      >
+        <ShellDetailHarness
+          entries={[
+            { id: "low", title: "Low", priority: 1 },
+            { id: "high-a", title: "High A", priority: 5 },
+            { id: "high-b", title: "High B", priority: 5 },
+          ]}
+          onSnapshot={(snapshot) => snapshots.push(snapshot)}
+        />
+      </ShellDetailPanelProvider>,
+    );
+
+    expect(textOf(renderer.toJSON())).toContain("High B");
+    act(() => {
+      renderer.root.findByType("button").props.onClick();
+    });
+    expect(onOpen).toHaveBeenCalled();
+    act(() => {
+      snapshots.at(-1)?.closePanel();
+    });
+    expect(onClose).toHaveBeenCalled();
+    expect(onActiveEntryChange).toHaveBeenCalledWith(expect.objectContaining({ id: "high-b" }));
+
+    renderer.update(
+      <ShellDetailPanelProvider
+        isOpen
+        onOpenPanel={onOpen}
+        onClosePanel={onClose}
+        onActiveEntryChange={onActiveEntryChange}
+      >
+        <ShellDetailHarness entries={[{ id: "low", title: "Low", priority: 1 }]} onSnapshot={() => undefined} />
+      </ShellDetailPanelProvider>,
+    );
+    expect(textOf(renderer.toJSON())).toContain("Low");
   });
 
   it("updates the clock badge through the browser timer APIs", () => {
