@@ -76,6 +76,7 @@ export function composeChatRouteDependencies(
     requireChatSession: (sessionId) => gateway.requireChatSession(sessionId),
     publishRealtime: (channel, topic, payload, options) => gateway.publishRealtime(channel, topic, payload, options),
   };
+  const chatMessageRouteRuntimeHost = gateway.chatMessageRouteRuntimeHost;
   const ChatThreadKnowledgeDependencies = createChatThreadKnowledgeDependenciesForGateway(gateway);
   const chatAttachments: GatewayRouteServiceDependencies["chatAttachments"] = {
     getChatAttachment: (attachmentId) => chatAttachmentService.getChatAttachment(chatAttachmentHost, attachmentId),
@@ -169,15 +170,21 @@ export function composeChatRouteDependencies(
     agentSendChatMessageStream: (sessionId, input) =>
       gateway.chatTurnRuntime.agentSendChatMessageStream(sessionId, input),
     answerChatUserInputPrompt: (sessionId, turnId, promptId, input) =>
-      chatMessageRouteRuntime.answerChatUserInputPrompt(gateway, sessionId, turnId, promptId, input),
+      chatMessageRouteRuntime.answerChatUserInputPrompt(
+        chatMessageRouteRuntimeHost,
+        sessionId,
+        turnId,
+        promptId,
+        input,
+      ),
     cancelChatTurn: (sessionId, turnId, cancelledBy) =>
       gateway.chatTurnRuntime.cancelChatTurn(sessionId, turnId, cancelledBy),
     editChatTurn: (sessionId, turnId, input) => gateway.chatTurnRuntime.editChatTurn(sessionId, turnId, input),
     editChatTurnStream: (sessionId, turnId, input) =>
       gateway.chatTurnRuntime.editChatTurnStream(sessionId, turnId, input),
-    getChatThread: (sessionId) => chatMessageRouteRuntime.getChatThread(gateway, sessionId),
+    getChatThread: (sessionId) => chatMessageRouteRuntime.getChatThread(chatMessageRouteRuntimeHost, sessionId),
     getTurnContextManifestForSession: (sessionId, turnId) =>
-      chatMessageRouteRuntime.getTurnContextManifestForSession(gateway, sessionId, turnId),
+      chatMessageRouteRuntime.getTurnContextManifestForSession(chatMessageRouteRuntimeHost, sessionId, turnId),
     listChatMessages: (sessionId, limit, cursor) => gateway.listChatMessages(sessionId, limit, cursor),
     resumeAgentChatTurnStream: (sessionId, turnId, sinceEventId) =>
       gateway.chatTurnRuntime.resumeAgentChatTurnStream(sessionId, turnId, sinceEventId),
@@ -186,7 +193,7 @@ export function composeChatRouteDependencies(
       gateway.chatTurnRuntime.retryChatTurnStream(sessionId, turnId, input),
     routePreflight: (sessionId, input) => gateway.chatTurnRuntime.routePreflight(sessionId, input),
     selectChatBranchTurn: (sessionId, turnId) =>
-      chatMessageRouteRuntime.selectChatBranchTurn(gateway, sessionId, turnId),
+      chatMessageRouteRuntime.selectChatBranchTurn(chatMessageRouteRuntimeHost, sessionId, turnId),
   };
 
   return {

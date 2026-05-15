@@ -5,10 +5,11 @@ import type { GatewayRuntimeConfig } from "../config.js";
 import type { GatewayRouteServiceDependencies } from "./gateway-route-services.js";
 import type { CommsHost } from "./comms-service.js";
 import type { IntegrationChannelPort as IntegrationChannelServicePort } from "./integration-channel-service.js";
-import type * as chatMessageRouteRuntime from "./chat-message-route-runtime.js";
 import type * as chatSessionService from "./chat-session-service.js";
 import type * as chatToolArtifactService from "./chat-tool-artifact-service.js";
+import type * as chatMessageRouteRuntime from "./chat-message-route-runtime.js";
 import type * as mcpServerAdminService from "./mcp-server-admin-service.js";
+import type * as onboardingStateService from "./onboarding-state-service.js";
 import type * as settingsAuthService from "./settings-auth-service.js";
 import type { GatewayDevDiagnosticsService } from "../dev-diagnostics/service.js";
 import type { AddonsService } from "./addons-service.js";
@@ -25,7 +26,6 @@ import type { CronAutomationService } from "./gateway/cron-automation-service.js
 import type { DatabaseCutoverService } from "./database-cutover-service.js";
 import type { DiscordRuntimeService } from "./discord-runtime-service.js";
 import type { DurableOperatorService } from "./durable-operator-service.js";
-import type { DurableRunService } from "./durable-run-service.js";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import type { GuidanceService } from "./guidance-service.js";
 import type { HooksService } from "./hooks-service.js";
@@ -61,13 +61,13 @@ export interface GatewayRouteCompositionPort {
   readonly capabilitySystemService: CapabilitySystemService;
   readonly chatProactiveService: ChatProactiveService;
   readonly chatProjectService: ChatProjectService;
+  readonly chatMessageRouteRuntimeHost: chatMessageRouteRuntime.ChatMessageRouteRuntimeHost;
   readonly chatTurnRuntime: ChatTurnRuntimeService;
   readonly config: GatewayRuntimeConfig;
   readonly cronAutomationService: CronAutomationService;
   readonly databaseCutoverService: DatabaseCutoverService;
   readonly devDiagnostics: GatewayDevDiagnosticsService;
   readonly discordRuntimeService: DiscordRuntimeService;
-  readonly durableRunService: DurableRunService;
   readonly durableOperatorService: DurableOperatorService;
   readonly evidenceEnvelopeService: EvidenceEnvelopeService;
   readonly guidanceService: GuidanceService;
@@ -80,8 +80,7 @@ export interface GatewayRouteCompositionPort {
   readonly meshService: MeshService;
   readonly npuSidecar: NpuSidecarService;
   readonly obsidianVaultService: ObsidianVaultService;
-  readonly onboardingMarkerPath: string;
-  onboardingMarker: { completedAt?: string; completedBy?: string };
+  readonly onboardingStateHost: onboardingStateService.OnboardingStateHost;
   readonly operatorSummaryCache: OperatorSummaryCache;
   readonly personalityCatalogService: PersonalityCatalogService;
   readonly policyEngine: ToolPolicyEngine;
@@ -119,7 +118,6 @@ export interface GatewayRouteCompositionPort {
   ensureChatSessionModelDefaults: chatSessionService.ChatSessionDependencies["ensureChatSessionModelDefaults"];
   ensureChatSessionRuntimeGrants: chatSessionService.ChatSessionDependencies["ensureChatSessionRuntimeGrants"];
   fetchWithDiagnosticsTimeout: IntegrationChannelServicePort["fetchWithDiagnosticsTimeout"];
-  getAuthRuntimeSettings: RouteDependencyMethod<"settings", "getAuthRuntimeSettings">;
   getBankrOptionalMigrationMessage: RouteDependencyMethod<"skills", "getBankrOptionalMigrationMessage">;
   getBankrSafetyPolicy: RouteDependencyMethod<"skills", "getBankrSafetyPolicy">;
   getChatSessionPrefs: RouteDependencyMethod<"chatSupport", "prefs">["getChatSessionPrefs"];
@@ -148,7 +146,6 @@ export interface GatewayRouteCompositionPort {
   listSkillImportHistory: RouteDependencyMethod<"skills", "listSkillImportHistory">;
   listSkillSources: RouteDependencyMethod<"skills", "listSkillSources">;
   listSkills: RouteDependencyMethod<"skills", "listSkills">;
-  loadChatTurnSessionState: chatMessageRouteRuntime.ChatMessageRouteRuntimeHost["loadChatTurnSessionState"];
   lookupSkillSources: RouteDependencyMethod<"skills", "lookupSkillSources">;
   normalizeWorkspaceId: chatSessionService.ChatSessionDependencies["normalizeWorkspaceId"];
   parseChatCommand: RouteDependencyMethod<"chatSupport", "commands">["parseChatCommand"];
@@ -190,7 +187,6 @@ export interface GatewayRouteCompositionPort {
   syncDiscordRuntime: IntegrationChannelServicePort["syncDiscordRuntime"];
   updateBankrSafetyPolicy: RouteDependencyMethod<"skills", "updateBankrSafetyPolicy">;
   updateChatSessionPrefs: RouteDependencyMethod<"chatSupport", "prefs">["updateChatSessionPrefs"];
-  updateSettings: RouteDependencyMethod<"settings", "updateSettings">;
   updateFeatureFlags: settingsAuthService.SettingsRuntimeDependencies["updateFeatureFlags"];
   updateSkillActivationPolicy: RouteDependencyMethod<"skills", "updateSkillActivationPolicy">;
   validateSkillImport: RouteDependencyMethod<"skills", "validateSkillImport">;
@@ -210,6 +206,7 @@ export type GatewayRouteCompositionPrivateDependencies = Pick<
   | "backupRetentionService"
   | "capabilityPackService"
   | "capabilitySystemService"
+  | "chatMessageRouteRuntimeHost"
   | "chatProjectService"
   | "chatTurnRuntime"
   | "databaseCutoverService"
@@ -220,6 +217,7 @@ export type GatewayRouteCompositionPrivateDependencies = Pick<
   | "improvementService"
   | "mediaVoiceService"
   | "obsidianVaultService"
+  | "onboardingStateHost"
   | "promptPackService"
   | "realtimeEventService"
   | "researchService"
@@ -244,6 +242,7 @@ export function createGatewayRouteCompositionPort(
     backupRetentionService: privateDependencies.backupRetentionService,
     capabilityPackService: privateDependencies.capabilityPackService,
     capabilitySystemService: privateDependencies.capabilitySystemService,
+    chatMessageRouteRuntimeHost: privateDependencies.chatMessageRouteRuntimeHost,
     chatProjectService: privateDependencies.chatProjectService,
     chatTurnRuntime: privateDependencies.chatTurnRuntime,
     databaseCutoverService: privateDependencies.databaseCutoverService,
@@ -254,6 +253,7 @@ export function createGatewayRouteCompositionPort(
     improvementService: privateDependencies.improvementService,
     mediaVoiceService: privateDependencies.mediaVoiceService,
     obsidianVaultService: privateDependencies.obsidianVaultService,
+    onboardingStateHost: privateDependencies.onboardingStateHost,
     promptPackService: privateDependencies.promptPackService,
     realtimeEventService: privateDependencies.realtimeEventService,
     researchService: privateDependencies.researchService,
@@ -267,20 +267,12 @@ export function createGatewayRouteCompositionPort(
     },
     cronAutomationService: gateway.cronAutomationService,
     discordRuntimeService: gateway.discordRuntimeService,
-    durableRunService: gateway.durableRunService,
     hooksService: gateway.hooksService,
     llamaCppRuntime: gateway.llamaCppRuntime,
     llmService: gateway.llmService,
     memoryLifecycleService: gateway.memoryLifecycleService,
     meshService: gateway.meshService,
     npuSidecar: gateway.npuSidecar,
-    onboardingMarkerPath: gateway.onboardingMarkerPath,
-    get onboardingMarker() {
-      return gateway.onboardingMarker;
-    },
-    set onboardingMarker(value) {
-      gateway.onboardingMarker = value;
-    },
     operatorSummaryCache: gateway.operatorSummaryCache,
     personalityCatalogService: gateway.personalityCatalogService,
     policyEngine: gateway.policyEngine,
@@ -306,7 +298,6 @@ export function createGatewayRouteCompositionPort(
     ensureChatSessionModelDefaults: gateway.ensureChatSessionModelDefaults.bind(gateway),
     ensureChatSessionRuntimeGrants: gateway.ensureChatSessionRuntimeGrants.bind(gateway),
     fetchWithDiagnosticsTimeout: gateway.fetchWithDiagnosticsTimeout.bind(gateway),
-    getAuthRuntimeSettings: gateway.getAuthRuntimeSettings.bind(gateway),
     getBankrOptionalMigrationMessage: gateway.getBankrOptionalMigrationMessage.bind(gateway),
     getBankrSafetyPolicy: gateway.getBankrSafetyPolicy.bind(gateway),
     getChatSessionPrefs: gateway.getChatSessionPrefs.bind(gateway),
@@ -335,7 +326,6 @@ export function createGatewayRouteCompositionPort(
     listSkillImportHistory: gateway.listSkillImportHistory.bind(gateway),
     listSkillSources: gateway.listSkillSources.bind(gateway),
     listSkills: gateway.listSkills.bind(gateway),
-    loadChatTurnSessionState: gateway.loadChatTurnSessionState.bind(gateway),
     lookupSkillSources: gateway.lookupSkillSources.bind(gateway),
     normalizeWorkspaceId: gateway.normalizeWorkspaceId.bind(gateway),
     parseChatCommand: gateway.parseChatCommand.bind(gateway),
@@ -377,7 +367,6 @@ export function createGatewayRouteCompositionPort(
     syncDiscordRuntime: gateway.syncDiscordRuntime.bind(gateway),
     updateBankrSafetyPolicy: gateway.updateBankrSafetyPolicy.bind(gateway),
     updateChatSessionPrefs: gateway.updateChatSessionPrefs.bind(gateway),
-    updateSettings: gateway.updateSettings.bind(gateway),
     updateFeatureFlags: gateway.updateFeatureFlags.bind(gateway),
     updateSkillActivationPolicy: gateway.updateSkillActivationPolicy.bind(gateway),
     validateSkillImport: gateway.validateSkillImport.bind(gateway),

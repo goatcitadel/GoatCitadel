@@ -48,6 +48,7 @@ export function composeRuntimeAdminRouteDependencies(
   const settingsRuntimeDeps = createSettingsRuntimeDependenciesForGateway(gateway);
   const settingsAuthDeps = createSettingsAuthRuntimeDependenciesForGateway(gateway);
   const workspaces = createWorkspacesRoutePortForGateway(gateway);
+  const onboardingStateHost = gateway.onboardingStateHost;
   const workflowRecipes = new WorkflowRecipeService({
     listSkills: () => gateway.listSkills(),
     listToolNames: () => {
@@ -167,10 +168,11 @@ export function composeRuntimeAdminRouteDependencies(
       publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
     }),
     onboarding: {
-      bootstrapOnboarding: (input) => onboardingStateService.bootstrapOnboarding(gateway, input),
-      getOnboardingStartupState: () => onboardingStateService.getOnboardingStartupState(gateway),
-      getOnboardingState: () => onboardingStateService.getOnboardingState(gateway),
-      markOnboardingComplete: (completedBy) => onboardingStateService.markOnboardingComplete(gateway, completedBy),
+      bootstrapOnboarding: (input) => onboardingStateService.bootstrapOnboarding(onboardingStateHost, input),
+      getOnboardingStartupState: () => onboardingStateService.getOnboardingStartupState(onboardingStateHost),
+      getOnboardingState: () => onboardingStateService.getOnboardingState(onboardingStateHost),
+      markOnboardingComplete: (completedBy) =>
+        onboardingStateService.markOnboardingComplete(onboardingStateHost, completedBy),
     },
     orchestration: {
       createOrchestrationPlan: (plan) => gateway.createOrchestrationPlan(plan),

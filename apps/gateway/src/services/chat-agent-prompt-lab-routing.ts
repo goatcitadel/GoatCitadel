@@ -227,3 +227,29 @@ export const PROMPT_LAB_LOCAL_SEARCH_QUERIES = {
 } as const satisfies Record<string, readonly string[]>;
 
 export type PromptLabLocalSearchQuerySeed = keyof typeof PROMPT_LAB_LOCAL_SEARCH_QUERIES;
+
+const CRON_REPORT_EVIDENCE_MATCHERS = {
+  cron: /(?:^|\/)(?:apps\/gateway\/src\/services\/gateway\/cron-automation-service|packages\/storage\/src\/cron-job-repo)\.ts$/i,
+  execution:
+    /(?:^|\/)(?:apps\/gateway\/src\/services\/gateway\/update-review|apps\/gateway\/src\/services\/cron-scheduler-service)\.ts$/i,
+  report:
+    /(?:^|\/)(?:apps\/gateway\/src\/routes\/prompt-packs|apps\/mission-control\/src\/api\/prompt-packs|apps\/gateway\/src\/routes\/costs|apps\/mission-control\/src\/api\/system)\.ts$/i,
+} as const;
+
+export function resolvePromptLabCronReportEvidencePaths(evidencePaths: readonly string[]): {
+  cronPath: string;
+  executionPath: string;
+  reportPath: string;
+} {
+  return {
+    cronPath:
+      evidencePaths.find((path) => CRON_REPORT_EVIDENCE_MATCHERS.cron.test(path)) ??
+      "apps/gateway/src/services/gateway/cron-automation-service.ts",
+    executionPath:
+      evidencePaths.find((path) => CRON_REPORT_EVIDENCE_MATCHERS.execution.test(path)) ??
+      "apps/gateway/src/services/gateway/update-review.ts",
+    reportPath:
+      evidencePaths.find((path) => CRON_REPORT_EVIDENCE_MATCHERS.report.test(path)) ??
+      "apps/gateway/src/routes/prompt-packs.ts",
+  };
+}

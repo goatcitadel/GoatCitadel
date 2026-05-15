@@ -381,6 +381,7 @@ import * as onboardingMarkerHelpers from "./onboarding-marker-helpers.js";
 import { GuidanceService } from "./guidance-service.js";
 import * as cronJobConfigHelpers from "./cron-job-config-helpers.js";
 import * as chatCommandService from "./chat-command-service.js";
+import type * as chatMessageRouteRuntime from "./chat-message-route-runtime.js";
 import * as chatSessionService from "./chat-session-service.js";
 import * as llmCompletionService from "./llm-completion-service.js";
 import * as durableExecutionService from "./durable-execution-service.js";
@@ -391,7 +392,7 @@ import * as chatTurnUserMessage from "./chat-turn-user-message.js";
 import { ChatDelegationService, type ChatDelegationProgressCallbacks } from "./chat-delegation-service.js";
 import * as chatTurnStreamService from "./chat-turn-stream-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
-import { createChatTurnRuntimeHost } from "./chat-turn-runtime-host-composition.js";
+import { createChatTurnRuntimeHost, type ChatTurnRuntimeHost } from "./chat-turn-runtime-host-composition.js";
 import { ChatTurnRuntimeService } from "./chat-turn-runtime-service.js";
 import { ToolInvocationCoordinatorService } from "./tool-invocation-coordinator-service.js";
 import { CapabilityPackService } from "./capability-pack-service.js";
@@ -1017,7 +1018,7 @@ export class GatewayService {
       enqueueApprovalRemoteTokenDelivery: (approval, connector, tokenRecord) =>
         this.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord),
     });
-    this.chatTurnRuntime = new ChatTurnRuntimeService(createChatTurnRuntimeHost(this));
+    this.chatTurnRuntime = new ChatTurnRuntimeService(this.buildChatTurnRuntimeHost());
     this.orchestrationPhaseExecutionService = new OrchestrationPhaseExecutionService({
       rootDir: this.config.rootDir,
       createChatSession: (input) => this.createChatSession(input),
@@ -1267,6 +1268,7 @@ export class GatewayService {
       backupRetentionService: this.backupRetentionService,
       capabilityPackService: this.capabilityPackService,
       capabilitySystemService: this.capabilitySystemService,
+      chatMessageRouteRuntimeHost: this.buildChatMessageRouteRuntimeHost(),
       chatProjectService: this.chatProjectService,
       chatTurnRuntime: this.chatTurnRuntime,
       databaseCutoverService: this.databaseCutoverService,
@@ -1277,6 +1279,7 @@ export class GatewayService {
       improvementService: this.improvementService,
       mediaVoiceService: this.mediaVoiceService,
       obsidianVaultService: this.obsidianVaultService,
+      onboardingStateHost: this.buildOnboardingStateHost(),
       promptPackService: this.promptPackService,
       realtimeEventService: this.realtimeEventService,
       researchService: this.researchService,
@@ -1284,6 +1287,128 @@ export class GatewayService {
       taskLifecycleService: this.taskLifecycleService,
       toolInvocationCoordinator: this.toolInvocationCoordinator,
     });
+  }
+
+  private buildChatMessageRouteRuntimeHost(): chatMessageRouteRuntime.ChatMessageRouteRuntimeHost {
+    return {
+      storage: this.storage,
+      durableRunService: this.durableRunService,
+      getSession: (sessionId) => this.getSession(sessionId),
+      loadChatTurnSessionState: (sessionId) => this.loadChatTurnSessionState(sessionId),
+      publishRealtime: (eventType, source, payload, options) =>
+        this.publishRealtime(eventType, source, payload, options),
+      recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+    };
+  }
+
+  private buildOnboardingStateHost(): onboardingStateService.OnboardingStateHost {
+    const host = {
+      config: this.config,
+      llmService: this.llmService,
+      onboardingMarkerPath: this.onboardingMarkerPath,
+      getAuthRuntimeSettings: () => this.getAuthRuntimeSettings(),
+      publishRealtime: (eventType, source, payload, options) =>
+        this.publishRealtime(eventType, source, payload, options),
+      updateSettings: (input) => this.updateSettings(input),
+    } as Omit<onboardingStateService.OnboardingStateHost, "onboardingMarker">;
+    Object.defineProperty(host, "onboardingMarker", {
+      configurable: false,
+      enumerable: true,
+      get: () => this.onboardingMarker,
+      set: (value: onboardingStateService.OnboardingStateHost["onboardingMarker"]) => {
+        this.onboardingMarker = value;
+      },
+    });
+    return host as onboardingStateService.OnboardingStateHost;
+  }
+
+  private buildChatTurnRuntimeHost(): ChatTurnRuntimeHost {
+    const host = {
+      storage: this.storage,
+      turnRuntime: this.turnRuntime,
+      backgroundTasks: this.backgroundTasks,
+      hooksService: this.hooksService,
+      llmService: this.llmService,
+      agentSendChatMessage: (sessionId, input) => this.chatTurnRuntime.agentSendChatMessage(sessionId, input),
+      beginActiveChatTurnExecution: (sessionId, turnId, operation) =>
+        this.beginActiveChatTurnExecution(sessionId, turnId, operation),
+      beginDurableChatRun: (prepared, input, threadEventType) =>
+        this.beginDurableChatRun(prepared, input, threadEventType),
+      buildChatOrchestrationSummary: (input) => this.buildChatOrchestrationSummary(input),
+      buildDefaultChatPersonalityOverlay: () => this.buildDefaultChatPersonalityOverlay(),
+      buildLlmMessagesFromBranchPath: (sessionId, pathTurnIds, currentUserMessage, options, state) =>
+        this.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
+      closeActiveChatTurnStream: (turnId) => this.closeActiveChatTurnStream(turnId),
+      collectCapabilityUpgradeSuggestions: (input) => this.collectCapabilityUpgradeSuggestions(input),
+      collectSpecialistCandidateSuggestions: (input) => this.collectSpecialistCandidateSuggestions(input),
+      commsSend: (input) => this.commsSend(input),
+      completeActiveChatTurnStream: (turnId) => this.completeActiveChatTurnStream(turnId),
+      createChatCompletion: (request) => this.createChatCompletion(request),
+      createChatSession: (input) => this.createChatSession(input),
+      createHydratedChatTurnTrace: (turnId, trace) => this.createHydratedChatTurnTrace(turnId, trace),
+      endActiveChatTurnExecution: (turnId, controller) => this.endActiveChatTurnExecution(turnId, controller),
+      ensureChatSessionModelDefaults: (sessionId, prefs) => this.ensureChatSessionModelDefaults(sessionId, prefs),
+      ensureChatSessionRuntimeGrants: (sessionId) => this.ensureChatSessionRuntimeGrants(sessionId),
+      ensureSessionInternalToolGrant: (sessionId, toolName, reason) =>
+        this.ensureSessionInternalToolGrant(sessionId, toolName, reason),
+      extractAndPersistLearnedMemory: (sessionId, content, source) =>
+        this.extractAndPersistLearnedMemory(sessionId, content, source),
+      finalizeDurableChatRun: (runId, prepared, trace) => this.finalizeDurableChatRun(runId, prepared, trace),
+      getActiveChatTurnExecution: (turnId) => this.getActiveChatTurnExecution(turnId),
+      getSession: (sessionId) => this.getSession(sessionId),
+      getSessionAutonomyPrefs: (sessionId) => this.getSessionAutonomyPrefs(sessionId),
+      inheritDelegatedSessionToolGrants: (sessionId, delegatedSessionId) =>
+        this.inheritDelegatedSessionToolGrants(sessionId, delegatedSessionId),
+      ingestEvent: (idempotencyKey, payload) => this.ingestEvent(idempotencyKey, payload),
+      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
+      isReplayScratchSession: (sessionId) => this.isReplayScratchSession(sessionId),
+      listLlmModels: (providerId) => this.listLlmModels(providerId),
+      loadChatTurnSessionState: (sessionId) => this.loadChatTurnSessionState(sessionId),
+      markChatTurnCancelled: (sessionId, turnId, cancelledBy) =>
+        this.markChatTurnCancelled(sessionId, turnId, cancelledBy),
+      maybeAutoTitleChatSession: (sessionId, content) => this.maybeAutoTitleChatSession(sessionId, content),
+      normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
+      patchSessionAutonomyPrefs: (sessionId, input) => this.patchSessionAutonomyPrefs(sessionId, input),
+      persistChatStreamChunk: (chunk, durableRunId) => {
+        if (!chunk.turnId) {
+          throw new Error("Persistable chat stream chunk is missing a turn id.");
+        }
+        this.persistChatStreamChunk(chunk as PersistableChatStreamChunk, durableRunId);
+      },
+      prepareAgentChatTurn: (sessionId, input, options) => this.prepareAgentChatTurn(sessionId, input, options),
+      publishRealtime: (channel, topic, payload, options) => this.publishRealtime(channel, topic, payload, options),
+      recordCapabilityGapFromTrace: (input) => this.recordCapabilityGapFromTrace(input),
+      recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+      registerActiveChatTurnStream: (sessionId, turnId, durableRunId) =>
+        this.registerActiveChatTurnStream(sessionId, turnId, durableRunId),
+      requireChatTurnContext: (sessionId, turnId) => this.requireChatTurnContext(sessionId, turnId),
+      requireExecutedToolResult: (toolName, result) => this.requireExecutedToolResult(toolName, result),
+      resolveFallbackTargets: (runtime, primaryProviderId, primaryModel) =>
+        this.resolveFallbackTargets(runtime, primaryProviderId, primaryModel),
+      resolvePreparedTurnOrchestration: (prepared) => this.resolvePreparedTurnOrchestration(prepared),
+      resolveRuntimeGuidance: (workspaceId) => this.resolveRuntimeGuidance(workspaceId),
+      resolveThreadKnowledgeContext: (sessionId, query) => this.resolveThreadKnowledgeContext(sessionId, query),
+      routeFromSession: (session) => this.routeFromSession(session),
+      scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
+      scheduleMemoryMaintenancePostTurnEvaluation: (sessionId, parentTurnId) =>
+        this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, parentTurnId),
+      streamPersistedChatTurnEvents: (sessionId, turnId, options) =>
+        this.streamPersistedChatTurnEvents(sessionId, turnId, options),
+      triggerChatSessionProactive: (sessionId, input) => this.triggerChatSessionProactive(sessionId, input),
+      updateActiveLeafOrThrow: (sessionId, previousActiveTurnId, nextActiveTurnId) =>
+        this.updateActiveLeafOrThrow(sessionId, previousActiveTurnId, nextActiveTurnId),
+      updateChatSessionPrefs: (sessionId, input) => this.updateChatSessionPrefs(sessionId, input),
+      withChatTurnWriteLease: (sessionId, operation, task) => this.withChatTurnWriteLease(sessionId, operation, task),
+      withChatTurnWriteLeaseStream: (sessionId, operation, factory) =>
+        this.withChatTurnWriteLeaseStream(sessionId, operation, factory),
+      withEphemeralStreamEnvelope: (stream, runId) => this.withEphemeralStreamEnvelope(stream, runId),
+    } as Omit<ChatTurnRuntimeHost, "config">;
+    Object.defineProperty(host, "config", {
+      configurable: false,
+      enumerable: true,
+      get: () => this.config,
+    });
+    return createChatTurnRuntimeHost(host as ChatTurnRuntimeHost);
   }
 
   private getRouteCompositionPort(): GatewayRouteCompositionPort {

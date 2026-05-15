@@ -97,6 +97,7 @@ const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES = [
   "backupRetentionService",
   "capabilityPackService",
   "capabilitySystemService",
+  "chatMessageRouteRuntimeHost",
   "chatProjectService",
   "chatTurnRuntime",
   "databaseCutoverService",
@@ -107,6 +108,7 @@ const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES = [
   "improvementService",
   "mediaVoiceService",
   "obsidianVaultService",
+  "onboardingStateHost",
   "promptPackService",
   "realtimeEventService",
   "researchService",
@@ -342,16 +344,14 @@ describe("gateway service host guard", () => {
     expect(portSource).not.toMatch(/\[\s*key\s*:\s*string\s*\]/);
     const portBlock = portSource.match(/export interface GatewayRouteCompositionPort\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
     const portMemberCount = portBlock.match(/^\s+(?:readonly\s+)?[A-Za-z_]\w+\??[:(]/gm)?.length ?? 0;
-    expect(portMemberCount).toBeLessThanOrEqual(151);
+    expect(portMemberCount).toBeLessThanOrEqual(145);
     const portFactory = portSource.slice(
       portSource.indexOf("export function createGatewayRouteCompositionPort"),
       portSource.indexOf("export type RouteDependencyDomain"),
     );
     expect(portFactory).not.toMatch(/config:\s*gateway\.config/);
     expect(portFactory).toMatch(/get config\(\)\s*\{\s*return gateway\.config;/);
-    expect(source).not.toMatch(/onboardingMarker:\s*gateway\.onboardingMarker/);
-    expect(source).toMatch(/get onboardingMarker\(\)\s*\{\s*return gateway\.onboardingMarker;/);
-    expect(source).toMatch(/set onboardingMarker\(value\)\s*\{\s*gateway\.onboardingMarker = value;/);
+    expect(source).not.toMatch(/\bonboardingMarker(?:Path)?\b/);
     expect(source).toMatch(/new IntegrationDiagnosticsService\(\{\s*get config\(\)/);
     expect(source).not.toMatch(
       /config:\s*\{\s*toolPolicy:\s*\{[\s\S]*?networkAllowlist:\s*gateway\.config\.toolPolicy\.sandbox\.networkAllowlist/,
@@ -394,6 +394,8 @@ describe("gateway service host guard", () => {
     expect(source).toContain('from "./integration-plugin-store.js"');
     const gatewayService = files.find(({ relativePath }) => relativePath === "gateway-service.ts")?.source ?? "";
     expect(gatewayService).not.toMatch(/\bclass\s+GatewayService\s+implements\s+GatewayRouteCompositionPort\b/);
+    expect(gatewayService).not.toMatch(/new\s+ChatTurnRuntimeService\(\s*createChatTurnRuntimeHost\(\s*this\s*\)\s*\)/);
+    expect(gatewayService).toMatch(/new\s+ChatTurnRuntimeService\(\s*this\.buildChatTurnRuntimeHost\(\)\s*\)/);
     const factoryConsumers = files
       .filter(
         ({ relativePath }) =>
