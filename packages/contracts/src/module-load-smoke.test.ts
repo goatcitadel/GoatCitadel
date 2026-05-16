@@ -17,4 +17,9 @@ describe("contracts module load smoke", () => {
     const trigger: HookTrigger = "transform_llm_output";
     expect(trigger).toBe("transform_llm_output");
   });
+
+  it("includes approval.request.before in HookTrigger", () => {
+    const trigger: HookTrigger = "approval.request.before";
+    expect(trigger).toBe("approval.request.before");
+  });
 });

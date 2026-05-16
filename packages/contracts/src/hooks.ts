@@ -21,6 +21,7 @@ export type HookTrigger =
   | "tool.call.after"
   | "tool.call.error"
   | "after_tool_call"
+  | "approval.request.before"
   | "approval.create.before"
   | "approval.resolve.after"
   | "orchestration.run.before"
@@ -176,6 +177,7 @@ export interface HookPatchByTrigger {
   "tool.call.after": never;
   "tool.call.error": never;
   after_tool_call: never;
+  "approval.request.before": never;
   "approval.create.before": ApprovalCreateHookPatch;
   "approval.resolve.after": never;
   "orchestration.run.before": OrchestrationRunHookPatch;

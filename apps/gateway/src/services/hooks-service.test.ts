@@ -452,6 +452,36 @@ describe("HooksService", () => {
     ).toThrow(/does not support mutate hooks/i);
   });
 
+  it("accepts approval.request.before for intercept mode hooks", () => {
+    const { service, workspaceId } = createHarness({
+      workspacePrefs: { hooks: { allowInterceptingHooks: true } },
+    });
+    const created = service.createWorkspaceHook({
+      workspaceId,
+      label: "approval-request-veto",
+      trigger: "approval.request.before",
+      mode: "intercept",
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/approval-request" } },
+    });
+    expect(created.trigger).toBe("approval.request.before");
+    expect(created.mode).toBe("intercept");
+  });
+
+  it("rejects approval.request.before for mutate mode hooks", () => {
+    const { service, workspaceId } = createHarness({
+      workspacePrefs: { hooks: { allowMutatingHooks: true, allowInterceptingHooks: true } },
+    });
+    expect(() =>
+      service.createWorkspaceHook({
+        workspaceId,
+        label: "approval-request-mutate",
+        trigger: "approval.request.before",
+        mode: "mutate",
+        action: { type: "webhook", webhook: { url: "https://hooks.example.test/approval-request-mutate" } },
+      }),
+    ).toThrow(/does not support mutate hooks/i);
+  });
+
   it("keeps runtime lifecycle triggers observe-only and phases them correctly", () => {
     const { service, workspaceId } = createHarness({
       workspacePrefs: {

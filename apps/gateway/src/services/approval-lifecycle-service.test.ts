@@ -71,6 +71,69 @@ describe("approval lifecycle service", () => {
     expect(approval.linkage?.durableRunId).toBe("approval-wait-1");
   });
 
+  it("blocks createApproval when approval.request.before vetoes before approval.create.before fires", async () => {
+    const host = createApprovalHarness();
+    const seenTriggers: string[] = [];
+    host.hooksService.runInlineHooks = vi.fn(async (input: { trigger: string }) => {
+      seenTriggers.push(input.trigger);
+      if (input.trigger === "approval.request.before") {
+        return {
+          blockedBy: { type: "block" as const, reason: "policy: blocked" },
+          runs: [],
+        };
+      }
+      return { runs: [] };
+    });
+
+    await expect(
+      createApproval(host, {
+        kind: "shell.exec",
+        riskLevel: "danger",
+        payload: {
+          sessionId: "session-1",
+        },
+        preview: {
+          label: "Run shell command",
+        },
+        linkage: {
+          sessionId: "session-1",
+          workspaceId: "workspace-1",
+        },
+      }),
+    ).rejects.toThrow(/policy: blocked/);
+
+    expect(seenTriggers).toEqual(["approval.request.before"]);
+    expect(host.storage.approvals.create).not.toHaveBeenCalled();
+  });
+
+  it("fires approval.request.before then approval.create.before in order on happy path", async () => {
+    const host = createApprovalHarness();
+    const seenTriggers: string[] = [];
+    host.hooksService.runInlineHooks = vi.fn(async (input: { trigger: string }) => {
+      seenTriggers.push(input.trigger);
+      return { runs: [] };
+    });
+
+    const approval = await createApproval(host, {
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: {
+        sessionId: "session-1",
+      },
+      preview: {
+        label: "Run shell command",
+      },
+      linkage: {
+        sessionId: "session-1",
+        workspaceId: "workspace-1",
+      },
+    });
+
+    expect(seenTriggers).toEqual(["approval.request.before", "approval.create.before"]);
+    expect(host.storage.approvals.create).toHaveBeenCalledTimes(1);
+    expect(approval.approvalId).toBe("approval-1");
+  });
+
   it("returns durable wake linkage from effect rows when resolving approvals", async () => {
     const host = createApprovalHarness({
       pendingAction: {
@@ -339,7 +402,9 @@ describe("approval lifecycle service", () => {
         resolveApprovalHookWorkspaceId: host.resolveApprovalHookWorkspaceId,
       },
     );
-    host.enqueueApprovalResolutionEffects = vi.fn((approval, input) => effectsService.enqueueResolutionEffects(approval, input));
+    host.enqueueApprovalResolutionEffects = vi.fn((approval, input) =>
+      effectsService.enqueueResolutionEffects(approval, input),
+    );
 
     const result = await resolveApproval(host, "approval-1", {
       decision: "approve",
@@ -405,7 +470,9 @@ describe("approval lifecycle service", () => {
         resolveApprovalHookWorkspaceId: host.resolveApprovalHookWorkspaceId,
       },
     );
-    host.enqueueApprovalResolutionEffects = vi.fn((approval, input) => effectsService.enqueueResolutionEffects(approval, input));
+    host.enqueueApprovalResolutionEffects = vi.fn((approval, input) =>
+      effectsService.enqueueResolutionEffects(approval, input),
+    );
 
     await expect(
       resolveApproval(host, "approval-1", {
@@ -602,57 +669,55 @@ describe("approval lifecycle service", () => {
       },
     })) as never;
     host.storage.approvalEffects = createInMemoryApprovalEffectsStore(effectRows) as never;
-    host.wakeDurableRun = vi.fn(
-      (runId: string, event: { eventKey: string; correlationId?: string }) => {
-        const current = runStates.get(runId);
-        if (!current) {
-          throw new Error(`Unknown durable run ${runId}`);
-        }
-        if (current.status === "waiting") {
-          const next = {
-            ...current,
-            status: "queued" as const,
-            version: current.version + 1,
-          };
-          runStates.set(runId, next);
-          return {
-            runId,
-            eventKey: event.eventKey,
-            correlationId: event.correlationId,
-            outcome: "woke" as const,
-            run: {
-              runId,
-              workflowKey: current.workflowKey,
-              status: next.status,
-              attemptCount: 0,
-              maxAttempts: 3,
-              version: next.version,
-              payload: {},
-              createdAt: "2026-04-11T00:00:00.000Z",
-              updatedAt: "2026-04-11T00:01:00.000Z",
-            },
-          };
-        }
+    host.wakeDurableRun = vi.fn((runId: string, event: { eventKey: string; correlationId?: string }) => {
+      const current = runStates.get(runId);
+      if (!current) {
+        throw new Error(`Unknown durable run ${runId}`);
+      }
+      if (current.status === "waiting") {
+        const next = {
+          ...current,
+          status: "queued" as const,
+          version: current.version + 1,
+        };
+        runStates.set(runId, next);
         return {
           runId,
           eventKey: event.eventKey,
           correlationId: event.correlationId,
-          outcome: "skipped_not_waiting" as const,
-          detail: `Durable run ${runId} is ${current.status}.`,
+          outcome: "woke" as const,
           run: {
             runId,
             workflowKey: current.workflowKey,
-            status: current.status,
+            status: next.status,
             attemptCount: 0,
             maxAttempts: 3,
-            version: current.version,
+            version: next.version,
             payload: {},
             createdAt: "2026-04-11T00:00:00.000Z",
             updatedAt: "2026-04-11T00:01:00.000Z",
           },
         };
-      },
-    );
+      }
+      return {
+        runId,
+        eventKey: event.eventKey,
+        correlationId: event.correlationId,
+        outcome: "skipped_not_waiting" as const,
+        detail: `Durable run ${runId} is ${current.status}.`,
+        run: {
+          runId,
+          workflowKey: current.workflowKey,
+          status: current.status,
+          attemptCount: 0,
+          maxAttempts: 3,
+          version: current.version,
+          payload: {},
+          createdAt: "2026-04-11T00:00:00.000Z",
+          updatedAt: "2026-04-11T00:01:00.000Z",
+        },
+      };
+    });
     host.resolveApproval = vi.fn((approvalId, input) => resolveApproval(host, approvalId, input));
 
     const effectsService = new ApprovalEffectsService(
@@ -671,7 +736,9 @@ describe("approval lifecycle service", () => {
         resolveApprovalHookWorkspaceId: host.resolveApprovalHookWorkspaceId,
       },
     );
-    host.enqueueApprovalResolutionEffects = vi.fn((approval, input) => effectsService.enqueueResolutionEffects(approval, input));
+    host.enqueueApprovalResolutionEffects = vi.fn((approval, input) =>
+      effectsService.enqueueResolutionEffects(approval, input),
+    );
 
     const resolution = await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
       allowScope: "once",
@@ -967,52 +1034,73 @@ function createInMemoryApprovalEffectsStore(effectRows: ApprovalEffectRecord[]) 
       }
       return { ...effect };
     }),
-    renewEffectLease: vi.fn((effectId: string, workerId: string, expectedVersion: number, now: string, leaseExpiresAt: string) => {
-      const effect = effectRows.find((candidate) => candidate.effectId === effectId);
-      if (!effect || effect.status !== "running" || effect.claimedBy !== workerId || effect.version !== expectedVersion) {
-        return undefined;
-      }
-      Object.assign(effect, {
-        leaseExpiresAt,
-        updatedAt: now,
-        version: effect.version + 1,
-      });
-      return { ...effect };
-    }),
-    completeEffect: vi.fn((effectId: string, workerId: string, expectedVersion: number, patch: { result?: Record<string, unknown> }) => {
-      const effect = effectRows.find((candidate) => candidate.effectId === effectId);
-      if (!effect || effect.status !== "running" || effect.claimedBy !== workerId || effect.version !== expectedVersion) {
-        return undefined;
-      }
-      Object.assign(effect, {
-        status: "completed",
-        result: patch.result ?? effect.result,
-        claimedBy: undefined,
-        claimedAt: undefined,
-        leaseExpiresAt: undefined,
-        completedAt: "2026-04-11T00:01:00.000Z",
-        updatedAt: "2026-04-11T00:01:00.000Z",
-        version: effect.version + 1,
-      });
-      return { ...effect };
-    }),
-    skipEffect: vi.fn((effectId: string, workerId: string, expectedVersion: number, patch: { result?: Record<string, unknown> }) => {
-      const effect = effectRows.find((candidate) => candidate.effectId === effectId);
-      if (!effect || effect.status !== "running" || effect.claimedBy !== workerId || effect.version !== expectedVersion) {
-        return undefined;
-      }
-      Object.assign(effect, {
-        status: "skipped",
-        result: patch.result ?? effect.result,
-        claimedBy: undefined,
-        claimedAt: undefined,
-        leaseExpiresAt: undefined,
-        completedAt: "2026-04-11T00:01:00.000Z",
-        updatedAt: "2026-04-11T00:01:00.000Z",
-        version: effect.version + 1,
-      });
-      return { ...effect };
-    }),
+    renewEffectLease: vi.fn(
+      (effectId: string, workerId: string, expectedVersion: number, now: string, leaseExpiresAt: string) => {
+        const effect = effectRows.find((candidate) => candidate.effectId === effectId);
+        if (
+          !effect ||
+          effect.status !== "running" ||
+          effect.claimedBy !== workerId ||
+          effect.version !== expectedVersion
+        ) {
+          return undefined;
+        }
+        Object.assign(effect, {
+          leaseExpiresAt,
+          updatedAt: now,
+          version: effect.version + 1,
+        });
+        return { ...effect };
+      },
+    ),
+    completeEffect: vi.fn(
+      (effectId: string, workerId: string, expectedVersion: number, patch: { result?: Record<string, unknown> }) => {
+        const effect = effectRows.find((candidate) => candidate.effectId === effectId);
+        if (
+          !effect ||
+          effect.status !== "running" ||
+          effect.claimedBy !== workerId ||
+          effect.version !== expectedVersion
+        ) {
+          return undefined;
+        }
+        Object.assign(effect, {
+          status: "completed",
+          result: patch.result ?? effect.result,
+          claimedBy: undefined,
+          claimedAt: undefined,
+          leaseExpiresAt: undefined,
+          completedAt: "2026-04-11T00:01:00.000Z",
+          updatedAt: "2026-04-11T00:01:00.000Z",
+          version: effect.version + 1,
+        });
+        return { ...effect };
+      },
+    ),
+    skipEffect: vi.fn(
+      (effectId: string, workerId: string, expectedVersion: number, patch: { result?: Record<string, unknown> }) => {
+        const effect = effectRows.find((candidate) => candidate.effectId === effectId);
+        if (
+          !effect ||
+          effect.status !== "running" ||
+          effect.claimedBy !== workerId ||
+          effect.version !== expectedVersion
+        ) {
+          return undefined;
+        }
+        Object.assign(effect, {
+          status: "skipped",
+          result: patch.result ?? effect.result,
+          claimedBy: undefined,
+          claimedAt: undefined,
+          leaseExpiresAt: undefined,
+          completedAt: "2026-04-11T00:01:00.000Z",
+          updatedAt: "2026-04-11T00:01:00.000Z",
+          version: effect.version + 1,
+        });
+        return { ...effect };
+      },
+    ),
     failEffect: vi.fn(
       (
         effectId: string,
@@ -1021,7 +1109,12 @@ function createInMemoryApprovalEffectsStore(effectRows: ApprovalEffectRecord[]) 
         patch: { result?: Record<string, unknown>; lastError: string },
       ) => {
         const effect = effectRows.find((candidate) => candidate.effectId === effectId);
-        if (!effect || effect.status !== "running" || effect.claimedBy !== workerId || effect.version !== expectedVersion) {
+        if (
+          !effect ||
+          effect.status !== "running" ||
+          effect.claimedBy !== workerId ||
+          effect.version !== expectedVersion
+        ) {
           return undefined;
         }
         Object.assign(effect, {
