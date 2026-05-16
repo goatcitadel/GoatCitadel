@@ -14,6 +14,7 @@ import { useApprovalQueue } from "@goatcitadel/mission-control-shared/hooks/useA
 import type { AppRoute } from "@next/app/route-model";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
+import { ShellExplanationList } from "./ShellExplanationList";
 import "../native-routes.css";
 
 export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApprovals, navigate }: NativeRoutePagesProps) {
@@ -407,11 +408,7 @@ function ApprovalInspectorCard(props: {
               </ul>
             ) : null}
             {evidence.commands.length > 0 ? (
-              <ul className="mc-next-approvals-compact-list">
-                {evidence.commands.map((line) => (
-                  <li key={`${approval.approvalId}-command-${line}`}>{line}</li>
-                ))}
-              </ul>
+              <ShellExplanationList commands={evidence.commands} explanations={approval.shellExplanations} />
             ) : null}
             {evidence.supporting.length > 0 ? (
               <ul className="mc-next-approvals-compact-list">
