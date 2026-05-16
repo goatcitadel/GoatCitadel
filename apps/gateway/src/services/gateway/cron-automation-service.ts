@@ -14,6 +14,35 @@ export const MEMORY_FLUSH_DAILY_JOB_ID = "memory-flush-daily";
 export const COST_REPORT_HOURLY_JOB_ID = "cost-report-hourly";
 export const UPDATE_REVIEW_DAILY_JOB_ID = "update-review-daily";
 
+interface CronReviewRow {
+  item_id: string;
+  job_id: string;
+  run_id: string;
+  severity: CronReviewItem["severity"];
+  status: CronReviewItem["status"];
+  summary_json: string;
+  diff_json: string | null;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+}
+
+interface CronRunSnapshot {
+  runId: string;
+  jobId: string;
+  status: "ok";
+  finishedAt?: string;
+  output?: string;
+}
+
+interface CronRunDiffRow {
+  diff_id: string;
+  run_id: string;
+  previous_run_id: string | null;
+  diff_json: string;
+  created_at: string;
+}
+
 const SYSTEM_CRON_JOB_IDS = new Set([
   IMPROVEMENT_WEEKLY_JOB_ID,
   PRIVATE_BETA_BACKUP_JOB_ID,
@@ -29,13 +58,22 @@ export interface CronAutomationServiceDeps {
   requireFeatureEnabled: (flag: "cronReviewQueueV1Enabled") => void;
   isFeatureEnabled: (flag: "cronReviewQueueV1Enabled") => boolean;
   runHandlers: {
-    task: (job: CronJobRecord) => Promise<{ taskId?: string } | void>;
+    task: (
+      job: CronJobRecord,
+      context?: { contextFrom?: string; contextOutput?: string },
+    ) => Promise<{ taskId?: string } | void>;
     improvement: () => Promise<void>;
     backup: () => Promise<void>;
     memoryFlush: () => Promise<void>;
     costReport: () => Promise<void>;
     updateReview: () => Promise<void>;
     watchdog: (job: CronJobRecord) => Promise<CronWatchdogRunResult>;
+    noAgent: (input: {
+      command: string;
+      args?: string[];
+      workdir?: string;
+      timeoutMs?: number;
+    }) => Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut: boolean }>;
   };
 }
 
@@ -64,6 +102,8 @@ export class CronAutomationService {
     enabled?: boolean;
     endAt?: string;
     actionConfig?: unknown;
+    workdir?: string;
+    contextFrom?: string;
   }): CronJobRecord {
     const jobId = normalizeCronJobId(input.jobId);
     if (this.deps.storage.cronJobs.get(jobId)) {
@@ -81,6 +121,8 @@ export class CronAutomationService {
       endAt: normalizeCronEndAt(input.endAt),
       lastRunAt: undefined,
       nextRunAt: undefined,
+      workdir: normalizeCronWorkdir(input.workdir),
+      contextFrom: normalizeCronContextFrom(input.contextFrom),
     };
     if (isScheduledCronAction(job.action)) {
       job.nextRunAt = computeNextCronRunAt(job.schedule, new Date(), job.endAt);
@@ -108,6 +150,8 @@ export class CronAutomationService {
       enabled?: boolean;
       endAt?: string | null;
       actionConfig?: unknown;
+      workdir?: string | null;
+      contextFrom?: string | null;
     },
   ): CronJobRecord {
     const current = this.getCronJob(jobId);
@@ -127,6 +171,8 @@ export class CronAutomationService {
       schedule: input.schedule !== undefined ? normalizeCronSchedule(input.schedule) : current.schedule,
       enabled: input.enabled ?? current.enabled,
       endAt: input.endAt !== undefined ? normalizeCronEndAt(input.endAt) : current.endAt,
+      workdir: input.workdir !== undefined ? normalizeCronWorkdir(input.workdir) : current.workdir,
+      contextFrom: input.contextFrom !== undefined ? normalizeCronContextFrom(input.contextFrom) : current.contextFrom,
     };
     if (isScheduledCronAction(updated.action)) {
       updated.nextRunAt = computeNextCronRunAt(updated.schedule, new Date(), updated.endAt);
@@ -167,7 +213,7 @@ export class CronAutomationService {
     };
   }
 
-  public async runCronJobNow(jobId: string): Promise<{ jobId: string; status: "ok" }> {
+  public async runCronJobNow(jobId: string): Promise<{ jobId: string; runId: string; status: "ok" }> {
     const normalizedJobId = normalizeCronJobId(jobId);
     const job = this.getCronJob(normalizedJobId);
     if (!job.enabled) {
@@ -176,15 +222,18 @@ export class CronAutomationService {
     if (job.endAt && Date.parse(job.endAt) < Date.now()) {
       throw new Error(`Cron job has ended: ${normalizedJobId}`);
     }
+    const runId = randomUUID();
     let runSummary: Record<string, unknown> = { result: "ok" };
     let watchdogReviewRecorded = false;
     if (job.action === "task") {
-      const taskResult = await this.deps.runHandlers.task(job);
+      const context = this.resolveCronJobContext(job);
+      const taskResult = await this.deps.runHandlers.task(job, context);
       const finishedAt = new Date().toISOString();
       const saved = this.deps.storage.cronJobs.upsert(
         {
           ...job,
           lastRunAt: finishedAt,
+          lastRunId: runId,
           nextRunAt: computeNextCronRunAt(job.schedule, new Date(finishedAt), job.endAt),
         },
         finishedAt,
@@ -195,12 +244,14 @@ export class CronAutomationService {
         action: job.action,
         taskId: taskResult?.taskId,
         nextRunAt: saved.nextRunAt,
+        contextFrom: context?.contextFrom,
       };
       this.deps.publishRealtime("cron_job_run", "cron", {
         type: "scheduled_task_created",
         jobId: saved.jobId,
         taskId: taskResult?.taskId,
         name: saved.name,
+        contextFrom: context?.contextFrom,
       });
     } else if (job.action === "watchdog") {
       const watchdogResult = await this.deps.runHandlers.watchdog(job);
@@ -209,6 +260,7 @@ export class CronAutomationService {
         {
           ...job,
           lastRunAt: finishedAt,
+          lastRunId: runId,
           nextRunAt: computeNextCronRunAt(job.schedule, new Date(finishedAt), job.endAt),
         },
         finishedAt,
@@ -263,6 +315,47 @@ export class CronAutomationService {
       await this.deps.runHandlers.costReport();
     } else if (job.action === "update_review") {
       await this.deps.runHandlers.updateReview();
+    } else if (job.action === "no_agent") {
+      const noAgentConfig = job.actionConfig?.noAgent;
+      if (!noAgentConfig?.command) {
+        throw new Error(`no_agent cron job missing command: ${normalizedJobId}`);
+      }
+      const runResult = await this.deps.runHandlers.noAgent({
+        command: noAgentConfig.command,
+        args: noAgentConfig.args,
+        workdir: job.workdir,
+        timeoutMs: noAgentConfig.timeoutMs,
+      });
+      const finishedAt = new Date().toISOString();
+      const stdoutTrimmed = runResult.stdout.replace(/\r?\n$/, "");
+      const hasOutput = stdoutTrimmed.length > 0;
+      const saved = this.deps.storage.cronJobs.upsert(
+        {
+          ...job,
+          lastRunAt: finishedAt,
+          lastRunOutput: hasOutput ? stdoutTrimmed : undefined,
+          lastRunId: runId,
+          nextRunAt: computeNextCronRunAt(job.schedule, new Date(finishedAt), job.endAt),
+        },
+        finishedAt,
+      );
+      this.deps.persistCronJobsConfig();
+      runSummary = {
+        ...runResult,
+        action: job.action,
+        runId,
+        hasOutput,
+        nextRunAt: saved.nextRunAt,
+      };
+      if (hasOutput) {
+        this.deps.publishRealtime("cron_job_run", "cron", {
+          type: "cron_no_agent_output",
+          jobId: saved.jobId,
+          runId,
+          output: stdoutTrimmed,
+          deliveryChannel: noAgentConfig.deliveryChannel,
+        });
+      }
     } else {
       throw new Error(`Cron job has no runnable handler: ${normalizedJobId}`);
     }
@@ -280,14 +373,12 @@ export class CronAutomationService {
           trigger: "manual_run",
           ...runSummary,
         },
-        diff: {
-          type: "manual_run",
-          changed: false,
-        },
+        diff: { type: "manual_run", changed: false },
       });
     }
     return {
       jobId: normalizedJobId,
+      runId,
       status: "ok",
     };
   }
@@ -310,6 +401,24 @@ export class CronAutomationService {
     }
   }
 
+  public findCronRunById(runId: string): CronRunSnapshot | undefined {
+    const normalized = runId.trim();
+    if (!normalized) {
+      return undefined;
+    }
+    const match = this.deps.storage.cronJobs.list().find((job) => job.lastRunId === normalized);
+    if (!match) {
+      return undefined;
+    }
+    return {
+      runId: normalized,
+      jobId: match.jobId,
+      status: "ok",
+      finishedAt: match.lastRunAt,
+      output: match.lastRunOutput,
+    };
+  }
+
   public listCronReviewQueue(limit = 200): CronReviewItem[] {
     this.deps.requireFeatureEnabled("cronReviewQueueV1Enabled");
     const safeLimit = Math.max(1, Math.min(1_000, Math.floor(limit)));
@@ -322,18 +431,7 @@ export class CronAutomationService {
       LIMIT ?
     `,
       )
-      .all(safeLimit) as Array<{
-      item_id: string;
-      job_id: string;
-      run_id: string;
-      severity: CronReviewItem["severity"];
-      status: CronReviewItem["status"];
-      summary_json: string;
-      diff_json: string | null;
-      created_at: string;
-      updated_at: string;
-      resolved_at: string | null;
-    }>;
+      .all(safeLimit) as CronReviewRow[];
     return rows.map((row) => mapCronReviewItemRow(row));
   }
 
@@ -347,40 +445,14 @@ export class CronAutomationService {
       WHERE item_id = ?
     `,
       )
-      .get(itemId) as
-      | {
-          item_id: string;
-          job_id: string;
-          run_id: string;
-          severity: CronReviewItem["severity"];
-          status: CronReviewItem["status"];
-          summary_json: string;
-          diff_json: string | null;
-          created_at: string;
-          updated_at: string;
-          resolved_at: string | null;
-        }
-      | undefined;
+      .get(itemId) as CronReviewRow | undefined;
     if (!existing) {
       throw new Error(`Cron review item not found: ${itemId}`);
     }
 
     const retriedRunId = randomUUID();
     const now = new Date().toISOString();
-    let updated:
-      | {
-          item_id: string;
-          job_id: string;
-          run_id: string;
-          severity: CronReviewItem["severity"];
-          status: CronReviewItem["status"];
-          summary_json: string;
-          diff_json: string | null;
-          created_at: string;
-          updated_at: string;
-          resolved_at: string | null;
-        }
-      | undefined;
+    let updated: CronReviewRow | undefined;
     this.deps.storage.db.exec("BEGIN IMMEDIATE");
     try {
       this.deps.storage.db
@@ -410,10 +482,7 @@ export class CronAutomationService {
           diffId: randomUUID(),
           runId: retriedRunId,
           previousRunId: existing.run_id,
-          diffJson: JSON.stringify({
-            retried: true,
-            previousRunId: existing.run_id,
-          }),
+          diffJson: JSON.stringify({ retried: true, previousRunId: existing.run_id }),
           createdAt: now,
         });
       updated = this.deps.storage.db
@@ -424,20 +493,7 @@ export class CronAutomationService {
         WHERE item_id = ?
       `,
         )
-        .get(itemId) as
-        | {
-            item_id: string;
-            job_id: string;
-            run_id: string;
-            severity: CronReviewItem["severity"];
-            status: CronReviewItem["status"];
-            summary_json: string;
-            diff_json: string | null;
-            created_at: string;
-            updated_at: string;
-            resolved_at: string | null;
-          }
-        | undefined;
+        .get(itemId) as CronReviewRow | undefined;
       this.deps.storage.db.exec("COMMIT");
     } catch (error) {
       this.deps.storage.db.exec("ROLLBACK");
@@ -468,15 +524,7 @@ export class CronAutomationService {
       LIMIT 1
     `,
       )
-      .get(runId) as
-      | {
-          diff_id: string;
-          run_id: string;
-          previous_run_id: string | null;
-          diff_json: string;
-          created_at: string;
-        }
-      | undefined;
+      .get(runId) as CronRunDiffRow | undefined;
     if (!row) {
       throw new Error(`Cron run diff not found for run ${runId}`);
     }
@@ -486,6 +534,17 @@ export class CronAutomationService {
       previousRunId: row.previous_run_id ?? undefined,
       diff: parseJsonRecord(row.diff_json),
       createdAt: row.created_at,
+    };
+  }
+
+  private resolveCronJobContext(job: CronJobRecord): { contextFrom?: string; contextOutput?: string } | undefined {
+    if (!job.contextFrom) {
+      return undefined;
+    }
+    const upstream = this.deps.storage.cronJobs.get(job.contextFrom);
+    return {
+      contextFrom: job.contextFrom,
+      contextOutput: upstream?.lastRunOutput,
     };
   }
 
@@ -522,18 +581,7 @@ export class CronAutomationService {
   }
 }
 
-function mapCronReviewItemRow(row: {
-  item_id: string;
-  job_id: string;
-  run_id: string;
-  severity: CronReviewItem["severity"];
-  status: CronReviewItem["status"];
-  summary_json: string;
-  diff_json: string | null;
-  created_at: string;
-  updated_at: string;
-  resolved_at: string | null;
-}): CronReviewItem {
+function mapCronReviewItemRow(row: CronReviewRow): CronReviewItem {
   return {
     itemId: row.item_id,
     jobId: row.job_id,
@@ -587,23 +635,63 @@ function normalizeCronJobActionConfig(
   value: unknown,
   action: CronJobRecord["action"],
 ): CronJobRecord["actionConfig"] | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value) || action !== "watchdog") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
   const rawValue = value as Record<string, unknown>;
-  const rawWatchdog =
-    rawValue.watchdog && typeof rawValue.watchdog === "object" && !Array.isArray(rawValue.watchdog)
-      ? (rawValue.watchdog as Record<string, unknown>)
-      : {};
-  const checkId = normalizeWatchdogCheckId(rawWatchdog.checkId);
-  const severityThreshold = rawWatchdog.severityThreshold === "error" ? "error" : "warning";
-  return {
-    watchdog: {
-      checkId,
-      severityThreshold,
-      notifyHomeChannel: rawWatchdog.notifyHomeChannel === true,
-    },
-  };
+  if (action === "watchdog") {
+    const rawWatchdog =
+      rawValue.watchdog && typeof rawValue.watchdog === "object" && !Array.isArray(rawValue.watchdog)
+        ? (rawValue.watchdog as Record<string, unknown>)
+        : {};
+    const checkId = normalizeWatchdogCheckId(rawWatchdog.checkId);
+    const severityThreshold = rawWatchdog.severityThreshold === "error" ? "error" : "warning";
+    return {
+      watchdog: {
+        checkId,
+        severityThreshold,
+        notifyHomeChannel: rawWatchdog.notifyHomeChannel === true,
+      },
+    };
+  }
+  if (action === "no_agent") {
+    const rawNoAgent =
+      rawValue.noAgent && typeof rawValue.noAgent === "object" && !Array.isArray(rawValue.noAgent)
+        ? (rawValue.noAgent as Record<string, unknown>)
+        : undefined;
+    if (!rawNoAgent || typeof rawNoAgent.command !== "string" || !rawNoAgent.command.trim()) {
+      throw new Error("no_agent cron job requires actionConfig.noAgent.command.");
+    }
+    const args = Array.isArray(rawNoAgent.args)
+      ? rawNoAgent.args.filter((token): token is string => typeof token === "string")
+      : undefined;
+    const timeoutMs =
+      typeof rawNoAgent.timeoutMs === "number" && Number.isFinite(rawNoAgent.timeoutMs) && rawNoAgent.timeoutMs > 0
+        ? Math.floor(rawNoAgent.timeoutMs)
+        : undefined;
+    const rawChannel =
+      rawNoAgent.deliveryChannel &&
+      typeof rawNoAgent.deliveryChannel === "object" &&
+      !Array.isArray(rawNoAgent.deliveryChannel)
+        ? (rawNoAgent.deliveryChannel as Record<string, unknown>)
+        : undefined;
+    const deliveryChannel =
+      rawChannel && typeof rawChannel.channelKey === "string"
+        ? {
+            channelKey: rawChannel.channelKey,
+            target: typeof rawChannel.target === "string" ? rawChannel.target : undefined,
+          }
+        : undefined;
+    return {
+      noAgent: {
+        command: rawNoAgent.command.trim(),
+        ...(args ? { args } : {}),
+        ...(timeoutMs ? { timeoutMs } : {}),
+        ...(deliveryChannel ? { deliveryChannel } : {}),
+      },
+    };
+  }
+  return undefined;
 }
 
 function normalizeWatchdogCheckId(value: unknown): CronWatchdogCheckId {
@@ -619,7 +707,7 @@ function normalizeWatchdogCheckId(value: unknown): CronWatchdogCheckId {
 }
 
 function isScheduledCronAction(action: CronJobRecord["action"]): boolean {
-  return action === "task" || action === "watchdog";
+  return action === "task" || action === "watchdog" || action === "no_agent";
 }
 
 function shouldRecordWatchdogReview(job: CronJobRecord, result: CronWatchdogRunResult): boolean {
@@ -864,6 +952,32 @@ function getZonedDateParts(
     minute: Number.parseInt(part("minute"), 10),
     weekday: weekdayLabelToNumber(part("weekday")),
   };
+}
+
+export function normalizeCronWorkdir(value: string | undefined | null): string | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.length > 1024) {
+    throw new Error("Cron workdir must be 1024 characters or less.");
+  }
+  return trimmed;
+}
+
+export function normalizeCronContextFrom(value: string | undefined | null): string | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  // Validate via existing id rules.
+  return normalizeCronJobId(trimmed);
 }
 
 function weekdayLabelToNumber(label: string): number {

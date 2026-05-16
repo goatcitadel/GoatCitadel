@@ -4,6 +4,7 @@ import type { CronAutomationService } from "./gateway/cron-automation-service.js
 export const cronRouteMethods = [
   "createCronJob",
   "deleteCronJob",
+  "findCronRunById",
   "getCronJob",
   "getCronRunDiff",
   "listCronJobs",
@@ -22,6 +23,7 @@ export function createCronRoutePort(cronAutomationService: CronAutomationService
   return {
     createCronJob: (input) => cronAutomationService.createCronJob(input),
     deleteCronJob: (jobId) => cronAutomationService.deleteCronJob(jobId),
+    findCronRunById: (runId) => cronAutomationService.findCronRunById(runId),
     getCronJob: (jobId) => cronAutomationService.getCronJob(jobId),
     getCronRunDiff: (runId) => cronAutomationService.getCronRunDiff(runId),
     listCronJobs: () => cronAutomationService.listCronJobs(),

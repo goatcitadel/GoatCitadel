@@ -14,6 +14,10 @@ export interface ChatSessionMetaRecord {
   folderId?: string;
   folderName?: string;
   tags: string[];
+  pinnedGoal?: string;
+  goalTurnBudget?: number;
+  goalTurnsUsed: number;
+  goalSetAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -30,6 +34,10 @@ interface ChatSessionMetaRow {
   folder_id: string | null;
   folder_name: string | null;
   tags_json: string | null;
+  pinned_goal: string | null;
+  goal_turn_budget: number | null;
+  goal_turns_used: number;
+  goal_set_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -45,6 +53,9 @@ export interface ChatSessionMetaPatchInput {
   folderId?: string;
   folderName?: string;
   tags?: string[];
+  pinnedGoal?: string | null;
+  goalTurnBudget?: number | null;
+  goalSetAt?: string | null;
 }
 
 export class ChatSessionMetaRepository {
@@ -55,9 +66,9 @@ export class ChatSessionMetaRepository {
     this.getStmt = db.prepare("SELECT * FROM chat_session_meta WHERE session_id = ?");
     this.upsertStmt = db.prepare(`
       INSERT INTO chat_session_meta (
-        session_id, workspace_id, title, origin, include_in_history, pinned, lifecycle_status, archived_at, folder_id, folder_name, tags_json, created_at, updated_at
+        session_id, workspace_id, title, origin, include_in_history, pinned, lifecycle_status, archived_at, folder_id, folder_name, tags_json, pinned_goal, goal_turn_budget, goal_turns_used, goal_set_at, created_at, updated_at
       ) VALUES (
-        @sessionId, @workspaceId, @title, @origin, @includeInHistory, @pinned, @lifecycleStatus, @archivedAt, @folderId, @folderName, @tagsJson, @createdAt, @updatedAt
+        @sessionId, @workspaceId, @title, @origin, @includeInHistory, @pinned, @lifecycleStatus, @archivedAt, @folderId, @folderName, @tagsJson, @pinnedGoal, @goalTurnBudget, @goalTurnsUsed, @goalSetAt, @createdAt, @updatedAt
       )
       ON CONFLICT(session_id) DO UPDATE SET
         workspace_id = excluded.workspace_id,
@@ -70,6 +81,10 @@ export class ChatSessionMetaRepository {
         folder_id = excluded.folder_id,
         folder_name = excluded.folder_name,
         tags_json = excluded.tags_json,
+        pinned_goal = excluded.pinned_goal,
+        goal_turn_budget = excluded.goal_turn_budget,
+        goal_turns_used = excluded.goal_turns_used,
+        goal_set_at = excluded.goal_set_at,
         updated_at = excluded.updated_at
     `);
   }
@@ -96,6 +111,10 @@ export class ChatSessionMetaRepository {
       folderId: null,
       folderName: null,
       tagsJson: "[]",
+      pinnedGoal: null,
+      goalTurnBudget: null,
+      goalTurnsUsed: 0,
+      goalSetAt: null,
       createdAt: now,
       updatedAt: now,
     });
@@ -121,6 +140,11 @@ export class ChatSessionMetaRepository {
             ? sanitizeFolderId(normalizedFolderName)
             : null
           : undefined;
+    const pinnedGoalWrite = resolveOptionalGoalString(input.pinnedGoal, current.pinnedGoal);
+    const goalBudgetWrite = resolveOptionalGoalNumber(input.goalTurnBudget, current.goalTurnBudget);
+    const goalSetAtWrite = resolveOptionalGoalString(input.goalSetAt, current.goalSetAt);
+    // Writing pinnedGoal (set or clear) resets the per-goal turn counter.
+    const goalTurnsUsedWrite = input.pinnedGoal !== undefined ? 0 : current.goalTurnsUsed;
     this.upsertStmt.run({
       sessionId,
       workspaceId:
@@ -137,6 +161,10 @@ export class ChatSessionMetaRepository {
       folderId: normalizedFolderId !== undefined ? normalizedFolderId : (current.folderId ?? null),
       folderName: normalizedFolderName !== undefined ? normalizedFolderName : (current.folderName ?? null),
       tagsJson: input.tags !== undefined ? JSON.stringify(sanitizeTags(input.tags)) : JSON.stringify(current.tags),
+      pinnedGoal: pinnedGoalWrite,
+      goalTurnBudget: goalBudgetWrite,
+      goalTurnsUsed: goalTurnsUsedWrite,
+      goalSetAt: goalSetAtWrite,
       createdAt: current.createdAt,
       updatedAt: now,
     });
@@ -145,6 +173,15 @@ export class ChatSessionMetaRepository {
       throw new TypeError("chat_session_meta patch did not return a row");
     }
     return mapRow(row);
+  }
+
+  public incrementGoalTurnsUsed(sessionId: string, now = new Date().toISOString()): number {
+    const current = this.ensure(sessionId, now);
+    const next = (current.goalTurnsUsed ?? 0) + 1;
+    this.db
+      .prepare(`UPDATE chat_session_meta SET goal_turns_used = ?, updated_at = ? WHERE session_id = ?`)
+      .run(next, now, sessionId);
+    return next;
   }
 
   public listBySessionIds(sessionIds: string[], workspaceId?: string): Map<string, ChatSessionMetaRecord> {
@@ -236,6 +273,10 @@ function isChatSessionMetaRow(value: unknown): value is ChatSessionMetaRow {
     (typeof value.folder_id === "string" || value.folder_id === null) &&
     (typeof value.folder_name === "string" || value.folder_name === null) &&
     (typeof value.tags_json === "string" || value.tags_json === null) &&
+    (typeof value.pinned_goal === "string" || value.pinned_goal === null) &&
+    (typeof value.goal_turn_budget === "number" || value.goal_turn_budget === null) &&
+    typeof value.goal_turns_used === "number" &&
+    (typeof value.goal_set_at === "string" || value.goal_set_at === null) &&
     typeof value.created_at === "string" &&
     typeof value.updated_at === "string"
   );
@@ -259,9 +300,27 @@ function mapRow(row: ChatSessionMetaRow): ChatSessionMetaRecord {
     folderId: row.folder_id ?? undefined,
     folderName: row.folder_name ?? undefined,
     tags: parseTags(row.tags_json),
+    pinnedGoal: row.pinned_goal ?? undefined,
+    goalTurnBudget: row.goal_turn_budget ?? undefined,
+    goalTurnsUsed: row.goal_turns_used,
+    goalSetAt: row.goal_set_at ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function resolveOptionalGoalString(input: string | null | undefined, current: string | undefined): string | null {
+  if (input === undefined) {
+    return current ?? null;
+  }
+  return input;
+}
+
+function resolveOptionalGoalNumber(input: number | null | undefined, current: number | undefined): number | null {
+  if (input === undefined) {
+    return current ?? null;
+  }
+  return input;
 }
 
 function sanitizeOptional(value: string): string | null {

@@ -130,6 +130,29 @@ export function parseTuiArgs(argv: string[]): TuiArgs {
   return { profile, gateway, readOnly, doctor, deep, yes, json, auditOnly, noRepair };
 }
 
+export interface RuntimeLlmSummaryInput {
+  activeProviderId?: string;
+  activeModel?: string;
+  activeModelContextWindow?: number;
+  activeModelOutputTokenLimit?: number;
+  providers?: unknown;
+}
+
+export function buildRuntimeLlmSummaryLines(input: RuntimeLlmSummaryInput): string[] {
+  const lines: string[] = [
+    `Active provider: ${input.activeProviderId ?? "unset"}`,
+    `Active model: ${input.activeModel ?? "unset"}`,
+  ];
+  if (typeof input.activeModelContextWindow === "number") {
+    lines.push(`Context window: ${input.activeModelContextWindow.toLocaleString()}`);
+  }
+  if (typeof input.activeModelOutputTokenLimit === "number") {
+    lines.push(`Output limit: ${input.activeModelOutputTokenLimit.toLocaleString()}`);
+  }
+  lines.push("New chats fall back to this runtime selection when session prefs are blank.");
+  return lines;
+}
+
 export function buildHeaderSummaryRows(input: HeaderSummaryInput): Array<{ key: string; value: string }> {
   return [
     { key: "Profile", value: input.profile },

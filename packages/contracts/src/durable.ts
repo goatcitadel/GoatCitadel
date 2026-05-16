@@ -193,6 +193,14 @@ export interface DurableDiagnosticsResponse {
     lastObservedAt: string;
     leaseAcquisitionPausedUntil?: string;
   };
+  lastBootRecovery?: {
+    observedAt: string;
+    resumedCount: number;
+    prunedOrphanCheckpoints: number;
+    prunedAgedCheckpoints: number;
+    finalCheckpointBytes: number;
+    diskBudgetBytes: number;
+  };
   generatedAt: string;
 }
 

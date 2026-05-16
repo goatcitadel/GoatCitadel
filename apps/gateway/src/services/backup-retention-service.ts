@@ -77,6 +77,7 @@ export async function restoreBackupOffline(input: {
     ensurePathWithinRoot(target, runtimeRoot);
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.copyFile(source, target);
+    await restrictCredentialFilePermsIfSensitive(target, file.path);
     filesRestored += 1;
   }
 
@@ -559,6 +560,40 @@ function ensurePathWithinRoot(targetPath: string, rootDir: string): void {
     return;
   }
   throw new Error("Path escapes allowed root");
+}
+
+/**
+ * After restoring a sensitive credential file (.env, config/*.json containing
+ * auth state, OAuth tokens, signing secrets), lock perms to 0600 so the file
+ * is owner-read/write only. No-op on win32 where chmod does not map to ACLs;
+ * Windows hardening relies on the parent dir's ACL.
+ */
+async function restrictCredentialFilePermsIfSensitive(
+  absoluteTargetPath: string,
+  manifestRelativePath: string,
+): Promise<void> {
+  if (!isSensitiveCredentialFile(manifestRelativePath)) {
+    return;
+  }
+  if (process.platform === "win32") {
+    return;
+  }
+  try {
+    await fs.chmod(absoluteTargetPath, 0o600);
+  } catch {
+    // best-effort: restore succeeded; some filesystems silently ignore chmod
+  }
+}
+
+function isSensitiveCredentialFile(manifestRelativePath: string): boolean {
+  const normalized = manifestRelativePath.replace(/\\/g, "/");
+  if (normalized === ".env" || normalized.endsWith("/.env")) {
+    return true;
+  }
+  if (normalized.startsWith("config/") && normalized.endsWith(".json")) {
+    return true;
+  }
+  return false;
 }
 
 function isContractDatabasePath(filePath: string): boolean {

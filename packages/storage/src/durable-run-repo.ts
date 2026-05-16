@@ -9,6 +9,15 @@ import type {
 } from "@goatcitadel/contracts";
 import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
+import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
+import { parseJsonObject } from "./state-validators.js";
+
+export interface PruneCheckpointsResult {
+  prunedOrphans: number;
+  prunedAged: number;
+  finalBytes: number;
+  diskBudgetBytes: number;
+}
 
 interface DurableRunRow {
   run_id: string;
@@ -56,6 +65,11 @@ interface DurableDeadLetterRow {
   resolution_note: string | null;
 }
 
+export interface DurableRunRepositoryOptions {
+  quarantine?: { record: (entry: QuarantineEntry) => unknown };
+  logger?: { warn: (data: unknown, msg: string) => void };
+}
+
 export class DurableRunRepository {
   private readonly insertRunStmt;
   private readonly getRunStmt;
@@ -75,7 +89,10 @@ export class DurableRunRepository {
   private readonly getDeadLetterByIdStmt;
   private readonly resolveDeadLetterStmt;
 
-  public constructor(private readonly db: DatabaseClient) {
+  public constructor(
+    private readonly db: DatabaseClient,
+    private readonly options: DurableRunRepositoryOptions = {},
+  ) {
     this.insertRunStmt = db.prepare(`
       INSERT INTO durable_runs (
         run_id, workflow_key, status, attempt_count, max_attempts,
@@ -263,7 +280,7 @@ export class DurableRunRepository {
     if (!row) {
       throw new NotFoundError({ entity: "Durable run", id: runId });
     }
-    return mapRunRow(row);
+    return this.mapRunRow(row);
   }
 
   public updateRun(input: {
@@ -391,7 +408,7 @@ export class DurableRunRepository {
   public listRuns(limit = 25): DurableRunRecord[] {
     const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
     const rows = toDurableRunRows(this.listRunsStmt.all(safeLimit));
-    return rows.map(mapRunRow);
+    return rows.map((row) => this.mapRunRow(row));
   }
 
   public listRunIdsByStatus(status: DurableRunStatus, limit = 500): string[] {
@@ -451,7 +468,17 @@ export class DurableRunRepository {
       checkpointId: row.checkpoint_id,
       runId: row.run_id,
       checkpointKind: row.checkpoint_kind,
-      state: safeJsonParse<Record<string, unknown>>(row.state_json, {}),
+      state: loadAndSanitize(
+        row.state_json,
+        {
+          store: "durable_checkpoint.state",
+          rowId: row.checkpoint_id,
+          parse: parseJsonObject,
+          onQuarantine: this.options.quarantine ? (e) => this.options.quarantine!.record(e) : undefined,
+          log: this.options.logger,
+        },
+        {},
+      ) as Record<string, unknown>,
       createdAt: row.created_at,
     }));
   }
@@ -578,6 +605,145 @@ export class DurableRunRepository {
       resolutionNote: input.resolutionNote?.trim() || null,
     });
     return this.getDeadLetterById(existing.deadLetterId);
+  }
+
+  public pruneCheckpoints(input: { keepPerRun: number; diskBudgetBytes: number }): PruneCheckpointsResult {
+    const keepPerRun = Math.max(1, Math.floor(input.keepPerRun));
+    const diskBudgetBytes = Math.max(0, Math.floor(input.diskBudgetBytes));
+
+    const orphanRows = this.db
+      .prepare(
+        `
+        SELECT cp.checkpoint_id AS checkpointId
+        FROM durable_checkpoints cp
+        LEFT JOIN durable_runs r ON r.run_id = cp.run_id
+        WHERE r.run_id IS NULL
+      `,
+      )
+      .all() as Array<{ checkpointId: string }>;
+
+    const deleteByIdStmt = this.db.prepare("DELETE FROM durable_checkpoints WHERE checkpoint_id = ?");
+    let prunedOrphans = 0;
+    for (const row of orphanRows) {
+      const result = deleteByIdStmt.run(row.checkpointId);
+      prunedOrphans += Number(result.changes ?? 0);
+    }
+
+    const terminalCheckpoints = this.db
+      .prepare(
+        `
+        SELECT cp.checkpoint_id AS checkpointId,
+               cp.run_id AS runId,
+               cp.state_json AS stateJson,
+               cp.created_at AS createdAt
+        FROM durable_checkpoints cp
+        INNER JOIN durable_runs r ON r.run_id = cp.run_id
+        WHERE r.status IN ('completed', 'failed', 'cancelled', 'dead_lettered')
+        ORDER BY cp.run_id ASC, cp.created_at ASC, cp.checkpoint_id ASC
+      `,
+      )
+      .all() as Array<{ checkpointId: string; runId: string; stateJson: string; createdAt: string }>;
+
+    const perRunBuckets = new Map<
+      string,
+      Array<{ checkpointId: string; runId: string; stateJson: string; createdAt: string }>
+    >();
+    for (const row of terminalCheckpoints) {
+      const bucket = perRunBuckets.get(row.runId) ?? [];
+      bucket.push(row);
+      perRunBuckets.set(row.runId, bucket);
+    }
+
+    let prunedAged = 0;
+    const survivingTerminal: Array<{ checkpointId: string; runId: string; stateJson: string; createdAt: string }> = [];
+    for (const bucket of perRunBuckets.values()) {
+      const overflow = Math.max(0, bucket.length - keepPerRun);
+      for (const victim of bucket.slice(0, overflow)) {
+        const result = deleteByIdStmt.run(victim.checkpointId);
+        prunedAged += Number(result.changes ?? 0);
+      }
+      for (const survivor of bucket.slice(overflow)) {
+        survivingTerminal.push(survivor);
+      }
+    }
+
+    let runningBytes = this.measureCheckpointBytes();
+    if (runningBytes > diskBudgetBytes) {
+      survivingTerminal.sort((l, r) =>
+        l.createdAt === r.createdAt
+          ? l.checkpointId.localeCompare(r.checkpointId)
+          : l.createdAt.localeCompare(r.createdAt),
+      );
+      for (const victim of survivingTerminal) {
+        if (runningBytes <= diskBudgetBytes) {
+          break;
+        }
+        const victimBytes = byteLength(victim.stateJson);
+        const result = deleteByIdStmt.run(victim.checkpointId);
+        const changes = Number(result.changes ?? 0);
+        if (changes > 0) {
+          prunedAged += changes;
+          runningBytes -= victimBytes;
+        }
+      }
+    }
+
+    return {
+      prunedOrphans,
+      prunedAged,
+      finalBytes: this.measureCheckpointBytes(),
+      diskBudgetBytes,
+    };
+  }
+
+  private measureCheckpointBytes(): number {
+    const row = this.db
+      .prepare("SELECT COALESCE(SUM(LENGTH(CAST(state_json AS BLOB))), 0) AS bytes FROM durable_checkpoints")
+      .get() as { bytes: number | bigint } | undefined;
+    return Number(row?.bytes ?? 0);
+  }
+
+  private mapRunRow(row: DurableRunRow): DurableRunRecord {
+    return {
+      runId: row.run_id,
+      workflowKey: row.workflow_key,
+      status: row.status,
+      attemptCount: Number(row.attempt_count ?? 0),
+      maxAttempts: Number(row.max_attempts ?? 0),
+      version: Number(row.version ?? 1),
+      payload: loadAndSanitize(
+        row.payload_json,
+        {
+          store: "durable_run.payload",
+          rowId: row.run_id,
+          parse: parseJsonObject,
+          onQuarantine: this.options.quarantine ? (e) => this.options.quarantine!.record(e) : undefined,
+          log: this.options.logger,
+        },
+        {},
+      ) as Record<string, unknown>,
+      metadata: row.metadata_json
+        ? (loadAndSanitize(
+            row.metadata_json,
+            {
+              store: "durable_run.metadata",
+              rowId: row.run_id,
+              parse: parseJsonObject,
+              onQuarantine: this.options.quarantine ? (e) => this.options.quarantine!.record(e) : undefined,
+              log: this.options.logger,
+            },
+            undefined,
+          ) as Record<string, unknown> | undefined)
+        : undefined,
+      startedAt: row.started_at ?? undefined,
+      finishedAt: row.finished_at ?? undefined,
+      lastError: row.last_error ?? undefined,
+      leaseOwnerId: row.lease_owner_id ?? undefined,
+      leaseExpiresAt: row.lease_expires_at ?? undefined,
+      leaseHeartbeatAt: row.lease_heartbeat_at ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
   }
 
   private buildNextRun(
@@ -757,30 +923,8 @@ function toCountRow(value: unknown): { count?: number } | undefined {
     : undefined;
 }
 
-function parseRecordJson(raw: string): Record<string, unknown> {
-  const parsed = safeJsonParse<unknown>(raw, {});
-  return isRecord(parsed) ? parsed : {};
-}
-
-function mapRunRow(row: DurableRunRow): DurableRunRecord {
-  return {
-    runId: row.run_id,
-    workflowKey: row.workflow_key,
-    status: row.status,
-    attemptCount: Number(row.attempt_count ?? 0),
-    maxAttempts: Number(row.max_attempts ?? 0),
-    version: Number(row.version ?? 1),
-    payload: parseRecordJson(row.payload_json),
-    metadata: row.metadata_json ? parseRecordJson(row.metadata_json) : undefined,
-    startedAt: row.started_at ?? undefined,
-    finishedAt: row.finished_at ?? undefined,
-    lastError: row.last_error ?? undefined,
-    leaseOwnerId: row.lease_owner_id ?? undefined,
-    leaseExpiresAt: row.lease_expires_at ?? undefined,
-    leaseHeartbeatAt: row.lease_heartbeat_at ?? undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
+function byteLength(value: string): number {
+  return Buffer.byteLength(value, "utf8");
 }
 
 function normalizeObject(value: Record<string, unknown> | undefined): Record<string, unknown> {

@@ -2390,7 +2390,7 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
     const createChatCompletion = vi
       .fn<() => Promise<ChatCompletionResponse>>()
       .mockResolvedValueOnce({
-        model: "kimi-k2.5",
+        model: "kimi-k2.6",
         choices: [
           {
             index: 0,
@@ -2419,7 +2419,7 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
         ],
       })
       .mockResolvedValueOnce({
-        model: "kimi-k2.5",
+        model: "kimi-k2.6",
         choices: [
           {
             index: 0,
@@ -2459,7 +2459,7 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
       content: "Try the search one more time",
       mode: "chat",
       providerId: "moonshot",
-      model: "kimi-k2.5",
+      model: "kimi-k2.6",
       webMode: "auto",
       memoryMode: "off",
       thinkingLevel: "standard",

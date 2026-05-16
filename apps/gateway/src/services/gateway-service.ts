@@ -294,7 +294,7 @@ import type {
   RemoteActionTokenRecord,
 } from "@goatcitadel/contracts";
 import type { ConnectorRecord, ConnectorType } from "@goatcitadel/contracts";
-import { BUILTIN_AGENT_PROFILES } from "@goatcitadel/contracts";
+import { AgentSubagentDefaultsSchema, BUILTIN_AGENT_PROFILES } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
 import { getRequestAttribution } from "@goatcitadel/storage";
@@ -348,6 +348,7 @@ import {
   PRIVATE_BETA_BACKUP_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./gateway/cron-automation-service.js";
+import { runNoAgentCommand } from "./gateway/cron-no-agent-runner.js";
 import * as orchestrationLifecycleService from "./orchestration-lifecycle-service.js";
 import { OrchestrationPhaseExecutionService } from "./orchestration-phase-execution-service.js";
 import { OrchestrationWorktreeService } from "./orchestration-worktree-service.js";
@@ -390,6 +391,7 @@ import * as chatTurnPrepService from "./chat-turn-prep-service.js";
 import * as chatTurnTraceHydration from "./chat-turn-trace-hydration.js";
 import * as chatTurnUserMessage from "./chat-turn-user-message.js";
 import { ChatDelegationService, type ChatDelegationProgressCallbacks } from "./chat-delegation-service.js";
+import { ChatSteerService } from "./chat-steer-service.js";
 import * as chatTurnStreamService from "./chat-turn-stream-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import { createChatTurnRuntimeHost, type ChatTurnRuntimeHost } from "./chat-turn-runtime-host-composition.js";
@@ -613,6 +615,7 @@ export class GatewayService {
   private readonly approvalRuntime: ApprovalRuntimeService;
   private readonly chatTurnRuntime: ChatTurnRuntimeService;
   private readonly chatDelegationService: ChatDelegationService;
+  public readonly steerService: ChatSteerService;
   private readonly toolInvocationCoordinator: ToolInvocationCoordinatorService;
   private readonly runtimeLifecycleReadService: RuntimeLifecycleReadService;
   private readonly chatLearnedMemoryService: ChatLearnedMemoryService;
@@ -873,7 +876,7 @@ export class GatewayService {
       requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag),
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
       runHandlers: {
-        task: async (job) => {
+        task: async (job, _context?) => {
           const task = this.taskLifecycleService.createTask({
             title: job.name,
             description: [
@@ -904,6 +907,7 @@ export class GatewayService {
           await this.runUpdateReviewSchedulerIfDue({ force: true });
         },
         watchdog: async (job) => this.runCronWatchdog(job),
+        noAgent: (input) => runNoAgentCommand(input),
       },
     });
 
@@ -1021,6 +1025,7 @@ export class GatewayService {
       enqueueApprovalRemoteTokenDelivery: (approval, connector, tokenRecord) =>
         this.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord),
     });
+    this.steerService = new ChatSteerService();
     this.chatTurnRuntime = new ChatTurnRuntimeService(this.buildChatTurnRuntimeHost());
     this.orchestrationPhaseExecutionService = new OrchestrationPhaseExecutionService({
       rootDir: this.config.rootDir,
@@ -1029,6 +1034,9 @@ export class GatewayService {
       agentSendChatMessage: (sessionId, input) => this.chatTurnRuntime.agentSendChatMessage(sessionId, input),
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
     });
+    const subagentDefaults = AgentSubagentDefaultsSchema.parse(
+      (config as { agents?: { defaults?: { subagents?: unknown } } }).agents?.defaults?.subagents ?? {},
+    );
     this.chatDelegationService = new ChatDelegationService({
       storage: this.storage,
       gatewaySql: this.gatewaySql,
@@ -1041,10 +1049,15 @@ export class GatewayService {
       inheritDelegatedSessionToolGrants: (parentSessionId, childSessionId) =>
         this.inheritDelegatedSessionToolGrants(parentSessionId, childSessionId),
       updateChatSessionPrefs: (sessionId, input) => this.updateChatSessionPrefs(sessionId, input),
-      agentSendChatMessage: (sessionId, input) => this.chatTurnRuntime.agentSendChatMessage(sessionId, input),
+      agentSendChatMessage: (sessionId, input, options) =>
+        this.chatTurnRuntime.agentSendChatMessage(sessionId, input, options),
       extractAndPersistLearnedMemory: (sessionId, content, source) =>
         this.extractAndPersistLearnedMemory(sessionId, content, source),
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
+      subagentDefaults: {
+        childTimeoutSeconds: subagentDefaults.childTimeoutSeconds,
+        maxDepth: subagentDefaults.maxDepth,
+      },
     });
     this.toolInvocationCoordinator = new ToolInvocationCoordinatorService({
       approvalInbox: this.storage.approvalInbox,
@@ -1360,6 +1373,9 @@ export class GatewayService {
         this.beginActiveChatTurnExecution(sessionId, turnId, operation),
       beginDurableChatRun: (prepared, input, threadEventType) =>
         this.beginDurableChatRun(prepared, input, threadEventType),
+      cancelDurableChatRun: (runId, actorId) => {
+        this.cancelDurableRun(runId, actorId);
+      },
       buildChatOrchestrationSummary: (input) => this.buildChatOrchestrationSummary(input),
       buildDefaultChatPersonalityOverlay: () => this.buildDefaultChatPersonalityOverlay(),
       buildLlmMessagesFromBranchPath: (sessionId, pathTurnIds, currentUserMessage, options, state) =>
@@ -1418,6 +1434,7 @@ export class GatewayService {
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
       scheduleMemoryMaintenancePostTurnEvaluation: (sessionId, parentTurnId) =>
         this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, parentTurnId),
+      steerService: this.steerService,
       streamPersistedChatTurnEvents: (sessionId, turnId, options) =>
         this.streamPersistedChatTurnEvents(sessionId, turnId, options),
       triggerChatSessionProactive: (sessionId, input) => this.triggerChatSessionProactive(sessionId, input),
@@ -1463,6 +1480,7 @@ export class GatewayService {
       storage: this.storage,
       backgroundTasks: this.backgroundTasks,
       turnRuntime: this.turnRuntime,
+      steerService: this.steerService,
       resolvePreparedTurnOrchestration: (prepared) => this.resolvePreparedTurnOrchestration(prepared),
       createChatCompletion: (request) => this.createChatCompletion(request),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
@@ -3740,8 +3758,9 @@ export class GatewayService {
   public async agentSendChatMessage(
     sessionId: string,
     input: ChatSendMessageRequest,
+    options?: { abortSignal?: AbortSignal },
   ): Promise<ChatSendMessageResponse> {
-    return this.chatTurnRuntime.agentSendChatMessage(sessionId, input);
+    return this.chatTurnRuntime.agentSendChatMessage(sessionId, input, options);
   }
 
   private async retryChatTurnInScratchSession(
@@ -6896,6 +6915,10 @@ export function toChatSessionRecord(
     folderId?: string;
     folderName?: string;
     tags?: string[];
+    pinnedGoal?: string;
+    goalTurnBudget?: number;
+    goalTurnsUsed?: number;
+    goalSetAt?: string;
   },
   project?: ChatProjectRecord,
   extras?: Partial<Pick<ChatSessionRecord, "searchHits" | "lastHandoff" | "delegationParent" | "generatedArtifacts">>,
@@ -6927,6 +6950,10 @@ export function toChatSessionRecord(
     lastActivityAt: session.lastActivityAt,
     tokenTotal: session.tokenTotal,
     costUsdTotal: session.costUsdTotal,
+    pinnedGoal: meta.pinnedGoal,
+    goalTurnBudget: meta.goalTurnBudget,
+    goalTurnsUsed: meta.goalTurnsUsed,
+    goalSetAt: meta.goalSetAt,
   };
 }
 

@@ -360,6 +360,42 @@ export function shouldExecuteLocalChatCommand(action: OutboundQueueItem["action"
   return action === "send" && content.trim().startsWith("/");
 }
 
+export type MidTurnDisposition = "idle" | "steer" | "queue";
+
+export function resolveMidTurnDisposition(input: { hasActiveStream: boolean; draft: string }): MidTurnDisposition {
+  if (!input.hasActiveStream) {
+    return "idle";
+  }
+  const trimmed = input.draft.trimStart();
+  if (/^\/queue\s+followup\b/i.test(trimmed)) {
+    return "queue";
+  }
+  if (/^\/queue\s+collect\b/i.test(trimmed)) {
+    return "queue";
+  }
+  return "steer";
+}
+
+export type GoalCommand = { kind: "set"; text: string } | { kind: "status" } | { kind: "clear" };
+
+export function parseGoalCommand(draft: string): GoalCommand | null {
+  const match = draft.trimStart().match(/^\/goal(?:\s+(.*))?$/i);
+  if (!match) {
+    return null;
+  }
+  const arg = (match[1] ?? "").trim();
+  if (!arg) {
+    return { kind: "status" };
+  }
+  if (arg.toLowerCase() === "status") {
+    return { kind: "status" };
+  }
+  if (arg.toLowerCase() === "clear") {
+    return { kind: "clear" };
+  }
+  return { kind: "set", text: arg };
+}
+
 export async function revealGeneratedArtifactInSurface(input: RevealGeneratedArtifactInput): Promise<void> {
   if (input.compactSurfaceLayout) {
     input.setSessionRailOpen(false);

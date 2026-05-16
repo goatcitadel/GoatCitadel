@@ -42,6 +42,8 @@ const DURABLE_WORKER_POLL_JITTER_MS = 500;
 const DURABLE_LEASE_HEARTBEAT_MS = 5_000;
 const DURABLE_EVENT_LOOP_LAG_WARN_MS = 1_000;
 const DURABLE_EVENT_LOOP_LAG_PAUSE_MS = 2_000;
+const DURABLE_CHECKPOINT_KEEP_PER_RUN_DEFAULT = 50;
+const DURABLE_CHECKPOINT_DISK_BUDGET_BYTES_DEFAULT = 64 * 1024 * 1024;
 
 function buildDurableRealtimeOptions(runId: string): Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links"> {
   return {
@@ -129,6 +131,7 @@ export class DurableRunService {
   private lastEventLoopLagMs = 0;
   private lastEventLoopLagAt: string | undefined;
   private leaseAcquisitionPausedUntilMs = 0;
+  private lastBootRecovery: DurableDiagnosticsResponse["lastBootRecovery"];
 
   constructor(
     private readonly ctx: DurableRunServiceContext,
@@ -171,6 +174,7 @@ export class DurableRunService {
             },
           }
         : {}),
+      ...(this.lastBootRecovery ? { lastBootRecovery: this.lastBootRecovery } : {}),
       generatedAt: new Date().toISOString(),
     };
   }
@@ -202,9 +206,85 @@ export class DurableRunService {
       return;
     }
     this.workerStopped = false;
-    this.reconcileRecoverableRuns();
+    const backgroundTasks = this.deps.backgroundTasks;
+    const bootTask = this.performBootRecovery();
+    backgroundTasks.add(bootTask);
+    void bootTask.finally(() => {
+      backgroundTasks.delete(bootTask);
+    });
     this.ensurePollLoop();
     this.requestRunProcessing();
+  }
+
+  private async performBootRecovery(): Promise<void> {
+    if (!this.deps) {
+      return;
+    }
+    const log = this.resolveLogger();
+    const resumedCount = await this.reconcileRecoverableRuns();
+    const pruneConfig = resolveCheckpointPruneConfig();
+    const durableRunsRepo = this.ctx.storage.durableRuns as unknown as {
+      pruneCheckpoints?: (input: { keepPerRun: number; diskBudgetBytes: number }) => {
+        prunedOrphans: number;
+        prunedAged: number;
+        finalBytes: number;
+        diskBudgetBytes: number;
+      };
+    };
+    const pruneSummary = durableRunsRepo.pruneCheckpoints?.(pruneConfig) ?? {
+      prunedOrphans: 0,
+      prunedAged: 0,
+      finalBytes: 0,
+      diskBudgetBytes: pruneConfig.diskBudgetBytes,
+    };
+    this.lastBootRecovery = {
+      observedAt: new Date().toISOString(),
+      resumedCount,
+      prunedOrphanCheckpoints: pruneSummary.prunedOrphans,
+      prunedAgedCheckpoints: pruneSummary.prunedAged,
+      finalCheckpointBytes: pruneSummary.finalBytes,
+      diskBudgetBytes: pruneSummary.diskBudgetBytes,
+    };
+    if (resumedCount > 0) {
+      log.info(
+        {
+          resumedCount,
+          prunedOrphanCheckpoints: pruneSummary.prunedOrphans,
+          prunedAgedCheckpoints: pruneSummary.prunedAged,
+          finalCheckpointBytes: pruneSummary.finalBytes,
+          diskBudgetBytes: pruneSummary.diskBudgetBytes,
+        },
+        "durable runs resumed after restart",
+      );
+    } else {
+      log.debug(
+        {
+          prunedOrphanCheckpoints: pruneSummary.prunedOrphans,
+          prunedAgedCheckpoints: pruneSummary.prunedAged,
+          finalCheckpointBytes: pruneSummary.finalBytes,
+          diskBudgetBytes: pruneSummary.diskBudgetBytes,
+        },
+        "no durable runs required resume after restart",
+      );
+    }
+  }
+
+  private resolveLogger(): {
+    info: (data: unknown, msg: string) => void;
+    debug: (data: unknown, msg: string) => void;
+    warn: (data: unknown, msg: string) => void;
+    error: (data: unknown, msg: string) => void;
+  } {
+    const candidate = (this.ctx as unknown as { logger?: unknown }).logger;
+    if (candidate && typeof (candidate as { info?: unknown }).info === "function") {
+      return candidate as ReturnType<DurableRunService["resolveLogger"]>;
+    }
+    return {
+      info: () => {},
+      debug: () => {},
+      warn: () => {},
+      error: () => {},
+    };
   }
 
   stopWorker(): void {
@@ -711,10 +791,11 @@ export class DurableRunService {
     return this.ctx.storage.durableRunEvents.append(event);
   }
 
-  private async reconcileRecoverableRuns(): Promise<void> {
+  private async reconcileRecoverableRuns(): Promise<number> {
     if (!this.deps) {
-      return;
+      return 0;
     }
+    let reclaimedCount = 0;
     const runningRunIds = this.ctx.storage.durableRuns.listExpiredRunningRunIds(new Date().toISOString());
     for (const runId of runningRunIds) {
       const run = this.ctx.storage.durableRuns.getRun(runId);
@@ -749,7 +830,9 @@ export class DurableRunService {
         previousLeaseOwnerId: run.leaseOwnerId,
         previousLeaseExpiresAt: run.leaseExpiresAt,
       });
+      reclaimedCount += 1;
     }
+    return reclaimedCount;
   }
 
   private async drainQueuedRuns(): Promise<void> {
@@ -1256,4 +1339,16 @@ export class DurableRunService {
 
 function isDurableRunUpdateConflict(error: unknown): boolean {
   return error instanceof Error && /durable run .* update conflict/i.test(error.message);
+}
+
+function resolveCheckpointPruneConfig(): { keepPerRun: number; diskBudgetBytes: number } {
+  const keepRaw = process.env.GOATCITADEL_DURABLE_CHECKPOINT_KEEP_PER_RUN?.trim();
+  const budgetRaw = process.env.GOATCITADEL_DURABLE_CHECKPOINT_DISK_BUDGET_BYTES?.trim();
+  const keepParsed = keepRaw ? Number.parseInt(keepRaw, 10) : Number.NaN;
+  const budgetParsed = budgetRaw ? Number.parseInt(budgetRaw, 10) : Number.NaN;
+  return {
+    keepPerRun: Number.isFinite(keepParsed) && keepParsed > 0 ? keepParsed : DURABLE_CHECKPOINT_KEEP_PER_RUN_DEFAULT,
+    diskBudgetBytes:
+      Number.isFinite(budgetParsed) && budgetParsed >= 0 ? budgetParsed : DURABLE_CHECKPOINT_DISK_BUDGET_BYTES_DEFAULT,
+  };
 }

@@ -43,13 +43,14 @@ describe("cron job config helpers", () => {
       ]),
       "utf8",
     );
+    const futureNextRunAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     host.storage.cronJobs.get.mockReturnValueOnce({
       jobId: "daily-review",
       action: "update_review",
       actionConfig: { mode: "full" },
       description: "Existing description",
       endAt: "2026-06-01T00:00:00.000Z",
-      nextRunAt: "2026-05-02T00:00:00.000Z",
+      nextRunAt: futureNextRunAt,
     });
 
     await loadCronJobsFromConfig(host);
@@ -65,7 +66,7 @@ describe("cron job config helpers", () => {
         enabled: true,
         endAt: "2026-06-01T00:00:00.000Z",
         lastRunAt: "2026-05-01T00:00:00.000Z",
-        nextRunAt: "2026-05-02T00:00:00.000Z",
+        nextRunAt: futureNextRunAt,
         schedule: "0 8 * * *",
       }),
     );

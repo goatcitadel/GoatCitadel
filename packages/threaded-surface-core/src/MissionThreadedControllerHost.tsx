@@ -27,15 +27,19 @@ import type {
 import { isChatTurnActiveStatus } from "@goatcitadel/contracts";
 import {
   attachThreadKnowledgeAttachment,
+  clearChatSessionGoal,
   createChatGeneratedArtifact,
   fetchAgents,
   fetchChatGeneratedArtifact,
+  fetchChatSessionGoal,
   fetchMcpServers,
   fetchMcpTemplates,
   fetchRuntimeLifecycleExport,
   fetchSkills,
   parseChatCommand,
   removeThreadKnowledgeAttachment,
+  setChatSessionGoal,
+  steerChatSession,
   updateChatSessionPrefs,
 } from "@goatcitadel/mission-control-shared/api/client";
 import {
@@ -70,6 +74,8 @@ import { formatWorkProviderModelSummary, type WorkTrustDescriptor } from "./chat
 import {
   getCapabilitySuggestionConfirmationCopy,
   getDeleteSessionConfirmationMessage,
+  parseGoalCommand,
+  resolveMidTurnDisposition,
   revealGeneratedArtifactInSurface,
   resolveSelectedTurnId,
   resolveChatRefreshPlan,
@@ -427,6 +433,7 @@ export function MissionThreadedControllerHost({
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [pinnedGoal, setPinnedGoal] = useState<string | undefined>(undefined);
   const [search, setSearch] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1020,6 +1027,27 @@ export function MissionThreadedControllerHost({
 
   useEffect(() => {
     setDevDiagnosticsActiveChatSession(selectedSessionId ?? undefined);
+  }, [selectedSessionId]);
+
+  useEffect(() => {
+    if (!selectedSessionId) {
+      setPinnedGoal(undefined);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetchChatSessionGoal(selectedSessionId);
+        if (!cancelled) {
+          setPinnedGoal(response.goal ?? undefined);
+        }
+      } catch {
+        // Goal fetch is best-effort. Don't surface errors on session switch.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [selectedSessionId]);
 
   useEffect(() => {
@@ -2062,7 +2090,102 @@ export function MissionThreadedControllerHost({
     uploadAttachments,
   });
 
+  const handleSetGoal = useCallback(
+    async (goal: string, turnBudget?: number) => {
+      if (!selectedSessionId) {
+        return;
+      }
+      try {
+        const response = await setChatSessionGoal(selectedSessionId, { goal, turnBudget });
+        setPinnedGoal(response.goal ?? undefined);
+        pushLocalNotice(`Goal set: ${response.goal ?? goal}`, "success");
+      } catch (cause) {
+        setUiError(cause instanceof Error ? cause.message : "Failed to set goal.");
+      }
+    },
+    [pushLocalNotice, selectedSessionId, setUiError],
+  );
+
+  const handleClearGoal = useCallback(async () => {
+    if (!selectedSessionId) {
+      return;
+    }
+    try {
+      await clearChatSessionGoal(selectedSessionId);
+      setPinnedGoal(undefined);
+      pushLocalNotice("Goal cleared.", "success");
+    } catch (cause) {
+      setUiError(cause instanceof Error ? cause.message : "Failed to clear goal.");
+    }
+  }, [pushLocalNotice, selectedSessionId, setUiError]);
+
+  const handleGoalStatus = useCallback(async () => {
+    if (!selectedSessionId) {
+      return;
+    }
+    try {
+      const response = await fetchChatSessionGoal(selectedSessionId);
+      setPinnedGoal(response.goal ?? undefined);
+      if (response.goal) {
+        const budgetSuffix =
+          response.turnBudget !== null && response.turnBudget !== undefined
+            ? ` (${response.turnsUsed}/${response.turnBudget} turns)`
+            : "";
+        pushLocalNotice(`Goal: ${response.goal}${budgetSuffix}`, "neutral");
+      } else {
+        pushLocalNotice("No pinned goal.", "neutral");
+      }
+    } catch (cause) {
+      setUiError(cause instanceof Error ? cause.message : "Failed to fetch goal status.");
+    }
+  }, [pushLocalNotice, selectedSessionId, setUiError]);
+
+  const handleSteerMidTurn = useCallback(
+    async (instruction: string) => {
+      if (!selectedSessionId) {
+        return;
+      }
+      try {
+        const response = await steerChatSession(selectedSessionId, { instruction });
+        if (!response.accepted) {
+          pushLocalNotice(response.reason ?? "Steering instruction not accepted.", "warning");
+        } else {
+          pushLocalNotice("Steering instruction queued.", "success");
+        }
+      } catch (cause) {
+        setUiError(cause instanceof Error ? cause.message : "Failed to send steering instruction.");
+      }
+    },
+    [pushLocalNotice, selectedSessionId, setUiError],
+  );
+
   const handleSendWithKnowledge = useCallback(async () => {
+    const goalCommand = parseGoalCommand(draft);
+    if (goalCommand) {
+      if (goalCommand.kind === "set") {
+        await handleSetGoal(goalCommand.text);
+      } else if (goalCommand.kind === "clear") {
+        await handleClearGoal();
+      } else {
+        await handleGoalStatus();
+      }
+      setDraft("");
+      return;
+    }
+
+    const disposition = resolveMidTurnDisposition({
+      hasActiveStream: Boolean(activeStreamRef.current),
+      draft,
+    });
+    if (disposition === "steer") {
+      const stripped = draft.trimStart().replace(/^\/(?:steer|queue\s+steer)\s*/i, "");
+      if (stripped) {
+        await handleSteerMidTurn(stripped);
+        setDraft("");
+        return;
+      }
+    }
+
     const shouldAutoGenerateImage =
       messageMode === "chat" && !editingTurnId && pendingAttachments.length === 0 && detectImageGenerationIntent(draft);
     if (shouldAutoGenerateImage) {
@@ -2094,12 +2217,17 @@ export function MissionThreadedControllerHost({
     attachPendingKnowledgeSources,
     draft,
     editingTurnId,
+    handleClearGoal,
     handleGenerateImage,
+    handleGoalStatus,
     handleSend,
+    handleSetGoal,
+    handleSteerMidTurn,
     imageBusy,
     imageGenerationAvailable,
     messageMode,
     pendingAttachments.length,
+    setDraft,
     setUiError,
   ]);
 
@@ -2343,6 +2471,15 @@ export function MissionThreadedControllerHost({
         onCloseGeneratedArtifact: handleCloseGeneratedArtifact,
         onStopActiveTurn: () => void handleStopActiveTurn(),
         onSend: () => void handleSendWithKnowledge(),
+        pinnedGoal,
+        midTurnDisposition: resolveMidTurnDisposition({
+          hasActiveStream: Boolean(activeStreamRef.current),
+          draft,
+        }),
+        onSteerMidTurn: handleSteerMidTurn,
+        onSetGoal: handleSetGoal,
+        onClearGoal: handleClearGoal,
+        onGoalStatus: handleGoalStatus,
       }
     : null;
 

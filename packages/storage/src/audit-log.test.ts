@@ -200,6 +200,19 @@ describe("AuditLog", () => {
     assert.deepEqual(await log.list("approvals"), [{ action: "approved" }, { action: "rejected" }]);
   });
 
+  it("returns an empty array when every audit row is malformed", async () => {
+    const root = path.join(os.tmpdir(), `goatcitadel-audit-${randomUUID()}`);
+    createdDirs.push(root);
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "policy_blocks.jsonl"),
+      ["{not-json", "still-not-json", '["array"', ""].join("\r\n"),
+    );
+
+    const log = new AuditLog(root);
+    assert.deepEqual(await log.list("policy_blocks"), []);
+  });
+
   it("prunes aged audit lines when retention is configured", async () => {
     const root = path.join(os.tmpdir(), `goatcitadel-audit-${randomUUID()}`);
     createdDirs.push(root);

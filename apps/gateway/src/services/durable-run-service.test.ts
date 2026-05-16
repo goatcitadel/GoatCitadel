@@ -768,6 +768,107 @@ describe("DurableRunService", () => {
     expect(executeWorkflow).toHaveBeenCalledTimes(1);
     expect(runs.get(run.runId)?.status).toBe("completed");
   });
+
+  it("emits a boot resume summary and prunes orphan checkpoints on startWorker", async () => {
+    const runs = new Map<string, DurableRunRecord>([
+      [
+        "run-resume-1",
+        {
+          ...createRun("run-resume-1", "running"),
+          leaseOwnerId: "worker-old",
+          leaseHeartbeatAt: "2026-05-14T23:55:00.000Z",
+          leaseExpiresAt: "2026-05-14T23:56:00.000Z",
+        },
+      ],
+    ]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const prune = vi.fn(() => ({
+      prunedOrphans: 3,
+      prunedAged: 5,
+      finalBytes: 1024,
+      diskBudgetBytes: 67108864,
+    }));
+
+    const ctx = createContext(runs, checkpoints, timeline);
+    (ctx.storage.durableRuns as unknown as { pruneCheckpoints: typeof prune }).pruneCheckpoints = prune;
+
+    const infoLogs: Array<{ data: unknown; msg: string }> = [];
+    (ctx as unknown as { logger?: unknown }).logger = {
+      info: (data: unknown, msg: string) => infoLogs.push({ data, msg }),
+      warn: () => {},
+      debug: () => {},
+      error: () => {},
+    };
+
+    const service = new DurableRunService(ctx as unknown as ServiceContext, {
+      backgroundTasks,
+      workflowRegistry: {
+        executeWorkflow: vi.fn(async () => {}),
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+    });
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+
+    const diag = service.getDurableDiagnostics();
+    expect(diag.lastBootRecovery).toBeDefined();
+    expect(diag.lastBootRecovery?.resumedCount).toBe(1);
+    expect(diag.lastBootRecovery?.prunedOrphanCheckpoints).toBe(3);
+    expect(diag.lastBootRecovery?.prunedAgedCheckpoints).toBe(5);
+    expect(diag.lastBootRecovery?.finalCheckpointBytes).toBe(1024);
+    expect(diag.lastBootRecovery?.diskBudgetBytes).toBe(67108864);
+
+    const resumeLog = infoLogs.find((entry) => entry.msg.includes("resumed after restart"));
+    expect(resumeLog).toBeDefined();
+    expect(prune.mock.calls.length).toBe(1);
+
+    service.stopWorker();
+  });
+
+  it("emits a debug-level boot log when no runs were resumed", async () => {
+    const runs = new Map<string, DurableRunRecord>();
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const prune = vi.fn(() => ({
+      prunedOrphans: 0,
+      prunedAged: 0,
+      finalBytes: 0,
+      diskBudgetBytes: 67108864,
+    }));
+
+    const ctx = createContext(runs, checkpoints, timeline);
+    (ctx.storage.durableRuns as unknown as { pruneCheckpoints: typeof prune }).pruneCheckpoints = prune;
+    const infoLogs: string[] = [];
+    const debugLogs: string[] = [];
+    (ctx as unknown as { logger?: unknown }).logger = {
+      info: (_d: unknown, msg: string) => infoLogs.push(msg),
+      debug: (_d: unknown, msg: string) => debugLogs.push(msg),
+      warn: () => {},
+      error: () => {},
+    };
+
+    const service = new DurableRunService(ctx as unknown as ServiceContext, {
+      backgroundTasks,
+      workflowRegistry: {
+        executeWorkflow: vi.fn(async () => {}),
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+      },
+    });
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+
+    expect(debugLogs.some((m) => m.includes("no durable runs required resume"))).toBe(true);
+    expect(infoLogs.filter((m) => m.includes("resumed after restart")).length).toBe(0);
+
+    service.stopWorker();
+  });
 });
 
 function createContext(

@@ -311,7 +311,12 @@ export async function previewLlmModels(
   input: {
     providerId: string;
     baseUrl: string;
-    apiStyle?: "openai-chat-completions" | "openai-responses" | "openai-codex-responses" | "anthropic-messages";
+    apiStyle?:
+      | "openai-chat-completions"
+      | "openai-responses"
+      | "openai-codex-responses"
+      | "anthropic-messages"
+      | "bedrock-messages";
     apiKey?: string;
     apiKeyEnv?: string;
     request?: LlmProviderRequestConfig;

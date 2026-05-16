@@ -21,6 +21,7 @@ import type { CapabilityPackService } from "./capability-pack-service.js";
 import type { CapabilitySystemService } from "./capability-system-service.js";
 import type { ChatProjectService } from "./chat-project-service.js";
 import type { ChatProactiveService } from "./chat-proactive-service.js";
+import type { ChatSteerService } from "./chat-steer-service.js";
 import type { ChatTurnRuntimeService } from "./chat-turn-runtime-service.js";
 import type { CronAutomationService } from "./gateway/cron-automation-service.js";
 import type { DatabaseCutoverService } from "./database-cutover-service.js";
@@ -63,6 +64,7 @@ export interface GatewayRouteCompositionPort {
   readonly chatProjectService: ChatProjectService;
   readonly chatMessageRouteRuntimeHost: chatMessageRouteRuntime.ChatMessageRouteRuntimeHost;
   readonly chatTurnRuntime: ChatTurnRuntimeService;
+  readonly steerService: ChatSteerService;
   readonly config: GatewayRuntimeConfig;
   readonly cronAutomationService: CronAutomationService;
   readonly databaseCutoverService: DatabaseCutoverService;
@@ -283,6 +285,7 @@ export function createGatewayRouteCompositionPort(
     personalityCatalogService: gateway.personalityCatalogService,
     policyEngine: gateway.policyEngine,
     recentChannelSetupTests: gateway.recentChannelSetupTests,
+    steerService: gateway.steerService,
     storage: gateway.storage,
     acceptChatDelegation: gateway.acceptChatDelegation.bind(gateway),
     approvePhase: gateway.approvePhase.bind(gateway),
