@@ -31,15 +31,6 @@ import type {
   NpuRuntimeStatus,
   OrchestrationRun,
 } from "@goatcitadel/contracts";
-
-export interface AddonSlotRegistration extends AddonDashboardSlotDeclaration {
-  addonId: string;
-}
-
-export interface FetchAddonSlotsParams {
-  route?: string;
-  slot?: AddonDashboardSlot;
-}
 import type {
   LlmChatCompletionResponse,
   MeshLeaseRecord,
@@ -51,6 +42,15 @@ import type {
   RuntimeSettingsResponse,
 } from "./types.js";
 import { request } from "./client-core.js";
+
+export interface AddonSlotRegistration extends AddonDashboardSlotDeclaration {
+  addonId: string;
+}
+
+export interface FetchAddonSlotsParams {
+  route?: string;
+  slot?: AddonDashboardSlot;
+}
 
 export type LlmRuntimeConfigResponse = RuntimeSettingsResponse["llm"] & {
   providerConfigs?: LlmProviderConfig[];
