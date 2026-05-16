@@ -189,6 +189,7 @@ const PROVIDER_API_STYLE_OPTIONS: ProviderEditorDraft["apiStyle"][] = [
   "openai-codex-responses",
   "anthropic-messages",
   "openai-chat-completions",
+  "bedrock-messages",
 ];
 const VISUAL_REGRESSION_MODE =
   (import.meta.env.VITE_GOATCITADEL_VISUAL_REGRESSION_MODE as string | undefined)?.trim().toLowerCase() === "true";
@@ -1142,7 +1143,12 @@ type ProviderEditorDraft = {
   providerId: string;
   label: string;
   baseUrl: string;
-  apiStyle: "openai-chat-completions" | "openai-responses" | "openai-codex-responses" | "anthropic-messages";
+  apiStyle:
+    | "openai-chat-completions"
+    | "openai-responses"
+    | "openai-codex-responses"
+    | "anthropic-messages"
+    | "bedrock-messages";
   defaultModel: string;
   apiKeyEnv: string;
 };
@@ -1170,7 +1176,12 @@ export function buildProviderEditorDraft(
     providerId: string;
     label: string;
     baseUrl: string;
-    apiStyle?: "openai-chat-completions" | "openai-responses" | "openai-codex-responses" | "anthropic-messages";
+    apiStyle?:
+      | "openai-chat-completions"
+      | "openai-responses"
+      | "openai-codex-responses"
+      | "anthropic-messages"
+      | "bedrock-messages";
     defaultModel: string;
     apiKeySource?: string;
     apiKeyRef?: string;

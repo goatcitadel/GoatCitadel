@@ -396,12 +396,18 @@ export interface RuntimeSettingsResponse {
       providerId: string;
       label: string;
       baseUrl: string;
-      apiStyle: "openai-chat-completions" | "openai-responses" | "openai-codex-responses" | "anthropic-messages";
+      apiStyle:
+        | "openai-chat-completions"
+        | "openai-responses"
+        | "openai-codex-responses"
+        | "anthropic-messages"
+        | "bedrock-messages";
       resolvedApiStyle?:
         | "openai-chat-completions"
         | "openai-responses"
         | "openai-codex-responses"
-        | "anthropic-messages";
+        | "anthropic-messages"
+        | "bedrock-messages";
       defaultModel: string;
       authMode?: "api-key" | "codex-oauth" | "claude-code-oauth";
       oauthStatus?: {
