@@ -38,7 +38,7 @@ export interface TaskArtifactClaim {
   label?: string;
 }
 
-export type TaskArtifactVerificationStatus = "unchecked" | "verified" | "missing" | "error";
+export type TaskArtifactVerificationStatus = "unverified" | "verified" | "missing" | "failed";
 
 export interface TaskArtifactVerification {
   claim: TaskArtifactClaim;
