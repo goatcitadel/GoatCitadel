@@ -6,8 +6,10 @@ import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { MissionControlNextApp } from "@next/app/MissionControlNextApp";
 import { retireMissionControlServiceWorkers } from "./service-worker-cleanup";
+import "@next/styles/mission-control-next-tokens.css";
 import "@next/styles/mission-control-next-foundation.css";
 import "@next/styles/mission-control-next.css";
+import "@next/features/native-routes/primitives/primitives.css";
 
 const visualRegressionMode =
   (import.meta.env.VITE_GOATCITADEL_VISUAL_REGRESSION_MODE as string | undefined)?.trim().toLowerCase() === "true";

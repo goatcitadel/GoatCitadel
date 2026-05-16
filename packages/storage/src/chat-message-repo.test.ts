@@ -8,6 +8,7 @@ import type { ChatMessageRecord } from "@goatcitadel/contracts";
 import type { DatabaseClient, DbStatement } from "./db.js";
 import { createDatabase } from "./sqlite.js";
 import { ChatMessageRepository } from "./chat-message-repo.js";
+import { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
 
 const createdFiles: string[] = [];
 
@@ -380,5 +381,67 @@ describe("ChatMessageRepository", () => {
     assert.equal(createGuardRepo({ countRow: { count: "bad" } }).countBySession("sess-1"), 0);
     assert.deepEqual(createGuardRepo({ cursorRow: "not a row", latestRows: "not rows" }).list("sess-1", 0, "m1"), []);
     assert.deepEqual(createGuardRepo({ cursorRow: { seq: "bad" }, latestRows: [null] }).list("sess-1", 1001, "m1"), []);
+  });
+});
+
+describe("ChatMessageRepository sanitization", () => {
+  it("quarantines a chat message whose parts_json is malformed and falls back to undefined parts", () => {
+    const dbPath = path.join(os.tmpdir(), `gc-chat-parts-sanitize-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const quarantine = new StateValidationQuarantineRepository(db);
+    const repo = new ChatMessageRepository(db, { quarantine });
+
+    const messageId = randomUUID();
+    repo.upsert({
+      messageId,
+      sessionId: "sess-sanitize-parts",
+      role: "user",
+      actorType: "user",
+      actorId: "operator",
+      content: "hello",
+      timestamp: "2026-03-05T01:00:00.000Z",
+    });
+
+    db.prepare("UPDATE chat_messages SET parts_json = ? WHERE message_id = ?").run("{not json", messageId);
+
+    const reloaded = repo.get(messageId);
+    assert.ok(reloaded);
+    assert.equal(reloaded.parts, undefined);
+    assert.equal(quarantine.count(), 1);
+    const entry0 = quarantine.list(10)[0];
+    assert.ok(entry0);
+    assert.equal(entry0.store, "chat_message.parts");
+    assert.equal(entry0.rowId, messageId);
+  });
+
+  it("quarantines a chat message whose attachments_json is malformed and falls back to undefined attachments", () => {
+    const dbPath = path.join(os.tmpdir(), `gc-chat-attach-sanitize-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const quarantine = new StateValidationQuarantineRepository(db);
+    const repo = new ChatMessageRepository(db, { quarantine });
+
+    const messageId = randomUUID();
+    repo.upsert({
+      messageId,
+      sessionId: "sess-sanitize-attach",
+      role: "user",
+      actorType: "user",
+      actorId: "operator",
+      content: "hello",
+      timestamp: "2026-03-05T01:00:00.000Z",
+    });
+
+    db.prepare("UPDATE chat_messages SET attachments_json = ? WHERE message_id = ?").run("[oops", messageId);
+
+    const reloaded = repo.get(messageId);
+    assert.ok(reloaded);
+    assert.equal(reloaded.attachments, undefined);
+    assert.equal(quarantine.count(), 1);
+    const entry0 = quarantine.list(10)[0];
+    assert.ok(entry0);
+    assert.equal(entry0.store, "chat_message.attachments");
+    assert.equal(entry0.rowId, messageId);
   });
 });

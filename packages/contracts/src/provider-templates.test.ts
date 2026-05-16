@@ -11,6 +11,7 @@ describe("provider templates", () => {
       "gpt-5-mini",
       "gpt-4.1-mini",
       "gpt-4o-mini",
+      "chat-latest",
     ]);
     expect(findProviderTemplate("openrouter")?.defaultModel).toBe("openai/gpt-5.4");
     expect(findProviderTemplate("openrouter")?.apiStyle).toBe("openai-chat-completions");
@@ -24,21 +25,18 @@ describe("provider templates", () => {
     expect(findProviderTemplate("vercel")?.defaultModel).toBe("openai/gpt-5.4");
   });
 
+  it("openai template recognizes chat-latest as a known model", () => {
+    const tpl = findProviderTemplate("openai");
+    expect(tpl?.knownModels).toContain("chat-latest");
+  });
+
   it("ships OpenAI Codex OAuth as a separate provider template", () => {
     expect(findProviderTemplate("openai-codex")).toMatchObject({
       label: "OpenAI Codex (ChatGPT OAuth)",
       baseUrl: "https://chatgpt.com/backend-api/codex",
       defaultModel: "gpt-5.5",
       apiStyle: "openai-codex-responses",
-      knownModels: [
-        "gpt-5.5",
-        "gpt-5.5-pro",
-        "gpt-5.4",
-        "gpt-5.4-pro",
-        "gpt-5.4-mini",
-        "gpt-5.3-codex",
-        "gpt-5.2-codex",
-      ],
+      knownModels: ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini"],
     });
   });
 
@@ -93,8 +91,8 @@ describe("provider templates", () => {
 
   it("includes DeepSeek V4 fallback models for offline model pickers", () => {
     expect(findProviderTemplate("deepseek")).toMatchObject({
-      defaultModel: "deepseek-v4-flash",
-      knownModels: ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"],
+      defaultModel: "deepseek-v4-pro",
+      knownModels: ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"],
     });
     expect(inferProviderForModelId("deepseek-v4-pro")).toBe("deepseek");
   });

@@ -95,6 +95,7 @@ export const PROVIDER_API_STYLE_OPTIONS: Array<{ value: ProviderApiStyle; label:
   { value: "openai-codex-responses", label: "OpenAI Codex Responses" },
   { value: "anthropic-messages", label: "Anthropic Messages" },
   { value: "openai-chat-completions", label: "OpenAI Chat Completions" },
+  { value: "bedrock-messages", label: "Bedrock Messages" },
 ];
 
 export function isAbortError(error: unknown): boolean {

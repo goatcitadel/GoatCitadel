@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import type { ChatInputPart, ChatMessageRecord, ChatMessageRole } from "@goatcitadel/contracts";
-import { safeJsonParse } from "./safe-json.js";
+import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
+import { parseJsonArray } from "./state-validators.js";
 
 interface ChatMessageRow {
   seq: number;
@@ -20,6 +21,11 @@ interface ChatMessageRow {
   created_at: string;
 }
 
+export interface ChatMessageRepositoryOptions {
+  quarantine?: { record: (entry: QuarantineEntry) => unknown };
+  logger?: { warn: (data: unknown, msg: string) => void };
+}
+
 export class ChatMessageRepository {
   private readonly upsertStmt;
   private readonly countStmt;
@@ -28,7 +34,10 @@ export class ChatMessageRepository {
   private readonly getStmt;
   private readonly getCursorStmt;
 
-  public constructor(private readonly db: DatabaseClient) {
+  public constructor(
+    private readonly db: DatabaseClient,
+    private readonly options: ChatMessageRepositoryOptions = {},
+  ) {
     this.upsertStmt = db.prepare(`
       INSERT INTO chat_messages (
         message_id, session_id, role, actor_type, actor_id, content, parts_json, attachments_json,
@@ -177,7 +186,7 @@ export class ChatMessageRepository {
 
   public get(messageId: string): ChatMessageRecord | undefined {
     const row = toChatMessageRow(this.getStmt.get(messageId));
-    return row ? mapRow(row) : undefined;
+    return row ? this.mapRow(row) : undefined;
   }
 
   public list(sessionId: string, limit = 200, cursor?: string): ChatMessageRecord[] {
@@ -192,7 +201,88 @@ export class ChatMessageRepository {
         })()
       : toChatMessageRows(this.listLatestStmt.all(sessionId, safeLimit));
     rows.reverse();
-    return rows.map((row) => mapRow(row));
+    return rows.map((row) => this.mapRow(row));
+  }
+
+  private mapRow(row: ChatMessageRow): ChatMessageRecord {
+    return {
+      messageId: row.message_id,
+      sessionId: row.session_id,
+      role: row.role,
+      actorType: row.actor_type,
+      actorId: row.actor_id,
+      content: row.content,
+      timestamp: row.timestamp,
+      tokenInput: row.token_input ?? undefined,
+      tokenOutput: row.token_output ?? undefined,
+      costUsd: row.cost_usd ?? undefined,
+      parts: this.parseParts(row.parts_json, row.message_id),
+      attachments: this.parseAttachments(row.attachments_json, row.message_id),
+    };
+  }
+
+  private parseParts(raw: string | null, messageId: string): ChatInputPart[] | undefined {
+    if (!raw) {
+      return undefined;
+    }
+    const parsed = loadAndSanitize(
+      raw,
+      {
+        store: "chat_message.parts",
+        rowId: messageId,
+        parse: parseJsonArray,
+        onQuarantine: this.options.quarantine ? (e) => this.options.quarantine!.record(e) : undefined,
+        log: this.options.logger,
+      },
+      undefined,
+    );
+    if (!parsed) {
+      return undefined;
+    }
+    const parts = parsed.filter(isChatInputPart);
+    return parts.length > 0 ? parts : undefined;
+  }
+
+  private parseAttachments(raw: string | null, messageId: string): ChatMessageRecord["attachments"] | undefined {
+    if (!raw) {
+      return undefined;
+    }
+    const parsed = loadAndSanitize(
+      raw,
+      {
+        store: "chat_message.attachments",
+        rowId: messageId,
+        parse: parseJsonArray,
+        onQuarantine: this.options.quarantine ? (e) => this.options.quarantine!.record(e) : undefined,
+        log: this.options.logger,
+      },
+      undefined,
+    );
+    if (!parsed) {
+      return undefined;
+    }
+    const attachments = parsed
+      .map((item) => {
+        if (!isRecord(item)) {
+          return undefined;
+        }
+        const attachmentId = typeof item.attachmentId === "string" ? item.attachmentId : undefined;
+        const fileName = typeof item.fileName === "string" ? item.fileName : undefined;
+        const mimeType = typeof item.mimeType === "string" ? item.mimeType : undefined;
+        const sizeBytes =
+          typeof item.sizeBytes === "number" && Number.isFinite(item.sizeBytes) ? item.sizeBytes : undefined;
+        if (!attachmentId || !fileName || !mimeType || sizeBytes === undefined) {
+          return undefined;
+        }
+        return {
+          attachmentId,
+          fileName,
+          mimeType,
+          sizeBytes,
+        };
+      })
+      .filter((item): item is NonNullable<ChatMessageRecord["attachments"]>[number] => Boolean(item));
+    return attachments.length > 0 ? attachments : undefined;
   }
 }
 
@@ -270,65 +360,4 @@ function toCursorRow(value: unknown): { seq?: number } | undefined {
   return typeof value.seq === "number" || value.seq === undefined
     ? { seq: value.seq as number | undefined }
     : undefined;
-}
-
-function mapRow(row: ChatMessageRow): ChatMessageRecord {
-  return {
-    messageId: row.message_id,
-    sessionId: row.session_id,
-    role: row.role,
-    actorType: row.actor_type,
-    actorId: row.actor_id,
-    content: row.content,
-    timestamp: row.timestamp,
-    tokenInput: row.token_input ?? undefined,
-    tokenOutput: row.token_output ?? undefined,
-    costUsd: row.cost_usd ?? undefined,
-    parts: parseParts(row.parts_json),
-    attachments: parseAttachments(row.attachments_json),
-  };
-}
-
-function parseParts(raw: string | null): ChatInputPart[] | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const parsed = safeJsonParse<unknown>(raw, undefined);
-  if (!Array.isArray(parsed)) {
-    return undefined;
-  }
-  const parts = parsed.filter(isChatInputPart);
-  return parts.length > 0 ? parts : undefined;
-}
-
-function parseAttachments(raw: string | null): ChatMessageRecord["attachments"] | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const parsed = safeJsonParse<unknown>(raw, undefined);
-  if (!Array.isArray(parsed)) {
-    return undefined;
-  }
-  const attachments = parsed
-    .map((item) => {
-      if (!isRecord(item)) {
-        return undefined;
-      }
-      const attachmentId = typeof item.attachmentId === "string" ? item.attachmentId : undefined;
-      const fileName = typeof item.fileName === "string" ? item.fileName : undefined;
-      const mimeType = typeof item.mimeType === "string" ? item.mimeType : undefined;
-      const sizeBytes =
-        typeof item.sizeBytes === "number" && Number.isFinite(item.sizeBytes) ? item.sizeBytes : undefined;
-      if (!attachmentId || !fileName || !mimeType || sizeBytes === undefined) {
-        return undefined;
-      }
-      return {
-        attachmentId,
-        fileName,
-        mimeType,
-        sizeBytes,
-      };
-    })
-    .filter((item): item is NonNullable<ChatMessageRecord["attachments"]>[number] => Boolean(item));
-  return attachments.length > 0 ? attachments : undefined;
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FolderKanban, MessageSquarePlus, RefreshCw } from "lucide-react";
+import { MessageSquarePlus, RefreshCw } from "lucide-react";
 import type { ChatMode, ChatProjectRecord, ChatSessionRecord } from "@goatcitadel/contracts";
 import {
   createChatSession,
@@ -8,6 +8,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import type { AppRoute } from "@next/app/route-model";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
+import { ModeBar } from "../primitives";
 import { readRouteDiagnosticNow, recordRouteAction, recordRouteDataLoad } from "../route-diagnostics";
 import type { NativeRoutePagesProps } from "../types";
 import "../native-routes.css";
@@ -175,14 +176,33 @@ export function ProjectsRoutePage({ route, activeWorkspaceId, activeWorkspaceNam
     }
   };
 
+  const totalLiveSessions = state.sessions.filter((session) => session.projectId).length;
+
   return (
     <NativePageFrame
-      icon={FolderKanban}
-      kicker="Projects"
+      area="projects"
+      kicker="Projects · Workspace"
       title="Project containers"
       description={`Cross-surface project threads for ${activeWorkspaceName}.`}
       loading={state.loading}
       error={state.error}
+      metrics={[
+        { label: "Projects", value: String(state.projects.length) },
+        { label: "Live sessions", value: String(totalLiveSessions) },
+      ]}
+      actions={
+        <>
+          {SURFACES.map((surface) => (
+            <NewSessionButton
+              key={`head-${surface.mode}`}
+              mode={surface.mode}
+              label={surface.action}
+              disabled={!selectedProject}
+              onSelect={() => void handleNewSession(surface.mode)}
+            />
+          ))}
+        </>
+      }
     >
       <NativeGrid className="mc-next-native-projects-grid">
         <NativeCard
@@ -191,8 +211,14 @@ export function ProjectsRoutePage({ route, activeWorkspaceId, activeWorkspaceNam
           density="compact"
           stats={[
             { label: "Projects", value: String(state.projects.length) },
-            { label: "Sessions", value: String(state.sessions.filter((session) => session.projectId).length) },
+            { label: "Sessions", value: String(totalLiveSessions) },
           ]}
+          actions={
+            <button type="button" className="mc-next-settings-filter" onClick={() => void loadProjects()}>
+              <RefreshCw className="h-4 w-4" />
+              Refresh
+            </button>
+          }
         >
           <div
             className="mc-next-settings-selectable-list is-compact is-scrollable"
@@ -216,6 +242,7 @@ export function ProjectsRoutePage({ route, activeWorkspaceId, activeWorkspaceNam
                       <span>{counts.chat + counts.cowork + counts.code} threads</span>
                     </div>
                     <p>{project.description?.trim() || project.workspacePath}</p>
+                    <ModeBar chat={counts.chat} cowork={counts.cowork} code={counts.code} />
                     <div className="mc-next-project-counts">
                       <span>Chat {counts.chat}</span>
                       <span>Cowork {counts.cowork}</span>
@@ -227,12 +254,6 @@ export function ProjectsRoutePage({ route, activeWorkspaceId, activeWorkspaceNam
             ) : (
               <p className="mc-next-directory-empty">No active projects found in this workspace.</p>
             )}
-          </div>
-          <div className="mc-next-settings-button-row">
-            <button type="button" className="mc-next-settings-filter" onClick={() => void loadProjects()}>
-              <RefreshCw className="h-4 w-4" />
-              Refresh
-            </button>
           </div>
         </NativeCard>
 
@@ -330,6 +351,32 @@ function ProjectThreadGroup({
         <p className="mc-next-directory-empty">No {label.toLowerCase()} threads in this project.</p>
       )}
     </section>
+  );
+}
+
+function NewSessionButton({
+  mode,
+  label,
+  disabled,
+  onSelect,
+}: {
+  mode: ChatMode;
+  label: string;
+  disabled: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="mc-next-new-session-button"
+      data-mode={mode}
+      disabled={disabled}
+      onClick={onSelect}
+    >
+      <span className="mc-next-new-session-button-swatch" aria-hidden="true" />
+      <MessageSquarePlus className="h-4 w-4" />
+      {label}
+    </button>
   );
 }
 

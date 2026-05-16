@@ -6,6 +6,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createDatabase } from "./sqlite.js";
 import { SessionRepository } from "./session-repo.js";
+import { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
 
 const createdFiles: string[] = [];
 
@@ -229,5 +230,37 @@ describe("SessionRepository", () => {
       () => repo.listOperatorSummaries("2026-02-27T09:00:00.000Z"),
       /Unexpected operator summary row shape/,
     );
+  });
+});
+
+describe("SessionRepository sanitization", () => {
+  it("quarantines a session whose routing_hints_json is malformed and falls back to empty routing hints", () => {
+    const dbPath = path.join(os.tmpdir(), `gc-session-sanitize-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const quarantine = new StateValidationQuarantineRepository(db);
+    const repo = new SessionRepository(db, { quarantine });
+
+    const sessionId = randomUUID();
+    // Insert a session, then corrupt its routing_hints_json directly
+    repo.upsert({
+      sessionId,
+      sessionKey: `key-${sessionId}`,
+      kind: "dm",
+      channel: "chat",
+      account: "u1",
+      timestamp: "2026-05-15T00:00:00.000Z",
+    });
+    db.prepare("UPDATE sessions SET routing_hints_json = ? WHERE session_id = ?").run("{not json", sessionId);
+
+    const loaded = repo.getBySessionId(sessionId);
+    assert.equal(loaded.routingHints, undefined);
+    assert.equal(quarantine.count(), 1);
+    const entries = quarantine.list(10);
+    const e0 = entries[0];
+    assert.ok(e0);
+    assert.equal(e0.store, "session.routing_hints");
+    assert.equal(e0.rowId, sessionId);
+    assert.match(e0.schemaError, /json_parse|schema/);
   });
 });

@@ -72,6 +72,31 @@ export function trimNewestContextMessagesForPromptCache(
   return trimmed;
 }
 
+export interface ClampSummaryReserveResult {
+  value: number;
+  clamped: boolean;
+  warning?: string;
+}
+
+export function clampSummaryReserveTokens(
+  requested: number,
+  outputTokenLimit: number | undefined,
+): ClampSummaryReserveResult {
+  const floored = Number.isFinite(requested) && requested > 0 ? Math.floor(requested) : 0;
+  const wasFloored = floored !== requested;
+  if (outputTokenLimit === undefined) {
+    return { value: floored, clamped: wasFloored };
+  }
+  if (floored <= outputTokenLimit) {
+    return { value: floored, clamped: wasFloored };
+  }
+  return {
+    value: outputTokenLimit,
+    clamped: true,
+    warning: `compaction summary reserve clamped from ${floored} to model output limit ${outputTokenLimit}`,
+  };
+}
+
 function extractCompactionArtifacts(contents: string[]): string[] {
   const collected: string[] = [];
   const pushArtifact = (value: string) => {

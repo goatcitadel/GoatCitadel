@@ -1,6 +1,12 @@
 import type { CronJobRecord } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
-import { safeJsonParse } from "./safe-json.js";
+import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
+import { parseJsonObject } from "./state-validators.js";
+
+export interface CronJobRepositoryOptions {
+  quarantine?: { record: (entry: QuarantineEntry) => unknown };
+  logger?: { warn: (data: unknown, msg: string) => void };
+}
 
 interface CronJobRow {
   job_id: string;
@@ -26,7 +32,10 @@ export class CronJobRepository {
   private readonly listStmt;
   private readonly deleteStmt;
 
-  public constructor(private readonly db: DatabaseClient) {
+  public constructor(
+    private readonly db: DatabaseClient,
+    private readonly options: CronJobRepositoryOptions = {},
+  ) {
     this.upsertStmt = db.prepare(`
       INSERT INTO cron_jobs (
         job_id, name, action, action_config_json, description, schedule, enabled, end_at, last_run_at, next_run_at, workdir, context_from, last_run_output, last_run_id, updated_at
@@ -98,13 +107,13 @@ export class CronJobRepository {
       return undefined;
     }
     assertCronJobRow(row);
-    return mapRow(row);
+    return this.mapRow(row);
   }
 
   public list(): CronJobRecord[] {
     const rows = this.listStmt.all();
     assertCronJobRows(rows);
-    return rows.map(mapRow);
+    return rows.map((row) => this.mapRow(row));
   }
 
   public delete(jobId: string): boolean {
@@ -112,27 +121,37 @@ export class CronJobRepository {
     const changes = Number((result as { changes?: number }).changes ?? 0);
     return changes > 0;
   }
-}
 
-function mapRow(row: CronJobRow): CronJobRecord {
-  const actionConfig = safeJsonParse<CronJobRecord["actionConfig"] | undefined>(row.action_config_json, undefined);
-  return {
-    jobId: row.job_id,
-    name: row.name,
-    action: row.action as CronJobRecord["action"],
-    ...(actionConfig ? { actionConfig } : {}),
-    description: row.description ?? undefined,
-    schedule: row.schedule,
-    enabled: Boolean(row.enabled),
-    endAt: row.end_at ?? undefined,
-    lastRunAt: row.last_run_at ?? undefined,
-    nextRunAt: row.next_run_at ?? undefined,
-    workdir: row.workdir ?? undefined,
-    contextFrom: row.context_from ?? undefined,
-    lastRunOutput: row.last_run_output ?? undefined,
-    lastRunId: row.last_run_id ?? undefined,
-    updatedAt: row.updated_at,
-  };
+  private mapRow(row: CronJobRow): CronJobRecord {
+    const actionConfig = loadAndSanitize(
+      row.action_config_json,
+      {
+        store: "cron_job.action_config",
+        rowId: row.job_id,
+        parse: parseJsonObject,
+        onQuarantine: this.options.quarantine ? (e) => this.options.quarantine!.record(e) : undefined,
+        log: this.options.logger,
+      },
+      undefined,
+    ) as CronJobRecord["actionConfig"] | undefined;
+    return {
+      jobId: row.job_id,
+      name: row.name,
+      action: row.action as CronJobRecord["action"],
+      ...(actionConfig ? { actionConfig } : {}),
+      description: row.description ?? undefined,
+      schedule: row.schedule,
+      enabled: Boolean(row.enabled),
+      endAt: row.end_at ?? undefined,
+      lastRunAt: row.last_run_at ?? undefined,
+      nextRunAt: row.next_run_at ?? undefined,
+      workdir: row.workdir ?? undefined,
+      contextFrom: row.context_from ?? undefined,
+      lastRunOutput: row.last_run_output ?? undefined,
+      lastRunId: row.last_run_id ?? undefined,
+      updatedAt: row.updated_at,
+    };
+  }
 }
 
 function cronJobsMatch(existing: CronJobRecord, next: CronJobRecord): boolean {

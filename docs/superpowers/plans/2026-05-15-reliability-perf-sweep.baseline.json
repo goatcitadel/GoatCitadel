@@ -1,0 +1,8 @@
+{
+  "branch": "feature/reliability-perf-sweep",
+  "capturedAt": "2026-05-16T00:05:00Z",
+  "testFiles": 437,
+  "tests": 2720,
+  "failures": 0,
+  "note": "Gateway vitest baseline before reliability+perf sweep. Cold-start RSS/time-to-ready captured in Task 11."
+}
