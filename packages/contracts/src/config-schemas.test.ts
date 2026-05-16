@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AssistantConfigInputSchema,
   BudgetConfigSchema,
+  CronJobSchema,
   CronJobsConfigSchema,
   LlmConfigFileSchema,
   ToolPolicyConfigSchema,
@@ -457,5 +458,33 @@ describe("CronJobsConfigSchema", () => {
   it("rejects when jobs is not an array", () => {
     const input = { jobs: "none" };
     expect(() => CronJobsConfigSchema.parse(input)).toThrow();
+  });
+});
+
+describe("CronJobSchema no_agent + chaining fields", () => {
+  it("accepts no_agent action with noAgent actionConfig", () => {
+    const parsed = CronJobSchema.parse({
+      jobId: "probe",
+      name: "Probe",
+      action: "no_agent",
+      actionConfig: { noAgent: { command: "echo", args: ["hi"], timeoutMs: 1000 } },
+      schedule: "*/5 * * * *",
+      enabled: true,
+    });
+    expect(parsed.action).toBe("no_agent");
+  });
+
+  it("accepts workdir and contextFrom", () => {
+    const parsed = CronJobSchema.parse({
+      jobId: "chained",
+      name: "Chained",
+      action: "task",
+      schedule: "*/5 * * * *",
+      enabled: true,
+      workdir: "/tmp/test",
+      contextFrom: "upstream",
+    });
+    expect(parsed.workdir).toBe("/tmp/test");
+    expect(parsed.contextFrom).toBe("upstream");
   });
 });

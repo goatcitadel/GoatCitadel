@@ -561,13 +561,15 @@ export const CronJobSchema = z
     jobId: z.string(),
     name: z.string(),
     action: z
-      .enum(["task", "improvement", "backup", "memory_flush", "cost_report", "update_review", "watchdog"])
+      .enum(["task", "improvement", "backup", "memory_flush", "cost_report", "update_review", "watchdog", "no_agent"])
       .default("task"),
     actionConfig: z.record(z.string(), z.unknown()).optional(),
     description: z.string().optional(),
     schedule: z.string(),
     enabled: z.boolean(),
     endAt: z.string().optional(),
+    workdir: z.string().optional(),
+    contextFrom: z.string().optional(),
   })
   .passthrough();
 
