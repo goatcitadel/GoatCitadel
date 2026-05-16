@@ -196,7 +196,8 @@ export class CronAutomationService {
     let runSummary: Record<string, unknown> = { result: "ok" };
     let watchdogReviewRecorded = false;
     if (job.action === "task") {
-      const taskResult = await this.deps.runHandlers.task(job);
+      const context = this.resolveCronJobContext(job);
+      const taskResult = await this.deps.runHandlers.task(job, context);
       const finishedAt = new Date().toISOString();
       const saved = this.deps.storage.cronJobs.upsert(
         {
@@ -212,12 +213,14 @@ export class CronAutomationService {
         action: job.action,
         taskId: taskResult?.taskId,
         nextRunAt: saved.nextRunAt,
+        contextFrom: context?.contextFrom,
       };
       this.deps.publishRealtime("cron_job_run", "cron", {
         type: "scheduled_task_created",
         jobId: saved.jobId,
         taskId: taskResult?.taskId,
         name: saved.name,
+        contextFrom: context?.contextFrom,
       });
     } else if (job.action === "watchdog") {
       const watchdogResult = await this.deps.runHandlers.watchdog(job);
@@ -545,6 +548,17 @@ export class CronAutomationService {
       previousRunId: row.previous_run_id ?? undefined,
       diff: parseJsonRecord(row.diff_json),
       createdAt: row.created_at,
+    };
+  }
+
+  private resolveCronJobContext(job: CronJobRecord): { contextFrom?: string; contextOutput?: string } | undefined {
+    if (!job.contextFrom) {
+      return undefined;
+    }
+    const upstream = this.deps.storage.cronJobs.get(job.contextFrom);
+    return {
+      contextFrom: job.contextFrom,
+      contextOutput: upstream?.lastRunOutput,
     };
   }
 
