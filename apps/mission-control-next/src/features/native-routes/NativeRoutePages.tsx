@@ -78,6 +78,7 @@ import { NativeCard, NativeGrid, NativeList, NativePageFrame, QuickJumpCard } fr
 import { SettingsNativePage as NextSettingsNativePage } from "./SettingsNativePage";
 import { MemoryRoutePage } from "./library/MemoryRoutePage";
 import { ApprovalsRoutePage } from "./ops/ApprovalsRoutePage";
+import { KanbanRoutePage } from "./ops/KanbanRoutePage";
 import { RuntimeRoutePage } from "./ops/RuntimeRoutePage";
 import { ProjectsRoutePage } from "./projects/ProjectsRoutePage";
 import { readRouteDiagnosticNow, recordRouteAction, recordRouteDataLoad } from "./route-diagnostics";
@@ -130,8 +131,12 @@ export function NativeRoutePages(props: NativeRoutePagesProps) {
     return <LibraryNativePage {...props} />;
   }
   if (route.area === "ops") {
-    if ((route.section ?? "activity") === "approvals") {
+    const section = route.section ?? "activity";
+    if (section === "approvals") {
       return <ApprovalsRoutePage {...props} />;
+    }
+    if (section === "kanban") {
+      return <KanbanRoutePage {...props} />;
     }
     return <RuntimeRoutePage {...props} />;
   }
