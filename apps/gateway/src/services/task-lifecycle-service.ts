@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- TaskLifecycleService centralizes task state transitions, agentic context, distress signals, retry budget, artifact verification, and worker crash bridging. */
 import type {
   AgenticControlRequest,
   AgenticControlResponse,
@@ -174,6 +175,27 @@ export class TaskLifecycleService {
       distressSignals,
       status: "blocked",
     });
+  }
+
+  public autoBlockOnIncompleteExit(taskId: string, runId: string): TaskRecord {
+    const current = this.deps.storage.tasks.get(taskId);
+    if (current.status === "done" || current.status === "blocked") {
+      return current;
+    }
+    const distressSignals = emitDistressSignal(current.distressSignals, {
+      code: "worker_crash",
+      severity: "critical",
+      title: "Worker exited without closing the task",
+      summary: `Durable run ${runId} exited without a terminal close.`,
+      evidenceRef: `durable-run:${runId}`,
+    });
+    const updated = this.deps.storage.tasks.update(taskId, { distressSignals, status: "blocked" });
+    this.publishTaskEvent(
+      "task_auto_blocked",
+      { taskId, runId, reason: "worker_incomplete_exit" },
+      buildTaskRealtimeLinks(updated),
+    );
+    return updated;
   }
 
   public async verifyTaskArtifacts(taskId: string, claims: TaskArtifactClaim[]): Promise<TaskRecord> {

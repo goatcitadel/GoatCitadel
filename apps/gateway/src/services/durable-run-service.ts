@@ -141,6 +141,9 @@ export class DurableRunService {
       onRunFailed?: (run: DurableRunRecord, message: string) => Promise<void> | void;
       evaluateContinuationGate?: (run: DurableRunRecord) => ContinuationGateDecision | undefined;
       recordEvidenceEnvelope?: (input: EvidenceEnvelopeCreateRequest) => void;
+      taskLifecycle?: {
+        autoBlockOnIncompleteExit(taskId: string, runId: string): unknown;
+      };
     },
   ) {}
 
@@ -793,6 +796,24 @@ export class DurableRunService {
             leaseExpiresAt: current.leaseExpiresAt,
           });
           await this.failWorkflowRun(current, "Durable workflow exited without marking a terminal or waiting state.");
+          const taskId = typeof current.payload?.taskId === "string" ? current.payload.taskId : undefined;
+          if (taskId && this.deps?.taskLifecycle) {
+            try {
+              this.deps.taskLifecycle.autoBlockOnIncompleteExit(taskId, current.runId);
+            } catch (error) {
+              this.ctx.publishRealtime(
+                "system",
+                "durable",
+                {
+                  kind: "task_auto_block_failed",
+                  runId: current.runId,
+                  taskId,
+                  error: error instanceof Error ? error.message : String(error),
+                },
+                buildDurableRealtimeOptions(current.runId),
+              );
+            }
+          }
         }
       }
     }

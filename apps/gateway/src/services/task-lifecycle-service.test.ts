@@ -543,3 +543,35 @@ describe("TaskLifecycleService.verifyTaskArtifacts", () => {
     expect(persisted.artifactVerification?.length).toBe(2);
   });
 });
+
+describe("TaskLifecycleService.autoBlockOnIncompleteExit", () => {
+  it("transitions an in-progress task to blocked and emits worker_crash distress", () => {
+    const { service, publishRealtime } = createService();
+    const task = service.createTask({ title: "t", status: "in_progress" });
+    const blocked = service.autoBlockOnIncompleteExit(task.taskId, "run-xyz");
+    expect(blocked.status).toBe("blocked");
+    const crash = blocked.distressSignals?.find((s) => s.code === "worker_crash");
+    expect(crash?.severity).toBe("critical");
+    expect(crash?.evidenceRef).toBe("durable-run:run-xyz");
+    const event = publishRealtime.mock.calls.find((c) => c[0] === "task_auto_blocked");
+    expect(event).toBeTruthy();
+  });
+
+  it("is a no-op when task is already blocked", () => {
+    const { service } = createService();
+    const task = service.createTask({ title: "t", status: "blocked" });
+    const result = service.autoBlockOnIncompleteExit(task.taskId, "run-xyz");
+    expect(result.status).toBe("blocked");
+    expect(result.distressSignals?.length ?? 0).toBe(0);
+  });
+
+  it("is a no-op when task is done", () => {
+    const { service, storage } = createService();
+    // Create + add a deliverable so we can mark done legitimately
+    const task = service.createTask({ title: "t", status: "in_progress" });
+    storage.taskDeliverables.append(task.taskId, { deliverableType: "artifact", title: "out" });
+    service.updateTask(task.taskId, { status: "done" });
+    const result = service.autoBlockOnIncompleteExit(task.taskId, "run-xyz");
+    expect(result.status).toBe("done");
+  });
+});

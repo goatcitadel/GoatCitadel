@@ -968,6 +968,10 @@ export class GatewayService {
       },
       evaluateContinuationGate: (run) => this.evaluateDurableContinuationGate(run),
       recordEvidenceEnvelope: (input) => this.evidenceEnvelopeService.createEnvelope(input),
+      taskLifecycle: {
+        autoBlockOnIncompleteExit: (taskId, runId) =>
+          this.taskLifecycleService.autoBlockOnIncompleteExit(taskId, runId),
+      },
     });
     this.hooksService = new HooksService(serviceCtx, {
       createDurableRun: (input) => this.durableRunService.createDurableRun(input),
