@@ -168,9 +168,16 @@ function toChatMessageRecord(event: TranscriptEvent): ChatMessageRecord {
       content?: unknown;
       parts?: unknown;
       attachments?: unknown;
+      steered?: unknown;
+      parentDelegationStepId?: unknown;
     };
   };
   const message = payload.message;
+  const steered = typeof message?.steered === "boolean" ? message.steered : undefined;
+  const parentDelegationStepId =
+    typeof message?.parentDelegationStepId === "string" && message.parentDelegationStepId.length > 0
+      ? message.parentDelegationStepId
+      : undefined;
   return {
     messageId: event.eventId,
     sessionId: event.sessionId,
@@ -186,6 +193,8 @@ function toChatMessageRecord(event: TranscriptEvent): ChatMessageRecord {
     attachments: Array.isArray(message?.attachments)
       ? (message.attachments as ChatMessageRecord["attachments"])
       : undefined,
+    ...(steered === undefined ? {} : { steered }),
+    ...(parentDelegationStepId === undefined ? {} : { parentDelegationStepId }),
   };
 }
 

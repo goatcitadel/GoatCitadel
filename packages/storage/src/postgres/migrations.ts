@@ -915,4 +915,13 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS goal_set_at TEXT;
     `,
   },
+  {
+    version: 33,
+    name: "chat_messages_steer_audit",
+    sql: `
+      ALTER TABLE chat_messages
+        ADD COLUMN IF NOT EXISTS steered INTEGER,
+        ADD COLUMN IF NOT EXISTS parent_delegation_step_id TEXT;
+    `,
+  },
 ];

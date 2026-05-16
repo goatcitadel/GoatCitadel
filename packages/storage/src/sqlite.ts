@@ -781,6 +781,14 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "chat_session_meta", "goal_set_at", "TEXT");
     },
   },
+  {
+    version: 80,
+    name: "chat_messages_steer_audit",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "chat_messages", "steered", "INTEGER");
+      addColumnIfMissingIfTableExists(db, "chat_messages", "parent_delegation_step_id", "TEXT");
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
