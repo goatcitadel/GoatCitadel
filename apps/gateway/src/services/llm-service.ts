@@ -573,7 +573,7 @@ export class LlmService {
       if (!response.ok) {
         throw new Error(await buildHttpError("image edit", response));
       }
-      return adaptImageGenerationResponse((await response.json()) as Record<string, unknown>, {
+      return adaptImageGenerationResponse(await parseProviderJsonResponse("image edit", response), {
         providerId: resolved.provider.providerId,
         model,
         operation,
@@ -603,7 +603,7 @@ export class LlmService {
     if (!response.ok) {
       throw new Error(await buildHttpError("image generation", response));
     }
-    return adaptImageGenerationResponse((await response.json()) as Record<string, unknown>, {
+    return adaptImageGenerationResponse(await parseProviderJsonResponse("image generation", response), {
       providerId: resolved.provider.providerId,
       model,
       operation,
@@ -785,10 +785,13 @@ export class LlmService {
       }
     }
 
-    return applyEstimatedCostToChatResponse((await response.json()) as ChatCompletionResponse, {
-      providerId: resolved.provider.providerId,
-      model,
-    });
+    return applyEstimatedCostToChatResponse(
+      await parseProviderJsonResponse<ChatCompletionResponse>("chat completion", response),
+      {
+        providerId: resolved.provider.providerId,
+        model,
+      },
+    );
   }
 
   private async *executeChatCompletionsStream(
@@ -885,7 +888,7 @@ export class LlmService {
       });
     }
 
-    const json = (await response.json()) as Record<string, unknown>;
+    const json = await parseProviderJsonResponse("responses request", response);
     return applyEstimatedCostToChatResponse(adaptOpenAiResponsesResponse(json), {
       providerId: resolved.provider.providerId,
       model,
@@ -915,7 +918,7 @@ export class LlmService {
     const shouldParseAsSse =
       isOpenAICodexResponsesProvider(resolved.provider) || contentType.includes("text/event-stream");
     if (!shouldParseAsSse || !response.body) {
-      const json = (await response.json()) as Record<string, unknown>;
+      const json = await parseProviderJsonResponse("responses stream", response);
       yield applyEstimatedCostToChatResponse(adaptOpenAiResponsesResponse(json), {
         providerId: resolved.provider.providerId,
         model,
@@ -1256,7 +1259,7 @@ export class LlmService {
         throw new Error(await buildHttpError("model listing", response));
       }
 
-      const json = (await response.json()) as unknown;
+      const json = await parseProviderJsonResponse<unknown>("model listing", response);
       const items = normalizeModelRecords(json);
       if (items.length > 0) {
         return { items, source: "live" };
@@ -1600,6 +1603,24 @@ async function buildHttpError(action: string, response: Response): Promise<strin
 function buildHttpErrorFromText(action: string, status: number, statusText: string, text: string): string {
   const snippet = text.slice(0, 400);
   return `${action} failed (${status} ${statusText}): ${snippet}`;
+}
+
+export async function parseProviderJsonResponse<T = Record<string, unknown>>(
+  action: string,
+  response: Response,
+): Promise<T> {
+  const text = await response.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch (error) {
+    const snippet = text.slice(0, 400).replace(/\s+/g, " ").trim();
+    const detail = error instanceof Error ? error.message : String(error);
+    const suffix = snippet ? ` — body: ${snippet}` : "";
+    throw new Error(
+      `${action} returned malformed JSON (${response.status} ${response.statusText}): ${detail}${suffix}`,
+      { cause: error },
+    );
+  }
 }
 
 function resolveRequestAuthSecret(
@@ -1958,12 +1979,12 @@ async function* streamJsonSseResponse(
 ): AsyncGenerator<Record<string, unknown>> {
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (!response.body) {
-    const json = (await response.json()) as Record<string, unknown>;
+    const json = await parseProviderJsonResponse("provider stream", response);
     yield json;
     return;
   }
   if (!options?.forceSse && !contentType.includes("text/event-stream")) {
-    const json = (await response.json()) as Record<string, unknown>;
+    const json = await parseProviderJsonResponse("provider stream", response);
     yield json;
     return;
   }
