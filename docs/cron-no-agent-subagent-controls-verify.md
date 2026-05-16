@@ -108,8 +108,17 @@ Prints the snapshot from `lastRunId` if it matches any job; errors otherwise.
 
 The parent depth is auto-inferred for in-session subagent callers from `taskSubagents.findByAgentSessionId(...).metadata.depth`. Explicit `parentSubagentDepth` on the request still overrides the lookup.
 
+## AbortSignal coverage
+
+All four `agentSendChatMessage` dispatch branches now propagate the external `AbortSignal`:
+
+| Branch | Chokepoint | Abort kind |
+|---|---|---|
+| LLM (`runAgentSendChatMessageLlmPath`) | `bindExternalAbortToController` → internal `AbortController` → `fetch(..., { signal })` | Hard |
+| Integration (`sendPreparedIntegrationChatTurn`) | `commsSend({ ..., signal })` | Hard |
+| Mode orchestration (`consumePreparedAgentChatTurn` non-durable) | `getActiveChatTurnExecution(turnId)?.controller.abort()` (cascades into nested LLM calls) | Hard |
+| Durable run (`consumePreparedAgentChatTurn` durable) | `cancelDurableChatRun(runId, "abort_signal")` + local controller abort | Soft — worker continues until it next observes the lease/cancel checkpoint. Documented inline. |
+
 ## Known limitations / follow-ups
 
-- **AbortSignal scope.** Plumbed through the dominant LLM path chokepoint (`runAgentSendChatMessageLlmPath`). Integration transports (Slack/etc.), durable runs, and orchestration phase execution still use their existing cancellation lifecycles — the budget race throws on schedule but in-flight calls on those paths aren't hard-aborted. Wire those if/when a use case appears.
-- **Two-migration split.** Postgres migrations 32 and 33 split the 4 new cron-job columns into two ALTERs; could be merged into one. No functional difference, idempotent (`IF NOT EXISTS`).
-- **Unrelated kanban commit.** `f2f9b0c1 feat(kanban): TaskDistressEngine helpers` landed on this branch via a subagent that picked up untracked files from a concurrent feature worktree. It does not conflict with cron/subagent work but should probably be moved to its own branch before merging the PR.
+- **Durable hard-cancel.** A remote durable worker that may live on another node cannot be killed synchronously. The soft-cancel uses `DurableRunService.cancelDurableRun`; the worker honors it at its next cancellation checkpoint. Hard mid-step cancellation would require a per-worker cancellation token in the workflow runtime — out of scope here.
