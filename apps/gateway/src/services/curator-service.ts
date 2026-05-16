@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   CuratorArchiveRequest,
   CuratorArchiveResponse,
@@ -5,6 +6,7 @@ import type {
   CuratorPruneRequest,
   CuratorPruneResponse,
   CuratorRunReport,
+  CuratorRunReportEntry,
   CuratorRunRequest,
   CuratorRunResponse,
   CuratorSkillStatusItem,
@@ -127,7 +129,93 @@ export class CuratorService {
     };
   }
 
-  public async runCurator(_input: CuratorRunRequest): Promise<CuratorRunResponse> {
-    throw new Error("not implemented yet");
+  public async runCurator(input: CuratorRunRequest): Promise<CuratorRunResponse> {
+    const startedAt = this.deps.now();
+    const runId = `curator-run-${randomUUID()}`;
+    const dryRun = Boolean(input.dryRun);
+    const skills = this.deps.listSkills();
+    const entries: CuratorRunReportEntry[] = [];
+    let immuneCount = 0;
+    let archivedCount = 0;
+
+    for (const skill of skills) {
+      const immunity = computeSkillImmunity(skill);
+      const grade = gradeSkillUsage({ skill, now: startedAt });
+      if (immunity.immune) {
+        immuneCount += 1;
+        entries.push({
+          skillId: skill.skillId,
+          name: skill.name,
+          recommendation: "keep",
+          score: grade.score,
+          signals: grade.signals,
+          action: "skipped_immune",
+          actionReason: immunity.reason,
+        });
+        continue;
+      }
+      if (grade.recommendation === "archive" && !dryRun) {
+        try {
+          this.deps.archiveSkill(skill.skillId, "curator:archived rubric_below_threshold", input.actorId);
+          archivedCount += 1;
+          entries.push({
+            skillId: skill.skillId,
+            name: skill.name,
+            recommendation: grade.recommendation,
+            score: grade.score,
+            signals: grade.signals,
+            action: "archived",
+            actionReason: "rubric_below_threshold",
+          });
+        } catch (error) {
+          entries.push({
+            skillId: skill.skillId,
+            name: skill.name,
+            recommendation: grade.recommendation,
+            score: grade.score,
+            signals: grade.signals,
+            action: "skipped_below_threshold",
+            actionReason: (error as Error).message,
+          });
+        }
+      } else {
+        entries.push({
+          skillId: skill.skillId,
+          name: skill.name,
+          recommendation: grade.recommendation,
+          score: grade.score,
+          signals: grade.signals,
+          action: grade.recommendation === "archive" ? "skipped_below_threshold" : "none",
+        });
+      }
+    }
+
+    const finishedAt = this.deps.now();
+    const report: CuratorRunReport = {
+      runId,
+      startedAt: startedAt.toISOString(),
+      finishedAt: finishedAt.toISOString(),
+      triggerMode: input.sync ? "synchronous" : "manual",
+      dryRun,
+      cycleDays: this.deps.cycleDays,
+      totalSkills: skills.length,
+      immuneCount,
+      scoredCount: entries.length,
+      archivedCount,
+      prunedCount: 0,
+      consolidationGroupCount: 0,
+      entries,
+      reportDir: "",
+    };
+    report.reportDir = await this.deps.writeReport(report);
+    this.deps.publishRealtime("curator", {
+      type: "curator_run_completed",
+      runId,
+      archivedCount,
+      immuneCount,
+      totalSkills: skills.length,
+      reportDir: report.reportDir,
+    });
+    return { runId, scheduled: false, report };
   }
 }

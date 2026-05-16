@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import type { SkillListItem } from "@goatcitadel/contracts";
+import type { CuratorRunReport, SkillListItem } from "@goatcitadel/contracts";
 import { CuratorService } from "./curator-service.js";
 
 function makeSkill(overrides: Partial<SkillListItem> = {}): SkillListItem {
@@ -228,5 +228,88 @@ describe("CuratorService.listArchived", () => {
     const response = service.listArchived();
     expect(response.items.map((i) => i.name)).toEqual(["beta"]);
     expect(response.items[0].archived).toBe(true);
+  });
+});
+
+describe("CuratorService.runCurator", () => {
+  it("scores every skill, archives below-threshold non-immune skills, writes report", async () => {
+    const archived: string[] = [];
+    const reports: CuratorRunReport[] = [];
+    const skills: SkillListItem[] = [
+      makeSkill({ name: "alpha", usageCount: 0 }) as SkillListItem,
+      makeSkill({ name: "beta", source: "bundled", usageCount: 0 }) as SkillListItem,
+      makeSkill({ name: "gamma", pinned: true, usageCount: 0 }) as SkillListItem,
+      makeSkill({ name: "delta", usageCount: 100, lastUsedAt: "2026-05-15T00:00:00Z" }) as SkillListItem,
+    ];
+    const service = new CuratorService({
+      listSkills: () => skills,
+      archiveSkill: (skillId) => {
+        archived.push(skillId);
+        const skill = skills.find((s) => s.skillId === skillId)!;
+        return { ...skill, state: "disabled" };
+      },
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-05-15T12:00:00Z"),
+      writeReport: async (report) => {
+        reports.push(report);
+        return `/tmp/logs/curator/${report.runId}`;
+      },
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+
+    const response = await service.runCurator({ sync: true });
+    expect(response.runId).toMatch(/^curator-run-/);
+    expect(response.scheduled).toBe(false);
+    expect(response.report).toBeDefined();
+    expect(response.report!.totalSkills).toBe(4);
+    expect(response.report!.immuneCount).toBe(2);
+    expect(response.report!.archivedCount).toBe(1);
+    expect(archived).toEqual(["skill-alpha"]);
+    expect(reports).toHaveLength(1);
+  });
+
+  it("does not archive on dryRun: true", async () => {
+    const archived: string[] = [];
+    const skills: SkillListItem[] = [makeSkill({ name: "alpha", usageCount: 0 }) as SkillListItem];
+    const service = new CuratorService({
+      listSkills: () => skills,
+      archiveSkill: (skillId) => {
+        archived.push(skillId);
+        return { ...skills[0], state: "disabled" };
+      },
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-05-15T12:00:00Z"),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    const response = await service.runCurator({ sync: true, dryRun: true });
+    expect(archived).toEqual([]);
+    expect(response.report!.archivedCount).toBe(0);
+    expect(response.report!.entries[0].action).toBe("skipped_below_threshold");
+  });
+
+  it("never archives bundled or pinned skills even when score is low", async () => {
+    const archived: string[] = [];
+    const skills: SkillListItem[] = [
+      makeSkill({ name: "alpha", source: "bundled", usageCount: 0 }) as SkillListItem,
+      makeSkill({ name: "beta", pinned: true, usageCount: 0 }) as SkillListItem,
+    ];
+    const service = new CuratorService({
+      listSkills: () => skills,
+      archiveSkill: (skillId) => {
+        archived.push(skillId);
+        return { ...skills[0], state: "disabled" };
+      },
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-05-15T12:00:00Z"),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    const response = await service.runCurator({ sync: true });
+    expect(archived).toEqual([]);
+    expect(response.report!.entries.every((e) => e.action === "skipped_immune")).toBe(true);
   });
 });
