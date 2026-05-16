@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BrainCircuit, RefreshCw, ShieldCheck } from "lucide-react";
+import { RefreshCw, ShieldCheck } from "lucide-react";
 import type { EvidenceEnvelope, MemoryItemRecord } from "@goatcitadel/contracts";
 import { fetchEvidenceEnvelopes } from "@goatcitadel/mission-control-shared/api/client";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
@@ -98,12 +98,16 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
 
   return (
     <NativePageFrame
-      icon={BrainCircuit}
-      kicker="Library"
+      area="library"
+      kicker="Library · Memory"
       title="Memory"
       description="Lifecycle-aware memory items, maintenance truth, provenance, and QMD posture in the canonical next shell."
       loading={memory.loading}
       error={memory.error}
+      metrics={[
+        { label: "Visible", value: String(visibleItems.length) },
+        { label: "Workspace", value: activeWorkspaceName },
+      ]}
     >
       {memory.notice ? (
         <div className={`mc-next-runtime-notice tone-${memory.notice.tone}`}>
@@ -113,7 +117,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
       {sectionErrors?.settings ? (
         <SectionTruthNotice message="Memory settings truth is unavailable. Admin and maintenance controls are locked until the backend confirms feature state." />
       ) : null}
-      <NativeGrid>
+      <NativeGrid className="mc-next-memory-shell">
         <NativeCard
           title="Memory items"
           subtitle="Real memory item truth comes first; files and QMD stay secondary."

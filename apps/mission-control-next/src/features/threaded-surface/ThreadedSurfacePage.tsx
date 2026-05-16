@@ -103,7 +103,12 @@ export function ThreadedSurfacePage({
   };
 
   return (
-    <div className="mc-next-threaded-surface unified" data-mode={surface} data-active-mode={activeMode}>
+    <div
+      className="mc-next-threaded-surface unified"
+      data-mode={surface}
+      data-active-mode={activeMode}
+      data-area={surface}
+    >
       <button
         type="button"
         className={`mc-next-threaded-scrim${railOpen ? " open" : ""}`}
@@ -159,7 +164,7 @@ export function ThreadedSurfacePage({
           </FilterChip>
           {(Object.keys(MODE_META) as ChatMode[]).map((mode) => (
             <FilterChip key={mode} active={postureFilter === mode} onClick={() => setPostureFilter(mode)}>
-              <span className={`mc-next-threaded-mode-dot mode-${mode}`} />
+              <span className={`mc-next-threaded-mode-dot mode-${mode}${activeMode === mode ? " is-live" : ""}`} />
               {MODE_META[mode].label}
             </FilterChip>
           ))}

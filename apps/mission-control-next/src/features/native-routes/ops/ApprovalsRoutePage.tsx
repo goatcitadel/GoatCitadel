@@ -1,8 +1,9 @@
 import { useMemo, useState, type MouseEvent } from "react";
-import { AlertTriangle, Clock, History, Play, RefreshCw, ShieldCheck, Waypoints } from "lucide-react";
+import { AlertTriangle, Clock, History, Play, RefreshCw, Waypoints } from "lucide-react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
+import { ThreePartChip } from "../primitives";
 import {
   buildApprovalEvidenceModel,
   findTraceMetadata,
@@ -36,12 +37,30 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
   return (
     <>
       <NativePageFrame
-        icon={ShieldCheck}
-        kicker="Ops"
+        area="ops"
+        kicker="Ops · Approvals"
         title="Approvals"
         description="Pending decisions, history, replay, and durable recovery in the canonical next shell."
         loading={approvals.loading}
         error={approvals.error}
+        metrics={[
+          { label: "Pending", value: String(queueCounts.pending || pendingApprovals) },
+          { label: "History", value: String(queueCounts.history) },
+          { label: "Recovery", value: String(queueCounts.recovery) },
+          { label: "Replay trails", value: String(approvals.replayCount) },
+        ]}
+        actions={
+          approvals.view === "pending" ? (
+            <button
+              type="button"
+              className="gc-button danger"
+              disabled={!approvals.hasPendingApprovals || approvals.bulkResolvePending}
+              onClick={() => setBulkRejectOpen(true)}
+            >
+              {approvals.bulkResolvePending ? "Rejecting..." : "Reject all pending"}
+            </button>
+          ) : null
+        }
       >
         <NativeGrid>
           <NativeCard
@@ -344,6 +363,9 @@ function ApprovalInspectorCard(props: {
           {approval.explanation?.riskExplanation ? <p>{approval.explanation.riskExplanation}</p> : null}
         </div>
         <div className="mc-next-approvals-actions">
+          {approval.status === "pending" && !expired ? (
+            <ThreePartChip tone="caution" state="awaiting approval" mid={approval.kind ?? "decision"} age="—" />
+          ) : null}
           {approval.status === "pending" && !expired ? (
             <>
               <button type="button" className="gc-button" disabled={resolvePending} onClick={onApprove}>

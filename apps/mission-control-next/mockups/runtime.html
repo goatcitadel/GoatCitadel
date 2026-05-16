@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Ops · Runtime — Design Review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="./_shared.css" />
+<style>
+  .ops-stage { padding: 18px 24px 28px; display: grid; gap: 16px; }
+  .stage-head-card {
+    position: relative;
+    padding: 18px 22px 16px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-lg);
+    background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 8%, transparent), transparent 60%), var(--bg-surface-1);
+    overflow: hidden;
+  }
+  .stage-head-card::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: linear-gradient(90deg, var(--accent), transparent 60%); }
+  .stage-head-card .eyebrow { display: inline-flex; align-items: center; gap: 7px; font: 700 10px/1 var(--font-sans); letter-spacing: 0.16em; text-transform: uppercase; color: color-mix(in oklab, var(--accent) 60%, var(--fg-muted)); }
+  .stage-head-card .eyebrow .dot { width: 6px; height: 6px; border-radius: 999px; background: var(--accent); }
+  .stage-head-card h1 { margin: 8px 0 4px; font-size: 24px; font-weight: 650; letter-spacing: -0.025em; }
+  .stage-head-card .sub { color: var(--fg-secondary); font-size: 13px; max-width: 64ch; }
+  .stage-head-card .row-top { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+
+  .health-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+  @media (max-width: 1080px) { .health-strip { grid-template-columns: repeat(2, 1fr); } }
+
+  .ops-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+    gap: 16px;
+  }
+  @media (max-width: 1080px) { .ops-row { grid-template-columns: 1fr; } }
+
+  .panel {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    background: var(--bg-surface-1);
+    display: grid;
+    grid-template-rows: auto 1fr;
+    overflow: hidden;
+  }
+  .panel-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-surface-2);
+  }
+  .panel-head h3 { margin: 0; font-size: 13.5px; font-weight: 650; letter-spacing: -0.01em; }
+
+  /* Cost chart */
+  .chart {
+    position: relative;
+    padding: 8px 14px 14px;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    gap: 8px;
+  }
+  .chart .legend {
+    display: flex; gap: 12px; flex-wrap: wrap;
+    font: 500 11px/1 var(--font-mono);
+    color: var(--fg-secondary);
+  }
+  .chart .legend .sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; margin-right: 5px; vertical-align: -1px; }
+  .chart svg { width: 100%; height: 200px; display: block; }
+  .chart .axis { font: 500 10px var(--font-mono); fill: var(--fg-muted); }
+  .chart .gridline { stroke: var(--border-hairline); }
+  .chart .ann {
+    position: absolute; left: 50%; top: 70px;
+    transform: translate(-30%, -100%);
+    border: 1px solid color-mix(in oklab, var(--risk-danger) 38%, var(--border-default));
+    background: color-mix(in oklab, var(--risk-danger) 14%, var(--bg-surface-1));
+    color: color-mix(in oklab, var(--risk-danger) 78%, var(--fg-primary));
+    border-radius: var(--r-xs);
+    padding: 4px 8px;
+    font: 600 11px/1 var(--font-sans);
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+
+  /* Activity feed */
+  .feed {
+    max-height: 480px;
+    overflow: auto;
+    padding: 0;
+  }
+  .feed-row {
+    display: grid;
+    grid-template-columns: 78px 26px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 14px;
+    font: 500 12px/1.4 var(--font-mono);
+    border-bottom: 1px solid var(--border-hairline);
+  }
+  .feed-row:last-child { border-bottom: 0; }
+  .feed-row .ts { color: var(--fg-muted); }
+  .feed-row .ev { color: var(--fg-secondary); }
+  .feed-row .actor { color: var(--fg-muted); font-size: 11px; }
+  .feed-row.error .badge { color: color-mix(in oklab, var(--risk-danger) 78%, var(--fg-primary)); }
+  .feed-row.warn .badge { color: color-mix(in oklab, var(--risk-caution) 78%, var(--fg-primary)); }
+  .feed-row.ok .badge { color: color-mix(in oklab, var(--risk-safe) 78%, var(--fg-primary)); }
+  .feed-row .badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 5px;
+    background: color-mix(in oklab, currentColor 12%, var(--bg-surface-2));
+    border: 1px solid color-mix(in oklab, currentColor 28%, var(--border-default));
+  }
+  .feed-row .badge svg { width: 12px; height: 12px; }
+
+  .feed-bar {
+    display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-surface-2);
+  }
+
+  /* Schedule creator */
+  .form-grid { display: grid; gap: 12px; padding: 14px; }
+  .form-row { display: grid; gap: 4px; }
+  .form-row label { font: 600 11px/1 var(--font-sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-muted); }
+  .form-row .hint { font: 500 11px/1.4 var(--font-mono); color: var(--fg-muted); }
+  .input, .select {
+    width: 100%;
+    font: 400 13px/1.4 var(--font-sans);
+    padding: 8px 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-xs);
+    background: var(--bg-surface-2);
+    color: var(--fg-primary);
+  }
+  .input:focus, .select:focus { outline: 0; border-color: color-mix(in oklab, var(--accent) 50%, var(--border-default)); box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 14%, transparent); }
+  .input.mono { font-family: var(--font-mono); font-size: 12.5px; }
+
+  .preview-card {
+    margin: 0 14px 14px;
+    padding: 10px 12px;
+    border: 1px dashed color-mix(in oklab, var(--accent) 40%, var(--border-default));
+    border-radius: var(--r-xs);
+    background: color-mix(in oklab, var(--accent) 10%, var(--bg-surface-2));
+    color: var(--fg-secondary);
+    font-size: 12px;
+    display: grid; gap: 4px;
+  }
+  .preview-card .label { font: 700 10px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: color-mix(in oklab, var(--accent) 70%, var(--fg-primary)); }
+  .preview-card .mono { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-primary); }
+</style>
+</head>
+<body class="area-ops">
+
+<header class="topbar">
+  <div class="brand-lockup">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <div class="brand-stack">
+      <span class="eyebrow">GoatCitadel</span>
+      <span class="name">Ops</span>
+    </div>
+  </div>
+  <nav class="primary-nav">
+    <a href="./threaded-surface.html">Chat</a>
+    <a href="./projects.html">Projects</a>
+    <a href="./prompt-packs.html">Library</a>
+    <a href="./runtime.html" class="active">Ops</a>
+    <a href="./settings.html">Settings</a>
+  </nav>
+  <span class="spacer"></span>
+  <button class="command-search" type="button">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <span class="search-q">Find a runtime event…</span>
+    <kbd>⌘K</kbd>
+  </button>
+</header>
+
+<main class="body no-rail">
+  <section class="ops-stage">
+
+    <article class="stage-head-card">
+      <div class="row-top">
+        <div>
+          <span class="eyebrow"><span class="dot"></span>Ops · Runtime &amp; cost</span>
+          <h1>Daemon up 4h 12m. Spend on pace.</h1>
+          <p class="sub">Gateway health, host vitals, backups, and the realtime event feed. Schedule recurring jobs at the bottom; the same actor and cron live alongside the events they triggered.</p>
+        </div>
+        <div class="row" style="gap:6px">
+          <span class="chip-3 success" data-critique="Health chip is three‑part: state, current host, uptime. Replaces the live app's flat ‘Running’ pill — same width, three orders of magnitude more information.">
+            <span class="lh"><span class="dot"></span>healthy</span>
+            <span class="mid">ws‑mac‑01</span>
+            <span class="rh">up 4h 12m</span>
+          </span>
+          <button class="btn btn-secondary">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9"/><path d="M21 3v6h-6"/></svg>
+            Restart daemon
+          </button>
+        </div>
+      </div>
+
+      <div class="health-strip">
+        <div class="metric">
+          <span class="label">Daemon</span>
+          <span class="value mono">04:12:48</span>
+          <span class="delta up">PID 14722 · since 09:30</span>
+        </div>
+        <div class="metric">
+          <span class="label">Spend today</span>
+          <span class="value mono">$4.18</span>
+          <span class="delta down">−12% vs 7‑day avg</span>
+        </div>
+        <div class="metric">
+          <span class="label">Active sessions</span>
+          <span class="value mono">3</span>
+          <span class="delta">1 streaming · 2 idle</span>
+        </div>
+        <div class="metric">
+          <span class="label">Last backup</span>
+          <span class="value mono" style="font-size:16px">04:12 · today</span>
+          <span class="delta up">retention 14d</span>
+        </div>
+      </div>
+    </article>
+
+    <!-- Cost chart -->
+    <article class="panel" data-critique="Cost story is a chart, not a number. Anomaly callout pins the model+route that caused yesterday's spike — operators don't have to cross‑ref the activity feed to learn why a column is taller.">
+      <header class="panel-head">
+        <h3>Spend — last 7 days</h3>
+        <div class="row" style="gap:6px">
+          <div class="tabs" data-tabs>
+            <button class="active">By route</button>
+            <button>By model</button>
+            <button>By workspace</button>
+          </div>
+          <button class="btn btn-ghost"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 10-5 5-5-5"/><path d="M12 15V3"/></svg>Export</button>
+        </div>
+      </header>
+      <div class="chart">
+        <div class="legend">
+          <span><span class="sw" style="background: var(--area-chat)"></span>chat</span>
+          <span><span class="sw" style="background: var(--area-cowork)"></span>cowork</span>
+          <span><span class="sw" style="background: var(--area-code)"></span>code</span>
+          <span><span class="sw" style="background: var(--area-library)"></span>library</span>
+          <span><span class="sw" style="background: var(--area-ops)"></span>ops</span>
+        </div>
+        <svg viewBox="0 0 700 200" preserveAspectRatio="none" role="presentation">
+          <!-- gridlines -->
+          <g>
+            <line class="gridline" x1="40" y1="40" x2="690" y2="40"/>
+            <line class="gridline" x1="40" y1="80" x2="690" y2="80"/>
+            <line class="gridline" x1="40" y1="120" x2="690" y2="120"/>
+            <line class="gridline" x1="40" y1="160" x2="690" y2="160"/>
+          </g>
+          <!-- y axis -->
+          <g class="axis">
+            <text x="34" y="44" text-anchor="end">$8</text>
+            <text x="34" y="84" text-anchor="end">$6</text>
+            <text x="34" y="124" text-anchor="end">$4</text>
+            <text x="34" y="164" text-anchor="end">$2</text>
+            <text x="34" y="184" text-anchor="end">$0</text>
+          </g>
+          <!-- bars: stacked columns -->
+          <!-- helper: positions for 7 days, each 80px slot starting at x=60 -->
+          <!-- Day 1 (8 days ago) -->
+          <g transform="translate(60,0)">
+            <rect width="40" height="22" x="0" y="158" fill="oklch(0.72 0.12 240)" opacity="0.78"/>
+            <rect width="40" height="14" x="0" y="144" fill="oklch(0.73 0.13 315)" opacity="0.78"/>
+            <rect width="40" height="8"  x="0" y="136" fill="oklch(0.74 0.12 175)" opacity="0.78"/>
+            <rect width="40" height="4"  x="0" y="132" fill="oklch(0.72 0.10 255)" opacity="0.78"/>
+            <text x="20" y="194" text-anchor="middle" class="axis">May 7</text>
+          </g>
+          <g transform="translate(150,0)">
+            <rect width="40" height="28" x="0" y="152" fill="oklch(0.72 0.12 240)" opacity="0.78"/>
+            <rect width="40" height="18" x="0" y="134" fill="oklch(0.73 0.13 315)" opacity="0.78"/>
+            <rect width="40" height="12" x="0" y="122" fill="oklch(0.74 0.12 175)" opacity="0.78"/>
+            <rect width="40" height="6"  x="0" y="116" fill="oklch(0.72 0.10 255)" opacity="0.78"/>
+            <text x="20" y="194" text-anchor="middle" class="axis">May 8</text>
+          </g>
+          <g transform="translate(240,0)">
+            <rect width="40" height="20" x="0" y="160" fill="oklch(0.72 0.12 240)" opacity="0.78"/>
+            <rect width="40" height="14" x="0" y="146" fill="oklch(0.73 0.13 315)" opacity="0.78"/>
+            <rect width="40" height="9"  x="0" y="137" fill="oklch(0.74 0.12 175)" opacity="0.78"/>
+            <rect width="40" height="4"  x="0" y="133" fill="oklch(0.71 0.08 220)" opacity="0.78"/>
+            <text x="20" y="194" text-anchor="middle" class="axis">May 9</text>
+          </g>
+          <g transform="translate(330,0)">
+            <rect width="40" height="34" x="0" y="146" fill="oklch(0.72 0.12 240)" opacity="0.78"/>
+            <rect width="40" height="22" x="0" y="124" fill="oklch(0.73 0.13 315)" opacity="0.78"/>
+            <rect width="40" height="14" x="0" y="110" fill="oklch(0.74 0.12 175)" opacity="0.78"/>
+            <rect width="40" height="8"  x="0" y="102" fill="oklch(0.72 0.10 255)" opacity="0.78"/>
+            <text x="20" y="194" text-anchor="middle" class="axis">May 10</text>
+          </g>
+          <g transform="translate(420,0)">
+            <rect width="40" height="32" x="0" y="148" fill="oklch(0.72 0.12 240)" opacity="0.78"/>
+            <rect width="40" height="20" x="0" y="128" fill="oklch(0.73 0.13 315)" opacity="0.78"/>
+            <rect width="40" height="14" x="0" y="114" fill="oklch(0.74 0.12 175)" opacity="0.78"/>
+            <rect width="40" height="9"  x="0" y="105" fill="oklch(0.72 0.10 255)" opacity="0.78"/>
+            <text x="20" y="194" text-anchor="middle" class="axis">May 11</text>
+          </g>
+          <!-- May 12 spike -->
+          <g transform="translate(510,0)">
+            <rect width="40" height="46" x="0" y="134" fill="oklch(0.72 0.12 240)" opacity="0.78"/>
+            <rect width="40" height="30" x="0" y="104" fill="oklch(0.73 0.13 315)" opacity="0.78"/>
+            <rect width="40" height="24" x="0" y="80"  fill="oklch(0.74 0.12 175)" opacity="0.78"/>
+            <rect width="40" height="36" x="0" y="44"  fill="oklch(0.72 0.10 255)"/>
+            <text x="20" y="194" text-anchor="middle" class="axis" style="fill: var(--fg-primary)">May 12 ▲</text>
+          </g>
+          <g transform="translate(600,0)">
+            <rect width="40" height="26" x="0" y="154" fill="oklch(0.72 0.12 240)" opacity="0.78"/>
+            <rect width="40" height="16" x="0" y="138" fill="oklch(0.73 0.13 315)" opacity="0.78"/>
+            <rect width="40" height="10" x="0" y="128" fill="oklch(0.74 0.12 175)" opacity="0.78"/>
+            <rect width="40" height="6"  x="0" y="122" fill="oklch(0.72 0.10 255)" opacity="0.78"/>
+            <text x="20" y="194" text-anchor="middle" class="axis">May 13</text>
+          </g>
+        </svg>
+        <div class="ann">
+          ▲ May 12 spike · library route +$2.18 (haiku fallback after reshard)
+        </div>
+      </div>
+    </article>
+
+    <!-- Activity feed + schedule -->
+    <div class="ops-row">
+
+      <article class="panel">
+        <header class="panel-head">
+          <h3>Activity feed</h3>
+          <div class="row" style="gap:6px">
+            <div class="tabs" data-tabs>
+              <button class="active">All <span class="count">142</span></button>
+              <button>Errors <span class="count">3</span></button>
+              <button>Approvals <span class="count">11</span></button>
+              <button>Runtime <span class="count">42</span></button>
+            </div>
+            <button class="icon-btn" title="Pause"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg></button>
+          </div>
+        </header>
+        <div class="feed" data-critique="Realtime feed reads like a log without looking like a terminal. Badge column gives event severity at a glance; mono timestamps let operators scan vertically.">
+          <div class="feed-row ok">
+            <span class="ts">14:11:42</span>
+            <span class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg></span>
+            <span class="ev"><span style="color: var(--fg-primary)">backup.complete</span>  retention=14d  size=82MB  duration=18s</span>
+            <span class="actor">scheduler · daily‑backup</span>
+          </div>
+          <div class="feed-row ok">
+            <span class="ts">14:11:14</span>
+            <span class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg></span>
+            <span class="ev"><span style="color: var(--fg-primary)">approval.granted</span>  scope=memory.write  ns=knowledge/routing  ttl=∞</span>
+            <span class="actor">spurnout@</span>
+          </div>
+          <div class="feed-row warn">
+            <span class="ts">14:11:08</span>
+            <span class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.3 3.3 1.8 19a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.3a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></span>
+            <span class="ev"><span style="color: var(--fg-primary)">watchdog.tripped</span>  provider=anthropic  duration=18s  fallback=sonnet</span>
+            <span class="actor">gateway</span>
+          </div>
+          <div class="feed-row ok">
+            <span class="ts">14:08:42</span>
+            <span class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg></span>
+            <span class="ev"><span style="color: var(--fg-primary)">stream.complete</span>  turn=t_4a82  tokens=3184  cost=$0.137</span>
+            <span class="actor">claude‑opus‑4‑7</span>
+          </div>
+          <div class="feed-row error">
+            <span class="ts">14:02:31</span>
+            <span class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg></span>
+            <span class="ev"><span style="color: var(--fg-primary)">channel.failed</span>  slack/#goatcitadel  status=401  message=token_revoked</span>
+            <span class="actor">channel‑worker</span>
+          </div>
+          <div class="feed-row ok">
+            <span class="ts">14:02:01</span>
+            <span class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg></span>
+            <span class="ev"><span style="color: var(--fg-primary)">tool.ok</span>  read_audit  range=w17..w19  duration=184ms  rows=412</span>
+            <span class="actor">mcp/citadel‑memory</span>
+          </div>
+          <div class="feed-row ok">
+            <span class="ts">14:01:50</span>
+            <span class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg></span>
+            <span class="ev"><span style="color: var(--fg-primary)">turn.start</span>  surface=chat  user=spurnout@  attachments=2</span>
+            <span class="actor">conversation t_4a82</span>
+          </div>
+          <div class="feed-row warn">
+            <span class="ts">13:42:01</span>
+            <span class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.3 3.3 1.8 19a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.3a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></span>
+            <span class="ev"><span style="color: var(--fg-primary)">posture.verify</span>  workspace=citadel‑prime  status=warning  channel=slack</span>
+            <span class="actor">posture‑check</span>
+          </div>
+          <div class="feed-row ok">
+            <span class="ts">10:00:02</span>
+            <span class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg></span>
+            <span class="ev"><span style="color: var(--fg-primary)">cost_report.delivered</span>  channel=slack/#cost  range=daily</span>
+            <span class="actor">scheduler · daily‑cost</span>
+          </div>
+          <div class="feed-row ok">
+            <span class="ts">09:30:00</span>
+            <span class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
+            <span class="ev"><span style="color: var(--fg-primary)">daemon.start</span>  PID=14722  host=ws‑mac‑01  version=0.18.2</span>
+            <span class="actor">supervisor</span>
+          </div>
+        </div>
+      </article>
+
+      <!-- Schedule creator -->
+      <article class="panel">
+        <header class="panel-head">
+          <h3>New schedule</h3>
+          <span class="muted" style="font-size:11px">cron · UTC</span>
+        </header>
+        <div class="form-grid" data-critique="Schedule creator gets a live cron preview — natural language above, mono spec below — so operators don't need a separate ‘what does this cron mean’ tool. Action enum spelled out explicitly.">
+          <div class="form-row">
+            <label>Name</label>
+            <input class="input" type="text" value="weekly retention pulse" />
+          </div>
+          <div class="form-row">
+            <label>Action</label>
+            <select class="select">
+              <option>task — run a saved chat / cowork / code prompt</option>
+              <option selected>improvement — kick off retention pulse pack</option>
+              <option>backup — snapshot workspace state</option>
+              <option>memory_flush — clear scoped namespace</option>
+              <option>cost_report — deliver daily cost digest</option>
+              <option>update_review — open release‑readiness review</option>
+              <option>watchdog — health probe with optional escalation</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>Cron</label>
+            <input class="input mono" type="text" value="0 9 * * MON" />
+            <span class="hint">∙ standard 5‑field cron, daemon timezone</span>
+          </div>
+          <div class="form-row">
+            <label>Target</label>
+            <select class="select">
+              <option selected>Pack — Routing · model fallback (v0.7)</option>
+              <option>Pack — Approvals · risk classifier (v1.2)</option>
+              <option>Pack — Memory · namespace router (v0.3)</option>
+              <option>Custom prompt…</option>
+            </select>
+          </div>
+        </div>
+        <div class="preview-card">
+          <span class="label">Preview</span>
+          <span>Runs <strong>Mondays at 09:00 UTC</strong>, executing the <strong>Routing · model fallback</strong> pack against the live gateway. Output delivered to <span class="mono">slack/#cost</span>.</span>
+          <span class="mono muted">next run · 2026‑05‑19 09:00:00Z</span>
+        </div>
+        <div class="row between" style="padding: 0 14px 14px">
+          <span class="muted" style="font-size:11px">3 schedules active · next at 09:00 UTC</span>
+          <div class="row" style="gap:6px">
+            <button class="btn btn-ghost">Test once</button>
+            <button class="btn btn-primary">Create schedule</button>
+          </div>
+        </div>
+      </article>
+    </div>
+
+  </section>
+</main>
+
+<div class="status-strip">
+  <span class="ok">● daemon up 04:12:48 · ws‑mac‑01</span>
+  <span>3 sessions · 1 streaming</span>
+  <span class="accent">3 schedules · next 09:00 UTC</span>
+  <span>spend today $4.18</span>
+  <span style="margin-left:auto" class="mono">version 0.18.2 · workspace citadel‑prime</span>
+</div>
+
+<button class="critique-toggle" data-critique-toggle type="button">
+  <span class="dot"></span>
+  <span data-critique-label>Critique on</span>
+</button>
+
+<script src="./_shared.js"></script>
+</body>
+</html>

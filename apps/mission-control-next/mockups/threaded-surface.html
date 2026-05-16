@@ -1,0 +1,819 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Threaded Surface — Design Review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="./_shared.css" />
+<style>
+  /* Threaded surface specific */
+  .threaded {
+    display: grid;
+    grid-template-columns: 248px minmax(0, 1fr) 320px;
+    min-height: calc(100dvh - 64px);
+  }
+  @media (max-width: 1280px) {
+    .threaded { grid-template-columns: 220px minmax(0, 1fr) 280px; }
+  }
+  @media (max-width: 1080px) {
+    .threaded { grid-template-columns: 200px minmax(0, 1fr); }
+    .context-drawer { display: none; }
+  }
+  @media (max-width: 880px) {
+    .threaded { grid-template-columns: minmax(0, 1fr); }
+    .session-rail { display: none; }
+  }
+
+  /* Session rail */
+  .session-rail {
+    border-right: 1px solid var(--border-subtle);
+    background: var(--bg-surface-2);
+    padding: 12px 10px;
+    display: grid; gap: 14px;
+    align-content: start;
+    overflow: auto;
+    max-height: calc(100dvh - 64px);
+    position: sticky; top: 40px;
+  }
+  .session-rail .head {
+    display: grid; gap: 8px;
+  }
+  .session-rail .new-row {
+    display: grid; grid-template-columns: 1fr auto; gap: 6px;
+  }
+  .filter-tabs {
+    display: inline-flex; padding: 2px;
+    border: 1px solid var(--border-subtle); border-radius: 6px;
+    background: var(--bg-surface-1);
+    font-size: 11px;
+  }
+  .filter-tabs button {
+    padding: 3px 8px; border: 0; border-radius: 4px;
+    background: transparent; color: var(--fg-secondary);
+    font: 600 11px/1 var(--font-sans); cursor: pointer;
+  }
+  .filter-tabs button.active {
+    background: var(--bg-surface-3); color: var(--fg-primary);
+  }
+  .session-group { display: grid; gap: 3px; }
+  .session-group-label {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 6px;
+    font: 700 10px/1 var(--font-sans);
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: color-mix(in oklab, var(--accent) 50%, var(--fg-muted));
+  }
+  .session-group-label::after {
+    content: ""; flex: 1; height: 1px;
+    background: color-mix(in oklab, var(--accent) 16%, var(--border-hairline));
+  }
+  .session-item {
+    display: grid;
+    grid-template-columns: 14px 1fr auto;
+    gap: 8px; align-items: center;
+    padding: 7px 8px;
+    border-radius: var(--r-xs);
+    border: 1px solid transparent;
+    cursor: pointer;
+  }
+  .session-item:hover { background: var(--bg-surface-1); border-color: var(--border-subtle); }
+  .session-item.active {
+    background: color-mix(in oklab, var(--accent) 12%, var(--bg-surface-1));
+    border-color: color-mix(in oklab, var(--accent) 28%, var(--border-default));
+  }
+  .session-item .mode-dot {
+    width: 9px; height: 9px; border-radius: 2px;
+    background: var(--bg-surface-3);
+  }
+  .session-item .mode-dot.chat { background: var(--area-chat); }
+  .session-item .mode-dot.cowork { background: var(--area-cowork); }
+  .session-item .mode-dot.code { background: var(--area-code); }
+  .session-item .info { display: grid; gap: 2px; min-width: 0; }
+  .session-item .info strong {
+    font: 600 12.5px/1.25 var(--font-sans);
+    color: var(--fg-primary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .session-item .info .meta {
+    font: 500 10.5px/1 var(--font-mono);
+    color: var(--fg-muted);
+  }
+  .session-item .age {
+    font: 500 10px/1 var(--font-mono);
+    color: var(--fg-muted);
+  }
+  .session-item .live-pulse {
+    width: 6px; height: 6px; border-radius: 999px;
+    background: var(--risk-safe);
+    box-shadow: 0 0 8px var(--risk-safe);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 50% { opacity: 0.4; } }
+
+  /* Stage / conversation */
+  .conversation {
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    min-width: 0;
+  }
+  .conversation-head {
+    position: relative;
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 16px; padding: 16px 24px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--accent) 8%, transparent), transparent 70%),
+      var(--bg-app);
+  }
+  .conversation-head::before {
+    content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px;
+    background: linear-gradient(90deg, var(--accent), transparent 60%);
+    opacity: 0.8;
+  }
+  .conversation-head .copy { display: grid; gap: 5px; min-width: 0; }
+  .conversation-head .eyebrow {
+    display: inline-flex; align-items: center; gap: 7px;
+    font: 700 10px/1 var(--font-sans);
+    letter-spacing: 0.16em; text-transform: uppercase;
+    color: color-mix(in oklab, var(--accent) 60%, var(--fg-muted));
+  }
+  .conversation-head .eyebrow .dot {
+    width: 6px; height: 6px; border-radius: 999px; background: var(--accent);
+    box-shadow: 0 0 10px color-mix(in oklab, var(--accent) 70%, transparent);
+  }
+  .conversation-head h1 {
+    margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.15;
+  }
+  .conversation-head .sub {
+    font-size: 12.5px; color: var(--fg-secondary); max-width: 60ch;
+  }
+  .conversation-head .actions {
+    display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0;
+  }
+  .mode-pills {
+    display: inline-flex; align-items: center;
+    border: 1px solid var(--border-subtle); border-radius: var(--r-xs);
+    background: var(--bg-surface-1);
+    padding: 2px;
+  }
+  .mode-pills button {
+    border: 0; background: transparent; cursor: pointer;
+    padding: 4px 10px; border-radius: 4px;
+    font: 600 11.5px/1 var(--font-sans); color: var(--fg-secondary);
+  }
+  .mode-pills button.active {
+    background: color-mix(in oklab, var(--accent) 18%, var(--bg-surface-3));
+    color: var(--fg-primary);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 30%, transparent);
+  }
+
+  /* Timeline */
+  .timeline {
+    overflow-y: auto;
+    padding: 18px 24px 16px;
+    display: grid; gap: 14px;
+    min-height: 0;
+  }
+  .turn {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .turn .avatar {
+    width: 26px; height: 26px; border-radius: 8px;
+    display: grid; place-items: center;
+    background: var(--bg-surface-3);
+    border: 1px solid var(--border-subtle);
+    color: var(--fg-secondary);
+    font: 700 11px/1 var(--font-sans);
+  }
+  .turn.user .avatar { background: color-mix(in oklab, var(--brand) 80%, transparent); color: var(--brand-ink); }
+  .turn.agent .avatar { background: color-mix(in oklab, var(--accent) 24%, var(--bg-surface-3)); border-color: color-mix(in oklab, var(--accent) 35%, var(--border-default)); color: color-mix(in oklab, var(--accent) 88%, var(--fg-primary)); }
+
+  .turn-card {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    background: var(--bg-surface-1);
+    padding: 12px 14px;
+    display: grid; gap: 8px;
+    min-width: 0;
+  }
+  .turn.user .turn-card {
+    background: color-mix(in oklab, var(--brand) 6%, var(--bg-surface-1));
+    border-color: color-mix(in oklab, var(--brand) 18%, var(--border-default));
+  }
+  .turn.agent .turn-card {
+    background: color-mix(in oklab, var(--accent) 4%, var(--bg-surface-1));
+  }
+  .turn-meta {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    font: 500 11px/1 var(--font-mono);
+    color: var(--fg-muted);
+  }
+  .turn-meta strong {
+    font: 700 11px/1 var(--font-sans);
+    letter-spacing: 0.04em;
+    color: var(--fg-primary);
+  }
+  .turn-body {
+    font-size: 13.5px;
+    color: var(--fg-primary);
+    line-height: 1.55;
+  }
+  .turn-body p { margin: 0 0 8px; }
+  .turn-body p:last-child { margin: 0; }
+  .turn-body code {
+    font: 500 12px/1.4 var(--font-mono);
+    padding: 1px 5px; border-radius: 3px;
+    background: var(--bg-surface-3);
+    color: color-mix(in oklab, var(--accent) 70%, var(--fg-primary));
+  }
+  .turn-body pre {
+    margin: 6px 0 0;
+    font: 500 12px/1.5 var(--font-mono);
+    padding: 10px 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-xs);
+    background: var(--bg-inset);
+    overflow-x: auto;
+  }
+
+  .tool-call {
+    display: grid; grid-template-columns: 18px 1fr auto; gap: 8px;
+    align-items: center;
+    padding: 7px 9px;
+    border-radius: var(--r-xs);
+    background: var(--bg-surface-2);
+    border: 1px dashed var(--border-subtle);
+    font: 500 12px/1.2 var(--font-mono);
+  }
+  .tool-call svg { color: var(--fg-muted); }
+  .tool-call .name { color: var(--fg-primary); }
+  .tool-call .arg { color: var(--fg-muted); }
+
+  /* Three-part chip variation */
+  .chip-3 {
+    display: inline-flex; align-items: center; gap: 0;
+    height: 22px;
+    border-radius: 999px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-surface-2);
+    overflow: hidden;
+    font: 600 11px/1 var(--font-sans);
+  }
+  .chip-3 .lh, .chip-3 .mid, .chip-3 .rh {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 0 8px; height: 100%;
+  }
+  .chip-3 .lh { background: color-mix(in oklab, currentColor 14%, transparent); }
+  .chip-3 .lh .dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
+  .chip-3 .mid { color: var(--fg-primary); border-left: 1px solid var(--border-subtle); }
+  .chip-3 .rh {
+    border-left: 1px solid var(--border-subtle);
+    color: var(--fg-muted);
+    font: 500 10.5px/1 var(--font-mono);
+  }
+  .chip-3.success { color: color-mix(in oklab, var(--risk-safe) 78%, var(--fg-primary)); border-color: color-mix(in oklab, var(--risk-safe) 28%, var(--border-default)); }
+  .chip-3.warning { color: color-mix(in oklab, var(--risk-caution) 78%, var(--fg-primary)); border-color: color-mix(in oklab, var(--risk-caution) 30%, var(--border-default)); }
+  .chip-3.danger  { color: color-mix(in oklab, var(--risk-danger) 76%, var(--fg-primary)); border-color: color-mix(in oklab, var(--risk-danger) 30%, var(--border-default)); }
+  .chip-3.muted   { color: var(--fg-muted); }
+
+  /* Composer */
+  .composer {
+    border-top: 1px solid var(--border-subtle);
+    padding: 12px 24px 16px;
+    background:
+      linear-gradient(180deg, transparent, color-mix(in oklab, var(--bg-surface-2) 50%, transparent));
+    display: grid; gap: 10px;
+  }
+  .context-strip {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 7px 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-xs);
+    background: var(--bg-surface-1);
+    font-size: 11.5px;
+    color: var(--fg-secondary);
+  }
+  .context-strip .ctx-group {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 0 4px;
+  }
+  .context-strip .ctx-group + .ctx-group { border-left: 1px solid var(--border-subtle); padding-left: 10px; }
+  .context-strip .ctx-key {
+    font: 700 10px/1 var(--font-sans);
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--fg-muted);
+  }
+  .context-strip .ctx-val { color: var(--fg-primary); font-weight: 600; }
+  .context-strip .ctx-val.mono { font-family: var(--font-mono); font-weight: 500; }
+  .context-strip .attach {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; border-radius: 999px;
+    background: var(--bg-surface-3); color: var(--fg-secondary);
+  }
+  .composer-wrap {
+    position: relative;
+    border: 1px solid var(--border-default);
+    border-radius: var(--r-md);
+    background: var(--bg-surface-1);
+    transition: border-color 160ms ease, box-shadow 160ms ease;
+  }
+  .composer-wrap:focus-within {
+    border-color: color-mix(in oklab, var(--accent) 50%, var(--border-default));
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 12%, transparent);
+  }
+  .composer-textarea {
+    width: 100%;
+    min-height: 84px;
+    padding: 12px 14px 0;
+    border: 0;
+    background: transparent;
+    color: var(--fg-primary);
+    font: 400 14px/1.55 var(--font-sans);
+    resize: none;
+  }
+  .composer-textarea:focus { outline: 0; }
+  .composer-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px;
+    padding: 6px 8px 8px;
+  }
+  .composer-row .left, .composer-row .right { display: inline-flex; align-items: center; gap: 6px; }
+  .send-cluster {
+    display: inline-flex; align-items: stretch; gap: 0;
+  }
+  .send-cluster .btn-primary { border-top-right-radius: 0; border-bottom-right-radius: 0; padding-right: 14px; }
+  .send-cluster .send-split {
+    background: color-mix(in oklab, var(--brand) 80%, black);
+    color: var(--brand-ink);
+    border: 1px solid var(--brand);
+    border-left: 1px solid rgba(0,0,0,0.15);
+    border-top-left-radius: 0; border-bottom-left-radius: 0;
+    padding: 0 8px;
+    cursor: pointer;
+  }
+
+  /* Context drawer */
+  .context-drawer {
+    border-left: 1px solid var(--border-subtle);
+    background: var(--bg-surface-2);
+    padding: 14px 14px 16px;
+    display: grid; gap: 12px;
+    align-content: start;
+    overflow: auto;
+    max-height: calc(100dvh - 64px);
+    position: sticky; top: 40px;
+  }
+  .context-drawer .drawer-tabs {
+    display: inline-flex; padding: 2px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px; background: var(--bg-surface-1);
+    width: 100%;
+  }
+  .context-drawer .drawer-tabs button {
+    flex: 1; border: 0; background: transparent;
+    padding: 4px 6px; border-radius: 4px;
+    font: 600 11px/1 var(--font-sans);
+    color: var(--fg-secondary); cursor: pointer;
+  }
+  .context-drawer .drawer-tabs button.active {
+    background: color-mix(in oklab, var(--accent) 18%, var(--bg-surface-3));
+    color: var(--fg-primary);
+  }
+  .drawer-section { display: grid; gap: 8px; }
+  .drawer-section h4 {
+    margin: 0;
+    font: 700 10px/1 var(--font-sans);
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: color-mix(in oklab, var(--accent) 50%, var(--fg-muted));
+  }
+  .drawer-kv {
+    display: grid; grid-template-columns: 1fr auto; gap: 6px 12px;
+    font-size: 12px;
+  }
+  .drawer-kv dt { color: var(--fg-muted); }
+  .drawer-kv dd { margin: 0; color: var(--fg-primary); font-family: var(--font-mono); font-size: 11.5px; }
+  .drawer-trace {
+    display: grid; gap: 4px;
+    font: 500 11.5px/1.4 var(--font-mono);
+  }
+  .drawer-trace .line {
+    display: grid; grid-template-columns: 56px 1fr; gap: 8px;
+  }
+  .drawer-trace .ts { color: var(--fg-muted); }
+  .drawer-trace .msg { color: var(--fg-secondary); }
+  .drawer-trace .msg .ok { color: color-mix(in oklab, var(--risk-safe) 78%, var(--fg-primary)); }
+  .drawer-trace .msg .warn { color: color-mix(in oklab, var(--risk-caution) 78%, var(--fg-primary)); }
+</style>
+</head>
+<body class="area-chat">
+
+<header class="topbar">
+  <div class="brand-lockup">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <div class="brand-stack">
+      <span class="eyebrow">GoatCitadel</span>
+      <span class="name">Mission Control</span>
+    </div>
+  </div>
+  <nav class="primary-nav">
+    <a href="./threaded-surface.html" class="active">Chat</a>
+    <a href="#">Cowork</a>
+    <a href="#">Code</a>
+    <a href="./projects.html">Projects</a>
+    <a href="./memory.html">Library</a>
+    <a href="./runtime.html">Ops</a>
+    <a href="./settings.html">Settings</a>
+  </nav>
+  <span class="spacer"></span>
+  <button class="command-search" type="button">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <span class="search-q">Find a session, route, or command…</span>
+    <kbd>⌘K</kbd>
+  </button>
+  <div class="topbar-right">
+    <button class="icon-btn" title="Notifications" aria-label="Notifications">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>
+    </button>
+    <button class="btn btn-accent" data-critique="Mode‑aware primary action: ‘Send’ in chat, ‘Delegate’ in cowork, ‘Implement’ in code. Verb tells you what will actually happen.">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+      Start
+    </button>
+  </div>
+</header>
+
+<main class="threaded">
+
+  <!-- Session rail -->
+  <aside class="session-rail" data-critique="Posture filter (All / Chat / Cowork / Code) collapses three rails into one; mode is shown by the 9px square dot — saves ~80px of horizontal real estate.">
+    <div class="head">
+      <div class="new-row">
+        <button class="btn btn-primary">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+          New chat
+        </button>
+        <button class="icon-btn" title="Archive view"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8M10 12h4"/></svg></button>
+      </div>
+      <div class="filter-tabs" data-tabs>
+        <button class="active">All <span class="muted mono" style="margin-left:4px;font-size:10px">14</span></button>
+        <button>Chat</button>
+        <button>Cowork</button>
+        <button>Code</button>
+      </div>
+    </div>
+
+    <div class="session-group">
+      <div class="session-group-label">Mission · pinned</div>
+      <button class="session-item active">
+        <span class="mode-dot chat"></span>
+        <span class="info">
+          <strong>Retention pulse — model routing</strong>
+          <span class="meta">claude‑opus‑4‑7 · 12 turns</span>
+        </span>
+        <span class="live-pulse" title="streaming"></span>
+      </button>
+      <button class="session-item">
+        <span class="mode-dot cowork"></span>
+        <span class="info">
+          <strong>Delegation: incident triage</strong>
+          <span class="meta">3 sub‑agents · awaiting approval</span>
+        </span>
+        <span class="age">2m</span>
+      </button>
+      <button class="session-item">
+        <span class="mode-dot code"></span>
+        <span class="info">
+          <strong>Refactor: ThreadedTimeline</strong>
+          <span class="meta">code‑mode · 4 files</span>
+        </span>
+        <span class="age">14m</span>
+      </button>
+    </div>
+
+    <div class="session-group">
+      <div class="session-group-label">Mission · today</div>
+      <button class="session-item">
+        <span class="mode-dot chat"></span>
+        <span class="info">
+          <strong>Cost report — May week 2</strong>
+          <span class="meta">claude‑sonnet · 6 turns</span>
+        </span>
+        <span class="age">1h</span>
+      </button>
+      <button class="session-item">
+        <span class="mode-dot cowork"></span>
+        <span class="info">
+          <strong>Q3 OKR draft</strong>
+          <span class="meta">2 sub‑agents · completed</span>
+        </span>
+        <span class="age">2h</span>
+      </button>
+      <button class="session-item">
+        <span class="mode-dot code"></span>
+        <span class="info">
+          <strong>Memory route test stub</strong>
+          <span class="meta">code‑mode · failed</span>
+        </span>
+        <span class="age">3h</span>
+      </button>
+      <button class="session-item">
+        <span class="mode-dot chat"></span>
+        <span class="info">
+          <strong>Approvals workflow Q&amp;A</strong>
+          <span class="meta">claude‑opus · 9 turns</span>
+        </span>
+        <span class="age">5h</span>
+      </button>
+    </div>
+
+    <div class="session-group">
+      <div class="session-group-label">External</div>
+      <button class="session-item">
+        <span class="mode-dot chat"></span>
+        <span class="info">
+          <strong>codex · ops on‑call</strong>
+          <span class="meta">linked · gateway</span>
+        </span>
+        <span class="age">live</span>
+      </button>
+      <button class="session-item">
+        <span class="mode-dot cowork"></span>
+        <span class="info">
+          <strong>aider · vite migration</strong>
+          <span class="meta">linked · code‑mode</span>
+        </span>
+        <span class="age">1d</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Conversation -->
+  <section class="conversation">
+    <div class="conversation-head">
+      <div class="copy">
+        <span class="eyebrow"><span class="dot"></span>Chat · Mission · Pinned</span>
+        <h1>Retention pulse — model routing</h1>
+        <p class="sub">Fast conversation with attachments and lightweight help. Streaming on, planning off, audit retained for 90 days.</p>
+      </div>
+      <div class="actions">
+        <div class="mode-pills" data-critique="Mode pills live with the conversation, not at the topbar. Switching mode rebrands the entire surface (accent, composer verb, side panel) without leaving the thread.">
+          <button class="active">Chat</button>
+          <button>Cowork</button>
+          <button>Code</button>
+        </div>
+        <button class="icon-btn" title="Share"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="M16 6l-4-4-4 4"/><path d="M12 2v14"/></svg></button>
+        <button class="icon-btn" title="More"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
+      </div>
+    </div>
+
+    <div class="timeline">
+
+      <article class="turn user">
+        <div class="avatar">YB</div>
+        <div class="turn-card">
+          <div class="turn-meta">
+            <strong>You</strong>
+            <span>· 14:02 · 2 attachments</span>
+            <span class="chip-3 muted" style="margin-left:auto">
+              <span class="lh"><span class="dot"></span>queued</span>
+              <span class="mid">tools allowed</span>
+              <span class="rh">0s</span>
+            </span>
+          </div>
+          <div class="turn-body">
+            <p>What changed in last week's retention pulse compared to the prior two? Use the routing audit and pull the Tuesday cost spike for context — I want to know whether the haiku fallback hit harder than expected.</p>
+            <div class="row" style="gap:6px; flex-wrap:wrap">
+              <span class="attach"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5l-9 9a5 5 0 0 1-7-7l9-9a4 4 0 0 1 5 5l-9 9a3 3 0 0 1-4-4l8-8"/></svg>retention‑pulse‑w19.csv · 18 KB</span>
+              <span class="attach"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5l-9 9a5 5 0 0 1-7-7l9-9a4 4 0 0 1 5 5l-9 9a3 3 0 0 1-4-4l8-8"/></svg>routing‑audit‑may.json · 4 KB</span>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="turn agent">
+        <div class="avatar">GC</div>
+        <div class="turn-card" data-critique="Tool calls render inline as their own dashed row — distinct from the agent's prose. Hidden by default on completed turns; expanded when streaming or when the user clicks Trace.">
+          <div class="turn-meta">
+            <strong>GoatCitadel</strong>
+            <span>· claude‑opus‑4‑7 · 14:02 → 14:03</span>
+            <span class="chip-3 success" style="margin-left:auto">
+              <span class="lh"><span class="dot"></span>using tools</span>
+              <span class="mid">3 of 4</span>
+              <span class="rh">42s</span>
+            </span>
+          </div>
+          <div class="turn-body">
+            <div class="tool-call">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h7"/></svg>
+              <span><span class="name">read_audit</span><span class="arg">  range=w17..w19  pulse=retention</span></span>
+              <span class="chip success" style="height:18px; padding:0 6px"><span class="dot"></span>184ms</span>
+            </div>
+            <div class="tool-call">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 5-5"/></svg>
+              <span><span class="name">aggregate_cost</span><span class="arg">  date=2026‑05‑12  by=route</span></span>
+              <span class="chip success" style="height:18px; padding:0 6px"><span class="dot"></span>312ms</span>
+            </div>
+            <p style="margin-top:8px">Routing audit reads cleanly. Across w17–w19 your haiku fallback fired <code>11.4%</code> of the time, peaking at <code>18.6%</code> on Tuesday — driven almost entirely by the <code>library/memory</code> route after the index resharded. Pulse retention is otherwise flat.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="turn agent">
+        <div class="avatar">GC</div>
+        <div class="turn-card">
+          <div class="turn-meta">
+            <strong>GoatCitadel</strong>
+            <span>· claude‑opus‑4‑7 · 14:03</span>
+            <span class="chip-3 warning" style="margin-left:auto" data-critique="Approval gate shows actor, scope, and a countdown — not just a yellow pill. ‘Waiting for approval’ should always tell you who, what, and how long.">
+              <span class="lh"><span class="dot"></span>awaiting approval</span>
+              <span class="mid">spurnout@</span>
+              <span class="rh">expires 4m</span>
+            </span>
+          </div>
+          <div class="turn-body">
+            <p>I'd like to write a remediation note to <code>/library/memory/routing‑heuristics</code> capturing the haiku‑fallback rule of thumb so the next pulse doesn't re‑investigate it.</p>
+            <div class="callout" style="margin-top:6px; padding:10px 12px">
+              <div class="row between">
+                <div>
+                  <div class="eyebrow">Memory write</div>
+                  <div style="font-weight:650; font-size:13px">routing‑heuristics · pinned · TTL ∞</div>
+                  <div class="secondary" style="font-size:12px">+148 bytes · namespace <span class="mono">knowledge/routing</span></div>
+                </div>
+                <div class="row" style="gap:6px">
+                  <button class="btn btn-ghost">Reject</button>
+                  <button class="btn btn-accent">Approve write</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="turn user">
+        <div class="avatar">YB</div>
+        <div class="turn-card">
+          <div class="turn-meta">
+            <strong>You</strong>
+            <span>· 14:08</span>
+            <span class="chip-3 success" style="margin-left:auto">
+              <span class="lh"><span class="dot"></span>sent</span>
+              <span class="mid">2 tokens charged</span>
+              <span class="rh">just now</span>
+            </span>
+          </div>
+          <div class="turn-body">
+            <p>Approved. Also — was Tuesday's spike caused by the reshard, or did the watchdog trip first? Plot the two against each other.</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="turn agent">
+        <div class="avatar">GC</div>
+        <div class="turn-card" data-critique="Streaming state shows live token & cost. The dot pulses; the mono numbers update in place. Saves a round‑trip to the inspector.">
+          <div class="turn-meta">
+            <strong>GoatCitadel</strong>
+            <span>· claude‑opus‑4‑7 · streaming</span>
+            <span class="chip-3 success" style="margin-left:auto">
+              <span class="lh"><span class="dot"></span>streaming</span>
+              <span class="mid">428 tok · $0.018</span>
+              <span class="rh">3s</span>
+            </span>
+          </div>
+          <div class="turn-body">
+            <p>Looking at the timeline now — watchdog tripped at <code>14:11:08Z</code>, reshard checkpoint completed at <code>14:11:42Z</code>. The haiku fallback first‑fired at <code>14:11:14Z</code>, so the cause was the watchdog<span style="opacity:0.5">▍</span></p>
+          </div>
+        </div>
+      </article>
+
+    </div>
+
+    <!-- Composer -->
+    <div class="composer">
+      <div class="context-strip" data-critique="Persistent ‘context‑attached’ strip — model, mode, files, live cost. The biggest single quality‑of‑life upgrade in this review: no more guessing what the next turn will actually charge or attach.">
+        <span class="ctx-group">
+          <span class="ctx-key">Model</span>
+          <span class="ctx-val mono">claude‑opus‑4‑7</span>
+        </span>
+        <span class="ctx-group">
+          <span class="ctx-key">Mode</span>
+          <span class="ctx-val">Chat · streaming on</span>
+        </span>
+        <span class="ctx-group">
+          <span class="ctx-key">Memory</span>
+          <span class="ctx-val">knowledge/routing · 14 items</span>
+        </span>
+        <span class="ctx-group" style="margin-left:auto">
+          <span class="ctx-key">Live</span>
+          <span class="ctx-val mono">428 tok · $0.018</span>
+        </span>
+      </div>
+      <div class="composer-wrap">
+        <textarea class="composer-textarea" placeholder="Ask GoatCitadel anything… or paste a URL, drop a file, or @mention a memory namespace."></textarea>
+        <div class="composer-row">
+          <div class="left">
+            <button class="icon-btn" title="Attach"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5l-9 9a5 5 0 0 1-7-7l9-9a4 4 0 0 1 5 5l-9 9a3 3 0 0 1-4-4l8-8"/></svg></button>
+            <button class="icon-btn" title="Plus menu"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></button>
+            <button class="icon-btn" title="Slash menu" style="font:600 11px/1 var(--font-mono); width:auto; padding:0 8px">/</button>
+            <span class="muted" style="font-size:11px; margin-left:6px">2 attached · <span class="mono">~ 18 KB</span></span>
+          </div>
+          <div class="right">
+            <span class="kbd">⏎</span>
+            <span class="muted" style="font-size:11px">to send</span>
+            <div class="send-cluster" style="margin-left:8px">
+              <button class="btn btn-primary">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l18-9-7 18-3-7-8-2z"/></svg>
+                Send
+              </button>
+              <button class="send-split" title="Send options">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Context drawer -->
+  <aside class="context-drawer">
+    <div class="drawer-tabs" data-tabs>
+      <button class="active">Context</button>
+      <button>Trace</button>
+      <button>Assist</button>
+      <button>Session</button>
+    </div>
+
+    <section class="drawer-section">
+      <h4>Session</h4>
+      <dl class="drawer-kv">
+        <dt>Provider</dt><dd>Anthropic</dd>
+        <dt>Model</dt><dd>claude‑opus‑4‑7</dd>
+        <dt>Mode</dt><dd>Chat · streaming on</dd>
+        <dt>Planning</dt><dd>off</dd>
+        <dt>Approval</dt><dd>per‑write</dd>
+        <dt>Workspace</dt><dd>citadel‑prime</dd>
+      </dl>
+    </section>
+
+    <section class="drawer-section">
+      <h4>Cost so far</h4>
+      <div class="grid-3" style="grid-template-columns: repeat(3, minmax(0, 1fr)); gap:6px">
+        <div class="metric" style="padding:8px 10px">
+          <span class="label">Tokens</span>
+          <span class="value mono" style="font-size:15px">3,184</span>
+        </div>
+        <div class="metric" style="padding:8px 10px">
+          <span class="label">Cost</span>
+          <span class="value mono" style="font-size:15px">$0.137</span>
+        </div>
+        <div class="metric" style="padding:8px 10px">
+          <span class="label">Tools</span>
+          <span class="value mono" style="font-size:15px">9</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="drawer-section">
+      <h4>Live trace</h4>
+      <div class="drawer-trace" data-critique="Trace becomes a peer to Context, not buried in a tab. Operators living in the timeline get audit at a glance — same surface, no route change.">
+        <div class="line"><span class="ts">14:02:01</span><span class="msg"><span class="ok">●</span> turn.start  user  2 attach</span></div>
+        <div class="line"><span class="ts">14:02:01</span><span class="msg"><span class="ok">●</span> tool.invoke  read_audit</span></div>
+        <div class="line"><span class="ts">14:02:01</span><span class="msg"><span class="ok">●</span> tool.ok  184ms  rows=412</span></div>
+        <div class="line"><span class="ts">14:02:02</span><span class="msg"><span class="ok">●</span> tool.invoke  aggregate_cost</span></div>
+        <div class="line"><span class="ts">14:02:02</span><span class="msg"><span class="ok">●</span> tool.ok  312ms</span></div>
+        <div class="line"><span class="ts">14:03:11</span><span class="msg"><span class="warn">●</span> approval.requested  memory.write</span></div>
+        <div class="line"><span class="ts">14:08:42</span><span class="msg"><span class="ok">●</span> approval.granted  by=spurnout@</span></div>
+        <div class="line"><span class="ts">14:11:14</span><span class="msg"><span class="ok">●</span> stream.delta  428 tok</span></div>
+      </div>
+    </section>
+
+    <section class="drawer-section">
+      <h4>Memory in scope</h4>
+      <div class="stack" style="gap:6px">
+        <div class="chip accent" style="justify-content:flex-start; gap:8px; height:24px"><span class="dot"></span>knowledge/routing<span class="meta">14 items</span></div>
+        <div class="chip" style="justify-content:flex-start; gap:8px; height:24px"><span class="dot"></span>knowledge/files<span class="meta">2 items · 18 KB</span></div>
+        <div class="chip muted" style="justify-content:flex-start; gap:8px; height:24px"><span class="dot"></span>scratch/today<span class="meta">disabled</span></div>
+      </div>
+    </section>
+  </aside>
+
+</main>
+
+<div class="status-strip">
+  <span class="ok">● gateway healthy</span>
+  <span>daemon · 04:12:48 up</span>
+  <span class="accent">chat · streaming · per‑write approvals</span>
+  <span>memory: knowledge/routing · 14 items</span>
+  <span style="margin-left:auto" class="mono">workspace citadel‑prime · ⌘K to jump</span>
+</div>
+
+<button class="critique-toggle" data-critique-toggle type="button">
+  <span class="dot"></span>
+  <span data-critique-label>Critique on</span>
+</button>
+
+<script src="./_shared.js"></script>
+</body>
+</html>

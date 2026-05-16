@@ -17,9 +17,8 @@ const item = (section: string) => ({ section }) as any;
 describe("MissionControlNextApp shell helpers", () => {
   it("groups rail sections by product area", () => {
     expect(buildRailSections("settings", [item("general"), item("channels"), item("tools")])).toEqual([
-      { id: "settings-core", label: "Configuration", items: [item("general")] },
-      { id: "settings-connections", label: "Connections", items: [item("channels")] },
-      { id: "settings-controls", label: "Controls", items: [item("tools")] },
+      { id: "settings-foundations", label: "Foundations", items: [item("general")] },
+      { id: "settings-surfaces", label: "Surfaces", items: [item("channels"), item("tools")] },
     ]);
     expect(
       buildRailSections("settings", [
@@ -34,9 +33,10 @@ describe("MissionControlNextApp shell helpers", () => {
         item("addons"),
       ]).map((group) => group.items.map((entry) => entry.section)),
     ).toEqual([
-      ["onboarding", "providers", "personalities", "access", "runtime", "workspaces"],
+      ["workspaces"],
+      ["providers", "personalities", "access"],
       ["integrations", "mcp"],
-      ["addons"],
+      ["onboarding", "runtime", "addons"],
     ]);
     expect(buildRailSections("library", [item("memory"), item("prompt-packs")]).map((group) => group.id)).toEqual([
       "library-knowledge",

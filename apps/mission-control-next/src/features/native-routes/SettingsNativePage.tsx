@@ -142,6 +142,7 @@ import {
 } from "@goatcitadel/mission-control-shared/components/LlmTransportFields";
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import type { AppRoute } from "@next/app/route-model";
+import { ThreePartChip, type ChipTone } from "./primitives";
 import "./native-routes.css";
 
 interface SettingsNativePageProps {
@@ -213,7 +214,7 @@ export function SettingsNativePage(props: SettingsNativePageProps) {
   return (
     <SettingsPageFrame
       icon={iconForSettingsSection(section)}
-      kicker="Settings"
+      kicker={`Settings · ${labelForSettingsSection(section)}`}
       title={labelForSettingsSection(section)}
       description={descriptionForSettingsSection(section)}
     >
@@ -314,6 +315,13 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
               ]}
             />
           </SettingsPanel>
+          <SettingsPosturePanel
+            settings={data.settings}
+            mcpServers={data.mcpServers}
+            integrations={data.integrations}
+            workspaces={data.workspaces}
+            onNavigate={(section) => navigate({ area: "settings", section, theme: route.theme })}
+          />
           <SettingsPanel
             title="Quick routes"
             subtitle="Jump straight into the settings surfaces that actually change behavior."
@@ -5672,7 +5680,7 @@ function SettingsPageFrame({
 }) {
   return (
     <section className="mc-next-directory-page">
-      <header className="mc-next-directory-header">
+      <header className="mc-next-directory-header" data-area="settings">
         <div className="mc-next-directory-icon">
           <Icon className="h-5 w-5" />
         </div>
@@ -5734,6 +5742,143 @@ function SettingsGrid({
 
 function SettingsStack({ children }: { children: ReactNode }) {
   return <div className="mc-next-settings-stack">{children}</div>;
+}
+
+type SettingsPostureCardRow = { name: string; state: string; tone: ChipTone; age?: string };
+
+function SettingsPosturePanel({
+  settings,
+  mcpServers,
+  integrations,
+  workspaces,
+  onNavigate,
+}: {
+  settings: Awaited<ReturnType<typeof fetchSettings>> | null;
+  mcpServers: McpServerRecord[];
+  integrations: Array<{ connectionId?: string; status?: string; pluginId?: string }>;
+  workspaces: Array<{ workspaceId?: string; name?: string }>;
+  onNavigate: (section: "providers" | "mcp" | "integrations" | "access") => void;
+}) {
+  const providers = settings?.llm.providers ?? [];
+  const activeProviderId = settings?.llm.activeProviderId ?? null;
+  const authMode = settings?.auth.mode ?? "unknown";
+
+  const providerRows: SettingsPostureCardRow[] = providers.slice(0, 4).map((provider) => {
+    const isActive = provider.providerId === activeProviderId;
+    return {
+      name: provider.providerId,
+      state: isActive ? "active" : "configured",
+      tone: isActive ? "safe" : "muted",
+    };
+  });
+
+  const mcpRows: SettingsPostureCardRow[] = mcpServers.slice(0, 4).map((server) => ({
+    name: server.label,
+    state: server.enabled ? "connected" : "disabled",
+    tone: server.enabled ? "safe" : "muted",
+  }));
+
+  const integrationRows: SettingsPostureCardRow[] = integrations.slice(0, 4).map((connection) => ({
+    name: connection.pluginId ?? connection.connectionId ?? "integration",
+    state: connection.status ?? "unknown",
+    tone:
+      connection.status === "ready" || connection.status === "connected"
+        ? "safe"
+        : connection.status === "error" || connection.status === "failed"
+          ? "danger"
+          : "caution",
+  }));
+
+  const identityRows: SettingsPostureCardRow[] = [
+    {
+      name: "Gateway auth",
+      state: authMode,
+      tone: authMode === "none" ? "caution" : authMode === "token" || authMode === "basic" ? "safe" : "muted",
+    },
+    {
+      name: "Workspaces",
+      state: `${workspaces.length} configured`,
+      tone: workspaces.length > 0 ? "safe" : "muted",
+    },
+  ];
+
+  return (
+    <SettingsPanel
+      title="Active posture"
+      subtitle="Live status of providers, MCP servers, integrations, and identity at a glance."
+    >
+      <div className="mc-next-settings-posture-grid">
+        <SettingsPostureCard
+          title="Providers"
+          count={providers.length}
+          rows={providerRows}
+          emptyLabel="No providers configured."
+          onOpen={() => onNavigate("providers")}
+        />
+        <SettingsPostureCard
+          title="MCP servers"
+          count={mcpServers.length}
+          rows={mcpRows}
+          emptyLabel="No MCP servers connected."
+          onOpen={() => onNavigate("mcp")}
+        />
+        <SettingsPostureCard
+          title="Integrations"
+          count={integrations.length}
+          rows={integrationRows}
+          emptyLabel="No integrations connected."
+          onOpen={() => onNavigate("integrations")}
+        />
+        <SettingsPostureCard
+          title="Identity & access"
+          count={identityRows.length}
+          rows={identityRows}
+          emptyLabel="No identity posture available."
+          onOpen={() => onNavigate("access")}
+        />
+      </div>
+    </SettingsPanel>
+  );
+}
+
+function SettingsPostureCard({
+  title,
+  count,
+  rows,
+  emptyLabel,
+  onOpen,
+}: {
+  title: string;
+  count: number;
+  rows: SettingsPostureCardRow[];
+  emptyLabel: string;
+  onOpen: () => void;
+}) {
+  return (
+    <article className="mc-next-settings-posture-card">
+      <header className="mc-next-settings-posture-card-head">
+        <div>
+          <h3>{title}</h3>
+          <span>{count} total</span>
+        </div>
+        <button type="button" className="mc-next-button-secondary" onClick={onOpen}>
+          Open
+        </button>
+      </header>
+      {rows.length > 0 ? (
+        <ul className="mc-next-settings-posture-card-rows">
+          {rows.map((row) => (
+            <li key={`${title}-${row.name}`}>
+              <span className="mc-next-settings-posture-card-row-name">{row.name}</span>
+              <ThreePartChip tone={row.tone} state={row.state} age={row.age} />
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mc-next-settings-posture-card-empty">{emptyLabel}</p>
+      )}
+    </article>
+  );
 }
 
 function SettingsPanel({
