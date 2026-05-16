@@ -1,7 +1,7 @@
 import { describe, it, expectTypeOf } from "vitest";
 import type { LlmApiStyle, LlmModelRecord, LlmProviderSummary, LlmRuntimeConfig } from "./llm.js";
 
-describe("LlmModelRecord context window metadata", () => {
+describe("LLM context-window and output-token-limit fields", () => {
   it("LlmModelRecord accepts contextWindow and outputTokenLimit", () => {
     expectTypeOf<LlmModelRecord>().toHaveProperty("contextWindow").toEqualTypeOf<number | undefined>();
     expectTypeOf<LlmModelRecord>().toHaveProperty("outputTokenLimit").toEqualTypeOf<number | undefined>();
