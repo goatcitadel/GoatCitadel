@@ -400,3 +400,68 @@ describe("TaskLifecycleService agentic runtime", () => {
     });
   }, 20_000);
 });
+
+describe("TaskLifecycleService — distress signals", () => {
+  it("emitDistressSignal persists the new signal and publishes a realtime event", () => {
+    const { service, storage, publishRealtime } = createService();
+    const task = service.createTask({ title: "t" });
+    const updated = service.emitDistressSignal(task.taskId, {
+      code: "needs_user",
+      severity: "warn",
+      title: "Need input",
+      summary: "worker is asking",
+      emittedBy: "agent-7",
+    });
+    expect(updated.distressSignals?.length).toBe(1);
+    expect(storage.tasks.get(task.taskId).distressSignals?.[0]?.code).toBe("needs_user");
+    const distressCall = publishRealtime.mock.calls.find((c) => c[0] === "task_distress_emitted");
+    expect(distressCall).toBeTruthy();
+  });
+
+  it("resolveDistressSignal marks it resolved", () => {
+    const { service } = createService();
+    const task = service.createTask({ title: "t" });
+    const withSignal = service.emitDistressSignal(task.taskId, {
+      code: "tool_error",
+      severity: "warn",
+      title: "Tool blew up",
+      summary: "boom",
+    });
+    const signalId = withSignal.distressSignals![0].signalId;
+    const resolved = service.resolveDistressSignal(task.taskId, signalId, { resolvedBy: "op-1" });
+    expect(resolved.distressSignals![0].resolvedAt).toBeTruthy();
+    expect(resolved.distressSignals![0].resolvedBy).toBe("op-1");
+  });
+});
+
+describe("TaskLifecycleService — retry budget", () => {
+  it("setRetryBudget initializes the budget when none exists", () => {
+    const { service } = createService();
+    const task = service.createTask({ title: "t" });
+    const updated = service.setRetryBudget(task.taskId, 3);
+    expect(updated.retryBudget?.maxRetries).toBe(3);
+    expect(updated.retryBudget?.retryCount).toBe(0);
+  });
+
+  it("recordRetryAttempt increments retryCount but stays in progress when below budget", () => {
+    const { service } = createService();
+    const task = service.createTask({ title: "t", status: "in_progress" });
+    service.setRetryBudget(task.taskId, 2);
+    const after1 = service.recordRetryAttempt(task.taskId, "transient_error");
+    expect(after1.retryBudget?.retryCount).toBe(1);
+    expect(after1.status).toBe("in_progress");
+  });
+
+  it("recordRetryAttempt transitions task to blocked when budget exhausted", () => {
+    const { service } = createService();
+    const task = service.createTask({ title: "t", status: "in_progress" });
+    service.setRetryBudget(task.taskId, 1);
+    service.recordRetryAttempt(task.taskId, "first failure");
+    const blocked = service.recordRetryAttempt(task.taskId, "second failure");
+    expect(blocked.status).toBe("blocked");
+    expect(blocked.retryBudget?.retryCount).toBe(2);
+    expect(blocked.retryBudget?.exhaustedAt).toBeTruthy();
+    const exhaustedSignal = blocked.distressSignals?.find((s) => s.code === "retry_budget_exhausted");
+    expect(exhaustedSignal?.severity).toBe("critical");
+  });
+});

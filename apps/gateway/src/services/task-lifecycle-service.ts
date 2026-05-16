@@ -15,6 +15,7 @@ import type {
   TaskDeliverableCreateInput,
   TaskDeliverableRecord,
   TaskRecord,
+  TaskRetryBudget,
   TaskStatus,
   TaskSubagentCreateInput,
   TaskSubagentSession,
@@ -22,6 +23,7 @@ import type {
   TaskUpdateInput,
 } from "@goatcitadel/contracts";
 import { ValidationError } from "@goatcitadel/contracts";
+import { emitDistressSignal, resolveDistressSignal, type EmitDistressInput } from "./task-distress-engine.js";
 import type { Storage } from "@goatcitadel/storage";
 import { randomUUID } from "node:crypto";
 
@@ -92,6 +94,66 @@ export class TaskLifecycleService {
     const updated = this.deps.storage.tasks.update(taskId, input);
     this.publishTaskEvent("task_updated", { task: updated }, buildTaskRealtimeLinks(updated));
     return updated;
+  }
+
+  public emitDistressSignal(taskId: string, input: EmitDistressInput): TaskRecord {
+    const current = this.deps.storage.tasks.get(taskId);
+    const next = emitDistressSignal(current.distressSignals, input);
+    const updated = this.deps.storage.tasks.update(taskId, { distressSignals: next });
+    this.publishTaskEvent("task_distress_emitted", { taskId, signal: next[0] }, buildTaskRealtimeLinks(updated));
+    return updated;
+  }
+
+  public resolveDistressSignal(taskId: string, signalId: string, input: { resolvedBy?: string } = {}): TaskRecord {
+    const current = this.deps.storage.tasks.get(taskId);
+    const next = resolveDistressSignal(current.distressSignals, signalId, input);
+    const updated = this.deps.storage.tasks.update(taskId, { distressSignals: next });
+    this.publishTaskEvent(
+      "task_distress_resolved",
+      { taskId, signalId, resolvedBy: input.resolvedBy },
+      buildTaskRealtimeLinks(updated),
+    );
+    return updated;
+  }
+
+  public setRetryBudget(taskId: string, maxRetries: number): TaskRecord {
+    if (!Number.isInteger(maxRetries) || maxRetries < 0) {
+      throw new ValidationError({ message: "maxRetries must be a non-negative integer" });
+    }
+    const current = this.deps.storage.tasks.get(taskId);
+    const retryBudget: TaskRetryBudget = {
+      maxRetries,
+      retryCount: current.retryBudget?.retryCount ?? 0,
+    };
+    return this.deps.storage.tasks.update(taskId, { retryBudget });
+  }
+
+  public recordRetryAttempt(taskId: string, reason: string): TaskRecord {
+    const current = this.deps.storage.tasks.get(taskId);
+    const budget = current.retryBudget ?? { maxRetries: 0, retryCount: 0 };
+    const nextCount = budget.retryCount + 1;
+    const now = new Date().toISOString();
+    const exhausted = nextCount > budget.maxRetries;
+    const retryBudget: TaskRetryBudget = {
+      ...budget,
+      retryCount: nextCount,
+      lastAttemptAt: now,
+      exhaustedAt: exhausted ? now : budget.exhaustedAt,
+    };
+    if (!exhausted) {
+      return this.deps.storage.tasks.update(taskId, { retryBudget });
+    }
+    const distressSignals = emitDistressSignal(current.distressSignals, {
+      code: "retry_budget_exhausted",
+      severity: "critical",
+      title: "Retry budget exhausted",
+      summary: reason,
+    });
+    return this.deps.storage.tasks.update(taskId, {
+      retryBudget,
+      distressSignals,
+      status: "blocked",
+    });
   }
 
   public listAgenticRuns(
