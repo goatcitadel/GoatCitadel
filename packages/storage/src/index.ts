@@ -195,7 +195,8 @@ export class Storage {
         dbPath: options.dbPath ?? ":memory:",
         tuning: options.tuning,
       });
-    this.sessions = new SessionRepository(this.db);
+    this.stateValidationQuarantine = new StateValidationQuarantineRepository(this.db);
+    this.sessions = new SessionRepository(this.db, { quarantine: this.stateValidationQuarantine });
     this.idempotency = new IdempotencyRepository(this.db);
     this.mutationIdempotency = new MutationIdempotencyRepository(this.db);
     this.transcripts =
@@ -281,7 +282,6 @@ export class Storage {
     this.durableRunEvents = new DurableRunEventRepository(this.db);
     this.chatReflectionAttempts = new ChatReflectionAttemptRepository(this.db);
     this.evidenceEnvelopes = new EvidenceEnvelopeRepository(this.db);
-    this.stateValidationQuarantine = new StateValidationQuarantineRepository(this.db);
   }
 
   public close(): void {
