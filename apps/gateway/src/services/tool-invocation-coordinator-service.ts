@@ -15,6 +15,7 @@ import type { HooksService } from "./hooks-service.js";
 import { parseToolCallHookPatch } from "./hook-patch-helpers.js";
 import { handleInternalMcpApprovalInboxInvoke, isInternalMcpApprovalInboxServer } from "./mcp-approval-inbox.js";
 import type { McpRuntimeInvocationResult } from "./mcp-runtime.js";
+import type { PluginToolOverrideService } from "./plugin-tool-override-service.js";
 import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
 import type { EvidenceEnvelopeCreateRequest } from "./evidence-envelope-service.js";
 
@@ -145,6 +146,7 @@ export interface ToolInvocationCoordinatorHost {
     };
     context?: Record<string, unknown>;
   }): void;
+  readonly pluginToolOverrideService?: Pick<PluginToolOverrideService, "resolveActiveHandler">;
 }
 
 export interface ToolInvocationCoordinator {
@@ -268,6 +270,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         }
       : normalizedRequest;
 
+    const overrideHandler = this.host.pluginToolOverrideService?.resolveActiveHandler(hookableRequest.toolName);
     let result: ToolInvokeResult;
     const toolStartedAt = Date.now();
     this.host.recordDevDiagnostic?.({
@@ -279,14 +282,16 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       taskId: hookableRequest.taskId,
       toolRunId: toolHookEntityId,
       toolName: hookableRequest.toolName,
-      runtimeKind: "tool.invocation",
+      runtimeKind: overrideHandler ? "tool.invocation.override" : "tool.invocation",
       runtimeStatus: "started",
       context: {
         agentId: hookableRequest.agentId,
       },
     });
     try {
-      result = await this.host.policyEngine.invoke(hookableRequest);
+      result = overrideHandler
+        ? await overrideHandler(hookableRequest.args ?? {})
+        : await this.host.policyEngine.invoke(hookableRequest);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.host.recordDevDiagnostic?.({
@@ -299,7 +304,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         toolRunId: toolHookEntityId,
         toolName: hookableRequest.toolName,
         durationMs: Date.now() - toolStartedAt,
-        runtimeKind: "tool.invocation",
+        runtimeKind: overrideHandler ? "tool.invocation.override" : "tool.invocation",
         runtimeStatus: "failed",
         runtimeError: {
           name: error instanceof Error ? error.name : undefined,
@@ -363,7 +368,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       toolRunId: toolHookEntityId,
       toolName: hookableRequest.toolName,
       durationMs: Date.now() - toolStartedAt,
-      runtimeKind: "tool.invocation",
+      runtimeKind: overrideHandler ? "tool.invocation.override" : "tool.invocation",
       runtimeStatus: result.outcome === "blocked" || result.outcome === "approval_required" ? "blocked" : "completed",
       context: {
         outcome: result.outcome,
@@ -378,7 +383,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       approvalId: result.approvalId,
       toolCallHashes: [result.auditEventId ?? toolHookEntityId],
       metadata: {
-        runtime: "policy",
+        runtime: overrideHandler ? "plugin_override" : "policy",
         toolName: hookableRequest.toolName,
         taskId: hookableRequest.taskId,
         agentId: hookableRequest.agentId,

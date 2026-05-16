@@ -1,4 +1,4 @@
-import type { IntegrationPluginToolOverride } from "@goatcitadel/contracts";
+import type { IntegrationPluginToolOverride, ToolInvokeResult } from "@goatcitadel/contracts";
 import { ConflictError, ValidationError } from "@goatcitadel/contracts";
 
 export interface PluginToolOverrideClaimInput {
@@ -17,8 +17,22 @@ export interface PluginToolOverrideServiceDeps {
   getOwnerId(): string;
 }
 
+export type PluginToolHandler = (args: Record<string, unknown>) => Promise<ToolInvokeResult>;
+
+export interface PluginToolHandlerRegistration {
+  pluginId: string;
+  toolName: string;
+  handler: PluginToolHandler;
+}
+
+export interface PluginToolHandlerUnregistration {
+  pluginId: string;
+  toolName: string;
+}
+
 export class PluginToolOverrideService {
   private readonly claims = new Map<string, PluginToolOverrideClaimRecord>();
+  private readonly handlers = new Map<string, PluginToolHandler>();
 
   public constructor(private readonly deps: PluginToolOverrideServiceDeps) {}
 
@@ -97,6 +111,28 @@ export class PluginToolOverrideService {
       }
     }
     return undefined;
+  }
+
+  public registerHandler(input: PluginToolHandlerRegistration): void {
+    if (!input.pluginId.trim() || !input.toolName.trim()) {
+      throw new ValidationError({ message: "pluginId and toolName are required." });
+    }
+    if (typeof input.handler !== "function") {
+      throw new ValidationError({ message: "handler must be a function." });
+    }
+    this.handlers.set(makeKey(input.pluginId, input.toolName), input.handler);
+  }
+
+  public unregisterHandler(input: PluginToolHandlerUnregistration): void {
+    this.handlers.delete(makeKey(input.pluginId, input.toolName));
+  }
+
+  public resolveActiveHandler(toolName: string): PluginToolHandler | undefined {
+    const activeOverride = this.resolveActiveOverride(toolName);
+    if (!activeOverride) {
+      return undefined;
+    }
+    return this.handlers.get(makeKey(activeOverride.pluginId, activeOverride.toolName));
   }
 
   private requireClaim(pluginId: string, toolName: string): PluginToolOverrideClaimRecord {

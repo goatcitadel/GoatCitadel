@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PluginToolOverrideService } from "./plugin-tool-override-service.js";
 
 describe("PluginToolOverrideService", () => {
@@ -191,5 +191,81 @@ describe("PluginToolOverrideService", () => {
     });
     expect(approved.status).toBe("approved");
     expect(approved.pluginId).toBe("second");
+  });
+
+  it("registerHandler associates an executor with a plugin+tool, resolveActiveHandler returns it only when approved", async () => {
+    const service = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    const handler = vi.fn(async (_args: Record<string, unknown>) => ({
+      outcome: "executed" as const,
+      result: { ok: true },
+      auditEventId: "evt-1",
+      policyReason: "plugin override",
+    }));
+
+    // No claim yet — resolveActiveHandler returns undefined even if handler registered
+    service.registerHandler({ pluginId: "p", toolName: "web_search", handler });
+    expect(service.resolveActiveHandler("web_search")).toBeUndefined();
+
+    // Pending claim — still undefined (not approved)
+    service.registerOverrideClaim({
+      pluginId: "p",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+    expect(service.resolveActiveHandler("web_search")).toBeUndefined();
+
+    // Approved — resolveActiveHandler returns the handler
+    service.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
+    const resolved = service.resolveActiveHandler("web_search");
+    expect(resolved).toBeDefined();
+    const result = await resolved!({ q: "test" });
+    expect(result).toEqual({
+      outcome: "executed",
+      result: { ok: true },
+      auditEventId: "evt-1",
+      policyReason: "plugin override",
+    });
+  });
+
+  it("resolveActiveHandler returns undefined when claim is approved but no handler registered", () => {
+    const service = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    service.registerOverrideClaim({
+      pluginId: "p",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+    service.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
+    expect(service.resolveActiveHandler("web_search")).toBeUndefined();
+  });
+
+  it("unregisterHandler removes the handler", () => {
+    const service = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    service.registerHandler({ pluginId: "p", toolName: "web_search", handler: vi.fn() });
+    service.unregisterHandler({ pluginId: "p", toolName: "web_search" });
+    service.registerOverrideClaim({
+      pluginId: "p",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+    service.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
+    expect(service.resolveActiveHandler("web_search")).toBeUndefined();
+  });
+
+  it("revoke disables the handler resolution even if handler still registered", () => {
+    const service = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    const handler = vi.fn();
+    service.registerHandler({ pluginId: "p", toolName: "web_search", handler });
+    service.registerOverrideClaim({
+      pluginId: "p",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+    service.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
+    service.revokeClaim({ pluginId: "p", toolName: "web_search", revokedBy: "owner-1" });
+    expect(service.resolveActiveHandler("web_search")).toBeUndefined();
   });
 });
