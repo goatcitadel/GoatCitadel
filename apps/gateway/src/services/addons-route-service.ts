@@ -1,11 +1,14 @@
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
 import type { GatewayDevDiagnosticsService } from "../dev-diagnostics/service.js";
 import type { AddonsService } from "./addons-service.js";
+import type { AddonDashboardSlot } from "@goatcitadel/contracts";
+import type { AddonSlotService } from "./addon-slot-service.js";
 
 export const addonsRouteMethods = [
   "getAddonStatus",
   "installAddon",
   "launchAddon",
+  "listAddonSlots",
   "listAddonsCatalog",
   "listInstalledAddons",
   "stopAddon",
@@ -19,6 +22,7 @@ export type AddonsRouteService = RouteService<AddonsRouteMethod>;
 
 export interface AddonsRoutePortDependencies {
   addonsService: AddonsService;
+  slotService: AddonSlotService;
   publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void;
   recordDevDiagnostic: (input: Parameters<GatewayDevDiagnosticsService["record"]>[0]) => void;
 }
@@ -71,6 +75,16 @@ export function createAddonsRoutePort(deps: AddonsRoutePortDependencies): Addons
         status: result.status.status,
       });
       return result;
+    },
+    listAddonSlots: (route?: string, slot?: AddonDashboardSlot) => {
+      if (typeof route === "string" && route.length > 0) {
+        return deps.slotService.findSlotsForRoute(route, slot);
+      }
+      const registrations = deps.slotService.listAllRegistrations();
+      if (slot) {
+        return registrations.filter((registration) => registration.slot === slot);
+      }
+      return registrations;
     },
     listAddonsCatalog: () => deps.addonsService.listCatalog(),
     listInstalledAddons: () => deps.addonsService.listInstalled(),

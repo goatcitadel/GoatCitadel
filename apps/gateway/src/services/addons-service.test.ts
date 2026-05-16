@@ -17,6 +17,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 import { AddonsService, __internal } from "./addons-service.js";
+import { AddonSlotService } from "./addon-slot-service.js";
 
 describe("AddonsService", () => {
   let tempDir: string;
@@ -304,6 +305,87 @@ describe("AddonsService", () => {
         }),
       }),
     );
+  });
+
+  it("registers dashboard slot declarations with the slot service on install", async () => {
+    execFileSyncMock.mockImplementation(() => "abc123\n");
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ status: "ok", uiReady: true, uiEntryPath: "/" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    const slotService = new AddonSlotService();
+    const registerSpy = vi.spyOn(slotService, "registerDeclarations");
+    const service = new AddonsService(tempDir, { slotService });
+
+    await service.install("arena", { confirmRepoDownload: true, actorId: "operator" });
+
+    expect(registerSpy).toHaveBeenCalledTimes(1);
+    expect(registerSpy).toHaveBeenCalledWith("arena", expect.any(Array));
+    const [addonIdArg, declarationsArg] = registerSpy.mock.calls[0] ?? [];
+    expect(addonIdArg).toBe("arena");
+    expect(Array.isArray(declarationsArg)).toBe(true);
+  });
+
+  it("unregisters dashboard slot declarations from the slot service on uninstall", async () => {
+    const addonsRoot = path.join(goatHome, "addons");
+    const addonPath = path.join(addonsRoot, "arena");
+    await fs.mkdir(addonPath, { recursive: true });
+    await fs.writeFile(
+      path.join(addonsRoot, "manifest.json"),
+      `${JSON.stringify(
+        {
+          items: {
+            arena: {
+              addonId: "arena",
+              installedPath: addonPath,
+              repoUrl: "https://github.com/spurnout/goatcitadel-arena",
+              owner: "spurnout",
+              sameOwnerAsGoatCitadel: true,
+              trustTier: "restricted",
+              runtimeType: "separate_repo_app",
+              webEntryMode: "external_local_url",
+              launchUrl: "http://127.0.0.1:3099/",
+              installedAt: "2026-03-06T00:00:00.000Z",
+              updatedAt: "2026-03-06T00:00:00.000Z",
+              consentedAt: "2026-03-06T00:00:00.000Z",
+              consentedBy: "operator",
+              runtimeStatus: "installed",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const slotService = new AddonSlotService();
+    slotService.registerDeclarations("arena", [{ slot: "ops.approvals.actions" }]);
+    const unregisterSpy = vi.spyOn(slotService, "unregister");
+    const service = new AddonsService(tempDir, { slotService });
+
+    await service.uninstall("arena");
+
+    expect(unregisterSpy).toHaveBeenCalledWith("arena");
+    expect(slotService.listAllRegistrations()).toEqual([]);
+  });
+
+  it("does not throw on install or uninstall when no slot service is provided", async () => {
+    execFileSyncMock.mockImplementation(() => "abc123\n");
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ status: "ok", uiReady: true, uiEntryPath: "/" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const service = new AddonsService(tempDir);
+
+    await expect(service.install("arena", { confirmRepoDownload: true })).resolves.toBeDefined();
   });
 
   it("marks Arena unhealthy when the server is up but the UI is not ready", async () => {

@@ -333,6 +333,7 @@ import { ResearchService } from "./research-service.js";
 import { ObsidianVaultService } from "./obsidian-vault-service.js";
 import { SkillImportService } from "./skill-import-service.js";
 import { AddonsService } from "./addons-service.js";
+import { AddonSlotService } from "./addon-slot-service.js";
 import {
   GatewayDevDiagnosticsService,
   resolveDevDiagnosticsBufferSize,
@@ -599,6 +600,7 @@ export class GatewayService {
   public readonly personalityCatalogService: PersonalityCatalogService;
   public readonly cronAutomationService: CronAutomationService;
   private readonly addonsService: AddonsService;
+  private readonly addonSlotService: AddonSlotService;
   private readonly devDiagnostics: GatewayDevDiagnosticsService;
   public readonly discordRuntimeService: DiscordRuntimeService;
   private readonly chatProjectService: ChatProjectService;
@@ -833,7 +835,8 @@ export class GatewayService {
     });
     this.obsidianVaultService = new ObsidianVaultService(this.storage.systemSettings);
     this.skillImportService = new SkillImportService(config.rootDir, this.storage.systemSettings);
-    this.addonsService = new AddonsService(config.rootDir);
+    this.addonSlotService = new AddonSlotService();
+    this.addonsService = new AddonsService(config.rootDir, { slotService: this.addonSlotService });
     this.discordRuntimeService = new DiscordRuntimeService({
       listConnections: () => this.storage.integrationConnections.list(undefined, 1000),
       findApprovedPairing: (connectionId, userId) => this.findApprovedDiscordPairing(connectionId, userId),
@@ -1263,6 +1266,7 @@ export class GatewayService {
   private buildRouteCompositionPort() {
     return createGatewayRouteCompositionPort(this, {
       addonsService: this.addonsService,
+      addonSlotService: this.addonSlotService,
       approvalRuntime: this.approvalRuntime,
       assemblyService: this.assemblyService,
       backupRetentionService: this.backupRetentionService,

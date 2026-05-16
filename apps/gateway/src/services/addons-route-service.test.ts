@@ -45,6 +45,28 @@ describe("addons route service", () => {
     });
   });
 
+  it("delegates listAddonSlots to the slot service for route filtering and global listing", () => {
+    const deps = fakeDeps();
+    const service = createAddonsRouteService(createAddonsRoutePort(deps));
+
+    const routed = service.listAddonSlots("/ops/approvals");
+    expect(deps.slotService.findSlotsForRoute).toHaveBeenCalledWith("/ops/approvals", undefined);
+    expect(routed).toEqual([{ addonId: "addon-1", slot: "ops.approvals.actions", route: "/ops/approvals" }]);
+
+    const all = service.listAddonSlots();
+    expect(deps.slotService.listAllRegistrations).toHaveBeenCalled();
+    expect(all).toHaveLength(2);
+  });
+
+  it("filters slot registrations to a specific slot kind when only slot is provided", () => {
+    const deps = fakeDeps();
+    const service = createAddonsRouteService(createAddonsRoutePort(deps));
+
+    const filtered = service.listAddonSlots(undefined, "library.skills.cards");
+    expect(deps.slotService.listAllRegistrations).toHaveBeenCalled();
+    expect(filtered).toEqual([{ addonId: "addon-2", slot: "library.skills.cards" }]);
+  });
+
   it("falls back to catalog launch URL and emits stop, uninstall, and update events", async () => {
     const deps = fakeDeps();
     deps.addonsService.launch.mockResolvedValueOnce({
@@ -96,6 +118,15 @@ function fakeDeps() {
       stop: vi.fn(async () => result("stopped")),
       uninstall: vi.fn(async () => result("uninstalled")),
       update: vi.fn(async () => result("updated")),
+    } as never,
+    slotService: {
+      findSlotsForRoute: vi.fn(() => [{ addonId: "addon-1", slot: "ops.approvals.actions", route: "/ops/approvals" }]),
+      listAllRegistrations: vi.fn(() => [
+        { addonId: "addon-1", slot: "ops.approvals.actions" },
+        { addonId: "addon-2", slot: "library.skills.cards" },
+      ]),
+      registerDeclarations: vi.fn(),
+      unregister: vi.fn(),
     } as never,
     publishRealtime: vi.fn(),
     recordDevDiagnostic: vi.fn(),

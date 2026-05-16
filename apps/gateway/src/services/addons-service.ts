@@ -13,6 +13,11 @@ import type {
   AddonStatusRecord,
   AddonUninstallResponse,
 } from "@goatcitadel/contracts";
+import { AddonSlotService } from "./addon-slot-service.js";
+
+export interface AddonsServiceOptions {
+  slotService?: AddonSlotService;
+}
 
 interface AddonManifestFile {
   items: Record<string, AddonInstalledRecord>;
@@ -140,11 +145,16 @@ export class AddonsService {
   private readonly goatHomeDir: string;
   private readonly addonsRootDir: string;
   private readonly manifestPath: string;
+  private readonly slotService?: AddonSlotService;
 
-  public constructor(private readonly rootDir: string) {
+  public constructor(
+    private readonly rootDir: string,
+    options: AddonsServiceOptions = {},
+  ) {
     this.goatHomeDir = resolveGoatCitadelHome(rootDir);
     this.addonsRootDir = path.join(this.goatHomeDir, "addons");
     this.manifestPath = path.join(this.addonsRootDir, "manifest.json");
+    this.slotService = options.slotService;
   }
 
   public listCatalog(): AddonCatalogEntry[] {
@@ -213,6 +223,7 @@ export class AddonsService {
       runtimeStatus: "installed",
     };
     await this.writeManifest(manifest);
+    this.slotService?.registerDeclarations(addonId, addon.dashboardSlots ?? []);
     return {
       status: await this.getStatus(addonId),
     };
@@ -331,6 +342,7 @@ export class AddonsService {
     await fs.rm(installedPath, { recursive: true, force: true });
     delete manifest.items[addonId];
     await this.writeManifest(manifest);
+    this.slotService?.unregister(addonId);
     return {
       addonId,
       removed: true,

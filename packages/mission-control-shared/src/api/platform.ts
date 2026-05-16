@@ -1,6 +1,8 @@
 import type {
   AddonActionResponse,
   AddonCatalogEntry,
+  AddonDashboardSlot,
+  AddonDashboardSlotDeclaration,
   AddonInstalledRecord,
   AddonInstallRequest,
   AddonStatusRecord,
@@ -29,6 +31,15 @@ import type {
   NpuRuntimeStatus,
   OrchestrationRun,
 } from "@goatcitadel/contracts";
+
+export interface AddonSlotRegistration extends AddonDashboardSlotDeclaration {
+  addonId: string;
+}
+
+export interface FetchAddonSlotsParams {
+  route?: string;
+  slot?: AddonDashboardSlot;
+}
 import type {
   LlmChatCompletionResponse,
   MeshLeaseRecord,
@@ -135,6 +146,18 @@ export async function fetchInstalledAddons(): Promise<{ items: AddonInstalledRec
 
 export async function fetchAddonStatus(addonId: string): Promise<AddonStatusRecord> {
   return request<AddonStatusRecord>(`/api/v1/addons/${encodeURIComponent(addonId)}/status`);
+}
+
+export async function fetchAddonSlots(params: FetchAddonSlotsParams = {}): Promise<{ items: AddonSlotRegistration[] }> {
+  const query = new URLSearchParams();
+  if (params.route) {
+    query.set("route", params.route);
+  }
+  if (params.slot) {
+    query.set("slot", params.slot);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<{ items: AddonSlotRegistration[] }>(`/api/v1/addons/slots${suffix}`);
 }
 
 export async function installAddon(addonId: string, input: AddonInstallRequest): Promise<AddonActionResponse> {

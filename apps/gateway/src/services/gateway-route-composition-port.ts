@@ -13,6 +13,7 @@ import type * as onboardingStateService from "./onboarding-state-service.js";
 import type * as settingsAuthService from "./settings-auth-service.js";
 import type { GatewayDevDiagnosticsService } from "../dev-diagnostics/service.js";
 import type { AddonsService } from "./addons-service.js";
+import type { AddonSlotService } from "./addon-slot-service.js";
 import type { ApprovalEffectsService } from "./approval-resolution-effects-service.js";
 import type { ApprovalRuntimeService } from "./approval-runtime-service.js";
 import type { AssemblyService } from "./assembly-service.js";
@@ -53,6 +54,7 @@ type RouteDependencyMethod<
 
 export interface GatewayRouteCompositionPort {
   readonly addonsService: AddonsService;
+  readonly addonSlotService: AddonSlotService;
   readonly approvalEffectsService: ApprovalEffectsService;
   readonly approvalRuntime: ApprovalRuntimeService;
   readonly assemblyService: AssemblyService;
@@ -202,6 +204,7 @@ export interface GatewayRouteCompositionPort {
 export type GatewayRouteCompositionPrivateDependencies = Pick<
   GatewayRouteCompositionPort,
   | "addonsService"
+  | "addonSlotService"
   | "approvalRuntime"
   | "assemblyService"
   | "backupRetentionService"
@@ -238,6 +241,7 @@ export function createGatewayRouteCompositionPort(
 ): GatewayRouteCompositionPort {
   return {
     addonsService: privateDependencies.addonsService,
+    addonSlotService: privateDependencies.addonSlotService,
     approvalRuntime: privateDependencies.approvalRuntime,
     assemblyService: privateDependencies.assemblyService,
     backupRetentionService: privateDependencies.backupRetentionService,

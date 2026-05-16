@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
     publish: () => deps.publishRealtime("addon.changed", "addons", undefined),
     record: () => deps.recordDevDiagnostic({ event: "addon" }),
     service: deps.addonsService,
+    slotService: deps.slotService,
   })),
   createCostsRoutePort: vi.fn((deps: any) => ({ storage: deps.storage })),
   getSettings: vi.fn((deps: unknown) => ({ method: "getSettings", deps })),
@@ -164,6 +165,12 @@ function createGateway() {
       gatewaySql: { prepare: fn(() => ({ run: fn(() => undefined) })) },
     },
     addonsService: { list: fn(() => []) },
+    addonSlotService: {
+      findSlotsForRoute: fn(() => []),
+      listAllRegistrations: fn(() => []),
+      registerDeclarations: fn(() => undefined),
+      unregister: fn(() => undefined),
+    },
     approvalRuntime: {
       createToolGrant: fn((input: unknown) => ({ input, grantId: "grant-1" })),
       listToolGrants: fn((scope: string, scopeRef: string, limit?: number) => [{ scope, scopeRef, limit }]),
