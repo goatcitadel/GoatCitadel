@@ -1,4 +1,4 @@
-import { t } from "./i18n.js";
+import { t, type I18nKey } from "./i18n.js";
 import type { ShellRiskFinding, ShellRiskLevel } from "./shell-command-prescreen.js";
 
 export interface ShellExplanationDetail {
@@ -34,11 +34,11 @@ function findCombinedShortFlag(tokens: Tokens, char: string): boolean {
   return tokens.some((tk) => /^-[a-zA-Z]+$/.test(tk) && tk.includes(char));
 }
 
-function risk(level: ShellRiskLevel, labelKey: string, explanationKey: string): ShellRiskFinding {
+function risk(level: ShellRiskLevel, labelKey: I18nKey, explanationKey: I18nKey): ShellRiskFinding {
   return {
     level,
-    label: t(labelKey as never),
-    explanation: t(explanationKey as never),
+    label: t(labelKey),
+    explanation: t(explanationKey),
   };
 }
 
@@ -78,13 +78,13 @@ const gitPush: Handler = (tokens) => {
   }
 
   const summaryKey = forceLease
-    ? "shell.git_push.force_with_lease_summary"
+    ? ("shell.git_push.force_with_lease_summary" as const)
     : force
-      ? "shell.git_push.force_summary"
-      : "shell.git_push.normal_summary";
+      ? ("shell.git_push.force_summary" as const)
+      : ("shell.git_push.normal_summary" as const);
   return {
     program: "git",
-    summary: t(summaryKey as never, { branch, remote }),
+    summary: t(summaryKey, { branch, remote }),
     details,
     risks,
   };
@@ -102,7 +102,7 @@ const gitReset: Handler = (tokens) => {
   const risks: ShellRiskFinding[] = [];
   if (hard) {
     details.push({
-      label: "Mode",
+      label: t("shell.detail.mode"),
       value: "--hard",
       note: t("shell.risk.hard_reset.explanation"),
       noteLevel: "danger",
