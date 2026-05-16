@@ -253,6 +253,7 @@ describe("chat-turn-entry-service loop 20 coverage", () => {
       expect.objectContaining({ turnId: "turn-1" }),
       "chat_thread_turn_appended",
       orchestrationResolution,
+      expect.objectContaining({ abortSignal: undefined }),
     );
     expect(dispatchMocks.shouldUseDurableExecution).not.toHaveBeenCalled();
   });
@@ -270,6 +271,8 @@ describe("chat-turn-entry-service loop 20 coverage", () => {
       expect.objectContaining({ content: "run durably" }),
       expect.objectContaining({ turnId: "turn-1" }),
       "chat_thread_turn_appended",
+      undefined,
+      expect.objectContaining({ abortSignal: undefined }),
     );
   });
 

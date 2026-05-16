@@ -921,4 +921,15 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON state_validation_quarantine(store, observed_at DESC);
     `,
   },
+  {
+    version: 33,
+    name: "cron_jobs_workdir_context_from_run_output_run_id",
+    sql: `
+      ALTER TABLE cron_jobs
+        ADD COLUMN IF NOT EXISTS workdir TEXT,
+        ADD COLUMN IF NOT EXISTS context_from TEXT,
+        ADD COLUMN IF NOT EXISTS last_run_output TEXT,
+        ADD COLUMN IF NOT EXISTS last_run_id TEXT;
+    `,
+  },
 ];

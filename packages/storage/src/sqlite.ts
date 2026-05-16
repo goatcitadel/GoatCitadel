@@ -1128,6 +1128,10 @@ function createBaseSchema(db: DatabaseSync): void {
       end_at TEXT,
       last_run_at TEXT,
       next_run_at TEXT,
+      workdir TEXT,
+      context_from TEXT,
+      last_run_output TEXT,
+      last_run_id TEXT,
       updated_at TEXT NOT NULL
     );
 

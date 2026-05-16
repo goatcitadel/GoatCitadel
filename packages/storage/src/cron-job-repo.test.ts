@@ -133,3 +133,28 @@ describe("CronJobRepository sanitization", () => {
     assert.match(entry0.schemaError, /json_parse|schema/);
   });
 });
+
+describe("CronJobRepository workdir/contextFrom/lastRunOutput/lastRunId", () => {
+  it("persists and reads new columns", () => {
+    const repo = createRepo();
+    const saved = repo.upsert({
+      jobId: "probe",
+      name: "Probe",
+      action: "no_agent" as const,
+      actionConfig: { noAgent: { command: "echo", args: ["alert"] } },
+      schedule: "*/5 * * * *",
+      enabled: true,
+      workdir: "/tmp/test",
+      contextFrom: "upstream",
+      lastRunOutput: "alert",
+      lastRunId: "run-1",
+    });
+    const reloaded = repo.get("probe");
+    assert.equal(reloaded?.workdir, "/tmp/test");
+    assert.equal(reloaded?.contextFrom, "upstream");
+    assert.equal(reloaded?.lastRunOutput, "alert");
+    assert.equal(reloaded?.lastRunId, "run-1");
+    assert.equal(reloaded?.action, "no_agent");
+    assert.equal(saved.workdir, "/tmp/test");
+  });
+});

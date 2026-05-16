@@ -536,6 +536,7 @@ describe("agentSendChatMessage", () => {
       expect.objectContaining({ turnId: "turn-1" }),
       expect.objectContaining({ transport: "discord" }),
       "chat_thread_turn_appended",
+      expect.objectContaining({ abortSignal: undefined }),
     );
     expect(dispatchMocks.sendPreparedIntegrationChatTurn).toHaveBeenCalledWith(
       host,

@@ -28,6 +28,9 @@ export function createCronJob(
     schedule: string;
     enabled?: boolean;
     endAt?: string;
+    actionConfig?: unknown;
+    workdir?: string;
+    contextFrom?: string;
   },
 ): CronJobRecord {
   return host.cronAutomationService.createCronJob(input);
@@ -43,6 +46,9 @@ export function updateCronJob(
     schedule?: string;
     enabled?: boolean;
     endAt?: string | null;
+    actionConfig?: unknown;
+    workdir?: string | null;
+    contextFrom?: string | null;
   },
 ): CronJobRecord {
   return host.cronAutomationService.updateCronJob(jobId, input);
@@ -56,8 +62,26 @@ export function deleteCronJob(host: CronSchedulerHost, jobId: string): { deleted
   return host.cronAutomationService.deleteCronJob(jobId);
 }
 
-export async function runCronJobNow(host: CronSchedulerHost, jobId: string): Promise<{ jobId: string; status: "ok" }> {
+export async function runCronJobNow(
+  host: CronSchedulerHost,
+  jobId: string,
+): Promise<{ jobId: string; runId: string; status: "ok" }> {
   return host.cronAutomationService.runCronJobNow(jobId);
+}
+
+export function findCronRunById(
+  host: CronSchedulerHost,
+  runId: string,
+):
+  | {
+      runId: string;
+      jobId: string;
+      status: "ok";
+      finishedAt?: string;
+      output?: string;
+    }
+  | undefined {
+  return host.cronAutomationService.findCronRunById(runId);
 }
 
 export function listCronReviewQueue(host: CronSchedulerHost, limit = 200): CronReviewItem[] {

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  AgentSubagentDefaultsSchema,
   AssistantConfigInputSchema,
   BudgetConfigSchema,
+  CronJobSchema,
   CronJobsConfigSchema,
   LlmConfigFileSchema,
   ToolPolicyConfigSchema,
@@ -477,5 +479,52 @@ describe("CronJobsConfigSchema", () => {
   it("rejects when jobs is not an array", () => {
     const input = { jobs: "none" };
     expect(() => CronJobsConfigSchema.parse(input)).toThrow();
+  });
+});
+
+describe("AgentSubagentDefaultsSchema", () => {
+  it("defaults childTimeoutSeconds to 600 and maxDepth to 4", () => {
+    const parsed = AgentSubagentDefaultsSchema.parse({});
+    expect(parsed.childTimeoutSeconds).toBe(600);
+    expect(parsed.maxDepth).toBe(4);
+  });
+
+  it("accepts overrides", () => {
+    const parsed = AgentSubagentDefaultsSchema.parse({ childTimeoutSeconds: 900, maxDepth: 3 });
+    expect(parsed.childTimeoutSeconds).toBe(900);
+    expect(parsed.maxDepth).toBe(3);
+  });
+
+  it("rejects non-positive values", () => {
+    expect(() => AgentSubagentDefaultsSchema.parse({ childTimeoutSeconds: 0 })).toThrow();
+    expect(() => AgentSubagentDefaultsSchema.parse({ maxDepth: 0 })).toThrow();
+  });
+});
+
+describe("CronJobSchema no_agent + chaining fields", () => {
+  it("accepts no_agent action with noAgent actionConfig", () => {
+    const parsed = CronJobSchema.parse({
+      jobId: "probe",
+      name: "Probe",
+      action: "no_agent",
+      actionConfig: { noAgent: { command: "echo", args: ["hi"], timeoutMs: 1000 } },
+      schedule: "*/5 * * * *",
+      enabled: true,
+    });
+    expect(parsed.action).toBe("no_agent");
+  });
+
+  it("accepts workdir and contextFrom", () => {
+    const parsed = CronJobSchema.parse({
+      jobId: "chained",
+      name: "Chained",
+      action: "task",
+      schedule: "*/5 * * * *",
+      enabled: true,
+      workdir: "/tmp/test",
+      contextFrom: "upstream",
+    });
+    expect(parsed.workdir).toBe("/tmp/test");
+    expect(parsed.contextFrom).toBe("upstream");
   });
 });

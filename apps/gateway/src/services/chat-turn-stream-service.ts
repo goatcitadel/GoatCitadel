@@ -118,7 +118,11 @@ export interface ChatTurnStreamHost
   createChatSession(input: ChatSessionCreateInput): ChatSessionRecord;
   inheritDelegatedSessionToolGrants(sessionId: string, delegatedSessionId: string): void;
   updateChatSessionPrefs(sessionId: string, input: ChatSessionPrefsPatch): unknown;
-  agentSendChatMessage(sessionId: string, input: ChatSendMessageRequest): Promise<ChatSendMessageResponse>;
+  agentSendChatMessage(
+    sessionId: string,
+    input: ChatSendMessageRequest,
+    options?: { abortSignal?: AbortSignal },
+  ): Promise<ChatSendMessageResponse>;
   updateActiveLeafOrThrow(sessionId: string, previousActiveTurnId: string | undefined, nextActiveTurnId: string): void;
   collectCapabilityUpgradeSuggestions(input: {
     sessionId: string;

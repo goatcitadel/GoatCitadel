@@ -10,7 +10,11 @@ import * as chatTurnEntryService from "./chat-turn-entry-service.js";
 import type { ChatTurnRuntimeHost } from "./chat-turn-runtime-host-composition.js";
 
 export interface ChatTurnRuntime {
-  agentSendChatMessage(sessionId: string, input: ChatSendMessageRequest): Promise<ChatSendMessageResponse>;
+  agentSendChatMessage(
+    sessionId: string,
+    input: ChatSendMessageRequest,
+    options?: { abortSignal?: AbortSignal },
+  ): Promise<ChatSendMessageResponse>;
   agentSendChatMessageStream(sessionId: string, input: ChatSendMessageRequest): AsyncGenerator<ChatStreamChunk>;
   retryChatTurn(
     sessionId: string,
@@ -32,8 +36,12 @@ export interface ChatTurnRuntime {
 export class ChatTurnRuntimeService implements ChatTurnRuntime {
   public constructor(private readonly host: ChatTurnRuntimeHost) {}
 
-  public agentSendChatMessage(sessionId: string, input: ChatSendMessageRequest): Promise<ChatSendMessageResponse> {
-    return chatTurnEntryService.agentSendChatMessage(this.host, sessionId, input);
+  public agentSendChatMessage(
+    sessionId: string,
+    input: ChatSendMessageRequest,
+    options?: { abortSignal?: AbortSignal },
+  ): Promise<ChatSendMessageResponse> {
+    return chatTurnEntryService.agentSendChatMessage(this.host, sessionId, input, options);
   }
 
   public agentSendChatMessageStream(sessionId: string, input: ChatSendMessageRequest): AsyncGenerator<ChatStreamChunk> {
