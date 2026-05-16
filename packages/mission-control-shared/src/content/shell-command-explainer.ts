@@ -36,15 +36,33 @@ function dedupeRisks(risks: readonly ShellRiskFinding[]): ShellRiskFinding[] {
   return out;
 }
 
-function tokenize(command: string): readonly string[] | undefined {
-  try {
-    // Detect unmatched quotes
-    const singleQuotes = (command.match(/'/g) ?? []).length;
-    const doubleQuotes = (command.match(/"/g) ?? []).length;
-    if (singleQuotes % 2 !== 0 || doubleQuotes % 2 !== 0) {
-      return undefined;
+function hasUnmatchedQuote(command: string): boolean {
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (const ch of command) {
+    if (escaped) {
+      escaped = false;
+      continue;
     }
+    if (ch === "\\" && !inSingle) {
+      escaped = true;
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+    } else if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+    }
+  }
+  return inSingle || inDouble;
+}
 
+function tokenize(command: string): readonly string[] | undefined {
+  if (hasUnmatchedQuote(command)) {
+    return undefined;
+  }
+  try {
     const parsed = shellParse(command);
     const tokens: string[] = [];
     for (const item of parsed) {

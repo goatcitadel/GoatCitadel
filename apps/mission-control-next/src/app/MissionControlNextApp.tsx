@@ -934,31 +934,37 @@ export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSec
   if (area === "settings") {
     return [
       {
-        id: "settings-core",
-        label: "Configuration",
+        id: "settings-foundations",
+        label: "Foundations",
+        items: items.filter((item) => item.section === "general" || item.section === "workspaces"),
+      },
+      {
+        id: "settings-identity",
+        label: "Identity",
+        items: items.filter(
+          (item) => item.section === "access" || item.section === "personalities" || item.section === "providers",
+        ),
+      },
+      {
+        id: "settings-surfaces",
+        label: "Surfaces",
         items: items.filter(
           (item) =>
-            item.section === "general" ||
-            item.section === "onboarding" ||
-            item.section === "providers" ||
-            item.section === "personalities" ||
-            item.section === "access" ||
+            item.section === "channels" ||
+            item.section === "integrations" ||
+            item.section === "mcp" ||
+            item.section === "tools",
+        ),
+      },
+      {
+        id: "settings-operations",
+        label: "Operations",
+        items: items.filter(
+          (item) =>
             item.section === "runtime" ||
-            item.section === "workspaces",
-        ),
-      },
-      {
-        id: "settings-connections",
-        label: "Connections",
-        items: items.filter(
-          (item) => item.section === "integrations" || item.section === "channels" || item.section === "mcp",
-        ),
-      },
-      {
-        id: "settings-controls",
-        label: "Controls",
-        items: items.filter(
-          (item) => item.section === "tools" || item.section === "addons" || item.section === "budget",
+            item.section === "addons" ||
+            item.section === "budget" ||
+            item.section === "onboarding",
         ),
       },
     ].filter((group) => group.items.length);

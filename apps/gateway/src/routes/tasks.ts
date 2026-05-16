@@ -6,6 +6,8 @@ import { buildAgenticRuntimeAvailability } from "../services/agentic-capability-
 import { probeAgenticHarnessAvailability } from "../services/agentic-harness-availability.js";
 import { sendRouteError } from "./_error-handler.js";
 
+const KANBAN_MUTATION_RATE_LIMIT_MAX = 180;
+
 const statusSchema = z.enum(["planning", "inbox", "assigned", "in_progress", "testing", "review", "done", "blocked"]);
 
 const prioritySchema = z.enum(["low", "normal", "high", "urgent"]);
@@ -177,6 +179,56 @@ const agenticDiagnosticSchema = z.object({
   createdAt: z.string().datetime().optional(),
   resolvedAt: z.string().datetime().optional(),
 });
+
+const distressSignalCodeSchema = z.enum([
+  "needs_user",
+  "tool_error",
+  "provider_outage",
+  "hallucination_suspected",
+  "stale_heartbeat",
+  "worker_crash",
+  "artifact_missing",
+  "retry_budget_exhausted",
+]);
+const distressSeveritySchema = z.enum(["info", "warn", "critical"]);
+
+const emitDistressBodySchema = z.object({
+  code: distressSignalCodeSchema,
+  severity: distressSeveritySchema,
+  title: z.string().min(1),
+  summary: z.string(),
+  emittedBy: z.string().min(1).optional(),
+  evidenceRef: z.string().min(1).optional(),
+});
+
+const resolveDistressBodySchema = z.object({
+  resolvedBy: z.string().min(1).optional(),
+});
+
+const retryBudgetBodySchema = z.object({
+  maxRetries: z.number().int().nonnegative(),
+});
+
+const artifactClaimSchema = z.object({
+  kind: z.enum(["file", "url", "commit_sha"]),
+  value: z.string().min(1),
+  label: z.string().min(1).optional(),
+});
+
+const verifyArtifactsBodySchema = z.object({
+  claims: z.array(artifactClaimSchema).min(1),
+});
+
+const bulkActionBodySchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("unblock"), taskIds: z.array(z.string().min(1)).min(1) }),
+  z.object({ action: z.literal("retry"), taskIds: z.array(z.string().min(1)).min(1), reason: z.string().min(1) }),
+  z.object({
+    action: z.literal("reassign"),
+    taskIds: z.array(z.string().min(1)).min(1),
+    assignedAgentId: z.string().min(1),
+  }),
+  z.object({ action: z.literal("close"), taskIds: z.array(z.string().min(1)).min(1) }),
+]);
 
 const deleteTaskQuerySchema = z.object({
   mode: z.enum(["soft", "hard"]).default("soft"),
@@ -441,6 +493,67 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
 
     try {
       return reply.send(fastify.services.tasks.updateTaskSubagent(agentSessionId, parsed.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  const kanbanMutationRouteConfig = { config: { rateLimit: { max: KANBAN_MUTATION_RATE_LIMIT_MAX } } };
+
+  fastify.post("/api/v1/tasks/:taskId/distress", kanbanMutationRouteConfig, async (request, reply) => {
+    const taskId = (request.params as { taskId: string }).taskId;
+    const parsed = emitDistressBodySchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    try {
+      const task = fastify.services.tasks.emitDistressSignal(taskId, parsed.data);
+      return reply.code(201).send(task);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.delete("/api/v1/tasks/:taskId/distress/:signalId", kanbanMutationRouteConfig, async (request, reply) => {
+    const { taskId, signalId } = request.params as { taskId: string; signalId: string };
+    const parsed = resolveDistressBodySchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    try {
+      const task = fastify.services.tasks.resolveDistressSignal(taskId, signalId, parsed.data);
+      return reply.send(task);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/tasks/:taskId/retry-budget", kanbanMutationRouteConfig, async (request, reply) => {
+    const taskId = (request.params as { taskId: string }).taskId;
+    const parsed = retryBudgetBodySchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    try {
+      const task = fastify.services.tasks.setRetryBudget(taskId, parsed.data.maxRetries);
+      return reply.send(task);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/tasks/:taskId/verify-artifacts", kanbanMutationRouteConfig, async (request, reply) => {
+    const taskId = (request.params as { taskId: string }).taskId;
+    const parsed = verifyArtifactsBodySchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    try {
+      const task = await fastify.services.tasks.verifyTaskArtifacts(taskId, parsed.data.claims);
+      return reply.send(task);
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/tasks/bulk", kanbanMutationRouteConfig, async (request, reply) => {
+    const parsed = bulkActionBodySchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    try {
+      const tasks = fastify.services.tasks.bulkUpdateTasks(parsed.data);
+      return reply.send({ tasks });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

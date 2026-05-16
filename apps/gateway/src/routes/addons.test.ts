@@ -113,6 +113,75 @@ describe("addons routes", () => {
     expect(failed.json()).toEqual({ error: "update blocked" });
   });
 
+  it("returns registered slot declarations from GET /api/v1/addons/slots", async () => {
+    const listAddonSlots = vi.fn((route?: string, slot?: string) => {
+      if (route === "/ops/approvals" && !slot) {
+        return [
+          { addonId: "alpha", slot: "ops.approvals.actions", route: "/ops/approvals" },
+          { addonId: "beta", slot: "ops.approvals.actions" },
+        ];
+      }
+      if (!route && slot === "library.skills.cards") {
+        return [{ addonId: "gamma", slot: "library.skills.cards" }];
+      }
+      return [
+        { addonId: "alpha", slot: "ops.approvals.actions", route: "/ops/approvals" },
+        { addonId: "gamma", slot: "library.skills.cards" },
+      ];
+    });
+    app = Fastify();
+    app.decorate("services", { addons: { listAddonSlots } } as never);
+    await app.register(addonsRoutes);
+
+    const all = await app.inject({ method: "GET", url: "/api/v1/addons/slots" });
+    expect(all.statusCode).toBe(200);
+    expect(all.json()).toEqual({
+      items: [
+        { addonId: "alpha", slot: "ops.approvals.actions", route: "/ops/approvals" },
+        { addonId: "gamma", slot: "library.skills.cards" },
+      ],
+    });
+    expect(listAddonSlots).toHaveBeenCalledWith(undefined, undefined);
+
+    const filteredByRoute = await app.inject({
+      method: "GET",
+      url: "/api/v1/addons/slots?route=%2Fops%2Fapprovals",
+    });
+    expect(filteredByRoute.statusCode).toBe(200);
+    expect(filteredByRoute.json()).toEqual({
+      items: [
+        { addonId: "alpha", slot: "ops.approvals.actions", route: "/ops/approvals" },
+        { addonId: "beta", slot: "ops.approvals.actions" },
+      ],
+    });
+    expect(listAddonSlots).toHaveBeenCalledWith("/ops/approvals", undefined);
+
+    const filteredBySlot = await app.inject({
+      method: "GET",
+      url: "/api/v1/addons/slots?slot=library.skills.cards",
+    });
+    expect(filteredBySlot.statusCode).toBe(200);
+    expect(filteredBySlot.json()).toEqual({
+      items: [{ addonId: "gamma", slot: "library.skills.cards" }],
+    });
+    expect(listAddonSlots).toHaveBeenCalledWith(undefined, "library.skills.cards");
+  });
+
+  it("rejects GET /api/v1/addons/slots with an unsupported slot kind via the Zod query schema", async () => {
+    const listAddonSlots = vi.fn();
+    app = Fastify();
+    app.decorate("services", { addons: { listAddonSlots } } as never);
+    await app.register(addonsRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/addons/slots?slot=does.not.exist",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(listAddonSlots).not.toHaveBeenCalled();
+  });
+
   it("maps addon service failures to the route-specific status codes", async () => {
     app = Fastify();
     app.decorate("services", {

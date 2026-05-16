@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- TaskLifecycleService centralizes task state transitions, agentic context, distress signals, retry budget, artifact verification, and worker crash bridging. */
 import type {
   AgenticControlRequest,
   AgenticControlResponse,
@@ -11,10 +12,12 @@ import type {
   RealtimeEvent,
   TaskActivityCreateInput,
   TaskActivityRecord,
+  TaskArtifactClaim,
   TaskCreateInput,
   TaskDeliverableCreateInput,
   TaskDeliverableRecord,
   TaskRecord,
+  TaskRetryBudget,
   TaskStatus,
   TaskSubagentCreateInput,
   TaskSubagentSession,
@@ -22,10 +25,18 @@ import type {
   TaskUpdateInput,
 } from "@goatcitadel/contracts";
 import { ValidationError } from "@goatcitadel/contracts";
+import { emitDistressSignal, resolveDistressSignal, type EmitDistressInput } from "./task-distress-engine.js";
+import { verifyClaimedArtifacts, type ArtifactProbers } from "./task-artifact-verifier.js";
 import type { Storage } from "@goatcitadel/storage";
 import { randomUUID } from "node:crypto";
 
 const DEFAULT_WORKSPACE_ID = "default";
+
+export type BulkTaskAction =
+  | { action: "unblock"; taskIds: string[] }
+  | { action: "retry"; taskIds: string[]; reason: string }
+  | { action: "reassign"; taskIds: string[]; assignedAgentId: string }
+  | { action: "close"; taskIds: string[] };
 
 type TaskStorage = Pick<Storage, "taskActivities" | "taskDeliverables" | "tasks" | "taskSubagents">;
 
@@ -45,6 +56,7 @@ export interface TaskLifecycleServiceDependencies {
   pauseDurableRun?(runId: string, actorId?: string): { status: string };
   recordAgenticDiagnosticSignal?(input: { task: TaskRecord; diagnostic: AgenticDiagnosticSignal }): void;
   storage: TaskStorage;
+  probers?: ArtifactProbers;
 }
 
 export class TaskLifecycleService {
@@ -91,6 +103,165 @@ export class TaskLifecycleService {
 
     const updated = this.deps.storage.tasks.update(taskId, input);
     this.publishTaskEvent("task_updated", { task: updated }, buildTaskRealtimeLinks(updated));
+    return updated;
+  }
+
+  public emitDistressSignal(taskId: string, input: EmitDistressInput): TaskRecord {
+    const current = this.deps.storage.tasks.get(taskId);
+    const next = emitDistressSignal(current.distressSignals, input);
+    const updated = this.deps.storage.tasks.update(taskId, { distressSignals: next });
+    const newSignal = next.find((s) => !current.distressSignals?.some((existing) => existing.signalId === s.signalId));
+    this.publishTaskEvent(
+      "task_distress_emitted",
+      { taskId, signal: newSignal ?? next[0] },
+      buildTaskRealtimeLinks(updated),
+    );
+    return updated;
+  }
+
+  public resolveDistressSignal(taskId: string, signalId: string, input: { resolvedBy?: string } = {}): TaskRecord {
+    const current = this.deps.storage.tasks.get(taskId);
+    const next = resolveDistressSignal(current.distressSignals, signalId, input);
+    const matched = current.distressSignals?.some((s) => s.signalId === signalId && !s.resolvedAt);
+    if (!matched) {
+      throw new ValidationError({
+        message: `No unresolved distress signal with signalId="${signalId}" on task ${taskId}`,
+      });
+    }
+    const updated = this.deps.storage.tasks.update(taskId, { distressSignals: next });
+    this.publishTaskEvent(
+      "task_distress_resolved",
+      { taskId, signalId, resolvedBy: input.resolvedBy },
+      buildTaskRealtimeLinks(updated),
+    );
+    return updated;
+  }
+
+  public setRetryBudget(taskId: string, maxRetries: number): TaskRecord {
+    if (!Number.isInteger(maxRetries) || maxRetries < 0) {
+      throw new ValidationError({ message: "maxRetries must be a non-negative integer" });
+    }
+    const current = this.deps.storage.tasks.get(taskId);
+    const retryBudget: TaskRetryBudget = {
+      maxRetries,
+      retryCount: current.retryBudget?.retryCount ?? 0,
+    };
+    return this.deps.storage.tasks.update(taskId, { retryBudget });
+  }
+
+  public recordRetryAttempt(taskId: string, reason: string): TaskRecord {
+    const current = this.deps.storage.tasks.get(taskId);
+    const budget = current.retryBudget ?? { maxRetries: 0, retryCount: 0 };
+    const nextCount = budget.retryCount + 1;
+    const now = new Date().toISOString();
+    const exhausted = nextCount > budget.maxRetries;
+    const retryBudget: TaskRetryBudget = {
+      ...budget,
+      retryCount: nextCount,
+      lastAttemptAt: now,
+      exhaustedAt: exhausted ? now : budget.exhaustedAt,
+    };
+    if (!exhausted) {
+      const updated = this.deps.storage.tasks.update(taskId, { retryBudget });
+      this.publishTaskEvent(
+        "task_retry_attempted",
+        { taskId, retryCount: nextCount, reason },
+        buildTaskRealtimeLinks(updated),
+      );
+      return updated;
+    }
+    const distressSignals = emitDistressSignal(current.distressSignals, {
+      code: "retry_budget_exhausted",
+      severity: "critical",
+      title: "Retry budget exhausted",
+      summary: reason,
+    });
+    const updated = this.deps.storage.tasks.update(taskId, {
+      retryBudget,
+      distressSignals,
+      status: "blocked",
+    });
+    this.publishTaskEvent(
+      "task_retry_budget_exhausted",
+      { taskId, retryCount: nextCount, reason },
+      buildTaskRealtimeLinks(updated),
+    );
+    return updated;
+  }
+
+  public autoBlockOnIncompleteExit(taskId: string, runId: string): TaskRecord {
+    const current = this.deps.storage.tasks.get(taskId);
+    if (current.status === "done" || current.status === "blocked") {
+      return current;
+    }
+    const distressSignals = emitDistressSignal(current.distressSignals, {
+      code: "worker_crash",
+      severity: "critical",
+      title: "Worker exited without closing the task",
+      summary: `Durable run ${runId} exited without a terminal close.`,
+      evidenceRef: `durable-run:${runId}`,
+    });
+    const updated = this.deps.storage.tasks.update(taskId, { distressSignals, status: "blocked" });
+    this.publishTaskEvent(
+      "task_auto_blocked",
+      { taskId, runId, reason: "worker_incomplete_exit" },
+      buildTaskRealtimeLinks(updated),
+    );
+    return updated;
+  }
+
+  public bulkUpdateTasks(input: BulkTaskAction): TaskRecord[] {
+    return input.taskIds.map((taskId) => {
+      if (input.action === "unblock") {
+        const current = this.deps.storage.tasks.get(taskId);
+        const retryBudget = current.retryBudget
+          ? { ...current.retryBudget, retryCount: 0, exhaustedAt: undefined }
+          : undefined;
+        const updated = this.deps.storage.tasks.update(taskId, {
+          status: "assigned",
+          retryBudget,
+        });
+        this.publishTaskEvent("task_updated", { task: updated }, buildTaskRealtimeLinks(updated));
+        return updated;
+      }
+      if (input.action === "retry") {
+        return this.recordRetryAttempt(taskId, input.reason);
+      }
+      if (input.action === "reassign") {
+        return this.updateTask(taskId, { assignedAgentId: input.assignedAgentId });
+      }
+      return this.updateTask(taskId, { status: "done" });
+    });
+  }
+
+  public async verifyTaskArtifacts(taskId: string, claims: TaskArtifactClaim[]): Promise<TaskRecord> {
+    if (!this.deps.probers) {
+      throw new ValidationError({ message: "Artifact verification probers not configured" });
+    }
+    const verification = await verifyClaimedArtifacts(claims, this.deps.probers);
+    const current = this.deps.storage.tasks.get(taskId);
+    const merged = [...(current.artifactVerification ?? []), ...verification];
+    const missingCount = verification.filter((v) => v.status === "missing").length;
+    const failedCount = verification.filter((v) => v.status === "failed").length;
+    const hasFailures = missingCount + failedCount > 0;
+    const distressSignals = hasFailures
+      ? emitDistressSignal(current.distressSignals, {
+          code: "artifact_missing",
+          severity: "critical",
+          title: "Claimed artifacts not found",
+          summary: `${missingCount} missing, ${failedCount} unreachable`,
+        })
+      : current.distressSignals;
+    const updated = this.deps.storage.tasks.update(taskId, {
+      artifactVerification: merged,
+      distressSignals,
+      status: hasFailures ? "blocked" : current.status,
+    });
+    this.publishTaskEvent(
+      "task_artifacts_verified",
+      { taskId, verifiedCount: verification.filter((v) => v.status === "verified").length, missingCount, failedCount },
+      buildTaskRealtimeLinks(updated),
+    );
     return updated;
   }
 
@@ -915,7 +1086,10 @@ function validateAgenticControlTransition(
 function mapDiagnosticToFailureClass(code: AgenticDiagnosticSignal["code"]): AgenticTaskContext["failureClass"] {
   switch (code) {
     case "child_timeout":
+    case "timeout_exceeded":
       return "timeout";
+    case "max_depth_exceeded":
+      return "spawn_failure";
     case "spawn_failure":
       return "spawn_failure";
     case "worker_crash":

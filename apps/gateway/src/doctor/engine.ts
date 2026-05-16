@@ -7,6 +7,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { syncUnifiedConfig } from "../config-sync-lib.js";
 import { repoHasConfigMarker } from "../config-files.js";
+import { describeMalformedCronRow, isPlainRecord, isValidCronRow } from "../services/cron-row-validation.js";
 import type {
   DoctorCheckResult,
   DoctorOperatorLinks,
@@ -94,13 +95,16 @@ export async function runDoctor(options: DoctorRunOptions = {}): Promise<DoctorR
   checks.push(await checkPrerequisites(context, repairs));
   checks.push(await checkManagedWorkspaceTooling(context, repairs));
   checks.push(await checkConfigIntegrity(context, repairs));
+  checks.push(await checkCronRows(context, repairs));
   checks.push(await checkAuthHostPosture(context, repairs));
   checks.push(await checkToolPolicyPaths(context, repairs));
   checks.push(await checkStoragePaths(context, repairs));
+  checks.push(await checkStateValidationQuarantine(context));
 
   const gatewayHealth = await checkGatewayHealth(context, repairs);
   checks.push(gatewayHealth.check);
   checks.push(await checkDeepRuntime(context, repairs, gatewayHealth.health));
+  checks.push(await checkLlmActiveModelMetadata(context, repairs, gatewayHealth.health));
 
   const finishedAt = new Date().toISOString();
   const summary = summarizeDoctor(checks, repairs);
@@ -480,6 +484,190 @@ async function checkConfigIntegrity(
   };
 }
 
+interface CronRowAnalysis {
+  validRows: Record<string, unknown>[];
+  malformedDescriptions: string[];
+  topLevelIsArray: boolean;
+}
+
+function analyzeCronRows(parsed: unknown): CronRowAnalysis | null {
+  const topLevelIsArray = Array.isArray(parsed);
+  const jobsArray: unknown = topLevelIsArray
+    ? parsed
+    : isPlainRecord(parsed)
+      ? (parsed as Record<string, unknown>).jobs
+      : undefined;
+  if (!Array.isArray(jobsArray)) {
+    return null;
+  }
+  const validRows: Record<string, unknown>[] = [];
+  const malformedDescriptions: string[] = [];
+  for (let index = 0; index < jobsArray.length; index += 1) {
+    const candidate = jobsArray[index];
+    if (isValidCronRow(candidate)) {
+      validRows.push(candidate as Record<string, unknown>);
+    } else {
+      malformedDescriptions.push(`row #${index}: ${describeMalformedCronRow(candidate)}`);
+    }
+  }
+  return {
+    validRows,
+    malformedDescriptions,
+    topLevelIsArray,
+  };
+}
+
+async function checkCronRows(context: DoctorRuntimeContext, repairs: DoctorRepairResult[]): Promise<DoctorCheckResult> {
+  const id = "config.cron-rows";
+  const cronPath = path.join(context.configDir, "cron-jobs.json");
+  const state = await readJsonFile(cronPath);
+
+  if (!state.exists) {
+    repairs.push({
+      checkId: id,
+      applied: false,
+      skipped: true,
+      reason: "cron-jobs.json is not present; nothing to audit.",
+    });
+    return {
+      id,
+      group: "config",
+      title: "Cron job row integrity",
+      status: "ok",
+      severity: "info",
+      detail: "cron-jobs.json is not present; no cron rows to validate.",
+      repairable: false,
+    };
+  }
+
+  if (!state.valid) {
+    // Avoid double-warning: checkConfigIntegrity already flags invalid JSON.
+    // Reporting "ok" here keeps the row audit silent on a problem another
+    // check already owns.
+    repairs.push({
+      checkId: id,
+      applied: false,
+      skipped: true,
+      reason: "cron-jobs.json is not valid JSON; config integrity check covers this.",
+    });
+    return {
+      id,
+      group: "config",
+      title: "Cron job row integrity",
+      status: "ok",
+      severity: "info",
+      detail: "Skipping row audit — JSON integrity check covers this file.",
+      repairable: false,
+    };
+  }
+
+  const analysis = analyzeCronRows(state.value);
+  if (!analysis) {
+    repairs.push({
+      checkId: id,
+      applied: false,
+      skipped: true,
+      reason: "cron-jobs.json has no jobs array; nothing to audit.",
+    });
+    return {
+      id,
+      group: "config",
+      title: "Cron job row integrity",
+      status: "warn",
+      severity: "warning",
+      detail: "cron-jobs.json has no jobs array; cannot audit cron rows.",
+      repairable: false,
+      repairAction: "Ensure cron-jobs.json is `{ jobs: [...] }` or an array of cron rows.",
+    };
+  }
+
+  if (analysis.malformedDescriptions.length === 0) {
+    repairs.push({
+      checkId: id,
+      applied: false,
+      skipped: true,
+      reason: "All cron rows are well-formed.",
+    });
+    return {
+      id,
+      group: "config",
+      title: "Cron job row integrity",
+      status: "ok",
+      severity: "info",
+      detail: `All ${analysis.validRows.length} cron row(s) are well-formed.`,
+      repairable: false,
+    };
+  }
+
+  const summary = `Detected ${analysis.malformedDescriptions.length} malformed cron row(s) in cron-jobs.json: ${analysis.malformedDescriptions
+    .slice(0, 3)
+    .join("; ")}${analysis.malformedDescriptions.length > 3 ? "; ..." : ""}`;
+
+  if (context.repairEnabled && context.autoRepair) {
+    try {
+      const repaired = analysis.topLevelIsArray
+        ? analysis.validRows
+        : { ...(isPlainRecord(state.value) ? state.value : {}), jobs: analysis.validRows };
+      await writeJsonFile(cronPath, repaired);
+      const changes = [
+        `Pruned ${analysis.malformedDescriptions.length} malformed cron row(s) from ${path.relative(context.rootDir, cronPath)}.`,
+        `Preserved ${analysis.validRows.length} valid row(s).`,
+        ...analysis.malformedDescriptions.map((description) => `Removed ${description}`),
+      ];
+      repairs.push({
+        checkId: id,
+        applied: true,
+        skipped: false,
+        changes,
+      });
+      return {
+        id,
+        group: "config",
+        title: "Cron job row integrity",
+        status: "fixed",
+        severity: "info",
+        detail: `${summary} Repaired by pruning malformed rows.`,
+        repairable: true,
+        repairAction: "Run `goatcitadel doctor --audit-only` to verify state without writes.",
+      };
+    } catch (error) {
+      repairs.push({
+        checkId: id,
+        applied: false,
+        skipped: false,
+        reason: `Failed to rewrite cron-jobs.json: ${(error as Error).message}`,
+      });
+      return {
+        id,
+        group: "config",
+        title: "Cron job row integrity",
+        status: "fail",
+        severity: "error",
+        detail: `${summary} Failed to repair: ${(error as Error).message}`,
+        repairable: true,
+        repairAction: "Inspect cron-jobs.json permissions and contents, then rerun doctor.",
+      };
+    }
+  }
+
+  repairs.push({
+    checkId: id,
+    applied: false,
+    skipped: true,
+    reason: "Repair disabled (--audit-only/--no-repair/read-only).",
+  });
+  return {
+    id,
+    group: "config",
+    title: "Cron job row integrity",
+    status: "warn",
+    severity: "warning",
+    detail: summary,
+    repairable: true,
+    repairAction: "Rerun doctor without --audit-only to prune malformed cron rows.",
+  };
+}
+
 async function checkAuthHostPosture(
   context: DoctorRuntimeContext,
   repairs: DoctorRepairResult[],
@@ -787,6 +975,83 @@ async function checkStoragePaths(
   };
 }
 
+async function checkStateValidationQuarantine(context: DoctorRuntimeContext): Promise<DoctorCheckResult> {
+  const id = "state.validation.quarantine";
+  const assistantPath = path.join(context.configDir, "assistant.config.json");
+  const assistantState = await readJsonFile<{ dataDir?: string }>(assistantPath);
+  const rawDataDir = (assistantState.valid && asString(assistantState.value?.dataDir)) || "./data";
+  const dataDir = path.resolve(context.rootDir, rawDataDir);
+  const dbPath = path.join(dataDir, "goatcitadel.db");
+
+  if (!existsSync(dbPath)) {
+    return {
+      id,
+      group: "storage",
+      title: "Persisted-state validation quarantine",
+      status: "ok",
+      severity: "info",
+      detail: "Storage database not initialized; no quarantine to inspect.",
+      repairable: false,
+    };
+  }
+
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const tableRow = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='state_validation_quarantine'")
+      .get();
+    if (!tableRow) {
+      return {
+        id,
+        group: "storage",
+        title: "Persisted-state validation quarantine",
+        status: "ok",
+        severity: "info",
+        detail: "Quarantine table not yet present.",
+        repairable: false,
+      };
+    }
+
+    const totalRow = db.prepare("SELECT COUNT(1) AS count FROM state_validation_quarantine").get() as
+      | { count: number | bigint }
+      | undefined;
+    const total = Number(totalRow?.count ?? 0);
+    const byStoreRows = db
+      .prepare(
+        "SELECT store, COUNT(1) AS count FROM state_validation_quarantine GROUP BY store ORDER BY count DESC LIMIT 5",
+      )
+      .all() as Array<{ store: string; count: number | bigint }>;
+
+    if (total === 0) {
+      return {
+        id,
+        group: "storage",
+        title: "Persisted-state validation quarantine",
+        status: "ok",
+        severity: "info",
+        detail: "No persisted-state shape failures recorded.",
+        repairable: false,
+      };
+    }
+
+    const topStores = byStoreRows.map((r) => `${r.store}=${Number(r.count)}`).join(", ");
+    const severity: DoctorSeverity = total >= 100 ? "error" : "warning";
+    const status: DoctorStatus = total >= 100 ? "fail" : "warn";
+    return {
+      id,
+      group: "storage",
+      title: "Persisted-state validation quarantine",
+      status,
+      severity,
+      detail: `${total} persisted rows quarantined for shape failures (top: ${topStores}). Run 'doctor --fix' after review.`,
+      repairable: false,
+    };
+  } finally {
+    db.close();
+  }
+}
+
 async function checkGatewayHealth(
   context: DoctorRuntimeContext,
   repairs: DoctorRepairResult[],
@@ -1014,6 +1279,131 @@ async function checkDeepRuntime(
     status: "ok",
     severity: "info",
     detail: details.join(" "),
+    repairable: false,
+  };
+}
+
+async function checkLlmActiveModelMetadata(
+  context: DoctorRuntimeContext,
+  repairs: DoctorRepairResult[],
+  health: GatewayHealthResult,
+): Promise<DoctorCheckResult> {
+  const id = "llm.active-model-metadata";
+  if (!context.deep) {
+    repairs.push({
+      checkId: id,
+      applied: false,
+      skipped: true,
+      reason: "Deep checks not requested.",
+    });
+    return {
+      id,
+      group: "runtime",
+      title: "LLM active model metadata",
+      status: "skipped",
+      severity: "info",
+      detail: "Skipped (use --deep to include LLM active-model metadata checks).",
+      repairable: false,
+    };
+  }
+  if (!health.reachable) {
+    repairs.push({
+      checkId: id,
+      applied: false,
+      skipped: true,
+      reason: "Gateway unreachable; LLM metadata check skipped.",
+    });
+    return {
+      id,
+      group: "runtime",
+      title: "LLM active model metadata",
+      status: "skipped",
+      severity: "info",
+      detail: "Skipped because gateway health probe failed.",
+      repairable: false,
+    };
+  }
+
+  const tokenQueryParam = context.tokenQueryParam ?? "access_token";
+  const config = await fetchGatewayJson(
+    context.gatewayBaseUrl,
+    "/api/v1/llm/config",
+    context.authToken,
+    tokenQueryParam,
+  );
+  if (!config.ok) {
+    repairs.push({
+      checkId: id,
+      applied: false,
+      skipped: true,
+      reason: "Unable to query LLM runtime config.",
+    });
+    return {
+      id,
+      group: "runtime",
+      title: "LLM active model metadata",
+      status: "warn",
+      severity: "warning",
+      detail: `Could not load /api/v1/llm/config: ${config.detail}`,
+      repairable: false,
+    };
+  }
+
+  const payload = asRecord(config.payload);
+  const activeProviderId = asString(payload?.activeProviderId)?.trim() ?? "";
+  const activeModel = asString(payload?.activeModel)?.trim() ?? "";
+  const contextWindowRaw = payload?.activeModelContextWindow;
+  const outputLimitRaw = payload?.activeModelOutputTokenLimit;
+  const contextWindow = typeof contextWindowRaw === "number" ? contextWindowRaw : undefined;
+  const outputLimit = typeof outputLimitRaw === "number" ? outputLimitRaw : undefined;
+
+  repairs.push({
+    checkId: id,
+    applied: false,
+    skipped: true,
+    reason: "LLM metadata findings are informational; update config/llm-model-metadata.json to resolve.",
+  });
+
+  if (!activeProviderId || !activeModel) {
+    return {
+      id,
+      group: "runtime",
+      title: "LLM active model metadata",
+      status: "warn",
+      severity: "warning",
+      detail: "No active LLM provider/model is configured; /status surfaces will be empty.",
+      repairable: false,
+      repairAction: "Pick an active provider and model with `goat tui` or PATCH `/api/v1/llm/config`.",
+    };
+  }
+
+  if (contextWindow === undefined) {
+    return {
+      id,
+      group: "runtime",
+      title: "LLM active model metadata",
+      status: "warn",
+      severity: "warning",
+      detail: `Active model ${activeProviderId}/${activeModel} has no contextWindow in llm-model-metadata.json. /status surfaces will not be able to display an authoritative limit.`,
+      repairable: false,
+      repairAction: "Add a matching entry to `config/llm-model-metadata.json` and restart the gateway.",
+    };
+  }
+
+  const detailParts = [
+    `Active model ${activeProviderId}/${activeModel} has contextWindow ${contextWindow.toLocaleString()}.`,
+  ];
+  if (outputLimit !== undefined) {
+    detailParts.push(`Output token limit: ${outputLimit.toLocaleString()}.`);
+  }
+
+  return {
+    id,
+    group: "runtime",
+    title: "LLM active model metadata",
+    status: "ok",
+    severity: "info",
+    detail: detailParts.join(" "),
     repairable: false,
   };
 }

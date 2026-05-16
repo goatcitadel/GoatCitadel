@@ -396,6 +396,21 @@ export async function createApproval(
 ): Promise<ApprovalRequest> {
   const approvalHookWorkspaceId = host.resolveApprovalHookWorkspaceId(input.payload);
   const approvalHookEntityId = randomUUID();
+  const requestHook = await host.hooksService.runInlineHooks({
+    workspaceId: approvalHookWorkspaceId,
+    trigger: "approval.request.before",
+    entityType: "approval",
+    entityId: approvalHookEntityId,
+    payload: {
+      kind: input.kind,
+      riskLevel: input.riskLevel,
+      payload: input.payload,
+    },
+    parsePatch: () => undefined,
+  });
+  if (requestHook.blockedBy) {
+    throw new Error(requestHook.blockedBy.reason);
+  }
   const beforeHook = await host.hooksService.runInlineHooks<{
     riskLevel?: ApprovalCreateInput["riskLevel"];
     payloadMerge?: Record<string, unknown>;

@@ -10,6 +10,21 @@ const installSchema = z.object({
   actorId: z.string().trim().min(1).optional(),
 });
 
+const ADDON_DASHBOARD_SLOT_VALUES = [
+  "ops.approvals.actions",
+  "ops.runtime.actions",
+  "ops.runtime.statusbar",
+  "library.skills.cards",
+  "library.memory.actions",
+  "projects.detail.toolbar",
+  "settings.account.sections",
+] as const;
+
+const addonSlotsQuerySchema = z.object({
+  route: z.string().trim().min(1).optional(),
+  slot: z.enum(ADDON_DASHBOARD_SLOT_VALUES).optional(),
+});
+
 export const addonsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/addons/catalog", async (_request, reply) => {
     return reply.send({ items: fastify.services.addons.listAddonsCatalog() });
@@ -17,6 +32,16 @@ export const addonsRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get("/api/v1/addons/installed", async (_request, reply) => {
     return reply.send({ items: await fastify.services.addons.listInstalledAddons() });
+  });
+
+  fastify.get("/api/v1/addons/slots", async (request, reply) => {
+    const parsed = addonSlotsQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send({
+      items: fastify.services.addons.listAddonSlots(parsed.data.route, parsed.data.slot),
+    });
   });
 
   fastify.get("/api/v1/addons/:addonId/status", async (request, reply) => {

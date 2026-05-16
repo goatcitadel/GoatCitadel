@@ -261,6 +261,28 @@
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--mc-mode-code) 16%, transparent);
 }
 
+.mc-next-threaded-mode-dot.is-live {
+  animation: mc-next-threaded-live-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes mc-next-threaded-live-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px color-mix(in oklab, currentColor 16%, transparent);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in oklab, currentColor 28%, transparent);
+    transform: scale(1.08);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-next-threaded-mode-dot.is-live {
+    animation: none;
+  }
+}
+
 .mc-next-threaded-search {
   display: flex;
   align-items: center;
@@ -1432,6 +1454,13 @@
 
 .mc-next-thread-strip {
   align-items: flex-start;
+  gap: 0.45rem;
+  padding: 0.2rem 0;
+  border-top: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+}
+
+.mc-next-thread-turn:first-of-type .mc-next-thread-strip {
+  border-top-color: transparent;
 }
 
 .mc-next-thread-strip > span,
@@ -1442,6 +1471,15 @@
   max-width: 100%;
   line-height: 1.25;
   overflow-wrap: anywhere;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.mc-next-thread-strip > span {
+  font-family: var(--mc-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.66rem;
+  letter-spacing: 0.01em;
 }
 
 .mc-next-thread-inline-button,

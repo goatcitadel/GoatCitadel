@@ -8,6 +8,12 @@ import * as chatCommandService from "./chat-command-service.js";
 import * as chatGeneratedArtifactService from "./chat-generated-artifact-service.js";
 import * as chatMessageRouteRuntime from "./chat-message-route-runtime.js";
 import * as chatSessionService from "./chat-session-service.js";
+import {
+  handleChatGoalClearRequest,
+  handleChatGoalSetRequest,
+  handleChatGoalStatusRequest,
+  handleChatSteerRequest,
+} from "./chat-steer-route.js";
 import * as chatThreadKnowledgeService from "./chat-thread-knowledge-service.js";
 import * as chatToolArtifactService from "./chat-tool-artifact-service.js";
 import * as chatWorkbenchService from "./chat-workbench-service.js";
@@ -260,6 +266,18 @@ export function composeChatRouteDependencies(
           }
           return gateway.storage.chatSpecialistCandidates.patch(candidateId, input);
         },
+      },
+      steer: {
+        submitChatSteerInstruction: (sessionId, body) =>
+          handleChatSteerRequest({ sessionId, body, steerService: gateway.steerService }),
+      },
+      goal: {
+        getChatSessionGoal: (sessionId) =>
+          handleChatGoalStatusRequest({ sessionId, chatSessionMeta: gateway.storage.chatSessionMeta }),
+        setChatSessionGoal: (sessionId, body) =>
+          handleChatGoalSetRequest({ sessionId, body, chatSessionMeta: gateway.storage.chatSessionMeta }),
+        clearChatSessionGoal: (sessionId) =>
+          handleChatGoalClearRequest({ sessionId, chatSessionMeta: gateway.storage.chatSessionMeta }),
       },
     },
     chatTools,

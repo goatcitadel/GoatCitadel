@@ -138,9 +138,16 @@ function parseHost(hostOrUrl: string): { host: string; hostname: string; invalid
   try {
     const parsed = new URL(trimmed);
     if (parsed.host || parsed.hostname) {
+      // SECURITY: when the URL contains an IPv6 host (`http://[fc00::1]/`),
+      // the WHATWG URL parser keeps the brackets in `hostname`. Strip them
+      // here so the IPv6 family detection in isPrivateOrReservedHost sees
+      // `fc00::1` (which `isIP()` recognises) instead of `[fc00::1]` (which
+      // it does not). Without this, every bracketed IPv6 form bypasses the
+      // SSRF guard — including ULA, link-local, loopback, and IPv4-mapped
+      // metadata addresses.
       return {
         host: parsed.host,
-        hostname: parsed.hostname,
+        hostname: stripIpv6Brackets(parsed.hostname),
       };
     }
     if (trimmed.includes("://")) {
@@ -292,7 +299,7 @@ function isPrivateOrReservedIpv4(host: string): boolean {
 
 function isBlockedIpv6(host: string): boolean {
   const lower = host.toLowerCase();
-  return (
+  if (
     lower === "::" ||
     lower === "::1" ||
     lower.startsWith("fc") ||
@@ -301,7 +308,46 @@ function isBlockedIpv6(host: string): boolean {
     lower.startsWith("fe9") ||
     lower.startsWith("fea") ||
     lower.startsWith("feb")
-  );
+  ) {
+    return true;
+  }
+  // IPv4-mapped IPv6 (RFC 4291) — `::ffff:a.b.c.d` or the canonical
+  // `::ffff:hhhh:hhhh` Node normalizes IPv4 octets into. Recurse through the
+  // IPv4 reserved-range check so an attacker cannot reach 169.254.169.254
+  // (AWS metadata), 100.100.100.200 (Alibaba), or any RFC1918 host via the
+  // IPv4-mapped IPv6 form.
+  const mapped = extractIpv4MappedAddress(lower);
+  if (mapped) {
+    return isPrivateOrReservedIpv4(mapped);
+  }
+  return false;
+}
+
+function extractIpv4MappedAddress(ipv6Lower: string): string | undefined {
+  // Dotted-quad mapped form: `::ffff:169.254.169.254`
+  const dottedMatch = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(ipv6Lower);
+  if (dottedMatch) {
+    return dottedMatch[1];
+  }
+  // Hex-quad mapped form: `::ffff:a9fe:a9fe` (Node's canonical normalisation
+  // of the dotted form, returned via `new URL().hostname`).
+  const hexMatch = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(ipv6Lower);
+  if (hexMatch) {
+    const high = Number.parseInt(hexMatch[1] ?? "", 16);
+    const low = Number.parseInt(hexMatch[2] ?? "", 16);
+    if (Number.isFinite(high) && Number.isFinite(low)) {
+      const octet = (value: number, shift: number) => (value >>> shift) & 0xff;
+      return [octet(high, 8), octet(high, 0), octet(low, 8), octet(low, 0)].join(".");
+    }
+  }
+  return undefined;
+}
+
+function stripIpv6Brackets(hostname: string): string {
+  if (hostname.startsWith("[") && hostname.endsWith("]")) {
+    return hostname.slice(1, -1);
+  }
+  return hostname;
 }
 
 function isExplicitLoopbackPattern(pattern: string, hostname: string): boolean {

@@ -72,9 +72,12 @@ describe("ChatTurnRuntimeService", () => {
     await runtime.retryChatTurn("session-1", "turn-1", { content: "retry" });
     await runtime.routePreflight("session-1", { action: "send" });
 
-    expect(chatTurnEntryService.agentSendChatMessage).toHaveBeenCalledWith(expect.anything(), "session-1", {
-      content: "hello",
-    });
+    expect(chatTurnEntryService.agentSendChatMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      "session-1",
+      { content: "hello" },
+      undefined,
+    );
     expect(chatTurnEntryService.retryChatTurn).toHaveBeenCalledWith(expect.anything(), "session-1", "turn-1", {
       content: "retry",
     });

@@ -167,8 +167,8 @@ describe("storage loop 23 branch tails", () => {
 
     const runs = repo.listRuns(0);
     assert.equal(runs.length, 1);
-    assert.deepEqual(runs[0]?.payload, []);
-    assert.deepEqual(runs[0]?.metadata, []);
+    assert.deepEqual(runs[0]?.payload, {});
+    assert.equal(runs[0]?.metadata, undefined);
   });
 
   it("filters execution plan and step rows while preserving explicit false/null mapper defaults", () => {

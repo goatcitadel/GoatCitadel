@@ -490,7 +490,7 @@ describe("CronAutomationService job behavior", () => {
     }
 
     for (const job of cronJobs.list()) {
-      await expect(service.runCronJobNow(job.jobId)).resolves.toEqual({ jobId: job.jobId, status: "ok" });
+      await expect(service.runCronJobNow(job.jobId)).resolves.toMatchObject({ jobId: job.jobId, status: "ok" });
     }
 
     expect(handlers.improvement).toHaveBeenCalledTimes(1);
@@ -619,6 +619,222 @@ describe("CronAutomationService job behavior", () => {
         notifyHomeChannel: false,
       },
     });
+  });
+});
+
+function makeServiceWithNoAgent(opts: {
+  realtime: ReturnType<typeof vi.fn>;
+  runner: (input: unknown) => Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut: boolean }>;
+}): CronAutomationService {
+  const db = new FakeDb();
+  const cronJobs = new FakeCronJobs();
+  const deps: CronAutomationServiceDeps = {
+    storage: { db, cronJobs } as unknown as Storage,
+    persistCronJobsConfig: () => {},
+    publishRealtime: opts.realtime,
+    requireFeatureEnabled: () => {},
+    isFeatureEnabled: () => false,
+    runHandlers: {
+      task: async () => ({}),
+      improvement: async () => {},
+      backup: async () => {},
+      memoryFlush: async () => {},
+      costReport: async () => {},
+      updateReview: async () => {},
+      watchdog: async () => ({ status: "ok", checkId: "runtime_health", summary: "ok" }),
+      noAgent: opts.runner,
+    },
+  };
+  return new CronAutomationService(deps);
+}
+
+describe("createCronJob workdir + contextFrom", () => {
+  it("stores workdir and contextFrom on the persisted record", () => {
+    const service = makeServiceWithNoAgent({
+      realtime: vi.fn(),
+      runner: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
+    });
+    const saved = service.createCronJob({
+      jobId: "chained",
+      name: "Chained",
+      action: "task",
+      schedule: "0 */6 * * * UTC",
+      workdir: "/tmp/test",
+      contextFrom: "upstream",
+    });
+    expect(saved.workdir).toBe("/tmp/test");
+    expect(saved.contextFrom).toBe("upstream");
+  });
+});
+
+describe("contextFrom resolution", () => {
+  function makeServiceWithTask(opts: {
+    realtime: ReturnType<typeof vi.fn>;
+    cronJobs: FakeCronJobs;
+    task: CronAutomationServiceDeps["runHandlers"]["task"];
+  }): CronAutomationService {
+    const db = new FakeDb();
+    const deps: CronAutomationServiceDeps = {
+      storage: { db, cronJobs: opts.cronJobs } as unknown as Storage,
+      persistCronJobsConfig: () => {},
+      publishRealtime: opts.realtime,
+      requireFeatureEnabled: () => {},
+      isFeatureEnabled: () => false,
+      runHandlers: {
+        task: opts.task,
+        improvement: async () => {},
+        backup: async () => {},
+        memoryFlush: async () => {},
+        costReport: async () => {},
+        updateReview: async () => {},
+        watchdog: async () => ({ status: "ok", checkId: "runtime_health", summary: "ok" }),
+        noAgent: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
+      },
+    };
+    return new CronAutomationService(deps);
+  }
+
+  it("passes upstream lastRunOutput to task handler as contextOutput", async () => {
+    const cronJobs = new FakeCronJobs();
+    const captured: Array<{ contextFrom?: string; contextOutput?: string }> = [];
+
+    const service = makeServiceWithTask({
+      realtime: vi.fn(),
+      cronJobs,
+      task: async (_job, context) => {
+        captured.push({ contextFrom: context?.contextFrom, contextOutput: context?.contextOutput });
+        return {};
+      },
+    });
+
+    // Pre-seed the upstream job with a lastRunOutput.
+    cronJobs.upsert({
+      jobId: "upstream",
+      name: "Upstream",
+      action: "no_agent",
+      schedule: "0 */6 * * * UTC",
+      enabled: true,
+      lastRunOutput: "context-payload",
+    });
+
+    service.createCronJob({
+      jobId: "downstream",
+      name: "Downstream",
+      action: "task",
+      schedule: "0 */6 * * * UTC",
+      contextFrom: "upstream",
+    });
+
+    await service.runCronJobNow("downstream");
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.contextFrom).toBe("upstream");
+    expect(captured[0]?.contextOutput).toBe("context-payload");
+  });
+
+  it("passes undefined contextOutput when contextFrom job has no lastRunOutput yet", async () => {
+    const cronJobs = new FakeCronJobs();
+    const captured: Array<{ contextFrom?: string; contextOutput?: string }> = [];
+
+    const service = makeServiceWithTask({
+      realtime: vi.fn(),
+      cronJobs,
+      task: async (_job, context) => {
+        captured.push({ contextFrom: context?.contextFrom, contextOutput: context?.contextOutput });
+        return {};
+      },
+    });
+
+    // Pre-seed upstream with no lastRunOutput.
+    cronJobs.upsert({
+      jobId: "upstream",
+      name: "Upstream",
+      action: "no_agent",
+      schedule: "0 */6 * * * UTC",
+      enabled: true,
+    });
+
+    service.createCronJob({
+      jobId: "downstream2",
+      name: "Downstream2",
+      action: "task",
+      schedule: "0 */6 * * * UTC",
+      contextFrom: "upstream",
+    });
+
+    await service.runCronJobNow("downstream2");
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.contextFrom).toBe("upstream");
+    expect(captured[0]?.contextOutput).toBeUndefined();
+  });
+});
+
+describe("no_agent cron action", () => {
+  it("skips delivery when stdout is empty", async () => {
+    const realtime = vi.fn();
+    const service = makeServiceWithNoAgent({
+      realtime,
+      runner: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
+    });
+    service.createCronJob({
+      jobId: "probe-empty",
+      name: "probe-empty",
+      action: "no_agent",
+      schedule: "0 */6 * * * UTC",
+      actionConfig: { noAgent: { command: "echo", args: [""] } },
+    });
+    await service.runCronJobNow("probe-empty");
+    const events = realtime.mock.calls.map((call) => call[2]?.type).filter(Boolean);
+    expect(events).not.toContain("cron_no_agent_output");
+    const job = service.getCronJob("probe-empty");
+    expect(job.lastRunOutput).toBeUndefined();
+  });
+
+  it("delivers stdout verbatim and stores it on lastRunOutput when non-empty", async () => {
+    const realtime = vi.fn();
+    const service = makeServiceWithNoAgent({
+      realtime,
+      runner: async () => ({ stdout: "alert", stderr: "", exitCode: 0, timedOut: false }),
+    });
+    service.createCronJob({
+      jobId: "probe-alert",
+      name: "probe-alert",
+      action: "no_agent",
+      schedule: "0 */6 * * * UTC",
+      actionConfig: { noAgent: { command: "echo", args: ["alert"] } },
+    });
+    await service.runCronJobNow("probe-alert");
+    const payloads = realtime.mock.calls
+      .filter((call) => call[2]?.type === "cron_no_agent_output")
+      .map((call) => call[2]);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.output).toBe("alert");
+    const job = service.getCronJob("probe-alert");
+    expect(job.lastRunOutput).toBe("alert");
+  });
+});
+
+describe("no_agent workdir forwarding", () => {
+  it("forwards workdir into the no_agent runner", async () => {
+    const captured: Array<{ workdir?: string }> = [];
+    const service = makeServiceWithNoAgent({
+      realtime: vi.fn(),
+      runner: async (input) => {
+        captured.push({ workdir: (input as { workdir?: string }).workdir });
+        return { stdout: "", stderr: "", exitCode: 0, timedOut: false };
+      },
+    });
+    service.createCronJob({
+      jobId: "wd-job",
+      name: "Wd",
+      action: "no_agent",
+      schedule: "0 */6 * * * UTC",
+      workdir: "/tmp/test",
+      actionConfig: { noAgent: { command: "echo" } },
+    });
+    await service.runCronJobNow("wd-job");
+    expect(captured[0]?.workdir).toBe("/tmp/test");
   });
 });
 
@@ -760,5 +976,56 @@ describe("CronAutomationService.retryCronReviewQueueItem", () => {
         runId: updated.runId,
       }),
     );
+  });
+});
+
+describe("runCronJobNow returns runId", () => {
+  it("returns the runId for the manual run", async () => {
+    const service = makeServiceWithNoAgent({
+      realtime: vi.fn(),
+      runner: async () => ({ stdout: "alert", stderr: "", exitCode: 0, timedOut: false }),
+    });
+    service.createCronJob({
+      jobId: "rid-job",
+      name: "Rid",
+      action: "no_agent",
+      schedule: "0 */6 * * * UTC",
+      actionConfig: { noAgent: { command: "echo" } },
+    });
+    const result = await service.runCronJobNow("rid-job");
+    expect(typeof result.runId).toBe("string");
+    expect(result.runId.length).toBeGreaterThan(0);
+    expect(result.jobId).toBe("rid-job");
+    expect(result.status).toBe("ok");
+  });
+});
+
+describe("findCronRunById", () => {
+  it("returns undefined for unknown run ids", () => {
+    const service = makeServiceWithNoAgent({
+      realtime: vi.fn(),
+      runner: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
+    });
+    expect(service.findCronRunById("missing-run-id")).toBeUndefined();
+  });
+
+  it("returns the job snapshot when a run id matches lastRunId", async () => {
+    const service = makeServiceWithNoAgent({
+      realtime: vi.fn(),
+      runner: async () => ({ stdout: "alert", stderr: "", exitCode: 0, timedOut: false }),
+    });
+    service.createCronJob({
+      jobId: "found-job",
+      name: "Found",
+      action: "no_agent",
+      schedule: "0 */6 * * * UTC",
+      actionConfig: { noAgent: { command: "echo" } },
+    });
+    const result = await service.runCronJobNow("found-job");
+    const lookup = service.findCronRunById(result.runId);
+    expect(lookup?.jobId).toBe("found-job");
+    expect(lookup?.runId).toBe(result.runId);
+    expect(lookup?.status).toBe("ok");
+    expect(lookup?.output).toBe("alert");
   });
 });

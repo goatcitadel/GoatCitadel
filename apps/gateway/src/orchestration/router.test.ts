@@ -72,7 +72,7 @@ function createRuntime(): LlmRuntimeConfig {
         label: "Moonshot",
         baseUrl: "https://api.moonshot.ai/v1",
         apiStyle: "openai-chat-completions",
-        defaultModel: "kimi-k2.5",
+        defaultModel: "kimi-k2.6",
         hasApiKey: true,
         apiKeySource: "env",
       },
@@ -320,7 +320,7 @@ describe("orchestration router", () => {
       prefs: createPrefs({
         mode: "code",
         providerId: "moonshot",
-        model: "kimi-k2.5",
+        model: "kimi-k2.6",
         orchestrationVisibility: "explicit",
       }),
     });
@@ -336,7 +336,7 @@ describe("orchestration router", () => {
       "synthesizer",
     ]);
     expect(plan.routeDecision.selectedProviders.every((selection) => selection.providerId === "moonshot")).toBe(true);
-    expect(plan.routeDecision.selectedProviders.every((selection) => selection.model === "kimi-k2.5")).toBe(true);
+    expect(plan.routeDecision.selectedProviders.every((selection) => selection.model === "kimi-k2.6")).toBe(true);
   });
 
   it("keeps dependencies valid after maxSteps truncation", () => {

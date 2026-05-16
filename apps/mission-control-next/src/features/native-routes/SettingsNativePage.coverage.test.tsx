@@ -828,7 +828,7 @@ describe("SettingsNativePage broad native sections", () => {
     expect(generalText).toContain("No active provider");
 
     const quickRouteButtons = buttons(general.root, "Open");
-    expect(quickRouteButtons).toHaveLength(9);
+    expect(quickRouteButtons).toHaveLength(13);
     for (const button of quickRouteButtons) {
       await click(button);
     }

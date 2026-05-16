@@ -2,6 +2,7 @@
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import type { LlmRuntimeConfig } from "@goatcitadel/contracts";
 import type { BundledPostgresRuntimeHandle } from "./bundled-postgres-runtime.js";
 import { ensureBundledPostgresRuntime } from "./bundled-postgres-runtime.js";
 import { repoHasConfigMarker } from "./config-files.js";
@@ -20,7 +21,7 @@ export async function main(): Promise<void> {
   }
 
   const [group, action, ...rest] = args;
-  if (group !== "backup" && group !== "retention" && group !== "auth" && group !== "database") {
+  if (group !== "backup" && group !== "retention" && group !== "auth" && group !== "database" && group !== "llm") {
     printUsage();
     process.exitCode = 1;
     return;
@@ -49,6 +50,10 @@ export async function main(): Promise<void> {
     }
     if (group === "auth") {
       await runAuthCommand(gateway, action, rest);
+      return;
+    }
+    if (group === "llm") {
+      await runLlmCommand(gateway, action, rest);
       return;
     }
     await runDatabaseCommand(gateway, action, rest);
@@ -178,6 +183,40 @@ async function runDatabaseCommand(
   throw new Error("Unknown database command");
 }
 
+async function runLlmCommand(gateway: GatewayAdminPort, action: string | undefined, args: string[]): Promise<void> {
+  if (action === "status") {
+    const runtime = gateway.getLlmConfig();
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(runtime, null, 2));
+      return;
+    }
+    const lines = buildLlmStatusLines(runtime);
+    for (const line of lines) {
+      console.log(line);
+    }
+    return;
+  }
+
+  throw new Error("Unknown llm command");
+}
+
+export function buildLlmStatusLines(runtime: LlmRuntimeConfig): string[] {
+  const activeProviderId = runtime.activeProviderId?.trim() || "unset";
+  const activeModel = runtime.activeModel?.trim() || "unset";
+  const lines: string[] = [
+    "LLM runtime status",
+    `  Active provider: ${activeProviderId}`,
+    `  Active model:    ${activeModel}`,
+  ];
+  if (typeof runtime.activeModelContextWindow === "number") {
+    lines.push(`  Context window:  ${runtime.activeModelContextWindow.toLocaleString()}`);
+  }
+  if (typeof runtime.activeModelOutputTokenLimit === "number") {
+    lines.push(`  Output limit:    ${runtime.activeModelOutputTokenLimit.toLocaleString()}`);
+  }
+  return lines;
+}
+
 function parseOptionalDays(value: string | null): number | undefined {
   if (!value) {
     return undefined;
@@ -225,6 +264,7 @@ function printUsage(): void {
   goat admin database cutover --profile local|hosted --dry-run
   goat admin database cutover --profile local|hosted --execute --confirm
   goat admin database verify --source <sqlite-backup> [--target <postgres-connection-string>]
+  goat admin llm status [--json]
   goat admin retention show
   goat admin retention set --realtime-days <n> --backup-keep <n> [--transcript-days <n>|off] [--audit-days <n>|off]
   goat admin retention prune [--dry-run|--apply]`);

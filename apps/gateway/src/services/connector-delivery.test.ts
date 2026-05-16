@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
+  ChannelReplyInput,
   ChannelSendInput,
   ConnectorDeliveryWorkflowPayload,
   ConnectorRecord,
@@ -549,6 +550,163 @@ describe("dispatchConnectorDelivery", () => {
       dispatchKind: "integration_channel_action",
       result: { supported: true, status: "sent" },
     });
+  });
+});
+
+describe("dispatchConnectorDelivery with [[as_document]] directives", () => {
+  it("converts a single [[as_document]] block to an attachment and strips it from the message text", async () => {
+    const commsSend = vi.fn(
+      async (input: ChannelSendInput): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        auditEventId: "audit-doc",
+        policyReason: "allowed",
+        result: { delivered: true, message: input.message, attachments: input.attachments ?? null },
+      }),
+    );
+
+    await dispatchConnectorDelivery(
+      createConnector("integration_connection", "integration:slack-1", "slack-1", ["outbound_messages"], {
+        key: "slack",
+      }),
+      createPayload("channel.send", {
+        target: "#ops",
+        message:
+          "Here is your report:\n[[as_document fileName=report.md mimeType=text/markdown]]\n# Q3 Report\nNumbers and figures.\n[[/as_document]]\nEnd.",
+      }),
+      {
+        commsSend,
+        commsReply: vi.fn(async () => ({})),
+        commsReact: vi.fn(),
+        commsUnsend: vi.fn(),
+        commsTyping: vi.fn(async () => createTypingResult()),
+        invokeMcpTool: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+    );
+
+    expect(commsSend).toHaveBeenCalledTimes(1);
+    const sendArgs = commsSend.mock.calls[0]![0];
+    expect(sendArgs.message).toMatch(/Here is your report:/);
+    expect(sendArgs.message).toMatch(/End\./);
+    expect(sendArgs.message).not.toMatch(/as_document/);
+    expect(sendArgs.attachments).toHaveLength(1);
+    expect(sendArgs.attachments?.[0]).toMatchObject({
+      title: "report.md",
+      mimeType: "text/markdown",
+      dataBase64: Buffer.from("# Q3 Report\nNumbers and figures.", "utf-8").toString("base64"),
+    });
+  });
+
+  it("appends document attachments alongside existing attachments", async () => {
+    const commsSend = vi.fn(
+      async (_input: ChannelSendInput): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        auditEventId: "audit-doc",
+        policyReason: "allowed",
+        result: { delivered: true },
+      }),
+    );
+
+    await dispatchConnectorDelivery(
+      createConnector("integration_connection", "integration:slack-1", "slack-1", ["outbound_messages"], {
+        key: "slack",
+      }),
+      createPayload("channel.send", {
+        target: "#ops",
+        message: "[[as_document fileName=doc.txt]]content[[/as_document]]",
+        attachments: [{ url: "https://example.com/existing.png", mimeType: "image/png" }],
+      }),
+      {
+        commsSend,
+        commsReply: vi.fn(async () => ({})),
+        commsReact: vi.fn(),
+        commsUnsend: vi.fn(),
+        commsTyping: vi.fn(async () => createTypingResult()),
+        invokeMcpTool: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+    );
+
+    const sendArgs = commsSend.mock.calls[0]![0];
+    expect(sendArgs.attachments).toHaveLength(2);
+    expect(sendArgs.attachments?.[0]).toMatchObject({ url: "https://example.com/existing.png" });
+    expect(sendArgs.attachments?.[1]).toMatchObject({
+      title: "doc.txt",
+      mimeType: "text/plain",
+      dataBase64: Buffer.from("content", "utf-8").toString("base64"),
+    });
+  });
+
+  it("is a no-op when no directives are present", async () => {
+    const commsSend = vi.fn(
+      async (_input: ChannelSendInput): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        auditEventId: "audit-plain",
+        policyReason: "allowed",
+        result: { delivered: true },
+      }),
+    );
+
+    await dispatchConnectorDelivery(
+      createConnector("integration_connection", "integration:slack-1", "slack-1", ["outbound_messages"], {
+        key: "slack",
+      }),
+      createPayload("channel.send", {
+        target: "#ops",
+        message: "plain text",
+      }),
+      {
+        commsSend,
+        commsReply: vi.fn(async () => ({})),
+        commsReact: vi.fn(),
+        commsUnsend: vi.fn(),
+        commsTyping: vi.fn(async () => createTypingResult()),
+        invokeMcpTool: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+    );
+
+    const sendArgs = commsSend.mock.calls[0]![0];
+    expect(sendArgs.message).toBe("plain text");
+    expect(sendArgs.attachments).toBeUndefined();
+  });
+
+  it("applies directive extraction to channel.reply as well", async () => {
+    const commsReply = vi.fn(
+      async (_input: ChannelReplyInput): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        auditEventId: "audit-reply-doc",
+        policyReason: "allowed",
+        result: { delivered: true },
+      }),
+    );
+
+    await dispatchConnectorDelivery(
+      createConnector("integration_connection", "integration:slack-1", "slack-1", ["outbound_messages"], {
+        key: "slack",
+      }),
+      createPayload("channel.reply", {
+        target: "#ops",
+        message: "[[as_document fileName=note.md]]hello[[/as_document]]",
+        replyToMessageId: "M999",
+      }),
+      {
+        commsSend: vi.fn(),
+        commsReply,
+        commsReact: vi.fn(),
+        commsUnsend: vi.fn(),
+        commsTyping: vi.fn(async () => createTypingResult()),
+        invokeMcpTool: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+    );
+
+    expect(commsReply).toHaveBeenCalledTimes(1);
+    const replyArgs = commsReply.mock.calls[0]![0];
+    expect(replyArgs.attachments).toHaveLength(1);
+    expect(replyArgs.attachments?.[0]?.title).toBe("note.md");
+    expect(replyArgs.attachments?.[0]?.dataBase64).toBe(Buffer.from("hello", "utf-8").toString("base64"));
+    expect(replyArgs.message).not.toMatch(/as_document/);
   });
 });
 

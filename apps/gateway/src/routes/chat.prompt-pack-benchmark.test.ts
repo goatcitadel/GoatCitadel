@@ -33,7 +33,7 @@ describe("prompt-pack benchmark routes", () => {
         testCodes: ["TEST-03", "TEST-06"],
         providers: [
           { providerId: "glm", model: "glm-5" },
-          { providerId: "moonshot", model: "kimi-k2.5" },
+          { providerId: "moonshot", model: "kimi-k2.6" },
         ],
       },
     });
@@ -43,7 +43,7 @@ describe("prompt-pack benchmark routes", () => {
       testCodes: ["TEST-03", "TEST-06"],
       providers: [
         { providerId: "glm", model: "glm-5" },
-        { providerId: "moonshot", model: "kimi-k2.5" },
+        { providerId: "moonshot", model: "kimi-k2.6" },
       ],
     });
     expect(response.json()).toEqual({

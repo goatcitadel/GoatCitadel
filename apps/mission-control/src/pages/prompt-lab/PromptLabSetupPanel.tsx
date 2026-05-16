@@ -197,7 +197,7 @@ export function PromptLabSetupPanel({
               rows={3}
               value={benchmarkProvidersInput}
               onChange={(event) => onBenchmarkProvidersInputChange(event.target.value)}
-              placeholder={"glm/glm-5\nmoonshot/kimi-k2.5"}
+              placeholder={"glm/glm-5\nmoonshot/kimi-k2.6"}
             />
           </label>
           <div className="prompt-lab-actions">

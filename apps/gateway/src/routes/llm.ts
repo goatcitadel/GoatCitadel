@@ -6,6 +6,7 @@ const llmApiStyleSchema = z.enum([
   "openai-responses",
   "openai-codex-responses",
   "anthropic-messages",
+  "bedrock-messages",
 ]);
 
 const providerRequestAuthSchema = z.discriminatedUnion("type", [

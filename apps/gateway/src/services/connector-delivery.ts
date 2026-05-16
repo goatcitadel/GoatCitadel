@@ -1,5 +1,6 @@
 import {
   ConflictError,
+  type ChannelAttachmentInput,
   type ChannelReplyInput,
   ValidationError,
   type ChannelReactInput,
@@ -15,6 +16,7 @@ import {
   type RealtimeEvent,
   type ToolInvokeResult,
 } from "@goatcitadel/contracts";
+import { parseSkillOutputDirectives } from "./skill-output-directives.js";
 
 export interface ConnectorDeliveryDispatchResult {
   capabilityId: ConnectorCapabilityId;
@@ -136,8 +138,9 @@ async function dispatchIntegrationChannelAction(
   let dispatchKind: ConnectorDeliveryDispatchResult["dispatchKind"] = "integration_channel_send";
 
   if (payload.action === "channel.send") {
-    const message = requireNonEmptyString(actionPayload.message, "payload.message");
-    const attachments = normalizeAttachments(actionPayload.attachments);
+    const rawMessage = requireNonEmptyString(actionPayload.message, "payload.message");
+    const rawAttachments = normalizeAttachments(actionPayload.attachments);
+    const { message, attachments } = applyAsDocumentDirectives(rawMessage, rawAttachments);
     result = await deps.commsSend({
       connectionId: connector.sourceId,
       target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
@@ -150,8 +153,9 @@ async function dispatchIntegrationChannelAction(
       signal: deps.signal,
     });
   } else if (payload.action === "channel.reply") {
-    const message = requireNonEmptyString(actionPayload.message, "payload.message");
-    const attachments = normalizeAttachments(actionPayload.attachments);
+    const rawMessage = requireNonEmptyString(actionPayload.message, "payload.message");
+    const rawAttachments = normalizeAttachments(actionPayload.attachments);
+    const { message, attachments } = applyAsDocumentDirectives(rawMessage, rawAttachments);
     result = await deps.commsReply({
       connectionId: connector.sourceId,
       target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
@@ -408,6 +412,25 @@ function normalizeRecord(value: unknown): Record<string, unknown> | undefined {
     return undefined;
   }
   return value as Record<string, unknown>;
+}
+
+function applyAsDocumentDirectives(
+  message: string,
+  existing: ChannelAttachmentInput[] | undefined,
+): { message: string; attachments: ChannelAttachmentInput[] | undefined } {
+  const parsed = parseSkillOutputDirectives(message);
+  if (parsed.directives.length === 0) {
+    return { message, attachments: existing };
+  }
+  const directiveAttachments: ChannelAttachmentInput[] = parsed.directives.map((directive) => ({
+    title: directive.fileName,
+    mimeType: directive.mimeType,
+    dataBase64: Buffer.from(directive.content, "utf-8").toString("base64"),
+  }));
+  return {
+    message: parsed.text,
+    attachments: [...(existing ?? []), ...directiveAttachments],
+  };
 }
 
 function normalizeAttachments(value: unknown): ChannelSendInput["attachments"] | undefined {

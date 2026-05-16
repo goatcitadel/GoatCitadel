@@ -39,6 +39,7 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
 function createRouteDependencyHarness() {
   return createGatewayHarness({
     addonsService: { name: "addons" },
+    addonSlotService: { name: "addon-slot" },
     approvalRuntime: { name: "approval-runtime" },
     assemblyService: { name: "assembly" },
     backupRetentionService: { name: "backup-retention" },
@@ -74,6 +75,9 @@ function createDeferredInitHarness(overrides: Record<string, unknown> = {}) {
     ensurePrivateBetaBackupCronJob: vi.fn(),
     ensureUpdateReviewCronJob: vi.fn(),
     eventIngestService: { flushPendingTranscriptOutbox: vi.fn(async () => 1) },
+    curatorService: {
+      ensureCuratorWeeklyCronJob: vi.fn(),
+    },
     improvementService: {
       ensureWeeklyImprovementCronJob: vi.fn(),
       markInterruptedDecisionReplayRuns: vi.fn(),

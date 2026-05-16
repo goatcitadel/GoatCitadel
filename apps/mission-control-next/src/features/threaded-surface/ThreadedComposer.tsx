@@ -6,6 +6,7 @@ import { ChatComposerPlusMenu } from "@goatcitadel/mission-control-shared/compon
 import { ChatQueueBar } from "@goatcitadel/mission-control-shared/components/chat/ChatQueueBar";
 import { Paperclip } from "lucide-react";
 import { useEffect, useState } from "react";
+import { ContextStrip, type ContextStripMode } from "../native-routes/primitives";
 import { describeThreadedUiError } from "./threaded-error-copy";
 
 type PendingAttachment = MissionThreadedActiveSessionSurfaceProps["pendingAttachments"][number];
@@ -57,8 +58,8 @@ function getSendLabel(props: MissionThreadedActiveSessionSurfaceProps): string {
   return props.sending ? "Sending..." : "Send";
 }
 
-function formatUsageLabel(thread: MissionThreadedActiveSessionSurfaceProps["thread"]): string {
-  const totals = (thread?.turns ?? []).reduce(
+function computeUsageTotals(thread: MissionThreadedActiveSessionSurfaceProps["thread"]) {
+  return (thread?.turns ?? []).reduce(
     (next, turn) => {
       const messages = [turn.userMessage, turn.assistantMessage].filter(Boolean);
       for (const message of messages) {
@@ -69,10 +70,49 @@ function formatUsageLabel(thread: MissionThreadedActiveSessionSurfaceProps["thre
     },
     { tokens: 0, costUsd: 0 },
   );
-  const tokenLabel = `${new Intl.NumberFormat("en-US").format(totals.tokens)} tokens`;
-  const costLabel =
-    totals.costUsd > 0 && totals.costUsd < 0.01 ? "<$0.01" : `$${totals.costUsd.toFixed(totals.costUsd >= 10 ? 1 : 2)}`;
-  return `${tokenLabel} / ${costLabel}`;
+}
+
+function formatTokenLabel(tokens: number): string {
+  return `${new Intl.NumberFormat("en-US").format(tokens)} tokens`;
+}
+
+function formatCostLabel(costUsd: number): string {
+  return costUsd > 0 && costUsd < 0.01 ? "<$0.01" : `$${costUsd.toFixed(costUsd >= 10 ? 1 : 2)}`;
+}
+
+function formatUsageLabel(thread: MissionThreadedActiveSessionSurfaceProps["thread"]): string {
+  const totals = computeUsageTotals(thread);
+  return `${formatTokenLabel(totals.tokens)} / ${formatCostLabel(totals.costUsd)}`;
+}
+
+const COMPOSER_KILL_SWITCH_KEY = "mc-next:composer-v2";
+
+function readComposerV2(): boolean {
+  if (typeof window === "undefined") {
+    return true;
+  }
+  try {
+    return window.localStorage.getItem(COMPOSER_KILL_SWITCH_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
+function useComposerV2Enabled(): boolean {
+  const [enabled, setEnabled] = useState<boolean>(() => readComposerV2());
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.addEventListener !== "function") {
+      return;
+    }
+    const handle = () => setEnabled(readComposerV2());
+    window.addEventListener("storage", handle);
+    return () => window.removeEventListener("storage", handle);
+  }, []);
+  return enabled;
+}
+
+function toContextStripMode(mode: MissionThreadedActiveSessionSurfaceProps["mode"]): ContextStripMode {
+  return mode === "code" || mode === "cowork" ? mode : "chat";
 }
 
 function isImageAttachment(attachment: PendingAttachment): boolean {
@@ -205,6 +245,14 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         : (props.trust?.providerModelSummary ?? "Provider routing pending");
   const sendLabel = getSendLabel(props);
   const usageLabel = formatUsageLabel(props.thread);
+  const usageTotals = computeUsageTotals(props.thread);
+  const composerV2Enabled = useComposerV2Enabled();
+  const contextStripMode = toContextStripMode(props.mode);
+  const contextStripModel = currentRouteLabel ?? props.trust?.providerModelSummary ?? "Routing pending";
+  // Memory mode lives per-turn on trace.memoryMode; surface the most recent if non-off.
+  // TODO(live-data): wire to a dedicated current-memory-mode prop once exposed by the core.
+  const recentMemoryMode = props.thread?.turns?.at(-1)?.trace?.memoryMode;
+  const memoryLabel = recentMemoryMode && recentMemoryMode !== "off" ? recentMemoryMode : undefined;
   const plusActions = [
     {
       label: props.voiceBusy ? "Voice listening..." : props.voiceTalkActive ? "Stop voice talk" : "Start voice talk",
@@ -319,6 +367,16 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         </div>
       ) : null}
 
+      {composerV2Enabled ? (
+        <ContextStrip
+          model={contextStripModel}
+          mode={contextStripMode}
+          memory={memoryLabel}
+          tokens={formatTokenLabel(usageTotals.tokens)}
+          cost={formatCostLabel(usageTotals.costUsd)}
+        />
+      ) : null}
+
       <div className="mc-next-composer-head">
         <div className="mc-next-composer-title">
           <p className="mc-next-composer-kicker">{getSurfaceLabel(props.mode)}</p>
@@ -331,6 +389,13 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           <span className="mc-next-composer-chip subtle">{speedLabel}</span>
           <span className="mc-next-composer-chip subtle">{routeLabel}</span>
           <span className="mc-next-composer-chip subtle">{usageLabel}</span>
+          {props.pinnedGoal ? <span className="mc-next-composer-chip emphasis">Goal: {props.pinnedGoal}</span> : null}
+          {props.hasActiveStream && props.midTurnDisposition === "steer" ? (
+            <span className="mc-next-composer-chip emphasis">Steering</span>
+          ) : null}
+          {props.hasActiveStream && props.midTurnDisposition === "queue" ? (
+            <span className="mc-next-composer-chip subtle">Queued</span>
+          ) : null}
         </div>
       </div>
 

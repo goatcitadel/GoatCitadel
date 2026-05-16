@@ -6,6 +6,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildLlmStatusLines } from "./admin-cli.js";
 
 const execAsync = promisify(exec);
 const TEMP_ROOTS: string[] = [];
@@ -18,6 +19,36 @@ afterEach(async () => {
       await rm(next, { recursive: true, force: true });
     }
   }
+});
+
+describe("admin CLI llm status formatting", () => {
+  it("renders the active model contextWindow and output limit when the runtime config exposes them", () => {
+    const lines = buildLlmStatusLines({
+      activeProviderId: "openai-codex",
+      activeModel: "gpt-5.5",
+      providers: [],
+      activeModelContextWindow: 272_000,
+      activeModelOutputTokenLimit: 32_000,
+    });
+    const joined = lines.join("\n");
+    expect(joined).toMatch(/Active provider:\s+openai-codex/);
+    expect(joined).toMatch(/Active model:\s+gpt-5\.5/);
+    expect(joined).toMatch(/Context window:\s+272,000/);
+    expect(joined).toMatch(/Output limit:\s+32,000/);
+  });
+
+  it("omits the context window and output limit when the active model has no metadata", () => {
+    const lines = buildLlmStatusLines({
+      activeProviderId: "custom",
+      activeModel: "unknown-model",
+      providers: [],
+    });
+    const joined = lines.join("\n");
+    expect(joined).toMatch(/Active provider:\s+custom/);
+    expect(joined).toMatch(/Active model:\s+unknown-model/);
+    expect(joined).not.toMatch(/Context window:/);
+    expect(joined).not.toMatch(/Output limit:/);
+  });
 });
 
 describe("admin CLI offline backup commands", () => {

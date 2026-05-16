@@ -22,6 +22,13 @@ export {
   type ChatErrorSource,
   type ChatUiErrorDescriptor,
 } from "./chat/chat-error-copy";
+export {
+  parseGoalCommand,
+  resolveMidTurnDisposition,
+  type GoalCommand,
+  type MidTurnDisposition,
+} from "./chat/chat-page-pure-helpers";
+export { buildOrchestrationCommandSuggestions } from "./chat-command-suggestions";
 
 export type {
   MissionThreadedActiveSessionSurfaceProps,

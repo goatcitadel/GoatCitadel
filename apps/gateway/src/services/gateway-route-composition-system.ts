@@ -15,6 +15,7 @@ export function composeSystemRouteDependencies(
   return {
     addons: createAddonsRoutePort({
       addonsService: gateway.addonsService,
+      slotService: gateway.addonSlotService,
       publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload ?? {}),
       recordDevDiagnostic: (input) => gateway.recordDevDiagnostic(input),
     }),

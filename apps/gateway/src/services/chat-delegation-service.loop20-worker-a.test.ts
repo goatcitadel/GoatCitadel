@@ -191,6 +191,9 @@ function createHarness(options: { prefs?: ChatSessionPrefsRecord; projectId?: st
           [...steps.values()].filter((step) => step.runId === runId).sort((left, right) => left.index - right.index),
         ),
       },
+      taskSubagents: {
+        findByAgentSessionId: vi.fn(() => undefined),
+      },
     },
   } satisfies ChatDelegationServiceHost;
 

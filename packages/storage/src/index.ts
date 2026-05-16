@@ -81,6 +81,7 @@ import { SkillLifecycleRepository } from "./skill-lifecycle-repo.js";
 import { CandidateSkillVersionRepository } from "./candidate-skill-version-repo.js";
 import { CapabilityProposalEventRepository, CapabilityProposalRepository } from "./capability-proposal-repo.js";
 import { SkillEvaluationRunRepository } from "./skill-evaluation-run-repo.js";
+import { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
 import { CodeModeRunRepository } from "./code-mode-run-repo.js";
 import { DurableRunEventRepository } from "./durable-run-event-repo.js";
 import { ChatReflectionAttemptRepository } from "./chat-reflection-attempt-repo.js";
@@ -185,6 +186,7 @@ export class Storage {
   public readonly durableRunEvents: DurableRunEventRepository;
   public readonly chatReflectionAttempts: ChatReflectionAttemptRepository;
   public readonly evidenceEnvelopes: EvidenceEnvelopeRepository;
+  public readonly stateValidationQuarantine: StateValidationQuarantineRepository;
 
   public constructor(options: StorageOptions) {
     this.db =
@@ -193,30 +195,35 @@ export class Storage {
         dbPath: options.dbPath ?? ":memory:",
         tuning: options.tuning,
       });
-    this.sessions = new SessionRepository(this.db);
+    this.stateValidationQuarantine = new StateValidationQuarantineRepository(this.db);
+    this.sessions = new SessionRepository(this.db, { quarantine: this.stateValidationQuarantine });
     this.idempotency = new IdempotencyRepository(this.db);
     this.mutationIdempotency = new MutationIdempotencyRepository(this.db);
     this.transcripts =
       options.transcripts ??
-      (this.db.dialect === "postgres" ? new PostgresTranscriptLog(this.db) : new TranscriptLog(options.transcriptsDir));
+      (this.db.dialect === "postgres"
+        ? new PostgresTranscriptLog(this.db)
+        : new TranscriptLog(options.transcriptsDir, { quarantine: this.stateValidationQuarantine }));
     this.audit =
       options.audit ??
       (this.db.dialect === "postgres" ? new PostgresAuditLog(this.db) : new AuditLog(options.auditDir));
     this.approvals = new ApprovalRepository(this.db);
     this.approvalEvents = new ApprovalEventRepository(this.db);
-    this.pendingApprovalActions = new PendingApprovalActionRepository(this.db);
+    this.pendingApprovalActions = new PendingApprovalActionRepository(this.db, {
+      quarantine: this.stateValidationQuarantine,
+    });
     this.remoteActionTokens = new RemoteActionTokenRepository(this.db);
     this.approvalInbox = new ApprovalInboxRepository(this.db);
     this.approvalEffects = new ApprovalEffectRepository(this.db);
     this.approvalWaitRuns = new ApprovalWaitRunRepository(this.db);
     this.costLedger = new CostLedgerRepository(this.db);
     this.orchestration = new OrchestrationRepository(this.db);
-    this.tasks = new TaskRepository(this.db);
+    this.tasks = new TaskRepository(this.db, { quarantine: this.stateValidationQuarantine });
     this.taskActivities = new TaskActivityRepository(this.db);
     this.taskDeliverables = new TaskDeliverableRepository(this.db);
     this.taskSubagents = new TaskSubagentRepository(this.db);
     this.realtimeEvents = new RealtimeEventRepository(this.db);
-    this.cronJobs = new CronJobRepository(this.db);
+    this.cronJobs = new CronJobRepository(this.db, { quarantine: this.stateValidationQuarantine });
     this.integrationConnections = new IntegrationConnectionRepository(this.db);
     this.channelSetupDrafts = new ChannelSetupDraftRepository(this.db);
     this.agentProfiles = new AgentProfileRepository(this.db);
@@ -238,7 +245,7 @@ export class Storage {
     this.chatAttachments = new ChatAttachmentRepository(this.db);
     this.chatSessionPrefs = new ChatSessionPrefsRepository(this.db);
     this.sessionAutonomyPrefs = new SessionAutonomyPrefsRepository(this.db);
-    this.chatMessages = new ChatMessageRepository(this.db);
+    this.chatMessages = new ChatMessageRepository(this.db, { quarantine: this.stateValidationQuarantine });
     this.chatTurnTraces = new ChatTurnTraceRepository(this.db);
     this.chatStreamEvents = new ChatStreamEventRepository(this.db);
     this.chatExecutionPlans = new ChatExecutionPlanRepository(this.db);
@@ -264,7 +271,7 @@ export class Storage {
     this.hookRuns = new HookRunRepository(this.db);
     this.learnedMemory = new LearnedMemoryRepository(this.db);
     this.memoryMaintenance = new MemoryMaintenanceRepository(this.db);
-    this.durableRuns = new DurableRunRepository(this.db);
+    this.durableRuns = new DurableRunRepository(this.db, { quarantine: this.stateValidationQuarantine });
     this.gatewaySql = new GatewaySqlRepository(this.db);
     this.assembly = new AssemblyRepository(this.db);
     this.transcriptOutbox = new TranscriptOutboxRepository(this.db);
@@ -522,7 +529,7 @@ export * from "./pending-approval-action-repo.js";
 export * from "./cost-ledger-repo.js";
 export * from "./orchestration-repo.js";
 export { TaskRepository } from "./task-repo.js";
-export type { TaskListQuery, TaskStatusCount } from "./task-repo.js";
+export type { TaskListQuery, TaskRepositoryOptions, TaskStatusCount } from "./task-repo.js";
 export * from "./task-activity-repo.js";
 export * from "./task-deliverable-repo.js";
 export * from "./task-subagent-repo.js";
@@ -584,4 +591,9 @@ export * from "./realtime-stream-lease-repo.js";
 export * from "./durable-run-event-repo.js";
 export * from "./chat-reflection-attempt-repo.js";
 export * from "./skill-evaluation-run-repo.js";
+export { loadAndSanitize } from "./load-and-sanitize.js";
+export type { QuarantineEntry, SafeParse, SafeParseResult } from "./load-and-sanitize.js";
+export { parseJsonObject, parseJsonArray, parseStringRecord } from "./state-validators.js";
+export { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
+export type { StoredQuarantineEntry } from "./state-validation-quarantine-repo.js";
 export * from "./postgres/index.js";

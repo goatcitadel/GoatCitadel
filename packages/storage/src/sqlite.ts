@@ -773,6 +773,54 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
   },
   {
     version: 79,
+    name: "state_validation_quarantine",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS state_validation_quarantine (
+          quarantine_id TEXT PRIMARY KEY,
+          store TEXT NOT NULL,
+          row_id TEXT NOT NULL,
+          raw_value TEXT,
+          schema_error TEXT NOT NULL,
+          observed_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_state_validation_quarantine_store_observed
+          ON state_validation_quarantine(store, observed_at DESC);
+      `);
+    },
+  },
+  {
+    version: 80,
+    name: "chat_session_meta_goal",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "chat_session_meta", "pinned_goal", "TEXT");
+      addColumnIfMissingIfTableExists(db, "chat_session_meta", "goal_turn_budget", "INTEGER");
+      addColumnIfMissingIfTableExists(db, "chat_session_meta", "goal_turns_used", "INTEGER NOT NULL DEFAULT 0");
+      addColumnIfMissingIfTableExists(db, "chat_session_meta", "goal_set_at", "TEXT");
+    },
+  },
+  {
+    version: 81,
+    name: "chat_messages_steer_audit",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "chat_messages", "steered", "INTEGER");
+      addColumnIfMissingIfTableExists(db, "chat_messages", "parent_delegation_step_id", "TEXT");
+    },
+  },
+  {
+    version: 82,
+    name: "task_kanban_columns",
+    up: (db) => {
+      if (tableExists(db, "tasks")) {
+        addColumnIfMissingIfTableExists(db, "tasks", "distress_signals_json", "TEXT");
+        addColumnIfMissingIfTableExists(db, "tasks", "retry_budget_json", "TEXT");
+        addColumnIfMissingIfTableExists(db, "tasks", "artifact_verification_json", "TEXT");
+      }
+    },
+  },
+  {
+    version: 83,
     name: "approvals_shell_explanations",
     up: (db) => {
       addColumnIfMissingIfTableExists(db, "approvals", "shell_explanations_json", "TEXT");
@@ -1043,6 +1091,9 @@ function createBaseSchema(db: DatabaseSync): void {
       deleted_at TEXT,
       deleted_by TEXT,
       delete_reason TEXT,
+      distress_signals_json TEXT,
+      retry_budget_json TEXT,
+      artifact_verification_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -1117,6 +1168,10 @@ function createBaseSchema(db: DatabaseSync): void {
       end_at TEXT,
       last_run_at TEXT,
       next_run_at TEXT,
+      workdir TEXT,
+      context_from TEXT,
+      last_run_output TEXT,
+      last_run_id TEXT,
       updated_at TEXT NOT NULL
     );
 
@@ -1210,6 +1265,18 @@ function createBaseSchema(db: DatabaseSync): void {
       ON integration_connections(kind, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_integration_connections_catalog_id
       ON integration_connections(catalog_id, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS state_validation_quarantine (
+      quarantine_id TEXT PRIMARY KEY,
+      store TEXT NOT NULL,
+      row_id TEXT NOT NULL,
+      raw_value TEXT,
+      schema_error TEXT NOT NULL,
+      observed_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_state_validation_quarantine_store_observed
+      ON state_validation_quarantine(store, observed_at DESC);
   `);
 }
 

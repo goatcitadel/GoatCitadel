@@ -13,6 +13,7 @@ import type * as onboardingStateService from "./onboarding-state-service.js";
 import type * as settingsAuthService from "./settings-auth-service.js";
 import type { GatewayDevDiagnosticsService } from "../dev-diagnostics/service.js";
 import type { AddonsService } from "./addons-service.js";
+import type { AddonSlotService } from "./addon-slot-service.js";
 import type { ApprovalEffectsService } from "./approval-resolution-effects-service.js";
 import type { ApprovalRuntimeService } from "./approval-runtime-service.js";
 import type { AssemblyService } from "./assembly-service.js";
@@ -21,6 +22,7 @@ import type { CapabilityPackService } from "./capability-pack-service.js";
 import type { CapabilitySystemService } from "./capability-system-service.js";
 import type { ChatProjectService } from "./chat-project-service.js";
 import type { ChatProactiveService } from "./chat-proactive-service.js";
+import type { ChatSteerService } from "./chat-steer-service.js";
 import type { ChatTurnRuntimeService } from "./chat-turn-runtime-service.js";
 import type { CronAutomationService } from "./gateway/cron-automation-service.js";
 import type { DatabaseCutoverService } from "./database-cutover-service.js";
@@ -53,6 +55,7 @@ type RouteDependencyMethod<
 
 export interface GatewayRouteCompositionPort {
   readonly addonsService: AddonsService;
+  readonly addonSlotService: AddonSlotService;
   readonly approvalEffectsService: ApprovalEffectsService;
   readonly approvalRuntime: ApprovalRuntimeService;
   readonly assemblyService: AssemblyService;
@@ -63,6 +66,7 @@ export interface GatewayRouteCompositionPort {
   readonly chatProjectService: ChatProjectService;
   readonly chatMessageRouteRuntimeHost: chatMessageRouteRuntime.ChatMessageRouteRuntimeHost;
   readonly chatTurnRuntime: ChatTurnRuntimeService;
+  readonly steerService: ChatSteerService;
   readonly config: GatewayRuntimeConfig;
   readonly cronAutomationService: CronAutomationService;
   readonly databaseCutoverService: DatabaseCutoverService;
@@ -107,6 +111,11 @@ export interface GatewayRouteCompositionPort {
   commsReply: RouteDependencyMethod<"comms", "commsReply">;
   commsSend: RouteDependencyMethod<"comms", "commsSend">;
   createApproval: RouteDependencyMethod<"devVerification", "createApproval">;
+  listCuratorStatus: RouteDependencyMethod<"curator", "listCuratorStatus">;
+  archiveCuratorSkill: RouteDependencyMethod<"curator", "archiveCuratorSkill">;
+  pruneCuratorSkill: RouteDependencyMethod<"curator", "pruneCuratorSkill">;
+  listCuratorArchived: RouteDependencyMethod<"curator", "listCuratorArchived">;
+  runCurator: RouteDependencyMethod<"curator", "runCurator">;
   createChatCompletion: RouteDependencyMethod<"llm", "createChatCompletion">;
   createChatCompletionStream: RouteDependencyMethod<"devVerification", "createChatCompletionStream">;
   createChatSession: RouteDependencyMethod<"chatSessions", "createChatSession">;
@@ -202,6 +211,7 @@ export interface GatewayRouteCompositionPort {
 export type GatewayRouteCompositionPrivateDependencies = Pick<
   GatewayRouteCompositionPort,
   | "addonsService"
+  | "addonSlotService"
   | "approvalRuntime"
   | "assemblyService"
   | "backupRetentionService"
@@ -238,6 +248,7 @@ export function createGatewayRouteCompositionPort(
 ): GatewayRouteCompositionPort {
   return {
     addonsService: privateDependencies.addonsService,
+    addonSlotService: privateDependencies.addonSlotService,
     approvalRuntime: privateDependencies.approvalRuntime,
     assemblyService: privateDependencies.assemblyService,
     backupRetentionService: privateDependencies.backupRetentionService,
@@ -278,6 +289,7 @@ export function createGatewayRouteCompositionPort(
     personalityCatalogService: gateway.personalityCatalogService,
     policyEngine: gateway.policyEngine,
     recentChannelSetupTests: gateway.recentChannelSetupTests,
+    steerService: gateway.steerService,
     storage: gateway.storage,
     acceptChatDelegation: gateway.acceptChatDelegation.bind(gateway),
     approvePhase: gateway.approvePhase.bind(gateway),
@@ -291,6 +303,11 @@ export function createGatewayRouteCompositionPort(
     commsReply: gateway.commsReply.bind(gateway),
     commsSend: gateway.commsSend.bind(gateway),
     createApproval: gateway.createApproval.bind(gateway),
+    listCuratorStatus: gateway.listCuratorStatus.bind(gateway),
+    archiveCuratorSkill: gateway.archiveCuratorSkill.bind(gateway),
+    pruneCuratorSkill: gateway.pruneCuratorSkill.bind(gateway),
+    listCuratorArchived: gateway.listCuratorArchived.bind(gateway),
+    runCurator: gateway.runCurator.bind(gateway),
     createChatCompletion: gateway.createChatCompletion.bind(gateway),
     createChatCompletionStream: gateway.createChatCompletionStream.bind(gateway),
     createChatSession: gateway.createChatSession.bind(gateway),

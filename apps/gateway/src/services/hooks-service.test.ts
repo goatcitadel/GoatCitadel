@@ -422,6 +422,66 @@ describe("HooksService", () => {
     expect(requestedRunIds).toEqual([]);
   });
 
+  it("accepts gateway.dispatch.before for intercept mode hooks", () => {
+    const { service, workspaceId } = createHarness({
+      workspacePrefs: { hooks: { allowInterceptingHooks: true } },
+    });
+    const created = service.createWorkspaceHook({
+      workspaceId,
+      label: "dispatch-veto",
+      trigger: "gateway.dispatch.before",
+      mode: "intercept",
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/dispatch" } },
+    });
+    expect(created.trigger).toBe("gateway.dispatch.before");
+    expect(created.mode).toBe("intercept");
+  });
+
+  it("rejects gateway.dispatch.before for mutate mode hooks", () => {
+    const { service, workspaceId } = createHarness({
+      workspacePrefs: { hooks: { allowMutatingHooks: true, allowInterceptingHooks: true } },
+    });
+    expect(() =>
+      service.createWorkspaceHook({
+        workspaceId,
+        label: "dispatch-mutate",
+        trigger: "gateway.dispatch.before",
+        mode: "mutate",
+        action: { type: "webhook", webhook: { url: "https://hooks.example.test/dispatch-mutate" } },
+      }),
+    ).toThrow(/does not support mutate hooks/i);
+  });
+
+  it("accepts approval.request.before for intercept mode hooks", () => {
+    const { service, workspaceId } = createHarness({
+      workspacePrefs: { hooks: { allowInterceptingHooks: true } },
+    });
+    const created = service.createWorkspaceHook({
+      workspaceId,
+      label: "approval-request-veto",
+      trigger: "approval.request.before",
+      mode: "intercept",
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/approval-request" } },
+    });
+    expect(created.trigger).toBe("approval.request.before");
+    expect(created.mode).toBe("intercept");
+  });
+
+  it("rejects approval.request.before for mutate mode hooks", () => {
+    const { service, workspaceId } = createHarness({
+      workspacePrefs: { hooks: { allowMutatingHooks: true, allowInterceptingHooks: true } },
+    });
+    expect(() =>
+      service.createWorkspaceHook({
+        workspaceId,
+        label: "approval-request-mutate",
+        trigger: "approval.request.before",
+        mode: "mutate",
+        action: { type: "webhook", webhook: { url: "https://hooks.example.test/approval-request-mutate" } },
+      }),
+    ).toThrow(/does not support mutate hooks/i);
+  });
+
   it("keeps runtime lifecycle triggers observe-only and phases them correctly", () => {
     const { service, workspaceId } = createHarness({
       workspacePrefs: {

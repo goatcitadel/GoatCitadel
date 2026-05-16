@@ -684,7 +684,7 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
     "Moonshot",
     "MOONSHOT_API_KEY",
     "https://api.moonshot.ai/v1",
-    "kimi-k2.5",
+    "kimi-k2.6",
   ),
   "model_provider.lmstudio": providerSchema(
     "model_provider.lmstudio",

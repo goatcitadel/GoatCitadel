@@ -263,6 +263,7 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
       runMemoryFlushSchedulerIfDue,
       runCostReportSchedulerIfDue,
       runUpdateReviewSchedulerIfDue,
+      curatorService: { runCuratorWeeklyIfDue: vi.fn(async () => undefined) },
       cronAutomationService: { runDueTaskCronJobs },
       memoryLifecycleService: { runDueEvaluation },
       drainDueChannelDeliveries,

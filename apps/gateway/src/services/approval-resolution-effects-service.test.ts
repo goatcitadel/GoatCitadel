@@ -949,6 +949,83 @@ describe("approval-resolution-effects-service", () => {
     );
   });
 
+  it("enqueues both approval.resolve.after and approval.response.after observer hooks", async () => {
+    const enqueueAfterHooks = vi.fn();
+    const completeEffect = vi.fn();
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: { completeEffect, failEffect: vi.fn() },
+          approvals: {
+            get: vi.fn(
+              () =>
+                ({
+                  approvalId: "approval-1",
+                  kind: "shell.exec",
+                  riskLevel: "danger",
+                  status: "approved",
+                  payload: {},
+                  preview: {},
+                  createdAt: "2026-04-11T00:00:00.000Z",
+                  resolvedAt: "2026-04-11T00:01:00.000Z",
+                  resolvedBy: "operator",
+                  explanationStatus: "not_requested",
+                }) satisfies ApprovalRequest,
+            ),
+          },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      {
+        backgroundTasks: new Set(),
+        wakeDurableRun: vi.fn(),
+        requestRunProcessing: vi.fn(),
+        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+        executeCodeModePendingApproval: vi.fn(),
+        executeApprovedPendingAction: vi.fn(),
+        enqueueAfterHooks,
+        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+      },
+    );
+
+    await (
+      service as unknown as {
+        handleApprovalAfterHooks(effect: ApprovalEffectRecord): Promise<void>;
+      }
+    ).handleApprovalAfterHooks(
+      createEffect({
+        effectKind: "approval_after_hooks",
+        targetKind: "approval",
+        targetId: "approval-1",
+        payload: {
+          decision: "approve",
+          resolvedBy: "operator",
+          deliveryChannel: "chat",
+        },
+      }),
+    );
+
+    const triggers = enqueueAfterHooks.mock.calls.map(([input]) => input.trigger);
+    expect(triggers).toContain("approval.resolve.after");
+    expect(triggers).toContain("approval.response.after");
+
+    const responseCall = enqueueAfterHooks.mock.calls.find(([input]) => input.trigger === "approval.response.after");
+    expect(responseCall?.[0]).toEqual(
+      expect.objectContaining({
+        workspaceId: "workspace-1",
+        trigger: "approval.response.after",
+        entityType: "approval",
+        entityId: "approval-1",
+        payload: expect.objectContaining({
+          decision: "approve",
+          resolvedBy: "operator",
+          deliveryChannel: "chat",
+        }),
+      }),
+    );
+    expect(completeEffect).toHaveBeenCalledOnce();
+  });
+
   it("fails remote inbox follow-up effects when an already-resolved item disagrees", async () => {
     const failEffect = vi.fn();
     const service = new ApprovalEffectsService(

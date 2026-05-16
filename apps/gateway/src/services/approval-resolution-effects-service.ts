@@ -40,7 +40,7 @@ export interface ApprovalEffectsServiceDeps {
   executeApprovedPendingAction(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
   enqueueAfterHooks(input: {
     workspaceId: string;
-    trigger: "approval.resolve.after";
+    trigger: "approval.resolve.after" | "approval.response.after";
     entityType: "approval";
     entityId: string;
     payload: Record<string, unknown>;
@@ -573,7 +573,11 @@ export class ApprovalEffectsService {
     }
 
     const refreshedPendingAction = this.ctx.storage.pendingApprovalActions.find(effect.approvalId);
-    if (refreshedPendingAction && refreshedPendingAction.resolutionStatus && refreshedPendingAction.resolutionStatus !== "pending") {
+    if (
+      refreshedPendingAction &&
+      refreshedPendingAction.resolutionStatus &&
+      refreshedPendingAction.resolutionStatus !== "pending"
+    ) {
       this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
         result: {
           actionType: refreshedPendingAction.actionType,
@@ -683,6 +687,18 @@ export class ApprovalEffectsService {
         approval,
         decision,
         resolvedBy,
+      },
+    });
+    this.deps.enqueueAfterHooks({
+      workspaceId,
+      trigger: "approval.response.after",
+      entityType: "approval",
+      entityId: approval.approvalId,
+      payload: {
+        approval,
+        decision,
+        resolvedBy,
+        deliveryChannel: typeof payload.deliveryChannel === "string" ? payload.deliveryChannel : null,
       },
     });
     this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
