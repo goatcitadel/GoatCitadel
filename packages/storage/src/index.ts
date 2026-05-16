@@ -201,7 +201,9 @@ export class Storage {
     this.mutationIdempotency = new MutationIdempotencyRepository(this.db);
     this.transcripts =
       options.transcripts ??
-      (this.db.dialect === "postgres" ? new PostgresTranscriptLog(this.db) : new TranscriptLog(options.transcriptsDir));
+      (this.db.dialect === "postgres"
+        ? new PostgresTranscriptLog(this.db)
+        : new TranscriptLog(options.transcriptsDir, { quarantine: this.stateValidationQuarantine }));
     this.audit =
       options.audit ??
       (this.db.dialect === "postgres" ? new PostgresAuditLog(this.db) : new AuditLog(options.auditDir));
