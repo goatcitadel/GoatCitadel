@@ -35,6 +35,11 @@ export interface OrchestrationPhaseHookPatch {
   requiresApproval?: boolean;
 }
 
+export interface TransformLlmOutputHookPatch {
+  content?: string;
+  metadata?: Record<string, unknown>;
+}
+
 export function parseLlmModelSelectHookPatch(
   value: Record<string, unknown>,
 ): Pick<LlmRequestHookPatch, "providerId" | "model"> | undefined {
@@ -178,6 +183,23 @@ export function parseOrchestrationRunHookPatch(value: Record<string, unknown>): 
     ...(maxIterations !== undefined ? { maxIterations } : {}),
     ...(maxRuntimeMinutes !== undefined ? { maxRuntimeMinutes } : {}),
     ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
+  };
+}
+
+export function parseTransformLlmOutputHookPatch(
+  value: Record<string, unknown>,
+): TransformLlmOutputHookPatch | undefined {
+  const content = typeof value.content === "string" && value.content.trim() ? value.content : undefined;
+  const metadata =
+    value.metadata && typeof value.metadata === "object" && !Array.isArray(value.metadata)
+      ? (value.metadata as Record<string, unknown>)
+      : undefined;
+  if (content === undefined && metadata === undefined) {
+    return undefined;
+  }
+  return {
+    ...(content !== undefined ? { content } : {}),
+    ...(metadata !== undefined ? { metadata } : {}),
   };
 }
 

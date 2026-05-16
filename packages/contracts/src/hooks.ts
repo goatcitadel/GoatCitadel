@@ -2,6 +2,26 @@ import type { ChatCompletionMessage } from "./llm.js";
 
 export type HookPhase = "before" | "around" | "after";
 
+/**
+ * Hook execution mode.
+ *
+ * - `observe`: hook receives the event but cannot affect dispatch. Best for logging,
+ *   metrics, audit fan-out. Failure of observe hooks never blocks the caller.
+ * - `mutate`: hook may return a `patch` object that the runtime merges back into the
+ *   request before execution proceeds. Only valid for `*.before` triggers that define
+ *   a `HookPatchByTrigger` entry (i.e., not `never`).
+ * - `intercept`: hook may return `{ decision: { type: "block", reason } }` to veto
+ *   the operation. The runtime surfaces the reason to the caller (transcript / API
+ *   error) and never invokes the underlying side effect. Combine with
+ *   `failPolicy: "closed"` for fail-closed enforcement when the hook itself errors.
+ *
+ * Veto contract:
+ * - `tool.call.before` veto → `ToolInvokeResult.outcome === "blocked"`, downstream
+ *   `policyEngine.invoke` is not called.
+ * - `gateway.dispatch.before` / `llm.request.before` / `transform_llm_output` /
+ *   `approval.request.before` / `approval.create.before` veto → caller throws an
+ *   Error with the veto reason as message; downstream side effects do not run.
+ */
 export type HookMode = "observe" | "mutate" | "intercept";
 
 export type HookFailPolicy = "open" | "closed";
@@ -11,6 +31,8 @@ export type HookActionType = "webhook";
 export type HookTrigger =
   | "llm.model.select.before"
   | "llm.request.before"
+  | "gateway.dispatch.before"
+  | "transform_llm_output"
   | "llm.response.after"
   | "before_prompt_build"
   | "llm_input"
@@ -19,8 +41,10 @@ export type HookTrigger =
   | "tool.call.after"
   | "tool.call.error"
   | "after_tool_call"
+  | "approval.request.before"
   | "approval.create.before"
   | "approval.resolve.after"
+  | "approval.response.after"
   | "orchestration.run.before"
   | "orchestration.phase.before"
   | "orchestration.phase.after"
@@ -85,6 +109,11 @@ export interface OrchestrationPhaseHookPatch {
   specPath?: string;
   loopMode?: "fresh-context" | "compaction";
   requiresApproval?: boolean;
+}
+
+export interface TransformLlmOutputHookPatch {
+  content?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export type RuntimeLifecycleHookTrigger =
@@ -159,6 +188,8 @@ export interface RuntimeLifecycleHookPayloadByTrigger {
 export interface HookPatchByTrigger {
   "llm.model.select.before": LlmModelSelectHookPatch;
   "llm.request.before": LlmRequestHookPatch;
+  "gateway.dispatch.before": never;
+  transform_llm_output: TransformLlmOutputHookPatch;
   "llm.response.after": never;
   before_prompt_build: never;
   llm_input: never;
@@ -167,8 +198,10 @@ export interface HookPatchByTrigger {
   "tool.call.after": never;
   "tool.call.error": never;
   after_tool_call: never;
+  "approval.request.before": never;
   "approval.create.before": ApprovalCreateHookPatch;
   "approval.resolve.after": never;
+  "approval.response.after": never;
   "orchestration.run.before": OrchestrationRunHookPatch;
   "orchestration.phase.before": OrchestrationPhaseHookPatch;
   "orchestration.phase.after": never;
@@ -184,7 +217,8 @@ export type HookPatch =
   | ToolCallHookPatch
   | ApprovalCreateHookPatch
   | OrchestrationRunHookPatch
-  | OrchestrationPhaseHookPatch;
+  | OrchestrationPhaseHookPatch
+  | TransformLlmOutputHookPatch;
 
 export interface HookPatchSummary {
   keys: string[];

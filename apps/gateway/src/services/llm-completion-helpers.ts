@@ -1,5 +1,8 @@
-import type { ChatCompletionRequest, MemoryContextPack } from "@goatcitadel/contracts";
+import type { ChatCompletionRequest, ChatCompletionResponse, MemoryContextPack } from "@goatcitadel/contracts";
+import { absorbCompletionStreamChunk, createCompletionStreamAggregate } from "./chat-agent-completion-adapters.js";
 import { isChatTurnCancelledError } from "./chat-turn-helpers.js";
+import { parseTransformLlmOutputHookPatch } from "./hook-patch-helpers.js";
+import type { HooksService } from "./hooks-service.js";
 
 export const CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT = 3;
 
@@ -223,4 +226,122 @@ function toPlainRecord(value: unknown): Record<string, unknown> | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+export interface ApplyNonStreamingTransformInput {
+  hooksService: Pick<HooksService, "runInlineHooks">;
+  workspaceId: string;
+  entityId: string;
+  providerId: string;
+  model: string;
+  response: ChatCompletionResponse;
+}
+
+/**
+ * Runs the `transform_llm_output` hook for a non-streamed chat completion. Mutates `response`
+ * in place when the hook returns a content patch so that downstream observers
+ * (publishRealtime, after-hooks, persistence) see the canonical post-transform content.
+ *
+ * Throws when the hook intercepts the response.
+ */
+export async function applyNonStreamingTransformLlmOutput(input: ApplyNonStreamingTransformInput): Promise<void> {
+  const transformHook = await input.hooksService.runInlineHooks<{
+    content?: string;
+    metadata?: Record<string, unknown>;
+  }>({
+    workspaceId: input.workspaceId,
+    trigger: "transform_llm_output",
+    entityType: "chat_completion",
+    entityId: input.entityId,
+    payload: {
+      providerId: input.providerId,
+      model: input.model,
+      response: input.response,
+    },
+    parsePatch: (value) => parseTransformLlmOutputHookPatch(value),
+    mergePatch: (current, next) => ({ ...(current ?? {}), ...next }),
+  });
+  if (transformHook.blockedBy) {
+    throw new Error(transformHook.blockedBy.reason);
+  }
+  if (transformHook.patch?.content) {
+    const firstChoice = input.response.choices?.[0];
+    if (firstChoice?.message) {
+      firstChoice.message.content = transformHook.patch.content;
+    }
+  }
+}
+
+export interface ApplyStreamingTransformInput {
+  hooksService: Pick<HooksService, "runInlineHooks">;
+  workspaceId: string;
+  entityId: string;
+  providerId: string;
+  model: string;
+  bufferedChunks: ReadonlyArray<Record<string, unknown>>;
+  shouldBufferForTransform: boolean;
+}
+
+/**
+ * Runs the `transform_llm_output` hook for a streamed chat completion and returns the chunks the
+ * caller should yield to the consumer.
+ *
+ * - In buffered mode the assembled content is exposed to mutate hooks; the returned chunks are a
+ *   single synthetic content delta followed by a finish marker derived from the original stream.
+ * - In passthrough mode the hook fires veto-only and no extra chunks are returned (raw chunks
+ *   were already yielded before this call).
+ *
+ * Throws when the hook intercepts the response.
+ */
+export async function applyStreamingTransformLlmOutput(
+  input: ApplyStreamingTransformInput,
+): Promise<Array<Record<string, unknown>>> {
+  if (!input.shouldBufferForTransform) {
+    const passthroughHook = await input.hooksService.runInlineHooks({
+      workspaceId: input.workspaceId,
+      trigger: "transform_llm_output",
+      entityType: "chat_completion",
+      entityId: input.entityId,
+      payload: {
+        providerId: input.providerId,
+        model: input.model,
+        stream: true,
+      },
+    });
+    if (passthroughHook.blockedBy) {
+      throw new Error(passthroughHook.blockedBy.reason);
+    }
+    return [];
+  }
+
+  const aggregate = createCompletionStreamAggregate();
+  for (const chunk of input.bufferedChunks) {
+    absorbCompletionStreamChunk(aggregate, chunk);
+  }
+  const assembledContent = aggregate.content;
+  const bufferedHook = await input.hooksService.runInlineHooks<{
+    content?: string;
+    metadata?: Record<string, unknown>;
+  }>({
+    workspaceId: input.workspaceId,
+    trigger: "transform_llm_output",
+    entityType: "chat_completion",
+    entityId: input.entityId,
+    payload: {
+      providerId: input.providerId,
+      model: input.model,
+      stream: true,
+      content: assembledContent,
+    },
+    parsePatch: (value) => parseTransformLlmOutputHookPatch(value),
+    mergePatch: (current, next) => ({ ...(current ?? {}), ...next }),
+  });
+  if (bufferedHook.blockedBy) {
+    throw new Error(bufferedHook.blockedBy.reason);
+  }
+  const finalContent = bufferedHook.patch?.content ?? assembledContent;
+  return [
+    { choices: [{ delta: { content: finalContent } }] },
+    { choices: [{ finish_reason: aggregate.finishReason ?? "stop", delta: {} }] },
+  ];
 }

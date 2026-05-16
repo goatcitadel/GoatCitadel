@@ -703,6 +703,7 @@ export {
   cancelLlamaCppHuggingFaceDownload,
   fetchCapabilityPackPreview,
   fetchCapabilityPacks,
+  fetchAddonSlots,
   fetchAddonStatus,
   fetchAddonsCatalog,
   fetchAssemblyReputations,

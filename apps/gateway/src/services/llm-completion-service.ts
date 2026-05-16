@@ -19,6 +19,8 @@ import type { LlmService } from "./llm-service.js";
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import {
   CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT,
+  applyNonStreamingTransformLlmOutput,
+  applyStreamingTransformLlmOutput,
   buildMemoryContextSystemMessage,
   calculateSavings,
   createChatCompletionDeadline,
@@ -41,7 +43,7 @@ import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatc
 export interface LlmCompletionHost {
   readonly config: Pick<GatewayRuntimeConfig, "assistant">;
   readonly memoryLifecycleService: Pick<MemoryLifecycleService, "composeContext">;
-  readonly hooksService: Pick<HooksService, "runInlineHooks" | "enqueueAfterHooks">;
+  readonly hooksService: Pick<HooksService, "runInlineHooks" | "enqueueAfterHooks" | "hasMutateHook">;
   readonly llmService: Pick<
     LlmService,
     "chatCompletions" | "chatCompletionsStream" | "getRuntimeConfig" | "resolveExecutionApiStyle"
@@ -189,6 +191,23 @@ export async function createChatCompletion(
       ...hookableRequest,
       ...modelSelectHook.patch,
     };
+  }
+
+  const dispatchHook = await host.hooksService.runInlineHooks({
+    workspaceId: chatHookWorkspaceId,
+    trigger: "gateway.dispatch.before",
+    entityType: "chat_completion",
+    entityId: chatHookEntityId,
+    payload: {
+      providerId: hookableRequest.providerId,
+      model: hookableRequest.model,
+      messageCount: hookableRequest.messages.length,
+      metadata: hookableRequest.metadata ?? {},
+    },
+    parsePatch: () => undefined,
+  });
+  if (dispatchHook.blockedBy) {
+    throw new Error(dispatchHook.blockedBy.reason);
   }
 
   const llmRequestHook = await host.hooksService.runInlineHooks<{
@@ -448,6 +467,17 @@ export async function createChatCompletion(
     },
   });
 
+  // transform_llm_output runs before publishRealtime/after-hooks so downstream observers see
+  // the post-transform content. Hook llm_output (observe-only) for the raw provider response.
+  await applyNonStreamingTransformLlmOutput({
+    hooksService: host.hooksService,
+    workspaceId: chatHookWorkspaceId,
+    entityId: chatHookEntityId,
+    providerId: routing.effectiveProviderId ?? primaryProviderId,
+    model: routing.effectiveModel ?? primaryModel,
+    response,
+  });
+
   host.publishRealtime("system", "llm", {
     type: "chat_completion",
     providerId: routing.effectiveProviderId ?? primaryProviderId,
@@ -587,6 +617,22 @@ export async function* createChatCompletionStream(
       hasMemoryContext: Boolean(memoryContext),
     },
   });
+  const dispatchHook = await host.hooksService.runInlineHooks({
+    workspaceId: chatHookWorkspaceId,
+    trigger: "gateway.dispatch.before",
+    entityType: "chat_completion",
+    entityId: chatHookEntityId,
+    payload: {
+      providerId: withContext.providerId,
+      model: withContext.model,
+      messageCount: withContext.messages.length,
+      metadata: withContext.metadata ?? {},
+    },
+    parsePatch: () => undefined,
+  });
+  if (dispatchHook.blockedBy) {
+    throw new Error(dispatchHook.blockedBy.reason);
+  }
   host.persistContextManifestForCompletionRequest({
     request: withContext,
     memoryContext,
@@ -628,6 +674,8 @@ export async function* createChatCompletionStream(
     fallbackUsed: false,
   };
 
+  const shouldBufferForTransform = host.hooksService.hasMutateHook(chatHookWorkspaceId, "transform_llm_output");
+  const bufferedChunks: Array<Record<string, unknown>> = [];
   const retryAttempts = [
     withContext,
     normalizeToolProtocolRetryRequest(withContext, 1),
@@ -655,7 +703,11 @@ export async function* createChatCompletionStream(
         })) {
           attemptStreamed = true;
           streamed = true;
-          yield chunk;
+          if (shouldBufferForTransform) {
+            bufferedChunks.push(chunk);
+          } else {
+            yield chunk;
+          }
         }
         routing.effectiveProviderId = attemptRequest.providerId ?? primaryProviderId;
         routing.effectiveModel = attemptRequest.model ?? primaryModel;
@@ -763,7 +815,11 @@ export async function* createChatCompletionStream(
           })) {
             attemptStreamed = true;
             streamed = true;
-            yield chunk;
+            if (shouldBufferForTransform) {
+              bufferedChunks.push(chunk);
+            } else {
+              yield chunk;
+            }
           }
           routing.fallbackUsed = true;
           routing.fallbackProviderId = fallback.providerId;
@@ -881,6 +937,19 @@ export async function* createChatCompletionStream(
       fallbackUsed: routing.fallbackUsed,
     },
   });
+
+  // Buffered: assembled content exposed to mutate hooks (synthetic chunks returned). Passthrough: veto-only.
+  for (const chunk of await applyStreamingTransformLlmOutput({
+    hooksService: host.hooksService,
+    workspaceId: chatHookWorkspaceId,
+    entityId: chatHookEntityId,
+    providerId: routing.effectiveProviderId ?? primaryProviderId,
+    model: routing.effectiveModel ?? primaryModel,
+    bufferedChunks,
+    shouldBufferForTransform,
+  })) {
+    yield chunk;
+  }
 
   host.publishRealtime("system", "llm", {
     type: "chat_completion_stream",

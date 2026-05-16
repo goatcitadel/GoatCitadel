@@ -35,6 +35,7 @@ function createHost(
     hooksService: {
       runInlineHooks: vi.fn(async () => ({ runs: [] })),
       enqueueAfterHooks: vi.fn(),
+      hasMutateHook: vi.fn(() => false),
     } as never,
     llmService: {
       chatCompletions: vi.fn(),
@@ -93,6 +94,7 @@ function createCompletionHost(input: {
     hooksService: {
       runInlineHooks: vi.fn(async () => ({ runs: [] })),
       enqueueAfterHooks: vi.fn(),
+      hasMutateHook: vi.fn(() => false),
     } as never,
     llmService: {
       chatCompletions: vi.fn(input.completion),
@@ -301,6 +303,117 @@ describe("createChatCompletionStream", () => {
       }),
     );
     expect(host.publishRealtime).not.toHaveBeenCalled();
+  });
+
+  it("blocks streaming chat completion when gateway.dispatch.before intercepts", async () => {
+    const host = createHost(async function* () {
+      yield {
+        choices: [{ delta: { content: "should-not-emit" } }],
+      };
+    });
+    host.hooksService.runInlineHooks = vi.fn(async (options: { trigger: string }) =>
+      options.trigger === "gateway.dispatch.before"
+        ? { runs: [], blockedBy: { type: "block", reason: "policy: stream-blocked" } }
+        : { runs: [] },
+    ) as never;
+
+    const result = await collectStream(createChatCompletionStream(host, createRequest()));
+
+    expect(result.error?.message).toMatch(/stream-blocked/);
+    expect(host.llmService.chatCompletionsStream).not.toHaveBeenCalled();
+    expect(host.persistContextManifestForCompletionRequest).not.toHaveBeenCalled();
+  });
+
+  it("buffers stream and replays patched content when a mutate hook is registered", async () => {
+    const host = createHost(async function* () {
+      yield { choices: [{ delta: { content: "raw " } }] };
+      yield { choices: [{ delta: { content: "stream " } }] };
+      yield { choices: [{ delta: { content: "output" } }] };
+    });
+    host.hooksService.hasMutateHook = vi.fn(
+      (_workspaceId: string, trigger: string) => trigger === "transform_llm_output",
+    ) as never;
+    host.hooksService.runInlineHooks = vi.fn(
+      async (options: { trigger: string; parsePatch?: (value: Record<string, unknown>) => unknown }) => {
+        if (options.trigger === "transform_llm_output") {
+          const patch = options.parsePatch?.({ content: "PATCHED" });
+          return { runs: [], patch };
+        }
+        return { runs: [] };
+      },
+    ) as never;
+
+    const result = await collectStream(createChatCompletionStream(host, createRequest()));
+
+    expect(result.error).toBeUndefined();
+    const deltas = result.chunks
+      .map((chunk) => {
+        const choices = (chunk as { choices?: Array<{ delta?: { content?: unknown } }> }).choices;
+        const delta = choices?.[0]?.delta?.content;
+        return typeof delta === "string" ? delta : undefined;
+      })
+      .filter((value): value is string => Boolean(value));
+    // In buffered mode the consumer should see ONLY the patched content, not the raw chunks.
+    expect(deltas.join("")).toBe("PATCHED");
+    expect(deltas).not.toContain("raw ");
+    expect(deltas).not.toContain("stream ");
+    expect(deltas).not.toContain("output");
+  });
+
+  it("falls through to passthrough+veto-only when no mutate hook is registered", async () => {
+    const host = createHost(async function* () {
+      yield { choices: [{ delta: { content: "raw " } }] };
+      yield { choices: [{ delta: { content: "stream" } }] };
+    });
+    // hasMutateHook defaults to false in createHost — assert the contract explicitly.
+    host.hooksService.hasMutateHook = vi.fn(() => false) as never;
+    // The transform_llm_output hook still fires veto-only; a content patch would be ignored.
+    host.hooksService.runInlineHooks = vi.fn(
+      async (options: { trigger: string; parsePatch?: (value: Record<string, unknown>) => unknown }) => {
+        if (options.trigger === "transform_llm_output") {
+          const patch = options.parsePatch?.({ content: "SHOULD_BE_IGNORED" });
+          return { runs: [], patch };
+        }
+        return { runs: [] };
+      },
+    ) as never;
+
+    const result = await collectStream(createChatCompletionStream(host, createRequest()));
+
+    expect(result.error).toBeUndefined();
+    const deltas = result.chunks
+      .map((chunk) => {
+        const choices = (chunk as { choices?: Array<{ delta?: { content?: unknown } }> }).choices;
+        const delta = choices?.[0]?.delta?.content;
+        return typeof delta === "string" ? delta : undefined;
+      })
+      .filter((value): value is string => Boolean(value));
+    expect(deltas.join("")).toBe("raw stream");
+  });
+
+  it("buffered mode still allows intercept veto", async () => {
+    const host = createHost(async function* () {
+      yield { choices: [{ delta: { content: "x" } }] };
+    });
+    host.hooksService.hasMutateHook = vi.fn(() => true) as never;
+    host.hooksService.runInlineHooks = vi.fn(async (options: { trigger: string }) =>
+      options.trigger === "transform_llm_output"
+        ? { runs: [], blockedBy: { type: "block", reason: "policy: stream-content-blocked" } }
+        : { runs: [] },
+    ) as never;
+
+    const result = await collectStream(createChatCompletionStream(host, createRequest()));
+
+    expect(result.error?.message).toMatch(/stream-content-blocked/);
+    // In buffered mode raw chunks are withheld; the veto fires before any synthetic emission.
+    const deltas = result.chunks
+      .map((chunk) => {
+        const choices = (chunk as { choices?: Array<{ delta?: { content?: unknown } }> }).choices;
+        const delta = choices?.[0]?.delta?.content;
+        return typeof delta === "string" ? delta : undefined;
+      })
+      .filter((value): value is string => Boolean(value));
+    expect(deltas).toEqual([]);
   });
 });
 
@@ -516,6 +629,109 @@ describe("createChatCompletion", () => {
         }),
       }),
     );
+    expect(host.publishRealtime).not.toHaveBeenCalled();
+  });
+
+  it("fires gateway.dispatch.before before llm.request.before", async () => {
+    const host = createCompletionHost({
+      completion: async (request) => ({
+        model: request.model ?? "primary-model",
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+      }),
+    });
+    const inlineHookTriggers: string[] = [];
+    host.hooksService.runInlineHooks = vi.fn(async (options: { trigger: string }) => {
+      inlineHookTriggers.push(options.trigger);
+      return { runs: [] };
+    }) as never;
+
+    await createChatCompletion(host, createRequest());
+
+    const dispatchIndex = inlineHookTriggers.indexOf("gateway.dispatch.before");
+    const requestIndex = inlineHookTriggers.indexOf("llm.request.before");
+    expect(dispatchIndex).toBeGreaterThanOrEqual(0);
+    expect(requestIndex).toBeGreaterThanOrEqual(0);
+    expect(dispatchIndex).toBeLessThan(requestIndex);
+  });
+
+  it("blocks chat completion when gateway.dispatch.before intercepts", async () => {
+    const host = createCompletionHost({
+      completion: async () => ({
+        model: "never",
+        choices: [{ index: 0, message: { role: "assistant", content: "never" }, finish_reason: "stop" }],
+      }),
+    });
+    host.hooksService.runInlineHooks = vi.fn(async (options: { trigger: string }) =>
+      options.trigger === "gateway.dispatch.before"
+        ? { runs: [], blockedBy: { reason: "dispatch blocked by policy" } }
+        : { runs: [] },
+    ) as never;
+
+    await expect(createChatCompletion(host, createRequest())).rejects.toThrow("dispatch blocked by policy");
+
+    expect(host.llmService.chatCompletions).not.toHaveBeenCalled();
+    expect(host.persistContextManifestForCompletionRequest).not.toHaveBeenCalled();
+  });
+
+  it("applies transform_llm_output content override before publishing the response", async () => {
+    const host = createCompletionHost({
+      completion: async (request) => ({
+        model: request.model ?? "primary-model",
+        choices: [{ index: 0, message: { role: "assistant", content: "raw-output" }, finish_reason: "stop" }],
+      }),
+    });
+    host.hooksService.runInlineHooks = vi.fn(
+      async (options: { trigger: string; parsePatch?: (value: Record<string, unknown>) => unknown }) => {
+        if (options.trigger === "transform_llm_output") {
+          const patch = options.parsePatch?.({ content: "scrubbed" });
+          return { runs: [], patch };
+        }
+        return { runs: [] };
+      },
+    ) as never;
+    // Snapshot the after-hook payload's content AT CALL TIME so we can verify the mutation
+    // happened BEFORE enqueueAfterHooks fired. Plain expect().toHaveBeenCalledWith() captures
+    // the payload by reference, so a delayed mutation would still satisfy the assertion — only
+    // an at-call-time read inside mockImplementation can detect reordering.
+    let afterHookContentAtCall: string | undefined;
+    const enqueueAfterHooksMock = host.hooksService.enqueueAfterHooks as ReturnType<typeof vi.fn>;
+    enqueueAfterHooksMock.mockImplementation(
+      (options: {
+        trigger: string;
+        payload?: { response?: { choices?: Array<{ message?: { content?: string } }> } };
+      }) => {
+        if (options.trigger === "llm.response.after") {
+          afterHookContentAtCall = options.payload?.response?.choices?.[0]?.message?.content;
+        }
+      },
+    );
+
+    const response = await createChatCompletion(host, createRequest());
+
+    expect(response.choices[0]?.message?.content).toBe("scrubbed");
+    // publishRealtime fires between the mutation and enqueueAfterHooks (per source order). It
+    // must have been called — if the mutation moved AFTER publishRealtime, this assertion plus
+    // afterHookContentAtCall together still anchor the contract: any observer downstream of the
+    // mutation point sees the canonical (post-transform) content.
+    expect(host.publishRealtime).toHaveBeenCalled();
+    expect(afterHookContentAtCall).toBe("scrubbed");
+  });
+
+  it("blocks chat completion when transform_llm_output intercepts", async () => {
+    const host = createCompletionHost({
+      completion: async () => ({
+        model: "primary-model",
+        choices: [{ index: 0, message: { role: "assistant", content: "leak" }, finish_reason: "stop" }],
+      }),
+    });
+    host.hooksService.runInlineHooks = vi.fn(async (options: { trigger: string }) =>
+      options.trigger === "transform_llm_output"
+        ? { runs: [], blockedBy: { type: "block", reason: "policy: bad-output" } }
+        : { runs: [] },
+    ) as never;
+
+    await expect(createChatCompletion(host, createRequest())).rejects.toThrow(/bad-output/);
+
     expect(host.publishRealtime).not.toHaveBeenCalled();
   });
 });

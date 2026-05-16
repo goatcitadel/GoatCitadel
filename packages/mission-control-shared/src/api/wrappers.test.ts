@@ -502,6 +502,19 @@ describe("shared API wrappers", () => {
     await expectCall(platform.fetchAddonsCatalog(), "/api/v1/addons/catalog");
     await expectCall(platform.fetchInstalledAddons(), "/api/v1/addons/installed");
     await expectCall(platform.fetchAddonStatus("addon/1"), "/api/v1/addons/addon%2F1/status");
+    await expectCall(platform.fetchAddonSlots(), "/api/v1/addons/slots");
+    await expectCall(
+      platform.fetchAddonSlots({ route: "/ops/approvals", slot: "ops.approvals.actions" }),
+      "/api/v1/addons/slots?route=%2Fops%2Fapprovals&slot=ops.approvals.actions",
+    );
+    await expectCall(
+      platform.fetchAddonSlots({ route: "/ops/approvals" }),
+      "/api/v1/addons/slots?route=%2Fops%2Fapprovals",
+    );
+    await expectCall(
+      platform.fetchAddonSlots({ slot: "library.skills.cards" }),
+      "/api/v1/addons/slots?slot=library.skills.cards",
+    );
     await expectCall(platform.installAddon("addon/1", {} as never), "/api/v1/addons/addon%2F1/install", {
       method: "POST",
     });
