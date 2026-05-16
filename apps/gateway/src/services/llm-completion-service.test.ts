@@ -302,6 +302,25 @@ describe("createChatCompletionStream", () => {
     );
     expect(host.publishRealtime).not.toHaveBeenCalled();
   });
+
+  it("blocks streaming chat completion when gateway.dispatch.before intercepts", async () => {
+    const host = createHost(async function* () {
+      yield {
+        choices: [{ delta: { content: "should-not-emit" } }],
+      };
+    });
+    host.hooksService.runInlineHooks = vi.fn(async (options: { trigger: string }) =>
+      options.trigger === "gateway.dispatch.before"
+        ? { runs: [], blockedBy: { type: "block", reason: "policy: stream-blocked" } }
+        : { runs: [] },
+    ) as never;
+
+    const result = await collectStream(createChatCompletionStream(host, createRequest()));
+
+    expect(result.error?.message).toMatch(/stream-blocked/);
+    expect(host.llmService.chatCompletionsStream).not.toHaveBeenCalled();
+    expect(host.persistContextManifestForCompletionRequest).not.toHaveBeenCalled();
+  });
 });
 
 describe("createChatCompletion", () => {

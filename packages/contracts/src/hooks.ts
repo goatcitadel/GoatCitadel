@@ -63,10 +63,6 @@ export interface LlmRequestHookPatch extends LlmModelSelectHookPatch {
   metadata?: Record<string, unknown>;
 }
 
-export interface GatewayDispatchHookPatch {
-  metadata?: Record<string, unknown>;
-}
-
 export interface ToolCallHookPatch {
   toolName?: string;
   args?: Record<string, unknown>;
@@ -164,7 +160,7 @@ export interface RuntimeLifecycleHookPayloadByTrigger {
 export interface HookPatchByTrigger {
   "llm.model.select.before": LlmModelSelectHookPatch;
   "llm.request.before": LlmRequestHookPatch;
-  "gateway.dispatch.before": GatewayDispatchHookPatch;
+  "gateway.dispatch.before": never;
   "llm.response.after": never;
   before_prompt_build: never;
   llm_input: never;
@@ -187,7 +183,6 @@ export interface HookPatchByTrigger {
 export type HookPatch =
   | LlmModelSelectHookPatch
   | LlmRequestHookPatch
-  | GatewayDispatchHookPatch
   | ToolCallHookPatch
   | ApprovalCreateHookPatch
   | OrchestrationRunHookPatch

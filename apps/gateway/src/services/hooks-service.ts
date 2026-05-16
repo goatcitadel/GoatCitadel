@@ -572,6 +572,11 @@ export class HooksService {
     if (mode === "observe") {
       return;
     }
+    if (trigger === "gateway.dispatch.before" && mode === "mutate") {
+      throw new ValidationError({
+        message: `Trigger ${trigger} does not support mutate hooks.`,
+      });
+    }
     if (
       trigger === "llm.response.after" ||
       trigger === "before_prompt_build" ||

@@ -437,6 +437,21 @@ describe("HooksService", () => {
     expect(created.mode).toBe("intercept");
   });
 
+  it("rejects gateway.dispatch.before for mutate mode hooks", () => {
+    const { service, workspaceId } = createHarness({
+      workspacePrefs: { hooks: { allowMutatingHooks: true, allowInterceptingHooks: true } },
+    });
+    expect(() =>
+      service.createWorkspaceHook({
+        workspaceId,
+        label: "dispatch-mutate",
+        trigger: "gateway.dispatch.before",
+        mode: "mutate",
+        action: { type: "webhook", webhook: { url: "https://hooks.example.test/dispatch-mutate" } },
+      }),
+    ).toThrow(/does not support mutate hooks/i);
+  });
+
   it("keeps runtime lifecycle triggers observe-only and phases them correctly", () => {
     const { service, workspaceId } = createHarness({
       workspacePrefs: {
