@@ -46,21 +46,26 @@ No pre-plan baseline was captured for cold-start; only post-plan numbers are ava
 
 | | Files | Tests | Failures |
 |---|---:|---:|---:|
-| Baseline (`baseline.json`) | 437 | 2720 | 0 |
-| Post-plan (`vitest run`)   | 444 | 2753 | 1 |
+| Baseline (`baseline.json`)            | 437 | 2720 | 0 |
+| Post-plan (Task 11 vitest run)        | 444 | 2753 | 1 |
+| Post-polish verification (Task 11+)   | 444 | 2753 | 0 |
 
-Net additions across the plan: **+7 files / +33 tests** (the regression locks added in Tasks 1, 2, 3, 4, 5, 6, 7, 8, 9 plus the new shared cron-validator unit tests).
+Net additions across the plan: **+7 files / +33 tests** (the regression locks added in Tasks 1–9 plus the new shared cron-validator unit tests).
 
-Post-plan failure: `src/services/skill-import-service.loop41.test.ts` — pre-existing flaky test under parallel load (passes in isolation); unrelated to this plan. The second known flaky `llama-cpp-runtime-service.test.ts` did not fire this run but remains in the same category.
+The 1 failure in the Task 11 sweep was `src/services/skill-import-service.loop41.test.ts` — a pre-existing flaky test under parallel load (passes in isolation); unrelated to this plan. It did NOT fail on the post-polish verification re-run. The second known flaky `llama-cpp-runtime-service.test.ts` did not fire in either run.
 
-## Repo-wide checks
+## Repo-wide checks (post-polish)
 
-- `pnpm -r typecheck`: PASS (exit 0).
-- `pnpm -r build`: PASS (see commit log; final tsc -b on gateway clean before this verification).
+- `pnpm -r typecheck`: PASS (exit 0, all 11 workspace packages).
+- `pnpm -r build`: PASS (exit 0; gateway + mission-control + mission-control-next + all libs).
+- `pnpm -r --filter ./packages/* build`: PASS.
 
 ## Commits in this branch (since baseline d8a04a07)
 
 ```
+3a8ae2c0 chore: surface cache hits + schema-validate streaming flag + log cron repairs
+003fb43c docs(plan): reliability+perf sweep plan and baseline
+743cdc6c docs(plan): record reliability+perf sweep results
 97689f6d perf(config): mtime-keyed cache for loadGatewayConfig
 9ad0f2fd perf(chat-sse): coalesce assistant/thinking deltas inside short window
 38c90fb7 feat(shutdown): phased pre-close + force-exit wait budgets
@@ -71,6 +76,16 @@ bcd1c869 test: sharpen malformed-row tolerance lock in transcript log
 d20a5d12 test: lock per-session busy scope in scheduler tick
 78af45d9 test: lock parallel fanout in proactive scheduler
 ```
+
+Final HEAD: `3a8ae2c0` (after post-review polish addressing operability gaps).
+
+## Post-review polish (commit `3a8ae2c0`)
+
+The final cross-cutting review flagged two Important operability gaps and one Minor logging gap; all three were addressed in a single follow-up commit:
+
+- **Model catalog + config mtime caches** now emit `log.debug("… cache hit", { … })` so an operator running with `GOATCITADEL_LOG_LEVEL=debug` can distinguish cache returns from upstream calls.
+- **`GOATCITADEL_STREAM_COALESCE_OFF`** is now declared in `GatewayEnvSchema` and read via the validated `env` object instead of raw `process.env`; a typo like `GOATCITADEL_STREAM_COALSCE_OFF=true` is now caught at startup rather than silently leaving the feature enabled.
+- **`repairCronNextRunAt`** corrections now emit `log.info("repaired stale nextRunAt", { jobId, schedule, persistedNextRunAt, repairedNextRunAt })` so the operator has a record of which jobs were repaired on load.
 
 ## Known caveats / follow-ups
 
