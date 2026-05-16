@@ -595,10 +595,32 @@ describe("createChatCompletion", () => {
         return { runs: [] };
       },
     ) as never;
+    // Snapshot the after-hook payload's content AT CALL TIME so we can verify the mutation
+    // happened BEFORE enqueueAfterHooks fired. Plain expect().toHaveBeenCalledWith() captures
+    // the payload by reference, so a delayed mutation would still satisfy the assertion — only
+    // an at-call-time read inside mockImplementation can detect reordering.
+    let afterHookContentAtCall: string | undefined;
+    const enqueueAfterHooksMock = host.hooksService.enqueueAfterHooks as ReturnType<typeof vi.fn>;
+    enqueueAfterHooksMock.mockImplementation(
+      (options: {
+        trigger: string;
+        payload?: { response?: { choices?: Array<{ message?: { content?: string } }> } };
+      }) => {
+        if (options.trigger === "llm.response.after") {
+          afterHookContentAtCall = options.payload?.response?.choices?.[0]?.message?.content;
+        }
+      },
+    );
 
     const response = await createChatCompletion(host, createRequest());
 
     expect(response.choices[0]?.message?.content).toBe("scrubbed");
+    // publishRealtime fires between the mutation and enqueueAfterHooks (per source order). It
+    // must have been called — if the mutation moved AFTER publishRealtime, this assertion plus
+    // afterHookContentAtCall together still anchor the contract: any observer downstream of the
+    // mutation point sees the canonical (post-transform) content.
+    expect(host.publishRealtime).toHaveBeenCalled();
+    expect(afterHookContentAtCall).toBe("scrubbed");
   });
 
   it("blocks chat completion when transform_llm_output intercepts", async () => {

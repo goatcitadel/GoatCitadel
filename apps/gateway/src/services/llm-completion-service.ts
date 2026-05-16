@@ -479,7 +479,7 @@ export async function createChatCompletion(
       model: routing.effectiveModel ?? primaryModel,
       response,
     },
-    parsePatch: (value) => parseTransformLlmOutputHookPatch(value as Record<string, unknown>),
+    parsePatch: (value) => parseTransformLlmOutputHookPatch(value),
     mergePatch: (current, next) => ({ ...(current ?? {}), ...next }),
   });
   if (transformHook.blockedBy) {
@@ -488,6 +488,10 @@ export async function createChatCompletion(
   if (transformHook.patch?.content) {
     const firstChoice = response.choices?.[0];
     if (firstChoice?.message) {
+      // transform_llm_output runs BEFORE llm.response.after enqueue and BEFORE publishRealtime,
+      // so all downstream observers (publishRealtime, after-hooks, persistence) see the
+      // post-transform content. This is the canonical interception point — anything that needs
+      // the raw provider output must hook llm_output (observe-only) which fires on the original.
       firstChoice.message.content = transformHook.patch.content;
     }
   }
@@ -955,7 +959,7 @@ export async function* createChatCompletionStream(
       model: routing.effectiveModel ?? primaryModel,
       stream: true,
     },
-    parsePatch: (value) => parseTransformLlmOutputHookPatch(value as Record<string, unknown>),
+    parsePatch: (value) => parseTransformLlmOutputHookPatch(value),
     mergePatch: (current, next) => ({ ...(current ?? {}), ...next }),
   });
   if (transformHook.blockedBy) {
