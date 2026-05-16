@@ -154,7 +154,10 @@ export function buildOrchestrationCommandSuggestions({
     if (!sub) {
       return items;
     }
-    return items.filter((item) => item.command.endsWith(sub) || item.command.includes(sub));
+    return items.filter((item) => {
+      const subcommand = item.command.split(" ")[1] ?? "";
+      return subcommand.startsWith(sub);
+    });
   }
 
   const goalMatch = trimmed.match(GOAL_PREFIX);
