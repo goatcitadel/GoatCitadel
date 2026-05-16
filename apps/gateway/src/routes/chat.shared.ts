@@ -101,8 +101,12 @@ export async function streamSseReply(
     return writeSsePayload(raw, payload, { eventId, signal: controller.signal });
   };
 
+  const coalesceEnabled = process.env.GOATCITADEL_STREAM_COALESCE_OFF !== "true";
+  const stream: AsyncIterable<unknown> = coalesceEnabled
+    ? coalesceStreamingDeltas(source(controller.signal))
+    : source(controller.signal);
   try {
-    for await (const chunk of source(controller.signal)) {
+    for await (const chunk of stream) {
       if (controller.signal.aborted) {
         break;
       }
@@ -132,4 +136,74 @@ export async function streamSseReply(
       raw.end();
     }
   }
+}
+
+interface CoalesceOptions {
+  windowMs?: number;
+  coalescableTypes?: ReadonlySet<string>;
+}
+
+const DEFAULT_COALESCABLE_TYPES: ReadonlySet<string> = new Set(["delta", "assistant.delta", "thinking.delta"]);
+
+export async function* coalesceStreamingDeltas(
+  source: AsyncIterable<unknown>,
+  options: CoalesceOptions = {},
+): AsyncGenerator<unknown> {
+  const types = options.coalescableTypes ?? DEFAULT_COALESCABLE_TYPES;
+  const window = Math.max(0, options.windowMs ?? 25);
+
+  let pendingType: string | null = null;
+  let pendingDelta = "";
+  let pendingTemplate: Record<string, unknown> | null = null;
+
+  const flush = (): unknown | null => {
+    if (pendingType === null || pendingTemplate === null) {
+      return null;
+    }
+    const out = { ...pendingTemplate, delta: pendingDelta };
+    pendingType = null;
+    pendingDelta = "";
+    pendingTemplate = null;
+    return out;
+  };
+
+  let lastEmit = Date.now();
+
+  for await (const raw of source) {
+    if (!raw || typeof raw !== "object") {
+      const drained = flush();
+      if (drained) yield drained;
+      yield raw;
+      continue;
+    }
+    const event = raw as Record<string, unknown>;
+    const type = typeof event.type === "string" ? event.type : "";
+    if (!types.has(type) || typeof event.delta !== "string") {
+      const drained = flush();
+      if (drained) yield drained;
+      yield event;
+      lastEmit = Date.now();
+      continue;
+    }
+
+    if (pendingType !== null && pendingType !== type) {
+      const drained = flush();
+      if (drained) yield drained;
+    }
+    pendingType = type;
+    pendingDelta += event.delta;
+    pendingTemplate = { ...event };
+    delete pendingTemplate.delta;
+
+    if (Date.now() - lastEmit >= window) {
+      const drained = flush();
+      if (drained) {
+        yield drained;
+        lastEmit = Date.now();
+      }
+    }
+  }
+
+  const tail = flush();
+  if (tail) yield tail;
 }
