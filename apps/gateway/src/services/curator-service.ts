@@ -62,8 +62,29 @@ export class CuratorService {
     };
   }
 
-  public archive(_input: CuratorArchiveRequest): CuratorArchiveResponse {
-    throw new Error("not implemented yet");
+  public archive(input: CuratorArchiveRequest): CuratorArchiveResponse {
+    const skill = this.deps.listSkills().find((s) => s.skillId === input.skillId);
+    if (!skill) {
+      throw new Error(`Curator: skill not found: ${input.skillId}`);
+    }
+    const immunity = computeSkillImmunity(skill);
+    if (immunity.immune) {
+      throw new Error(`Curator: ${immunity.reason} skill ${input.skillId} cannot be archived`);
+    }
+    const updated = this.deps.archiveSkill(input.skillId, input.reason ?? "curator:archived", input.actorId);
+    const archivedAt = this.deps.now().toISOString();
+    this.deps.publishRealtime("curator", {
+      type: "skill_archived",
+      skillId: input.skillId,
+      reason: input.reason ?? "curator:archived",
+      archivedAt,
+    });
+    return {
+      skillId: input.skillId,
+      archived: true,
+      archivedAt,
+      state: updated.state,
+    };
   }
 
   public prune(_input: CuratorPruneRequest): CuratorPruneResponse {

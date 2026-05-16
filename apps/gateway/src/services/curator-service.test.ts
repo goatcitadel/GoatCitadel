@@ -64,3 +64,73 @@ describe("CuratorService.listCuratorStatus", () => {
     expect(beta?.recommendation).toBe("archive");
   });
 });
+
+describe("CuratorService.archive", () => {
+  it("archives a managed unpinned skill (calls archiveSkill once)", () => {
+    let archivedId: string | undefined;
+    const skills = [makeSkill({ name: "alpha", usageCount: 0 })];
+    const service = new CuratorService({
+      listSkills: () => skills,
+      archiveSkill: (skillId) => {
+        archivedId = skillId;
+        return makeSkill({ name: "alpha", state: "disabled" });
+      },
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-05-15T12:00:00Z"),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    const response = service.archive({ skillId: skills[0].skillId });
+    expect(archivedId).toBe(skills[0].skillId);
+    expect(response.archived).toBe(true);
+    expect(response.state).toBe("disabled");
+  });
+
+  it("refuses to archive a pinned skill", () => {
+    const skills = [makeSkill({ name: "alpha", pinned: true })];
+    const service = new CuratorService({
+      listSkills: () => skills,
+      archiveSkill: () => {
+        throw new Error("archive should not be called for pinned skills");
+      },
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date(),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    expect(() => service.archive({ skillId: skills[0].skillId })).toThrow(/pinned/i);
+  });
+
+  it("refuses to archive a bundled skill", () => {
+    const skills = [makeSkill({ name: "alpha", source: "bundled" })];
+    const service = new CuratorService({
+      listSkills: () => skills,
+      archiveSkill: () => {
+        throw new Error("archive should not be called for bundled skills");
+      },
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date(),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    expect(() => service.archive({ skillId: skills[0].skillId })).toThrow(/bundled/i);
+  });
+
+  it("throws NotFoundError for unknown skill ids", () => {
+    const service = new CuratorService({
+      listSkills: () => [],
+      archiveSkill: () => {
+        throw new Error("not called");
+      },
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date(),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    expect(() => service.archive({ skillId: "skill-missing" })).toThrow(/not found/i);
+  });
+});
