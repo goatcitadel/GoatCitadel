@@ -32,6 +32,12 @@ import { randomUUID } from "node:crypto";
 
 const DEFAULT_WORKSPACE_ID = "default";
 
+export type BulkTaskAction =
+  | { action: "unblock"; taskIds: string[] }
+  | { action: "retry"; taskIds: string[]; reason: string }
+  | { action: "reassign"; taskIds: string[]; assignedAgentId: string }
+  | { action: "close"; taskIds: string[] };
+
 type TaskStorage = Pick<Storage, "taskActivities" | "taskDeliverables" | "tasks" | "taskSubagents">;
 
 type TaskRealtimeOptions = {
@@ -196,6 +202,28 @@ export class TaskLifecycleService {
       buildTaskRealtimeLinks(updated),
     );
     return updated;
+  }
+
+  public bulkUpdateTasks(input: BulkTaskAction): TaskRecord[] {
+    return input.taskIds.map((taskId) => {
+      if (input.action === "unblock") {
+        const current = this.deps.storage.tasks.get(taskId);
+        const retryBudget = current.retryBudget
+          ? { ...current.retryBudget, retryCount: 0, exhaustedAt: undefined }
+          : undefined;
+        return this.deps.storage.tasks.update(taskId, {
+          status: "assigned",
+          retryBudget,
+        });
+      }
+      if (input.action === "retry") {
+        return this.recordRetryAttempt(taskId, input.reason);
+      }
+      if (input.action === "reassign") {
+        return this.deps.storage.tasks.update(taskId, { assignedAgentId: input.assignedAgentId });
+      }
+      return this.updateTask(taskId, { status: "done" });
+    });
   }
 
   public async verifyTaskArtifacts(taskId: string, claims: TaskArtifactClaim[]): Promise<TaskRecord> {

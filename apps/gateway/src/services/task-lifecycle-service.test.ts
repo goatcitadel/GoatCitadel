@@ -575,3 +575,56 @@ describe("TaskLifecycleService.autoBlockOnIncompleteExit", () => {
     expect(result.status).toBe("done");
   });
 });
+
+describe("TaskLifecycleService.bulkUpdateTasks", () => {
+  it("unblock action moves blocked tasks to assigned and resets retry count + clears exhaustedAt", () => {
+    const { service } = createService();
+    const a = service.createTask({ title: "a", status: "blocked" });
+    service.setRetryBudget(a.taskId, 1);
+    service.recordRetryAttempt(a.taskId, "fail-1");
+    service.recordRetryAttempt(a.taskId, "fail-2"); // exhausted → already blocked
+    const results = service.bulkUpdateTasks({ action: "unblock", taskIds: [a.taskId] });
+    expect(results.length).toBe(1);
+    expect(results[0].status).toBe("assigned");
+    expect(results[0].retryBudget?.retryCount).toBe(0);
+    expect(results[0].retryBudget?.exhaustedAt).toBeUndefined();
+  });
+
+  it("retry action records a fresh attempt without status change when budget allows", () => {
+    const { service } = createService();
+    const a = service.createTask({ title: "a", status: "in_progress" });
+    service.setRetryBudget(a.taskId, 3);
+    const results = service.bulkUpdateTasks({ action: "retry", taskIds: [a.taskId], reason: "operator" });
+    expect(results[0].retryBudget?.retryCount).toBe(1);
+    expect(results[0].status).toBe("in_progress");
+  });
+
+  it("reassign action sets the new assignedAgentId on each task", () => {
+    const { service } = createService();
+    const a = service.createTask({ title: "a" });
+    const b = service.createTask({ title: "b" });
+    const results = service.bulkUpdateTasks({
+      action: "reassign",
+      taskIds: [a.taskId, b.taskId],
+      assignedAgentId: "agent-9",
+    });
+    expect(results[0].assignedAgentId).toBe("agent-9");
+    expect(results[1].assignedAgentId).toBe("agent-9");
+  });
+
+  it("close action moves tasks to done when they have a deliverable", () => {
+    const { service, storage } = createService();
+    const a = service.createTask({ title: "a" });
+    storage.taskDeliverables.append(a.taskId, { deliverableType: "artifact", title: "out" });
+    const results = service.bulkUpdateTasks({ action: "close", taskIds: [a.taskId] });
+    expect(results[0].status).toBe("done");
+  });
+
+  it("close action throws ValidationError when a task has no deliverable", () => {
+    const { service } = createService();
+    const a = service.createTask({ title: "a" });
+    expect(() => service.bulkUpdateTasks({ action: "close", taskIds: [a.taskId] })).toThrow(
+      /at least one deliverable/i,
+    );
+  });
+});
