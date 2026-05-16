@@ -815,6 +815,29 @@ describe("no_agent cron action", () => {
   });
 });
 
+describe("no_agent workdir forwarding", () => {
+  it("forwards workdir into the no_agent runner", async () => {
+    const captured: Array<{ workdir?: string }> = [];
+    const service = makeServiceWithNoAgent({
+      realtime: vi.fn(),
+      runner: async (input) => {
+        captured.push({ workdir: (input as { workdir?: string }).workdir });
+        return { stdout: "", stderr: "", exitCode: 0, timedOut: false };
+      },
+    });
+    service.createCronJob({
+      jobId: "wd-job",
+      name: "Wd",
+      action: "no_agent",
+      schedule: "0 */6 * * * UTC",
+      workdir: "/tmp/test",
+      actionConfig: { noAgent: { command: "echo" } },
+    });
+    await service.runCronJobNow("wd-job");
+    expect(captured[0]?.workdir).toBe("/tmp/test");
+  });
+});
+
 describe("CronAutomationService.retryCronReviewQueueItem", () => {
   it("lists review queue items and resolves cron run diffs", () => {
     const db = new FakeDb();
