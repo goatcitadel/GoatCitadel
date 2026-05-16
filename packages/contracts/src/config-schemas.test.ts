@@ -169,6 +169,26 @@ describe("LlmConfigFileSchema", () => {
     expect(result.providers).toHaveLength(1);
   });
 
+  it("accepts apiStyle 'bedrock-messages' on the zod runtime enum", () => {
+    const input = {
+      activeProviderId: "bedrock",
+      providers: [
+        {
+          providerId: "bedrock",
+          label: "Bedrock",
+          baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+          apiStyle: "bedrock-messages",
+          defaultModel: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        },
+      ],
+    };
+    const result = LlmConfigFileSchema.safeParse(input);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.providers[0]?.apiStyle).toBe("bedrock-messages");
+    }
+  });
+
   it("rejects when activeProviderId is missing", () => {
     const input = { providers: [] };
     expect(() => LlmConfigFileSchema.parse(input)).toThrow();

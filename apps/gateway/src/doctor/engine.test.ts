@@ -121,6 +121,138 @@ describe("doctor summary behavior", () => {
     expect(report.summary.exitCode).toBe(0);
   });
 
+  it("flags missing active model contextWindow during deep runtime checks", async () => {
+    const rootDir = await createDoctorFixture();
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/health")) {
+        return new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/api/v1/settings")) {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/api/v1/onboarding/state")) {
+        return new Response(JSON.stringify({ checklist: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/api/v1/voice/status")) {
+        return new Response(JSON.stringify({ provider: "whisper.cpp", readiness: "ready" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/api/v1/voice/runtime")) {
+        return new Response(JSON.stringify({ readiness: "ready", selectedModelId: "base.en" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/api/v1/llm/config")) {
+        return new Response(
+          JSON.stringify({
+            activeProviderId: "anthropic",
+            activeModel: "claude-opus-uncatalogued",
+            providers: [],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as typeof fetch);
+
+    const report = await runDoctor({
+      rootDir,
+      gatewayBaseUrl: "http://127.0.0.1:8787",
+      auditOnly: true,
+      deep: true,
+    });
+
+    const llmCheck = report.checks.find((check) => check.id === "llm.active-model-metadata");
+    expect(llmCheck).toBeDefined();
+    expect(llmCheck?.status).toBe("warn");
+    expect(llmCheck?.severity).toBe("warning");
+    expect(llmCheck?.detail).toMatch(/contextWindow/);
+    expect(llmCheck?.detail).toMatch(/claude-opus-uncatalogued/);
+  });
+
+  it("passes the LLM active model metadata check when contextWindow is available", async () => {
+    const rootDir = await createDoctorFixture();
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/health")) {
+        return new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/api/v1/settings")) {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/api/v1/onboarding/state")) {
+        return new Response(JSON.stringify({ checklist: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/api/v1/voice/status")) {
+        return new Response(JSON.stringify({ provider: "whisper.cpp", readiness: "ready" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/api/v1/voice/runtime")) {
+        return new Response(JSON.stringify({ readiness: "ready", selectedModelId: "base.en" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/api/v1/llm/config")) {
+        return new Response(
+          JSON.stringify({
+            activeProviderId: "anthropic",
+            activeModel: "claude-opus-4-7",
+            providers: [],
+            activeModelContextWindow: 1_000_000,
+            activeModelOutputTokenLimit: 32_000,
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as typeof fetch);
+
+    const report = await runDoctor({
+      rootDir,
+      gatewayBaseUrl: "http://127.0.0.1:8787",
+      auditOnly: true,
+      deep: true,
+    });
+
+    const llmCheck = report.checks.find((check) => check.id === "llm.active-model-metadata");
+    expect(llmCheck).toBeDefined();
+    expect(llmCheck?.status).toBe("ok");
+    expect(llmCheck?.detail).toMatch(/1,000,000/);
+  });
+
   it("retries an aborted deep-runtime settings probe before warning", async () => {
     const rootDir = await createDoctorFixture();
     let settingsAttempts = 0;

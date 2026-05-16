@@ -101,6 +101,7 @@ export async function runDoctor(options: DoctorRunOptions = {}): Promise<DoctorR
   const gatewayHealth = await checkGatewayHealth(context, repairs);
   checks.push(gatewayHealth.check);
   checks.push(await checkDeepRuntime(context, repairs, gatewayHealth.health));
+  checks.push(await checkLlmActiveModelMetadata(context, repairs, gatewayHealth.health));
 
   const finishedAt = new Date().toISOString();
   const summary = summarizeDoctor(checks, repairs);
@@ -1014,6 +1015,131 @@ async function checkDeepRuntime(
     status: "ok",
     severity: "info",
     detail: details.join(" "),
+    repairable: false,
+  };
+}
+
+async function checkLlmActiveModelMetadata(
+  context: DoctorRuntimeContext,
+  repairs: DoctorRepairResult[],
+  health: GatewayHealthResult,
+): Promise<DoctorCheckResult> {
+  const id = "llm.active-model-metadata";
+  if (!context.deep) {
+    repairs.push({
+      checkId: id,
+      applied: false,
+      skipped: true,
+      reason: "Deep checks not requested.",
+    });
+    return {
+      id,
+      group: "runtime",
+      title: "LLM active model metadata",
+      status: "skipped",
+      severity: "info",
+      detail: "Skipped (use --deep to include LLM active-model metadata checks).",
+      repairable: false,
+    };
+  }
+  if (!health.reachable) {
+    repairs.push({
+      checkId: id,
+      applied: false,
+      skipped: true,
+      reason: "Gateway unreachable; LLM metadata check skipped.",
+    });
+    return {
+      id,
+      group: "runtime",
+      title: "LLM active model metadata",
+      status: "skipped",
+      severity: "info",
+      detail: "Skipped because gateway health probe failed.",
+      repairable: false,
+    };
+  }
+
+  const tokenQueryParam = context.tokenQueryParam ?? "access_token";
+  const config = await fetchGatewayJson(
+    context.gatewayBaseUrl,
+    "/api/v1/llm/config",
+    context.authToken,
+    tokenQueryParam,
+  );
+  if (!config.ok) {
+    repairs.push({
+      checkId: id,
+      applied: false,
+      skipped: true,
+      reason: "Unable to query LLM runtime config.",
+    });
+    return {
+      id,
+      group: "runtime",
+      title: "LLM active model metadata",
+      status: "warn",
+      severity: "warning",
+      detail: `Could not load /api/v1/llm/config: ${config.detail}`,
+      repairable: false,
+    };
+  }
+
+  const payload = asRecord(config.payload);
+  const activeProviderId = asString(payload?.activeProviderId)?.trim() ?? "";
+  const activeModel = asString(payload?.activeModel)?.trim() ?? "";
+  const contextWindowRaw = payload?.activeModelContextWindow;
+  const outputLimitRaw = payload?.activeModelOutputTokenLimit;
+  const contextWindow = typeof contextWindowRaw === "number" ? contextWindowRaw : undefined;
+  const outputLimit = typeof outputLimitRaw === "number" ? outputLimitRaw : undefined;
+
+  repairs.push({
+    checkId: id,
+    applied: false,
+    skipped: true,
+    reason: "LLM metadata findings are informational; update config/llm-model-metadata.json to resolve.",
+  });
+
+  if (!activeProviderId || !activeModel) {
+    return {
+      id,
+      group: "runtime",
+      title: "LLM active model metadata",
+      status: "warn",
+      severity: "warning",
+      detail: "No active LLM provider/model is configured; /status surfaces will be empty.",
+      repairable: false,
+      repairAction: "Pick an active provider and model with `goat tui` or PATCH `/api/v1/llm/config`.",
+    };
+  }
+
+  if (contextWindow === undefined) {
+    return {
+      id,
+      group: "runtime",
+      title: "LLM active model metadata",
+      status: "warn",
+      severity: "warning",
+      detail: `Active model ${activeProviderId}/${activeModel} has no contextWindow in llm-model-metadata.json. /status surfaces will not be able to display an authoritative limit.`,
+      repairable: false,
+      repairAction: "Add a matching entry to `config/llm-model-metadata.json` and restart the gateway.",
+    };
+  }
+
+  const detailParts = [
+    `Active model ${activeProviderId}/${activeModel} has contextWindow ${contextWindow.toLocaleString()}.`,
+  ];
+  if (outputLimit !== undefined) {
+    detailParts.push(`Output token limit: ${outputLimit.toLocaleString()}.`);
+  }
+
+  return {
+    id,
+    group: "runtime",
+    title: "LLM active model metadata",
+    status: "ok",
+    severity: "info",
+    detail: detailParts.join(" "),
     repairable: false,
   };
 }
