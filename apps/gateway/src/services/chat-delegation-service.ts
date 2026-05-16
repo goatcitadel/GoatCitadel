@@ -17,6 +17,7 @@ import type {
   ChatSessionPrefsRecord,
   ChatSessionRecord,
   ChatTurnTraceRecord,
+  TaskSubagentSession,
 } from "@goatcitadel/contracts";
 import { chatModeRequiresProjectBinding, ValidationError } from "@goatcitadel/contracts";
 import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
@@ -102,6 +103,9 @@ export interface ChatDelegationServiceHost {
       ): ChatDelegationStepRecord;
       patch(stepId: string, patch: Partial<ChatDelegationStepRecord>): ChatDelegationStepRecord;
       listByRun(runId: string): ChatDelegationStepRecord[];
+    };
+    taskSubagents: {
+      findByAgentSessionId(agentSessionId: string): TaskSubagentSession | undefined;
     };
   };
   gatewaySql: {
@@ -272,7 +276,9 @@ export class ChatDelegationService {
     const stepResults = new Map<string, DelegationStepExecutionResult>();
     const stages = buildDelegationStages(delegationSteps);
     const subagentDefaults = deps.subagentDefaults ?? DEFAULT_SUBAGENT_DEFAULTS;
-    const childDepth = computeChildDepth(input.parentSubagentDepth);
+    const inferredParentDepth = resolveInferredParentDepth(deps, sessionId);
+    const parentDepth = input.parentSubagentDepth ?? inferredParentDepth;
+    const childDepth = computeChildDepth(parentDepth);
 
     const executeDelegationStep = async (step: NormalizedDelegationStep): Promise<DelegationStepExecutionResult> => {
       const startedAt = new Date().toISOString();
@@ -1022,4 +1028,21 @@ function safeJsonParse<T>(raw: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+/**
+ * When a chat session that is itself a subagent calls
+ * `runChatDelegation`, infer the caller's depth from its registered
+ * task-subagent record so the resulting child sits at `depth + 1` and is
+ * subject to `maxDepth` enforcement. Returns `undefined` when no record
+ * exists or the record has no usable depth (so the caller is treated as
+ * a top-level operator -> child depth 1).
+ */
+function resolveInferredParentDepth(deps: ChatDelegationServiceHost, sessionId: string): number | undefined {
+  const record = deps.storage.taskSubagents.findByAgentSessionId(sessionId);
+  const depth = record?.metadata?.depth;
+  if (typeof depth !== "number" || !Number.isFinite(depth) || depth < 0) {
+    return undefined;
+  }
+  return depth;
 }

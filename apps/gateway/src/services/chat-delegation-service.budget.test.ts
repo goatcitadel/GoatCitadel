@@ -1,4 +1,10 @@
-import type { ChatDelegationStepRecord, ChatSendMessageResponse, ChatSessionPrefsRecord } from "@goatcitadel/contracts";
+import type {
+  AgenticSubagentMetadata,
+  ChatDelegationStepRecord,
+  ChatSendMessageResponse,
+  ChatSessionPrefsRecord,
+  TaskSubagentSession,
+} from "@goatcitadel/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { ChatDelegationService, type ChatDelegationServiceHost } from "./chat-delegation-service.js";
 
@@ -107,11 +113,28 @@ function createChatResponse(
   };
 }
 
+function buildSubagentRecord(input: {
+  agentSessionId: string;
+  metadata?: AgenticSubagentMetadata;
+}): TaskSubagentSession {
+  return {
+    subagentSessionId: `sub-${input.agentSessionId}`,
+    taskId: "task-parent",
+    agentSessionId: input.agentSessionId,
+    agentName: "test-agent",
+    status: "active",
+    metadata: input.metadata,
+    createdAt: "2026-05-14T00:00:00.000Z",
+    updatedAt: "2026-05-14T00:00:00.000Z",
+  };
+}
+
 function createHarness(
   options: {
     prefs?: ChatSessionPrefsRecord;
     projectId?: string;
     subagentDefaults?: { childTimeoutSeconds: number; maxDepth: number };
+    callerSubagentRecord?: TaskSubagentSession;
   } = {},
 ) {
   const prefs = options.prefs ?? buildPrefs();
@@ -187,6 +210,13 @@ function createHarness(
         }),
         listByRun: vi.fn((runId: string) =>
           [...steps.values()].filter((step) => step.runId === runId).sort((left, right) => left.index - right.index),
+        ),
+      },
+      taskSubagents: {
+        findByAgentSessionId: vi.fn((agentSessionId: string) =>
+          options.callerSubagentRecord && options.callerSubagentRecord.agentSessionId === agentSessionId
+            ? options.callerSubagentRecord
+            : undefined,
         ),
       },
     },
@@ -293,6 +323,61 @@ describe("ChatDelegationService subagent budget enforcement", () => {
     expect(deps.storage.chatDelegationRuns.patch).toHaveBeenLastCalledWith(
       expect.any(String),
       expect.objectContaining({ status: "failed" }),
+    );
+  });
+
+  it("rejects depth=4 chain via recursive parent lookup (caller is a subagent at depth 3, maxDepth=4)", async () => {
+    const callerSubagentRecord = buildSubagentRecord({
+      agentSessionId: "grandchild-session",
+      metadata: { depth: 3, profileId: "researcher", runId: "run-parent" },
+    });
+    const { deps, service } = createHarness({
+      subagentDefaults: { childTimeoutSeconds: 600, maxDepth: 4 },
+      callerSubagentRecord,
+    });
+
+    const result = await service.runChatDelegation("grandchild-session", {
+      objective: "Spawn yet another subagent",
+      roles: ["architect"],
+    });
+
+    expect(result.steps[0]).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        error: expect.stringMatching(/max_depth_exceeded/),
+      }),
+    );
+    expect(deps.storage.taskSubagents.findByAgentSessionId).toHaveBeenCalledWith("grandchild-session");
+    expect(deps.agentSendChatMessage).not.toHaveBeenCalled();
+    expect(deps.taskLifecycleService.registerTaskSubagent).toHaveBeenCalledWith(
+      "task-1",
+      expect.objectContaining({
+        metadata: expect.objectContaining({ depth: 4 }),
+      }),
+    );
+  });
+
+  it("explicit parentSubagentDepth overrides the recursive lookup", async () => {
+    const callerSubagentRecord = buildSubagentRecord({
+      agentSessionId: "grandchild-session",
+      metadata: { depth: 3 },
+    });
+    const { deps, service } = createHarness({
+      subagentDefaults: { childTimeoutSeconds: 600, maxDepth: 5 },
+      callerSubagentRecord,
+    });
+
+    await service.runChatDelegation("grandchild-session", {
+      objective: "Spawn with explicit depth override",
+      roles: ["architect"],
+      parentSubagentDepth: 1,
+    });
+
+    expect(deps.taskLifecycleService.registerTaskSubagent).toHaveBeenCalledWith(
+      "task-1",
+      expect.objectContaining({
+        metadata: expect.objectContaining({ depth: 2 }),
+      }),
     );
   });
 

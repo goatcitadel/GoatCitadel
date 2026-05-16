@@ -207,6 +207,9 @@ function createDelegationHarness() {
         [...steps.values()].filter((step) => step.runId === runId).sort((a, b) => a.index - b.index),
       ),
     },
+    taskSubagents: {
+      findByAgentSessionId: vi.fn(() => undefined),
+    },
   };
 
   const service = new ChatDelegationService(gateway as never);
