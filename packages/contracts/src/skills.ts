@@ -266,3 +266,17 @@ export interface SkillImportHistoryRecord {
   details?: Record<string, unknown>;
   createdAt: string;
 }
+
+export interface SkillOutputDocumentDirective {
+  kind: "document";
+  fileName: string;
+  mimeType: string;
+  content: string;
+}
+
+export type SkillOutputDirective = SkillOutputDocumentDirective;
+
+export interface SkillOutputParseResult {
+  text: string;
+  directives: SkillOutputDirective[];
+}

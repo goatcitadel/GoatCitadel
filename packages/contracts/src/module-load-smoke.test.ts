@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HookTrigger } from "./hooks.js";
+import type { SkillOutputDocumentDirective } from "./skills.js";
 
 describe("contracts module load smoke", () => {
   it("loads contracts index exports", async () => {
@@ -26,5 +27,15 @@ describe("contracts module load smoke", () => {
   it("includes approval.response.after in HookTrigger", () => {
     const trigger: HookTrigger = "approval.response.after";
     expect(trigger).toBe("approval.response.after");
+  });
+
+  it("exposes SkillOutputDocumentDirective", () => {
+    const directive: SkillOutputDocumentDirective = {
+      kind: "document",
+      fileName: "report.md",
+      mimeType: "text/markdown",
+      content: "# hello",
+    };
+    expect(directive.kind).toBe("document");
   });
 });
