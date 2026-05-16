@@ -45,6 +45,7 @@ const CODE_MODE_RUN_TIMEOUT_MS = 15_000;
 const CODE_MODE_OUTPUT_CAPTURE_LIMIT_BYTES = 64 * 1024;
 const CODE_MODE_IPC_MAX_BYTES = 128 * 1024;
 const CODE_MODE_HEAP_MB = 64;
+const CODE_MODE_ENV_PASSTHROUGH_KEYS = ["SystemRoot", "SYSTEMROOT", "ComSpec", "WINDIR", "TEMP", "TMP"];
 
 export interface CapabilitySystemServiceOptions {
   rootDir: string;
@@ -1477,7 +1478,7 @@ function createMinimalSyntheticEnv(): NodeJS.ProcessEnv {
     GOATCITADEL_CODE_MODE: "1",
     TZ: process.env.TZ ?? "UTC",
   };
-  for (const key of ["SystemRoot", "SYSTEMROOT", "ComSpec", "WINDIR", "TEMP", "TMP"]) {
+  for (const key of CODE_MODE_ENV_PASSTHROUGH_KEYS) {
     const value = process.env[key];
     if (value) {
       env[key] = value;
@@ -1556,3 +1557,7 @@ function asOptionalString(value: unknown): string | undefined {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
+
+export const __internal = {
+  createMinimalSyntheticEnv,
+};

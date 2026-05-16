@@ -840,6 +840,45 @@ describe("browser tools coverage sweep", () => {
     expect(extract.extractionMode).toBe("firecrawl-html-selector");
   });
 
+  it("does not read Firecrawl API keys from non-Firecrawl env-name input", async () => {
+    const priorOpenAi = process.env.OPENAI_API_KEY;
+    const priorFirecrawl = process.env.FIRECRAWL_API_KEY;
+    try {
+      process.env.OPENAI_API_KEY = "openai-secret";
+      delete process.env.FIRECRAWL_API_KEY;
+      const config = createConfig(tempRoot);
+      globalThis.fetch = vi.fn(async (_input, init) => {
+        expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBeUndefined();
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof fetch;
+
+      await executeBrowserTool(
+        "browser.search",
+        {
+          query: "coverage",
+          backend: "firecrawl",
+          firecrawlBaseUrl: "http://127.0.0.1:3002",
+          firecrawlApiKeyEnv: "OPENAI_API_KEY",
+        },
+        config,
+      );
+    } finally {
+      if (priorOpenAi === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = priorOpenAi;
+      }
+      if (priorFirecrawl === undefined) {
+        delete process.env.FIRECRAWL_API_KEY;
+      } else {
+        process.env.FIRECRAWL_API_KEY = priorFirecrawl;
+      }
+    }
+  });
+
   it("throws Firecrawl errors when fallback is disabled", async () => {
     const config = createConfig(tempRoot);
     globalThis.fetch = vi.fn(

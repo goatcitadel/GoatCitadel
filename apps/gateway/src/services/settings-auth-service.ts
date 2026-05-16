@@ -15,6 +15,7 @@
 
 import { createHash, createPublicKey, randomBytes, randomUUID, verify } from "node:crypto";
 import { logger } from "@goatcitadel/gateway-core";
+import { normalizeFirecrawlApiKeyEnvName } from "@goatcitadel/policy-engine";
 import {
   clampInt,
   ConflictError,
@@ -422,7 +423,13 @@ export function updateSettings(deps: SettingsRuntimeDependencies, input: UpdateS
       deps.config.assistant.web.firecrawl.baseUrl = trimmed;
     }
     if (firecrawl.apiKeyEnv !== undefined) {
-      deps.config.assistant.web.firecrawl.apiKeyEnv = firecrawl.apiKeyEnv.trim() || undefined;
+      const apiKeyEnv = firecrawl.apiKeyEnv.trim() ? normalizeFirecrawlApiKeyEnvName(firecrawl.apiKeyEnv) : undefined;
+      if (firecrawl.apiKeyEnv.trim() && !apiKeyEnv) {
+        throw new Error(
+          "web.firecrawl.apiKeyEnv must be FIRECRAWL_API_KEY, FIRECRAWL_KEY, or GOATCITADEL_FIRECRAWL_API_KEY",
+        );
+      }
+      deps.config.assistant.web.firecrawl.apiKeyEnv = apiKeyEnv;
     }
     if (firecrawl.timeoutMs !== undefined) {
       deps.config.assistant.web.firecrawl.timeoutMs = Math.max(1_000, Math.min(firecrawl.timeoutMs, 120_000));

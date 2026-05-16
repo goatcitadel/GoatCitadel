@@ -5,6 +5,7 @@ import type {
   McpServerRecord,
   McpToolRecord,
 } from "@goatcitadel/contracts";
+import { normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 const DEFAULT_STDIO_TIMEOUT_MS = 25000;
@@ -410,12 +411,9 @@ function buildMcpChildEnv(server: McpServerRecord): Record<string, string | unde
       env[key] = process.env[key];
     }
   }
-  const allowedKeys = server.policy.allowedEnvKeys;
-  if (Array.isArray(allowedKeys)) {
-    for (const key of allowedKeys) {
-      if (typeof key === "string" && key.trim() && process.env[key] !== undefined) {
-        env[key] = process.env[key];
-      }
+  for (const key of normalizeSafeEnvKeyNames(server.policy.allowedEnvKeys)) {
+    if (process.env[key] !== undefined) {
+      env[key] = process.env[key];
     }
   }
   return env;

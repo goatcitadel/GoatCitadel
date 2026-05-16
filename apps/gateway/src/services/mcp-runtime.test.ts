@@ -104,6 +104,34 @@ rl.on("line", (line) => {
 });
 `;
 
+const MCP_ENV_ECHO_SCRIPT = String.raw`
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+function reply(id, result) {
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n");
+}
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    reply(message.id, {
+      protocolVersion: "2024-11-05",
+      capabilities: { tools: {} },
+      serverInfo: { name: "test-mcp", version: "1.0.0" },
+    });
+    return;
+  }
+  if (message.method === "tools/call") {
+    reply(message.id, {
+      structuredContent: {
+        allowed: process.env.MCP_TEST_TOKEN || null,
+        lowercase: process.env.mcp_lowercase_token || null,
+        assigned: process.env["MCP_TOKEN=value"] || null,
+      },
+    });
+  }
+});
+`;
+
 const MCP_EXPIRED_SESSION_ONCE_SCRIPT = String.raw`
 const fs = require("node:fs");
 const statePath = process.argv[1];
@@ -472,5 +500,44 @@ describe("mcp runtime", () => {
     expect(result.error).not.toContain("secret-token-value");
     expect(result.error).not.toContain("super-secret-password");
     expect(result.error).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
+  });
+
+  it("passes only sanitized MCP allowed env keys to stdio children", async () => {
+    const previousAllowed = process.env.MCP_TEST_TOKEN;
+    const previousLowercase = process.env.mcp_lowercase_token;
+    try {
+      process.env.MCP_TEST_TOKEN = "allowed-token";
+      process.env.mcp_lowercase_token = "lowercase-token";
+      const result = await invokeMcpRuntimeTool(
+        {
+          ...createTestServer(MCP_ENV_ECHO_SCRIPT),
+          policy: {
+            ...createTestServer("").policy,
+            allowedEnvKeys: ["MCP_TEST_TOKEN", " mcp_lowercase_token ", "MCP_TOKEN=value"],
+          },
+        },
+        { toolName: "browser.navigate", arguments: {} },
+      );
+
+      expect(result.ok).toBe(true);
+      expect(result.output).toMatchObject({
+        structuredContent: {
+          allowed: "allowed-token",
+          lowercase: null,
+          assigned: null,
+        },
+      });
+    } finally {
+      if (previousAllowed === undefined) {
+        delete process.env.MCP_TEST_TOKEN;
+      } else {
+        process.env.MCP_TEST_TOKEN = previousAllowed;
+      }
+      if (previousLowercase === undefined) {
+        delete process.env.mcp_lowercase_token;
+      } else {
+        process.env.mcp_lowercase_token = previousLowercase;
+      }
+    }
   });
 });

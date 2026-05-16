@@ -15,7 +15,7 @@ import type {
   ToolCatalogEntry,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
-import { CapabilitySystemService } from "./capability-system-service.js";
+import { CapabilitySystemService, __internal } from "./capability-system-service.js";
 
 const tempRoots: string[] = [];
 
@@ -343,6 +343,31 @@ describe("CapabilitySystemService", () => {
         }),
       }),
     );
+  });
+
+  it("does not pass provider or gateway secrets into Code Mode child environments", () => {
+    const priorOpenAi = process.env.OPENAI_API_KEY;
+    const priorGatewayToken = process.env.GOATCITADEL_AUTH_TOKEN;
+    try {
+      process.env.OPENAI_API_KEY = "sk-code-mode-secret";
+      process.env.GOATCITADEL_AUTH_TOKEN = "gateway-token-secret";
+      const env = __internal.createMinimalSyntheticEnv();
+
+      expect(env.GOATCITADEL_CODE_MODE).toBe("1");
+      expect(env.OPENAI_API_KEY).toBeUndefined();
+      expect(env.GOATCITADEL_AUTH_TOKEN).toBeUndefined();
+    } finally {
+      if (priorOpenAi === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = priorOpenAi;
+      }
+      if (priorGatewayToken === undefined) {
+        delete process.env.GOATCITADEL_AUTH_TOKEN;
+      } else {
+        process.env.GOATCITADEL_AUTH_TOKEN = priorGatewayToken;
+      }
+    }
   });
 
   it("fails closed before child execution when required host isolation is unavailable", async () => {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import rateLimit from "@fastify/rate-limit";
 import { secretsRoutes } from "./secrets.js";
 
 describe("secrets routes", () => {
@@ -64,5 +65,35 @@ describe("secrets routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(deleteProviderSecret).toHaveBeenCalledWith("glm");
+  });
+
+  it("applies route-level rate limits to secret mutations", async () => {
+    const saveProviderSecret = vi.fn(() => ({ providerId: "glm", hasSecret: true }));
+    app = Fastify();
+    app.decorate("services", { secrets: { saveProviderSecret } } as never);
+    await app.register(rateLimit, {
+      global: false,
+      timeWindow: "1 minute",
+      keyGenerator: (request) => request.ip,
+      allowList: [],
+      max: 100,
+    });
+    await app.register(secretsRoutes);
+
+    for (let i = 0; i < 10; i += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/secrets/providers/glm",
+        payload: { apiKey: `key-${i}` },
+      });
+      expect(response.statusCode).toBe(200);
+    }
+    const limited = await app.inject({
+      method: "POST",
+      url: "/api/v1/secrets/providers/glm",
+      payload: { apiKey: "key-11" },
+    });
+
+    expect(limited.statusCode).toBe(429);
   });
 });

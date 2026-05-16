@@ -21,20 +21,20 @@ describe("browser tools loop 29 branch tails", () => {
   const originalFetch = globalThis.fetch;
   const originalFirecrawlBaseUrl = process.env.FIRECRAWL_BASE_URL;
   const originalFirecrawlApiKeyEnv = process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV;
-  const originalLoop29FirecrawlKey = process.env.LOOP29_FIRECRAWL_KEY;
+  const originalFirecrawlKey = process.env.FIRECRAWL_KEY;
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
     process.env.FIRECRAWL_BASE_URL = originalFirecrawlBaseUrl;
     process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV = originalFirecrawlApiKeyEnv;
-    process.env.LOOP29_FIRECRAWL_KEY = originalLoop29FirecrawlKey;
+    process.env.FIRECRAWL_KEY = originalFirecrawlKey;
     vi.restoreAllMocks();
   });
 
   it("uses Firecrawl env defaults, nested result payloads, markdown snippets, and API-key headers", async () => {
     process.env.FIRECRAWL_BASE_URL = "http://127.0.0.1:3002/";
-    process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV = "LOOP29_FIRECRAWL_KEY";
-    process.env.LOOP29_FIRECRAWL_KEY = " firecrawl-secret ";
+    process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV = "FIRECRAWL_KEY";
+    process.env.FIRECRAWL_KEY = " firecrawl-secret ";
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       expect(init?.headers).toMatchObject({ Authorization: "Bearer firecrawl-secret" });
       return new Response(
@@ -68,7 +68,7 @@ describe("browser tools loop 29 branch tails", () => {
   it("falls back to configured Firecrawl defaults when API key env values are absent", async () => {
     delete process.env.FIRECRAWL_BASE_URL;
     delete process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV;
-    delete process.env.LOOP29_FIRECRAWL_KEY;
+    delete process.env.FIRECRAWL_KEY;
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       expect(init?.headers).not.toMatchObject({ Authorization: expect.any(String) });
       return new Response(JSON.stringify({ data: [] }), {
@@ -81,7 +81,7 @@ describe("browser tools loop 29 branch tails", () => {
 
     const result = await executeBrowserTool(
       "browser.search",
-      { query: "coverage", backend: "firecrawl", firecrawlApiKeyEnv: "LOOP29_FIRECRAWL_KEY" },
+      { query: "coverage", backend: "firecrawl", firecrawlApiKeyEnv: "FIRECRAWL_KEY" },
       createConfig(),
     );
 

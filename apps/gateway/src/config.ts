@@ -18,6 +18,7 @@ import {
   clampInt,
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
+import { normalizeFirecrawlApiKeyEnvName } from "@goatcitadel/policy-engine";
 import { ZodError, type ZodType } from "zod";
 import { materializeConfigFilesFromExamples } from "./config-files.js";
 import { syncUnifiedConfig } from "./config-sync-lib.js";
@@ -657,7 +658,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
   if (firecrawlBaseUrl) {
     assistant.web.firecrawl.baseUrl = firecrawlBaseUrl;
   }
-  const firecrawlApiKeyEnv = process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV?.trim();
+  const firecrawlApiKeyEnv = normalizeFirecrawlApiKeyEnvName(process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV);
   if (firecrawlApiKeyEnv) {
     assistant.web.firecrawl.apiKeyEnv = firecrawlApiKeyEnv;
   }
@@ -826,7 +827,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       firecrawl: {
         enabled: firecrawlInput.enabled ?? false,
         baseUrl: firecrawlInput.baseUrl ?? "http://127.0.0.1:3002",
-        apiKeyEnv: firecrawlInput.apiKeyEnv,
+        apiKeyEnv: normalizeFirecrawlApiKeyEnvName(firecrawlInput.apiKeyEnv),
         timeoutMs: clampInt(firecrawlInput.timeoutMs, 20_000, 1_000, 120_000),
         defaultReadBackend: firecrawlInput.defaultReadBackend ?? "native",
         fallbackToNative: firecrawlInput.fallbackToNative ?? true,

@@ -9,8 +9,26 @@ const upsertSchema = z.object({
   apiKey: z.string().min(1),
 });
 
+const secretStatusRouteOptions = {
+  config: {
+    rateLimit: {
+      max: 60,
+      timeWindow: "1 minute",
+    },
+  },
+};
+
+const secretMutationRouteOptions = {
+  config: {
+    rateLimit: {
+      max: 10,
+      timeWindow: "1 minute",
+    },
+  },
+};
+
 export const secretsRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.get("/api/v1/secrets/providers/:providerId/status", async (request, reply) => {
+  fastify.get("/api/v1/secrets/providers/:providerId/status", secretStatusRouteOptions, async (request, reply) => {
     const parsed = paramsSchema.safeParse(request.params);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
@@ -23,7 +41,7 @@ export const secretsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/secrets/providers/:providerId", async (request, reply) => {
+  fastify.post("/api/v1/secrets/providers/:providerId", secretMutationRouteOptions, async (request, reply) => {
     const parsedParams = paramsSchema.safeParse(request.params);
     if (!parsedParams.success) {
       return reply.code(400).send({ error: parsedParams.error.flatten() });
@@ -41,7 +59,7 @@ export const secretsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.delete("/api/v1/secrets/providers/:providerId", async (request, reply) => {
+  fastify.delete("/api/v1/secrets/providers/:providerId", secretMutationRouteOptions, async (request, reply) => {
     const parsed = paramsSchema.safeParse(request.params);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });

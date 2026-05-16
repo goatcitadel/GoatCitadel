@@ -523,6 +523,21 @@ describe("settings-auth-service durable settings", () => {
     expect(host.persistBudgetsConfig).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects unsafe Firecrawl API key env-name settings", () => {
+    const host = buildHost();
+
+    expect(() =>
+      updateSettings(host, {
+        web: {
+          firecrawl: {
+            apiKeyEnv: "OPENAI_API_KEY",
+          },
+        },
+      }),
+    ).toThrow("web.firecrawl.apiKeyEnv must be FIRECRAWL_API_KEY, FIRECRAWL_KEY, or GOATCITADEL_FIRECRAWL_API_KEY");
+    expect(host.config.assistant.web.firecrawl.apiKeyEnv).toBeUndefined();
+  });
+
   it("applies mesh, NPU, and llama.cpp runtime updates with persistence and autostart hooks", () => {
     const host = buildHost();
     process.env.GOATCITADEL_MESH_JOIN_TOKEN = "join-token-test";

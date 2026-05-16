@@ -7,6 +7,7 @@ import { clampInt } from "@goatcitadel/contracts";
 import { stripHtmlNoiseTags, stripHtmlTags } from "./html-noise.js";
 import { assertHostAllowed } from "./sandbox/network-guard.js";
 import { assertWritePathInJail } from "./sandbox/path-jail.js";
+import { normalizeFirecrawlApiKeyEnvName } from "./safe-env-name.js";
 
 type BrowserToolName =
   | "browser.search"
@@ -1950,7 +1951,9 @@ function resolveFirecrawlRuntimeConfig(args: Record<string, unknown>): {
   const baseUrl = asString(args.firecrawlBaseUrl) ?? process.env.FIRECRAWL_BASE_URL?.trim() ?? "http://127.0.0.1:3002";
   const timeoutMs = clampInt(args.firecrawlTimeoutMs, 20_000, 1_000, 120_000);
   const apiKeyEnv =
-    asString(args.firecrawlApiKeyEnv) ?? process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV?.trim() ?? "FIRECRAWL_API_KEY";
+    normalizeFirecrawlApiKeyEnvName(asString(args.firecrawlApiKeyEnv)) ??
+    normalizeFirecrawlApiKeyEnvName(process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV) ??
+    "FIRECRAWL_API_KEY";
   const apiKey = apiKeyEnv ? process.env[apiKeyEnv]?.trim() : undefined;
   return {
     baseUrl: trimTrailingSlashes(baseUrl),
