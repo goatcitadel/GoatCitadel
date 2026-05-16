@@ -81,6 +81,7 @@ import { SkillLifecycleRepository } from "./skill-lifecycle-repo.js";
 import { CandidateSkillVersionRepository } from "./candidate-skill-version-repo.js";
 import { CapabilityProposalEventRepository, CapabilityProposalRepository } from "./capability-proposal-repo.js";
 import { SkillEvaluationRunRepository } from "./skill-evaluation-run-repo.js";
+import { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
 import { CodeModeRunRepository } from "./code-mode-run-repo.js";
 import { DurableRunEventRepository } from "./durable-run-event-repo.js";
 import { ChatReflectionAttemptRepository } from "./chat-reflection-attempt-repo.js";
@@ -185,6 +186,7 @@ export class Storage {
   public readonly durableRunEvents: DurableRunEventRepository;
   public readonly chatReflectionAttempts: ChatReflectionAttemptRepository;
   public readonly evidenceEnvelopes: EvidenceEnvelopeRepository;
+  public readonly stateValidationQuarantine: StateValidationQuarantineRepository;
 
   public constructor(options: StorageOptions) {
     this.db =
@@ -279,6 +281,7 @@ export class Storage {
     this.durableRunEvents = new DurableRunEventRepository(this.db);
     this.chatReflectionAttempts = new ChatReflectionAttemptRepository(this.db);
     this.evidenceEnvelopes = new EvidenceEnvelopeRepository(this.db);
+    this.stateValidationQuarantine = new StateValidationQuarantineRepository(this.db);
   }
 
   public close(): void {
@@ -584,4 +587,9 @@ export * from "./realtime-stream-lease-repo.js";
 export * from "./durable-run-event-repo.js";
 export * from "./chat-reflection-attempt-repo.js";
 export * from "./skill-evaluation-run-repo.js";
+export { loadAndSanitize } from "./load-and-sanitize.js";
+export type { QuarantineEntry, SafeParse, SafeParseResult } from "./load-and-sanitize.js";
+export { parseJsonObject, parseJsonArray, parseStringRecord } from "./state-validators.js";
+export { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
+export type { StoredQuarantineEntry } from "./state-validation-quarantine-repo.js";
 export * from "./postgres/index.js";
