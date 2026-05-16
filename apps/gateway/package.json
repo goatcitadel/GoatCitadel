@@ -15,6 +15,7 @@
     "@goatcitadel/gateway-core": "workspace:*",
     "@goatcitadel/memory-core": "workspace:*",
     "@goatcitadel/mesh-core": "workspace:*",
+    "@goatcitadel/mission-control-shared": "workspace:*",
     "@goatcitadel/orchestration": "workspace:*",
     "@goatcitadel/policy-engine": "workspace:*",
     "@goatcitadel/skills": "workspace:*",

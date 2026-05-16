@@ -42,7 +42,7 @@ export async function ingestDocumentViaBackend(input: {
   const cacheTtlSeconds =
     positiveInt(args.cacheTtlSeconds) ?? (sourceType === "url" ? DEFAULT_URL_CACHE_TTL_SECONDS : 0);
   const now = new Date();
-  const cached = readCachedDocument({
+  const cachedDocument = readCachedDocument({
     storage: input.storage,
     namespace,
     sourceType,
@@ -50,31 +50,31 @@ export async function ingestDocumentViaBackend(input: {
     backend: backendName,
     now,
   });
-  if (cached && args.forceRefresh !== true) {
+  if (cachedDocument && args.forceRefresh !== true) {
     return {
       backend: buildBackendDescriptor(backendName, cacheTtlSeconds),
       fetchResult: {
         backend: backendName,
         sourceType,
         sourceRef: source,
-        title: cached.title,
-        rawText: cached.text,
-        normalizedText: cached.text,
+        title: cachedDocument.title,
+        rawText: cachedDocument.text,
+        normalizedText: cachedDocument.text,
         fetchedAt: now.toISOString(),
         fromCache: true,
-        cacheExpiresAt: cached.cacheExpiresAt,
+        cacheExpiresAt: cachedDocument.cacheExpiresAt,
       },
       document: {
         sourceType,
         sourceRef: source,
-        title: cached.title,
-        text: cached.text,
-        metadata: cached.metadata,
-        attribution: cached.attribution,
+        title: cachedDocument.title,
+        text: cachedDocument.text,
+        metadata: cachedDocument.metadata,
+        attribution: cachedDocument.attribution,
       },
       chunksSaved: 0,
       cached: true,
-      chunks: cached.chunks,
+      chunks: cachedDocument.chunks,
     };
   }
 
@@ -398,7 +398,7 @@ function pseudoEmbedding(text: string): number[] {
   const buckets = new Array<number>(8).fill(0);
   for (let index = 0; index < text.length; index += 1) {
     const bucketIndex = index % buckets.length;
-    buckets[bucketIndex]! += text.charCodeAt(index) / 255;
+    buckets[bucketIndex] = (buckets[bucketIndex] ?? 0) + text.charCodeAt(index) / 255;
   }
   return buckets.map((value) => Number(value.toFixed(4)));
 }

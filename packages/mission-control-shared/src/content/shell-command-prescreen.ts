@@ -1,29 +1,47 @@
-export type ShellRiskLevel = "info" | "caution" | "danger";
+import type { ShellRiskFinding } from "@goatcitadel/contracts";
+import { t } from "./i18n.js";
 
-export interface ShellRiskFinding {
-  level: ShellRiskLevel;
-  label: string;
-  detail?: string;
-}
+export type { ShellRiskFinding, ShellRiskLevel } from "@goatcitadel/contracts";
 
-interface PrescreenRule {
-  pattern: RegExp;
-  level: ShellRiskLevel;
-  label: string;
-}
+const SYSTEM_PATH_WRITE = /(^|\s)>{1,2}\s*\/(etc|usr|var|bin|sbin|boot|lib|lib64)(\/|\s|$)/;
+const PIPE_TO_SHELL = /\|\s*(sh|bash)(\s|$)/;
+const SUDO_PREFIX = /(^|\s)sudo(\s|$)/;
+const CHMOD_WORLD = /\bchmod\b[^|;&]*\b777\b/;
 
-const RULES: readonly PrescreenRule[] = [
-  { pattern: /\|\s*(sh|bash|zsh|fish)\b/i, level: "danger", label: "Pipe-to-shell" },
-  { pattern: /\brm\b[^|]*\s\/(\s|$)/, level: "danger", label: "Filesystem root" },
-  { pattern: />>?\s*\/(etc|usr|bin|sbin|var|root)\b/, level: "danger", label: "System path write" },
-];
+export function prescreenShellRisks(command: string): readonly ShellRiskFinding[] {
+  const findings: ShellRiskFinding[] = [];
 
-export function prescreenShellRisks(rawCommand: string): readonly ShellRiskFinding[] {
-  const out: ShellRiskFinding[] = [];
-  for (const rule of RULES) {
-    if (rule.pattern.test(rawCommand)) {
-      out.push({ level: rule.level, label: rule.label });
-    }
+  if (PIPE_TO_SHELL.test(command)) {
+    findings.push({
+      level: "danger",
+      label: t("shell.risk.pipe_to_shell.label"),
+      explanation: t("shell.risk.pipe_to_shell.explanation"),
+    });
   }
-  return out;
+
+  if (SUDO_PREFIX.test(command)) {
+    findings.push({
+      level: "caution",
+      label: t("shell.risk.sudo.label"),
+      explanation: t("shell.risk.sudo.explanation"),
+    });
+  }
+
+  if (SYSTEM_PATH_WRITE.test(command)) {
+    findings.push({
+      level: "danger",
+      label: t("shell.risk.system_path_write.label"),
+      explanation: t("shell.risk.system_path_write.explanation"),
+    });
+  }
+
+  if (CHMOD_WORLD.test(command)) {
+    findings.push({
+      level: "caution",
+      label: t("shell.risk.world_writable.label"),
+      explanation: t("shell.risk.world_writable.explanation"),
+    });
+  }
+
+  return findings;
 }
