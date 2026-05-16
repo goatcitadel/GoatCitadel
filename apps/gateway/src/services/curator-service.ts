@@ -11,9 +11,17 @@ import type {
   CuratorRunResponse,
   CuratorSkillStatusItem,
   CuratorStatusResponse,
+  DurableRunRecord,
   SkillListItem,
 } from "@goatcitadel/contracts";
+import type { Storage } from "@goatcitadel/storage";
 import { computeSkillImmunity, gradeSkillUsage } from "./curator-grader.js";
+import { getZonedDateParts, toWeekKeyForTimezone } from "./improvement-replay.js";
+
+const CURATOR_WEEKLY_JOB_ID = "curator_weekly";
+const CURATOR_WEEKLY_SCHEDULE_LABEL = "0 2 * * 0 America/Los_Angeles";
+const CURATOR_WEEKLY_DEDUP_SETTING_KEY = "curator_weekly_last_week_key_v1";
+const CURATOR_WEEKLY_TIME_ZONE = "America/Los_Angeles";
 
 export interface CuratorServiceDeps {
   listSkills: () => SkillListItem[];
@@ -23,6 +31,7 @@ export interface CuratorServiceDeps {
   writeReport: (report: CuratorRunReport) => Promise<string>;
   publishRealtime: (topic: string, payload: Record<string, unknown>) => void;
   cycleDays: number;
+  storage?: Pick<Storage, "cronJobs" | "systemSettings">; // NEW: optional, gates curator cron methods
 }
 
 export class CuratorService {
@@ -217,5 +226,56 @@ export class CuratorService {
       reportDir: report.reportDir,
     });
     return { runId, scheduled: false, report };
+  }
+
+  public ensureCuratorWeeklyCronJob(): void {
+    if (!this.deps.storage) return;
+    const existing = this.deps.storage.cronJobs.get(CURATOR_WEEKLY_JOB_ID);
+    const now = this.deps.now().toISOString();
+    this.deps.storage.cronJobs.upsertIfChanged(
+      {
+        jobId: CURATOR_WEEKLY_JOB_ID,
+        name: "Autonomous Curator Weekly Run",
+        action: "curator",
+        description: existing?.description ?? "Run the autonomous curator over the skill registry.",
+        schedule: CURATOR_WEEKLY_SCHEDULE_LABEL,
+        enabled: existing?.enabled ?? true,
+        endAt: existing?.endAt,
+        lastRunAt: existing?.lastRunAt,
+        nextRunAt: existing?.nextRunAt,
+      },
+      now,
+    );
+  }
+
+  public async runCuratorWeeklyIfDue(options: { force?: boolean } = {}): Promise<void> {
+    if (!this.deps.storage) return;
+    const job = this.deps.storage.cronJobs.get(CURATOR_WEEKLY_JOB_ID);
+    if (!job?.enabled) return;
+    const now = this.deps.now();
+    if (!options.force) {
+      const parts = getZonedDateParts(now, CURATOR_WEEKLY_TIME_ZONE);
+      // Sunday=0, 02:00 hour gate (matches improvement_weekly cadence)
+      if (parts.weekday !== 0 || parts.hour !== 2) return;
+    }
+    const weekKey = toWeekKeyForTimezone(now, CURATOR_WEEKLY_TIME_ZONE);
+    const lastWeekKey = this.deps.storage.systemSettings.get<string>(CURATOR_WEEKLY_DEDUP_SETTING_KEY)?.value;
+    if (!options.force && lastWeekKey === weekKey) return;
+    await this.runCurator({ sync: false });
+    this.deps.storage.systemSettings.set(CURATOR_WEEKLY_DEDUP_SETTING_KEY, weekKey);
+    const finishedAt = this.deps.now().toISOString();
+    this.deps.storage.cronJobs.upsert(
+      {
+        ...job,
+        lastRunAt: finishedAt,
+        nextRunAt: new Date(this.deps.now().getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+      finishedAt,
+    );
+  }
+
+  public async executeDurableCuratorTickRun(_run: DurableRunRecord, _context: unknown): Promise<void> {
+    // Treat the durable run as a manual force-tick (no dedup, real archive on)
+    await this.runCurator({ sync: false });
   }
 }

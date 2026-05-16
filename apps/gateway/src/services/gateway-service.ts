@@ -443,6 +443,8 @@ import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
 import { PromptPackService } from "./prompt-pack-service.js";
 import { ChatProactiveService } from "./chat-proactive-service.js";
 import { ImprovementService } from "./improvement-service.js";
+import { CuratorService } from "./curator-service.js";
+import { writeCuratorReport } from "./curator-report.js";
 import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
 import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import { RuntimeLifecycleReadService } from "./runtime-lifecycle-read-service.js";
@@ -617,6 +619,7 @@ export class GatewayService {
   private readonly promptPackService: PromptPackService;
   public readonly chatProactiveService: ChatProactiveService;
   private readonly improvementService: ImprovementService;
+  private readonly curatorService: CuratorService;
   private readonly memoryMaintenanceService: MemoryMaintenanceService;
   public readonly memoryLifecycleService: MemoryLifecycleService;
   private readonly evidenceEnvelopeService: EvidenceEnvelopeService;
@@ -1133,6 +1136,25 @@ export class GatewayService {
         return self.closing;
       },
     });
+    this.curatorService = new CuratorService({
+      listSkills: () => this.listSkills(),
+      archiveSkill: (skillId, reason) => {
+        this.setSkillState(skillId, "disabled", reason);
+        const updated = this.listSkills().find((s) => s.skillId === skillId);
+        if (!updated) throw new Error(`Skill ${skillId} not found after archiving`);
+        return updated;
+      },
+      pruneSkill: (skillId) => {
+        // v1: mark with prune note. Actual file removal is a follow-up task.
+        this.setSkillState(skillId, "disabled", "curator:pruned");
+        return { filesRemoved: [] };
+      },
+      now: () => new Date(),
+      writeReport: (report) => writeCuratorReport(report, { logsRoot: this.config.rootDir }),
+      publishRealtime: (topic, payload) => this.publishRealtime("system", topic, payload),
+      cycleDays: 7,
+      storage: this.storage,
+    });
     this.memoryMaintenanceService = new MemoryMaintenanceService(serviceCtx, {
       createDurableRun: (input) => this.createDurableRun(input),
       getDurableRun: (runId) => this.getDurableRun(runId),
@@ -1573,6 +1595,7 @@ export class GatewayService {
     this.improvementService.markInterruptedDecisionReplayRuns();
     await this.loadCronJobsFromConfig();
     this.improvementService.ensureWeeklyImprovementCronJob();
+    this.curatorService.ensureCuratorWeeklyCronJob();
     this.ensurePrivateBetaBackupCronJob();
     this.ensureMemoryFlushCronJob();
     this.ensureCostReportCronJob();
@@ -1975,6 +1998,7 @@ export class GatewayService {
     await this.runMemoryFlushSchedulerIfDue();
     await this.runCostReportSchedulerIfDue();
     await this.runUpdateReviewSchedulerIfDue();
+    await this.curatorService.runCuratorWeeklyIfDue();
     await this.cronAutomationService.runDueTaskCronJobs();
     await this.memoryLifecycleService.runDueEvaluation();
     await this.drainDueChannelDeliveries();
@@ -4646,6 +4670,26 @@ export class GatewayService {
   public listSkills(): SkillListItem[] {
     this.ensureSkillStates(this.skillsService.list().map((skill) => skill.skillId));
     return this.capabilitySystemService.listSkills();
+  }
+
+  public listCuratorStatus() {
+    return this.curatorService.listCuratorStatus();
+  }
+
+  public archiveCuratorSkill(input: Parameters<CuratorService["archive"]>[0]) {
+    return this.curatorService.archive(input);
+  }
+
+  public pruneCuratorSkill(input: Parameters<CuratorService["prune"]>[0]) {
+    return this.curatorService.prune(input);
+  }
+
+  public listCuratorArchived() {
+    return this.curatorService.listArchived();
+  }
+
+  public runCurator(input: Parameters<CuratorService["runCurator"]>[0]) {
+    return this.curatorService.runCurator(input);
   }
 
   public async reloadSkills(): Promise<SkillListItem[]> {

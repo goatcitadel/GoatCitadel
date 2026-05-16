@@ -313,3 +313,181 @@ describe("CuratorService.runCurator", () => {
     expect(response.report!.entries.every((e) => e.action === "skipped_immune")).toBe(true);
   });
 });
+
+describe("CuratorService cron scheduler", () => {
+  type CronJob = {
+    jobId: string;
+    name: string;
+    action: string;
+    schedule: string;
+    enabled: boolean;
+    description?: string;
+    lastRunAt?: string;
+    nextRunAt?: string;
+    endAt?: string;
+  };
+  type CronStore = Map<string, CronJob>;
+
+  function makeStorageStub(): {
+    cronJobs: {
+      get: (id: string) => CronJob | undefined;
+      upsert: (job: CronJob, finishedAt: string) => void;
+      upsertIfChanged: (job: CronJob, now: string) => void;
+    };
+    systemSettings: {
+      get: <T>(key: string) => { value: T } | undefined;
+      set: <T>(key: string, value: T) => void;
+    };
+    crons: CronStore;
+    settings: Map<string, unknown>;
+  } {
+    const crons: CronStore = new Map();
+    const settings = new Map<string, unknown>();
+    return {
+      cronJobs: {
+        get: (id: string) => crons.get(id),
+        upsert: (job, _finishedAt) => {
+          crons.set(job.jobId, { ...job });
+        },
+        upsertIfChanged: (job, _now) => {
+          crons.set(job.jobId, { ...job });
+        },
+      },
+      systemSettings: {
+        get: <T>(key: string) => {
+          const v = settings.get(key);
+          return v === undefined ? undefined : { value: v as T };
+        },
+        set: <T>(key: string, value: T) => {
+          settings.set(key, value);
+        },
+      },
+      crons,
+      settings,
+    };
+  }
+
+  it("ensureCuratorWeeklyCronJob registers the cron with action=curator and Sunday 02:00 PT schedule", () => {
+    const storageStub = makeStorageStub();
+    const service = new CuratorService({
+      listSkills: () => [],
+      archiveSkill: () => makeSkill(),
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-05-15T12:00:00Z"),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+      storage: storageStub as never,
+    });
+    service.ensureCuratorWeeklyCronJob();
+    const job = storageStub.crons.get("curator_weekly");
+    expect(job).toBeDefined();
+    expect(job?.action).toBe("curator");
+    expect(job?.enabled).toBe(true);
+    expect(job?.schedule).toBe("0 2 * * 0 America/Los_Angeles");
+  });
+
+  it("runCuratorWeeklyIfDue no-ops when cron job is missing or disabled", async () => {
+    const storageStub = makeStorageStub();
+    let runCalls = 0;
+    const service = new CuratorService({
+      listSkills: () => {
+        runCalls += 1;
+        return [];
+      }, // listSkills called during run
+      archiveSkill: () => makeSkill(),
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-05-17T02:00:00-07:00"), // Sunday 2am PT
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+      storage: storageStub as never,
+    });
+    // job not registered yet — should no-op
+    await service.runCuratorWeeklyIfDue();
+    expect(runCalls).toBe(0);
+
+    // register but disabled — should no-op
+    storageStub.crons.set("curator_weekly", {
+      jobId: "curator_weekly",
+      name: "x",
+      action: "curator",
+      schedule: "0 2 * * 0 America/Los_Angeles",
+      enabled: false,
+    });
+    await service.runCuratorWeeklyIfDue();
+    expect(runCalls).toBe(0);
+  });
+
+  it("runCuratorWeeklyIfDue with force=true bypasses time-of-week check + dedup", async () => {
+    const storageStub = makeStorageStub();
+    storageStub.crons.set("curator_weekly", {
+      jobId: "curator_weekly",
+      name: "x",
+      action: "curator",
+      schedule: "0 2 * * 0 America/Los_Angeles",
+      enabled: true,
+    });
+    let runCalls = 0;
+    const service = new CuratorService({
+      listSkills: () => {
+        runCalls += 1;
+        return [];
+      },
+      archiveSkill: () => makeSkill(),
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-05-15T12:00:00Z"), // Wednesday, NOT due
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+      storage: storageStub as never,
+    });
+    await service.runCuratorWeeklyIfDue({ force: true });
+    expect(runCalls).toBe(1);
+    expect(storageStub.crons.get("curator_weekly")?.lastRunAt).toBeDefined();
+  });
+
+  it("runCuratorWeeklyIfDue is idempotent within a week (dedup via week key)", async () => {
+    const storageStub = makeStorageStub();
+    storageStub.crons.set("curator_weekly", {
+      jobId: "curator_weekly",
+      name: "x",
+      action: "curator",
+      schedule: "0 2 * * 0 America/Los_Angeles",
+      enabled: true,
+    });
+    let runCalls = 0;
+    const service = new CuratorService({
+      listSkills: () => {
+        runCalls += 1;
+        return [];
+      },
+      archiveSkill: () => makeSkill(),
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-05-15T12:00:00Z"),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+      storage: storageStub as never,
+    });
+    await service.runCuratorWeeklyIfDue({ force: true });
+    await service.runCuratorWeeklyIfDue({ force: false }); // second call without force — should dedup since same week
+    expect(runCalls).toBe(1);
+  });
+
+  it("when storage is undefined (constructor without storage), both cron methods are no-ops", async () => {
+    const service = new CuratorService({
+      listSkills: () => [],
+      archiveSkill: () => makeSkill(),
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date(),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    // No throw, no error
+    service.ensureCuratorWeeklyCronJob();
+    await service.runCuratorWeeklyIfDue();
+    await service.runCuratorWeeklyIfDue({ force: true });
+  });
+});
