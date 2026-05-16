@@ -57,6 +57,7 @@ import {
   type ConnectorsRouteService,
 } from "./connectors-route-service.js";
 import { createCostsRouteService, type CostsRoutePort, type CostsRouteService } from "./costs-route-service.js";
+import { CuratorRouteService, type CuratorRoutePort } from "./curator-route-service.js";
 import { createCronRouteService, type CronRoutePort, type CronRouteService } from "./cron-route-service.js";
 import {
   createDashboardRouteService,
@@ -179,6 +180,7 @@ export interface GatewayRouteServices {
   connectors: ConnectorsRouteService;
   costs: CostsRouteService;
   cron: CronRouteService;
+  curator: CuratorRouteService;
   dashboard: DashboardRouteService;
   daemon: DaemonRouteService;
   devDiagnostics: DevDiagnosticsRouteService;
@@ -237,6 +239,7 @@ export interface GatewayRouteServiceDependencies {
   connectors: ConnectorsRoutePort;
   costs: CostsRoutePort;
   cron: CronRoutePort;
+  curator: CuratorRoutePort;
   dashboard: DashboardRoutePort;
   daemon: DaemonRoutePort;
   devDiagnostics: DevDiagnosticsRoutePort;
@@ -296,6 +299,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     connectors: createConnectorsRouteService(deps.connectors),
     costs: createCostsRouteService(deps.costs),
     cron: createCronRouteService(deps.cron),
+    curator: new CuratorRouteService(deps.curator),
     dashboard: createDashboardRouteService(deps.dashboard),
     daemon: createDaemonRouteService(deps.daemon),
     devDiagnostics: createDevDiagnosticsRouteService(deps.devDiagnostics),

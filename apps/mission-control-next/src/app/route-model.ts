@@ -8,7 +8,8 @@ export type LibrarySection =
   | "knowledge"
   | "files"
   | "artifacts"
-  | "prompt-packs";
+  | "prompt-packs"
+  | "curator";
 export type OpsSection =
   | "activity"
   | "sessions"

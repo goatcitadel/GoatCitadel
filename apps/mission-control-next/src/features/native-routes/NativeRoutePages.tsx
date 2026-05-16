@@ -61,6 +61,7 @@ import type { AppRoute } from "@next/app/route-model";
 import type { TaskDeliverableRecord, TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame, QuickJumpCard } from "./NativeRoutePageLayout";
 import { SettingsNativePage as NextSettingsNativePage } from "./SettingsNativePage";
+import { CuratorRoutePage } from "./library/CuratorRoutePage";
 import { MemoryRoutePage } from "./library/MemoryRoutePage";
 import { ApprovalsRoutePage } from "./ops/ApprovalsRoutePage";
 import { RuntimeRoutePage } from "./ops/RuntimeRoutePage";
@@ -757,6 +758,8 @@ function renderLibrarySection(section: NonNullable<AppRoute["section"]>, props: 
       return <LibrarySkillsSection {...props} />;
     case "capabilities":
       return <LibraryCapabilitiesSection {...props} />;
+    case "curator":
+      return <CuratorRoutePage {...props} />;
     case "memory":
       return <MemoryRoutePage {...props} />;
     case "knowledge":

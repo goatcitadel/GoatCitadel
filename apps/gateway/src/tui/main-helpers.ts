@@ -12,6 +12,7 @@ export type HomeView =
   | "tools"
   | "tasks"
   | "skills"
+  | "curator"
   | "integrations"
   | "mesh"
   | "npu"
@@ -63,6 +64,7 @@ export const HOME_VIEW_CHOICES: ReadonlyArray<TuiChoice<HomeView>> = [
   { name: "Tools", value: "tools" },
   { name: "Tasks", value: "tasks" },
   { name: "Skills", value: "skills" },
+  { name: "Curator", value: "curator" },
   { name: "Integrations", value: "integrations" },
   { name: "Mesh", value: "mesh" },
   { name: "NPU", value: "npu" },

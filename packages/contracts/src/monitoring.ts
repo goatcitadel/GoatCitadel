@@ -81,6 +81,7 @@ export interface DashboardState {
 export type CronJobAction =
   | "task"
   | "improvement"
+  | "curator"
   | "backup"
   | "memory_flush"
   | "cost_report"

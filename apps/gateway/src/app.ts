@@ -51,6 +51,7 @@ import { evidenceRoutes } from "./routes/evidence.js";
 import { voiceRoutes } from "./routes/voice.js";
 import { mediaRoutes } from "./routes/media.js";
 import { daemonRoutes } from "./routes/daemon.js";
+import { curatorRoutes } from "./routes/curator.js";
 import { improvementRoutes } from "./routes/improvement.js";
 import { workspacesRoutes } from "./routes/workspaces.js";
 import { hooksRoutes } from "./routes/hooks.js";
@@ -312,6 +313,7 @@ export async function buildApp() {
   await app.register(approvalsRoutes);
   await app.register(costsRoutes);
   await app.register(skillsRoutes);
+  await app.register(curatorRoutes);
   await app.register(orchestrationRoutes);
   await app.register(assemblyRoutes);
   await app.register(tasksRoutes);

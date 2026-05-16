@@ -696,6 +696,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
             { label: "Approvals", route: { area: "ops", section: "approvals", theme: route.theme } },
             { label: "Runtime", route: { area: "ops", section: "runtime", theme: route.theme } },
             { label: "Knowledge", route: { area: "library", section: "knowledge", theme: route.theme } },
+            { label: "Autonomous Curator", route: { area: "library", section: "curator", theme: route.theme } },
           ]}
           navigate={navigate}
         />

@@ -35,6 +35,7 @@ export * from "./tool-catalog.js";
 export * from "./internal-tooling.js";
 export * from "./ingestion.js";
 export * from "./comms.js";
+export * from "./curator.js";
 export * from "./knowledge.js";
 export * from "./ui-forms.js";
 export * from "./chat.js";
