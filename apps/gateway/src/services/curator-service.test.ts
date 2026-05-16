@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import type { CuratorRunReport, SkillListItem } from "@goatcitadel/contracts";
+import type { CuratorRunReport, DurableRunRecord, SkillListItem } from "@goatcitadel/contracts";
 import { CuratorService } from "./curator-service.js";
 
 function makeSkill(overrides: Partial<SkillListItem> = {}): SkillListItem {
@@ -312,6 +312,45 @@ describe("CuratorService.runCurator", () => {
     expect(archived).toEqual([]);
     expect(response.report!.entries.every((e) => e.action === "skipped_immune")).toBe(true);
   });
+
+  it("uses triggerMode='scheduled' when called from cron tick", async () => {
+    const reports: CuratorRunReport[] = [];
+    const skills: SkillListItem[] = [makeSkill({ name: "alpha", usageCount: 5 }) as SkillListItem];
+    const service = new CuratorService({
+      listSkills: () => skills,
+      archiveSkill: (_skillId) => ({ ...skills[0], state: "disabled" }),
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-05-15T12:00:00Z"),
+      writeReport: async (report) => {
+        reports.push(report);
+        return "/tmp/dummy";
+      },
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    await service.runCurator({ sync: false, triggerMode: "scheduled" });
+    expect(reports).toHaveLength(1);
+    expect(reports[0].triggerMode).toBe("scheduled");
+  });
+
+  it("uses triggerMode='manual' when no override is provided", async () => {
+    const reports: CuratorRunReport[] = [];
+    const skills: SkillListItem[] = [makeSkill({ name: "alpha", usageCount: 5 }) as SkillListItem];
+    const service = new CuratorService({
+      listSkills: () => skills,
+      archiveSkill: () => skills[0] as SkillListItem,
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-05-15T12:00:00Z"),
+      writeReport: async (report) => {
+        reports.push(report);
+        return "/tmp/dummy";
+      },
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    await service.runCurator({ sync: false });
+    expect(reports[0].triggerMode).toBe("manual");
+  });
 });
 
 describe("CuratorService cron scheduler", () => {
@@ -489,5 +528,100 @@ describe("CuratorService cron scheduler", () => {
     service.ensureCuratorWeeklyCronJob();
     await service.runCuratorWeeklyIfDue();
     await service.runCuratorWeeklyIfDue({ force: true });
+  });
+});
+
+describe("CuratorService.executeDurableCuratorTickRun", () => {
+  function makeRun(payload: Record<string, unknown>): DurableRunRecord {
+    return {
+      runId: "durable-run-x",
+      workflowKey: "curator.tick",
+      status: "running",
+      attemptCount: 1,
+      maxAttempts: 3,
+      version: 1,
+      payload,
+      createdAt: "2026-05-15T12:00:00Z",
+      updatedAt: "2026-05-15T12:00:00Z",
+    } as DurableRunRecord;
+  }
+
+  it("runs curator when payload is valid", async () => {
+    let ran = false;
+    const service = new CuratorService({
+      listSkills: () => {
+        ran = true;
+        return [];
+      },
+      archiveSkill: () => makeSkill(),
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-05-15T12:00:00Z"),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    await service.executeDurableCuratorTickRun(
+      makeRun({
+        version: "curator.tick.v1",
+        runId: "curator-run-xyz",
+        triggerMode: "scheduled",
+        cycleDays: 7,
+        requestedAt: "2026-05-15T12:00:00Z",
+      }),
+      undefined,
+    );
+    expect(ran).toBe(true);
+  });
+
+  it("throws on invalid version", async () => {
+    const service = new CuratorService({
+      listSkills: () => [],
+      archiveSkill: () => makeSkill(),
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date(),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    await expect(service.executeDurableCuratorTickRun(makeRun({ version: "wrong.v1" }), undefined)).rejects.toThrow(
+      /version/i,
+    );
+  });
+
+  it("throws on missing runId", async () => {
+    const service = new CuratorService({
+      listSkills: () => [],
+      archiveSkill: () => makeSkill(),
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date(),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    await expect(
+      service.executeDurableCuratorTickRun(makeRun({ version: "curator.tick.v1" }), undefined),
+    ).rejects.toThrow(/runId/i);
+  });
+
+  it("throws on invalid triggerMode", async () => {
+    const service = new CuratorService({
+      listSkills: () => [],
+      archiveSkill: () => makeSkill(),
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date(),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    await expect(
+      service.executeDurableCuratorTickRun(
+        makeRun({
+          version: "curator.tick.v1",
+          runId: "x",
+          triggerMode: "bogus",
+        }),
+        undefined,
+      ),
+    ).rejects.toThrow(/triggerMode/i);
   });
 });

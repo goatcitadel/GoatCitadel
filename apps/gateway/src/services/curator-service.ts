@@ -204,7 +204,7 @@ export class CuratorService {
       runId,
       startedAt: startedAt.toISOString(),
       finishedAt: finishedAt.toISOString(),
-      triggerMode: input.sync ? "synchronous" : "manual",
+      triggerMode: input.triggerMode ?? (input.sync ? "synchronous" : "manual"),
       dryRun,
       cycleDays: this.deps.cycleDays,
       totalSkills: skills.length,
@@ -261,21 +261,34 @@ export class CuratorService {
     const weekKey = toWeekKeyForTimezone(now, CURATOR_WEEKLY_TIME_ZONE);
     const lastWeekKey = this.deps.storage.systemSettings.get<string>(CURATOR_WEEKLY_DEDUP_SETTING_KEY)?.value;
     if (!options.force && lastWeekKey === weekKey) return;
-    await this.runCurator({ sync: false });
+    await this.runCurator({ sync: false, triggerMode: "scheduled" });
     this.deps.storage.systemSettings.set(CURATOR_WEEKLY_DEDUP_SETTING_KEY, weekKey);
     const finishedAt = this.deps.now().toISOString();
     this.deps.storage.cronJobs.upsert(
       {
         ...job,
         lastRunAt: finishedAt,
+        // Note: force-runs set nextRunAt = now + 7d which drifts from the Sunday 02:00 PT schedule.
+        // Normal scheduled runs naturally re-align since the time-of-week guard only fires on Sunday 02:00.
         nextRunAt: new Date(this.deps.now().getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
       },
       finishedAt,
     );
   }
 
-  public async executeDurableCuratorTickRun(_run: DurableRunRecord, _context: unknown): Promise<void> {
-    // Treat the durable run as a manual force-tick (no dedup, real archive on)
-    await this.runCurator({ sync: false });
+  public async executeDurableCuratorTickRun(run: DurableRunRecord, _context: unknown): Promise<void> {
+    const payload = run.payload as
+      | { version?: string; runId?: string; triggerMode?: string; cycleDays?: number; requestedAt?: string }
+      | undefined;
+    if (!payload || payload.version !== "curator.tick.v1") {
+      throw new Error("curator.tick: invalid payload version");
+    }
+    if (typeof payload.runId !== "string" || payload.runId.length === 0) {
+      throw new Error("curator.tick: invalid payload runId");
+    }
+    if (payload.triggerMode !== "scheduled" && payload.triggerMode !== "manual") {
+      throw new Error("curator.tick: invalid payload triggerMode");
+    }
+    await this.runCurator({ sync: false, triggerMode: "scheduled" });
   }
 }

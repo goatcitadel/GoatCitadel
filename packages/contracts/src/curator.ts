@@ -75,6 +75,7 @@ export interface CuratorRunRequest {
   sync?: boolean;
   dryRun?: boolean;
   actorId?: string;
+  triggerMode?: "manual" | "scheduled" | "synchronous";
 }
 
 export interface CuratorRunReportEntry {
