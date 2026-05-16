@@ -30,7 +30,7 @@ describe("CuratorScopeGuard", () => {
     try {
       guard.assertScopeAllowed("shell");
     } catch {
-      // expected — we only care about recorded violations below
+      // intentionally ignored — we only care about the recorded violation below
     }
     expect(violations).toEqual([
       {
