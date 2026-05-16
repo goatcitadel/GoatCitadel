@@ -117,6 +117,29 @@ describe("ChatModelPicker", () => {
     expect(findText(rendered, "1,000,000")).toBe(true);
   });
 
+  it("renders boundary contextWindow value 999_999 as 1M abbreviation", () => {
+    const renderer = create(
+      <ChatModelPicker
+        providers={[
+          {
+            providerId: "anthropic",
+            label: "Anthropic",
+            models: ["claude-opus-4-7"],
+          },
+        ]}
+        providerId="anthropic"
+        model="claude-opus-4-7"
+        activeModelContextWindow={999_999}
+        onChangeProvider={vi.fn()}
+        onChangeModel={vi.fn()}
+      />,
+    );
+
+    const rendered = renderer.toJSON();
+    expect(findText(rendered, "1M")).toBe(true);
+    expect(findText(rendered, "1000K")).toBe(false);
+  });
+
   it("shows provider context cost and capability metadata", () => {
     const renderer = create(
       <ChatModelPicker

@@ -46,6 +46,10 @@ function formatContextWindow(value: number): string {
   }
   if (value >= 1_000) {
     const thousands = value / 1_000;
+    // Promote to "1M" if rounding to 1-decimal precision yields >= 1000 (e.g. 999_999 → "1000.0" → "1M")
+    if (Number.parseFloat(thousands.toFixed(1)) >= 1_000) {
+      return "1M";
+    }
     return Number.isInteger(thousands) ? `${thousands}K` : `${thousands.toFixed(1).replace(/\.0$/, "")}K`;
   }
   return String(value);
