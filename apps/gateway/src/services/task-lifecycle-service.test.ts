@@ -461,7 +461,7 @@ describe("TaskLifecycleService — retry budget", () => {
   });
 
   it("recordRetryAttempt transitions task to blocked when budget exhausted", () => {
-    const { service } = createService();
+    const { service, publishRealtime } = createService();
     const task = service.createTask({ title: "t", status: "in_progress" });
     service.setRetryBudget(task.taskId, 1);
     service.recordRetryAttempt(task.taskId, "first failure");
@@ -471,6 +471,9 @@ describe("TaskLifecycleService — retry budget", () => {
     expect(blocked.retryBudget?.exhaustedAt).toBeTruthy();
     const exhaustedSignal = blocked.distressSignals?.find((s) => s.code === "retry_budget_exhausted");
     expect(exhaustedSignal?.severity).toBe("critical");
+    const exhaustedEvent = publishRealtime.mock.calls.find((c) => c[0] === "task_retry_budget_exhausted");
+    expect(exhaustedEvent).toBeTruthy();
+    expect(exhaustedEvent?.[2]).toMatchObject({ taskId: task.taskId, retryCount: 2, reason: "second failure" });
   });
 
   it("recordRetryAttempt publishes task_retry_attempted event on non-exhausted path", () => {
@@ -599,8 +602,8 @@ describe("TaskLifecycleService.bulkUpdateTasks", () => {
     expect(results[0].status).toBe("in_progress");
   });
 
-  it("reassign action sets the new assignedAgentId on each task", () => {
-    const { service } = createService();
+  it("reassign action sets the new assignedAgentId on each task and publishes task_updated", () => {
+    const { service, publishRealtime } = createService();
     const a = service.createTask({ title: "a" });
     const b = service.createTask({ title: "b" });
     const results = service.bulkUpdateTasks({
@@ -610,6 +613,16 @@ describe("TaskLifecycleService.bulkUpdateTasks", () => {
     });
     expect(results[0].assignedAgentId).toBe("agent-9");
     expect(results[1].assignedAgentId).toBe("agent-9");
+    const updateCalls = publishRealtime.mock.calls.filter((c) => c[0] === "task_updated");
+    expect(updateCalls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("unblock action publishes task_updated so subscribers see the transition", () => {
+    const { service, publishRealtime } = createService();
+    const a = service.createTask({ title: "a", status: "blocked" });
+    service.bulkUpdateTasks({ action: "unblock", taskIds: [a.taskId] });
+    const updateCalls = publishRealtime.mock.calls.filter((c) => c[0] === "task_updated");
+    expect(updateCalls.length).toBeGreaterThanOrEqual(1);
   });
 
   it("close action moves tasks to done when they have a deliverable", () => {

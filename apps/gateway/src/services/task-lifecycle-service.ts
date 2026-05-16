@@ -176,11 +176,17 @@ export class TaskLifecycleService {
       title: "Retry budget exhausted",
       summary: reason,
     });
-    return this.deps.storage.tasks.update(taskId, {
+    const updated = this.deps.storage.tasks.update(taskId, {
       retryBudget,
       distressSignals,
       status: "blocked",
     });
+    this.publishTaskEvent(
+      "task_retry_budget_exhausted",
+      { taskId, retryCount: nextCount, reason },
+      buildTaskRealtimeLinks(updated),
+    );
+    return updated;
   }
 
   public autoBlockOnIncompleteExit(taskId: string, runId: string): TaskRecord {
@@ -211,16 +217,18 @@ export class TaskLifecycleService {
         const retryBudget = current.retryBudget
           ? { ...current.retryBudget, retryCount: 0, exhaustedAt: undefined }
           : undefined;
-        return this.deps.storage.tasks.update(taskId, {
+        const updated = this.deps.storage.tasks.update(taskId, {
           status: "assigned",
           retryBudget,
         });
+        this.publishTaskEvent("task_updated", { task: updated }, buildTaskRealtimeLinks(updated));
+        return updated;
       }
       if (input.action === "retry") {
         return this.recordRetryAttempt(taskId, input.reason);
       }
       if (input.action === "reassign") {
-        return this.deps.storage.tasks.update(taskId, { assignedAgentId: input.assignedAgentId });
+        return this.updateTask(taskId, { assignedAgentId: input.assignedAgentId });
       }
       return this.updateTask(taskId, { status: "done" });
     });
