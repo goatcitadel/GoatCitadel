@@ -1228,6 +1228,11 @@ export class LlmService {
     const now = Date.now();
     const cached = this.modelDiscoveryCache.get(key);
     if (cached && now - cached.cachedAt < LlmService.MODEL_DISCOVERY_TTL_MS) {
+      log.debug("model catalog cache hit", {
+        providerId: resolved.provider.providerId,
+        ageMs: now - cached.cachedAt,
+        itemCount: cached.result.items.length,
+      });
       return cached.result;
     }
     // Stampede protection: coalesce concurrent cold-cache callers onto a single fetch.

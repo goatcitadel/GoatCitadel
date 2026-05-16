@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyReply } from "fastify";
 import { z } from "zod";
 import { isGoatError } from "@goatcitadel/contracts";
+import { env } from "../env.js";
 import { sendRouteError } from "./_error-handler.js";
 import { writeSseChunk, writeSsePayload } from "./sse-writer.js";
 
@@ -101,7 +102,7 @@ export async function streamSseReply(
     return writeSsePayload(raw, payload, { eventId, signal: controller.signal });
   };
 
-  const coalesceEnabled = process.env.GOATCITADEL_STREAM_COALESCE_OFF !== "true";
+  const coalesceEnabled = env.GOATCITADEL_STREAM_COALESCE_OFF !== "true";
   const stream: AsyncIterable<unknown> = coalesceEnabled
     ? coalesceStreamingDeltas(source(controller.signal))
     : source(controller.signal);

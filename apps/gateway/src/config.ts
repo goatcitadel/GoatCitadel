@@ -374,6 +374,7 @@ export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntime
     configMtimeCache.key === cacheKey &&
     configMtimesEqual(configMtimeCache.entry.mtimes, currentMtimes)
   ) {
+    configLog.debug("config cache hit (mtime unchanged)", { rootDir: cacheKey });
     return configMtimeCache.entry.value;
   }
 

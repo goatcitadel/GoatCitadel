@@ -109,6 +109,14 @@ export async function loadCronJobsFromConfig(host: CronJobConfigHost): Promise<v
       }
       const persistedNext = sanitized.nextRunAt ?? existing?.nextRunAt;
       const repairedNext = repairCronNextRunAt(normalizedSchedule, persistedNext, normalizedEndAt, Date.now());
+      if (repairedNext && repairedNext !== persistedNext) {
+        log.info("repaired stale nextRunAt", {
+          jobId: normalizedJobId,
+          schedule: normalizedSchedule,
+          persistedNextRunAt: persistedNext,
+          repairedNextRunAt: repairedNext,
+        });
+      }
       host.storage.cronJobs.upsertIfChanged({
         ...sanitized,
         jobId: normalizedJobId,
