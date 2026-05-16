@@ -27,6 +27,14 @@ import {
   toTitleCase,
   truncateSummaryLine,
 } from "./chat-turn-helpers.js";
+import {
+  computeChildDepth,
+  enforceMaxDepth,
+  runWithChildTimeout,
+  SubagentBudgetError,
+} from "./subagent-budget-enforcer.js";
+
+const DEFAULT_SUBAGENT_DEFAULTS = { childTimeoutSeconds: 600, maxDepth: 4 } as const;
 
 interface ChatDelegationProgressStatusEvent {
   runId: string;
@@ -154,6 +162,14 @@ export interface ChatDelegationServiceHost {
     source: { role: "user" | "assistant"; sourceRef: string },
   ): void;
   scheduleChatMemoryContextPrewarm(input: { sessionId: string; prompt: string; relationScope: "peer" }): void;
+  /**
+   * Runtime budgets enforced on every child delegation step. When omitted the
+   * service falls back to `{ childTimeoutSeconds: 600, maxDepth: 4 }`.
+   */
+  subagentDefaults?: {
+    childTimeoutSeconds: number;
+    maxDepth: number;
+  };
 }
 
 export class ChatDelegationService {
@@ -251,6 +267,8 @@ export class ChatDelegationService {
     const completedOutputs = new Map<string, { role: string; output: string }>();
     const stepResults = new Map<string, DelegationStepExecutionResult>();
     const stages = buildDelegationStages(delegationSteps);
+    const subagentDefaults = deps.subagentDefaults ?? DEFAULT_SUBAGENT_DEFAULTS;
+    const childDepth = computeChildDepth(input.parentSubagentDepth);
 
     const executeDelegationStep = async (step: NormalizedDelegationStep): Promise<DelegationStepExecutionResult> => {
       const startedAt = new Date().toISOString();
@@ -302,6 +320,7 @@ export class ChatDelegationService {
         profileId: step.role,
         contextMode: "isolated",
         index: step.index,
+        depth: childDepth,
         dependsOnStepIds: step.dependsOnStepIds,
         heartbeatAt: startedAt,
       };
@@ -316,30 +335,35 @@ export class ChatDelegationService {
         .filter((item): item is { role: string; output: string } => Boolean(item));
 
       try {
-        const response = await deps.agentSendChatMessage(
-          childSession.sessionId,
-          buildDelegatedChatSendRequest({
-            content: [
-              buildDelegationSystemPrompt(step.role),
-              buildDelegationUserPrompt({
-                objective,
-                role: step.role,
-                mode,
-                sharedContext: dependencyContext,
+        enforceMaxDepth({ depth: childDepth, maxDepth: subagentDefaults.maxDepth });
+        const response = await runWithChildTimeout({
+          timeoutSeconds: subagentDefaults.childTimeoutSeconds,
+          run: async (_signal) =>
+            deps.agentSendChatMessage(
+              childSession.sessionId,
+              buildDelegatedChatSendRequest({
+                content: [
+                  buildDelegationSystemPrompt(step.role),
+                  buildDelegationUserPrompt({
+                    objective,
+                    role: step.role,
+                    mode,
+                    sharedContext: dependencyContext,
+                  }),
+                ].join("\n\n"),
+                providerId,
+                model,
+                mode: executionMode,
+                webMode: prefs.webMode,
+                memoryMode: prefs.memoryMode,
+                thinkingLevel: prefs.thinkingLevel,
+                speedMode: prefs.speedMode,
+                subagentPolicy: "off",
+                retrievalMode: prefs.retrievalMode ?? "standard",
+                toolAutonomy: prefs.toolAutonomy,
               }),
-            ].join("\n\n"),
-            providerId,
-            model,
-            mode: executionMode,
-            webMode: prefs.webMode,
-            memoryMode: prefs.memoryMode,
-            thinkingLevel: prefs.thinkingLevel,
-            speedMode: prefs.speedMode,
-            subagentPolicy: "off",
-            retrievalMode: prefs.retrievalMode ?? "standard",
-            toolAutonomy: prefs.toolAutonomy,
-          }),
-        );
+            ),
+        });
         const traceStatus = response.trace?.status;
         const waitingForApproval = traceStatus === "waiting_for_approval";
         const waitingForUserInput = traceStatus === "waiting_for_user_input";
@@ -445,30 +469,55 @@ export class ChatDelegationService {
       } catch (error) {
         const finishedAt = new Date().toISOString();
         const message = (error as Error).message;
+        const isBudgetError = error instanceof SubagentBudgetError;
+        const budgetCode = isBudgetError ? error.code : undefined;
         const failedStep = deps.storage.chatDelegationSteps.patch(step.stepId, {
           status: "failed",
           label: step.role,
           error: message,
+          summary: isBudgetError
+            ? budgetCode === "timeout_exceeded"
+              ? "Child timed out."
+              : "Maximum delegation depth exceeded."
+            : undefined,
           failureGuidance: buildDelegationFailureGuidance(message, step.role),
           childSessionId: childSession.sessionId,
           finishedAt,
           durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
         });
         await callbacks?.onStep?.(failedStep);
+        const budgetDiagnostic = isBudgetError
+          ? {
+              signalId: randomUUID(),
+              code: budgetCode as "timeout_exceeded" | "max_depth_exceeded",
+              severity: "critical" as const,
+              title:
+                budgetCode === "timeout_exceeded" ? "Subagent child timed out" : "Subagent maxDepth budget exhausted",
+              summary: message,
+              createdAt: finishedAt,
+            }
+          : undefined;
         deps.taskLifecycleService.updateTaskSubagent(agentSessionId, {
           status: "failed",
           endedAt: finishedAt,
           metadata: {
             ...childMetadataBase,
             heartbeatAt: finishedAt,
-            failureClass: "crash",
+            failureClass: isBudgetError ? "timeout" : "crash",
+            diagnostics: budgetDiagnostic ? [budgetDiagnostic] : undefined,
           },
         });
         deps.taskLifecycleService.appendTaskActivity(task.taskId, {
           activityType: "diagnostic",
           agentId: step.role,
           message: `${step.role} failed delegation step ${step.index + 1}/${delegationSteps.length}: ${message}`,
-          metadata: { runId, childRunId, stepId: step.stepId, error: message },
+          metadata: {
+            runId,
+            childRunId,
+            stepId: step.stepId,
+            error: message,
+            ...(isBudgetError ? { diagnosticCode: budgetCode } : {}),
+          },
         });
         return {
           step: failedStep,

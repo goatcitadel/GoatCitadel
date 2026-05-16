@@ -294,7 +294,7 @@ import type {
   RemoteActionTokenRecord,
 } from "@goatcitadel/contracts";
 import type { ConnectorRecord, ConnectorType } from "@goatcitadel/contracts";
-import { BUILTIN_AGENT_PROFILES } from "@goatcitadel/contracts";
+import { AgentSubagentDefaultsSchema, BUILTIN_AGENT_PROFILES } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
 import { getRequestAttribution } from "@goatcitadel/storage";
@@ -1028,6 +1028,9 @@ export class GatewayService {
       agentSendChatMessage: (sessionId, input) => this.chatTurnRuntime.agentSendChatMessage(sessionId, input),
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
     });
+    const subagentDefaults = AgentSubagentDefaultsSchema.parse(
+      (config as { agents?: { defaults?: { subagents?: unknown } } }).agents?.defaults?.subagents ?? {},
+    );
     this.chatDelegationService = new ChatDelegationService({
       storage: this.storage,
       gatewaySql: this.gatewaySql,
@@ -1044,6 +1047,10 @@ export class GatewayService {
       extractAndPersistLearnedMemory: (sessionId, content, source) =>
         this.extractAndPersistLearnedMemory(sessionId, content, source),
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
+      subagentDefaults: {
+        childTimeoutSeconds: subagentDefaults.childTimeoutSeconds,
+        maxDepth: subagentDefaults.maxDepth,
+      },
     });
     this.toolInvocationCoordinator = new ToolInvocationCoordinatorService({
       approvalInbox: this.storage.approvalInbox,

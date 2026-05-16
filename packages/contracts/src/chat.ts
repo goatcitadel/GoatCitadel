@@ -1163,6 +1163,12 @@ export interface ChatDelegateRequest {
   providerId?: string;
   model?: string;
   steps?: ChatDelegateStepRequest[];
+  /**
+   * Depth of the parent run in the subagent tree. Children are spawned at
+   * `parentSubagentDepth + 1` and are subject to the configured maxDepth
+   * budget. Undefined implies a top-level parent (depth 0).
+   */
+  parentSubagentDepth?: number;
 }
 
 export interface ChatDelegateResponse {
