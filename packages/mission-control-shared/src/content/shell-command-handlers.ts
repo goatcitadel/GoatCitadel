@@ -177,7 +177,7 @@ const rm: Handler = (tokens) => {
 };
 
 const curlOrWget: Handler = (tokens) => {
-  const program = tokens[0];
+  const program = tokens[0] ?? "curl";
   const after = tokens.slice(1);
   const insecure = findFlag(after, "-k", "--insecure");
   const url = after.find((tk) => /^https?:\/\//.test(tk)) ?? "(no URL)";
@@ -198,7 +198,7 @@ const curlOrWget: Handler = (tokens) => {
 };
 
 const packageManager: Handler = (tokens) => {
-  const program = tokens[0];
+  const program = tokens[0] ?? "npm";
   const sub = tokens[1];
   const after = tokens.slice(2);
   const global = findFlag(after, "--global", "-g");
@@ -327,6 +327,9 @@ export function handleCommand(tokens: readonly string[]): HandlerResult {
     return generic(tokens);
   }
   const program = tokens[0];
+  if (program === undefined) {
+    return generic(tokens);
+  }
   const handler = HANDLERS[program] ?? generic;
   return handler(tokens);
 }
