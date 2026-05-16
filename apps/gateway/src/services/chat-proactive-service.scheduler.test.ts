@@ -71,4 +71,50 @@ describe("chat-proactive-service scheduler fanout", () => {
     const s1Start = triggerOrder.indexOf("start:s1");
     expect(s1Start).toBeLessThan(s0End);
   });
+
+  it("scoped busy check — agent A's running turn does NOT block agent B's tick", async () => {
+    const runningSessions = new Set<string>(["sA"]);
+    const triggered: string[] = [];
+
+    const sessions = [
+      { sessionId: "sA", lastActivityAt: new Date(Date.now() - 600_000).toISOString() },
+      { sessionId: "sB", lastActivityAt: new Date(Date.now() - 600_000).toISOString() },
+    ];
+
+    const callbacks: Partial<ChatProactiveServiceCallbacks> = {
+      listChatSessions: () => sessions,
+      hasRunningTurn: (sessionId: string) => runningSessions.has(sessionId),
+      getSessionIdleSeconds: () => 600,
+      detectDelegationRoles: () => [],
+      requestDurableRunProcessing: () => undefined,
+      backgroundTasks: new Set(),
+      closing: false,
+    };
+
+    const trigger = vi.fn();
+    trigger.mockImplementation(async (sessionId: string) => {
+      triggered.push(sessionId);
+    });
+
+    const ctx = {
+      storage: {
+        sessionAutonomyPrefs: { listBySessionIds: () => new Map() },
+      },
+      publishRealtime: () => undefined,
+      isFeatureEnabled: () => true,
+    } as unknown as ChatProactiveServiceContext;
+
+    const service = new ChatProactiveService(ctx, callbacks as ChatProactiveServiceCallbacks);
+
+    (service as unknown as { triggerChatSessionProactive: typeof trigger }).triggerChatSessionProactive = trigger;
+    await (service as unknown as { runSchedulerTick: () => Promise<void> }).runSchedulerTick();
+
+    // Both sessions are dispatched at the scheduler level; the per-session busy
+    // check happens inside triggerChatSessionProactive (at line 1423), and the
+    // scheduler tick should never gate B on A's busy state.
+    expect(triggered).toContain("sB");
+    // Equally important: the scheduler also dispatches sA — the busy check
+    // happens inside the trigger (which we've stubbed), not in the scheduler.
+    expect(triggered).toContain("sA");
+  });
 });
