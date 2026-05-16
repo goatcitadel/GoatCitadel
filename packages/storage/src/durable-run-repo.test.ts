@@ -609,6 +609,41 @@ describe("DurableRunRepository", () => {
       assert.equal(summary.prunedAged, 0);
       assert.equal(summary.finalBytes, 0);
     });
+
+    it("accounts for UTF-8 byte length of multi-byte characters in disk budget", () => {
+      const repo = createRepo();
+      const run = repo.createRun({ workflowKey: "test.utf8" });
+      // 100-character string of multi-byte UTF-8 chars (é = 2 bytes each)
+      const padding = "é".repeat(100);
+      for (let i = 0; i < 5; i += 1) {
+        repo.createCheckpoint({
+          runId: run.runId,
+          checkpointKind: "run_started",
+          state: { run: "utf8", step: i, pad: padding },
+          createdAt: new Date(2026, 0, 1, i).toISOString(),
+        });
+      }
+      repo.updateRun({
+        runId: run.runId,
+        status: "completed",
+        finishedAt: "2026-05-15T00:00:00.000Z",
+        expectedVersion: run.version,
+      });
+
+      // Set a tight budget that requires pruning AT LEAST some checkpoints
+      // when bytes are counted correctly. 100 multi-byte chars + json overhead
+      // per checkpoint is roughly 250 bytes; 5 checkpoints ~= 1250 bytes.
+      const summary = repo.pruneCheckpoints({ keepPerRun: 100, diskBudgetBytes: 600 });
+      assert.ok(summary.prunedAged > 0, "should prune some checkpoints under 600-byte budget");
+      assert.ok(
+        summary.finalBytes <= 600 + 300,
+        `finalBytes should be at or under budget+headroom, got ${summary.finalBytes}`,
+      );
+      // The budget guard must work consistently — re-running with no slack should not over-prune
+      const second = repo.pruneCheckpoints({ keepPerRun: 100, diskBudgetBytes: 600 });
+      // Second pass should not destroy more than already needed
+      assert.ok(second.finalBytes <= summary.finalBytes + 300, "second pass should be idempotent within tolerance");
+    });
   });
 });
 

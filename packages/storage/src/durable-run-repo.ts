@@ -678,7 +678,7 @@ export class DurableRunRepository {
 
   private measureCheckpointBytes(): number {
     const row = this.db
-      .prepare("SELECT COALESCE(SUM(LENGTH(state_json)), 0) AS bytes FROM durable_checkpoints")
+      .prepare("SELECT COALESCE(SUM(LENGTH(CAST(state_json AS BLOB))), 0) AS bytes FROM durable_checkpoints")
       .get() as { bytes: number | bigint } | undefined;
     return Number(row?.bytes ?? 0);
   }
