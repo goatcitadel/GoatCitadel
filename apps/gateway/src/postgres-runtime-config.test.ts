@@ -166,7 +166,7 @@ function buildConfig(): GatewayRuntimeConfig {
         bundledPostgres: {
           enabled: true,
           dataDir: "./data/postgres",
-          port: 55432,
+          port: 45432,
           autoStart: true,
           startTimeoutMs: 1000,
         },
@@ -228,7 +228,7 @@ describe("resolveGatewayPostgresConnectionOptions", () => {
     const config = buildConfig();
     const resolved = resolveGatewayPostgresConnectionOptions(config);
     expect(resolved.host).toBe("127.0.0.1");
-    expect(resolved.port).toBe(55432);
+    expect(resolved.port).toBe(45432);
     expect(resolved.user).toBe("postgres");
     expect(resolved.database).toBe("goatcitadel");
   });
@@ -236,6 +236,6 @@ describe("resolveGatewayPostgresConnectionOptions", () => {
   it("builds a connection string from bundled defaults", () => {
     const config = buildConfig();
     const resolved = resolveGatewayPostgresConnectionString(config);
-    expect(resolved).toBe("postgresql://postgres@127.0.0.1:55432/goatcitadel");
+    expect(resolved).toBe("postgresql://postgres@127.0.0.1:45432/goatcitadel");
   });
 });

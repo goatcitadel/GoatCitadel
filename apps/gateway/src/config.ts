@@ -930,7 +930,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       bundledPostgres: {
         enabled: bundledPostgresInput.enabled ?? true,
         dataDir: bundledPostgresInput.dataDir ?? "./data/postgres",
-        port: clampInt(bundledPostgresInput.port, 55_432, 1, 65_535),
+        port: clampInt(bundledPostgresInput.port, 45_432, 1, 65_535),
         binDir: bundledPostgresInput.binDir,
         autoStart: bundledPostgresInput.autoStart ?? true,
         startTimeoutMs: clampInt(bundledPostgresInput.startTimeoutMs, 20_000, 1_000, 120_000),

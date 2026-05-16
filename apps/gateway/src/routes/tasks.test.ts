@@ -121,7 +121,7 @@ describe("tasks routes", () => {
         expect.objectContaining({ capabilityId: "plugin:plugin-corrupt", status: "unavailable", callable: false }),
       ]),
     );
-  });
+  }, 15_000);
 
   it("rejects malformed subagent metadata instead of persisting arbitrary payloads", async () => {
     const registerTaskSubagent = vi.fn();

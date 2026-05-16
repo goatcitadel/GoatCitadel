@@ -25,7 +25,7 @@ function buildBundledConfig(rootDir: string, binDir?: string): never {
         bundledPostgres: {
           binDir,
           dataDir: "data/postgres",
-          port: 55432,
+          port: 45432,
         },
       },
     },

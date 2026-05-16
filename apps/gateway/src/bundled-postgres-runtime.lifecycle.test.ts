@@ -191,7 +191,7 @@ describe("bundled postgres runtime lifecycle", () => {
     expect(handle?.strategy).toBe("docker");
     expect(mocks.execFileSync).toHaveBeenCalledWith(
       "docker",
-      expect.arrayContaining(["run", "--detach", "--publish", "55432:5432"]),
+      expect.arrayContaining(["run", "--detach", "--publish", "45432:5432"]),
       expect.any(Object),
     );
 
@@ -317,6 +317,46 @@ describe("bundled postgres runtime lifecycle", () => {
     );
   });
 
+  it("falls back to Docker when configured native startup fails", async () => {
+    const rootDir = await makeTempDir();
+    const binDir = path.join(rootDir, "pg-bin");
+    await fs.mkdir(binDir, { recursive: true });
+    const extension = process.platform === "win32" ? ".exe" : "";
+    const initdb = path.join(binDir, `initdb${extension}`);
+    const pgCtl = path.join(binDir, `pg_ctl${extension}`);
+    await fs.writeFile(initdb, "", "utf8");
+    await fs.writeFile(pgCtl, "", "utf8");
+    let dockerPsCalls = 0;
+    mocks.execFileSync.mockImplementation((command: string, args: string[]) => {
+      if (command === pgCtl && args.includes("start")) {
+        throw new Error("pg_ctl native start failed");
+      }
+      if (command === "docker" && args[0] === "info") {
+        return "";
+      }
+      if (command === "docker" && args[0] === "ps") {
+        dockerPsCalls += 1;
+        return dockerPsCalls === 1 ? "" : "running";
+      }
+      return "";
+    });
+    mocks.dbScripts.push(
+      { queryOne: new Error("ECONNREFUSED") },
+      { queryOne: new Error("still refused after native failure") },
+      { queryOne: { data_directory: "/var/lib/postgresql/data" } },
+      { queryOne: { present: 1 } },
+    );
+
+    const handle = await ensureBundledPostgresRuntime(buildConfig(rootDir, { binDir: "pg-bin" }));
+
+    expect(handle?.strategy).toBe("docker");
+    expect(mocks.execFileSync).toHaveBeenCalledWith(
+      "docker",
+      expect.arrayContaining(["run", "--detach", "--publish", "45432:5432"]),
+      expect.any(Object),
+    );
+  });
+
   it("rethrows native startup failures when the fallback probe cannot reach the expected runtime", async () => {
     const rootDir = await makeTempDir();
     const binDir = path.join(rootDir, "pg-bin");
@@ -328,15 +368,27 @@ describe("bundled postgres runtime lifecycle", () => {
     await fs.writeFile(pgCtl, "", "utf8");
     mocks.execFileSync.mockImplementation((command: string, args: string[]) => {
       if (command === pgCtl && args.includes("start")) {
-        throw new Error("pg_ctl start failed");
+        const nativeError = new Error("pg_ctl start failed") as Error & { stderr: Buffer };
+        nativeError.stderr = Buffer.from("bind failed");
+        throw nativeError;
+      }
+      if (command === "docker" && args[0] === "info") {
+        throw new Error("docker unavailable");
       }
       return "";
     });
     mocks.dbScripts.push({ queryOne: new Error("ECONNREFUSED") }, { queryOne: new Error("still refused") });
-
-    await expect(ensureBundledPostgresRuntime(buildConfig(rootDir, { binDir: "pg-bin" }))).rejects.toThrow(
-      "pg_ctl start failed",
+    await fs.mkdir(path.join(rootDir, "data", "logs"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "data", "logs", "goatcitadel-postgres.log"),
+      'older line\ncould not bind IPv4 address "127.0.0.1": Permission denied\n',
+      "utf8",
     );
+
+    const action = ensureBundledPostgresRuntime(buildConfig(rootDir, { binDir: "pg-bin" }));
+    await expect(action).rejects.toThrow("Native bundled Postgres failed to start on 127.0.0.1:45432");
+    await expect(action).rejects.toThrow("could not bind IPv4 address");
+    await expect(action).rejects.toThrow("GOATCITADEL_BUNDLED_POSTGRES_PORT");
   });
 });
 
@@ -364,7 +416,7 @@ function buildConfig(
           autoStart: options.autoStart ?? true,
           binDir: options.binDir,
           dataDir: "data/postgres",
-          port: 55432,
+          port: 45432,
           startTimeoutMs: 10_000,
         },
       },

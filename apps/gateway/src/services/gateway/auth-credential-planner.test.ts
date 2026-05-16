@@ -459,7 +459,7 @@ function createRuntimeConfig(rootDir: string, auth: GatewayRuntimeConfig["assist
         bundledPostgres: {
           enabled: true,
           dataDir: "./data/postgres",
-          port: 55432,
+          port: 45432,
           autoStart: true,
           startTimeoutMs: 20000,
         },

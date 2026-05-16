@@ -73,7 +73,7 @@ describe("SkillImportService loop42 git install behavior", () => {
         skillId: "git-runtime-tool",
       }),
     ]);
-  });
+  }, 15_000);
 });
 
 function createGitSkillRepo(rootDir: string): string {

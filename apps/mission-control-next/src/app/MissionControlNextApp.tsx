@@ -957,7 +957,9 @@ export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSec
       {
         id: "settings-controls",
         label: "Controls",
-        items: items.filter((item) => item.section === "tools" || item.section === "addons"),
+        items: items.filter(
+          (item) => item.section === "tools" || item.section === "addons" || item.section === "budget",
+        ),
       },
     ].filter((group) => group.items.length);
   }
@@ -1001,6 +1003,7 @@ export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSec
         items: items.filter(
           (item) =>
             item.section === "improvement" ||
+            item.section === "notifications" ||
             item.section === "approvals" ||
             item.section === "costs" ||
             item.section === "runtime" ||

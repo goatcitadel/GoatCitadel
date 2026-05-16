@@ -10,6 +10,7 @@ import {
   resolveShellThemeClass,
   usesEmbeddedRouteHeader,
 } from "./MissionControlNextApp";
+import { RAIL_ITEMS } from "./route-model";
 
 const item = (section: string) => ({ section }) as any;
 
@@ -50,15 +51,24 @@ describe("MissionControlNextApp shell helpers", () => {
         item("sessions"),
         item("schedules"),
         item("improvement"),
+        item("notifications"),
         item("costs"),
         item("runtime"),
         item("diagnostics"),
       ]).map((group) => group.items.map((entry) => entry.section)),
     ).toEqual([
       ["sessions", "schedules"],
-      ["improvement", "costs", "runtime", "diagnostics"],
+      ["improvement", "notifications", "costs", "runtime", "diagnostics"],
     ]);
     expect(buildRailSections("chat", [item("thread")])).toEqual([{ id: "chat-primary", items: [item("thread")] }]);
+  });
+
+  it("renders every declared grouped rail item exactly once", () => {
+    for (const area of ["settings", "library", "ops"] as const) {
+      const groupedItems = buildRailSections(area, RAIL_ITEMS[area]).flatMap((group) => group.items);
+      expect(groupedItems.map((entry) => entry.id).sort()).toEqual(RAIL_ITEMS[area].map((entry) => entry.id).sort());
+      expect(new Set(groupedItems.map((entry) => entry.id)).size).toBe(RAIL_ITEMS[area].length);
+    }
   });
 
   it("describes theme, realtime, and embedded route chrome decisions", () => {

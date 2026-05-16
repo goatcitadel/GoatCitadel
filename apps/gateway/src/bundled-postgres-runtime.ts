@@ -45,11 +45,16 @@ export async function ensureBundledPostgresRuntime(
     throw new Error("Bundled Postgres is configured but not reachable, and autoStart is disabled.");
   }
 
-  const nativeRuntime = await tryStartNativeBundledPostgres(config);
-  if (nativeRuntime) {
-    await waitForBundledPostgres(config);
-    await ensureDatabaseExists(config);
-    return nativeRuntime;
+  let nativeStartupError: Error | undefined;
+  try {
+    const nativeRuntime = await tryStartNativeBundledPostgres(config);
+    if (nativeRuntime) {
+      await waitForBundledPostgres(config);
+      await ensureDatabaseExists(config);
+      return nativeRuntime;
+    }
+  } catch (error) {
+    nativeStartupError = normalizeError(error);
   }
 
   const dockerRuntime = await tryStartDockerBundledPostgres(config);
@@ -57,6 +62,10 @@ export async function ensureBundledPostgresRuntime(
     await waitForBundledPostgres(config);
     await ensureDatabaseExists(config);
     return dockerRuntime;
+  }
+
+  if (nativeStartupError) {
+    throw nativeStartupError;
   }
 
   throw new Error(
@@ -102,7 +111,7 @@ async function tryStartNativeBundledPostgres(
       ],
       {
         encoding: "utf8",
-        stdio: "ignore",
+        stdio: ["ignore", "pipe", "pipe"],
       },
     );
   } catch (error) {
@@ -115,7 +124,7 @@ async function tryStartNativeBundledPostgres(
         }),
       ))
     ) {
-      throw error;
+      throw await buildNativeStartError(config, logFile, error);
     }
   }
 
@@ -355,6 +364,63 @@ function inspectDockerContainerState(containerName: string): "missing" | "runnin
   }
 }
 
+async function buildNativeStartError(config: GatewayRuntimeConfig, logFile: string, error: unknown): Promise<Error> {
+  const port = config.assistant.database.bundledPostgres.port;
+  const messageParts = [
+    `Native bundled Postgres failed to start on 127.0.0.1:${port}.`,
+    extractProcessErrorDetail(error),
+  ];
+  const logTail = await readLogTail(logFile, 50);
+  if (logTail) {
+    messageParts.push(`Last lines from ${logFile}:\n${logTail}`);
+  } else {
+    messageParts.push(`No Postgres log output was available at ${logFile}.`);
+  }
+  messageParts.push(
+    "Set GOATCITADEL_BUNDLED_POSTGRES_PORT to a free port and restart. On Windows, check reserved ranges with: netsh interface ipv4 show excludedportrange protocol=tcp",
+  );
+  const wrapped = new Error(messageParts.filter(Boolean).join("\n\n"));
+  (wrapped as Error & { cause?: unknown }).cause = error;
+  return wrapped;
+}
+
+function extractProcessErrorDetail(error: unknown): string | undefined {
+  const candidate = error as { message?: unknown; stdout?: unknown; stderr?: unknown };
+  const details = [stringifyErrorField(candidate.message)];
+  const stdout = stringifyErrorField(candidate.stdout);
+  const stderr = stringifyErrorField(candidate.stderr);
+  if (stdout) {
+    details.push(`stdout:\n${stdout}`);
+  }
+  if (stderr) {
+    details.push(`stderr:\n${stderr}`);
+  }
+  return details.filter(Boolean).join("\n\n") || undefined;
+}
+
+function stringifyErrorField(value: unknown): string | undefined {
+  if (Buffer.isBuffer(value)) {
+    return value.toString("utf8").trim() || undefined;
+  }
+  if (typeof value === "string") {
+    return value.trim() || undefined;
+  }
+  return undefined;
+}
+
+async function readLogTail(filePath: string, maxLines: number): Promise<string | undefined> {
+  try {
+    const content = await fs.readFile(filePath, "utf8");
+    return content.split(/\r?\n/).filter(Boolean).slice(-maxLines).join("\n") || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
 export function buildBundledDockerContainerName(rootDir: string): string {
   const hash = createHash("sha1").update(rootDir).digest("hex").slice(0, 10);
   const hostname = os
@@ -378,6 +444,7 @@ function wait(ms: number): Promise<void> {
 export const __bundledPostgresRuntimeInternals = {
   isDockerPostgresDataDirectory,
   quoteIdentifier,
+  readLogTail,
   resolveNativePostgresCommands,
   sameFilesystemPath,
 };

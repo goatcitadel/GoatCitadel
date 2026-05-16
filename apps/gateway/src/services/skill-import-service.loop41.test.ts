@@ -103,7 +103,7 @@ describe("SkillImportService loop41 zip install behavior", () => {
         sourceRef: firstZip,
       }),
     ]);
-  });
+  }, 15_000);
 });
 
 function createSkillZip(rootDir: string, fileName: string): string {

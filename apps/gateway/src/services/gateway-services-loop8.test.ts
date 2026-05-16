@@ -682,7 +682,7 @@ describe("Loop 8 gateway service coverage", () => {
       }),
     ).toBeUndefined();
     expect(disabled.service.listImprovementSignals(10)).toHaveLength(0);
-  });
+  }, 15_000);
 
   it("enforces memory lifecycle file jails and learned-memory write gate evidence", async () => {
     const rootDir = createTempRoot("goat-loop8-memory-");

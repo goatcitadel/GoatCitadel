@@ -654,7 +654,7 @@ function tryDumpViaBundledDocker(config: GatewayRuntimeConfig, connectionString:
 }
 
 function normalizeBundledDockerConnectionString(connectionString: string): string {
-  return connectionString.replace("@127.0.0.1:55432/", "@127.0.0.1:5432/");
+  return connectionString.replace(/@127\.0\.0\.1:\d+\//, "@127.0.0.1:5432/");
 }
 
 function canUseDockerCli(): boolean {

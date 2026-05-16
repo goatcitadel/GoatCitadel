@@ -417,6 +417,13 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       area: "settings",
       section: "addons",
     },
+    {
+      id: "settings-budget",
+      label: "Budget",
+      description: "Cost-control defaults and budget-facing runtime guidance.",
+      area: "settings",
+      section: "budget",
+    },
   ],
 };
 
