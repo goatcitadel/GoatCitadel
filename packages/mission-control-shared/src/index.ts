@@ -1,14 +1,14 @@
-export * from "./api/index";
-export * from "./hooks/useEventStreamStatus";
-export * from "./hooks/useMediaQuery";
-export * from "./hooks/useMemoryOperatorSnapshot";
-export * from "./hooks/useOpsRuntimeSnapshot";
-export * from "./hooks/useProviderModelCatalog";
-export * from "./hooks/useRefreshSubscription";
-export * from "./state/effects-mode";
-export * from "./state/event-stream-status-store";
-export * from "./state/refresh-bus";
-export * from "./state/ui-preferences";
+export * from "./api/index.js";
+export * from "./hooks/useEventStreamStatus.js";
+export * from "./hooks/useMediaQuery.js";
+export * from "./hooks/useMemoryOperatorSnapshot.js";
+export * from "./hooks/useOpsRuntimeSnapshot.js";
+export * from "./hooks/useProviderModelCatalog.js";
+export * from "./hooks/useRefreshSubscription.js";
+export * from "./state/effects-mode.js";
+export * from "./state/event-stream-status-store.js";
+export * from "./state/refresh-bus.js";
+export * from "./state/ui-preferences.js";
 export {
   explainShellCommand,
   type ShellCommandExplanation,
