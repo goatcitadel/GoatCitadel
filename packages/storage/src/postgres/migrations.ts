@@ -906,18 +906,11 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
   },
   {
     version: 32,
-    name: "cron_jobs_workdir_and_context_from",
+    name: "cron_jobs_workdir_context_from_run_output_run_id",
     sql: `
       ALTER TABLE cron_jobs
         ADD COLUMN IF NOT EXISTS workdir TEXT,
-        ADD COLUMN IF NOT EXISTS context_from TEXT;
-    `,
-  },
-  {
-    version: 33,
-    name: "cron_jobs_last_run_output_and_run_id",
-    sql: `
-      ALTER TABLE cron_jobs
+        ADD COLUMN IF NOT EXISTS context_from TEXT,
         ADD COLUMN IF NOT EXISTS last_run_output TEXT,
         ADD COLUMN IF NOT EXISTS last_run_id TEXT;
     `,
