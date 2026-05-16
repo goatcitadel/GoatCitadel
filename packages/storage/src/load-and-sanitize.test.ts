@@ -129,4 +129,24 @@ describe("loadAndSanitize", () => {
     assert.deepEqual(out, { already: "parsed" });
     assert.equal(entries.length, 0);
   });
+
+  it("quarantines parser-contract violation when success is true but data is undefined", () => {
+    const entries: QuarantineEntry[] = [];
+    const brokenParse: SafeParse<Record<string, unknown>> = () => ({ success: true });
+    const out = loadAndSanitize(
+      '{"x":1}',
+      {
+        store: "test",
+        rowId: "row-7",
+        parse: brokenParse,
+        onQuarantine: (e) => entries.push(e),
+      },
+      undefined,
+    );
+    assert.equal(out, undefined);
+    assert.equal(entries.length, 1);
+    const entry0 = entries[0];
+    assert.ok(entry0, "expected quarantine entry");
+    assert.match(entry0.schemaError, /contract violation/);
+  });
 });

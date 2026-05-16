@@ -45,10 +45,19 @@ export function loadAndSanitize<T>(
   }
 
   const result = ctx.parse(parsed);
-  if (!result.success || result.data === undefined) {
+  if (!result.success) {
     const message = result.error?.message ?? "unknown schema error";
     const rawForQuarantine = typeof rawValue === "string" ? rawValue : safeStringify(rawValue);
     reportQuarantine(ctx, rawForQuarantine, `schema: ${message}`);
+    return fallback;
+  }
+  if (result.data === undefined) {
+    const rawForQuarantine = typeof rawValue === "string" ? rawValue : safeStringify(rawValue);
+    reportQuarantine(
+      ctx,
+      rawForQuarantine,
+      "schema: parser returned success:true with data:undefined (contract violation)",
+    );
     return fallback;
   }
 
