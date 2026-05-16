@@ -158,6 +158,40 @@ describe("ThreadedTimeline", () => {
     expect(markup).not.toContain("<details open");
   });
 
+  it("renders citations as source cards and exposes stream status through aria-live", () => {
+    const props = buildProps({
+      queuedCount: 2,
+    });
+    props.thread.turns[0].citations = [
+      {
+        citationId: "cite-1",
+        title: "Launch notes",
+        url: "https://example.test/launch-notes",
+        snippet: "Operator-visible evidence.",
+        sourceType: "web",
+      },
+      {
+        citationId: "cite-file",
+        title: "Local report",
+        url: "workspace/report.md",
+        sourceType: "file",
+      },
+    ];
+
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+    const text = renderedText(renderer);
+
+    expect(text).toContain("Launch notes");
+    expect(text).toContain("web · Operator-visible evidence.");
+    expect(text).toContain("Local report");
+    expect(text).toContain("Cowork response streaming with 2 queued.");
+    expect(renderer.root.findByProps({ "aria-label": "Citations for this answer" })).toBeTruthy();
+    expect(renderer.root.findByProps({ className: "mc-next-thread-live-region" }).props["aria-live"]).toBe("polite");
+    expect(renderer.root.findAllByType("a").map((link) => link.props.href)).toEqual([
+      "https://example.test/launch-notes",
+    ]);
+  });
+
   it("renders pending approval as an inline blocker near the thread bottom", () => {
     const markup = renderToStaticMarkup(
       <ThreadedTimeline

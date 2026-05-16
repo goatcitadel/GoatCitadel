@@ -5,6 +5,9 @@ export interface ChatModelProviderOption {
   label: string;
   baseUrl?: string;
   defaultModel?: string;
+  contextWindowTokens?: number;
+  inputCostPerMillionTokens?: number;
+  outputCostPerMillionTokens?: number;
   capabilities?: {
     voiceInput?: boolean;
     voiceOutput?: boolean;
@@ -19,6 +22,72 @@ export interface ChatModelProviderOption {
   modelProbeState?: "not_checked" | "ready" | "fallback" | "empty" | "error";
   modelProbeSource?: "live" | "template_fallback" | "error_fallback";
   modelProbeCheckedAt?: string;
+}
+
+function formatHostLabel(baseUrl?: string): string | null {
+  if (!baseUrl) {
+    return null;
+  }
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return baseUrl;
+  }
+}
+
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat("en-US").format(value);
+}
+
+function formatCost(input?: number, output?: number): string | null {
+  const parts = [
+    typeof input === "number" ? `$${input.toFixed(input >= 10 ? 2 : 3)}/M input` : null,
+    typeof output === "number" ? `$${output.toFixed(output >= 10 ? 2 : 3)}/M output` : null,
+  ].filter((value): value is string => Boolean(value));
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function formatCapabilities(capabilities: ChatModelProviderOption["capabilities"]): string | null {
+  if (!capabilities) {
+    return null;
+  }
+  const parts = [
+    capabilities.voiceInput ? "voice in" : null,
+    capabilities.voiceOutput ? "voice out" : null,
+    capabilities.imageGenerate ? "image gen" : null,
+    capabilities.imageEdit ? "image edit" : null,
+  ].filter((value): value is string => Boolean(value));
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function buildProviderMetadata(
+  activeProvider: ChatModelProviderOption | undefined,
+  model?: string,
+): Array<{ label: string; value: string }> {
+  if (!activeProvider) {
+    return [];
+  }
+  const endpoint = formatHostLabel(activeProvider.baseUrl);
+  const cost = formatCost(activeProvider.inputCostPerMillionTokens, activeProvider.outputCostPerMillionTokens);
+  const capabilities = formatCapabilities(activeProvider.capabilities);
+  const probe = activeProvider.modelProbeState
+    ? `${activeProvider.modelProbeState}${activeProvider.modelProbeSource ? ` via ${activeProvider.modelProbeSource}` : ""}`
+    : null;
+  return [
+    { label: "Runtime", value: activeProvider.isLocalRuntime ? "Local" : "Cloud" },
+    endpoint ? { label: "Endpoint", value: endpoint } : null,
+    model
+      ? { label: "Model", value: model }
+      : activeProvider.defaultModel
+        ? { label: "Default", value: activeProvider.defaultModel }
+        : null,
+    typeof activeProvider.contextWindowTokens === "number"
+      ? { label: "Context", value: `${formatNumber(activeProvider.contextWindowTokens)} tokens` }
+      : null,
+    cost ? { label: "Cost", value: cost } : null,
+    capabilities ? { label: "Capabilities", value: capabilities } : null,
+    probe ? { label: "Catalog", value: probe } : null,
+  ].filter((value): value is { label: string; value: string } => Boolean(value));
 }
 
 export function ChatModelPicker({
@@ -62,6 +131,7 @@ export function ChatModelPicker({
       ? `Loading models for ${activeProvider?.label ?? "provider"}...`
       : (activeProvider?.availabilityHint ??
         (models.length === 0 ? `No models available for ${activeProvider?.label ?? "this provider"} yet.` : null));
+  const metadata = buildProviderMetadata(activeProvider, modelLoading ? undefined : (model ?? models[0]));
 
   return (
     <div className="chat-model-picker">
@@ -81,6 +151,16 @@ export function ChatModelPicker({
         options={modelOptions}
       />
       {availabilityMessage ? <p className="chat-model-picker-note">{availabilityMessage}</p> : null}
+      {metadata.length > 0 ? (
+        <dl className="chat-model-picker-metadata" aria-label="Provider and model metadata">
+          {metadata.map((item) => (
+            <div key={`${item.label}-${item.value}`}>
+              <dt>{item.label}</dt>
+              <dd>{item.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
     </div>
   );
 }

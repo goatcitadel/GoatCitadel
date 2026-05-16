@@ -729,6 +729,42 @@
   display: none;
 }
 
+.mc-next-threaded-model-picker .chat-model-picker-metadata {
+  grid-column: 1 / -1;
+  display: flex;
+  max-width: 18rem;
+  flex-wrap: wrap;
+  gap: 0.22rem;
+  margin: 0;
+}
+
+.mc-next-threaded-model-picker .chat-model-picker-metadata div {
+  display: inline-flex;
+  max-width: 100%;
+  gap: 0.18rem;
+  align-items: center;
+  padding: 0.08rem 0.32rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  color: var(--text-secondary);
+  font-size: 0.58rem;
+  line-height: 1.2;
+}
+
+.mc-next-threaded-model-picker .chat-model-picker-metadata dt,
+.mc-next-threaded-model-picker .chat-model-picker-metadata dd {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-next-threaded-model-picker .chat-model-picker-metadata dt {
+  color: var(--text-tertiary);
+  font-weight: 700;
+}
+
 .mc-next-threaded-conversation {
   display: grid;
   gap: 0;
@@ -757,6 +793,18 @@
 .mc-next-threaded-surface.unified .mc-next-threaded-thread-card {
   min-height: 15rem;
   padding: 14px 0;
+  border: 0;
+}
+
+.mc-next-thread-live-region {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
   border: 0;
 }
 
@@ -1281,6 +1329,44 @@
   gap: 0.28rem;
   flex-wrap: wrap;
   align-items: center;
+}
+
+.mc-next-thread-citations {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.mc-next-thread-citations article {
+  display: grid;
+  gap: 0.22rem;
+  padding: 0.42rem 0.5rem;
+  border-radius: 0.45rem;
+  border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-2) 90%, transparent);
+}
+
+.mc-next-thread-citations article > div {
+  display: flex;
+  min-width: 0;
+  gap: 0.38rem;
+  align-items: baseline;
+}
+
+.mc-next-thread-citations a,
+.mc-next-thread-citations span {
+  min-width: 0;
+  color: var(--foreground);
+  font-size: 0.76rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-thread-citations p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.45;
 }
 
 .mc-next-thread-bubble article > div > button {

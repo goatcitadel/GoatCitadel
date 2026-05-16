@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent }
 import {
   getChatTurnRecoveryActionLabel,
   isChatTurnActiveStatus,
+  type ChatCitationRecord,
   type ChatMode,
   type ChatThreadTurnRecord,
   type ChatTurnTraceRecord,
@@ -120,6 +121,56 @@ function getRecoveryStripLabel(turn: ChatThreadTurnRecord): string | null {
   return getChatTurnRecoveryActionLabel(action);
 }
 
+function isSafeCitationHref(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function formatCitationSource(citation: ChatCitationRecord): string {
+  if (citation.knowledge) {
+    return citation.knowledge.retrievalMode === "full_text" ? "knowledge full text" : "knowledge retrieval";
+  }
+  return citation.sourceType ?? "source";
+}
+
+function ThreadCitationList({ citations }: { citations: ChatCitationRecord[] }) {
+  if (citations.length === 0) {
+    return null;
+  }
+  return (
+    <div className="mc-next-thread-citations" aria-label="Citations for this answer">
+      {citations.slice(0, 6).map((citation, index) => {
+        const label = citation.title?.trim() || citation.url;
+        const source = formatCitationSource(citation);
+        const safeHref = isSafeCitationHref(citation.url);
+        return (
+          <article key={citation.citationId || `${citation.url}-${index}`}>
+            <div>
+              <strong>{index + 1}</strong>
+              {safeHref ? (
+                <a href={citation.url} target="_blank" rel="noreferrer">
+                  {label}
+                </a>
+              ) : (
+                <span>{label}</span>
+              )}
+            </div>
+            <p>
+              {source}
+              {citation.snippet ? ` · ${citation.snippet}` : ""}
+            </p>
+          </article>
+        );
+      })}
+      {citations.length > 6 ? <p className="mc-next-thread-note">+{citations.length - 6} more citations</p> : null}
+    </div>
+  );
+}
+
 function ThreadBranchSwitcher({ turn, onSwitch }: { turn: ChatThreadTurnRecord; onSwitch: (turnId: string) => void }) {
   if (turn.branch.siblingCount <= 1) {
     return null;
@@ -230,6 +281,7 @@ function ThreadTurnCard({
                 : "No assistant output yet."}
             </p>
           )}
+          <ThreadCitationList citations={turn.citations} />
         </div>
       </div>
       <div className="mc-next-thread-strip">
@@ -456,6 +508,15 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
   const scrollFrameRef = useRef<number | null>(null);
   const pendingApproval = props.pendingApproval as ChatPendingApprovalState | null;
   const blockerActive = Boolean(pendingApproval || props.pendingUserInput);
+  const liveStatus =
+    props.streamError ??
+    (props.streamStatus === "streaming"
+      ? `${toTitleCase(props.mode)} response streaming${props.queuedCount > 0 ? ` with ${props.queuedCount} queued` : ""}.`
+      : props.streamStatus === "queued"
+        ? `${toTitleCase(props.mode)} turn queued.`
+        : props.streamStatus === "connecting"
+          ? `${toTitleCase(props.mode)} stream connecting.`
+          : "");
 
   useEffect(() => {
     if (!props.followOutput) {
@@ -540,6 +601,9 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
 
   return (
     <div ref={shellRef} className={`mc-next-thread-shell mode-${props.mode}`}>
+      <div className="mc-next-thread-live-region" role="status" aria-live="polite" aria-atomic="true">
+        {liveStatus}
+      </div>
       <div className="mc-next-thread-status-lane">
         <SurfaceReconnectBanner mode={props.mode} status={props.eventStreamStatus} onRefresh={props.onRefreshThread} />
       </div>

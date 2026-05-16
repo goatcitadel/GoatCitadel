@@ -69,4 +69,36 @@ describe("ChatModelPicker", () => {
     );
     expect(findText(empty.toJSON(), "No models available for Local runtime yet.")).toBe(true);
   });
+
+  it("shows provider context cost and capability metadata", () => {
+    const renderer = create(
+      <ChatModelPicker
+        providers={[
+          {
+            providerId: "openai",
+            label: "OpenAI",
+            baseUrl: "https://api.openai.com/v1",
+            models: ["gpt-5.4"],
+            contextWindowTokens: 128000,
+            inputCostPerMillionTokens: 1.25,
+            outputCostPerMillionTokens: 10,
+            capabilities: { voiceInput: true, imageGenerate: true },
+            modelProbeState: "ready",
+            modelProbeSource: "live",
+          },
+        ]}
+        providerId="openai"
+        model="gpt-5.4"
+        onChangeProvider={vi.fn()}
+        onChangeModel={vi.fn()}
+      />,
+    );
+
+    const rendered = renderer.toJSON();
+    expect(findText(rendered, "128,000 tokens")).toBe(true);
+    expect(findText(rendered, "$1.250/M input")).toBe(true);
+    expect(findText(rendered, "$10.00/M output")).toBe(true);
+    expect(findText(rendered, "voice in · image gen")).toBe(true);
+    expect(findText(rendered, "ready via live")).toBe(true);
+  });
 });
