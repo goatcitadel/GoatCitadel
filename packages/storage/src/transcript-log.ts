@@ -71,7 +71,7 @@ export class TranscriptLog {
       if (!parsed) {
         continue;
       }
-      events.push(parsed as TranscriptEvent);
+      events.push(parsed as unknown as TranscriptEvent);
     }
     return events;
   }
