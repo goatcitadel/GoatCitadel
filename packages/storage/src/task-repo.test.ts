@@ -348,6 +348,13 @@ describe("TaskRepository — kanban fields", () => {
     const repos = createRepos();
     const created = repos.tasks.create({ title: "kanban", workspaceId: "default" });
     repos.tasks.update(created.taskId, {
+      artifactVerification: [
+        {
+          claim: { kind: "file", value: "/tmp/x" },
+          status: "missing",
+          checkedAt: "2026-05-15T12:00:00.000Z",
+        },
+      ],
       distressSignals: [
         {
           signalId: "ds-1",
@@ -361,9 +368,11 @@ describe("TaskRepository — kanban fields", () => {
       retryBudget: { maxRetries: 3, retryCount: 0 },
     });
     const cleared = repos.tasks.update(created.taskId, {
+      artifactVerification: null,
       distressSignals: null,
       retryBudget: null,
     });
+    assert.equal(cleared.artifactVerification, undefined);
     assert.equal(cleared.distressSignals, undefined);
     assert.equal(cleared.retryBudget, undefined);
   });

@@ -346,10 +346,7 @@ function mapTaskRow(row: TaskRow): TaskRecord {
       ? (safeJsonParse<TaskDistressSignal[]>(row.distress_signals_json, []) as TaskDistressSignal[])
       : undefined,
     retryBudget: row.retry_budget_json
-      ? (safeJsonParse<TaskRetryBudget>(
-          row.retry_budget_json,
-          undefined as unknown as TaskRetryBudget,
-        ) as TaskRetryBudget)
+      ? safeJsonParse<TaskRetryBudget | undefined>(row.retry_budget_json, undefined)
       : undefined,
     artifactVerification: row.artifact_verification_json
       ? (safeJsonParse<TaskArtifactVerification[]>(row.artifact_verification_json, []) as TaskArtifactVerification[])
