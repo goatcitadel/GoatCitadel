@@ -304,3 +304,67 @@ describe("task repositories", () => {
     assert.equal(repos.tasks.find(task.taskId), undefined);
   });
 });
+
+describe("TaskRepository — kanban fields", () => {
+  it("persists distressSignals, retryBudget, artifactVerification on update", () => {
+    const repos = createRepos();
+    const created = repos.tasks.create({ title: "kanban", workspaceId: "default" });
+    const updated = repos.tasks.update(created.taskId, {
+      distressSignals: [
+        {
+          signalId: "ds-1",
+          code: "needs_user",
+          severity: "warn",
+          title: "Awaiting input",
+          summary: "Worker paused.",
+          createdAt: "2026-05-15T12:00:00.000Z",
+        },
+      ],
+      retryBudget: { maxRetries: 3, retryCount: 1 },
+      artifactVerification: [
+        {
+          claim: { kind: "file", value: "/tmp/out.txt" },
+          status: "missing",
+          checkedAt: "2026-05-15T12:00:00.000Z",
+          detail: "ENOENT",
+        },
+      ],
+    });
+    const reloaded = repos.tasks.get(created.taskId);
+    assert.deepEqual(reloaded.distressSignals, updated.distressSignals);
+    assert.deepEqual(reloaded.retryBudget, updated.retryBudget);
+    assert.deepEqual(reloaded.artifactVerification, updated.artifactVerification);
+  });
+
+  it("returns undefined for kanban fields when never set", () => {
+    const repos = createRepos();
+    const created = repos.tasks.create({ title: "plain", workspaceId: "default" });
+    assert.equal(created.distressSignals, undefined);
+    assert.equal(created.retryBudget, undefined);
+    assert.equal(created.artifactVerification, undefined);
+  });
+
+  it("clears kanban fields when explicitly set to null in update", () => {
+    const repos = createRepos();
+    const created = repos.tasks.create({ title: "kanban", workspaceId: "default" });
+    repos.tasks.update(created.taskId, {
+      distressSignals: [
+        {
+          signalId: "ds-1",
+          code: "tool_error",
+          severity: "warn",
+          title: "x",
+          summary: "y",
+          createdAt: "2026-05-15T12:00:00.000Z",
+        },
+      ],
+      retryBudget: { maxRetries: 3, retryCount: 0 },
+    });
+    const cleared = repos.tasks.update(created.taskId, {
+      distressSignals: null,
+      retryBudget: null,
+    });
+    assert.equal(cleared.distressSignals, undefined);
+    assert.equal(cleared.retryBudget, undefined);
+  });
+});

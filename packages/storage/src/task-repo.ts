@@ -2,9 +2,12 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import type {
   AgenticTaskContext,
+  TaskArtifactVerification,
   TaskCreateInput,
+  TaskDistressSignal,
   TaskProactiveContext,
   TaskRecord,
+  TaskRetryBudget,
   TaskStatus,
   TaskUpdateInput,
 } from "@goatcitadel/contracts";
@@ -25,6 +28,9 @@ interface TaskRow {
   deleted_at: string | null;
   deleted_by: string | null;
   delete_reason: string | null;
+  distress_signals_json: string | null;
+  retry_budget_json: string | null;
+  artifact_verification_json: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -54,10 +60,14 @@ export class TaskRepository {
     this.insertStmt = db.prepare(`
       INSERT INTO tasks (
         task_id, workspace_id, title, description, status, priority,
-        assigned_agent_id, created_by, due_at, metadata_json, created_at, updated_at
+        assigned_agent_id, created_by, due_at, metadata_json,
+        distress_signals_json, retry_budget_json, artifact_verification_json,
+        created_at, updated_at
       ) VALUES (
         @taskId, @workspaceId, @title, @description, @status, @priority,
-        @assignedAgentId, @createdBy, @dueAt, @metadataJson, @createdAt, @updatedAt
+        @assignedAgentId, @createdBy, @dueAt, @metadataJson,
+        @distressSignalsJson, @retryBudgetJson, @artifactVerificationJson,
+        @createdAt, @updatedAt
       )
     `);
 
@@ -72,6 +82,9 @@ export class TaskRepository {
         assigned_agent_id = @assignedAgentId,
         due_at = @dueAt,
         metadata_json = @metadataJson,
+        distress_signals_json = @distressSignalsJson,
+        retry_budget_json = @retryBudgetJson,
+        artifact_verification_json = @artifactVerificationJson,
         deleted_at = @deletedAt,
         deleted_by = @deletedBy,
         delete_reason = @deleteReason,
@@ -113,6 +126,9 @@ export class TaskRepository {
       createdBy: input.createdBy ?? null,
       dueAt: input.dueAt ?? null,
       metadataJson: serializeTaskMetadata(input.proactiveContext, input.agenticContext),
+      distressSignalsJson: input.distressSignals ? JSON.stringify(input.distressSignals) : null,
+      retryBudgetJson: input.retryBudget ? JSON.stringify(input.retryBudget) : null,
+      artifactVerificationJson: input.artifactVerification ? JSON.stringify(input.artifactVerification) : null,
       createdAt: now,
       updatedAt: now,
     });
@@ -192,6 +208,30 @@ export class TaskRepository {
               input.proactiveContext === undefined ? current.proactiveContext : (input.proactiveContext ?? undefined),
               input.agenticContext === undefined ? current.agenticContext : (input.agenticContext ?? undefined),
             ),
+      distressSignalsJson:
+        input.distressSignals === undefined
+          ? current.distressSignals
+            ? JSON.stringify(current.distressSignals)
+            : null
+          : input.distressSignals === null
+            ? null
+            : JSON.stringify(input.distressSignals),
+      retryBudgetJson:
+        input.retryBudget === undefined
+          ? current.retryBudget
+            ? JSON.stringify(current.retryBudget)
+            : null
+          : input.retryBudget === null
+            ? null
+            : JSON.stringify(input.retryBudget),
+      artifactVerificationJson:
+        input.artifactVerification === undefined
+          ? current.artifactVerification
+            ? JSON.stringify(current.artifactVerification)
+            : null
+          : input.artifactVerification === null
+            ? null
+            : JSON.stringify(input.artifactVerification),
       deletedAt: current.deletedAt ?? null,
       deletedBy: current.deletedBy ?? null,
       deleteReason: current.deleteReason ?? null,
@@ -302,6 +342,18 @@ function mapTaskRow(row: TaskRow): TaskRecord {
     dueAt: row.due_at ?? undefined,
     proactiveContext: metadata.proactiveContext ?? undefined,
     agenticContext: metadata.agenticContext ?? undefined,
+    distressSignals: row.distress_signals_json
+      ? (safeJsonParse<TaskDistressSignal[]>(row.distress_signals_json, []) as TaskDistressSignal[])
+      : undefined,
+    retryBudget: row.retry_budget_json
+      ? (safeJsonParse<TaskRetryBudget>(
+          row.retry_budget_json,
+          undefined as unknown as TaskRetryBudget,
+        ) as TaskRetryBudget)
+      : undefined,
+    artifactVerification: row.artifact_verification_json
+      ? (safeJsonParse<TaskArtifactVerification[]>(row.artifact_verification_json, []) as TaskArtifactVerification[])
+      : undefined,
     deletedAt: row.deleted_at ?? undefined,
     deletedBy: row.deleted_by ?? undefined,
     deleteReason: row.delete_reason ?? undefined,
@@ -402,6 +454,9 @@ function isTaskRow(value: unknown): value is TaskRow {
     (typeof value.deleted_at === "string" || value.deleted_at === null) &&
     (typeof value.deleted_by === "string" || value.deleted_by === null) &&
     (typeof value.delete_reason === "string" || value.delete_reason === null) &&
+    (typeof value.distress_signals_json === "string" || value.distress_signals_json === null) &&
+    (typeof value.retry_budget_json === "string" || value.retry_budget_json === null) &&
+    (typeof value.artifact_verification_json === "string" || value.artifact_verification_json === null) &&
     typeof value.created_at === "string" &&
     typeof value.updated_at === "string"
   );
