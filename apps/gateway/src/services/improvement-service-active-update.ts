@@ -1,14 +1,11 @@
 import type { ImprovementCandidateKind } from "@goatcitadel/contracts";
 import type { AgenticImprovementBridgeProposal } from "./agentic-improvement-bridge-service.js";
 
-export type EvidenceItem = Pick<AgenticImprovementBridgeProposal["evidence"][number], "source" | "sourceId"> & {
-  refType?: string;
-  [key: string]: unknown;
-};
+export type EvidenceItem = Pick<AgenticImprovementBridgeProposal["evidence"][number], "source" | "sourceId">;
 
 export interface ResolveActiveUpdateTargetInput {
   candidateKind: ImprovementCandidateKind;
-  evidence: EvidenceItem[];
+  evidence: readonly EvidenceItem[];
   justLoadedSkillIds: string[];
 }
 
