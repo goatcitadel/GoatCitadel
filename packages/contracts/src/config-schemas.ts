@@ -287,6 +287,14 @@ export const AssistantConfigInputSchema = z
       })
       .passthrough()
       .optional(),
+    shellExplainerPolicy: z
+      .object({
+        enabled: z.boolean().optional(),
+        elevateOnDanger: z.enum(["caution", "danger", "nuclear"]).optional(),
+        autoRejectOnDanger: z.boolean().optional(),
+      })
+      .passthrough()
+      .optional(),
     memory: z
       .object({
         enabled: z.boolean().optional(),

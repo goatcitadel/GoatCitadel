@@ -40,6 +40,7 @@ export interface AssistantConfig {
   worktreesDir: string;
   auth: AuthConfig;
   approvalExplainer: ApprovalExplainerConfig;
+  shellExplainerPolicy: ShellExplainerPolicyConfig;
   memory: MemoryConfig;
   web: WebRuntimeConfig;
   mesh: MeshConfig;
@@ -143,6 +144,18 @@ export interface ApprovalExplainerConfig {
   timeoutMs: number;
   maxPayloadChars: number;
 }
+
+export interface ShellExplainerPolicyConfig {
+  enabled: boolean;
+  elevateOnDanger?: "caution" | "danger" | "nuclear";
+  autoRejectOnDanger?: boolean;
+}
+
+export const DEFAULT_SHELL_EXPLAINER_POLICY: ShellExplainerPolicyConfig = {
+  enabled: true,
+  elevateOnDanger: "danger",
+  autoRejectOnDanger: false,
+};
 
 export interface MeshConfig {
   enabled: boolean;
@@ -789,6 +802,10 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
     approvalExplainer: {
       ...approvalExplainerDefaults,
       ...(input.approvalExplainer ?? {}),
+    },
+    shellExplainerPolicy: {
+      ...DEFAULT_SHELL_EXPLAINER_POLICY,
+      ...(input.shellExplainerPolicy ?? {}),
     },
     memory: {
       enabled: memoryInput.enabled ?? true,

@@ -314,8 +314,10 @@ describe("ApprovalRepository", () => {
 
     const fetched = repo.get(created.approvalId);
     assert.equal(fetched.shellExplanations?.length, 1);
-    assert.equal(fetched.shellExplanations?.[0].highestRisk, "danger");
-    assert.equal(fetched.shellExplanations?.[0].command, "rm -rf /tmp/x");
+    const first = fetched.shellExplanations?.[0];
+    assert.ok(first, "shellExplanations[0] should exist");
+    assert.equal(first.highestRisk, "danger");
+    assert.equal(first.command, "rm -rf /tmp/x");
   });
 
   it("setShellExplanations returns false for unknown approval id", () => {

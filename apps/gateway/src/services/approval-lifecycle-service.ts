@@ -41,6 +41,8 @@ import type {
 } from "./approval-types.js";
 import type { HooksService } from "./hooks-service.js";
 import type { ApprovalWaitRunService } from "./approval-wait-run-service.js";
+import type { ShellExplainerPolicyConfig } from "../config.js";
+import { applyShellExplainerPolicy } from "./shell-command-explainer.js";
 import {
   deriveApprovalResolutionEffectsResult,
   type ApprovalResolutionEffectsResult,
@@ -80,6 +82,9 @@ export interface ApprovalLifecycleHost {
     ApprovalWaitRunService,
     "buildApprovalLinkage" | "buildApprovalRealtimeLinks" | "primeApprovalLifecycle"
   >;
+
+  // ── config ─────────────────────────────────────────────────────────
+  readonly shellExplainerPolicy: ShellExplainerPolicyConfig;
 
   // ── realtime ───────────────────────────────────────────────────────
   publishRealtime(
@@ -450,7 +455,23 @@ export async function createApproval(
       }
     : input;
 
-  let approval = host.storage.approvals.create(hookableInput);
+  const policyOutcome = applyShellExplainerPolicy(
+    {
+      riskLevel: hookableInput.riskLevel,
+      payload: hookableInput.payload,
+      preview: hookableInput.preview,
+    },
+    host.shellExplainerPolicy,
+  );
+  const createInput = policyOutcome.elevatedRiskLevel
+    ? { ...hookableInput, riskLevel: policyOutcome.elevatedRiskLevel }
+    : hookableInput;
+
+  let approval = host.storage.approvals.create(createInput);
+  if (policyOutcome.explanations.length > 0) {
+    host.storage.approvals.setShellExplanations(approval.approvalId, policyOutcome.explanations);
+    approval = host.storage.approvals.get(approval.approvalId);
+  }
   approval = host.approvalWaitRunService.primeApprovalLifecycle(
     approval.approvalId,
     host.approvalWaitRunService.buildApprovalLinkage(hookableInput.linkage),
