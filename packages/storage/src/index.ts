@@ -214,7 +214,7 @@ export class Storage {
     this.approvalWaitRuns = new ApprovalWaitRunRepository(this.db);
     this.costLedger = new CostLedgerRepository(this.db);
     this.orchestration = new OrchestrationRepository(this.db);
-    this.tasks = new TaskRepository(this.db);
+    this.tasks = new TaskRepository(this.db, { quarantine: this.stateValidationQuarantine });
     this.taskActivities = new TaskActivityRepository(this.db);
     this.taskDeliverables = new TaskDeliverableRepository(this.db);
     this.taskSubagents = new TaskSubagentRepository(this.db);
@@ -525,7 +525,7 @@ export * from "./pending-approval-action-repo.js";
 export * from "./cost-ledger-repo.js";
 export * from "./orchestration-repo.js";
 export { TaskRepository } from "./task-repo.js";
-export type { TaskListQuery, TaskStatusCount } from "./task-repo.js";
+export type { TaskListQuery, TaskRepositoryOptions, TaskStatusCount } from "./task-repo.js";
 export * from "./task-activity-repo.js";
 export * from "./task-deliverable-repo.js";
 export * from "./task-subagent-repo.js";
