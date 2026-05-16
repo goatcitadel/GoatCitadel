@@ -45,5 +45,7 @@ describe("task_kanban_columns migration", () => {
       (db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map((row) => row.name),
     );
     assert.ok(columns.has("distress_signals_json"));
+    assert.ok(columns.has("retry_budget_json"));
+    assert.ok(columns.has("artifact_verification_json"));
   });
 });
