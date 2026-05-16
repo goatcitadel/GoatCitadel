@@ -109,4 +109,87 @@ describe("PluginToolOverrideService", () => {
     const second = service.registerOverrideClaim(baseInput());
     expect(second).toEqual(first);
   });
+
+  it("rejects approval when another plugin already has an approved override for the same toolName", () => {
+    const service = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    service.registerOverrideClaim({
+      pluginId: "first",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+    service.approveClaim({ pluginId: "first", toolName: "web_search", approvedBy: "owner-1" });
+    service.registerOverrideClaim({
+      pluginId: "second",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+    expect(() => service.approveClaim({ pluginId: "second", toolName: "web_search", approvedBy: "owner-1" })).toThrow(
+      /already.*approved.*first/i,
+    );
+  });
+
+  it("allows approving a different toolName even when one plugin already has an approved override", () => {
+    const service = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    service.registerOverrideClaim({
+      pluginId: "first",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+    service.approveClaim({ pluginId: "first", toolName: "web_search", approvedBy: "owner-1" });
+    service.registerOverrideClaim({
+      pluginId: "second",
+      toolName: "shell_exec",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+    const approved = service.approveClaim({
+      pluginId: "second",
+      toolName: "shell_exec",
+      approvedBy: "owner-1",
+    });
+    expect(approved.status).toBe("approved");
+  });
+
+  it("allows re-approving the SAME plugin's claim (idempotent)", () => {
+    const service = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    service.registerOverrideClaim({
+      pluginId: "first",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+    const first = service.approveClaim({ pluginId: "first", toolName: "web_search", approvedBy: "owner-1" });
+    // No revoke in between — same plugin claim, idempotent re-approve
+    const second = service.approveClaim({ pluginId: "first", toolName: "web_search", approvedBy: "owner-1" });
+    expect(second.status).toBe("approved");
+    expect(second.pluginId).toBe(first.pluginId);
+  });
+
+  it("after revoke, a new plugin can be approved for the same toolName", () => {
+    const service = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    service.registerOverrideClaim({
+      pluginId: "first",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+    service.approveClaim({ pluginId: "first", toolName: "web_search", approvedBy: "owner-1" });
+    service.revokeClaim({ pluginId: "first", toolName: "web_search", revokedBy: "owner-1" });
+    service.registerOverrideClaim({
+      pluginId: "second",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+    const approved = service.approveClaim({
+      pluginId: "second",
+      toolName: "web_search",
+      approvedBy: "owner-1",
+    });
+    expect(approved.status).toBe("approved");
+    expect(approved.pluginId).toBe("second");
+  });
 });

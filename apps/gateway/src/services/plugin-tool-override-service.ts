@@ -53,6 +53,12 @@ export class PluginToolOverrideService {
       });
     }
     const record = this.requireClaim(input.pluginId, input.toolName);
+    const existingApproved = this.findApprovedForTool(input.toolName);
+    if (existingApproved && existingApproved.pluginId !== input.pluginId) {
+      throw new ConflictError({
+        message: `Cannot approve plugin ${input.pluginId} for tool ${input.toolName}: plugin ${existingApproved.pluginId} already has an approved override. Revoke the existing override first.`,
+      });
+    }
     const updated: PluginToolOverrideClaimRecord = {
       ...record,
       status: "approved",
@@ -101,6 +107,15 @@ export class PluginToolOverrideService {
       });
     }
     return record;
+  }
+
+  private findApprovedForTool(toolName: string): PluginToolOverrideClaimRecord | undefined {
+    for (const record of this.claims.values()) {
+      if (record.toolName === toolName && record.status === "approved") {
+        return record;
+      }
+    }
+    return undefined;
   }
 }
 
