@@ -101,14 +101,18 @@ describe("KanbanRoutePage", () => {
   it("fires bulkTaskAction with unblock when the operator clicks Unblock with selections", async () => {
     const renderer = await renderPage();
     const checkbox = renderer.root.findAll((node) => node.props?.["data-testid"] === "kanban-select-t-2")[0];
-    expect(checkbox).toBeTruthy();
+    if (!checkbox) {
+      throw new Error("kanban-select-t-2 checkbox not found");
+    }
     await act(async () => {
       checkbox.props.onChange();
     });
     const unblockButton = renderer.root.findAll(
       (node) => node.type === "button" && collectText(node).trim().toLowerCase() === "unblock",
     )[0];
-    expect(unblockButton).toBeTruthy();
+    if (!unblockButton) {
+      throw new Error("unblock button not found");
+    }
     await act(async () => {
       await unblockButton.props.onClick();
     });
