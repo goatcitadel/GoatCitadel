@@ -22,6 +22,7 @@ import {
   PRIVATE_BETA_BACKUP_SCHEDULE_LABEL,
   UPDATE_REVIEW_DAILY_SCHEDULE_LABEL,
 } from "./cron-job-schedule-labels.js";
+import { describeMalformedCronRow, isPlainRecord, isValidCronRow } from "./cron-row-validation.js";
 
 const log = logger.child("cron-job-config-helpers");
 
@@ -59,7 +60,7 @@ export async function loadCronJobsFromConfig(host: CronJobConfigHost): Promise<v
     return;
   }
 
-  const jobsArray: unknown = Array.isArray(parsed) ? parsed : isRecord(parsed) ? parsed.jobs : undefined;
+  const jobsArray: unknown = Array.isArray(parsed) ? parsed : isPlainRecord(parsed) ? parsed.jobs : undefined;
   if (!Array.isArray(jobsArray)) {
     log.warn("cron-jobs.json has no jobs array — skipping load", { path: filePath });
     return;
@@ -73,7 +74,7 @@ export async function loadCronJobsFromConfig(host: CronJobConfigHost): Promise<v
         log.warn("dropping malformed cron job row", {
           path: filePath,
           index,
-          reason: describeMalformedRow(candidate),
+          reason: describeMalformedCronRow(candidate),
         });
         continue;
       }
@@ -125,10 +126,6 @@ export async function loadCronJobsFromConfig(host: CronJobConfigHost): Promise<v
   });
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 interface SanitizedCronJobRow {
   jobId: string;
   name: string;
@@ -143,51 +140,24 @@ interface SanitizedCronJobRow {
 }
 
 function sanitizeCronJobRow(input: unknown): SanitizedCronJobRow | null {
-  if (!isRecord(input)) {
+  if (!isValidCronRow(input)) {
     return null;
   }
-  const jobId = typeof input.jobId === "string" ? input.jobId.trim() : "";
-  const name = typeof input.name === "string" ? input.name.trim() : "";
-  const schedule = typeof input.schedule === "string" ? input.schedule.trim() : "";
-  if (!jobId || !name || !schedule) {
-    return null;
-  }
+  // isValidCronRow narrows to { jobId, name, schedule } but we also need the
+  // ancillary fields, so coerce back to a record after the narrowing check.
+  const record = input as Record<string, unknown> & { jobId: string; name: string; schedule: string };
   return {
-    jobId,
-    name,
-    schedule,
-    action: typeof input.action === "string" ? (input.action as CronJobRecord["action"]) : undefined,
-    actionConfig: (input.actionConfig as CronJobRecord["actionConfig"]) ?? undefined,
-    description: typeof input.description === "string" ? input.description : undefined,
-    enabled: input.enabled,
-    endAt: typeof input.endAt === "string" ? input.endAt : undefined,
-    lastRunAt: typeof input.lastRunAt === "string" ? input.lastRunAt : undefined,
-    nextRunAt: typeof input.nextRunAt === "string" ? input.nextRunAt : undefined,
+    jobId: record.jobId.trim(),
+    name: record.name.trim(),
+    schedule: record.schedule.trim(),
+    action: typeof record.action === "string" ? (record.action as CronJobRecord["action"]) : undefined,
+    actionConfig: (record.actionConfig as CronJobRecord["actionConfig"]) ?? undefined,
+    description: typeof record.description === "string" ? record.description : undefined,
+    enabled: record.enabled,
+    endAt: typeof record.endAt === "string" ? record.endAt : undefined,
+    lastRunAt: typeof record.lastRunAt === "string" ? record.lastRunAt : undefined,
+    nextRunAt: typeof record.nextRunAt === "string" ? record.nextRunAt : undefined,
   };
-}
-
-function describeMalformedRow(candidate: unknown): string {
-  if (candidate === null) {
-    return "row is null";
-  }
-  if (typeof candidate !== "object") {
-    return `row is ${typeof candidate}, not object`;
-  }
-  if (Array.isArray(candidate)) {
-    return "row is array, not object";
-  }
-  const record = candidate as Record<string, unknown>;
-  const issues: string[] = [];
-  if (typeof record.jobId !== "string" || record.jobId.trim() === "") {
-    issues.push("missing or empty jobId");
-  }
-  if (typeof record.name !== "string" || record.name.trim() === "") {
-    issues.push("missing or empty name");
-  }
-  if (typeof record.schedule !== "string" || record.schedule.trim() === "") {
-    issues.push("missing or empty schedule");
-  }
-  return issues.length > 0 ? issues.join(", ") : "row failed validation";
 }
 
 function repairCronNextRunAt(
