@@ -1,3 +1,5 @@
+import type { TaskRetryBudget, TaskDistressSignal, TaskArtifactVerification } from "./task-distress.js";
+
 export type TaskStatus = "planning" | "inbox" | "assigned" | "in_progress" | "testing" | "review" | "done" | "blocked";
 
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
@@ -28,6 +30,9 @@ export interface TaskRecord {
   deletedAt?: string;
   deletedBy?: string;
   deleteReason?: string;
+  retryBudget?: TaskRetryBudget;
+  distressSignals?: TaskDistressSignal[];
+  artifactVerification?: TaskArtifactVerification[];
   createdAt: string;
   updatedAt: string;
 }
@@ -43,6 +48,9 @@ export interface TaskCreateInput {
   dueAt?: string;
   proactiveContext?: TaskProactiveContext;
   agenticContext?: import("./agentic-runtime.js").AgenticTaskContext;
+  retryBudget?: TaskRetryBudget;
+  distressSignals?: TaskDistressSignal[];
+  artifactVerification?: TaskArtifactVerification[];
 }
 
 export interface TaskUpdateInput {
@@ -54,6 +62,9 @@ export interface TaskUpdateInput {
   dueAt?: string;
   proactiveContext?: TaskProactiveContext | null;
   agenticContext?: import("./agentic-runtime.js").AgenticTaskContext | null;
+  retryBudget?: TaskRetryBudget | null;
+  distressSignals?: TaskDistressSignal[] | null;
+  artifactVerification?: TaskArtifactVerification[] | null;
 }
 
 export type TaskActivityType =

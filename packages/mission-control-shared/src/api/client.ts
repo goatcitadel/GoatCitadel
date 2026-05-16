@@ -658,18 +658,24 @@ export {
 export {
   addTaskActivity,
   addTaskDeliverable,
+  bulkTaskAction,
   createTask,
   deleteTask,
+  emitTaskDistress,
   fetchTaskActivities,
   fetchTaskDeliverables,
   fetchTasks,
   fetchTasksByView,
   fetchTaskSubagents,
   registerTaskSubagent,
+  resolveTaskDistress,
   restoreTask,
+  setTaskRetryBudget,
   updateTask,
   updateTaskSubagent,
+  verifyTaskArtifacts,
 } from "./tasks.js";
+export type { BulkTaskActionInput, EmitTaskDistressBody } from "./tasks.js";
 export {
   createMcpServer,
   completeMcpOAuth,

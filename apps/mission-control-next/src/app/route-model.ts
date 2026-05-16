@@ -20,7 +20,8 @@ export type OpsSection =
   | "costs"
   | "runtime"
   | "quality"
-  | "diagnostics";
+  | "diagnostics"
+  | "kanban";
 export type SettingsSection =
   | "general"
   | "providers"
@@ -331,6 +332,13 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       description: "Durable, daemon, admin, docs, and verification families.",
       area: "ops",
       section: "diagnostics",
+    },
+    {
+      id: "ops-kanban",
+      label: "Kanban",
+      description: "Multi-agent board with distress signals, retry budgets, and bulk operator controls.",
+      area: "ops",
+      section: "kanban",
     },
   ],
   settings: [

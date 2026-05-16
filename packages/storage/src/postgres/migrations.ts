@@ -952,4 +952,14 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS parent_delegation_step_id TEXT;
     `,
   },
+  {
+    version: 36,
+    name: "task_kanban_columns",
+    sql: `
+      ALTER TABLE tasks
+        ADD COLUMN IF NOT EXISTS distress_signals_json TEXT,
+        ADD COLUMN IF NOT EXISTS retry_budget_json TEXT,
+        ADD COLUMN IF NOT EXISTS artifact_verification_json TEXT;
+    `,
+  },
 ];

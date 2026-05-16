@@ -400,3 +400,244 @@ describe("TaskLifecycleService agentic runtime", () => {
     });
   }, 20_000);
 });
+
+describe("TaskLifecycleService — distress signals", () => {
+  it("emitDistressSignal persists the new signal and publishes a realtime event", () => {
+    const { service, storage, publishRealtime } = createService();
+    const task = service.createTask({ title: "t" });
+    const updated = service.emitDistressSignal(task.taskId, {
+      code: "needs_user",
+      severity: "warn",
+      title: "Need input",
+      summary: "worker is asking",
+      emittedBy: "agent-7",
+    });
+    expect(updated.distressSignals?.length).toBe(1);
+    expect(storage.tasks.get(task.taskId).distressSignals?.[0]?.code).toBe("needs_user");
+    const distressCall = publishRealtime.mock.calls.find((c) => c[0] === "task_distress_emitted");
+    expect(distressCall).toBeTruthy();
+  });
+
+  it("resolveDistressSignal marks it resolved", () => {
+    const { service } = createService();
+    const task = service.createTask({ title: "t" });
+    const withSignal = service.emitDistressSignal(task.taskId, {
+      code: "tool_error",
+      severity: "warn",
+      title: "Tool blew up",
+      summary: "boom",
+    });
+    const signalId = withSignal.distressSignals![0].signalId;
+    const resolved = service.resolveDistressSignal(task.taskId, signalId, { resolvedBy: "op-1" });
+    expect(resolved.distressSignals![0].resolvedAt).toBeTruthy();
+    expect(resolved.distressSignals![0].resolvedBy).toBe("op-1");
+  });
+
+  it("resolveDistressSignal throws when signalId does not exist", () => {
+    const { service } = createService();
+    const task = service.createTask({ title: "t" });
+    expect(() => service.resolveDistressSignal(task.taskId, "ds-nonexistent", { resolvedBy: "op" })).toThrow(
+      /No unresolved distress signal/,
+    );
+  });
+});
+
+describe("TaskLifecycleService — retry budget", () => {
+  it("setRetryBudget initializes the budget when none exists", () => {
+    const { service } = createService();
+    const task = service.createTask({ title: "t" });
+    const updated = service.setRetryBudget(task.taskId, 3);
+    expect(updated.retryBudget?.maxRetries).toBe(3);
+    expect(updated.retryBudget?.retryCount).toBe(0);
+  });
+
+  it("recordRetryAttempt increments retryCount but stays in progress when below budget", () => {
+    const { service } = createService();
+    const task = service.createTask({ title: "t", status: "in_progress" });
+    service.setRetryBudget(task.taskId, 2);
+    const after1 = service.recordRetryAttempt(task.taskId, "transient_error");
+    expect(after1.retryBudget?.retryCount).toBe(1);
+    expect(after1.status).toBe("in_progress");
+  });
+
+  it("recordRetryAttempt transitions task to blocked when budget exhausted", () => {
+    const { service, publishRealtime } = createService();
+    const task = service.createTask({ title: "t", status: "in_progress" });
+    service.setRetryBudget(task.taskId, 1);
+    service.recordRetryAttempt(task.taskId, "first failure");
+    const blocked = service.recordRetryAttempt(task.taskId, "second failure");
+    expect(blocked.status).toBe("blocked");
+    expect(blocked.retryBudget?.retryCount).toBe(2);
+    expect(blocked.retryBudget?.exhaustedAt).toBeTruthy();
+    const exhaustedSignal = blocked.distressSignals?.find((s) => s.code === "retry_budget_exhausted");
+    expect(exhaustedSignal?.severity).toBe("critical");
+    const exhaustedEvent = publishRealtime.mock.calls.find((c) => c[0] === "task_retry_budget_exhausted");
+    expect(exhaustedEvent).toBeTruthy();
+    expect(exhaustedEvent?.[2]).toMatchObject({ taskId: task.taskId, retryCount: 2, reason: "second failure" });
+  });
+
+  it("recordRetryAttempt publishes task_retry_attempted event on non-exhausted path", () => {
+    const { service, publishRealtime } = createService();
+    const task = service.createTask({ title: "t", status: "in_progress" });
+    service.setRetryBudget(task.taskId, 3);
+    service.recordRetryAttempt(task.taskId, "transient");
+    const call = publishRealtime.mock.calls.find((c) => c[0] === "task_retry_attempted");
+    expect(call).toBeTruthy();
+    expect(call?.[2]).toMatchObject({ taskId: task.taskId, retryCount: 1, reason: "transient" });
+  });
+});
+
+describe("TaskLifecycleService.verifyTaskArtifacts", () => {
+  it("records verification results and emits artifact_missing distress when any claim is missing", async () => {
+    const { service, storage } = createService({
+      probers: {
+        fs: { statExists: async (p: string) => p !== "/missing.txt" },
+        http: { headOk: async () => true },
+        git: { hasCommit: async () => true },
+      },
+    });
+    const task = service.createTask({ title: "t", status: "in_progress" });
+    const updated = await service.verifyTaskArtifacts(task.taskId, [
+      { kind: "file", value: "/exists.txt" },
+      { kind: "file", value: "/missing.txt" },
+    ]);
+    const persisted = storage.tasks.get(task.taskId);
+    expect(persisted.artifactVerification?.length).toBe(2);
+    const missing = persisted.distressSignals?.find((s) => s.code === "artifact_missing");
+    expect(missing).toBeTruthy();
+    expect(missing?.severity).toBe("critical");
+    expect(updated.status).toBe("blocked");
+  });
+
+  it("does not emit distress when all claims verify", async () => {
+    const { service } = createService({
+      probers: {
+        fs: { statExists: async () => true },
+        http: { headOk: async () => true },
+        git: { hasCommit: async () => true },
+      },
+    });
+    const task = service.createTask({ title: "t", status: "in_progress" });
+    const updated = await service.verifyTaskArtifacts(task.taskId, [{ kind: "file", value: "/ok.txt" }]);
+    expect(updated.status).toBe("in_progress");
+    expect(updated.distressSignals?.find((s) => s.code === "artifact_missing")).toBeUndefined();
+  });
+
+  it("throws ValidationError when probers are not configured", async () => {
+    const { service } = createService(); // no probers
+    const task = service.createTask({ title: "t" });
+    await expect(service.verifyTaskArtifacts(task.taskId, [{ kind: "file", value: "/x" }])).rejects.toThrow(
+      /probers not configured/i,
+    );
+  });
+
+  it("merges new verification results with prior ones", async () => {
+    const { service, storage } = createService({
+      probers: {
+        fs: { statExists: async () => true },
+        http: { headOk: async () => true },
+        git: { hasCommit: async () => true },
+      },
+    });
+    const task = service.createTask({ title: "t", status: "in_progress" });
+    await service.verifyTaskArtifacts(task.taskId, [{ kind: "file", value: "/a.txt" }]);
+    await service.verifyTaskArtifacts(task.taskId, [{ kind: "url", value: "https://x" }]);
+    const persisted = storage.tasks.get(task.taskId);
+    expect(persisted.artifactVerification?.length).toBe(2);
+  });
+});
+
+describe("TaskLifecycleService.autoBlockOnIncompleteExit", () => {
+  it("transitions an in-progress task to blocked and emits worker_crash distress", () => {
+    const { service, publishRealtime } = createService();
+    const task = service.createTask({ title: "t", status: "in_progress" });
+    const blocked = service.autoBlockOnIncompleteExit(task.taskId, "run-xyz");
+    expect(blocked.status).toBe("blocked");
+    const crash = blocked.distressSignals?.find((s) => s.code === "worker_crash");
+    expect(crash?.severity).toBe("critical");
+    expect(crash?.evidenceRef).toBe("durable-run:run-xyz");
+    const event = publishRealtime.mock.calls.find((c) => c[0] === "task_auto_blocked");
+    expect(event).toBeTruthy();
+  });
+
+  it("is a no-op when task is already blocked", () => {
+    const { service } = createService();
+    const task = service.createTask({ title: "t", status: "blocked" });
+    const result = service.autoBlockOnIncompleteExit(task.taskId, "run-xyz");
+    expect(result.status).toBe("blocked");
+    expect(result.distressSignals?.length ?? 0).toBe(0);
+  });
+
+  it("is a no-op when task is done", () => {
+    const { service, storage } = createService();
+    // Create + add a deliverable so we can mark done legitimately
+    const task = service.createTask({ title: "t", status: "in_progress" });
+    storage.taskDeliverables.append(task.taskId, { deliverableType: "artifact", title: "out" });
+    service.updateTask(task.taskId, { status: "done" });
+    const result = service.autoBlockOnIncompleteExit(task.taskId, "run-xyz");
+    expect(result.status).toBe("done");
+  });
+});
+
+describe("TaskLifecycleService.bulkUpdateTasks", () => {
+  it("unblock action moves blocked tasks to assigned and resets retry count + clears exhaustedAt", () => {
+    const { service } = createService();
+    const a = service.createTask({ title: "a", status: "blocked" });
+    service.setRetryBudget(a.taskId, 1);
+    service.recordRetryAttempt(a.taskId, "fail-1");
+    service.recordRetryAttempt(a.taskId, "fail-2"); // exhausted → already blocked
+    const results = service.bulkUpdateTasks({ action: "unblock", taskIds: [a.taskId] });
+    expect(results.length).toBe(1);
+    expect(results[0].status).toBe("assigned");
+    expect(results[0].retryBudget?.retryCount).toBe(0);
+    expect(results[0].retryBudget?.exhaustedAt).toBeUndefined();
+  });
+
+  it("retry action records a fresh attempt without status change when budget allows", () => {
+    const { service } = createService();
+    const a = service.createTask({ title: "a", status: "in_progress" });
+    service.setRetryBudget(a.taskId, 3);
+    const results = service.bulkUpdateTasks({ action: "retry", taskIds: [a.taskId], reason: "operator" });
+    expect(results[0].retryBudget?.retryCount).toBe(1);
+    expect(results[0].status).toBe("in_progress");
+  });
+
+  it("reassign action sets the new assignedAgentId on each task and publishes task_updated", () => {
+    const { service, publishRealtime } = createService();
+    const a = service.createTask({ title: "a" });
+    const b = service.createTask({ title: "b" });
+    const results = service.bulkUpdateTasks({
+      action: "reassign",
+      taskIds: [a.taskId, b.taskId],
+      assignedAgentId: "agent-9",
+    });
+    expect(results[0].assignedAgentId).toBe("agent-9");
+    expect(results[1].assignedAgentId).toBe("agent-9");
+    const updateCalls = publishRealtime.mock.calls.filter((c) => c[0] === "task_updated");
+    expect(updateCalls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("unblock action publishes task_updated so subscribers see the transition", () => {
+    const { service, publishRealtime } = createService();
+    const a = service.createTask({ title: "a", status: "blocked" });
+    service.bulkUpdateTasks({ action: "unblock", taskIds: [a.taskId] });
+    const updateCalls = publishRealtime.mock.calls.filter((c) => c[0] === "task_updated");
+    expect(updateCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("close action moves tasks to done when they have a deliverable", () => {
+    const { service, storage } = createService();
+    const a = service.createTask({ title: "a" });
+    storage.taskDeliverables.append(a.taskId, { deliverableType: "artifact", title: "out" });
+    const results = service.bulkUpdateTasks({ action: "close", taskIds: [a.taskId] });
+    expect(results[0].status).toBe("done");
+  });
+
+  it("close action throws ValidationError when a task has no deliverable", () => {
+    const { service } = createService();
+    const a = service.createTask({ title: "a" });
+    expect(() => service.bulkUpdateTasks({ action: "close", taskIds: [a.taskId] })).toThrow(
+      /at least one deliverable/i,
+    );
+  });
+});
