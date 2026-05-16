@@ -97,6 +97,7 @@ export async function runDoctor(options: DoctorRunOptions = {}): Promise<DoctorR
   checks.push(await checkAuthHostPosture(context, repairs));
   checks.push(await checkToolPolicyPaths(context, repairs));
   checks.push(await checkStoragePaths(context, repairs));
+  checks.push(await checkStateValidationQuarantine(context));
 
   const gatewayHealth = await checkGatewayHealth(context, repairs);
   checks.push(gatewayHealth.check);
@@ -785,6 +786,83 @@ async function checkStoragePaths(
     detail: "Runtime directories exist and are writable.",
     repairable: false,
   };
+}
+
+async function checkStateValidationQuarantine(context: DoctorRuntimeContext): Promise<DoctorCheckResult> {
+  const id = "state.validation.quarantine";
+  const assistantPath = path.join(context.configDir, "assistant.config.json");
+  const assistantState = await readJsonFile<{ dataDir?: string }>(assistantPath);
+  const rawDataDir = (assistantState.valid && asString(assistantState.value?.dataDir)) || "./data";
+  const dataDir = path.resolve(context.rootDir, rawDataDir);
+  const dbPath = path.join(dataDir, "goatcitadel.db");
+
+  if (!existsSync(dbPath)) {
+    return {
+      id,
+      group: "storage",
+      title: "Persisted-state validation quarantine",
+      status: "pass",
+      severity: "info",
+      detail: "Storage database not initialized; no quarantine to inspect.",
+      repairable: false,
+    };
+  }
+
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const tableRow = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='state_validation_quarantine'")
+      .get();
+    if (!tableRow) {
+      return {
+        id,
+        group: "storage",
+        title: "Persisted-state validation quarantine",
+        status: "pass",
+        severity: "info",
+        detail: "Quarantine table not yet present.",
+        repairable: false,
+      };
+    }
+
+    const totalRow = db.prepare("SELECT COUNT(1) AS count FROM state_validation_quarantine").get() as
+      | { count: number | bigint }
+      | undefined;
+    const total = Number(totalRow?.count ?? 0);
+    const byStoreRows = db
+      .prepare(
+        "SELECT store, COUNT(1) AS count FROM state_validation_quarantine GROUP BY store ORDER BY count DESC LIMIT 5",
+      )
+      .all() as Array<{ store: string; count: number | bigint }>;
+
+    if (total === 0) {
+      return {
+        id,
+        group: "storage",
+        title: "Persisted-state validation quarantine",
+        status: "pass",
+        severity: "info",
+        detail: "No persisted-state shape failures recorded.",
+        repairable: false,
+      };
+    }
+
+    const topStores = byStoreRows.map((r) => `${r.store}=${Number(r.count)}`).join(", ");
+    const severity: DoctorSeverity = total >= 100 ? "error" : "warning";
+    const status: DoctorStatus = total >= 100 ? "fail" : "warn";
+    return {
+      id,
+      group: "storage",
+      title: "Persisted-state validation quarantine",
+      status,
+      severity,
+      detail: `${total} persisted rows quarantined for shape failures (top: ${topStores}). Run 'doctor --fix' after review.`,
+      repairable: false,
+    };
+  } finally {
+    db.close();
+  }
 }
 
 async function checkGatewayHealth(

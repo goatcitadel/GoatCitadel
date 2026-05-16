@@ -503,3 +503,54 @@ async function createDoctorFixture(): Promise<string> {
 async function writeJson(filePath: string, value: unknown): Promise<void> {
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
+
+describe("state validation quarantine check", () => {
+  it("passes when quarantine is empty", async () => {
+    const rootDir = await createDoctorFixture();
+    const report = await runDoctor({ rootDir, gatewayBaseUrl: "http://127.0.0.1:8787", auditOnly: true });
+    const check = report.checks.find((c) => c.id === "state.validation.quarantine");
+    expect(check).toBeDefined();
+    expect(check?.status).toBe("pass");
+  });
+
+  it("warns when 1-99 quarantine entries exist", async () => {
+    const rootDir = await createDoctorFixture();
+    await seedQuarantine(rootDir, 5);
+    const report = await runDoctor({ rootDir, gatewayBaseUrl: "http://127.0.0.1:8787", auditOnly: true });
+    const check = report.checks.find((c) => c.id === "state.validation.quarantine");
+    expect(check?.status).toBe("warn");
+    expect(check?.detail).toContain("5");
+  });
+
+  it("fails when 100+ entries exist", async () => {
+    const rootDir = await createDoctorFixture();
+    await seedQuarantine(rootDir, 105);
+    const report = await runDoctor({ rootDir, gatewayBaseUrl: "http://127.0.0.1:8787", auditOnly: true });
+    const check = report.checks.find((c) => c.id === "state.validation.quarantine");
+    expect(check?.status).toBe("fail");
+  });
+});
+
+async function seedQuarantine(rootDir: string, count: number): Promise<void> {
+  const { DatabaseSync } = await import("node:sqlite");
+  const dbPath = path.join(rootDir, "data", "goatcitadel.db");
+  await mkdir(path.dirname(dbPath), { recursive: true });
+  const db = new DatabaseSync(dbPath);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS state_validation_quarantine (
+      quarantine_id TEXT PRIMARY KEY,
+      store TEXT NOT NULL,
+      row_id TEXT NOT NULL,
+      raw_value TEXT,
+      schema_error TEXT NOT NULL,
+      observed_at TEXT NOT NULL
+    )
+  `);
+  const stmt = db.prepare(
+    "INSERT INTO state_validation_quarantine (quarantine_id, store, row_id, raw_value, schema_error, observed_at) VALUES (?,?,?,?,?,?)",
+  );
+  for (let i = 0; i < count; i += 1) {
+    stmt.run(`q-${i}`, "test", `r-${i}`, null, "schema: x", "2026-05-15T00:00:00.000Z");
+  }
+  db.close();
+}
