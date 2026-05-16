@@ -337,6 +337,43 @@ describe("ToolInvocationCoordinatorService", () => {
     });
   });
 
+  it("blocks tool execution when intercept-mode before-hook returns a block decision", async () => {
+    const policyInvoke = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-should-not-run",
+        result: { ok: true },
+      }),
+    );
+    const enqueueAfterHooks = vi.fn();
+    const host = createHost({
+      hooksService: {
+        runInlineHooks: vi.fn(async () => ({
+          runs: [],
+          blockedBy: { type: "block" as const, reason: "policy:dryrun-blocked" },
+        })),
+        enqueueAfterHooks,
+      },
+      policyEngine: {
+        invoke: policyInvoke,
+        evaluateAccess: vi.fn(() => ({
+          allowed: true,
+          requiresApproval: false,
+          reasonCodes: [],
+        })),
+      },
+    });
+    const coordinator = new ToolInvocationCoordinatorService(host);
+
+    const result = await coordinator.invokeTool(createToolRequest());
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.policyReason).toMatch(/policy:dryrun-blocked/);
+    expect(policyInvoke).not.toHaveBeenCalled();
+    expect(enqueueAfterHooks).not.toHaveBeenCalled();
+  });
+
   it("primes approval lifecycle and publishes retained-stream linkage for approval-required tools", async () => {
     const publishRealtime = vi.fn();
     const scheduleApprovalExplanationById = vi.fn();

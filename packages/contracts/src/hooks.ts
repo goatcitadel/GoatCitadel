@@ -2,6 +2,26 @@ import type { ChatCompletionMessage } from "./llm.js";
 
 export type HookPhase = "before" | "around" | "after";
 
+/**
+ * Hook execution mode.
+ *
+ * - `observe`: hook receives the event but cannot affect dispatch. Best for logging,
+ *   metrics, audit fan-out. Failure of observe hooks never blocks the caller.
+ * - `mutate`: hook may return a `patch` object that the runtime merges back into the
+ *   request before execution proceeds. Only valid for `*.before` triggers that define
+ *   a `HookPatchByTrigger` entry (i.e., not `never`).
+ * - `intercept`: hook may return `{ decision: { type: "block", reason } }` to veto
+ *   the operation. The runtime surfaces the reason to the caller (transcript / API
+ *   error) and never invokes the underlying side effect. Combine with
+ *   `failPolicy: "closed"` for fail-closed enforcement when the hook itself errors.
+ *
+ * Veto contract:
+ * - `tool.call.before` veto → `ToolInvokeResult.outcome === "blocked"`, downstream
+ *   `policyEngine.invoke` is not called.
+ * - `gateway.dispatch.before` / `llm.request.before` / `transform_llm_output` /
+ *   `approval.request.before` / `approval.create.before` veto → caller throws an
+ *   Error with the veto reason as message; downstream side effects do not run.
+ */
 export type HookMode = "observe" | "mutate" | "intercept";
 
 export type HookFailPolicy = "open" | "closed";
