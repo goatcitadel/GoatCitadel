@@ -44,6 +44,11 @@ describe("ingestion backend coverage", () => {
       title: "Local Notes",
       fromCache: false,
     });
+    expect(result.document.metadata).toMatchObject({
+      ingestion: {
+        sourceHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
+    });
     expect(result.chunksSaved).toBe(3);
     expect(result.chunks).toHaveLength(3);
   });

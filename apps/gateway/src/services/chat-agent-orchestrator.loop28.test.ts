@@ -8,7 +8,7 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import { ChatAgentOrchestrator, type ChatAgentTurnInput } from "./chat-agent-orchestrator.js";
-import { createMockStorage, createToolCatalog } from "./chat-agent-orchestrator-test-fixtures.js";
+import { createExecuteToolCallForTest, createMockStorage } from "./chat-agent-orchestrator-test-fixtures.js";
 
 describe("ChatAgentOrchestrator loop 28 coverage", () => {
   it("scores essential, suggested, project, memory, and access-filtered tools for code turns", async () => {
@@ -327,28 +327,10 @@ describe("ChatAgentOrchestrator loop 28 coverage", () => {
 });
 
 function createExecuteToolCall(input: { invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult> }) {
-  const orchestrator = new ChatAgentOrchestrator({
-    storage: createMockStorage() as never,
-    listToolCatalog: () => createToolCatalog(["browser.search", "file.read_range", "time.now"]),
-    createChatCompletion: vi.fn<() => Promise<ChatCompletionResponse>>(),
+  return createExecuteToolCallForTest({
     invokeTool: input.invokeTool,
+    toolNames: ["browser.search", "file.read_range", "time.now"],
   });
-  return (
-    orchestrator as unknown as {
-      executeToolCall(input: {
-        input: ChatAgentTurnInput;
-        turnId: string;
-        toolName: string;
-        rawArgs: Record<string, unknown>;
-        localFileIntent?: boolean;
-      }): Promise<{
-        record: ChatToolRunRecord & {
-          result?: Record<string, unknown>;
-          failureGuidance?: string;
-        };
-      }>;
-    }
-  ).executeToolCall.bind(orchestrator);
 }
 
 async function buildToolSchema(

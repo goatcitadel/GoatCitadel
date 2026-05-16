@@ -3,7 +3,31 @@ import type {
   ChatToolRunRecord,
   ChatTurnTraceRecord,
   ToolCatalogEntry,
+  ToolInvokeRequest,
+  ToolInvokeResult,
 } from "@goatcitadel/contracts";
+import {
+  ChatAgentOrchestrator,
+  type ChatAgentOrchestratorDeps,
+  type ChatAgentTurnInput,
+} from "./chat-agent-orchestrator.js";
+
+type ExecuteToolCallInput = {
+  input: ChatAgentTurnInput;
+  turnId: string;
+  toolName: string;
+  rawArgs: Record<string, unknown>;
+  localFileIntent?: boolean;
+  priorToolRuns?: ChatToolRunRecord[];
+};
+
+type ExecuteToolCallResult = {
+  record: ChatToolRunRecord & {
+    failureGuidance?: string;
+  };
+  approvalExpiresAt?: string;
+  chunk?: Record<string, unknown>;
+};
 
 export function createToolCatalog(toolNames: string[] = ["browser.search"]): ToolCatalogEntry[] {
   return toolNames.map((toolName) => {
@@ -300,6 +324,30 @@ export function createToolCatalog(toolNames: string[] = ["browser.search"]): Too
       pack: "core",
     };
   });
+}
+
+export function createExecuteToolCallForTest(input: {
+  invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
+  toolNames: string[];
+  storage?: ChatAgentOrchestratorDeps["storage"];
+  persistToolArtifact?: NonNullable<ChatAgentOrchestratorDeps["persistToolArtifact"]>;
+}): (input: ExecuteToolCallInput) => Promise<ExecuteToolCallResult> {
+  const orchestrator = new ChatAgentOrchestrator({
+    storage: input.storage ?? (createMockStorage() as never),
+    listToolCatalog: () => createToolCatalog(input.toolNames),
+    createChatCompletion: async (): Promise<ChatCompletionResponse> => ({
+      model: "glm-5",
+      choices: [{ index: 0, message: { role: "assistant", content: "" } }],
+    }),
+    invokeTool: input.invokeTool,
+    persistToolArtifact: input.persistToolArtifact,
+  });
+  const executeToolCall = (
+    orchestrator as unknown as {
+      executeToolCall(input: ExecuteToolCallInput): Promise<ExecuteToolCallResult>;
+    }
+  ).executeToolCall;
+  return executeToolCall.bind(orchestrator);
 }
 
 export function toolCallCompletion(query: string): ChatCompletionResponse {

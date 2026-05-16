@@ -6,7 +6,11 @@ import {
   type ChatAgentOrchestratorDeps,
   type ChatAgentTurnInput,
 } from "./chat-agent-orchestrator.js";
-import { createMockStorage, createToolCatalog } from "./chat-agent-orchestrator-test-fixtures.js";
+import {
+  createExecuteToolCallForTest,
+  createMockStorage,
+  createToolCatalog,
+} from "./chat-agent-orchestrator-test-fixtures.js";
 
 describe("ChatAgentOrchestrator runtime recovery coverage", () => {
   it("returns deterministic partial extraction output when final synthesis fails after tool evidence", async () => {
@@ -218,34 +222,11 @@ function createExecuteToolCall(input: {
   invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
   persistToolArtifact?: NonNullable<ChatAgentOrchestratorDeps["persistToolArtifact"]>;
 }) {
-  const orchestrator = new ChatAgentOrchestrator({
-    storage: createMockStorage() as never,
-    listToolCatalog: () =>
-      createToolCatalog(["browser.search", "browser.interact", "code.search_files", "fs.write", "time.now"]),
-    createChatCompletion: vi.fn<() => Promise<ChatCompletionResponse>>(),
+  return createExecuteToolCallForTest({
     invokeTool: input.invokeTool,
+    toolNames: ["browser.search", "browser.interact", "code.search_files", "fs.write", "time.now"],
     persistToolArtifact: input.persistToolArtifact,
   });
-  return (
-    orchestrator as unknown as {
-      executeToolCall(input: {
-        input: ChatAgentTurnInput;
-        turnId: string;
-        toolName: string;
-        rawArgs: Record<string, unknown>;
-        localFileIntent?: boolean;
-      }): Promise<{
-        record: {
-          status: string;
-          args?: Record<string, unknown>;
-          result?: Record<string, unknown>;
-          error?: string;
-          approvalId?: string;
-        };
-        approvalExpiresAt?: string;
-      }>;
-    }
-  ).executeToolCall.bind(orchestrator);
 }
 
 function turnInput(overrides: Partial<ChatAgentTurnInput> = {}): ChatAgentTurnInput {

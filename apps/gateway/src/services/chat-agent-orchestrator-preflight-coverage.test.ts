@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChatCompletionResponse, ToolInvokeResult } from "@goatcitadel/contracts";
-import { ChatAgentOrchestrator, type ChatAgentTurnInput } from "./chat-agent-orchestrator.js";
-import { createMockStorage, createToolCatalog } from "./chat-agent-orchestrator-test-fixtures.js";
+import type { ToolInvokeRequest, ToolInvokeResult } from "@goatcitadel/contracts";
+import type { ChatAgentTurnInput } from "./chat-agent-orchestrator.js";
+import { createExecuteToolCallForTest } from "./chat-agent-orchestrator-test-fixtures.js";
 
 describe("ChatAgentOrchestrator tool preflight coverage", () => {
   it("persists blocked web tools without invoking runtime tools when web mode is off", async () => {
@@ -154,34 +154,11 @@ describe("ChatAgentOrchestrator tool preflight coverage", () => {
   });
 });
 
-function createExecuteToolCall(input: { invokeTool: ReturnType<typeof vi.fn<() => Promise<ToolInvokeResult>>> }) {
-  const orchestrator = new ChatAgentOrchestrator({
-    storage: createMockStorage() as never,
-    listToolCatalog: () => createToolCatalog(["browser.search", "http.get", "memory.search", "memory.write"]),
-    createChatCompletion: vi.fn<() => Promise<ChatCompletionResponse>>(),
+function createExecuteToolCall(input: { invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult> }) {
+  return createExecuteToolCallForTest({
     invokeTool: input.invokeTool,
+    toolNames: ["browser.search", "http.get", "memory.search", "memory.write"],
   });
-  return (
-    orchestrator as unknown as {
-      executeToolCall(input: {
-        input: ChatAgentTurnInput;
-        turnId: string;
-        toolName: string;
-        rawArgs: Record<string, unknown>;
-      }): Promise<{
-        record: {
-          toolName: string;
-          status: string;
-          error?: string;
-          failureGuidance?: string;
-          result?: Record<string, unknown>;
-          approvalId?: string;
-        };
-        approvalExpiresAt?: string;
-        chunk?: Record<string, unknown>;
-      }>;
-    }
-  ).executeToolCall.bind(orchestrator);
 }
 
 function turnInput(overrides: Partial<ChatAgentTurnInput> = {}): ChatAgentTurnInput {

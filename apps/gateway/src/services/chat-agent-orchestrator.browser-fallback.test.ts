@@ -9,8 +9,9 @@ import type {
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
-import { ChatAgentOrchestrator, type ChatAgentTurnInput } from "./chat-agent-orchestrator.js";
+import { ChatAgentOrchestrator } from "./chat-agent-orchestrator.js";
 import {
+  createExecuteToolCallForTest,
   createMockStorage,
   createToolCatalog,
   extractToolCallCompletion,
@@ -3597,23 +3598,11 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
   it("does not reuse a prior browser result when the current call is preflight-blocked", async () => {
     const storage = createMockStorage();
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
-    const orchestrator = new ChatAgentOrchestrator({
+    const executeToolCall = createExecuteToolCallForTest({
       storage: storage as never,
-      listToolCatalog: () => createToolCatalog(["http.get"]),
-      createChatCompletion: vi.fn(),
       invokeTool,
+      toolNames: ["http.get"],
     });
-    const executeToolCall = (
-      orchestrator as unknown as {
-        executeToolCall(input: {
-          input: ChatAgentTurnInput;
-          turnId: string;
-          toolName: string;
-          rawArgs: Record<string, unknown>;
-          priorToolRuns?: ChatToolRunRecord[];
-        }): Promise<{ record: ChatToolRunRecord }>;
-      }
-    ).executeToolCall.bind(orchestrator);
     const priorToolRun: ChatToolRunRecord = {
       toolRunId: "prior-http-get-run",
       turnId: "prior-turn",

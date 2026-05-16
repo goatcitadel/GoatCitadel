@@ -404,7 +404,7 @@ function pseudoEmbedding(text: string): number[] {
 }
 
 function stableHash(value: string): string {
-  return createHash("sha1").update(value).digest("hex");
+  return createHash("sha256").update(value).digest("hex");
 }
 
 function requiredString(value: unknown, field: string): string {
