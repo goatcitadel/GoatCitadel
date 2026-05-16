@@ -134,3 +134,74 @@ describe("CuratorService.archive", () => {
     expect(() => service.archive({ skillId: "skill-missing" })).toThrow(/not found/i);
   });
 });
+
+describe("CuratorService.prune", () => {
+  it("requires confirm: true to actually prune", () => {
+    const skills = [makeSkill({ name: "alpha", state: "disabled" })];
+    const service = new CuratorService({
+      listSkills: () => skills,
+      archiveSkill: () => skills[0],
+      pruneSkill: () => {
+        throw new Error("prune should not be called without confirm");
+      },
+      now: () => new Date(),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    expect(() => service.prune({ skillId: skills[0].skillId, confirm: false as unknown as true })).toThrow(/confirm/i);
+  });
+
+  it("prunes a managed, archived, unpinned, non-bundled skill", () => {
+    const skills = [makeSkill({ name: "alpha", state: "disabled" })];
+    let prunedId: string | undefined;
+    const service = new CuratorService({
+      listSkills: () => skills,
+      archiveSkill: () => skills[0],
+      pruneSkill: (skillId) => {
+        prunedId = skillId;
+        return { filesRemoved: ["/tmp/skills/alpha/SKILL.md"] };
+      },
+      now: () => new Date("2026-05-15T12:00:00Z"),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    const response = service.prune({ skillId: skills[0].skillId, confirm: true });
+    expect(prunedId).toBe(skills[0].skillId);
+    expect(response.pruned).toBe(true);
+    expect(response.filesRemoved).toContain("/tmp/skills/alpha/SKILL.md");
+  });
+
+  it("refuses to prune a pinned skill", () => {
+    const skills = [makeSkill({ name: "alpha", pinned: true })];
+    const service = new CuratorService({
+      listSkills: () => skills,
+      archiveSkill: () => skills[0],
+      pruneSkill: () => {
+        throw new Error("prune should not be called for pinned skills");
+      },
+      now: () => new Date(),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    expect(() => service.prune({ skillId: skills[0].skillId, confirm: true })).toThrow(/pinned/i);
+  });
+
+  it("refuses to prune a bundled skill", () => {
+    const skills = [makeSkill({ name: "alpha", source: "bundled" })];
+    const service = new CuratorService({
+      listSkills: () => skills,
+      archiveSkill: () => skills[0],
+      pruneSkill: () => {
+        throw new Error("prune should not be called for bundled skills");
+      },
+      now: () => new Date(),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    expect(() => service.prune({ skillId: skills[0].skillId, confirm: true })).toThrow(/bundled/i);
+  });
+});

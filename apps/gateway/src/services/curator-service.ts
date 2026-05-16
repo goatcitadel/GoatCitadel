@@ -87,8 +87,32 @@ export class CuratorService {
     };
   }
 
-  public prune(_input: CuratorPruneRequest): CuratorPruneResponse {
-    throw new Error("not implemented yet");
+  public prune(input: CuratorPruneRequest): CuratorPruneResponse {
+    if (input.confirm !== true) {
+      throw new Error("Curator: prune requires confirm: true");
+    }
+    const skill = this.deps.listSkills().find((s) => s.skillId === input.skillId);
+    if (!skill) {
+      throw new Error(`Curator: skill not found: ${input.skillId}`);
+    }
+    const immunity = computeSkillImmunity(skill);
+    if (immunity.immune) {
+      throw new Error(`Curator: ${immunity.reason} skill ${input.skillId} cannot be pruned`);
+    }
+    const result = this.deps.pruneSkill(input.skillId, input.actorId);
+    const prunedAt = this.deps.now().toISOString();
+    this.deps.publishRealtime("curator", {
+      type: "skill_pruned",
+      skillId: input.skillId,
+      prunedAt,
+      filesRemoved: result.filesRemoved,
+    });
+    return {
+      skillId: input.skillId,
+      pruned: true,
+      prunedAt,
+      filesRemoved: result.filesRemoved,
+    };
   }
 
   public listArchived(): CuratorListArchivedResponse {
