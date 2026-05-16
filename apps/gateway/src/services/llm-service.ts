@@ -18,6 +18,7 @@ import type {
   LlmApiStyle,
   LlmConfigFile,
   LlmModelDiscoverySource,
+  LlmModelMetadataManifest,
   LlmModelRecord,
   LlmModelPreviewRequest,
   LlmModelPreviewResponse,
@@ -26,6 +27,8 @@ import type {
   LlmRuntimeConfig,
 } from "@goatcitadel/contracts";
 import { findProviderTemplate, inferProviderForModelId, providerAllowsForeignModelIds } from "@goatcitadel/contracts";
+import { clampSummaryReserveTokens, type ClampSummaryReserveResult } from "./chat-compaction.js";
+import { loadLlmModelMetadataManifest, lookupModelMetadata } from "./llm-model-metadata.js";
 import { anthropicProviderAdapter } from "./llm-provider-anthropic.js";
 import {
   createLlmProviderAdapterRegistry,
@@ -84,6 +87,17 @@ export interface LlmServiceOptions {
   enforceNetworkAllowlist?: boolean;
   secretStore?: SecretStoreService;
   openAICodexOAuthFetch?: typeof fetch;
+  /**
+   * Explicit path to the LLM model metadata manifest. Highest precedence.
+   * Falls back to `GOATCITADEL_LLM_MODEL_METADATA_PATH` then a default path
+   * colocated with `configFilePath` (or `config/llm-model-metadata.json`).
+   */
+  modelMetadataPath?: string;
+  /**
+   * Optional path of the provider config file. Used to derive the default
+   * model metadata manifest path when `modelMetadataPath` is unset.
+   */
+  configFilePath?: string;
 }
 
 export interface LlmProviderSecretStatusOptions {
@@ -144,6 +158,7 @@ export class LlmService {
   private enforceNetworkAllowlist: boolean;
   private activeProviderId: string;
   private activeModel: string;
+  private readonly modelMetadata: LlmModelMetadataManifest;
 
   public constructor(
     config: LlmConfigFile,
@@ -156,6 +171,16 @@ export class LlmService {
     this.enforceNetworkAllowlist = options.enforceNetworkAllowlist ?? true;
     this.activeProviderId = "";
     this.activeModel = "";
+
+    const metadataPath =
+      options.modelMetadataPath ??
+      this.env.GOATCITADEL_LLM_MODEL_METADATA_PATH ??
+      defaultModelMetadataPath(options.configFilePath);
+    const { manifest, errors } = loadLlmModelMetadataManifest(metadataPath);
+    for (const message of errors) {
+      log.warn(message, { path: metadataPath });
+    }
+    this.modelMetadata = manifest;
 
     for (const provider of config.providers) {
       this.providers.set(provider.providerId, normalizeProvider(provider));
@@ -229,14 +254,27 @@ export class LlmService {
   public getRuntimeConfig(
     options: { includeKeychainForActiveProvider?: boolean; useCache?: boolean } = {},
   ): LlmRuntimeConfig {
+    const activeMeta = this.activeProviderId
+      ? lookupModelMetadata(this.modelMetadata, this.activeProviderId, this.activeModel)
+      : undefined;
+    const providers = this.listProviders({
+      includeKeychain: false,
+      includeKeychainForProviderId: options.includeKeychainForActiveProvider ? this.activeProviderId : undefined,
+      useCache: options.useCache,
+    }).map((provider) => {
+      const providerMeta = lookupModelMetadata(this.modelMetadata, provider.providerId, provider.defaultModel);
+      return {
+        ...provider,
+        activeModelContextWindow: provider.activeModelContextWindow ?? providerMeta?.contextWindow,
+        activeModelOutputTokenLimit: provider.activeModelOutputTokenLimit ?? providerMeta?.outputTokenLimit,
+      };
+    });
     return {
       activeProviderId: this.activeProviderId,
       activeModel: this.activeModel,
-      providers: this.listProviders({
-        includeKeychain: false,
-        includeKeychainForProviderId: options.includeKeychainForActiveProvider ? this.activeProviderId : undefined,
-        useCache: options.useCache,
-      }),
+      activeModelContextWindow: activeMeta?.contextWindow,
+      activeModelOutputTokenLimit: activeMeta?.outputTokenLimit,
+      providers,
     };
   }
 
@@ -461,12 +499,16 @@ export class LlmService {
   public async listModels(providerId?: string): Promise<LlmModelRecord[]> {
     const resolved = await this.resolveProvider(providerId);
     const result = await this.fetchModelsForResolvedProvider(resolved);
-    return result.items;
+    return result.items.map((record) => this.enrichModelRecord(resolved.provider.providerId, record));
   }
 
   public async listModelsWithSource(providerId?: string): Promise<ModelDiscoveryResult> {
     const resolved = await this.resolveProvider(providerId);
-    return this.fetchModelsForResolvedProvider(resolved);
+    const result = await this.fetchModelsForResolvedProvider(resolved);
+    return {
+      ...result,
+      items: result.items.map((record) => this.enrichModelRecord(resolved.provider.providerId, record)),
+    };
   }
 
   public async previewModels(input: LlmModelPreviewRequest): Promise<LlmModelPreviewResponse> {
@@ -494,7 +536,9 @@ export class LlmService {
       const result = await this.fetchModelsForResolvedProvider(resolved);
       if (result.items.length > 0) {
         return {
-          items: mergeModelCatalogs(result.items, fallbackCatalog),
+          items: mergeModelCatalogs(result.items, fallbackCatalog).map((record) =>
+            this.enrichModelRecord(provider.providerId, record),
+          ),
           source: result.source,
           warning: result.warning,
         };
@@ -502,7 +546,7 @@ export class LlmService {
     } catch (error) {
       if (fallbackCatalog.length > 0) {
         return {
-          items: fallbackCatalog,
+          items: fallbackCatalog.map((record) => this.enrichModelRecord(provider.providerId, record)),
           source: "error_fallback",
           warning: (error as Error).message,
         };
@@ -511,9 +555,26 @@ export class LlmService {
     }
 
     return {
-      items: fallbackCatalog,
+      items: fallbackCatalog.map((record) => this.enrichModelRecord(provider.providerId, record)),
       source: "template_fallback",
       warning: "Provider returned no models. Falling back to the recommended default model.",
+    };
+  }
+
+  public clampActiveModelSummaryReserve(requested: number): ClampSummaryReserveResult {
+    const meta = this.activeProviderId
+      ? lookupModelMetadata(this.modelMetadata, this.activeProviderId, this.activeModel)
+      : undefined;
+    return clampSummaryReserveTokens(requested, meta?.outputTokenLimit);
+  }
+
+  private enrichModelRecord(providerId: string, record: LlmModelRecord): LlmModelRecord {
+    const meta = lookupModelMetadata(this.modelMetadata, providerId, record.id);
+    if (!meta) return record;
+    return {
+      ...record,
+      contextWindow: record.contextWindow ?? meta.contextWindow,
+      outputTokenLimit: record.outputTokenLimit ?? meta.outputTokenLimit,
     };
   }
 
@@ -1483,6 +1544,15 @@ function buildFallbackModelCatalog(providerId: string, defaultModel: string | un
   }
 
   return Array.from(ids, (id) => ({ id }));
+}
+
+function defaultModelMetadataPath(configFilePath: string | undefined): string {
+  if (!configFilePath) {
+    return "config/llm-model-metadata.json";
+  }
+  const lastSep = Math.max(configFilePath.lastIndexOf("/"), configFilePath.lastIndexOf("\\"));
+  const dir = lastSep >= 0 ? configFilePath.slice(0, lastSep) : ".";
+  return `${dir}/llm-model-metadata.json`;
 }
 
 function normalizeModelRecords(payload: unknown): LlmModelRecord[] {
