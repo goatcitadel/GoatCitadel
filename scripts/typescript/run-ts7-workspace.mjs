@@ -63,6 +63,7 @@ async function main() {
       "tsgo",
       "-b",
       ...projects,
+      "--skipLibCheck",
     ]);
     return;
   }
@@ -75,6 +76,7 @@ async function main() {
       "-p",
       project,
       "--noEmit",
+      "--skipLibCheck",
     ]);
   }
 }
