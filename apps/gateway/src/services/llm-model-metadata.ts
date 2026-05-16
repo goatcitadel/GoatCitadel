@@ -15,18 +15,18 @@ export function loadLlmModelMetadataManifest(path: string): LlmModelMetadataLoad
     raw = readFileSync(path, "utf8");
   } catch (error) {
     errors.push(`llm-model-metadata: could not read ${path}: ${(error as Error).message}`);
-    return { manifest: { ...EMPTY_MANIFEST, entries: {} }, errors };
+    return { manifest: { ...EMPTY_MANIFEST }, errors };
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
     errors.push(`llm-model-metadata: invalid JSON in ${path}: ${(error as Error).message}`);
-    return { manifest: { ...EMPTY_MANIFEST, entries: {} }, errors };
+    return { manifest: { ...EMPTY_MANIFEST }, errors };
   }
   if (!isManifest(parsed)) {
     errors.push(`llm-model-metadata: ${path} does not match manifest shape`);
-    return { manifest: { ...EMPTY_MANIFEST, entries: {} }, errors };
+    return { manifest: { ...EMPTY_MANIFEST }, errors };
   }
   return { manifest: parsed, errors };
 }

@@ -1,14 +1,27 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadLlmModelMetadataManifest, lookupModelMetadata } from "./llm-model-metadata.js";
+
+const TEMP_ROOTS: string[] = [];
+
+afterEach(async () => {
+  while (TEMP_ROOTS.length > 0) {
+    const next = TEMP_ROOTS.pop();
+    if (next) {
+      await rm(next, { recursive: true, force: true });
+    }
+  }
+});
 
 describe("LLM model metadata loader", () => {
   let tmp: string;
 
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), "llm-meta-"));
+    TEMP_ROOTS.push(tmp);
   });
 
   it("loads a manifest from disk", () => {
@@ -49,6 +62,7 @@ describe("LLM model metadata loader", () => {
     const result = loadLlmModelMetadataManifest(path);
     expect(result.manifest.entries).toEqual({});
     expect(result.errors.length).toBe(1);
+    expect(result.errors[0]).toContain("does not match manifest shape");
   });
 });
 
