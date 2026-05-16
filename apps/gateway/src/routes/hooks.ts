@@ -27,6 +27,7 @@ const createHookSchema = z.object({
   trigger: z.enum([
     "llm.model.select.before",
     "llm.request.before",
+    "gateway.dispatch.before",
     "llm.response.after",
     "before_prompt_build",
     "llm_input",

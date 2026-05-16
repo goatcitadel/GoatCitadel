@@ -422,6 +422,21 @@ describe("HooksService", () => {
     expect(requestedRunIds).toEqual([]);
   });
 
+  it("accepts gateway.dispatch.before for intercept mode hooks", () => {
+    const { service, workspaceId } = createHarness({
+      workspacePrefs: { hooks: { allowInterceptingHooks: true } },
+    });
+    const created = service.createWorkspaceHook({
+      workspaceId,
+      label: "dispatch-veto",
+      trigger: "gateway.dispatch.before",
+      mode: "intercept",
+      action: { type: "webhook", webhook: { url: "https://hooks.example.test/dispatch" } },
+    });
+    expect(created.trigger).toBe("gateway.dispatch.before");
+    expect(created.mode).toBe("intercept");
+  });
+
   it("keeps runtime lifecycle triggers observe-only and phases them correctly", () => {
     const { service, workspaceId } = createHarness({
       workspacePrefs: {

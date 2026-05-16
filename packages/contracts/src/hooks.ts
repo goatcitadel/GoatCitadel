@@ -11,6 +11,7 @@ export type HookActionType = "webhook";
 export type HookTrigger =
   | "llm.model.select.before"
   | "llm.request.before"
+  | "gateway.dispatch.before"
   | "llm.response.after"
   | "before_prompt_build"
   | "llm_input"
@@ -59,6 +60,10 @@ export interface LlmRequestHookPatch extends LlmModelSelectHookPatch {
   appendMessages?: ChatCompletionMessage[];
   tools?: Array<Record<string, unknown>>;
   toolChoice?: string | Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface GatewayDispatchHookPatch {
   metadata?: Record<string, unknown>;
 }
 
@@ -159,6 +164,7 @@ export interface RuntimeLifecycleHookPayloadByTrigger {
 export interface HookPatchByTrigger {
   "llm.model.select.before": LlmModelSelectHookPatch;
   "llm.request.before": LlmRequestHookPatch;
+  "gateway.dispatch.before": GatewayDispatchHookPatch;
   "llm.response.after": never;
   before_prompt_build: never;
   llm_input: never;
@@ -181,6 +187,7 @@ export interface HookPatchByTrigger {
 export type HookPatch =
   | LlmModelSelectHookPatch
   | LlmRequestHookPatch
+  | GatewayDispatchHookPatch
   | ToolCallHookPatch
   | ApprovalCreateHookPatch
   | OrchestrationRunHookPatch
