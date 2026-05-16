@@ -904,4 +904,21 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS action_config_json TEXT;
     `,
   },
+  {
+    version: 32,
+    name: "state_validation_quarantine",
+    sql: `
+      CREATE TABLE IF NOT EXISTS state_validation_quarantine (
+        quarantine_id TEXT PRIMARY KEY,
+        store TEXT NOT NULL,
+        row_id TEXT NOT NULL,
+        raw_value TEXT,
+        schema_error TEXT NOT NULL,
+        observed_at TIMESTAMPTZ NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_state_validation_quarantine_store_observed
+        ON state_validation_quarantine(store, observed_at DESC);
+    `,
+  },
 ];

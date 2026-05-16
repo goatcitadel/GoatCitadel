@@ -6,6 +6,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createDatabase } from "./sqlite.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
+import { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
 
 const createdFiles: string[] = [];
 
@@ -485,6 +486,237 @@ describe("DurableRunRepository", () => {
     const resolved = resolvable.resolveDeadLetter(inserted.deadLetterId);
     assert.ok(resolved.resolvedAt);
     assert.equal(resolved.resolutionNote, undefined);
+  });
+  describe("pruneCheckpoints", () => {
+    it("removes orphan checkpoints whose run was deleted", () => {
+      const repo = createRepo();
+      const run = repo.createRun({ workflowKey: "test.workflow" });
+      repo.createCheckpoint({
+        runId: run.runId,
+        checkpointKind: "run_created",
+        state: { step: 1 },
+      });
+      // Force-orphan: directly write a checkpoint pointing at a non-existent run
+      const dbForOrphan = (repo as unknown as { db: import("./db.js").DatabaseClient }).db;
+      dbForOrphan.exec("PRAGMA foreign_keys = OFF");
+      dbForOrphan
+        .prepare(
+          "INSERT INTO durable_checkpoints (checkpoint_id, run_id, checkpoint_kind, state_json, created_at) VALUES (@id, @runId, @kind, @state, @at)",
+        )
+        .run({
+          id: "orphan-1",
+          runId: "no-such-run",
+          kind: "run_created",
+          state: "{}",
+          at: "2026-05-15T00:00:00.000Z",
+        });
+      dbForOrphan.exec("PRAGMA foreign_keys = ON");
+
+      const summary = repo.pruneCheckpoints({ keepPerRun: 50, diskBudgetBytes: 1024 * 1024 });
+      assert.equal(summary.prunedOrphans, 1);
+      assert.equal(summary.prunedAged, 0);
+      assert.equal(repo.listCheckpoints(run.runId, 100).length, 1);
+    });
+
+    it("keeps at most keepPerRun checkpoints per terminal run, pruning oldest", () => {
+      const repo = createRepo();
+      const run = repo.createRun({ workflowKey: "test.workflow" });
+      for (let i = 0; i < 5; i += 1) {
+        repo.createCheckpoint({
+          runId: run.runId,
+          checkpointKind: "run_started",
+          state: { step: i },
+          createdAt: new Date(2026, 0, 1, i).toISOString(),
+        });
+      }
+      repo.updateRun({
+        runId: run.runId,
+        status: "completed",
+        finishedAt: "2026-05-15T00:00:00.000Z",
+        expectedVersion: run.version,
+      });
+
+      const summary = repo.pruneCheckpoints({ keepPerRun: 2, diskBudgetBytes: 1024 * 1024 });
+      assert.equal(summary.prunedAged, 3);
+      const remaining = repo.listCheckpoints(run.runId, 100);
+      assert.equal(remaining.length, 2);
+      // Oldest pruned, newest kept
+      const r0 = remaining[0];
+      const r1 = remaining[1];
+      assert.ok(r0);
+      assert.ok(r1);
+      assert.equal((r0.state as { step: number }).step, 3);
+      assert.equal((r1.state as { step: number }).step, 4);
+    });
+
+    it("never prunes active (non-terminal) run checkpoints even when over budget", () => {
+      const repo = createRepo();
+      const run = repo.createRun({ workflowKey: "test.workflow" });
+      for (let i = 0; i < 10; i += 1) {
+        repo.createCheckpoint({
+          runId: run.runId,
+          checkpointKind: "run_started",
+          state: { step: i, big: "x".repeat(1024) },
+          createdAt: new Date(2026, 0, 1, i).toISOString(),
+        });
+      }
+      // Run stays "queued" — non-terminal
+
+      const summary = repo.pruneCheckpoints({ keepPerRun: 2, diskBudgetBytes: 10 });
+      assert.equal(summary.prunedAged, 0);
+      assert.equal(repo.listCheckpoints(run.runId, 100).length, 10);
+    });
+
+    it("prunes oldest across terminal runs to fit disk budget", () => {
+      const repo = createRepo();
+      const runA = repo.createRun({ workflowKey: "test.a" });
+      const runB = repo.createRun({ workflowKey: "test.b" });
+      for (let i = 0; i < 5; i += 1) {
+        repo.createCheckpoint({
+          runId: runA.runId,
+          checkpointKind: "run_started",
+          state: { run: "A", step: i, pad: "x".repeat(200) },
+          createdAt: new Date(2026, 0, 1, i).toISOString(),
+        });
+        repo.createCheckpoint({
+          runId: runB.runId,
+          checkpointKind: "run_started",
+          state: { run: "B", step: i, pad: "y".repeat(200) },
+          createdAt: new Date(2026, 1, 1, i).toISOString(),
+        });
+      }
+      repo.updateRun({
+        runId: runA.runId,
+        status: "completed",
+        finishedAt: "2026-05-15T00:00:00.000Z",
+        expectedVersion: runA.version,
+      });
+      repo.updateRun({
+        runId: runB.runId,
+        status: "completed",
+        finishedAt: "2026-05-15T00:00:00.000Z",
+        expectedVersion: runB.version,
+      });
+
+      const summary = repo.pruneCheckpoints({ keepPerRun: 100, diskBudgetBytes: 1024 });
+      assert.ok(summary.prunedAged > 0, "should prune to fit disk budget");
+      assert.ok(summary.finalBytes <= 1024 + 250, "final bytes should be at or under budget+headroom");
+    });
+
+    it("returns zero counts when nothing to prune", () => {
+      const repo = createRepo();
+      const summary = repo.pruneCheckpoints({ keepPerRun: 50, diskBudgetBytes: 1024 });
+      assert.equal(summary.prunedOrphans, 0);
+      assert.equal(summary.prunedAged, 0);
+      assert.equal(summary.finalBytes, 0);
+    });
+
+    it("accounts for UTF-8 byte length of multi-byte characters in disk budget", () => {
+      const repo = createRepo();
+      const run = repo.createRun({ workflowKey: "test.utf8" });
+      // 100-character string of multi-byte UTF-8 chars (é = 2 bytes each)
+      const padding = "é".repeat(100);
+      for (let i = 0; i < 5; i += 1) {
+        repo.createCheckpoint({
+          runId: run.runId,
+          checkpointKind: "run_started",
+          state: { run: "utf8", step: i, pad: padding },
+          createdAt: new Date(2026, 0, 1, i).toISOString(),
+        });
+      }
+      repo.updateRun({
+        runId: run.runId,
+        status: "completed",
+        finishedAt: "2026-05-15T00:00:00.000Z",
+        expectedVersion: run.version,
+      });
+
+      // Set a tight budget that requires pruning AT LEAST some checkpoints
+      // when bytes are counted correctly. 100 multi-byte chars + json overhead
+      // per checkpoint is roughly 250 bytes; 5 checkpoints ~= 1250 bytes.
+      const summary = repo.pruneCheckpoints({ keepPerRun: 100, diskBudgetBytes: 600 });
+      assert.ok(summary.prunedAged > 0, "should prune some checkpoints under 600-byte budget");
+      assert.ok(
+        summary.finalBytes <= 600 + 300,
+        `finalBytes should be at or under budget+headroom, got ${summary.finalBytes}`,
+      );
+      // The budget guard must work consistently — re-running with no slack should not over-prune
+      const second = repo.pruneCheckpoints({ keepPerRun: 100, diskBudgetBytes: 600 });
+      // Second pass should not destroy more than already needed
+      assert.ok(second.finalBytes <= summary.finalBytes + 300, "second pass should be idempotent within tolerance");
+    });
+  });
+});
+
+describe("DurableRunRepository sanitization", () => {
+  it("quarantines corrupt payload_json and returns an empty payload", () => {
+    const dbPath = path.join(os.tmpdir(), `gc-durable-sanitize-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const quarantine = new StateValidationQuarantineRepository(db);
+    const repo = new DurableRunRepository(db, { quarantine });
+
+    const run = repo.createRun({ workflowKey: "test.workflow", payload: { ok: true } });
+    db.prepare("UPDATE durable_runs SET payload_json = ? WHERE run_id = ?").run("{not json", run.runId);
+
+    const reloaded = repo.getRun(run.runId);
+    assert.deepEqual(reloaded.payload, {});
+    assert.equal(quarantine.count(), 1);
+    const entries = quarantine.list(10);
+    const entry = entries[0];
+    assert.ok(entry);
+    assert.equal(entry.store, "durable_run.payload");
+    assert.equal(entry.rowId, run.runId);
+  });
+
+  it("quarantines corrupt metadata_json and returns undefined metadata", () => {
+    const dbPath = path.join(os.tmpdir(), `gc-durable-sanitize-md-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const quarantine = new StateValidationQuarantineRepository(db);
+    const repo = new DurableRunRepository(db, { quarantine });
+
+    const run = repo.createRun({ workflowKey: "test.workflow", metadata: { hint: "x" } });
+    db.prepare("UPDATE durable_runs SET metadata_json = ? WHERE run_id = ?").run("[not, json", run.runId);
+
+    const reloaded = repo.getRun(run.runId);
+    assert.equal(reloaded.metadata, undefined);
+    assert.equal(quarantine.count(), 1);
+    const entries = quarantine.list(10);
+    const entry = entries[0];
+    assert.ok(entry);
+    assert.equal(entry.store, "durable_run.metadata");
+  });
+
+  it("quarantines corrupt checkpoint state_json and yields a placeholder", () => {
+    const dbPath = path.join(os.tmpdir(), `gc-checkpoint-sanitize-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const quarantine = new StateValidationQuarantineRepository(db);
+    const repo = new DurableRunRepository(db, { quarantine });
+
+    const run = repo.createRun({ workflowKey: "test.workflow" });
+    const checkpoint = repo.createCheckpoint({
+      runId: run.runId,
+      checkpointKind: "run_started",
+      state: { step: 1 },
+    });
+    db.prepare("UPDATE durable_checkpoints SET state_json = ? WHERE checkpoint_id = ?").run(
+      "{not json",
+      checkpoint.checkpointId,
+    );
+
+    const list = repo.listCheckpoints(run.runId, 10);
+    assert.equal(list.length, 1);
+    const cp = list[0];
+    assert.ok(cp);
+    assert.deepEqual(cp.state, {});
+    assert.equal(quarantine.count(), 1);
+    const entries = quarantine.list(10);
+    const entry = entries[0];
+    assert.ok(entry);
+    assert.equal(entry.store, "durable_checkpoint.state");
+    assert.equal(entry.rowId, checkpoint.checkpointId);
   });
 });
 

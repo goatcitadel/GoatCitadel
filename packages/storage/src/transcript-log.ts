@@ -1,18 +1,25 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { TranscriptEvent } from "@goatcitadel/contracts";
-import { safeJsonParse } from "./safe-json.js";
+import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
+import { parseJsonObject } from "./state-validators.js";
+
+export interface TranscriptLogOptions {
+  quarantine?: { record: (entry: QuarantineEntry) => unknown };
+  logger?: { warn: (data: unknown, msg: string) => void };
+}
 
 export class TranscriptLog {
   private readonly writeQueues = new Map<string, Promise<number>>();
 
-  public constructor(private readonly transcriptsDir: string) {}
+  public constructor(
+    private readonly transcriptsDir: string,
+    private readonly options: TranscriptLogOptions = {},
+  ) {}
 
   public async append(event: TranscriptEvent): Promise<number> {
     const prior = this.writeQueues.get(event.sessionId) ?? Promise.resolve(0);
-    const next = prior
-      .catch(() => 0)
-      .then(async () => this.appendInternal(event));
+    const next = prior.catch(() => 0).then(async () => this.appendInternal(event));
 
     this.writeQueues.set(event.sessionId, next);
     try {
@@ -49,15 +56,22 @@ export class TranscriptLog {
       if (!trimmed) {
         continue;
       }
-      const event = safeJsonParse<TranscriptEvent | undefined>(trimmed, undefined);
-      if (!event) {
-        console.warn("[goatcitadel] transcript line is malformed; continuing with degraded transcript read", {
-          sessionId,
-          lineNumber: index + 1,
-        });
+      const lineNumber = index + 1;
+      const parsed = loadAndSanitize(
+        trimmed,
+        {
+          store: "transcript.jsonl",
+          rowId: `${sessionId}:line-${lineNumber}`,
+          parse: parseJsonObject,
+          onQuarantine: this.options.quarantine ? (e) => this.options.quarantine!.record(e) : undefined,
+          log: this.options.logger,
+        },
+        undefined,
+      );
+      if (!parsed) {
         continue;
       }
-      events.push(event);
+      events.push(parsed as unknown as TranscriptEvent);
     }
     return events;
   }

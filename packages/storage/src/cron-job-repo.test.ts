@@ -6,6 +6,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createDatabase } from "./sqlite.js";
 import { CronJobRepository } from "./cron-job-repo.js";
+import { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
 
 const createdFiles: string[] = [];
 
@@ -95,5 +96,40 @@ describe("CronJobRepository", () => {
     assert.throws(() => repo.list(), /cron_jobs query returned an unexpected row shape/);
 
     assert.equal(first.updatedAt, "2026-03-29T10:30:00.000Z");
+  });
+});
+
+describe("CronJobRepository sanitization", () => {
+  it("quarantines a cron job whose action_config_json is malformed and falls back to undefined", () => {
+    const dbPath = path.join(os.tmpdir(), `gc-cron-sanitize-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const quarantine = new StateValidationQuarantineRepository(db);
+    const repo = new CronJobRepository(db, { quarantine });
+
+    const cron = repo.upsert({
+      jobId: `sanitize-test-${randomUUID()}`,
+      name: "Sanitize Test",
+      action: "watchdog" as const,
+      actionConfig: { watchdog: { checkId: "runtime_health" as const, notifyHomeChannel: false } },
+      description: undefined,
+      schedule: "0 * * * * America/Los_Angeles",
+      enabled: true,
+      endAt: undefined,
+      lastRunAt: undefined,
+      nextRunAt: undefined,
+    });
+
+    db.prepare("UPDATE cron_jobs SET action_config_json = ? WHERE job_id = ?").run("{not json", cron.jobId);
+
+    const reloaded = repo.get(cron.jobId);
+    assert.ok(reloaded);
+    assert.equal(reloaded.actionConfig, undefined);
+    assert.equal(quarantine.count(), 1);
+    const entry0 = quarantine.list(10)[0];
+    assert.ok(entry0);
+    assert.equal(entry0.store, "cron_job.action_config");
+    assert.equal(entry0.rowId, cron.jobId);
+    assert.match(entry0.schemaError, /json_parse|schema/);
   });
 });
