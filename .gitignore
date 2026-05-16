@@ -47,3 +47,6 @@ assets/source/**/*.rar
 assets/source/**/*.tar
 assets/source/**/*.tar.gz
 assets/source/office/_downloads/
+
+# Visual companion sessions
+.superpowers/
