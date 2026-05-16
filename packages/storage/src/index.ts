@@ -219,7 +219,7 @@ export class Storage {
     this.taskDeliverables = new TaskDeliverableRepository(this.db);
     this.taskSubagents = new TaskSubagentRepository(this.db);
     this.realtimeEvents = new RealtimeEventRepository(this.db);
-    this.cronJobs = new CronJobRepository(this.db);
+    this.cronJobs = new CronJobRepository(this.db, { quarantine: this.stateValidationQuarantine });
     this.integrationConnections = new IntegrationConnectionRepository(this.db);
     this.channelSetupDrafts = new ChannelSetupDraftRepository(this.db);
     this.agentProfiles = new AgentProfileRepository(this.db);
