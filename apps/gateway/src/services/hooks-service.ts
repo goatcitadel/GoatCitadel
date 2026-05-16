@@ -591,6 +591,7 @@ export class HooksService {
       trigger === "tool.call.error" ||
       trigger === "after_tool_call" ||
       trigger === "approval.resolve.after" ||
+      trigger === "approval.response.after" ||
       trigger === "orchestration.phase.after" ||
       trigger === "orchestration.retry.scheduled" ||
       trigger === "orchestration.run.woken" ||

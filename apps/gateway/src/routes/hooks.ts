@@ -40,6 +40,7 @@ const createHookSchema = z.object({
     "approval.request.before",
     "approval.create.before",
     "approval.resolve.after",
+    "approval.response.after",
     "orchestration.run.before",
     "orchestration.phase.before",
     "orchestration.phase.after",

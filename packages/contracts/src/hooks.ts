@@ -24,6 +24,7 @@ export type HookTrigger =
   | "approval.request.before"
   | "approval.create.before"
   | "approval.resolve.after"
+  | "approval.response.after"
   | "orchestration.run.before"
   | "orchestration.phase.before"
   | "orchestration.phase.after"
@@ -180,6 +181,7 @@ export interface HookPatchByTrigger {
   "approval.request.before": never;
   "approval.create.before": ApprovalCreateHookPatch;
   "approval.resolve.after": never;
+  "approval.response.after": never;
   "orchestration.run.before": OrchestrationRunHookPatch;
   "orchestration.phase.before": OrchestrationPhaseHookPatch;
   "orchestration.phase.after": never;

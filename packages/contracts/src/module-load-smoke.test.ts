@@ -22,4 +22,9 @@ describe("contracts module load smoke", () => {
     const trigger: HookTrigger = "approval.request.before";
     expect(trigger).toBe("approval.request.before");
   });
+
+  it("includes approval.response.after in HookTrigger", () => {
+    const trigger: HookTrigger = "approval.response.after";
+    expect(trigger).toBe("approval.response.after");
+  });
 });
