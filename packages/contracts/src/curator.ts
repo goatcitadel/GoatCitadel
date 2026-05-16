@@ -1,3 +1,5 @@
+import type { SkillRuntimeState } from "./skills.js";
+
 export type CuratorSkillImmunityReason = "bundled" | "pinned" | "missing_state";
 
 export interface CuratorSkillScore {
@@ -19,7 +21,7 @@ export interface CuratorSkillStatusItem {
   bundled: boolean;
   immune: boolean;
   immunityReason?: CuratorSkillImmunityReason;
-  state: "enabled" | "sleep" | "disabled";
+  state: SkillRuntimeState;
   usageCount: number;
   lastUsedAt?: string;
   ageDays: number;
@@ -48,7 +50,7 @@ export interface CuratorArchiveResponse {
   skillId: string;
   archived: boolean;
   archivedAt: string;
-  state: "enabled" | "sleep" | "disabled";
+  state: SkillRuntimeState;
 }
 
 export interface CuratorPruneRequest {
@@ -111,7 +113,7 @@ export interface CuratorRunResponse {
 export type CuratorScopeKind = "skill" | "memory";
 
 export interface CuratorScopeViolation {
-  attemptedKind: string;
+  attemptedKind: CuratorScopeKind | string;
   reason: string;
 }
 
