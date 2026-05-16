@@ -346,21 +346,21 @@ export class ChatDelegationService {
 
       try {
         enforceMaxDepth({ depth: childDepth, maxDepth: subagentDefaults.maxDepth });
+        const taskFirstMessage = buildSubagentTaskFirstMessage({
+          role: step.role,
+          objective,
+          mode,
+          parentDelegationStepId: step.stepId,
+          sharedContext: dependencyContext,
+        });
         const response = await runWithChildTimeout({
           timeoutSeconds: subagentDefaults.childTimeoutSeconds,
           run: async (signal) =>
             deps.agentSendChatMessage(
               childSession.sessionId,
               buildDelegatedChatSendRequest({
-                content: [
-                  buildDelegationSystemPrompt(step.role),
-                  buildDelegationUserPrompt({
-                    objective,
-                    role: step.role,
-                    mode,
-                    sharedContext: dependencyContext,
-                  }),
-                ].join("\n\n"),
+                content: taskFirstMessage,
+                parentDelegationStepId: step.stepId,
                 providerId,
                 model,
                 mode: executionMode,
@@ -968,34 +968,44 @@ function dedupeStrings(values: readonly string[]): string[] {
   return out;
 }
 
-function buildDelegationSystemPrompt(role: string): string {
+export interface BuildDelegationSpecialistSystemPromptInput {
+  role: string;
+}
+
+export function buildDelegationSpecialistSystemPrompt(input: BuildDelegationSpecialistSystemPromptInput): string {
   return [
     "You are a specialist subagent in a multi-step delegation run.",
-    `Assigned role: ${role}.`,
+    `Assigned role: ${input.role}.`,
     "Return concise, practical output in plain markdown.",
     "If you are missing data, call that out explicitly and propose a next best step.",
     "Never claim external data unless it was provided in the current context.",
   ].join("\n");
 }
 
-function buildDelegationUserPrompt(input: {
-  objective: string;
+export interface BuildSubagentTaskFirstMessageInput {
   role: string;
+  objective: string;
   mode: "sequential" | "parallel";
+  parentDelegationStepId: string;
   sharedContext: Array<{ role: string; output: string }>;
-}): string {
-  const previous =
+}
+
+export function buildSubagentTaskFirstMessage(input: BuildSubagentTaskFirstMessageInput): string {
+  const dependencyBlock =
     input.sharedContext.length > 0
       ? input.sharedContext.map((item) => `Role ${item.role} output:\n${item.output}`).join("\n\n")
       : "None";
   return [
-    `Objective: ${input.objective}`,
+    `[Subagent Task] ${input.objective}`,
+    `Assigned role: ${input.role}`,
     `Execution mode: ${input.mode}`,
-    `Current role: ${input.role}`,
+    `Parent delegation step: ${input.parentDelegationStepId}`,
+    "",
     "Completed dependency outputs available to this role:",
-    previous,
+    dependencyBlock,
+    "",
     "Produce your role output now.",
-  ].join("\n\n");
+  ].join("\n");
 }
 
 async function mapWithConcurrency<TInput, TOutput>(

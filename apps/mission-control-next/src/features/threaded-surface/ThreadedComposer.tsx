@@ -389,6 +389,13 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           <span className="mc-next-composer-chip subtle">{speedLabel}</span>
           <span className="mc-next-composer-chip subtle">{routeLabel}</span>
           <span className="mc-next-composer-chip subtle">{usageLabel}</span>
+          {props.pinnedGoal ? <span className="mc-next-composer-chip emphasis">Goal: {props.pinnedGoal}</span> : null}
+          {props.hasActiveStream && props.midTurnDisposition === "steer" ? (
+            <span className="mc-next-composer-chip emphasis">Steering</span>
+          ) : null}
+          {props.hasActiveStream && props.midTurnDisposition === "queue" ? (
+            <span className="mc-next-composer-chip subtle">Queued</span>
+          ) : null}
         </div>
       </div>
 

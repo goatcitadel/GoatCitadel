@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-05-16T17:41:05.151Z",
-  "gatewayLineCount": 7753,
+  "generatedAt": "2026-05-16T16:38:55.861Z",
+  "gatewayLineCount": 7752,
   "gatewayPublicMethodCount": 240,
   "gatewayPublicMethodsByRegion": {
     "approvals": 18,
@@ -53,10 +53,10 @@
   "gatewayRouteCompositionVariadicAnyMethodCount": 0,
   "gatewayRouteCompositionFactoryExternalConsumerCount": 0,
   "gatewayRouteCompositionFactoryExternalConsumers": [],
-  "gatewayRouteCompositionPortMemberCount": 139,
+  "gatewayRouteCompositionPortMemberCount": 140,
   "legacyRouteServiceFactoryVariadicAnyCount": 2,
   "legacyRoutePortAliasCount": 38,
-  "totalHostCallbacks": 692,
+  "totalHostCallbacks": 696,
   "hostCallbacksByFile": {
     "apps/gateway/src/services/approval-lifecycle-service.ts": 59,
     "apps/gateway/src/services/channel-setup-helpers.ts": 1,
@@ -64,9 +64,9 @@
     "apps/gateway/src/services/chat-agent-orchestrator.ts": 8,
     "apps/gateway/src/services/chat-turn-dispatch-service.ts": 41,
     "apps/gateway/src/services/chat-turn-entry-service.ts": 77,
-    "apps/gateway/src/services/chat-turn-prep-service.ts": 24,
+    "apps/gateway/src/services/chat-turn-prep-service.ts": 26,
     "apps/gateway/src/services/chat-turn-stream-events.ts": 2,
-    "apps/gateway/src/services/chat-turn-stream-service.ts": 81,
+    "apps/gateway/src/services/chat-turn-stream-service.ts": 87,
     "apps/gateway/src/services/comms-service.ts": 11,
     "apps/gateway/src/services/connection-url-helpers.ts": 1,
     "apps/gateway/src/services/connector-diagnostics-helpers.ts": 1,
@@ -93,7 +93,7 @@
     "apps/gateway/src/services/workflow-recipe-service.ts": 3
   },
   "settingsHostCallbackCount": 0,
-  "chatHostCallbackCount": 233,
+  "chatHostCallbackCount": 238,
   "routeFacingServiceCount": 55,
   "routeFacingServiceFiles": [
     "apps/gateway/src/services/addons-route-service.ts",

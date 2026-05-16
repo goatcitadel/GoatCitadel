@@ -790,6 +790,24 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       `);
     },
   },
+  {
+    version: 80,
+    name: "chat_session_meta_goal",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "chat_session_meta", "pinned_goal", "TEXT");
+      addColumnIfMissingIfTableExists(db, "chat_session_meta", "goal_turn_budget", "INTEGER");
+      addColumnIfMissingIfTableExists(db, "chat_session_meta", "goal_turns_used", "INTEGER NOT NULL DEFAULT 0");
+      addColumnIfMissingIfTableExists(db, "chat_session_meta", "goal_set_at", "TEXT");
+    },
+  },
+  {
+    version: 81,
+    name: "chat_messages_steer_audit",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "chat_messages", "steered", "INTEGER");
+      addColumnIfMissingIfTableExists(db, "chat_messages", "parent_delegation_step_id", "TEXT");
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {

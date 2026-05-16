@@ -19,6 +19,8 @@ interface ChatMessageRow {
   token_output: number | null;
   cost_usd: number | null;
   created_at: string;
+  steered: number | null;
+  parent_delegation_step_id: string | null;
 }
 
 export interface ChatMessageRepositoryOptions {
@@ -41,10 +43,10 @@ export class ChatMessageRepository {
     this.upsertStmt = db.prepare(`
       INSERT INTO chat_messages (
         message_id, session_id, role, actor_type, actor_id, content, parts_json, attachments_json,
-        timestamp, token_input, token_output, cost_usd, created_at
+        timestamp, token_input, token_output, cost_usd, created_at, steered, parent_delegation_step_id
       ) VALUES (
         @messageId, @sessionId, @role, @actorType, @actorId, @content, @partsJson, @attachmentsJson,
-        @timestamp, @tokenInput, @tokenOutput, @costUsd, @createdAt
+        @timestamp, @tokenInput, @tokenOutput, @costUsd, @createdAt, @steered, @parentDelegationStepId
       )
       ON CONFLICT(message_id) DO UPDATE SET
         role = excluded.role,
@@ -56,7 +58,9 @@ export class ChatMessageRepository {
         timestamp = excluded.timestamp,
         token_input = excluded.token_input,
         token_output = excluded.token_output,
-        cost_usd = excluded.cost_usd
+        cost_usd = excluded.cost_usd,
+        steered = excluded.steered,
+        parent_delegation_step_id = excluded.parent_delegation_step_id
     `);
     this.countStmt = db.prepare(`
       SELECT COUNT(1) AS count
@@ -106,6 +110,8 @@ export class ChatMessageRepository {
       tokenOutput: message.tokenOutput ?? null,
       costUsd: message.costUsd ?? null,
       createdAt: message.timestamp || now,
+      steered: typeof message.steered === "boolean" ? (message.steered ? 1 : 0) : null,
+      parentDelegationStepId: message.parentDelegationStepId ?? null,
     });
   }
 
@@ -128,6 +134,8 @@ export class ChatMessageRepository {
       "token_output",
       "cost_usd",
       "created_at",
+      "steered",
+      "parent_delegation_step_id",
     ];
     const savepointName = `chat_messages_upsert_many_${randomUUID().replaceAll("-", "_")}`;
     this.db.exec(`SAVEPOINT ${savepointName}`);
@@ -149,7 +157,9 @@ export class ChatMessageRepository {
             timestamp = excluded.timestamp,
             token_input = excluded.token_input,
             token_output = excluded.token_output,
-            cost_usd = excluded.cost_usd
+            cost_usd = excluded.cost_usd,
+            steered = excluded.steered,
+            parent_delegation_step_id = excluded.parent_delegation_step_id
         `;
         const params: (string | number | null)[] = [];
         for (const message of chunk) {
@@ -167,6 +177,8 @@ export class ChatMessageRepository {
             message.tokenOutput ?? null,
             message.costUsd ?? null,
             message.timestamp || now,
+            typeof message.steered === "boolean" ? (message.steered ? 1 : 0) : null,
+            message.parentDelegationStepId ?? null,
           );
         }
         this.db.prepare(sql).run(...params);
@@ -205,6 +217,7 @@ export class ChatMessageRepository {
   }
 
   private mapRow(row: ChatMessageRow): ChatMessageRecord {
+    const steered = typeof row.steered === "number" ? row.steered !== 0 : undefined;
     return {
       messageId: row.message_id,
       sessionId: row.session_id,
@@ -218,6 +231,10 @@ export class ChatMessageRepository {
       costUsd: row.cost_usd ?? undefined,
       parts: this.parseParts(row.parts_json, row.message_id),
       attachments: this.parseAttachments(row.attachments_json, row.message_id),
+      ...(steered === undefined ? {} : { steered }),
+      ...(row.parent_delegation_step_id === null || row.parent_delegation_step_id === undefined
+        ? {}
+        : { parentDelegationStepId: row.parent_delegation_step_id }),
     };
   }
 
@@ -308,7 +325,11 @@ function isChatMessageRow(value: unknown): value is ChatMessageRow {
     (typeof value.token_input === "number" || value.token_input === null) &&
     (typeof value.token_output === "number" || value.token_output === null) &&
     (typeof value.cost_usd === "number" || value.cost_usd === null) &&
-    typeof value.created_at === "string"
+    typeof value.created_at === "string" &&
+    (typeof value.steered === "number" || value.steered === null || value.steered === undefined) &&
+    (typeof value.parent_delegation_step_id === "string" ||
+      value.parent_delegation_step_id === null ||
+      value.parent_delegation_step_id === undefined)
   );
 }
 

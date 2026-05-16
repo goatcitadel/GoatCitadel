@@ -6,6 +6,7 @@ import type {
   ChatTurnLeaseControl,
   ChatTurnMemorySideEffects,
   ChatTurnRealtimeEmitter,
+  ChatTurnSteerCollaborator,
   ChatTurnStreamLifecycleControl,
   ChatTurnTranscriptIngress,
 } from "./chat-turn-runtime-collaborators.js";
@@ -21,6 +22,7 @@ export function createChatTurnRuntimeHost(source: ChatTurnRuntimeHost): ChatTurn
     composeDurableOwnership(source),
     composeMemorySideEffects(source),
     composeRealtimeEmission(source),
+    composeSteerCollaborator(source),
     composeTranscriptIngress(source),
     composeIntegrationDispatch(source),
     composeRoutingAndPlanning(source),
@@ -153,6 +155,14 @@ function composeMemorySideEffects(source: ChatTurnRuntimeHost): ChatTurnMemorySi
 function composeRealtimeEmission(source: ChatTurnRuntimeHost): ChatTurnRealtimeEmitter {
   return {
     publishRealtime: (channel, topic, payload, options) => source.publishRealtime(channel, topic, payload, options),
+  };
+}
+
+function composeSteerCollaborator(source: ChatTurnRuntimeHost): ChatTurnSteerCollaborator {
+  return {
+    get steerService() {
+      return source.steerService;
+    },
   };
 }
 

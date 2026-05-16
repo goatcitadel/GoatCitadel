@@ -11,6 +11,7 @@ import type {
   DurableRunRecord,
 } from "@goatcitadel/contracts";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import type { ChatSteerService } from "./chat-steer-service.js";
 
 export type ChatTurnRealtimeOptions = Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">;
 
@@ -127,4 +128,8 @@ export interface ChatTurnIntegrationDispatch {
     result: ToolInvokeResult | Record<string, unknown>,
   ): Record<string, unknown>;
   commsSend(input: ChannelSendInput): Promise<ToolInvokeResult | Record<string, unknown>>;
+}
+
+export interface ChatTurnSteerCollaborator {
+  readonly steerService: ChatSteerService;
 }

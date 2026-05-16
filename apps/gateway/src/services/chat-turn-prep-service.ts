@@ -148,6 +148,30 @@ export interface PreparedAgentChatTurn {
   effectiveToolAutonomy: ChatSessionPrefsRecord["toolAutonomy"];
 }
 
+export const DEFAULT_GOAL_TURN_BUDGET = 20;
+
+export function applyGoalToGuidanceSystemInstruction(input: { baseInstruction?: string; goal: string | null }): string {
+  if (!input.goal) {
+    return input.baseInstruction ?? "";
+  }
+  const goalSection = `Pinned goal: ${input.goal}\nKeep every turn focused on this goal until the operator clears it.`;
+  if (!input.baseInstruction) {
+    return goalSection;
+  }
+  return `${goalSection}\n\n${input.baseInstruction}`;
+}
+
+/**
+ * Counts an attempted turn against the goal budget.
+ * Note: increment happens at prep time, BEFORE dispatch. Transient dispatch
+ * failures still count toward the budget. This is intentional — a misconfigured
+ * goal that triggers repeated failures should still time out via the budget.
+ */
+export function advanceGoalForTurn(input: { turnsUsed: number; turnBudget: number | null }): { cleared: boolean } {
+  const budget = input.turnBudget ?? DEFAULT_GOAL_TURN_BUDGET;
+  return { cleared: input.turnsUsed >= budget };
+}
+
 export async function prepareAgentChatTurn(
   host: ChatTurnPrepHost,
   sessionId: string,
@@ -202,6 +226,7 @@ export async function prepareAgentChatTurn(
           mimeType: item.mimeType,
           sizeBytes: item.sizeBytes,
         })),
+        parentDelegationStepId: input.parentDelegationStepId,
       },
     });
     const attachments = uploadAttachments.map((item) => ({
@@ -220,6 +245,7 @@ export async function prepareAgentChatTurn(
       parts: inputParts.length > 0 ? inputParts : undefined,
       timestamp: new Date().toISOString(),
       attachments: attachments.length > 0 ? attachments : undefined,
+      parentDelegationStepId: input.parentDelegationStepId,
     };
   } else {
     userMessage = options.existingUserMessage;
@@ -258,7 +284,12 @@ export async function prepareAgentChatTurn(
   const resolvedGuidance = await host.resolveRuntimeGuidance(workspaceId);
   const threadKnowledgeContext = await host.resolveThreadKnowledgeContext(sessionId, content);
   const personalityOverlay = prefs.mode === "chat" ? host.buildDefaultChatPersonalityOverlay() : undefined;
+  const goalAdjustedBaseGuidance = applyGoalToGuidanceSystemInstruction({
+    baseInstruction: undefined,
+    goal: sessionMeta.pinnedGoal ?? null,
+  });
   const guidanceSystemInstruction = mergeChatSystemInstructions(
+    goalAdjustedBaseGuidance || undefined,
     resolvedGuidance.systemInstruction,
     threadKnowledgeContext.systemInstruction,
     personalityOverlay,
@@ -302,6 +333,21 @@ export async function prepareAgentChatTurn(
     },
     sessionState,
   );
+
+  if (sessionMeta.pinnedGoal) {
+    const turnsUsed = host.storage.chatSessionMeta.incrementGoalTurnsUsed(sessionId);
+    const { cleared } = advanceGoalForTurn({
+      turnsUsed,
+      turnBudget: sessionMeta.goalTurnBudget ?? null,
+    });
+    if (cleared) {
+      host.storage.chatSessionMeta.patch(sessionId, {
+        pinnedGoal: null,
+        goalTurnBudget: null,
+        goalSetAt: null,
+      });
+    }
+  }
 
   return {
     session,

@@ -195,6 +195,10 @@ export interface ChatSessionRecord {
   lastActivityAt: string;
   tokenTotal: number;
   costUsdTotal: number;
+  pinnedGoal?: string;
+  goalTurnBudget?: number;
+  goalTurnsUsed?: number;
+  goalSetAt?: string;
 }
 
 export interface ChatSessionCreateInput {
@@ -436,6 +440,16 @@ export interface ChatMessageRecord {
     mimeType: string;
     sizeBytes: number;
   }>;
+  /**
+   * Set true when this user message was injected into an active run via /steer.
+   * Surfaces on transcript entries so operators can audit which prompts steered.
+   */
+  steered?: boolean;
+  /**
+   * Links the message to a parent delegation step. Set on the [Subagent Task]
+   * first message of a child session so the lineage is queryable from the message.
+   */
+  parentDelegationStepId?: string;
 }
 
 export interface ChatSessionPrefsRecord {
@@ -1334,6 +1348,12 @@ export interface ChatSendMessageRequest {
   normalizationProfile?: ChatNormalizationProfile;
   commandText?: string;
   prefsOverride?: ChatSessionPrefsPatch;
+  /**
+   * When set, the constructed user message will carry parentDelegationStepId so the
+   * child transcript links back to the parent's delegation step record. Used by
+   * the chat-delegation-service when spawning child sessions.
+   */
+  parentDelegationStepId?: string;
 }
 
 export type RoutingPreflightAction = "send" | "retry" | "edit";
@@ -1627,3 +1647,27 @@ export type ChatStreamChunk =
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
 export type ChatStreamChunkDraft = DistributiveOmit<ChatStreamChunk, "eventId" | "sequence" | "runId">;
+
+export interface ChatSteerRequest {
+  instruction: string;
+}
+
+export interface ChatSteerResponse {
+  sessionId: string;
+  turnId: string;
+  accepted: boolean;
+  reason?: string;
+}
+
+export interface ChatGoalRequest {
+  goal: string;
+  turnBudget?: number;
+}
+
+export interface ChatGoalStatusResponse {
+  sessionId: string;
+  goal: string | null;
+  turnBudget: number | null;
+  turnsUsed: number;
+  setAt: string | null;
+}

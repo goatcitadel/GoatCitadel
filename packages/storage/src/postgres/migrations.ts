@@ -932,4 +932,24 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS last_run_id TEXT;
     `,
   },
+  {
+    version: 34,
+    name: "chat_session_meta_goal",
+    sql: `
+      ALTER TABLE chat_session_meta
+        ADD COLUMN IF NOT EXISTS pinned_goal TEXT,
+        ADD COLUMN IF NOT EXISTS goal_turn_budget INTEGER,
+        ADD COLUMN IF NOT EXISTS goal_turns_used INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS goal_set_at TEXT;
+    `,
+  },
+  {
+    version: 35,
+    name: "chat_messages_steer_audit",
+    sql: `
+      ALTER TABLE chat_messages
+        ADD COLUMN IF NOT EXISTS steered INTEGER,
+        ADD COLUMN IF NOT EXISTS parent_delegation_step_id TEXT;
+    `,
+  },
 ];

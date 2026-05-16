@@ -79,6 +79,16 @@ export interface GatewayEventInput {
       mimeType: string;
       sizeBytes: number;
     }>;
+    /**
+     * Set true when this user message was injected into an active run via /steer.
+     * Forwarded to chat_messages so transcripts show the operator intervention.
+     */
+    steered?: boolean;
+    /**
+     * Links the message to a parent delegation step. Set on the [Subagent Task]
+     * first message of a child session so the lineage is queryable from the message.
+     */
+    parentDelegationStepId?: string;
   };
   taskId?: string;
   usage?: {
