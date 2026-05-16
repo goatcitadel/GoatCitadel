@@ -648,6 +648,25 @@ function makeServiceWithNoAgent(opts: {
   return new CronAutomationService(deps);
 }
 
+describe("createCronJob workdir + contextFrom", () => {
+  it("stores workdir and contextFrom on the persisted record", () => {
+    const service = makeServiceWithNoAgent({
+      realtime: vi.fn(),
+      runner: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
+    });
+    const saved = service.createCronJob({
+      jobId: "chained",
+      name: "Chained",
+      action: "task",
+      schedule: "0 */6 * * * UTC",
+      workdir: "/tmp/test",
+      contextFrom: "upstream",
+    });
+    expect(saved.workdir).toBe("/tmp/test");
+    expect(saved.contextFrom).toBe("upstream");
+  });
+});
+
 describe("no_agent cron action", () => {
   it("skips delivery when stdout is empty", async () => {
     const realtime = vi.fn();

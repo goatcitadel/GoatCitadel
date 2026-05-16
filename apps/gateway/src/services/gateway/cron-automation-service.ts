@@ -73,6 +73,8 @@ export class CronAutomationService {
     enabled?: boolean;
     endAt?: string;
     actionConfig?: unknown;
+    workdir?: string;
+    contextFrom?: string;
   }): CronJobRecord {
     const jobId = normalizeCronJobId(input.jobId);
     if (this.deps.storage.cronJobs.get(jobId)) {
@@ -90,6 +92,8 @@ export class CronAutomationService {
       endAt: normalizeCronEndAt(input.endAt),
       lastRunAt: undefined,
       nextRunAt: undefined,
+      workdir: normalizeCronWorkdir(input.workdir),
+      contextFrom: normalizeCronContextFrom(input.contextFrom),
     };
     if (isScheduledCronAction(job.action)) {
       job.nextRunAt = computeNextCronRunAt(job.schedule, new Date(), job.endAt);
@@ -117,6 +121,8 @@ export class CronAutomationService {
       enabled?: boolean;
       endAt?: string | null;
       actionConfig?: unknown;
+      workdir?: string | null;
+      contextFrom?: string | null;
     },
   ): CronJobRecord {
     const current = this.getCronJob(jobId);
@@ -136,6 +142,8 @@ export class CronAutomationService {
       schedule: input.schedule !== undefined ? normalizeCronSchedule(input.schedule) : current.schedule,
       enabled: input.enabled ?? current.enabled,
       endAt: input.endAt !== undefined ? normalizeCronEndAt(input.endAt) : current.endAt,
+      workdir: input.workdir !== undefined ? normalizeCronWorkdir(input.workdir) : current.workdir,
+      contextFrom: input.contextFrom !== undefined ? normalizeCronContextFrom(input.contextFrom) : current.contextFrom,
     };
     if (isScheduledCronAction(updated.action)) {
       updated.nextRunAt = computeNextCronRunAt(updated.schedule, new Date(), updated.endAt);
@@ -955,6 +963,32 @@ function getZonedDateParts(
     minute: Number.parseInt(part("minute"), 10),
     weekday: weekdayLabelToNumber(part("weekday")),
   };
+}
+
+export function normalizeCronWorkdir(value: string | undefined | null): string | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.length > 1024) {
+    throw new Error("Cron workdir must be 1024 characters or less.");
+  }
+  return trimmed;
+}
+
+export function normalizeCronContextFrom(value: string | undefined | null): string | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  // Validate via existing id rules.
+  return normalizeCronJobId(trimmed);
 }
 
 function weekdayLabelToNumber(label: string): number {

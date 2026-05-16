@@ -28,6 +28,9 @@ export function createCronJob(
     schedule: string;
     enabled?: boolean;
     endAt?: string;
+    actionConfig?: unknown;
+    workdir?: string;
+    contextFrom?: string;
   },
 ): CronJobRecord {
   return host.cronAutomationService.createCronJob(input);
@@ -43,6 +46,9 @@ export function updateCronJob(
     schedule?: string;
     enabled?: boolean;
     endAt?: string | null;
+    actionConfig?: unknown;
+    workdir?: string | null;
+    contextFrom?: string | null;
   },
 ): CronJobRecord {
   return host.cronAutomationService.updateCronJob(jobId, input);
