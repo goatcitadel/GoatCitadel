@@ -7,6 +7,7 @@ apps/*/src-tauri/gen/schemas/
 *.tsbuildinfo
 config/*.json
 !config/*.example.json
+!config/llm-model-metadata.json
 .data
 .vscode
 *.log
