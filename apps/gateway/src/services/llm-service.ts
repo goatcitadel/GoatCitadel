@@ -129,10 +129,13 @@ type UndiciConnectOptions = UndiciAgentConnectOptions & UndiciProxyTlsOptions;
 type FetchRequestInitWithDispatcher = RequestInit & { dispatcher?: Dispatcher };
 
 export class LlmService {
+  private static readonly MODEL_DISCOVERY_TTL_MS = 60_000;
   private readonly providers = new Map<string, LlmProviderConfig>();
   private readonly secretStore: SecretStoreService;
   private readonly openAICodexOAuth: OpenAICodexOAuthService;
   private readonly secretStatusCache = new Map<string, SecretStatusCacheEntry>();
+  private readonly modelDiscoveryCache = new Map<string, { cachedAt: number; result: ModelDiscoveryResult }>();
+  private readonly modelDiscoveryInFlight = new Map<string, Promise<ModelDiscoveryResult>>();
   private readonly requestDispatcherCache = new Map<string, Dispatcher>();
   private readonly providerAdapters: LlmProviderAdapterRegistry = createLlmProviderAdapterRegistry([
     anthropicProviderAdapter,
@@ -241,6 +244,8 @@ export class LlmService {
   }
 
   public updateRuntimeConfig(input: LlmRuntimeUpdateInput): LlmRuntimeConfig {
+    this.modelDiscoveryCache.clear();
+    this.modelDiscoveryInFlight.clear();
     if (input.upsertProvider) {
       const existing = this.providers.get(input.upsertProvider.providerId);
       const isCodexOAuthProvider = input.upsertProvider.providerId.trim().toLowerCase() === "openai-codex";
@@ -1219,6 +1224,34 @@ export class LlmService {
   }
 
   private async fetchModelsForResolvedProvider(resolved: ResolvedProvider): Promise<ModelDiscoveryResult> {
+    const key = `${resolved.provider.providerId}::${resolved.provider.baseUrl}`;
+    const now = Date.now();
+    const cached = this.modelDiscoveryCache.get(key);
+    if (cached && now - cached.cachedAt < LlmService.MODEL_DISCOVERY_TTL_MS) {
+      return cached.result;
+    }
+    // Stampede protection: coalesce concurrent cold-cache callers onto a single fetch.
+    const inFlight = this.modelDiscoveryInFlight.get(key);
+    if (inFlight) {
+      return inFlight;
+    }
+    const pending = this.fetchModelsForResolvedProviderUncached(resolved)
+      .then((result) => {
+        // Cache live + template_fallback (successful fetches with known catalog), but
+        // skip error_fallback so transient network errors retry on the next call.
+        if (result.source !== "error_fallback") {
+          this.modelDiscoveryCache.set(key, { cachedAt: now, result });
+        }
+        return result;
+      })
+      .finally(() => {
+        this.modelDiscoveryInFlight.delete(key);
+      });
+    this.modelDiscoveryInFlight.set(key, pending);
+    return pending;
+  }
+
+  private async fetchModelsForResolvedProviderUncached(resolved: ResolvedProvider): Promise<ModelDiscoveryResult> {
     const fallback = buildFallbackModelCatalog(resolved.provider.providerId, resolved.provider.defaultModel);
     if (isOpenAICodexProvider(resolved.provider)) {
       return {
