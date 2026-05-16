@@ -669,7 +669,7 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
                 >
                   {filteredActivityEvents.map((item, index) => (
                     <li
-                      key={`${item.eventType}-${item.timestamp ?? "no-ts"}-${index}`}
+                      key={item.eventId ?? `${item.eventType}-${item.timestamp ?? "no-ts"}-${index}`}
                       className="mc-next-activity-feed-row"
                     >
                       <ThreePartChip
