@@ -1335,6 +1335,72 @@ describe("LlmService", () => {
     });
   });
 
+  it("uses Claude Code OAuth headers for Claude subscription provider requests", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "claude-code",
+      providers: [
+        {
+          providerId: "claude-code",
+          label: "Claude Code (Claude subscription)",
+          baseUrl: "https://api.anthropic.com/v1",
+          apiStyle: "anthropic-messages",
+          authMode: "claude-code-oauth",
+          defaultModel: "claude-sonnet-4-6",
+          apiKeyEnv: "CLAUDE_CODE_OAUTH_TOKEN",
+        },
+      ],
+    };
+
+    const service = new LlmService(
+      config,
+      {
+        ...process.env,
+        CLAUDE_CODE_OAUTH_TOKEN: "claude-code-oauth-secret",
+      },
+      { secretStore: createNoopSecretStore() },
+    );
+    const originalFetch = globalThis.fetch;
+    let requestUrl = "";
+    let payloadBody: Record<string, unknown> | undefined;
+    let receivedHeaders: Headers | undefined;
+
+    globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      requestUrl = String(url);
+      payloadBody = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+      receivedHeaders = new Headers(init?.headers);
+      return new Response(
+        JSON.stringify({
+          id: "msg_claude_code_oauth",
+          model: "claude-sonnet-4-6",
+          role: "assistant",
+          content: [{ type: "text", text: "ok" }],
+          stop_reason: "end_turn",
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      await service.chatCompletions({
+        providerId: "claude-code",
+        model: "claude-code/claude-sonnet-4-6",
+        messages: [{ role: "user", content: "hello" }],
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(requestUrl).toBe("https://api.anthropic.com/v1/messages");
+    expect(payloadBody?.model).toBe("claude-sonnet-4-6");
+    expect(receivedHeaders?.get("authorization")).toBe("Bearer claude-code-oauth-secret");
+    expect(receivedHeaders?.get("anthropic-beta")).toBe("oauth-2025-04-20");
+    expect(receivedHeaders?.get("anthropic-version")).toBe("2023-06-01");
+    expect(receivedHeaders?.get("x-api-key")).toBeNull();
+  });
+
   it("maps OpenAI-style tool_choice values for Anthropic Messages payloads", async () => {
     const config: LlmConfigFile = {
       activeProviderId: "anthropic",

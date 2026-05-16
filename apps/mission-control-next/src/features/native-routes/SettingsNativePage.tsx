@@ -1362,6 +1362,9 @@ export function formatProviderCredentialLabel(
   hasApiKey: boolean | undefined,
   codexOAuthStatus: OpenAICodexOAuthStatus | null,
 ): string {
+  if (providerId === "claude-code") {
+    return hasApiKey ? "OAuth token ready" : "OAuth token missing";
+  }
   if (providerId === "openai-codex") {
     if (codexOAuthStatus?.connected) {
       return "OAuth connected";
@@ -1424,6 +1427,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   }, [providerTransportDraft]);
   const selectedProviderIsLocal = isLikelyLocalProviderBaseUrl(selectedProvider?.baseUrl);
   const selectedProviderIsCodexOAuth = selectedProvider?.providerId === "openai-codex";
+  const selectedProviderIsClaudeCodeOAuth = selectedProvider?.providerId === "claude-code";
   const draftIsCodexOAuth = providerDraft.providerId.trim().toLowerCase() === "openai-codex";
   const hasCodexOAuthProvider = Boolean(codexOAuthProvider);
   const codexOAuthConnected = Boolean(codexOAuthStatus?.connected);
@@ -2216,22 +2220,28 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                   items={[
                     { label: "Default model", value: selectedProvider.defaultModel, meta: selectedProvider.apiStyle },
                     {
-                      label: selectedProviderIsCodexOAuth ? "OAuth" : "API key",
+                      label: selectedProviderIsCodexOAuth || selectedProviderIsClaudeCodeOAuth ? "OAuth" : "API key",
                       value: selectedProviderIsCodexOAuth
                         ? codexOAuthStatus?.connected
                           ? "Connected"
                           : codexOAuthStatus?.requiresReauth
                             ? "Reauth"
                             : "Missing"
-                        : secretState.data?.hasSecret || selectedProvider.hasApiKey
-                          ? "Configured"
-                          : "Missing",
+                        : selectedProviderIsClaudeCodeOAuth
+                          ? secretState.data?.hasSecret || selectedProvider.hasApiKey
+                            ? "Configured"
+                            : "Missing"
+                          : secretState.data?.hasSecret || selectedProvider.hasApiKey
+                            ? "Configured"
+                            : "Missing",
                       meta: selectedProviderIsCodexOAuth
                         ? (codexOAuthStatus?.accountLabel ?? "ChatGPT/Codex plan")
-                        : formatSecretStatusMeta(
-                            secretState.data?.source ?? selectedProvider.apiKeySource,
-                            secretState.data?.hasSecret ?? selectedProvider.hasApiKey ?? false,
-                          ),
+                        : selectedProviderIsClaudeCodeOAuth
+                          ? "Claude subscription token"
+                          : formatSecretStatusMeta(
+                              secretState.data?.source ?? selectedProvider.apiKeySource,
+                              secretState.data?.hasSecret ?? selectedProvider.hasApiKey ?? false,
+                            ),
                     },
                     {
                       label: "Probe",

@@ -250,7 +250,7 @@ export interface UpdateSettingsInput {
       label?: string;
       baseUrl?: string;
       apiStyle?: "openai-chat-completions" | "openai-responses" | "openai-codex-responses" | "anthropic-messages";
-      authMode?: "api-key" | "codex-oauth";
+      authMode?: "api-key" | "codex-oauth" | "claude-code-oauth";
       defaultModel?: string;
       apiKey?: string;
       apiKeyEnv?: string;

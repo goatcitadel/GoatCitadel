@@ -403,7 +403,7 @@ export interface RuntimeSettingsResponse {
         | "openai-codex-responses"
         | "anthropic-messages";
       defaultModel: string;
-      authMode?: "api-key" | "codex-oauth";
+      authMode?: "api-key" | "codex-oauth" | "claude-code-oauth";
       oauthStatus?: {
         connected: boolean;
         accountLabel?: string;

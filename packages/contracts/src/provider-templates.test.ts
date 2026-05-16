@@ -49,6 +49,13 @@ describe("provider templates", () => {
       "claude-sonnet-4",
       "claude-opus-4",
     ]);
+    expect(findProviderTemplate("claude-code")).toMatchObject({
+      label: "Claude Code (Claude subscription)",
+      baseUrl: "https://api.anthropic.com/v1",
+      defaultModel: "claude-sonnet-4-6",
+      apiStyle: "anthropic-messages",
+      knownModels: ["claude-sonnet-4-6", "claude-sonnet-4", "claude-opus-4"],
+    });
   });
 
   it("includes a fallback Google Gemini shortlist for offline model pickers", () => {
@@ -111,6 +118,7 @@ describe("provider templates", () => {
     expect(inferProviderForModelId("openai/gpt-5.4-mini")).toBe("openai");
     expect(inferProviderForModelId("openai-codex/gpt-5.5")).toBe("openai-codex");
     expect(inferProviderForModelId("anthropic/claude-sonnet-4")).toBe("anthropic");
+    expect(inferProviderForModelId("claude-code/claude-sonnet-4")).toBe("claude-code");
     expect(inferProviderForModelId("zai/glm-5v-turbo")).toBe("glm");
     expect(inferProviderForModelId("custom-private-model")).toBeUndefined();
   });

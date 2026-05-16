@@ -4,7 +4,7 @@ export type LlmApiStyle =
   | "openai-codex-responses"
   | "anthropic-messages";
 
-export type LlmProviderAuthMode = "api-key" | "codex-oauth";
+export type LlmProviderAuthMode = "api-key" | "codex-oauth" | "claude-code-oauth";
 
 export interface LlmProviderOAuthStatus {
   connected: boolean;

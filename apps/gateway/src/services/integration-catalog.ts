@@ -892,6 +892,15 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
   ),
   entry(
     "model_provider",
+    "claude-code",
+    "Claude Code",
+    "Claude subscription provider via Claude Code OAuth token.",
+    "beta",
+    ["oauth"],
+    ["messages", "chat-completions"],
+  ),
+  entry(
+    "model_provider",
     "google",
     "Google",
     "Google model provider via adapter/proxy.",

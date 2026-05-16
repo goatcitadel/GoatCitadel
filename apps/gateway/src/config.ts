@@ -1032,6 +1032,15 @@ function defaultLlmConfig(): string {
         apiKeyEnv: "ANTHROPIC_API_KEY",
       },
       {
+        providerId: "claude-code",
+        label: "Claude Code (Claude subscription)",
+        baseUrl: "https://api.anthropic.com/v1",
+        apiStyle: "anthropic-messages",
+        defaultModel: "claude-sonnet-4-6",
+        authMode: "claude-code-oauth",
+        apiKeyEnv: "CLAUDE_CODE_OAUTH_TOKEN",
+      },
+      {
         providerId: "google",
         label: "Google (compatible endpoint)",
         baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",

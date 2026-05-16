@@ -35,6 +35,14 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     knownModels: ["claude-sonnet-4-6", "claude-sonnet-4", "claude-opus-4"],
   },
   {
+    providerId: "claude-code",
+    label: "Claude Code (Claude subscription)",
+    baseUrl: "https://api.anthropic.com/v1",
+    defaultModel: "claude-sonnet-4-6",
+    apiStyle: "anthropic-messages",
+    knownModels: ["claude-sonnet-4-6", "claude-sonnet-4", "claude-opus-4"],
+  },
+  {
     providerId: "google",
     label: "Google (compatible endpoint)",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -194,6 +202,7 @@ const FOREIGN_MODEL_PROVIDER_IDS = new Set([
 
 const MODEL_PREFIX_PROVIDER_IDS: Record<string, string> = {
   anthropic: "anthropic",
+  "claude-code": "claude-code",
   google: "google",
   openai: "openai",
   "openai-codex": "openai-codex",

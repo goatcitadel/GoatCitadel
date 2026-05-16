@@ -193,7 +193,7 @@ export const LlmProviderConfigSchema = z
     baseUrl: z.string(),
     apiStyle: z.enum(["openai-chat-completions", "openai-responses", "openai-codex-responses", "anthropic-messages"]),
     defaultModel: z.string(),
-    authMode: z.enum(["api-key", "codex-oauth"]).optional(),
+    authMode: z.enum(["api-key", "codex-oauth", "claude-code-oauth"]).optional(),
     apiKey: z.string().optional(),
     apiKeyEnv: z.string().optional(),
     request: LlmProviderRequestConfigSchema.optional(),

@@ -1085,18 +1085,24 @@ export class LlmService {
     };
     const explicitAuth = resolved.provider.request?.auth;
     const useAnthropicNativeHeaders =
-      resolved.provider.providerId === "anthropic" && (purpose === "models" || purpose === "messages");
+      isAnthropicApiKeyProvider(resolved.provider) && (purpose === "models" || purpose === "messages");
+    const useClaudeCodeOAuthHeaders =
+      isClaudeCodeOAuthProvider(resolved.provider) && (purpose === "models" || purpose === "messages");
 
     delete headers.Authorization;
     delete headers["x-api-key"];
     applyRequestAuthHeaders(headers, explicitAuth, this.env, resolved.apiKey);
-    if (useAnthropicNativeHeaders && !explicitAuth && resolved.apiKey) {
+    if (useClaudeCodeOAuthHeaders && !explicitAuth && resolved.apiKey) {
+      headers.Authorization = `Bearer ${resolved.apiKey}`;
+      headers["anthropic-beta"] = "oauth-2025-04-20";
+      delete headers["x-api-key"];
+    } else if (useAnthropicNativeHeaders && !explicitAuth && resolved.apiKey) {
       headers["x-api-key"] = resolved.apiKey;
       delete headers.Authorization;
     } else if (!explicitAuth && resolved.apiKey) {
       headers.Authorization = `Bearer ${resolved.apiKey}`;
     }
-    if (useAnthropicNativeHeaders) {
+    if (useAnthropicNativeHeaders || useClaudeCodeOAuthHeaders) {
       headers["anthropic-version"] = "2023-06-01";
     }
     return headers;
@@ -1281,7 +1287,9 @@ function normalizeProvider(provider: LlmProviderConfig): LlmProviderConfig {
     authMode:
       provider.providerId === "openai-codex"
         ? "codex-oauth"
-        : (provider.authMode ?? defaultAuthModeForProvider(provider.providerId)),
+        : provider.providerId === "claude-code"
+          ? "claude-code-oauth"
+          : (provider.authMode ?? defaultAuthModeForProvider(provider.providerId)),
     request: normalizeProviderRequestConfig(provider.request, provider.headers),
     headers: undefined,
   };
@@ -1325,7 +1333,7 @@ function normalizeProviderApiStyle(providerId: string, apiStyle: LlmApiStyle | u
   if (providerId === "openai") {
     return "openai-responses";
   }
-  if (providerId === "anthropic") {
+  if (providerId === "anthropic" || providerId === "claude-code") {
     return "anthropic-messages";
   }
   return "openai-chat-completions";
@@ -1343,7 +1351,7 @@ function resolveProviderExecutionApiStyle(provider: LlmProviderConfig, model: st
     return isOpenAiResponsesPreferredModel(model) ? "openai-responses" : "openai-chat-completions";
   }
 
-  if (provider.providerId === "anthropic") {
+  if (provider.providerId === "anthropic" || provider.providerId === "claude-code") {
     return provider.apiStyle === "openai-chat-completions" ? "openai-chat-completions" : "anthropic-messages";
   }
 
@@ -1391,11 +1399,17 @@ function inferForeignProviderForModel(providerId: string, model: string): string
   if (!ownerProviderId || ownerProviderId === providerId) {
     return undefined;
   }
+  if (providerId === "claude-code" && ownerProviderId === "anthropic") {
+    return undefined;
+  }
   return ownerProviderId;
 }
 
 function normalizeRequestedModel(providerId: string, model: string): string {
   const trimmed = model.trim();
+  if (providerId === "claude-code") {
+    return trimmed.replace(/^claude-code\//i, "");
+  }
   if (providerId === "openai-codex") {
     return trimmed.replace(/^openai-codex\//i, "");
   }
@@ -2703,7 +2717,14 @@ function defaultModelForProvider(providerId: string): string {
 }
 
 function defaultAuthModeForProvider(providerId: string): LlmProviderConfig["authMode"] {
-  return providerId.trim().toLowerCase() === "openai-codex" ? "codex-oauth" : undefined;
+  const normalized = providerId.trim().toLowerCase();
+  if (normalized === "openai-codex") {
+    return "codex-oauth";
+  }
+  if (normalized === "claude-code") {
+    return "claude-code-oauth";
+  }
+  return undefined;
 }
 
 function resolveProviderAuthMode(provider: LlmProviderConfig): LlmProviderConfig["authMode"] {
@@ -2712,6 +2733,14 @@ function resolveProviderAuthMode(provider: LlmProviderConfig): LlmProviderConfig
 
 function isOpenAICodexProvider(provider: Pick<LlmProviderConfig, "providerId">): boolean {
   return provider.providerId.trim().toLowerCase() === "openai-codex";
+}
+
+function isClaudeCodeOAuthProvider(provider: Pick<LlmProviderConfig, "providerId" | "authMode">): boolean {
+  return provider.providerId.trim().toLowerCase() === "claude-code" || provider.authMode === "claude-code-oauth";
+}
+
+function isAnthropicApiKeyProvider(provider: Pick<LlmProviderConfig, "providerId" | "authMode">): boolean {
+  return provider.providerId.trim().toLowerCase() === "anthropic" && !isClaudeCodeOAuthProvider(provider);
 }
 
 function applyProviderSpecificChatOptions(input: {

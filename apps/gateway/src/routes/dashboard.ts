@@ -101,7 +101,7 @@ const updateSettingsSchema = z.object({
           label: z.string().min(1).optional(),
           baseUrl: z.string().url().optional(),
           apiStyle: llmApiStyleSchema.optional(),
-          authMode: z.enum(["api-key", "codex-oauth"]).optional(),
+          authMode: z.enum(["api-key", "codex-oauth", "claude-code-oauth"]).optional(),
           defaultModel: z.string().min(1).optional(),
           apiKey: z.string().min(1).optional(),
           apiKeyEnv: z.string().min(1).optional(),
