@@ -14,6 +14,35 @@ export const MEMORY_FLUSH_DAILY_JOB_ID = "memory-flush-daily";
 export const COST_REPORT_HOURLY_JOB_ID = "cost-report-hourly";
 export const UPDATE_REVIEW_DAILY_JOB_ID = "update-review-daily";
 
+interface CronReviewRow {
+  item_id: string;
+  job_id: string;
+  run_id: string;
+  severity: CronReviewItem["severity"];
+  status: CronReviewItem["status"];
+  summary_json: string;
+  diff_json: string | null;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+}
+
+interface CronRunSnapshot {
+  runId: string;
+  jobId: string;
+  status: "ok";
+  finishedAt?: string;
+  output?: string;
+}
+
+interface CronRunDiffRow {
+  diff_id: string;
+  run_id: string;
+  previous_run_id: string | null;
+  diff_json: string;
+  created_at: string;
+}
+
 const SYSTEM_CRON_JOB_IDS = new Set([
   IMPROVEMENT_WEEKLY_JOB_ID,
   PRIVATE_BETA_BACKUP_JOB_ID,
@@ -184,7 +213,7 @@ export class CronAutomationService {
     };
   }
 
-  public async runCronJobNow(jobId: string): Promise<{ jobId: string; status: "ok" }> {
+  public async runCronJobNow(jobId: string): Promise<{ jobId: string; runId: string; status: "ok" }> {
     const normalizedJobId = normalizeCronJobId(jobId);
     const job = this.getCronJob(normalizedJobId);
     if (!job.enabled) {
@@ -193,6 +222,7 @@ export class CronAutomationService {
     if (job.endAt && Date.parse(job.endAt) < Date.now()) {
       throw new Error(`Cron job has ended: ${normalizedJobId}`);
     }
+    const runId = randomUUID();
     let runSummary: Record<string, unknown> = { result: "ok" };
     let watchdogReviewRecorded = false;
     if (job.action === "task") {
@@ -203,6 +233,7 @@ export class CronAutomationService {
         {
           ...job,
           lastRunAt: finishedAt,
+          lastRunId: runId,
           nextRunAt: computeNextCronRunAt(job.schedule, new Date(finishedAt), job.endAt),
         },
         finishedAt,
@@ -229,6 +260,7 @@ export class CronAutomationService {
         {
           ...job,
           lastRunAt: finishedAt,
+          lastRunId: runId,
           nextRunAt: computeNextCronRunAt(job.schedule, new Date(finishedAt), job.endAt),
         },
         finishedAt,
@@ -288,7 +320,6 @@ export class CronAutomationService {
       if (!noAgentConfig?.command) {
         throw new Error(`no_agent cron job missing command: ${normalizedJobId}`);
       }
-      const runId = randomUUID();
       const runResult = await this.deps.runHandlers.noAgent({
         command: noAgentConfig.command,
         args: noAgentConfig.args,
@@ -342,14 +373,12 @@ export class CronAutomationService {
           trigger: "manual_run",
           ...runSummary,
         },
-        diff: {
-          type: "manual_run",
-          changed: false,
-        },
+        diff: { type: "manual_run", changed: false },
       });
     }
     return {
       jobId: normalizedJobId,
+      runId,
       status: "ok",
     };
   }
@@ -372,6 +401,24 @@ export class CronAutomationService {
     }
   }
 
+  public findCronRunById(runId: string): CronRunSnapshot | undefined {
+    const normalized = runId.trim();
+    if (!normalized) {
+      return undefined;
+    }
+    const match = this.deps.storage.cronJobs.list().find((job) => job.lastRunId === normalized);
+    if (!match) {
+      return undefined;
+    }
+    return {
+      runId: normalized,
+      jobId: match.jobId,
+      status: "ok",
+      finishedAt: match.lastRunAt,
+      output: match.lastRunOutput,
+    };
+  }
+
   public listCronReviewQueue(limit = 200): CronReviewItem[] {
     this.deps.requireFeatureEnabled("cronReviewQueueV1Enabled");
     const safeLimit = Math.max(1, Math.min(1_000, Math.floor(limit)));
@@ -384,18 +431,7 @@ export class CronAutomationService {
       LIMIT ?
     `,
       )
-      .all(safeLimit) as Array<{
-      item_id: string;
-      job_id: string;
-      run_id: string;
-      severity: CronReviewItem["severity"];
-      status: CronReviewItem["status"];
-      summary_json: string;
-      diff_json: string | null;
-      created_at: string;
-      updated_at: string;
-      resolved_at: string | null;
-    }>;
+      .all(safeLimit) as CronReviewRow[];
     return rows.map((row) => mapCronReviewItemRow(row));
   }
 
@@ -409,40 +445,14 @@ export class CronAutomationService {
       WHERE item_id = ?
     `,
       )
-      .get(itemId) as
-      | {
-          item_id: string;
-          job_id: string;
-          run_id: string;
-          severity: CronReviewItem["severity"];
-          status: CronReviewItem["status"];
-          summary_json: string;
-          diff_json: string | null;
-          created_at: string;
-          updated_at: string;
-          resolved_at: string | null;
-        }
-      | undefined;
+      .get(itemId) as CronReviewRow | undefined;
     if (!existing) {
       throw new Error(`Cron review item not found: ${itemId}`);
     }
 
     const retriedRunId = randomUUID();
     const now = new Date().toISOString();
-    let updated:
-      | {
-          item_id: string;
-          job_id: string;
-          run_id: string;
-          severity: CronReviewItem["severity"];
-          status: CronReviewItem["status"];
-          summary_json: string;
-          diff_json: string | null;
-          created_at: string;
-          updated_at: string;
-          resolved_at: string | null;
-        }
-      | undefined;
+    let updated: CronReviewRow | undefined;
     this.deps.storage.db.exec("BEGIN IMMEDIATE");
     try {
       this.deps.storage.db
@@ -472,10 +482,7 @@ export class CronAutomationService {
           diffId: randomUUID(),
           runId: retriedRunId,
           previousRunId: existing.run_id,
-          diffJson: JSON.stringify({
-            retried: true,
-            previousRunId: existing.run_id,
-          }),
+          diffJson: JSON.stringify({ retried: true, previousRunId: existing.run_id }),
           createdAt: now,
         });
       updated = this.deps.storage.db
@@ -486,20 +493,7 @@ export class CronAutomationService {
         WHERE item_id = ?
       `,
         )
-        .get(itemId) as
-        | {
-            item_id: string;
-            job_id: string;
-            run_id: string;
-            severity: CronReviewItem["severity"];
-            status: CronReviewItem["status"];
-            summary_json: string;
-            diff_json: string | null;
-            created_at: string;
-            updated_at: string;
-            resolved_at: string | null;
-          }
-        | undefined;
+        .get(itemId) as CronReviewRow | undefined;
       this.deps.storage.db.exec("COMMIT");
     } catch (error) {
       this.deps.storage.db.exec("ROLLBACK");
@@ -530,15 +524,7 @@ export class CronAutomationService {
       LIMIT 1
     `,
       )
-      .get(runId) as
-      | {
-          diff_id: string;
-          run_id: string;
-          previous_run_id: string | null;
-          diff_json: string;
-          created_at: string;
-        }
-      | undefined;
+      .get(runId) as CronRunDiffRow | undefined;
     if (!row) {
       throw new Error(`Cron run diff not found for run ${runId}`);
     }
@@ -595,18 +581,7 @@ export class CronAutomationService {
   }
 }
 
-function mapCronReviewItemRow(row: {
-  item_id: string;
-  job_id: string;
-  run_id: string;
-  severity: CronReviewItem["severity"];
-  status: CronReviewItem["status"];
-  summary_json: string;
-  diff_json: string | null;
-  created_at: string;
-  updated_at: string;
-  resolved_at: string | null;
-}): CronReviewItem {
+function mapCronReviewItemRow(row: CronReviewRow): CronReviewItem {
   return {
     itemId: row.item_id,
     jobId: row.job_id,

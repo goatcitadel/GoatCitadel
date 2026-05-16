@@ -62,8 +62,26 @@ export function deleteCronJob(host: CronSchedulerHost, jobId: string): { deleted
   return host.cronAutomationService.deleteCronJob(jobId);
 }
 
-export async function runCronJobNow(host: CronSchedulerHost, jobId: string): Promise<{ jobId: string; status: "ok" }> {
+export async function runCronJobNow(
+  host: CronSchedulerHost,
+  jobId: string,
+): Promise<{ jobId: string; runId: string; status: "ok" }> {
   return host.cronAutomationService.runCronJobNow(jobId);
+}
+
+export function findCronRunById(
+  host: CronSchedulerHost,
+  runId: string,
+):
+  | {
+      runId: string;
+      jobId: string;
+      status: "ok";
+      finishedAt?: string;
+      output?: string;
+    }
+  | undefined {
+  return host.cronAutomationService.findCronRunById(runId);
 }
 
 export function listCronReviewQueue(host: CronSchedulerHost, limit = 200): CronReviewItem[] {

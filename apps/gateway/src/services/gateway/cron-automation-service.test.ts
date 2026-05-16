@@ -490,7 +490,7 @@ describe("CronAutomationService job behavior", () => {
     }
 
     for (const job of cronJobs.list()) {
-      await expect(service.runCronJobNow(job.jobId)).resolves.toEqual({ jobId: job.jobId, status: "ok" });
+      await expect(service.runCronJobNow(job.jobId)).resolves.toMatchObject({ jobId: job.jobId, status: "ok" });
     }
 
     expect(handlers.improvement).toHaveBeenCalledTimes(1);
@@ -976,5 +976,56 @@ describe("CronAutomationService.retryCronReviewQueueItem", () => {
         runId: updated.runId,
       }),
     );
+  });
+});
+
+describe("runCronJobNow returns runId", () => {
+  it("returns the runId for the manual run", async () => {
+    const service = makeServiceWithNoAgent({
+      realtime: vi.fn(),
+      runner: async () => ({ stdout: "alert", stderr: "", exitCode: 0, timedOut: false }),
+    });
+    service.createCronJob({
+      jobId: "rid-job",
+      name: "Rid",
+      action: "no_agent",
+      schedule: "0 */6 * * * UTC",
+      actionConfig: { noAgent: { command: "echo" } },
+    });
+    const result = await service.runCronJobNow("rid-job");
+    expect(typeof result.runId).toBe("string");
+    expect(result.runId.length).toBeGreaterThan(0);
+    expect(result.jobId).toBe("rid-job");
+    expect(result.status).toBe("ok");
+  });
+});
+
+describe("findCronRunById", () => {
+  it("returns undefined for unknown run ids", () => {
+    const service = makeServiceWithNoAgent({
+      realtime: vi.fn(),
+      runner: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
+    });
+    expect(service.findCronRunById("missing-run-id")).toBeUndefined();
+  });
+
+  it("returns the job snapshot when a run id matches lastRunId", async () => {
+    const service = makeServiceWithNoAgent({
+      realtime: vi.fn(),
+      runner: async () => ({ stdout: "alert", stderr: "", exitCode: 0, timedOut: false }),
+    });
+    service.createCronJob({
+      jobId: "found-job",
+      name: "Found",
+      action: "no_agent",
+      schedule: "0 */6 * * * UTC",
+      actionConfig: { noAgent: { command: "echo" } },
+    });
+    const result = await service.runCronJobNow("found-job");
+    const lookup = service.findCronRunById(result.runId);
+    expect(lookup?.jobId).toBe("found-job");
+    expect(lookup?.runId).toBe(result.runId);
+    expect(lookup?.status).toBe("ok");
+    expect(lookup?.output).toBe("alert");
   });
 });
