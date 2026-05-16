@@ -26,7 +26,7 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
     setLoading(true);
     try {
       const result = await fetchTasksByView("active", undefined, props.activeWorkspaceId);
-      setTasks(result.items);
+      setTasks(result.items as TaskRecord[]);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
