@@ -30,6 +30,8 @@ export interface GradeSkillUsageResult {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STALE_USAGE_DAYS = 90;
 const ARCHIVE_THRESHOLD = 0.4;
+const SOFT_ARCHIVE_THRESHOLD = 0.55;
+const STALE_SCORE_CAP = 0.42;
 
 export function gradeSkillUsage(input: GradeSkillUsageInput): GradeSkillUsageResult {
   const { skill, now } = input;
@@ -65,9 +67,9 @@ export function gradeSkillUsage(input: GradeSkillUsageInput): GradeSkillUsageRes
   }
 
   if (Number.isFinite(ageDays) && ageDays > STALE_USAGE_DAYS) {
-    blockerQuality = Math.min(blockerQuality, 0.42);
-    retryQuality = Math.min(retryQuality, 0.42);
-    actionability = Math.min(actionability, 0.42);
+    blockerQuality = Math.min(blockerQuality, STALE_SCORE_CAP);
+    retryQuality = Math.min(retryQuality, STALE_SCORE_CAP);
+    actionability = Math.min(actionability, STALE_SCORE_CAP);
     signals.push("stale_usage");
   } else if (Number.isFinite(ageDays) && ageDays <= 7 && usage > 0) {
     blockerQuality = Math.max(blockerQuality, 0.78);
@@ -87,10 +89,10 @@ export function gradeSkillUsage(input: GradeSkillUsageInput): GradeSkillUsageRes
   let recommendation: CuratorSkillRecommendation = "keep";
   if (mean < ARCHIVE_THRESHOLD) {
     recommendation = "archive";
-  } else if (mean < 0.55 && usage === 0) {
+  } else if (mean < SOFT_ARCHIVE_THRESHOLD && usage === 0) {
     recommendation = "archive";
+  } else if (mean < SOFT_ARCHIVE_THRESHOLD && signals.includes("stale_usage")) {
     // Stale-usage archive: low-mean (<0.55) skills with stale_usage signal, even when usageCount > 0.
-  } else if (mean < 0.55 && signals.includes("stale_usage")) {
     recommendation = "archive";
   }
 

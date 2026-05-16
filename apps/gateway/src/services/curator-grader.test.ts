@@ -90,4 +90,15 @@ describe("gradeSkillUsage", () => {
       expect(value).toBeLessThanOrEqual(1);
     }
   });
+
+  it("emits 'moderate_usage' signal and 'keep' recommendation for mid-tier usage (10-49 uses)", () => {
+    const grade = gradeSkillUsage({
+      skill: makeSkill({ usageCount: 15, lastUsedAt: "2026-05-14T00:00:00Z" }),
+      now: new Date("2026-05-15T00:00:00Z"),
+    });
+    expect(grade.signals).toContain("moderate_usage");
+    expect(grade.recommendation).toBe("keep");
+    expect(grade.score.toolEvidence).toBeCloseTo(0.74, 2);
+    expect(grade.score.actionability).toBeCloseTo(0.74, 2);
+  });
 });
