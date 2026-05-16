@@ -1,12 +1,7 @@
+import type { ShellExplanationDetail, ShellRiskFinding, ShellRiskLevel } from "@goatcitadel/contracts";
 import { t, type I18nKey } from "./i18n.js";
-import type { ShellRiskFinding, ShellRiskLevel } from "./shell-command-prescreen.js";
 
-export interface ShellExplanationDetail {
-  readonly label: string;
-  readonly value: string;
-  readonly note?: string;
-  readonly noteLevel?: ShellRiskLevel;
-}
+export type { ShellExplanationDetail } from "@goatcitadel/contracts";
 
 export interface HandlerResult {
   readonly program: string;

@@ -40,6 +40,31 @@ export interface ApprovalFollowUpState {
   completedAt?: string;
 }
 
+export type ShellRiskLevel = "info" | "caution" | "danger";
+
+export interface ShellRiskFinding {
+  readonly level: ShellRiskLevel;
+  readonly label: string;
+  readonly explanation: string;
+}
+
+export interface ShellExplanationDetail {
+  readonly label: string;
+  readonly value: string;
+  readonly note?: string;
+  readonly noteLevel?: ShellRiskLevel;
+}
+
+export interface ShellCommandExplanation {
+  readonly command: string;
+  readonly parsed: boolean;
+  readonly program?: string;
+  readonly summary: string;
+  readonly details: readonly ShellExplanationDetail[];
+  readonly risks: readonly ShellRiskFinding[];
+  readonly highestRisk: ShellRiskLevel;
+}
+
 export interface ApprovalRequest {
   approvalId: string;
   kind: string;
@@ -57,6 +82,7 @@ export interface ApprovalRequest {
   explanation?: ApprovalExplanation;
   explanationError?: string;
   followUp?: ApprovalFollowUpState;
+  shellExplanations?: readonly ShellCommandExplanation[];
 }
 
 export interface ApprovalCreateInput {

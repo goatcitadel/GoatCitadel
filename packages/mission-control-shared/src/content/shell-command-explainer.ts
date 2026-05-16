@@ -1,20 +1,15 @@
+import type { ShellCommandExplanation, ShellRiskFinding, ShellRiskLevel } from "@goatcitadel/contracts";
 import { parse as shellParse } from "shell-quote";
 import { t } from "./i18n.js";
 import { handleCommand } from "./shell-command-handlers.js";
-import { prescreenShellRisks, type ShellRiskFinding, type ShellRiskLevel } from "./shell-command-prescreen.js";
+import { prescreenShellRisks } from "./shell-command-prescreen.js";
 
-export type { ShellRiskFinding, ShellRiskLevel } from "./shell-command-prescreen.js";
-export type { ShellExplanationDetail } from "./shell-command-handlers.js";
-
-export interface ShellCommandExplanation {
-  readonly command: string;
-  readonly parsed: boolean;
-  readonly program?: string;
-  readonly summary: string;
-  readonly details: readonly import("./shell-command-handlers.js").ShellExplanationDetail[];
-  readonly risks: readonly ShellRiskFinding[];
-  readonly highestRisk: ShellRiskLevel;
-}
+export type {
+  ShellCommandExplanation,
+  ShellExplanationDetail,
+  ShellRiskFinding,
+  ShellRiskLevel,
+} from "@goatcitadel/contracts";
 
 const RISK_ORDER: ShellRiskLevel[] = ["info", "caution", "danger"];
 

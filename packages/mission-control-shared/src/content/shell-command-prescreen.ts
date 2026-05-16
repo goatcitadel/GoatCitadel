@@ -1,12 +1,7 @@
+import type { ShellRiskFinding } from "@goatcitadel/contracts";
 import { t } from "./i18n.js";
 
-export type ShellRiskLevel = "info" | "caution" | "danger";
-
-export interface ShellRiskFinding {
-  readonly level: ShellRiskLevel;
-  readonly label: string;
-  readonly explanation: string;
-}
+export type { ShellRiskFinding, ShellRiskLevel } from "@goatcitadel/contracts";
 
 const SYSTEM_PATH_WRITE = /(^|\s)>{1,2}\s*\/(etc|usr|var|bin|sbin|boot|lib|lib64)(\/|\s|$)/;
 const PIPE_TO_SHELL = /\|\s*(sh|bash)(\s|$)/;
