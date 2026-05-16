@@ -2,6 +2,8 @@
 
 This backlog tracks the follow-on work after Capability System v1.
 
+Status note, 2026-05-15: the broader backlog closeout landed Code Mode env passthrough allowlisting, secrets route rate limits, and high-risk approval-bypass regressions. The items below remain capability-system follow-on scope only; do not use this file as evidence that the May 2026 security blockers are still open without checking the live tests and [docs/review/backlog-closeout-2026-05-15.md](./review/backlog-closeout-2026-05-15.md).
+
 ## Near-Term Hardening
 
 1. Add dedicated gateway tests for:
