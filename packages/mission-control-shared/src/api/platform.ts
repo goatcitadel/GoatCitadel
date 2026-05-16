@@ -12,6 +12,14 @@ import type {
   CapabilityPackPreview,
   ChangeRiskEvaluationResponse,
   CreateAssemblyRunInput,
+  CuratorArchiveRequest,
+  CuratorArchiveResponse,
+  CuratorListArchivedResponse,
+  CuratorPruneRequest,
+  CuratorPruneResponse,
+  CuratorRunRequest,
+  CuratorRunResponse,
+  CuratorStatusResponse,
   EvidenceEnvelope,
   EvidenceEnvelopeListQuery,
   LlmModelDiscoverySource,
@@ -207,6 +215,35 @@ export async function fetchEvidenceEnvelopes(
   }
   const suffix = params.toString() ? `?${params.toString()}` : "";
   return request<{ items: EvidenceEnvelope[] }>(`/api/v1/evidence/envelopes${suffix}`);
+}
+
+export async function fetchCuratorStatus(): Promise<CuratorStatusResponse> {
+  return request<CuratorStatusResponse>(`/api/v1/curator/status`);
+}
+
+export async function archiveCuratorSkill(input: CuratorArchiveRequest): Promise<CuratorArchiveResponse> {
+  return request<CuratorArchiveResponse>(`/api/v1/curator/archive`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function pruneCuratorSkill(input: CuratorPruneRequest): Promise<CuratorPruneResponse> {
+  return request<CuratorPruneResponse>(`/api/v1/curator/prune`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function listCuratorArchived(): Promise<CuratorListArchivedResponse> {
+  return request<CuratorListArchivedResponse>(`/api/v1/curator/archived`);
+}
+
+export async function runCurator(input: CuratorRunRequest = {}): Promise<CuratorRunResponse> {
+  return request<CuratorRunResponse>(`/api/v1/curator/run`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function fetchOrchestrationRunContext(runId: string): Promise<{ items: MemoryContextPack[] }> {
