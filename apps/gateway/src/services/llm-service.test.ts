@@ -2350,6 +2350,7 @@ describe("LlmService", () => {
         "gpt-5.4",
         "gpt-5-mini",
         "gpt-4o-mini",
+        "chat-latest",
       ]);
     } finally {
       globalThis.fetch = originalFetch;
@@ -2509,6 +2510,7 @@ describe("LlmService", () => {
         "gpt-5-mini",
         "gpt-4.1-mini",
         "gpt-4o-mini",
+        "chat-latest",
       ]);
 
       const discovery = await service.listModelsWithSource("openai");
