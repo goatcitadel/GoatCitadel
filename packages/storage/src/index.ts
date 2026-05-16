@@ -241,7 +241,7 @@ export class Storage {
     this.chatAttachments = new ChatAttachmentRepository(this.db);
     this.chatSessionPrefs = new ChatSessionPrefsRepository(this.db);
     this.sessionAutonomyPrefs = new SessionAutonomyPrefsRepository(this.db);
-    this.chatMessages = new ChatMessageRepository(this.db);
+    this.chatMessages = new ChatMessageRepository(this.db, { quarantine: this.stateValidationQuarantine });
     this.chatTurnTraces = new ChatTurnTraceRepository(this.db);
     this.chatStreamEvents = new ChatStreamEventRepository(this.db);
     this.chatExecutionPlans = new ChatExecutionPlanRepository(this.db);
