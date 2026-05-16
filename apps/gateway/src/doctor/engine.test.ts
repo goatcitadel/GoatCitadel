@@ -510,7 +510,7 @@ describe("state validation quarantine check", () => {
     const report = await runDoctor({ rootDir, gatewayBaseUrl: "http://127.0.0.1:8787", auditOnly: true });
     const check = report.checks.find((c) => c.id === "state.validation.quarantine");
     expect(check).toBeDefined();
-    expect(check?.status).toBe("pass");
+    expect(check?.status).toBe("ok");
   });
 
   it("warns when 1-99 quarantine entries exist", async () => {
