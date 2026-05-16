@@ -107,6 +107,11 @@ export interface GatewayRouteCompositionPort {
   commsReply: RouteDependencyMethod<"comms", "commsReply">;
   commsSend: RouteDependencyMethod<"comms", "commsSend">;
   createApproval: RouteDependencyMethod<"devVerification", "createApproval">;
+  listCuratorStatus: RouteDependencyMethod<"curator", "listCuratorStatus">;
+  archiveCuratorSkill: RouteDependencyMethod<"curator", "archiveCuratorSkill">;
+  pruneCuratorSkill: RouteDependencyMethod<"curator", "pruneCuratorSkill">;
+  listCuratorArchived: RouteDependencyMethod<"curator", "listCuratorArchived">;
+  runCurator: RouteDependencyMethod<"curator", "runCurator">;
   createChatCompletion: RouteDependencyMethod<"llm", "createChatCompletion">;
   createChatCompletionStream: RouteDependencyMethod<"devVerification", "createChatCompletionStream">;
   createChatSession: RouteDependencyMethod<"chatSessions", "createChatSession">;
@@ -291,6 +296,11 @@ export function createGatewayRouteCompositionPort(
     commsReply: gateway.commsReply.bind(gateway),
     commsSend: gateway.commsSend.bind(gateway),
     createApproval: gateway.createApproval.bind(gateway),
+    listCuratorStatus: gateway.listCuratorStatus.bind(gateway),
+    archiveCuratorSkill: gateway.archiveCuratorSkill.bind(gateway),
+    pruneCuratorSkill: gateway.pruneCuratorSkill.bind(gateway),
+    listCuratorArchived: gateway.listCuratorArchived.bind(gateway),
+    runCurator: gateway.runCurator.bind(gateway),
     createChatCompletion: gateway.createChatCompletion.bind(gateway),
     createChatCompletionStream: gateway.createChatCompletionStream.bind(gateway),
     createChatSession: gateway.createChatSession.bind(gateway),

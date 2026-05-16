@@ -5,7 +5,7 @@ import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gatew
 export function composeMemoryKnowledgeRouteDependencies(
   gateway: GatewayRouteCompositionPort,
 ): RouteDependencyDomain<
-  "capabilities" | "capabilityPacks" | "evidence" | "improvement" | "knowledge" | "memory" | "skills"
+  "capabilities" | "capabilityPacks" | "curator" | "evidence" | "improvement" | "knowledge" | "memory" | "skills"
 > {
   const knowledgeFacade = new KnowledgeFacadeService({
     invokeAndUnwrap: (request, realtimeType) => gateway.invokeAndUnwrap(request, realtimeType),
@@ -23,6 +23,13 @@ export function composeMemoryKnowledgeRouteDependencies(
       installPack: (packId, input) => gateway.capabilityPackService.installPack(packId, input),
       listPacks: () => gateway.capabilityPackService.listPacks(),
       previewPack: (packId) => gateway.capabilityPackService.previewPack(packId),
+    },
+    curator: {
+      listCuratorStatus: () => gateway.listCuratorStatus(),
+      archiveCuratorSkill: (input) => gateway.archiveCuratorSkill(input),
+      pruneCuratorSkill: (input) => gateway.pruneCuratorSkill(input),
+      listCuratorArchived: () => gateway.listCuratorArchived(),
+      runCurator: (input) => gateway.runCurator(input),
     },
     evidence: {
       listEnvelopes: (input) => gateway.evidenceEnvelopeService.listEnvelopes(input),

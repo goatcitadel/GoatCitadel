@@ -259,6 +259,11 @@ function createGateway() {
     updateBankrSafetyPolicy: fn((input: unknown) => ({ input, updated: true })),
     updateSkillActivationPolicy: fn((input: unknown) => ({ input, updated: true })),
     validateSkillImport: fn((input: unknown) => ({ input, valid: true })),
+    listCuratorStatus: fn(() => ({ generatedAt: "2026-05-16T00:00:00Z", cycleDays: 7, items: [] })),
+    archiveCuratorSkill: fn((input: unknown) => ({ input, archived: true })),
+    pruneCuratorSkill: fn((input: unknown) => ({ input, pruned: true })),
+    listCuratorArchived: fn(() => ({ generatedAt: "2026-05-16T00:00:00Z", items: [] })),
+    runCurator: fn(async (input: unknown) => ({ input, runId: "curator-run-1" })),
     writeMcpAuthState: fn((state: unknown) => ({ state })),
     writeMcpServers: fn((servers: unknown) => ({ servers })),
     writeMcpTools: fn((tools: unknown) => ({ tools })),
@@ -309,6 +314,10 @@ describe("route composition loop 15 delegates", () => {
     });
     expect(deps.capabilityPacks.listPacks()).toEqual([{ packId: "pack-1" }]);
     expect(deps.capabilityPacks.previewPack("pack-1")).toEqual({ packId: "pack-1", preview: true });
+    expect(deps.curator.listCuratorStatus()).toMatchObject({ cycleDays: 7 });
+    expect(deps.curator.archiveCuratorSkill({ skillId: "skill-1" })).toMatchObject({ archived: true });
+    expect(deps.curator.pruneCuratorSkill({ skillId: "skill-1", confirm: true })).toMatchObject({ pruned: true });
+    expect(deps.curator.listCuratorArchived()).toMatchObject({ items: [] });
     expect(deps.evidence.listEnvelopes({ limit: 1 })).toEqual({ input: { limit: 1 }, items: [] });
     expect(deps.improvement.audit.getSkillActivationPolicy()).toEqual({ defaultState: "enabled" });
     expect(deps.improvement.audit.listCapabilityCatalog("chat")).toEqual([{ scope: "chat" }]);
