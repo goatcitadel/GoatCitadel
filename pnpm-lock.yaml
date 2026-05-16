@@ -103,6 +103,9 @@ importers:
       '@goatcitadel/mesh-core':
         specifier: workspace:*
         version: link:../../packages/mesh-core
+      '@goatcitadel/mission-control-shared':
+        specifier: workspace:*
+        version: link:../../packages/mission-control-shared
       '@goatcitadel/orchestration':
         specifier: workspace:*
         version: link:../../packages/orchestration
