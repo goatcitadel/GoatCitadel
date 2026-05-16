@@ -28,6 +28,9 @@ export interface TaskRecord {
   deletedAt?: string;
   deletedBy?: string;
   deleteReason?: string;
+  retryBudget?: import("./task-distress.js").TaskRetryBudget;
+  distressSignals?: import("./task-distress.js").TaskDistressSignal[];
+  artifactVerification?: import("./task-distress.js").TaskArtifactVerification[];
   createdAt: string;
   updatedAt: string;
 }
@@ -43,6 +46,9 @@ export interface TaskCreateInput {
   dueAt?: string;
   proactiveContext?: TaskProactiveContext;
   agenticContext?: import("./agentic-runtime.js").AgenticTaskContext;
+  retryBudget?: import("./task-distress.js").TaskRetryBudget;
+  distressSignals?: import("./task-distress.js").TaskDistressSignal[];
+  artifactVerification?: import("./task-distress.js").TaskArtifactVerification[];
 }
 
 export interface TaskUpdateInput {
@@ -54,6 +60,9 @@ export interface TaskUpdateInput {
   dueAt?: string;
   proactiveContext?: TaskProactiveContext | null;
   agenticContext?: import("./agentic-runtime.js").AgenticTaskContext | null;
+  retryBudget?: import("./task-distress.js").TaskRetryBudget | null;
+  distressSignals?: import("./task-distress.js").TaskDistressSignal[] | null;
+  artifactVerification?: import("./task-distress.js").TaskArtifactVerification[] | null;
 }
 
 export type TaskActivityType =
