@@ -220,6 +220,7 @@ export async function prepareAgentChatTurn(
           mimeType: item.mimeType,
           sizeBytes: item.sizeBytes,
         })),
+        parentDelegationStepId: input.parentDelegationStepId,
       },
     });
     const attachments = uploadAttachments.map((item) => ({
@@ -238,6 +239,7 @@ export async function prepareAgentChatTurn(
       parts: inputParts.length > 0 ? inputParts : undefined,
       timestamp: new Date().toISOString(),
       attachments: attachments.length > 0 ? attachments : undefined,
+      parentDelegationStepId: input.parentDelegationStepId,
     };
   } else {
     userMessage = options.existingUserMessage;
