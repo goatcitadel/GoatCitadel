@@ -205,3 +205,28 @@ describe("CuratorService.prune", () => {
     expect(() => service.prune({ skillId: skills[0].skillId, confirm: true })).toThrow(/bundled/i);
   });
 });
+
+describe("CuratorService.listArchived", () => {
+  it("returns only skills with curator:archived note marker", () => {
+    const skills: SkillListItem[] = [
+      makeSkill({ name: "alpha", state: "enabled" }) as SkillListItem,
+      {
+        ...(makeSkill({ name: "beta", state: "disabled" }) as SkillListItem),
+        note: "curator:archived rubric_below_threshold",
+      },
+      { ...(makeSkill({ name: "gamma", state: "disabled" }) as SkillListItem), note: "manual disable" },
+    ];
+    const service = new CuratorService({
+      listSkills: () => skills,
+      archiveSkill: () => skills[0],
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-05-15T12:00:00Z"),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    const response = service.listArchived();
+    expect(response.items.map((i) => i.name)).toEqual(["beta"]);
+    expect(response.items[0].archived).toBe(true);
+  });
+});

@@ -116,7 +116,15 @@ export class CuratorService {
   }
 
   public listArchived(): CuratorListArchivedResponse {
-    throw new Error("not implemented yet");
+    const now = this.deps.now();
+    const items = this.deps
+      .listSkills()
+      .filter((skill) => skill.state === "disabled" && (skill.note?.startsWith("curator:archived") ?? false))
+      .map((skill) => this.toStatusItem(skill, now));
+    return {
+      generatedAt: now.toISOString(),
+      items,
+    };
   }
 
   public async runCurator(_input: CuratorRunRequest): Promise<CuratorRunResponse> {
