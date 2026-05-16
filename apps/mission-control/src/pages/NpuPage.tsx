@@ -134,7 +134,7 @@ export function NpuPage({ settings }: NpuPageProps) {
       riskAbortRef.current?.abort();
       const controller = new AbortController();
       riskAbortRef.current = controller;
-      void evaluateUiChangeRisk(
+      const riskReview = evaluateUiChangeRisk(
         {
           pageId: "npu",
           changes: [
@@ -144,8 +144,12 @@ export function NpuPage({ settings }: NpuPageProps) {
           ],
         },
         { signal: controller.signal },
-      )
+      );
+      void Promise.resolve(riskReview)
         .then((result) => {
+          if (!result) {
+            throw new Error("Gateway returned an empty risk review.");
+          }
           setChangeReview({
             overall: result.overall,
             items: result.items.map((item) => ({
@@ -429,4 +433,3 @@ export function NpuPage({ settings }: NpuPageProps) {
 function canLoadNpuModels(status: NpuStatusRecord | null): boolean {
   return Boolean(status && status.processState === "running" && status.healthy);
 }
-

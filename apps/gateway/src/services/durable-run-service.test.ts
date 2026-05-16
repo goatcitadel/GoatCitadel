@@ -388,6 +388,57 @@ describe("DurableRunService", () => {
     expect(checkpoints.map((item) => item.checkpointKind)).toContain("continuation_gate");
   });
 
+  it.each([
+    { action: "pause" as const, expectedStatus: "paused" as const },
+    { action: "cancel" as const, expectedStatus: "cancelled" as const },
+  ])(
+    "aborts the active workflow signal when operators $action a running durable run",
+    async ({ action, expectedStatus }) => {
+      const run = createRun("run-operator-control", "queued");
+      const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+      const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+      const timeline: Array<{ runId: string; eventType: string }> = [];
+      const backgroundTasks = new Set<Promise<void>>();
+      let observedSignal: AbortSignal | undefined;
+      let workflowStarted!: () => void;
+      const workflowStartedPromise = new Promise<void>((resolve) => {
+        workflowStarted = resolve;
+      });
+      const executeWorkflow = vi.fn(async (_run: DurableRunRecord, context: { signal: AbortSignal }) => {
+        observedSignal = context.signal;
+        workflowStarted();
+        await new Promise<void>((resolve) => {
+          if (context.signal.aborted) {
+            resolve();
+            return;
+          }
+          context.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      });
+      const service = new DurableRunService(createContext(runs, checkpoints, timeline) as unknown as ServiceContext, {
+        backgroundTasks,
+        workflowRegistry: {
+          executeWorkflow,
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+      });
+
+      service.startWorker();
+      await workflowStartedPromise;
+      if (action === "pause") {
+        service.pauseDurableRun(run.runId, "operator-1");
+      } else {
+        service.cancelDurableRun(run.runId, "operator-1");
+      }
+      await Promise.allSettled([...backgroundTasks]);
+
+      expect(observedSignal?.aborted).toBe(true);
+      expect(runs.get(run.runId)?.status).toBe(expectedStatus);
+      expect(executeWorkflow).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("records checkpoint continuation gates and continues workflow execution", async () => {
     const run = createRun("run-checkpoint", "queued", "connector.delivery");
     const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);

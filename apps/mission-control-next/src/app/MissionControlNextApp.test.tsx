@@ -472,6 +472,38 @@ describe("MissionControlNextApp", () => {
     expect(JSON.stringify(renderer.toJSON())).toContain("Threaded chat");
   });
 
+  it("surfaces replay-gap events as an operator-visible recovery signal", async () => {
+    const renderer = await renderApp();
+    appMocks.deriveRealtimeRefresh.mockReturnValueOnce({
+      topics: ["surface"],
+      signalReason: "replay_gap",
+      signalEventType: "replay_gap",
+      truthMode: "replay-gap",
+    });
+    appMocks.deriveRealtimeNotification.mockReturnValueOnce({
+      tone: "warning",
+      message:
+        "Live event history rotated past this browser cursor. Mission Control is refreshing from the latest retained state.",
+      groupKey: "stream-replay-gap",
+    });
+
+    await act(async () => {
+      appMocks.streamCallbacks.onStateChange?.("open");
+      appMocks.streamCallbacks.onEvent?.({
+        eventId: "evt-gap",
+        eventType: "replay_gap",
+        source: "gateway",
+        payload: { kind: "replay_gap" },
+      });
+    });
+
+    const rendered = JSON.stringify(renderer.toJSON());
+    expect(rendered).toContain("Streaming (replay recovery)");
+    expect(rendered).toContain(
+      "Live event history rotated past this browser cursor. Mission Control is refreshing from the latest retained state.",
+    );
+  });
+
   it("covers shell fallback and trust-report warning/error branches", async () => {
     appMocks.activeWorkspaceId = "missing-workspace";
     const noSessionRenderer = await renderApp("http://localhost:5173/chat");

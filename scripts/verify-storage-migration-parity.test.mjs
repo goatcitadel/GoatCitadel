@@ -5,6 +5,7 @@ import {
   extractMigrationRecords,
   findMigrationParityErrors,
   findPostgresMigrationImmutabilityErrors,
+  findRuntimeSchemaSemanticGuardErrors,
 } from "./verify-storage-migration-parity.mjs";
 
 test("extracts migration names from TypeScript migration arrays", () => {
@@ -60,4 +61,58 @@ test("locks protected Postgres migration versions, names, and SQL hashes", () =>
     ),
     ["Protected Postgres migration v21 SQL hash changed: prompt_pack_agentic_diagnostics_repairs"],
   );
+});
+
+test("requires Postgres runtime schema to stay generated from the SQLite blueprint", () => {
+  const errors = findRuntimeSchemaSemanticGuardErrors({
+    postgresMigrationsSource: `
+      export const postgresMigrations = [
+        { version: 2, name: "canonical_runtime_schema", sql: buildPostgresRuntimeSchemaSql() },
+        { version: 7, name: "canonical_runtime_schema_repairs", sql: \`${"${buildPostgresRuntimeSchemaSql()}"}\` },
+      ];
+    `,
+    runtimeSchemaSource: `
+      import { createSqliteSchemaBlueprint } from "../sqlite.js";
+      export function buildPostgresRuntimeSchemaSql() {
+        return buildPostgresRuntimeSchemaSqlFromBlueprint(createSqliteSchemaBlueprint());
+      }
+    `,
+    runtimeSchemaInternalSource: `
+      table.columns;
+      table.indexes;
+      table.foreignKeys;
+      table.seedRows;
+    `,
+  });
+
+  assert.deepEqual(errors, []);
+});
+
+test("fails when Postgres runtime schema stops consuming the SQLite blueprint end state", () => {
+  const errors = findRuntimeSchemaSemanticGuardErrors({
+    postgresMigrationsSource: `
+      export const postgresMigrations = [
+        { version: 2, name: "canonical_runtime_schema", sql: "CREATE TABLE sessions();" },
+        { version: 7, name: "canonical_runtime_schema_repairs", sql: "ALTER TABLE sessions ADD COLUMN title TEXT;" },
+      ];
+    `,
+    runtimeSchemaSource: `
+      export function buildPostgresRuntimeSchemaSql() {
+        return "CREATE TABLE sessions();";
+      }
+    `,
+    runtimeSchemaInternalSource: `
+      table.columns;
+    `,
+  });
+
+  assert.deepEqual(errors, [
+    "Postgres canonical runtime schema migration must be generated from the SQLite schema blueprint.",
+    "Postgres runtime schema repair migration must replay the generated SQLite schema blueprint.",
+    "Postgres runtime schema generator must import createSqliteSchemaBlueprint from SQLite storage.",
+    "Postgres runtime schema generator must render from createSqliteSchemaBlueprint().",
+    "Postgres runtime schema renderer must consume SQLite blueprint field: table.indexes",
+    "Postgres runtime schema renderer must consume SQLite blueprint field: table.foreignKeys",
+    "Postgres runtime schema renderer must consume SQLite blueprint field: table.seedRows",
+  ]);
 });

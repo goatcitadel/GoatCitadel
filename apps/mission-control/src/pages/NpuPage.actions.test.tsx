@@ -205,6 +205,7 @@ describe("NpuPage runtime actions", () => {
   });
 
   afterEach(() => {
+    vi.clearAllTimers();
     vi.useRealTimers();
   });
 

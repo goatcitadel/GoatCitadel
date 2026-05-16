@@ -30,6 +30,7 @@ workspace/chat/
 .goatcitadel/self-improvement/
 .assistant/
 .playwright-cli/
+.playwright-mcp/
 .codex-tmp/
 .codex-smoke/
 .worktrees/*

@@ -454,7 +454,7 @@ import {
   type ChannelDeliveryRuntimeSendInput,
 } from "./channel-delivery-runtime-service.js";
 import { ReplayExecutionSkippedError } from "./replay-execution.js";
-import { evaluateDeploymentProfileToolAccess } from "../tool-runtime-guardrails.js";
+import { evaluateDeploymentProfileToolAccess } from "../browser-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
 import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
 import {

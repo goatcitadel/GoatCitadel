@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -76,6 +76,11 @@ describe("desktop shell bootstrap", () => {
     tauriMocks.requestPermission.mockResolvedValue("granted");
   });
 
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
   it("launches the runtime and opens the ready Mission Control target", async () => {
     tauriMocks.invoke.mockResolvedValueOnce(createRuntimeStatus({ status: "ready" }));
 
@@ -85,6 +90,30 @@ describe("desktop shell bootstrap", () => {
     expect(tauriMocks.invoke).toHaveBeenCalledWith("launch_runtime");
     expect(element("status-copy").textContent).toBe("Runtime ready. Opening Mission Control...");
     expect(frameElement().src).toBe("http://127.0.0.1:5173/cowork");
+    expect(element("startup").classList.contains("is-hidden")).toBe(true);
+    expect(element("mission-control-frame").classList.contains("is-ready")).toBe(true);
+  });
+
+  it("surfaces gateway degradation after the shell has already loaded and recovers when health returns", async () => {
+    vi.useFakeTimers();
+    tauriMocks.invoke
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready" }))
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "stale", readiness: { gateway: false, ui: true } }))
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready", targetUrl: "http://127.0.0.1:5173/chat" }));
+
+    await import("./main.js");
+    await flushPromises();
+    expect(element("startup").classList.contains("is-hidden")).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushPromises();
+    expect(element("status-copy").textContent).toBe("Runtime stale: gateway not ready, UI ready.");
+    expect(element("recovery-actions").classList.contains("is-hidden")).toBe(false);
+    expect(element("mission-control-frame").classList.contains("is-ready")).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushPromises();
+    expect(frameElement().src).toBe("http://127.0.0.1:5173/chat");
     expect(element("startup").classList.contains("is-hidden")).toBe(true);
     expect(element("mission-control-frame").classList.contains("is-ready")).toBe(true);
   });

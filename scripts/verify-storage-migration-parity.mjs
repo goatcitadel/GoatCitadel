@@ -6,6 +6,15 @@ import { fileURLToPath } from "node:url";
 const repoRoot = process.cwd();
 const SQLITE_MIGRATIONS_PATH = path.join(repoRoot, "packages", "storage", "src", "sqlite.ts");
 const POSTGRES_MIGRATIONS_PATH = path.join(repoRoot, "packages", "storage", "src", "postgres", "migrations.ts");
+const POSTGRES_RUNTIME_SCHEMA_PATH = path.join(repoRoot, "packages", "storage", "src", "postgres", "runtime-schema.ts");
+const POSTGRES_RUNTIME_SCHEMA_INTERNAL_PATH = path.join(
+  repoRoot,
+  "packages",
+  "storage",
+  "src",
+  "postgres",
+  "runtime-schema.internal.ts",
+);
 const PROTECTED_POSTGRES_MIGRATIONS = Object.freeze([
   { version: 1, name: "runtime_event_and_cutover_tables", sha256: "9f9644496238572a6c3f284c11f5fa9fcbfab3fb14087378efd713f87676be3d" },
   { version: 2, name: "canonical_runtime_schema", sha256: null },
@@ -112,6 +121,40 @@ export function findPostgresMigrationImmutabilityErrors(
   return errors;
 }
 
+export function findRuntimeSchemaSemanticGuardErrors({
+  postgresMigrationsSource,
+  runtimeSchemaSource,
+  runtimeSchemaInternalSource,
+}) {
+  const errors = [];
+  if (
+    !/name:\s*"canonical_runtime_schema"[\s\S]*?sql:\s*buildPostgresRuntimeSchemaSql\(\)/.test(
+      postgresMigrationsSource,
+    )
+  ) {
+    errors.push("Postgres canonical runtime schema migration must be generated from the SQLite schema blueprint.");
+  }
+  if (
+    !/name:\s*"canonical_runtime_schema_repairs"[\s\S]*?\$\{buildPostgresRuntimeSchemaSql\(\)\}/.test(
+      postgresMigrationsSource,
+    )
+  ) {
+    errors.push("Postgres runtime schema repair migration must replay the generated SQLite schema blueprint.");
+  }
+  if (!/\bcreateSqliteSchemaBlueprint\b/.test(runtimeSchemaSource)) {
+    errors.push("Postgres runtime schema generator must import createSqliteSchemaBlueprint from SQLite storage.");
+  }
+  if (!/buildPostgresRuntimeSchemaSqlFromBlueprint\(createSqliteSchemaBlueprint\(\)\)/.test(runtimeSchemaSource)) {
+    errors.push("Postgres runtime schema generator must render from createSqliteSchemaBlueprint().");
+  }
+  for (const token of ["table.columns", "table.indexes", "table.foreignKeys", "table.seedRows"]) {
+    if (!runtimeSchemaInternalSource.includes(token)) {
+      errors.push(`Postgres runtime schema renderer must consume SQLite blueprint field: ${token}`);
+    }
+  }
+  return errors;
+}
+
 function isParityMigrationName(name) {
   return name.endsWith("_parity") || name.includes("_parity_");
 }
@@ -123,11 +166,18 @@ function hashSql(sql) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const sqlite = extractMigrationNames(await fs.readFile(SQLITE_MIGRATIONS_PATH, "utf8"));
   const postgresSource = await fs.readFile(POSTGRES_MIGRATIONS_PATH, "utf8");
+  const runtimeSchemaSource = await fs.readFile(POSTGRES_RUNTIME_SCHEMA_PATH, "utf8");
+  const runtimeSchemaInternalSource = await fs.readFile(POSTGRES_RUNTIME_SCHEMA_INTERNAL_PATH, "utf8");
   const postgresRecords = extractMigrationRecords(postgresSource);
   const postgres = postgresRecords.map((record) => record.name);
   const errors = [
     ...findMigrationParityErrors(sqlite, postgres),
     ...findPostgresMigrationImmutabilityErrors(postgresRecords),
+    ...findRuntimeSchemaSemanticGuardErrors({
+      postgresMigrationsSource: postgresSource,
+      runtimeSchemaSource,
+      runtimeSchemaInternalSource,
+    }),
   ];
   if (errors.length > 0) {
     console.error("Storage migration parity check failed:");

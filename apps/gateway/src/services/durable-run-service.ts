@@ -343,6 +343,7 @@ export class DurableRunService {
       },
       buildDurableRealtimeOptions(runId),
     );
+    this.abortActiveRun(runId, `Durable run ${runId} paused by ${actorId}.`);
     return next;
   }
 
@@ -420,6 +421,7 @@ export class DurableRunService {
       },
       buildDurableRealtimeOptions(runId),
     );
+    this.abortActiveRun(runId, `Durable run ${runId} cancelled by ${actorId}.`);
     return next;
   }
 
@@ -894,6 +896,14 @@ export class DurableRunService {
         },
       );
     });
+  }
+
+  private abortActiveRun(runId: string, reason: string): void {
+    const controller = this.activeRunAbortControllers.get(runId);
+    if (!controller || controller.signal.aborted) {
+      return;
+    }
+    controller.abort(new Error(reason));
   }
 
   private async executeWithLeaseHeartbeat<T>(

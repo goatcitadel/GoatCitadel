@@ -143,6 +143,42 @@ describe("idempotencyHeaderPlugin", () => {
     }
   });
 
+  it("blocks completed duplicate approval resolve requests with the same key and payload", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const { app } = await buildApp((fastify) => {
+      fastify.post("/api/v1/approvals/:approvalId/resolve", async (request) => {
+        calls.push((request as { body: Record<string, unknown> }).body);
+        return { ok: true };
+      });
+    });
+
+    try {
+      const headers = { "Idempotency-Key": "idem-approval-completed-1" };
+      const payload = { decision: "approve" };
+      const first = await app.inject({
+        method: "POST",
+        url: "/api/v1/approvals/apr-1/resolve",
+        headers,
+        payload,
+      });
+      const second = await app.inject({
+        method: "POST",
+        url: "/api/v1/approvals/apr-1/resolve",
+        headers,
+        payload,
+      });
+
+      expect(first.statusCode).toBe(200);
+      expect(second.statusCode).toBe(409);
+      expect(second.json()).toEqual({
+        error: "Duplicate mutation blocked for this Idempotency-Key",
+      });
+      expect(calls).toEqual([payload]);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("blocks a parallel approval resolve while the first matching mutation is in progress", async () => {
     let releaseFirst!: () => void;
     const firstCanFinish = new Promise<void>((resolve) => {

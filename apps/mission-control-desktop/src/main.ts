@@ -51,6 +51,7 @@ interface ApprovalNotificationPayload {
   status?: string;
 }
 
+const RUNTIME_HEALTH_POLL_MS = 10_000;
 const startup = mustGetElement<HTMLElement>("startup");
 const frame = mustGetElement<HTMLIFrameElement>("mission-control-frame");
 const statusCopy = mustGetElement<HTMLElement>("status-copy");
@@ -65,6 +66,7 @@ const desktopToast = mustGetElement<HTMLElement>("desktop-toast");
 
 let lastRuntime: DesktopRuntimeStatus | null = null;
 let toastTimer: number | undefined;
+let runtimeStatusPollTimer: number | undefined;
 
 retryButton.addEventListener("click", () => {
   void launchRuntime();
@@ -106,21 +108,35 @@ void listen("desktop://runtime-stopped", () => {
 void launchRuntime();
 
 async function launchRuntime(): Promise<void> {
+  stopRuntimeStatusPolling();
   renderStarting();
   try {
     const result = await invoke<DesktopLaunchResult>("launch_runtime");
-    lastRuntime = result;
-    renderRuntime(result);
-    if (result.status === "ready") {
-      frame.src = result.targetUrl;
-      startup.classList.add("is-hidden");
-      frame.classList.add("is-ready");
+    if (isRuntimeReady(result)) {
+      showReadyRuntime(result);
     } else {
+      lastRuntime = result;
+      renderRuntime(result);
       renderRecovery(`Runtime is ${result.status}. Gateway and Mission Control did not both become ready.`);
+      startRuntimeStatusPolling();
     }
   } catch (error) {
     renderRecovery(error instanceof Error ? error.message : String(error));
   }
+}
+
+function showReadyRuntime(result: DesktopRuntimeStatus): void {
+  lastRuntime = result;
+  renderRuntime(result);
+  frame.src = result.targetUrl;
+  startup.classList.add("is-hidden");
+  frame.classList.add("is-ready");
+  recoveryActions.classList.add("is-hidden");
+  startRuntimeStatusPolling();
+}
+
+function isRuntimeReady(result: DesktopRuntimeStatus): boolean {
+  return result.status === "ready" && result.readiness.gateway && result.readiness.ui;
 }
 
 function renderStarting(): void {
@@ -155,6 +171,7 @@ function renderRecovery(message: string): void {
 }
 
 function renderStopped(): void {
+  stopRuntimeStatusPolling();
   startup.classList.remove("is-hidden");
   frame.classList.remove("is-ready");
   recoveryActions.classList.remove("is-hidden");
@@ -167,18 +184,49 @@ function renderStopped(): void {
     : "Use Retry to start GoatCitadel again.";
 }
 
-async function refreshRuntimeStatus(): Promise<void> {
+async function refreshRuntimeStatus(options: { syncShell?: boolean; notify?: boolean } = {}): Promise<void> {
+  const notify = options.notify ?? true;
   try {
     const result = await invoke<DesktopRuntimeStatus>("read_runtime_status");
     lastRuntime = result;
-    showToast(
-      `Runtime ${result.status}: gateway ${result.readiness.gateway ? "ready" : "not ready"}, UI ${
-        result.readiness.ui ? "ready" : "not ready"
-      }.`,
-    );
+    const message = `Runtime ${result.status}: gateway ${result.readiness.gateway ? "ready" : "not ready"}, UI ${
+      result.readiness.ui ? "ready" : "not ready"
+    }.`;
+    if (notify) {
+      showToast(message);
+    }
+    if (options.syncShell) {
+      if (isRuntimeReady(result)) {
+        showReadyRuntime(result);
+      } else {
+        renderRuntime(result);
+        renderRecovery(message);
+      }
+    }
   } catch (error) {
-    showToast(error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error);
+    if (notify) {
+      showToast(message);
+    }
+    if (options.syncShell) {
+      renderRecovery(`Runtime status check failed: ${message}`);
+    }
   }
+}
+
+function startRuntimeStatusPolling(): void {
+  stopRuntimeStatusPolling();
+  runtimeStatusPollTimer = window.setInterval(() => {
+    void refreshRuntimeStatus({ syncShell: true, notify: false });
+  }, RUNTIME_HEALTH_POLL_MS);
+}
+
+function stopRuntimeStatusPolling(): void {
+  if (runtimeStatusPollTimer === undefined) {
+    return;
+  }
+  window.clearInterval(runtimeStatusPollTimer);
+  runtimeStatusPollTimer = undefined;
 }
 
 async function showApprovalNotification(payload: ApprovalNotificationPayload): Promise<void> {

@@ -16,7 +16,7 @@ export interface ComputerUseSafety {
   confirmed: boolean;
 }
 
-export interface ToolRuntimeGuardrailViolation {
+export interface BrowserRuntimeGuardrailViolation {
   statusCode: 403 | 409;
   reason: string;
   details?: Record<string, unknown>;
@@ -26,10 +26,7 @@ export function isRestrictedBrowserStateTool(toolName: string): boolean {
   return RESTRICTED_BROWSER_STATE_TOOLS.has(toolName);
 }
 
-export function evaluateComputerUseSafety(
-  toolName: string,
-  args: Record<string, unknown>,
-): ComputerUseSafety {
+export function evaluateComputerUseSafety(toolName: string, args: Record<string, unknown>): ComputerUseSafety {
   const isBrowserInteract = toolName === "browser.interact";
   const steps = Array.isArray(args.steps) ? (args.steps as Array<Record<string, unknown>>) : [];
   const mutatingStep = steps.some((step) => {
@@ -52,7 +49,7 @@ export function evaluateDeploymentProfileToolAccess(
   profile: DeploymentProfile,
   toolName: string,
   args: Record<string, unknown>,
-): ToolRuntimeGuardrailViolation | null {
+): BrowserRuntimeGuardrailViolation | null {
   if (profile !== "trusted_local" && isRestrictedBrowserStateTool(toolName)) {
     return {
       statusCode: 403,
@@ -72,7 +69,8 @@ export function evaluateDeploymentProfileToolAccess(
   if (safety.requiresVerification && !safety.verified) {
     return {
       statusCode: 409,
-      reason: "Computer-use guardrail: this mutating browser action requires step verification (set args.verifyStep=true).",
+      reason:
+        "Computer-use guardrail: this mutating browser action requires step verification (set args.verifyStep=true).",
       details: {
         ...safety,
         deploymentProfile: profile,

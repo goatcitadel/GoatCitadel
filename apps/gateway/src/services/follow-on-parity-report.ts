@@ -24,7 +24,7 @@ import type {
 import { buildVoiceOperatorGuidance, FOLLOW_ON_PROOF_LANE_SPECS } from "@goatcitadel/contracts";
 import { buildA2UIContract } from "./a2ui-contract.js";
 import { buildCompanionContract } from "./companion-contract.js";
-import { evaluateDeploymentProfileToolAccess, isRestrictedBrowserStateTool } from "../tool-runtime-guardrails.js";
+import { evaluateDeploymentProfileToolAccess, isRestrictedBrowserStateTool } from "../browser-runtime-guardrails.js";
 
 interface BuildFollowOnParityReportInput {
   generatedAt?: string;

@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { evaluateComputerUseSafety, evaluateDeploymentProfileToolAccess } from "../tool-runtime-guardrails.js";
+import { evaluateComputerUseSafety, evaluateDeploymentProfileToolAccess } from "../browser-runtime-guardrails.js";
 
 const bodySchema = z.object({
   toolName: z.string().min(1),
