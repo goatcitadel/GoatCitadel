@@ -37,6 +37,7 @@ export interface IntegrationPluginRecord {
   installedAt: string;
   updatedAt: string;
   capabilities: string[];
+  toolOverrides?: IntegrationPluginToolOverride[];
 }
 
 export interface IntegrationPluginInstallInput {
@@ -57,6 +58,23 @@ export interface IntegrationPluginAuthorManifest {
     expected?: string;
   };
   theme?: IntegrationPluginThemeMetadata;
+  toolOverrides?: IntegrationPluginToolOverrideManifestEntry[];
+}
+
+export type IntegrationPluginToolOverrideStatus = "pending_owner_approval" | "approved" | "revoked";
+
+export interface IntegrationPluginToolOverride {
+  toolName: string;
+  override: boolean;
+  status: IntegrationPluginToolOverrideStatus;
+  approvedAt?: string;
+  approvedBy?: string;
+  revokedAt?: string;
+}
+
+export interface IntegrationPluginToolOverrideManifestEntry {
+  toolName: string;
+  override: boolean;
 }
 
 export type ChannelActionName =
