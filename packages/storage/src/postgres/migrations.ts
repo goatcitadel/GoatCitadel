@@ -904,4 +904,15 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS action_config_json TEXT;
     `,
   },
+  {
+    version: 32,
+    name: "chat_session_meta_goal",
+    sql: `
+      ALTER TABLE chat_session_meta
+        ADD COLUMN IF NOT EXISTS pinned_goal TEXT,
+        ADD COLUMN IF NOT EXISTS goal_turn_budget INTEGER,
+        ADD COLUMN IF NOT EXISTS goal_turns_used INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS goal_set_at TEXT;
+    `,
+  },
 ];
