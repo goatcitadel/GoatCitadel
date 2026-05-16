@@ -771,6 +771,16 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "cron_jobs", "action_config_json", "TEXT");
     },
   },
+  {
+    version: 79,
+    name: "chat_session_meta_goal",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "chat_session_meta", "pinned_goal", "TEXT");
+      addColumnIfMissingIfTableExists(db, "chat_session_meta", "goal_turn_budget", "INTEGER");
+      addColumnIfMissingIfTableExists(db, "chat_session_meta", "goal_turns_used", "INTEGER NOT NULL DEFAULT 0");
+      addColumnIfMissingIfTableExists(db, "chat_session_meta", "goal_set_at", "TEXT");
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
