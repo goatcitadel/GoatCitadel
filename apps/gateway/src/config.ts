@@ -302,6 +302,55 @@ export interface GatewayRuntimeConfig {
   dbPath: string;
 }
 
+/**
+ * Tracked config files for the mtime-keyed load cache. Must include every file
+ * that {@link loadGatewayConfig} reads + validates directly. `cron-jobs.json` is
+ * not read by `loadGatewayConfig` itself; the unified config sync handles it.
+ */
+const TRACKED_CONFIG_FILES = [
+  "assistant.config.json",
+  "tool-policy.json",
+  "budgets.json",
+  "llm-providers.json",
+] as const;
+
+interface ConfigMtimeCacheEntry {
+  mtimes: Record<string, number>;
+  value: GatewayRuntimeConfig;
+}
+
+let configMtimeCache: { key: string; entry: ConfigMtimeCacheEntry } | null = null;
+
+/** @internal Test-only: reset the in-memory mtime cache between tests. */
+export function __resetConfigMtimeCacheForTests(): void {
+  configMtimeCache = null;
+}
+
+async function readConfigMtimes(configDir: string, files: readonly string[]): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  await Promise.all(
+    files.map(async (file) => {
+      try {
+        const stat = await fs.stat(path.join(configDir, file));
+        out[file] = stat.mtimeMs;
+      } catch {
+        out[file] = 0;
+      }
+    }),
+  );
+  return out;
+}
+
+function configMtimesEqual(a: Record<string, number>, b: Record<string, number>): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const key of keys) {
+    if ((a[key] ?? 0) !== (b[key] ?? 0)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntimeConfig> {
   const syncResult = await syncUnifiedConfig(rootDir, { createUnifiedIfMissing: true });
   if (syncResult.createdUnified || syncResult.materializedExamples.length > 0 || syncResult.syncedSections.length > 0) {
@@ -317,6 +366,18 @@ export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntime
   }
 
   const configDir = path.join(rootDir, "config");
+
+  const cacheKey = path.resolve(rootDir);
+  const currentMtimes = await readConfigMtimes(configDir, TRACKED_CONFIG_FILES);
+  if (
+    configMtimeCache &&
+    configMtimeCache.key === cacheKey &&
+    configMtimesEqual(configMtimeCache.entry.mtimes, currentMtimes)
+  ) {
+    configLog.debug("config cache hit (mtime unchanged)", { rootDir: cacheKey });
+    return configMtimeCache.entry.value;
+  }
+
   const [assistantRaw, toolPolicyRaw, budgetsRaw, llmRaw] = await Promise.all([
     fs.readFile(path.join(configDir, "assistant.config.json"), "utf8"),
     fs.readFile(path.join(configDir, "tool-policy.json"), "utf8"),
@@ -341,7 +402,7 @@ export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntime
   toolPolicy.sandbox.writeJailRoots = toolPolicy.sandbox.writeJailRoots.map((root) => path.resolve(rootDir, root));
   toolPolicy.sandbox.readOnlyRoots = toolPolicy.sandbox.readOnlyRoots.map((root) => path.resolve(rootDir, root));
 
-  return {
+  const result: GatewayRuntimeConfig = {
     assistant,
     toolPolicy,
     budgets,
@@ -349,6 +410,18 @@ export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntime
     rootDir,
     dbPath: path.join(rootDir, assistant.dataDir, "index.db"),
   };
+
+  // Capture mtimes AFTER load so any side-effects from the sync/materialize
+  // path (which can mutate split files on first run) are reflected in the
+  // cache key. Without this, the next call could think files changed and
+  // miss the cache forever.
+  const postLoadMtimes = await readConfigMtimes(configDir, TRACKED_CONFIG_FILES);
+  configMtimeCache = {
+    key: cacheKey,
+    entry: { mtimes: postLoadMtimes, value: result },
+  };
+
+  return result;
 }
 
 function parseAndValidate<T>(raw: string, schema: ZodType<T>, filePath: string): T {

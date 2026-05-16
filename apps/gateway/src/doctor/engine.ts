@@ -7,6 +7,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { syncUnifiedConfig } from "../config-sync-lib.js";
 import { repoHasConfigMarker } from "../config-files.js";
+import { describeMalformedCronRow, isPlainRecord, isValidCronRow } from "../services/cron-row-validation.js";
 import type {
   DoctorCheckResult,
   DoctorOperatorLinks,
@@ -94,6 +95,7 @@ export async function runDoctor(options: DoctorRunOptions = {}): Promise<DoctorR
   checks.push(await checkPrerequisites(context, repairs));
   checks.push(await checkManagedWorkspaceTooling(context, repairs));
   checks.push(await checkConfigIntegrity(context, repairs));
+  checks.push(await checkCronRows(context, repairs));
   checks.push(await checkAuthHostPosture(context, repairs));
   checks.push(await checkToolPolicyPaths(context, repairs));
   checks.push(await checkStoragePaths(context, repairs));
@@ -478,6 +480,190 @@ async function checkConfigIntegrity(
       : `Detected config issues: ${beforeIssues.join(" ")}`,
     repairable: true,
     repairAction: "Run `pnpm config:sync` and verify JSON syntax.",
+  };
+}
+
+interface CronRowAnalysis {
+  validRows: Record<string, unknown>[];
+  malformedDescriptions: string[];
+  topLevelIsArray: boolean;
+}
+
+function analyzeCronRows(parsed: unknown): CronRowAnalysis | null {
+  const topLevelIsArray = Array.isArray(parsed);
+  const jobsArray: unknown = topLevelIsArray
+    ? parsed
+    : isPlainRecord(parsed)
+      ? (parsed as Record<string, unknown>).jobs
+      : undefined;
+  if (!Array.isArray(jobsArray)) {
+    return null;
+  }
+  const validRows: Record<string, unknown>[] = [];
+  const malformedDescriptions: string[] = [];
+  for (let index = 0; index < jobsArray.length; index += 1) {
+    const candidate = jobsArray[index];
+    if (isValidCronRow(candidate)) {
+      validRows.push(candidate as Record<string, unknown>);
+    } else {
+      malformedDescriptions.push(`row #${index}: ${describeMalformedCronRow(candidate)}`);
+    }
+  }
+  return {
+    validRows,
+    malformedDescriptions,
+    topLevelIsArray,
+  };
+}
+
+async function checkCronRows(context: DoctorRuntimeContext, repairs: DoctorRepairResult[]): Promise<DoctorCheckResult> {
+  const id = "config.cron-rows";
+  const cronPath = path.join(context.configDir, "cron-jobs.json");
+  const state = await readJsonFile(cronPath);
+
+  if (!state.exists) {
+    repairs.push({
+      checkId: id,
+      applied: false,
+      skipped: true,
+      reason: "cron-jobs.json is not present; nothing to audit.",
+    });
+    return {
+      id,
+      group: "config",
+      title: "Cron job row integrity",
+      status: "ok",
+      severity: "info",
+      detail: "cron-jobs.json is not present; no cron rows to validate.",
+      repairable: false,
+    };
+  }
+
+  if (!state.valid) {
+    // Avoid double-warning: checkConfigIntegrity already flags invalid JSON.
+    // Reporting "ok" here keeps the row audit silent on a problem another
+    // check already owns.
+    repairs.push({
+      checkId: id,
+      applied: false,
+      skipped: true,
+      reason: "cron-jobs.json is not valid JSON; config integrity check covers this.",
+    });
+    return {
+      id,
+      group: "config",
+      title: "Cron job row integrity",
+      status: "ok",
+      severity: "info",
+      detail: "Skipping row audit — JSON integrity check covers this file.",
+      repairable: false,
+    };
+  }
+
+  const analysis = analyzeCronRows(state.value);
+  if (!analysis) {
+    repairs.push({
+      checkId: id,
+      applied: false,
+      skipped: true,
+      reason: "cron-jobs.json has no jobs array; nothing to audit.",
+    });
+    return {
+      id,
+      group: "config",
+      title: "Cron job row integrity",
+      status: "warn",
+      severity: "warning",
+      detail: "cron-jobs.json has no jobs array; cannot audit cron rows.",
+      repairable: false,
+      repairAction: "Ensure cron-jobs.json is `{ jobs: [...] }` or an array of cron rows.",
+    };
+  }
+
+  if (analysis.malformedDescriptions.length === 0) {
+    repairs.push({
+      checkId: id,
+      applied: false,
+      skipped: true,
+      reason: "All cron rows are well-formed.",
+    });
+    return {
+      id,
+      group: "config",
+      title: "Cron job row integrity",
+      status: "ok",
+      severity: "info",
+      detail: `All ${analysis.validRows.length} cron row(s) are well-formed.`,
+      repairable: false,
+    };
+  }
+
+  const summary = `Detected ${analysis.malformedDescriptions.length} malformed cron row(s) in cron-jobs.json: ${analysis.malformedDescriptions
+    .slice(0, 3)
+    .join("; ")}${analysis.malformedDescriptions.length > 3 ? "; ..." : ""}`;
+
+  if (context.repairEnabled && context.autoRepair) {
+    try {
+      const repaired = analysis.topLevelIsArray
+        ? analysis.validRows
+        : { ...(isPlainRecord(state.value) ? state.value : {}), jobs: analysis.validRows };
+      await writeJsonFile(cronPath, repaired);
+      const changes = [
+        `Pruned ${analysis.malformedDescriptions.length} malformed cron row(s) from ${path.relative(context.rootDir, cronPath)}.`,
+        `Preserved ${analysis.validRows.length} valid row(s).`,
+        ...analysis.malformedDescriptions.map((description) => `Removed ${description}`),
+      ];
+      repairs.push({
+        checkId: id,
+        applied: true,
+        skipped: false,
+        changes,
+      });
+      return {
+        id,
+        group: "config",
+        title: "Cron job row integrity",
+        status: "fixed",
+        severity: "info",
+        detail: `${summary} Repaired by pruning malformed rows.`,
+        repairable: true,
+        repairAction: "Run `goatcitadel doctor --audit-only` to verify state without writes.",
+      };
+    } catch (error) {
+      repairs.push({
+        checkId: id,
+        applied: false,
+        skipped: false,
+        reason: `Failed to rewrite cron-jobs.json: ${(error as Error).message}`,
+      });
+      return {
+        id,
+        group: "config",
+        title: "Cron job row integrity",
+        status: "fail",
+        severity: "error",
+        detail: `${summary} Failed to repair: ${(error as Error).message}`,
+        repairable: true,
+        repairAction: "Inspect cron-jobs.json permissions and contents, then rerun doctor.",
+      };
+    }
+  }
+
+  repairs.push({
+    checkId: id,
+    applied: false,
+    skipped: true,
+    reason: "Repair disabled (--audit-only/--no-repair/read-only).",
+  });
+  return {
+    id,
+    group: "config",
+    title: "Cron job row integrity",
+    status: "warn",
+    severity: "warning",
+    detail: summary,
+    repairable: true,
+    repairAction: "Rerun doctor without --audit-only to prune malformed cron rows.",
   };
 }
 
