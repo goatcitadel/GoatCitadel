@@ -59,6 +59,7 @@ describe("TUI main helpers", () => {
       "tools",
       "tasks",
       "skills",
+      "curator",
       "integrations",
       "mesh",
       "npu",

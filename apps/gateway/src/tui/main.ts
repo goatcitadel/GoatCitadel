@@ -97,6 +97,8 @@ async function main(): Promise<void> {
         await viewTasks(client);
       } else if (current === "skills") {
         await viewSkills(client);
+      } else if (current === "curator") {
+        await viewCurator(client);
       } else if (current === "integrations") {
         await viewIntegrations(client);
       } else if (current === "mesh") {
@@ -1617,6 +1619,103 @@ async function viewSkills(client: TuiApiClient): Promise<void> {
     const decision = await client.resolveSkills(text);
     console.log(JSON.stringify(decision, null, 2));
     await pause();
+  }
+}
+
+async function viewCurator(client: TuiApiClient): Promise<void> {
+  const status = await client.getCuratorStatus();
+  const items = Array.isArray((status as { items?: unknown[] }).items)
+    ? (status as { items: Array<Record<string, unknown>> }).items
+    : [];
+
+  console.log(chalk.bold("Autonomous Curator"));
+  console.log(
+    chalk.dim(`${items.length} skills • cycle ${String((status as { cycleDays?: number }).cycleDays ?? 7)} days`),
+  );
+  console.table(
+    items.map((item) => ({
+      skillId: String(item.skillId ?? ""),
+      name: String(item.name ?? ""),
+      source: String(item.source ?? ""),
+      usage: Number(item.usageCount ?? 0),
+      mean: Number((item as { score?: { mean?: number } }).score?.mean ?? 0).toFixed(2),
+      rec: String(item.recommendation ?? ""),
+      immune: item.immune ? `yes:${item.immunityReason ?? ""}` : "no",
+    })),
+  );
+
+  const action = await select({
+    message: "Curator action",
+    choices: [
+      { name: "Back", value: "back" },
+      { name: "Refresh", value: "refresh" },
+      { name: "Run synchronously (dry run)", value: "run-dry" },
+      { name: "Run synchronously (live)", value: "run-live" },
+      { name: "Archive a skill", value: "archive" },
+      { name: "Prune a skill", value: "prune" },
+      { name: "List archived", value: "archived" },
+    ],
+  });
+
+  if (action === "back") return;
+
+  if (action === "refresh") {
+    await viewCurator(client);
+    return;
+  }
+
+  if (action === "run-dry" || action === "run-live") {
+    const dryRun = action === "run-dry";
+    const result = await client.runCurator({ sync: true, dryRun });
+    console.log(JSON.stringify(result, null, 2));
+    await pause();
+    return;
+  }
+
+  if (action === "archive") {
+    const skillId = await input({ message: "Skill ID to archive" });
+    if (!skillId.trim()) {
+      console.log("No skill ID provided.");
+      await pause();
+      return;
+    }
+    const reason = await input({ message: "Reason (optional)", default: "manual archive from TUI" });
+    const confirmed = await confirm({ message: `Archive ${skillId}?`, default: false });
+    if (!confirmed) return;
+    try {
+      const result = await client.archiveCuratorSkill(skillId.trim(), reason.trim() || undefined);
+      console.log(JSON.stringify(result, null, 2));
+    } catch (err) {
+      console.error(chalk.red((err as Error).message));
+    }
+    await pause();
+    return;
+  }
+
+  if (action === "prune") {
+    const skillId = await input({ message: "Skill ID to prune (DESTRUCTIVE)" });
+    if (!skillId.trim()) {
+      console.log("No skill ID provided.");
+      await pause();
+      return;
+    }
+    const confirmed = await confirm({ message: `PRUNE ${skillId}? This cannot be undone.`, default: false });
+    if (!confirmed) return;
+    try {
+      const result = await client.pruneCuratorSkill(skillId.trim());
+      console.log(JSON.stringify(result, null, 2));
+    } catch (err) {
+      console.error(chalk.red((err as Error).message));
+    }
+    await pause();
+    return;
+  }
+
+  if (action === "archived") {
+    const archived = await client.listCuratorArchived();
+    console.log(JSON.stringify(archived, null, 2));
+    await pause();
+    return;
   }
 }
 
