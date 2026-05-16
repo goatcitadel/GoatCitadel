@@ -9,3 +9,10 @@ export * from "./state/effects-mode";
 export * from "./state/event-stream-status-store";
 export * from "./state/refresh-bus";
 export * from "./state/ui-preferences";
+export {
+  explainShellCommand,
+  type ShellCommandExplanation,
+  type ShellExplanationDetail,
+  type ShellRiskFinding,
+  type ShellRiskLevel,
+} from "./content/shell-command-explainer.js";
