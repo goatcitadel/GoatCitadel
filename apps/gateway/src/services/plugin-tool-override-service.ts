@@ -47,28 +47,37 @@ export class PluginToolOverrideService {
     toolName: string;
     approvedBy: string;
   }): PluginToolOverrideClaimRecord {
-    const record = this.requireClaim(input.pluginId, input.toolName);
     if (input.approvedBy !== this.deps.getOwnerId()) {
       throw new ConflictError({
         message: "Only the owner can approve plugin tool overrides.",
       });
     }
-    record.status = "approved";
-    record.approvedBy = input.approvedBy;
-    record.approvedAt = new Date().toISOString();
-    return { ...record };
+    const record = this.requireClaim(input.pluginId, input.toolName);
+    const updated: PluginToolOverrideClaimRecord = {
+      ...record,
+      status: "approved",
+      approvedBy: input.approvedBy,
+      approvedAt: new Date().toISOString(),
+    };
+    this.claims.set(makeKey(record.pluginId, record.toolName), updated);
+    return { ...updated };
   }
 
   public revokeClaim(input: { pluginId: string; toolName: string; revokedBy: string }): PluginToolOverrideClaimRecord {
-    const record = this.requireClaim(input.pluginId, input.toolName);
     if (input.revokedBy !== this.deps.getOwnerId()) {
       throw new ConflictError({
         message: "Only the owner can revoke plugin tool overrides.",
       });
     }
-    record.status = "revoked";
-    record.revokedAt = new Date().toISOString();
-    return { ...record };
+    const record = this.requireClaim(input.pluginId, input.toolName);
+    const updated: PluginToolOverrideClaimRecord = {
+      ...record,
+      status: "revoked",
+      override: false,
+      revokedAt: new Date().toISOString(),
+    };
+    this.claims.set(makeKey(record.pluginId, record.toolName), updated);
+    return { ...updated };
   }
 
   public listClaims(): PluginToolOverrideClaimRecord[] {

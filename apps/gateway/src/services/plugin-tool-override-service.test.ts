@@ -51,6 +51,15 @@ describe("PluginToolOverrideService", () => {
     );
   });
 
+  it("does not leak claim existence to non-owners", () => {
+    const service = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    expect(() => service.approveClaim({ pluginId: "missing", toolName: "missing", approvedBy: "intruder-2" })).toThrow(
+      /owner/i,
+    );
+    // Even though the claim does not exist, a non-owner receives the owner-scope error,
+    // not a "no claim" error.
+  });
+
   it("resolveActiveOverride returns the approved plugin for the tool", () => {
     const service = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
     service.registerOverrideClaim(baseInput());
