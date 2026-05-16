@@ -5,7 +5,11 @@ import type { ChatAttachmentMediaType, ChatAttachmentRecord } from "@goatcitadel
 import type { Storage } from "@goatcitadel/storage";
 import { assertExistingPathRealpathAllowed, assertWritePathInJail } from "@goatcitadel/policy-engine";
 import type { GatewayRuntimeConfig } from "../config.js";
-import { detectAttachmentMediaType } from "./media-voice-service.js";
+import {
+  assertAttachmentBytesMatchMimeHint,
+  decodeStrictBase64,
+  detectAttachmentMediaType,
+} from "./media-voice-service.js";
 
 export interface ChatAttachmentHost {
   readonly config: GatewayRuntimeConfig;
@@ -35,13 +39,14 @@ export async function uploadChatAttachment(
   const sessionWorkspaceId = deps.normalizeWorkspaceId(sessionMeta.workspaceId);
   const fileName = sanitizeAttachmentFileName(input.fileName);
   const mimeType = input.mimeType.trim() || "application/octet-stream";
-  const bytes = Buffer.from(input.bytesBase64, "base64");
+  const bytes = decodeStrictBase64(input.bytesBase64);
   if (bytes.length === 0) {
     throw new Error("Attachment payload is empty");
   }
   if (bytes.length > 20 * 1024 * 1024) {
     throw new Error("Attachment exceeds 20MB upload limit");
   }
+  assertAttachmentBytesMatchMimeHint(bytes, mimeType);
 
   let projectId = input.projectId;
   if (!projectId) {

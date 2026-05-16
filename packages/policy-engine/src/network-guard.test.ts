@@ -209,4 +209,40 @@ describe("isHostAllowed", () => {
       reason: "Private, metadata, or reserved host is blocked: :443",
     });
   });
+
+  // SECURITY_AUDIT_2026-05-15 — S5 + S6: cloud-metadata SSRF floor must block
+  // every cloud-metadata endpoint regardless of allowlist content, including
+  // the bracketed-IPv6 URL form (`http://[fc00::1]/`) and the IPv4-mapped
+  // IPv6 form (`http://[::ffff:169.254.169.254]/`) that previously bypassed
+  // the guard because new URL() returns hostname with brackets and isIP()
+  // does not classify the bracketed form as IPv6.
+  it("blocks every cloud-metadata endpoint even when '*' is allowlisted", () => {
+    const cloudMetadataTargets = [
+      "http://169.254.169.254/latest/meta-data/iam/security-credentials", // AWS
+      "http://169.254.169.254:80/computeMetadata/v1/", // GCP via raw IP
+      "http://metadata.google.internal/computeMetadata/v1/instance/", // GCP DNS
+      "http://100.100.100.200/latest/meta-data/", // Alibaba Cloud
+      "http://[fc00::1]/", // ULA via bracketed-URL form
+      "http://[fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]/", // ULA range end
+      "http://[fe80::1]/", // link-local via bracketed-URL form
+      "http://[::1]/", // loopback via bracketed-URL form
+      "http://[::ffff:169.254.169.254]/", // IPv4-mapped AWS metadata
+      "https://[fc00::1]:8443/path", // ULA with port + path
+      "[fc00::1]", // bare bracketed host (no scheme)
+    ];
+    for (const target of cloudMetadataTargets) {
+      const decision = evaluateHostEgress(target, ["*"]);
+      expect(decision.allowed, target).toBe(false);
+      expect(decision.approvalState, target).toBe("blocked");
+    }
+  });
+
+  it("still allows public IPv6 hosts via the bracketed-URL form", () => {
+    // After the bracketed-IPv6 SSRF fix, public IPv6 (e.g. Google DNS)
+    // must still flow through the allowlist unchanged.
+    expect(evaluateHostEgress("http://[2001:4860:4860::8888]/", ["*"])).toMatchObject({
+      allowed: true,
+      approvalState: "not_required",
+    });
+  });
 });
