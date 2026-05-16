@@ -638,7 +638,7 @@ describe("LlmService", () => {
           label: "Moonshot",
           baseUrl: "https://api.moonshot.ai/v1",
           apiStyle: "openai-chat-completions",
-          defaultModel: "kimi-k2.5",
+          defaultModel: "kimi-k2.6",
         },
       ],
     };
@@ -849,7 +849,7 @@ describe("LlmService", () => {
     });
 
     expect(updated.providers.find((provider) => provider.providerId === "deepseek")?.defaultModel).toBe(
-      "deepseek-v4-flash",
+      "deepseek-v4-pro",
     );
   });
 
@@ -1886,7 +1886,7 @@ describe("LlmService", () => {
           label: "Moonshot",
           baseUrl: "https://api.moonshot.ai/v1",
           apiStyle: "openai-chat-completions",
-          defaultModel: "kimi-k2.5",
+          defaultModel: "kimi-k2.6",
         },
       ],
     };
@@ -1937,7 +1937,7 @@ describe("LlmService", () => {
           label: "Moonshot",
           baseUrl: "https://api.moonshot.ai/v1",
           apiStyle: "openai-chat-completions",
-          defaultModel: "kimi-k2.5",
+          defaultModel: "kimi-k2.6",
         },
       ],
     };
@@ -1969,7 +1969,7 @@ describe("LlmService", () => {
           label: "Moonshot",
           baseUrl: "https://api.moonshot.ai/v1",
           apiStyle: "openai-chat-completions",
-          defaultModel: "kimi-k2.5",
+          defaultModel: "kimi-k2.6",
         },
       ],
     };
@@ -1981,7 +1981,7 @@ describe("LlmService", () => {
     const service = new LlmService(config, process.env, { secretStore });
 
     expect(service.resolveExecutionApiStyle("openai", "gpt-5.4-mini")).toBe("openai-responses");
-    expect(service.resolveExecutionApiStyle("moonshot", "kimi-k2.5")).toBe("openai-chat-completions");
+    expect(service.resolveExecutionApiStyle("moonshot", "kimi-k2.6")).toBe("openai-chat-completions");
     expect(secretStore.getCalls()).toBe(0);
   });
 
@@ -1994,7 +1994,7 @@ describe("LlmService", () => {
           label: "Moonshot",
           baseUrl: "https://api.moonshot.ai/v1",
           apiStyle: "openai-chat-completions",
-          defaultModel: "kimi-k2.5",
+          defaultModel: "kimi-k2.6",
         },
       ],
     };
@@ -2018,7 +2018,7 @@ describe("LlmService", () => {
 
     try {
       await service.chatCompletions({
-        model: "kimi-k2.5",
+        model: "kimi-k2.6",
         messages: [
           { role: "user", content: "what is the weather today?" },
           {
@@ -2066,7 +2066,7 @@ describe("LlmService", () => {
           label: "Moonshot",
           baseUrl: "https://api.moonshot.ai/v1",
           apiStyle: "openai-chat-completions",
-          defaultModel: "kimi-k2.5",
+          defaultModel: "kimi-k2.6",
         },
       ],
     };
@@ -2106,7 +2106,7 @@ describe("LlmService", () => {
 
     try {
       const completion = await service.chatCompletions({
-        model: "kimi-k2.5",
+        model: "kimi-k2.6",
         messages: [{ role: "user", content: "hello" }],
         metadata: { source: "test-suite" },
       });
@@ -2130,7 +2130,7 @@ describe("LlmService", () => {
           label: "Moonshot",
           baseUrl: "https://api.moonshot.ai/v1",
           apiStyle: "openai-chat-completions",
-          defaultModel: "kimi-k2.5",
+          defaultModel: "kimi-k2.6",
         },
       ],
     };
@@ -2168,7 +2168,7 @@ describe("LlmService", () => {
     const chunks: Record<string, unknown>[] = [];
     try {
       for await (const chunk of service.chatCompletionsStream({
-        model: "kimi-k2.5",
+        model: "kimi-k2.6",
         messages: [{ role: "user", content: "hello" }],
         metadata: { source: "test-suite" },
       })) {
@@ -2561,10 +2561,10 @@ describe("LlmService", () => {
         "gpt-5.4",
         "gpt-5.4-pro",
         "gpt-5.4-mini",
-        "gpt-5.3-codex",
-        "gpt-5.2-codex",
       ]);
       expect(models.map((model) => model.id)).not.toContain("gpt-5.3-codex-spark");
+      expect(models.map((model) => model.id)).not.toContain("gpt-5.3-codex");
+      expect(models.map((model) => model.id)).not.toContain("gpt-5.2-codex");
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       globalThis.fetch = originalFetch;

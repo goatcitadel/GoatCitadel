@@ -1316,7 +1316,7 @@ export function PromptPacksWorkbenchPage({
                   rows={4}
                   value={benchmarkProvidersInput}
                   onChange={(event) => setBenchmarkProvidersInput(event.target.value)}
-                  placeholder={"openai/gpt-5.4-mini\nmoonshot/kimi-k2.5"}
+                  placeholder={"openai/gpt-5.4-mini\nmoonshot/kimi-k2.6"}
                 />
               </label>
               <div className="mc-pp-inline-actions wrap">

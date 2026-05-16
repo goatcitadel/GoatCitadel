@@ -24,7 +24,7 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     baseUrl: "https://chatgpt.com/backend-api/codex",
     defaultModel: "gpt-5.5",
     apiStyle: "openai-codex-responses",
-    knownModels: ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2-codex"],
+    knownModels: ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini"],
   },
   {
     providerId: "anthropic",
@@ -151,9 +151,9 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     providerId: "deepseek",
     label: "DeepSeek",
     baseUrl: "https://api.deepseek.com/v1",
-    defaultModel: "deepseek-v4-flash",
+    defaultModel: "deepseek-v4-pro",
     apiStyle: "openai-chat-completions",
-    knownModels: ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"],
+    knownModels: ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"],
   },
   {
     providerId: "glm",
@@ -167,9 +167,9 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     providerId: "moonshot",
     label: "Moonshot (Kimi API)",
     baseUrl: "https://api.moonshot.ai/v1",
-    defaultModel: "kimi-k2.5",
+    defaultModel: "kimi-k2.6",
     apiStyle: "openai-chat-completions",
-    knownModels: ["kimi-k2.5", "kimi-k2", "kimi-1"],
+    knownModels: ["kimi-k2.6", "kimi-k2", "kimi-1"],
   },
   {
     providerId: "perplexity",
@@ -178,6 +178,14 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     defaultModel: "sonar",
     apiStyle: "openai-chat-completions",
     knownModels: ["sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"],
+  },
+  {
+    providerId: "xai",
+    label: "xAI Grok (SuperGrok OAuth)",
+    baseUrl: "https://api.x.ai/v1",
+    defaultModel: "grok-4.3",
+    apiStyle: "openai-chat-completions",
+    knownModels: ["grok-4.3", "grok-4.2", "grok-4-mini"],
   },
   {
     providerId: "huggingface",

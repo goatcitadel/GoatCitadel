@@ -1077,7 +1077,7 @@ function defaultLlmConfig(): string {
         label: "DeepSeek",
         baseUrl: "https://api.deepseek.com/v1",
         apiStyle: "openai-chat-completions",
-        defaultModel: "deepseek-v4-flash",
+        defaultModel: "deepseek-v4-pro",
         apiKeyEnv: "DEEPSEEK_API_KEY",
       },
       {
@@ -1093,7 +1093,7 @@ function defaultLlmConfig(): string {
         label: "Moonshot (Kimi API)",
         baseUrl: "https://api.moonshot.ai/v1",
         apiStyle: "openai-chat-completions",
-        defaultModel: "kimi-k2.5",
+        defaultModel: "kimi-k2.6",
         apiKeyEnv: "MOONSHOT_API_KEY",
       },
       {

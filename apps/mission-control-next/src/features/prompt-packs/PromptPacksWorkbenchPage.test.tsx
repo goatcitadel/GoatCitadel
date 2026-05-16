@@ -871,7 +871,7 @@ describe("PromptPacksWorkbenchPage", () => {
     expect(readNodeText(renderer.root)).toContain("Run all needs a selected provider/model lane.");
 
     await click(findTab(renderer, "Insights"));
-    await change(findTextarea(renderer, "openai/gpt-5.4-mini\nmoonshot/kimi-k2.5"), "");
+    await change(findTextarea(renderer, "openai/gpt-5.4-mini\nmoonshot/kimi-k2.6"), "");
     await click(findButton(renderer, "Start benchmark"));
     expect(readNodeText(renderer.root)).toContain("Benchmark needs at least one provider/model entry");
 
