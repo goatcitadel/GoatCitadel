@@ -125,3 +125,33 @@ export function applyShellExplainerPolicy(
     autoRejectReason,
   };
 }
+
+export interface BackfillResult {
+  readonly scanned: number;
+  readonly backfilled: number;
+}
+
+export interface BackfillStorage {
+  readonly approvals: {
+    list(status?: ApprovalRequest["status"], limit?: number): readonly ApprovalRequest[];
+    setShellExplanations(approvalId: string, explanations: readonly ShellCommandExplanation[]): boolean;
+  };
+}
+
+export function backfillMissingShellExplanations(storage: BackfillStorage, limit = 500): BackfillResult {
+  const pending = storage.approvals.list("pending", limit);
+  let backfilled = 0;
+  for (const approval of pending) {
+    if (approval.shellExplanations && approval.shellExplanations.length > 0) {
+      continue;
+    }
+    const commands = extractApprovalCommands(approval);
+    if (commands.length === 0) {
+      continue;
+    }
+    const explanations = explainCommandsForApproval(commands);
+    storage.approvals.setShellExplanations(approval.approvalId, explanations);
+    backfilled++;
+  }
+  return { scanned: pending.length, backfilled };
+}

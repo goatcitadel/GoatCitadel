@@ -54,6 +54,58 @@ describe("extractApprovalCommands", () => {
   });
 });
 
+describe("backfillMissingShellExplanations", () => {
+  function fakeStorage(
+    approvals: Array<{
+      approvalId: string;
+      preview: Record<string, unknown>;
+      payload: Record<string, unknown>;
+      shellExplanations?: unknown[];
+    }>,
+  ) {
+    const stored = new Map(approvals.map((a) => [a.approvalId, a]));
+    return {
+      approvals: {
+        list: () => approvals.map((a) => ({ ...a, status: "pending" as const })),
+        setShellExplanations: (id: string, explanations: unknown[]) => {
+          const a = stored.get(id);
+          if (!a) return false;
+          a.shellExplanations = explanations;
+          return true;
+        },
+      },
+    } as never;
+  }
+
+  it("backfills approvals missing shellExplanations", async () => {
+    const { backfillMissingShellExplanations } = await import("./shell-command-explainer.js");
+    const storage = fakeStorage([
+      {
+        approvalId: "a1",
+        preview: { commands: ["rm -rf /tmp/x"] },
+        payload: { commands: ["rm -rf /tmp/x"] },
+      },
+      {
+        approvalId: "a2",
+        preview: { commands: ["pnpm install"] },
+        payload: { commands: ["pnpm install"] },
+        shellExplanations: [
+          { command: "pnpm install", parsed: true, summary: "x", details: [], risks: [], highestRisk: "info" },
+        ],
+      },
+    ]);
+    const result = backfillMissingShellExplanations(storage);
+    expect(result.scanned).toBe(2);
+    expect(result.backfilled).toBe(1);
+  });
+
+  it("skips approvals with no commands", async () => {
+    const { backfillMissingShellExplanations } = await import("./shell-command-explainer.js");
+    const storage = fakeStorage([{ approvalId: "a1", preview: {}, payload: {} }]);
+    expect(backfillMissingShellExplanations(storage).backfilled).toBe(0);
+  });
+});
+
 describe("applyShellExplainerPolicy", () => {
   const policyOn = { enabled: true, elevateOnDanger: "danger" as const, autoRejectOnDanger: false };
   const policyOff = { enabled: false };
