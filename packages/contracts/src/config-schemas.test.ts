@@ -518,13 +518,18 @@ describe("CronJobSchema no_agent + chaining fields", () => {
     const parsed = CronJobSchema.parse({
       jobId: "chained",
       name: "Chained",
-      action: "task",
+      action: "curator",
       schedule: "*/5 * * * *",
       enabled: true,
       workdir: "/tmp/test",
       contextFrom: "upstream",
+      lastRunOutput: "previous output",
+      lastRunId: "run-1",
     });
+    expect(parsed.action).toBe("curator");
     expect(parsed.workdir).toBe("/tmp/test");
     expect(parsed.contextFrom).toBe("upstream");
+    expect(parsed.lastRunOutput).toBe("previous output");
+    expect(parsed.lastRunId).toBe("run-1");
   });
 });

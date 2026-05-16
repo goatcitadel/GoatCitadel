@@ -54,14 +54,14 @@ These probes cannot run from CI/agent. The user should execute them.
 - [ ] Switch to `anthropic` provider with active model `claude-opus-4-7`. Run the same admin-cli command. Assert `Context window: 1,000,000`.
 - [ ] Set `XAI_API_KEY` and switch to `xai` provider with active model `grok-4.3`. Run admin-cli status. Assert `Context window: 1,000,000`.
 - [ ] Trigger a chat completion where the LLM service is asked to clamp a summary reserve (this requires a code path that calls `clampActiveModelSummaryReserve`). Inspect logs for the clamp warning text `compaction summary reserve clamped from N to model output limit M`.
-- [ ] Open the Mission Control UI. Confirm the ChatModelPicker shows a context-window badge (e.g., `272K` for Codex, `1M` for Claude/Grok).
+- [ ] Open the Mission Control UI. Confirm the ChatModelPicker shows the catalog/probe context-window badge when metadata is present (for example, `272K` for Codex or `1M` for a manifest entry with 1,000,000 tokens). Do not treat the badge as provider-verified unless a live provider probe supplied that metadata.
 - [ ] Run `pnpm --filter @goatcitadel/gateway exec node dist/doctor/cli.js --deep`. Confirm the `llm.active-model-metadata` probe is OK when the active model is in the manifest, warns when it isn't.
 
 ## Deferred follow-ups (NOT in this PR)
 
 - DeepSeek v4-pro: strip empty `reasoning_content` placeholders before follow-up turns. Needs adapter work in `llm-provider-adapter.ts` or the deepseek transport. Tracked separately.
 - Bedrock concrete transport adapter — `bedrock-messages` is added to `LlmApiStyle` and the example zod enums; actual SigV4 + bedrock-runtime client is a separate PR.
-- xAI Grok SuperGrok OAuth flow — current provider entry uses `apiKeyEnv`. SuperGrok OAuth would extend `LlmProviderAuthMode` and add an OAuth service stub.
+- xAI OAuth flow — current provider entry uses `apiKeyEnv`. OAuth would extend `LlmProviderAuthMode` and add an OAuth service stub.
 - Doctor probe asymmetric loopback severity (vs `checkDeepRuntime`) — minor consistency fix.
 - Admin-cli optional chaining cleanup on a required field — cosmetic.
 

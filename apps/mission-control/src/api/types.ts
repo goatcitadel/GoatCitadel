@@ -303,7 +303,17 @@ export interface CronJobsResponse {
   items: Array<{
     jobId: string;
     name: string;
-    action: "task" | "improvement" | "backup" | "memory_flush" | "cost_report" | "update_review";
+    action:
+      | "task"
+      | "improvement"
+      | "curator"
+      | "backup"
+      | "memory_flush"
+      | "cost_report"
+      | "update_review"
+      | "watchdog"
+      | "no_agent";
+    actionConfig?: Record<string, unknown>;
     description?: string;
     schedule: string;
     enabled: boolean;
@@ -311,13 +321,27 @@ export interface CronJobsResponse {
     lastRunAt?: string;
     nextRunAt?: string;
     updatedAt?: string;
+    workdir?: string;
+    contextFrom?: string;
+    lastRunOutput?: string;
+    lastRunId?: string;
   }>;
 }
 
 export interface CronJobRecordResponse {
   jobId: string;
   name: string;
-  action: "task" | "improvement" | "backup" | "memory_flush" | "cost_report" | "update_review";
+  action:
+    | "task"
+    | "improvement"
+    | "curator"
+    | "backup"
+    | "memory_flush"
+    | "cost_report"
+    | "update_review"
+    | "watchdog"
+    | "no_agent";
+  actionConfig?: Record<string, unknown>;
   description?: string;
   schedule: string;
   enabled: boolean;
@@ -325,6 +349,10 @@ export interface CronJobRecordResponse {
   lastRunAt?: string;
   nextRunAt?: string;
   updatedAt?: string;
+  workdir?: string;
+  contextFrom?: string;
+  lastRunOutput?: string;
+  lastRunId?: string;
 }
 
 export interface OperatorsResponse {

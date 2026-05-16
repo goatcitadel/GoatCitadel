@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ApprovalEffectRecord } from "@goatcitadel/contracts";
+import type { ApprovalEffectRecord, ApprovalRequest } from "@goatcitadel/contracts";
 import {
   createApproval,
   resolveApproval,
@@ -132,6 +132,76 @@ describe("approval lifecycle service", () => {
     expect(seenTriggers).toEqual(["approval.request.before", "approval.create.before"]);
     expect(host.storage.approvals.create).toHaveBeenCalledTimes(1);
     expect(approval.approvalId).toBe("approval-1");
+  });
+
+  it("auto-rejects dangerous shell approvals with durable resolution evidence", async () => {
+    const host = createApprovalHarness({
+      pendingAction: {
+        approvalId: "approval-1",
+        actionType: "tool.invoke",
+        request: { toolName: "shell.exec" },
+        createdAt: "2026-04-11T00:00:00.000Z",
+        resolutionStatus: "pending",
+      },
+      shellExplainerPolicy: {
+        enabled: true,
+        elevateOnDanger: "danger",
+        autoRejectOnDanger: true,
+        autoRejectDangerThreshold: "danger",
+      },
+    });
+
+    const approval = await createApproval(host, {
+      kind: "shell.exec",
+      riskLevel: "caution",
+      payload: {
+        sessionId: "session-1",
+        command: "rm -rf /tmp/gc-danger",
+      },
+      preview: {
+        label: "Run shell command",
+      },
+      linkage: {
+        sessionId: "session-1",
+        workspaceId: "workspace-1",
+      },
+    });
+
+    expect(approval).toMatchObject({
+      approvalId: "approval-1",
+      riskLevel: "danger",
+      status: "rejected",
+      resolvedBy: "system",
+      resolutionNote: expect.stringContaining("Auto-rejected"),
+    });
+    expect(host.storage.approvals.setShellExplanations).toHaveBeenCalledWith(
+      "approval-1",
+      expect.arrayContaining([expect.objectContaining({ command: "rm -rf /tmp/gc-danger", highestRisk: "danger" })]),
+    );
+    expect(host.storage.approvalEvents.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "approval-1",
+        eventType: "created",
+      }),
+    );
+    expect(host.storage.approvalEvents.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "approval-1",
+        eventType: "resolved",
+        actorId: "system",
+        payload: expect.objectContaining({ decision: "reject", status: "rejected" }),
+      }),
+    );
+    expect(host.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "rejected",
+      expect.objectContaining({ decision: "reject" }),
+    );
+    expect(host.recordApprovalResolution).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "approval-1", status: "rejected" }),
+      expect.objectContaining({ decision: "reject", resolvedBy: "system" }),
+    );
+    expect(host.scheduleApprovalExplanation).not.toHaveBeenCalled();
   });
 
   it("returns durable wake linkage from effect rows when resolving approvals", async () => {
@@ -799,28 +869,10 @@ function createApprovalHarness(input?: {
   };
   approvalEffects?: Array<Record<string, unknown>>;
   expiresAt?: string;
+  shellExplainerPolicy?: ApprovalLifecycleHost["shellExplainerPolicy"];
 }) {
   const pendingAction = input?.pendingAction;
-  let approval: {
-    approvalId: string;
-    kind: string;
-    riskLevel: "danger";
-    status: "pending" | "approved" | "rejected" | "edited";
-    payload: {
-      sessionId: string;
-    };
-    preview: Record<string, unknown>;
-    linkage?: {
-      sessionId?: string;
-      workspaceId?: string;
-      durableRunId?: string;
-    };
-    createdAt: string;
-    expiresAt?: string;
-    explanationStatus: "not_requested";
-    resolvedBy?: string;
-    resolvedAt?: string;
-  } = {
+  let approval: ApprovalRequest = {
     approvalId: "approval-1",
     kind: "shell.exec",
     riskLevel: "danger" as const,
@@ -856,6 +908,7 @@ function createApprovalHarness(input?: {
         ...approval,
         status: request.decision === "approve" ? "approved" : request.decision === "reject" ? "rejected" : "edited",
         resolvedBy: request.resolvedBy,
+        resolutionNote: request.resolutionNote,
         resolvedAt: "2026-04-11T00:01:00.000Z",
       };
       return approval;
@@ -869,6 +922,13 @@ function createApprovalHarness(input?: {
         },
       };
       return approval;
+    }),
+    setShellExplanations: vi.fn((_approvalId: string, explanations: readonly unknown[]) => {
+      approval = {
+        ...approval,
+        shellExplanations: explanations,
+      } as ApprovalRequest;
+      return true;
     }),
     list: vi.fn(() => []),
   };
@@ -927,6 +987,11 @@ function createApprovalHarness(input?: {
     hooksService: {
       runInlineHooks: vi.fn(async () => ({ blockedBy: undefined, patch: undefined })),
       enqueueAfterHooks: vi.fn(),
+    },
+    shellExplainerPolicy: input?.shellExplainerPolicy ?? {
+      enabled: true,
+      elevateOnDanger: "danger" as const,
+      autoRejectOnDanger: false,
     },
     approvalWaitRunService: {
       buildApprovalLinkage: vi.fn((linkage?: Record<string, unknown>) => linkage),

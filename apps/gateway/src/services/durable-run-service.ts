@@ -704,6 +704,10 @@ export class DurableRunService {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     const deadLetter = this.ctx.storage.durableRuns.getDeadLetterById(entryId);
     const current = this.ctx.storage.durableRuns.getRun(deadLetter.runId);
+    const recoverability = this.deps?.workflowRegistry.isWorkflowRecoverable(current);
+    if (recoverability && !recoverability.recoverable) {
+      throw new Error(recoverability.reason ?? `Durable run ${deadLetter.runId} cannot be safely recovered.`);
+    }
     const newMaxAttempts = options?.maxAttempts
       ? Math.max(current.attemptCount + 1, Math.min(20, Math.floor(options.maxAttempts)))
       : undefined;

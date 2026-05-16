@@ -996,7 +996,10 @@ async function viewCron(client: TuiApiClient): Promise<void> {
       schedule: toText(job.schedule),
       enabled: Boolean(job.enabled),
       lastRunAt: toText(job.lastRunAt),
+      lastRunId: toText(job.lastRunId),
       lastStatus: toText(job.lastStatus),
+      contextFrom: toText(job.contextFrom),
+      workdir: toText(job.workdir),
     })),
   );
   const queueItems = queue.items ?? [];
@@ -1619,7 +1622,7 @@ async function viewCurator(client: TuiApiClient): Promise<void> {
     ? (status as { items: Array<Record<string, unknown>> }).items
     : [];
 
-  console.log(chalk.bold("Autonomous Curator"));
+  console.log(chalk.bold("Skill Curator"));
   console.log(
     chalk.dim(`${items.length} skills • cycle ${String((status as { cycleDays?: number }).cycleDays ?? 7)} days`),
   );
@@ -1640,8 +1643,7 @@ async function viewCurator(client: TuiApiClient): Promise<void> {
     choices: [
       { name: "Back", value: "back" },
       { name: "Refresh", value: "refresh" },
-      { name: "Run synchronously (dry run)", value: "run-dry" },
-      { name: "Run synchronously (live)", value: "run-live" },
+      { name: "Generate report", value: "generate-report" },
       { name: "Archive a skill", value: "archive" },
       { name: "Prune a skill", value: "prune" },
       { name: "List archived", value: "archived" },
@@ -1655,9 +1657,8 @@ async function viewCurator(client: TuiApiClient): Promise<void> {
     return;
   }
 
-  if (action === "run-dry" || action === "run-live") {
-    const dryRun = action === "run-dry";
-    const result = await client.runCurator({ sync: true, dryRun });
+  if (action === "generate-report") {
+    const result = await client.runCurator({ sync: true, dryRun: true });
     console.log(JSON.stringify(result, null, 2));
     await pause();
     return;

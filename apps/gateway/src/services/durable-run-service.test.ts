@@ -280,6 +280,57 @@ describe("DurableRunService", () => {
     expect(timeline.map((item) => item.eventType)).toContain("run_started");
   });
 
+  it("refuses to recover dead letters the workflow registry classifies as unrecoverable", () => {
+    const unrecoverabilityReason =
+      "Durable chat run was interrupted after tool execution began and cannot be safely replayed.";
+    const run = {
+      ...createRun("run-unsafe-dead", "dead_lettered", "chat.turn.execute"),
+      lastError: unrecoverabilityReason,
+    };
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const deadLetters = new Map([
+      ["dead-unsafe", { dead_letter_id: "dead-unsafe", run_id: run.runId, reason: "unsafe_replay" }],
+    ]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const publishRealtime = vi.fn();
+    const backgroundTasks = new Set<Promise<void>>();
+    const executeWorkflow = vi.fn(async () => undefined);
+    const isWorkflowRecoverable = vi.fn(() => ({
+      recoverable: false,
+      reason: unrecoverabilityReason,
+    }));
+    const service = new DurableRunService(
+      createContext(runs, checkpoints, timeline, { deadLetters, publishRealtime }) as unknown as ServiceContext,
+      {
+        backgroundTasks,
+        workflowRegistry: {
+          executeWorkflow,
+          isWorkflowRecoverable,
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+      },
+    );
+
+    expect(() => service.recoverDurableDeadLetter("dead-unsafe", "operator-1")).toThrow(unrecoverabilityReason);
+    expect(isWorkflowRecoverable).toHaveBeenCalledWith(expect.objectContaining({ runId: run.runId }));
+    expect(runs.get(run.runId)?.status).toBe("dead_lettered");
+    expect(deadLetters.get("dead-unsafe")).toEqual({
+      dead_letter_id: "dead-unsafe",
+      run_id: run.runId,
+      reason: "unsafe_replay",
+    });
+    expect(timeline).toEqual([]);
+    expect(publishRealtime).not.toHaveBeenCalledWith(
+      "system",
+      "durable",
+      expect.objectContaining({ type: "durable_dead_letter_recovered" }),
+      expect.anything(),
+    );
+    expect(backgroundTasks.size).toBe(0);
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
   it("skips waking waiting runs when the correlation id does not match", () => {
     const run = createRun("run-wait", "waiting", "approval.wait");
     run.metadata = {

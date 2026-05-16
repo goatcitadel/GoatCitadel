@@ -104,6 +104,8 @@ export class CronAutomationService {
     actionConfig?: unknown;
     workdir?: string;
     contextFrom?: string;
+    lastRunOutput?: string;
+    lastRunId?: string;
   }): CronJobRecord {
     const jobId = normalizeCronJobId(input.jobId);
     if (this.deps.storage.cronJobs.get(jobId)) {
@@ -123,6 +125,8 @@ export class CronAutomationService {
       nextRunAt: undefined,
       workdir: normalizeCronWorkdir(input.workdir),
       contextFrom: normalizeCronContextFrom(input.contextFrom),
+      lastRunOutput: normalizeCronLastRunOutput(input.lastRunOutput),
+      lastRunId: normalizeCronLastRunId(input.lastRunId),
     };
     if (isScheduledCronAction(job.action)) {
       job.nextRunAt = computeNextCronRunAt(job.schedule, new Date(), job.endAt);
@@ -152,6 +156,8 @@ export class CronAutomationService {
       actionConfig?: unknown;
       workdir?: string | null;
       contextFrom?: string | null;
+      lastRunOutput?: string | null;
+      lastRunId?: string | null;
     },
   ): CronJobRecord {
     const current = this.getCronJob(jobId);
@@ -173,6 +179,9 @@ export class CronAutomationService {
       endAt: input.endAt !== undefined ? normalizeCronEndAt(input.endAt) : current.endAt,
       workdir: input.workdir !== undefined ? normalizeCronWorkdir(input.workdir) : current.workdir,
       contextFrom: input.contextFrom !== undefined ? normalizeCronContextFrom(input.contextFrom) : current.contextFrom,
+      lastRunOutput:
+        input.lastRunOutput !== undefined ? normalizeCronLastRunOutput(input.lastRunOutput) : current.lastRunOutput,
+      lastRunId: input.lastRunId !== undefined ? normalizeCronLastRunId(input.lastRunId) : current.lastRunId,
     };
     if (isScheduledCronAction(updated.action)) {
       updated.nextRunAt = computeNextCronRunAt(updated.schedule, new Date(), updated.endAt);
@@ -625,6 +634,21 @@ export function normalizeCronJobName(value: string): string {
     throw new Error("Cron job name must be 120 characters or less.");
   }
   return normalized;
+}
+
+function normalizeCronLastRunOutput(value: string | null | undefined): string | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  return value;
+}
+
+function normalizeCronLastRunId(value: string | null | undefined): string | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 export function normalizeCronJobAction(value: CronJobRecord["action"] | undefined): CronJobRecord["action"] {

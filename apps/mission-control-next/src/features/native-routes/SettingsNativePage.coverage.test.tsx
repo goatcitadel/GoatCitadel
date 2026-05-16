@@ -862,6 +862,10 @@ describe("SettingsNativePage broad native sections", () => {
     const generalNavigate = vi.fn();
     const general = await mount("general", { navigate: generalNavigate });
     expect(collectText(general.root)).toContain("Mission Control posture");
+    expect(collectText(general.root)).toContain(
+      "Configured and enabled posture for providers, MCP servers, integrations, and identity at a glance.",
+    );
+    expect(collectText(general.root)).not.toContain("Live status of providers");
     expect(collectText(general.root)).toContain("Quick routes");
     await click(buttons(general.root, "Open")[0]!);
     expect(generalNavigate).toHaveBeenCalledWith({ area: "settings", section: "providers", theme: "ops" });

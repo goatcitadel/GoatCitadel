@@ -129,6 +129,10 @@ export async function loadCronJobsFromConfig(host: CronJobConfigHost): Promise<v
         endAt: normalizedEndAt,
         lastRunAt: sanitized.lastRunAt ?? existing?.lastRunAt,
         nextRunAt: repairedNext,
+        workdir: sanitized.workdir ?? existing?.workdir,
+        contextFrom: sanitized.contextFrom ?? existing?.contextFrom,
+        lastRunOutput: sanitized.lastRunOutput ?? existing?.lastRunOutput,
+        lastRunId: sanitized.lastRunId ?? existing?.lastRunId,
       });
     }
   });
@@ -145,6 +149,10 @@ interface SanitizedCronJobRow {
   endAt?: string;
   lastRunAt?: string;
   nextRunAt?: string;
+  workdir?: string;
+  contextFrom?: string;
+  lastRunOutput?: string;
+  lastRunId?: string;
 }
 
 function sanitizeCronJobRow(input: unknown): SanitizedCronJobRow | null {
@@ -165,6 +173,10 @@ function sanitizeCronJobRow(input: unknown): SanitizedCronJobRow | null {
     endAt: typeof record.endAt === "string" ? record.endAt : undefined,
     lastRunAt: typeof record.lastRunAt === "string" ? record.lastRunAt : undefined,
     nextRunAt: typeof record.nextRunAt === "string" ? record.nextRunAt : undefined,
+    workdir: typeof record.workdir === "string" ? record.workdir : undefined,
+    contextFrom: typeof record.contextFrom === "string" ? record.contextFrom : undefined,
+    lastRunOutput: typeof record.lastRunOutput === "string" ? record.lastRunOutput : undefined,
+    lastRunId: typeof record.lastRunId === "string" ? record.lastRunId : undefined,
   };
 }
 
@@ -204,6 +216,10 @@ export function persistCronJobsConfig(host: CronJobConfigHost): void {
     endAt: job.endAt,
     lastRunAt: job.lastRunAt,
     nextRunAt: job.nextRunAt,
+    workdir: job.workdir,
+    contextFrom: job.contextFrom,
+    lastRunOutput: job.lastRunOutput,
+    lastRunId: job.lastRunId,
   }));
   fsSync.writeFileSync(filePath, JSON.stringify({ jobs }, null, 2), "utf8");
   host.persistUnifiedConfig();
@@ -223,6 +239,10 @@ export function ensurePrivateBetaBackupCronJob(host: CronJobConfigHost): void {
       endAt: existing?.endAt,
       lastRunAt: existing?.lastRunAt,
       nextRunAt: existing?.nextRunAt,
+      workdir: existing?.workdir,
+      contextFrom: existing?.contextFrom,
+      lastRunOutput: existing?.lastRunOutput,
+      lastRunId: existing?.lastRunId,
     },
     now,
   );
@@ -242,6 +262,10 @@ export function ensureMemoryFlushCronJob(host: CronJobConfigHost): void {
       endAt: existing?.endAt,
       lastRunAt: existing?.lastRunAt,
       nextRunAt: existing?.nextRunAt,
+      workdir: existing?.workdir,
+      contextFrom: existing?.contextFrom,
+      lastRunOutput: existing?.lastRunOutput,
+      lastRunId: existing?.lastRunId,
     },
     now,
   );
@@ -261,6 +285,10 @@ export function ensureCostReportCronJob(host: CronJobConfigHost): void {
       endAt: existing?.endAt,
       lastRunAt: existing?.lastRunAt,
       nextRunAt: existing?.nextRunAt,
+      workdir: existing?.workdir,
+      contextFrom: existing?.contextFrom,
+      lastRunOutput: existing?.lastRunOutput,
+      lastRunId: existing?.lastRunId,
     },
     now,
   );
@@ -280,6 +308,10 @@ export function ensureUpdateReviewCronJob(host: CronJobConfigHost): void {
       endAt: existing?.endAt,
       lastRunAt: existing?.lastRunAt,
       nextRunAt: existing?.nextRunAt,
+      workdir: existing?.workdir,
+      contextFrom: existing?.contextFrom,
+      lastRunOutput: existing?.lastRunOutput,
+      lastRunId: existing?.lastRunId,
     },
     now,
   );

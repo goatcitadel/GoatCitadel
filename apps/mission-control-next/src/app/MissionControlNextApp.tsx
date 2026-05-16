@@ -1013,7 +1013,8 @@ export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSec
             item.section === "approvals" ||
             item.section === "costs" ||
             item.section === "runtime" ||
-            item.section === "diagnostics",
+            item.section === "diagnostics" ||
+            item.section === "kanban",
         ),
       },
     ].filter((group) => group.items.length);

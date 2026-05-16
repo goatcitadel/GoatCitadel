@@ -1000,7 +1000,15 @@ export class GatewayService {
       policyEngine: this.policyEngine,
       hooksService: this.hooksService,
       approvalWaitRunService: this.approvalWaitRunService,
-      shellExplainerPolicy: this.config.assistant.shellExplainerPolicy,
+      shellExplainerPolicy: {
+        ...this.config.assistant.shellExplainerPolicy,
+        autoRejectOnDanger:
+          this.config.assistant.approvalExplainer.autoRejectOnDanger ??
+          this.config.assistant.shellExplainerPolicy.autoRejectOnDanger,
+        autoRejectDangerThreshold:
+          this.config.assistant.approvalExplainer.autoRejectDangerThreshold ??
+          this.config.assistant.shellExplainerPolicy.autoRejectDangerThreshold,
+      },
       publishRealtime: (eventType, source, payload, options) =>
         this.publishRealtime(eventType, source, payload, options),
       requireConnectorRecord: (connectorId) => this.requireConnectorRecord(connectorId),

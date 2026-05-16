@@ -31,6 +31,8 @@ export function createCronJob(
     actionConfig?: unknown;
     workdir?: string;
     contextFrom?: string;
+    lastRunOutput?: string;
+    lastRunId?: string;
   },
 ): CronJobRecord {
   return host.cronAutomationService.createCronJob(input);
@@ -49,6 +51,8 @@ export function updateCronJob(
     actionConfig?: unknown;
     workdir?: string | null;
     contextFrom?: string | null;
+    lastRunOutput?: string | null;
+    lastRunId?: string | null;
   },
 ): CronJobRecord {
   return host.cronAutomationService.updateCronJob(jobId, input);

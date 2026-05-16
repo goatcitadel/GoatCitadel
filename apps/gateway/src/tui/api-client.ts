@@ -389,7 +389,7 @@ export class TuiApiClient {
       "/api/v1/curator/archive",
       {
         method: "POST",
-        body: JSON.stringify({ skillId, reason, actorId }),
+        body: JSON.stringify({ skillId, reason, confirm: true, actorId }),
       },
       true,
     );
@@ -411,7 +411,7 @@ export class TuiApiClient {
   }
 
   public async runCurator(
-    options: { sync?: boolean; dryRun?: boolean; actorId?: string } = {},
+    options: { sync?: boolean; dryRun?: true; actorId?: string } = {},
   ): Promise<Record<string, unknown>> {
     return this.request(
       "/api/v1/curator/run",

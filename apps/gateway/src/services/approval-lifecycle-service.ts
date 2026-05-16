@@ -528,6 +528,15 @@ export async function createApproval(
     },
   );
 
+  if (policyOutcome.autoReject) {
+    const resolution = await resolveApproval(host, approval.approvalId, {
+      decision: "reject",
+      resolvedBy: "system",
+      resolutionNote: policyOutcome.autoRejectReason ?? "Auto-rejected by shell danger policy.",
+    });
+    return resolution.approval;
+  }
+
   host.scheduleApprovalExplanation(approval);
 
   return approval;

@@ -1,18 +1,19 @@
 import { randomUUID } from "node:crypto";
-import type {
-  CuratorArchiveRequest,
-  CuratorArchiveResponse,
-  CuratorListArchivedResponse,
-  CuratorPruneRequest,
-  CuratorPruneResponse,
-  CuratorRunReport,
-  CuratorRunReportEntry,
-  CuratorRunRequest,
-  CuratorRunResponse,
-  CuratorSkillStatusItem,
-  CuratorStatusResponse,
-  DurableRunRecord,
-  SkillListItem,
+import {
+  ValidationError,
+  type CuratorArchiveRequest,
+  type CuratorArchiveResponse,
+  type CuratorListArchivedResponse,
+  type CuratorPruneRequest,
+  type CuratorPruneResponse,
+  type CuratorRunReport,
+  type CuratorRunReportEntry,
+  type CuratorRunRequest,
+  type CuratorRunResponse,
+  type CuratorSkillStatusItem,
+  type CuratorStatusResponse,
+  type DurableRunRecord,
+  type SkillListItem,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { computeSkillImmunity, gradeSkillUsage } from "./curator-grader.js";
@@ -74,6 +75,9 @@ export class CuratorService {
   }
 
   public archive(input: CuratorArchiveRequest): CuratorArchiveResponse {
+    if (input.confirm !== true) {
+      throw new ValidationError({ message: "Curator: archive requires confirm: true" });
+    }
     const skill = this.deps.listSkills().find((s) => s.skillId === input.skillId);
     if (!skill) {
       throw new Error(`Curator: skill not found: ${input.skillId}`);
@@ -82,12 +86,13 @@ export class CuratorService {
     if (immunity.immune) {
       throw new Error(`Curator: ${immunity.reason} skill ${input.skillId} cannot be archived`);
     }
-    const updated = this.deps.archiveSkill(input.skillId, input.reason ?? "curator:archived", input.actorId);
+    const archiveReason = normalizeArchiveReason(input.reason);
+    const updated = this.deps.archiveSkill(input.skillId, archiveReason, input.actorId);
     const archivedAt = this.deps.now().toISOString();
     this.deps.publishRealtime("curator", {
       type: "skill_archived",
       skillId: input.skillId,
-      reason: input.reason ?? "curator:archived",
+      reason: archiveReason,
       archivedAt,
     });
     return {
@@ -138,14 +143,21 @@ export class CuratorService {
     };
   }
 
-  public async runCurator(input: CuratorRunRequest): Promise<CuratorRunResponse> {
+  public async runCurator(input: CuratorRunRequest = {}): Promise<CuratorRunResponse> {
+    const requestedDryRun = (input as { dryRun?: boolean }).dryRun;
+    if (requestedDryRun === false) {
+      throw new ValidationError({
+        message: "Curator runs are proposal-only; use the confirmed curator archive endpoint to mutate skills.",
+      });
+    }
     const startedAt = this.deps.now();
     const runId = `curator-run-${randomUUID()}`;
-    const dryRun = Boolean(input.dryRun);
+    const dryRun = true;
     const skills = this.deps.listSkills();
     const entries: CuratorRunReportEntry[] = [];
     let immuneCount = 0;
-    let archivedCount = 0;
+    const archivedCount = 0;
+    let proposalCount = 0;
 
     for (const skill of skills) {
       const immunity = computeSkillImmunity(skill);
@@ -163,30 +175,17 @@ export class CuratorService {
         });
         continue;
       }
-      if (grade.recommendation === "archive" && !dryRun) {
-        try {
-          this.deps.archiveSkill(skill.skillId, "curator:archived rubric_below_threshold", input.actorId);
-          archivedCount += 1;
-          entries.push({
-            skillId: skill.skillId,
-            name: skill.name,
-            recommendation: grade.recommendation,
-            score: grade.score,
-            signals: grade.signals,
-            action: "archived",
-            actionReason: "rubric_below_threshold",
-          });
-        } catch (error) {
-          entries.push({
-            skillId: skill.skillId,
-            name: skill.name,
-            recommendation: grade.recommendation,
-            score: grade.score,
-            signals: grade.signals,
-            action: "skipped_below_threshold",
-            actionReason: (error as Error).message,
-          });
-        }
+      if (grade.recommendation === "archive") {
+        proposalCount += 1;
+        entries.push({
+          skillId: skill.skillId,
+          name: skill.name,
+          recommendation: grade.recommendation,
+          score: grade.score,
+          signals: grade.signals,
+          action: "proposed_archive",
+          actionReason: "rubric_below_threshold",
+        });
       } else {
         entries.push({
           skillId: skill.skillId,
@@ -194,7 +193,7 @@ export class CuratorService {
           recommendation: grade.recommendation,
           score: grade.score,
           signals: grade.signals,
-          action: grade.recommendation === "archive" ? "skipped_below_threshold" : "none",
+          action: "none",
         });
       }
     }
@@ -211,6 +210,7 @@ export class CuratorService {
       immuneCount,
       scoredCount: entries.length,
       archivedCount,
+      proposalCount,
       prunedCount: 0,
       consolidationGroupCount: 0,
       entries,
@@ -221,6 +221,7 @@ export class CuratorService {
       type: "curator_run_completed",
       runId,
       archivedCount,
+      proposalCount,
       immuneCount,
       totalSkills: skills.length,
       reportDir: report.reportDir,
@@ -235,9 +236,9 @@ export class CuratorService {
     this.deps.storage.cronJobs.upsertIfChanged(
       {
         jobId: CURATOR_WEEKLY_JOB_ID,
-        name: "Autonomous Curator Weekly Run",
+        name: "Curator Weekly Report",
         action: "curator",
-        description: existing?.description ?? "Run the autonomous curator over the skill registry.",
+        description: "Generate a proposal-only curator report over the skill registry.",
         schedule: CURATOR_WEEKLY_SCHEDULE_LABEL,
         enabled: existing?.enabled ?? true,
         endAt: existing?.endAt,
@@ -261,7 +262,7 @@ export class CuratorService {
     const weekKey = toWeekKeyForTimezone(now, CURATOR_WEEKLY_TIME_ZONE);
     const lastWeekKey = this.deps.storage.systemSettings.get<string>(CURATOR_WEEKLY_DEDUP_SETTING_KEY)?.value;
     if (!options.force && lastWeekKey === weekKey) return;
-    await this.runCurator({ sync: false, triggerMode: "scheduled" });
+    await this.runCurator({ sync: false, dryRun: true, triggerMode: "scheduled" });
     this.deps.storage.systemSettings.set(CURATOR_WEEKLY_DEDUP_SETTING_KEY, weekKey);
     const finishedAt = this.deps.now().toISOString();
     this.deps.storage.cronJobs.upsert(
@@ -289,6 +290,14 @@ export class CuratorService {
     if (payload.triggerMode !== "scheduled" && payload.triggerMode !== "manual") {
       throw new Error("curator.tick: invalid payload triggerMode");
     }
-    await this.runCurator({ sync: false, triggerMode: "scheduled" });
+    await this.runCurator({ sync: false, dryRun: true, triggerMode: "scheduled" });
   }
+}
+
+function normalizeArchiveReason(reason?: string): string {
+  const trimmed = reason?.trim();
+  if (!trimmed) {
+    return "curator:archived";
+  }
+  return trimmed.startsWith("curator:archived") ? trimmed : `curator:archived ${trimmed}`;
 }

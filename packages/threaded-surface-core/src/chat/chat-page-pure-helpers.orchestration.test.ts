@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseGoalCommand, resolveMidTurnDisposition } from "./chat-page-pure-helpers";
+import { parseGoalCommand, parseQueueCommand, resolveMidTurnDisposition } from "./chat-page-pure-helpers";
 
 describe("resolveMidTurnDisposition", () => {
   it("returns 'idle' when no stream is active", () => {
@@ -27,5 +27,21 @@ describe("parseGoalCommand", () => {
     expect(parseGoalCommand("/goal status")).toEqual({ kind: "status" });
     expect(parseGoalCommand("/goal clear")).toEqual({ kind: "clear" });
     expect(parseGoalCommand("/goal")).toEqual({ kind: "status" });
+  });
+});
+
+describe("parseQueueCommand", () => {
+  it("recognizes local queue commands and strips routing prefixes", () => {
+    expect(parseQueueCommand("/queue steer stay scoped")).toEqual({ kind: "steer", text: "stay scoped" });
+    expect(parseQueueCommand("/queue followup run the tests")).toEqual({ kind: "followup", text: "run the tests" });
+    expect(parseQueueCommand("/queue collect add this to the batch")).toEqual({
+      kind: "collect",
+      text: "add this to the batch",
+    });
+  });
+
+  it("returns null for unknown queue subcommands", () => {
+    expect(parseQueueCommand("/queue ship it")).toBeNull();
+    expect(parseQueueCommand("/goal pause")).toBeNull();
   });
 });

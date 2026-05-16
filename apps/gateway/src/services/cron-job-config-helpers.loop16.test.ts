@@ -51,6 +51,10 @@ describe("cron job config helpers", () => {
       description: "Existing description",
       endAt: "2026-06-01T00:00:00.000Z",
       nextRunAt: futureNextRunAt,
+      workdir: "F:/existing",
+      contextFrom: "upstream-existing",
+      lastRunOutput: "existing output",
+      lastRunId: "run-existing",
     });
 
     await loadCronJobsFromConfig(host);
@@ -68,6 +72,10 @@ describe("cron job config helpers", () => {
         lastRunAt: "2026-05-01T00:00:00.000Z",
         nextRunAt: futureNextRunAt,
         schedule: "0 8 * * *",
+        workdir: "F:/existing",
+        contextFrom: "upstream-existing",
+        lastRunOutput: "existing output",
+        lastRunId: "run-existing",
       }),
     );
   });
@@ -86,6 +94,10 @@ describe("cron job config helpers", () => {
         endAt: undefined,
         lastRunAt: "2026-05-01T00:00:00.000Z",
         nextRunAt: "2026-05-01T00:15:00.000Z",
+        workdir: "F:/code/personal-ai",
+        contextFrom: "upstream-job",
+        lastRunOutput: "alert body",
+        lastRunId: "run-1",
       },
     ]);
 
@@ -103,7 +115,11 @@ describe("cron job config helpers", () => {
           schedule: "*/15 * * * *",
           enabled: true,
           lastRunAt: "2026-05-01T00:00:00.000Z",
+          lastRunOutput: "alert body",
+          lastRunId: "run-1",
           nextRunAt: "2026-05-01T00:15:00.000Z",
+          workdir: "F:/code/personal-ai",
+          contextFrom: "upstream-job",
         },
       ],
     });

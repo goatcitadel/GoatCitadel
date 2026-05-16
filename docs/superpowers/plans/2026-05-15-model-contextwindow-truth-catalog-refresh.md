@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `LlmModelRecord` carry authoritative `contextWindow` and `outputTokenLimit`, source them from a versioned manifest, surface the active model's window across `/status` surfaces, clamp compaction summary reserves to the active model's output cap, and refresh the example provider catalog (xAI Grok OAuth, DeepSeek v4-pro, Kimi K2.6 rename, ChatGPT Instant alias).
+**Goal:** Make `LlmModelRecord` carry catalog-backed `contextWindow` and `outputTokenLimit`, source them from a versioned manifest/probe metadata path, surface the active model's window across `/status` surfaces when known, clamp compaction summary reserves to the active model's output cap, and refresh the example provider catalog (xAI API-key provider, DeepSeek v4-pro, Kimi K2.6 rename, ChatGPT Instant alias).
 
 **Architecture:**
 - A new JSON manifest (`config/llm-model-metadata.json`) keyed by `<providerId>/<modelId>` glob entries (with `*` wildcard) returns `{contextWindow, outputTokenLimit, thinking?}`.
@@ -10,7 +10,7 @@
 - `apps/gateway/src/services/llm-service.ts` loads the manifest at construction (with `process.env`-override path), exposes `enrichModelMetadata(providerId, model)` and `clampSummaryReserveTokens(modelMetadata, requested)`, and decorates every `LlmModelRecord` it returns through `listModels`/`previewModels` with metadata.
 - `apps/gateway/src/services/chat-compaction.ts` gets a pure `clampSummaryReserveTokens(requested, outputTokenLimit)` helper (returns `{value, clamped, warning?}`).
 - `/status` surfaces (gateway runtime endpoint, doctor engine probe, admin-cli, TUI status, Mission Control `ChatModelPicker`) read the active model metadata via the runtime config.
-- `config/llm-providers.example.json` is updated with xAI Grok OAuth, ChatGPT Instant alias override, DeepSeek v4-pro, Kimi rename to k2.6.
+- `config/llm-providers.example.json` is updated with an xAI Grok API-key provider, ChatGPT Instant alias override, DeepSeek v4-pro, Kimi rename to k2.6.
 
 **Tech Stack:** TypeScript, Node 22, Fastify, Vitest, Zod, undici, pnpm workspaces.
 
@@ -29,7 +29,7 @@
 - `apps/gateway/src/admin-cli.ts` — surface contextWindow / outputTokenLimit in the LLM status section if present.
 - `apps/gateway/src/tui/main-helpers.ts` — display contextWindow on the active-model status line (if a status line exists; otherwise add to llm summary helper).
 - `packages/mission-control-shared/src/components/ChatModelPicker.tsx` — show contextWindow on the active-model row when present.
-- `config/llm-providers.example.json` — xAI Grok OAuth provider, ChatGPT Instant alias override, DeepSeek v4-pro (replace `deepseek-v4-flash`), rename `kimi-k2.5`→`kimi-k2.6`, ensure `openai-codex` knownModels suppress 5.1/5.2/5.3.
+- `config/llm-providers.example.json` — xAI Grok API-key provider, ChatGPT Instant alias override, DeepSeek v4-pro (replace `deepseek-v4-flash`), rename `kimi-k2.5`→`kimi-k2.6`, ensure `openai-codex` knownModels suppress 5.1/5.2/5.3.
 
 **Create:**
 - `config/llm-model-metadata.json` — versioned manifest.
@@ -49,7 +49,7 @@
 - [ ] **Step 1: Verify worktree is clean**
 
 ```bash
-git -C /f/code/personal-ai/.claude/worktrees/jolly-allen-0fad0f status --short
+git status --short
 ```
 
 Expected: empty output (clean tree).
@@ -57,7 +57,7 @@ Expected: empty output (clean tree).
 - [ ] **Step 2: Run targeted baseline tests so we know they're green BEFORE we touch anything**
 
 ```bash
-cd /f/code/personal-ai/.claude/worktrees/jolly-allen-0fad0f && pnpm --filter @goatcitadel/contracts typecheck && pnpm --filter @goatcitadel/gateway typecheck
+pnpm --filter @goatcitadel/contracts typecheck && pnpm --filter @goatcitadel/gateway typecheck
 ```
 
 Expected: typecheck passes both packages.
@@ -196,7 +196,7 @@ Expected: PASS.
 - [ ] **Step 5: Run full contracts typecheck**
 
 ```bash
-cd /f/code/personal-ai/.claude/worktrees/jolly-allen-0fad0f && pnpm --filter @goatcitadel/contracts typecheck
+pnpm --filter @goatcitadel/contracts typecheck
 ```
 
 Expected: PASS.
@@ -290,7 +290,7 @@ Expected: PASS.
 - [ ] **Step 7: Check that no exhaustive switch on LlmApiStyle is broken**
 
 ```bash
-cd /f/code/personal-ai/.claude/worktrees/jolly-allen-0fad0f && pnpm --filter @goatcitadel/gateway typecheck
+pnpm --filter @goatcitadel/gateway typecheck
 ```
 
 Expected: PASS. If TS complains about non-exhaustive switches anywhere, treat each as a follow-up — either add a default-throws branch (preferred for forward-compat enums) or list the new style. List each affected file in the commit message.
@@ -1081,7 +1081,7 @@ function probeActiveModelMetadata(deps: DoctorProbeDeps): DoctorFinding[] {
       {
         id: "llm-active-model-metadata",
         severity: "warning",
-        message: `Active model ${runtime.activeProviderId}/${runtime.activeModel} has no contextWindow in llm-model-metadata.json. /status will not be able to display an authoritative limit.`,
+        message: `Active model ${runtime.activeProviderId}/${runtime.activeModel} has no contextWindow in llm-model-metadata.json. /status will omit the catalog-backed limit unless another provider probe supplies one.`,
       },
     ];
   }
@@ -1202,7 +1202,7 @@ In the active-model display block, conditionally render a small badge/tooltip:
 
 ```tsx
 {runtime.activeModelContextWindow !== undefined && (
-  <span className="text-xs text-muted-foreground" title="Model context window">
+  <span className="text-xs text-muted-foreground" title="Catalog/probe context window">
     {formatContextWindow(runtime.activeModelContextWindow)}
   </span>
 )}
@@ -1221,7 +1221,7 @@ Expected: PASS.
 - [ ] **Step 16: Run all touched packages typecheck**
 
 ```bash
-cd /f/code/personal-ai/.claude/worktrees/jolly-allen-0fad0f && pnpm --filter @goatcitadel/gateway typecheck && pnpm --filter @goatcitadel/mission-control-shared typecheck
+pnpm --filter @goatcitadel/gateway typecheck && pnpm --filter @goatcitadel/mission-control-shared typecheck
 ```
 
 Expected: PASS.
@@ -1246,7 +1246,7 @@ git commit -m "feat(gateway,mc-shared): surface active model contextWindow on do
 - [ ] **Step 1: Capture current example config tests**
 
 ```bash
-cd /f/code/personal-ai/.claude/worktrees/jolly-allen-0fad0f && grep -rn "kimi-k2\." packages/contracts apps/gateway/src config | head -20
+grep -rn "kimi-k2\." packages/contracts apps/gateway/src config | head -20
 ```
 
 Note every k2.5 reference. We will rename to k2.6 in lockstep.
@@ -1269,7 +1269,7 @@ describe("config/llm-providers.example.json catalog", () => {
   ) as LlmConfigFile;
   const ids = config.providers.map((p) => p.providerId);
 
-  it("includes the xAI Grok OAuth provider", () => {
+  it("includes the xAI Grok API-key provider", () => {
     expect(ids).toContain("xai");
     const xai = config.providers.find((p) => p.providerId === "xai");
     expect(xai?.defaultModel).toBe("grok-4.3");
@@ -1313,7 +1313,7 @@ Apply these changes:
 ```json
 {
   "providerId": "xai",
-  "label": "xAI Grok (SuperGrok OAuth)",
+  "label": "xAI Grok (API key)",
   "baseUrl": "https://api.x.ai/v1",
   "apiStyle": "openai-chat-completions",
   "defaultModel": "grok-4.3",
@@ -1322,7 +1322,7 @@ Apply these changes:
 }
 ```
 
-(authMode=`api-key` is the default; the manifest's `thinking: "off"` clamp handles the reasoning-effort issue. If/when SuperGrok OAuth is wired in code, a follow-up adds `xai-oauth` to `LlmProviderAuthMode`.)
+(authMode=`api-key` is the default; the manifest's `thinking: "off"` clamp handles the reasoning-effort issue. If/when xAI OAuth is wired in code, a follow-up adds `xai-oauth` to `LlmProviderAuthMode`.)
 
 - [ ] **Step 5: Update `packages/contracts/src/provider-templates.ts`**
 
@@ -1335,7 +1335,7 @@ Mirror the example config:
 ```typescript
 {
   providerId: "xai",
-  label: "xAI Grok (SuperGrok OAuth)",
+  label: "xAI Grok (API key)",
   baseUrl: "https://api.x.ai/v1",
   defaultModel: "grok-4.3",
   apiStyle: "openai-chat-completions",
@@ -1346,7 +1346,7 @@ Mirror the example config:
 - [ ] **Step 6: Update existing references**
 
 ```bash
-cd /f/code/personal-ai/.claude/worktrees/jolly-allen-0fad0f && grep -rn "kimi-k2\.5" --include="*.ts" --include="*.tsx" --include="*.json" .
+grep -rn "kimi-k2\.5" --include="*.ts" --include="*.tsx" --include="*.json" .
 ```
 
 For each remaining reference (test fixtures, command parser tests, etc.), update to `kimi-k2.6` UNLESS the test is specifically asserting backward compatibility — in that case keep it. Pay attention to `chat-model-command.test.ts` which uses `moonshot/kimi-k2`.
@@ -1362,7 +1362,7 @@ Expected: PASS.
 - [ ] **Step 8: Run contracts + gateway + mission-control test suites**
 
 ```bash
-cd /f/code/personal-ai/.claude/worktrees/jolly-allen-0fad0f && pnpm --filter @goatcitadel/contracts test && pnpm --filter @goatcitadel/gateway test --run -- src/services/llm-service.test.ts src/services/llm-providers-example.catalog.test.ts src/services/chat-model-command.test.ts
+pnpm --filter @goatcitadel/contracts test && pnpm --filter @goatcitadel/gateway test --run -- src/services/llm-service.test.ts src/services/llm-providers-example.catalog.test.ts src/services/chat-model-command.test.ts
 ```
 
 Expected: green. Any failures here are likely stale references to `kimi-k2.5` or `deepseek-v4-flash` — fix and re-run.
@@ -1434,7 +1434,7 @@ git commit -m "feat(contracts): list openai/chat-latest as ChatGPT Instant alias
 - [ ] **Step 1: Run full repo typecheck**
 
 ```bash
-cd /f/code/personal-ai/.claude/worktrees/jolly-allen-0fad0f && pnpm -r typecheck
+pnpm -r typecheck
 ```
 
 Expected: PASS.
@@ -1534,7 +1534,7 @@ Expected: PR URL returned.
 
 - DeepSeek v4-pro empty `reasoning_content` placeholder strip — needs adapter work in `llm-provider-adapter.ts`; tracked as follow-up.
 - Actual Bedrock adapter implementation — only the enum is added; concrete transport will be a follow-up.
-- xAI SuperGrok OAuth flow — only the provider entry + manifest are added; OAuth wiring is follow-up.
+- xAI OAuth flow — not included; this plan only adds the API-key provider entry + manifest metadata, with OAuth wiring as follow-up.
 - Live smoke probes against real APIs — cannot be performed from within this session; verification report lists them for the user.
 
 **Placeholder scan:** all code blocks contain real types and concrete values. Where the actual constructor / probe shape differs from the plan's illustrative form, each task explicitly instructs the implementer to inspect existing code first and calibrate.

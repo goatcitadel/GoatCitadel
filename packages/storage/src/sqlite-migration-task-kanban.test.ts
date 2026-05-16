@@ -26,7 +26,7 @@ describe("task_kanban_columns migration", () => {
       );
     `);
 
-    __sqliteInternals.applySchemaMigrationForTest(79, db);
+    __sqliteInternals.applySchemaMigrationForTest(82, db);
 
     const columns = new Set(
       (db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map((row) => row.name),
@@ -39,8 +39,8 @@ describe("task_kanban_columns migration", () => {
   it("is idempotent", () => {
     const db = new DatabaseSync(":memory:");
     db.exec("CREATE TABLE tasks (task_id TEXT PRIMARY KEY);");
-    __sqliteInternals.applySchemaMigrationForTest(79, db);
-    __sqliteInternals.applySchemaMigrationForTest(79, db); // must not throw
+    __sqliteInternals.applySchemaMigrationForTest(82, db);
+    __sqliteInternals.applySchemaMigrationForTest(82, db); // must not throw
     const columns = new Set(
       (db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map((row) => row.name),
     );

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Archive, Play, RefreshCw, ShieldCheck } from "lucide-react";
+import { Archive, RefreshCw, ShieldCheck } from "lucide-react";
 import type { CuratorSkillStatusItem, CuratorStatusResponse } from "@goatcitadel/contracts";
 import { archiveCuratorSkill, fetchCuratorStatus, runCurator } from "@goatcitadel/mission-control-shared/api/client";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
 import "../native-routes.css";
@@ -12,6 +13,7 @@ export function CuratorRoutePage({ route: _route, navigate: _navigate, activeWor
   const [loading, setLoading] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [pendingArchive, setPendingArchive] = useState<CuratorSkillStatusItem | null>(null);
 
   async function load() {
     setLoading(true);
@@ -46,13 +48,23 @@ export function CuratorRoutePage({ route: _route, navigate: _navigate, activeWor
     };
   }, [activeWorkspaceId]);
 
-  async function handleArchive(item: CuratorSkillStatusItem) {
+  function handleArchive(item: CuratorSkillStatusItem) {
     if (item.immune) return;
+    setPendingArchive(item);
+  }
+
+  async function confirmArchive() {
+    if (!pendingArchive || pendingArchive.immune) return;
     setActionBusy(true);
     setNotice(null);
     try {
-      await archiveCuratorSkill({ skillId: item.skillId, reason: "manual archive from Mission Control" });
-      setNotice(`Archived ${item.name}`);
+      await archiveCuratorSkill({
+        skillId: pendingArchive.skillId,
+        reason: "manual archive from Mission Control",
+        confirm: true,
+      });
+      setNotice(`Archived ${pendingArchive.name}`);
+      setPendingArchive(null);
       await load();
     } catch (err) {
       setError((err as Error).message);
@@ -61,13 +73,13 @@ export function CuratorRoutePage({ route: _route, navigate: _navigate, activeWor
     }
   }
 
-  async function handleRun(dryRun: boolean) {
+  async function handleRun() {
     setActionBusy(true);
     setNotice(null);
     try {
-      const result = await runCurator({ sync: true, dryRun });
+      const result = await runCurator({ sync: true, dryRun: true });
       setNotice(
-        `${dryRun ? "Dry run" : "Run"} complete: ${result.report?.archivedCount ?? 0} archived, ${result.report?.immuneCount ?? 0} immune`,
+        `Report complete: ${result.report?.proposalCount ?? 0} archive proposals, ${result.report?.immuneCount ?? 0} immune`,
       );
       await load();
     } catch (err) {
@@ -77,14 +89,14 @@ export function CuratorRoutePage({ route: _route, navigate: _navigate, activeWor
     }
   }
 
-  const subtitle = data ? `${data.cycleDays}-day cycle · ${data.items.length} skills` : "Autonomous skill grader";
+  const subtitle = data ? `${data.cycleDays}-day cycle · ${data.items.length} skills` : "Proposal-only skill grader";
 
   return (
     <NativePageFrame
       icon={ShieldCheck}
       kicker="Library"
-      title="Autonomous Curator"
-      description="Ranked skill status, immunity flags, and recommendations from the background curator cycle."
+      title="Skill Curator"
+      description="Ranked skill status, immunity flags, and archive proposals from the background curator report cycle."
       loading={false}
       error={null}
     >
@@ -103,23 +115,9 @@ export function CuratorRoutePage({ route: _route, navigate: _navigate, activeWor
                 <RefreshCw className="h-4 w-4" />
                 Refresh
               </button>
-              <button
-                type="button"
-                className="gc-button subtle"
-                onClick={() => void handleRun(true)}
-                disabled={loading || actionBusy}
-              >
-                <Play className="h-4 w-4" />
-                Dry run
-              </button>
-              <button
-                type="button"
-                className="gc-button"
-                onClick={() => void handleRun(false)}
-                disabled={loading || actionBusy}
-              >
+              <button type="button" className="gc-button subtle" onClick={handleRun} disabled={loading || actionBusy}>
                 <ShieldCheck className="h-4 w-4" />
-                Run now
+                Generate report
               </button>
             </div>
           }
@@ -136,7 +134,7 @@ export function CuratorRoutePage({ route: _route, navigate: _navigate, activeWor
           ) : null}
           {!error && !notice ? (
             <p className="mc-next-directory-empty">
-              {loading ? "Loading curator status…" : "Use the actions above to refresh or trigger a curator run."}
+              {loading ? "Loading curator status…" : "Use the actions above to refresh or generate a curator report."}
             </p>
           ) : null}
         </NativeCard>
@@ -174,7 +172,7 @@ export function CuratorRoutePage({ route: _route, navigate: _navigate, activeWor
                       <button
                         type="button"
                         className="gc-button subtle"
-                        onClick={() => void handleArchive(item)}
+                        onClick={() => handleArchive(item)}
                         disabled={actionBusy}
                         aria-label={`Archive ${item.name}`}
                       >
@@ -191,6 +189,25 @@ export function CuratorRoutePage({ route: _route, navigate: _navigate, activeWor
           )}
         </NativeCard>
       </NativeGrid>
+      <ConfirmModal
+        open={pendingArchive !== null}
+        title="Archive skill?"
+        message={
+          pendingArchive
+            ? `Archive ${pendingArchive.name}? This disables the skill until you restore or re-enable it.`
+            : ""
+        }
+        confirmLabel="Archive"
+        danger
+        pending={actionBusy}
+        disableDismiss={actionBusy}
+        onCancel={() => {
+          if (!actionBusy) {
+            setPendingArchive(null);
+          }
+        }}
+        onConfirm={confirmArchive}
+      />
     </NativePageFrame>
   );
 }

@@ -173,12 +173,12 @@ export function ChatModelPicker({
       {typeof activeModelContextWindow === "number" ? (
         <span
           className="chat-model-picker-context-badge text-xs text-muted-foreground"
-          title={`Model context window: ${formatNumber(activeModelContextWindow)} tokens${
+          title={`Catalog/probe context window: ${formatNumber(activeModelContextWindow)} tokens${
             typeof activeModelOutputTokenLimit === "number"
               ? ` · Output limit: ${formatNumber(activeModelOutputTokenLimit)} tokens`
               : ""
           }`}
-          aria-label="Active model context window"
+          aria-label="Active model catalog/probe context window"
         >
           {formatContextWindow(activeModelContextWindow)}
         </span>

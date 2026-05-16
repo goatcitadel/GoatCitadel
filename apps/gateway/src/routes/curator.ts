@@ -2,6 +2,9 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { sendRouteError } from "./_error-handler.js";
 
+const CURATOR_PROPOSAL_ONLY_MESSAGE =
+  "Curator runs are proposal-only; use the confirmed curator archive endpoint to mutate skills.";
+
 export const curatorRoutes: FastifyPluginAsync = async (fastify) => {
   const curator = fastify.services.curator;
 
@@ -15,6 +18,7 @@ export const curatorRoutes: FastifyPluginAsync = async (fastify) => {
 
   const archiveSchema = z.object({
     skillId: z.string().min(1),
+    confirm: z.literal(true),
     reason: z.string().trim().max(300).optional(),
     actorId: z.string().optional(),
   });
@@ -57,12 +61,16 @@ export const curatorRoutes: FastifyPluginAsync = async (fastify) => {
 
   const runSchema = z.object({
     sync: z.boolean().optional(),
-    dryRun: z.boolean().optional(),
+    dryRun: z.literal(true).optional(),
     actorId: z.string().optional(),
     triggerMode: z.enum(["manual", "scheduled", "synchronous"]).optional(),
   });
   fastify.post("/api/v1/curator/run", async (request, reply) => {
-    const parsed = runSchema.safeParse(request.body ?? {});
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    if (body.dryRun === false) {
+      return reply.code(400).send({ error: CURATOR_PROPOSAL_ONLY_MESSAGE });
+    }
+    const parsed = runSchema.safeParse(body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }

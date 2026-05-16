@@ -290,6 +290,8 @@ export const AssistantConfigInputSchema = z
         model: z.string().optional(),
         timeoutMs: z.number().optional(),
         maxPayloadChars: z.number().optional(),
+        autoRejectOnDanger: z.boolean().optional(),
+        autoRejectDangerThreshold: z.enum(["danger", "nuclear"]).optional(),
       })
       .passthrough()
       .optional(),
@@ -298,6 +300,7 @@ export const AssistantConfigInputSchema = z
         enabled: z.boolean().optional(),
         elevateOnDanger: z.enum(["caution", "danger", "nuclear"]).optional(),
         autoRejectOnDanger: z.boolean().optional(),
+        autoRejectDangerThreshold: z.enum(["danger", "nuclear"]).optional(),
       })
       .passthrough()
       .optional(),
@@ -575,7 +578,17 @@ export const CronJobSchema = z
     jobId: z.string(),
     name: z.string(),
     action: z
-      .enum(["task", "improvement", "backup", "memory_flush", "cost_report", "update_review", "watchdog", "no_agent"])
+      .enum([
+        "task",
+        "improvement",
+        "curator",
+        "backup",
+        "memory_flush",
+        "cost_report",
+        "update_review",
+        "watchdog",
+        "no_agent",
+      ])
       .default("task"),
     actionConfig: z.record(z.string(), z.unknown()).optional(),
     description: z.string().optional(),
@@ -584,6 +597,8 @@ export const CronJobSchema = z
     endAt: z.string().optional(),
     workdir: z.string().optional(),
     contextFrom: z.string().optional(),
+    lastRunOutput: z.string().optional(),
+    lastRunId: z.string().optional(),
   })
   .passthrough();
 

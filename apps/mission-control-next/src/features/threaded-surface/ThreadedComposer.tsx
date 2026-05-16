@@ -86,13 +86,24 @@ function formatUsageLabel(thread: MissionThreadedActiveSessionSurfaceProps["thre
 }
 
 const COMPOSER_KILL_SWITCH_KEY = "mc-next:composer-v2";
+const COMPOSER_KILL_SWITCH_FALSE_VALUES = new Set(["off", "false", "0", "no", "disabled"]);
+const IN_PROGRESS_MEMORY_TRACE_STATUSES = new Set([
+  "pending",
+  "queued",
+  "running",
+  "streaming",
+  "in_progress",
+  "waiting_for_approval",
+  "waiting_for_user_input",
+]);
 
 function readComposerV2(): boolean {
   if (typeof window === "undefined") {
     return true;
   }
   try {
-    return window.localStorage.getItem(COMPOSER_KILL_SWITCH_KEY) !== "off";
+    const value = window.localStorage.getItem(COMPOSER_KILL_SWITCH_KEY)?.trim().toLowerCase();
+    return !value || !COMPOSER_KILL_SWITCH_FALSE_VALUES.has(value);
   } catch {
     return true;
   }
@@ -123,6 +134,19 @@ function isImageAttachment(attachment: PendingAttachment): boolean {
     mimeType.includes("image") ||
     /\.(png|apng|jpe?g|gif|webp|avif|bmp|svg)$/i.test(fileName)
   );
+}
+
+function formatHistoricalMemoryLabel(thread: MissionThreadedActiveSessionSurfaceProps["thread"]): string | undefined {
+  const lastTurn = thread?.turns?.at(-1);
+  const memoryMode = lastTurn?.trace?.memoryMode?.trim();
+  if (!memoryMode || memoryMode === "off") {
+    return undefined;
+  }
+  const status = lastTurn?.trace?.status;
+  if (status && IN_PROGRESS_MEMORY_TRACE_STATUSES.has(status)) {
+    return undefined;
+  }
+  return `Last turn: ${memoryMode}`;
 }
 
 function PendingImagePreview({ attachment }: { attachment: PendingAttachment }) {
@@ -249,10 +273,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const composerV2Enabled = useComposerV2Enabled();
   const contextStripMode = toContextStripMode(props.mode);
   const contextStripModel = currentRouteLabel ?? props.trust?.providerModelSummary ?? "Routing pending";
-  // Memory mode lives per-turn on trace.memoryMode; surface the most recent if non-off.
-  // TODO(live-data): wire to a dedicated current-memory-mode prop once exposed by the core.
-  const recentMemoryMode = props.thread?.turns?.at(-1)?.trace?.memoryMode;
-  const memoryLabel = recentMemoryMode && recentMemoryMode !== "off" ? recentMemoryMode : undefined;
+  const memoryLabel = formatHistoricalMemoryLabel(props.thread);
   const plusActions = [
     {
       label: props.voiceBusy ? "Voice listening..." : props.voiceTalkActive ? "Stop voice talk" : "Start voice talk",

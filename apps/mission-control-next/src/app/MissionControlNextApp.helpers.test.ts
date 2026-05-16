@@ -55,10 +55,11 @@ describe("MissionControlNextApp shell helpers", () => {
         item("costs"),
         item("runtime"),
         item("diagnostics"),
+        item("kanban"),
       ]).map((group) => group.items.map((entry) => entry.section)),
     ).toEqual([
       ["sessions", "schedules"],
-      ["improvement", "notifications", "costs", "runtime", "diagnostics"],
+      ["improvement", "notifications", "costs", "runtime", "diagnostics", "kanban"],
     ]);
     expect(buildRailSections("chat", [item("thread")])).toEqual([{ id: "chat-primary", items: [item("thread")] }]);
   });

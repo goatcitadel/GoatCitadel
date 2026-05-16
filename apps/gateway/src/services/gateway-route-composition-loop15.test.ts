@@ -322,7 +322,7 @@ describe("route composition loop 15 delegates", () => {
     expect(deps.capabilityPacks.listPacks()).toEqual([{ packId: "pack-1" }]);
     expect(deps.capabilityPacks.previewPack("pack-1")).toEqual({ packId: "pack-1", preview: true });
     expect(deps.curator.listCuratorStatus()).toMatchObject({ cycleDays: 7 });
-    expect(deps.curator.archiveCuratorSkill({ skillId: "skill-1" })).toMatchObject({ archived: true });
+    expect(deps.curator.archiveCuratorSkill({ skillId: "skill-1", confirm: true })).toMatchObject({ archived: true });
     expect(deps.curator.pruneCuratorSkill({ skillId: "skill-1", confirm: true })).toMatchObject({ pruned: true });
     expect(deps.curator.listCuratorArchived()).toMatchObject({ items: [] });
     expect(deps.evidence.listEnvelopes({ limit: 1 })).toEqual({ input: { limit: 1 }, items: [] });

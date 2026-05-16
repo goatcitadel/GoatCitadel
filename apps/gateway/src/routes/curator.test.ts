@@ -94,10 +94,23 @@ describe("curator routes", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/v1/curator/archive",
-      payload: { skillId: "skill-x", reason: "test" },
+      payload: { skillId: "skill-x", reason: "test", confirm: true },
     });
     expect(res.statusCode).toBe(200);
-    expect(curator.archive).toHaveBeenCalledWith({ skillId: "skill-x", reason: "test" });
+    expect(curator.archive).toHaveBeenCalledWith({ skillId: "skill-x", reason: "test", confirm: true });
+  });
+
+  it("POST /api/v1/curator/archive requires confirm: true", async () => {
+    const curator = makeMockCurator();
+    app = await makeApp(curator);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/curator/archive",
+      payload: { skillId: "skill-x", reason: "test" },
+    });
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(res.statusCode).toBeLessThan(500);
+    expect(curator.archive).not.toHaveBeenCalled();
   });
 
   it("POST /api/v1/curator/archive rejects missing skillId", async () => {
@@ -155,5 +168,31 @@ describe("curator routes", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(curator.run).toHaveBeenCalledWith({ sync: true, dryRun: true, triggerMode: "manual" });
+  });
+
+  it("POST /api/v1/curator/run accepts an empty body as proposal-only", async () => {
+    const curator = makeMockCurator();
+    app = await makeApp(curator);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/curator/run",
+      payload: {},
+    });
+    expect(res.statusCode).toBe(200);
+    expect(curator.run).toHaveBeenCalledWith({});
+  });
+
+  it("POST /api/v1/curator/run rejects dryRun: false", async () => {
+    const curator = makeMockCurator();
+    app = await makeApp(curator);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/curator/run",
+      payload: { dryRun: false },
+    });
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(res.statusCode).toBeLessThan(500);
+    expect(res.json()).toMatchObject({ error: expect.stringMatching(/proposal-only/i) });
+    expect(curator.run).not.toHaveBeenCalled();
   });
 });

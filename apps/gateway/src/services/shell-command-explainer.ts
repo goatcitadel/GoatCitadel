@@ -113,7 +113,9 @@ export function applyShellExplainerPolicy(
     }
   }
 
-  const autoReject = policy.autoRejectOnDanger === true;
+  const rejectThreshold = policy.autoRejectDangerThreshold ?? "danger";
+  const effectiveRiskLevel = elevatedRiskLevel ?? input.riskLevel;
+  const autoReject = policy.autoRejectOnDanger === true && RISK_RANK[effectiveRiskLevel] >= RISK_RANK[rejectThreshold];
   const autoRejectReason = autoReject
     ? `Auto-rejected: shell command "${dangerExplanations[0]?.command ?? "(unknown)"}" triggered danger policy`
     : undefined;

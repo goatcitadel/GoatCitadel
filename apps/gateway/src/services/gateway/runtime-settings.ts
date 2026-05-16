@@ -27,6 +27,8 @@ export interface RuntimeSettings {
     model?: string;
     timeoutMs: number;
     maxPayloadChars: number;
+    autoRejectOnDanger?: boolean;
+    autoRejectDangerThreshold?: "danger" | "nuclear";
   };
   memory: {
     enabled: boolean;

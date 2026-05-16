@@ -14,7 +14,7 @@ describe("dashboard cron routes", () => {
   });
 
   it("creates a cron job", async () => {
-    const createCronJob = vi.fn((input: { jobId: string; name: string; schedule: string; enabled?: boolean }) => ({
+    const createCronJob = vi.fn((input: Record<string, unknown>) => ({
       ...input,
       enabled: input.enabled ?? true,
     }));
@@ -29,8 +29,14 @@ describe("dashboard cron routes", () => {
       payload: {
         jobId: "nightly-maintenance",
         name: "Nightly Maintenance",
+        action: "no_agent",
+        actionConfig: { noAgent: { command: "pnpm", args: ["verify:fast"] } },
         schedule: "0 2 * * * America/Los_Angeles",
         enabled: true,
+        workdir: "F:/code/personal-ai",
+        contextFrom: "daily-review",
+        lastRunOutput: "previous",
+        lastRunId: "run-1",
       },
     });
 
@@ -38,8 +44,43 @@ describe("dashboard cron routes", () => {
     expect(createCronJob).toHaveBeenCalledWith({
       jobId: "nightly-maintenance",
       name: "Nightly Maintenance",
+      action: "no_agent",
+      actionConfig: { noAgent: { command: "pnpm", args: ["verify:fast"] } },
       schedule: "0 2 * * * America/Los_Angeles",
       enabled: true,
+      workdir: "F:/code/personal-ai",
+      contextFrom: "daily-review",
+      lastRunOutput: "previous",
+      lastRunId: "run-1",
+    });
+  });
+
+  it("updates cron fields without schema rejection", async () => {
+    const updateCronJob = vi.fn((jobId: string, input: Record<string, unknown>) => ({ jobId, ...input }));
+
+    app = Fastify();
+    app.decorate("services", { cron: { updateCronJob } } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/cron/jobs/nightly-maintenance",
+      payload: {
+        action: "curator",
+        workdir: null,
+        contextFrom: "daily-review",
+        lastRunOutput: null,
+        lastRunId: "run-2",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(updateCronJob).toHaveBeenCalledWith("nightly-maintenance", {
+      action: "curator",
+      workdir: null,
+      contextFrom: "daily-review",
+      lastRunOutput: null,
+      lastRunId: "run-2",
     });
   });
 

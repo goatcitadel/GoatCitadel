@@ -124,7 +124,7 @@ describe("MediaVoiceService managed voice runtime operations", () => {
       const service = new MediaVoiceService(createDeps({ systemSettings }));
       await expect(
         service.transcribeVoice({
-          bytesBase64: Buffer.from("not-audio").toString("base64"),
+          bytesBase64: Buffer.from("524946462400000057415645666d7420", "hex").toString("base64"),
           mimeType: "audio/wav",
         }),
       ).rejects.toThrow("Local STT is not configured");

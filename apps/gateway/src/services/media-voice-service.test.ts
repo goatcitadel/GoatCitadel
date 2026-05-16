@@ -44,6 +44,13 @@ describe("MediaVoiceService", () => {
       "--no-gpu",
     ]);
     expect(__mediaVoiceServiceInternals.parseVoiceCliArgs("   ")).toEqual([]);
+    expect(() => __mediaVoiceServiceInternals.decodeStrictBase64("not valid base64!")).toThrow(
+      "outside the base64 alphabet",
+    );
+    expect(__mediaVoiceServiceInternals.validateVoiceTranscriptionPayload(wavBytes(), "audio/wav")).toBeUndefined();
+    expect(() =>
+      __mediaVoiceServiceInternals.validateVoiceTranscriptionPayload(Buffer.from("not-audio"), "audio/wav"),
+    ).toThrow("sniffed text");
     expect(__mediaVoiceServiceInternals.extFromMimeType("audio/wav")).toBe(".wav");
     expect(__mediaVoiceServiceInternals.extFromMimeType("audio/mpeg")).toBe(".mp3");
     expect(__mediaVoiceServiceInternals.extFromMimeType("audio/ogg")).toBe(".ogg");
@@ -315,10 +322,13 @@ describe("MediaVoiceService", () => {
     process.env.GOATCITADEL_WHISPER_CPP_BIN = process.execPath;
 
     try {
-      await expect(service.transcribeVoice({ bytesBase64: "" })).rejects.toThrow("Audio payload is empty");
+      await expect(service.transcribeVoice({ bytesBase64: "" })).rejects.toThrow("Base64 payload is empty");
+      await expect(service.transcribeVoice({ bytesBase64: "AAAA", mimeType: "text/plain" })).rejects.toThrow(
+        "requires audio or video",
+      );
       await expect(
         service.transcribeVoice({
-          bytesBase64: Buffer.from("not-audio").toString("base64"),
+          bytesBase64: wavBytes().toString("base64"),
           mimeType: "audio/wav",
           language: " en ",
         }),
@@ -492,6 +502,10 @@ function createDeps(
     readChatAttachmentContent: vi.fn(),
     getChatAttachment: overrides.getChatAttachment ?? vi.fn(),
   };
+}
+
+function wavBytes() {
+  return Buffer.from("524946462400000057415645666d7420", "hex");
 }
 
 function createSystemSettings() {

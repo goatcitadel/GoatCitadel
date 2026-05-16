@@ -448,7 +448,7 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
           <SetupCenterPanel route={route} navigate={navigate} onboarding={data} />
           <SettingsPanel
             title="First-run setup"
-            subtitle="Live readiness for the first trustworthy send."
+            subtitle="Configured readiness for the first trustworthy send."
             stats={[
               { label: "Status", value: data.completed ? "Complete" : "Open" },
               { label: "Provider", value: data.settings.llm.activeProviderId || "Unset" },
@@ -5766,7 +5766,7 @@ function SettingsPosturePanel({
 }: {
   settings: Awaited<ReturnType<typeof fetchSettings>> | null;
   mcpServers: McpServerRecord[];
-  integrations: Array<{ connectionId?: string; status?: string; pluginId?: string }>;
+  integrations: Array<{ connectionId?: string; enabled?: boolean; status?: string; pluginId?: string }>;
   workspaces: Array<{ workspaceId?: string; name?: string }>;
   onNavigate: (section: "providers" | "mcp" | "integrations" | "access") => void;
 }) {
@@ -5785,19 +5785,14 @@ function SettingsPosturePanel({
 
   const mcpRows: SettingsPostureCardRow[] = mcpServers.slice(0, 4).map((server) => ({
     name: server.label,
-    state: server.enabled ? "connected" : "disabled",
+    state: server.enabled ? "enabled" : "disabled",
     tone: server.enabled ? "safe" : "muted",
   }));
 
   const integrationRows: SettingsPostureCardRow[] = integrations.slice(0, 4).map((connection) => ({
     name: connection.pluginId ?? connection.connectionId ?? "integration",
-    state: connection.status ?? "unknown",
-    tone:
-      connection.status === "ready" || connection.status === "connected"
-        ? "safe"
-        : connection.status === "error" || connection.status === "failed"
-          ? "danger"
-          : "caution",
+    state: connection.enabled === false ? "disabled" : "configured",
+    tone: connection.enabled === false ? "muted" : "safe",
   }));
 
   const identityRows: SettingsPostureCardRow[] = [
@@ -5816,7 +5811,7 @@ function SettingsPosturePanel({
   return (
     <SettingsPanel
       title="Active posture"
-      subtitle="Live status of providers, MCP servers, integrations, and identity at a glance."
+      subtitle="Configured and enabled posture for providers, MCP servers, integrations, and identity at a glance."
     >
       <div className="mc-next-settings-posture-grid">
         <SettingsPostureCard
@@ -5830,14 +5825,14 @@ function SettingsPosturePanel({
           title="MCP servers"
           count={mcpServers.length}
           rows={mcpRows}
-          emptyLabel="No MCP servers connected."
+          emptyLabel="No MCP servers configured."
           onOpen={() => onNavigate("mcp")}
         />
         <SettingsPostureCard
           title="Integrations"
           count={integrations.length}
           rows={integrationRows}
-          emptyLabel="No integrations connected."
+          emptyLabel="No integrations configured."
           onOpen={() => onNavigate("integrations")}
         />
         <SettingsPostureCard

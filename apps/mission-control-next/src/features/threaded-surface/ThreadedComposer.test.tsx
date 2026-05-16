@@ -264,6 +264,55 @@ describe("ThreadedComposer", () => {
     expect(markup).not.toContain("Planning mode is on");
   });
 
+  it("surfaces memory as historical last-turn state and omits empty or in-progress memory", () => {
+    const completedMemory = buildMarkup({
+      thread: {
+        sessionId: "session-1",
+        turns: [{ turnId: "turn-1", trace: { status: "completed", memoryMode: "workspace" } }],
+      },
+    });
+    expect(completedMemory).toContain("Last turn: workspace");
+
+    const runningMemory = buildMarkup({
+      thread: {
+        sessionId: "session-1",
+        turns: [{ turnId: "turn-1", trace: { status: "running", memoryMode: "workspace" } }],
+      },
+    });
+    expect(runningMemory).not.toContain("Last turn: workspace");
+
+    const emptyMemory = buildMarkup({
+      thread: {
+        sessionId: "session-1",
+        turns: [{ turnId: "turn-1", trace: { status: "completed", memoryMode: "off" } }],
+      },
+    });
+    expect(emptyMemory).not.toContain("Last turn:");
+  });
+
+  it.each(["off", "false", "0", "no", "disabled", " OFF "])(
+    "honors %s as a composer v2 kill switch false value",
+    (value) => {
+      const getItem = vi.fn(() => value);
+      const previousWindow = globalThis.window;
+      Object.defineProperty(globalThis, "window", {
+        value: {
+          localStorage: { getItem },
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        },
+        configurable: true,
+      });
+
+      try {
+        const markup = buildMarkup();
+        expect(markup).not.toContain("mc-next-context-strip");
+      } finally {
+        Object.defineProperty(globalThis, "window", { value: previousWindow, configurable: true });
+      }
+    },
+  );
+
   it("shows an explicit action to leave planning mode", () => {
     const markup = buildMarkup({
       planningMode: "advisory",

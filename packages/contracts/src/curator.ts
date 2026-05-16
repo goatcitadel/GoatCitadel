@@ -42,6 +42,7 @@ export interface CuratorStatusResponse {
 
 export interface CuratorArchiveRequest {
   skillId: string;
+  confirm: true;
   reason?: string;
   actorId?: string;
 }
@@ -73,7 +74,7 @@ export interface CuratorListArchivedResponse {
 
 export interface CuratorRunRequest {
   sync?: boolean;
-  dryRun?: boolean;
+  dryRun?: true;
   actorId?: string;
   triggerMode?: "manual" | "scheduled" | "synchronous";
 }
@@ -84,7 +85,7 @@ export interface CuratorRunReportEntry {
   recommendation: CuratorSkillRecommendation;
   score: CuratorSkillScore;
   signals: string[];
-  action: "none" | "archived" | "skipped_immune" | "skipped_below_threshold";
+  action: "none" | "archived" | "proposed_archive" | "skipped_immune" | "skipped_below_threshold";
   actionReason?: string;
 }
 
@@ -99,6 +100,7 @@ export interface CuratorRunReport {
   immuneCount: number;
   scoredCount: number;
   archivedCount: number;
+  proposalCount: number;
   prunedCount: number;
   consolidationGroupCount: number;
   entries: CuratorRunReportEntry[];

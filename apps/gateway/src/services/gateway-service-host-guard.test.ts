@@ -92,6 +92,7 @@ const EXTRACTED_GATEWAY_SERVICE_SYMBOLS = [
 
 const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES = [
   "addonsService",
+  "addonSlotService",
   "approvalRuntime",
   "assemblyService",
   "backupRetentionService",
@@ -344,7 +345,7 @@ describe("gateway service host guard", () => {
     expect(portSource).not.toMatch(/\[\s*key\s*:\s*string\s*\]/);
     const portBlock = portSource.match(/export interface GatewayRouteCompositionPort\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
     const portMemberCount = portBlock.match(/^\s+(?:readonly\s+)?[A-Za-z_]\w+\??[:(]/gm)?.length ?? 0;
-    expect(portMemberCount).toBeLessThanOrEqual(145);
+    expect(portMemberCount).toBeLessThanOrEqual(146);
     const portFactory = portSource.slice(
       portSource.indexOf("export function createGatewayRouteCompositionPort"),
       portSource.indexOf("export type RouteDependencyDomain"),

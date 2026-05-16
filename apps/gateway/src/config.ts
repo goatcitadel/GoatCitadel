@@ -143,12 +143,15 @@ export interface ApprovalExplainerConfig {
   model?: string;
   timeoutMs: number;
   maxPayloadChars: number;
+  autoRejectOnDanger?: boolean;
+  autoRejectDangerThreshold?: "danger" | "nuclear";
 }
 
 export interface ShellExplainerPolicyConfig {
   enabled: boolean;
   elevateOnDanger?: "caution" | "danger" | "nuclear";
   autoRejectOnDanger?: boolean;
+  autoRejectDangerThreshold?: "danger" | "nuclear";
 }
 
 export const DEFAULT_SHELL_EXPLAINER_POLICY: ShellExplainerPolicyConfig = {

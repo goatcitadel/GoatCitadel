@@ -398,6 +398,10 @@ describe("CronAutomationService job behavior", () => {
       name: " Daily task ",
       schedule: "0 12 * * * UTC",
       description: " hello ",
+      workdir: "F:/code/personal-ai",
+      contextFrom: "upstream",
+      lastRunOutput: "previous",
+      lastRunId: "run-1",
     });
     expect(created).toMatchObject({
       jobId: "daily_task",
@@ -405,6 +409,10 @@ describe("CronAutomationService job behavior", () => {
       description: "hello",
       action: "task",
       enabled: true,
+      workdir: "F:/code/personal-ai",
+      contextFrom: "upstream",
+      lastRunOutput: "previous",
+      lastRunId: "run-1",
     });
     expect(created.nextRunAt).toBeDefined();
 
@@ -418,6 +426,10 @@ describe("CronAutomationService job behavior", () => {
         },
       },
       enabled: false,
+      workdir: null,
+      contextFrom: "upstream-2",
+      lastRunOutput: null,
+      lastRunId: "run-2",
     });
     expect(updated.actionConfig).toEqual({
       watchdog: {
@@ -426,6 +438,10 @@ describe("CronAutomationService job behavior", () => {
         notifyHomeChannel: true,
       },
     });
+    expect(updated.workdir).toBeUndefined();
+    expect(updated.contextFrom).toBe("upstream-2");
+    expect(updated.lastRunOutput).toBeUndefined();
+    expect(updated.lastRunId).toBe("run-2");
     expect(service.updateCronJob("daily_task", { action: "improvement" }).actionConfig).toBeUndefined();
     expect(service.setCronJobEnabled("daily_task", true).enabled).toBe(true);
     expect(service.deleteCronJob("daily_task")).toEqual({ deleted: true, jobId: "daily_task" });

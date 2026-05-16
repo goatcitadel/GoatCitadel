@@ -15,6 +15,7 @@ This note supersedes older review backlog line counts and open-item summaries fo
 - `packages/threaded-surface-core/src/cowork-view-model.ts` now re-exports the shared Cowork view-model implementation instead of carrying a second source copy. The remaining `apps/mission-control/src/components/cowork-view-model.ts` copy is intentionally compatibility-only until the legacy shell is retired.
 - React Three dependencies are still real runtime dependencies through `OfficeCanvas` in `packages/mission-control-shared` and the legacy compatibility shell. The direct duplicate declarations in `apps/mission-control-next` were removed because the canonical app consumes that code through the shared package.
 - README release proof now points at checked-in visual baselines and local verification artifacts instead of claiming `docs/screenshots/` as generated release output.
+- Commit `7f131371` is a binary-only visual rebaseline for `ops-approvals` desktop dark mode. It should be referenced in release/review notes as baseline maintenance only; it is not evidence of a product behavior change by itself.
 
 ## Still not claimed
 

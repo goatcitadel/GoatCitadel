@@ -2,6 +2,8 @@ import type { CronReviewItem, CronRunDiff } from "@goatcitadel/contracts";
 import type { CronJobRecordResponse, CronJobsResponse } from "./types.js";
 import { request } from "./client-core.js";
 
+type CronJobAction = CronJobRecordResponse["action"];
+
 export async function fetchCronJobs(): Promise<CronJobsResponse> {
   return request<CronJobsResponse>("/api/v1/cron/jobs");
 }
@@ -13,11 +15,16 @@ export async function fetchCronJob(jobId: string): Promise<CronJobRecordResponse
 export async function createCronJob(input: {
   jobId: string;
   name: string;
-  action?: "task" | "improvement" | "backup" | "memory_flush" | "cost_report" | "update_review";
+  action?: CronJobAction;
+  actionConfig?: Record<string, unknown>;
   description?: string;
   schedule: string;
   enabled?: boolean;
   endAt?: string;
+  workdir?: string;
+  contextFrom?: string;
+  lastRunOutput?: string;
+  lastRunId?: string;
 }): Promise<CronJobRecordResponse> {
   return request<CronJobRecordResponse>("/api/v1/cron/jobs", {
     method: "POST",
@@ -29,11 +36,16 @@ export async function updateCronJob(
   jobId: string,
   input: {
     name?: string;
-    action?: "task" | "improvement" | "backup" | "memory_flush" | "cost_report" | "update_review";
+    action?: CronJobAction;
+    actionConfig?: Record<string, unknown> | null;
     description?: string;
     schedule?: string;
     enabled?: boolean;
     endAt?: string | null;
+    workdir?: string | null;
+    contextFrom?: string | null;
+    lastRunOutput?: string | null;
+    lastRunId?: string | null;
   },
 ): Promise<CronJobRecordResponse> {
   return request<CronJobRecordResponse>(`/api/v1/cron/jobs/${encodeURIComponent(jobId)}`, {

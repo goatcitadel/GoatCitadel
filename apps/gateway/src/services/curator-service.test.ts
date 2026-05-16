@@ -66,13 +66,33 @@ describe("CuratorService.listCuratorStatus", () => {
 });
 
 describe("CuratorService.archive", () => {
-  it("archives a managed unpinned skill (calls archiveSkill once)", () => {
-    let archivedId: string | undefined;
+  it("requires confirm: true to archive", () => {
     const skills = [makeSkill({ name: "alpha", usageCount: 0 })];
     const service = new CuratorService({
       listSkills: () => skills,
-      archiveSkill: (skillId) => {
+      archiveSkill: () => {
+        throw new Error("archive should not be called without confirm");
+      },
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-05-15T12:00:00Z"),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    expect(() => service.archive({ skillId: skills[0].skillId, confirm: false as unknown as true })).toThrow(
+      /confirm/i,
+    );
+  });
+
+  it("archives a managed unpinned skill (calls archiveSkill once)", () => {
+    let archivedId: string | undefined;
+    let archiveReason: string | undefined;
+    const skills = [makeSkill({ name: "alpha", usageCount: 0 })];
+    const service = new CuratorService({
+      listSkills: () => skills,
+      archiveSkill: (skillId, reason) => {
         archivedId = skillId;
+        archiveReason = reason;
         return makeSkill({ name: "alpha", state: "disabled" });
       },
       pruneSkill: () => ({ filesRemoved: [] }),
@@ -81,8 +101,9 @@ describe("CuratorService.archive", () => {
       publishRealtime: () => undefined,
       cycleDays: 7,
     });
-    const response = service.archive({ skillId: skills[0].skillId });
+    const response = service.archive({ skillId: skills[0].skillId, confirm: true, reason: "manual operator archive" });
     expect(archivedId).toBe(skills[0].skillId);
+    expect(archiveReason).toBe("curator:archived manual operator archive");
     expect(response.archived).toBe(true);
     expect(response.state).toBe("disabled");
   });
@@ -100,7 +121,7 @@ describe("CuratorService.archive", () => {
       publishRealtime: () => undefined,
       cycleDays: 7,
     });
-    expect(() => service.archive({ skillId: skills[0].skillId })).toThrow(/pinned/i);
+    expect(() => service.archive({ skillId: skills[0].skillId, confirm: true })).toThrow(/pinned/i);
   });
 
   it("refuses to archive a bundled skill", () => {
@@ -116,7 +137,7 @@ describe("CuratorService.archive", () => {
       publishRealtime: () => undefined,
       cycleDays: 7,
     });
-    expect(() => service.archive({ skillId: skills[0].skillId })).toThrow(/bundled/i);
+    expect(() => service.archive({ skillId: skills[0].skillId, confirm: true })).toThrow(/bundled/i);
   });
 
   it("throws NotFoundError for unknown skill ids", () => {
@@ -131,7 +152,7 @@ describe("CuratorService.archive", () => {
       publishRealtime: () => undefined,
       cycleDays: 7,
     });
-    expect(() => service.archive({ skillId: "skill-missing" })).toThrow(/not found/i);
+    expect(() => service.archive({ skillId: "skill-missing", confirm: true })).toThrow(/not found/i);
   });
 });
 
@@ -232,7 +253,7 @@ describe("CuratorService.listArchived", () => {
 });
 
 describe("CuratorService.runCurator", () => {
-  it("scores every skill, archives below-threshold non-immune skills, writes report", async () => {
+  it("scores every skill, proposes below-threshold archives, writes report, and never mutates", async () => {
     const archived: string[] = [];
     const reports: CuratorRunReport[] = [];
     const skills: SkillListItem[] = [
@@ -264,12 +285,15 @@ describe("CuratorService.runCurator", () => {
     expect(response.report).toBeDefined();
     expect(response.report!.totalSkills).toBe(4);
     expect(response.report!.immuneCount).toBe(2);
-    expect(response.report!.archivedCount).toBe(1);
-    expect(archived).toEqual(["skill-alpha"]);
+    expect(response.report!.archivedCount).toBe(0);
+    expect(response.report!.proposalCount).toBe(1);
+    expect(response.report!.dryRun).toBe(true);
+    expect(response.report!.entries.find((entry) => entry.skillId === "skill-alpha")?.action).toBe("proposed_archive");
+    expect(archived).toEqual([]);
     expect(reports).toHaveLength(1);
   });
 
-  it("does not archive on dryRun: true", async () => {
+  it("does not archive on dryRun: true and emits archive proposals", async () => {
     const archived: string[] = [];
     const skills: SkillListItem[] = [makeSkill({ name: "alpha", usageCount: 0 }) as SkillListItem];
     const service = new CuratorService({
@@ -287,7 +311,28 @@ describe("CuratorService.runCurator", () => {
     const response = await service.runCurator({ sync: true, dryRun: true });
     expect(archived).toEqual([]);
     expect(response.report!.archivedCount).toBe(0);
-    expect(response.report!.entries[0].action).toBe("skipped_below_threshold");
+    expect(response.report!.proposalCount).toBe(1);
+    expect(response.report!.entries[0].action).toBe("proposed_archive");
+  });
+
+  it("rejects dryRun: false before scoring or mutating", async () => {
+    let listed = false;
+    const service = new CuratorService({
+      listSkills: () => {
+        listed = true;
+        return [makeSkill({ name: "alpha", usageCount: 0 }) as SkillListItem];
+      },
+      archiveSkill: () => {
+        throw new Error("archive should not be called by runCurator");
+      },
+      pruneSkill: () => ({ filesRemoved: [] }),
+      now: () => new Date("2026-05-15T12:00:00Z"),
+      writeReport: async () => "/tmp/dummy",
+      publishRealtime: () => undefined,
+      cycleDays: 7,
+    });
+    await expect(service.runCurator({ sync: true, dryRun: false as never })).rejects.toThrow(/proposal-only/i);
+    expect(listed).toBe(false);
   });
 
   it("never archives bundled or pinned skills even when score is low", async () => {
@@ -313,12 +358,16 @@ describe("CuratorService.runCurator", () => {
     expect(response.report!.entries.every((e) => e.action === "skipped_immune")).toBe(true);
   });
 
-  it("uses triggerMode='scheduled' when called from cron tick", async () => {
+  it("uses triggerMode='scheduled' when called from cron tick and does not mutate", async () => {
     const reports: CuratorRunReport[] = [];
-    const skills: SkillListItem[] = [makeSkill({ name: "alpha", usageCount: 5 }) as SkillListItem];
+    const archived: string[] = [];
+    const skills: SkillListItem[] = [makeSkill({ name: "alpha", usageCount: 0 }) as SkillListItem];
     const service = new CuratorService({
       listSkills: () => skills,
-      archiveSkill: (_skillId) => ({ ...skills[0], state: "disabled" }),
+      archiveSkill: (skillId) => {
+        archived.push(skillId);
+        return { ...skills[0], state: "disabled" };
+      },
       pruneSkill: () => ({ filesRemoved: [] }),
       now: () => new Date("2026-05-15T12:00:00Z"),
       writeReport: async (report) => {
@@ -328,9 +377,11 @@ describe("CuratorService.runCurator", () => {
       publishRealtime: () => undefined,
       cycleDays: 7,
     });
-    await service.runCurator({ sync: false, triggerMode: "scheduled" });
+    await service.runCurator({ sync: false, dryRun: true, triggerMode: "scheduled" });
     expect(reports).toHaveLength(1);
     expect(reports[0].triggerMode).toBe("scheduled");
+    expect(reports[0].proposalCount).toBe(1);
+    expect(archived).toEqual([]);
   });
 
   it("uses triggerMode='manual' when no override is provided", async () => {
@@ -422,6 +473,8 @@ describe("CuratorService cron scheduler", () => {
     const job = storageStub.crons.get("curator_weekly");
     expect(job).toBeDefined();
     expect(job?.action).toBe("curator");
+    expect(job?.name).toBe("Curator Weekly Report");
+    expect(job?.description).toBe("Generate a proposal-only curator report over the skill registry.");
     expect(job?.enabled).toBe(true);
     expect(job?.schedule).toBe("0 2 * * 0 America/Los_Angeles");
   });
@@ -468,21 +521,31 @@ describe("CuratorService cron scheduler", () => {
       enabled: true,
     });
     let runCalls = 0;
+    const archived: string[] = [];
+    const reports: CuratorRunReport[] = [];
     const service = new CuratorService({
       listSkills: () => {
         runCalls += 1;
-        return [];
+        return [makeSkill({ name: "alpha", usageCount: 0 })];
       },
-      archiveSkill: () => makeSkill(),
+      archiveSkill: (skillId) => {
+        archived.push(skillId);
+        return makeSkill({ name: "alpha", state: "disabled" });
+      },
       pruneSkill: () => ({ filesRemoved: [] }),
       now: () => new Date("2026-05-15T12:00:00Z"), // Wednesday, NOT due
-      writeReport: async () => "/tmp/dummy",
+      writeReport: async (report) => {
+        reports.push(report);
+        return "/tmp/dummy";
+      },
       publishRealtime: () => undefined,
       cycleDays: 7,
       storage: storageStub as never,
     });
     await service.runCuratorWeeklyIfDue({ force: true });
     expect(runCalls).toBe(1);
+    expect(archived).toEqual([]);
+    expect(reports[0]).toMatchObject({ triggerMode: "scheduled", dryRun: true, proposalCount: 1, archivedCount: 0 });
     expect(storageStub.crons.get("curator_weekly")?.lastRunAt).toBeDefined();
   });
 
@@ -548,15 +611,24 @@ describe("CuratorService.executeDurableCuratorTickRun", () => {
 
   it("runs curator when payload is valid", async () => {
     let ran = false;
+    const archived: string[] = [];
+    const reports: CuratorRunReport[] = [];
+    const skills = [makeSkill({ name: "alpha", usageCount: 0 })];
     const service = new CuratorService({
       listSkills: () => {
         ran = true;
-        return [];
+        return skills;
       },
-      archiveSkill: () => makeSkill(),
+      archiveSkill: (skillId) => {
+        archived.push(skillId);
+        return makeSkill({ name: "alpha", state: "disabled" });
+      },
       pruneSkill: () => ({ filesRemoved: [] }),
       now: () => new Date("2026-05-15T12:00:00Z"),
-      writeReport: async () => "/tmp/dummy",
+      writeReport: async (report) => {
+        reports.push(report);
+        return "/tmp/dummy";
+      },
       publishRealtime: () => undefined,
       cycleDays: 7,
     });
@@ -571,6 +643,8 @@ describe("CuratorService.executeDurableCuratorTickRun", () => {
       undefined,
     );
     expect(ran).toBe(true);
+    expect(archived).toEqual([]);
+    expect(reports[0]).toMatchObject({ triggerMode: "scheduled", dryRun: true, proposalCount: 1, archivedCount: 0 });
   });
 
   it("throws on invalid version", async () => {

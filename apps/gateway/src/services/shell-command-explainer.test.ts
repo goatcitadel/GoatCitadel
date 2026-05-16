@@ -166,4 +166,17 @@ describe("applyShellExplainerPolicy", () => {
     expect(out.autoReject).toBe(true);
     expect(out.autoRejectReason).toMatch(/rm -rf \/tmp\/x/);
   });
+
+  it("honors the configured auto-reject danger threshold", () => {
+    const out = applyShellExplainerPolicy(
+      {
+        riskLevel: "caution",
+        payload: { commands: ["rm -rf /tmp/x"] },
+        preview: { commands: ["rm -rf /tmp/x"] },
+      },
+      { enabled: true, elevateOnDanger: "danger", autoRejectOnDanger: true, autoRejectDangerThreshold: "nuclear" },
+    );
+    expect(out.elevatedRiskLevel).toBe("danger");
+    expect(out.autoReject).toBe(false);
+  });
 });

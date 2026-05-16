@@ -720,7 +720,7 @@ git commit -m "test(hooks): add regression guard for intercept-mode tool veto"
 
 ## Task 6: Plugin `tool_override` Flag (O10)
 
-A plugin can declare it overrides a built-in tool name. On first activation, owner approval is required. Once approved, the plugin's `tool.execute` replaces the built-in.
+A plugin can declare it overrides a built-in tool name. On first activation, owner approval is required. Current `ToolInvocationCoordinatorService` coverage proves that an approved override with a registered handler routes through the plugin handler; product-ready override behavior still depends on handler registration and e2e/live coverage for each installed plugin.
 
 **Files:**
 - Modify: `packages/contracts/src/integrations.ts`
@@ -1000,7 +1000,7 @@ git add packages/contracts/src/channels.ts packages/contracts/src/integrations.t
 git commit -m "feat(plugins): add tool_override flag with owner approval gate"
 ```
 
-> NOTE: Wiring the override resolution into the tool dispatcher (so an approved override actually replaces the built-in `web_search`) is a FOLLOW-UP task in a subsequent PR. This task ships the contract + registry only — the dispatcher change touches `tool-invocation-coordinator-service.ts` and the policy engine, and deserves its own review surface.
+> NOTE: Current coordinator coverage proves handler-level override routing through `ToolInvocationCoordinatorService` when `PluginToolOverrideService.resolveActiveHandler()` returns an approved handler, including native fallback and hook behavior. This is not yet product-wide readiness for every plugin install path; e2e/live installed-plugin proof remains follow-up work.
 
 ---
 
@@ -1405,7 +1405,7 @@ git push -u origin feature/plugin-sdk-hooks-expansion
 
 - [ ] **Step 4: Update upstream review doc**
 
-Edit `.codex-tmp/upstream-review/openclaw-hermes-weekly-gap-review-2026-05-15.md` items O10–O15 to mark "Shipped (contract + registry; dispatcher wiring TBD)" inline.
+Edit `.codex-tmp/upstream-review/openclaw-hermes-weekly-gap-review-2026-05-15.md` items O10–O15 to mark "Shipped where covered by contracts/services; plugin override has coordinator-level handler proof, installed-plugin e2e proof still pending" inline.
 
 ---
 
@@ -1413,7 +1413,7 @@ Edit `.codex-tmp/upstream-review/openclaw-hermes-weekly-gap-review-2026-05-15.md
 
 The following work is intentionally NOT in this plan and should ship in subsequent PRs:
 
-1. **Tool-override dispatcher wiring**: route built-in tool invocations through `PluginToolOverrideService.resolveActiveOverride()` to swap to the plugin's `tool.execute`. Touches `tool-invocation-coordinator-service.ts` and the policy engine.
+1. **Tool-override installed-plugin e2e proof**: coordinator tests cover approved handler routing via `PluginToolOverrideService.resolveActiveHandler()`, fallback, after-hooks, and error hooks. A follow-up should prove the installed-plugin registration path end-to-end before claiming product-wide override readiness.
 2. **`[[as_document]]` delivery integration**: in `connector-delivery.ts`, convert each `SkillOutputDocumentDirective` into a `ChannelAttachmentInput` before invoking `channel.send`. Touches channel capability matrix.
 3. **Mission Control Next slot rendering**: read `/api/v1/addons/slots?route=X` and render extension components into matching slots. New gateway route + MCN feature.
 4. **Streaming `transform_llm_output`**: the synchronous path is wired in this plan; streaming requires assembling deltas before transform.

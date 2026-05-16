@@ -19,6 +19,7 @@ export async function writeCuratorReport(
 
 function renderMarkdown(report: CuratorRunReport): string {
   const archived = report.entries.filter((e) => e.action === "archived");
+  const proposals = report.entries.filter((e) => e.action === "proposed_archive");
   const immune = report.entries.filter((e) => e.action === "skipped_immune");
   const skipped = report.entries.filter((e) => e.action === "skipped_below_threshold");
   const kept = report.entries.filter((e) => e.action === "none");
@@ -32,8 +33,12 @@ function renderMarkdown(report: CuratorRunReport): string {
     `- Dry run: ${report.dryRun}`,
     `- Total skills: ${report.totalSkills}`,
     `- Archived: ${report.archivedCount}`,
+    `- Archive proposals: ${report.proposalCount}`,
     `- Immune: ${report.immuneCount}`,
     `- Scored: ${report.scoredCount}`,
+    "",
+    `## Archive Proposals (${proposals.length})`,
+    ...renderEntries(proposals),
     "",
     `## Archived (${archived.length})`,
     ...renderEntries(archived),

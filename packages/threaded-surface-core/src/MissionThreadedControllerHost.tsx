@@ -74,7 +74,7 @@ import { formatWorkProviderModelSummary, type WorkTrustDescriptor } from "./chat
 import {
   getCapabilitySuggestionConfirmationCopy,
   getDeleteSessionConfirmationMessage,
-  parseGoalCommand,
+  parseQueueCommand,
   resolveMidTurnDisposition,
   revealGeneratedArtifactInSurface,
   resolveSelectedTurnId,
@@ -874,6 +874,48 @@ export function MissionThreadedControllerHost({
 
   const handleCommandExecution = useCallback(
     async (sessionId: string, commandText: string) => {
+      const queueCommand = parseQueueCommand(commandText);
+      if (queueCommand) {
+        if (queueCommand.kind === "steer") {
+          if (!queueCommand.text) {
+            pushLocalNotice("Usage: /queue steer <instruction>", "warning");
+            return;
+          }
+          try {
+            const response = await steerChatSession(sessionId, { instruction: queueCommand.text });
+            pushLocalNotice(
+              response.accepted
+                ? "Steering instruction queued."
+                : (response.reason ?? "Steering instruction not accepted."),
+              response.accepted ? "success" : "warning",
+            );
+          } catch (cause) {
+            setUiError(cause instanceof Error ? cause.message : "Failed to send steering instruction.");
+          }
+          return;
+        }
+        if (!queueCommand.text) {
+          pushLocalNotice(`Usage: /queue ${queueCommand.kind} <message>`, "warning");
+          return;
+        }
+        setQueuedOutbound((current) => [
+          ...current,
+          {
+            id: `queue-${Date.now()}`,
+            action: "send",
+            sessionId,
+            content: queueCommand.text,
+            attachments: [],
+            createdAt: new Date().toISOString(),
+            paused: queueCommand.kind === "collect",
+          },
+        ]);
+        pushLocalNotice(
+          queueCommand.kind === "collect" ? "Message collected in the queue." : "Follow-up queued for the next turn.",
+          "success",
+        );
+        return;
+      }
       const result = await parseChatCommand(sessionId, commandText);
       if (result.prefs) setPrefs(result.prefs);
       pushLocalNotice(formatCommandResult(result), result.ok ? "success" : "warning");
@@ -895,7 +937,16 @@ export function MissionThreadedControllerHost({
         setMcpTemplates(templates.items);
       }
     },
-    [loadSidebar, pushLocalNotice, setInstalledSkills, setMcpServers, setMcpTemplates, setPrefs],
+    [
+      loadSidebar,
+      pushLocalNotice,
+      setInstalledSkills,
+      setMcpServers,
+      setMcpTemplates,
+      setPrefs,
+      setQueuedOutbound,
+      setUiError,
+    ],
   );
 
   const contextActions = useChatContextActions({
@@ -2160,30 +2211,47 @@ export function MissionThreadedControllerHost({
   );
 
   const handleSendWithKnowledge = useCallback(async () => {
-    const goalCommand = parseGoalCommand(draft);
-    if (goalCommand) {
-      if (goalCommand.kind === "set") {
-        await handleSetGoal(goalCommand.text);
-      } else if (goalCommand.kind === "clear") {
-        await handleClearGoal();
-      } else {
-        await handleGoalStatus();
-      }
-      setDraft("");
-      return;
-    }
-
+    const queueCommand = parseQueueCommand(draft);
     const disposition = resolveMidTurnDisposition({
       hasActiveStream: Boolean(activeStreamRef.current),
       draft,
     });
-    if (disposition === "steer") {
-      const stripped = draft.trimStart().replace(/^\/(?:steer|queue\s+steer)\s*/i, "");
+    const trimmedDraft = draft.trimStart();
+    const explicitSteerCommand = /^\/(?:steer|queue\s+steer)\b/i.test(trimmedDraft);
+    const localSlashCommand = trimmedDraft.startsWith("/");
+    if (disposition === "steer" && (!localSlashCommand || explicitSteerCommand)) {
+      const stripped =
+        queueCommand?.kind === "steer" ? queueCommand.text : draft.trimStart().replace(/^\/steer\s*/i, "");
       if (stripped) {
         await handleSteerMidTurn(stripped);
         setDraft("");
         return;
       }
+    }
+    if (queueCommand?.kind === "followup" || queueCommand?.kind === "collect") {
+      if (!queueCommand.text) {
+        pushLocalNotice(`Usage: /queue ${queueCommand.kind} <message>`, "warning");
+        return;
+      }
+      setQueuedOutbound((current) => [
+        ...current,
+        {
+          id: `queue-${Date.now()}`,
+          action: "send",
+          sessionId: selectedSessionId ?? undefined,
+          content: queueCommand.text,
+          attachments: pendingAttachments,
+          createdAt: new Date().toISOString(),
+          paused: queueCommand.kind === "collect",
+        },
+      ]);
+      setDraft("");
+      setPendingAttachments([]);
+      pushLocalNotice(
+        queueCommand.kind === "collect" ? "Message collected in the queue." : "Follow-up queued for the next turn.",
+        "success",
+      );
+      return;
     }
 
     const shouldAutoGenerateImage =
@@ -2217,17 +2285,19 @@ export function MissionThreadedControllerHost({
     attachPendingKnowledgeSources,
     draft,
     editingTurnId,
-    handleClearGoal,
     handleGenerateImage,
-    handleGoalStatus,
     handleSend,
-    handleSetGoal,
     handleSteerMidTurn,
     imageBusy,
     imageGenerationAvailable,
     messageMode,
     pendingAttachments.length,
+    pendingAttachments,
+    pushLocalNotice,
+    selectedSessionId,
     setDraft,
+    setPendingAttachments,
+    setQueuedOutbound,
     setUiError,
   ]);
 

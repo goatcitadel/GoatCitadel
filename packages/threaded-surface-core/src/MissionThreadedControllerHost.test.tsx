@@ -1281,6 +1281,20 @@ describe("MissionThreadedControllerHost", () => {
       { serverId: "server-1", label: "Server", status: "connected" },
     ]);
 
+    parseChatCommandMock.mockResolvedValueOnce({ ok: true, command: "/goal", message: "Goal paused." });
+    await act(async () => {
+      await outboundInput.handleCommandExecution("session-1", "/goal pause");
+      await flushEffects();
+    });
+    expect(parseChatCommandMock).toHaveBeenLastCalledWith("session-1", "/goal pause");
+
+    parseChatCommandMock.mockClear();
+    await act(async () => {
+      await outboundInput.handleCommandExecution("session-1", "/queue followup run focused tests");
+      await flushEffects();
+    });
+    expect(parseChatCommandMock).not.toHaveBeenCalled();
+
     setupMocks();
     useChatSessionDataMock.mockReturnValue({
       ...useChatSessionDataMock(),

@@ -597,6 +597,89 @@ describe("RuntimeRoutePage", () => {
     expect(collectText(renderer!.root)).not.toContain("tool.failed");
   });
 
+  it("renders activity events with duplicate timestamp fallbacks without duplicate key warnings", async () => {
+    runtimeSnapshotOverrides.data = {
+      dashboard: {
+        timestamp: "2026-04-22T00:00:00.000Z",
+        sessions: [],
+        pendingApprovals: 0,
+        activeSubagents: 0,
+        taskStatusCounts: [],
+        recentEvents: [],
+        dailyCostUsd: 0,
+      },
+      timeline: {
+        generatedAt: "2026-04-22T00:00:00.000Z",
+        events: {
+          items: [
+            {
+              sequence: 1,
+              eventType: "tool.started",
+              eventClass: "info",
+              source: "worker-a",
+              timestamp: "2026-04-22T00:00:00.000Z",
+              payload: {},
+            },
+            {
+              sequence: 2,
+              eventType: "tool.started",
+              eventClass: "info",
+              source: "worker-b",
+              timestamp: "2026-04-22T00:00:00.000Z",
+              payload: {},
+            },
+          ],
+        },
+        sessions: { items: [] },
+        scheduler: { jobs: [], reviewQueue: [] },
+        improvement: { reports: [], replayRuns: [] },
+      },
+      health: null,
+      cost: null,
+      daemon: null,
+      backups: [],
+      sessions: [],
+      mcpServers: [],
+      sourceStatus: {
+        dashboard: { status: "ok" },
+        timeline: { status: "ok" },
+        health: { status: "ok" },
+        cost: { status: "ok" },
+        daemon: { status: "ok" },
+        backups: { status: "ok" },
+        sessions: { status: "ok" },
+        mcpServers: { status: "ok" },
+      },
+    } as any;
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      let renderer: ReactTestRenderer | null = null;
+      await act(async () => {
+        renderer = create(
+          <RuntimeRoutePage
+            route={{ area: "ops", section: "activity", theme: "ops" } as any}
+            activeWorkspaceId="default"
+            activeWorkspaceName="Default"
+            pendingApprovals={0}
+            navigate={vi.fn()}
+            setActiveWorkspaceId={vi.fn()}
+          />,
+        );
+      });
+
+      expect(collectText(renderer!.root)).toContain("worker-a");
+      expect(collectText(renderer!.root)).toContain("worker-b");
+      expect(
+        consoleErrorSpy.mock.calls.filter((call) =>
+          call.some((argument) => String(argument).includes("Encountered two children with the same key")),
+        ),
+      ).toHaveLength(0);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
   it("navigates with canonical next-route objects instead of legacy URL strings", async () => {
     const navigate = vi.fn();
     let renderer: ReactTestRenderer | null = null;

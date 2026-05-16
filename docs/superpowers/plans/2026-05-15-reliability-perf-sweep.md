@@ -10,7 +10,7 @@
 
 **Branch:** `feature/reliability-perf-sweep` (currently on `goatrocity/priceless-merkle-53633a` — rename at execution start: `git branch -m feature/reliability-perf-sweep`).
 
-**Worktree:** `F:\code\personal-ai\.claude\worktrees\priceless-merkle-53633a` (already isolated).
+**Worktree:** Use an isolated GoatCitadel worktree for execution; do not record machine-local absolute paths in this tracked plan.
 
 ---
 

@@ -25,7 +25,16 @@ import { GCSelect, GCSwitch, Textarea } from "../components/ui";
 import { pageCopy } from "../content/copy";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 
-type CronAction = "task" | "improvement" | "backup" | "memory_flush" | "cost_report" | "update_review";
+type CronAction =
+  | "task"
+  | "improvement"
+  | "curator"
+  | "backup"
+  | "memory_flush"
+  | "cost_report"
+  | "update_review"
+  | "watchdog"
+  | "no_agent";
 export type ScheduleFrequency = "hourly" | "daily" | "weekly";
 
 export interface CronScheduleDraft {
@@ -53,10 +62,13 @@ const DEFAULT_SCHEDULE_DRAFT: CronScheduleDraft = {
 const ACTION_LABELS: Record<CronAction, string> = {
   task: "Creates an Observe task",
   improvement: "Runs the improvement replay",
+  curator: "Runs the skill curator",
   backup: "Creates a backup snapshot",
   memory_flush: "Flushes stale memory data",
   cost_report: "Writes the cost report",
   update_review: "Runs the update review",
+  watchdog: "Runs a watchdog check",
+  no_agent: "Runs a local command",
 };
 
 const WEEKDAY_OPTIONS = [

@@ -396,6 +396,24 @@ export function parseGoalCommand(draft: string): GoalCommand | null {
   return { kind: "set", text: arg };
 }
 
+export type QueueCommand =
+  | { kind: "steer"; text: string }
+  | { kind: "followup"; text: string }
+  | { kind: "collect"; text: string };
+
+export function parseQueueCommand(draft: string): QueueCommand | null {
+  const match = draft.trimStart().match(/^\/queue(?:\s+(\S+)(?:\s+([\s\S]*))?)?$/i);
+  if (!match) {
+    return null;
+  }
+  const kind = (match[1] ?? "").toLowerCase();
+  const text = (match[2] ?? "").trim();
+  if (kind === "steer" || kind === "followup" || kind === "collect") {
+    return { kind, text };
+  }
+  return null;
+}
+
 export async function revealGeneratedArtifactInSurface(input: RevealGeneratedArtifactInput): Promise<void> {
   if (input.compactSurfaceLayout) {
     input.setSessionRailOpen(false);

@@ -1,4 +1,5 @@
-import { renderToStaticMarkup } from "react-dom/server";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CuratorRoutePage } from "./CuratorRoutePage";
 
@@ -79,43 +80,103 @@ const sampleStatus = {
   ],
 };
 
+function readText(node: ReactTestInstance): string {
+  return node
+    .findAll(() => true)
+    .reduce((text, child) => {
+      for (const value of child.children) {
+        if (typeof value === "string" || typeof value === "number") {
+          text += String(value);
+        }
+      }
+      return text;
+    }, "");
+}
+
+function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
+  const button = root.findAllByType("button").find((candidate) => readText(candidate).includes(label));
+  if (!button) {
+    throw new Error(`Button not found: ${label}`);
+  }
+  return button;
+}
+
+async function renderPage(): Promise<ReactTestRenderer> {
+  let renderer: ReactTestRenderer | undefined;
+  await act(async () => {
+    renderer = create(<CuratorRoutePage {...defaultProps} />);
+  });
+  await act(async () => undefined);
+  return renderer!;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   curatorApiMocks.fetchCuratorStatus.mockResolvedValue(sampleStatus);
+  curatorApiMocks.archiveCuratorSkill.mockResolvedValue({
+    skillId: "skill-a",
+    archived: true,
+    archivedAt: "2026-05-15T12:00:00Z",
+    state: "disabled",
+  });
+  curatorApiMocks.runCurator.mockResolvedValue({
+    runId: "curator-run-test",
+    scheduled: false,
+    report: { proposalCount: 1, archivedCount: 0, immuneCount: 1 },
+  });
 });
 
 describe("CuratorRoutePage", () => {
-  it("renders skill rows with immunity badges", () => {
-    curatorApiMocks.fetchCuratorStatus.mockResolvedValue(sampleStatus);
+  it("renders proposal-only actions and immunity badges", async () => {
+    const renderer = await renderPage();
+    const text = readText(renderer.root);
 
-    const markup = renderToStaticMarkup(<CuratorRoutePage {...defaultProps} />);
-
-    // Page frame and static elements always render
-    expect(markup).toContain("Autonomous Curator");
-    expect(markup).toContain("Skills (ranked by usage)");
-    // Actions are always rendered
-    expect(markup).toContain("Dry run");
-    expect(markup).toContain("Run now");
-    expect(markup).toContain("Refresh");
+    expect(text).toContain("Skill Curator");
+    expect(text).toContain("Skills (ranked by usage)");
+    expect(text).toContain("Generate report");
+    expect(text).toContain("Refresh");
+    expect(text).toContain("Immune: bundled");
+    expect(text).not.toContain("Dry run");
+    expect(text).not.toContain("Run now");
   });
 
-  it("renders loading state before data resolves", () => {
-    // Never resolves during this test — check initial state
-    curatorApiMocks.fetchCuratorStatus.mockReturnValue(new Promise(() => undefined));
+  it("generates curator reports with dryRun: true", async () => {
+    const renderer = await renderPage();
 
-    const markup = renderToStaticMarkup(<CuratorRoutePage {...defaultProps} />);
+    await act(async () => {
+      await findButton(renderer.root, "Generate report").props.onClick();
+    });
 
-    expect(markup).toContain("Autonomous Curator");
-    // In loading state, skills table shows loading message
-    expect(markup).toContain("Loading curator status");
+    expect(curatorApiMocks.runCurator).toHaveBeenCalledWith({ sync: true, dryRun: true });
+    expect(readText(renderer.root)).toContain("1 archive proposals");
   });
 
-  it("renders the page structure with correct kicker and description", () => {
-    curatorApiMocks.fetchCuratorStatus.mockResolvedValue(sampleStatus);
+  it("requires confirmation before archiving and sends confirm: true", async () => {
+    const renderer = await renderPage();
 
-    const markup = renderToStaticMarkup(<CuratorRoutePage {...defaultProps} />);
+    await act(async () => {
+      findButton(renderer.root, "Archive").props.onClick();
+    });
+    const modal = renderer.root.findByType(ConfirmModal);
+    expect(modal.props.open).toBe(true);
 
-    expect(markup).toContain("Library");
-    expect(markup).toContain("background curator cycle");
+    await act(async () => {
+      modal.props.onCancel();
+    });
+    expect(curatorApiMocks.archiveCuratorSkill).not.toHaveBeenCalled();
+    expect(renderer.root.findByType(ConfirmModal).props.open).toBe(false);
+
+    await act(async () => {
+      findButton(renderer.root, "Archive").props.onClick();
+    });
+    await act(async () => {
+      await renderer.root.findByType(ConfirmModal).props.onConfirm();
+    });
+
+    expect(curatorApiMocks.archiveCuratorSkill).toHaveBeenCalledWith({
+      skillId: "skill-a",
+      reason: "manual archive from Mission Control",
+      confirm: true,
+    });
   });
 });

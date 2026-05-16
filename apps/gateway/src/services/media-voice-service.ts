@@ -114,12 +114,14 @@ function safeJsonParse<T>(raw: string, fallback: T): T {
 }
 
 export const __mediaVoiceServiceInternals = {
+  decodeStrictBase64,
   extFromMimeType,
   isMediaJobRow,
   isRecord,
   mapMediaJobRow,
   normalizeAudioForWhisper,
   parseVoiceCliArgs,
+  validateVoiceTranscriptionPayload,
   safeJsonParse,
   toMediaJobRows,
 };
@@ -395,6 +397,25 @@ export function assertAttachmentBytesMatchMimeHint(bytes: Buffer, declaredMimeTy
   );
 }
 
+function validateVoiceTranscriptionPayload(bytes: Buffer, declaredMimeType?: string): void {
+  const normalizedMime = declaredMimeType?.trim().toLowerCase();
+  if (!normalizedMime) {
+    throw new Error("Voice transcription requires an audio or video MIME type.");
+  }
+  const declared = detectAttachmentMediaType(normalizedMime);
+  if (declared !== "audio" && declared !== "video") {
+    throw new Error(`Voice transcription requires audio or video bytes, got ${declaredMimeType}.`);
+  }
+
+  const sniffed = sniffAttachmentBytes(bytes);
+  if (sniffed === "unknown" || sniffed === "audio" || sniffed === "video") {
+    return;
+  }
+  throw new Error(
+    `Voice transcription bytes do not match the declared MIME hint (${declaredMimeType} -> ${declared}, sniffed ${sniffed}).`,
+  );
+}
+
 function extFromMimeType(mimeType?: string): string {
   const normalized = mimeType?.toLowerCase() ?? "";
   if (normalized.includes("wav")) {
@@ -546,10 +567,11 @@ export class MediaVoiceService {
     mimeType?: string;
     language?: string;
   }): Promise<VoiceTranscribeResponse> {
-    const bytes = Buffer.from(input.bytesBase64, "base64");
+    const bytes = decodeStrictBase64(input.bytesBase64);
     if (bytes.length === 0) {
       throw new Error("Audio payload is empty.");
     }
+    validateVoiceTranscriptionPayload(bytes, input.mimeType);
     this.deps.recordDevDiagnostic({
       level: "info",
       category: "voice",
