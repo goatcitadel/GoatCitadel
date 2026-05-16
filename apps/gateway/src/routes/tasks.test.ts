@@ -310,6 +310,150 @@ describe("tasks routes", () => {
     );
   });
 
+  it("emits a distress signal through the task route service", async () => {
+    const emitDistressSignal = vi.fn((_taskId: string, input: Record<string, unknown>) => ({
+      taskId: "task-1",
+      distressSignals: [{ signalId: "signal-1", code: input.code, severity: input.severity }],
+    }));
+
+    app = buildApp({ emitDistressSignal });
+    await app.register(tasksRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/tasks/task-1/distress",
+      payload: {
+        code: "worker_crash",
+        severity: "critical",
+        title: "Worker crashed unexpectedly",
+        summary: "The worker process exited without closing the task.",
+        emittedBy: "durable-runner",
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(emitDistressSignal).toHaveBeenCalledWith(
+      "task-1",
+      expect.objectContaining({ code: "worker_crash", severity: "critical" }),
+    );
+    expect(response.json()).toMatchObject({
+      distressSignals: [expect.objectContaining({ code: "worker_crash" })],
+    });
+  });
+
+  it("returns 400 when emitting distress with missing required fields", async () => {
+    app = buildApp({});
+    await app.register(tasksRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/tasks/task-1/distress",
+      payload: { severity: "critical" }, // missing code and title
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("resolves a distress signal through the task route service", async () => {
+    const resolveDistressSignal = vi.fn(() => ({ taskId: "task-1", distressSignals: [] }));
+
+    app = buildApp({ resolveDistressSignal });
+    await app.register(tasksRoutes);
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/tasks/task-1/distress/signal-1",
+      payload: { resolvedBy: "operator" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(resolveDistressSignal).toHaveBeenCalledWith("task-1", "signal-1", { resolvedBy: "operator" });
+    expect(response.json()).toMatchObject({ taskId: "task-1", distressSignals: [] });
+  });
+
+  it("sets the retry budget through the task route service", async () => {
+    const setRetryBudget = vi.fn((_taskId: string, maxRetries: number) => ({
+      taskId: "task-1",
+      retryBudget: { maxRetries, retryCount: 0 },
+    }));
+
+    app = buildApp({ setRetryBudget });
+    await app.register(tasksRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/tasks/task-1/retry-budget",
+      payload: { maxRetries: 3 },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(setRetryBudget).toHaveBeenCalledWith("task-1", 3);
+    expect(response.json()).toMatchObject({ retryBudget: { maxRetries: 3 } });
+  });
+
+  it("verifies task artifacts through the task route service", async () => {
+    const verifyTaskArtifacts = vi.fn(() => Promise.resolve({ taskId: "task-1", artifactVerification: "ok" }));
+
+    app = buildApp({ verifyTaskArtifacts });
+    await app.register(tasksRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/tasks/task-1/verify-artifacts",
+      payload: {
+        claims: [{ kind: "file", value: "dist/output.js", label: "build output" }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(verifyTaskArtifacts).toHaveBeenCalledWith("task-1", [
+      expect.objectContaining({ kind: "file", value: "dist/output.js" }),
+    ]);
+  });
+
+  it("bulk updates tasks via reassign action", async () => {
+    const bulkUpdateTasks = vi.fn(() => [
+      { taskId: "task-1", assignedAgentId: "agent-2" },
+      { taskId: "task-2", assignedAgentId: "agent-2" },
+    ]);
+
+    app = buildApp({ bulkUpdateTasks });
+    await app.register(tasksRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/tasks/bulk",
+      payload: {
+        action: "reassign",
+        taskIds: ["task-1", "task-2"],
+        assignedAgentId: "agent-2",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(bulkUpdateTasks).toHaveBeenCalledWith({
+      action: "reassign",
+      taskIds: ["task-1", "task-2"],
+      assignedAgentId: "agent-2",
+    });
+    expect(response.json()).toMatchObject({
+      tasks: [expect.objectContaining({ taskId: "task-1" }), expect.objectContaining({ taskId: "task-2" })],
+    });
+  });
+
+  it("returns 400 for bulk action with missing required fields", async () => {
+    app = buildApp({});
+    await app.register(tasksRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/tasks/bulk",
+      payload: { action: "reassign", taskIds: ["task-1"] }, // missing assignedAgentId
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
   it("validates agentic controls and maps thrown service errors through route error handling", async () => {
     app = buildApp({
       getAgenticRunTree: vi.fn(() => {
@@ -354,6 +498,20 @@ function buildApp(taskOverrides: Record<string, unknown>): FastifyInstance {
       softDeleteTask: vi.fn(),
       updateTask: vi.fn(),
       updateTaskSubagent: vi.fn(),
+      emitDistressSignal: vi.fn((_taskId: string, input: Record<string, unknown>) => ({
+        taskId: "task-1",
+        distressSignals: [{ signalId: "signal-1", ...input }],
+      })),
+      resolveDistressSignal: vi.fn((_taskId: string, _signalId: string) => ({
+        taskId: "task-1",
+        distressSignals: [],
+      })),
+      setRetryBudget: vi.fn((_taskId: string, maxRetries: number) => ({
+        taskId: "task-1",
+        retryBudget: { maxRetries, retryCount: 0 },
+      })),
+      verifyTaskArtifacts: vi.fn((_taskId: string) => Promise.resolve({ taskId: "task-1" })),
+      bulkUpdateTasks: vi.fn((input: { taskIds: string[] }) => input.taskIds.map((taskId) => ({ taskId }))),
       ...taskOverrides,
     },
     llm: {
