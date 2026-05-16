@@ -153,34 +153,6 @@ export function drainSteerMessagesForLlm(
   }));
 }
 
-export interface StreamWithSteerDrainInput {
-  host: Pick<ChatTurnStreamHost, "steerService" | "createChatCompletion">;
-  sessionId: string;
-  turnId: string;
-  request: ChatCompletionRequest;
-}
-
-/**
- * Wrap a single createChatCompletion call so any pending /steer instructions are
- * drained and appended to the request's messages before delegating to the underlying
- * completion. Used by orchestration so each step "sees" mid-turn nudges, and exposed
- * separately for focused tests.
- */
-export async function streamWithSteerDrain(input: StreamWithSteerDrainInput): Promise<ChatCompletionResponse> {
-  const steerMessages = drainSteerMessagesForLlm(input.host.steerService, {
-    sessionId: input.sessionId,
-    turnId: input.turnId,
-  });
-  if (steerMessages.length === 0) {
-    return input.host.createChatCompletion(input.request);
-  }
-  const composed: ChatCompletionRequest = {
-    ...input.request,
-    messages: [...input.request.messages, ...steerMessages],
-  };
-  return input.host.createChatCompletion(composed);
-}
-
 export function collectOrchestrationToolRuns(host: ChatTurnStreamHost, runId: string): ChatToolRunRecord[] {
   const steps = host.storage.chatDelegationSteps.listByRun(runId);
   const childTurnIds = steps.map((step) => step.childTurnId).filter((value): value is string => Boolean(value));

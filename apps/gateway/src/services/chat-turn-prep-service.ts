@@ -161,6 +161,12 @@ export function applyGoalToGuidanceSystemInstruction(input: { baseInstruction?: 
   return `${goalSection}\n\n${input.baseInstruction}`;
 }
 
+/**
+ * Counts an attempted turn against the goal budget.
+ * Note: increment happens at prep time, BEFORE dispatch. Transient dispatch
+ * failures still count toward the budget. This is intentional — a misconfigured
+ * goal that triggers repeated failures should still time out via the budget.
+ */
 export function advanceGoalForTurn(input: { turnsUsed: number; turnBudget: number | null }): { cleared: boolean } {
   const budget = input.turnBudget ?? DEFAULT_GOAL_TURN_BUDGET;
   return { cleared: input.turnsUsed >= budget };

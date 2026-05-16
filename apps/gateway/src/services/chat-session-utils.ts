@@ -91,6 +91,10 @@ export function toChatSessionRecord(
     folderId?: string;
     folderName?: string;
     tags?: string[];
+    pinnedGoal?: string;
+    goalTurnBudget?: number;
+    goalTurnsUsed?: number;
+    goalSetAt?: string;
   },
   project?: ChatProjectRecord,
   extras?: Partial<Pick<ChatSessionRecord, "searchHits" | "lastHandoff" | "delegationParent" | "generatedArtifacts">>,
@@ -122,6 +126,10 @@ export function toChatSessionRecord(
     lastActivityAt: session.lastActivityAt,
     tokenTotal: session.tokenTotal,
     costUsdTotal: session.costUsdTotal,
+    pinnedGoal: meta.pinnedGoal,
+    goalTurnBudget: meta.goalTurnBudget,
+    goalTurnsUsed: meta.goalTurnsUsed,
+    goalSetAt: meta.goalSetAt,
   };
 }
 
