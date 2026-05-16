@@ -213,7 +213,7 @@ describe("SettingsNativePage loop 30 branch matrices", () => {
     expect(describeToolApprovalMode("approve_all")).toBe("Ask every time");
     expect(describeToolApprovalMode("approve_risky")).toBe("Ask for risky work");
     expect(describeToolApprovalMode("bypass")).toBe("Bypass prompts");
-    expect(labelForSettingsSection("providers")).toBe("Providers");
+    expect(labelForSettingsSection("providers")).toBe("Providers & Models");
     expect(labelForSettingsSection("unknown")).toBe("Unknown");
     expect(descriptionForSettingsSection("channels")).toContain("channel connections");
     expect(descriptionForSettingsSection("unknown")).toContain("not registered");

@@ -139,10 +139,21 @@ describe("onboarding tui entrypoint coverage", () => {
 
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify(initialState), { status: 200, headers: { "content-type": "application/json" } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ items: [{ id: "gpt-4.1-mini" }], source: "live" }), { status: 200, headers: { "content-type": "application/json" } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(bootstrap), { status: 200, headers: { "content-type": "application/json" } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(llmConfig), { status: 200, headers: { "content-type": "application/json" } }));
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(initialState), { status: 200, headers: { "content-type": "application/json" } }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ items: [{ id: "gpt-4.1-mini" }], source: "live" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(bootstrap), { status: 200, headers: { "content-type": "application/json" } }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(llmConfig), { status: 200, headers: { "content-type": "application/json" } }),
+      );
 
     vi.stubGlobal("fetch", fetchMock);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -151,6 +162,8 @@ describe("onboarding tui entrypoint coverage", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(fetchMock).toHaveBeenCalledTimes(4);
+    const bootstrapBody = JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body));
+    expect(bootstrapBody.auth).toMatchObject({ mode: "none", allowLoopbackBypass: false });
     expect(selectMock).toHaveBeenCalled();
     expect(confirmMock).toHaveBeenCalled();
     const promptedMessages = inputMock.mock.calls.map(([config]) => config?.message);
@@ -203,10 +216,27 @@ describe("onboarding tui entrypoint coverage", () => {
       .fn()
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValueOnce(new Response("ok", { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(initialState), { status: 200, headers: { "content-type": "application/json" } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ items: [{ id: "glm-5" }], source: "live" }), { status: 200, headers: { "content-type": "application/json" } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ appliedAt: new Date().toISOString(), state: { completed: true, checklist: [] } }), { status: 200, headers: { "content-type": "application/json" } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ activeProviderId: "glm", activeModel: "glm-5", providers: [] }), { status: 200, headers: { "content-type": "application/json" } }));
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(initialState), { status: 200, headers: { "content-type": "application/json" } }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ items: [{ id: "glm-5" }], source: "live" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ appliedAt: new Date().toISOString(), state: { completed: true, checklist: [] } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ activeProviderId: "glm", activeModel: "glm-5", providers: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     await import("./onboarding-tui.js");

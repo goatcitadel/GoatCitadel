@@ -37,6 +37,7 @@ import type {
   PersonalityPreset,
   PersonalityPresetCategory,
   ToolApprovalMode,
+  ToolProfile,
   ToolGrantRecord,
 } from "@goatcitadel/contracts";
 import {
@@ -173,7 +174,22 @@ type NativeLoadResult<T> = {
 };
 
 const TOOL_APPROVAL_MODE_OPTIONS: ToolApprovalMode[] = ["approve_all", "approve_risky", "bypass"];
+const TOOL_PROFILE_OPTIONS: ToolProfile[] = [
+  "minimal",
+  "standard",
+  "coding",
+  "ops",
+  "research",
+  "chat-agent",
+  "danger",
+];
 const BUDGET_MODE_OPTIONS: Array<OnboardingState["settings"]["budgetMode"]> = ["saver", "balanced", "power"];
+const PROVIDER_API_STYLE_OPTIONS: ProviderEditorDraft["apiStyle"][] = [
+  "openai-responses",
+  "openai-codex-responses",
+  "anthropic-messages",
+  "openai-chat-completions",
+];
 const VISUAL_REGRESSION_MODE =
   (import.meta.env.VITE_GOATCITADEL_VISUAL_REGRESSION_MODE as string | undefined)?.trim().toLowerCase() === "true";
 const PERSONALITY_CATEGORY_OPTIONS: PersonalityPresetCategory[] = [
@@ -363,10 +379,12 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
   const { loading, error, data, reload } = useAsyncLoad(load);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [defaultsDraft, setDefaultsDraft] = useState<{
+    defaultToolProfile: ToolProfile;
     toolApprovalMode: ToolApprovalMode;
     budgetMode: OnboardingState["settings"]["budgetMode"];
     networkAllowlist: string;
   }>({
+    defaultToolProfile: "standard",
     toolApprovalMode: "approve_risky",
     budgetMode: "balanced",
     networkAllowlist: "",
@@ -377,6 +395,7 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
       return;
     }
     setDefaultsDraft({
+      defaultToolProfile: normalizeToolProfile(data.settings.defaultToolProfile),
       toolApprovalMode: normalizeToolApprovalMode(data.settings.toolApprovalMode),
       budgetMode: normalizeBudgetMode(data.settings.budgetMode),
       networkAllowlist: data.settings.networkAllowlist.join(", "),
@@ -386,9 +405,13 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
   const applyDefaults = async () => {
     try {
       await bootstrapOnboarding({
+        defaultToolProfile: defaultsDraft.defaultToolProfile,
         toolApprovalMode: defaultsDraft.toolApprovalMode,
         budgetMode: defaultsDraft.budgetMode,
         networkAllowlist: splitCommaList(defaultsDraft.networkAllowlist),
+        auth: {
+          allowLoopbackBypass: false,
+        },
       });
       setNotice({ tone: "success", message: "First-run defaults applied." });
       await reload();
@@ -456,6 +479,25 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
             subtitle="Set the minimum runtime defaults without duplicating advanced setup."
           >
             <SettingsFieldGrid>
+              <SettingsField label="Tool profile">
+                <select
+                  className="mc-next-settings-input"
+                  value={defaultsDraft.defaultToolProfile}
+                  onChange={(event) =>
+                    setDefaultsDraft((current) => ({
+                      ...current,
+                      defaultToolProfile: normalizeToolProfile(event.target.value),
+                    }))
+                  }
+                >
+                  {TOOL_PROFILE_OPTIONS.map((profile) => (
+                    <option key={profile} value={profile}>
+                      {profile}
+                    </option>
+                  ))}
+                </select>
+                <p className="mc-next-settings-field-note">{describeToolProfile(defaultsDraft.defaultToolProfile)}</p>
+              </SettingsField>
               <SettingsField label="Tool approvals">
                 <select
                   className="mc-next-settings-input"
@@ -473,6 +515,9 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
                     </option>
                   ))}
                 </select>
+                <p className="mc-next-settings-field-note">
+                  {describeToolApprovalModeHelp(defaultsDraft.toolApprovalMode)}
+                </p>
               </SettingsField>
               <SettingsField label="Budget mode">
                 <select
@@ -488,6 +533,7 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
                     </option>
                   ))}
                 </select>
+                <p className="mc-next-settings-field-note">{describeBudgetMode(defaultsDraft.budgetMode)}</p>
               </SettingsField>
               <SettingsField label="Network allowlist" span={2}>
                 <input
@@ -1908,7 +1954,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       {notice ? <SettingsNotice notice={notice} /> : null}
       <SettingsGrid variant="detail-wide">
         <SettingsPanel
-          title="Providers"
+          title="Providers & Models"
           subtitle="Available providers, probe posture, and current catalog coverage."
           scrollBody
           bodyMaxHeight="min(62vh, 36rem)"
@@ -2182,7 +2228,10 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                           : "Missing",
                       meta: selectedProviderIsCodexOAuth
                         ? (codexOAuthStatus?.accountLabel ?? "ChatGPT/Codex plan")
-                        : (secretState.data?.source ?? selectedProvider.apiKeySource ?? "unknown"),
+                        : formatSecretStatusMeta(
+                            secretState.data?.source ?? selectedProvider.apiKeySource,
+                            secretState.data?.hasSecret ?? selectedProvider.hasApiKey ?? false,
+                          ),
                     },
                     {
                       label: "Probe",
@@ -2190,7 +2239,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                       meta: formatProviderProbeSourceMeta(selectedProvider),
                     },
                     {
-                      label: "Models",
+                      label: "Provider models",
                       value: String(availableModels.length),
                       meta:
                         selectedProvider.modelProbeState === "fallback"
@@ -2255,7 +2304,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                       notice={{
                         tone: "info",
                         message:
-                          "Provider secrets are saved through gateway secret endpoints and are not sent back to the browser after save. This field is only for entering a replacement key.",
+                          "Key on file status comes from the gateway only. Secrets are saved through secure endpoints and are never sent back to the browser after save; this field only accepts a replacement key.",
                       }}
                     />
                     {secretState.error ? (
@@ -2332,7 +2381,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                   }
                 />
               </SettingsField>
-              <SettingsField label="API style">
+              <SettingsField label="Provider API style">
                 <select
                   className="mc-next-settings-input"
                   value={providerDraft.apiStyle}
@@ -2343,11 +2392,13 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                     }))
                   }
                 >
-                  <option value="openai-responses">OpenAI Responses</option>
-                  <option value="openai-codex-responses">OpenAI Codex Responses</option>
-                  <option value="openai-chat-completions">OpenAI Chat Completions</option>
-                  <option value="anthropic-messages">Anthropic Messages</option>
+                  {PROVIDER_API_STYLE_OPTIONS.map((style) => (
+                    <option key={style} value={style}>
+                      {formatProviderApiStyleLabel(style)}
+                    </option>
+                  ))}
                 </select>
+                <p className="mc-next-settings-field-note">{describeProviderApiStyle(providerDraft.apiStyle)}</p>
               </SettingsField>
               <SettingsField label="Default model">
                 <input
@@ -6038,6 +6089,10 @@ export function normalizeToolApprovalMode(value: string | undefined): ToolApprov
   return TOOL_APPROVAL_MODE_OPTIONS.includes(value as ToolApprovalMode) ? (value as ToolApprovalMode) : "approve_risky";
 }
 
+export function normalizeToolProfile(value: string | undefined): ToolProfile {
+  return TOOL_PROFILE_OPTIONS.includes(value as ToolProfile) ? (value as ToolProfile) : "standard";
+}
+
 export function describeToolApprovalMode(value: ToolApprovalMode): string {
   if (value === "approve_all") {
     return "Ask every time";
@@ -6048,10 +6103,91 @@ export function describeToolApprovalMode(value: ToolApprovalMode): string {
   return "Ask for risky work";
 }
 
+export function describeToolApprovalModeHelp(value: ToolApprovalMode): string {
+  if (value === "approve_all") {
+    return "Every otherwise-allowed tool call asks first; useful for audits and first-run learning.";
+  }
+  if (value === "bypass") {
+    return "Allowed tools run without prompts, while hard policy blocks still apply. Use only in trusted local workflows.";
+  }
+  return "Low-risk allowed tools can run, but caution, danger, and nuclear-risk work asks first.";
+}
+
+export function describeToolProfile(value: ToolProfile): string {
+  switch (value) {
+    case "minimal":
+      return "Smallest tool set for basic chat and status checks.";
+    case "coding":
+      return "Adds repo, filesystem, terminal, and validation tools for implementation work.";
+    case "ops":
+      return "Prioritizes runtime, diagnostics, deployment, and repair tooling.";
+    case "research":
+      return "Prioritizes retrieval, browsing, citations, and synthesis tools.";
+    case "chat-agent":
+      return "Chat-friendly tools without turning the surface into a full coding workstation.";
+    case "danger":
+      return "Broadest local tool profile. Pair it with strict approvals unless this machine is fully trusted.";
+    default:
+      return "Balanced default for normal local work without opening the broadest tool set.";
+  }
+}
+
 export function normalizeBudgetMode(value: string | undefined): OnboardingState["settings"]["budgetMode"] {
   return BUDGET_MODE_OPTIONS.includes(value as OnboardingState["settings"]["budgetMode"])
     ? (value as OnboardingState["settings"]["budgetMode"])
     : "balanced";
+}
+
+export function describeBudgetMode(value: OnboardingState["settings"]["budgetMode"]): string {
+  if (value === "saver") {
+    return "Prefer lower-cost models and tighter runtime limits.";
+  }
+  if (value === "power") {
+    return "Allow stronger defaults when quality matters more than cost.";
+  }
+  return "Keep cost and capability balanced for everyday work.";
+}
+
+function formatProviderApiStyleLabel(value: ProviderEditorDraft["apiStyle"]): string {
+  if (value === "openai-responses") {
+    return "OpenAI Responses";
+  }
+  if (value === "openai-codex-responses") {
+    return "OpenAI Codex Responses";
+  }
+  if (value === "anthropic-messages") {
+    return "Anthropic Messages";
+  }
+  return "OpenAI Chat Completions";
+}
+
+function describeProviderApiStyle(value: ProviderEditorDraft["apiStyle"]): string {
+  if (value === "openai-responses") {
+    return "Use for modern OpenAI-compatible Responses endpoints with tool and reasoning support.";
+  }
+  if (value === "openai-codex-responses") {
+    return "Use only for the built-in ChatGPT/Codex OAuth provider.";
+  }
+  if (value === "anthropic-messages") {
+    return "Use for Anthropic Claude providers that speak the Messages API.";
+  }
+  return "Use for older OpenAI-compatible chat-completions endpoints such as many proxy or local servers.";
+}
+
+function formatSecretStatusMeta(source: string | undefined, hasSecret: boolean): string {
+  if (!hasSecret) {
+    return "No key on file";
+  }
+  if (source === "keychain") {
+    return "Key on file in OS secure storage";
+  }
+  if (source === "env") {
+    return "Key on file via environment variable";
+  }
+  if (source === "inline") {
+    return "Key on file in runtime config";
+  }
+  return "Key on file; value is never returned";
 }
 
 export function applyIntegrationDefaults(
@@ -6268,7 +6404,7 @@ export function labelForSettingsSection(section: string) {
     case "budget":
       return "Budget";
     case "providers":
-      return "Providers";
+      return "Providers & Models";
     case "personalities":
       return "Personalities";
     case "access":
@@ -6301,7 +6437,7 @@ export function descriptionForSettingsSection(section: string) {
     case "budget":
       return "Cost-control deep links route to explicit budget guidance instead of silent fallback.";
     case "providers":
-      return "Choose active routing, inspect provider posture, and manage secrets.";
+      return "Choose active routing, inspect provider and model posture, and manage secrets.";
     case "personalities":
       return "Manage Chat tone presets and choose the global Chat default.";
     case "access":

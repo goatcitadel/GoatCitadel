@@ -219,7 +219,7 @@ async function run(): Promise<void> {
           networkAllowlist: runtimeDefaults.networkAllowlist,
           auth: {
             mode: auth.mode,
-            allowLoopbackBypass: initialState.settings.auth.allowLoopbackBypass,
+            allowLoopbackBypass: false,
             token: auth.mode === "token" ? auth.token : undefined,
             basicUsername: auth.mode === "basic" ? auth.username : undefined,
             basicPassword: auth.mode === "basic" ? auth.password : undefined,
@@ -504,6 +504,7 @@ async function promptProviderAndModel(
       "Provider key guidance",
       [
         "If this provider uses an API key, you can paste it now for onboarding.",
+        "If you save it, GoatCitadel keeps a key-on-file status and never sends the key back to the browser.",
         "You can also skip the secret here and rely on an env var later.",
         `Suggested env var: ${suggestedEnvVar}`,
       ],

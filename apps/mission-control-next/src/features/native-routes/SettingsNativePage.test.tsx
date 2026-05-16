@@ -1084,6 +1084,9 @@ describe("SettingsNativePage providers", () => {
     expect(text).toContain("First-run setup");
     expect(text).toContain("Provider configured");
     expect(text).toContain("Apply first-run defaults");
+    expect(text).toContain("Tool profile");
+    expect(text).toContain("Balanced default for normal local work");
+    expect(text).toContain("Keep cost and capability balanced");
     expect(text).not.toContain("Terminal onboarding");
     expect(text).not.toContain("Mission Control posture");
 
@@ -1091,9 +1094,13 @@ describe("SettingsNativePage providers", () => {
       findButton(renderer!.root, "Apply defaults").props.onClick();
     });
     expect(mocks.bootstrapOnboarding).toHaveBeenCalledWith({
+      defaultToolProfile: "standard",
       toolApprovalMode: "approve_risky",
       budgetMode: "balanced",
       networkAllowlist: ["api.openai.com"],
+      auth: {
+        allowLoopbackBypass: false,
+      },
     });
 
     await act(async () => {
@@ -1255,6 +1262,14 @@ describe("SettingsNativePage providers", () => {
       await act(async () => {
         renderer = renderPage();
       });
+
+      const initialText = collectText(renderer!.root);
+      expect(initialText).toContain("Providers & Models");
+      expect(initialText).toContain("Provider API style");
+      expect(initialText).toContain("Use for modern OpenAI-compatible Responses endpoints");
+      expect(initialText).toContain("Key on file in OS secure storage");
+      expect(initialText).toContain("never sent back to the browser");
+      expect(initialText).toContain("Provider models");
 
       await act(async () => {
         findButton(renderer!.root, "Refresh models").props.onClick();

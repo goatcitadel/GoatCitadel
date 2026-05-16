@@ -1151,17 +1151,22 @@ describe("SettingsNativePage broad native sections", () => {
     const onboarding = await mount("onboarding", { navigate, setActiveWorkspaceId });
 
     const selects = onboarding.root.findAllByType("select");
-    await change(selects[0]!, "bypass");
-    await change(selects[1]!, "power");
+    await change(selects[0]!, "danger");
+    await change(selects[1]!, "bypass");
+    await change(selects[2]!, "power");
     await change(
       onboarding.root.findByProps({ placeholder: "example.com, api.example.com" }),
       "api.example.com, localhost",
     );
     await click(findButton(onboarding.root, "Apply defaults"));
     expect(settingsMocks.bootstrapOnboarding).toHaveBeenCalledWith({
+      defaultToolProfile: "danger",
       toolApprovalMode: "bypass",
       budgetMode: "power",
       networkAllowlist: ["api.example.com", "localhost"],
+      auth: {
+        allowLoopbackBypass: false,
+      },
     });
     expect(collectText(onboarding.root)).toContain("defaults failed");
 
@@ -1194,7 +1199,7 @@ describe("SettingsNativePage broad native sections", () => {
   });
 
   it("covers demo load, ready, and bootstrap error branches", async () => {
-    settingsMocks.fetchDemoState.mockResolvedValueOnce({
+    settingsMocks.fetchDemoState.mockResolvedValue({
       status: "ready",
       workspace: { workspaceId: "demo-existing", name: "Existing Demo" },
       sessions: [{ sessionId: "chat-demo", mode: "chat" }],

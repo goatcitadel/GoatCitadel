@@ -349,8 +349,8 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     },
     {
       id: "settings-providers",
-      label: "Providers",
-      description: "Model and provider defaults.",
+      label: "Providers & Models",
+      description: "Provider credentials, model catalogs, and active routing defaults.",
       area: "settings",
       section: "providers",
     },
