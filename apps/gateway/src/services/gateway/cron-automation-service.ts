@@ -29,13 +29,22 @@ export interface CronAutomationServiceDeps {
   requireFeatureEnabled: (flag: "cronReviewQueueV1Enabled") => void;
   isFeatureEnabled: (flag: "cronReviewQueueV1Enabled") => boolean;
   runHandlers: {
-    task: (job: CronJobRecord) => Promise<{ taskId?: string } | void>;
+    task: (
+      job: CronJobRecord,
+      context?: { contextFrom?: string; contextOutput?: string },
+    ) => Promise<{ taskId?: string } | void>;
     improvement: () => Promise<void>;
     backup: () => Promise<void>;
     memoryFlush: () => Promise<void>;
     costReport: () => Promise<void>;
     updateReview: () => Promise<void>;
     watchdog: (job: CronJobRecord) => Promise<CronWatchdogRunResult>;
+    noAgent: (input: {
+      command: string;
+      args?: string[];
+      workdir?: string;
+      timeoutMs?: number;
+    }) => Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut: boolean }>;
   };
 }
 
@@ -263,6 +272,48 @@ export class CronAutomationService {
       await this.deps.runHandlers.costReport();
     } else if (job.action === "update_review") {
       await this.deps.runHandlers.updateReview();
+    } else if (job.action === "no_agent") {
+      const noAgentConfig = job.actionConfig?.noAgent;
+      if (!noAgentConfig?.command) {
+        throw new Error(`no_agent cron job missing command: ${normalizedJobId}`);
+      }
+      const runId = randomUUID();
+      const runResult = await this.deps.runHandlers.noAgent({
+        command: noAgentConfig.command,
+        args: noAgentConfig.args,
+        workdir: job.workdir,
+        timeoutMs: noAgentConfig.timeoutMs,
+      });
+      const finishedAt = new Date().toISOString();
+      const stdoutTrimmed = runResult.stdout.replace(/\r?\n$/, "");
+      const hasOutput = stdoutTrimmed.length > 0;
+      const saved = this.deps.storage.cronJobs.upsert(
+        {
+          ...job,
+          lastRunAt: finishedAt,
+          lastRunOutput: hasOutput ? stdoutTrimmed : undefined,
+          lastRunId: runId,
+          nextRunAt: computeNextCronRunAt(job.schedule, new Date(finishedAt), job.endAt),
+        },
+        finishedAt,
+      );
+      this.deps.persistCronJobsConfig();
+      runSummary = {
+        ...runResult,
+        action: job.action,
+        runId,
+        hasOutput,
+        nextRunAt: saved.nextRunAt,
+      };
+      if (hasOutput) {
+        this.deps.publishRealtime("cron_job_run", "cron", {
+          type: "cron_no_agent_output",
+          jobId: saved.jobId,
+          runId,
+          output: stdoutTrimmed,
+          deliveryChannel: noAgentConfig.deliveryChannel,
+        });
+      }
     } else {
       throw new Error(`Cron job has no runnable handler: ${normalizedJobId}`);
     }
@@ -587,23 +638,63 @@ function normalizeCronJobActionConfig(
   value: unknown,
   action: CronJobRecord["action"],
 ): CronJobRecord["actionConfig"] | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value) || action !== "watchdog") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
   const rawValue = value as Record<string, unknown>;
-  const rawWatchdog =
-    rawValue.watchdog && typeof rawValue.watchdog === "object" && !Array.isArray(rawValue.watchdog)
-      ? (rawValue.watchdog as Record<string, unknown>)
-      : {};
-  const checkId = normalizeWatchdogCheckId(rawWatchdog.checkId);
-  const severityThreshold = rawWatchdog.severityThreshold === "error" ? "error" : "warning";
-  return {
-    watchdog: {
-      checkId,
-      severityThreshold,
-      notifyHomeChannel: rawWatchdog.notifyHomeChannel === true,
-    },
-  };
+  if (action === "watchdog") {
+    const rawWatchdog =
+      rawValue.watchdog && typeof rawValue.watchdog === "object" && !Array.isArray(rawValue.watchdog)
+        ? (rawValue.watchdog as Record<string, unknown>)
+        : {};
+    const checkId = normalizeWatchdogCheckId(rawWatchdog.checkId);
+    const severityThreshold = rawWatchdog.severityThreshold === "error" ? "error" : "warning";
+    return {
+      watchdog: {
+        checkId,
+        severityThreshold,
+        notifyHomeChannel: rawWatchdog.notifyHomeChannel === true,
+      },
+    };
+  }
+  if (action === "no_agent") {
+    const rawNoAgent =
+      rawValue.noAgent && typeof rawValue.noAgent === "object" && !Array.isArray(rawValue.noAgent)
+        ? (rawValue.noAgent as Record<string, unknown>)
+        : undefined;
+    if (!rawNoAgent || typeof rawNoAgent.command !== "string" || !rawNoAgent.command.trim()) {
+      throw new Error("no_agent cron job requires actionConfig.noAgent.command.");
+    }
+    const args = Array.isArray(rawNoAgent.args)
+      ? rawNoAgent.args.filter((token): token is string => typeof token === "string")
+      : undefined;
+    const timeoutMs =
+      typeof rawNoAgent.timeoutMs === "number" && Number.isFinite(rawNoAgent.timeoutMs) && rawNoAgent.timeoutMs > 0
+        ? Math.floor(rawNoAgent.timeoutMs)
+        : undefined;
+    const rawChannel =
+      rawNoAgent.deliveryChannel &&
+      typeof rawNoAgent.deliveryChannel === "object" &&
+      !Array.isArray(rawNoAgent.deliveryChannel)
+        ? (rawNoAgent.deliveryChannel as Record<string, unknown>)
+        : undefined;
+    const deliveryChannel =
+      rawChannel && typeof rawChannel.channelKey === "string"
+        ? {
+            channelKey: rawChannel.channelKey,
+            target: typeof rawChannel.target === "string" ? rawChannel.target : undefined,
+          }
+        : undefined;
+    return {
+      noAgent: {
+        command: rawNoAgent.command.trim(),
+        ...(args ? { args } : {}),
+        ...(timeoutMs ? { timeoutMs } : {}),
+        ...(deliveryChannel ? { deliveryChannel } : {}),
+      },
+    };
+  }
+  return undefined;
 }
 
 function normalizeWatchdogCheckId(value: unknown): CronWatchdogCheckId {
@@ -619,7 +710,7 @@ function normalizeWatchdogCheckId(value: unknown): CronWatchdogCheckId {
 }
 
 function isScheduledCronAction(action: CronJobRecord["action"]): boolean {
-  return action === "task" || action === "watchdog";
+  return action === "task" || action === "watchdog" || action === "no_agent";
 }
 
 function shouldRecordWatchdogReview(job: CronJobRecord, result: CronWatchdogRunResult): boolean {

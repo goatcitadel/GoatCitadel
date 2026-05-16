@@ -622,6 +622,77 @@ describe("CronAutomationService job behavior", () => {
   });
 });
 
+function makeServiceWithNoAgent(opts: {
+  realtime: ReturnType<typeof vi.fn>;
+  runner: (input: unknown) => Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut: boolean }>;
+}): CronAutomationService {
+  const db = new FakeDb();
+  const cronJobs = new FakeCronJobs();
+  const deps: CronAutomationServiceDeps = {
+    storage: { db, cronJobs } as unknown as Storage,
+    persistCronJobsConfig: () => {},
+    publishRealtime: opts.realtime,
+    requireFeatureEnabled: () => {},
+    isFeatureEnabled: () => false,
+    runHandlers: {
+      task: async () => ({}),
+      improvement: async () => {},
+      backup: async () => {},
+      memoryFlush: async () => {},
+      costReport: async () => {},
+      updateReview: async () => {},
+      watchdog: async () => ({ status: "ok", checkId: "runtime_health", summary: "ok" }),
+      noAgent: opts.runner,
+    },
+  };
+  return new CronAutomationService(deps);
+}
+
+describe("no_agent cron action", () => {
+  it("skips delivery when stdout is empty", async () => {
+    const realtime = vi.fn();
+    const service = makeServiceWithNoAgent({
+      realtime,
+      runner: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
+    });
+    service.createCronJob({
+      jobId: "probe-empty",
+      name: "probe-empty",
+      action: "no_agent",
+      schedule: "0 */6 * * * UTC",
+      actionConfig: { noAgent: { command: "echo", args: [""] } },
+    });
+    await service.runCronJobNow("probe-empty");
+    const events = realtime.mock.calls.map((call) => call[2]?.type).filter(Boolean);
+    expect(events).not.toContain("cron_no_agent_output");
+    const job = service.getCronJob("probe-empty");
+    expect(job.lastRunOutput).toBeUndefined();
+  });
+
+  it("delivers stdout verbatim and stores it on lastRunOutput when non-empty", async () => {
+    const realtime = vi.fn();
+    const service = makeServiceWithNoAgent({
+      realtime,
+      runner: async () => ({ stdout: "alert", stderr: "", exitCode: 0, timedOut: false }),
+    });
+    service.createCronJob({
+      jobId: "probe-alert",
+      name: "probe-alert",
+      action: "no_agent",
+      schedule: "0 */6 * * * UTC",
+      actionConfig: { noAgent: { command: "echo", args: ["alert"] } },
+    });
+    await service.runCronJobNow("probe-alert");
+    const payloads = realtime.mock.calls
+      .filter((call) => call[2]?.type === "cron_no_agent_output")
+      .map((call) => call[2]);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.output).toBe("alert");
+    const job = service.getCronJob("probe-alert");
+    expect(job.lastRunOutput).toBe("alert");
+  });
+});
+
 describe("CronAutomationService.retryCronReviewQueueItem", () => {
   it("lists review queue items and resolves cron run diffs", () => {
     const db = new FakeDb();

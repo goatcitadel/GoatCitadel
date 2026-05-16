@@ -348,6 +348,7 @@ import {
   PRIVATE_BETA_BACKUP_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./gateway/cron-automation-service.js";
+import { runNoAgentCommand } from "./gateway/cron-no-agent-runner.js";
 import * as orchestrationLifecycleService from "./orchestration-lifecycle-service.js";
 import { OrchestrationPhaseExecutionService } from "./orchestration-phase-execution-service.js";
 import { OrchestrationWorktreeService } from "./orchestration-worktree-service.js";
@@ -870,7 +871,7 @@ export class GatewayService {
       requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag),
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
       runHandlers: {
-        task: async (job) => {
+        task: async (job, _context?) => {
           const task = this.taskLifecycleService.createTask({
             title: job.name,
             description: [
@@ -901,6 +902,7 @@ export class GatewayService {
           await this.runUpdateReviewSchedulerIfDue({ force: true });
         },
         watchdog: async (job) => this.runCronWatchdog(job),
+        noAgent: (input) => runNoAgentCommand(input),
       },
     });
 
