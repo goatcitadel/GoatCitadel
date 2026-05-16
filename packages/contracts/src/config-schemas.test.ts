@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AgentSubagentDefaultsSchema,
   AssistantConfigInputSchema,
   BudgetConfigSchema,
   CronJobSchema,
@@ -458,6 +459,25 @@ describe("CronJobsConfigSchema", () => {
   it("rejects when jobs is not an array", () => {
     const input = { jobs: "none" };
     expect(() => CronJobsConfigSchema.parse(input)).toThrow();
+  });
+});
+
+describe("AgentSubagentDefaultsSchema", () => {
+  it("defaults childTimeoutSeconds to 600 and maxDepth to 4", () => {
+    const parsed = AgentSubagentDefaultsSchema.parse({});
+    expect(parsed.childTimeoutSeconds).toBe(600);
+    expect(parsed.maxDepth).toBe(4);
+  });
+
+  it("accepts overrides", () => {
+    const parsed = AgentSubagentDefaultsSchema.parse({ childTimeoutSeconds: 900, maxDepth: 3 });
+    expect(parsed.childTimeoutSeconds).toBe(900);
+    expect(parsed.maxDepth).toBe(3);
+  });
+
+  it("rejects non-positive values", () => {
+    expect(() => AgentSubagentDefaultsSchema.parse({ childTimeoutSeconds: 0 })).toThrow();
+    expect(() => AgentSubagentDefaultsSchema.parse({ maxDepth: 0 })).toThrow();
   });
 });
 

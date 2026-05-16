@@ -580,3 +580,17 @@ export const CronJobsConfigSchema = z
   .passthrough();
 
 export type CronJobsConfigInput = z.input<typeof CronJobsConfigSchema>;
+
+// ---------------------------------------------------------------------------
+// Agent Subagent Defaults
+// ---------------------------------------------------------------------------
+
+export const AgentSubagentDefaultsSchema = z
+  .object({
+    childTimeoutSeconds: z.number().int().positive().default(600),
+    maxDepth: z.number().int().positive().default(4),
+  })
+  .passthrough();
+
+export type AgentSubagentDefaultsInput = z.input<typeof AgentSubagentDefaultsSchema>;
+export type AgentSubagentDefaults = z.output<typeof AgentSubagentDefaultsSchema>;
