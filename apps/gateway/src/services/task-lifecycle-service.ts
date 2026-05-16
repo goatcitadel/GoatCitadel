@@ -100,13 +100,24 @@ export class TaskLifecycleService {
     const current = this.deps.storage.tasks.get(taskId);
     const next = emitDistressSignal(current.distressSignals, input);
     const updated = this.deps.storage.tasks.update(taskId, { distressSignals: next });
-    this.publishTaskEvent("task_distress_emitted", { taskId, signal: next[0] }, buildTaskRealtimeLinks(updated));
+    const newSignal = next.find((s) => !current.distressSignals?.some((existing) => existing.signalId === s.signalId));
+    this.publishTaskEvent(
+      "task_distress_emitted",
+      { taskId, signal: newSignal ?? next[0] },
+      buildTaskRealtimeLinks(updated),
+    );
     return updated;
   }
 
   public resolveDistressSignal(taskId: string, signalId: string, input: { resolvedBy?: string } = {}): TaskRecord {
     const current = this.deps.storage.tasks.get(taskId);
     const next = resolveDistressSignal(current.distressSignals, signalId, input);
+    const matched = current.distressSignals?.some((s) => s.signalId === signalId && !s.resolvedAt);
+    if (!matched) {
+      throw new ValidationError({
+        message: `No unresolved distress signal with signalId="${signalId}" on task ${taskId}`,
+      });
+    }
     const updated = this.deps.storage.tasks.update(taskId, { distressSignals: next });
     this.publishTaskEvent(
       "task_distress_resolved",
@@ -141,7 +152,13 @@ export class TaskLifecycleService {
       exhaustedAt: exhausted ? now : budget.exhaustedAt,
     };
     if (!exhausted) {
-      return this.deps.storage.tasks.update(taskId, { retryBudget });
+      const updated = this.deps.storage.tasks.update(taskId, { retryBudget });
+      this.publishTaskEvent(
+        "task_retry_attempted",
+        { taskId, retryCount: nextCount, reason },
+        buildTaskRealtimeLinks(updated),
+      );
+      return updated;
     }
     const distressSignals = emitDistressSignal(current.distressSignals, {
       code: "retry_budget_exhausted",

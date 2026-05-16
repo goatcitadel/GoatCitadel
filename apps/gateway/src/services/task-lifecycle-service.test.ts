@@ -432,6 +432,14 @@ describe("TaskLifecycleService — distress signals", () => {
     expect(resolved.distressSignals![0].resolvedAt).toBeTruthy();
     expect(resolved.distressSignals![0].resolvedBy).toBe("op-1");
   });
+
+  it("resolveDistressSignal throws when signalId does not exist", () => {
+    const { service } = createService();
+    const task = service.createTask({ title: "t" });
+    expect(() => service.resolveDistressSignal(task.taskId, "ds-nonexistent", { resolvedBy: "op" })).toThrow(
+      /No unresolved distress signal/,
+    );
+  });
 });
 
 describe("TaskLifecycleService — retry budget", () => {
@@ -463,5 +471,15 @@ describe("TaskLifecycleService — retry budget", () => {
     expect(blocked.retryBudget?.exhaustedAt).toBeTruthy();
     const exhaustedSignal = blocked.distressSignals?.find((s) => s.code === "retry_budget_exhausted");
     expect(exhaustedSignal?.severity).toBe("critical");
+  });
+
+  it("recordRetryAttempt publishes task_retry_attempted event on non-exhausted path", () => {
+    const { service, publishRealtime } = createService();
+    const task = service.createTask({ title: "t", status: "in_progress" });
+    service.setRetryBudget(task.taskId, 3);
+    service.recordRetryAttempt(task.taskId, "transient");
+    const call = publishRealtime.mock.calls.find((c) => c[0] === "task_retry_attempted");
+    expect(call).toBeTruthy();
+    expect(call?.[2]).toMatchObject({ taskId: task.taskId, retryCount: 1, reason: "transient" });
   });
 });
