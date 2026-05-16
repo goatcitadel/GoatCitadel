@@ -448,6 +448,7 @@ import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import { RuntimeLifecycleReadService } from "./runtime-lifecycle-read-service.js";
 import { CapabilitySystemService } from "./capability-system-service.js";
 import { TaskLifecycleService } from "./task-lifecycle-service.js";
+import { createDefaultArtifactProbers, createDurableTaskAutoBlockBridge } from "./gateway-kanban-wiring.js";
 import {
   ChannelDeliveryRuntimeService,
   type ChannelDeliveryRuntimeRecord,
@@ -747,45 +748,10 @@ export class GatewayService {
     });
     this.taskLifecycleService = new TaskLifecycleService({
       storage: this.storage,
-      publishRealtime: (eventType, source, payload, options) => {
-        this.publishRealtime(eventType, source, payload, options);
-      },
+      publishRealtime: (event, source, payload, options) => this.publishRealtime(event, source, payload, options),
       pauseDurableRun: (runId, actorId) => this.pauseDurableRun(runId, actorId),
-      recordAgenticDiagnosticSignal: ({ task, diagnostic }) => {
-        this.improvementService.recordAgenticDiagnosticSignal({ task, diagnostic });
-      },
-      probers: {
-        fs: {
-          statExists: async (filePath: string) => {
-            try {
-              await fs.stat(filePath);
-              return true;
-            } catch {
-              return false;
-            }
-          },
-        },
-        http: {
-          headOk: async (url: string) => {
-            try {
-              const response = await fetch(url, { method: "HEAD" });
-              return response.ok;
-            } catch {
-              return false;
-            }
-          },
-        },
-        git: {
-          hasCommit: async (sha: string) => {
-            try {
-              execFileSync("git", ["cat-file", "-e", sha], { stdio: "ignore" });
-              return true;
-            } catch {
-              return false;
-            }
-          },
-        },
-      },
+      recordAgenticDiagnosticSignal: (input) => this.improvementService.recordAgenticDiagnosticSignal(input),
+      probers: createDefaultArtifactProbers(),
     });
     this.orchestrationEngine = new OrchestrationEngine();
     this.orchestrationWorktreeService = new OrchestrationWorktreeService({
@@ -968,10 +934,7 @@ export class GatewayService {
       },
       evaluateContinuationGate: (run) => this.evaluateDurableContinuationGate(run),
       recordEvidenceEnvelope: (input) => this.evidenceEnvelopeService.createEnvelope(input),
-      taskLifecycle: {
-        autoBlockOnIncompleteExit: (taskId, runId) =>
-          this.taskLifecycleService.autoBlockOnIncompleteExit(taskId, runId),
-      },
+      taskLifecycle: createDurableTaskAutoBlockBridge(this.taskLifecycleService),
     });
     this.hooksService = new HooksService(serviceCtx, {
       createDurableRun: (input) => this.durableRunService.createDurableRun(input),

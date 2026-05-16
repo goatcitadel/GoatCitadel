@@ -6,6 +6,8 @@ import { buildAgenticRuntimeAvailability } from "../services/agentic-capability-
 import { probeAgenticHarnessAvailability } from "../services/agentic-harness-availability.js";
 import { sendRouteError } from "./_error-handler.js";
 
+const KANBAN_MUTATION_RATE_LIMIT_MAX = 180;
+
 const statusSchema = z.enum(["planning", "inbox", "assigned", "in_progress", "testing", "review", "done", "blocked"]);
 
 const prioritySchema = z.enum(["low", "normal", "high", "urgent"]);
@@ -496,7 +498,9 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/tasks/:taskId/distress", async (request, reply) => {
+  const kanbanMutationRouteConfig = { config: { rateLimit: { max: KANBAN_MUTATION_RATE_LIMIT_MAX } } };
+
+  fastify.post("/api/v1/tasks/:taskId/distress", kanbanMutationRouteConfig, async (request, reply) => {
     const taskId = (request.params as { taskId: string }).taskId;
     const parsed = emitDistressBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
@@ -508,7 +512,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.delete("/api/v1/tasks/:taskId/distress/:signalId", async (request, reply) => {
+  fastify.delete("/api/v1/tasks/:taskId/distress/:signalId", kanbanMutationRouteConfig, async (request, reply) => {
     const { taskId, signalId } = request.params as { taskId: string; signalId: string };
     const parsed = resolveDistressBodySchema.safeParse(request.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
@@ -520,7 +524,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/tasks/:taskId/retry-budget", async (request, reply) => {
+  fastify.post("/api/v1/tasks/:taskId/retry-budget", kanbanMutationRouteConfig, async (request, reply) => {
     const taskId = (request.params as { taskId: string }).taskId;
     const parsed = retryBudgetBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
@@ -532,7 +536,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/tasks/:taskId/verify-artifacts", async (request, reply) => {
+  fastify.post("/api/v1/tasks/:taskId/verify-artifacts", kanbanMutationRouteConfig, async (request, reply) => {
     const taskId = (request.params as { taskId: string }).taskId;
     const parsed = verifyArtifactsBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
@@ -544,7 +548,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/tasks/bulk", async (request, reply) => {
+  fastify.post("/api/v1/tasks/bulk", kanbanMutationRouteConfig, async (request, reply) => {
     const parsed = bulkActionBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
