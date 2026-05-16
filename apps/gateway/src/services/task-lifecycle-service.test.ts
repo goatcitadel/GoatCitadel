@@ -483,3 +483,63 @@ describe("TaskLifecycleService — retry budget", () => {
     expect(call?.[2]).toMatchObject({ taskId: task.taskId, retryCount: 1, reason: "transient" });
   });
 });
+
+describe("TaskLifecycleService.verifyTaskArtifacts", () => {
+  it("records verification results and emits artifact_missing distress when any claim is missing", async () => {
+    const { service, storage } = createService({
+      probers: {
+        fs: { statExists: async (p: string) => p !== "/missing.txt" },
+        http: { headOk: async () => true },
+        git: { hasCommit: async () => true },
+      },
+    });
+    const task = service.createTask({ title: "t", status: "in_progress" });
+    const updated = await service.verifyTaskArtifacts(task.taskId, [
+      { kind: "file", value: "/exists.txt" },
+      { kind: "file", value: "/missing.txt" },
+    ]);
+    const persisted = storage.tasks.get(task.taskId);
+    expect(persisted.artifactVerification?.length).toBe(2);
+    const missing = persisted.distressSignals?.find((s) => s.code === "artifact_missing");
+    expect(missing).toBeTruthy();
+    expect(missing?.severity).toBe("critical");
+    expect(updated.status).toBe("blocked");
+  });
+
+  it("does not emit distress when all claims verify", async () => {
+    const { service } = createService({
+      probers: {
+        fs: { statExists: async () => true },
+        http: { headOk: async () => true },
+        git: { hasCommit: async () => true },
+      },
+    });
+    const task = service.createTask({ title: "t", status: "in_progress" });
+    const updated = await service.verifyTaskArtifacts(task.taskId, [{ kind: "file", value: "/ok.txt" }]);
+    expect(updated.status).toBe("in_progress");
+    expect(updated.distressSignals?.find((s) => s.code === "artifact_missing")).toBeUndefined();
+  });
+
+  it("throws ValidationError when probers are not configured", async () => {
+    const { service } = createService(); // no probers
+    const task = service.createTask({ title: "t" });
+    await expect(service.verifyTaskArtifacts(task.taskId, [{ kind: "file", value: "/x" }])).rejects.toThrow(
+      /probers not configured/i,
+    );
+  });
+
+  it("merges new verification results with prior ones", async () => {
+    const { service, storage } = createService({
+      probers: {
+        fs: { statExists: async () => true },
+        http: { headOk: async () => true },
+        git: { hasCommit: async () => true },
+      },
+    });
+    const task = service.createTask({ title: "t", status: "in_progress" });
+    await service.verifyTaskArtifacts(task.taskId, [{ kind: "file", value: "/a.txt" }]);
+    await service.verifyTaskArtifacts(task.taskId, [{ kind: "url", value: "https://x" }]);
+    const persisted = storage.tasks.get(task.taskId);
+    expect(persisted.artifactVerification?.length).toBe(2);
+  });
+});

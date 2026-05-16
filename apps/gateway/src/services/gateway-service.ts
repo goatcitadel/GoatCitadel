@@ -754,6 +754,38 @@ export class GatewayService {
       recordAgenticDiagnosticSignal: ({ task, diagnostic }) => {
         this.improvementService.recordAgenticDiagnosticSignal({ task, diagnostic });
       },
+      probers: {
+        fs: {
+          statExists: async (filePath: string) => {
+            try {
+              await fs.stat(filePath);
+              return true;
+            } catch {
+              return false;
+            }
+          },
+        },
+        http: {
+          headOk: async (url: string) => {
+            try {
+              const response = await fetch(url, { method: "HEAD" });
+              return response.ok;
+            } catch {
+              return false;
+            }
+          },
+        },
+        git: {
+          hasCommit: async (sha: string) => {
+            try {
+              execFileSync("git", ["cat-file", "-e", sha], { stdio: "ignore" });
+              return true;
+            } catch {
+              return false;
+            }
+          },
+        },
+      },
     });
     this.orchestrationEngine = new OrchestrationEngine();
     this.orchestrationWorktreeService = new OrchestrationWorktreeService({

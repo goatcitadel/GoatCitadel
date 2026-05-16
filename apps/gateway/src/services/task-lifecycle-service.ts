@@ -11,6 +11,7 @@ import type {
   RealtimeEvent,
   TaskActivityCreateInput,
   TaskActivityRecord,
+  TaskArtifactClaim,
   TaskCreateInput,
   TaskDeliverableCreateInput,
   TaskDeliverableRecord,
@@ -24,6 +25,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { ValidationError } from "@goatcitadel/contracts";
 import { emitDistressSignal, resolveDistressSignal, type EmitDistressInput } from "./task-distress-engine.js";
+import { verifyClaimedArtifacts, type ArtifactProbers } from "./task-artifact-verifier.js";
 import type { Storage } from "@goatcitadel/storage";
 import { randomUUID } from "node:crypto";
 
@@ -47,6 +49,7 @@ export interface TaskLifecycleServiceDependencies {
   pauseDurableRun?(runId: string, actorId?: string): { status: string };
   recordAgenticDiagnosticSignal?(input: { task: TaskRecord; diagnostic: AgenticDiagnosticSignal }): void;
   storage: TaskStorage;
+  probers?: ArtifactProbers;
 }
 
 export class TaskLifecycleService {
@@ -171,6 +174,37 @@ export class TaskLifecycleService {
       distressSignals,
       status: "blocked",
     });
+  }
+
+  public async verifyTaskArtifacts(taskId: string, claims: TaskArtifactClaim[]): Promise<TaskRecord> {
+    if (!this.deps.probers) {
+      throw new ValidationError({ message: "Artifact verification probers not configured" });
+    }
+    const verification = await verifyClaimedArtifacts(claims, this.deps.probers);
+    const current = this.deps.storage.tasks.get(taskId);
+    const merged = [...(current.artifactVerification ?? []), ...verification];
+    const missingCount = verification.filter((v) => v.status === "missing").length;
+    const failedCount = verification.filter((v) => v.status === "failed").length;
+    const hasFailures = missingCount + failedCount > 0;
+    const distressSignals = hasFailures
+      ? emitDistressSignal(current.distressSignals, {
+          code: "artifact_missing",
+          severity: "critical",
+          title: "Claimed artifacts not found",
+          summary: `${missingCount} missing, ${failedCount} unreachable`,
+        })
+      : current.distressSignals;
+    const updated = this.deps.storage.tasks.update(taskId, {
+      artifactVerification: merged,
+      distressSignals,
+      status: hasFailures ? "blocked" : current.status,
+    });
+    this.publishTaskEvent(
+      "task_artifacts_verified",
+      { taskId, verifiedCount: verification.filter((v) => v.status === "verified").length, missingCount, failedCount },
+      buildTaskRealtimeLinks(updated),
+    );
+    return updated;
   }
 
   public listAgenticRuns(
