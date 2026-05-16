@@ -102,3 +102,95 @@ function toSuggestionItems(matches: ModelCommandCandidate[]): CommandSuggestionI
     applyValue: `/model ${item.providerId}/${item.model}`,
   }));
 }
+
+interface BuildOrchestrationCommandSuggestionsInput {
+  draft: string;
+}
+
+const STEER_PREFIX = /^\/steer(?:\s+(.*))?$/i;
+const QUEUE_PREFIX = /^\/queue(?:\s+(.*))?$/i;
+const GOAL_PREFIX = /^\/goal(?:\s+(.*))?$/i;
+
+export function buildOrchestrationCommandSuggestions({
+  draft,
+}: BuildOrchestrationCommandSuggestionsInput): CommandSuggestionItem[] {
+  const trimmed = draft.trimStart();
+  const steerMatch = trimmed.match(STEER_PREFIX);
+  if (steerMatch) {
+    const instruction = (steerMatch[1] ?? "").trim();
+    return [
+      {
+        key: "steer-instruction",
+        command: "/steer <instruction>",
+        description: "Inject this text into the active turn before it finishes streaming.",
+        applyValue: instruction ? `/steer ${instruction}` : "/steer ",
+      },
+    ];
+  }
+
+  const queueMatch = trimmed.match(QUEUE_PREFIX);
+  if (queueMatch) {
+    const sub = (queueMatch[1] ?? "").trim().toLowerCase();
+    const items: CommandSuggestionItem[] = [
+      {
+        key: "queue-steer",
+        command: "/queue steer",
+        description: "Force this message to steer the in-flight run.",
+        applyValue: "/queue steer ",
+      },
+      {
+        key: "queue-followup",
+        command: "/queue followup",
+        description: "Defer this message until the active turn completes.",
+        applyValue: "/queue followup ",
+      },
+      {
+        key: "queue-collect",
+        command: "/queue collect",
+        description: "Stage this message into a collection batch.",
+        applyValue: "/queue collect ",
+      },
+    ];
+    if (!sub) {
+      return items;
+    }
+    return items.filter((item) => item.command.endsWith(sub) || item.command.includes(sub));
+  }
+
+  const goalMatch = trimmed.match(GOAL_PREFIX);
+  if (goalMatch) {
+    const arg = (goalMatch[1] ?? "").trim();
+    if (!arg) {
+      return [
+        {
+          key: "goal-set",
+          command: "/goal <target>",
+          description: "Pin a cross-turn goal that prepends to every turn until cleared.",
+          applyValue: "/goal ",
+        },
+        {
+          key: "goal-status",
+          command: "/goal status",
+          description: "Show the current pinned goal and remaining turn budget.",
+          applyValue: "/goal status",
+        },
+        {
+          key: "goal-clear",
+          command: "/goal clear",
+          description: "Clear the pinned goal.",
+          applyValue: "/goal clear",
+        },
+      ];
+    }
+    return [
+      {
+        key: "goal-set",
+        command: "/goal <target>",
+        description: "Pin a cross-turn goal that prepends to every turn until cleared.",
+        applyValue: `/goal ${arg}`,
+      },
+    ];
+  }
+
+  return [];
+}
