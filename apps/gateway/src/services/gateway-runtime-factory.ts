@@ -1,3 +1,4 @@
+import type { LlmRuntimeConfig } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
 import { GatewayService } from "./gateway-service.js";
@@ -36,6 +37,7 @@ export type GatewayRuntimeInstance = GatewayRuntimePort & GatewayAuthValidationP
 export interface GatewayAdminPort extends GatewayRuntimePort, GatewayAuthValidationPort {
   createBackup(input: { name?: string; outputPath?: string }): Promise<unknown>;
   getAuthCredentialPlan(): unknown;
+  getLlmConfig(): LlmRuntimeConfig;
   getRetentionPolicy(): unknown;
   listBackups(limit?: number): Promise<unknown>;
   pruneRetention(input: { dryRun?: boolean }): Promise<unknown>;
@@ -64,6 +66,7 @@ export function createGatewayAdminRuntime(config: GatewayRuntimeConfig): Gateway
     ...createGatewayRuntimeFacade(gateway),
     createBackup: (input) => gateway.createBackup(input),
     getAuthCredentialPlan: () => gateway.getAuthCredentialPlan(),
+    getLlmConfig: () => gateway.getLlmConfig(),
     getRetentionPolicy: () => gateway.getRetentionPolicy(),
     listBackups: (limit) => gateway.listBackups(limit),
     pruneRetention: (input) => gateway.pruneRetention(input),

@@ -70,6 +70,53 @@ describe("ChatModelPicker", () => {
     expect(findText(empty.toJSON(), "No models available for Local runtime yet.")).toBe(true);
   });
 
+  it("shows active model contextWindow when LlmRuntimeConfig provides it", () => {
+    const renderer = create(
+      <ChatModelPicker
+        providers={[
+          {
+            providerId: "openai-codex",
+            label: "OpenAI Codex",
+            models: ["gpt-5.5"],
+          },
+        ]}
+        providerId="openai-codex"
+        model="gpt-5.5"
+        activeModelContextWindow={272_000}
+        activeModelOutputTokenLimit={32_000}
+        onChangeProvider={vi.fn()}
+        onChangeModel={vi.fn()}
+      />,
+    );
+
+    const rendered = renderer.toJSON();
+    expect(findText(rendered, "272K")).toBe(true);
+    expect(findText(rendered, "272,000")).toBe(true);
+  });
+
+  it("renders abbreviated millions for very large active model contextWindows", () => {
+    const renderer = create(
+      <ChatModelPicker
+        providers={[
+          {
+            providerId: "anthropic",
+            label: "Anthropic",
+            models: ["claude-opus-4-7"],
+          },
+        ]}
+        providerId="anthropic"
+        model="claude-opus-4-7"
+        activeModelContextWindow={1_000_000}
+        onChangeProvider={vi.fn()}
+        onChangeModel={vi.fn()}
+      />,
+    );
+
+    const rendered = renderer.toJSON();
+    expect(findText(rendered, "1M")).toBe(true);
+    expect(findText(rendered, "1,000,000")).toBe(true);
+  });
+
   it("shows provider context cost and capability metadata", () => {
     const renderer = create(
       <ChatModelPicker

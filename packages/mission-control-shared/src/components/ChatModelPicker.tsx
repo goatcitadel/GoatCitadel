@@ -39,6 +39,18 @@ function formatNumber(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
+function formatContextWindow(value: number): string {
+  if (value >= 1_000_000) {
+    const millions = value / 1_000_000;
+    return Number.isInteger(millions) ? `${millions}M` : `${millions.toFixed(1).replace(/\.0$/, "")}M`;
+  }
+  if (value >= 1_000) {
+    const thousands = value / 1_000;
+    return Number.isInteger(thousands) ? `${thousands}K` : `${thousands.toFixed(1).replace(/\.0$/, "")}K`;
+  }
+  return String(value);
+}
+
 function formatCost(input?: number, output?: number): string | null {
   const parts = [
     typeof input === "number" ? `$${input.toFixed(input >= 10 ? 2 : 3)}/M input` : null,
@@ -97,6 +109,8 @@ export function ChatModelPicker({
   disabled,
   pendingProviderId,
   modelLoading = false,
+  activeModelContextWindow,
+  activeModelOutputTokenLimit,
   onChangeProvider,
   onChangeModel,
 }: {
@@ -106,6 +120,8 @@ export function ChatModelPicker({
   disabled?: boolean;
   pendingProviderId?: string | null;
   modelLoading?: boolean;
+  activeModelContextWindow?: number;
+  activeModelOutputTokenLimit?: number;
   onChangeProvider: (providerId: string) => void;
   onChangeModel: (model: string) => void;
 }) {
@@ -150,6 +166,19 @@ export function ChatModelPicker({
         placeholder={modelLoading ? "Loading models..." : "Search model..."}
         options={modelOptions}
       />
+      {typeof activeModelContextWindow === "number" ? (
+        <span
+          className="chat-model-picker-context-badge text-xs text-muted-foreground"
+          title={`Model context window: ${formatNumber(activeModelContextWindow)} tokens${
+            typeof activeModelOutputTokenLimit === "number"
+              ? ` · Output limit: ${formatNumber(activeModelOutputTokenLimit)} tokens`
+              : ""
+          }`}
+          aria-label="Active model context window"
+        >
+          {formatContextWindow(activeModelContextWindow)}
+        </span>
+      ) : null}
       {availabilityMessage ? <p className="chat-model-picker-note">{availabilityMessage}</p> : null}
       {metadata.length > 0 ? (
         <dl className="chat-model-picker-metadata" aria-label="Provider and model metadata">
