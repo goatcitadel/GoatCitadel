@@ -133,6 +133,9 @@ function composeDurableOwnership(source: ChatTurnRuntimeHost): ChatTurnDurableRu
       source.beginDurableChatRun(prepared, input, threadEventType),
     finalizeDurableChatRun: (runId, prepared, trace) => source.finalizeDurableChatRun(runId, prepared, trace),
     isFeatureEnabled: (flag) => source.isFeatureEnabled(flag),
+    cancelDurableChatRun: source.cancelDurableChatRun
+      ? (runId, actorId) => source.cancelDurableChatRun?.(runId, actorId)
+      : undefined,
   };
 }
 

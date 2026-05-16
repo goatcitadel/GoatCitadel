@@ -194,6 +194,7 @@ export async function agentSendChatMessage(
         prepared,
         binding,
         "chat_thread_turn_appended",
+        { abortSignal: options?.abortSignal },
       );
     }
     const modeOrchestration = await host.resolvePreparedTurnOrchestration(prepared);
@@ -213,6 +214,7 @@ export async function agentSendChatMessage(
         prepared,
         "chat_thread_turn_appended",
         modeOrchestration,
+        { abortSignal: options?.abortSignal },
       );
     }
     if (chatTurnDispatchService.shouldUseDurableExecution(host, prepared, input)) {
@@ -222,6 +224,8 @@ export async function agentSendChatMessage(
         input,
         prepared,
         "chat_thread_turn_appended",
+        undefined,
+        { abortSignal: options?.abortSignal },
       );
     }
     return runAgentSendChatMessageLlmPath(host, sessionId, input, prepared, options);

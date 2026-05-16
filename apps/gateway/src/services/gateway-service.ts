@@ -1344,6 +1344,9 @@ export class GatewayService {
         this.beginActiveChatTurnExecution(sessionId, turnId, operation),
       beginDurableChatRun: (prepared, input, threadEventType) =>
         this.beginDurableChatRun(prepared, input, threadEventType),
+      cancelDurableChatRun: (runId, actorId) => {
+        this.cancelDurableRun(runId, actorId);
+      },
       buildChatOrchestrationSummary: (input) => this.buildChatOrchestrationSummary(input),
       buildDefaultChatPersonalityOverlay: () => this.buildDefaultChatPersonalityOverlay(),
       buildLlmMessagesFromBranchPath: (sessionId, pathTurnIds, currentUserMessage, options, state) =>
