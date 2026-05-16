@@ -6,6 +6,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createDatabase } from "./sqlite.js";
 import { PendingApprovalActionRepository } from "./pending-approval-action-repo.js";
+import { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
 import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
 import { buildPostgresRuntimeSchemaSql } from "./postgres/runtime-schema.js";
 
@@ -74,5 +75,64 @@ describe("PendingApprovalActionRepository", () => {
     assert.match(runtimeSql, /idx_chat_turn_traces_session_status/);
     assert.match(migrationSql, /ADD COLUMN IF NOT EXISTS expires_at TEXT/);
     assert.match(migrationSql, /idx_chat_turn_traces_session_status/);
+  });
+});
+
+describe("PendingApprovalActionRepository sanitization", () => {
+  it("quarantines a row whose request_json is malformed and falls back to empty request", () => {
+    const dbPath = path.join(os.tmpdir(), `gc-paa-request-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const quarantine = new StateValidationQuarantineRepository(db);
+    const repo = new PendingApprovalActionRepository(db, { quarantine });
+
+    const action = repo.upsertPending({
+      approvalId: `ap-sanitize-req-${randomUUID()}`,
+      actionType: "tool.invoke",
+      request: { toolName: "fs.write" },
+    });
+
+    db.prepare("UPDATE pending_approval_actions SET request_json = ? WHERE approval_id = ?").run(
+      "{not json",
+      action.approvalId,
+    );
+
+    const reloaded = repo.find(action.approvalId);
+    assert.ok(reloaded);
+    assert.deepEqual(reloaded.request, {});
+    assert.equal(quarantine.count(), 1);
+    const entry0 = quarantine.list(10)[0];
+    assert.ok(entry0);
+    assert.equal(entry0.store, "pending_approval_action.request");
+    assert.equal(entry0.rowId, action.approvalId);
+  });
+
+  it("quarantines a row whose result_json is malformed and falls back to empty result", () => {
+    const dbPath = path.join(os.tmpdir(), `gc-paa-result-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const quarantine = new StateValidationQuarantineRepository(db);
+    const repo = new PendingApprovalActionRepository(db, { quarantine });
+
+    const action = repo.upsertPending({
+      approvalId: `ap-sanitize-res-${randomUUID()}`,
+      actionType: "tool.invoke",
+      request: { toolName: "fs.read" },
+    });
+    repo.markResolved(action.approvalId, "executed", { ok: true });
+
+    db.prepare("UPDATE pending_approval_actions SET result_json = ? WHERE approval_id = ?").run(
+      "{bad",
+      action.approvalId,
+    );
+
+    const reloaded = repo.find(action.approvalId);
+    assert.ok(reloaded);
+    assert.deepEqual(reloaded.result, {});
+    assert.equal(quarantine.count(), 1);
+    const entry0 = quarantine.list(10)[0];
+    assert.ok(entry0);
+    assert.equal(entry0.store, "pending_approval_action.result");
+    assert.equal(entry0.rowId, action.approvalId);
   });
 });

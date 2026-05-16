@@ -209,7 +209,9 @@ export class Storage {
       (this.db.dialect === "postgres" ? new PostgresAuditLog(this.db) : new AuditLog(options.auditDir));
     this.approvals = new ApprovalRepository(this.db);
     this.approvalEvents = new ApprovalEventRepository(this.db);
-    this.pendingApprovalActions = new PendingApprovalActionRepository(this.db);
+    this.pendingApprovalActions = new PendingApprovalActionRepository(this.db, {
+      quarantine: this.stateValidationQuarantine,
+    });
     this.remoteActionTokens = new RemoteActionTokenRepository(this.db);
     this.approvalInbox = new ApprovalInboxRepository(this.db);
     this.approvalEffects = new ApprovalEffectRepository(this.db);
