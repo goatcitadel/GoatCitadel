@@ -12,6 +12,7 @@ export type HookTrigger =
   | "llm.model.select.before"
   | "llm.request.before"
   | "gateway.dispatch.before"
+  | "transform_llm_output"
   | "llm.response.after"
   | "before_prompt_build"
   | "llm_input"
@@ -88,6 +89,11 @@ export interface OrchestrationPhaseHookPatch {
   requiresApproval?: boolean;
 }
 
+export interface TransformLlmOutputHookPatch {
+  content?: string;
+  metadata?: Record<string, unknown>;
+}
+
 export type RuntimeLifecycleHookTrigger =
   | "before_prompt_build"
   | "llm_input"
@@ -161,6 +167,7 @@ export interface HookPatchByTrigger {
   "llm.model.select.before": LlmModelSelectHookPatch;
   "llm.request.before": LlmRequestHookPatch;
   "gateway.dispatch.before": never;
+  transform_llm_output: TransformLlmOutputHookPatch;
   "llm.response.after": never;
   before_prompt_build: never;
   llm_input: never;
@@ -186,7 +193,8 @@ export type HookPatch =
   | ToolCallHookPatch
   | ApprovalCreateHookPatch
   | OrchestrationRunHookPatch
-  | OrchestrationPhaseHookPatch;
+  | OrchestrationPhaseHookPatch
+  | TransformLlmOutputHookPatch;
 
 export interface HookPatchSummary {
   keys: string[];

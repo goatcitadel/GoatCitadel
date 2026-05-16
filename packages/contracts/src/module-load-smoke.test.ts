@@ -12,4 +12,9 @@ describe("contracts module load smoke", () => {
     const trigger: HookTrigger = "gateway.dispatch.before";
     expect(trigger).toBe("gateway.dispatch.before");
   });
+
+  it("includes transform_llm_output in HookTrigger", () => {
+    const trigger: HookTrigger = "transform_llm_output";
+    expect(trigger).toBe("transform_llm_output");
+  });
 });

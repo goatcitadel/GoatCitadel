@@ -9,6 +9,7 @@ import {
   parseOrchestrationPhaseHookPatch,
   parseOrchestrationRunHookPatch,
   parseToolCallHookPatch,
+  parseTransformLlmOutputHookPatch,
 } from "./hook-patch-helpers.js";
 
 describe("hook patch helpers", () => {
@@ -137,5 +138,32 @@ describe("hook patch helpers", () => {
       requiresApproval: false,
     });
     expect(patched.waves[0].phases[1]).toMatchObject({ ownerAgentId: "reviewer" });
+  });
+});
+
+describe("parseTransformLlmOutputHookPatch", () => {
+  it("returns undefined when no recognized fields", () => {
+    expect(parseTransformLlmOutputHookPatch({})).toBeUndefined();
+  });
+  it("parses content override (preserves whitespace via .trim() check)", () => {
+    expect(parseTransformLlmOutputHookPatch({ content: "redacted" })).toEqual({ content: "redacted" });
+  });
+  it("rejects empty string content", () => {
+    expect(parseTransformLlmOutputHookPatch({ content: "" })).toBeUndefined();
+  });
+  it("rejects whitespace-only content", () => {
+    expect(parseTransformLlmOutputHookPatch({ content: "   " })).toBeUndefined();
+  });
+  it("parses metadata", () => {
+    expect(parseTransformLlmOutputHookPatch({ metadata: { reason: "policy" } })).toEqual({
+      metadata: { reason: "policy" },
+    });
+  });
+  it("rejects non-record metadata", () => {
+    expect(parseTransformLlmOutputHookPatch({ metadata: "not-a-record" })).toBeUndefined();
+  });
+  it("returns combined patch when content and metadata both present", () => {
+    const patch = parseTransformLlmOutputHookPatch({ content: "x", metadata: { y: 1 } });
+    expect(patch).toEqual({ content: "x", metadata: { y: 1 } });
   });
 });

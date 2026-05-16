@@ -28,6 +28,7 @@ const createHookSchema = z.object({
     "llm.model.select.before",
     "llm.request.before",
     "gateway.dispatch.before",
+    "transform_llm_output",
     "llm.response.after",
     "before_prompt_build",
     "llm_input",

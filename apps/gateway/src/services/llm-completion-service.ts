@@ -35,6 +35,7 @@ import {
   mergeLlmRequestHookPatch,
   parseLlmModelSelectHookPatch,
   parseLlmRequestHookPatch,
+  parseTransformLlmOutputHookPatch,
 } from "./hook-patch-helpers.js";
 import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
 
@@ -464,6 +465,32 @@ export async function createChatCompletion(
       fallbackUsed: routing.fallbackUsed,
     },
   });
+
+  const transformHook = await host.hooksService.runInlineHooks<{
+    content?: string;
+    metadata?: Record<string, unknown>;
+  }>({
+    workspaceId: chatHookWorkspaceId,
+    trigger: "transform_llm_output",
+    entityType: "chat_completion",
+    entityId: chatHookEntityId,
+    payload: {
+      providerId: routing.effectiveProviderId ?? primaryProviderId,
+      model: routing.effectiveModel ?? primaryModel,
+      response,
+    },
+    parsePatch: (value) => parseTransformLlmOutputHookPatch(value as Record<string, unknown>),
+    mergePatch: (current, next) => ({ ...(current ?? {}), ...next }),
+  });
+  if (transformHook.blockedBy) {
+    throw new Error(transformHook.blockedBy.reason);
+  }
+  if (transformHook.patch?.content) {
+    const firstChoice = response.choices?.[0];
+    if (firstChoice?.message) {
+      firstChoice.message.content = transformHook.patch.content;
+    }
+  }
 
   host.publishRealtime("system", "llm", {
     type: "chat_completion",
@@ -914,6 +941,26 @@ export async function* createChatCompletionStream(
       fallbackUsed: routing.fallbackUsed,
     },
   });
+
+  const transformHook = await host.hooksService.runInlineHooks<{
+    content?: string;
+    metadata?: Record<string, unknown>;
+  }>({
+    workspaceId: chatHookWorkspaceId,
+    trigger: "transform_llm_output",
+    entityType: "chat_completion",
+    entityId: chatHookEntityId,
+    payload: {
+      providerId: routing.effectiveProviderId ?? primaryProviderId,
+      model: routing.effectiveModel ?? primaryModel,
+      stream: true,
+    },
+    parsePatch: (value) => parseTransformLlmOutputHookPatch(value as Record<string, unknown>),
+    mergePatch: (current, next) => ({ ...(current ?? {}), ...next }),
+  });
+  if (transformHook.blockedBy) {
+    throw new Error(transformHook.blockedBy.reason);
+  }
 
   host.publishRealtime("system", "llm", {
     type: "chat_completion_stream",

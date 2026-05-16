@@ -578,4 +578,44 @@ describe("createChatCompletion", () => {
     expect(host.llmService.chatCompletions).not.toHaveBeenCalled();
     expect(host.persistContextManifestForCompletionRequest).not.toHaveBeenCalled();
   });
+
+  it("applies transform_llm_output content override before publishing the response", async () => {
+    const host = createCompletionHost({
+      completion: async (request) => ({
+        model: request.model ?? "primary-model",
+        choices: [{ index: 0, message: { role: "assistant", content: "raw-output" }, finish_reason: "stop" }],
+      }),
+    });
+    host.hooksService.runInlineHooks = vi.fn(
+      async (options: { trigger: string; parsePatch?: (value: Record<string, unknown>) => unknown }) => {
+        if (options.trigger === "transform_llm_output") {
+          const patch = options.parsePatch?.({ content: "scrubbed" });
+          return { runs: [], patch };
+        }
+        return { runs: [] };
+      },
+    ) as never;
+
+    const response = await createChatCompletion(host, createRequest());
+
+    expect(response.choices[0]?.message?.content).toBe("scrubbed");
+  });
+
+  it("blocks chat completion when transform_llm_output intercepts", async () => {
+    const host = createCompletionHost({
+      completion: async () => ({
+        model: "primary-model",
+        choices: [{ index: 0, message: { role: "assistant", content: "leak" }, finish_reason: "stop" }],
+      }),
+    });
+    host.hooksService.runInlineHooks = vi.fn(async (options: { trigger: string }) =>
+      options.trigger === "transform_llm_output"
+        ? { runs: [], blockedBy: { type: "block", reason: "policy: bad-output" } }
+        : { runs: [] },
+    ) as never;
+
+    await expect(createChatCompletion(host, createRequest())).rejects.toThrow(/bad-output/);
+
+    expect(host.publishRealtime).not.toHaveBeenCalled();
+  });
 });
