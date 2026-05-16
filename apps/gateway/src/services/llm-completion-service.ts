@@ -191,6 +191,23 @@ export async function createChatCompletion(
     };
   }
 
+  const dispatchHook = await host.hooksService.runInlineHooks({
+    workspaceId: chatHookWorkspaceId,
+    trigger: "gateway.dispatch.before",
+    entityType: "chat_completion",
+    entityId: chatHookEntityId,
+    payload: {
+      providerId: hookableRequest.providerId,
+      model: hookableRequest.model,
+      messageCount: hookableRequest.messages.length,
+      metadata: hookableRequest.metadata ?? {},
+    },
+    parsePatch: () => undefined,
+  });
+  if (dispatchHook.blockedBy) {
+    throw new Error(dispatchHook.blockedBy.reason);
+  }
+
   const llmRequestHook = await host.hooksService.runInlineHooks<{
     providerId?: string;
     model?: string;
@@ -587,6 +604,22 @@ export async function* createChatCompletionStream(
       hasMemoryContext: Boolean(memoryContext),
     },
   });
+  const dispatchHook = await host.hooksService.runInlineHooks({
+    workspaceId: chatHookWorkspaceId,
+    trigger: "gateway.dispatch.before",
+    entityType: "chat_completion",
+    entityId: chatHookEntityId,
+    payload: {
+      providerId: withContext.providerId,
+      model: withContext.model,
+      messageCount: withContext.messages.length,
+      metadata: withContext.metadata ?? {},
+    },
+    parsePatch: () => undefined,
+  });
+  if (dispatchHook.blockedBy) {
+    throw new Error(dispatchHook.blockedBy.reason);
+  }
   host.persistContextManifestForCompletionRequest({
     request: withContext,
     memoryContext,

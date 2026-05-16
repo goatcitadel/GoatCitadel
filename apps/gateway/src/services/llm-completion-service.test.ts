@@ -518,4 +518,45 @@ describe("createChatCompletion", () => {
     );
     expect(host.publishRealtime).not.toHaveBeenCalled();
   });
+
+  it("fires gateway.dispatch.before before llm.request.before", async () => {
+    const host = createCompletionHost({
+      completion: async (request) => ({
+        model: request.model ?? "primary-model",
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+      }),
+    });
+    const inlineHookTriggers: string[] = [];
+    host.hooksService.runInlineHooks = vi.fn(async (options: { trigger: string }) => {
+      inlineHookTriggers.push(options.trigger);
+      return { runs: [] };
+    }) as never;
+
+    await createChatCompletion(host, createRequest());
+
+    const dispatchIndex = inlineHookTriggers.indexOf("gateway.dispatch.before");
+    const requestIndex = inlineHookTriggers.indexOf("llm.request.before");
+    expect(dispatchIndex).toBeGreaterThanOrEqual(0);
+    expect(requestIndex).toBeGreaterThanOrEqual(0);
+    expect(dispatchIndex).toBeLessThan(requestIndex);
+  });
+
+  it("blocks chat completion when gateway.dispatch.before intercepts", async () => {
+    const host = createCompletionHost({
+      completion: async () => ({
+        model: "never",
+        choices: [{ index: 0, message: { role: "assistant", content: "never" }, finish_reason: "stop" }],
+      }),
+    });
+    host.hooksService.runInlineHooks = vi.fn(async (options: { trigger: string }) =>
+      options.trigger === "gateway.dispatch.before"
+        ? { runs: [], blockedBy: { reason: "dispatch blocked by policy" } }
+        : { runs: [] },
+    ) as never;
+
+    await expect(createChatCompletion(host, createRequest())).rejects.toThrow("dispatch blocked by policy");
+
+    expect(host.llmService.chatCompletions).not.toHaveBeenCalled();
+    expect(host.persistContextManifestForCompletionRequest).not.toHaveBeenCalled();
+  });
 });
