@@ -1276,6 +1276,10 @@ export class GatewayService {
             this.recordImprovementDurableRunCompletion(run, checkpointState),
           executeDurableOrchestrationRun: (run, context) => this.executeDurableOrchestrationRun(run, context),
         },
+        curatorTick: {
+          curatorService: this.curatorService,
+          publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
+        },
       }),
     );
     this.routeCompositionPort = this.buildRouteCompositionPort();
