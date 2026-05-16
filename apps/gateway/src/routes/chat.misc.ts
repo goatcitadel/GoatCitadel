@@ -151,6 +151,15 @@ const specialistCandidateParamsSchema = z.object({
   candidateId: z.string().min(1),
 });
 
+const steerRequestSchema = z.object({
+  instruction: z.string().min(1),
+});
+
+const goalRequestSchema = z.object({
+  goal: z.string().min(1),
+  turnBudget: z.coerce.number().int().positive().max(1000).optional(),
+});
+
 export function registerChatMiscRoutes(fastify: FastifyInstance): void {
   const chatSupport = () => fastify.services.chatSupport;
 
@@ -405,6 +414,66 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
       return reply.send(
         chatSupport().updateChatSessionSpecialistCandidate(params.data.sessionId, params.data.candidateId, body.data),
       );
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/chat/sessions/:sessionId/steer", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    const body = steerRequestSchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(await chatSupport().submitChatSteerInstruction(params.data.sessionId, body.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/chat/sessions/:sessionId/goal", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(await chatSupport().getChatSessionGoal(params.data.sessionId));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/chat/sessions/:sessionId/goal", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    const body = goalRequestSchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(await chatSupport().setChatSessionGoal(params.data.sessionId, body.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.delete("/api/v1/chat/sessions/:sessionId/goal", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(await chatSupport().clearChatSessionGoal(params.data.sessionId));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
