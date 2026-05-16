@@ -89,6 +89,7 @@ export function gradeSkillUsage(input: GradeSkillUsageInput): GradeSkillUsageRes
     recommendation = "archive";
   } else if (mean < 0.55 && usage === 0) {
     recommendation = "archive";
+    // Stale-usage archive: low-mean (<0.55) skills with stale_usage signal, even when usageCount > 0.
   } else if (mean < 0.55 && signals.includes("stale_usage")) {
     recommendation = "archive";
   }
