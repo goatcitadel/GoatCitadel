@@ -37,6 +37,7 @@ export interface AddonCatalogEntry {
   requiresSeparateRepoDownload: true;
   launchUrl?: string;
   healthChecks: AddonHealthCheckRecord[];
+  dashboardSlots?: AddonDashboardSlotDeclaration[];
 }
 
 export interface AddonInstalledRecord {
@@ -78,4 +79,21 @@ export interface AddonActionResponse {
 export interface AddonUninstallResponse {
   addonId: string;
   removed: boolean;
+}
+
+export type AddonDashboardSlot =
+  | "ops.approvals.actions"
+  | "ops.runtime.actions"
+  | "ops.runtime.statusbar"
+  | "library.skills.cards"
+  | "library.memory.actions"
+  | "projects.detail.toolbar"
+  | "settings.account.sections";
+
+export interface AddonDashboardSlotDeclaration {
+  slot: AddonDashboardSlot;
+  /** If set, this slot only renders on this route. If omitted, renders on every page that hosts the slot. */
+  route?: string;
+  /** Optional render priority for ordering within the slot. Higher is rendered first. */
+  priority?: number;
 }
