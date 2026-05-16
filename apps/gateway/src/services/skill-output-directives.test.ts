@@ -62,4 +62,30 @@ End of message.`;
     const result = parseSkillOutputDirectives(input);
     expect(result.directives[0]?.content).toBe("content with surrounding ws");
   });
+
+  it("rejects fileName with path traversal", () => {
+    const input = `[[as_document fileName=../etc/passwd mimeType=text/plain]]content[[/as_document]]`;
+    const result = parseSkillOutputDirectives(input);
+    expect(result.directives).toEqual([]);
+    expect(result.text).toContain("[[as_document");
+  });
+
+  it("rejects fileName with forward slashes", () => {
+    const input = `[[as_document fileName=foo/bar.txt mimeType=text/plain]]content[[/as_document]]`;
+    const result = parseSkillOutputDirectives(input);
+    expect(result.directives).toEqual([]);
+  });
+
+  it("rejects fileName with backslashes", () => {
+    const input = `[[as_document fileName=foo\\bar.txt mimeType=text/plain]]content[[/as_document]]`;
+    const result = parseSkillOutputDirectives(input);
+    expect(result.directives).toEqual([]);
+  });
+
+  it("rejects fileName starting with a dot (hidden file)", () => {
+    const input = `[[as_document fileName=.env mimeType=text/plain]]content[[/as_document]]`;
+    const result = parseSkillOutputDirectives(input);
+    expect(result.directives).toEqual([]);
+    expect(result.text).toContain("[[as_document");
+  });
 });

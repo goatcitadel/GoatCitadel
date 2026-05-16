@@ -946,10 +946,10 @@ export async function* createChatCompletionStream(
     },
   });
 
-  const transformHook = await host.hooksService.runInlineHooks<{
-    content?: string;
-    metadata?: Record<string, unknown>;
-  }>({
+  // Streaming: veto-only. Chunks have already been emitted by the time the hook fires,
+  // so content patches cannot retroactively redact them. A future buffer-and-replay
+  // design could enable mutation on streams (deferred).
+  const transformHook = await host.hooksService.runInlineHooks({
     workspaceId: chatHookWorkspaceId,
     trigger: "transform_llm_output",
     entityType: "chat_completion",
@@ -959,8 +959,6 @@ export async function* createChatCompletionStream(
       model: routing.effectiveModel ?? primaryModel,
       stream: true,
     },
-    parsePatch: (value) => parseTransformLlmOutputHookPatch(value),
-    mergePatch: (current, next) => ({ ...(current ?? {}), ...next }),
   });
   if (transformHook.blockedBy) {
     throw new Error(transformHook.blockedBy.reason);
