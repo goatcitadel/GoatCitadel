@@ -32,15 +32,17 @@ describe("LlmModelMetadataManifest", () => {
   });
 });
 
+// Resolve repo root from this test file's location: packages/contracts/src/...
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const manifestPath = join(repoRoot, "config", "llm-model-metadata.json");
+const parsedManifest = JSON.parse(readFileSync(manifestPath, "utf8")) as LlmModelMetadataManifest;
+
 describe("shipped manifest at config/llm-model-metadata.json", () => {
   it("parses against LlmModelMetadataManifest and every entry is well-formed", () => {
-    // Resolve repo root from this test file's location: packages/contracts/src/...
-    const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-    const raw = readFileSync(join(repoRoot, "config", "llm-model-metadata.json"), "utf8");
-    const parsed = JSON.parse(raw) as LlmModelMetadataManifest;
-    expect(parsed.version).toBe(1);
-    expect(typeof parsed.entries).toBe("object");
-    for (const [key, entry] of Object.entries(parsed.entries)) {
+    expect(parsedManifest.version).toBe(1);
+    expect(typeof parsedManifest.entries).toBe("object");
+    expect(Object.keys(parsedManifest.entries)).toHaveLength(25);
+    for (const [key, entry] of Object.entries(parsedManifest.entries)) {
       expect(entry.contextWindow, `${key} contextWindow`).toBeGreaterThan(0);
       expect(entry.outputTokenLimit, `${key} outputTokenLimit`).toBeGreaterThan(0);
       if (entry.thinking !== undefined) {
@@ -50,19 +52,19 @@ describe("shipped manifest at config/llm-model-metadata.json", () => {
   });
 
   it("includes the critical entries called out in the plan", () => {
-    const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-    const raw = readFileSync(join(repoRoot, "config", "llm-model-metadata.json"), "utf8");
-    const parsed = JSON.parse(raw) as LlmModelMetadataManifest;
-    expect(parsed.entries["openai-codex/*"]).toEqual({ contextWindow: 272000, outputTokenLimit: 32000 });
-    expect(parsed.entries["xai/grok-4.3"]).toEqual({
+    expect(parsedManifest.entries["openai-codex/*"]).toEqual({ contextWindow: 272000, outputTokenLimit: 32000 });
+    expect(parsedManifest.entries["xai/grok-4.3"]).toEqual({
       contextWindow: 1000000,
       outputTokenLimit: 32000,
       thinking: "off",
     });
-    expect(parsed.entries["openrouter/deepseek/deepseek-v4-pro"]).toEqual({
+    expect(parsedManifest.entries["openrouter/deepseek/deepseek-v4-pro"]).toEqual({
       contextWindow: 128000,
       outputTokenLimit: 32000,
     });
-    expect(parsed.entries["anthropic/claude-opus-4-7"]).toEqual({ contextWindow: 1000000, outputTokenLimit: 32000 });
+    expect(parsedManifest.entries["anthropic/claude-opus-4-7"]).toEqual({
+      contextWindow: 1000000,
+      outputTokenLimit: 32000,
+    });
   });
 });
