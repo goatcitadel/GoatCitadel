@@ -1,7 +1,8 @@
 import type { OperatorSummary, SessionMeta } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
-import { safeJsonParse } from "./safe-json.js";
+import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
+import { parseStringRecord } from "./state-validators.js";
 
 interface SessionRow {
   session_id: string;
@@ -49,6 +50,11 @@ export interface SessionUsageDelta {
   timestamp: string;
 }
 
+export interface SessionRepositoryOptions {
+  quarantine?: { record: (entry: QuarantineEntry) => unknown };
+  logger?: { warn: (data: unknown, msg: string) => void };
+}
+
 export class SessionRepository {
   private readonly getByKeyStmt;
   private readonly getByIdStmt;
@@ -58,7 +64,10 @@ export class SessionRepository {
   private readonly listAfterCursorStmt;
   private readonly listOperatorSummariesStmt;
 
-  public constructor(private readonly db: DatabaseClient) {
+  public constructor(
+    private readonly db: DatabaseClient,
+    private readonly options: SessionRepositoryOptions = {},
+  ) {
     this.getByKeyStmt = db.prepare("SELECT * FROM sessions WHERE session_key = ?");
     this.getByIdStmt = db.prepare("SELECT * FROM sessions WHERE session_id = ?");
     this.upsertStmt = db.prepare(`
@@ -142,7 +151,7 @@ export class SessionRepository {
       throw new NotFoundError({ entity: "Session", id: sessionKey });
     }
 
-    return mapSessionRow(row);
+    return this.mapSessionRow(row);
   }
 
   public getBySessionId(sessionId: string): SessionMeta {
@@ -151,7 +160,7 @@ export class SessionRepository {
       throw new NotFoundError({ entity: "Session", id: sessionId });
     }
 
-    return mapSessionRow(row);
+    return this.mapSessionRow(row);
   }
 
   public list(limit: number, cursor?: string): SessionMeta[] {
@@ -167,7 +176,7 @@ export class SessionRepository {
     assertSessionRows(rows);
     const sessionRows: SessionRow[] = rows;
 
-    return sessionRows.map(mapSessionRow);
+    return sessionRows.map((row) => this.mapSessionRow(row));
   }
 
   public listOperatorSummaries(activeSinceIso: string): OperatorSummary[] {
@@ -184,6 +193,37 @@ export class SessionRepository {
       activeSessions: row.active_sessions,
       lastActivityAt: row.last_activity_at ?? undefined,
     }));
+  }
+
+  private mapSessionRow(row: SessionRow): SessionMeta {
+    return {
+      sessionId: row.session_id,
+      sessionKey: row.session_key,
+      kind: row.kind,
+      channel: row.channel,
+      account: row.account,
+      displayName: row.display_name ?? undefined,
+      routingHints: loadAndSanitize(
+        row.routing_hints_json,
+        {
+          store: "session.routing_hints",
+          rowId: row.session_id,
+          parse: parseStringRecord,
+          onQuarantine: this.options.quarantine ? (e) => this.options.quarantine!.record(e) : undefined,
+          log: this.options.logger,
+        },
+        undefined,
+      ),
+      lastActivityAt: row.last_activity_at,
+      updatedAt: row.updated_at,
+      health: row.health,
+      tokenInput: row.token_input,
+      tokenOutput: row.token_output,
+      tokenCachedInput: row.token_cached_input,
+      tokenTotal: row.token_total,
+      costUsdTotal: row.cost_usd_total,
+      budgetState: row.budget_state,
+    };
   }
 }
 
@@ -266,25 +306,4 @@ function isOperatorSummaryRow(value: unknown): value is OperatorSummaryRow {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-function mapSessionRow(row: SessionRow): SessionMeta {
-  return {
-    sessionId: row.session_id,
-    sessionKey: row.session_key,
-    kind: row.kind,
-    channel: row.channel,
-    account: row.account,
-    displayName: row.display_name ?? undefined,
-    routingHints: safeJsonParse<Record<string, string> | undefined>(row.routing_hints_json, undefined),
-    lastActivityAt: row.last_activity_at,
-    updatedAt: row.updated_at,
-    health: row.health,
-    tokenInput: row.token_input,
-    tokenOutput: row.token_output,
-    tokenCachedInput: row.token_cached_input,
-    tokenTotal: row.token_total,
-    costUsdTotal: row.cost_usd_total,
-    budgetState: row.budget_state,
-  };
 }

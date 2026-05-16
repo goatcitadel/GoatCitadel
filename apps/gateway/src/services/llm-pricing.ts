@@ -14,21 +14,15 @@ interface EstimateUsageCostInput {
   usage?: Record<string, unknown>;
 }
 
-const ZERO_COST_PROVIDER_IDS = new Set([
-  "genie-ir20",
-  "lmstudio",
-  "localai",
-  "npu-local",
-  "ollama",
-]);
+const ZERO_COST_PROVIDER_IDS = new Set(["genie-ir20", "lmstudio", "localai", "npu-local", "ollama"]);
 
 // Pricing snapshot as of 2026-03-29.
 // Sources:
 // - OpenAI model pages for GPT-5.4, GPT-5.4 mini, and GPT-4.1 mini.
 // - Z.AI pricing page for GLM-5.
 // - OpenRouter model pages for routed OpenRouter model ids.
-// - Moonshot native Kimi K2.5 is inferred from OpenRouter's no-markup policy plus
-//   the OpenRouter Kimi K2.5 model page because Moonshot's public docs did not expose
+// - Moonshot native Kimi K2.6 is inferred from OpenRouter's no-markup policy plus
+//   the OpenRouter Kimi K2.6 model page because Moonshot's public docs did not expose
 //   a machine-readable pricing table for that model.
 const PRICING_BY_PROVIDER: Record<string, TextModelPricing[]> = {
   glm: [
@@ -41,7 +35,8 @@ const PRICING_BY_PROVIDER: Record<string, TextModelPricing[]> = {
   ],
   moonshot: [
     {
-      modelId: "kimi-k2.5",
+      modelId: "kimi-k2.6",
+      aliases: ["kimi-k2.5"],
       inputUsdPerMillion: 0.42,
       outputUsdPerMillion: 2.2,
     },
@@ -81,7 +76,8 @@ const PRICING_BY_PROVIDER: Record<string, TextModelPricing[]> = {
       outputUsdPerMillion: 4.5,
     },
     {
-      modelId: "moonshotai/kimi-k2.5",
+      modelId: "moonshotai/kimi-k2.6",
+      aliases: ["moonshotai/kimi-k2.5"],
       inputUsdPerMillion: 0.42,
       outputUsdPerMillion: 2.2,
     },
@@ -134,14 +130,15 @@ export function estimateUsageCostUsd(input: EstimateUsageCostInput): number | un
 
   const totalInputTokens = readUsageNumber(usage.prompt_tokens) ?? readUsageNumber(usage.input_tokens) ?? 0;
   const totalOutputTokens = readUsageNumber(usage.completion_tokens) ?? readUsageNumber(usage.output_tokens) ?? 0;
-  const cachedInputTokens = readUsageNumber(usage.cached_prompt_tokens) ?? readUsageNumber(usage.cached_input_tokens) ?? 0;
+  const cachedInputTokens =
+    readUsageNumber(usage.cached_prompt_tokens) ?? readUsageNumber(usage.cached_input_tokens) ?? 0;
   const billableInputTokens = Math.max(0, totalInputTokens - cachedInputTokens);
   const cachedRate = pricing.cachedInputUsdPerMillion ?? pricing.inputUsdPerMillion;
-  const totalCostUsd = (
-    (billableInputTokens * pricing.inputUsdPerMillion)
-    + (cachedInputTokens * cachedRate)
-    + (totalOutputTokens * pricing.outputUsdPerMillion)
-  ) / 1_000_000;
+  const totalCostUsd =
+    (billableInputTokens * pricing.inputUsdPerMillion +
+      cachedInputTokens * cachedRate +
+      totalOutputTokens * pricing.outputUsdPerMillion) /
+    1_000_000;
 
   return Number(totalCostUsd.toFixed(8));
 }

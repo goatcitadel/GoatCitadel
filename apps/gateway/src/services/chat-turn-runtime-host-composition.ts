@@ -135,6 +135,9 @@ function composeDurableOwnership(source: ChatTurnRuntimeHost): ChatTurnDurableRu
       source.beginDurableChatRun(prepared, input, threadEventType),
     finalizeDurableChatRun: (runId, prepared, trace) => source.finalizeDurableChatRun(runId, prepared, trace),
     isFeatureEnabled: (flag) => source.isFeatureEnabled(flag),
+    cancelDurableChatRun: source.cancelDurableChatRun
+      ? (runId, actorId) => source.cancelDurableChatRun?.(runId, actorId)
+      : undefined,
   };
 }
 
@@ -220,7 +223,7 @@ function composeEntryExtras(
   | "updateChatSessionPrefs"
 > {
   return {
-    agentSendChatMessage: (sessionId, input) => source.agentSendChatMessage(sessionId, input),
+    agentSendChatMessage: (sessionId, input, options) => source.agentSendChatMessage(sessionId, input, options),
     createChatSession: (input) => source.createChatSession(input),
     inheritDelegatedSessionToolGrants: (sessionId, delegatedSessionId) =>
       source.inheritDelegatedSessionToolGrants(sessionId, delegatedSessionId),

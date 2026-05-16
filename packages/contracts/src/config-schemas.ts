@@ -191,7 +191,13 @@ export const LlmProviderConfigSchema = z
     providerId: z.string(),
     label: z.string(),
     baseUrl: z.string(),
-    apiStyle: z.enum(["openai-chat-completions", "openai-responses", "openai-codex-responses", "anthropic-messages"]),
+    apiStyle: z.enum([
+      "openai-chat-completions",
+      "openai-responses",
+      "openai-codex-responses",
+      "anthropic-messages",
+      "bedrock-messages",
+    ]),
     defaultModel: z.string(),
     authMode: z.enum(["api-key", "codex-oauth", "claude-code-oauth"]).optional(),
     apiKey: z.string().optional(),
@@ -561,13 +567,15 @@ export const CronJobSchema = z
     jobId: z.string(),
     name: z.string(),
     action: z
-      .enum(["task", "improvement", "backup", "memory_flush", "cost_report", "update_review", "watchdog"])
+      .enum(["task", "improvement", "backup", "memory_flush", "cost_report", "update_review", "watchdog", "no_agent"])
       .default("task"),
     actionConfig: z.record(z.string(), z.unknown()).optional(),
     description: z.string().optional(),
     schedule: z.string(),
     enabled: z.boolean(),
     endAt: z.string().optional(),
+    workdir: z.string().optional(),
+    contextFrom: z.string().optional(),
   })
   .passthrough();
 
@@ -578,3 +586,17 @@ export const CronJobsConfigSchema = z
   .passthrough();
 
 export type CronJobsConfigInput = z.input<typeof CronJobsConfigSchema>;
+
+// ---------------------------------------------------------------------------
+// Agent Subagent Defaults
+// ---------------------------------------------------------------------------
+
+export const AgentSubagentDefaultsSchema = z
+  .object({
+    childTimeoutSeconds: z.number().int().positive().default(600),
+    maxDepth: z.number().int().positive().default(4),
+  })
+  .passthrough();
+
+export type AgentSubagentDefaultsInput = z.input<typeof AgentSubagentDefaultsSchema>;
+export type AgentSubagentDefaults = z.output<typeof AgentSubagentDefaultsSchema>;

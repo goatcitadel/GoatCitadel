@@ -1,6 +1,53 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 import { repoHasConfigMarker } from "./config-files.js";
+
+const ENV_FILE_MODE = 0o600;
+
+/**
+ * Atomic + owner-only write for credential files. Writes to a sibling temp file
+ * with O_CREAT|O_EXCL|O_WRONLY at 0600, then renames over the target.
+ * Restores 0600 on the renamed target on POSIX; no-op on win32 where chmod
+ * does not map to ACLs.
+ */
+function writeCredentialFileAtomicSync(targetPath: string, contents: string): void {
+  const dir = path.dirname(targetPath);
+  const base = path.basename(targetPath);
+  const tempPath = path.join(dir, `.${base}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(tempPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, ENV_FILE_MODE);
+    fs.writeFileSync(fd, contents, "utf8");
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(tempPath, targetPath);
+    if (process.platform !== "win32") {
+      try {
+        fs.chmodSync(targetPath, ENV_FILE_MODE);
+      } catch {
+        // best-effort: rename succeeded; some filesystems (e.g. exfat) ignore chmod
+      }
+    }
+  } catch (error) {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // ignore close error during cleanup
+      }
+    }
+    try {
+      if (fs.existsSync(tempPath)) {
+        fs.unlinkSync(tempPath);
+      }
+    } catch {
+      // ignore cleanup error
+    }
+    throw error;
+  }
+}
 
 export interface EnvFileLoadResult {
   path?: string;
@@ -132,7 +179,7 @@ export function upsertLocalEnvVar(
     : [...updatedLines.filter((line, index, array) => !(index === array.length - 1 && line === "")), nextLine, ""].join(
         "\n",
       );
-  fs.writeFileSync(envPath, normalized, "utf8");
+  writeCredentialFileAtomicSync(envPath, normalized);
   return { path: envPath, updated: true };
 }
 
@@ -176,7 +223,7 @@ export function deleteLocalEnvVar(key: string, options?: { rootDir?: string }): 
     ...updatedLines.filter((line, index, array) => !(index === array.length - 1 && line === "")),
     "",
   ].join("\n");
-  fs.writeFileSync(envPath, normalized, "utf8");
+  writeCredentialFileAtomicSync(envPath, normalized);
   return { path: envPath, updated: true };
 }
 

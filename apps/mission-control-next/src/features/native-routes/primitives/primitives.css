@@ -1,0 +1,404 @@
+/* Mission Control Next primitives
+   Co-located styles for StageHeader, ThreePartChip, ContextStrip, ModeBar.
+   Consumes tokens from mission-control-next-tokens.css. */
+
+/* ============================================================
+   StageHeader (.mc-next-stage-head)
+   ============================================================ */
+.mc-next-stage-head {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  padding: 1rem 1.1rem 0.9rem;
+  border-bottom: 1px solid var(--border-subtle, var(--mc-border-subtle));
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--accent, var(--mc-area-color)) 6%, transparent),
+    transparent 60%
+  );
+}
+
+.mc-next-stage-head[data-area="chat"] {
+  --accent: var(--area-chat);
+}
+.mc-next-stage-head[data-area="cowork"] {
+  --accent: var(--area-cowork);
+}
+.mc-next-stage-head[data-area="code"] {
+  --accent: var(--area-code);
+}
+.mc-next-stage-head[data-area="projects"] {
+  --accent: var(--area-projects);
+}
+.mc-next-stage-head[data-area="library"] {
+  --accent: var(--area-library);
+}
+.mc-next-stage-head[data-area="ops"] {
+  --accent: var(--area-ops);
+}
+.mc-next-stage-head[data-area="settings"] {
+  --accent: var(--area-settings);
+}
+
+.mc-next-stage-head::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent, var(--mc-area-color)), transparent 70%);
+  opacity: 0.7;
+}
+
+.mc-next-stage-head-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: color-mix(in oklab, var(--accent, var(--mc-area-color)) 60%, var(--fg-muted, var(--text-muted)));
+}
+
+.mc-next-stage-head-eyebrow-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent, var(--mc-area-color));
+  box-shadow: 0 0 10px color-mix(in oklab, var(--accent, var(--mc-area-color)) 60%, transparent);
+}
+
+.mc-next-stage-head h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.12;
+}
+
+.mc-next-stage-head-sub {
+  margin: 0;
+  max-width: 64ch;
+  color: var(--fg-secondary, var(--text-secondary));
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.mc-next-stage-head-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.mc-next-stage-head-metrics {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.mc-next-stage-head-metric {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mc-next-stage-head-metric-label {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-muted, var(--text-muted));
+  font-weight: 650;
+}
+
+.mc-next-stage-head-metric-value {
+  font: 600 1.35rem/1 var(--font-sans, var(--mc-font-sans));
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.mc-next-stage-head-metric-delta {
+  font: 500 11px/1.2 var(--font-mono, var(--mc-font-mono));
+  color: var(--fg-secondary, var(--text-secondary));
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.mc-next-stage-head-metric-delta[data-tone="up"] {
+  color: color-mix(in oklab, var(--risk-safe, var(--gc-risk-safe)) 70%, var(--fg-primary, var(--foreground)));
+}
+
+.mc-next-stage-head-metric-delta[data-tone="down"] {
+  color: color-mix(in oklab, var(--risk-danger, var(--gc-risk-danger)) 70%, var(--fg-primary, var(--foreground)));
+}
+
+.mc-next-stage-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* ============================================================
+   ThreePartChip (.mc-next-chip-3)
+   ============================================================ */
+.mc-next-chip-3 {
+  display: inline-flex;
+  align-items: stretch;
+  height: 1.55rem;
+  min-height: 1.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle, var(--mc-border-subtle));
+  background: var(--bg-surface-1, var(--mc-surface-1));
+  color: var(--fg-secondary, var(--text-secondary));
+  font: 600 11px/1 var(--font-sans, var(--mc-font-sans));
+  overflow: hidden;
+}
+
+.mc-next-chip-3-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 0.55rem;
+}
+
+.mc-next-chip-3-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--fg-muted, var(--text-muted));
+  flex: 0 0 auto;
+}
+
+.mc-next-chip-3-mid {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.55rem;
+  border-left: 1px solid var(--border-subtle, var(--mc-border-subtle));
+  color: var(--fg-secondary, var(--text-secondary));
+}
+
+.mc-next-chip-3-age {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.55rem;
+  border-left: 1px solid var(--border-subtle, var(--mc-border-subtle));
+  font: 500 10px/1 var(--font-mono, var(--mc-font-mono));
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-muted, var(--text-muted));
+}
+
+.mc-next-chip-3[data-tone="safe"] {
+  color: color-mix(in oklab, var(--risk-safe, var(--gc-risk-safe)) 76%, var(--fg-primary, var(--foreground)));
+  border-color: color-mix(in oklab, var(--risk-safe, var(--gc-risk-safe)) 28%, var(--border-default, var(--border)));
+}
+
+.mc-next-chip-3[data-tone="safe"] .mc-next-chip-3-state {
+  background: color-mix(in oklab, var(--risk-safe, var(--gc-risk-safe)) 12%, transparent);
+}
+
+.mc-next-chip-3[data-tone="safe"] .mc-next-chip-3-dot {
+  background: var(--risk-safe, var(--gc-risk-safe));
+  box-shadow: 0 0 8px color-mix(in oklab, var(--risk-safe, var(--gc-risk-safe)) 60%, transparent);
+}
+
+.mc-next-chip-3[data-tone="caution"] {
+  color: color-mix(in oklab, var(--risk-caution, var(--gc-risk-caution)) 78%, var(--fg-primary, var(--foreground)));
+  border-color: color-mix(
+    in oklab,
+    var(--risk-caution, var(--gc-risk-caution)) 30%,
+    var(--border-default, var(--border))
+  );
+}
+
+.mc-next-chip-3[data-tone="caution"] .mc-next-chip-3-state {
+  background: color-mix(in oklab, var(--risk-caution, var(--gc-risk-caution)) 12%, transparent);
+}
+
+.mc-next-chip-3[data-tone="caution"] .mc-next-chip-3-dot {
+  background: var(--risk-caution, var(--gc-risk-caution));
+}
+
+.mc-next-chip-3[data-tone="danger"] {
+  color: color-mix(in oklab, var(--risk-danger, var(--gc-risk-danger)) 74%, var(--fg-primary, var(--foreground)));
+  border-color: color-mix(
+    in oklab,
+    var(--risk-danger, var(--gc-risk-danger)) 32%,
+    var(--border-default, var(--border))
+  );
+}
+
+.mc-next-chip-3[data-tone="danger"] .mc-next-chip-3-state {
+  background: color-mix(in oklab, var(--risk-danger, var(--gc-risk-danger)) 14%, transparent);
+}
+
+.mc-next-chip-3[data-tone="danger"] .mc-next-chip-3-dot {
+  background: var(--risk-danger, var(--gc-risk-danger));
+}
+
+.mc-next-chip-3[data-tone="nuclear"] {
+  color: color-mix(in oklab, var(--risk-nuclear, var(--gc-risk-nuclear)) 70%, var(--fg-primary, var(--foreground)));
+  border-color: color-mix(
+    in oklab,
+    var(--risk-nuclear, var(--gc-risk-nuclear)) 36%,
+    var(--border-default, var(--border))
+  );
+}
+
+.mc-next-chip-3[data-tone="nuclear"] .mc-next-chip-3-state {
+  background: color-mix(in oklab, var(--risk-nuclear, var(--gc-risk-nuclear)) 16%, transparent);
+}
+
+.mc-next-chip-3[data-tone="nuclear"] .mc-next-chip-3-dot {
+  background: var(--risk-nuclear, var(--gc-risk-nuclear));
+}
+
+.mc-next-chip-3[data-tone="muted"] {
+  color: var(--fg-muted, var(--text-muted));
+}
+
+.mc-next-chip-3[data-tone="accent"] {
+  color: color-mix(in oklab, var(--mc-area-color) 60%, var(--fg-primary, var(--foreground)));
+  border-color: color-mix(in oklab, var(--mc-area-color) 32%, var(--border-default, var(--border)));
+}
+
+.mc-next-chip-3[data-tone="accent"] .mc-next-chip-3-state {
+  background: color-mix(in oklab, var(--mc-area-color) 14%, transparent);
+}
+
+.mc-next-chip-3[data-tone="accent"] .mc-next-chip-3-dot {
+  background: var(--mc-area-color);
+}
+
+/* ============================================================
+   ContextStrip (.mc-next-context-strip)
+   ============================================================ */
+.mc-next-context-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+  padding: 0.35rem 0;
+  border: 1px solid var(--border-subtle, var(--mc-border-subtle));
+  border-bottom: 0;
+  border-radius: 0.42rem 0.42rem 0 0;
+  background: var(--bg-surface-1, var(--mc-surface-1));
+  font-size: 11px;
+  color: var(--fg-secondary, var(--text-secondary));
+}
+
+.mc-next-context-strip[data-mode="chat"] {
+  --accent: var(--area-chat);
+}
+.mc-next-context-strip[data-mode="cowork"] {
+  --accent: var(--area-cowork);
+}
+.mc-next-context-strip[data-mode="code"] {
+  --accent: var(--area-code);
+}
+
+.mc-next-context-strip-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0 0.75rem;
+  border-right: 1px solid var(--border-subtle, var(--mc-border-subtle));
+  min-width: 0;
+}
+
+.mc-next-context-strip-cell:last-child {
+  border-right: 0;
+}
+
+.mc-next-context-strip-cell-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-muted, var(--text-muted));
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+
+.mc-next-context-strip-cell-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-next-context-strip-mode .mc-next-context-strip-cell-value {
+  color: color-mix(in oklab, var(--accent, var(--mc-area-color)) 70%, var(--fg-primary, var(--foreground)));
+}
+
+.mc-next-context-strip-sep {
+  color: var(--fg-faint, var(--text-muted));
+}
+
+.mc-next-context-strip-cost,
+.mc-next-context-strip-tokens {
+  font-family: var(--font-mono, var(--mc-font-mono));
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================
+   ModeBar (.mc-next-mode-bar)
+   ============================================================ */
+.mc-next-mode-bar {
+  display: flex;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--bg-surface-2, var(--mc-surface-2));
+  border: 1px solid var(--border-subtle, var(--mc-border-subtle));
+}
+
+.mc-next-mode-bar-segment {
+  display: block;
+  height: 100%;
+  min-width: 0;
+}
+
+.mc-next-mode-bar-segment[data-mode="chat"] {
+  background: color-mix(in oklab, var(--area-chat, var(--gc-area-chat)) 70%, var(--bg-surface-3, var(--mc-surface-3)));
+}
+
+.mc-next-mode-bar-segment[data-mode="cowork"] {
+  background: color-mix(
+    in oklab,
+    var(--area-cowork, var(--gc-area-cowork)) 70%,
+    var(--bg-surface-3, var(--mc-surface-3))
+  );
+}
+
+.mc-next-mode-bar-segment[data-mode="code"] {
+  background: color-mix(in oklab, var(--area-code, var(--gc-area-code)) 70%, var(--bg-surface-3, var(--mc-surface-3)));
+}
+
+.mc-next-mode-bar-empty {
+  background: var(--bg-surface-2, var(--mc-surface-2));
+}
+
+@media (max-width: 880px) {
+  .mc-next-stage-head {
+    padding: 0.85rem 0.85rem 0.7rem;
+  }
+
+  .mc-next-stage-head-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .mc-next-context-strip {
+    flex-wrap: wrap;
+  }
+}

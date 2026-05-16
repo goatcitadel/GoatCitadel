@@ -14,6 +14,7 @@ import {
   MAX_TUI_SESSION_CHOICES,
   asRecord,
   buildHeaderSummaryRows,
+  buildRuntimeLlmSummaryLines,
   buildSessionChoices,
   formatSessionSummary,
   formatTimestamp,
@@ -318,17 +319,7 @@ async function viewChat(client: TuiApiClient): Promise<void> {
     renderSection("Chat Workspace", "Start from an existing session or create one. Project creation is optional."),
   );
   if (runtimeLlm) {
-    console.log(
-      renderBox(
-        "Runtime model",
-        [
-          `Active provider: ${runtimeLlm.activeProviderId}`,
-          `Active model: ${runtimeLlm.activeModel}`,
-          "New chats fall back to this runtime selection when session prefs are blank.",
-        ],
-        "info",
-      ),
-    );
+    console.log(renderBox("Runtime model", buildRuntimeLlmSummaryLines(runtimeLlm), "info"));
   }
   const sessionItems = sessions.items ?? [];
   if (sessionItems.length > 0) {

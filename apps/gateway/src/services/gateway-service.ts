@@ -294,7 +294,7 @@ import type {
   RemoteActionTokenRecord,
 } from "@goatcitadel/contracts";
 import type { ConnectorRecord, ConnectorType } from "@goatcitadel/contracts";
-import { BUILTIN_AGENT_PROFILES } from "@goatcitadel/contracts";
+import { AgentSubagentDefaultsSchema, BUILTIN_AGENT_PROFILES } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
 import { getRequestAttribution } from "@goatcitadel/storage";
@@ -348,6 +348,7 @@ import {
   PRIVATE_BETA_BACKUP_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./gateway/cron-automation-service.js";
+import { runNoAgentCommand } from "./gateway/cron-no-agent-runner.js";
 import * as orchestrationLifecycleService from "./orchestration-lifecycle-service.js";
 import { OrchestrationPhaseExecutionService } from "./orchestration-phase-execution-service.js";
 import { OrchestrationWorktreeService } from "./orchestration-worktree-service.js";
@@ -872,7 +873,7 @@ export class GatewayService {
       requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag),
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
       runHandlers: {
-        task: async (job) => {
+        task: async (job, _context?) => {
           const task = this.taskLifecycleService.createTask({
             title: job.name,
             description: [
@@ -903,6 +904,7 @@ export class GatewayService {
           await this.runUpdateReviewSchedulerIfDue({ force: true });
         },
         watchdog: async (job) => this.runCronWatchdog(job),
+        noAgent: (input) => runNoAgentCommand(input),
       },
     });
 
@@ -1029,6 +1031,9 @@ export class GatewayService {
       agentSendChatMessage: (sessionId, input) => this.chatTurnRuntime.agentSendChatMessage(sessionId, input),
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
     });
+    const subagentDefaults = AgentSubagentDefaultsSchema.parse(
+      (config as { agents?: { defaults?: { subagents?: unknown } } }).agents?.defaults?.subagents ?? {},
+    );
     this.chatDelegationService = new ChatDelegationService({
       storage: this.storage,
       gatewaySql: this.gatewaySql,
@@ -1041,10 +1046,15 @@ export class GatewayService {
       inheritDelegatedSessionToolGrants: (parentSessionId, childSessionId) =>
         this.inheritDelegatedSessionToolGrants(parentSessionId, childSessionId),
       updateChatSessionPrefs: (sessionId, input) => this.updateChatSessionPrefs(sessionId, input),
-      agentSendChatMessage: (sessionId, input) => this.chatTurnRuntime.agentSendChatMessage(sessionId, input),
+      agentSendChatMessage: (sessionId, input, options) =>
+        this.chatTurnRuntime.agentSendChatMessage(sessionId, input, options),
       extractAndPersistLearnedMemory: (sessionId, content, source) =>
         this.extractAndPersistLearnedMemory(sessionId, content, source),
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
+      subagentDefaults: {
+        childTimeoutSeconds: subagentDefaults.childTimeoutSeconds,
+        maxDepth: subagentDefaults.maxDepth,
+      },
     });
     this.toolInvocationCoordinator = new ToolInvocationCoordinatorService({
       approvalInbox: this.storage.approvalInbox,
@@ -1337,6 +1347,9 @@ export class GatewayService {
         this.beginActiveChatTurnExecution(sessionId, turnId, operation),
       beginDurableChatRun: (prepared, input, threadEventType) =>
         this.beginDurableChatRun(prepared, input, threadEventType),
+      cancelDurableChatRun: (runId, actorId) => {
+        this.cancelDurableRun(runId, actorId);
+      },
       buildChatOrchestrationSummary: (input) => this.buildChatOrchestrationSummary(input),
       buildDefaultChatPersonalityOverlay: () => this.buildDefaultChatPersonalityOverlay(),
       buildLlmMessagesFromBranchPath: (sessionId, pathTurnIds, currentUserMessage, options, state) =>
@@ -3717,8 +3730,9 @@ export class GatewayService {
   public async agentSendChatMessage(
     sessionId: string,
     input: ChatSendMessageRequest,
+    options?: { abortSignal?: AbortSignal },
   ): Promise<ChatSendMessageResponse> {
-    return this.chatTurnRuntime.agentSendChatMessage(sessionId, input);
+    return this.chatTurnRuntime.agentSendChatMessage(sessionId, input, options);
   }
 
   private async retryChatTurnInScratchSession(

@@ -906,6 +906,34 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
   },
   {
     version: 32,
+    name: "state_validation_quarantine",
+    sql: `
+      CREATE TABLE IF NOT EXISTS state_validation_quarantine (
+        quarantine_id TEXT PRIMARY KEY,
+        store TEXT NOT NULL,
+        row_id TEXT NOT NULL,
+        raw_value TEXT,
+        schema_error TEXT NOT NULL,
+        observed_at TIMESTAMPTZ NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_state_validation_quarantine_store_observed
+        ON state_validation_quarantine(store, observed_at DESC);
+    `,
+  },
+  {
+    version: 33,
+    name: "cron_jobs_workdir_context_from_run_output_run_id",
+    sql: `
+      ALTER TABLE cron_jobs
+        ADD COLUMN IF NOT EXISTS workdir TEXT,
+        ADD COLUMN IF NOT EXISTS context_from TEXT,
+        ADD COLUMN IF NOT EXISTS last_run_output TEXT,
+        ADD COLUMN IF NOT EXISTS last_run_id TEXT;
+    `,
+  },
+  {
+    version: 34,
     name: "chat_session_meta_goal",
     sql: `
       ALTER TABLE chat_session_meta
@@ -916,7 +944,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     `,
   },
   {
-    version: 33,
+    version: 35,
     name: "chat_messages_steer_audit",
     sql: `
       ALTER TABLE chat_messages

@@ -44,6 +44,9 @@ const GatewayEnvSchema = z.object({
 
   /** Custom Vite allowed hosts. */
   GOATCITADEL_VITE_ALLOWED_HOSTS: z.string().optional(),
+
+  /** Disable streaming delta coalescing (set to "true" to opt out). */
+  GOATCITADEL_STREAM_COALESCE_OFF: z.union([z.literal("true"), z.literal("false")]).optional(),
 });
 
 export type GatewayEnv = z.infer<typeof GatewayEnvSchema>;

@@ -1,0 +1,626 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Library · Memory — Design Review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="./_shared.css" />
+<style>
+  .memory {
+    display: grid;
+    grid-template-columns: 320px minmax(0, 1fr);
+    min-height: calc(100dvh - 64px);
+  }
+  @media (max-width: 1080px) { .memory { grid-template-columns: 280px minmax(0, 1fr); } }
+  @media (max-width: 880px)  { .memory { grid-template-columns: 1fr; } .memory-rail { display: none; } }
+
+  /* Rail */
+  .memory-rail {
+    border-right: 1px solid var(--border-subtle);
+    background: var(--bg-surface-2);
+    display: grid;
+    grid-template-rows: auto auto 1fr auto;
+    overflow: hidden;
+    max-height: calc(100dvh - 64px);
+    position: sticky; top: 40px;
+  }
+  .rail-search {
+    padding: 9px 10px 8px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: grid; gap: 6px;
+  }
+  .rail-search .row { display: flex; align-items: center; gap: 6px; }
+  .rail-search-input {
+    display: flex; align-items: center; gap: 7px;
+    padding: 0 9px;
+    height: 26px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-xs);
+    background: var(--bg-surface-1);
+    color: var(--fg-muted);
+    font-size: 12.5px;
+  }
+  .rail-search-input input {
+    flex: 1; min-width: 0;
+    border: 0; background: transparent;
+    color: var(--fg-primary); font: 400 12.5px/1 var(--font-sans);
+  }
+  .rail-search-input input:focus { outline: 0; }
+  .rail-search .ns-pills {
+    display: flex; gap: 3px; flex-wrap: wrap;
+  }
+  .ns-pill {
+    font: 600 10.5px/1 var(--font-mono);
+    padding: 3px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-surface-1);
+    color: var(--fg-secondary);
+    cursor: pointer;
+  }
+  .ns-pill.active {
+    background: color-mix(in oklab, var(--accent) 16%, var(--bg-surface-1));
+    border-color: color-mix(in oklab, var(--accent) 32%, var(--border-default));
+    color: color-mix(in oklab, var(--accent) 80%, var(--fg-primary));
+  }
+  .ns-pill .count {
+    margin-left: 6px;
+    color: var(--fg-muted);
+    font: 500 10px/1 var(--font-mono);
+  }
+  .ns-pill.active .count { color: color-mix(in oklab, var(--accent) 60%, var(--fg-primary)); }
+
+  .item-list {
+    overflow-y: auto;
+    padding: 4px;
+  }
+  .item-list .group-label {
+    padding: 8px 8px 3px;
+    font: 700 10px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase;
+    color: color-mix(in oklab, var(--accent) 50%, var(--fg-muted));
+  }
+  .item-list .group-label:first-child { padding-top: 4px; }
+  .item {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 2px 12px;
+    padding: 6px 8px;
+    border-radius: var(--r-xs);
+    border: 1px solid transparent;
+    cursor: pointer;
+  }
+  .item + .item { margin-top: 1px; }
+  .item:hover { background: var(--bg-surface-1); border-color: var(--border-subtle); }
+  .item.active {
+    background: color-mix(in oklab, var(--accent) 14%, var(--bg-surface-1));
+    border-color: color-mix(in oklab, var(--accent) 30%, var(--border-default));
+  }
+  .item .row1 { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .item .row1 strong {
+    font: 600 12.5px/1.2 var(--font-sans);
+    color: var(--fg-primary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .item .row1 svg.pin { width: 11px; height: 11px; color: var(--brand); flex: 0 0 auto; }
+  .item .preview {
+    grid-column: 1 / -1;
+    color: var(--fg-muted);
+    font-size: 11.5px;
+    line-height: 1.35;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
+    margin-top: 1px;
+  }
+  .item .meta {
+    grid-column: 1 / -1;
+    display: flex; gap: 8px;
+    font: 500 10px/1 var(--font-mono);
+    color: var(--fg-muted);
+    margin-top: 1px;
+  }
+  .item .ttl.warn { color: color-mix(in oklab, var(--risk-caution) 78%, var(--fg-primary)); }
+
+  /* Bottom maintenance bar */
+  .maintenance {
+    border-top: 1px solid var(--border-subtle);
+    background: var(--bg-surface-1);
+    padding: 8px 10px 9px;
+    display: grid; gap: 6px;
+  }
+  .maintenance .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .maintenance .head .label { font: 700 10px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-muted); }
+  .maintenance .actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+  .maintenance .actions button {
+    appearance: none;
+    padding: 6px 7px;
+    border-radius: var(--r-xs);
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-surface-2);
+    color: var(--fg-secondary);
+    font: 600 11.5px/1 var(--font-sans);
+    cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  }
+  .maintenance .actions button:hover { background: var(--bg-surface-3); color: var(--fg-primary); }
+
+  /* Editor side */
+  .editor-stage { display: grid; grid-template-rows: auto auto 1fr; min-width: 0; }
+  .editor-head {
+    position: relative;
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 16px; padding: 14px 20px 11px;
+    border-bottom: 1px solid var(--border-subtle);
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--accent) 7%, transparent), transparent 70%),
+      var(--bg-app);
+  }
+  .editor-head::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: linear-gradient(90deg, var(--accent), transparent 60%); }
+  .editor-head .copy { display: grid; gap: 5px; min-width: 0; }
+  .editor-head .eyebrow {
+    display: inline-flex; align-items: center; gap: 7px;
+    font: 700 10px/1 var(--font-sans);
+    letter-spacing: 0.16em; text-transform: uppercase;
+    color: color-mix(in oklab, var(--accent) 60%, var(--fg-muted));
+  }
+  .editor-head .eyebrow .dot { width: 6px; height: 6px; border-radius: 999px; background: var(--accent); }
+  .editor-head h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.15; }
+  .editor-head .crumbs { font: 500 12px/1 var(--font-mono); color: var(--fg-muted); }
+  .editor-head .crumbs .sep { padding: 0 4px; color: var(--fg-faint); }
+
+  .summary-strip {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px;
+    padding: 11px 20px 0;
+  }
+  @media (max-width: 1100px) { .summary-strip { grid-template-columns: repeat(2, 1fr); } }
+
+  .editor-body {
+    padding: 12px 20px 20px;
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+    gap: 12px;
+    min-width: 0;
+  }
+  @media (max-width: 1100px) { .editor-body { grid-template-columns: 1fr; } }
+
+  .item-editor {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    background: var(--bg-surface-1);
+    display: grid; gap: 0;
+    overflow: hidden;
+  }
+  .item-editor header {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-surface-2);
+  }
+  .item-editor header h3 { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
+  .item-editor .ed-row { display: grid; gap: 5px; padding: 12px 14px 0; }
+  .item-editor .ed-row label { font: 600 11px/1 var(--font-sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-muted); }
+  .item-editor .ed-row input, .item-editor .ed-row textarea {
+    width: 100%;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-surface-2);
+    color: var(--fg-primary);
+    border-radius: var(--r-xs);
+    padding: 8px 10px;
+    font: 400 13px/1.55 var(--font-sans);
+  }
+  .item-editor textarea { min-height: 200px; font-family: var(--font-sans); resize: vertical; }
+  .item-editor .ed-row input:focus, .item-editor .ed-row textarea:focus {
+    outline: 0;
+    border-color: color-mix(in oklab, var(--accent) 50%, var(--border-default));
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 12%, transparent);
+  }
+  .ed-toolbar {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 12px 14px 14px;
+  }
+  .ed-toggles { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .toggle {
+    display: inline-flex; align-items: center; gap: 8px;
+    font: 500 12px/1 var(--font-sans);
+    color: var(--fg-secondary);
+  }
+  .toggle .sw {
+    width: 30px; height: 16px;
+    border-radius: 999px;
+    background: var(--bg-surface-3);
+    border: 1px solid var(--border-subtle);
+    position: relative;
+  }
+  .toggle .sw::after {
+    content: ""; position: absolute;
+    top: 1px; left: 1px;
+    width: 12px; height: 12px;
+    border-radius: 999px;
+    background: var(--fg-muted);
+    transition: transform 160ms ease, background 160ms ease;
+  }
+  .toggle.on .sw {
+    background: color-mix(in oklab, var(--accent) 22%, var(--bg-surface-3));
+    border-color: color-mix(in oklab, var(--accent) 38%, var(--border-default));
+  }
+  .toggle.on .sw::after { transform: translateX(14px); background: var(--accent); }
+
+  /* Side panel: subspaces + evidence */
+  .side {
+    display: grid; gap: 14px; align-content: start;
+  }
+  .side-card {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    background: var(--bg-surface-1);
+    overflow: hidden;
+  }
+  .side-card header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-surface-2);
+  }
+  .side-card header h3 { margin: 0; font-size: 13px; font-weight: 650; letter-spacing: -0.01em; }
+  .side-card header .sub { font-size: 11.5px; color: var(--fg-muted); }
+  .side-card .body { padding: 12px 14px; }
+
+  .subspace-row {
+    display: grid;
+    grid-template-columns: 12px 1fr auto;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 4px;
+    border-bottom: 1px solid var(--border-hairline);
+    font-size: 12.5px;
+  }
+  .subspace-row:last-child { border-bottom: 0; }
+  .subspace-row .dot { width: 8px; height: 8px; border-radius: 999px; background: var(--accent); }
+  .subspace-row .dot.warn { background: var(--risk-caution); }
+  .subspace-row .dot.muted { background: var(--fg-faint); }
+  .subspace-row .name { font: 500 12.5px/1.2 var(--font-mono); color: var(--fg-primary); }
+  .subspace-row .meta { color: var(--fg-muted); font: 500 11px/1 var(--font-mono); display: block; }
+  .subspace-row .size {
+    font: 500 11px/1 var(--font-mono);
+    color: var(--fg-secondary);
+  }
+
+  /* Audit log */
+  .audit {
+    display: grid; gap: 6px;
+    font: 500 12px/1.4 var(--font-mono);
+  }
+  .audit .ln {
+    display: grid; grid-template-columns: 70px 1fr; gap: 8px;
+    padding: 4px 0; border-bottom: 1px solid var(--border-hairline);
+  }
+  .audit .ln:last-child { border-bottom: 0; }
+  .audit .ts { color: var(--fg-muted); }
+  .audit .msg { color: var(--fg-secondary); }
+  .audit .msg strong { color: var(--fg-primary); font-weight: 600; }
+  .audit .msg .kind { color: color-mix(in oklab, var(--accent) 72%, var(--fg-primary)); }
+</style>
+</head>
+<body class="area-library">
+
+<header class="topbar">
+  <div class="brand-lockup">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <div class="brand-stack">
+      <span class="eyebrow">GoatCitadel</span>
+      <span class="name">Memory</span>
+    </div>
+  </div>
+  <nav class="primary-nav">
+    <a href="./threaded-surface.html">Chat</a>
+    <a href="./projects.html">Projects</a>
+    <a href="./memory.html" class="active">Library</a>
+    <a href="./runtime.html">Ops</a>
+    <a href="./settings.html">Settings</a>
+  </nav>
+  <span class="spacer"></span>
+  <button class="command-search" type="button">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <span class="search-q">Search memory by namespace, title, or content…</span>
+    <kbd>⌘K</kbd>
+  </button>
+</header>
+
+<main class="memory">
+
+  <!-- Rail -->
+  <aside class="memory-rail" data-critique="Namespace pills replace ‘memory enabled / disabled’ chrome — the user filters by *where* they're working, not whether memory is on. Maintenance moves to the bottom of the rail where it doesn’t crowd the editor.">
+    <div class="rail-search">
+      <div class="rail-search-input">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input type="text" placeholder="Search title, ns, content…" />
+      </div>
+      <div class="ns-pills">
+        <span class="ns-pill active">all<span class="count">37</span></span>
+        <span class="ns-pill">knowledge<span class="count">22</span></span>
+        <span class="ns-pill">routing<span class="count">14</span></span>
+        <span class="ns-pill">files<span class="count">2</span></span>
+        <span class="ns-pill">scratch<span class="count">9</span></span>
+      </div>
+    </div>
+
+    <div class="item-list">
+      <div class="group-label">Pinned · 2</div>
+
+      <div class="item active">
+        <div class="row1">
+          <strong>haiku‑fallback heuristic</strong>
+          <svg class="pin" viewBox="0 0 24 24" fill="currentColor"><path d="M14 4 11 1H7l1 6L3 11h6l1 5 2-5h6l-5-4 1-3z"/></svg>
+        </div>
+        <p class="preview">When haiku fallback fires &gt; 12% over 24h and the cause is a watchdog trip rather than sustained outage, prefer reshard‑idle window before reclassifying…</p>
+        <div class="meta">
+          <span>knowledge/routing</span>
+          <span class="ttl">ttl ∞</span>
+          <span>148 B</span>
+        </div>
+      </div>
+
+      <div class="item">
+        <div class="row1">
+          <strong>approval verdict policy v3</strong>
+          <svg class="pin" viewBox="0 0 24 24" fill="currentColor"><path d="M14 4 11 1H7l1 6L3 11h6l1 5 2-5h6l-5-4 1-3z"/></svg>
+        </div>
+        <p class="preview">Critical‑risk scopes require a human verdict even when the actor matches the historic 100% approval pattern. Expiry window 5 minutes…</p>
+        <div class="meta">
+          <span>knowledge/policy</span>
+          <span class="ttl">ttl ∞</span>
+          <span>312 B</span>
+        </div>
+      </div>
+
+      <div class="group-label">Recent · today</div>
+
+      <div class="item">
+        <div class="row1"><strong>w19 retention pulse · summary</strong></div>
+        <p class="preview">Haiku fallback 11.4% across the window, peak 18.6% Tuesday driven by library/memory after reshard. Pulse otherwise flat.</p>
+        <div class="meta">
+          <span>knowledge/routing</span>
+          <span class="ttl">ttl 90d</span>
+          <span>418 B</span>
+        </div>
+      </div>
+
+      <div class="item">
+        <div class="row1"><strong>retention‑pulse‑w19.csv</strong></div>
+        <p class="preview">Uploaded by spurnout@ · 412 rows · used in 1 turn (t_4a82) so far this week.</p>
+        <div class="meta">
+          <span>knowledge/files</span>
+          <span class="ttl warn">ttl 14d · expires 5d</span>
+          <span>18 KB</span>
+        </div>
+      </div>
+
+      <div class="item">
+        <div class="row1"><strong>routing‑audit‑may.json</strong></div>
+        <p class="preview">May rolling routing audit. Linked from retention pulse memory; reviewed weekly during pulse turn.</p>
+        <div class="meta">
+          <span>knowledge/files</span>
+          <span class="ttl">ttl 30d</span>
+          <span>4 KB</span>
+        </div>
+      </div>
+
+      <div class="group-label">Scratch · 3</div>
+
+      <div class="item">
+        <div class="row1"><strong>tools to recheck after MCP swap</strong></div>
+        <p class="preview">After the next MCP transport bump, verify chrome‑devtools and citadel‑playwright reconnect within 8s; auto‑rerun against the live gateway.</p>
+        <div class="meta">
+          <span>scratch/today</span>
+          <span class="ttl warn">ttl 24h · expires 4h</span>
+          <span>96 B</span>
+        </div>
+      </div>
+
+      <div class="item">
+        <div class="row1"><strong>OKR Q3 — open questions</strong></div>
+        <p class="preview">Two stretch KRs still need a stakeholder confirm. Owner spurnout@, read‑through Thursday 14:00 UTC.</p>
+        <div class="meta">
+          <span>scratch/projects</span>
+          <span class="ttl warn">ttl 7d</span>
+          <span>284 B</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="maintenance" data-critique="Maintenance is *not* a primary verb. Flush / optimize / verify live in a footer strip so the editor doesn’t shout ‘DANGER’ at every glance.">
+      <div class="head">
+        <span class="label">Maintenance</span>
+        <span class="muted mono" style="font-size:10px">last verified 13:42 · 18m ago</span>
+      </div>
+      <div class="actions">
+        <button title="Flush expired items">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9"/><path d="M21 3v6h-6"/></svg>
+          Flush
+        </button>
+        <button title="Re‑embed namespace">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v6"/><path d="M12 16v6"/><path d="M5 12H1"/><path d="M23 12h-4"/><path d="m17 7 3-3"/><path d="m4 4 3 3"/><path d="m17 17 3 3"/><path d="m4 20 3-3"/></svg>
+          Optimize
+        </button>
+        <button title="Run audit check">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 12 2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>
+          Verify
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Editor + side -->
+  <section class="editor-stage">
+
+    <header class="editor-head">
+      <div class="copy">
+        <span class="eyebrow"><span class="dot"></span>Library · Memory</span>
+        <div class="crumbs"><span>knowledge</span><span class="sep">/</span><span>routing</span><span class="sep">/</span><span style="color: var(--fg-primary)">haiku‑fallback heuristic</span></div>
+        <h1>Routing heuristic — haiku fallback under watchdog</h1>
+      </div>
+      <div class="row" style="gap:6px">
+        <button class="btn btn-ghost">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 10-5 5-5-5"/><path d="M12 15V3"/></svg>
+          Export
+        </button>
+        <button class="btn btn-secondary"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9"/><path d="M21 3v6h-6"/></svg>Replay last write</button>
+        <button class="btn btn-danger">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+          Delete
+        </button>
+      </div>
+    </header>
+
+    <div class="summary-strip">
+      <div class="metric">
+        <span class="label">Items in scope</span>
+        <span class="value mono">37</span>
+        <span class="delta">3 expiring within 7d</span>
+      </div>
+      <div class="metric">
+        <span class="label">Storage</span>
+        <span class="value mono">512 KB</span>
+        <span class="delta">knowledge 380 · scratch 64 · files 22 + 46</span>
+      </div>
+      <div class="metric">
+        <span class="label">Memory mode</span>
+        <span class="value" style="font-size:15px">Enabled · admin auto</span>
+        <span class="delta">writes require per‑item approval</span>
+      </div>
+      <div class="metric">
+        <span class="label">Last write</span>
+        <span class="value mono" style="font-size:16px">14:11 · today</span>
+        <span class="delta up">via t_4a82 · approved by spurnout@</span>
+      </div>
+    </div>
+
+    <div class="editor-body">
+
+      <article class="item-editor">
+        <header>
+          <h3>Item · <span class="muted mono" style="font-size:12px">mem_4a82c1</span></h3>
+          <span class="chip success"><span class="dot"></span>Saved 14:11</span>
+        </header>
+        <div class="ed-row">
+          <label>Title</label>
+          <input type="text" value="Routing heuristic — haiku fallback under watchdog" />
+        </div>
+        <div class="ed-row">
+          <label>Namespace</label>
+          <input type="text" class="mono" style="font-family: var(--font-mono); font-size: 12.5px" value="knowledge/routing" />
+        </div>
+        <div class="ed-row">
+          <label>Content</label>
+          <textarea>When haiku fallback fires &gt; 12% over a 24h window AND the cause is a watchdog trip rather than a sustained outage, prefer reshard‑idle window before reclassifying as a primary‑model degradation.
+
+· validated: w19 retention pulse, 2026‑05‑12
+· source: turn t_4a82 · audit b14‑31
+· revisit every two pulses; archive when fallback &lt; 6% three weeks running.</textarea>
+        </div>
+        <div class="ed-toolbar">
+          <div class="ed-toggles" data-critique="Toggle controls (pinned, citable‑in‑answers, write‑gated) live on the item itself — not buried in a separate ‘policy’ tab. One‑line semantics, one‑click changes.">
+            <span class="toggle on" title="Pinned items survive flush">
+              <span class="sw"></span>Pinned
+            </span>
+            <span class="toggle on" title="Allow agent to cite this item in answers">
+              <span class="sw"></span>Citable in answers
+            </span>
+            <span class="toggle" title="Require per‑write approval">
+              <span class="sw"></span>Auto‑approve writes
+            </span>
+            <span class="muted" style="font-size:11.5px">TTL: <strong class="mono" style="color: var(--fg-primary); font-weight:600">∞</strong> · created 2026‑05‑15 14:11</span>
+          </div>
+          <div class="row" style="gap:6px">
+            <button class="btn btn-ghost">Discard</button>
+            <button class="btn btn-primary">Save changes</button>
+          </div>
+        </div>
+      </article>
+
+      <div class="side">
+
+        <article class="side-card">
+          <header>
+            <h3>Subspaces</h3>
+            <span class="sub">5 namespaces · 37 items</span>
+          </header>
+          <div class="body">
+            <div class="subspace-row">
+              <span class="dot"></span>
+              <span>
+                <span class="name">knowledge/routing</span>
+                <span class="meta">14 items · pinned 2</span>
+              </span>
+              <span class="size">128 KB</span>
+            </div>
+            <div class="subspace-row">
+              <span class="dot"></span>
+              <span>
+                <span class="name">knowledge/policy</span>
+                <span class="meta">8 items · pinned 1</span>
+              </span>
+              <span class="size">142 KB</span>
+            </div>
+            <div class="subspace-row">
+              <span class="dot warn"></span>
+              <span>
+                <span class="name">knowledge/files</span>
+                <span class="meta">2 items · 1 expiring 5d</span>
+              </span>
+              <span class="size">22 KB</span>
+            </div>
+            <div class="subspace-row">
+              <span class="dot warn"></span>
+              <span>
+                <span class="name">scratch/today</span>
+                <span class="meta">6 items · TTL 24h</span>
+              </span>
+              <span class="size">3 KB</span>
+            </div>
+            <div class="subspace-row">
+              <span class="dot muted"></span>
+              <span>
+                <span class="name">scratch/projects</span>
+                <span class="meta">3 items · last touched 1d</span>
+              </span>
+              <span class="size">12 KB</span>
+            </div>
+          </div>
+        </article>
+
+        <article class="side-card">
+          <header>
+            <h3>Evidence audit</h3>
+            <span class="sub">memory.write envelopes · last 24h</span>
+          </header>
+          <div class="body audit">
+            <div class="ln"><span class="ts">14:11:42</span><span class="msg"><span class="kind">memory.write</span> · <strong>knowledge/routing</strong> · mem_4a82c1 · spurnout@ approved</span></div>
+            <div class="ln"><span class="ts">13:54:08</span><span class="msg"><span class="kind">memory.touch</span> · scratch/today · ttl extended +6h</span></div>
+            <div class="ln"><span class="ts">11:02:14</span><span class="msg"><span class="kind">memory.expire</span> · scratch/today · mem_47a1f9 · auto</span></div>
+            <div class="ln"><span class="ts">10:14:32</span><span class="msg"><span class="kind">memory.read</span> · knowledge/routing · 14 items · via t_4744</span></div>
+            <div class="ln"><span class="ts">09:30:00</span><span class="msg"><span class="kind">backup.snapshot</span> · all namespaces · 82MB</span></div>
+            <div class="ln"><span class="ts">04:12:48</span><span class="msg"><span class="kind">memory.verify</span> · all namespaces · <strong>OK</strong> · 412 items checked</span></div>
+          </div>
+        </article>
+
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="status-strip">
+  <span class="ok">● memory enabled · admin auto</span>
+  <span>37 items · 512 KB</span>
+  <span class="accent">2 pinned · 3 expiring within 7d</span>
+  <span>last verified 13:42 · 412 items</span>
+  <span style="margin-left:auto" class="mono">workspace citadel‑prime</span>
+</div>
+
+<button class="critique-toggle" data-critique-toggle type="button">
+  <span class="dot"></span>
+  <span data-critique-label>Critique on</span>
+</button>
+
+<script src="./_shared.js"></script>
+</body>
+</html>

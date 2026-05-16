@@ -1022,6 +1022,8 @@ export function PromptPacksWorkbenchPage({
         ))}
       </section>
 
+      {report ? <AssessmentThresholdBar passRate={report.summary.passRate} threshold={passThreshold} /> : null}
+
       {error ? (
         <div className="mc-pp-alert danger" role="alert">
           <AlertTriangle size={16} />
@@ -1316,7 +1318,7 @@ export function PromptPacksWorkbenchPage({
                   rows={4}
                   value={benchmarkProvidersInput}
                   onChange={(event) => setBenchmarkProvidersInput(event.target.value)}
-                  placeholder={"openai/gpt-5.4-mini\nmoonshot/kimi-k2.5"}
+                  placeholder={"openai/gpt-5.4-mini\nmoonshot/kimi-k2.6"}
                 />
               </label>
               <div className="mc-pp-inline-actions wrap">
@@ -2574,4 +2576,30 @@ export function isPromptPackV2UiEnabled(): boolean {
     return true;
   }
   return !["0", "false", "off", "no", "disabled"].includes(raw);
+}
+
+function AssessmentThresholdBar({ passRate, threshold }: { passRate: number; threshold: number }) {
+  const safePassRate = Number.isFinite(passRate) ? Math.max(0, Math.min(1, passRate)) : 0;
+  const safeThreshold = Number.isFinite(threshold) ? Math.max(0, Math.min(1, threshold)) : 0.8;
+  const passing = safePassRate >= safeThreshold;
+  return (
+    <div className="mc-pp-threshold-bar" data-passing={passing}>
+      <div className="mc-pp-threshold-bar-label">
+        <span className="mc-pp-threshold-bar-eyebrow">Assessment</span>
+        <strong>{(safePassRate * 100).toFixed(1)}%</strong>
+        <em>threshold {(safeThreshold * 100).toFixed(0)}%</em>
+        <span className={`mc-pp-threshold-bar-status${passing ? " is-passing" : " is-failing"}`}>
+          {passing ? "above threshold" : "below threshold"}
+        </span>
+      </div>
+      <div
+        className="mc-pp-threshold-bar-track"
+        role="img"
+        aria-label={`Pass rate ${(safePassRate * 100).toFixed(1)}%, threshold ${(safeThreshold * 100).toFixed(0)}%`}
+      >
+        <div className="mc-pp-threshold-bar-fill" style={{ width: `${safePassRate * 100}%` }} />
+        <div className="mc-pp-threshold-bar-marker" style={{ left: `${safeThreshold * 100}%` }} aria-hidden="true" />
+      </div>
+    </div>
+  );
 }

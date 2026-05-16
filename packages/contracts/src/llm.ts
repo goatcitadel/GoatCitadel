@@ -2,7 +2,8 @@ export type LlmApiStyle =
   | "openai-chat-completions"
   | "openai-responses"
   | "openai-codex-responses"
-  | "anthropic-messages";
+  | "anthropic-messages"
+  | "bedrock-messages";
 
 export type LlmProviderAuthMode = "api-key" | "codex-oauth" | "claude-code-oauth";
 
@@ -112,12 +113,16 @@ export interface LlmProviderSummary {
   hasKeychainSecret?: boolean;
   apiKeyRef?: string;
   capabilities?: LlmProviderCapabilities;
+  activeModelContextWindow?: number;
+  activeModelOutputTokenLimit?: number;
 }
 
 export interface LlmRuntimeConfig {
   activeProviderId: string;
   activeModel: string;
   providers: LlmProviderSummary[];
+  activeModelContextWindow?: number;
+  activeModelOutputTokenLimit?: number;
 }
 
 export interface LlmModelRecord {
@@ -125,6 +130,8 @@ export interface LlmModelRecord {
   label?: string;
   ownedBy?: string;
   created?: number;
+  contextWindow?: number;
+  outputTokenLimit?: number;
 }
 
 export type LlmModelDiscoverySource = "live" | "template_fallback" | "error_fallback";

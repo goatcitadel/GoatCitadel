@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Ops · Approvals — Design Review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="./_shared.css" />
+<style>
+  .approvals-stage { padding: 18px 24px 28px; display: grid; gap: 14px; }
+
+  .stage-head-card {
+    position: relative;
+    padding: 18px 22px 16px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-lg);
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--accent) 8%, transparent), transparent 60%),
+      var(--bg-surface-1);
+    overflow: hidden;
+  }
+  .stage-head-card::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: linear-gradient(90deg, var(--accent), transparent 60%); }
+  .stage-head-card .eyebrow { display: inline-flex; align-items: center; gap: 7px; font: 700 10px/1 var(--font-sans); letter-spacing: 0.16em; text-transform: uppercase; color: color-mix(in oklab, var(--accent) 60%, var(--fg-muted)); }
+  .stage-head-card .eyebrow .dot { width: 6px; height: 6px; border-radius: 999px; background: var(--accent); }
+  .stage-head-card h1 { margin: 8px 0 4px; font-size: 24px; font-weight: 650; letter-spacing: -0.025em; }
+  .stage-head-card .sub { color: var(--fg-secondary); font-size: 13px; max-width: 64ch; }
+  .stage-head-card .row-top { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap: wrap; }
+
+  /* Toolbar */
+  .approval-toolbar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    background: var(--bg-surface-1);
+  }
+
+  /* Queue card */
+  .queue-card {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    background: var(--bg-surface-1);
+    overflow: hidden;
+  }
+  .queue-card + .queue-card { margin-top: 12px; }
+
+  .queue-head {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-surface-2);
+  }
+  .queue-head .risk-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 9px;
+    border-radius: var(--r-xs);
+    font: 700 11px/1 var(--font-sans);
+    letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  .queue-head .risk-badge.critical { color: color-mix(in oklab, var(--risk-danger) 80%, var(--fg-primary)); background: color-mix(in oklab, var(--risk-danger) 14%, var(--bg-surface-2)); border: 1px solid color-mix(in oklab, var(--risk-danger) 32%, var(--border-default)); }
+  .queue-head .risk-badge.warning  { color: color-mix(in oklab, var(--risk-caution) 80%, var(--fg-primary)); background: color-mix(in oklab, var(--risk-caution) 12%, var(--bg-surface-2)); border: 1px solid color-mix(in oklab, var(--risk-caution) 30%, var(--border-default)); }
+  .queue-head .risk-badge.info     { color: var(--fg-secondary); background: var(--bg-surface-3); border: 1px solid var(--border-subtle); }
+
+  .queue-head h3 {
+    margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.01em;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .queue-head h3 .id { font: 500 11px/1 var(--font-mono); color: var(--fg-muted); }
+  .queue-head .meta { font: 500 11.5px/1.4 var(--font-mono); color: var(--fg-muted); margin-top: 3px; }
+  .queue-head .meta strong { color: var(--fg-secondary); font-weight: 600; }
+  .queue-head .countdown {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 9px;
+    border-radius: 999px;
+    font: 700 11px/1 var(--font-mono);
+    background: color-mix(in oklab, var(--risk-caution) 16%, var(--bg-surface-2));
+    color: color-mix(in oklab, var(--risk-caution) 78%, var(--fg-primary));
+    border: 1px solid color-mix(in oklab, var(--risk-caution) 30%, var(--border-default));
+  }
+
+  /* Evidence body */
+  .queue-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+    gap: 0;
+  }
+  @media (max-width: 1100px) { .queue-body { grid-template-columns: 1fr; } }
+
+  .evidence {
+    padding: 14px 16px;
+    border-right: 1px solid var(--border-subtle);
+    display: grid; gap: 12px;
+  }
+  @media (max-width: 1100px) { .evidence { border-right: 0; border-bottom: 1px solid var(--border-subtle); } }
+
+  .evidence h4 {
+    margin: 0;
+    font: 700 10px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--fg-muted);
+  }
+  .evidence p { margin: 0; font-size: 13px; color: var(--fg-secondary); line-height: 1.5; }
+
+  .diff {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-xs);
+    overflow: hidden;
+    font: 500 12px/1.5 var(--font-mono);
+    background: var(--bg-inset);
+  }
+  .diff .line { display: grid; grid-template-columns: 28px 1fr; padding: 1px 0; }
+  .diff .line .gutter { color: var(--fg-faint); padding-left: 10px; user-select: none; }
+  .diff .line.add { background: color-mix(in oklab, var(--risk-safe) 10%, transparent); }
+  .diff .line.add .gutter { color: color-mix(in oklab, var(--risk-safe) 78%, var(--fg-primary)); }
+  .diff .line.rm  { background: color-mix(in oklab, var(--risk-danger) 12%, transparent); }
+  .diff .line.rm  .gutter { color: color-mix(in oklab, var(--risk-danger) 78%, var(--fg-primary)); }
+  .diff .line .code { padding-right: 10px; white-space: pre-wrap; word-break: break-word; color: var(--fg-primary); }
+  .diff .line.rm .code { text-decoration: line-through; opacity: 0.85; }
+
+  .trace-mini {
+    display: grid; gap: 3px;
+    font: 500 11.5px/1.4 var(--font-mono);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-xs);
+    padding: 9px 12px;
+    background: var(--bg-surface-2);
+  }
+  .trace-mini .ln { display: grid; grid-template-columns: 64px 1fr; gap: 8px; color: var(--fg-secondary); }
+  .trace-mini .ln .ts { color: var(--fg-muted); }
+  .trace-mini .ln.warn .ts, .trace-mini .ln.warn { color: color-mix(in oklab, var(--risk-caution) 78%, var(--fg-primary)); }
+
+  /* Decision side */
+  .decision {
+    padding: 14px 16px;
+    display: grid; gap: 12px;
+    background: var(--bg-surface-2);
+  }
+  .decision h4 {
+    margin: 0;
+    font: 700 10px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--fg-muted);
+  }
+  .decision-row {
+    display: grid; grid-template-columns: auto 1fr;
+    align-items: center; gap: 10px;
+    padding: 8px 10px;
+    border-radius: var(--r-xs);
+    background: var(--bg-surface-1);
+    border: 1px solid var(--border-subtle);
+    font-size: 12.5px;
+  }
+  .decision-row .label { font: 600 11px/1 var(--font-sans); letter-spacing: 0.04em; color: var(--fg-muted); }
+  .decision-row .v { color: var(--fg-primary); font: 500 12px/1.3 var(--font-mono); }
+  .decision-row .v strong { color: var(--fg-primary); font-weight: 700; }
+
+  .decision-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 2px;
+  }
+  .decision-actions .approve {
+    padding: 10px 12px;
+    border-radius: var(--r-xs);
+    border: 1px solid color-mix(in oklab, var(--risk-safe) 32%, var(--border-default));
+    background: color-mix(in oklab, var(--risk-safe) 16%, var(--bg-surface-3));
+    color: color-mix(in oklab, var(--risk-safe) 78%, var(--fg-primary));
+    font: 700 12.5px/1 var(--font-sans);
+    cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .decision-actions .reject {
+    padding: 10px 12px;
+    border-radius: var(--r-xs);
+    border: 1px solid color-mix(in oklab, var(--risk-danger) 32%, var(--border-default));
+    background: color-mix(in oklab, var(--risk-danger) 14%, var(--bg-surface-3));
+    color: color-mix(in oklab, var(--risk-danger) 78%, var(--fg-primary));
+    font: 700 12.5px/1 var(--font-sans);
+    cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .decision-actions .replay {
+    grid-column: 1 / -1;
+    padding: 8px 12px;
+    border-radius: var(--r-xs);
+    border: 1px solid var(--border-default);
+    background: var(--bg-surface-3);
+    color: var(--fg-primary);
+    font: 600 12px/1 var(--font-sans);
+    cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  }
+
+  /* History row (collapsed style) */
+  .history-row {
+    display: grid;
+    grid-template-columns: 78px 110px minmax(0,1fr) 120px;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--border-hairline);
+    font-size: 12.5px;
+  }
+  .history-row.head {
+    font: 700 10px/1 var(--font-sans); letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--fg-muted);
+    background: var(--bg-surface-2);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .history-row:last-child { border-bottom: 0; }
+  .history-row .ts { font: 500 11px/1 var(--font-mono); color: var(--fg-muted); }
+</style>
+</head>
+<body class="area-ops">
+
+<header class="topbar">
+  <div class="brand-lockup">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <div class="brand-stack">
+      <span class="eyebrow">GoatCitadel</span>
+      <span class="name">Approvals</span>
+    </div>
+  </div>
+  <nav class="primary-nav">
+    <a href="./threaded-surface.html">Chat</a>
+    <a href="./projects.html">Projects</a>
+    <a href="./prompt-packs.html">Library</a>
+    <a href="./approvals.html" class="active">Ops</a>
+    <a href="./settings.html">Settings</a>
+  </nav>
+  <span class="spacer"></span>
+  <button class="command-search" type="button">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <span class="search-q">Find an approval by id, actor, or scope…</span>
+    <kbd>⌘K</kbd>
+  </button>
+</header>
+
+<main class="body no-rail">
+  <section class="approvals-stage">
+
+    <article class="stage-head-card">
+      <div class="row-top">
+        <div>
+          <span class="eyebrow"><span class="dot"></span>Ops · Approvals</span>
+          <h1>2 pending decisions. 4‑minute window on the oldest.</h1>
+          <p class="sub">Work the pending queue, audit history, or jump straight to a recovery‑linked approval. Each card leads with the artifact under decision — trace, diff, affected service — so the verdict is grounded, not gated.</p>
+        </div>
+        <div class="row" style="gap:6px">
+          <button class="btn btn-secondary"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9"/><path d="M21 3v6h-6"/></svg>Refresh</button>
+          <button class="btn btn-danger" data-critique="Bulk reject is in the toolbar (with confirm) rather than per‑card. Operators sweep stale queues with confidence; the destructive action lives where destructive actions go.">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+            Reject all pending
+          </button>
+        </div>
+      </div>
+    </article>
+
+    <!-- Toolbar -->
+    <div class="approval-toolbar">
+      <div class="tabs" data-tabs>
+        <button class="active">Pending <span class="count">2</span></button>
+        <button>History <span class="count">114</span></button>
+        <button>Recovery <span class="count">3</span></button>
+      </div>
+      <span class="spacer" style="flex:1"></span>
+      <span class="chip muted"><span class="dot"></span>scope: any</span>
+      <span class="chip muted"><span class="dot"></span>actor: any</span>
+      <button class="btn btn-ghost">+ Filter</button>
+    </div>
+
+    <!-- Pending #1 — critical -->
+    <article class="queue-card">
+      <header class="queue-head">
+        <span class="risk-badge critical">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.3 3.3 1.8 19a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.3a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+          Critical
+        </span>
+        <div>
+          <h3>memory.write · knowledge/routing · TTL ∞ · pin <span class="id">apr_24bc12</span></h3>
+          <div class="meta">
+            requested by <strong>claude‑opus‑4‑7</strong> · turn <strong>t_4a82</strong> · workspace <strong>citadel‑prime</strong> · expires in
+          </div>
+        </div>
+        <span class="countdown" data-critique="Expiry countdown — operators see the urgency without having to math it. Live UTC offset visible on hover (designed below in the trace).">⏳ 4m 12s</span>
+      </header>
+      <div class="queue-body">
+        <div class="evidence" data-critique="Evidence panel leads. The artifact under decision (the actual diff to memory) is bigger than the buttons because it’s what the verdict is *about*.">
+          <h4>What's being written</h4>
+          <p>The agent proposes appending a routing‑heuristic note to <code>knowledge/routing</code>, derived from this turn's audit. <strong>148 bytes</strong> · pinned · namespace remains marked safe for low‑risk reads.</p>
+          <div class="diff">
+            <div class="line add"><span class="gutter">+ 14</span><span class="code">when haiku fallback fires &gt; 12% over a 24h window AND the cause is</span></div>
+            <div class="line add"><span class="gutter">+ 15</span><span class="code">a watchdog trip rather than a sustained outage, prefer reshard‑idle</span></div>
+            <div class="line add"><span class="gutter">+ 16</span><span class="code">window before reclassifying as a primary‑model degradation.</span></div>
+            <div class="line add"><span class="gutter">+ 17</span><span class="code">  · validated: w19 retention pulse, 2026‑05‑12</span></div>
+            <div class="line add"><span class="gutter">+ 18</span><span class="code">  · source: turn t_4a82 · audit b14‑31</span></div>
+            <div class="line rm"><span class="gutter">− 14</span><span class="code">(none — appending to end of file)</span></div>
+          </div>
+
+          <h4 style="margin-top:6px">Trace</h4>
+          <div class="trace-mini">
+            <div class="ln"><span class="ts">14:02:01</span><span>● turn.start · 2 attachments</span></div>
+            <div class="ln"><span class="ts">14:02:01</span><span>● tool.ok · read_audit · 184ms</span></div>
+            <div class="ln"><span class="ts">14:02:02</span><span>● tool.ok · aggregate_cost · 312ms</span></div>
+            <div class="ln warn"><span class="ts">14:03:11</span><span>● approval.requested · memory.write · scope=knowledge/routing</span></div>
+          </div>
+        </div>
+        <aside class="decision">
+          <h4>Decision context</h4>
+          <div class="decision-row">
+            <span class="label">Scope</span>
+            <span class="v">memory.write · <strong>knowledge/routing</strong></span>
+          </div>
+          <div class="decision-row">
+            <span class="label">Actor</span>
+            <span class="v">claude‑opus‑4‑7 <span class="muted">(via gateway t_4a82)</span></span>
+          </div>
+          <div class="decision-row">
+            <span class="label">Reversible?</span>
+            <span class="v">Yes — <strong>30‑day undo</strong></span>
+          </div>
+          <div class="decision-row">
+            <span class="label">Prior verdicts</span>
+            <span class="v">12 approved · <strong>0 rejected</strong> · 1 expired</span>
+          </div>
+          <div class="decision-actions">
+            <button class="reject">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+              Reject
+            </button>
+            <button class="approve">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>
+              Approve write
+            </button>
+            <button class="replay" data-critique="Replay opens the turn live in the threaded surface — operators reviewing async still anchor back to the conversation, not a frozen log line.">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m4 4 16 8-16 8z"/></svg>
+              Replay in live lane
+            </button>
+          </div>
+        </aside>
+      </div>
+    </article>
+
+    <!-- Pending #2 — warning -->
+    <article class="queue-card">
+      <header class="queue-head">
+        <span class="risk-badge warning">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+          Warning
+        </span>
+        <div>
+          <h3>channel.send · slack/#release‑notes <span class="id">apr_24bd09</span></h3>
+          <div class="meta">requested by <strong>cowork · q3‑okr‑draft</strong> · turn <strong>t_4b09</strong> · expires in</div>
+        </div>
+        <span class="countdown" style="background: color-mix(in oklab, var(--risk-safe) 14%, var(--bg-surface-2)); color: color-mix(in oklab, var(--risk-safe) 76%, var(--fg-primary)); border-color: color-mix(in oklab, var(--risk-safe) 28%, var(--border-default))">⏳ 22m 04s</span>
+      </header>
+      <div class="queue-body">
+        <div class="evidence">
+          <h4>Message preview</h4>
+          <div class="card" style="padding:10px 12px">
+            <div class="row between">
+              <span class="mono" style="color: var(--fg-muted); font-size:11px">to · #release‑notes · as · GoatCitadel</span>
+              <span class="chip muted" style="font-size:10px">draft · 196 chars</span>
+            </div>
+            <p style="margin:8px 0 0; font-size:13px">Q3 OKR draft is up for review in the Citadel workspace — three objectives, eight KRs, two stretch. Read‑through Thursday 14:00 UTC; comments open until Tuesday EOD. Owner: spurnout@.</p>
+          </div>
+
+          <h4 style="margin-top:6px">Affected service</h4>
+          <p>Slack workspace <strong>goatcitadel.slack.com</strong>, channel <strong>#release‑notes</strong>. Last delivery 18h ago — channel is healthy.</p>
+        </div>
+        <aside class="decision">
+          <h4>Decision context</h4>
+          <div class="decision-row"><span class="label">Scope</span><span class="v">channel.send · <strong>slack/#release‑notes</strong></span></div>
+          <div class="decision-row"><span class="label">Actor</span><span class="v">cowork session t_4b09</span></div>
+          <div class="decision-row"><span class="label">Reversible?</span><span class="v">No — outbound message</span></div>
+          <div class="decision-row"><span class="label">Prior verdicts</span><span class="v">26 approved · 1 rejected · 0 expired</span></div>
+          <div class="decision-actions">
+            <button class="reject"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>Reject</button>
+            <button class="approve"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>Approve send</button>
+            <button class="replay"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m4 4 16 8-16 8z"/></svg>Replay in live lane</button>
+          </div>
+        </aside>
+      </div>
+    </article>
+
+    <!-- History sample -->
+    <article class="queue-card" data-critique="History uses the same row anatomy but collapses to a denser table — auditing a week of decisions doesn't require expanding every card.">
+      <header class="queue-head" style="grid-template-columns: 1fr auto">
+        <h3>History · last 24h <span class="muted" style="font-size:12px; font-weight:500">12 verdicts</span></h3>
+        <div class="row" style="gap:6px">
+          <button class="btn btn-ghost">Export CSV</button>
+          <div class="tabs" data-tabs>
+            <button class="active">All</button>
+            <button>Approved</button>
+            <button>Rejected</button>
+            <button>Expired</button>
+          </div>
+        </div>
+      </header>
+      <div class="history-row head">
+        <span>When</span>
+        <span>Verdict</span>
+        <span>Scope · actor</span>
+        <span>Decided by</span>
+      </div>
+      <div class="history-row">
+        <span class="ts">14:08:42</span>
+        <span><span class="chip success"><span class="dot"></span>approved</span></span>
+        <span>memory.write · knowledge/routing — claude‑opus‑4‑7 / t_4a82</span>
+        <span class="mono muted">spurnout@</span>
+      </div>
+      <div class="history-row">
+        <span class="ts">13:54:12</span>
+        <span><span class="chip success"><span class="dot"></span>approved</span></span>
+        <span>code.write · src/features/threaded‑surface/ThreadedTimeline.tsx — code t_4970</span>
+        <span class="mono muted">spurnout@</span>
+      </div>
+      <div class="history-row">
+        <span class="ts">12:11:08</span>
+        <span><span class="chip danger"><span class="dot"></span>rejected</span></span>
+        <span>channel.send · email/spurnout@ — cowork t_47ab</span>
+        <span class="mono muted">spurnout@</span>
+      </div>
+      <div class="history-row">
+        <span class="ts">11:02:01</span>
+        <span><span class="chip warning"><span class="dot"></span>expired</span></span>
+        <span>memory.flush · scratch/today — chat t_4790</span>
+        <span class="mono muted">— (no actor)</span>
+      </div>
+      <div class="history-row">
+        <span class="ts">10:14:32</span>
+        <span><span class="chip success"><span class="dot"></span>approved</span></span>
+        <span>tool.grant · web.search — chat t_4744</span>
+        <span class="mono muted">spurnout@</span>
+      </div>
+      <div class="history-row">
+        <span class="ts">09:30:17</span>
+        <span><span class="chip success"><span class="dot"></span>approved</span></span>
+        <span>backup.restore · workspace=citadel‑prime — supervisor</span>
+        <span class="mono muted">spurnout@</span>
+      </div>
+    </article>
+
+  </section>
+</main>
+
+<div class="status-strip">
+  <span class="ok">● 2 pending · 4m on oldest</span>
+  <span>114 verdicts retained · 7d window</span>
+  <span class="accent">approval mode: per‑write</span>
+  <span>3 recovery candidates</span>
+  <span style="margin-left:auto" class="mono">workspace citadel‑prime</span>
+</div>
+
+<button class="critique-toggle" data-critique-toggle type="button">
+  <span class="dot"></span>
+  <span data-critique-label>Critique on</span>
+</button>
+
+<script src="./_shared.js"></script>
+</body>
+</html>

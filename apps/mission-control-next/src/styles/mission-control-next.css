@@ -16,7 +16,7 @@
   overflow-x: clip;
   background: var(--mc-shell-bg);
   color: var(--foreground);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .mc-next-shell[data-area="chat"] {
@@ -399,9 +399,9 @@
 }
 
 .mc-next-primary-link.active {
-  background: color-mix(in oklab, var(--mc-area-color) 12%, var(--mc-surface-3));
+  background: color-mix(in oklab, var(--mc-area-color) 14%, var(--mc-surface-3));
   color: var(--foreground);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--mc-area-color) 28%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--mc-area-color) 30%, transparent);
 }
 
 .mc-next-command-search {
@@ -884,12 +884,25 @@
   width: min(24rem, calc(100vw - 2rem));
   max-height: calc(100dvh - 6.3rem);
   padding: 1rem;
-  border-radius: 1.2rem;
+  border-radius: var(--r-lg, 1.25rem);
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--mc-surface-2) 96%, transparent);
   box-shadow: var(--mc-shadow-strong);
   overflow: auto;
   transform: translate3d(var(--side-inspector-drag-x, 0), var(--side-inspector-drag-y, 0), 0);
+}
+
+.mc-next-shell-inspector.side-inspector-drawer::before {
+  content: "";
+  position: absolute;
+  left: var(--r-lg, 1.25rem);
+  right: var(--r-lg, 1.25rem);
+  top: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--mc-area-color), transparent 70%);
+  opacity: 0.7;
+  border-radius: 0 0 1px 1px;
+  pointer-events: none;
 }
 
 .mc-next-inspector-scrim {
@@ -974,6 +987,10 @@
   padding: 0 8px;
   border-top: 1px solid var(--mc-border-subtle);
   background: var(--background);
+  font-family: var(--mc-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.62rem;
+  color: var(--text-muted);
 }
 
 .mc-next-status-pill {
@@ -1177,19 +1194,31 @@
 }
 
 .notification-item.info {
-  border-color: color-mix(in oklab, var(--gc-area-chat) 26%, var(--border));
+  border-color: color-mix(in oklab, var(--gc-area-chat) 32%, var(--border));
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--gc-area-chat) 4%, transparent), transparent 60%),
+    color-mix(in oklab, var(--mc-surface-2) 96%, transparent);
 }
 
 .notification-item.success {
-  border-color: color-mix(in oklab, var(--gc-risk-safe) 28%, var(--border));
+  border-color: color-mix(in oklab, var(--gc-risk-safe) 32%, var(--border));
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--gc-risk-safe) 5%, transparent), transparent 60%),
+    color-mix(in oklab, var(--mc-surface-2) 96%, transparent);
 }
 
 .notification-item.warning {
-  border-color: color-mix(in oklab, var(--gc-risk-caution) 28%, var(--border));
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 32%, var(--border));
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--gc-risk-caution) 5%, transparent), transparent 60%),
+    color-mix(in oklab, var(--mc-surface-2) 96%, transparent);
 }
 
 .notification-item.error {
-  border-color: color-mix(in oklab, var(--gc-risk-danger) 32%, var(--border));
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 36%, var(--border));
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--gc-risk-danger) 6%, transparent), transparent 60%),
+    color-mix(in oklab, var(--mc-surface-2) 96%, transparent);
 }
 
 .notification-dismiss {
@@ -1212,6 +1241,24 @@
 
 .gateway-access-card {
   width: min(56rem, 100%);
+  position: relative;
+  border-radius: var(--r-lg, 1.25rem);
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--primary) 6%, transparent), transparent 60%),
+    color-mix(in oklab, var(--card) 95%, transparent);
+  overflow: hidden;
+}
+
+.gateway-access-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--primary), transparent 70%);
+  opacity: 0.7;
+  pointer-events: none;
 }
 
 .gateway-access-header,
@@ -1274,12 +1321,21 @@
 
 .gateway-access-row input,
 .gateway-access-row select {
-  min-height: 2.7rem;
-  border-radius: 0.95rem;
+  min-height: 2.5rem;
+  border-radius: var(--r-sm, 0.5rem);
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
   color: var(--foreground);
-  padding: 0.72rem 0.9rem;
+  padding: 0.55rem 0.78rem;
+  font-size: 13px;
+  font-family: var(--mc-font-sans);
+}
+
+.gateway-access-row input:focus,
+.gateway-access-row select:focus {
+  outline: 0;
+  border-color: color-mix(in oklab, var(--primary) 50%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 14%, transparent);
 }
 
 .gateway-access-details {
