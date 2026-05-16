@@ -35,6 +35,7 @@ function createHost(
     hooksService: {
       runInlineHooks: vi.fn(async () => ({ runs: [] })),
       enqueueAfterHooks: vi.fn(),
+      hasMutateHook: vi.fn(() => false),
     } as never,
     llmService: {
       chatCompletions: vi.fn(),
@@ -93,6 +94,7 @@ function createCompletionHost(input: {
     hooksService: {
       runInlineHooks: vi.fn(async () => ({ runs: [] })),
       enqueueAfterHooks: vi.fn(),
+      hasMutateHook: vi.fn(() => false),
     } as never,
     llmService: {
       chatCompletions: vi.fn(input.completion),
@@ -320,6 +322,98 @@ describe("createChatCompletionStream", () => {
     expect(result.error?.message).toMatch(/stream-blocked/);
     expect(host.llmService.chatCompletionsStream).not.toHaveBeenCalled();
     expect(host.persistContextManifestForCompletionRequest).not.toHaveBeenCalled();
+  });
+
+  it("buffers stream and replays patched content when a mutate hook is registered", async () => {
+    const host = createHost(async function* () {
+      yield { choices: [{ delta: { content: "raw " } }] };
+      yield { choices: [{ delta: { content: "stream " } }] };
+      yield { choices: [{ delta: { content: "output" } }] };
+    });
+    host.hooksService.hasMutateHook = vi.fn(
+      (_workspaceId: string, trigger: string) => trigger === "transform_llm_output",
+    ) as never;
+    host.hooksService.runInlineHooks = vi.fn(
+      async (options: { trigger: string; parsePatch?: (value: Record<string, unknown>) => unknown }) => {
+        if (options.trigger === "transform_llm_output") {
+          const patch = options.parsePatch?.({ content: "PATCHED" });
+          return { runs: [], patch };
+        }
+        return { runs: [] };
+      },
+    ) as never;
+
+    const result = await collectStream(createChatCompletionStream(host, createRequest()));
+
+    expect(result.error).toBeUndefined();
+    const deltas = result.chunks
+      .map((chunk) => {
+        const choices = (chunk as { choices?: Array<{ delta?: { content?: unknown } }> }).choices;
+        const delta = choices?.[0]?.delta?.content;
+        return typeof delta === "string" ? delta : undefined;
+      })
+      .filter((value): value is string => Boolean(value));
+    // In buffered mode the consumer should see ONLY the patched content, not the raw chunks.
+    expect(deltas.join("")).toBe("PATCHED");
+    expect(deltas).not.toContain("raw ");
+    expect(deltas).not.toContain("stream ");
+    expect(deltas).not.toContain("output");
+  });
+
+  it("falls through to passthrough+veto-only when no mutate hook is registered", async () => {
+    const host = createHost(async function* () {
+      yield { choices: [{ delta: { content: "raw " } }] };
+      yield { choices: [{ delta: { content: "stream" } }] };
+    });
+    // hasMutateHook defaults to false in createHost — assert the contract explicitly.
+    host.hooksService.hasMutateHook = vi.fn(() => false) as never;
+    // The transform_llm_output hook still fires veto-only; a content patch would be ignored.
+    host.hooksService.runInlineHooks = vi.fn(
+      async (options: { trigger: string; parsePatch?: (value: Record<string, unknown>) => unknown }) => {
+        if (options.trigger === "transform_llm_output") {
+          const patch = options.parsePatch?.({ content: "SHOULD_BE_IGNORED" });
+          return { runs: [], patch };
+        }
+        return { runs: [] };
+      },
+    ) as never;
+
+    const result = await collectStream(createChatCompletionStream(host, createRequest()));
+
+    expect(result.error).toBeUndefined();
+    const deltas = result.chunks
+      .map((chunk) => {
+        const choices = (chunk as { choices?: Array<{ delta?: { content?: unknown } }> }).choices;
+        const delta = choices?.[0]?.delta?.content;
+        return typeof delta === "string" ? delta : undefined;
+      })
+      .filter((value): value is string => Boolean(value));
+    expect(deltas.join("")).toBe("raw stream");
+  });
+
+  it("buffered mode still allows intercept veto", async () => {
+    const host = createHost(async function* () {
+      yield { choices: [{ delta: { content: "x" } }] };
+    });
+    host.hooksService.hasMutateHook = vi.fn(() => true) as never;
+    host.hooksService.runInlineHooks = vi.fn(async (options: { trigger: string }) =>
+      options.trigger === "transform_llm_output"
+        ? { runs: [], blockedBy: { type: "block", reason: "policy: stream-content-blocked" } }
+        : { runs: [] },
+    ) as never;
+
+    const result = await collectStream(createChatCompletionStream(host, createRequest()));
+
+    expect(result.error?.message).toMatch(/stream-content-blocked/);
+    // In buffered mode raw chunks are withheld; the veto fires before any synthetic emission.
+    const deltas = result.chunks
+      .map((chunk) => {
+        const choices = (chunk as { choices?: Array<{ delta?: { content?: unknown } }> }).choices;
+        const delta = choices?.[0]?.delta?.content;
+        return typeof delta === "string" ? delta : undefined;
+      })
+      .filter((value): value is string => Boolean(value));
+    expect(deltas).toEqual([]);
   });
 });
 

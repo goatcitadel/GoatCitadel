@@ -114,6 +114,21 @@ export class HooksService {
     return this.ctx.storage.workspaceHooks.list(this.ctx.normalizeWorkspaceId(workspaceId), limit);
   }
 
+  /**
+   * Returns true when the workspace has at least one enabled mutate-mode hook for the trigger.
+   *
+   * Used by streaming code paths (e.g. `createChatCompletionStream`) to decide whether to
+   * buffer-and-replay or pass through chunks live: a mutate-mode `transform_llm_output` hook
+   * cannot rewrite chunks once they have already left the wire.
+   *
+   * The check reads from the workspace hook index once per call (not per chunk).
+   */
+  public hasMutateHook(workspaceId: string, trigger: HookTrigger): boolean {
+    const normalized = this.ctx.normalizeWorkspaceId(workspaceId);
+    const hooks = this.ctx.storage.workspaceHooks.listByTrigger(normalized, trigger, 200);
+    return hooks.some((hook) => hook.enabled && hook.mode === "mutate");
+  }
+
   public listWorkspaceHookRuns(workspaceId: string, limit = 200): HookRunRecord[] {
     return this.ctx.storage.hookRuns.listByWorkspace(this.ctx.normalizeWorkspaceId(workspaceId), limit);
   }

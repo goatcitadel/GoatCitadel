@@ -19,6 +19,8 @@ import type { LlmService } from "./llm-service.js";
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import {
   CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT,
+  applyNonStreamingTransformLlmOutput,
+  applyStreamingTransformLlmOutput,
   buildMemoryContextSystemMessage,
   calculateSavings,
   createChatCompletionDeadline,
@@ -35,14 +37,13 @@ import {
   mergeLlmRequestHookPatch,
   parseLlmModelSelectHookPatch,
   parseLlmRequestHookPatch,
-  parseTransformLlmOutputHookPatch,
 } from "./hook-patch-helpers.js";
 import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
 
 export interface LlmCompletionHost {
   readonly config: Pick<GatewayRuntimeConfig, "assistant">;
   readonly memoryLifecycleService: Pick<MemoryLifecycleService, "composeContext">;
-  readonly hooksService: Pick<HooksService, "runInlineHooks" | "enqueueAfterHooks">;
+  readonly hooksService: Pick<HooksService, "runInlineHooks" | "enqueueAfterHooks" | "hasMutateHook">;
   readonly llmService: Pick<
     LlmService,
     "chatCompletions" | "chatCompletionsStream" | "getRuntimeConfig" | "resolveExecutionApiStyle"
@@ -466,35 +467,16 @@ export async function createChatCompletion(
     },
   });
 
-  const transformHook = await host.hooksService.runInlineHooks<{
-    content?: string;
-    metadata?: Record<string, unknown>;
-  }>({
+  // transform_llm_output runs before publishRealtime/after-hooks so downstream observers see
+  // the post-transform content. Hook llm_output (observe-only) for the raw provider response.
+  await applyNonStreamingTransformLlmOutput({
+    hooksService: host.hooksService,
     workspaceId: chatHookWorkspaceId,
-    trigger: "transform_llm_output",
-    entityType: "chat_completion",
     entityId: chatHookEntityId,
-    payload: {
-      providerId: routing.effectiveProviderId ?? primaryProviderId,
-      model: routing.effectiveModel ?? primaryModel,
-      response,
-    },
-    parsePatch: (value) => parseTransformLlmOutputHookPatch(value),
-    mergePatch: (current, next) => ({ ...(current ?? {}), ...next }),
+    providerId: routing.effectiveProviderId ?? primaryProviderId,
+    model: routing.effectiveModel ?? primaryModel,
+    response,
   });
-  if (transformHook.blockedBy) {
-    throw new Error(transformHook.blockedBy.reason);
-  }
-  if (transformHook.patch?.content) {
-    const firstChoice = response.choices?.[0];
-    if (firstChoice?.message) {
-      // transform_llm_output runs BEFORE llm.response.after enqueue and BEFORE publishRealtime,
-      // so all downstream observers (publishRealtime, after-hooks, persistence) see the
-      // post-transform content. This is the canonical interception point — anything that needs
-      // the raw provider output must hook llm_output (observe-only) which fires on the original.
-      firstChoice.message.content = transformHook.patch.content;
-    }
-  }
 
   host.publishRealtime("system", "llm", {
     type: "chat_completion",
@@ -692,6 +674,8 @@ export async function* createChatCompletionStream(
     fallbackUsed: false,
   };
 
+  const shouldBufferForTransform = host.hooksService.hasMutateHook(chatHookWorkspaceId, "transform_llm_output");
+  const bufferedChunks: Array<Record<string, unknown>> = [];
   const retryAttempts = [
     withContext,
     normalizeToolProtocolRetryRequest(withContext, 1),
@@ -719,7 +703,11 @@ export async function* createChatCompletionStream(
         })) {
           attemptStreamed = true;
           streamed = true;
-          yield chunk;
+          if (shouldBufferForTransform) {
+            bufferedChunks.push(chunk);
+          } else {
+            yield chunk;
+          }
         }
         routing.effectiveProviderId = attemptRequest.providerId ?? primaryProviderId;
         routing.effectiveModel = attemptRequest.model ?? primaryModel;
@@ -827,7 +815,11 @@ export async function* createChatCompletionStream(
           })) {
             attemptStreamed = true;
             streamed = true;
-            yield chunk;
+            if (shouldBufferForTransform) {
+              bufferedChunks.push(chunk);
+            } else {
+              yield chunk;
+            }
           }
           routing.fallbackUsed = true;
           routing.fallbackProviderId = fallback.providerId;
@@ -946,22 +938,17 @@ export async function* createChatCompletionStream(
     },
   });
 
-  // Streaming: veto-only. Chunks have already been emitted by the time the hook fires,
-  // so content patches cannot retroactively redact them. A future buffer-and-replay
-  // design could enable mutation on streams (deferred).
-  const transformHook = await host.hooksService.runInlineHooks({
+  // Buffered: assembled content exposed to mutate hooks (synthetic chunks returned). Passthrough: veto-only.
+  for (const chunk of await applyStreamingTransformLlmOutput({
+    hooksService: host.hooksService,
     workspaceId: chatHookWorkspaceId,
-    trigger: "transform_llm_output",
-    entityType: "chat_completion",
     entityId: chatHookEntityId,
-    payload: {
-      providerId: routing.effectiveProviderId ?? primaryProviderId,
-      model: routing.effectiveModel ?? primaryModel,
-      stream: true,
-    },
-  });
-  if (transformHook.blockedBy) {
-    throw new Error(transformHook.blockedBy.reason);
+    providerId: routing.effectiveProviderId ?? primaryProviderId,
+    model: routing.effectiveModel ?? primaryModel,
+    bufferedChunks,
+    shouldBufferForTransform,
+  })) {
+    yield chunk;
   }
 
   host.publishRealtime("system", "llm", {
