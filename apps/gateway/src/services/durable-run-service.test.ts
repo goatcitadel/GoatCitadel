@@ -347,6 +347,46 @@ describe("DurableRunService", () => {
     );
   });
 
+  it("refuses to retry runs the workflow registry classifies as unrecoverable", () => {
+    const unrecoverabilityReason =
+      "Durable chat run was interrupted after tool execution began and cannot be safely replayed.";
+    const run = {
+      ...createRun("run-unsafe-retry", "failed", "chat.turn.execute"),
+      finishedAt: "2026-03-14T00:00:05.000Z",
+      lastError: unrecoverabilityReason,
+    };
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const publishRealtime = vi.fn();
+    const isWorkflowRecoverable = vi.fn(() => ({
+      recoverable: false,
+      reason: unrecoverabilityReason,
+    }));
+    const service = new DurableRunService(
+      createContext(runs, checkpoints, timeline, { publishRealtime }) as unknown as ServiceContext,
+      {
+        backgroundTasks: new Set<Promise<void>>(),
+        workflowRegistry: {
+          executeWorkflow: vi.fn(),
+          isWorkflowRecoverable,
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+      },
+    );
+
+    expect(() => service.retryDurableRun(run.runId, "manual_retry", "operator-1")).toThrow(unrecoverabilityReason);
+    expect(isWorkflowRecoverable).toHaveBeenCalledWith(expect.objectContaining({ runId: run.runId }));
+    expect(runs.get(run.runId)?.status).toBe("failed");
+    expect(runs.get(run.runId)?.attemptCount).toBe(0);
+    expect(publishRealtime).not.toHaveBeenCalledWith(
+      "system",
+      "durable",
+      expect.objectContaining({ type: "durable_run_retry_scheduled" }),
+      expect.anything(),
+    );
+  });
+
   it("blocks pause continuation gates before workflow execution", async () => {
     const run = createRun("run-gated", "queued", "connector.delivery");
     const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);

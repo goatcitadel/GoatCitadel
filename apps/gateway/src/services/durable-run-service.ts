@@ -428,6 +428,10 @@ export class DurableRunService {
   retryDurableRun(runId: string, reason = "manual_retry", actorId = "operator"): DurableRunRecord {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     const current = this.ctx.storage.durableRuns.getRun(runId);
+    const recoverability = this.deps?.workflowRegistry.isWorkflowRecoverable(current);
+    if (recoverability && !recoverability.recoverable) {
+      throw new Error(recoverability.reason ?? `Durable run ${runId} cannot be safely retried.`);
+    }
     const attemptNo = current.attemptCount + 1;
     if (attemptNo > current.maxAttempts) {
       const deadLetter = this.ctx.storage.durableRuns.upsertDeadLetter({
