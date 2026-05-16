@@ -771,6 +771,17 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "cron_jobs", "action_config_json", "TEXT");
     },
   },
+  {
+    version: 79,
+    name: "task_kanban_columns",
+    up: (db) => {
+      if (tableExists(db, "tasks")) {
+        addColumnIfMissingIfTableExists(db, "tasks", "distress_signals_json", "TEXT");
+        addColumnIfMissingIfTableExists(db, "tasks", "retry_budget_json", "TEXT");
+        addColumnIfMissingIfTableExists(db, "tasks", "artifact_verification_json", "TEXT");
+      }
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -1035,6 +1046,9 @@ function createBaseSchema(db: DatabaseSync): void {
       deleted_at TEXT,
       deleted_by TEXT,
       delete_reason TEXT,
+      distress_signals_json TEXT,
+      retry_budget_json TEXT,
+      artifact_verification_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
