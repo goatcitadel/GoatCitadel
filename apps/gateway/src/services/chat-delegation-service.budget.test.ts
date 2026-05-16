@@ -295,4 +295,42 @@ describe("ChatDelegationService subagent budget enforcement", () => {
       expect.objectContaining({ status: "failed" }),
     );
   });
+
+  it("forwards AbortSignal into agentSendChatMessage when the budget timer fires", async () => {
+    const { deps, service } = createHarness({
+      subagentDefaults: { childTimeoutSeconds: 0.02, maxDepth: 4 },
+    });
+    let observedSignal: AbortSignal | undefined;
+    deps.agentSendChatMessage = vi.fn(
+      async (_childSessionId: string, _request: unknown, options?: { abortSignal?: AbortSignal }) => {
+        observedSignal = options?.abortSignal;
+        await new Promise<void>((resolve, reject) => {
+          if (options?.abortSignal?.aborted) {
+            reject(new Error("aborted"));
+            return;
+          }
+          const onAbort = (): void => {
+            reject(new Error("aborted"));
+          };
+          options?.abortSignal?.addEventListener("abort", onAbort);
+          setTimeout(() => resolve(undefined), 500);
+        });
+        return createChatResponse("late");
+      },
+    ) as never;
+
+    const result = await service.runChatDelegation("sess-1", {
+      objective: "Run a slow delegate that watches the signal",
+      roles: ["researcher"],
+    });
+
+    expect(result.steps[0]).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        error: expect.stringMatching(/timeout_exceeded/),
+      }),
+    );
+    expect(observedSignal).toBeInstanceOf(AbortSignal);
+    expect(observedSignal?.aborted).toBe(true);
+  });
 });

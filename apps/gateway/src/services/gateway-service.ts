@@ -1043,7 +1043,8 @@ export class GatewayService {
       inheritDelegatedSessionToolGrants: (parentSessionId, childSessionId) =>
         this.inheritDelegatedSessionToolGrants(parentSessionId, childSessionId),
       updateChatSessionPrefs: (sessionId, input) => this.updateChatSessionPrefs(sessionId, input),
-      agentSendChatMessage: (sessionId, input) => this.chatTurnRuntime.agentSendChatMessage(sessionId, input),
+      agentSendChatMessage: (sessionId, input, options) =>
+        this.chatTurnRuntime.agentSendChatMessage(sessionId, input, options),
       extractAndPersistLearnedMemory: (sessionId, content, source) =>
         this.extractAndPersistLearnedMemory(sessionId, content, source),
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
@@ -3721,8 +3722,9 @@ export class GatewayService {
   public async agentSendChatMessage(
     sessionId: string,
     input: ChatSendMessageRequest,
+    options?: { abortSignal?: AbortSignal },
   ): Promise<ChatSendMessageResponse> {
-    return this.chatTurnRuntime.agentSendChatMessage(sessionId, input);
+    return this.chatTurnRuntime.agentSendChatMessage(sessionId, input, options);
   }
 
   private async retryChatTurnInScratchSession(

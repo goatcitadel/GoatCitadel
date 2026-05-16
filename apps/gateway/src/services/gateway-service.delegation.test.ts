@@ -292,6 +292,7 @@ describe("GatewayService.runChatDelegation", () => {
         providerId: "openai",
         model: "gpt-5.4",
       }),
+      expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
     );
     expect(result.steps[0]).toEqual(
       expect.objectContaining({

@@ -155,7 +155,11 @@ export interface ChatDelegationServiceHost {
   }): ChatSessionRecord;
   inheritDelegatedSessionToolGrants(parentSessionId: string, childSessionId: string): void;
   updateChatSessionPrefs(sessionId: string, patch: Partial<ChatSessionPrefsRecord>): ChatSessionPrefsRecord;
-  agentSendChatMessage(sessionId: string, input: ChatSendMessageRequest): Promise<ChatSendMessageResponse>;
+  agentSendChatMessage(
+    sessionId: string,
+    input: ChatSendMessageRequest,
+    options?: { abortSignal?: AbortSignal },
+  ): Promise<ChatSendMessageResponse>;
   extractAndPersistLearnedMemory(
     sessionId: string,
     content: string,
@@ -338,7 +342,7 @@ export class ChatDelegationService {
         enforceMaxDepth({ depth: childDepth, maxDepth: subagentDefaults.maxDepth });
         const response = await runWithChildTimeout({
           timeoutSeconds: subagentDefaults.childTimeoutSeconds,
-          run: async (_signal) =>
+          run: async (signal) =>
             deps.agentSendChatMessage(
               childSession.sessionId,
               buildDelegatedChatSendRequest({
@@ -362,6 +366,7 @@ export class ChatDelegationService {
                 retrievalMode: prefs.retrievalMode ?? "standard",
                 toolAutonomy: prefs.toolAutonomy,
               }),
+              { abortSignal: signal },
             ),
         });
         const traceStatus = response.trace?.status;

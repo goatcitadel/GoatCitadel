@@ -210,7 +210,7 @@ function composeEntryExtras(
   | "updateChatSessionPrefs"
 > {
   return {
-    agentSendChatMessage: (sessionId, input) => source.agentSendChatMessage(sessionId, input),
+    agentSendChatMessage: (sessionId, input, options) => source.agentSendChatMessage(sessionId, input, options),
     createChatSession: (input) => source.createChatSession(input),
     inheritDelegatedSessionToolGrants: (sessionId, delegatedSessionId) =>
       source.inheritDelegatedSessionToolGrants(sessionId, delegatedSessionId),
