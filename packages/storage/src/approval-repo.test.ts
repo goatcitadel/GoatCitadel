@@ -287,4 +287,39 @@ describe("ApprovalRepository", () => {
     assert.throws(() => repo.list(undefined, 10), /Unexpected approvals row shape/);
     assert.throws(() => repo.list("pending", 10), /Unexpected approvals row shape/);
   });
+
+  it("persists shellExplanations and round-trips them on read", () => {
+    const repo = createRepo();
+    const created = repo.create({
+      kind: "shell.exec",
+      riskLevel: "caution",
+      payload: { commands: ["rm -rf /tmp/x"] },
+      preview: { commands: ["rm -rf /tmp/x"] },
+    });
+
+    assert.equal(created.shellExplanations, undefined);
+
+    const updated = repo.setShellExplanations(created.approvalId, [
+      {
+        command: "rm -rf /tmp/x",
+        parsed: true,
+        program: "rm",
+        summary: "Recursively delete /tmp/x",
+        details: [],
+        risks: [{ level: "danger", label: "Recursive delete", explanation: "deletes directories" }],
+        highestRisk: "danger",
+      },
+    ]);
+    assert.equal(updated, true);
+
+    const fetched = repo.get(created.approvalId);
+    assert.equal(fetched.shellExplanations?.length, 1);
+    assert.equal(fetched.shellExplanations?.[0].highestRisk, "danger");
+    assert.equal(fetched.shellExplanations?.[0].command, "rm -rf /tmp/x");
+  });
+
+  it("setShellExplanations returns false for unknown approval id", () => {
+    const repo = createRepo();
+    assert.equal(repo.setShellExplanations("missing-approval", []), false);
+  });
 });

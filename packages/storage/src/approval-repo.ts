@@ -4,6 +4,7 @@ import type {
   ApprovalExplanationStatus,
   ApprovalRequest,
   ApprovalResolveInput,
+  ShellCommandExplanation,
 } from "@goatcitadel/contracts";
 import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
@@ -29,6 +30,7 @@ interface ApprovalRow {
   resolved_at: string | null;
   resolved_by: string | null;
   resolution_note: string | null;
+  shell_explanations_json: string | null;
 }
 
 export class ApprovalRepository {
@@ -41,6 +43,7 @@ export class ApprovalRepository {
   private readonly markExplanationPendingStmt;
   private readonly setExplanationStmt;
   private readonly setExplanationFailedStmt;
+  private readonly setShellExplanationsStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.createStmt = db.prepare(`
@@ -97,6 +100,19 @@ export class ApprovalRepository {
         explanation_updated_at = @updatedAt
       WHERE approval_id = @approvalId
     `);
+    this.setShellExplanationsStmt = db.prepare(`
+      UPDATE approvals SET
+        shell_explanations_json = @shellExplanationsJson
+      WHERE approval_id = @approvalId
+    `);
+  }
+
+  public setShellExplanations(approvalId: string, explanations: readonly ShellCommandExplanation[]): boolean {
+    const result = this.setShellExplanationsStmt.run({
+      approvalId,
+      shellExplanationsJson: JSON.stringify(explanations),
+    });
+    return result.changes > 0;
   }
 
   public create(input: ApprovalCreateInput): ApprovalRequest {
@@ -219,6 +235,10 @@ function mapRow(row: ApprovalRow): ApprovalRequest {
   const rawPreview = safeJsonParse<Record<string, unknown>>(row.preview_json, {});
   const linkage =
     deserializeApprovalLinkage(row.linkage_json) ?? readApprovalLinkage(rawPayload) ?? readApprovalLinkage(rawPreview);
+  const shellExplanations = safeJsonParse<readonly ShellCommandExplanation[] | undefined>(
+    row.shell_explanations_json,
+    undefined,
+  );
 
   return {
     approvalId: row.approval_id,
@@ -236,6 +256,7 @@ function mapRow(row: ApprovalRow): ApprovalRequest {
     explanationStatus: row.explanation_status,
     explanation,
     explanationError: row.explanation_error ?? undefined,
+    shellExplanations,
   };
 }
 
@@ -274,7 +295,10 @@ function isApprovalRow(value: unknown): value is ApprovalRow {
     (typeof value.expires_at === "string" || value.expires_at === null) &&
     (typeof value.resolved_at === "string" || value.resolved_at === null) &&
     (typeof value.resolved_by === "string" || value.resolved_by === null) &&
-    (typeof value.resolution_note === "string" || value.resolution_note === null)
+    (typeof value.resolution_note === "string" || value.resolution_note === null) &&
+    (typeof value.shell_explanations_json === "string" ||
+      value.shell_explanations_json === null ||
+      value.shell_explanations_json === undefined)
   );
 }
 
