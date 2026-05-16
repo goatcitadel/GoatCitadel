@@ -76,6 +76,30 @@ import { parseLooseJsonRecord } from "./json-record-parser.js";
 import { parsePromptJudgeScoreRecord } from "./prompt-pack-judge-score-parser.js";
 import { applyPromptPackPromptLabFallbacks } from "./prompt-pack-empty-output-fallbacks.js";
 import {
+  DEFAULT_PROMPT_PACK_EXPORT_ARCHIVE_DIR,
+  DEFAULT_PROMPT_PACK_EXPORT_DIR,
+  PROMPT_PACK_BENCHMARK_CLAIM_HEARTBEAT_MS,
+  PROMPT_PACK_BENCHMARK_CLAIM_TTL_MS,
+  PROMPT_PACK_BENCHMARK_MAX_FAILURE_SIGNALS,
+  PROMPT_PACK_BENCHMARK_MAX_PROVIDERS,
+  PROMPT_PACK_BENCHMARK_MAX_TESTS,
+  PROMPT_PACK_CAPABILITY_KEYS,
+  PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION,
+  PROMPT_PACK_PASS_THRESHOLD,
+  PROMPT_PACK_V2_DIMENSIONS,
+  PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION,
+  PROMPT_PACK_V2_PASS_THRESHOLD,
+  PROMPT_PACK_V2_SCORER_VERSION,
+  PROMPT_PACK_V2_SCHEMA_VERSION,
+  PROMPT_PACK_V2_SCORING_ENABLED_ENV,
+  PROMPT_PACK_V3_DIMENSIONS,
+  PROMPT_PACK_V3_EXECUTION_DIMENSIONS,
+  PROMPT_PACK_V3_JUDGE_RUBRIC_VERSION,
+  PROMPT_PACK_V3_OUTCOME_DIMENSIONS,
+  PROMPT_PACK_V3_SCORER_VERSION,
+  PROMPT_PACK_V3_SCHEMA_VERSION,
+} from "./prompt-pack-policy.js";
+import {
   PROMPT_PACK_MEMORY_TOOL_NAME_LIST as PROMPT_PACK_MEMORY_TOOL_NAMES,
   PROMPT_PACK_WEB_TOOL_NAME_LIST as PROMPT_PACK_WEB_TOOL_NAMES,
 } from "./chat-tool-families.js";
@@ -118,50 +142,6 @@ export {
   resolvePromptPackProjectBinding,
 } from "./prompt-pack-execution-profile.js";
 export type { PromptPackExecutionProfile } from "./prompt-pack-execution-profile.js";
-
-// ── constants ────────────────────────────────────────────────────────
-const PROMPT_PACK_PASS_THRESHOLD = 7;
-const PROMPT_PACK_CAPABILITY_KEYS = ["routing", "honesty", "handoff", "robustness", "usability"] as const;
-const PROMPT_PACK_V2_DIMENSIONS = [
-  "taskSuccess",
-  "honesty",
-  "executionQuality",
-  "robustness",
-  "usability",
-] as const satisfies readonly PromptPackScoreDimensionV2[];
-const PROMPT_PACK_V2_SCHEMA_VERSION = "v2";
-const PROMPT_PACK_V2_SCORER_VERSION = "2026-04-16.2";
-const PROMPT_PACK_V2_JUDGE_RUBRIC_VERSION = "2026-04-09.1";
-const PROMPT_PACK_V3_SCHEMA_VERSION = "v3";
-const PROMPT_PACK_V3_SCORER_VERSION = "2026-05-v3.1";
-const PROMPT_PACK_V3_JUDGE_RUBRIC_VERSION = "outcome-execution-attribution-2026-05";
-const PROMPT_PACK_V2_PASS_THRESHOLD = DEFAULT_PROMPT_PACK_POLICY_V2.threshold;
-const PROMPT_PACK_V2_SCORING_ENABLED_ENV = "PROMPT_PACK_V2_SCORING_ENABLED";
-const PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION: PromptPackScoringSchemaVersion = PROMPT_PACK_V3_SCHEMA_VERSION;
-const PROMPT_PACK_V3_OUTCOME_DIMENSIONS = [
-  "taskSuccess",
-  "truthfulness",
-  "evidenceGrounding",
-  "formatAdherence",
-  "operatorUsefulness",
-] as const;
-const PROMPT_PACK_V3_EXECUTION_DIMENSIONS = [
-  "toolUseQuality",
-  "orchestrationQuality",
-  "efficiency",
-  "recoveryQuality",
-] as const;
-const PROMPT_PACK_V3_DIMENSIONS = [
-  ...PROMPT_PACK_V3_OUTCOME_DIMENSIONS,
-  ...PROMPT_PACK_V3_EXECUTION_DIMENSIONS,
-] as const satisfies readonly PromptPackScoreDimensionV3[];
-const PROMPT_PACK_BENCHMARK_MAX_FAILURE_SIGNALS = 5;
-const PROMPT_PACK_BENCHMARK_MAX_TESTS = 200;
-const PROMPT_PACK_BENCHMARK_MAX_PROVIDERS = 10;
-const PROMPT_PACK_BENCHMARK_CLAIM_TTL_MS = 120_000;
-const PROMPT_PACK_BENCHMARK_CLAIM_HEARTBEAT_MS = 30_000;
-const DEFAULT_PROMPT_PACK_EXPORT_DIR = "artifacts/prompt-lab";
-const DEFAULT_PROMPT_PACK_EXPORT_ARCHIVE_DIR = "runs";
 
 export interface PromptPackServiceContext {
   readonly storage: Pick<

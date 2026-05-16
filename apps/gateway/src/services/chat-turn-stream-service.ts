@@ -49,7 +49,7 @@ import type { PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import type { HooksService } from "./hooks-service.js";
-import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
+import { enqueueAgentEndHook, observeBeforeAssistantMessageWrite } from "./chat-turn-stream-events.js";
 import type {
   ChatTurnActiveExecutionControl,
   ChatTurnMemorySideEffects,
@@ -153,80 +153,6 @@ export function collectOrchestrationToolRuns(host: ChatTurnStreamHost, runId: st
     }
   }
   return orderedToolRuns;
-}
-
-async function observeBeforeAssistantMessageWrite(
-  host: ChatTurnStreamHost,
-  input: {
-    workspaceId: string;
-    sessionId: string;
-    turnId: string;
-    messageId: string;
-    content: string;
-    stream: boolean;
-    runId?: string;
-    taskId?: string;
-    providerId?: string;
-    model?: string;
-  },
-): Promise<void> {
-  await runtimeLifecycleHookDispatcher.runObserveHook(host.hooksService, {
-    workspaceId: input.workspaceId,
-    trigger: "before_message_write",
-    entityType: "chat_turn",
-    entityId: input.turnId,
-    payload: {
-      workspaceId: input.workspaceId,
-      sessionId: input.sessionId,
-      turnId: input.turnId,
-      runId: input.runId,
-      taskId: input.taskId,
-      providerId: input.providerId,
-      model: input.model,
-      messageId: input.messageId,
-      contentLength: input.content.length,
-      stream: input.stream,
-    },
-  });
-}
-
-function enqueueAgentEndHook(
-  host: ChatTurnStreamHost,
-  input: {
-    workspaceId: string;
-    sessionId: string;
-    turnId: string;
-    status: string;
-    toolRunCount: number;
-    stream: boolean;
-    repaired: boolean;
-    runId?: string;
-    taskId?: string;
-    providerId?: string;
-    model?: string;
-    approvalId?: string;
-  },
-): void {
-  runtimeLifecycleHookDispatcher.enqueueObserveHook(host.hooksService, {
-    workspaceId: input.workspaceId,
-    trigger: "agent_end",
-    entityType: "chat_turn",
-    entityId: input.turnId,
-    payload: {
-      workspaceId: input.workspaceId,
-      sessionId: input.sessionId,
-      turnId: input.turnId,
-      runId: input.runId,
-      taskId: input.taskId,
-      approvalId: input.approvalId,
-      providerId: input.providerId,
-      model: input.model,
-      status: input.status,
-      toolRunCount: input.toolRunCount,
-      stream: input.stream,
-      repaired: input.repaired,
-    },
-  });
 }
 
 export async function executePreparedModeOrchestration(
