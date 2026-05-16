@@ -262,7 +262,8 @@ export class LlmService {
       includeKeychainForProviderId: options.includeKeychainForActiveProvider ? this.activeProviderId : undefined,
       useCache: options.useCache,
     }).map((provider) => {
-      const providerMeta = lookupModelMetadata(this.modelMetadata, provider.providerId, provider.defaultModel);
+      const providerModel = provider.providerId === this.activeProviderId ? this.activeModel : provider.defaultModel;
+      const providerMeta = lookupModelMetadata(this.modelMetadata, provider.providerId, providerModel);
       return {
         ...provider,
         activeModelContextWindow: provider.activeModelContextWindow ?? providerMeta?.contextWindow,

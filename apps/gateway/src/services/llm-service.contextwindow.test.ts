@@ -224,4 +224,71 @@ describe("LlmService model metadata decoration", () => {
     expect(provider?.activeModelContextWindow).toBeUndefined();
     expect(provider?.activeModelOutputTokenLimit).toBeUndefined();
   });
+
+  it("getRuntimeConfig per-provider metadata tracks activeModel for the active provider when it differs from defaultModel", () => {
+    const manifestPath = writeManifest(tmp, {
+      "anthropic/claude-sonnet-4-6": { contextWindow: 1_000_000, outputTokenLimit: 32_000 },
+      "anthropic/claude-opus-4-7": { contextWindow: 1_000_000, outputTokenLimit: 64_000 },
+    });
+    const config: LlmConfigFile = {
+      activeProviderId: "anthropic",
+      activeModel: "claude-opus-4-7",
+      providers: [
+        {
+          providerId: "anthropic",
+          label: "Anthropic",
+          baseUrl: "https://api.anthropic.com/v1",
+          apiStyle: "anthropic-messages",
+          defaultModel: "claude-sonnet-4-6",
+        },
+      ],
+    };
+    const service = new LlmService(config, process.env, {
+      secretStore: createNoopSecretStore(),
+      modelMetadataPath: manifestPath,
+    });
+
+    const runtime = service.getRuntimeConfig();
+    // Top-level uses activeModel (opus): outputTokenLimit 64_000
+    expect(runtime.activeModelOutputTokenLimit).toBe(64_000);
+    // Per-provider for the active provider ALSO uses activeModel: 64_000 (NOT defaultModel sonnet's 32_000)
+    const activeProvider = runtime.providers.find((p) => p.providerId === "anthropic");
+    expect(activeProvider?.activeModelOutputTokenLimit).toBe(64_000);
+    expect(activeProvider?.activeModelContextWindow).toBe(1_000_000);
+  });
+
+  it("loads manifest from GOATCITADEL_LLM_MODEL_METADATA_PATH when option not set", () => {
+    const manifestPath = writeManifest(tmp, {
+      "anthropic/claude-opus-4-7": { contextWindow: 1_000_000, outputTokenLimit: 32_000 },
+    });
+    const service = new LlmService(
+      buildAnthropicConfig(),
+      { GOATCITADEL_LLM_MODEL_METADATA_PATH: manifestPath } as NodeJS.ProcessEnv,
+      { secretStore: createNoopSecretStore() },
+    );
+    const config = service.getRuntimeConfig();
+    expect(config.activeModelContextWindow).toBe(1_000_000);
+    expect(config.activeModelOutputTokenLimit).toBe(32_000);
+  });
+
+  it("loads manifest from configFilePath-colocated default when neither option nor env set", () => {
+    const fakeConfigPath = join(tmp, "llm-providers.json");
+    writeFileSync(fakeConfigPath, JSON.stringify({ activeProviderId: "anthropic", providers: [] }));
+    writeFileSync(
+      join(tmp, "llm-model-metadata.json"),
+      JSON.stringify({
+        version: 1,
+        entries: {
+          "anthropic/claude-opus-4-7": { contextWindow: 1_000_000, outputTokenLimit: 32_000 },
+        },
+      }),
+    );
+    const service = new LlmService(buildAnthropicConfig(), {} as NodeJS.ProcessEnv, {
+      secretStore: createNoopSecretStore(),
+      configFilePath: fakeConfigPath,
+    });
+    const config = service.getRuntimeConfig();
+    expect(config.activeModelContextWindow).toBe(1_000_000);
+    expect(config.activeModelOutputTokenLimit).toBe(32_000);
+  });
 });
