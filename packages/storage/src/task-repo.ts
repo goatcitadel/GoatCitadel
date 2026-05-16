@@ -13,6 +13,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
+import { safeJsonParse } from "./safe-json.js";
 import { parseJsonObject } from "./state-validators.js";
 
 interface TaskRow {
