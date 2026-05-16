@@ -12,7 +12,8 @@ import type {
   TaskUpdateInput,
 } from "@goatcitadel/contracts";
 import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
-import { safeJsonParse } from "./safe-json.js";
+import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
+import { parseJsonObject } from "./state-validators.js";
 
 interface TaskRow {
   task_id: string;
@@ -48,6 +49,11 @@ export interface TaskStatusCount {
   count: number;
 }
 
+export interface TaskRepositoryOptions {
+  quarantine?: { record: (entry: QuarantineEntry) => unknown };
+  logger?: { warn: (data: unknown, msg: string) => void };
+}
+
 export class TaskRepository {
   private readonly insertStmt;
   private readonly getStmt;
@@ -56,7 +62,10 @@ export class TaskRepository {
   private readonly softDeleteStmt;
   private readonly restoreStmt;
 
-  public constructor(private readonly db: DatabaseClient) {
+  public constructor(
+    private readonly db: DatabaseClient,
+    private readonly options: TaskRepositoryOptions = {},
+  ) {
     this.insertStmt = db.prepare(`
       INSERT INTO tasks (
         task_id, workspace_id, title, description, status, priority,
@@ -141,7 +150,7 @@ export class TaskRepository {
     if (!row) {
       throw new NotFoundError({ entity: "Task", id: taskId });
     }
-    return mapTaskRow(row);
+    return this.mapTaskRow(row);
   }
 
   public find(taskId: string): TaskRecord | undefined {
@@ -149,7 +158,7 @@ export class TaskRepository {
     if (!row) {
       return undefined;
     }
-    return mapTaskRow(row);
+    return this.mapTaskRow(row);
   }
 
   public list(query: TaskListQuery): TaskRecord[] {
@@ -185,7 +194,7 @@ export class TaskRepository {
       LIMIT @limit
     `;
     const rows = toTaskRows(this.db.prepare(sql).all(params));
-    return rows.map(mapTaskRow);
+    return rows.map((row) => this.mapTaskRow(row));
   }
 
   public update(taskId: string, input: TaskUpdateInput, now = new Date().toISOString()): TaskRecord {
@@ -323,40 +332,50 @@ export class TaskRepository {
       count: Number(row.count ?? 0),
     }));
   }
-}
 
-function mapTaskRow(row: TaskRow): TaskRecord {
-  const metadata = safeJsonParse<{
-    proactiveContext?: TaskProactiveContext | null;
-    agenticContext?: AgenticTaskContext | null;
-  }>(row.metadata_json, {});
-  return {
-    taskId: row.task_id,
-    workspaceId: row.workspace_id,
-    title: row.title,
-    description: row.description ?? undefined,
-    status: row.status,
-    priority: row.priority,
-    assignedAgentId: row.assigned_agent_id ?? undefined,
-    createdBy: row.created_by ?? undefined,
-    dueAt: row.due_at ?? undefined,
-    proactiveContext: metadata.proactiveContext ?? undefined,
-    agenticContext: metadata.agenticContext ?? undefined,
-    distressSignals: row.distress_signals_json
-      ? (safeJsonParse<TaskDistressSignal[]>(row.distress_signals_json, []) as TaskDistressSignal[])
-      : undefined,
-    retryBudget: row.retry_budget_json
-      ? safeJsonParse<TaskRetryBudget | undefined>(row.retry_budget_json, undefined)
-      : undefined,
-    artifactVerification: row.artifact_verification_json
-      ? (safeJsonParse<TaskArtifactVerification[]>(row.artifact_verification_json, []) as TaskArtifactVerification[])
-      : undefined,
-    deletedAt: row.deleted_at ?? undefined,
-    deletedBy: row.deleted_by ?? undefined,
-    deleteReason: row.delete_reason ?? undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
+  private mapTaskRow(row: TaskRow): TaskRecord {
+    const metadata = loadAndSanitize(
+      row.metadata_json,
+      {
+        store: "task.metadata",
+        rowId: row.task_id,
+        parse: parseJsonObject,
+        onQuarantine: this.options.quarantine ? (e) => this.options.quarantine!.record(e) : undefined,
+        log: this.options.logger,
+      },
+      {},
+    ) as {
+      proactiveContext?: TaskProactiveContext | null;
+      agenticContext?: AgenticTaskContext | null;
+    };
+    return {
+      taskId: row.task_id,
+      workspaceId: row.workspace_id,
+      title: row.title,
+      description: row.description ?? undefined,
+      status: row.status,
+      priority: row.priority,
+      assignedAgentId: row.assigned_agent_id ?? undefined,
+      createdBy: row.created_by ?? undefined,
+      dueAt: row.due_at ?? undefined,
+      proactiveContext: metadata.proactiveContext ?? undefined,
+      agenticContext: metadata.agenticContext ?? undefined,
+      distressSignals: row.distress_signals_json
+        ? (safeJsonParse<TaskDistressSignal[]>(row.distress_signals_json, []) as TaskDistressSignal[])
+        : undefined,
+      retryBudget: row.retry_budget_json
+        ? safeJsonParse<TaskRetryBudget | undefined>(row.retry_budget_json, undefined)
+        : undefined,
+      artifactVerification: row.artifact_verification_json
+        ? (safeJsonParse<TaskArtifactVerification[]>(row.artifact_verification_json, []) as TaskArtifactVerification[])
+        : undefined,
+      deletedAt: row.deleted_at ?? undefined,
+      deletedBy: row.deleted_by ?? undefined,
+      deleteReason: row.delete_reason ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
 }
 
 interface CompositeCursor {

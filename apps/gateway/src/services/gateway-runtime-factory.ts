@@ -1,3 +1,4 @@
+import type { LlmRuntimeConfig } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
 import { GatewayService } from "./gateway-service.js";
@@ -35,7 +36,11 @@ export type GatewayRuntimeInstance = GatewayRuntimePort & GatewayAuthValidationP
 
 export interface GatewayAdminPort extends GatewayRuntimePort, GatewayAuthValidationPort {
   createBackup(input: { name?: string; outputPath?: string }): Promise<unknown>;
+  findCronRunById(
+    runId: string,
+  ): { runId: string; jobId: string; status: "ok"; finishedAt?: string; output?: string } | undefined;
   getAuthCredentialPlan(): unknown;
+  getLlmConfig(): LlmRuntimeConfig;
   getRetentionPolicy(): unknown;
   listBackups(limit?: number): Promise<unknown>;
   pruneRetention(input: { dryRun?: boolean }): Promise<unknown>;
@@ -44,6 +49,7 @@ export interface GatewayAdminPort extends GatewayRuntimePort, GatewayAuthValidat
     generateWhenMissing?: boolean;
     persistToEnv?: boolean;
   }): Promise<unknown>;
+  runCronJobNow(jobId: string): Promise<{ jobId: string; runId: string; status: "ok" }>;
   runDatabaseCutover(input: { profile: "local" | "hosted"; execute: boolean; confirm?: boolean }): Promise<unknown>;
   updateRetentionPolicy(input: {
     realtimeEventsDays?: number;
@@ -63,11 +69,14 @@ export function createGatewayAdminRuntime(config: GatewayRuntimeConfig): Gateway
   return {
     ...createGatewayRuntimeFacade(gateway),
     createBackup: (input) => gateway.createBackup(input),
+    findCronRunById: (runId) => gateway.cronAutomationService.findCronRunById(runId),
     getAuthCredentialPlan: () => gateway.getAuthCredentialPlan(),
+    getLlmConfig: () => gateway.getLlmConfig(),
     getRetentionPolicy: () => gateway.getRetentionPolicy(),
     listBackups: (limit) => gateway.listBackups(limit),
     pruneRetention: (input) => gateway.pruneRetention(input),
     resolveGatewayInstallToken: (input) => gateway.resolveGatewayInstallToken(input),
+    runCronJobNow: (jobId) => gateway.cronAutomationService.runCronJobNow(jobId),
     runDatabaseCutover: (input) => gateway.runDatabaseCutover(input),
     updateRetentionPolicy: (input) => gateway.updateRetentionPolicy(input),
     verifyDatabaseCutover: (input) => gateway.verifyDatabaseCutover(input),

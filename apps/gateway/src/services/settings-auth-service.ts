@@ -249,7 +249,12 @@ export interface UpdateSettingsInput {
       providerId: string;
       label?: string;
       baseUrl?: string;
-      apiStyle?: "openai-chat-completions" | "openai-responses" | "openai-codex-responses" | "anthropic-messages";
+      apiStyle?:
+        | "openai-chat-completions"
+        | "openai-responses"
+        | "openai-codex-responses"
+        | "anthropic-messages"
+        | "bedrock-messages";
       authMode?: "api-key" | "codex-oauth" | "claude-code-oauth";
       defaultModel?: string;
       apiKey?: string;

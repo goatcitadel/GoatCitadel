@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DurableRunRecord } from "@goatcitadel/contracts";
+import type { CuratorTickWorkflowPayload, DurableRunRecord } from "@goatcitadel/contracts";
 vi.mock("@goatcitadel/storage", () => ({}));
 vi.mock("sqlite", () => ({}));
 vi.mock("./connector-delivery.js", () => ({
@@ -22,6 +22,7 @@ import {
   isDurableWorkflowRecoverable,
   markDurableWorkflowUnrecoverable,
   parseApprovalWaitWorkflowPayload,
+  parseCuratorTickWorkflowPayload,
   parseConnectorDeliveryWorkflowPayload,
   parseDurableChatTurnPayload,
   parseHookDeliveryWorkflowPayload,
@@ -121,6 +122,7 @@ function createHosts(outcome: "paused" | "completed" | "cancelled"): {
       connectorDelivery: {} as DurableWorkflowExecutorHosts["connectorDelivery"],
       hookDelivery: {} as DurableWorkflowExecutorHosts["hookDelivery"],
       orchestration: orchestrationHost,
+      curatorTick: {} as DurableWorkflowExecutorHosts["curatorTick"],
     },
     durableRuns,
     publishRealtime,
@@ -848,3 +850,26 @@ function createApprovalWaitHost(run: DurableRunRecord, status: "pending" | "appr
     publishRealtime: vi.fn(),
   };
 }
+
+describe("parseCuratorTickWorkflowPayload", () => {
+  it("returns payload when valid", () => {
+    const run = {
+      payload: {
+        version: "curator.tick.v1",
+        runId: "curator-run-xyz",
+        triggerMode: "scheduled",
+        cycleDays: 7,
+        requestedAt: "2026-05-15T12:00:00Z",
+      } as CuratorTickWorkflowPayload,
+    } as unknown as DurableRunRecord;
+    expect(parseCuratorTickWorkflowPayload(run)).toEqual(run.payload);
+  });
+  it("returns undefined when version mismatches", () => {
+    const run = { payload: { version: "wrong.v1" } } as unknown as DurableRunRecord;
+    expect(parseCuratorTickWorkflowPayload(run)).toBeUndefined();
+  });
+  it("returns undefined when payload is missing required fields", () => {
+    const run = { payload: { version: "curator.tick.v1" } } as unknown as DurableRunRecord;
+    expect(parseCuratorTickWorkflowPayload(run)).toBeUndefined();
+  });
+});

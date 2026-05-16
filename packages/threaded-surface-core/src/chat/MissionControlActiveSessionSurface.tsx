@@ -19,6 +19,7 @@ import type { ActiveChatDelegationRun } from "./useChatDelegationPolicyActions";
 import type { PendingUserInputState } from "./useChatOutboundExecution";
 import type { WorkTrustDescriptor } from "./work-trust";
 import type { ChatErrorSource } from "./chat-error-copy";
+import type { MidTurnDisposition } from "./chat-page-pure-helpers";
 
 export interface MissionControlActiveSessionSurfaceProps {
   mode: ChatMode;
@@ -170,4 +171,10 @@ export interface MissionControlActiveSessionSurfaceProps {
   onCloseGeneratedArtifact?: () => void;
   onStopActiveTurn: () => void;
   onSend: () => void;
+  pinnedGoal?: string;
+  midTurnDisposition?: MidTurnDisposition;
+  onSteerMidTurn?: (instruction: string) => Promise<void>;
+  onSetGoal?: (goal: string, turnBudget?: number) => Promise<void>;
+  onClearGoal?: () => Promise<void>;
+  onGoalStatus?: () => Promise<void>;
 }

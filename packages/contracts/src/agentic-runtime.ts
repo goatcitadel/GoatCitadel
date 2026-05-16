@@ -38,6 +38,8 @@ export type AgenticDiagnosticCode =
   | "missing_assistant_output"
   | "stale_approval"
   | "child_timeout"
+  | "timeout_exceeded"
+  | "max_depth_exceeded"
   | "spawn_failure"
   | "worker_crash"
   | "stale_worker"
@@ -240,6 +242,7 @@ export interface AgenticSubagentMetadata {
   profileId?: string;
   contextMode?: AgenticContextMode;
   index?: number;
+  depth?: number;
   dependsOnStepIds?: string[];
   heartbeatAt?: string;
   timeoutAt?: string;

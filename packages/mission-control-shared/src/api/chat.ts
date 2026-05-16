@@ -13,6 +13,8 @@ import type {
   ChatGeneratedArtifactKind,
   ChatGeneratedArtifactRecord,
   ChatGeneratedArtifactSourceSurface,
+  ChatGoalRequest,
+  ChatGoalStatusResponse,
   ChatMessageRecord,
   ChatMode,
   ChatProjectRecord,
@@ -42,6 +44,8 @@ import type {
   ChatSpecialistCandidatePatchInput,
   ChatSpecialistCandidateRecord,
   ChatSpecialistCandidateSuggestionRecord,
+  ChatSteerRequest,
+  ChatSteerResponse,
   RoutingPreflightRequest,
   RoutingPreflightResult,
   ChatStreamChunk,
@@ -1229,6 +1233,30 @@ export async function fetchChatDelegationRun(
   steps: ChatDelegationStepRecord[];
 }> {
   return request(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/delegations/${encodeURIComponent(runId)}`);
+}
+
+export async function steerChatSession(sessionId: string, input: ChatSteerRequest): Promise<ChatSteerResponse> {
+  return request<ChatSteerResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/steer`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchChatSessionGoal(sessionId: string): Promise<ChatGoalStatusResponse> {
+  return request<ChatGoalStatusResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/goal`);
+}
+
+export async function setChatSessionGoal(sessionId: string, input: ChatGoalRequest): Promise<ChatGoalStatusResponse> {
+  return request<ChatGoalStatusResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/goal`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function clearChatSessionGoal(sessionId: string): Promise<ChatGoalStatusResponse> {
+  return request<ChatGoalStatusResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/goal`, {
+    method: "DELETE",
+  });
 }
 
 async function encodeFileBase64(file: File): Promise<string> {

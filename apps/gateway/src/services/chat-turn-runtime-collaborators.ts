@@ -11,6 +11,7 @@ import type {
   DurableRunRecord,
 } from "@goatcitadel/contracts";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
+import type { ChatSteerService } from "./chat-steer-service.js";
 
 export type ChatTurnRealtimeOptions = Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">;
 
@@ -86,6 +87,14 @@ export interface ChatTurnDurableRunOwner {
     threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
   ): DurableRunRecord | undefined;
   finalizeDurableChatRun(runId: string, prepared: PreparedAgentChatTurn, trace: ChatTurnTraceRecord): void;
+  /**
+   * Soft-cancel a durable chat run when an external `AbortSignal` fires while
+   * `consumePreparedAgentChatTurn` is waiting on its persisted stream. The
+   * implementation typically delegates to the durable-kernel's cancel API
+   * (`cancelDurableRun`). Optional because not every dispatch host owns a
+   * durable kernel (e.g., tests).
+   */
+  cancelDurableChatRun?(runId: string, actorId?: string): void;
 }
 
 export interface ChatTurnMemorySideEffects {
@@ -119,4 +128,8 @@ export interface ChatTurnIntegrationDispatch {
     result: ToolInvokeResult | Record<string, unknown>,
   ): Record<string, unknown>;
   commsSend(input: ChannelSendInput): Promise<ToolInvokeResult | Record<string, unknown>>;
+}
+
+export interface ChatTurnSteerCollaborator {
+  readonly steerService: ChatSteerService;
 }

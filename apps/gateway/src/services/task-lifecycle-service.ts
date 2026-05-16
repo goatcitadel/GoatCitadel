@@ -1086,7 +1086,10 @@ function validateAgenticControlTransition(
 function mapDiagnosticToFailureClass(code: AgenticDiagnosticSignal["code"]): AgenticTaskContext["failureClass"] {
   switch (code) {
     case "child_timeout":
+    case "timeout_exceeded":
       return "timeout";
+    case "max_depth_exceeded":
+      return "spawn_failure";
     case "spawn_failure":
       return "spawn_failure";
     case "worker_crash":

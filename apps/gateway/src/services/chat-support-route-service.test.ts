@@ -32,6 +32,14 @@ function createDeps() {
       listChatSessionSpecialistCandidates: call("listChatSessionSpecialistCandidates"),
       updateChatSessionSpecialistCandidate: call("updateChatSessionSpecialistCandidate"),
     },
+    steer: {
+      submitChatSteerInstruction: call("submitChatSteerInstruction"),
+    },
+    goal: {
+      getChatSessionGoal: call("getChatSessionGoal"),
+      setChatSessionGoal: call("setChatSessionGoal"),
+      clearChatSessionGoal: call("clearChatSessionGoal"),
+    },
   };
 }
 
@@ -106,6 +114,22 @@ describe("ChatSupportRouteService", () => {
     ).toEqual({
       method: "updateChatSessionSpecialistCandidate",
       args: ["session-1", "candidate-1", { status: "accepted" }],
+    });
+    expect(service.submitChatSteerInstruction("session-1", { instruction: "focus" })).toEqual({
+      method: "submitChatSteerInstruction",
+      args: ["session-1", { instruction: "focus" }],
+    });
+    expect(service.getChatSessionGoal("session-1")).toEqual({
+      method: "getChatSessionGoal",
+      args: ["session-1"],
+    });
+    expect(service.setChatSessionGoal("session-1", { goal: "ship" })).toEqual({
+      method: "setChatSessionGoal",
+      args: ["session-1", { goal: "ship" }],
+    });
+    expect(service.clearChatSessionGoal("session-1")).toEqual({
+      method: "clearChatSessionGoal",
+      args: ["session-1"],
     });
   });
 });

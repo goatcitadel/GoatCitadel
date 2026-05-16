@@ -21,6 +21,7 @@ import {
   type ChatSendMessageRequest,
   type ChatTurnTraceRecord,
   type ConnectorDeliveryWorkflowPayload,
+  type CuratorTickWorkflowPayload,
   type DurableRunRecord,
   type DurableRunTimelineEvent,
   type HookTrigger,
@@ -36,6 +37,7 @@ import type { ChatProactiveService } from "./chat-proactive-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import type { DurableChatTurnExecutionPayload, DurableChatTurnUserInputResumeRecord } from "./chat-turn-types.js";
+import type { CuratorService } from "./curator-service.js";
 import type { DurableRunService } from "./durable-run-service.js";
 import type { HooksService } from "./hooks-service.js";
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
@@ -159,6 +161,11 @@ type DurableHookDeliveryWorkflowHost = DurableWorkflowCompletionHost &
 type DurableOrchestrationWorkflowHost = DurableWorkflowCompletionHost &
   Pick<DurableExecutionHost, "executeDurableOrchestrationRun" | "durableRunService">;
 
+type DurableCuratorTickWorkflowHost = {
+  curatorService: Pick<CuratorService, "executeDurableCuratorTickRun">;
+  publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void;
+};
+
 export interface DurableWorkflowExecutorHosts {
   memoryMaintenance: DurableMemoryMaintenanceWorkflowHost;
   chatTurn: DurableChatTurnWorkflowHost;
@@ -167,6 +174,7 @@ export interface DurableWorkflowExecutorHosts {
   connectorDelivery: DurableConnectorDeliveryWorkflowHost;
   hookDelivery: DurableHookDeliveryWorkflowHost;
   orchestration: DurableOrchestrationWorkflowHost;
+  curatorTick: DurableCuratorTickWorkflowHost;
 }
 
 function buildConnectorDeliveryRealtimeLinks(input: {
@@ -287,6 +295,26 @@ export function parseProactiveTickWorkflowPayload(run: DurableRunRecord): Proact
     return undefined;
   }
   return payload as ProactiveTickWorkflowPayload;
+}
+
+export function parseCuratorTickWorkflowPayload(run: DurableRunRecord): CuratorTickWorkflowPayload | undefined {
+  const payload = run.payload as Partial<CuratorTickWorkflowPayload> | undefined;
+  if (!payload || payload.version !== "curator.tick.v1") {
+    return undefined;
+  }
+  if (typeof payload.runId !== "string" || payload.runId.length === 0) {
+    return undefined;
+  }
+  if (payload.triggerMode !== "scheduled" && payload.triggerMode !== "manual") {
+    return undefined;
+  }
+  if (typeof payload.cycleDays !== "number") {
+    return undefined;
+  }
+  if (typeof payload.requestedAt !== "string") {
+    return undefined;
+  }
+  return payload as CuratorTickWorkflowPayload;
 }
 
 export function parseConnectorDeliveryWorkflowPayload(
@@ -416,6 +444,21 @@ export function buildDurableWorkflowExecutors(
           : { recoverable: false, reason: "Durable proactive tick payload is invalid or incomplete." },
       markUnrecoverable: (run, reason) => markDurableProactiveTickUnrecoverable(hosts.proactiveTick, run, reason),
     },
+    "curator.tick": {
+      execute: (run, context) => hosts.curatorTick.curatorService.executeDurableCuratorTickRun(run, context),
+      isRecoverable: (run) =>
+        parseCuratorTickWorkflowPayload(run)
+          ? { recoverable: true }
+          : { recoverable: false, reason: "Durable curator tick payload is invalid or incomplete." },
+      markUnrecoverable: async (run, reason) => {
+        hosts.curatorTick.publishRealtime("system", "durable", {
+          type: "durable_workflow_unrecoverable",
+          runId: run.runId,
+          workflowKey: run.workflowKey,
+          reason,
+        });
+      },
+    },
     "approval.wait": {
       execute: (run, context) => executeDurableApprovalWaitRun(hosts.approvalWait, run, context),
       isRecoverable: (run) =>
@@ -512,6 +555,14 @@ function buildDurableWorkflowExecutorsFromExecutionHost(
     connectorDelivery: host,
     hookDelivery: host,
     orchestration: host,
+    curatorTick: {
+      curatorService: {
+        executeDurableCuratorTickRun: async () => {
+          throw new Error("curator.tick not supported in this execution context");
+        },
+      },
+      publishRealtime: () => undefined,
+    },
   });
 }
 

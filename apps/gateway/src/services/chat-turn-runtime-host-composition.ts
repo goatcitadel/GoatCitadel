@@ -6,6 +6,7 @@ import type {
   ChatTurnLeaseControl,
   ChatTurnMemorySideEffects,
   ChatTurnRealtimeEmitter,
+  ChatTurnSteerCollaborator,
   ChatTurnStreamLifecycleControl,
   ChatTurnTranscriptIngress,
 } from "./chat-turn-runtime-collaborators.js";
@@ -21,6 +22,7 @@ export function createChatTurnRuntimeHost(source: ChatTurnRuntimeHost): ChatTurn
     composeDurableOwnership(source),
     composeMemorySideEffects(source),
     composeRealtimeEmission(source),
+    composeSteerCollaborator(source),
     composeTranscriptIngress(source),
     composeIntegrationDispatch(source),
     composeRoutingAndPlanning(source),
@@ -133,6 +135,9 @@ function composeDurableOwnership(source: ChatTurnRuntimeHost): ChatTurnDurableRu
       source.beginDurableChatRun(prepared, input, threadEventType),
     finalizeDurableChatRun: (runId, prepared, trace) => source.finalizeDurableChatRun(runId, prepared, trace),
     isFeatureEnabled: (flag) => source.isFeatureEnabled(flag),
+    cancelDurableChatRun: source.cancelDurableChatRun
+      ? (runId, actorId) => source.cancelDurableChatRun?.(runId, actorId)
+      : undefined,
   };
 }
 
@@ -150,6 +155,14 @@ function composeMemorySideEffects(source: ChatTurnRuntimeHost): ChatTurnMemorySi
 function composeRealtimeEmission(source: ChatTurnRuntimeHost): ChatTurnRealtimeEmitter {
   return {
     publishRealtime: (channel, topic, payload, options) => source.publishRealtime(channel, topic, payload, options),
+  };
+}
+
+function composeSteerCollaborator(source: ChatTurnRuntimeHost): ChatTurnSteerCollaborator {
+  return {
+    get steerService() {
+      return source.steerService;
+    },
   };
 }
 
@@ -210,7 +223,7 @@ function composeEntryExtras(
   | "updateChatSessionPrefs"
 > {
   return {
-    agentSendChatMessage: (sessionId, input) => source.agentSendChatMessage(sessionId, input),
+    agentSendChatMessage: (sessionId, input, options) => source.agentSendChatMessage(sessionId, input, options),
     createChatSession: (input) => source.createChatSession(input),
     inheritDelegatedSessionToolGrants: (sessionId, delegatedSessionId) =>
       source.inheritDelegatedSessionToolGrants(sessionId, delegatedSessionId),

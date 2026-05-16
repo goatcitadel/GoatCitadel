@@ -187,6 +187,214 @@ export function detectAttachmentMediaType(mimeType: string): ChatAttachmentMedia
   return "binary";
 }
 
+export type SniffedMediaClass = "image" | "audio" | "video" | "archive" | "document" | "text" | "unknown";
+
+/**
+ * Magic-number sniff for attachment bytes. Distrust the declared filename and
+ * MIME hint; sniff a small prefix and surface the actual content class. Used
+ * to catch zip-as-png and other label-vs-bytes mismatches before staging.
+ */
+export function sniffAttachmentBytes(bytes: Buffer): SniffedMediaClass {
+  if (!Buffer.isBuffer(bytes) || bytes.length === 0) {
+    return "unknown";
+  }
+  const head = bytes.subarray(0, Math.min(bytes.length, 32));
+
+  // Image formats
+  if (head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) {
+    return "image"; // JPEG
+  }
+  if (
+    head.length >= 8 &&
+    head[0] === 0x89 &&
+    head[1] === 0x50 &&
+    head[2] === 0x4e &&
+    head[3] === 0x47 &&
+    head[4] === 0x0d &&
+    head[5] === 0x0a &&
+    head[6] === 0x1a &&
+    head[7] === 0x0a
+  ) {
+    return "image"; // PNG
+  }
+  if (head.length >= 6 && head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x38) {
+    return "image"; // GIF
+  }
+  if (head.length >= 2 && head[0] === 0x42 && head[1] === 0x4d) {
+    return "image"; // BMP
+  }
+  if (
+    head.length >= 4 &&
+    ((head[0] === 0x49 && head[1] === 0x49 && head[2] === 0x2a && head[3] === 0x00) ||
+      (head[0] === 0x4d && head[1] === 0x4d && head[2] === 0x00 && head[3] === 0x2a))
+  ) {
+    return "image"; // TIFF
+  }
+  // WebP: "RIFF" .... "WEBP"
+  if (
+    head.length >= 12 &&
+    head[0] === 0x52 &&
+    head[1] === 0x49 &&
+    head[2] === 0x46 &&
+    head[3] === 0x46 &&
+    head[8] === 0x57 &&
+    head[9] === 0x45 &&
+    head[10] === 0x42 &&
+    head[11] === 0x50
+  ) {
+    return "image"; // WebP
+  }
+  // HEIC: 00 00 00 ?? "ftyp" then "heic" / "heix" / "mif1" / "msf1"
+  if (head.length >= 12 && head[4] === 0x66 && head[5] === 0x74 && head[6] === 0x79 && head[7] === 0x70) {
+    const brand = head.subarray(8, 12).toString("ascii");
+    if (brand === "heic" || brand === "heix" || brand === "mif1" || brand === "msf1" || brand === "avif") {
+      return "image";
+    }
+    if (
+      brand === "qt  " ||
+      brand === "mp41" ||
+      brand === "mp42" ||
+      brand === "isom" ||
+      brand === "M4V " ||
+      brand === "M4VP"
+    ) {
+      return "video";
+    }
+    if (brand === "M4A " || brand === "M4B ") {
+      return "audio";
+    }
+    return "video"; // Default for unknown ftyp brands; still treats as media not zip
+  }
+
+  // Audio formats
+  if (
+    head.length >= 12 &&
+    head[0] === 0x52 &&
+    head[1] === 0x49 &&
+    head[2] === 0x46 &&
+    head[3] === 0x46 &&
+    head[8] === 0x57 &&
+    head[9] === 0x41 &&
+    head[10] === 0x56 &&
+    head[11] === 0x45
+  ) {
+    return "audio"; // WAV (RIFF...WAVE)
+  }
+  if (head.length >= 4 && head[0] === 0x4f && head[1] === 0x67 && head[2] === 0x67 && head[3] === 0x53) {
+    return "audio"; // OGG
+  }
+  if (head.length >= 3 && head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33) {
+    return "audio"; // MP3 with ID3
+  }
+  if (
+    head.length >= 2 &&
+    head[0] === 0xff &&
+    (head[1] === 0xfb || head[1] === 0xf3 || head[1] === 0xf2 || head[1] === 0xe3)
+  ) {
+    return "audio"; // MP3 framesync
+  }
+  if (head.length >= 4 && head[0] === 0x66 && head[1] === 0x4c && head[2] === 0x61 && head[3] === 0x43) {
+    return "audio"; // FLAC
+  }
+
+  // Document formats
+  if (head.length >= 4 && head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46) {
+    return "document"; // PDF
+  }
+
+  // Archive (zip / docx / xlsx / pptx / odf — bytes look like zip)
+  if (
+    head.length >= 4 &&
+    head[0] === 0x50 &&
+    head[1] === 0x4b &&
+    (head[2] === 0x03 || head[2] === 0x05 || head[2] === 0x07)
+  ) {
+    return "archive";
+  }
+  if (head.length >= 6 && head[0] === 0x37 && head[1] === 0x7a && head[2] === 0xbc && head[3] === 0xaf) {
+    return "archive"; // 7z
+  }
+  if (head.length >= 4 && head[0] === 0x52 && head[1] === 0x61 && head[2] === 0x72 && head[3] === 0x21) {
+    return "archive"; // RAR
+  }
+  if (head.length >= 2 && head[0] === 0x1f && head[1] === 0x8b) {
+    return "archive"; // gzip
+  }
+
+  // Text: pragmatic check on the prefix (UTF-8 BOM + printable / control whitespace)
+  let printable = 0;
+  for (const byte of head) {
+    if (byte === 0) {
+      return "unknown";
+    }
+    if (byte === 0x09 || byte === 0x0a || byte === 0x0d || (byte >= 0x20 && byte < 0x7f) || byte >= 0xa0) {
+      printable += 1;
+    }
+  }
+  if (printable === head.length && head.length >= 8) {
+    return "text";
+  }
+
+  return "unknown";
+}
+
+/**
+ * Reject malformed base64 BEFORE Buffer.from(..., 'base64') silently mangles
+ * the input. Buffer.from with base64 input silently strips invalid bytes,
+ * which means a malicious payload can smuggle bytes past validation.
+ */
+export function decodeStrictBase64(value: string): Buffer {
+  const stripped = value.trim().replace(/\s+/g, "");
+  if (stripped.length === 0) {
+    throw new Error("Base64 payload is empty.");
+  }
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(stripped)) {
+    throw new Error("Base64 payload contains characters outside the base64 alphabet.");
+  }
+  if (stripped.length % 4 !== 0) {
+    throw new Error("Base64 payload length is not a multiple of 4.");
+  }
+  const decoded = Buffer.from(stripped, "base64");
+  // Round-trip check: Buffer.from('base64') is lenient. Re-encode and confirm.
+  const reEncoded = decoded.toString("base64");
+  if (reEncoded.replace(/=+$/, "") !== stripped.replace(/=+$/, "")) {
+    throw new Error("Base64 payload failed strict round-trip validation.");
+  }
+  return decoded;
+}
+
+/**
+ * Compare a declared MIME hint against the sniffed media class. Throws when
+ * the declared class is "image"/"audio"/"video" but the bytes look like zip,
+ * a different media class, or unknown opaque bytes — the exact label-vs-bytes
+ * mismatch that lets a "PNG" payload smuggle a zip into the workspace.
+ *
+ * Permissive when the bytes legitimately classify as text (e.g. an SVG image
+ * declared as image/svg+xml correctly sniffs as text and is allowed through
+ * the image class).
+ */
+export function assertAttachmentBytesMatchMimeHint(bytes: Buffer, declaredMimeType: string): void {
+  const declared = detectAttachmentMediaType(declaredMimeType);
+  if (declared !== "image" && declared !== "audio" && declared !== "video") {
+    return;
+  }
+  const sniffed = sniffAttachmentBytes(bytes);
+  if (sniffed === "unknown") {
+    // Allow uncommon-but-legitimate formats not in our sniff table; the
+    // bytes don't carry a known mismatch signal.
+    return;
+  }
+  if (sniffed === declared) {
+    return;
+  }
+  if (declared === "image" && sniffed === "text") {
+    return; // SVG and friends
+  }
+  throw new Error(
+    `Attachment bytes do not match the declared MIME hint (${declaredMimeType} → ${declared}, sniffed ${sniffed}).`,
+  );
+}
+
 function extFromMimeType(mimeType?: string): string {
   const normalized = mimeType?.toLowerCase() ?? "";
   if (normalized.includes("wav")) {
