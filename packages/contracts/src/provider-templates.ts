@@ -16,7 +16,7 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
     baseUrl: "https://api.openai.com/v1",
     defaultModel: "gpt-5.4",
     apiStyle: "openai-responses",
-    knownModels: ["gpt-5.4", "gpt-5.4-mini", "gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini"],
+    knownModels: ["gpt-5.4", "gpt-5.4-mini", "gpt-5-mini", "gpt-4.1-mini", "gpt-4o-mini", "chat-latest"],
   },
   {
     providerId: "openai-codex",

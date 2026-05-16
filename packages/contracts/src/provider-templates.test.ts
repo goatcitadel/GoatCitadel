@@ -11,6 +11,7 @@ describe("provider templates", () => {
       "gpt-5-mini",
       "gpt-4.1-mini",
       "gpt-4o-mini",
+      "chat-latest",
     ]);
     expect(findProviderTemplate("openrouter")?.defaultModel).toBe("openai/gpt-5.4");
     expect(findProviderTemplate("openrouter")?.apiStyle).toBe("openai-chat-completions");
@@ -22,6 +23,11 @@ describe("provider templates", () => {
       "zai/glm-5v-turbo",
     ]);
     expect(findProviderTemplate("vercel")?.defaultModel).toBe("openai/gpt-5.4");
+  });
+
+  it("openai template recognizes chat-latest as a known model", () => {
+    const tpl = findProviderTemplate("openai");
+    expect(tpl?.knownModels).toContain("chat-latest");
   });
 
   it("ships OpenAI Codex OAuth as a separate provider template", () => {
