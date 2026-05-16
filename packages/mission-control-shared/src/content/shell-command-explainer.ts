@@ -41,7 +41,32 @@ function dedupeRisks(risks: readonly ShellRiskFinding[]): ShellRiskFinding[] {
   return out;
 }
 
+function hasUnmatchedQuote(command: string): boolean {
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (const ch of command) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\" && !inSingle) {
+      escaped = true;
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+    } else if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+    }
+  }
+  return inSingle || inDouble;
+}
+
 function tokenize(command: string): readonly string[] | undefined {
+  if (hasUnmatchedQuote(command)) {
+    return undefined;
+  }
   try {
     const parsed = shellParse(command);
     const tokens: string[] = [];
