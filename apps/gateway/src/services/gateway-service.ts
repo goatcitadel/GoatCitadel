@@ -1000,6 +1000,7 @@ export class GatewayService {
       policyEngine: this.policyEngine,
       hooksService: this.hooksService,
       approvalWaitRunService: this.approvalWaitRunService,
+      shellExplainerPolicy: this.config.assistant.shellExplainerPolicy,
       publishRealtime: (eventType, source, payload, options) =>
         this.publishRealtime(eventType, source, payload, options),
       requireConnectorRecord: (connectorId) => this.requireConnectorRecord(connectorId),

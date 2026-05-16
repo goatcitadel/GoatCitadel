@@ -819,6 +819,13 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       }
     },
   },
+  {
+    version: 83,
+    name: "approvals_shell_explanations",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "approvals", "shell_explanations_json", "TEXT");
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -1005,7 +1012,8 @@ function createBaseSchema(db: DatabaseSync): void {
       expires_at TEXT,
       resolved_at TEXT,
       resolved_by TEXT,
-      resolution_note TEXT
+      resolution_note TEXT,
+      shell_explanations_json TEXT
     );
 
     CREATE TABLE IF NOT EXISTS approval_events (

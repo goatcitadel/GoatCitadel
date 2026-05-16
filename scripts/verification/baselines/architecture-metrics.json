@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-05-16T18:29:36.085Z",
-  "gatewayLineCount": 7743,
+  "generatedAt": "2026-05-16T18:35:21.588Z",
+  "gatewayLineCount": 7740,
   "gatewayPublicMethodCount": 240,
   "gatewayPublicMethodsByRegion": {
     "approvals": 18,
@@ -56,9 +56,9 @@
   "gatewayRouteCompositionPortMemberCount": 140,
   "legacyRouteServiceFactoryVariadicAnyCount": 2,
   "legacyRoutePortAliasCount": 38,
-  "totalHostCallbacks": 695,
+  "totalHostCallbacks": 691,
   "hostCallbacksByFile": {
-    "apps/gateway/src/services/approval-lifecycle-service.ts": 60,
+    "apps/gateway/src/services/approval-lifecycle-service.ts": 62,
     "apps/gateway/src/services/channel-setup-helpers.ts": 1,
     "apps/gateway/src/services/channel-setup-service.ts": 34,
     "apps/gateway/src/services/chat-agent-orchestrator.ts": 8,
