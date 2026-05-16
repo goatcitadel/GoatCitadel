@@ -138,6 +138,7 @@ export async function agentSendChatMessage(
   host: ChatTurnEntryHost,
   sessionId: string,
   input: ChatSendMessageRequest,
+  options?: { abortSignal?: AbortSignal },
 ): Promise<ChatSendMessageResponse> {
   return host.withChatTurnWriteLease(sessionId, "agent-send", async () => {
     const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
@@ -193,6 +194,7 @@ export async function agentSendChatMessage(
         prepared,
         binding,
         "chat_thread_turn_appended",
+        { abortSignal: options?.abortSignal },
       );
     }
     const modeOrchestration = await host.resolvePreparedTurnOrchestration(prepared);
@@ -212,6 +214,7 @@ export async function agentSendChatMessage(
         prepared,
         "chat_thread_turn_appended",
         modeOrchestration,
+        { abortSignal: options?.abortSignal },
       );
     }
     if (chatTurnDispatchService.shouldUseDurableExecution(host, prepared, input)) {
@@ -221,9 +224,11 @@ export async function agentSendChatMessage(
         input,
         prepared,
         "chat_thread_turn_appended",
+        undefined,
+        { abortSignal: options?.abortSignal },
       );
     }
-    return runAgentSendChatMessageLlmPath(host, sessionId, input, prepared);
+    return runAgentSendChatMessageLlmPath(host, sessionId, input, prepared, options);
   });
 }
 
@@ -232,8 +237,10 @@ async function runAgentSendChatMessageLlmPath(
   sessionId: string,
   input: ChatSendMessageRequest,
   prepared: PreparedAgentChatTurn,
+  options?: { abortSignal?: AbortSignal },
 ): Promise<ChatSendMessageResponse> {
   const controller = host.beginActiveChatTurnExecution(sessionId, prepared.turnId, "agent-send");
+  const externalAbortListener = bindExternalAbortToController(options?.abortSignal, controller);
   try {
     let turnId = prepared.turnId;
     let turnResult = await host.turnRuntime.run({
@@ -535,8 +542,29 @@ async function runAgentSendChatMessageLlmPath(
       routing: hydratedTrace.routing,
     };
   } finally {
+    externalAbortListener?.();
     host.endActiveChatTurnExecution(prepared.turnId, controller);
   }
+}
+
+function bindExternalAbortToController(
+  externalSignal: AbortSignal | undefined,
+  controller: AbortController,
+): (() => void) | undefined {
+  if (!externalSignal) {
+    return undefined;
+  }
+  if (externalSignal.aborted) {
+    controller.abort();
+    return undefined;
+  }
+  const onAbort = (): void => {
+    controller.abort();
+  };
+  externalSignal.addEventListener("abort", onAbort);
+  return () => {
+    externalSignal.removeEventListener("abort", onAbort);
+  };
 }
 
 export async function* agentSendChatMessageStream(

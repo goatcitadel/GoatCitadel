@@ -81,11 +81,13 @@ export interface DashboardState {
 export type CronJobAction =
   | "task"
   | "improvement"
+  | "curator"
   | "backup"
   | "memory_flush"
   | "cost_report"
   | "update_review"
-  | "watchdog";
+  | "watchdog"
+  | "no_agent";
 
 export type CronWatchdogCheckId = "runtime_health" | "durable_dead_letters" | "channel_delivery_queue" | "mcp_posture";
 export type CronWatchdogStatus = "ok" | "warning" | "error";
@@ -96,8 +98,21 @@ export interface CronWatchdogConfig {
   notifyHomeChannel?: boolean;
 }
 
+export interface CronNoAgentDeliveryChannel {
+  channelKey: string;
+  target?: string;
+}
+
+export interface CronNoAgentConfig {
+  command: string;
+  args?: string[];
+  timeoutMs?: number;
+  deliveryChannel?: CronNoAgentDeliveryChannel;
+}
+
 export interface CronJobActionConfig {
   watchdog?: CronWatchdogConfig;
+  noAgent?: CronNoAgentConfig;
 }
 
 export interface CronWatchdogRunResult {
@@ -120,6 +135,10 @@ export interface CronJobRecord {
   lastRunAt?: string;
   nextRunAt?: string;
   updatedAt?: string;
+  workdir?: string;
+  contextFrom?: string;
+  lastRunOutput?: string;
+  lastRunId?: string;
 }
 
 export interface OperatorSummary {

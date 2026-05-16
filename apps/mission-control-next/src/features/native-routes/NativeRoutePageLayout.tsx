@@ -3,6 +3,13 @@ import { AlertTriangle, ArrowRight } from "lucide-react";
 import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
 import type { AppRoute } from "@next/app/route-model";
 import { recordRouteDiagnostic } from "./route-diagnostics";
+import type { AreaSlug } from "./primitives";
+
+export type NativePageMetric = {
+  label: string;
+  value: string;
+  delta?: { value: string; tone: "up" | "down" | "neutral" };
+};
 
 export function NativePageFrame({
   icon: Icon,
@@ -12,14 +19,20 @@ export function NativePageFrame({
   loading,
   error,
   children,
+  area,
+  metrics,
+  actions,
 }: {
-  icon: React.ComponentType<{ className?: string }>;
+  icon?: React.ComponentType<{ className?: string }>;
   kicker: string;
   title: string;
   description: string;
   loading: boolean;
   error: string | null;
   children: ReactNode;
+  area?: AreaSlug;
+  metrics?: NativePageMetric[];
+  actions?: ReactNode;
 }) {
   const pageRef = useRef<HTMLElement | null>(null);
 
@@ -63,17 +76,41 @@ export function NativePageFrame({
     return () => window.cancelAnimationFrame(handle);
   }, [kicker, loading, title]);
 
+  const hasHeadRow = Boolean(metrics?.length) || Boolean(actions);
+
   return (
     <section ref={pageRef} className="mc-next-directory-page">
-      <header className="mc-next-directory-header" data-native-kicker={kicker}>
-        <div className="mc-next-directory-icon">
-          <Icon className="h-5 w-5" />
-        </div>
+      <header className="mc-next-directory-header" data-native-kicker={kicker} data-area={area}>
+        {Icon ? (
+          <div className="mc-next-directory-icon">
+            <Icon className="h-5 w-5" />
+          </div>
+        ) : null}
         <div className="mc-next-directory-copy">
           <p>{kicker}</p>
           <h1>{title}</h1>
           <span>{description}</span>
         </div>
+        {hasHeadRow ? (
+          <div className="mc-next-directory-head-row">
+            {metrics?.length ? (
+              <div className="mc-next-directory-head-metrics">
+                {metrics.map((metric) => (
+                  <div key={metric.label} className="mc-next-directory-head-metric">
+                    <span className="mc-next-directory-head-metric-label">{metric.label}</span>
+                    <strong className="mc-next-directory-head-metric-value">{metric.value}</strong>
+                    {metric.delta ? (
+                      <em className="mc-next-directory-head-metric-delta" data-tone={metric.delta.tone}>
+                        {metric.delta.value}
+                      </em>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {actions ? <div className="mc-next-directory-head-actions">{actions}</div> : null}
+          </div>
+        ) : null}
       </header>
       {error ? (
         <div className="mc-next-directory-alert">

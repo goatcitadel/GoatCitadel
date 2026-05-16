@@ -294,7 +294,7 @@ import type {
   RemoteActionTokenRecord,
 } from "@goatcitadel/contracts";
 import type { ConnectorRecord, ConnectorType } from "@goatcitadel/contracts";
-import { BUILTIN_AGENT_PROFILES } from "@goatcitadel/contracts";
+import { AgentSubagentDefaultsSchema, BUILTIN_AGENT_PROFILES } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
 import { getRequestAttribution } from "@goatcitadel/storage";
@@ -349,6 +349,7 @@ import {
   PRIVATE_BETA_BACKUP_JOB_ID,
   UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./gateway/cron-automation-service.js";
+import { runNoAgentCommand } from "./gateway/cron-no-agent-runner.js";
 import * as orchestrationLifecycleService from "./orchestration-lifecycle-service.js";
 import { OrchestrationPhaseExecutionService } from "./orchestration-phase-execution-service.js";
 import { OrchestrationWorktreeService } from "./orchestration-worktree-service.js";
@@ -391,6 +392,7 @@ import * as chatTurnPrepService from "./chat-turn-prep-service.js";
 import * as chatTurnTraceHydration from "./chat-turn-trace-hydration.js";
 import * as chatTurnUserMessage from "./chat-turn-user-message.js";
 import { ChatDelegationService, type ChatDelegationProgressCallbacks } from "./chat-delegation-service.js";
+import { ChatSteerService } from "./chat-steer-service.js";
 import * as chatTurnStreamService from "./chat-turn-stream-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import { createChatTurnRuntimeHost, type ChatTurnRuntimeHost } from "./chat-turn-runtime-host-composition.js";
@@ -444,11 +446,14 @@ import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
 import { PromptPackService } from "./prompt-pack-service.js";
 import { ChatProactiveService } from "./chat-proactive-service.js";
 import { ImprovementService } from "./improvement-service.js";
+import { CuratorService } from "./curator-service.js";
+import { writeCuratorReport } from "./curator-report.js";
 import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
 import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import { RuntimeLifecycleReadService } from "./runtime-lifecycle-read-service.js";
 import { CapabilitySystemService } from "./capability-system-service.js";
 import { TaskLifecycleService } from "./task-lifecycle-service.js";
+import { createDefaultArtifactProbers, createDurableTaskAutoBlockBridge } from "./gateway-kanban-wiring.js";
 import {
   ChannelDeliveryRuntimeService,
   type ChannelDeliveryRuntimeRecord,
@@ -613,12 +618,14 @@ export class GatewayService {
   private readonly approvalRuntime: ApprovalRuntimeService;
   private readonly chatTurnRuntime: ChatTurnRuntimeService;
   private readonly chatDelegationService: ChatDelegationService;
+  public readonly steerService: ChatSteerService;
   private readonly toolInvocationCoordinator: ToolInvocationCoordinatorService;
   private readonly runtimeLifecycleReadService: RuntimeLifecycleReadService;
   private readonly chatLearnedMemoryService: ChatLearnedMemoryService;
   private readonly promptPackService: PromptPackService;
   public readonly chatProactiveService: ChatProactiveService;
   private readonly improvementService: ImprovementService;
+  private readonly curatorService: CuratorService;
   private readonly memoryMaintenanceService: MemoryMaintenanceService;
   public readonly memoryLifecycleService: MemoryLifecycleService;
   private readonly evidenceEnvelopeService: EvidenceEnvelopeService;
@@ -749,13 +756,10 @@ export class GatewayService {
     });
     this.taskLifecycleService = new TaskLifecycleService({
       storage: this.storage,
-      publishRealtime: (eventType, source, payload, options) => {
-        this.publishRealtime(eventType, source, payload, options);
-      },
+      publishRealtime: (event, source, payload, options) => this.publishRealtime(event, source, payload, options),
       pauseDurableRun: (runId, actorId) => this.pauseDurableRun(runId, actorId),
-      recordAgenticDiagnosticSignal: ({ task, diagnostic }) => {
-        this.improvementService.recordAgenticDiagnosticSignal({ task, diagnostic });
-      },
+      recordAgenticDiagnosticSignal: (input) => this.improvementService.recordAgenticDiagnosticSignal(input),
+      probers: createDefaultArtifactProbers(),
     });
     this.orchestrationEngine = new OrchestrationEngine();
     this.orchestrationWorktreeService = new OrchestrationWorktreeService({
@@ -873,7 +877,7 @@ export class GatewayService {
       requireFeatureEnabled: (flag) => this.requireFeatureEnabled(flag),
       isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
       runHandlers: {
-        task: async (job) => {
+        task: async (job, _context?) => {
           const task = this.taskLifecycleService.createTask({
             title: job.name,
             description: [
@@ -904,6 +908,7 @@ export class GatewayService {
           await this.runUpdateReviewSchedulerIfDue({ force: true });
         },
         watchdog: async (job) => this.runCronWatchdog(job),
+        noAgent: (input) => runNoAgentCommand(input),
       },
     });
 
@@ -939,6 +944,7 @@ export class GatewayService {
       },
       evaluateContinuationGate: (run) => this.evaluateDurableContinuationGate(run),
       recordEvidenceEnvelope: (input) => this.evidenceEnvelopeService.createEnvelope(input),
+      taskLifecycle: createDurableTaskAutoBlockBridge(this.taskLifecycleService),
     });
     this.hooksService = new HooksService(serviceCtx, {
       createDurableRun: (input) => this.durableRunService.createDurableRun(input),
@@ -1021,6 +1027,7 @@ export class GatewayService {
       enqueueApprovalRemoteTokenDelivery: (approval, connector, tokenRecord) =>
         this.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord),
     });
+    this.steerService = new ChatSteerService();
     this.chatTurnRuntime = new ChatTurnRuntimeService(this.buildChatTurnRuntimeHost());
     this.orchestrationPhaseExecutionService = new OrchestrationPhaseExecutionService({
       rootDir: this.config.rootDir,
@@ -1029,6 +1036,9 @@ export class GatewayService {
       agentSendChatMessage: (sessionId, input) => this.chatTurnRuntime.agentSendChatMessage(sessionId, input),
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
     });
+    const subagentDefaults = AgentSubagentDefaultsSchema.parse(
+      (config as { agents?: { defaults?: { subagents?: unknown } } }).agents?.defaults?.subagents ?? {},
+    );
     this.chatDelegationService = new ChatDelegationService({
       storage: this.storage,
       gatewaySql: this.gatewaySql,
@@ -1041,10 +1051,15 @@ export class GatewayService {
       inheritDelegatedSessionToolGrants: (parentSessionId, childSessionId) =>
         this.inheritDelegatedSessionToolGrants(parentSessionId, childSessionId),
       updateChatSessionPrefs: (sessionId, input) => this.updateChatSessionPrefs(sessionId, input),
-      agentSendChatMessage: (sessionId, input) => this.chatTurnRuntime.agentSendChatMessage(sessionId, input),
+      agentSendChatMessage: (sessionId, input, options) =>
+        this.chatTurnRuntime.agentSendChatMessage(sessionId, input, options),
       extractAndPersistLearnedMemory: (sessionId, content, source) =>
         this.extractAndPersistLearnedMemory(sessionId, content, source),
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
+      subagentDefaults: {
+        childTimeoutSeconds: subagentDefaults.childTimeoutSeconds,
+        maxDepth: subagentDefaults.maxDepth,
+      },
     });
     this.toolInvocationCoordinator = new ToolInvocationCoordinatorService({
       approvalInbox: this.storage.approvalInbox,
@@ -1135,6 +1150,25 @@ export class GatewayService {
       get closing() {
         return self.closing;
       },
+    });
+    this.curatorService = new CuratorService({
+      listSkills: () => this.listSkills(),
+      archiveSkill: (skillId, reason) => {
+        this.setSkillState(skillId, "disabled", reason);
+        const updated = this.listSkills().find((s) => s.skillId === skillId);
+        if (!updated) throw new Error(`Skill ${skillId} not found after archiving`);
+        return updated;
+      },
+      pruneSkill: (skillId) => {
+        // v1: mark with prune note. Actual file removal is a follow-up task.
+        this.setSkillState(skillId, "disabled", "curator:pruned");
+        return { filesRemoved: [] };
+      },
+      now: () => new Date(),
+      writeReport: (report) => writeCuratorReport(report, { logsRoot: this.config.rootDir }),
+      publishRealtime: (topic, payload) => this.publishRealtime("system", topic, payload),
+      cycleDays: 7,
+      storage: this.storage,
     });
     this.memoryMaintenanceService = new MemoryMaintenanceService(serviceCtx, {
       createDurableRun: (input) => this.createDurableRun(input),
@@ -1257,6 +1291,10 @@ export class GatewayService {
             this.recordImprovementDurableRunCompletion(run, checkpointState),
           executeDurableOrchestrationRun: (run, context) => this.executeDurableOrchestrationRun(run, context),
         },
+        curatorTick: {
+          curatorService: this.curatorService,
+          publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
+        },
       }),
     );
     this.routeCompositionPort = this.buildRouteCompositionPort();
@@ -1338,6 +1376,9 @@ export class GatewayService {
         this.beginActiveChatTurnExecution(sessionId, turnId, operation),
       beginDurableChatRun: (prepared, input, threadEventType) =>
         this.beginDurableChatRun(prepared, input, threadEventType),
+      cancelDurableChatRun: (runId, actorId) => {
+        this.cancelDurableRun(runId, actorId);
+      },
       buildChatOrchestrationSummary: (input) => this.buildChatOrchestrationSummary(input),
       buildDefaultChatPersonalityOverlay: () => this.buildDefaultChatPersonalityOverlay(),
       buildLlmMessagesFromBranchPath: (sessionId, pathTurnIds, currentUserMessage, options, state) =>
@@ -1396,6 +1437,7 @@ export class GatewayService {
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
       scheduleMemoryMaintenancePostTurnEvaluation: (sessionId, parentTurnId) =>
         this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, parentTurnId),
+      steerService: this.steerService,
       streamPersistedChatTurnEvents: (sessionId, turnId, options) =>
         this.streamPersistedChatTurnEvents(sessionId, turnId, options),
       triggerChatSessionProactive: (sessionId, input) => this.triggerChatSessionProactive(sessionId, input),
@@ -1441,6 +1483,7 @@ export class GatewayService {
       storage: this.storage,
       backgroundTasks: this.backgroundTasks,
       turnRuntime: this.turnRuntime,
+      steerService: this.steerService,
       resolvePreparedTurnOrchestration: (prepared) => this.resolvePreparedTurnOrchestration(prepared),
       createChatCompletion: (request) => this.createChatCompletion(request),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
@@ -1577,6 +1620,7 @@ export class GatewayService {
     this.improvementService.markInterruptedDecisionReplayRuns();
     await this.loadCronJobsFromConfig();
     this.improvementService.ensureWeeklyImprovementCronJob();
+    this.curatorService.ensureCuratorWeeklyCronJob();
     this.ensurePrivateBetaBackupCronJob();
     this.ensureMemoryFlushCronJob();
     this.ensureCostReportCronJob();
@@ -1979,6 +2023,7 @@ export class GatewayService {
     await this.runMemoryFlushSchedulerIfDue();
     await this.runCostReportSchedulerIfDue();
     await this.runUpdateReviewSchedulerIfDue();
+    await this.curatorService.runCuratorWeeklyIfDue();
     await this.cronAutomationService.runDueTaskCronJobs();
     await this.memoryLifecycleService.runDueEvaluation();
     await this.drainDueChannelDeliveries();
@@ -3716,8 +3761,9 @@ export class GatewayService {
   public async agentSendChatMessage(
     sessionId: string,
     input: ChatSendMessageRequest,
+    options?: { abortSignal?: AbortSignal },
   ): Promise<ChatSendMessageResponse> {
-    return this.chatTurnRuntime.agentSendChatMessage(sessionId, input);
+    return this.chatTurnRuntime.agentSendChatMessage(sessionId, input, options);
   }
 
   private async retryChatTurnInScratchSession(
@@ -4650,6 +4696,26 @@ export class GatewayService {
   public listSkills(): SkillListItem[] {
     this.ensureSkillStates(this.skillsService.list().map((skill) => skill.skillId));
     return this.capabilitySystemService.listSkills();
+  }
+
+  public listCuratorStatus() {
+    return this.curatorService.listCuratorStatus();
+  }
+
+  public archiveCuratorSkill(input: Parameters<CuratorService["archive"]>[0]) {
+    return this.curatorService.archive(input);
+  }
+
+  public pruneCuratorSkill(input: Parameters<CuratorService["prune"]>[0]) {
+    return this.curatorService.prune(input);
+  }
+
+  public listCuratorArchived() {
+    return this.curatorService.listArchived();
+  }
+
+  public runCurator(input: Parameters<CuratorService["runCurator"]>[0]) {
+    return this.curatorService.runCurator(input);
   }
 
   public async reloadSkills(): Promise<SkillListItem[]> {
@@ -6852,6 +6918,10 @@ export function toChatSessionRecord(
     folderId?: string;
     folderName?: string;
     tags?: string[];
+    pinnedGoal?: string;
+    goalTurnBudget?: number;
+    goalTurnsUsed?: number;
+    goalSetAt?: string;
   },
   project?: ChatProjectRecord,
   extras?: Partial<Pick<ChatSessionRecord, "searchHits" | "lastHandoff" | "delegationParent" | "generatedArtifacts">>,
@@ -6883,6 +6953,10 @@ export function toChatSessionRecord(
     lastActivityAt: session.lastActivityAt,
     tokenTotal: session.tokenTotal,
     costUsdTotal: session.costUsdTotal,
+    pinnedGoal: meta.pinnedGoal,
+    goalTurnBudget: meta.goalTurnBudget,
+    goalTurnsUsed: meta.goalTurnsUsed,
+    goalSetAt: meta.goalSetAt,
   };
 }
 

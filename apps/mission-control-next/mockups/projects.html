@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Projects — Design Review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="./_shared.css" />
+<style>
+  .projects-stage { padding: 18px 24px 28px; display: grid; gap: 18px; }
+
+  .stage-head-card {
+    position: relative;
+    padding: 18px 22px 16px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-lg);
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--accent) 8%, transparent), transparent 60%),
+      var(--bg-surface-1);
+    overflow: hidden;
+  }
+  .stage-head-card::before {
+    content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px;
+    background: linear-gradient(90deg, var(--accent), transparent 60%);
+  }
+  .stage-head-card .row-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .stage-head-card .eyebrow {
+    display: inline-flex; align-items: center; gap: 7px;
+    font: 700 10px/1 var(--font-sans);
+    letter-spacing: 0.16em; text-transform: uppercase;
+    color: color-mix(in oklab, var(--accent) 60%, var(--fg-muted));
+  }
+  .stage-head-card .eyebrow .dot {
+    width: 6px; height: 6px; border-radius: 999px; background: var(--accent);
+  }
+  .stage-head-card h1 { margin: 8px 0 4px; font-size: 24px; font-weight: 650; letter-spacing: -0.025em; }
+  .stage-head-card .sub { color: var(--fg-secondary); font-size: 13px; max-width: 64ch; }
+
+  .new-cluster {
+    display: inline-flex; gap: 6px; flex-wrap: wrap; align-items: center;
+  }
+  .new-btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 7px 11px;
+    border-radius: var(--r-xs);
+    border: 1px solid var(--border-default);
+    background: var(--bg-surface-1);
+    color: var(--fg-primary);
+    font: 600 12px/1 var(--font-sans);
+    cursor: pointer;
+  }
+  .new-btn .swatch {
+    width: 8px; height: 8px; border-radius: 2px;
+  }
+  .new-btn:hover { filter: brightness(1.1); }
+
+  .projects-toolbar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .search-input {
+    flex: 1 1 280px; max-width: 380px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 10px;
+    height: 30px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-xs);
+    background: var(--bg-surface-1);
+    color: var(--fg-muted);
+    font-size: 12.5px;
+  }
+  .search-input input {
+    flex: 1; min-width: 0;
+    border: 0; background: transparent;
+    color: var(--fg-primary); font: 400 13px/1 var(--font-sans);
+  }
+  .search-input input:focus { outline: 0; }
+
+  .project-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+  }
+  .project-card {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    background: var(--bg-surface-1);
+    overflow: hidden;
+    display: grid; gap: 0;
+    transition: border-color 160ms ease, transform 160ms ease;
+  }
+  .project-card:hover {
+    border-color: color-mix(in oklab, var(--accent) 30%, var(--border-default));
+    transform: translateY(-1px);
+  }
+  .project-card .head {
+    padding: 13px 14px 10px;
+    display: grid; gap: 5px;
+  }
+  .project-card .head .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .project-card .head h3 { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
+  .project-card .head .desc { font-size: 12.5px; color: var(--fg-secondary); line-height: 1.45; max-width: 36ch; }
+  .project-card .head .meta { font: 500 11px/1 var(--font-mono); color: var(--fg-muted); }
+  .project-card .pin {
+    width: 18px; height: 18px;
+    color: var(--brand);
+  }
+
+  /* Multi-mode bar */
+  .mode-bar {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    margin: 4px 14px 0;
+    border-radius: var(--r-xs);
+    overflow: hidden;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-surface-2);
+    height: 22px;
+    position: relative;
+  }
+  .mode-bar .seg {
+    display: flex; align-items: center;
+    padding: 0 8px;
+    font: 600 10.5px/1 var(--font-mono);
+    color: var(--fg-secondary);
+    background:
+      linear-gradient(180deg, color-mix(in oklab, currentColor 14%, transparent), transparent 70%),
+      var(--bg-surface-1);
+    border-right: 1px solid var(--border-subtle);
+    gap: 6px;
+  }
+  .mode-bar .seg:last-child { border-right: 0; }
+  .mode-bar .seg .dot { width: 6px; height: 6px; border-radius: 2px; background: currentColor; }
+  .mode-bar .seg.chat   { color: var(--area-chat); }
+  .mode-bar .seg.cowork { color: var(--area-cowork); }
+  .mode-bar .seg.code   { color: var(--area-code); }
+
+  .project-card .foot {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0;
+    margin: 8px 0 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .project-card .foot button {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--fg-secondary);
+    font: 600 11.5px/1 var(--font-sans);
+    padding: 9px 6px;
+    cursor: pointer;
+    border-right: 1px solid var(--border-subtle);
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .project-card .foot button:last-child { border-right: 0; }
+  .project-card .foot button:hover { background: var(--bg-surface-3); color: var(--fg-primary); }
+  .project-card .foot button .swatch {
+    width: 7px; height: 7px; border-radius: 2px;
+  }
+
+  .recents {
+    display: grid; gap: 10px;
+  }
+  .recents-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+  }
+  .recent-card {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    background: var(--bg-surface-1);
+    padding: 11px 12px;
+    display: grid; gap: 6px;
+    text-decoration: none;
+    color: inherit;
+  }
+  .recent-card:hover {
+    border-color: color-mix(in oklab, var(--accent) 28%, var(--border-default));
+  }
+  .recent-card .mode-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 2px 8px; border-radius: 999px;
+    font: 700 10px/1 var(--font-sans);
+    letter-spacing: 0.1em; text-transform: uppercase;
+  }
+  .recent-card .mode-pill .swatch { width: 6px; height: 6px; border-radius: 2px; }
+  .recent-card .mode-pill.chat   { color: color-mix(in oklab, var(--area-chat) 75%, var(--fg-primary)); background: color-mix(in oklab, var(--area-chat) 14%, transparent); }
+  .recent-card .mode-pill.cowork { color: color-mix(in oklab, var(--area-cowork) 75%, var(--fg-primary)); background: color-mix(in oklab, var(--area-cowork) 14%, transparent); }
+  .recent-card .mode-pill.code   { color: color-mix(in oklab, var(--area-code) 75%, var(--fg-primary)); background: color-mix(in oklab, var(--area-code) 14%, transparent); }
+  .recent-card h4 { margin: 0; font-size: 13.5px; font-weight: 650; letter-spacing: -0.01em; }
+  .recent-card .meta { font: 500 11px/1.2 var(--font-mono); color: var(--fg-muted); display: flex; gap: 8px; }
+</style>
+</head>
+<body class="area-projects">
+
+<header class="topbar">
+  <div class="brand-lockup">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <div class="brand-stack">
+      <span class="eyebrow">GoatCitadel</span>
+      <span class="name">Mission Control</span>
+    </div>
+  </div>
+  <nav class="primary-nav">
+    <a href="./threaded-surface.html">Chat</a>
+    <a href="./projects.html" class="active">Projects</a>
+    <a href="./prompt-packs.html">Library</a>
+    <a href="./runtime.html">Ops</a>
+    <a href="./settings.html">Settings</a>
+  </nav>
+  <span class="spacer"></span>
+  <button class="command-search" type="button">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <span class="search-q">Find project or session…</span>
+    <kbd>⌘K</kbd>
+  </button>
+</header>
+
+<main class="body no-rail">
+  <section class="projects-stage">
+
+    <article class="stage-head-card">
+      <div class="row-top">
+        <div>
+          <span class="eyebrow"><span class="dot"></span>Projects</span>
+          <h1>Six projects. Twenty‑two live sessions.</h1>
+          <p class="sub">Project containers gather chat, cowork, and code threads under one root. Every project starts new work with the same triple‑action — pick the posture once, then the conversation inherits the right composer, side panel, and approvals.</p>
+        </div>
+        <div class="new-cluster" data-critique="Triple‑action is the brand’s point of view: a project is the same idea expressed at three different fidelities. Reads as one button group, not three loose buttons.">
+          <button class="new-btn" style="background: color-mix(in oklab, var(--area-chat) 14%, var(--bg-surface-1)); border-color: color-mix(in oklab, var(--area-chat) 32%, var(--border-default))">
+            <span class="swatch" style="background: var(--area-chat)"></span>
+            New chat
+          </button>
+          <button class="new-btn" style="background: color-mix(in oklab, var(--area-cowork) 14%, var(--bg-surface-1)); border-color: color-mix(in oklab, var(--area-cowork) 32%, var(--border-default))">
+            <span class="swatch" style="background: var(--area-cowork)"></span>
+            New cowork
+          </button>
+          <button class="new-btn" style="background: color-mix(in oklab, var(--area-code) 14%, var(--bg-surface-1)); border-color: color-mix(in oklab, var(--area-code) 32%, var(--border-default))">
+            <span class="swatch" style="background: var(--area-code)"></span>
+            New code
+          </button>
+        </div>
+      </div>
+    </article>
+
+    <div class="projects-toolbar">
+      <div class="search-input">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input type="text" placeholder="Filter by project name, owner, or tag…" />
+      </div>
+      <div class="tabs" data-tabs>
+        <button class="active">All <span class="count">6</span></button>
+        <button>Pinned <span class="count">2</span></button>
+        <button>Active <span class="count">4</span></button>
+        <button>Archived <span class="count">11</span></button>
+      </div>
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn btn-ghost"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 6 3 3 3-3"/><path d="M6 9V3"/><path d="m15 6 3 3 3-3"/><path d="M18 9V3"/></svg>Sort: activity ▾</button>
+    </div>
+
+    <!-- Projects -->
+    <div class="project-grid">
+
+      <article class="project-card" data-critique="The dual‑band visualisation shows mode mix per project — strip is a stacked, weighted bar (not stat soup). Reviewers can tell at a glance which projects are code‑heavy and which lean conversational.">
+        <header class="head">
+          <div class="row">
+            <h3>Mission Control Next</h3>
+            <svg class="pin" viewBox="0 0 24 24" fill="currentColor"><path d="M14 4 11 1H7l1 6L3 11h6l1 5 2-5h6l-5-4 1-3z"/></svg>
+          </div>
+          <p class="desc">Threaded surface, native routes, prompt packs workbench, and the unified shell.</p>
+          <span class="meta">12 sessions · last 4m ago · 3 members</span>
+        </header>
+        <div class="mode-bar" title="14 chat · 5 cowork · 3 code">
+          <span class="seg chat" style="grid-column: span 7"><span class="dot"></span>Chat · 7</span>
+          <span class="seg cowork" style="grid-column: span 3"><span class="dot"></span>3</span>
+          <span class="seg code" style="grid-column: span 2"><span class="dot"></span>2</span>
+        </div>
+        <footer class="foot">
+          <button><span class="swatch" style="background: var(--area-chat)"></span>+ Chat</button>
+          <button><span class="swatch" style="background: var(--area-cowork)"></span>+ Cowork</button>
+          <button><span class="swatch" style="background: var(--area-code)"></span>+ Code</button>
+        </footer>
+      </article>
+
+      <article class="project-card">
+        <header class="head">
+          <div class="row">
+            <h3>Citadel Gateway</h3>
+            <svg class="pin" viewBox="0 0 24 24" fill="currentColor"><path d="M14 4 11 1H7l1 6L3 11h6l1 5 2-5h6l-5-4 1-3z"/></svg>
+          </div>
+          <p class="desc">Gateway service, daemon, MCP transports, and the loopback bypass story.</p>
+          <span class="meta">9 sessions · last 22m ago · 2 members</span>
+        </header>
+        <div class="mode-bar">
+          <span class="seg chat" style="grid-column: span 3"><span class="dot"></span>3</span>
+          <span class="seg cowork" style="grid-column: span 3"><span class="dot"></span>3</span>
+          <span class="seg code" style="grid-column: span 6"><span class="dot"></span>Code · 6</span>
+        </div>
+        <footer class="foot">
+          <button><span class="swatch" style="background: var(--area-chat)"></span>+ Chat</button>
+          <button><span class="swatch" style="background: var(--area-cowork)"></span>+ Cowork</button>
+          <button><span class="swatch" style="background: var(--area-code)"></span>+ Code</button>
+        </footer>
+      </article>
+
+      <article class="project-card">
+        <header class="head">
+          <div class="row">
+            <h3>Retention Pulse</h3>
+            <span class="chip warning" style="height:18px; font-size:10px"><span class="dot"></span>investigating</span>
+          </div>
+          <p class="desc">Weekly retention analysis, model‑routing audit, cost narratives.</p>
+          <span class="meta">5 sessions · last 1h ago · 1 member</span>
+        </header>
+        <div class="mode-bar">
+          <span class="seg chat" style="grid-column: span 9"><span class="dot"></span>Chat · 9</span>
+          <span class="seg cowork" style="grid-column: span 2"><span class="dot"></span>2</span>
+          <span class="seg code" style="grid-column: span 1"><span class="dot"></span>1</span>
+        </div>
+        <footer class="foot">
+          <button><span class="swatch" style="background: var(--area-chat)"></span>+ Chat</button>
+          <button><span class="swatch" style="background: var(--area-cowork)"></span>+ Cowork</button>
+          <button><span class="swatch" style="background: var(--area-code)"></span>+ Code</button>
+        </footer>
+      </article>
+
+      <article class="project-card">
+        <header class="head">
+          <div class="row">
+            <h3>Internal Comms</h3>
+          </div>
+          <p class="desc">Slack tone packs, broadcast drafts, status pages, and on‑call digests.</p>
+          <span class="meta">3 sessions · last 4h ago · 4 members</span>
+        </header>
+        <div class="mode-bar">
+          <span class="seg chat" style="grid-column: span 8"><span class="dot"></span>Chat · 8</span>
+          <span class="seg cowork" style="grid-column: span 4"><span class="dot"></span>Cowork · 4</span>
+        </div>
+        <footer class="foot">
+          <button><span class="swatch" style="background: var(--area-chat)"></span>+ Chat</button>
+          <button><span class="swatch" style="background: var(--area-cowork)"></span>+ Cowork</button>
+          <button><span class="swatch" style="background: var(--area-code)"></span>+ Code</button>
+        </footer>
+      </article>
+
+      <article class="project-card">
+        <header class="head">
+          <div class="row">
+            <h3>Memory Heuristics</h3>
+          </div>
+          <p class="desc">Routing rules, namespace lifecycle policy, audit and verification cadence.</p>
+          <span class="meta">2 sessions · last 1d ago · 1 member</span>
+        </header>
+        <div class="mode-bar">
+          <span class="seg chat" style="grid-column: span 4"><span class="dot"></span>4</span>
+          <span class="seg cowork" style="grid-column: span 5"><span class="dot"></span>Cowork · 5</span>
+          <span class="seg code" style="grid-column: span 3"><span class="dot"></span>3</span>
+        </div>
+        <footer class="foot">
+          <button><span class="swatch" style="background: var(--area-chat)"></span>+ Chat</button>
+          <button><span class="swatch" style="background: var(--area-cowork)"></span>+ Cowork</button>
+          <button><span class="swatch" style="background: var(--area-code)"></span>+ Code</button>
+        </footer>
+      </article>
+
+      <article class="project-card">
+        <header class="head">
+          <div class="row">
+            <h3>Pixel Office</h3>
+            <span class="chip muted" style="height:18px; font-size:10px">draft</span>
+          </div>
+          <p class="desc">2D office canvas, agent furniture metadata, ambient state experiments.</p>
+          <span class="meta">1 session · last 3d ago · 1 member</span>
+        </header>
+        <div class="mode-bar">
+          <span class="seg chat" style="grid-column: span 2"><span class="dot"></span>2</span>
+          <span class="seg code" style="grid-column: span 10"><span class="dot"></span>Code · 10</span>
+        </div>
+        <footer class="foot">
+          <button><span class="swatch" style="background: var(--area-chat)"></span>+ Chat</button>
+          <button><span class="swatch" style="background: var(--area-cowork)"></span>+ Cowork</button>
+          <button><span class="swatch" style="background: var(--area-code)"></span>+ Code</button>
+        </footer>
+      </article>
+
+    </div>
+
+    <!-- Recents -->
+    <section class="recents" data-critique="Recent sessions intentionally cross project boundaries — last activity matters more than ‘which project did this belong to’ when you’re returning to a half‑finished thought.">
+      <div class="row between">
+        <div>
+          <span class="eyebrow">Recent sessions · across all projects</span>
+          <div style="font-size:14px; font-weight:650; letter-spacing:-0.01em">Pick up where you left off</div>
+        </div>
+        <button class="btn btn-ghost">View archive →</button>
+      </div>
+      <div class="recents-grid">
+        <a class="recent-card" href="./threaded-surface.html">
+          <span class="mode-pill chat"><span class="swatch" style="background: var(--area-chat)"></span>Chat</span>
+          <h4>Retention pulse — model routing</h4>
+          <span class="meta"><span>Retention Pulse</span><span>·</span><span class="mono">4m ago · 12 turns</span></span>
+        </a>
+        <a class="recent-card" href="./threaded-surface.html">
+          <span class="mode-pill cowork"><span class="swatch" style="background: var(--area-cowork)"></span>Cowork</span>
+          <h4>Incident triage delegation</h4>
+          <span class="meta"><span>Citadel Gateway</span><span>·</span><span class="mono">22m ago · 3 sub‑agents</span></span>
+        </a>
+        <a class="recent-card" href="./threaded-surface.html">
+          <span class="mode-pill code"><span class="swatch" style="background: var(--area-code)"></span>Code</span>
+          <h4>Refactor: ThreadedTimeline</h4>
+          <span class="meta"><span>Mission Control Next</span><span>·</span><span class="mono">1h ago · 4 files</span></span>
+        </a>
+        <a class="recent-card" href="./threaded-surface.html">
+          <span class="mode-pill cowork"><span class="swatch" style="background: var(--area-cowork)"></span>Cowork</span>
+          <h4>Q3 OKR draft</h4>
+          <span class="meta"><span>Internal Comms</span><span>·</span><span class="mono">2h ago · completed</span></span>
+        </a>
+      </div>
+    </section>
+
+  </section>
+</main>
+
+<div class="status-strip">
+  <span class="ok">● 6 projects · 22 live sessions</span>
+  <span>14 chat · 5 cowork · 3 code</span>
+  <span class="accent">2 pinned · 11 archived</span>
+  <span style="margin-left:auto" class="mono">workspace citadel‑prime</span>
+</div>
+
+<button class="critique-toggle" data-critique-toggle type="button">
+  <span class="dot"></span>
+  <span data-critique-label>Critique on</span>
+</button>
+
+<script src="./_shared.js"></script>
+</body>
+</html>

@@ -1,7 +1,13 @@
 import type { PendingApprovalAction } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
-import { safeJsonParse } from "./safe-json.js";
+import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
+import { parseJsonObject } from "./state-validators.js";
+
+export interface PendingApprovalActionRepositoryOptions {
+  quarantine?: { record: (entry: QuarantineEntry) => unknown };
+  logger?: { warn: (data: unknown, msg: string) => void };
+}
 
 interface PendingActionRow {
   approval_id: string;
@@ -18,8 +24,13 @@ export class PendingApprovalActionRepository {
   private readonly upsertStmt;
   private readonly getStmt;
   private readonly resolveStmt;
+  private readonly options: PendingApprovalActionRepositoryOptions;
 
-  public constructor(private readonly db: DatabaseClient) {
+  public constructor(
+    private readonly db: DatabaseClient,
+    options: PendingApprovalActionRepositoryOptions = {},
+  ) {
+    this.options = options;
     this.upsertStmt = db.prepare(`
       INSERT INTO pending_approval_actions (
         approval_id, action_type, request_json, created_at, expires_at, resolution_status
@@ -67,7 +78,7 @@ export class PendingApprovalActionRepository {
     if (!row) {
       throw new NotFoundError({ entity: "pending approval action", id: approvalId });
     }
-    return mapPendingRow(row);
+    return this.mapRow(row);
   }
 
   public find(approvalId: string): PendingApprovalAction | undefined {
@@ -75,7 +86,7 @@ export class PendingApprovalActionRepository {
     if (!row) {
       return undefined;
     }
-    return mapPendingRow(row);
+    return this.mapRow(row);
   }
 
   public markResolved(
@@ -100,17 +111,39 @@ export class PendingApprovalActionRepository {
 
     return this.get(approvalId);
   }
-}
 
-function mapPendingRow(row: PendingActionRow): PendingApprovalAction {
-  return {
-    approvalId: row.approval_id,
-    actionType: row.action_type,
-    request: safeJsonParse<Record<string, unknown>>(row.request_json, {}),
-    createdAt: row.created_at,
-    expiresAt: row.expires_at ?? undefined,
-    resolvedAt: row.resolved_at ?? undefined,
-    resolutionStatus: row.resolution_status,
-    result: row.result_json ? safeJsonParse<Record<string, unknown>>(row.result_json, {}) : undefined,
-  };
+  private mapRow(row: PendingActionRow): PendingApprovalAction {
+    return {
+      approvalId: row.approval_id,
+      actionType: row.action_type,
+      request: loadAndSanitize(
+        row.request_json,
+        {
+          store: "pending_approval_action.request",
+          rowId: row.approval_id,
+          parse: parseJsonObject,
+          onQuarantine: this.options.quarantine ? (e) => this.options.quarantine!.record(e) : undefined,
+          log: this.options.logger,
+        },
+        {},
+      ) as Record<string, unknown>,
+      createdAt: row.created_at,
+      expiresAt: row.expires_at ?? undefined,
+      resolvedAt: row.resolved_at ?? undefined,
+      resolutionStatus: row.resolution_status,
+      result: row.result_json
+        ? (loadAndSanitize(
+            row.result_json,
+            {
+              store: "pending_approval_action.result",
+              rowId: row.approval_id,
+              parse: parseJsonObject,
+              onQuarantine: this.options.quarantine ? (e) => this.options.quarantine!.record(e) : undefined,
+              log: this.options.logger,
+            },
+            {},
+          ) as Record<string, unknown>)
+        : undefined,
+    };
+  }
 }

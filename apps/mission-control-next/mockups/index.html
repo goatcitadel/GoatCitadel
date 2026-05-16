@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Mission Control Next — Design Review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="./_shared.css" />
+<style>
+  .review-hero {
+    padding: 32px 24px 24px;
+    border-bottom: 1px solid var(--border-subtle);
+    background:
+      radial-gradient(800px 360px at 10% -20%, color-mix(in oklab, var(--area-chat) 14%, transparent), transparent 60%),
+      radial-gradient(700px 320px at 90% -10%, color-mix(in oklab, var(--area-cowork) 12%, transparent), transparent 60%),
+      var(--bg-app);
+  }
+  .review-hero .kicker {
+    display: inline-flex; align-items: center; gap: 8px;
+    font: 700 10px/1 var(--font-sans); letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--fg-muted);
+  }
+  .review-hero .kicker .dot { width: 8px; height: 8px; border-radius: 2px; background: var(--brand-glow); }
+  .review-hero h1 {
+    margin: 12px 0 6px; font-size: clamp(28px, 4vw, 44px); letter-spacing: -0.025em; font-weight: 700;
+    line-height: 1.04; max-width: 22ch;
+  }
+  .review-hero p.lede { margin: 0; max-width: 64ch; color: var(--fg-secondary); font-size: 15px; line-height: 1.55; }
+  .review-meta {
+    margin-top: 22px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px;
+  }
+  @media (max-width: 880px) { .review-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .review-meta .cell {
+    padding: 10px 12px; border-left: 2px solid color-mix(in oklab, var(--accent) 50%, transparent);
+    display: grid; gap: 3px;
+  }
+  .review-meta .cell .l { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-muted); font-weight: 700; }
+  .review-meta .cell .v { font: 600 15px/1.2 var(--font-sans); letter-spacing: -0.01em; }
+
+  .themes {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    padding: 22px 24px 0;
+  }
+  @media (max-width: 1100px) { .themes { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 720px) { .themes { grid-template-columns: minmax(0, 1fr); } }
+  .theme {
+    padding: 14px 16px; border: 1px solid var(--border-subtle); border-radius: var(--r-md);
+    background: var(--bg-surface-1); display: grid; gap: 6px;
+  }
+  .theme .n {
+    width: 22px; height: 22px; border-radius: var(--r-xs);
+    display: inline-flex; align-items: center; justify-content: center;
+    background: color-mix(in oklab, var(--accent) 18%, var(--bg-surface-3));
+    color: color-mix(in oklab, var(--accent) 80%, var(--fg-primary));
+    font: 700 11px/1 var(--font-mono);
+  }
+  .theme h3 { margin: 0; font-size: 13.5px; font-weight: 650; letter-spacing: -0.01em; }
+  .theme p { margin: 0; font-size: 12.5px; color: var(--fg-secondary); line-height: 1.5; }
+
+  .gallery {
+    padding: 24px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+  }
+  .screen-card {
+    display: grid;
+    grid-template-rows: 220px auto;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-lg);
+    background: var(--bg-surface-1);
+    overflow: hidden;
+    text-decoration: none; color: inherit;
+    transition: transform 160ms ease, border-color 160ms ease;
+  }
+  .screen-card:hover {
+    transform: translateY(-2px);
+    border-color: color-mix(in oklab, var(--accent) 35%, var(--border-default));
+  }
+  .screen-card .thumb {
+    position: relative;
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--accent) 14%, transparent) 0%, transparent 50%),
+      var(--bg-surface-2);
+    overflow: hidden;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .screen-card .thumb svg { width: 100%; height: 100%; display: block; }
+  .screen-card .body {
+    padding: 14px 16px 16px;
+    display: grid; gap: 6px;
+  }
+  .screen-card .row {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  }
+  .screen-card h2 {
+    margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -0.01em;
+  }
+  .screen-card .path {
+    font: 500 10.5px/1 var(--font-mono);
+    color: var(--fg-muted);
+    padding: 3px 6px;
+    border-radius: 4px;
+    background: var(--bg-surface-3);
+  }
+  .screen-card p { margin: 0; font-size: 12.5px; color: var(--fg-secondary); line-height: 1.5; }
+  .screen-card .area-tag {
+    font: 700 10px/1 var(--font-sans);
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: color-mix(in oklab, var(--accent) 70%, var(--fg-primary));
+  }
+
+  .ratings {
+    padding: 0 24px 24px;
+    display: grid;
+    gap: 16px;
+  }
+  .ratings h2 { margin: 8px 0 0; font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
+  .ratings table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    overflow: hidden;
+    font-size: 12.5px;
+  }
+  .ratings th, .ratings td {
+    text-align: left; padding: 10px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .ratings th {
+    background: var(--bg-surface-2);
+    font: 700 10px/1 var(--font-sans);
+    letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--fg-muted);
+  }
+  .ratings tbody tr:last-child td { border-bottom: 0; }
+  .ratings td.score {
+    font: 500 12px/1 var(--font-mono);
+    color: var(--fg-secondary);
+  }
+  .ratings .stars { color: var(--brand); letter-spacing: 1px; }
+  .ratings .stars .off { color: color-mix(in oklab, var(--brand) 30%, var(--bg-surface-3)); }
+
+  .review-foot {
+    padding: 22px 24px 32px;
+    border-top: 1px solid var(--border-subtle);
+    display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+    background: var(--bg-surface-2);
+    color: var(--fg-muted);
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand-lockup">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <div class="brand-stack">
+      <span class="eyebrow">GoatCitadel</span>
+      <span class="name">Mission Control Next</span>
+    </div>
+  </div>
+  <nav class="primary-nav" aria-label="Sections">
+    <a href="#themes">Themes</a>
+    <a href="#screens" class="active">Screens</a>
+    <a href="#scorecard">Scorecard</a>
+  </nav>
+  <span class="spacer"></span>
+  <button class="command-search" type="button">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <span class="search-q">Jump to mockup, theme, route…</span>
+    <kbd>⌘K</kbd>
+  </button>
+  <div class="topbar-right">
+    <span class="chip muted">Design review · v0.1</span>
+  </div>
+</header>
+
+<section class="review-hero">
+  <div class="kicker"><span class="dot"></span><span>Design Review · 2026‑05‑15</span></div>
+  <h1>Tightening Mission Control Next.</h1>
+  <p class="lede">
+    The current build is functionally complete and stylistically restrained — but the visual system is doing
+    less work than it could. Hierarchy collapses inside the 12px density, area color reads as a single rail
+    pixel instead of wayfinding, and the 13‑section Settings IA fragments configuration. This review proposes
+    a tighter typographic ladder, a more confident application of area accent, a 4‑group Settings consolidation,
+    and a few surface‑specific moves on the threaded timeline, approvals, and prompt packs. Eight responsive
+    mockups follow, each annotated.
+  </p>
+  <div class="review-meta">
+    <div class="cell"><span class="l">Scope</span><span class="v">8 surfaces · full responsive set</span></div>
+    <div class="cell"><span class="l">Brand</span><span class="v">GoatCitadel · Signal Noir (extended)</span></div>
+    <div class="cell"><span class="l">Fidelity</span><span class="v">High · real copy, real states</span></div>
+    <div class="cell"><span class="l">Annotations</span><span class="v">Inline · toggleable</span></div>
+  </div>
+</section>
+
+<section class="themes" id="themes" aria-label="Recurring themes">
+  <article class="theme">
+    <span class="n">01</span>
+    <h3>Type scale earns its keep</h3>
+    <p>Lift body from 12 → 13px, headings to 22/18/15/13, and reserve mono for IDs, hashes, and tabular numerics. Same physical density, far better hierarchy.</p>
+  </article>
+  <article class="theme">
+    <span class="n">02</span>
+    <h3>Area color as wayfinding</h3>
+    <p>Each route family already owns an OKLch accent. Promote it from a single rail‑link tint to a 2px stage stripe + tinted eyebrow + scoped chip wash. Glanceable from any tab.</p>
+  </article>
+  <article class="theme">
+    <span class="n">03</span>
+    <h3>Status density, not status soup</h3>
+    <p>Replace mixed pill flavors with a three‑part chip: <span class="chip success" style="vertical-align:middle"><span class="dot"></span>Streaming<span class="meta">42s</span></span> — state, dot, and a mono age. Reads at a glance in the timeline and runtime feed.</p>
+  </article>
+  <article class="theme">
+    <span class="n">04</span>
+    <h3>Settings 13 → 4 groups</h3>
+    <p>Group into Foundations · Identity · Surfaces · Operations. Keeps every leaf reachable in one rail page on a laptop, and lets the General overview do real summarisation.</p>
+  </article>
+  <article class="theme">
+    <span class="n">05</span>
+    <h3>Composer that knows its context</h3>
+    <p>A persistent strip above the textarea showing model, mode, attached files, and live token/$$ — without stealing vertical from the prompt area. One affordance per mode (Send / Delegate / Implement).</p>
+  </article>
+  <article class="theme">
+    <span class="n">06</span>
+    <h3>Approvals: evidence first, decision second</h3>
+    <p>Lead each queue card with the artifact under decision — trace + diff + affected service — then the approve/reject/replay row. Bulk reject moves to the toolbar with confirm.</p>
+  </article>
+</section>
+
+<section class="gallery" id="screens" aria-label="Mockup gallery">
+
+  <a class="screen-card area-chat" href="./threaded-surface.html">
+    <div class="thumb">
+      <svg viewBox="0 0 320 220" preserveAspectRatio="xMidYMid slice" role="presentation">
+        <rect width="320" height="220" fill="#181d24"/>
+        <rect x="0" y="0" width="320" height="18" fill="#10141a"/>
+        <rect x="6" y="6" width="60" height="6" rx="2" fill="#f4ead6" opacity="0.7"/>
+        <rect x="80" y="6" width="40" height="6" rx="2" fill="oklch(0.72 0.12 240)" opacity="0.6"/>
+        <rect x="0" y="18" width="64" height="202" fill="#10141a"/>
+        <rect x="6" y="28" width="52" height="8" rx="2" fill="#5a6068" opacity="0.5"/>
+        <rect x="6" y="42" width="52" height="10" rx="3" fill="oklch(0.72 0.12 240)" opacity="0.18"/>
+        <rect x="6" y="56" width="52" height="10" rx="3" fill="#222833"/>
+        <rect x="6" y="70" width="52" height="10" rx="3" fill="#222833"/>
+        <rect x="6" y="92" width="52" height="8" rx="2" fill="#5a6068" opacity="0.5"/>
+        <rect x="6" y="106" width="52" height="10" rx="3" fill="#222833"/>
+        <rect x="76" y="28" width="180" height="46" rx="6" fill="#10141a"/>
+        <rect x="84" y="36" width="60" height="6" rx="2" fill="#c9cdd4"/>
+        <rect x="84" y="48" width="140" height="5" rx="2" fill="#5a6068"/>
+        <rect x="84" y="58" width="120" height="5" rx="2" fill="#5a6068" opacity="0.7"/>
+        <rect x="76" y="82" width="180" height="38" rx="6" fill="oklch(0.72 0.12 240)" opacity="0.12"/>
+        <rect x="76" y="82" width="180" height="38" rx="6" fill="none" stroke="oklch(0.72 0.12 240)" stroke-opacity="0.35"/>
+        <rect x="84" y="90" width="120" height="6" rx="2" fill="#f4f1ea"/>
+        <rect x="84" y="102" width="160" height="5" rx="2" fill="#c9cdd4" opacity="0.8"/>
+        <rect x="76" y="128" width="180" height="58" rx="6" fill="#181d24" stroke="rgba(255,255,255,0.1)"/>
+        <rect x="84" y="138" width="100" height="6" rx="2" fill="#5a6068"/>
+        <rect x="84" y="152" width="60" height="8" rx="4" fill="oklch(0.72 0.12 240)" opacity="0.5"/>
+        <rect x="148" y="152" width="40" height="8" rx="4" fill="#222833"/>
+        <rect x="84" y="166" width="160" height="10" rx="3" fill="#10141a"/>
+        <rect x="266" y="28" width="48" height="190" rx="6" fill="#10141a"/>
+        <rect x="272" y="36" width="36" height="5" rx="2" fill="#898f99"/>
+        <rect x="272" y="48" width="32" height="5" rx="2" fill="#5a6068"/>
+        <rect x="272" y="58" width="36" height="5" rx="2" fill="#5a6068"/>
+      </svg>
+    </div>
+    <div class="body">
+      <div class="row">
+        <span class="area-tag">Chat · Cowork · Code</span>
+        <span class="path">/chat</span>
+      </div>
+      <h2>Threaded surface</h2>
+      <p>Three‑pane: session rail, turn timeline with live status, composer that surfaces model/mode/attachments + token cost in a single strip.</p>
+    </div>
+  </a>
+
+  <a class="screen-card area-library" href="./prompt-packs.html">
+    <div class="thumb">
+      <svg viewBox="0 0 320 220" preserveAspectRatio="xMidYMid slice" role="presentation">
+        <rect width="320" height="220" fill="#181d24"/>
+        <rect x="0" y="0" width="320" height="18" fill="#10141a"/>
+        <rect x="6" y="6" width="60" height="6" rx="2" fill="#f4ead6" opacity="0.7"/>
+        <rect x="0" y="18" width="120" height="202" fill="#10141a"/>
+        <rect x="10" y="26" width="100" height="6" rx="2" fill="#c9cdd4"/>
+        <rect x="10" y="42" width="100" height="18" rx="4" fill="oklch(0.72 0.10 255)" opacity="0.2"/>
+        <rect x="10" y="64" width="100" height="18" rx="4" fill="#222833"/>
+        <rect x="10" y="86" width="100" height="18" rx="4" fill="#222833"/>
+        <rect x="10" y="108" width="100" height="18" rx="4" fill="#222833"/>
+        <rect x="10" y="130" width="100" height="18" rx="4" fill="#222833"/>
+        <rect x="130" y="26" width="184" height="20" rx="5" fill="#10141a"/>
+        <rect x="138" y="32" width="40" height="6" rx="2" fill="oklch(0.72 0.10 255)" opacity="0.7"/>
+        <rect x="186" y="32" width="40" height="6" rx="2" fill="#898f99"/>
+        <rect x="130" y="54" width="184" height="120" rx="5" fill="#0d1116" stroke="rgba(255,255,255,0.08)"/>
+        <rect x="138" y="64" width="60" height="5" rx="2" fill="oklch(0.72 0.10 255)" opacity="0.8"/>
+        <rect x="138" y="76" width="170" height="4" rx="2" fill="#c9cdd4" opacity="0.5"/>
+        <rect x="138" y="84" width="160" height="4" rx="2" fill="#c9cdd4" opacity="0.45"/>
+        <rect x="138" y="92" width="148" height="4" rx="2" fill="#c9cdd4" opacity="0.4"/>
+        <rect x="138" y="100" width="166" height="4" rx="2" fill="#c9cdd4" opacity="0.5"/>
+        <rect x="138" y="108" width="140" height="4" rx="2" fill="#c9cdd4" opacity="0.45"/>
+        <rect x="138" y="120" width="60" height="14" rx="3" fill="oklch(0.76 0.15 160)" opacity="0.32"/>
+        <rect x="204" y="120" width="60" height="14" rx="3" fill="oklch(0.84 0.15 85)" opacity="0.3"/>
+        <rect x="130" y="182" width="184" height="32" rx="5" fill="#10141a"/>
+        <rect x="138" y="192" width="40" height="6" rx="2" fill="#5a6068"/>
+        <rect x="186" y="192" width="40" height="6" rx="2" fill="#5a6068"/>
+      </svg>
+    </div>
+    <div class="body">
+      <div class="row">
+        <span class="area-tag">Library</span>
+        <span class="path">/library/prompt-packs</span>
+      </div>
+      <h2>Prompt packs workbench</h2>
+      <p>Pack list + test grid + 5‑tab detail (Prompt · Output · Assessment · Review · Insights) with batch runs and real pass thresholds.</p>
+    </div>
+  </a>
+
+  <a class="screen-card area-settings" href="./settings.html">
+    <div class="thumb">
+      <svg viewBox="0 0 320 220" preserveAspectRatio="xMidYMid slice" role="presentation">
+        <rect width="320" height="220" fill="#181d24"/>
+        <rect x="0" y="0" width="320" height="18" fill="#10141a"/>
+        <rect x="0" y="18" width="100" height="202" fill="#10141a"/>
+        <rect x="10" y="28" width="80" height="6" rx="2" fill="oklch(0.78 0.10 85)" opacity="0.7"/>
+        <rect x="10" y="42" width="80" height="14" rx="3" fill="oklch(0.78 0.10 85)" opacity="0.2"/>
+        <rect x="10" y="60" width="80" height="14" rx="3" fill="#222833"/>
+        <rect x="10" y="78" width="80" height="14" rx="3" fill="#222833"/>
+        <rect x="10" y="96" width="80" height="14" rx="3" fill="#222833"/>
+        <rect x="10" y="118" width="80" height="6" rx="2" fill="oklch(0.78 0.10 85)" opacity="0.5"/>
+        <rect x="10" y="132" width="80" height="14" rx="3" fill="#222833"/>
+        <rect x="10" y="150" width="80" height="14" rx="3" fill="#222833"/>
+        <rect x="110" y="28" width="204" height="80" rx="5" fill="#10141a"/>
+        <rect x="118" y="38" width="80" height="8" rx="2" fill="#f4f1ea"/>
+        <rect x="118" y="54" width="180" height="5" rx="2" fill="#898f99"/>
+        <rect x="118" y="62" width="160" height="5" rx="2" fill="#898f99" opacity="0.7"/>
+        <rect x="118" y="78" width="60" height="20" rx="4" fill="oklch(0.78 0.10 85)" opacity="0.2"/>
+        <rect x="184" y="78" width="60" height="20" rx="4" fill="oklch(0.78 0.10 85)" opacity="0.2"/>
+        <rect x="250" y="78" width="60" height="20" rx="4" fill="oklch(0.78 0.10 85)" opacity="0.2"/>
+        <rect x="110" y="116" width="98" height="50" rx="5" fill="#10141a"/>
+        <rect x="216" y="116" width="98" height="50" rx="5" fill="#10141a"/>
+        <rect x="110" y="172" width="204" height="40" rx="5" fill="#10141a"/>
+      </svg>
+    </div>
+    <div class="body">
+      <div class="row">
+        <span class="area-tag">Settings</span>
+        <span class="path">/settings/general</span>
+      </div>
+      <h2>Settings — IA & General</h2>
+      <p>13 sections consolidated into 4 groups. General page becomes an active‑posture summary, not a directory link list.</p>
+    </div>
+  </a>
+
+  <a class="screen-card area-projects" href="./projects.html">
+    <div class="thumb">
+      <svg viewBox="0 0 320 220" preserveAspectRatio="xMidYMid slice" role="presentation">
+        <rect width="320" height="220" fill="#181d24"/>
+        <rect x="0" y="0" width="320" height="18" fill="#10141a"/>
+        <rect x="0" y="18" width="60" height="202" fill="#10141a"/>
+        <rect x="76" y="30" width="220" height="42" rx="6" fill="#10141a"/>
+        <rect x="84" y="40" width="100" height="8" rx="2" fill="#f4f1ea"/>
+        <rect x="84" y="54" width="160" height="5" rx="2" fill="#898f99"/>
+        <rect x="76" y="80" width="106" height="64" rx="6" fill="#10141a"/>
+        <rect x="84" y="88" width="60" height="6" rx="2" fill="#c9cdd4"/>
+        <rect x="84" y="100" width="80" height="5" rx="2" fill="#898f99"/>
+        <rect x="84" y="124" width="22" height="12" rx="3" fill="oklch(0.72 0.12 240)" opacity="0.3"/>
+        <rect x="112" y="124" width="22" height="12" rx="3" fill="oklch(0.73 0.13 315)" opacity="0.3"/>
+        <rect x="140" y="124" width="22" height="12" rx="3" fill="oklch(0.74 0.12 175)" opacity="0.3"/>
+        <rect x="190" y="80" width="106" height="64" rx="6" fill="#10141a"/>
+        <rect x="198" y="88" width="60" height="6" rx="2" fill="#c9cdd4"/>
+        <rect x="198" y="100" width="80" height="5" rx="2" fill="#898f99"/>
+        <rect x="198" y="124" width="22" height="12" rx="3" fill="oklch(0.72 0.12 240)" opacity="0.3"/>
+        <rect x="226" y="124" width="22" height="12" rx="3" fill="oklch(0.74 0.12 175)" opacity="0.3"/>
+        <rect x="76" y="156" width="220" height="56" rx="6" fill="#10141a"/>
+        <rect x="84" y="164" width="80" height="6" rx="2" fill="#898f99"/>
+        <rect x="84" y="180" width="60" height="24" rx="4" fill="oklch(0.72 0.12 240)" opacity="0.2"/>
+        <rect x="152" y="180" width="60" height="24" rx="4" fill="oklch(0.73 0.13 315)" opacity="0.2"/>
+        <rect x="220" y="180" width="60" height="24" rx="4" fill="oklch(0.74 0.12 175)" opacity="0.2"/>
+      </svg>
+    </div>
+    <div class="body">
+      <div class="row">
+        <span class="area-tag">Projects</span>
+        <span class="path">/projects</span>
+      </div>
+      <h2>Projects directory</h2>
+      <p>Per‑project mode counts, recent sessions strip, triple‑action toolbar (New Chat · Cowork · Code).</p>
+    </div>
+  </a>
+
+  <a class="screen-card area-ops" href="./runtime.html">
+    <div class="thumb">
+      <svg viewBox="0 0 320 220" preserveAspectRatio="xMidYMid slice" role="presentation">
+        <rect width="320" height="220" fill="#181d24"/>
+        <rect x="0" y="0" width="320" height="18" fill="#10141a"/>
+        <rect x="0" y="18" width="60" height="202" fill="#10141a"/>
+        <rect x="76" y="30" width="220" height="36" rx="6" fill="#10141a"/>
+        <rect x="84" y="40" width="80" height="6" rx="2" fill="oklch(0.71 0.08 220)" opacity="0.8"/>
+        <rect x="84" y="52" width="110" height="6" rx="2" fill="#c9cdd4"/>
+        <rect x="76" y="74" width="64" height="56" rx="6" fill="#10141a"/>
+        <rect x="148" y="74" width="64" height="56" rx="6" fill="#10141a"/>
+        <rect x="220" y="74" width="76" height="56" rx="6" fill="#10141a"/>
+        <rect x="84" y="84" width="36" height="5" rx="2" fill="#898f99"/>
+        <rect x="84" y="96" width="40" height="14" rx="3" fill="oklch(0.76 0.15 160)" opacity="0.3"/>
+        <rect x="156" y="84" width="36" height="5" rx="2" fill="#898f99"/>
+        <rect x="156" y="96" width="44" height="14" rx="3" fill="#f4f1ea" opacity="0.4"/>
+        <rect x="228" y="84" width="44" height="5" rx="2" fill="#898f99"/>
+        <rect x="228" y="98" width="60" height="20" rx="3" fill="oklch(0.71 0.08 220)" opacity="0.25"/>
+        <rect x="76" y="140" width="140" height="72" rx="6" fill="#10141a"/>
+        <rect x="84" y="148" width="60" height="6" rx="2" fill="#898f99"/>
+        <rect x="84" y="160" width="124" height="5" rx="2" fill="#c9cdd4" opacity="0.6"/>
+        <rect x="84" y="170" width="118" height="5" rx="2" fill="#c9cdd4" opacity="0.5"/>
+        <rect x="84" y="180" width="124" height="5" rx="2" fill="#c9cdd4" opacity="0.6"/>
+        <rect x="84" y="190" width="100" height="5" rx="2" fill="#c9cdd4" opacity="0.5"/>
+        <rect x="84" y="200" width="120" height="5" rx="2" fill="#c9cdd4" opacity="0.55"/>
+        <rect x="224" y="140" width="72" height="72" rx="6" fill="#10141a"/>
+        <rect x="232" y="148" width="56" height="6" rx="2" fill="#898f99"/>
+        <rect x="232" y="160" width="56" height="14" rx="3" fill="#222833"/>
+        <rect x="232" y="178" width="56" height="14" rx="3" fill="#222833"/>
+        <rect x="232" y="196" width="56" height="14" rx="3" fill="oklch(0.78 0.10 85)" opacity="0.3"/>
+      </svg>
+    </div>
+    <div class="body">
+      <div class="row">
+        <span class="area-tag">Ops</span>
+        <span class="path">/ops/runtime</span>
+      </div>
+      <h2>Runtime</h2>
+      <p>Daemon health · cost visibility · filterable activity feed · schedule creator with cron + action picker.</p>
+    </div>
+  </a>
+
+  <a class="screen-card area-ops" href="./approvals.html">
+    <div class="thumb">
+      <svg viewBox="0 0 320 220" preserveAspectRatio="xMidYMid slice" role="presentation">
+        <rect width="320" height="220" fill="#181d24"/>
+        <rect x="0" y="0" width="320" height="18" fill="#10141a"/>
+        <rect x="0" y="18" width="60" height="202" fill="#10141a"/>
+        <rect x="76" y="30" width="220" height="36" rx="6" fill="#10141a"/>
+        <rect x="84" y="40" width="60" height="14" rx="4" fill="oklch(0.71 0.08 220)" opacity="0.25"/>
+        <rect x="148" y="40" width="60" height="14" rx="4" fill="#222833"/>
+        <rect x="212" y="40" width="60" height="14" rx="4" fill="#222833"/>
+        <rect x="76" y="74" width="220" height="68" rx="6" fill="#10141a"/>
+        <rect x="84" y="84" width="40" height="14" rx="3" fill="oklch(0.70 0.18 28)" opacity="0.3"/>
+        <rect x="130" y="84" width="100" height="6" rx="2" fill="#f4f1ea"/>
+        <rect x="84" y="106" width="180" height="5" rx="2" fill="#898f99"/>
+        <rect x="84" y="116" width="160" height="5" rx="2" fill="#898f99" opacity="0.7"/>
+        <rect x="84" y="130" width="50" height="8" rx="3" fill="oklch(0.76 0.15 160)" opacity="0.5"/>
+        <rect x="138" y="130" width="50" height="8" rx="3" fill="oklch(0.70 0.18 28)" opacity="0.5"/>
+        <rect x="192" y="130" width="50" height="8" rx="3" fill="#5a6068"/>
+        <rect x="76" y="150" width="220" height="68" rx="6" fill="#10141a"/>
+        <rect x="84" y="160" width="40" height="14" rx="3" fill="oklch(0.84 0.15 85)" opacity="0.3"/>
+        <rect x="130" y="160" width="100" height="6" rx="2" fill="#f4f1ea"/>
+        <rect x="84" y="182" width="180" height="5" rx="2" fill="#898f99"/>
+        <rect x="84" y="192" width="140" height="5" rx="2" fill="#898f99" opacity="0.7"/>
+        <rect x="84" y="206" width="50" height="8" rx="3" fill="oklch(0.76 0.15 160)" opacity="0.5"/>
+        <rect x="138" y="206" width="50" height="8" rx="3" fill="oklch(0.70 0.18 28)" opacity="0.5"/>
+      </svg>
+    </div>
+    <div class="body">
+      <div class="row">
+        <span class="area-tag">Ops</span>
+        <span class="path">/ops/approvals</span>
+      </div>
+      <h2>Approvals</h2>
+      <p>Pending · History · Recovery tabs. Evidence first (trace + diff + risk), decision row second, bulk reject confirmed.</p>
+    </div>
+  </a>
+
+  <a class="screen-card area-library" href="./memory.html">
+    <div class="thumb">
+      <svg viewBox="0 0 320 220" preserveAspectRatio="xMidYMid slice" role="presentation">
+        <rect width="320" height="220" fill="#181d24"/>
+        <rect x="0" y="0" width="320" height="18" fill="#10141a"/>
+        <rect x="0" y="18" width="60" height="202" fill="#10141a"/>
+        <rect x="76" y="30" width="220" height="30" rx="6" fill="#10141a"/>
+        <rect x="84" y="40" width="200" height="10" rx="3" fill="#222833"/>
+        <rect x="76" y="68" width="100" height="144" rx="6" fill="#10141a"/>
+        <rect x="84" y="78" width="84" height="18" rx="3" fill="oklch(0.72 0.10 255)" opacity="0.2"/>
+        <rect x="84" y="102" width="84" height="18" rx="3" fill="#222833"/>
+        <rect x="84" y="126" width="84" height="18" rx="3" fill="#222833"/>
+        <rect x="84" y="150" width="84" height="18" rx="3" fill="#222833"/>
+        <rect x="84" y="174" width="84" height="18" rx="3" fill="#222833"/>
+        <rect x="184" y="68" width="112" height="92" rx="6" fill="#10141a"/>
+        <rect x="192" y="78" width="60" height="6" rx="2" fill="#c9cdd4"/>
+        <rect x="192" y="92" width="96" height="5" rx="2" fill="#898f99"/>
+        <rect x="192" y="102" width="88" height="5" rx="2" fill="#898f99" opacity="0.7"/>
+        <rect x="192" y="112" width="92" height="5" rx="2" fill="#898f99" opacity="0.7"/>
+        <rect x="192" y="130" width="60" height="20" rx="4" fill="oklch(0.72 0.10 255)" opacity="0.25"/>
+        <rect x="184" y="168" width="112" height="44" rx="6" fill="#10141a"/>
+        <rect x="192" y="178" width="40" height="5" rx="2" fill="#5a6068"/>
+        <rect x="192" y="188" width="90" height="5" rx="2" fill="#c9cdd4" opacity="0.5"/>
+        <rect x="192" y="196" width="80" height="5" rx="2" fill="#c9cdd4" opacity="0.45"/>
+      </svg>
+    </div>
+    <div class="body">
+      <div class="row">
+        <span class="area-tag">Library</span>
+        <span class="path">/library/memory</span>
+      </div>
+      <h2>Memory</h2>
+      <p>Two‑column list/editor with subspace summaries, evidence audit, and explicit lifecycle controls (Flush · Optimize · Verify).</p>
+    </div>
+  </a>
+
+</section>
+
+<section class="ratings" id="scorecard">
+  <h2>5‑dimensional self‑critique scorecard</h2>
+  <p class="muted" style="font-size:12.5px; max-width:64ch; margin:0;">Each surface scored across philosophy / hierarchy / execution / specificity / restraint, 1–5. Anything below 3 is treated as a regression and pinned for the next pass.</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Surface</th>
+        <th>Philosophy</th>
+        <th>Hierarchy</th>
+        <th>Execution</th>
+        <th>Specificity</th>
+        <th>Restraint</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>Threaded surface</td>          <td class="score"><span class="stars">★★★★<span class="off">★</span></span></td><td class="score"><span class="stars">★★★★<span class="off">★</span></span></td><td class="score"><span class="stars">★★★★<span class="off">★</span></span></td><td class="score"><span class="stars">★★★★★</span></td><td class="score"><span class="stars">★★★★<span class="off">★</span></span></td></tr>
+      <tr><td>Prompt packs workbench</td>    <td class="score"><span class="stars">★★★★<span class="off">★</span></span></td><td class="score"><span class="stars">★★★★★</span></td><td class="score"><span class="stars">★★★★<span class="off">★</span></span></td><td class="score"><span class="stars">★★★★★</span></td><td class="score"><span class="stars">★★★<span class="off">★★</span></span></td></tr>
+      <tr><td>Settings (IA + General)</td>   <td class="score"><span class="stars">★★★★★</span></td><td class="score"><span class="stars">★★★★★</span></td><td class="score"><span class="stars">★★★★<span class="off">★</span></span></td><td class="score"><span class="stars">★★★★<span class="off">★</span></span></td><td class="score"><span class="stars">★★★★★</span></td></tr>
+      <tr><td>Projects</td>                  <td class="score"><span class="stars">★★★★<span class="off">★</span></span></td><td class="score"><span class="stars">★★★★<span class="off">★</span></span></td><td class="score"><span class="stars">★★★★<span class="off">★</span></span></td><td class="score"><span class="stars">★★★★★</span></td><td class="score"><span class="stars">★★★★★</span></td></tr>
+      <tr><td>Runtime</td>                   <td class="score"><span class="stars">★★★★<span class="off">★</span></span></td><td class="score"><span class="stars">★★★★★</span></td><td class="score"><span class="stars">★★★★<span class="off">★</span></span></td><td class="score"><span class="stars">★★★★★</span></td><td class="score"><span class="stars">★★★★<span class="off">★</span></span></td></tr>
+      <tr><td>Approvals</td>                 <td class="score"><span class="stars">★★★★★</span></td><td class="score"><span class="stars">★★★★★</span></td><td class="score"><span class="stars">★★★★<span class="off">★</span></span></td><td class="score"><span class="stars">★★★★★</span></td><td class="score"><span class="stars">★★★★<span class="off">★</span></span></td></tr>
+      <tr><td>Memory</td>                    <td class="score"><span class="stars">★★★★<span class="off">★</span></span></td><td class="score"><span class="stars">★★★★<span class="off">★</span></span></td><td class="score"><span class="stars">★★★★<span class="off">★</span></span></td><td class="score"><span class="stars">★★★★★</span></td><td class="score"><span class="stars">★★★★★</span></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<footer class="review-foot">
+  <div>Mockups are static — click into any card to open the screen. Toggle critique callouts with the pill at the bottom right.</div>
+  <div class="mono">mockups/index.html · 2026‑05‑15</div>
+</footer>
+
+<div class="status-strip">
+  <span class="ok">● review build healthy</span>
+  <span>tokens · OKLch · Geist</span>
+  <span class="accent">8 surfaces · 6 themes</span>
+  <span style="margin-left:auto" class="mono">v0.1 · signal noir</span>
+</div>
+
+<button class="critique-toggle" data-critique-toggle type="button">
+  <span class="dot"></span>
+  <span data-critique-label>Critique on</span>
+</button>
+
+<script src="./_shared.js"></script>
+</body>
+</html>

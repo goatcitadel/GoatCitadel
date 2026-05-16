@@ -126,7 +126,7 @@ describe("gateway main entrypoint", () => {
     handlers.get("SIGTERM")?.[0]?.();
     await vi.waitFor(() => expect(app.close).toHaveBeenCalledTimes(1));
     expect(app.log.info).toHaveBeenCalledWith({ signal: "SIGTERM" }, "shutting down gateway");
-    expect(process.exitCode).toBe(0);
+    await vi.waitFor(() => expect(process.exitCode).toBe(0));
   });
 
   it("defaults the terminal title, ignores repeated shutdown, and forces exit after timeout", async () => {

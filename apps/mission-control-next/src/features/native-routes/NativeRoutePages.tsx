@@ -1,21 +1,6 @@
 /* eslint-disable max-lines -- Native route shells intentionally co-locate the remaining next-native Library and Cowork views while extraction finishes. */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  AlertTriangle,
-  Bot,
-  BrainCircuit,
-  CheckCircle2,
-  Compass,
-  FileText,
-  FolderOpen,
-  History,
-  Plus,
-  RefreshCw,
-  Save,
-  Sparkles,
-  Undo2,
-  Workflow,
-} from "lucide-react";
+import { AlertTriangle, CheckCircle2, FileText, Plus, RefreshCw, Save, Sparkles, Undo2, Workflow } from "lucide-react";
 import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
 import type {
   CapabilityProposalDetailRecord,
@@ -76,8 +61,10 @@ import type { AppRoute } from "@next/app/route-model";
 import type { TaskDeliverableRecord, TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame, QuickJumpCard } from "./NativeRoutePageLayout";
 import { SettingsNativePage as NextSettingsNativePage } from "./SettingsNativePage";
+import { CuratorRoutePage } from "./library/CuratorRoutePage";
 import { MemoryRoutePage } from "./library/MemoryRoutePage";
 import { ApprovalsRoutePage } from "./ops/ApprovalsRoutePage";
+import { KanbanRoutePage } from "./ops/KanbanRoutePage";
 import { RuntimeRoutePage } from "./ops/RuntimeRoutePage";
 import { ProjectsRoutePage } from "./projects/ProjectsRoutePage";
 import { readRouteDiagnosticNow, recordRouteAction, recordRouteDataLoad } from "./route-diagnostics";
@@ -130,8 +117,12 @@ export function NativeRoutePages(props: NativeRoutePagesProps) {
     return <LibraryNativePage {...props} />;
   }
   if (route.area === "ops") {
-    if ((route.section ?? "activity") === "approvals") {
+    const section = route.section ?? "activity";
+    if (section === "approvals") {
       return <ApprovalsRoutePage {...props} />;
+    }
+    if (section === "kanban") {
+      return <KanbanRoutePage {...props} />;
     }
     return <RuntimeRoutePage {...props} />;
   }
@@ -722,8 +713,8 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
 
   return (
     <NativePageFrame
-      icon={section === "board" ? Bot : Workflow}
-      kicker="Cowork"
+      area="cowork"
+      kicker={`Cowork · ${section === "board" ? "Agent Board" : "Task Board"}`}
       title={section === "board" ? "Agent Board" : "Task Board"}
       description={
         section === "board"
@@ -732,6 +723,15 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
       }
       loading={state.loading}
       error={state.error}
+      metrics={
+        state.data
+          ? [
+              { label: "Open tasks", value: String(tasks.length) },
+              { label: "Operators", value: String(state.data.operators.length) },
+              { label: "Trash", value: String(state.data.deletedTasks.length) },
+            ]
+          : undefined
+      }
     >
       {notice ? <LibraryNotice notice={notice} /> : null}
       <LibraryLoadWarnings issues={state.data?.issues ?? []} />
@@ -745,8 +745,8 @@ function LibraryNativePage(props: NativeRoutePagesProps) {
 
   return (
     <NativePageFrame
-      icon={iconForLibrarySection(section)}
-      kicker="Library"
+      area="library"
+      kicker={`Library · ${labelForLibrarySection(section)}`}
       title={labelForLibrarySection(section)}
       description={descriptionForLibrarySection(section, props.activeWorkspaceName)}
       loading={false}
@@ -763,6 +763,8 @@ function renderLibrarySection(section: NonNullable<AppRoute["section"]>, props: 
       return <LibrarySkillsSection {...props} />;
     case "capabilities":
       return <LibraryCapabilitiesSection {...props} />;
+    case "curator":
+      return <CuratorRoutePage {...props} />;
     case "memory":
       return <MemoryRoutePage {...props} />;
     case "knowledge":
@@ -2822,25 +2824,6 @@ export function summarizeCapabilityCounts(items: CapabilityCatalogEntry[]): Reco
     counts[deriveCapabilityStatus(item).status] += 1;
   }
   return counts;
-}
-
-function iconForLibrarySection(section: NonNullable<AppRoute["section"]>) {
-  switch (section) {
-    case "skills":
-      return Sparkles;
-    case "capabilities":
-      return Compass;
-    case "memory":
-      return BrainCircuit;
-    case "knowledge":
-      return History;
-    case "files":
-      return FolderOpen;
-    case "artifacts":
-      return FileText;
-    default:
-      return Bot;
-  }
 }
 
 function labelForLibrarySection(section: NonNullable<AppRoute["section"]>) {

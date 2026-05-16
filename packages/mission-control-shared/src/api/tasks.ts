@@ -1,4 +1,5 @@
 import type { TaskActivityRecord, TaskDeliverableRecord, TaskRecord, TaskSubagentSession } from "./types.js";
+import type { TaskArtifactClaim, TaskDistressSignalCode, TaskDistressSeverity } from "@goatcitadel/contracts";
 import { request } from "./client-core.js";
 
 export async function fetchTasks(
@@ -148,6 +149,60 @@ export async function updateTaskSubagent(
 ): Promise<TaskSubagentSession> {
   return request<TaskSubagentSession>(`/api/v1/subagents/${encodeURIComponent(agentSessionId)}`, {
     method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export interface EmitTaskDistressBody {
+  code: TaskDistressSignalCode;
+  severity: TaskDistressSeverity;
+  title: string;
+  summary: string;
+  emittedBy?: string;
+  evidenceRef?: string;
+}
+
+export async function emitTaskDistress(taskId: string, input: EmitTaskDistressBody): Promise<TaskRecord> {
+  return request<TaskRecord>(`/api/v1/tasks/${encodeURIComponent(taskId)}/distress`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function resolveTaskDistress(
+  taskId: string,
+  signalId: string,
+  input?: { resolvedBy?: string },
+): Promise<TaskRecord> {
+  return request<TaskRecord>(`/api/v1/tasks/${encodeURIComponent(taskId)}/distress/${encodeURIComponent(signalId)}`, {
+    method: "DELETE",
+    body: JSON.stringify(input ?? {}),
+  });
+}
+
+export async function setTaskRetryBudget(taskId: string, maxRetries: number): Promise<TaskRecord> {
+  return request<TaskRecord>(`/api/v1/tasks/${encodeURIComponent(taskId)}/retry-budget`, {
+    method: "POST",
+    body: JSON.stringify({ maxRetries }),
+  });
+}
+
+export async function verifyTaskArtifacts(taskId: string, claims: TaskArtifactClaim[]): Promise<TaskRecord> {
+  return request<TaskRecord>(`/api/v1/tasks/${encodeURIComponent(taskId)}/verify-artifacts`, {
+    method: "POST",
+    body: JSON.stringify({ claims }),
+  });
+}
+
+export type BulkTaskActionInput =
+  | { action: "unblock"; taskIds: string[] }
+  | { action: "retry"; taskIds: string[]; reason: string }
+  | { action: "reassign"; taskIds: string[]; assignedAgentId: string }
+  | { action: "close"; taskIds: string[] };
+
+export async function bulkTaskAction(input: BulkTaskActionInput): Promise<{ tasks: TaskRecord[] }> {
+  return request<{ tasks: TaskRecord[] }>(`/api/v1/tasks/bulk`, {
+    method: "POST",
     body: JSON.stringify(input),
   });
 }

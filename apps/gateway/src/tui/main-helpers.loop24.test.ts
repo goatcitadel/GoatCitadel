@@ -4,6 +4,7 @@ import {
   asRecord,
   buildHeaderSummaryRows,
   buildSessionChoices,
+  buildRuntimeLlmSummaryLines,
   formatSessionSummary,
   formatTimestamp,
   parseTuiArgs,
@@ -65,6 +66,32 @@ describe("TUI main helper loop24 edge coverage", () => {
     expect(formatSessionSummary({ sessionId: "session-3", title: "Third", updatedAt: "not-a-date" })).toBe(
       "Third [session-3] · chat · updated not-a-date",
     );
+  });
+
+  it("renders the runtime LLM summary with contextWindow when the active model has metadata", () => {
+    const lines = buildRuntimeLlmSummaryLines({
+      activeProviderId: "openai-codex",
+      activeModel: "gpt-5.5",
+      providers: [],
+      activeModelContextWindow: 272_000,
+      activeModelOutputTokenLimit: 32_000,
+    });
+    expect(lines).toContain("Active provider: openai-codex");
+    expect(lines).toContain("Active model: gpt-5.5");
+    expect(lines.some((line) => line.includes("272,000"))).toBe(true);
+    expect(lines.some((line) => line.includes("32,000"))).toBe(true);
+  });
+
+  it("omits contextWindow lines when the active model metadata is missing", () => {
+    const lines = buildRuntimeLlmSummaryLines({
+      activeProviderId: "custom",
+      activeModel: "unknown-model",
+      providers: [],
+    });
+    expect(lines).toContain("Active provider: custom");
+    expect(lines).toContain("Active model: unknown-model");
+    expect(lines.some((line) => line.toLowerCase().includes("context window"))).toBe(false);
+    expect(lines.some((line) => line.toLowerCase().includes("output limit"))).toBe(false);
   });
 
   it("coerces timestamps, records, and compact labels defensively", () => {

@@ -9,6 +9,7 @@ import { __taskRepoInternals, TaskRepository } from "./task-repo.js";
 import { TaskActivityRepository } from "./task-activity-repo.js";
 import { TaskDeliverableRepository } from "./task-deliverable-repo.js";
 import { TaskSubagentRepository } from "./task-subagent-repo.js";
+import { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
 import type { DatabaseClient } from "./db.js";
 
 const createdFiles: string[] = [];
@@ -302,5 +303,102 @@ describe("task repositories", () => {
     setTaskRawField(repos.db, task.taskId, "status", "inbox");
     setTaskRawField(repos.db, task.taskId, "priority", "critical");
     assert.equal(repos.tasks.find(task.taskId), undefined);
+  });
+});
+
+describe("TaskRepository — kanban fields", () => {
+  it("persists distressSignals, retryBudget, artifactVerification on update", () => {
+    const repos = createRepos();
+    const created = repos.tasks.create({ title: "kanban", workspaceId: "default" });
+    const updated = repos.tasks.update(created.taskId, {
+      distressSignals: [
+        {
+          signalId: "ds-1",
+          code: "needs_user",
+          severity: "warn",
+          title: "Awaiting input",
+          summary: "Worker paused.",
+          createdAt: "2026-05-15T12:00:00.000Z",
+        },
+      ],
+      retryBudget: { maxRetries: 3, retryCount: 1 },
+      artifactVerification: [
+        {
+          claim: { kind: "file", value: "/tmp/out.txt" },
+          status: "missing",
+          checkedAt: "2026-05-15T12:00:00.000Z",
+          detail: "ENOENT",
+        },
+      ],
+    });
+    const reloaded = repos.tasks.get(created.taskId);
+    assert.deepEqual(reloaded.distressSignals, updated.distressSignals);
+    assert.deepEqual(reloaded.retryBudget, updated.retryBudget);
+    assert.deepEqual(reloaded.artifactVerification, updated.artifactVerification);
+  });
+
+  it("returns undefined for kanban fields when never set", () => {
+    const repos = createRepos();
+    const created = repos.tasks.create({ title: "plain", workspaceId: "default" });
+    assert.equal(created.distressSignals, undefined);
+    assert.equal(created.retryBudget, undefined);
+    assert.equal(created.artifactVerification, undefined);
+  });
+
+  it("clears kanban fields when explicitly set to null in update", () => {
+    const repos = createRepos();
+    const created = repos.tasks.create({ title: "kanban", workspaceId: "default" });
+    repos.tasks.update(created.taskId, {
+      artifactVerification: [
+        {
+          claim: { kind: "file", value: "/tmp/x" },
+          status: "missing",
+          checkedAt: "2026-05-15T12:00:00.000Z",
+        },
+      ],
+      distressSignals: [
+        {
+          signalId: "ds-1",
+          code: "tool_error",
+          severity: "warn",
+          title: "x",
+          summary: "y",
+          createdAt: "2026-05-15T12:00:00.000Z",
+        },
+      ],
+      retryBudget: { maxRetries: 3, retryCount: 0 },
+    });
+    const cleared = repos.tasks.update(created.taskId, {
+      artifactVerification: null,
+      distressSignals: null,
+      retryBudget: null,
+    });
+    assert.equal(cleared.artifactVerification, undefined);
+    assert.equal(cleared.distressSignals, undefined);
+    assert.equal(cleared.retryBudget, undefined);
+  });
+});
+
+describe("TaskRepository sanitization", () => {
+  it("quarantines a task whose metadata_json is malformed and falls back to empty metadata", () => {
+    const dbPath = path.join(os.tmpdir(), `gc-task-sanitize-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const quarantine = new StateValidationQuarantineRepository(db);
+    const repo = new TaskRepository(db, { quarantine });
+
+    const task = repo.create({ title: "Sanitize metadata test" });
+    db.prepare("UPDATE tasks SET metadata_json = ? WHERE task_id = ?").run("{not json", task.taskId);
+
+    const reloaded = repo.find(task.taskId);
+    assert.ok(reloaded, "task should still load with fallback metadata");
+    assert.equal(reloaded.proactiveContext, undefined);
+    assert.equal(reloaded.agenticContext, undefined);
+    assert.equal(quarantine.count(), 1);
+    const entry0 = quarantine.list(10)[0];
+    assert.ok(entry0);
+    assert.equal(entry0.store, "task.metadata");
+    assert.equal(entry0.rowId, task.taskId);
+    assert.match(entry0.schemaError, /json_parse|schema|parse/i);
   });
 });

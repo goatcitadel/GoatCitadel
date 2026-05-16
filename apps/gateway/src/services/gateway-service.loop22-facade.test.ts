@@ -75,6 +75,9 @@ function createDeferredInitHarness(overrides: Record<string, unknown> = {}) {
     ensurePrivateBetaBackupCronJob: vi.fn(),
     ensureUpdateReviewCronJob: vi.fn(),
     eventIngestService: { flushPendingTranscriptOutbox: vi.fn(async () => 1) },
+    curatorService: {
+      ensureCuratorWeeklyCronJob: vi.fn(),
+    },
     improvementService: {
       ensureWeeklyImprovementCronJob: vi.fn(),
       markInterruptedDecisionReplayRuns: vi.fn(),

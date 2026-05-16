@@ -24,6 +24,7 @@ interface BuildDelegatedChatSendRequestInput {
   retrievalMode: ChatRetrievalMode;
   toolAutonomy?: ChatSessionPrefsRecord["toolAutonomy"];
   normalizationProfile?: ChatSendMessageRequest["normalizationProfile"];
+  parentDelegationStepId?: string;
 }
 
 export function buildDelegatedChatSendRequest(input: BuildDelegatedChatSendRequestInput): ChatSendMessageRequest {
@@ -53,5 +54,6 @@ export function buildDelegatedChatSendRequest(input: BuildDelegatedChatSendReque
     subagentPolicy: input.subagentPolicy ?? "off",
     normalizationProfile: input.normalizationProfile,
     prefsOverride,
+    parentDelegationStepId: input.parentDelegationStepId,
   };
 }

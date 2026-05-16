@@ -1,4 +1,6 @@
 import type {
+  ChatGoalRequest,
+  ChatGoalStatusResponse,
   ChatProactiveMode,
   ChatReflectionMode,
   ChatRetrievalMode,
@@ -7,6 +9,8 @@ import type {
   ChatSpecialistCandidatePatchInput,
   ChatSpecialistCandidateRecord,
   ChatSpecialistCandidateSuggestionRecord,
+  ChatSteerRequest,
+  ChatSteerResponse,
   LearnedMemoryConflictRecord,
   LearnedMemoryItemRecord,
   LearnedMemoryUpdateInput,
@@ -120,6 +124,14 @@ export interface ChatSupportRouteDependencies {
       input: ChatSpecialistCandidatePatchInput,
     ): ChatSpecialistCandidateRecord;
   };
+  steer: {
+    submitChatSteerInstruction(sessionId: string, body: ChatSteerRequest): Promise<ChatSteerResponse>;
+  };
+  goal: {
+    getChatSessionGoal(sessionId: string): Promise<ChatGoalStatusResponse>;
+    setChatSessionGoal(sessionId: string, body: ChatGoalRequest): Promise<ChatGoalStatusResponse>;
+    clearChatSessionGoal(sessionId: string): Promise<ChatGoalStatusResponse>;
+  };
 }
 
 export class ChatSupportRouteService {
@@ -206,5 +218,21 @@ export class ChatSupportRouteService {
     input: ChatSpecialistCandidatePatchInput,
   ) {
     return this.deps.specialists.updateChatSessionSpecialistCandidate(sessionId, candidateId, input);
+  }
+
+  public submitChatSteerInstruction(sessionId: string, body: ChatSteerRequest) {
+    return this.deps.steer.submitChatSteerInstruction(sessionId, body);
+  }
+
+  public getChatSessionGoal(sessionId: string) {
+    return this.deps.goal.getChatSessionGoal(sessionId);
+  }
+
+  public setChatSessionGoal(sessionId: string, body: ChatGoalRequest) {
+    return this.deps.goal.setChatSessionGoal(sessionId, body);
+  }
+
+  public clearChatSessionGoal(sessionId: string) {
+    return this.deps.goal.clearChatSessionGoal(sessionId);
   }
 }

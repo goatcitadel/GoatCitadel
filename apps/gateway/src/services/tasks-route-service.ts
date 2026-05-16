@@ -20,6 +20,13 @@ export type TasksRoutePort = Pick<
   | "softDeleteTask"
   | "updateTask"
   | "updateTaskSubagent"
+  | "emitDistressSignal"
+  | "resolveDistressSignal"
+  | "setRetryBudget"
+  | "recordRetryAttempt"
+  | "verifyTaskArtifacts"
+  | "autoBlockOnIncompleteExit"
+  | "bulkUpdateTasks"
 >;
 
 export class TasksRouteService {
@@ -95,5 +102,29 @@ export class TasksRouteService {
 
   public updateTaskSubagent(agentSessionId: string, input: Parameters<TasksRoutePort["updateTaskSubagent"]>[1]) {
     return this.tasks.updateTaskSubagent(agentSessionId, input);
+  }
+
+  public emitDistressSignal(taskId: string, input: Parameters<TasksRoutePort["emitDistressSignal"]>[1]) {
+    return this.tasks.emitDistressSignal(taskId, input);
+  }
+
+  public resolveDistressSignal(
+    taskId: string,
+    signalId: string,
+    input?: Parameters<TasksRoutePort["resolveDistressSignal"]>[2],
+  ) {
+    return this.tasks.resolveDistressSignal(taskId, signalId, input);
+  }
+
+  public setRetryBudget(taskId: string, maxRetries: number) {
+    return this.tasks.setRetryBudget(taskId, maxRetries);
+  }
+
+  public verifyTaskArtifacts(taskId: string, claims: Parameters<TasksRoutePort["verifyTaskArtifacts"]>[1]) {
+    return this.tasks.verifyTaskArtifacts(taskId, claims);
+  }
+
+  public bulkUpdateTasks(input: Parameters<TasksRoutePort["bulkUpdateTasks"]>[0]) {
+    return this.tasks.bulkUpdateTasks(input);
   }
 }

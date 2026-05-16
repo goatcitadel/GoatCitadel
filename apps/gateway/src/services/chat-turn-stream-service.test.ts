@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatTurnTraceRecord } from "@goatcitadel/contracts";
+import { ChatSteerService } from "./chat-steer-service.js";
 import type { ChatTurnStreamHost } from "./chat-turn-stream-service.js";
 
 vi.mock("./chat-turn-helpers.js", () => ({
@@ -724,6 +725,7 @@ function createHost(): ChatTurnStreamHost & {
     agentSendChatMessage: vi.fn(),
     beginActiveChatTurnExecution: vi.fn(() => new AbortController()),
     endActiveChatTurnExecution: vi.fn(),
+    steerService: new ChatSteerService(),
     ingestEvent: vi.fn(async () => undefined),
     updateActiveLeafOrThrow: vi.fn(),
     collectCapabilityUpgradeSuggestions: vi.fn(async () => []),

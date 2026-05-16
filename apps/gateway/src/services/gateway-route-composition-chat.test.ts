@@ -177,6 +177,32 @@ function createGateway() {
         })),
         patch: fn((candidateId: string, input: Record<string, unknown>) => ({ candidateId, input })),
       },
+      chatSessionMeta: {
+        ensure: fn((sessionId: string) => ({
+          sessionId,
+          pinnedGoal: "ship kanban",
+          goalTurnBudget: 10,
+          goalTurnsUsed: 3,
+          goalSetAt: "2026-05-15T10:00:00Z",
+        })),
+        patch: fn((sessionId: string, input: Record<string, unknown>) => ({
+          sessionId,
+          pinnedGoal: input.pinnedGoal === null ? undefined : (input.pinnedGoal as string | undefined),
+          goalTurnBudget: input.goalTurnBudget === null ? undefined : (input.goalTurnBudget as number | undefined),
+          goalTurnsUsed: 0,
+          goalSetAt: input.goalSetAt === null ? undefined : (input.goalSetAt as string | undefined),
+        })),
+      },
+    },
+    steerService: {
+      registerActiveTurn: fn(() => undefined),
+      unregisterActiveTurn: fn(() => undefined),
+      enqueue: fn((input: { sessionId: string; instruction: string }) => ({
+        sessionId: input.sessionId,
+        turnId: "t-1",
+        accepted: true,
+      })),
+      drainPending: fn(() => []),
     },
     operatorSummaryCache: {},
     mediaVoiceService: {
@@ -507,6 +533,31 @@ describe("composeChatRouteDependencies", () => {
     });
     expect(deps.chatSupport.specialists.listChatSessionSpecialistCandidates("session-1")).toEqual({
       items: [{ sessionId: "session-1", limit: 200 }],
+    });
+    await expect(
+      deps.chatSupport.steer.submitChatSteerInstruction("session-1", { instruction: "focus" }),
+    ).resolves.toMatchObject({
+      sessionId: "session-1",
+      turnId: "t-1",
+      accepted: true,
+    });
+    await expect(deps.chatSupport.goal.getChatSessionGoal("session-1")).resolves.toMatchObject({
+      sessionId: "session-1",
+      goal: "ship kanban",
+      turnBudget: 10,
+      turnsUsed: 3,
+    });
+    await expect(
+      deps.chatSupport.goal.setChatSessionGoal("session-1", { goal: "ship", turnBudget: 5 }),
+    ).resolves.toMatchObject({
+      sessionId: "session-1",
+      goal: "ship",
+      turnBudget: 5,
+    });
+    await expect(deps.chatSupport.goal.clearChatSessionGoal("session-1")).resolves.toMatchObject({
+      sessionId: "session-1",
+      goal: null,
+      turnBudget: null,
     });
     expect(
       deps.chatSupport.specialists.updateChatSessionSpecialistCandidate("session-1", "candidate-1", { role: "QA" }),

@@ -555,7 +555,7 @@ describe("prompt-pack scoring, judging, and integrity", () => {
   });
 
   it("uses kimi-compatible temperature for prompt-pack model judging", () => {
-    expect(resolvePromptPackJudgeTemperature("moonshot", "moonshot/kimi-k2.5")).toBe(1);
+    expect(resolvePromptPackJudgeTemperature("moonshot", "moonshot/kimi-k2.6")).toBe(1);
     expect(resolvePromptPackJudgeTemperature("openai", "gpt-5")).toBe(0);
     expect(resolvePromptPackJudgeTemperature("openai-codex", "gpt-5.5")).toBeUndefined();
     expect(resolvePromptPackJudgeTemperature("chatgpt-codex", "gpt-5.5")).toBeUndefined();
@@ -585,7 +585,7 @@ describe("prompt-pack scoring, judging, and integrity", () => {
     expect(
       resolvePromptPackJudgeTarget({
         runProviderId: "moonshot",
-        runModel: "kimi-k2.5",
+        runModel: "kimi-k2.6",
         defaultProviderId: "openai",
         defaultModel: "gpt-5.4",
       }),

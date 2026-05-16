@@ -124,6 +124,7 @@ import {
   titleForDecisionReplayCause,
   toWeekKeyForTimezone,
 } from "./improvement-replay.js";
+import { resolveActiveUpdateTarget } from "./improvement-service-active-update.js";
 
 // ── constants ────────────────────────────────────────────────────────
 const IMPROVEMENT_WEEKLY_TIME_ZONE = "America/Los_Angeles";
@@ -5317,24 +5318,9 @@ function determineAgenticProposalCandidateKind(proposal: AgenticImprovementBridg
 function buildAgenticProposalTargetKey(
   proposal: AgenticImprovementBridgeProposal,
   kind: ImprovementCandidateKind,
+  justLoadedSkillIds: string[] = [],
 ): string {
-  const primary = proposal.evidence[0];
-  if (primary) {
-    if (primary.source === "prompt_lab") {
-      return `prompt-lab:${primary.sourceId}`;
-    }
-    if (primary.source === "skill_evaluation") {
-      return `skill:${primary.sourceId}`;
-    }
-    if (primary.source === "memory") {
-      return `memory:${primary.sourceId}`;
-    }
-    if (primary.source === "provider" || primary.source === "plugin" || primary.source === "channel") {
-      return `${primary.source}:${primary.sourceId}`;
-    }
-    return `agentic:${primary.sourceId}`;
-  }
-  return `${kind}:${proposal.proposalId}`;
+  return resolveActiveUpdateTarget({ candidateKind: kind, evidence: proposal.evidence, justLoadedSkillIds });
 }
 
 function mapAgenticProposalEvidenceRefType(

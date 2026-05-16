@@ -376,6 +376,53 @@ export class TuiApiClient {
     });
   }
 
+  public async getCuratorStatus(): Promise<Record<string, unknown>> {
+    return this.request("/api/v1/curator/status", { method: "GET" });
+  }
+
+  public async archiveCuratorSkill(
+    skillId: string,
+    reason?: string,
+    actorId?: string,
+  ): Promise<Record<string, unknown>> {
+    return this.request(
+      "/api/v1/curator/archive",
+      {
+        method: "POST",
+        body: JSON.stringify({ skillId, reason, actorId }),
+      },
+      true,
+    );
+  }
+
+  public async pruneCuratorSkill(skillId: string, actorId?: string): Promise<Record<string, unknown>> {
+    return this.request(
+      "/api/v1/curator/prune",
+      {
+        method: "POST",
+        body: JSON.stringify({ skillId, confirm: true, actorId }),
+      },
+      true,
+    );
+  }
+
+  public async listCuratorArchived(): Promise<Record<string, unknown>> {
+    return this.request("/api/v1/curator/archived", { method: "GET" });
+  }
+
+  public async runCurator(
+    options: { sync?: boolean; dryRun?: boolean; actorId?: string } = {},
+  ): Promise<Record<string, unknown>> {
+    return this.request(
+      "/api/v1/curator/run",
+      {
+        method: "POST",
+        body: JSON.stringify(options),
+      },
+      true,
+    );
+  }
+
   public async listSkillSources(query?: string, limit = 25): Promise<SkillSourceListResponse> {
     const params = new URLSearchParams();
     if (query?.trim()) {

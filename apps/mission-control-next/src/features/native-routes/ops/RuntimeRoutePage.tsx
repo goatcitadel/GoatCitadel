@@ -1,10 +1,18 @@
 import { useMemo, useState } from "react";
-import { Activity, RefreshCw, Server, Wallet } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { createCronJob } from "@goatcitadel/mission-control-shared/api/client";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
 import { useOpsRuntimeSnapshot } from "@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot";
 import type { AppRoute } from "@next/app/route-model";
-import { NativeCard, NativeGrid, NativeList, NativePageFrame, QuickJumpCard } from "../NativeRoutePageLayout";
+import {
+  NativeCard,
+  NativeGrid,
+  NativeList,
+  NativePageFrame,
+  type NativePageMetric,
+  QuickJumpCard,
+} from "../NativeRoutePageLayout";
+import { ThreePartChip, type ChipTone } from "../primitives";
 import { recordRouteAction } from "../route-diagnostics";
 import type { NativeRoutePagesProps } from "../types";
 import "../native-routes.css";
@@ -650,17 +658,31 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
                   </button>
                 ))}
               </div>
-              <NativeList
-                items={filteredActivityEvents.map((item) => ({
-                  title: item.eventType,
-                  meta: item.source,
-                  body: formatDateTime(item.timestamp),
-                }))}
-                emptyLabel="No recent events."
-                density="compact"
-                maxHeight="min(52vh, 30rem)"
-                ariaLabel="Activity feed"
-              />
+              {filteredActivityEvents.length === 0 ? (
+                <p className="mc-next-directory-empty">No recent events.</p>
+              ) : (
+                <ul
+                  className="mc-next-activity-feed"
+                  data-native-scroll="true"
+                  style={{ maxHeight: "min(52vh, 30rem)" }}
+                  aria-label="Activity feed"
+                >
+                  {filteredActivityEvents.map((item, index) => (
+                    <li
+                      key={`${item.eventType}-${item.timestamp ?? "no-ts"}-${index}`}
+                      className="mc-next-activity-feed-row"
+                    >
+                      <ThreePartChip
+                        tone={toneForActivityEvent(item.eventType, item.eventClass)}
+                        state={item.eventType}
+                        mid={item.eventClass ?? item.source ?? ""}
+                        age={formatDateTime(item.timestamp)}
+                      />
+                      {item.source ? <span className="mc-next-activity-feed-source">{item.source}</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </NativeCard>
             <NativeCard
               title="Operator posture"
@@ -704,14 +726,22 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
     section,
   ]);
 
+  const headMetrics = useMemo<NativePageMetric[] | undefined>(() => {
+    if (!data) {
+      return undefined;
+    }
+    return buildOpsHeadMetrics(section, data, pendingApprovals);
+  }, [data, pendingApprovals, section]);
+
   return (
     <NativePageFrame
-      icon={section === "costs" ? Wallet : section === "runtime" ? Server : Activity}
-      kicker="Ops"
+      area="ops"
+      kicker={`Ops · ${labelForOpsSection(section)}`}
       title={labelForOpsSection(section)}
       description={descriptionForOpsSection(section)}
       loading={runtime.loading}
       error={runtime.error}
+      metrics={headMetrics}
     >
       {content}
     </NativePageFrame>
@@ -784,6 +814,88 @@ export function labelForOpsSection(section: NonNullable<AppRoute["section"]>) {
       return "Diagnostics";
     default:
       return "Activity";
+  }
+}
+
+export function toneForActivityEvent(eventType: string, eventClass?: string | null): ChipTone {
+  const haystack = `${eventType} ${eventClass ?? ""}`.toLowerCase();
+  if (/error|failed|failure|degraded|critical/.test(haystack)) {
+    return "danger";
+  }
+  if (/approval|review|decision|warn/.test(haystack)) {
+    return "caution";
+  }
+  if (/runtime|daemon|mcp|gateway|schedule/.test(haystack)) {
+    return "accent";
+  }
+  if (/ok|success|complete|ready/.test(haystack)) {
+    return "safe";
+  }
+  return "muted";
+}
+
+export function buildOpsHeadMetrics(
+  section: NonNullable<AppRoute["section"]>,
+  data: NonNullable<ReturnType<typeof useOpsRuntimeSnapshot>["data"]>,
+  pendingApprovals: number,
+): NativePageMetric[] {
+  const daemonValue = data.daemon?.running === undefined ? "unknown" : data.daemon.running ? "running" : "stopped";
+  const pendingValue = String(data.dashboard?.pendingApprovals ?? pendingApprovals);
+  const subagentsValue = String(data.dashboard?.activeSubagents ?? 0);
+  const daySpendValue = formatUsd(data.dashboard?.dailyCostUsd ?? 0);
+
+  switch (section) {
+    case "sessions":
+      return [
+        { label: "Visible", value: String(data.sessions.length || data.dashboard?.sessions.length || 0) },
+        { label: "Active subagents", value: subagentsValue },
+        { label: "Pending approvals", value: pendingValue },
+      ];
+    case "schedules":
+      return [
+        { label: "Jobs", value: String(data.timeline?.scheduler.jobs.length ?? 0) },
+        { label: "Review queue", value: String(data.timeline?.scheduler.reviewQueue.length ?? 0) },
+        { label: "Pending approvals", value: pendingValue },
+      ];
+    case "improvement":
+      return [
+        { label: "Reports", value: String(data.timeline?.improvement.reports.length ?? 0) },
+        { label: "Replay runs", value: String(data.timeline?.improvement.replayRuns.length ?? 0) },
+        { label: "Pending approvals", value: pendingValue },
+      ];
+    case "notifications":
+      return [
+        { label: "Pending approvals", value: pendingValue },
+        { label: "Daemon", value: daemonValue },
+        { label: "Active subagents", value: subagentsValue },
+      ];
+    case "costs":
+      return [
+        { label: "Day spend", value: daySpendValue },
+        { label: "Tracked events", value: String(data.cost?.usageAvailability?.trackedEvents ?? 0) },
+        { label: "Scope", value: data.cost?.scope ?? "day" },
+      ];
+    case "runtime":
+      return [
+        { label: "Daemon", value: daemonValue },
+        { label: "MCP servers", value: String(data.mcpServers.length) },
+        { label: "Backups", value: String(data.backups.length) },
+        { label: "Pending approvals", value: pendingValue },
+      ];
+    case "diagnostics":
+      return [
+        { label: "Hostname", value: data.health?.systemVitals.hostname ?? "Unknown" },
+        { label: "CPU", value: String(data.health?.systemVitals.cpuCount ?? 0) },
+        { label: "Load", value: formatLoadAverage(data.health?.systemVitals.loadAverage ?? []) },
+      ];
+    case "activity":
+    default:
+      return [
+        { label: "Pending approvals", value: pendingValue },
+        { label: "Active subagents", value: subagentsValue },
+        { label: "Day spend", value: daySpendValue },
+        { label: "Daemon", value: daemonValue },
+      ];
   }
 }
 

@@ -1,5 +1,6 @@
 /* eslint-disable no-console */
 import { buildApp } from "./app.js";
+import { performShutdown } from "./shutdown.js";
 import {
   INSECURE_LOCAL_ONLY_OVERRIDE_ENV,
   resolveAllowUnauthNetwork,
@@ -36,19 +37,17 @@ const shutdown = async (signal: string) => {
     return;
   }
   shuttingDown = true;
-  app.log.info({ signal }, "shutting down gateway");
-  const forceExitTimer = setTimeout(() => {
-    console.error("[gateway] graceful shutdown timed out after 10 s — forcing exit");
-    process.exit(1);
-  }, 10_000);
-  forceExitTimer.unref(); // don't keep event loop alive just for this
-
   try {
-    await app.close();
-    clearTimeout(forceExitTimer);
-    process.exitCode = 0;
+    const result = await performShutdown(app, signal, undefined, {
+      onForceExitArmed: () => {
+        console.error("[gateway] graceful shutdown timed out after 10 s — forcing exit");
+        process.exit(1);
+      },
+    });
+    if (result.reached !== "force-exit-armed") {
+      process.exitCode = 0;
+    }
   } catch (error) {
-    clearTimeout(forceExitTimer);
     app.log.error(error, "gateway shutdown failed");
     process.exitCode = 1;
   }

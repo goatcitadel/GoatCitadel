@@ -28,7 +28,8 @@ export type DurableSupportedWorkflowKey =
   | "connector.delivery"
   | "hook.delivery"
   | "memory.maintenance"
-  | "orchestration.plan.execute";
+  | "orchestration.plan.execute"
+  | "curator.tick";
 
 export interface ProactiveTickWorkflowPayload {
   version: "proactive.tick.v1";
@@ -68,6 +69,14 @@ export interface OrchestrationPlanWorkflowPayload {
   orchestrationRunId: string;
   planId: string;
   workspaceId: string;
+  requestedAt: string;
+}
+
+export interface CuratorTickWorkflowPayload {
+  version: "curator.tick.v1";
+  runId: string;
+  triggerMode: "scheduled" | "manual";
+  cycleDays: number;
   requestedAt: string;
 }
 
@@ -183,6 +192,14 @@ export interface DurableDiagnosticsResponse {
     lastMs: number;
     lastObservedAt: string;
     leaseAcquisitionPausedUntil?: string;
+  };
+  lastBootRecovery?: {
+    observedAt: string;
+    resumedCount: number;
+    prunedOrphanCheckpoints: number;
+    prunedAgedCheckpoints: number;
+    finalCheckpointBytes: number;
+    diskBudgetBytes: number;
   };
   generatedAt: string;
 }

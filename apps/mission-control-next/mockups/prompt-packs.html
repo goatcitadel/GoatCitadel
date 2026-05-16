@@ -1,0 +1,618 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Prompt Packs Workbench — Design Review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="./_shared.css" />
+<style>
+  .workbench {
+    display: grid;
+    grid-template-columns: 280px minmax(0, 1fr);
+    min-height: calc(100dvh - 64px);
+  }
+  @media (max-width: 1100px) { .workbench { grid-template-columns: 240px minmax(0, 1fr); } }
+  @media (max-width: 880px)  { .workbench { grid-template-columns: 1fr; } .pack-rail { display: none; } }
+
+  .pack-rail {
+    border-right: 1px solid var(--border-subtle);
+    background: var(--bg-surface-2);
+    padding: 14px 12px;
+    display: grid; gap: 14px; align-content: start;
+    overflow: auto;
+    max-height: calc(100dvh - 64px);
+    position: sticky; top: 40px;
+  }
+  .pack-rail .head { display: grid; gap: 8px; }
+  .pack-search {
+    display: flex; align-items: center; gap: 6px;
+    height: 30px; padding: 0 10px;
+    border-radius: var(--r-xs);
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-surface-1);
+    color: var(--fg-muted);
+    font-size: 12px;
+  }
+  .pack-search input {
+    flex: 1; min-width: 0; border: 0; background: transparent;
+    color: var(--fg-primary); font: 400 12.5px/1 var(--font-sans);
+  }
+  .pack-search input::placeholder { color: var(--fg-muted); }
+  .pack-search input:focus { outline: 0; }
+
+  .pack-item {
+    display: grid; gap: 4px;
+    padding: 9px 10px;
+    border-radius: var(--r-xs);
+    border: 1px solid transparent;
+    cursor: pointer;
+  }
+  .pack-item:hover { background: var(--bg-surface-1); border-color: var(--border-subtle); }
+  .pack-item.active {
+    background: color-mix(in oklab, var(--accent) 14%, var(--bg-surface-1));
+    border-color: color-mix(in oklab, var(--accent) 30%, var(--border-default));
+  }
+  .pack-item .name {
+    font: 600 13px/1.2 var(--font-sans);
+    color: var(--fg-primary);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .pack-item .name svg { width: 13px; height: 13px; color: var(--fg-muted); flex: 0 0 auto; }
+  .pack-item.active .name svg { color: var(--accent); }
+  .pack-item .meta {
+    display: flex; align-items: center; gap: 8px;
+    font: 500 10.5px/1 var(--font-mono);
+    color: var(--fg-muted);
+  }
+  .pack-item .meta .pass {
+    color: color-mix(in oklab, var(--risk-safe) 78%, var(--fg-primary));
+  }
+  .pack-item .meta .fail {
+    color: color-mix(in oklab, var(--risk-danger) 76%, var(--fg-primary));
+  }
+
+  /* Workbench main */
+  .work-main {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    min-width: 0;
+  }
+  .work-head {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 16px; padding: 16px 22px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+    background:
+      linear-gradient(180deg, color-mix(in oklab, var(--accent) 6%, transparent), transparent 70%),
+      var(--bg-app);
+    position: relative;
+  }
+  .work-head::before {
+    content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px;
+    background: linear-gradient(90deg, var(--accent), transparent 60%);
+    opacity: 0.7;
+  }
+  .work-head .copy { display: grid; gap: 4px; min-width: 0; }
+  .work-head .eyebrow {
+    display: inline-flex; align-items: center; gap: 7px;
+    font: 700 10px/1 var(--font-sans);
+    letter-spacing: 0.16em; text-transform: uppercase;
+    color: color-mix(in oklab, var(--accent) 56%, var(--fg-muted));
+  }
+  .work-head .eyebrow .dot {
+    width: 6px; height: 6px; border-radius: 999px; background: var(--accent);
+  }
+  .work-head h1 {
+    margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.02em;
+  }
+  .work-head .sub { font-size: 12.5px; color: var(--fg-secondary); max-width: 60ch; }
+
+  .pack-stats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    padding: 14px 22px 0;
+  }
+  @media (max-width: 1080px) { .pack-stats { grid-template-columns: repeat(2, 1fr); } }
+
+  /* Test grid */
+  .test-bar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 12px 22px;
+  }
+  .test-table {
+    margin: 0 22px 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    overflow: hidden;
+    background: var(--bg-surface-1);
+  }
+  .test-row {
+    display: grid;
+    grid-template-columns: 26px 60px minmax(0, 1.4fr) minmax(120px, 1fr) 110px 110px 90px;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--border-hairline);
+    font-size: 12.5px;
+  }
+  .test-row.head {
+    background: var(--bg-surface-2);
+    color: var(--fg-muted);
+    font: 700 10px/1 var(--font-sans);
+    letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 8px 14px;
+  }
+  .test-row:last-child { border-bottom: 0; }
+  .test-row.selected {
+    background: color-mix(in oklab, var(--accent) 8%, transparent);
+  }
+  .test-row input[type=checkbox] { accent-color: var(--accent); }
+  .test-row .id { font: 500 11px/1 var(--font-mono); color: var(--fg-muted); }
+  .test-row .name { font-weight: 600; }
+  .test-row .name .sub { display: block; font: 400 11.5px/1.35 var(--font-sans); color: var(--fg-muted); margin-top: 2px; }
+  .test-row .score {
+    font: 600 12px/1 var(--font-mono);
+    padding: 3px 7px; border-radius: 999px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-surface-2);
+    color: var(--fg-secondary);
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .test-row .score.pass { color: color-mix(in oklab, var(--risk-safe) 78%, var(--fg-primary)); border-color: color-mix(in oklab, var(--risk-safe) 26%, var(--border-default)); }
+  .test-row .score.fail { color: color-mix(in oklab, var(--risk-danger) 78%, var(--fg-primary)); border-color: color-mix(in oklab, var(--risk-danger) 28%, var(--border-default)); }
+  .test-row .score.review { color: color-mix(in oklab, var(--risk-caution) 78%, var(--fg-primary)); border-color: color-mix(in oklab, var(--risk-caution) 28%, var(--border-default)); }
+
+  /* Detail */
+  .detail {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+    gap: 14px;
+    padding: 0 22px 22px;
+  }
+  @media (max-width: 1080px) { .detail { grid-template-columns: 1fr; } }
+  .detail-panel {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    background: var(--bg-surface-1);
+    overflow: hidden;
+    display: grid;
+    grid-template-rows: auto 1fr;
+  }
+  .detail-panel-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-surface-2);
+  }
+  .detail-panel-head .label {
+    font: 700 10px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase;
+    color: color-mix(in oklab, var(--accent) 56%, var(--fg-muted));
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .detail-panel-head .label .dot { width: 5px; height: 5px; border-radius: 999px; background: var(--accent); }
+
+  .editor {
+    font: 500 12.5px/1.6 var(--font-mono);
+    padding: 12px 14px;
+    background: var(--bg-inset);
+    color: var(--fg-primary);
+    overflow: auto;
+    min-height: 260px;
+  }
+  .editor .ln { color: var(--fg-faint); padding-right: 12px; user-select: none; }
+  .editor .kw { color: color-mix(in oklab, var(--area-cowork) 70%, var(--fg-primary)); }
+  .editor .var { color: color-mix(in oklab, var(--accent) 78%, var(--fg-primary)); background: color-mix(in oklab, var(--accent) 14%, transparent); padding: 0 4px; border-radius: 3px; }
+  .editor .str { color: color-mix(in oklab, var(--area-code) 78%, var(--fg-primary)); }
+  .editor .cm { color: var(--fg-faint); }
+
+  .output {
+    padding: 12px 14px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--fg-primary);
+  }
+  .output p { margin: 0 0 8px; }
+  .output .diff-add { background: color-mix(in oklab, var(--risk-safe) 12%, transparent); padding: 0 4px; border-radius: 3px; }
+  .output .diff-rm  { background: color-mix(in oklab, var(--risk-danger) 14%, transparent); padding: 0 4px; border-radius: 3px; text-decoration: line-through; }
+
+  .assess {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+  .assess-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 12px;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-xs);
+    background: var(--bg-surface-2);
+  }
+  .assess-row .label {
+    font: 600 12px/1.3 var(--font-sans);
+  }
+  .assess-row .label .why {
+    display: block; font: 400 11.5px/1.4 var(--font-sans); color: var(--fg-muted); margin-top: 2px;
+  }
+  .threshold-bar {
+    width: 100%;
+    height: 8px; border-radius: 999px;
+    background: var(--bg-surface-3);
+    overflow: hidden;
+    margin: 6px 14px 0;
+    position: relative;
+  }
+  .threshold-bar .fill {
+    height: 100%; background: linear-gradient(90deg, var(--risk-danger), var(--risk-caution) 60%, var(--risk-safe));
+  }
+  .threshold-bar .marker {
+    position: absolute; top: -3px; bottom: -3px; width: 2px;
+    background: var(--brand); box-shadow: 0 0 6px var(--brand);
+  }
+</style>
+</head>
+<body class="area-library">
+
+<header class="topbar">
+  <div class="brand-lockup">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <div class="brand-stack">
+      <span class="eyebrow">GoatCitadel</span>
+      <span class="name">Prompt Packs</span>
+    </div>
+  </div>
+  <nav class="primary-nav">
+    <a href="./threaded-surface.html">Chat</a>
+    <a href="./projects.html">Projects</a>
+    <a href="./prompt-packs.html" class="active">Library</a>
+    <a href="./runtime.html">Ops</a>
+    <a href="./settings.html">Settings</a>
+  </nav>
+  <span class="spacer"></span>
+  <button class="command-search" type="button">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <span class="search-q">Find pack, test, or routing rule…</span>
+    <kbd>⌘K</kbd>
+  </button>
+  <div class="topbar-right">
+    <button class="btn btn-secondary">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>
+      Import
+    </button>
+    <button class="btn btn-primary">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 9-14 9V3z"/></svg>
+      Run selected
+    </button>
+  </div>
+</header>
+
+<main class="workbench">
+
+  <!-- Pack rail -->
+  <aside class="pack-rail">
+    <div class="head">
+      <div class="row between">
+        <div class="eyebrow" style="color: color-mix(in oklab, var(--accent) 60%, var(--fg-muted))">Prompt Packs</div>
+        <button class="icon-btn" title="New pack"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></button>
+      </div>
+      <div class="pack-search">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input type="text" placeholder="Search packs…" />
+      </div>
+    </div>
+
+    <div class="stack" style="gap:4px">
+      <div class="pack-item active">
+        <span class="name">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+          Routing — model fallback
+        </span>
+        <span class="meta">
+          <span>v0.7 · 18 tests</span>
+          <span class="pass">14 pass</span>
+          <span class="fail">3 fail</span>
+        </span>
+      </div>
+      <div class="pack-item">
+        <span class="name"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>Approvals — risk classifier</span>
+        <span class="meta"><span>v1.2 · 24 tests</span><span class="pass">22 pass</span><span class="fail">2 fail</span></span>
+      </div>
+      <div class="pack-item">
+        <span class="name"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>Memory — namespace router</span>
+        <span class="meta"><span>v0.3 · 9 tests</span><span class="pass">9 pass</span></span>
+      </div>
+      <div class="pack-item">
+        <span class="name"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>Code — refactor‑safety</span>
+        <span class="meta"><span>v2.0 · 32 tests</span><span class="pass">28 pass</span><span class="fail">4 fail</span></span>
+      </div>
+      <div class="pack-item">
+        <span class="name"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>Tone — internal comms</span>
+        <span class="meta"><span>v0.5 · 12 tests</span><span class="pass">10 pass</span></span>
+      </div>
+      <div class="pack-item">
+        <span class="name"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>Cost — usage justification</span>
+        <span class="meta"><span>v0.1 · 6 tests · draft</span></span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Workbench main -->
+  <section class="work-main">
+
+    <header class="work-head">
+      <div class="copy">
+        <span class="eyebrow"><span class="dot"></span>Library · Prompt Packs</span>
+        <h1>Routing — model fallback <span class="muted mono" style="font-size:13px; font-weight:500; letter-spacing:0">v0.7</span></h1>
+        <p class="sub">Author, benchmark, and review the routing pack that governs when a request falls from claude‑opus → claude‑sonnet → claude‑haiku. Pass threshold 80%.</p>
+      </div>
+      <div class="row" data-critique="Header carries the two numbers reviewers actually argue about — pass threshold and current pass rate — instead of leaving them buried inside the assessment tab.">
+        <div class="metric" style="padding:8px 12px">
+          <span class="label">Pass rate</span>
+          <span class="value mono" style="font-size:18px; color: color-mix(in oklab, var(--risk-safe) 70%, var(--fg-primary))">77.8%</span>
+          <span class="delta down">below threshold 80%</span>
+        </div>
+        <button class="btn btn-ghost">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 10-5 5-5-5"/><path d="M12 15V3"/></svg>
+          Export
+        </button>
+        <button class="btn btn-secondary">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 12V4l4 4"/></svg>
+          Re‑run failures
+        </button>
+      </div>
+    </header>
+
+    <!-- Stats -->
+    <div class="pack-stats">
+      <div class="metric">
+        <span class="label">Tests</span>
+        <span class="value mono">18</span>
+        <span class="delta">14 pass · 3 fail · 1 review</span>
+      </div>
+      <div class="metric">
+        <span class="label">Avg latency</span>
+        <span class="value mono">1.42s</span>
+        <span class="delta up">−180ms vs v0.6</span>
+      </div>
+      <div class="metric">
+        <span class="label">Cost per run</span>
+        <span class="value mono">$0.092</span>
+        <span class="delta">opus 64% · sonnet 28% · haiku 8%</span>
+      </div>
+      <div class="metric">
+        <span class="label">Last benchmark</span>
+        <span class="value mono" style="font-size:14px">2026‑05‑14 18:11</span>
+        <span class="delta">benchmark‑b14</span>
+      </div>
+    </div>
+
+    <!-- Test bar -->
+    <div class="test-bar" data-critique="Filter chips + batch selector + single primary action. Skipping the 6+ icon buttons the live app has — bench is the verb, everything else is a menu.">
+      <div class="tabs" data-tabs>
+        <button class="active">All <span class="count">18</span></button>
+        <button>Pass <span class="count">14</span></button>
+        <button>Fail <span class="count">3</span></button>
+        <button>Review <span class="count">1</span></button>
+      </div>
+      <span class="muted" style="font-size:12px">3 selected · TEST‑03, TEST‑06, TEST‑10</span>
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn btn-ghost">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 6 3 3 3-3"/><path d="M6 9V3"/><path d="m15 6 3 3 3-3"/><path d="M18 9V3"/></svg>
+        Sort: status ▾
+      </button>
+      <button class="btn btn-secondary">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 12 2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>
+        Auto‑score selected
+      </button>
+      <button class="btn btn-primary">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 9-14 9V3z"/></svg>
+        Run 3 selected
+      </button>
+    </div>
+
+    <!-- Test grid -->
+    <div class="test-table">
+      <div class="test-row head">
+        <span></span>
+        <span>ID</span>
+        <span>Test</span>
+        <span>Expected</span>
+        <span>Score</span>
+        <span>Latency</span>
+        <span></span>
+      </div>
+      <div class="test-row">
+        <input type="checkbox" checked />
+        <span class="id">TEST‑01</span>
+        <span class="name">Opus available, no fallback<span class="sub">Healthy primary path; should never drop to sonnet.</span></span>
+        <span class="muted">route=opus</span>
+        <span><span class="score pass">PASS · 1.0</span></span>
+        <span class="mono muted">0.91s</span>
+        <button class="icon-btn" title="Open"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg></button>
+      </div>
+      <div class="test-row">
+        <input type="checkbox" />
+        <span class="id">TEST‑02</span>
+        <span class="name">Opus 429 once, retry succeeds<span class="sub">Transient rate‑limit; expected: stay on opus.</span></span>
+        <span class="muted">route=opus retry=1</span>
+        <span><span class="score pass">PASS · 0.95</span></span>
+        <span class="mono muted">1.34s</span>
+        <button class="icon-btn"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg></button>
+      </div>
+      <div class="test-row selected">
+        <input type="checkbox" checked />
+        <span class="id">TEST‑03</span>
+        <span class="name">Opus down for 90s · drop to sonnet<span class="sub">Watchdog tripped; should fall to sonnet, not haiku.</span></span>
+        <span class="muted">route=sonnet</span>
+        <span><span class="score fail">FAIL · 0.41</span></span>
+        <span class="mono muted">2.12s</span>
+        <button class="icon-btn"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg></button>
+      </div>
+      <div class="test-row">
+        <input type="checkbox" />
+        <span class="id">TEST‑04</span>
+        <span class="name">Memory route, post‑reshard<span class="sub">Indexing penalty applied to opus; expect sonnet.</span></span>
+        <span class="muted">route=sonnet</span>
+        <span><span class="score pass">PASS · 0.87</span></span>
+        <span class="mono muted">1.48s</span>
+        <button class="icon-btn"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg></button>
+      </div>
+      <div class="test-row selected">
+        <input type="checkbox" checked />
+        <span class="id">TEST‑06</span>
+        <span class="name">Both opus &amp; sonnet 503 · haiku<span class="sub">Full outage path. Latency budget 3s.</span></span>
+        <span class="muted">route=haiku</span>
+        <span><span class="score review">REVIEW · 0.78</span></span>
+        <span class="mono muted">2.97s</span>
+        <button class="icon-btn"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg></button>
+      </div>
+      <div class="test-row">
+        <input type="checkbox" />
+        <span class="id">TEST‑07</span>
+        <span class="name">Cost ceiling reached mid‑turn<span class="sub">Should refuse cleanly, not silently truncate.</span></span>
+        <span class="muted">refuse</span>
+        <span><span class="score fail">FAIL · 0.22</span></span>
+        <span class="mono muted">0.81s</span>
+        <button class="icon-btn"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg></button>
+      </div>
+      <div class="test-row selected">
+        <input type="checkbox" checked />
+        <span class="id">TEST‑10</span>
+        <span class="name">Tool‑call budget exhausted<span class="sub">After 8 tool calls, force a summarise turn.</span></span>
+        <span class="muted">summarise</span>
+        <span><span class="score pass">PASS · 0.93</span></span>
+        <span class="mono muted">1.16s</span>
+        <button class="icon-btn"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg></button>
+      </div>
+    </div>
+
+    <!-- Detail (selected: TEST-03) -->
+    <div class="detail">
+
+      <!-- Prompt editor -->
+      <article class="detail-panel" data-critique="Prompt editor shows variables as inline highlighted chips so reviewers instantly see what the test is parameterising — no more decoding curly braces in flat mono text.">
+        <header class="detail-panel-head">
+          <span class="label"><span class="dot"></span>Prompt · TEST‑03</span>
+          <div class="tabs" data-tabs>
+            <button class="active">Prompt</button>
+            <button>Output</button>
+            <button>Diff</button>
+          </div>
+        </header>
+        <pre class="editor"><span class="ln">  1</span><span class="cm"># role: routing‑judge / fallback policy</span>
+<span class="ln">  2</span>
+<span class="ln">  3</span><span class="kw">Given</span> a request to <span class="var">{{primary_model}}</span> that has been failing for
+<span class="ln">  4</span><span class="var">{{outage_seconds}}</span> seconds with status codes <span class="var">{{status_codes}}</span>,
+<span class="ln">  5</span><span class="kw">decide</span> which model the gateway should fall back to.
+<span class="ln">  6</span>
+<span class="ln">  7</span><span class="kw">Constraints:</span>
+<span class="ln">  8</span>  · Latency budget: <span class="var">{{latency_budget_ms}}</span>ms
+<span class="ln">  9</span>  · Quality floor: <span class="str">"reasoning OK, code OK"</span>
+<span class="ln"> 10</span>  · Cost ceiling per turn: <span class="var">{{cost_ceiling_usd}}</span> USD
+<span class="ln"> 11</span>
+<span class="ln"> 12</span><span class="kw">Return</span> JSON: <span class="str">{ "route": &lt;model_id&gt;, "reason": &lt;30‑word string&gt; }</span>
+<span class="ln"> 13</span>
+<span class="ln"> 14</span><span class="cm"># scenario: opus down 90s · sonnet healthy · haiku healthy</span>
+<span class="ln"> 15</span><span class="var">primary_model</span> = <span class="str">"claude-opus-4-7"</span>
+<span class="ln"> 16</span><span class="var">outage_seconds</span> = 90
+<span class="ln"> 17</span><span class="var">status_codes</span> = [503, 503, 503]
+<span class="ln"> 18</span><span class="var">latency_budget_ms</span> = 3000
+<span class="ln"> 19</span><span class="var">cost_ceiling_usd</span> = 0.50</pre>
+      </article>
+
+      <!-- Assessment + output -->
+      <div class="stack" style="gap:14px">
+
+        <article class="detail-panel">
+          <header class="detail-panel-head">
+            <span class="label"><span class="dot"></span>Output · run b14‑31</span>
+            <span class="chip-3 danger">
+              <span class="lh"><span class="dot"></span>fail</span>
+              <span class="mid">expected sonnet · got haiku</span>
+              <span class="rh">b14</span>
+            </span>
+          </header>
+          <div class="output">
+            <p><strong>Model returned:</strong></p>
+            <pre style="font:500 12px/1.5 var(--font-mono); padding:10px 12px; background:var(--bg-inset); border:1px solid var(--border-subtle); border-radius:6px; margin:0">{
+  "route": <span class="diff-rm">"claude-haiku-4-5"</span> <span class="diff-add">// expected: "claude-sonnet-4-6"</span>,
+  "reason": "primary unreachable &gt; 60s, prefer fastest healthy route within budget"
+}</pre>
+            <p style="margin-top:10px"><strong>Why this matters:</strong> reasoning quality drop is the failure mode — haiku misclassified two of the three follow‑up risk decisions during the same outage in production logs.</p>
+          </div>
+        </article>
+
+        <article class="detail-panel" data-critique="Assessment is structured criteria, not free‑text. Each row shows what the test cares about, the reviewer's verdict, and a hint at how the score was reached.">
+          <header class="detail-panel-head">
+            <span class="label"><span class="dot"></span>Assessment</span>
+            <div class="row" style="gap:6px">
+              <button class="btn btn-ghost">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>
+                Re‑score
+              </button>
+              <button class="btn btn-secondary">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
+                Promote criterion
+              </button>
+            </div>
+          </header>
+          <div class="assess">
+            <div class="assess-row">
+              <div class="label">Route correctness
+                <span class="why">Must equal "claude-sonnet-4-6" given a 90s outage and healthy sonnet.</span>
+              </div>
+              <span class="chip danger"><span class="dot"></span>Fail · 0/40</span>
+            </div>
+            <div class="assess-row">
+              <div class="label">JSON shape
+                <span class="why">Response parses, contains route + reason, no extra keys.</span>
+              </div>
+              <span class="chip success"><span class="dot"></span>Pass · 25/25</span>
+            </div>
+            <div class="assess-row">
+              <div class="label">Reason cogency
+                <span class="why">Auto‑scored against reference rubric; LLM grader weighted 0.6×.</span>
+              </div>
+              <span class="chip warning"><span class="dot"></span>Partial · 14/20</span>
+            </div>
+            <div class="assess-row">
+              <div class="label">Latency budget
+                <span class="why">2.12s of 3.0s — under budget.</span>
+              </div>
+              <span class="chip success"><span class="dot"></span>Pass · 15/15</span>
+            </div>
+            <div class="threshold-bar" data-critique="The gold line is the pass threshold (80%). Reviewers see at a glance whether a single test is dragging the pack under.">
+              <div class="fill" style="width:54%"></div>
+              <div class="marker" style="left:80%"></div>
+            </div>
+            <div class="row between" style="font-size:11px; color:var(--fg-muted); padding:0 14px">
+              <span class="mono">Score 54 / 100</span>
+              <span>Pass threshold 80%</span>
+            </div>
+          </div>
+        </article>
+
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="status-strip">
+  <span class="ok">● benchmark b14 healthy</span>
+  <span>routing pack · v0.7 · 18 tests</span>
+  <span class="accent">3 selected · ready to run</span>
+  <span>auto‑score: claude‑sonnet‑4‑6</span>
+  <span style="margin-left:auto" class="mono">benchmark/b14 · 2026‑05‑14 18:11Z</span>
+</div>
+
+<button class="critique-toggle" data-critique-toggle type="button">
+  <span class="dot"></span>
+  <span data-critique-label>Critique on</span>
+</button>
+
+<script src="./_shared.js"></script>
+</body>
+</html>

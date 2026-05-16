@@ -46,7 +46,7 @@ vi.mock("@goatcitadel/contracts", () => ({
       providerId: "moonshot",
       label: "Moonshot (Kimi API)",
       baseUrl: "https://api.moonshot.ai/v1",
-      defaultModel: "kimi-k2.5",
+      defaultModel: "kimi-k2.6",
     },
   ],
 }));

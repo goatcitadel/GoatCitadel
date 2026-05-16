@@ -92,52 +92,113 @@ export async function consumePreparedAgentChatTurn(
   prepared: PreparedAgentChatTurn,
   threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
   resolvedOrchestration?: PreparedChatExecutionPlanResolution,
+  options?: { abortSignal?: AbortSignal },
 ): Promise<ChatSendMessageResponse> {
   let assistantMessage: ChatMessageRecord | undefined;
   let trace: ChatTurnTraceRecord | undefined;
   let citations: ChatCitationRecord[] = [];
   const useDurableExecution = shouldUseDurableExecution(host, prepared, input);
+  let launchedDurableRunId: string | undefined;
   if (useDurableExecution) {
-    launchPreparedAgentChatTurnStream(host, sessionId, input, prepared, threadEventType, resolvedOrchestration);
+    launchedDurableRunId = launchPreparedAgentChatTurnStream(
+      host,
+      sessionId,
+      input,
+      prepared,
+      threadEventType,
+      resolvedOrchestration,
+    );
   }
-  const source: AsyncGenerator<InspectableChatStreamChunk> = useDurableExecution
-    ? host.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true })
-    : chatTurnStreamService.streamPreparedAgentChatTurn(
-        host,
-        sessionId,
-        input,
-        prepared,
-        threadEventType,
-        resolvedOrchestration,
-      );
-  for await (const chunk of source) {
-    if (chunk.type === "message_done") {
-      assistantMessage = {
-        messageId: chunk.messageId,
-        sessionId,
-        role: "assistant",
-        actorType: "agent",
-        actorId: "assistant",
-        content: chunk.content,
-        timestamp: new Date().toISOString(),
-      };
-    } else if (chunk.type === "trace_update") {
-      trace = chunk.trace;
-    } else if (chunk.type === "citation") {
-      citations = dedupeChatCitations([...citations, chunk.citation]);
+  // Wire the external abort signal to both the in-process turn controller
+  // (used by the inline orchestration path that registers via
+  // `beginActiveChatTurnExecution`) and, when running durable, the
+  // durable-kernel cancel API. For durable runs the worker may execute on
+  // another node; calling `cancelDurableChatRun` is a soft cancel that
+  // tells the kernel to stop, while aborting the local controller lets
+  // the parent's await-loop bail out promptly via `ChatTurnCancelledError`.
+  const detachAbortListener = bindConsumeAbortToTurn(host, prepared.turnId, launchedDurableRunId, options?.abortSignal);
+  try {
+    const source: AsyncGenerator<InspectableChatStreamChunk> = useDurableExecution
+      ? host.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true })
+      : chatTurnStreamService.streamPreparedAgentChatTurn(
+          host,
+          sessionId,
+          input,
+          prepared,
+          threadEventType,
+          resolvedOrchestration,
+        );
+    for await (const chunk of source) {
+      if (chunk.type === "message_done") {
+        assistantMessage = {
+          messageId: chunk.messageId,
+          sessionId,
+          role: "assistant",
+          actorType: "agent",
+          actorId: "assistant",
+          content: chunk.content,
+          timestamp: new Date().toISOString(),
+        };
+      } else if (chunk.type === "trace_update") {
+        trace = chunk.trace;
+      } else if (chunk.type === "citation") {
+        citations = dedupeChatCitations([...citations, chunk.citation]);
+      }
     }
+    const dedupedTraceCitations = dedupeChatCitations(trace?.citations ?? []);
+    return {
+      sessionId,
+      userMessage: prepared.userMessage,
+      assistantMessage,
+      transport: "llm",
+      model: trace?.model ?? input.model ?? prepared.prefs.model,
+      turnId: prepared.turnId,
+      trace: trace ? { ...trace, citations: dedupedTraceCitations } : trace,
+      citations: dedupeChatCitations(citations),
+      routing: trace?.routing,
+    };
+  } finally {
+    detachAbortListener?.();
   }
-  const dedupedTraceCitations = dedupeChatCitations(trace?.citations ?? []);
-  return {
-    sessionId,
-    userMessage: prepared.userMessage,
-    assistantMessage,
-    transport: "llm",
-    model: trace?.model ?? input.model ?? prepared.prefs.model,
-    turnId: prepared.turnId,
-    trace: trace ? { ...trace, citations: dedupedTraceCitations } : trace,
-    citations: dedupeChatCitations(citations),
-    routing: trace?.routing,
+}
+
+function bindConsumeAbortToTurn(
+  host: ChatTurnDispatchHost,
+  turnId: string,
+  durableRunId: string | undefined,
+  externalSignal: AbortSignal | undefined,
+): (() => void) | undefined {
+  if (!externalSignal) {
+    return undefined;
+  }
+  const fire = (): void => {
+    // Soft-cancel the durable kernel run first so the worker stops
+    // promptly; the failure handler in `executePreparedAgentChatTurnBackground`
+    // then settles the trace. Cancellation faults are swallowed because the
+    // parent's local controller abort below still ensures this caller
+    // returns control to its parent.
+    if (durableRunId && host.cancelDurableChatRun) {
+      try {
+        host.cancelDurableChatRun(durableRunId, "abort_signal");
+      } catch {
+        // best effort: cancel API may reject if the run already terminated
+      }
+    }
+    // Abort the in-process controller registered by `beginActiveChatTurnExecution`
+    // so `streamPreparedAgentChatTurn` and the orchestration's nested calls
+    // observe the abort and bail out via `ChatTurnCancelledError`.
+    const active = host.getActiveChatTurnExecution(turnId);
+    if (active && !active.controller.signal.aborted) {
+      active.controller.abort();
+    }
+  };
+  if (externalSignal.aborted) {
+    fire();
+    return undefined;
+  }
+  externalSignal.addEventListener("abort", fire);
+  return () => {
+    externalSignal.removeEventListener("abort", fire);
   };
 }
 
@@ -273,7 +334,7 @@ export function launchPreparedAgentChatTurnStream(
   prepared: PreparedAgentChatTurn,
   threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
   resolvedOrchestration?: PreparedChatExecutionPlanResolution,
-): void {
+): string | undefined {
   const durableRequested = shouldUseDurableExecution(host, prepared, input);
   const durableRun = host.beginDurableChatRun(prepared, input, threadEventType);
   host.registerActiveChatTurnStream(sessionId, prepared.turnId, durableRun?.runId);
@@ -297,11 +358,11 @@ export function launchPreparedAgentChatTurnStream(
     },
   });
   if (durableRun) {
-    return;
+    return durableRun.runId;
   }
   if (durableRequested) {
     persistDurableUnavailableFailure(host, sessionId, prepared);
-    return;
+    return undefined;
   }
   const task = executePreparedAgentChatTurnBackground(
     host,
@@ -314,6 +375,7 @@ export function launchPreparedAgentChatTurnStream(
   );
   task.finally(() => host.backgroundTasks.delete(task));
   host.backgroundTasks.add(task);
+  return undefined;
 }
 
 function persistDurableUnavailableFailure(
@@ -379,6 +441,7 @@ export async function sendPreparedIntegrationChatTurn(
   prepared: PreparedAgentChatTurn,
   binding: ChatSessionBindingRecord,
   threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
+  options?: { abortSignal?: AbortSignal },
 ): Promise<ChatSendMessageResponse> {
   const startedAt = new Date().toISOString();
   host.storage.chatTurnTraces.create({
@@ -416,6 +479,7 @@ export async function sendPreparedIntegrationChatTurn(
         message: prepared.content,
         sessionId,
         agentId: "operator",
+        signal: options?.abortSignal,
       }),
     );
     const assistantContent = `Delivered via integration ${binding.connectionId} to ${binding.target}.`;

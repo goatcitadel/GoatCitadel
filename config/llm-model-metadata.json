@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "entries": {
+    "openai-codex/*": { "contextWindow": 272000, "outputTokenLimit": 32000 },
+    "openai/chat-latest": { "contextWindow": 128000, "outputTokenLimit": 16000 },
+    "openai/gpt-5.4": { "contextWindow": 400000, "outputTokenLimit": 32000 },
+    "openai/gpt-5.4-mini": { "contextWindow": 400000, "outputTokenLimit": 32000 },
+    "openai/gpt-5.5": { "contextWindow": 400000, "outputTokenLimit": 32000 },
+    "anthropic/claude-opus-4-7": { "contextWindow": 1000000, "outputTokenLimit": 32000 },
+    "anthropic/claude-sonnet-4-6": { "contextWindow": 1000000, "outputTokenLimit": 32000 },
+    "anthropic/claude-haiku-4-5": { "contextWindow": 400000, "outputTokenLimit": 16000 },
+    "claude-code/claude-sonnet-4-6": { "contextWindow": 1000000, "outputTokenLimit": 32000 },
+    "claude-code/claude-opus-4-7": { "contextWindow": 1000000, "outputTokenLimit": 32000 },
+    "xai/grok-4.3": { "contextWindow": 1000000, "outputTokenLimit": 32000, "thinking": "off" },
+    "xai/*": { "contextWindow": 256000, "outputTokenLimit": 16000 },
+    "openrouter/deepseek/deepseek-v4-pro": { "contextWindow": 128000, "outputTokenLimit": 32000 },
+    "openrouter/anthropic/claude-opus-4-7": { "contextWindow": 1000000, "outputTokenLimit": 32000 },
+    "deepseek/deepseek-v4-pro": { "contextWindow": 128000, "outputTokenLimit": 32000 },
+    "deepseek/deepseek-v4-flash": { "contextWindow": 128000, "outputTokenLimit": 16000 },
+    "moonshot/kimi-k2.6": { "contextWindow": 256000, "outputTokenLimit": 32000 },
+    "moonshot/kimi-k2.5": { "contextWindow": 256000, "outputTokenLimit": 32000 },
+    "google/models/gemini-2.5-pro": { "contextWindow": 2000000, "outputTokenLimit": 8192 },
+    "google/models/gemini-2.5-flash": { "contextWindow": 1000000, "outputTokenLimit": 8192 },
+    "mistral/*": { "contextWindow": 128000, "outputTokenLimit": 16000 },
+    "glm/*": { "contextWindow": 128000, "outputTokenLimit": 16000 },
+    "perplexity/*": { "contextWindow": 128000, "outputTokenLimit": 8192 },
+    "vercel/*": { "contextWindow": 128000, "outputTokenLimit": 16000 },
+    "minimax/*": { "contextWindow": 256000, "outputTokenLimit": 16000 }
+  }
+}

@@ -17,6 +17,7 @@ describe("TUI helper edge decisions loop 23", () => {
       "tools",
       "tasks",
       "skills",
+      "curator",
       "integrations",
       "mesh",
       "npu",
