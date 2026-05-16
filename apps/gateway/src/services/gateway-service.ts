@@ -390,6 +390,7 @@ import * as chatTurnPrepService from "./chat-turn-prep-service.js";
 import * as chatTurnTraceHydration from "./chat-turn-trace-hydration.js";
 import * as chatTurnUserMessage from "./chat-turn-user-message.js";
 import { ChatDelegationService, type ChatDelegationProgressCallbacks } from "./chat-delegation-service.js";
+import { ChatSteerService } from "./chat-steer-service.js";
 import * as chatTurnStreamService from "./chat-turn-stream-service.js";
 import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import { createChatTurnRuntimeHost, type ChatTurnRuntimeHost } from "./chat-turn-runtime-host-composition.js";
@@ -611,6 +612,7 @@ export class GatewayService {
   private readonly approvalRuntime: ApprovalRuntimeService;
   private readonly chatTurnRuntime: ChatTurnRuntimeService;
   private readonly chatDelegationService: ChatDelegationService;
+  public readonly steerService: ChatSteerService;
   private readonly toolInvocationCoordinator: ToolInvocationCoordinatorService;
   private readonly runtimeLifecycleReadService: RuntimeLifecycleReadService;
   private readonly chatLearnedMemoryService: ChatLearnedMemoryService;
@@ -1018,6 +1020,7 @@ export class GatewayService {
       enqueueApprovalRemoteTokenDelivery: (approval, connector, tokenRecord) =>
         this.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord),
     });
+    this.steerService = new ChatSteerService();
     this.chatTurnRuntime = new ChatTurnRuntimeService(this.buildChatTurnRuntimeHost());
     this.orchestrationPhaseExecutionService = new OrchestrationPhaseExecutionService({
       rootDir: this.config.rootDir,
@@ -1392,6 +1395,7 @@ export class GatewayService {
       scheduleChatMemoryContextPrewarm: (input) => this.scheduleChatMemoryContextPrewarm(input),
       scheduleMemoryMaintenancePostTurnEvaluation: (sessionId, parentTurnId) =>
         this.scheduleMemoryMaintenancePostTurnEvaluation(sessionId, parentTurnId),
+      steerService: this.steerService,
       streamPersistedChatTurnEvents: (sessionId, turnId, options) =>
         this.streamPersistedChatTurnEvents(sessionId, turnId, options),
       triggerChatSessionProactive: (sessionId, input) => this.triggerChatSessionProactive(sessionId, input),
@@ -1437,6 +1441,7 @@ export class GatewayService {
       storage: this.storage,
       backgroundTasks: this.backgroundTasks,
       turnRuntime: this.turnRuntime,
+      steerService: this.steerService,
       resolvePreparedTurnOrchestration: (prepared) => this.resolvePreparedTurnOrchestration(prepared),
       createChatCompletion: (request) => this.createChatCompletion(request),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),

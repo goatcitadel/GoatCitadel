@@ -54,6 +54,7 @@ import type {
   ChatTurnActiveExecutionControl,
   ChatTurnMemorySideEffects,
   ChatTurnRealtimeEmitter,
+  ChatTurnSteerCollaborator,
   ChatTurnTranscriptIngress,
 } from "./chat-turn-runtime-collaborators.js";
 import { PROMPT_LAB_LOCAL_FILE_TOOL_NAMES } from "./chat-tool-families.js";
@@ -73,6 +74,7 @@ export interface ChatTurnStreamHost
     ChatTurnActiveExecutionControl,
     ChatTurnMemorySideEffects,
     ChatTurnRealtimeEmitter,
+    ChatTurnSteerCollaborator,
     ChatTurnTranscriptIngress {
   readonly storage: ChatTurnStreamStorage;
   readonly turnRuntime: Pick<TurnRuntime, "runStream">;
@@ -133,6 +135,50 @@ export interface ChatTurnStreamHost
     capabilitySuggestions: ChatCapabilityUpgradeSuggestion[];
     trace: ChatTurnTraceRecord;
   }): ChatSpecialistCandidateSuggestionRecord[];
+}
+
+/**
+ * Build the user-role chat messages that should be appended to the next LLM call so the
+ * model sees the operator's mid-turn steers. Returns an empty array when no steers are
+ * pending. Drains the steer queue as a side effect.
+ */
+export function drainSteerMessagesForLlm(
+  steerService: ChatTurnStreamHost["steerService"],
+  input: { sessionId: string; turnId: string },
+): Array<{ role: "user"; content: string }> {
+  const drained = steerService.drainPending({ sessionId: input.sessionId, turnId: input.turnId });
+  return drained.map((item) => ({
+    role: "user" as const,
+    content: `[Steer] ${item.instruction}`,
+  }));
+}
+
+export interface StreamWithSteerDrainInput {
+  host: Pick<ChatTurnStreamHost, "steerService" | "createChatCompletion">;
+  sessionId: string;
+  turnId: string;
+  request: ChatCompletionRequest;
+}
+
+/**
+ * Wrap a single createChatCompletion call so any pending /steer instructions are
+ * drained and appended to the request's messages before delegating to the underlying
+ * completion. Used by orchestration so each step "sees" mid-turn nudges, and exposed
+ * separately for focused tests.
+ */
+export async function streamWithSteerDrain(input: StreamWithSteerDrainInput): Promise<ChatCompletionResponse> {
+  const steerMessages = drainSteerMessagesForLlm(input.host.steerService, {
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+  });
+  if (steerMessages.length === 0) {
+    return input.host.createChatCompletion(input.request);
+  }
+  const composed: ChatCompletionRequest = {
+    ...input.request,
+    messages: [...input.request.messages, ...steerMessages],
+  };
+  return input.host.createChatCompletion(composed);
 }
 
 export function collectOrchestrationToolRuns(host: ChatTurnStreamHost, runId: string): ChatToolRunRecord[] {
@@ -308,11 +354,41 @@ export async function executePreparedModeOrchestration(
     task: orchestration.routerInput.task,
     plan: orchestration.orchestrationPlan,
     callbacks: {
-      createChatCompletion: (request) =>
-        host.createChatCompletion({
-          ...request,
+      createChatCompletion: async (request) => {
+        const orchestrationDrainedSteers = host.steerService.drainPending({
+          sessionId: prepared.session.sessionId,
+          turnId: prepared.turnId,
+        });
+        for (const steerItem of orchestrationDrainedSteers) {
+          await host.ingestEvent(randomUUID(), {
+            eventId: randomUUID(),
+            route: prepared.route,
+            actor: { type: "user", id: "operator" },
+            message: {
+              role: "user",
+              content: steerItem.instruction,
+              steered: true,
+            },
+          });
+        }
+        const composed =
+          orchestrationDrainedSteers.length > 0
+            ? {
+                ...request,
+                messages: [
+                  ...request.messages,
+                  ...orchestrationDrainedSteers.map((item) => ({
+                    role: "user" as const,
+                    content: `[Steer] ${item.instruction}`,
+                  })),
+                ],
+              }
+            : request;
+        return host.createChatCompletion({
+          ...composed,
           signal,
-        }),
+        });
+      },
       executeDelegatedStep: async ({ task, plan, priorSteps, step, stepIndex }) =>
         executeDelegatedPlanStep(host, prepared, {
           task,
@@ -788,6 +864,7 @@ export async function* streamPreparedAgentChatTurn(
   const turnId = prepared.turnId;
   const assistantMessageId = prepared.assistantMessageId;
   const controller = host.beginActiveChatTurnExecution(sessionId, turnId, threadEventType);
+  host.steerService.registerActiveTurn({ sessionId, turnId });
 
   try {
     if (!options?.skipMessageStart) {
@@ -1128,6 +1205,25 @@ export async function* streamPreparedAgentChatTurn(
     let userInputRequired = false;
     let pendingUserInput = undefined as ChatTurnTraceRecord["pendingUserInput"];
     const streamCitations: ChatCitationRecord[] = [...(prepared.threadKnowledgeCitations ?? [])];
+    const drainedSteers = host.steerService.drainPending({ sessionId, turnId: prepared.turnId });
+    const steerHistoryMessages = drainedSteers.map((item) => ({
+      role: "user" as const,
+      content: `[Steer] ${item.instruction}`,
+    }));
+    const historyWithSteers =
+      drainedSteers.length > 0 ? [...prepared.history, ...steerHistoryMessages] : prepared.history;
+    for (const steerItem of drainedSteers) {
+      await host.ingestEvent(randomUUID(), {
+        eventId: randomUUID(),
+        route: prepared.route,
+        actor: { type: "user", id: "operator" },
+        message: {
+          role: "user",
+          content: steerItem.instruction,
+          steered: true,
+        },
+      });
+    }
     for await (const chunk of host.turnRuntime.runStream({
       sessionId,
       turnId,
@@ -1147,7 +1243,7 @@ export async function* streamPreparedAgentChatTurn(
       subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
       normalizationProfile: prepared.normalized.normalizationProfile,
       toolAutonomy: prepared.effectiveToolAutonomy,
-      historyMessages: prepared.history,
+      historyMessages: historyWithSteers,
       signal: controller.signal,
     })) {
       if (chunk.type === "message_done" && chunk.content) {
@@ -1572,6 +1668,7 @@ export async function* streamPreparedAgentChatTurn(
     }
     throw error;
   } finally {
+    host.steerService.unregisterActiveTurn({ sessionId, turnId });
     host.endActiveChatTurnExecution(turnId, controller);
   }
 }
