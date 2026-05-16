@@ -398,7 +398,7 @@ function pseudoEmbedding(text: string): number[] {
   const buckets = new Array<number>(8).fill(0);
   for (let index = 0; index < text.length; index += 1) {
     const bucketIndex = index % buckets.length;
-    buckets[bucketIndex]! += text.charCodeAt(index) / 255;
+    buckets[bucketIndex] = (buckets[bucketIndex] ?? 0) + text.charCodeAt(index) / 255;
   }
   return buckets.map((value) => Number(value.toFixed(4)));
 }
