@@ -9,6 +9,8 @@ import type {
 } from "@goatcitadel/contracts";
 import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
+import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
+import { parseJsonObject } from "./state-validators.js";
 
 export interface PruneCheckpointsResult {
   prunedOrphans: number;
@@ -63,6 +65,11 @@ interface DurableDeadLetterRow {
   resolution_note: string | null;
 }
 
+export interface DurableRunRepositoryOptions {
+  quarantine?: { record: (entry: QuarantineEntry) => unknown };
+  logger?: { warn: (data: unknown, msg: string) => void };
+}
+
 export class DurableRunRepository {
   private readonly insertRunStmt;
   private readonly getRunStmt;
@@ -82,7 +89,10 @@ export class DurableRunRepository {
   private readonly getDeadLetterByIdStmt;
   private readonly resolveDeadLetterStmt;
 
-  public constructor(private readonly db: DatabaseClient) {
+  public constructor(
+    private readonly db: DatabaseClient,
+    private readonly options: DurableRunRepositoryOptions = {},
+  ) {
     this.insertRunStmt = db.prepare(`
       INSERT INTO durable_runs (
         run_id, workflow_key, status, attempt_count, max_attempts,
@@ -270,7 +280,7 @@ export class DurableRunRepository {
     if (!row) {
       throw new NotFoundError({ entity: "Durable run", id: runId });
     }
-    return mapRunRow(row);
+    return this.mapRunRow(row);
   }
 
   public updateRun(input: {
@@ -398,7 +408,7 @@ export class DurableRunRepository {
   public listRuns(limit = 25): DurableRunRecord[] {
     const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
     const rows = toDurableRunRows(this.listRunsStmt.all(safeLimit));
-    return rows.map(mapRunRow);
+    return rows.map((row) => this.mapRunRow(row));
   }
 
   public listRunIdsByStatus(status: DurableRunStatus, limit = 500): string[] {
@@ -458,7 +468,17 @@ export class DurableRunRepository {
       checkpointId: row.checkpoint_id,
       runId: row.run_id,
       checkpointKind: row.checkpoint_kind,
-      state: safeJsonParse<Record<string, unknown>>(row.state_json, {}),
+      state: loadAndSanitize(
+        row.state_json,
+        {
+          store: "durable_checkpoint.state",
+          rowId: row.checkpoint_id,
+          parse: parseJsonObject,
+          onQuarantine: this.options.quarantine ? (e) => this.options.quarantine!.record(e) : undefined,
+          log: this.options.logger,
+        },
+        {},
+      ) as Record<string, unknown>,
       createdAt: row.created_at,
     }));
   }
@@ -683,6 +703,49 @@ export class DurableRunRepository {
     return Number(row?.bytes ?? 0);
   }
 
+  private mapRunRow(row: DurableRunRow): DurableRunRecord {
+    return {
+      runId: row.run_id,
+      workflowKey: row.workflow_key,
+      status: row.status,
+      attemptCount: Number(row.attempt_count ?? 0),
+      maxAttempts: Number(row.max_attempts ?? 0),
+      version: Number(row.version ?? 1),
+      payload: loadAndSanitize(
+        row.payload_json,
+        {
+          store: "durable_run.payload",
+          rowId: row.run_id,
+          parse: parseJsonObject,
+          onQuarantine: this.options.quarantine ? (e) => this.options.quarantine!.record(e) : undefined,
+          log: this.options.logger,
+        },
+        {},
+      ) as Record<string, unknown>,
+      metadata: row.metadata_json
+        ? (loadAndSanitize(
+            row.metadata_json,
+            {
+              store: "durable_run.metadata",
+              rowId: row.run_id,
+              parse: parseJsonObject,
+              onQuarantine: this.options.quarantine ? (e) => this.options.quarantine!.record(e) : undefined,
+              log: this.options.logger,
+            },
+            undefined,
+          ) as Record<string, unknown> | undefined)
+        : undefined,
+      startedAt: row.started_at ?? undefined,
+      finishedAt: row.finished_at ?? undefined,
+      lastError: row.last_error ?? undefined,
+      leaseOwnerId: row.lease_owner_id ?? undefined,
+      leaseExpiresAt: row.lease_expires_at ?? undefined,
+      leaseHeartbeatAt: row.lease_heartbeat_at ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
   private buildNextRun(
     current: DurableRunRecord,
     input: {
@@ -858,32 +921,6 @@ function toCountRow(value: unknown): { count?: number } | undefined {
   return typeof value.count === "number" || value.count === undefined
     ? { count: value.count as number | undefined }
     : undefined;
-}
-
-function parseRecordJson(raw: string): Record<string, unknown> {
-  const parsed = safeJsonParse<unknown>(raw, {});
-  return isRecord(parsed) ? parsed : {};
-}
-
-function mapRunRow(row: DurableRunRow): DurableRunRecord {
-  return {
-    runId: row.run_id,
-    workflowKey: row.workflow_key,
-    status: row.status,
-    attemptCount: Number(row.attempt_count ?? 0),
-    maxAttempts: Number(row.max_attempts ?? 0),
-    version: Number(row.version ?? 1),
-    payload: parseRecordJson(row.payload_json),
-    metadata: row.metadata_json ? parseRecordJson(row.metadata_json) : undefined,
-    startedAt: row.started_at ?? undefined,
-    finishedAt: row.finished_at ?? undefined,
-    lastError: row.last_error ?? undefined,
-    leaseOwnerId: row.lease_owner_id ?? undefined,
-    leaseExpiresAt: row.lease_expires_at ?? undefined,
-    leaseHeartbeatAt: row.lease_heartbeat_at ?? undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
 }
 
 function byteLength(value: string): number {

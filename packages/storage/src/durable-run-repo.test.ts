@@ -6,6 +6,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createDatabase } from "./sqlite.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
+import { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
 
 const createdFiles: string[] = [];
 
@@ -644,6 +645,78 @@ describe("DurableRunRepository", () => {
       // Second pass should not destroy more than already needed
       assert.ok(second.finalBytes <= summary.finalBytes + 300, "second pass should be idempotent within tolerance");
     });
+  });
+});
+
+describe("DurableRunRepository sanitization", () => {
+  it("quarantines corrupt payload_json and returns an empty payload", () => {
+    const dbPath = path.join(os.tmpdir(), `gc-durable-sanitize-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const quarantine = new StateValidationQuarantineRepository(db);
+    const repo = new DurableRunRepository(db, { quarantine });
+
+    const run = repo.createRun({ workflowKey: "test.workflow", payload: { ok: true } });
+    db.prepare("UPDATE durable_runs SET payload_json = ? WHERE run_id = ?").run("{not json", run.runId);
+
+    const reloaded = repo.getRun(run.runId);
+    assert.deepEqual(reloaded.payload, {});
+    assert.equal(quarantine.count(), 1);
+    const entries = quarantine.list(10);
+    const entry = entries[0];
+    assert.ok(entry);
+    assert.equal(entry.store, "durable_run.payload");
+    assert.equal(entry.rowId, run.runId);
+  });
+
+  it("quarantines corrupt metadata_json and returns undefined metadata", () => {
+    const dbPath = path.join(os.tmpdir(), `gc-durable-sanitize-md-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const quarantine = new StateValidationQuarantineRepository(db);
+    const repo = new DurableRunRepository(db, { quarantine });
+
+    const run = repo.createRun({ workflowKey: "test.workflow", metadata: { hint: "x" } });
+    db.prepare("UPDATE durable_runs SET metadata_json = ? WHERE run_id = ?").run("[not, json", run.runId);
+
+    const reloaded = repo.getRun(run.runId);
+    assert.equal(reloaded.metadata, undefined);
+    assert.equal(quarantine.count(), 1);
+    const entries = quarantine.list(10);
+    const entry = entries[0];
+    assert.ok(entry);
+    assert.equal(entry.store, "durable_run.metadata");
+  });
+
+  it("quarantines corrupt checkpoint state_json and yields a placeholder", () => {
+    const dbPath = path.join(os.tmpdir(), `gc-checkpoint-sanitize-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const quarantine = new StateValidationQuarantineRepository(db);
+    const repo = new DurableRunRepository(db, { quarantine });
+
+    const run = repo.createRun({ workflowKey: "test.workflow" });
+    const checkpoint = repo.createCheckpoint({
+      runId: run.runId,
+      checkpointKind: "run_started",
+      state: { step: 1 },
+    });
+    db.prepare("UPDATE durable_checkpoints SET state_json = ? WHERE checkpoint_id = ?").run(
+      "{not json",
+      checkpoint.checkpointId,
+    );
+
+    const list = repo.listCheckpoints(run.runId, 10);
+    assert.equal(list.length, 1);
+    const cp = list[0];
+    assert.ok(cp);
+    assert.deepEqual(cp.state, {});
+    assert.equal(quarantine.count(), 1);
+    const entries = quarantine.list(10);
+    const entry = entries[0];
+    assert.ok(entry);
+    assert.equal(entry.store, "durable_checkpoint.state");
+    assert.equal(entry.rowId, checkpoint.checkpointId);
   });
 });
 

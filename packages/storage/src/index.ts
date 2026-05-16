@@ -267,7 +267,7 @@ export class Storage {
     this.hookRuns = new HookRunRepository(this.db);
     this.learnedMemory = new LearnedMemoryRepository(this.db);
     this.memoryMaintenance = new MemoryMaintenanceRepository(this.db);
-    this.durableRuns = new DurableRunRepository(this.db);
+    this.durableRuns = new DurableRunRepository(this.db, { quarantine: this.stateValidationQuarantine });
     this.gatewaySql = new GatewaySqlRepository(this.db);
     this.assembly = new AssemblyRepository(this.db);
     this.transcriptOutbox = new TranscriptOutboxRepository(this.db);
