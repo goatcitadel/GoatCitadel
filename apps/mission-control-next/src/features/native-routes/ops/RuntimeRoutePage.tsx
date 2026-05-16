@@ -668,7 +668,10 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
                   aria-label="Activity feed"
                 >
                   {filteredActivityEvents.map((item, index) => (
-                    <li key={`${item.eventType}-${item.timestamp ?? index}`} className="mc-next-activity-feed-row">
+                    <li
+                      key={`${item.eventType}-${item.timestamp ?? "no-ts"}-${index}`}
+                      className="mc-next-activity-feed-row"
+                    >
                       <ThreePartChip
                         tone={toneForActivityEvent(item.eventType, item.eventClass)}
                         state={item.eventType}
