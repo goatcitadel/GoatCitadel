@@ -58,13 +58,19 @@ async function main() {
   console.log(`Running TS7 ${mode} for groups: ${groups.join(", ")}`);
 
   if (mode === "build") {
-    await runTsgoCommand([
-      "exec",
-      "tsgo",
-      "-b",
-      ...projects,
-      "--skipLibCheck",
-    ]);
+    // tsgo (like tsc) rejects --skipLibCheck with -b. Iterate -p in
+    // dependency order instead; PROJECT_GROUPS are already ordered so each
+    // subsequent project's references resolve from the prior emit.
+    for (const project of projects) {
+      console.log(`\n[ts7:build] ${project}`);
+      await runTsgoCommand([
+        "exec",
+        "tsgo",
+        "-p",
+        project,
+        "--skipLibCheck",
+      ]);
+    }
     return;
   }
 
