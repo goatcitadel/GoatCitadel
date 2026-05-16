@@ -10,6 +10,13 @@ import type {
 import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
+export interface PruneCheckpointsResult {
+  prunedOrphans: number;
+  prunedAged: number;
+  finalBytes: number;
+  diskBudgetBytes: number;
+}
+
 interface DurableRunRow {
   run_id: string;
   workflow_key: string;
@@ -580,6 +587,102 @@ export class DurableRunRepository {
     return this.getDeadLetterById(existing.deadLetterId);
   }
 
+  public pruneCheckpoints(input: { keepPerRun: number; diskBudgetBytes: number }): PruneCheckpointsResult {
+    const keepPerRun = Math.max(1, Math.floor(input.keepPerRun));
+    const diskBudgetBytes = Math.max(0, Math.floor(input.diskBudgetBytes));
+
+    const orphanRows = this.db
+      .prepare(
+        `
+        SELECT cp.checkpoint_id AS checkpointId
+        FROM durable_checkpoints cp
+        LEFT JOIN durable_runs r ON r.run_id = cp.run_id
+        WHERE r.run_id IS NULL
+      `,
+      )
+      .all() as Array<{ checkpointId: string }>;
+
+    const deleteByIdStmt = this.db.prepare("DELETE FROM durable_checkpoints WHERE checkpoint_id = ?");
+    let prunedOrphans = 0;
+    for (const row of orphanRows) {
+      const result = deleteByIdStmt.run(row.checkpointId);
+      prunedOrphans += Number(result.changes ?? 0);
+    }
+
+    const terminalCheckpoints = this.db
+      .prepare(
+        `
+        SELECT cp.checkpoint_id AS checkpointId,
+               cp.run_id AS runId,
+               cp.state_json AS stateJson,
+               cp.created_at AS createdAt
+        FROM durable_checkpoints cp
+        INNER JOIN durable_runs r ON r.run_id = cp.run_id
+        WHERE r.status IN ('completed', 'failed', 'cancelled', 'dead_lettered')
+        ORDER BY cp.run_id ASC, cp.created_at ASC, cp.checkpoint_id ASC
+      `,
+      )
+      .all() as Array<{ checkpointId: string; runId: string; stateJson: string; createdAt: string }>;
+
+    const perRunBuckets = new Map<
+      string,
+      Array<{ checkpointId: string; runId: string; stateJson: string; createdAt: string }>
+    >();
+    for (const row of terminalCheckpoints) {
+      const bucket = perRunBuckets.get(row.runId) ?? [];
+      bucket.push(row);
+      perRunBuckets.set(row.runId, bucket);
+    }
+
+    let prunedAged = 0;
+    const survivingTerminal: Array<{ checkpointId: string; runId: string; stateJson: string; createdAt: string }> = [];
+    for (const bucket of perRunBuckets.values()) {
+      const overflow = Math.max(0, bucket.length - keepPerRun);
+      for (const victim of bucket.slice(0, overflow)) {
+        const result = deleteByIdStmt.run(victim.checkpointId);
+        prunedAged += Number(result.changes ?? 0);
+      }
+      for (const survivor of bucket.slice(overflow)) {
+        survivingTerminal.push(survivor);
+      }
+    }
+
+    let runningBytes = this.measureCheckpointBytes();
+    if (runningBytes > diskBudgetBytes) {
+      survivingTerminal.sort((l, r) =>
+        l.createdAt === r.createdAt
+          ? l.checkpointId.localeCompare(r.checkpointId)
+          : l.createdAt.localeCompare(r.createdAt),
+      );
+      for (const victim of survivingTerminal) {
+        if (runningBytes <= diskBudgetBytes) {
+          break;
+        }
+        const victimBytes = byteLength(victim.stateJson);
+        const result = deleteByIdStmt.run(victim.checkpointId);
+        const changes = Number(result.changes ?? 0);
+        if (changes > 0) {
+          prunedAged += changes;
+          runningBytes -= victimBytes;
+        }
+      }
+    }
+
+    return {
+      prunedOrphans,
+      prunedAged,
+      finalBytes: this.measureCheckpointBytes(),
+      diskBudgetBytes,
+    };
+  }
+
+  private measureCheckpointBytes(): number {
+    const row = this.db
+      .prepare("SELECT COALESCE(SUM(LENGTH(state_json)), 0) AS bytes FROM durable_checkpoints")
+      .get() as { bytes: number | bigint } | undefined;
+    return Number(row?.bytes ?? 0);
+  }
+
   private buildNextRun(
     current: DurableRunRecord,
     input: {
@@ -781,6 +884,10 @@ function mapRunRow(row: DurableRunRow): DurableRunRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function byteLength(value: string): number {
+  return Buffer.byteLength(value, "utf8");
 }
 
 function normalizeObject(value: Record<string, unknown> | undefined): Record<string, unknown> {
