@@ -771,6 +771,25 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "cron_jobs", "action_config_json", "TEXT");
     },
   },
+  {
+    version: 79,
+    name: "state_validation_quarantine",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS state_validation_quarantine (
+          quarantine_id TEXT PRIMARY KEY,
+          store TEXT NOT NULL,
+          row_id TEXT NOT NULL,
+          raw_value TEXT,
+          schema_error TEXT NOT NULL,
+          observed_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_state_validation_quarantine_store_observed
+          ON state_validation_quarantine(store, observed_at DESC);
+      `);
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -1202,6 +1221,18 @@ function createBaseSchema(db: DatabaseSync): void {
       ON integration_connections(kind, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_integration_connections_catalog_id
       ON integration_connections(catalog_id, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS state_validation_quarantine (
+      quarantine_id TEXT PRIMARY KEY,
+      store TEXT NOT NULL,
+      row_id TEXT NOT NULL,
+      raw_value TEXT,
+      schema_error TEXT NOT NULL,
+      observed_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_state_validation_quarantine_store_observed
+      ON state_validation_quarantine(store, observed_at DESC);
   `);
 }
 
