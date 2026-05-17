@@ -111,6 +111,39 @@ export function createToolCatalog(toolNames: string[] = ["browser.search"]): Too
         pack: "core",
       };
     }
+    if (toolName === "presentations.create") {
+      return {
+        toolName: "presentations.create",
+        category: "knowledge",
+        riskLevel: "caution",
+        requiresApproval: false,
+        description: "Create a PowerPoint presentation artifact",
+        argSchema: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+            title: { type: "string" },
+            subtitle: { type: "string" },
+            slides: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  title: { type: "string" },
+                  bullets: { type: "array", items: { type: "string" } },
+                },
+                required: ["title"],
+              },
+            },
+          },
+          required: ["path", "title", "slides"],
+        },
+        examples: [],
+        pack: "core",
+        recommendedContexts: ["chat", "cowork"],
+        preferredForIntents: ["presentation", "slide_deck", "powerpoint", "artifact_output"],
+      };
+    }
     if (toolName === "browser.extract") {
       return {
         toolName: "browser.extract",

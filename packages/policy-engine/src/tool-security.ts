@@ -29,62 +29,79 @@ export function deriveToolCapabilityPolicy(
 ): ToolCapabilityPolicy {
   const category = toolDef?.category;
   const startsWith = (prefix: string) => toolName.startsWith(prefix);
-  const isBrowserRead = toolName === "browser.search"
-    || toolName === "browser.navigate"
-    || toolName === "browser.extract"
-    || toolName === "browser.screenshot";
-  const isBrowserControl = toolName === "browser.interact"
-    || toolName.startsWith("browser.cookies.")
-    || toolName.startsWith("browser.storage.")
-    || toolName === "browser.context.configure";
+  const isBrowserRead =
+    toolName === "browser.search" ||
+    toolName === "browser.navigate" ||
+    toolName === "browser.extract" ||
+    toolName === "browser.screenshot";
+  const isBrowserControl =
+    toolName === "browser.interact" ||
+    toolName.startsWith("browser.cookies.") ||
+    toolName.startsWith("browser.storage.") ||
+    toolName === "browser.context.configure";
   const isNetworkRead = toolName === "http.get" || isBrowserRead;
   const isNetworkWrite = toolName === "http.post" || toolName === "webhook.send";
-  const mutatesFilesystem = toolName === "fs.write"
-    || toolName === "fs.move"
-    || toolName === "fs.delete"
-    || toolName === "artifacts.create";
-  const mutatesRemoteState = isNetworkWrite
-    || startsWith("gmail.send")
-    || startsWith("calendar.create_event")
-    || startsWith("channel.")
-    || startsWith("slack.")
-    || startsWith("discord.")
-    || startsWith("telegram.")
-    || startsWith("teams.")
-    || startsWith("whatsapp.")
-    || startsWith("imessage.")
-    || startsWith("mattermost.")
-    || startsWith("google-chat.")
-    || startsWith("line.")
-    || startsWith("nextcloud-talk.")
-    || startsWith("zalo")
-    || toolName.startsWith("git.")
-    || toolName === "mcp.invoke";
-  const resolvesSecrets = toolName === "mcp.invoke"
-    || startsWith("gmail.")
-    || startsWith("calendar.")
-    || startsWith("channel.")
-    || startsWith("slack.")
-    || startsWith("discord.")
-    || startsWith("telegram.")
-    || startsWith("teams.")
-    || startsWith("whatsapp.")
-    || startsWith("imessage.")
-    || startsWith("mattermost.")
-    || startsWith("google-chat.")
-    || startsWith("line.")
-    || startsWith("nextcloud-talk.")
-    || startsWith("zalo")
-    || toolName.startsWith("bankr.");
-  const executesProcess = toolName === "shell.exec"
-    || toolName === "shell.exec_background"
-    || toolName === "tests.run"
-    || toolName === "lint.run"
-    || toolName === "build.run";
+  const mutatesFilesystem =
+    toolName === "fs.write" ||
+    toolName === "fs.move" ||
+    toolName === "fs.delete" ||
+    toolName === "artifacts.create" ||
+    toolName === "presentations.create";
+  const mutatesRemoteState =
+    isNetworkWrite ||
+    startsWith("gmail.send") ||
+    startsWith("calendar.create_event") ||
+    startsWith("channel.") ||
+    startsWith("slack.") ||
+    startsWith("discord.") ||
+    startsWith("telegram.") ||
+    startsWith("teams.") ||
+    startsWith("whatsapp.") ||
+    startsWith("imessage.") ||
+    startsWith("mattermost.") ||
+    startsWith("google-chat.") ||
+    startsWith("line.") ||
+    startsWith("nextcloud-talk.") ||
+    startsWith("zalo") ||
+    toolName.startsWith("git.") ||
+    toolName === "mcp.invoke";
+  const resolvesSecrets =
+    toolName === "mcp.invoke" ||
+    startsWith("gmail.") ||
+    startsWith("calendar.") ||
+    startsWith("channel.") ||
+    startsWith("slack.") ||
+    startsWith("discord.") ||
+    startsWith("telegram.") ||
+    startsWith("teams.") ||
+    startsWith("whatsapp.") ||
+    startsWith("imessage.") ||
+    startsWith("mattermost.") ||
+    startsWith("google-chat.") ||
+    startsWith("line.") ||
+    startsWith("nextcloud-talk.") ||
+    startsWith("zalo") ||
+    toolName.startsWith("bankr.");
+  const executesProcess =
+    toolName === "shell.exec" ||
+    toolName === "shell.exec_background" ||
+    toolName === "tests.run" ||
+    toolName === "lint.run" ||
+    toolName === "build.run";
 
   let family: ToolCapabilityPolicy["family"] = "other";
   if (toolName.startsWith("memory.")) family = "memory";
-  else if (toolName === "fs.read" || toolName === "file.read_range" || toolName === "file.find" || toolName === "code.search" || toolName === "code.search_files" || toolName === "fs.list" || toolName === "fs.stat" || toolName === "fs.copy") family = "filesystem_read";
+  else if (
+    toolName === "fs.read" ||
+    toolName === "file.read_range" ||
+    toolName === "file.find" ||
+    toolName === "code.search" ||
+    toolName === "code.search_files" ||
+    toolName === "fs.list" ||
+    toolName === "fs.stat" ||
+    toolName === "fs.copy"
+  )
+    family = "filesystem_read";
   else if (mutatesFilesystem) family = "filesystem_write";
   else if (isNetworkRead || category === "research") family = isBrowserRead ? "browser_read" : "network_read";
   else if (isNetworkWrite) family = "network_write";
@@ -99,7 +116,8 @@ export function deriveToolCapabilityPolicy(
   return {
     toolName,
     family,
-    usesNetwork: isNetworkRead || isNetworkWrite || family === "mcp" || category === "comms" || toolName === "docs.ingest",
+    usesNetwork:
+      isNetworkRead || isNetworkWrite || family === "mcp" || category === "comms" || toolName === "docs.ingest",
     readsFilesystem: family === "filesystem_read" || toolName === "docs.ingest",
     mutatesFilesystem,
     mutatesRemoteState,
@@ -107,12 +125,13 @@ export function deriveToolCapabilityPolicy(
     executesProcess,
     controlsBrowser: isBrowserControl,
     invokesMcp: toolName === "mcp.invoke",
-    blocksUntrustedEscalation: mutatesFilesystem
-      || mutatesRemoteState
-      || resolvesSecrets
-      || executesProcess
-      || isBrowserControl
-      || toolName === "mcp.invoke",
+    blocksUntrustedEscalation:
+      mutatesFilesystem ||
+      mutatesRemoteState ||
+      resolvesSecrets ||
+      executesProcess ||
+      isBrowserControl ||
+      toolName === "mcp.invoke",
   };
 }
 
@@ -121,8 +140,8 @@ export function isUntrustedToolEscalation(
   capabilityPolicy: ToolCapabilityPolicy,
 ): boolean {
   return (
-    (trustLevel === "untrusted_external" || trustLevel === "mixed_untrusted")
-    && capabilityPolicy.blocksUntrustedEscalation
+    (trustLevel === "untrusted_external" || trustLevel === "mixed_untrusted") &&
+    capabilityPolicy.blocksUntrustedEscalation
   );
 }
 
@@ -258,21 +277,23 @@ function stringifyUnknown(value: unknown): string {
 }
 
 function defaultSecretBoundaryForTool(toolName: string): SecretResolutionBoundary {
-  if (toolName.startsWith("gmail.")
-    || toolName.startsWith("calendar.")
-    || toolName.startsWith("channel.")
-    || toolName.startsWith("slack.")
-    || toolName.startsWith("discord.")
-    || toolName.startsWith("telegram.")
-    || toolName.startsWith("teams.")
-    || toolName.startsWith("whatsapp.")
-    || toolName.startsWith("imessage.")
-    || toolName.startsWith("mattermost.")
-    || toolName.startsWith("google-chat.")
-    || toolName.startsWith("line.")
-    || toolName.startsWith("nextcloud-talk.")
-    || toolName.startsWith("zalo")
-    || toolName === "mcp.invoke") {
+  if (
+    toolName.startsWith("gmail.") ||
+    toolName.startsWith("calendar.") ||
+    toolName.startsWith("channel.") ||
+    toolName.startsWith("slack.") ||
+    toolName.startsWith("discord.") ||
+    toolName.startsWith("telegram.") ||
+    toolName.startsWith("teams.") ||
+    toolName.startsWith("whatsapp.") ||
+    toolName.startsWith("imessage.") ||
+    toolName.startsWith("mattermost.") ||
+    toolName.startsWith("google-chat.") ||
+    toolName.startsWith("line.") ||
+    toolName.startsWith("nextcloud-talk.") ||
+    toolName.startsWith("zalo") ||
+    toolName === "mcp.invoke"
+  ) {
     return "tool_host_boundary";
   }
   return "provider_boundary";

@@ -219,7 +219,7 @@ function buildWorkstreamStepPlans(
       stage: role === "reviewer" ? (parallelProduction ? 2 : productionCount + 1) : parallelProduction ? 1 : index + 1,
       objective: buildWorkstreamStepObjective(input.objective, label, role),
       successCriteria: `Return a complete ${label} workstream that can be merged into the final Cowork answer.`,
-      suggestedTools: buildFallbackSuggestedTools(role, "cowork.workstreams.synthesize"),
+      suggestedTools: buildFallbackSuggestedTools(role, "cowork.workstreams.synthesize", input.objective),
       expectedOutput: `${label} section for the final answer.`,
       parallelizable: role !== "reviewer" && parallelProduction,
       dependsOnStepIds: role === "reviewer" ? productionStepIds : undefined,
@@ -240,6 +240,7 @@ function buildWorkstreamStepPlans(
       stage: parallelProduction ? 3 : productionCount + 2,
       objective: `Merge ${labels.join(", ")} into one final response for "${input.objective.trim().replace(/\s+/g, " ")}".`,
       successCriteria: `Include every required section (${labels.join(", ")}) and end with the requested final deliverable.`,
+      suggestedTools: buildFallbackSuggestedTools("synthesizer", "cowork.workstreams.synthesize", input.objective),
       expectedOutput: "One complete Cowork answer that integrates all requested workstreams.",
       parallelizable: false,
       dependsOnStepIds: workstreamSteps.map((step) => step.stepId),
@@ -308,7 +309,7 @@ function buildStepPlans(
       stage,
       objective,
       successCriteria: buildFallbackSuccessCriteria(role, expectedOutput),
-      suggestedTools: buildFallbackSuggestedTools(role, input.workflowTemplate),
+      suggestedTools: buildFallbackSuggestedTools(role, input.workflowTemplate, input.objective),
       expectedOutput,
       parallelizable: useStageDependencies && role === "researcher",
       dependsOnStepIds,
@@ -445,7 +446,12 @@ function buildFallbackSuccessCriteria(role: OrchestrationRole, expectedOutput: s
   }
 }
 
-function buildFallbackSuggestedTools(role: OrchestrationRole, workflowTemplate: string): string[] {
+function buildFallbackSuggestedTools(role: OrchestrationRole, workflowTemplate: string, objective = ""): string[] {
+  const needsPresentation = detectPresentationArtifactIntent(objective);
+  const withPresentation = (tools: string[]) =>
+    needsPresentation && (role === "synthesizer" || role === "worker")
+      ? ["presentations.create", ...tools.filter((tool) => tool !== "presentations.create")]
+      : tools;
   switch (role) {
     case "researcher":
       return workflowTemplate.includes("research")
@@ -457,10 +463,20 @@ function buildFallbackSuggestedTools(role: OrchestrationRole, workflowTemplate: 
     case "qa-validator":
       return ["code.search", "file.read_range", "tests.run", "lint.run"];
     case "worker":
-      return ["memory.search", "code.search", "file.find"];
+      return withPresentation(["memory.search", "code.search", "file.find"]);
+    case "synthesizer":
+      return withPresentation([]);
     default:
       return [];
   }
+}
+
+function detectPresentationArtifactIntent(content: string): boolean {
+  const normalized = content.toLowerCase();
+  return (
+    /\b(power\s?point|pptx?|(?:slide|pitch|investor|presentation)\s+deck|slides?|presentation)\b/.test(normalized) &&
+    /\b(create|make|build|generate|put|turn|export|save|write|produce|deliver|format|file)\b/.test(normalized)
+  );
 }
 
 function selectProviderForRole(

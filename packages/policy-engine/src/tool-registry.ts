@@ -788,6 +788,64 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "knowledge",
   },
   {
+    name: "presentations.create",
+    category: "knowledge",
+    riskLevel: "caution",
+    requiresApproval: false,
+    description: "Create a real PowerPoint .pptx deck in a jailed workspace path.",
+    argSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Output path for the .pptx file. Use a safe workspace or artifacts path when none is provided.",
+        },
+        title: { type: "string" },
+        subtitle: { type: "string" },
+        slides: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              bullets: {
+                type: "array",
+                items: { type: "string" },
+              },
+              speakerNotes: { type: "string" },
+            },
+            required: ["title"],
+          },
+        },
+        theme: { type: "string" },
+      },
+      required: ["path", "title", "slides"],
+    },
+    examples: [
+      {
+        title: "Create a PowerPoint deck",
+        args: {
+          path: "./workspace/artifacts/free-time-activities.pptx",
+          title: "Top Things To Do In Free Time",
+          slides: [
+            {
+              title: "Go Outside",
+              bullets: ["Pick a nearby park or trail.", "Keep the plan lightweight and repeatable."],
+            },
+          ],
+        },
+      },
+    ],
+    pack: "knowledge",
+    recommendedContexts: ["chat", "cowork", "code"],
+    preferredForIntents: ["presentation", "slide_deck", "powerpoint", "artifact_output", "document_generation"],
+    usageHints: [
+      "Use when the user asks for PowerPoint, PPTX, slides, a slide deck, or a presentation file.",
+      "Do not satisfy a requested PowerPoint by returning markdown-only slide text unless this tool is unavailable or blocked.",
+    ],
+  },
+  {
     name: "channel.send",
     category: "comms",
     riskLevel: "caution",

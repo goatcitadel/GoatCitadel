@@ -73,6 +73,7 @@ export const PROMPT_PACK_SAFE_EXPLICIT_TOOL_NAME_LIST = [
 export const PROMPT_PACK_GATED_EXPLICIT_TOOL_NAME_LIST = [
   "fs.write",
   "artifacts.create",
+  "presentations.create",
   "shell.exec",
   "shell.exec_background",
   "git.exec",

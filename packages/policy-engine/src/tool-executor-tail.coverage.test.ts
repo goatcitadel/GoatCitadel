@@ -222,6 +222,39 @@ describe("tool executor tail coverage", () => {
     expect(fs.readFileSync(artifactPath, "utf8")).toContain("_No content provided._");
   });
 
+  it("creates a real pptx deck inside the write jail", async () => {
+    const root = createRoot();
+    const config = createConfig(root);
+    const storage = createKnowledgeStorage();
+    const deckPath = path.join(root, "free-time-deck.pptx");
+
+    const created = await executeTool(
+      request("presentations.create", {
+        path: deckPath,
+        title: "Top Free-Time Activities",
+        subtitle: "A lightweight deck",
+        slides: [
+          {
+            title: "Go Outside",
+            bullets: ["Visit a local park", "Take a low-pressure walk"],
+          },
+        ],
+      }),
+      config,
+      storage,
+    );
+
+    const deck = fs.readFileSync(deckPath);
+    expect(created).toMatchObject({
+      path: path.resolve(deckPath),
+      format: "pptx",
+      slideCount: 2,
+    });
+    expect(deck.subarray(0, 2).toString("utf8")).toBe("PK");
+    expect(deck.includes("ppt/presentation.xml")).toBe(true);
+    expect(deck.includes("ppt/slides/slide1.xml")).toBe(true);
+  });
+
   it("builds citations from partial source rows and sanitizes secret-like fields", async () => {
     const root = createRoot();
     const config = createConfig(root);

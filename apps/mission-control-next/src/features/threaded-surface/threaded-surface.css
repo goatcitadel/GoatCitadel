@@ -1153,12 +1153,50 @@
 }
 
 .mc-next-thread-turn.delegation.compact > details > summary {
+  display: block;
   cursor: pointer;
   list-style: none;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 20%, var(--mc-border-subtle));
+  border-radius: 0.65rem;
+  background: color-mix(in oklab, var(--mc-surface-2) 90%, var(--background));
+  color: var(--foreground);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
 }
 
 .mc-next-thread-turn.delegation.compact > details > summary::-webkit-details-marker {
   display: none;
+}
+
+.mc-next-thread-turn.delegation.compact > details > summary::marker {
+  content: "";
+}
+
+.mc-next-thread-turn.delegation.compact > details > summary:hover,
+.mc-next-thread-turn.delegation.compact > details[open] > summary {
+  border-color: color-mix(in oklab, var(--mc-area-color) 38%, var(--mc-border-subtle));
+  background: color-mix(in oklab, var(--mc-area-color) 12%, var(--mc-surface-2));
+}
+
+.mc-next-thread-turn.delegation.compact > details > summary:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--mc-area-color) 72%, var(--foreground));
+  outline-offset: 2px;
+}
+
+.mc-next-thread-turn.delegation.compact > details > summary .mc-next-thread-strip {
+  align-items: center;
+  padding: 0;
+  border-top: 0;
+  background: transparent;
+}
+
+.mc-next-thread-turn.delegation.compact > details > summary .mc-next-thread-strip > span:not([class]) {
+  color: color-mix(in oklab, var(--foreground) 78%, var(--text-muted));
+}
+
+.mc-next-thread-turn.delegation.compact > details > summary .mc-next-thread-inline-button {
+  border-color: color-mix(in oklab, var(--mc-area-color) 28%, var(--mc-border-subtle));
+  background: color-mix(in oklab, var(--mc-area-color) 9%, transparent);
 }
 
 .mc-next-thread-step-output-details {

@@ -20,6 +20,7 @@ import { collectLeakDetections, sanitizeForModel } from "./tool-security.js";
 import { ingestDocumentViaBackend, searchIngestedContext } from "./ingestion-backends.js";
 import { matchesToolPattern } from "./tool-patterns.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
+import { createPresentationPptx, type PresentationSlide } from "./presentation-pptx.js";
 import {
   appendBankrActionAudit,
   evaluateBankrActionPreview,
@@ -167,6 +168,8 @@ export async function executeTool(
       return finalizeToolResult(await embeddingsQuery(request.args, storage));
     case "artifacts.create":
       return finalizeToolResult(await artifactsCreate(request.args, config));
+    case "presentations.create":
+      return finalizeToolResult(await presentationsCreate(request.args, config));
     case "channel.send":
     case "channel.react":
     case "channel.unsend":
@@ -1094,6 +1097,78 @@ async function artifactsCreate(args: Record<string, unknown>, config: ToolPolicy
   await fs.mkdir(path.dirname(full), { recursive: true });
   await fs.writeFile(full, out, "utf8");
   return { path: full, bytesWritten: out.length, template };
+}
+
+async function presentationsCreate(args: Record<string, unknown>, config: ToolPolicyConfig) {
+  const requestedPath = required(args.path, "path");
+  const p = ensurePptxPath(requestedPath);
+  assertWritePathInJail(p, config.sandbox.writeJailRoots);
+  const title = truncateText(asString(args.title) ?? "Presentation", 120);
+  const subtitle = truncateText(asString(args.subtitle) ?? "", 180);
+  const slides = normalizePresentationSlides(args.slides, title, asString(args.body));
+  const pptx = createPresentationPptx({
+    title,
+    subtitle: subtitle || undefined,
+    slides,
+  });
+  const full = path.resolve(p);
+  await fs.mkdir(path.dirname(full), { recursive: true });
+  await fs.writeFile(full, pptx);
+  return {
+    path: full,
+    bytesWritten: pptx.length,
+    format: "pptx",
+    title,
+    slideCount: slides.length + 1,
+  };
+}
+
+function ensurePptxPath(value: string): string {
+  if (/\.pptx$/i.test(value)) {
+    return value;
+  }
+  const parsed = path.parse(value);
+  const fileName = parsed.name ? `${parsed.name}.pptx` : "presentation.pptx";
+  return path.join(parsed.dir, fileName);
+}
+
+function normalizePresentationSlides(
+  value: unknown,
+  fallbackTitle: string,
+  fallbackBody?: string,
+): PresentationSlide[] {
+  const rawSlides = Array.isArray(value) ? value : [];
+  const slides = rawSlides
+    .map((item, index) => {
+      const slide = record(item);
+      const title = truncateText(asString(slide.title) ?? `Slide ${index + 1}`, 100);
+      const bullets = normalizePresentationBullets(slide.bullets);
+      return {
+        title,
+        bullets,
+        speakerNotes: truncateText(asString(slide.speakerNotes) ?? "", 600) || undefined,
+      } satisfies PresentationSlide;
+    })
+    .filter((slide) => slide.title || slide.bullets.length > 0)
+    .slice(0, 40);
+  if (slides.length > 0) {
+    return slides;
+  }
+  const fallbackBullets = normalizePresentationBullets(fallbackBody);
+  return [{ title: fallbackTitle, bullets: fallbackBullets }];
+}
+
+function normalizePresentationBullets(value: unknown): string[] {
+  const rawItems = Array.isArray(value) ? value : typeof value === "string" ? value.split(/\r?\n|;/g) : [];
+  return rawItems
+    .map((item) => truncateText(asString(item) ?? "", 180))
+    .filter((item) => item.length > 0)
+    .slice(0, 8);
+}
+
+function truncateText(value: string, maxLength: number): string {
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return normalized.length > maxLength ? `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}...` : normalized;
 }
 
 function finalizeToolResult(result: Record<string, unknown>): Record<string, unknown> {

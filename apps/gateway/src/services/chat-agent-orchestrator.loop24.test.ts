@@ -118,6 +118,66 @@ describe("ChatAgentOrchestrator loop 24 coverage", () => {
     expect(toolNames).not.toContain("browser_search");
   });
 
+  it("probes presentation access with safe args and creates a PPTX fallback when the model answers with text", async () => {
+    let capturedRequest: ChatCompletionRequest | undefined;
+    const createChatCompletion = vi.fn(async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
+      capturedRequest = request;
+      return completion("I can outline the deck, but I did not create a PowerPoint file.");
+    });
+    const evaluateToolAccess = vi.fn((input: { toolName: string; args?: Record<string, unknown> }) => ({
+      allowed: input.toolName !== "presentations.create" || typeof input.args?.path === "string",
+    }));
+    const invokeTool = vi.fn(
+      async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        result: {
+          path: "F:\\code\\personal-ai\\workspace\\goatcitadel_out\\top-10-things-to-do-in-free-time.pptx",
+          bytesWritten: 12345,
+          format: "pptx",
+          title: request.args.title,
+          slideCount: 7,
+        },
+      }),
+    );
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["presentations.create"]),
+      createChatCompletion,
+      invokeTool,
+      evaluateToolAccess,
+    });
+
+    const result = await orchestrator.run(
+      turnInput({
+        mode: "cowork",
+        content: "Create a real PowerPoint .pptx presentation about the top 10 things to do in free time.",
+        historyMessages: [
+          {
+            role: "user",
+            content: "Create a real PowerPoint .pptx presentation about the top 10 things to do in free time.",
+          },
+        ],
+      }),
+    );
+
+    const presentationProbe = evaluateToolAccess.mock.calls.find(
+      ([input]) => input.toolName === "presentations.create",
+    )?.[0];
+    expect(presentationProbe?.args?.path).toBe("./workspace/goatcitadel_out/tool-access-probe.pptx");
+    expect(extractRequestToolNames(capturedRequest)).toContain("presentations_create");
+    expect(invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "presentations.create",
+        args: expect.objectContaining({
+          path: expect.stringContaining("top-10-things-to-do-in-free-time"),
+          title: "Top 10 Things To Do In Free Time",
+        }),
+      }),
+    );
+    expect(result.assistantContent).toContain("Created the PowerPoint presentation artifact");
+    expect(result.assistantContent).toContain(".pptx");
+  });
+
   it("blocks delegated non-code Prompt Lab local file calls before runtime invocation", async () => {
     const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>();
     const executeToolCall = createExecuteToolCall({ invokeTool });

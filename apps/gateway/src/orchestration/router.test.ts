@@ -239,6 +239,27 @@ describe("orchestration router", () => {
     expectPlanDependenciesValid(plan);
   });
 
+  it("suggests presentation creation for Cowork deck deliverables", () => {
+    const input = createInput({
+      mode: "cowork",
+      objective: "Research the top 10 things to do near me, then put it together in a PowerPoint presentation format.",
+      prefs: createPrefs({
+        mode: "cowork",
+        orchestrationVisibility: "explicit",
+      }),
+    });
+    input.policy = resolveModePolicy("cowork");
+
+    const plan = buildOrchestrationPlan(input);
+    const synthesisStep = plan.steps.find((step) => step.role === "synthesizer");
+
+    expect(plan.workflowTemplate).toBe("cowork.research.synthesize.critic");
+    expect(synthesisStep?.suggestedTools).toContain("presentations.create");
+    expect(
+      plan.steps.filter((step) => step.role === "researcher").flatMap((step) => step.suggestedTools ?? []),
+    ).not.toContain("presentations.create");
+  });
+
   it("preserves explicit Cowork workstreams for final synthesis", () => {
     const input = createInput({
       mode: "cowork",

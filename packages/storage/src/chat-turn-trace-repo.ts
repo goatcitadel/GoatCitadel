@@ -134,6 +134,7 @@ export class ChatTurnTraceRepository {
         @failureJson,
         @capabilityUpgradeSuggestionsJson, @specialistCandidateSuggestionsJson, @startedAt, @finishedAt
       )
+      ON CONFLICT(turn_id) DO NOTHING
     `);
     this.patchStmt = db.prepare(`
       UPDATE chat_turn_traces
@@ -218,7 +219,13 @@ export class ChatTurnTraceRepository {
       startedAt: input.startedAt ?? new Date().toISOString(),
       finishedAt: input.finishedAt ?? null,
     });
-    return this.get(input.turnId);
+    const trace = this.get(input.turnId);
+    if (trace.sessionId !== input.sessionId || trace.userMessageId !== input.userMessageId) {
+      throw new Error(
+        `Chat turn trace ${input.turnId} already belongs to session ${trace.sessionId} and message ${trace.userMessageId}.`,
+      );
+    }
+    return trace;
   }
 
   public patch(turnId: string, input: ChatTurnTracePatchInput): ChatTurnTraceRecord {

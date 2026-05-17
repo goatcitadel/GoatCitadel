@@ -716,7 +716,8 @@ export class ToolPolicyEngine {
         request.toolName === "fs.write" ||
         request.toolName === "fs.move" ||
         request.toolName === "fs.delete" ||
-        request.toolName === "artifacts.create"
+        request.toolName === "artifacts.create" ||
+        request.toolName === "presentations.create"
       ) {
         const pathValue = String(request.args?.path ?? request.args?.to ?? request.args?.from ?? "");
         const referenceRoots = getReferenceRootPaths(allowGrant?.constraints);

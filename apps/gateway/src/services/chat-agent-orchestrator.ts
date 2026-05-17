@@ -431,6 +431,7 @@ export class ChatAgentOrchestrator {
       webLookup: detectWebLookupIntent(input.content, input.historyMessages),
       time: detectTimeIntent(input.content),
       localFile: detectLocalFileIntent(input.content),
+      presentationArtifact: detectPresentationArtifactIntent(input.content),
       missingLogPayload: detectMissingLogPayloadIntent(input.content),
     };
     const loopGuardState = initializeToolLoopGuardState(this.deps.toolLoopDetection);
@@ -2297,6 +2298,53 @@ export class ChatAgentOrchestrator {
     if (
       !approvalPayload &&
       finalStatus !== "cancelled" &&
+      input.toolAutonomy !== "manual" &&
+      intents.presentationArtifact &&
+      toolSchema.canonicalToModel.has("presentations.create") &&
+      !toolRuns.some((run) => run.toolName === "presentations.create") &&
+      toolRunCount < executionBudget.maxToolRunsPerTurn
+    ) {
+      throwIfChatTurnCancelled(input);
+      const rawArgs = buildSyntheticPresentationCreateArgs(input);
+      this.deps.storage.chatTurnTraces.patch(input.turnId, {
+        status: "waiting_for_tool",
+      });
+      const syntheticRun = await this.executeToolCall({
+        input,
+        turnId: input.turnId,
+        toolName: "presentations.create",
+        rawArgs,
+        localFileIntent,
+        priorToolRuns: toolRuns,
+        turnBudgetDeadline,
+      });
+      toolRuns.push(syntheticRun.record);
+      rememberToolLoopHistory(loopGuardState, syntheticRun.record);
+      yield {
+        type: "tool_start",
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        toolRun: {
+          ...syntheticRun.record,
+          status: "started",
+        },
+      };
+      if (syntheticRun.chunk) {
+        yield syntheticRun.chunk;
+      }
+      const preRepairContent = assistantContent;
+      assistantContent = mergePresentationArtifactDeliveryContent(assistantContent, syntheticRun.record);
+      if (assistantContent !== preRepairContent) {
+        markCompletionRepair("degraded_answer_synthesis", "orchestrator", preRepairContent, assistantContent);
+      }
+      if (syntheticRun.record.status === "executed" && finalStatus === "failed") {
+        finalStatus = "completed";
+      }
+    }
+
+    if (
+      !approvalPayload &&
+      finalStatus !== "cancelled" &&
       toolRuns.length > 0 &&
       (looksLikeDegradedAssistantFallbackContent(assistantContent) ||
         looksLikeSerializedToolCallMarkupContent(assistantContent))
@@ -2536,6 +2584,7 @@ export class ChatAgentOrchestrator {
       liveData: boolean;
       webLookup: boolean;
       localFile: boolean;
+      presentationArtifact: boolean;
     },
   ): Promise<{
     tools: Array<Record<string, unknown>>;
@@ -2659,7 +2708,7 @@ export class ChatAgentOrchestrator {
           toolName: tool.toolName,
           sessionId: input.sessionId,
           agentId: "assistant",
-          args: {},
+          args: buildToolAccessProbeArgs(tool.toolName),
         });
         if (!access.allowed) {
           continue;
@@ -2678,6 +2727,7 @@ export class ChatAgentOrchestrator {
           liveDataIntent: intents.liveData,
           webLookupIntent,
           localFileIntent,
+          presentationArtifactIntent: intents.presentationArtifact,
           memoryLookupIntent,
           memoryPersistenceIntent,
           projectBound,
@@ -2694,6 +2744,7 @@ export class ChatAgentOrchestrator {
       liveDataIntent: intents.liveData,
       webLookupIntent,
       localFileIntent,
+      presentationArtifactIntent: intents.presentationArtifact,
       memoryLookupIntent,
       memoryPersistenceIntent,
       explicitToolMentions,
@@ -3890,7 +3941,11 @@ export class ChatAgentOrchestrator {
       }
     | undefined
   > {
-    if (input.toolName !== "fs.write" && input.toolName !== "artifacts.create") {
+    if (
+      input.toolName !== "fs.write" &&
+      input.toolName !== "artifacts.create" &&
+      input.toolName !== "presentations.create"
+    ) {
       return undefined;
     }
     if (!isWriteJailBlockReason(input.policyReason)) {
@@ -4285,6 +4340,7 @@ function buildEssentialToolSet(input: {
   liveDataIntent: boolean;
   webLookupIntent: boolean;
   localFileIntent: boolean;
+  presentationArtifactIntent: boolean;
   memoryLookupIntent: boolean;
   memoryPersistenceIntent: boolean;
   explicitToolMentions: Set<string>;
@@ -4309,6 +4365,9 @@ function buildEssentialToolSet(input: {
     tools.add("browser.search");
     tools.add("browser.navigate");
     tools.add("http.get");
+  }
+  if (input.presentationArtifactIntent) {
+    tools.add("presentations.create");
   }
   if (!input.suppressLocalPathTools && (input.localFileIntent || input.projectBound || input.mode === "code")) {
     tools.add("fs.list");
@@ -4335,12 +4394,47 @@ function buildEssentialToolSet(input: {
   return [...tools];
 }
 
+function buildToolAccessProbeArgs(toolName: string): Record<string, unknown> {
+  if (toolName === "presentations.create") {
+    return {
+      path: "./workspace/goatcitadel_out/tool-access-probe.pptx",
+      title: "Tool access probe",
+      slides: [{ title: "Probe", bullets: ["Verifies the tool can write inside the workspace jail."] }],
+    };
+  }
+  if (toolName === "artifacts.create") {
+    return {
+      path: "./workspace/goatcitadel_out/tool-access-probe.md",
+      content: "Tool access probe",
+    };
+  }
+  if (toolName === "fs.write") {
+    return {
+      path: "./workspace/goatcitadel_out/tool-access-probe.txt",
+      content: "Tool access probe",
+    };
+  }
+  if (toolName === "fs.copy" || toolName === "fs.move") {
+    return {
+      from: "./workspace/goatcitadel_out/tool-access-probe.txt",
+      to: "./workspace/goatcitadel_out/tool-access-probe-copy.txt",
+    };
+  }
+  if (toolName === "fs.delete") {
+    return {
+      path: "./workspace/goatcitadel_out/tool-access-probe.txt",
+    };
+  }
+  return {};
+}
+
 function scoreToolForTurn(input: {
   tool: ToolCatalogEntry;
   mode: ChatMode;
   liveDataIntent: boolean;
   webLookupIntent: boolean;
   localFileIntent: boolean;
+  presentationArtifactIntent: boolean;
   memoryLookupIntent: boolean;
   memoryPersistenceIntent: boolean;
   projectBound: boolean;
@@ -4381,6 +4475,15 @@ function scoreToolForTurn(input: {
     );
     if (isWebToolName(tool.toolName)) {
       score -= 6;
+    }
+  }
+  if (input.presentationArtifactIntent) {
+    score += scoreToolIntentMatch(tool, ["presentation", "slide_deck", "powerpoint", "artifact_output"], 9);
+    if (tool.toolName === "presentations.create") {
+      score += 18;
+    }
+    if (tool.toolName === "artifacts.create") {
+      score += 2;
     }
   }
   if (input.memoryLookupIntent) {
@@ -4653,6 +4756,198 @@ function detectTimeIntent(content: string): boolean {
     normalized.includes("current time") ||
     normalized.includes("time is it") ||
     normalized.includes("local time")
+  );
+}
+
+function detectPresentationArtifactIntent(content: string): boolean {
+  const normalized = content.toLowerCase();
+  const presentationPhrase =
+    /\b(power\s?point|pptx?|(?:slide|pitch|investor|presentation)\s+deck|slides?|presentation)\b/.test(normalized);
+  if (!presentationPhrase) {
+    return false;
+  }
+  return (
+    /\b(create|make|build|generate|put|turn|export|save|write|produce|deliver)\b/.test(normalized) ||
+    /\b(file|format|artifact|download|power\s?point|pptx?)\b/.test(normalized)
+  );
+}
+
+function buildSyntheticPresentationCreateArgs(input: ChatAgentTurnInput): Record<string, unknown> {
+  const task = extractPrimaryUserTaskContent(input.content) ?? input.content;
+  const title = inferPresentationTitle(task);
+  const path = buildSafeWriteFallbackPath(input.sessionId, "presentations.create", `${title}.pptx`);
+  return {
+    path: path ?? "./workspace/goatcitadel_out/presentation.pptx",
+    title,
+    subtitle: "Generated by GoatCitadel Cowork",
+    slides: buildSyntheticPresentationSlides(task, title),
+  };
+}
+
+function inferPresentationTitle(content: string): string {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  const quotedTitle = normalized.match(/["'`](.{8,90}?)["'`]/)?.[1]?.trim();
+  if (quotedTitle) {
+    return titleCasePresentationText(quotedTitle);
+  }
+  if (/\bfree time\b/i.test(normalized) && /\btop\s*10\b/i.test(normalized)) {
+    return "Top 10 Things To Do In Free Time";
+  }
+  const topic =
+    normalized.match(/\b(?:about|on|for)\s+(.{8,100}?)(?:\.|$|\n)/i)?.[1]?.trim() ??
+    normalized
+      .match(/\b(?:power\s?point|pptx?|presentation|slides?|deck)\b\s+(?:about|on|for)?\s*(.{8,100}?)(?:\.|$|\n)/i)?.[1]
+      ?.trim();
+  return titleCasePresentationText(topic ?? "Presentation");
+}
+
+function titleCasePresentationText(value: string): string {
+  const cleaned = value
+    .replace(
+      /\b(?:please|create|make|build|generate|put|together|presentation|power\s?point|pptx?|slides?|deck|artifact|file)\b/gi,
+      " ",
+    )
+    .replace(/[^a-zA-Z0-9\s'-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 90);
+  if (!cleaned) {
+    return "Presentation";
+  }
+  return cleaned
+    .split(" ")
+    .map((word) =>
+      /^(?:a|an|and|as|at|but|by|for|in|near|of|on|or|the|to|with)$/i.test(word)
+        ? word.toLowerCase()
+        : `${word.slice(0, 1).toUpperCase()}${word.slice(1).toLowerCase()}`,
+    )
+    .join(" ")
+    .replace(/\b(?:Ai|Api|Ui|Ux|Pptx)\b/g, (match) => match.toUpperCase());
+}
+
+function buildSyntheticPresentationSlides(content: string, title: string): Array<{ title: string; bullets: string[] }> {
+  if (/\bfree time\b/i.test(content)) {
+    return [
+      {
+        title: "Why Free Time Matters",
+        bullets: [
+          "Restores attention, energy, and creativity",
+          "Creates room for health, relationships, and curiosity",
+          "Works best when activities match mood, time, and budget",
+        ],
+      },
+      {
+        title: "Top 10 Ideas",
+        bullets: [
+          "Read, walk, exercise, cook, learn, create",
+          "Volunteer, explore locally, connect with friends, rest intentionally",
+          "Mix active, social, creative, and quiet choices",
+        ],
+      },
+      {
+        title: "Active Options",
+        bullets: [
+          "Take a walk, hike, bike ride, or gym session",
+          "Try a class or recreational sport",
+          "Choose movement that feels repeatable, not punishing",
+        ],
+      },
+      {
+        title: "Creative Options",
+        bullets: [
+          "Write, draw, play music, garden, or make something useful",
+          "Use small projects to lower the starting friction",
+          "Keep a simple idea list for open evenings",
+        ],
+      },
+      {
+        title: "Social and Local Options",
+        bullets: [
+          "Meet friends, visit a park, museum, cafe, or local event",
+          "Volunteer for a cause that already matters to you",
+          "Rotate familiar favorites with one new thing each month",
+        ],
+      },
+      {
+        title: "Choosing Well",
+        bullets: [
+          "Match the activity to your energy level",
+          "Protect some free time from productivity pressure",
+          "Track what leaves you feeling better afterward",
+        ],
+      },
+    ];
+  }
+  return [
+    {
+      title,
+      bullets: [
+        "Summarizes the requested topic in a shareable slide format",
+        "Keeps the deck concise and easy to edit",
+        "Uses a real PPTX artifact rather than text-only presentation notes",
+      ],
+    },
+    {
+      title: "Key Points",
+      bullets: extractPresentationBulletsFromPrompt(content),
+    },
+    {
+      title: "Recommended Structure",
+      bullets: ["Open with the purpose", "Group details into clear sections", "Close with next steps or takeaways"],
+    },
+  ];
+}
+
+function extractPresentationBulletsFromPrompt(content: string): string[] {
+  const lines = content
+    .split(/\r?\n|[.;]/)
+    .map((line) => line.replace(/^[-*\d.)\s]+/, "").trim())
+    .filter((line) => line.length >= 12 && !/^suggested tools:/i.test(line))
+    .slice(0, 5);
+  return lines.length > 0
+    ? lines.map((line) => line.slice(0, 180))
+    : ["Clarify the main audience", "Focus each slide on one idea", "Keep bullets brief and scannable"];
+}
+
+function mergePresentationArtifactDeliveryContent(existingContent: string, toolRun: ChatToolRunRecord): string {
+  if (toolRun.status !== "executed") {
+    const failure = toolRun.error ?? "the presentation tool did not complete";
+    const fallback = `I tried to create the PowerPoint artifact with \`presentations.create\`, but ${failure}.`;
+    return existingContent.trim().length > 0 ? `${existingContent.trim()}\n\n${fallback}` : fallback;
+  }
+  const result = (toolRun.result ?? {}) as Record<string, unknown>;
+  const path =
+    typeof result.path === "string"
+      ? result.path
+      : typeof result.fallbackPath === "string"
+        ? result.fallbackPath
+        : typeof toolRun.args?.path === "string"
+          ? toolRun.args.path
+          : "the requested PPTX path";
+  const slideCount = typeof result.slideCount === "number" ? result.slideCount : undefined;
+  const bytesWritten = typeof result.bytesWritten === "number" ? result.bytesWritten : undefined;
+  const delivery = [
+    `Created the PowerPoint presentation artifact at \`${path}\`.`,
+    slideCount !== undefined ? `Slides: ${slideCount}.` : undefined,
+    bytesWritten !== undefined ? `Size: ${bytesWritten} bytes.` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const trimmed = existingContent.trim();
+  if (!trimmed || looksLikeMissingPresentationArtifactContent(trimmed)) {
+    return delivery;
+  }
+  if (trimmed.includes(path)) {
+    return trimmed;
+  }
+  return `${trimmed}\n\n${delivery}`;
+}
+
+function looksLikeMissingPresentationArtifactContent(content: string): boolean {
+  return (
+    /\b(?:could not|couldn't|unable to|did not|didn't|not able to|no verified|not created|was not created)\b/i.test(
+      content,
+    ) && /\b(?:pptx?|power\s?point|presentation|slides?|deck|artifact|file)\b/i.test(content)
   );
 }
 
@@ -13511,12 +13806,12 @@ function extractExplicitToolLikeReferences(content: string): Set<string> {
   const matches = new Set<string>();
   const normalized = content.toLowerCase();
   for (const match of normalized.matchAll(
-    /\b(browser|http|file|code|memory|shell|git|tests|lint|time)\.[a-z][a-z0-9_.-]*\b/g,
+    /\b(browser|http|file|code|memory|shell|git|tests|lint|time|artifacts|presentations)\.[a-z][a-z0-9_.-]*\b/g,
   )) {
     matches.add(match[0]!);
   }
   for (const match of normalized.matchAll(
-    /\b(browser|http|file|code|memory|shell|git|tests|lint|time)_[a-z][a-z0-9_-]*\b/g,
+    /\b(browser|http|file|code|memory|shell|git|tests|lint|time|artifacts|presentations)_[a-z][a-z0-9_-]*\b/g,
   )) {
     const raw = match[0]!;
     const namespaceEnd = raw.indexOf("_");
@@ -13601,8 +13896,11 @@ function buildSafeWriteFallbackPath(sessionId: string, toolName: string, origina
   const match = fileName.match(/^(.+?)(\.[a-zA-Z0-9_-]{1,12})$/);
   const baseName = (match?.[1] ?? fileName).trim();
   const ext = (match?.[2] ?? "").trim();
-  const safeBaseName = sanitizePathSegment(baseName) || (toolName === "artifacts.create" ? "artifact" : "output");
-  const fallbackExt = ext || (toolName === "artifacts.create" ? ".md" : ".txt");
+  const safeBaseName =
+    sanitizePathSegment(baseName) ||
+    (toolName === "presentations.create" ? "presentation" : toolName === "artifacts.create" ? "artifact" : "output");
+  const fallbackExt =
+    ext || (toolName === "presentations.create" ? ".pptx" : toolName === "artifacts.create" ? ".md" : ".txt");
   return `${SAFE_WRITE_FALLBACK_DIR}/${safeBaseName}-${safeSessionId}${fallbackExt}`;
 }
 

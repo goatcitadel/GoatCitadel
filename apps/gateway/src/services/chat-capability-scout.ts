@@ -93,10 +93,14 @@ const GAP_SIGNAL =
 export async function scoutCapabilityUpgradeSuggestions(
   input: CapabilityScoutInput,
 ): Promise<ChatCapabilityUpgradeSuggestion[]> {
-  if (!looksToolOrientedRequest(input.content)) {
+  const presentationArtifactIntent = detectPresentationArtifactIntent(input.content);
+  if (!looksToolOrientedRequest(input.content) && !presentationArtifactIntent) {
     return [];
   }
-  if (!looksLikeCapabilityGap(input.assistantText, input.trace)) {
+  if (
+    !looksLikeCapabilityGap(input.assistantText, input.trace) &&
+    !looksLikeMissingRequestedPresentationArtifact(input, presentationArtifactIntent)
+  ) {
     return [];
   }
 
@@ -172,7 +176,9 @@ export async function scoutCapabilityUpgradeSuggestions(
   }
 
   const directSourceUrl = extractDirectSourceUrl(input.content);
-  const searchQuery = buildCapabilitySearchQuery(input.content);
+  const searchQuery = presentationArtifactIntent
+    ? "powerpoint presentation slides deck pptx"
+    : buildCapabilitySearchQuery(input.content);
   if (directSourceUrl || searchQuery) {
     try {
       const sourceResults = directSourceUrl
@@ -272,6 +278,34 @@ function looksLikeCapabilityGap(assistantText: string, trace?: ChatTurnTraceReco
   const executed = toolRuns.filter((item) => item.status === "executed");
   const blocked = toolRuns.filter((item) => item.status === "blocked" || item.status === "failed");
   return executed.length === 0 && (trace?.status === "failed" || blocked.length > 0);
+}
+
+function looksLikeMissingRequestedPresentationArtifact(
+  input: CapabilityScoutInput,
+  presentationIntent: boolean,
+): boolean {
+  if (!presentationIntent) {
+    return false;
+  }
+  const ranPresentationTool = (input.trace?.toolRuns ?? []).some(
+    (run) => run.toolName === "presentations.create" && run.status === "executed",
+  );
+  if (ranPresentationTool) {
+    return false;
+  }
+  const assistantText = input.assistantText.toLowerCase();
+  const claimsCreatedDeck =
+    /\b(power\s?point|pptx?|slide\s+deck|presentation)\b/.test(assistantText) &&
+    /\b(created|saved|exported|attached|workspace|artifact|\.pptx)\b/.test(assistantText);
+  return !claimsCreatedDeck;
+}
+
+function detectPresentationArtifactIntent(content: string): boolean {
+  const normalized = content.toLowerCase();
+  return (
+    /\b(power\s?point|pptx?|(?:slide|pitch|investor|presentation)\s+deck|slides?|presentation)\b/.test(normalized) &&
+    /\b(create|make|build|generate|put|turn|export|save|write|produce|deliver|format|file)\b/.test(normalized)
+  );
 }
 
 function rankToolMatches(content: string, catalog: ToolCatalogEntry[]): Array<ToolCatalogEntry & { score: number }> {

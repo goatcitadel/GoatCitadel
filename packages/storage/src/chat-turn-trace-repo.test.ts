@@ -417,6 +417,41 @@ describe("ChatTurnTraceRepository", () => {
     assert.equal(attachTurnTraceDetails(trace, {}).citations, trace.citations);
   });
 
+  it("treats duplicate trace starts for the same turn as idempotent", () => {
+    const { repo } = createStore();
+    const created = repo.create(
+      baseTrace({
+        status: "running",
+        model: "gpt-original",
+        startedAt: "2026-03-26T00:00:01.000Z",
+      }),
+    );
+
+    const duplicate = repo.create(
+      baseTrace({
+        status: "failed",
+        model: "gpt-duplicate",
+        failure: {
+          failureClass: "unknown",
+          message: "duplicate should not replace the running trace",
+          retryable: true,
+        },
+        startedAt: "2026-03-26T00:00:02.000Z",
+      }),
+    );
+
+    assert.equal(duplicate.turnId, created.turnId);
+    assert.equal(duplicate.status, "running");
+    assert.equal(duplicate.model, "gpt-original");
+    assert.equal(duplicate.failure, undefined);
+    assert.equal(duplicate.startedAt, "2026-03-26T00:00:01.000Z");
+
+    assert.throws(
+      () => repo.create(baseTrace({ sessionId: "other-session" })),
+      /already belongs to session session-a and message user-message-a/,
+    );
+  });
+
   it("filters malformed rows and falls back on malformed persisted JSON", () => {
     const { db, repo } = createStore();
     repo.create(
