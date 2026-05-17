@@ -1,5 +1,6 @@
 import type {
   ChatAttachmentRecord,
+  ChatDelegationSuggestionRecord,
   ChatGeneratedArtifactRecord,
   ChatMode,
   ChatSessionRecord,
@@ -42,6 +43,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   thread: ChatThreadResponse | null;
   selectedTurnId: string | null;
   delegationRun: ActiveChatDelegationRun | null;
+  delegationSuggestion: ChatDelegationSuggestionRecord | null;
   notices: ChatThreadNotice[];
   followOutput: boolean;
   streamStatus: ChatStreamStatus;
@@ -64,6 +66,8 @@ export interface MissionControlActiveSessionSurfaceProps {
   onOpenGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifactVersion: (turnId: string) => void;
+  onAcceptDelegation: () => Promise<void>;
+  onDismissDelegationSuggestion: () => void;
   onApprovePending: (allowScope: "once" | "session" | "workspace") => void;
   onDenyPending: () => void;
   onSubmitUserInput: (response: { kind: "single_select"; optionId: string } | { kind: "text"; text: string }) => void;

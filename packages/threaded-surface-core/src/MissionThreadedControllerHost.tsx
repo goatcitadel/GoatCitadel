@@ -1740,6 +1740,7 @@ export function MissionThreadedControllerHost({
           await createCodeModeRun({
             language: normalizedLanguage.startsWith("ts") ? "typescript" : "javascript",
             source,
+            originSurface: "code",
             sessionId,
             turnId: selectedTurn?.turnId,
             requestedOutputIntent: "workbench_helper",
@@ -2387,6 +2388,7 @@ export function MissionThreadedControllerHost({
         thread,
         selectedTurnId,
         delegationRun: visibleDelegationRun,
+        delegationSuggestion,
         notices: localNotices,
         followOutput: followThreadOutput,
         streamStatus: streamStatus as ChatStreamStatus,
@@ -2419,6 +2421,8 @@ export function MissionThreadedControllerHost({
         onCreateGeneratedArtifact: (turnId) => void handleCreateGeneratedArtifactFromTurn(turnId),
         onCreateGeneratedArtifactVersion: (turnId) =>
           void handleCreateGeneratedArtifactFromTurn(turnId, { supersedeLatest: true }),
+        onAcceptDelegation: handleAcceptDelegation,
+        onDismissDelegationSuggestion: () => setDelegationSuggestion(null),
         onApprovePending: (allowScope) => void handleApprovePending(allowScope),
         onDenyPending: () => void handleDenyPending(),
         onSubmitUserInput: (response) => void handleSubmitUserInput(response),

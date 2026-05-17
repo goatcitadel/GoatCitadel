@@ -741,7 +741,6 @@ export function useChatDelegationPolicyActions(input: {
         }
         if (subagentPolicy === "ask_when_useful") {
           setDelegationSuggestion(suggested.suggestion);
-          pushLocalNotice("Subagents may help with this task. Review the suggested delegation plan in Assist.");
           return;
         }
         setSending(true);

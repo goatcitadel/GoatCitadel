@@ -593,7 +593,9 @@ describe("useChatDelegationPolicyActions", () => {
       objective: "Please implement, refactor, test, and review this end-to-end with several agents.",
     });
     expect(latestHarness?.result.delegationSuggestion?.objective).toBe("Suggested plan");
-    expect(latestHarness?.notices.at(-1)?.content).toContain("Subagents may help");
+    expect(latestHarness?.notices.map((notice) => notice.content)).not.toContain(
+      "Subagents may help with this task. Review the suggested delegation plan in Assist.",
+    );
   });
 
   it("handles missing sessions, empty objectives, and API failures", async () => {

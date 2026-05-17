@@ -305,6 +305,17 @@ describe("ChatDelegationService loop 20 coverage", () => {
         steps: [{ stepId: "architect-step", role: "architect", index: 0, dependsOnStepIds: ["architect-step"] }],
       }),
     ).rejects.toThrow(/cannot depend on itself/);
+    await expect(
+      service.runChatDelegation("sess-1", {
+        objective: "Run duplicate step ids",
+        roles: ["architect", "qa"],
+        mode: "parallel",
+        steps: [
+          { stepId: "shared-step", role: "architect", index: 0 },
+          { stepId: "shared-step", role: "qa", index: 1 },
+        ],
+      }),
+    ).rejects.toThrow(/duplicated/);
     const codeHarness = createHarness({ prefs: buildPrefs({ mode: "code" }), projectId: undefined });
     codeHarness.deps.storage.chatSessionProjects.get = vi.fn(() => undefined);
     await expect(
@@ -328,8 +339,38 @@ describe("ChatDelegationService loop 20 coverage", () => {
         ],
       }),
     ).rejects.toThrow(/dependency cycle/);
-    expect(cycleHarness.deps.taskLifecycleService.createTask).toHaveBeenCalledWith(
-      expect.objectContaining({ description: "Run dependency cycle" }),
+    expect(cycleHarness.deps.taskLifecycleService.createTask).not.toHaveBeenCalled();
+    expect(cycleHarness.deps.storage.chatDelegationRuns.create).not.toHaveBeenCalled();
+  });
+
+  it("normalizes caller-supplied plan step ids into unique persisted delegation step ids", async () => {
+    const { deps, service } = createHarness();
+
+    const result = await service.runChatDelegation("sess-1", {
+      objective: "Split a planned turn into persisted delegation steps",
+      roles: ["architect", "qa"],
+      mode: "parallel",
+      steps: [
+        { stepId: "plan-step-1", role: "architect", index: 0, parallelizable: true },
+        { stepId: "plan-step-2", role: "qa", index: 1, parallelizable: false, dependsOnStepIds: ["plan-step-1"] },
+      ],
+    });
+
+    const actualStepIds = result.steps.map((step) => step.stepId);
+    expect(actualStepIds).toHaveLength(2);
+    expect(new Set(actualStepIds).size).toBe(2);
+    expect(actualStepIds).not.toEqual(expect.arrayContaining(["plan-step-1", "plan-step-2"]));
+    expect(deps.storage.chatDelegationSteps.create).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ stepId: result.steps[0]?.stepId, role: "architect" }),
+    );
+    expect(deps.taskLifecycleService.registerTaskSubagent).toHaveBeenNthCalledWith(
+      2,
+      "task-1",
+      expect.objectContaining({
+        agentName: "qa",
+        metadata: expect.objectContaining({ dependsOnStepIds: [result.steps[0]?.stepId] }),
+      }),
     );
   });
 

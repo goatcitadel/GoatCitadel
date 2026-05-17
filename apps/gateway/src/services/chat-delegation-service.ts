@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Chat delegation centralizes run persistence, child sessions, dependency ordering, and synthesis truth. */
 import { randomUUID } from "node:crypto";
 import type {
   AgenticSubagentMetadata,
@@ -205,6 +206,7 @@ export class ChatDelegationService {
       mode,
       steps: input.steps,
     });
+    const stages = buildDelegationStages(delegationSteps);
     const prefs = deps.ensureChatSessionModelDefaults(sessionId, deps.storage.chatSessionPrefs.ensure(sessionId));
     const executionMode: ChatMode = input.surfaceMode ?? prefs.mode;
     const providerId = input.providerId ?? prefs.providerId;
@@ -274,7 +276,6 @@ export class ChatDelegationService {
     let trace: ChatTurnTraceRecord["routing"] | undefined;
     const completedOutputs = new Map<string, { role: string; output: string }>();
     const stepResults = new Map<string, DelegationStepExecutionResult>();
-    const stages = buildDelegationStages(delegationSteps);
     const subagentDefaults = deps.subagentDefaults ?? DEFAULT_SUBAGENT_DEFAULTS;
     const inferredParentDepth = resolveInferredParentDepth(deps, sessionId);
     const parentDepth = input.parentSubagentDepth ?? inferredParentDepth;
@@ -904,16 +905,35 @@ function normalizeDelegationSteps(input: {
   });
 
   provisional.sort((left, right) => left.requestedIndex - right.requestedIndex);
-  const seenStepIds = new Set<string>();
+  const seenRequestedStepIds = new Set<string>();
+  for (const step of provisional) {
+    if (!step.requestedStepId) {
+      continue;
+    }
+    if (seenRequestedStepIds.has(step.requestedStepId)) {
+      throw new Error(`delegation step id "${step.requestedStepId}" is duplicated`);
+    }
+    seenRequestedStepIds.add(step.requestedStepId);
+  }
+
+  const requestedToActualStepIds = new Map<string, string>();
+  const actualStepIds: string[] = provisional.map((step) => {
+    const actualStepId = randomUUID();
+    if (step.requestedStepId) {
+      requestedToActualStepIds.set(step.requestedStepId, actualStepId);
+    }
+    return actualStepId;
+  });
   const normalized = provisional.map((step, index) => {
-    const stepId = step.requestedStepId && !seenStepIds.has(step.requestedStepId) ? step.requestedStepId : randomUUID();
-    seenStepIds.add(stepId);
+    const stepId = actualStepIds[index]!;
     return {
       stepId,
       index,
       role: step.role,
       parallelizable: step.parallelizable,
-      dependsOnStepIds: step.dependsOnStepIds,
+      dependsOnStepIds: step.dependsOnStepIds.map(
+        (dependencyStepId) => requestedToActualStepIds.get(dependencyStepId) ?? dependencyStepId,
+      ),
     };
   });
 

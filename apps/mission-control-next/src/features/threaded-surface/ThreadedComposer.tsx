@@ -85,6 +85,21 @@ function formatUsageLabel(thread: MissionThreadedActiveSessionSurfaceProps["thre
   return `${formatTokenLabel(totals.tokens)} / ${formatCostLabel(totals.costUsd)}`;
 }
 
+function formatDelegationMode(mode: string): string {
+  return mode
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatDelegationConfidence(confidence?: number): string | null {
+  if (typeof confidence !== "number" || !Number.isFinite(confidence)) {
+    return null;
+  }
+  return `${Math.round(Math.max(0, Math.min(1, confidence)) * 100)}% confidence`;
+}
+
 const COMPOSER_KILL_SWITCH_KEY = "mc-next:composer-v2";
 const COMPOSER_KILL_SWITCH_FALSE_VALUES = new Set(["off", "false", "0", "no", "disabled"]);
 const IN_PROGRESS_MEMORY_TRACE_STATUSES = new Set([
@@ -231,6 +246,60 @@ function PendingImagePreview({ attachment }: { attachment: PendingAttachment }) 
     <div className="mc-next-composer-image-shell loading">
       <p>{fallbackLoading ? "Loading image preview..." : `Preview unavailable: ${error}`}</p>
     </div>
+  );
+}
+
+function ComposerDelegationApproval({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
+  const suggestion = props.delegationSuggestion;
+  if (!suggestion) {
+    return null;
+  }
+
+  const roleCount = suggestion.roles.length;
+  const roleSummary = roleCount === 1 ? "1 subagent" : `${roleCount} subagents`;
+  const confidenceLabel = formatDelegationConfidence(suggestion.confidence);
+  const reason = suggestion.reason?.trim();
+
+  return (
+    <section className="mc-next-composer-delegation-approval" role="alert" aria-live="assertive">
+      <div className="mc-next-composer-delegation-head">
+        <StatusChip tone="warning">Subagent approval</StatusChip>
+        <strong>Approve subagents for this run?</strong>
+        {confidenceLabel ? <span>{confidenceLabel}</span> : null}
+      </div>
+      <p>
+        Cowork can split this into {roleSummary} with {formatDelegationMode(suggestion.mode)} execution.
+      </p>
+      <p className="mc-next-composer-delegation-objective">{suggestion.objective}</p>
+      {reason ? <p className="mc-next-composer-delegation-reason">{reason}</p> : null}
+      {suggestion.roles.length > 0 ? (
+        <div className="mc-next-composer-delegation-roles" aria-label="Suggested subagent roles">
+          {suggestion.roles.map((role) => (
+            <StatusChip key={role} tone="muted">
+              {role}
+            </StatusChip>
+          ))}
+        </div>
+      ) : null}
+      <div className="mc-next-composer-delegation-actions">
+        <button
+          type="button"
+          className="mc-next-composer-inline-button primary"
+          disabled={props.sending}
+          onClick={() => void props.onAcceptDelegation()}
+        >
+          Approve subagents
+        </button>
+        <button
+          type="button"
+          className="mc-next-composer-inline-button"
+          disabled={props.sending}
+          onClick={props.onDismissDelegationSuggestion}
+        >
+          Keep single run
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -451,6 +520,8 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           </div>
         </div>
       ) : null}
+
+      <ComposerDelegationApproval props={props} />
 
       <div className="mc-next-composer-input-shell">
         <textarea

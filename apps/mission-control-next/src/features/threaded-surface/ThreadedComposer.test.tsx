@@ -47,6 +47,7 @@ function buildProps(overrides: Partial<any> = {}) {
     commandIndex: 0,
     pendingAttachments: [],
     threadKnowledgeAttachments: [],
+    delegationSuggestion: null,
     presetOptions: [],
     selectedPresetId: "",
     presetApplyWarning: null,
@@ -104,6 +105,8 @@ function buildProps(overrides: Partial<any> = {}) {
     onKnowledgeUrlModeChange: vi.fn(),
     onPresetChange: vi.fn(),
     onApplyPreset: vi.fn(),
+    onAcceptDelegation: vi.fn(async () => undefined),
+    onDismissDelegationSuggestion: vi.fn(),
     onStopActiveTurn: vi.fn(),
     onSend: vi.fn(),
     voiceInputAvailable: false,
@@ -343,6 +346,41 @@ describe("ThreadedComposer", () => {
   it("uses surface-specific primary action labels", () => {
     expect(buildMarkup({ mode: "cowork" })).toContain("Delegate");
     expect(buildMarkup({ mode: "code" })).toContain("Implement");
+  });
+
+  it("renders subagent suggestions as an inline composer approval", async () => {
+    const onAcceptDelegation = vi.fn(async () => undefined);
+    const onDismissDelegationSuggestion = vi.fn();
+    const renderer = await renderComposer({
+      mode: "cowork",
+      delegationSuggestion: {
+        suggestionId: "suggestion-1",
+        sessionId: "session-1",
+        objective: "Research launch options, verify sources, and synthesize the final brief.",
+        roles: ["Researcher", "QA"],
+        mode: "parallel",
+        confidence: 0.82,
+        reason: "Independent research and verification can run side by side.",
+        source: "heuristic",
+        createdAt: "2026-05-16T00:00:00.000Z",
+      },
+      onAcceptDelegation,
+      onDismissDelegationSuggestion,
+    });
+
+    const text = collectText(renderer.root);
+    expect(text).toContain("Subagent approval");
+    expect(text).toContain("Approve subagents for this run?");
+    expect(text).toContain("2 subagents");
+    expect(text).toContain("82% confidence");
+    expect(text).toContain("Researcher");
+    expect(text).toContain("QA");
+
+    await click(findButton(renderer.root, "Approve subagents"));
+    await click(findButton(renderer.root, "Keep single run"));
+
+    expect(onAcceptDelegation).toHaveBeenCalledTimes(1);
+    expect(onDismissDelegationSuggestion).toHaveBeenCalledTimes(1);
   });
 
   it("covers residual route, mode, and primary label branches", async () => {
