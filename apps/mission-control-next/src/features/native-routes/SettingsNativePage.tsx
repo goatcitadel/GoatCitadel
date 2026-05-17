@@ -5874,8 +5874,10 @@ function SettingsPostureCard({
       {rows.length > 0 ? (
         <ul className="mc-next-settings-posture-card-rows">
           {rows.map((row) => (
-            <li key={`${title}-${row.name}`}>
-              <span className="mc-next-settings-posture-card-row-name">{row.name}</span>
+            <li key={`${title}-${row.name}`} aria-label={`${title}: ${row.name} is ${row.state}`}>
+              <span className="mc-next-settings-posture-card-row-name" title={row.name}>
+                {row.name}
+              </span>
               <ThreePartChip tone={row.tone} state={row.state} age={row.age} />
             </li>
           ))}

@@ -1,5 +1,7 @@
 # Plugin/Extension SDK Expansion (O10–O15) Implementation Plan
 
+> Implementation-plan artifact only. This document may name proposed files, commands, tests, and runtime behavior; treat those as plan intent, not shipped 1.0 truth, unless the current implementation and release evidence prove them.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Expand the plugin/extension SDK with 4 new `HookTrigger` values, an intercept-veto regression suite, a `tool_override` plugin flag, a `[[as_document]]` skill output directive, and page-scoped dashboard slots — per the OpenClaw + Hermes Agent gap review for 2026-05-15.
@@ -8,7 +10,7 @@
 
 **Tech Stack:** TypeScript, Fastify (gateway routes), Vitest (tests), Zod (route schemas), pnpm workspaces.
 
-**Branch:** `feature/plugin-sdk-hooks-expansion` — confirm with user whether to rename the current worktree branch or open a new worktree before starting.
+**Original workstream label:** `feature/plugin-sdk-hooks-expansion`; historical plan metadata, not the current release branch.
 
 ---
 
@@ -1405,7 +1407,7 @@ git push -u origin feature/plugin-sdk-hooks-expansion
 
 - [ ] **Step 4: Update upstream review doc**
 
-Edit `.codex-tmp/upstream-review/openclaw-hermes-weekly-gap-review-2026-05-15.md` items O10–O15 to mark "Shipped where covered by contracts/services; plugin override has coordinator-level handler proof, installed-plugin e2e proof still pending" inline.
+If updating an upstream-review summary, mark items O10-O15 as "covered where backed by committed contracts/services; plugin override has coordinator-level handler proof, installed-plugin e2e proof still pending." Do not treat untracked scratch notes as release evidence.
 
 ---
 

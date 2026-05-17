@@ -32,26 +32,29 @@ export type AgenticFailureClass =
 
 export type AgenticDiagnosticSeverity = "info" | "warning" | "critical";
 
-export type AgenticDiagnosticCode =
-  | "repeated_tool_result"
-  | "post_compaction_loop"
-  | "missing_assistant_output"
-  | "stale_approval"
-  | "child_timeout"
-  | "timeout_exceeded"
-  | "max_depth_exceeded"
-  | "spawn_failure"
-  | "worker_crash"
-  | "stale_worker"
-  | "invalid_assignee_profile"
-  | "unsafe_status_transition"
-  | "provider_fallback_loop"
-  | "dirty_worktree_without_artifact"
-  | "missing_claimed_artifact"
-  | "missing_claimed_file"
-  | "missing_claimed_test"
-  | "repeated_phase_failure"
-  | "final_delivery_retry";
+export const AGENTIC_DIAGNOSTIC_CODES = [
+  "repeated_tool_result",
+  "post_compaction_loop",
+  "missing_assistant_output",
+  "stale_approval",
+  "child_timeout",
+  "timeout_exceeded",
+  "max_depth_exceeded",
+  "spawn_failure",
+  "worker_crash",
+  "stale_worker",
+  "invalid_assignee_profile",
+  "unsafe_status_transition",
+  "provider_fallback_loop",
+  "dirty_worktree_without_artifact",
+  "missing_claimed_artifact",
+  "missing_claimed_file",
+  "missing_claimed_test",
+  "repeated_phase_failure",
+  "final_delivery_retry",
+] as const;
+
+export type AgenticDiagnosticCode = (typeof AGENTIC_DIAGNOSTIC_CODES)[number];
 
 export interface AgenticDiagnosticSignal {
   signalId: string;

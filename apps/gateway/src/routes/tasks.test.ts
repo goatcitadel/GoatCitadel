@@ -288,6 +288,16 @@ describe("tasks routes", () => {
         summary: "The worker claimed a test that was not present.",
       },
     });
+    const timeoutDiagnostic = await app.inject({
+      method: "POST",
+      url: "/api/v1/tasks/task-1/agentic/diagnostics",
+      payload: {
+        code: "timeout_exceeded",
+        severity: "critical",
+        title: "Child timed out",
+        summary: "The child worker exceeded the configured execution timeout.",
+      },
+    });
 
     expect(deliverable.statusCode).toBe(201);
     expect(subagent.statusCode).toBe(200);
@@ -301,11 +311,19 @@ describe("tasks routes", () => {
     expect(tree.json()).toEqual({ runId: "run-1", children: [] });
     expect(control.json()).toMatchObject({ accepted: true, action: "steer", instruction: "stay scoped" });
     expect(diagnostic.statusCode).toBe(201);
+    expect(timeoutDiagnostic.statusCode).toBe(201);
     expect(appendTaskDiagnostic).toHaveBeenCalledWith(
       "task-1",
       expect.objectContaining({
         code: "missing_claimed_test",
         severity: "warning",
+      }),
+    );
+    expect(appendTaskDiagnostic).toHaveBeenCalledWith(
+      "task-1",
+      expect.objectContaining({
+        code: "timeout_exceeded",
+        severity: "critical",
       }),
     );
   });

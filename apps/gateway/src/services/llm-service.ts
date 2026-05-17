@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- LLM transport and provider normalization are intentionally centralized until provider seams are split further. */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
+import path from "node:path";
 import { logger } from "@goatcitadel/gateway-core";
 import { assertHostAllowed } from "@goatcitadel/policy-engine";
 import { Agent, ProxyAgent } from "undici";
@@ -1429,7 +1430,8 @@ function normalizeProviderApiStyle(providerId: string, apiStyle: LlmApiStyle | u
     apiStyle === "openai-chat-completions" ||
     apiStyle === "openai-responses" ||
     apiStyle === "openai-codex-responses" ||
-    apiStyle === "anthropic-messages"
+    apiStyle === "anthropic-messages" ||
+    apiStyle === "bedrock-messages"
   ) {
     return apiStyle;
   }
@@ -1590,11 +1592,24 @@ function buildFallbackModelCatalog(providerId: string, defaultModel: string | un
 
 function defaultModelMetadataPath(configFilePath: string | undefined): string {
   if (!configFilePath) {
-    return "config/llm-model-metadata.json";
+    return findNearestModelMetadataPath(process.cwd()) ?? "config/llm-model-metadata.json";
   }
-  const lastSep = Math.max(configFilePath.lastIndexOf("/"), configFilePath.lastIndexOf("\\"));
-  const dir = lastSep >= 0 ? configFilePath.slice(0, lastSep) : ".";
-  return `${dir}/llm-model-metadata.json`;
+  return path.join(path.dirname(configFilePath), "llm-model-metadata.json");
+}
+
+function findNearestModelMetadataPath(startDir: string): string | undefined {
+  let current = path.resolve(startDir);
+  while (true) {
+    const candidate = path.join(current, "config", "llm-model-metadata.json");
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return undefined;
+    }
+    current = parent;
+  }
 }
 
 function normalizeModelRecords(payload: unknown): LlmModelRecord[] {

@@ -127,6 +127,30 @@ beforeEach(() => {
 });
 
 describe("CuratorRoutePage", () => {
+  it("passes loading and load errors through the native frame", async () => {
+    let resolveStatus: (value: typeof sampleStatus) => void = () => undefined;
+    curatorApiMocks.fetchCuratorStatus.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveStatus = resolve;
+      }),
+    );
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<CuratorRoutePage {...defaultProps} />);
+    });
+    expect(readText(renderer.root)).toContain("Loading current route data");
+    await act(async () => {
+      resolveStatus(sampleStatus);
+    });
+
+    curatorApiMocks.fetchCuratorStatus.mockRejectedValueOnce(new Error("curator route offline"));
+    await act(async () => {
+      renderer = create(<CuratorRoutePage {...defaultProps} />);
+    });
+    await act(async () => undefined);
+    expect(readText(renderer.root)).toContain("curator route offline");
+  });
+
   it("renders proposal-only actions and immunity badges", async () => {
     const renderer = await renderPage();
     const text = readText(renderer.root);

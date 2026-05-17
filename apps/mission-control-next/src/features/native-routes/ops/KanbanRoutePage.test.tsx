@@ -77,6 +77,24 @@ async function renderPage(): Promise<ReactTestRenderer> {
   return renderer;
 }
 
+function findRequiredByTestId(renderer: ReactTestRenderer, testId: string): ReactTestInstance {
+  const node = renderer.root.findAll((candidate) => candidate.props?.["data-testid"] === testId)[0];
+  if (!node) {
+    throw new Error(`${testId} not found`);
+  }
+  return node;
+}
+
+function findRequiredButton(renderer: ReactTestRenderer, label: string): ReactTestInstance {
+  const button = renderer.root.findAll(
+    (node) => node.type === "button" && collectText(node).trim().toLowerCase() === label.toLowerCase(),
+  )[0];
+  if (!button) {
+    throw new Error(`${label} button not found`);
+  }
+  return button;
+}
+
 describe("KanbanRoutePage", () => {
   it("renders four columns and groups tasks correctly", async () => {
     const renderer = await renderPage();
@@ -100,23 +118,37 @@ describe("KanbanRoutePage", () => {
 
   it("fires bulkTaskAction with unblock when the operator clicks Unblock with selections", async () => {
     const renderer = await renderPage();
-    const checkbox = renderer.root.findAll((node) => node.props?.["data-testid"] === "kanban-select-t-2")[0];
-    if (!checkbox) {
-      throw new Error("kanban-select-t-2 checkbox not found");
-    }
+    const checkbox = findRequiredByTestId(renderer, "kanban-select-t-2");
     await act(async () => {
       checkbox.props.onChange();
     });
-    const unblockButton = renderer.root.findAll(
-      (node) => node.type === "button" && collectText(node).trim().toLowerCase() === "unblock",
-    )[0];
-    if (!unblockButton) {
-      throw new Error("unblock button not found");
-    }
+    const unblockButton = findRequiredButton(renderer, "unblock");
     await act(async () => {
       await unblockButton.props.onClick();
     });
     expect(bulkTaskAction).toHaveBeenCalledWith({ action: "unblock", taskIds: ["t-2"] });
+    const updatedCheckbox = findRequiredByTestId(renderer, "kanban-select-t-2");
+    expect((updatedCheckbox.props as { checked: boolean }).checked).toBe(false);
+    expect(collectText(renderer.root)).toContain("1 selected task updated.");
+    act(() => renderer.unmount());
+  });
+
+  it("surfaces bulk action failures and keeps the selected task checked", async () => {
+    bulkTaskAction.mockRejectedValueOnce(new Error("bulk route offline"));
+    const renderer = await renderPage();
+    const checkbox = findRequiredByTestId(renderer, "kanban-select-t-2");
+    await act(async () => {
+      checkbox.props.onChange();
+    });
+    const unblockButton = findRequiredButton(renderer, "unblock");
+
+    await act(async () => {
+      await unblockButton.props.onClick();
+    });
+
+    expect(collectText(renderer.root)).toContain("bulk route offline");
+    const checkedAfterFailure = findRequiredByTestId(renderer, "kanban-select-t-2");
+    expect((checkedAfterFailure.props as { checked: boolean }).checked).toBe(true);
     act(() => renderer.unmount());
   });
 

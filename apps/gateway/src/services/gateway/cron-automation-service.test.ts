@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJobRecord } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import {
   computeNextCronRunAt,
   CronAutomationService,
+  EXPERIMENTAL_NO_AGENT_CRON_ENV,
   type CronAutomationServiceDeps,
   didCronJobRunInCurrentWindow,
   isCronJobActive,
@@ -16,6 +17,10 @@ import {
   parseSimpleCronSchedule,
   UPDATE_REVIEW_DAILY_JOB_ID,
 } from "./cron-automation-service.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 interface CronReviewRow {
   item_id: string;
@@ -264,11 +269,13 @@ function createService(
       memoryFlush: async () => {},
       costReport: async () => {},
       updateReview: async () => {},
+      curator: async () => {},
       watchdog: async () => ({
         status: "ok",
         checkId: "runtime_health",
         summary: "runtime healthy",
       }),
+      noAgent: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
       ...options.handlers,
     },
   });
@@ -499,9 +506,17 @@ describe("CronAutomationService job behavior", () => {
       memoryFlush: vi.fn(async () => {}),
       costReport: vi.fn(async () => {}),
       updateReview: vi.fn(async () => {}),
+      curator: vi.fn(async () => {}),
     };
     const service = createService(db, vi.fn(), { cronJobs, handlers });
-    for (const action of ["improvement", "backup", "memory_flush", "cost_report", "update_review"] as const) {
+    for (const action of [
+      "improvement",
+      "backup",
+      "memory_flush",
+      "cost_report",
+      "update_review",
+      "curator",
+    ] as const) {
       cronJobs.upsert(buildTaskJob({ jobId: `${action.replace("_", "-")}-job`, action }));
     }
 
@@ -514,13 +529,86 @@ describe("CronAutomationService job behavior", () => {
     expect(handlers.memoryFlush).toHaveBeenCalledTimes(1);
     expect(handlers.costReport).toHaveBeenCalledTimes(1);
     expect(handlers.updateReview).toHaveBeenCalledTimes(1);
+    expect(handlers.curator).toHaveBeenCalledTimes(1);
     expect([...db.review.values()].map((row) => row.status)).toEqual([
       "resolved",
       "resolved",
       "resolved",
       "resolved",
       "resolved",
+      "resolved",
     ]);
+  });
+
+  it("keeps no_agent cron jobs behind the explicit experimental env gate", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-15T12:03:00.000Z"));
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const noAgent = vi.fn(async () => ({ stdout: "alert", stderr: "", exitCode: 0, timedOut: false }));
+    const service = createService(db, vi.fn(), {
+      cronJobs,
+      handlers: { noAgent },
+    });
+
+    try {
+      expect(() =>
+        service.createCronJob({
+          jobId: "new-no-agent",
+          name: "New no-agent",
+          action: "no_agent",
+          schedule: "0 12 * * * UTC",
+          actionConfig: { noAgent: { command: "echo" } },
+        }),
+      ).toThrow(EXPERIMENTAL_NO_AGENT_CRON_ENV);
+
+      cronJobs.upsert(
+        buildTaskJob({
+          jobId: "legacy-no-agent",
+          action: "no_agent",
+          schedule: "0 12 * * * UTC",
+          actionConfig: { noAgent: { command: "echo" } },
+        }),
+      );
+
+      await expect(service.runCronJobNow("legacy-no-agent")).rejects.toThrow(EXPERIMENTAL_NO_AGENT_CRON_ENV);
+      await service.runDueTaskCronJobs(new Date("2026-05-15T12:03:00.000Z"));
+      expect(noAgent).not.toHaveBeenCalled();
+      expect(service.updateCronJob("legacy-no-agent", { enabled: false }).enabled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("runs curator as a scheduled cron action and records its run window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-17T02:03:00.000Z"));
+    const db = new FakeDb();
+    const cronJobs = new FakeCronJobs();
+    const curator = vi.fn(async () => {});
+    const service = createService(db, vi.fn(), {
+      cronJobs,
+      handlers: { curator },
+    });
+    cronJobs.upsert(
+      buildTaskJob({
+        jobId: "curator-weekly",
+        action: "curator",
+        schedule: "0 2 * * 0 UTC",
+      }),
+    );
+
+    try {
+      await service.runDueTaskCronJobs(new Date("2026-05-17T02:03:00.000Z"));
+      await service.runDueTaskCronJobs(new Date("2026-05-17T02:04:00.000Z"));
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(curator).toHaveBeenCalledTimes(1);
+    expect(cronJobs.get("curator-weekly")?.lastRunAt).toBeDefined();
+    expect(cronJobs.get("curator-weekly")?.lastRunId).toBeDefined();
+    expect(cronJobs.get("curator-weekly")?.nextRunAt).toBeDefined();
   });
 
   it("records watchdog review items only when the configured threshold is met", async () => {
@@ -657,6 +745,7 @@ function makeServiceWithNoAgent(opts: {
       memoryFlush: async () => {},
       costReport: async () => {},
       updateReview: async () => {},
+      curator: async () => {},
       watchdog: async () => ({ status: "ok", checkId: "runtime_health", summary: "ok" }),
       noAgent: opts.runner,
     },
@@ -703,6 +792,7 @@ describe("contextFrom resolution", () => {
         memoryFlush: async () => {},
         costReport: async () => {},
         updateReview: async () => {},
+        curator: async () => {},
         watchdog: async () => ({ status: "ok", checkId: "runtime_health", summary: "ok" }),
         noAgent: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
       },
@@ -787,6 +877,10 @@ describe("contextFrom resolution", () => {
 });
 
 describe("no_agent cron action", () => {
+  beforeEach(() => {
+    vi.stubEnv(EXPERIMENTAL_NO_AGENT_CRON_ENV, "true");
+  });
+
   it("skips delivery when stdout is empty", async () => {
     const realtime = vi.fn();
     const service = makeServiceWithNoAgent({
@@ -829,9 +923,28 @@ describe("no_agent cron action", () => {
     const job = service.getCronJob("probe-alert");
     expect(job.lastRunOutput).toBe("alert");
   });
+
+  it("reports runner failures instead of returning ok", async () => {
+    const service = makeServiceWithNoAgent({
+      realtime: vi.fn(),
+      runner: async () => ({ stdout: "", stderr: "boom", exitCode: 2, timedOut: false }),
+    });
+    service.createCronJob({
+      jobId: "probe-fail",
+      name: "probe-fail",
+      action: "no_agent",
+      schedule: "0 */6 * * * UTC",
+      actionConfig: { noAgent: { command: "exit", args: ["2"] } },
+    });
+    await expect(service.runCronJobNow("probe-fail")).rejects.toThrow("no_agent cron job failed: probe-fail");
+  });
 });
 
 describe("no_agent workdir forwarding", () => {
+  beforeEach(() => {
+    vi.stubEnv(EXPERIMENTAL_NO_AGENT_CRON_ENV, "true");
+  });
+
   it("forwards workdir into the no_agent runner", async () => {
     const captured: Array<{ workdir?: string }> = [];
     const service = makeServiceWithNoAgent({
@@ -996,6 +1109,10 @@ describe("CronAutomationService.retryCronReviewQueueItem", () => {
 });
 
 describe("runCronJobNow returns runId", () => {
+  beforeEach(() => {
+    vi.stubEnv(EXPERIMENTAL_NO_AGENT_CRON_ENV, "true");
+  });
+
   it("returns the runId for the manual run", async () => {
     const service = makeServiceWithNoAgent({
       realtime: vi.fn(),
@@ -1017,6 +1134,10 @@ describe("runCronJobNow returns runId", () => {
 });
 
 describe("findCronRunById", () => {
+  beforeEach(() => {
+    vi.stubEnv(EXPERIMENTAL_NO_AGENT_CRON_ENV, "true");
+  });
+
   it("returns undefined for unknown run ids", () => {
     const service = makeServiceWithNoAgent({
       realtime: vi.fn(),

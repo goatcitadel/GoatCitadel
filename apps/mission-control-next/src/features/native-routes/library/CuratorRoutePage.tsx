@@ -97,8 +97,8 @@ export function CuratorRoutePage({ route: _route, navigate: _navigate, activeWor
       kicker="Library"
       title="Skill Curator"
       description="Ranked skill status, immunity flags, and archive proposals from the background curator report cycle."
-      loading={false}
-      error={null}
+      loading={loading}
+      error={error}
     >
       <NativeGrid>
         <NativeCard
@@ -122,17 +122,12 @@ export function CuratorRoutePage({ route: _route, navigate: _navigate, activeWor
             </div>
           }
         >
-          {error ? (
-            <div className="mc-next-runtime-notice tone-warning" data-testid="curator-error">
-              <span>{error}</span>
-            </div>
-          ) : null}
           {notice ? (
             <div className="mc-next-runtime-notice tone-success" data-testid="curator-notice">
               <span>{notice}</span>
             </div>
           ) : null}
-          {!error && !notice ? (
+          {!notice ? (
             <p className="mc-next-directory-empty">
               {loading ? "Loading curator status…" : "Use the actions above to refresh or generate a curator report."}
             </p>

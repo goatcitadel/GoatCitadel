@@ -1,5 +1,7 @@
 # Multi-Agent Kanban Operator Surface — Implementation Plan
 
+> Implementation-plan artifact only. This document may name proposed files, commands, tests, and runtime behavior; treat those as plan intent, not shipped 1.0 truth, unless the current implementation and release evidence prove them.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Stand up an operator-facing Kanban surface in mission-control-next that exposes task distress signals, per-task retry budgets, artifact hallucination gating, and auto-block on incomplete worker exit — so operators can supervise multiple long-running agents from a single board.
@@ -14,7 +16,7 @@
 - We do NOT touch the durable-run lease/heartbeat loop — `reconcileRecoverableRuns` and `drainQueuedRuns` already work. We only bridge their existing terminal events to tasks.
 
 **Conventions:**
-- Branch: `feature/multi-agent-kanban` (cut from `goatrocity/elastic-davinci-7946fb`).
+- Original workstream label: `feature/multi-agent-kanban` (cut from `goatrocity/elastic-davinci-7946fb`); historical plan metadata, not the current release branch.
 - Commit prefix: `feat(kanban):`, `test(kanban):`, `refactor(kanban):`. Each step ends with a commit.
 - Test runner for gateway/storage/contracts: `pnpm --filter @goatcitadel/<pkg> test -- <file>`. For mission-control-next: `pnpm --filter @goatcitadel/mission-control-next test -- <file>`.
 - All new files: ≤ 400 lines; if a file approaches 800, split.

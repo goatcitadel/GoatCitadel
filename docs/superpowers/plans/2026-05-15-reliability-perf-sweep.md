@@ -1,5 +1,7 @@
 # Reliability + Performance Sweep Implementation Plan
 
+> Implementation-plan artifact only. This document may name proposed files, commands, tests, and runtime behavior; treat those as plan intent, not shipped 1.0 truth, unless the current implementation and release evidence prove them.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Audit GoatCitadel gateway against upstream OpenClaw/Hermes reliability + performance fixes from 2026.5.x window; lock correct behavior with regression tests where GoatCitadel is already right; fix the analogs that are vulnerable.
@@ -8,7 +10,7 @@
 
 **Tech Stack:** TypeScript, Fastify, Vitest, undici, Zod (no AJV), node:crypto, node:fs/promises.
 
-**Branch:** `feature/reliability-perf-sweep` (currently on `goatrocity/priceless-merkle-53633a` — rename at execution start: `git branch -m feature/reliability-perf-sweep`).
+**Original workstream label:** `feature/reliability-perf-sweep` / `goatrocity/priceless-merkle-53633a`; historical plan metadata, not the current release branch.
 
 **Worktree:** Use an isolated GoatCitadel worktree for execution; do not record machine-local absolute paths in this tracked plan.
 

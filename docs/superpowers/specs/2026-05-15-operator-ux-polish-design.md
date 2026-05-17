@@ -1,7 +1,9 @@
 # Operator UX Polish — Design Spec (O19 + O17 + Operator Diagnostics)
 
+> Design/reference artifact only. This document preserves an implementation proposal and must not be cited as shipped runtime truth unless the referenced code and release evidence also prove it.
+
 **Date**: 2026-05-15
-**Branch**: `goatrocity/zen-chatelet-e8461d` (current worktree branch; spec originally named `feature/operator-ux-polish` but worktree is already provisioned)
+**Original workstream label**: `goatrocity/zen-chatelet-e8461d` / `feature/operator-ux-polish`; this is historical plan metadata, not the current release branch.
 **Scope**: Single PR covering the full operator-UX-polish bundle from the upstream gap-review. Originally proposed as 3 PRs; consolidated into one at the user's direction. Big diff, slow review, but nothing falls through the cracks.
 
 ## What this PR ships

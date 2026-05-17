@@ -54,6 +54,14 @@ describe("Postgres runtime schema generation", () => {
     assert.match(repairMigration?.sql ?? "", /CREATE TABLE IF NOT EXISTS approval_effects \(/);
   });
 
+  it("repairs approval shell explanation storage for older Postgres runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 37);
+
+    assert.equal(repairMigration?.name, "approval_shell_explanations");
+    assert.match(repairMigration?.sql ?? "", /ALTER TABLE approvals/);
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS shell_explanations_json TEXT/);
+  });
+
   it("repairs benchmark lease columns for older Postgres prompt-pack runtime tables", () => {
     const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 8);
 

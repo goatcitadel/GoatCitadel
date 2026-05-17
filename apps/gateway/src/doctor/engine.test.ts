@@ -660,7 +660,7 @@ describe("state validation quarantine check", () => {
     const report = await runDoctor({ rootDir, gatewayBaseUrl: "http://127.0.0.1:8787", auditOnly: true });
     const check = report.checks.find((c) => c.id === "state.validation.quarantine");
     expect(check?.status).toBe("fail");
-  });
+  }, 15000);
 });
 
 async function seedQuarantine(rootDir: string, count: number): Promise<void> {

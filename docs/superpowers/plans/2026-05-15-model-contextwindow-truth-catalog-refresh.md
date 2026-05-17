@@ -1,5 +1,7 @@
 # Model contextWindow truth + Provider catalog refresh — Implementation Plan
 
+> Implementation-plan artifact only. This document may name proposed files, commands, tests, and runtime behavior; treat those as plan intent, not shipped 1.0 truth, unless the current implementation and release evidence prove them.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make `LlmModelRecord` carry catalog-backed `contextWindow` and `outputTokenLimit`, source them from a versioned manifest/probe metadata path, surface the active model's window across `/status` surfaces when known, clamp compaction summary reserves to the active model's output cap, and refresh the example provider catalog (xAI API-key provider, DeepSeek v4-pro, Kimi K2.6 rename, ChatGPT Instant alias).

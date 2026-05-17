@@ -280,7 +280,7 @@
   flex: 0 0 auto;
 }
 
-/* Memory route: 320px namespace rail + editor stage, per mockup. */
+/* Memory route: 320px namespace rail + editor stage. */
 .mc-next-directory-grid-native.mc-next-memory-shell {
   grid-template-columns: 320px minmax(0, 1fr);
   align-items: start;
@@ -896,7 +896,7 @@
 }
 
 .mc-next-cowork-task-grid {
-  grid-template-columns: minmax(210px, 0.62fr) minmax(500px, 1.35fr) minmax(320px, 0.9fr);
+  grid-template-columns: minmax(180px, 0.58fr) minmax(0, 1.35fr) minmax(260px, 0.9fr);
 }
 
 .mc-next-cowork-task-board-card {
@@ -1599,9 +1599,8 @@
   min-width: 0;
   font-size: 0.72rem;
   color: var(--foreground);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .mc-next-settings-posture-card-empty {

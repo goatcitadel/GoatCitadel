@@ -38,10 +38,9 @@ describe("MissionControlNextApp shell helpers", () => {
       ["integrations", "mcp"],
       ["onboarding", "runtime", "addons"],
     ]);
-    expect(buildRailSections("library", [item("memory"), item("prompt-packs")]).map((group) => group.id)).toEqual([
-      "library-knowledge",
-      "library-assets",
-    ]);
+    expect(
+      buildRailSections("library", [item("memory"), item("prompt-packs"), item("curator")]).map((group) => group.id),
+    ).toEqual(["library-knowledge", "library-assets"]);
     expect(buildRailSections("ops", [item("activity"), item("approvals")]).map((group) => group.id)).toEqual([
       "ops-observe",
       "ops-control",

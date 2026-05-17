@@ -330,7 +330,8 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       const job = fastify.services.cron.createCronJob(parsed.data);
       return reply.code(201).send(job);
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      const message = (error as Error).message;
+      return reply.code(isUnsupportedCronActionError(message) ? 409 : 400).send({ error: message });
     }
   });
 
@@ -351,7 +352,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     } catch (error) {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
-      return reply.code(notFound ? 404 : 400).send({ error: message });
+      return reply.code(notFound ? 404 : isUnsupportedCronActionError(message) ? 409 : 400).send({ error: message });
     }
   });
 
@@ -394,7 +395,9 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       const message = (error as Error).message;
       const notFound = message.toLowerCase().includes("not found");
       const noHandler = message.toLowerCase().includes("no runnable handler");
-      return reply.code(notFound ? 404 : noHandler ? 409 : 400).send({ error: message });
+      return reply.code(notFound ? 404 : noHandler || isUnsupportedCronActionError(message) ? 409 : 400).send({
+        error: message,
+      });
     }
   });
 
@@ -563,3 +566,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 };
+
+function isUnsupportedCronActionError(message: string): boolean {
+  return message.includes("GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON");
+}

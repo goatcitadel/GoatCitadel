@@ -1,9 +1,9 @@
 # GoatCitadel Security Audit — 2026-05-15
 
-**Scope**: 20 security bug classes from the OpenClaw + Hermes Agent weekly gap review at [.codex-tmp/upstream-review/openclaw-hermes-weekly-gap-review-2026-05-15.md](.codex-tmp/upstream-review/openclaw-hermes-weekly-gap-review-2026-05-15.md), section "P0 — Security Hardening (Hermes 8 P0s + OpenClaw bug classes)".
+**Scope**: 20 security bug classes adapted from the OpenClaw + Hermes Agent weekly gap-review themes for 2026-05-15, verified against committed GoatCitadel source paths and tests.
 
-**Branch**: `security/audit-2026-05-15`
-**Method**: 5 parallel exploration agents per bug-class group, verification of every VULNERABILITY finding against the actual source, surgical fixes, regression tests.
+**Provenance**: This is a committed audit record. It intentionally does not depend on untracked scratch review notes or local-only artifacts.
+**Method**: verification of every `VULNERABILITY` finding against source, surgical fixes, and regression tests recorded below.
 
 ## Verdict summary
 
@@ -320,7 +320,7 @@ with the body snippet clipped to 400 chars and whitespace flattened. All 8 call 
 
 ## Verification
 
-All regression suites green on `security/audit-2026-05-15`:
+Regression suites recorded by the audit author at the time these fixes were made:
 
 - `pnpm --filter @goatcitadel/policy-engine test` — 28 files / 344 tests pass, including the extended network-guard cloud-metadata + bracketed-IPv6 coverage.
 - `pnpm --filter @goatcitadel/gateway exec vitest run src/env-file.test.ts src/env-file.coverage.test.ts src/env-file.security.test.ts src/services/backup-retention-service.test.ts src/services/backup-retention-service.security.test.ts src/services/chat-attachment-service.test.ts src/services/media-voice-service.test.ts src/services/media-voice-service.sniff.security.test.ts src/services/llm-service.parse-provider-json.security.test.ts` — 9 files / 58 tests pass.

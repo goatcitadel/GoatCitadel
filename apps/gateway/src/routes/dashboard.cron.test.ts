@@ -29,8 +29,7 @@ describe("dashboard cron routes", () => {
       payload: {
         jobId: "nightly-maintenance",
         name: "Nightly Maintenance",
-        action: "no_agent",
-        actionConfig: { noAgent: { command: "pnpm", args: ["verify:fast"] } },
+        action: "task",
         schedule: "0 2 * * * America/Los_Angeles",
         enabled: true,
         workdir: "F:/code/personal-ai",
@@ -44,14 +43,42 @@ describe("dashboard cron routes", () => {
     expect(createCronJob).toHaveBeenCalledWith({
       jobId: "nightly-maintenance",
       name: "Nightly Maintenance",
-      action: "no_agent",
-      actionConfig: { noAgent: { command: "pnpm", args: ["verify:fast"] } },
+      action: "task",
       schedule: "0 2 * * * America/Los_Angeles",
       enabled: true,
       workdir: "F:/code/personal-ai",
       contextFrom: "daily-review",
       lastRunOutput: "previous",
       lastRunId: "run-1",
+    });
+  });
+
+  it("returns conflict when no_agent creation is disabled by the runtime gate", async () => {
+    const createCronJob = vi.fn(() => {
+      throw new Error(
+        "no_agent cron execution is experimental and disabled by default. Set GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON=true only for local, explicitly governed experiments.",
+      );
+    });
+
+    app = Fastify();
+    app.decorate("services", { cron: { createCronJob } } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/cron/jobs",
+      payload: {
+        jobId: "nightly-maintenance",
+        name: "Nightly Maintenance",
+        action: "no_agent",
+        actionConfig: { noAgent: { command: "pnpm", args: ["verify:fast"] } },
+        schedule: "0 2 * * * America/Los_Angeles",
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      error: expect.stringContaining("GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON"),
     });
   });
 

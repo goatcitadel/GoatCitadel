@@ -962,4 +962,12 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS artifact_verification_json TEXT;
     `,
   },
+  {
+    version: 37,
+    name: "approval_shell_explanations",
+    sql: `
+      ALTER TABLE approvals
+        ADD COLUMN IF NOT EXISTS shell_explanations_json TEXT;
+    `,
+  },
 ];

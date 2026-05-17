@@ -271,6 +271,15 @@ describe("LlmService model metadata decoration", () => {
     expect(config.activeModelOutputTokenLimit).toBe(32_000);
   });
 
+  it("loads the repo-root manifest when constructed from a package cwd without explicit metadata options", () => {
+    const service = new LlmService(buildAnthropicConfig(), {} as NodeJS.ProcessEnv, {
+      secretStore: createNoopSecretStore(),
+    });
+    const config = service.getRuntimeConfig();
+    expect(config.activeModelContextWindow).toBe(1_000_000);
+    expect(config.activeModelOutputTokenLimit).toBe(32_000);
+  });
+
   it("loads manifest from configFilePath-colocated default when neither option nor env set", () => {
     const fakeConfigPath = join(tmp, "llm-providers.json");
     writeFileSync(fakeConfigPath, JSON.stringify({ activeProviderId: "anthropic", providers: [] }));

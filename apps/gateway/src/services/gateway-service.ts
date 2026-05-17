@@ -769,6 +769,7 @@ export class GatewayService {
     this.llmService = new LlmService(config.llm, process.env, {
       networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
       enforceNetworkAllowlist: true,
+      modelMetadataPath: path.join(config.rootDir, "config", "llm-model-metadata.json"),
       secretStore,
     });
     this.assemblyService = new AssemblyService({
@@ -906,6 +907,9 @@ export class GatewayService {
         },
         updateReview: async () => {
           await this.runUpdateReviewSchedulerIfDue({ force: true });
+        },
+        curator: async () => {
+          await this.curatorService.runCurator({ sync: false, dryRun: true, triggerMode: "scheduled" });
         },
         watchdog: async (job) => this.runCronWatchdog(job),
         noAgent: (input) => runNoAgentCommand(input),

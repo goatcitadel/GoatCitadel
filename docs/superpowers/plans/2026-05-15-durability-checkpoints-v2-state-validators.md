@@ -1,5 +1,7 @@
 # Durability: Checkpoints v2 + Auto-Resume + Persisted-State Validators — Implementation Plan
 
+> Implementation-plan artifact only. This document may name proposed files, commands, tests, and runtime behavior; treat those as plan intent, not shipped 1.0 truth, unless the current implementation and release evidence prove them.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make durable-run auto-resume visible at boot, add a checkpoint pruning sweep with a disk budget, and validate the shape of every JSON-backed persisted-state column on read so malformed rows are quarantined for `doctor --fix` instead of poisoning runtime.
@@ -8,7 +10,7 @@
 
 **Tech Stack:** TypeScript (Node 22 ESM), better-sqlite3 via `node:sqlite` / `DatabaseClient`, Fastify, Pino logger, Vitest (gateway + contracts), `tsx --test` + `node:assert/strict` (storage), Zod (contracts/gateway already; storage stays Zod-free and accepts caller-supplied SafeParse functions).
 
-**Branch:** `feature/durability-checkpoints-v2-state-validators` (already created and on a `docs:` commit with the spec).
+**Original workstream label:** `feature/durability-checkpoints-v2-state-validators`; historical plan metadata, not the current release branch.
 
 **Spec:** [`docs/superpowers/specs/2026-05-15-durability-checkpoints-v2-state-validators-design.md`](../specs/2026-05-15-durability-checkpoints-v2-state-validators-design.md)
 

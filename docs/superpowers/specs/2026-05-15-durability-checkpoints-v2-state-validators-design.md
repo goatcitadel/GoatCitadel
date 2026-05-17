@@ -1,8 +1,10 @@
 # Durability: Checkpoints v2 + Auto-Resume + Persisted-State Validators
 
+> Design/reference artifact only. This document preserves an implementation proposal and must not be cited as shipped runtime truth unless the referenced code and release evidence also prove it.
+
 **Date**: 2026-05-15
-**Branch**: `feature/durability-checkpoints-v2-state-validators`
-**Upstream reference**: `.codex-tmp/upstream-review/openclaw-hermes-weekly-gap-review-2026-05-15.md` sections P0-5 and P0-7
+**Original workstream label**: `feature/durability-checkpoints-v2-state-validators`; this is historical plan metadata, not the current release branch.
+**Upstream reference**: OpenClaw/Hermes 2026-05-15 gap-review themes P0-5 and P0-7; the original scratch notes were not a committed source of truth.
 **Status**: design
 
 ## Goal

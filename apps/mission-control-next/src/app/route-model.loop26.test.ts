@@ -34,3 +34,14 @@ describe("ops/kanban route", () => {
     expect(getRouteLabel({ area: "ops", section: "kanban" })).toBe("Kanban");
   });
 });
+
+describe("library/curator route", () => {
+  it("parses /library/curator and exposes it in the Library rail", () => {
+    const route = parseAppRoute("/library/curator");
+    expect(route.area).toBe("library");
+    expect(route.section).toBe("curator");
+    const entry = RAIL_ITEMS.library.find((item) => item.id === "library-curator");
+    expect(entry?.section).toBe("curator");
+    expect(getRouteLabel({ area: "library", section: "curator" })).toBe("Skill Curator");
+  });
+});

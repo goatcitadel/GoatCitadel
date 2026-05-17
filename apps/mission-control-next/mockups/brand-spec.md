@@ -1,6 +1,8 @@
 # GoatCitadel Brand Spec — extended for the design review
 
-Extracted from `src/styles/mission-control-next-foundation.css` and `mission-control-next.css`. The "Signal Noir" dark theme is the production default; "Citadel Light" is supported and inherits the same area-accent system.
+Mockup/reference artifact only. This file documents the design-review target and nearby live-token references; it is not release evidence for shipped Mission Control behavior.
+
+Extracted from `src/styles/mission-control-next-foundation.css` and `mission-control-next.css`. The "Signal Noir" dark theme is the current implementation default; "Citadel Light" is supported and inherits the same area-accent system.
 
 ## Color — Signal Noir (dark, default)
 
@@ -49,7 +51,7 @@ Mix rule: tint borders and ambient washes at 12–18% accent into `--bg-surface-
 
 ## Density
 
-The production app uses **12px base** with most controls at 0.66–0.72rem. The review mockups keep that density honest but bump the *type scale* up one step (13px base, headings 1.1–1.5rem) so reviewers can read at desktop scale without zooming. The control sizes (rails, buttons, chips) remain the same physical pixel ranges as the live app.
+The current implementation uses **12px base** with most controls at 0.66–0.72rem. The review mockups keep that density honest but bump the *type scale* up one step (13px base, headings 1.1–1.5rem) so reviewers can read at desktop scale without zooming. The control sizes (rails, buttons, chips) remain the same physical pixel ranges as the live app.
 
 ## Radii + posture
 

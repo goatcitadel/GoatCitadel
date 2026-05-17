@@ -115,6 +115,10 @@ Current shell posture for this map:
 - Generic remote MCP creation is rejected at the 1.0 route and admin-service boundary unless `GOATCITADEL_EXPERIMENTAL_REMOTE_MCP_TRANSPORTS` is explicitly enabled, keeping source-level templates available for future work without making them visible runtime promises.
 - Unit-test evidence for the visibility and create-boundary rules lives in [apps/gateway/src/services/mcp-template-visibility.test.ts](../apps/gateway/src/services/mcp-template-visibility.test.ts) and [apps/gateway/src/routes/mcp.test.ts](../apps/gateway/src/routes/mcp.test.ts), compatibility-only Mission Control surface evidence lives in [apps/mission-control/src/mission-control-hardening.test.tsx](../apps/mission-control/src/mission-control-hardening.test.tsx), and current-shell route compatibility evidence lives in [apps/mission-control-next/src/app/legacy-route-adapter.test.ts](../apps/mission-control-next/src/app/legacy-route-adapter.test.ts).
 
+### Experimental Cron
+
+- `GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON` / `no_agent` cron execution is experimental, local-only, disabled by default, and outside the `1.0` merge guarantee. Do not cite the superpowers plan or manual checklist as shipped release evidence unless this flag is separately promoted in [docs/1_0_CONTRACT.md](./1_0_CONTRACT.md) and backed by current proof lanes.
+
 ### Extensions
 
 - The published author boundary is the `@goatcitadel/extensions-sdk` package under [packages/extensions-sdk](../packages/extensions-sdk).

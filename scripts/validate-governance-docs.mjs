@@ -346,8 +346,8 @@ if (RELEASE_SURFACE_MANIFEST.length !== 15) {
   errors.push("scripts/verification/lib/release-surface-manifest.mjs must freeze the 15 legacy compatibility release-taxonomy surfaces.");
 }
 
-if (NEXT_RELEASE_SURFACE_MANIFEST.length !== 30) {
-  errors.push("scripts/verification/lib/release-surface-manifest.mjs must freeze the 30 Mission Control Next release-surface routes.");
+if (NEXT_RELEASE_SURFACE_MANIFEST.length !== 32) {
+  errors.push("scripts/verification/lib/release-surface-manifest.mjs must freeze the 32 Mission Control Next release-surface routes.");
 }
 
 if (NEXT_VISUAL_REGRESSION_MANIFEST.length !== NEXT_RELEASE_SURFACE_MANIFEST.length) {

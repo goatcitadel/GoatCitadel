@@ -1,6 +1,6 @@
 # Manual verification — cron + subagent control knobs
 
-Branch: `feature/cron-no-agent-subagent-controls`.
+This checklist covers an experimental local-only workstream. `GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON` must remain disabled by default; enabling it is outside the GoatCitadel 1.0 merge guarantee and should only be used for local/manual validation.
 
 This is the manual-probe checklist for O3/O4/O5/O6 from the 2026-05-15 upstream gap review. The unit tests in this PR cover all paths; this doc is for sanity-checking the integration end-to-end against a running gateway.
 

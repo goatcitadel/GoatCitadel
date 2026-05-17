@@ -1,5 +1,7 @@
 # Operator UX Polish Implementation Plan
 
+> Implementation-plan artifact only. This document may name proposed files, commands, tests, and runtime behavior; treat those as plan intent, not shipped 1.0 truth, unless the current implementation and release evidence prove them.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Land the operator-UX-polish bundle (O19 shell explainer, O17 bot-loop guard, operator diagnostics, plus follow-ups) in a single PR on the worktree branch.
@@ -10,7 +12,7 @@
 
 **Spec:** [docs/superpowers/specs/2026-05-15-operator-ux-polish-design.md](../specs/2026-05-15-operator-ux-polish-design.md)
 
-**Branch:** `goatrocity/zen-chatelet-e8461d` (current worktree, already provisioned)
+**Original workstream label:** `goatrocity/zen-chatelet-e8461d`; historical plan metadata, not the current release branch.
 
 ---
 

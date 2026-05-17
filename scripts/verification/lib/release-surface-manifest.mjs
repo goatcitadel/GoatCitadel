@@ -145,6 +145,14 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = [
     interaction: "open-inspector",
   },
   {
+    slug: "library-curator",
+    href: "/library/curator",
+    readyText: "Skill Curator",
+    expectedArea: "library",
+    expectedSection: "curator",
+    interaction: "open-inspector",
+  },
+  {
     slug: "ops-activity",
     href: "/ops/activity",
     readyText: "Activity feed",
@@ -206,6 +214,14 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = [
     readyText: "Diagnostics directory",
     expectedArea: "ops",
     expectedSection: "diagnostics",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "ops-kanban",
+    href: "/ops/kanban",
+    readySelector: ".mc-next-kanban-board",
+    expectedArea: "ops",
+    expectedSection: "kanban",
     interaction: "open-inspector",
   },
   {

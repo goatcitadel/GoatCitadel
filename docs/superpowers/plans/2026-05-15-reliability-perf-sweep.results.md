@@ -1,6 +1,8 @@
 # Reliability + Perf Sweep — Results
 
-Branch: `feature/reliability-perf-sweep`
+> Results artifact only. This records one workstream's local measurements and checks; rerun the relevant lanes on the target commit before using it as current release proof.
+
+Original workstream label: `feature/reliability-perf-sweep`; historical result metadata, not the current release branch.
 Plan: `docs/superpowers/plans/2026-05-15-reliability-perf-sweep.md`
 Baseline: `2026-05-15-reliability-perf-sweep.baseline.json` (437 files / 2720 tests / 0 failures)
 Cold-start: `2026-05-15-reliability-perf-sweep.after.json`

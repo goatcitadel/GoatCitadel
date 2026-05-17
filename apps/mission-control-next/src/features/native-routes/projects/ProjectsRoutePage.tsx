@@ -176,7 +176,7 @@ export function ProjectsRoutePage({ route, activeWorkspaceId, activeWorkspaceNam
     }
   };
 
-  const totalLiveSessions = state.sessions.filter((session) => session.projectId).length;
+  const totalProjectSessions = state.sessions.filter((session) => session.projectId).length;
 
   return (
     <NativePageFrame
@@ -188,7 +188,7 @@ export function ProjectsRoutePage({ route, activeWorkspaceId, activeWorkspaceNam
       error={state.error}
       metrics={[
         { label: "Projects", value: String(state.projects.length) },
-        { label: "Live sessions", value: String(totalLiveSessions) },
+        { label: "Project sessions", value: String(totalProjectSessions) },
       ]}
       actions={
         <>
@@ -211,7 +211,7 @@ export function ProjectsRoutePage({ route, activeWorkspaceId, activeWorkspaceNam
           density="compact"
           stats={[
             { label: "Projects", value: String(state.projects.length) },
-            { label: "Sessions", value: String(totalLiveSessions) },
+            { label: "Sessions", value: String(totalProjectSessions) },
           ]}
           actions={
             <button type="button" className="mc-next-settings-filter" onClick={() => void loadProjects()}>

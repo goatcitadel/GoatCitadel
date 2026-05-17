@@ -19,7 +19,10 @@ type BulkAction = "unblock" | "retry" | "close";
 export function KanbanRoutePage(props: NativeRoutePagesProps) {
   const [tasks, setTasks] = useState<TaskRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
@@ -28,6 +31,7 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
       const result = await fetchTasksByView("active", undefined, props.activeWorkspaceId);
       setTasks(result.items as TaskRecord[]);
       setError(null);
+      setActionError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -74,9 +78,19 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
       }
       const body =
         action === "retry" ? { action, taskIds: ids, reason: "operator-bulk-retry" } : { action, taskIds: ids };
-      await bulkTaskAction(body);
-      setSelected(new Set());
-      await load();
+      setBulkBusy(true);
+      setActionError(null);
+      setNotice(null);
+      try {
+        await bulkTaskAction(body);
+        setSelected(new Set());
+        setNotice(`${ids.length} selected task${ids.length === 1 ? "" : "s"} updated.`);
+        await load();
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBulkBusy(false);
+      }
     },
     [load, selected],
   );
@@ -90,22 +104,27 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
       title="Kanban"
       description="Multi-agent board with distress signals, retry budgets, and bulk operator controls."
       loading={loading}
-      error={error}
+      error={actionError ?? error}
     >
       <div className="mc-next-kanban-toolbar">
-        <button type="button" disabled={!hasSelection} onClick={() => void runBulk("unblock")}>
+        <button type="button" disabled={!hasSelection || bulkBusy} onClick={() => void runBulk("unblock")}>
           Unblock
         </button>
-        <button type="button" disabled={!hasSelection} onClick={() => void runBulk("retry")}>
+        <button type="button" disabled={!hasSelection || bulkBusy} onClick={() => void runBulk("retry")}>
           Retry
         </button>
-        <button type="button" disabled={!hasSelection} onClick={() => void runBulk("close")}>
+        <button type="button" disabled={!hasSelection || bulkBusy} onClick={() => void runBulk("close")}>
           Close
         </button>
-        <button type="button" onClick={() => void load()}>
+        <button type="button" disabled={bulkBusy} onClick={() => void load()}>
           <RefreshCw className="h-3 w-3" /> Refresh
         </button>
       </div>
+      {notice ? (
+        <div className="mc-next-runtime-notice tone-success" data-testid="kanban-notice">
+          <span>{notice}</span>
+        </div>
+      ) : null}
       <div className="mc-next-kanban-board" data-testid="kanban-board">
         {COLUMNS.map((col) => (
           <KanbanColumn

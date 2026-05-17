@@ -988,7 +988,11 @@ export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSec
         id: "library-assets",
         label: "Assets",
         items: items.filter(
-          (item) => item.section === "files" || item.section === "artifacts" || item.section === "prompt-packs",
+          (item) =>
+            item.section === "files" ||
+            item.section === "artifacts" ||
+            item.section === "prompt-packs" ||
+            item.section === "curator",
         ),
       },
     ].filter((group) => group.items.length);

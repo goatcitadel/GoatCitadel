@@ -1,5 +1,7 @@
 # Verification — Model contextWindow truth + Provider catalog refresh
 
+> Verification-note artifact only. This document records the checks from that workstream and must not be cited as current release proof unless rerun on the target commit or backed by current CI evidence.
+
 ## Branch
 
 `goatrocity/jolly-allen-0fad0f` — open as PR with title `feat: model contextWindow truth + provider catalog refresh`.

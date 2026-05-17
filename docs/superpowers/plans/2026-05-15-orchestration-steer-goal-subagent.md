@@ -1,5 +1,7 @@
 # Orchestration: Steer + Goal + Subagent-Task Implementation Plan
 
+> Implementation-plan artifact only. This document may name proposed files, commands, tests, and runtime behavior; treat those as plan intent, not shipped 1.0 truth, unless the current implementation and release evidence prove them.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship three coupled P0 orchestration features in GoatCitadel — (1) active-run steering by default for mid-turn prompts, (2) `/goal` cross-turn target lock with turn-budget enforcement, and (3) materializing the subagent task as a visible `[Subagent Task]` first message in child transcripts.

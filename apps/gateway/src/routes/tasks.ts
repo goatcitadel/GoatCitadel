@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import type { AgenticSubagentMetadata } from "@goatcitadel/contracts";
+import { AGENTIC_DIAGNOSTIC_CODES, type AgenticSubagentMetadata } from "@goatcitadel/contracts";
 import process from "node:process";
 import { z } from "zod";
 import { buildAgenticRuntimeAvailability } from "../services/agentic-capability-availability.js";
@@ -152,25 +152,7 @@ const agenticControlSchema = z.object({
 });
 
 const agenticDiagnosticSchema = z.object({
-  code: z.enum([
-    "repeated_tool_result",
-    "post_compaction_loop",
-    "missing_assistant_output",
-    "stale_approval",
-    "child_timeout",
-    "spawn_failure",
-    "worker_crash",
-    "stale_worker",
-    "invalid_assignee_profile",
-    "unsafe_status_transition",
-    "provider_fallback_loop",
-    "dirty_worktree_without_artifact",
-    "missing_claimed_artifact",
-    "missing_claimed_file",
-    "missing_claimed_test",
-    "repeated_phase_failure",
-    "final_delivery_retry",
-  ]),
+  code: z.enum(AGENTIC_DIAGNOSTIC_CODES),
   severity: z.enum(["info", "warning", "critical"]),
   title: z.string().min(1),
   summary: z.string().min(1),

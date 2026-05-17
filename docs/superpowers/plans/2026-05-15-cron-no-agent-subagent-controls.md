@@ -1,14 +1,16 @@
 # Cron `no_agent` + Subagent Control Knobs Implementation Plan
 
+> Implementation-plan artifact only. This document may name proposed files, commands, tests, and runtime behavior; treat those as plan intent, not shipped 1.0 truth, unless the current implementation and release evidence prove them.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add four upstream-parity operator knobs to GoatCitadel: `no_agent` cron watchdog mode (O4), `context_from`+`workdir` cron chaining (O5), `cron run --wait` CLI (O6), and real budget enforcement of subagent child-spawn timeout + depth ceiling (O3).
+**Goal:** Explore four upstream-parity operator knobs for GoatCitadel: `no_agent` cron watchdog mode (O4), `context_from`+`workdir` cron chaining (O5), `cron run --wait` CLI (O6), and real budget enforcement of subagent child-spawn timeout + depth ceiling (O3).
 
-**Architecture:** Each item lives in a clear contract layer (`packages/contracts`) → storage layer (`packages/storage` + SQL migrations) → service layer (`apps/gateway/src/services`) → entry layer (CLI for O6, dispatcher for O3). All four items ship on branch `feature/cron-no-agent-subagent-controls`. Each phase commits independently so any one can be reverted without the others.
+**Architecture:** The plan routes each item through a clear contract layer (`packages/contracts`) → storage layer (`packages/storage` + SQL migrations) → service layer (`apps/gateway/src/services`) → entry layer (CLI for O6, dispatcher for O3). The original workstream assumed a `feature/cron-no-agent-subagent-controls` branch and independent phase commits so any one could be reverted without the others.
 
 **Tech Stack:** TypeScript strict mode, Vitest, Zod, better-sqlite3, Postgres migrations array, Node CLI via `process.argv`.
 
-**Reference upstream review:** [.codex-tmp/upstream-review/openclaw-hermes-weekly-gap-review-2026-05-15.md](.codex-tmp/upstream-review/openclaw-hermes-weekly-gap-review-2026-05-15.md) — items O3, O4, O5, O6.
+**Reference upstream review:** OpenClaw/Hermes 2026-05-15 gap-review themes O3, O4, O5, and O6. The scratch review file was not committed and is not a source of release truth.
 
 ---
 

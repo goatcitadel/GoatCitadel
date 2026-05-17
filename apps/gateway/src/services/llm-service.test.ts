@@ -881,6 +881,18 @@ describe("LlmService", () => {
     expect(updated.providers.find((provider) => provider.providerId === "anthropic")?.apiStyle).toBe(
       "anthropic-messages",
     );
+
+    const bedrock = service.updateRuntimeConfig({
+      upsertProvider: {
+        providerId: "bedrock",
+        label: "Amazon Bedrock",
+        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+        apiStyle: "bedrock-messages",
+        defaultModel: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+      },
+    });
+
+    expect(bedrock.providers.find((provider) => provider.providerId === "bedrock")?.apiStyle).toBe("bedrock-messages");
   });
 
   it("rejects raw API-key storage for the OpenAI Codex OAuth provider", () => {

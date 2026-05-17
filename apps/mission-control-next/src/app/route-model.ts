@@ -268,6 +268,13 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       area: "library",
       section: "prompt-packs",
     },
+    {
+      id: "library-curator",
+      label: "Skill Curator",
+      description: "Review ranked skill health, immunity flags, and archive proposals.",
+      area: "library",
+      section: "curator",
+    },
   ],
   ops: [
     {

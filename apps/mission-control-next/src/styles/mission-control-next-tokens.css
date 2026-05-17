@@ -1,6 +1,7 @@
 /* Mission Control Next - canonical design tokens.
-   Mirrors apps/mission-control-next/mockups/_shared.css verbatim and is the
-   authoritative source from brand-spec.md. Coexists with the existing
+   This file is the maintained runtime token source, informed by the
+   current visual spec and adjusted with the shipped UI.
+   Coexists with the existing
    --mc and --gc tokens declared in mission-control-next.css; both sets
    resolve to identical values so old and new selectors work in parallel.
 

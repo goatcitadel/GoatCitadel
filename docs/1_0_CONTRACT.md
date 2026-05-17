@@ -60,6 +60,7 @@ The repo must not claim these at `1.0` unless separately proven and documented:
 - silent or autonomous high-risk tool activation
 - `packages/mesh-core` as a readiness-bearing `1.0` subsystem while it only has targeted service coverage rather than full release evidence
 - `apps/npu-sidecar` as a maturity signal for local inference completeness while it remains optional experimental infrastructure
+- `GOATCITADEL_EXPERIMENTAL_NO_AGENT_CRON` or `no_agent` cron execution as a `1.0` guarantee; that path is experimental, local-only, disabled by default, and outside the 1.0 merge promise unless separately proven and promoted here
 
 ## Upgrade and Backup Guarantees
 
