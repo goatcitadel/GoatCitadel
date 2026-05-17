@@ -256,8 +256,7 @@ set -euo pipefail
 exec "${COREPACK_BIN}" pnpm "\$@"
 EOF
 chmod +x "${BIN_DIR}/pnpm"
-cp "${BIN_DIR}/goatcitadel" "${BIN_DIR}/gc"
-chmod +x "${BIN_DIR}/gc"
+rm -f "${BIN_DIR}/gc"
 
 if [[ "${NO_PATH_UPDATE}" == "0" ]]; then
   SHELL_NAME="$(basename "${SHELL:-}")"

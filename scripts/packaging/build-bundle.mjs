@@ -267,7 +267,7 @@ function writeLaunchers(bundleRootPath) {
     "",
   ].join("\r\n");
 
-  for (const name of ["goatcitadel", "goat", "gc"]) {
+  for (const name of ["goatcitadel", "goat"]) {
     fs.writeFileSync(path.join(launcherDir, `${name}.cmd`), launcherCmd, "ascii");
     fs.writeFileSync(path.join(launcherDir, `${name}.ps1`), launcherPs1, "ascii");
   }

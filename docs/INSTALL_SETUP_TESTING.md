@@ -150,7 +150,7 @@ PowerShell note:
 - onboarding uses the live gateway API, so start with `goat up`
 - the desktop app is the Windows shortcut default, but `goatcitadel launch` still opens Mission Control in the browser
 - run `pnpm verify:install`, `pnpm verify:desktop`, or `goatcitadel doctor --deep` from a source checkout unless the installed release explicitly advertises those as packaged commands
-- do not use `gc` in PowerShell because it is the built-in alias for `Get-Content`
+- GoatCitadel does not install `gc` because PowerShell already uses it as the built-in alias for `Get-Content`
 - if `goatcitadel` is not found immediately after install, open a new PowerShell window
 - immediate fallback: `& "$HOME\\.GoatCitadel\\bin\\goatcitadel.cmd" onboard`
 

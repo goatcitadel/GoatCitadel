@@ -340,8 +340,6 @@ $launcherGoatCmdPath = Join-Path $BinDir "goat.cmd"
 $launcherGoatPs1Path = Join-Path $BinDir "goat.ps1"
 $pnpmCmdPath = Join-Path $BinDir "pnpm.cmd"
 $pnpmPs1Path = Join-Path $BinDir "pnpm.ps1"
-$launcherGcCmdPath = Join-Path $BinDir "gc.cmd"
-$launcherGcPs1Path = Join-Path $BinDir "gc.ps1"
 
 Set-Content -Path $launcherCmdPath -Value $launcherCmd -Encoding Ascii
 Set-Content -Path $launcherPs1Path -Value $launcherPs1 -Encoding Ascii
@@ -349,8 +347,12 @@ Set-Content -Path $launcherGoatCmdPath -Value $launcherCmd -Encoding Ascii
 Set-Content -Path $launcherGoatPs1Path -Value $launcherPs1 -Encoding Ascii
 Set-Content -Path $pnpmCmdPath -Value $pnpmCmd -Encoding Ascii
 Set-Content -Path $pnpmPs1Path -Value $pnpmPs1 -Encoding Ascii
-Set-Content -Path $launcherGcCmdPath -Value $launcherCmd -Encoding Ascii
-Set-Content -Path $launcherGcPs1Path -Value $launcherPs1 -Encoding Ascii
+
+foreach ($legacyGcLauncher in @((Join-Path $BinDir "gc.cmd"), (Join-Path $BinDir "gc.ps1"))) {
+  if (Test-Path -LiteralPath $legacyGcLauncher) {
+    Remove-Item -LiteralPath $legacyGcLauncher -Force
+  }
+}
 
 if (-not $NoPathUpdate) {
   $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -387,7 +389,7 @@ Write-Host ""
 Write-Host "PowerShell notes:"
 Write-Host "  - Open a new PowerShell window if 'goatcitadel' is not found yet."
 Write-Host "  - The installer updates your user PATH for new shells, not the already-running parent shell."
-Write-Host "  - Use 'goatcitadel' or 'goat' in PowerShell. Do not use 'gc' there because it maps to Get-Content."
+Write-Host "  - Use 'goatcitadel' or 'goat'. GoatCitadel does not install 'gc' because PowerShell maps it to Get-Content."
 Write-Host "  - Onboarding uses the live gateway API. Start with 'goat up' first, then run onboarding."
 Write-Host "  - Managed GoatCitadel config is preserved across installer updates."
 Write-Host "  - Immediate fallback: & `"$launcherCmdPath`" onboard"

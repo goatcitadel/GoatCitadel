@@ -76,7 +76,7 @@ iwr https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.ps1 -
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-The Windows installer adds the `goatcitadel`, `goat`, and `gc` launchers and opens the native Mission Control desktop host. The desktop host starts the same local gateway and web Mission Control runtime behind the scenes.
+The Windows installer adds the `goatcitadel` and `goat` launchers and opens the native Mission Control desktop host. The desktop host starts the same local gateway and web Mission Control runtime behind the scenes.
 
 Full setup, update, uninstall, and troubleshooting guidance lives in [docs/INSTALL_SETUP_TESTING.md](./docs/INSTALL_SETUP_TESTING.md).
 
@@ -164,7 +164,7 @@ goatcitadel up
 goatcitadel stop --json
 ```
 
-PowerShell note: prefer `goatcitadel` or `goat`; `gc` is already the built-in PowerShell alias for `Get-Content`.
+PowerShell note: prefer `goatcitadel` or `goat`. GoatCitadel does not install `gc` because PowerShell already uses it as the built-in alias for `Get-Content`.
 
 ## What Ships In This Repo
 
