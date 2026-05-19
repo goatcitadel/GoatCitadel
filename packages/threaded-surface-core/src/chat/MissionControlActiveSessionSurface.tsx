@@ -54,6 +54,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   pendingUserInput: PendingUserInputState | null;
   workspaceId: string;
   approvalPending: boolean;
+  approvalsCount: number;
   userInputPending: boolean;
   eventStreamStatus: EventStreamStatus;
   onBottomStateChange: (next: boolean) => void;
@@ -70,6 +71,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   onDismissDelegationSuggestion: () => void;
   onApprovePending: (allowScope: "once" | "session" | "workspace") => void;
   onDenyPending: () => void;
+  onOpenApprovals: () => void;
   onSubmitUserInput: (response: { kind: "single_select"; optionId: string } | { kind: "text"; text: string }) => void;
   onRefreshThread: () => void;
   isDragActive: boolean;

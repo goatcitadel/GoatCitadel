@@ -161,7 +161,7 @@ export function composeChatRouteDependencies(
       };
     },
     runChatDelegation: (sessionId, input) => gateway.runChatDelegation(sessionId, input),
-    runChatDelegationStream: (sessionId, input) => gateway.runChatDelegationStream(sessionId, input),
+    runChatDelegationStream: (sessionId, input, options) => gateway.runChatDelegationStream(sessionId, input, options),
     suggestChatDelegation: (sessionId, input) => gateway.suggestChatDelegation(sessionId, input),
   };
   const chatTools: GatewayRouteServiceDependencies["chatTools"] = {
@@ -173,8 +173,8 @@ export function composeChatRouteDependencies(
   };
   const chatMessages: GatewayRouteServiceDependencies["chatMessages"] = {
     agentSendChatMessage: (sessionId, input) => gateway.chatTurnRuntime.agentSendChatMessage(sessionId, input),
-    agentSendChatMessageStream: (sessionId, input) =>
-      gateway.chatTurnRuntime.agentSendChatMessageStream(sessionId, input),
+    agentSendChatMessageStream: (sessionId, input, signal?: AbortSignal) =>
+      gateway.chatTurnRuntime.agentSendChatMessageStream(sessionId, input, { abortSignal: signal }),
     answerChatUserInputPrompt: (sessionId, turnId, promptId, input) =>
       chatMessageRouteRuntime.answerChatUserInputPrompt(
         chatMessageRouteRuntimeHost,
@@ -186,17 +186,17 @@ export function composeChatRouteDependencies(
     cancelChatTurn: (sessionId, turnId, cancelledBy) =>
       gateway.chatTurnRuntime.cancelChatTurn(sessionId, turnId, cancelledBy),
     editChatTurn: (sessionId, turnId, input) => gateway.chatTurnRuntime.editChatTurn(sessionId, turnId, input),
-    editChatTurnStream: (sessionId, turnId, input) =>
-      gateway.chatTurnRuntime.editChatTurnStream(sessionId, turnId, input),
+    editChatTurnStream: (sessionId, turnId, input, signal?: AbortSignal) =>
+      gateway.chatTurnRuntime.editChatTurnStream(sessionId, turnId, input, { abortSignal: signal }),
     getChatThread: (sessionId) => chatMessageRouteRuntime.getChatThread(chatMessageRouteRuntimeHost, sessionId),
     getTurnContextManifestForSession: (sessionId, turnId) =>
       chatMessageRouteRuntime.getTurnContextManifestForSession(chatMessageRouteRuntimeHost, sessionId, turnId),
     listChatMessages: (sessionId, limit, cursor) => gateway.listChatMessages(sessionId, limit, cursor),
-    resumeAgentChatTurnStream: (sessionId, turnId, sinceEventId) =>
-      gateway.chatTurnRuntime.resumeAgentChatTurnStream(sessionId, turnId, sinceEventId),
+    resumeAgentChatTurnStream: (sessionId, turnId, sinceEventId, signal?: AbortSignal) =>
+      gateway.chatTurnRuntime.resumeAgentChatTurnStream(sessionId, turnId, sinceEventId, { abortSignal: signal }),
     retryChatTurn: (sessionId, turnId, input) => gateway.chatTurnRuntime.retryChatTurn(sessionId, turnId, input),
-    retryChatTurnStream: (sessionId, turnId, input) =>
-      gateway.chatTurnRuntime.retryChatTurnStream(sessionId, turnId, input),
+    retryChatTurnStream: (sessionId, turnId, input, signal?: AbortSignal) =>
+      gateway.chatTurnRuntime.retryChatTurnStream(sessionId, turnId, input, { abortSignal: signal }),
     routePreflight: (sessionId, input) => gateway.chatTurnRuntime.routePreflight(sessionId, input),
     selectChatBranchTurn: (sessionId, turnId) =>
       chatMessageRouteRuntime.selectChatBranchTurn(chatMessageRouteRuntimeHost, sessionId, turnId),
@@ -221,7 +221,8 @@ export function composeChatRouteDependencies(
     chatSupport: {
       commands: {
         listChatCommandCatalog: () => chatCommandService.listChatCommandCatalog(),
-        parseChatCommand: (sessionId, commandText) => gateway.parseChatCommand(sessionId, commandText),
+        parseChatCommand: (sessionId, commandText, options) =>
+          gateway.parseChatCommand(sessionId, commandText, options),
       },
       learnedMemory: {
         listChatSessionLearnedMemory: (sessionId, limit) =>

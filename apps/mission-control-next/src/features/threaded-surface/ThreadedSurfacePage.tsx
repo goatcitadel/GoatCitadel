@@ -42,12 +42,64 @@ const MODE_META: Record<ChatMode, { label: string; icon: typeof MessageSquareTex
   },
 };
 
+export interface ThreadedPermissionState {
+  loading?: boolean;
+  error?: string;
+  profileId?: string;
+  profileLabel?: string;
+  approvalMode?: string;
+  localOperatorOverrideId?: string;
+  overrideExpiresAt?: string;
+}
+
+export function formatThreadedPermissionSummary(state?: ThreadedPermissionState): string {
+  if (!state || state.loading) {
+    return "Policy loading";
+  }
+  if (state.error) {
+    return "Policy unavailable";
+  }
+  const profile = state.profileLabel ?? state.profileId ?? "Safe";
+  const details = [formatThreadedApprovalMode(state.approvalMode)].filter(Boolean);
+  if (state.localOperatorOverrideId) {
+    details.push(
+      state.overrideExpiresAt
+        ? `override until ${formatThreadedOverrideExpiry(state.overrideExpiresAt)}`
+        : "local override active",
+    );
+  }
+  return `Policy: ${[profile, ...details].join(" · ")}`;
+}
+
+export function formatThreadedApprovalMode(value?: string): string | undefined {
+  switch (value) {
+    case "approve_all":
+      return "asks every time";
+    case "approve_risky":
+      return "asks on risk";
+    case "bypass":
+      return "skips normal prompts";
+    default:
+      return value;
+  }
+}
+
+export function formatThreadedOverrideExpiry(value: string): string {
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) {
+    return value;
+  }
+  return `${new Date(timestamp).toISOString().slice(11, 16)} UTC`;
+}
+
 export function ThreadedSurfacePage({
   surface,
   input,
+  permissionState,
 }: {
   surface: ChatMode;
   input: MissionThreadedRenderSurfaceInput;
+  permissionState?: ThreadedPermissionState;
 }) {
   const compactLayout = useMediaQuery("(max-width: 1180px)");
   const railOpen = input.sessionRailOpen;
@@ -332,6 +384,7 @@ export function ThreadedSurfacePage({
               onToggleCodeWorkbench={
                 workflowPanel?.kind === "code" ? () => setCodeWorkbenchOpen((current) => !current) : undefined
               }
+              permissionState={permissionState}
             />
           ) : (
             <ThreadEmptyState
@@ -351,7 +404,12 @@ export function ThreadedSurfacePage({
 
         {dockOpen && input.contextDockProps ? (
           <aside className="mc-next-threaded-context-panel">
-            <ThreadedContextDrawer surface={activeMode} props={input.contextDockProps} />
+            <ThreadedContextDrawer
+              surface={activeMode}
+              props={input.contextDockProps}
+              permissionSummary={formatThreadedPermissionSummary(permissionState)}
+              permissionOverrideActive={Boolean(permissionState?.localOperatorOverrideId)}
+            />
           </aside>
         ) : null}
       </section>
@@ -367,6 +425,7 @@ function ThreadConversationSurface({
   onToggleDock,
   codeWorkbenchOpen,
   onToggleCodeWorkbench,
+  permissionState,
 }: {
   surface: ChatMode;
   compactLayout: boolean;
@@ -375,6 +434,7 @@ function ThreadConversationSurface({
   onToggleDock: () => void;
   codeWorkbenchOpen: boolean;
   onToggleCodeWorkbench?: () => void;
+  permissionState?: ThreadedPermissionState;
 }) {
   const compactArtifactSheet = useMediaQuery("(max-width: 840px)");
   const actions = useMemo(() => {
@@ -421,6 +481,9 @@ function ThreadConversationSurface({
           </div>
           <div className="mc-next-threaded-chip-row">
             <StatusChip tone="muted">{props.trust.providerModelSummary}</StatusChip>
+            <StatusChip tone={permissionState?.localOperatorOverrideId ? "warning" : "muted"}>
+              {formatThreadedPermissionSummary(permissionState)}
+            </StatusChip>
             {props.trust.selectionSourceSummary ? (
               <StatusChip tone="muted">{props.trust.selectionSourceSummary}</StatusChip>
             ) : null}
@@ -455,6 +518,11 @@ function ThreadConversationSurface({
                 Export run bundle
               </button>
             ) : null}
+            {props.approvalsCount > 0 ? (
+              <button type="button" className="mc-next-threaded-secondary" onClick={props.onOpenApprovals}>
+                Approvals ({props.approvalsCount})
+              </button>
+            ) : null}
             <button
               type="button"
               className="mc-next-threaded-secondary"
@@ -475,6 +543,11 @@ function ThreadConversationSurface({
           <ThreadedTimeline props={props} />
         </div>
         <div className="mc-next-threaded-composer-card">
+          <div className="mc-next-threaded-composer-policy" aria-label="Composer policy state">
+            <StatusChip tone={permissionState?.localOperatorOverrideId ? "warning" : "muted"}>
+              {formatThreadedPermissionSummary(permissionState)}
+            </StatusChip>
+          </div>
           <ThreadedComposer props={props} />
         </div>
       </section>
@@ -538,16 +611,35 @@ function ThreadEmptyState({
         <button type="button" className="mc-next-threaded-secondary" onClick={dropTarget.onAttachFiles}>
           Attach files
         </button>
-        {surface === "chat" ? (
-          <>
-            <button type="button" className="mc-next-threaded-secondary" onClick={input.emptyStateProps.onOpenCowork}>
-              Open Cowork
-            </button>
-            <button type="button" className="mc-next-threaded-secondary" onClick={input.emptyStateProps.onOpenCode}>
-              Open Code
-            </button>
-          </>
+        {input.emptyStateProps.approvalsCount > 0 ? (
+          <button
+            type="button"
+            className="mc-next-threaded-secondary"
+            onClick={() => input.emptyStateProps.onOpenApprovals()}
+          >
+            Approvals ({input.emptyStateProps.approvalsCount})
+          </button>
         ) : null}
+        {surface === "chat"
+          ? [
+              <button
+                key="open-cowork"
+                type="button"
+                className="mc-next-threaded-secondary"
+                onClick={input.emptyStateProps.onOpenCowork}
+              >
+                Open Cowork
+              </button>,
+              <button
+                key="open-code"
+                type="button"
+                className="mc-next-threaded-secondary"
+                onClick={input.emptyStateProps.onOpenCode}
+              >
+                Open Code
+              </button>,
+            ]
+          : null}
       </div>
     </section>
   );

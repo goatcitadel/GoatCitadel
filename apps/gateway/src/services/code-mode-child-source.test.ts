@@ -98,6 +98,38 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
     await waitForClose(child);
   });
 
+  it("rejects oversized outbound IPC results with a structured error", async () => {
+    const child = await spawnHarness();
+
+    child.send({
+      jsonrpc: "2.0",
+      id: "run-outbound-too-large",
+      method: "run.execute",
+      params: {
+        runId: "run-outbound-too-large",
+        source: `return { payload: "x".repeat(150_000) };`,
+        input: {},
+        wrapperManifest: { wrappers: [] },
+        deadlineAt: Date.now() + 2000,
+      },
+    });
+
+    const response = await waitForChildMessage(
+      child,
+      (message) => isResponseMessage(message) && message.id === "run-outbound-too-large",
+    );
+    const close = await waitForClose(child);
+
+    expect(response.error).toMatchObject({
+      code: "MESSAGE_TOO_LARGE",
+      message: "Code Mode IPC message exceeded the maximum allowed size.",
+      details: expect.objectContaining({
+        direction: "child_to_parent",
+      }),
+    });
+    expect(close.code).toBe(0);
+  });
+
   it("propagates wrapper deadlines to the parent IPC contract", async () => {
     const child = await spawnHarness();
     const deadlineAt = Date.now() + 3000;
@@ -163,7 +195,7 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
         wrapperManifest: {
           wrappers: [{ name: "fs.read" }],
         },
-        deadlineAt: Date.now() + 5000,
+        deadlineAt: Date.now() + 500,
       },
     });
 
@@ -192,6 +224,50 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
       message: "operator requested cancellation",
     });
     expect(close.code).toBe(0);
+  });
+
+  it("exits cleanly when a wrapper response misses the propagated deadline", async () => {
+    const child = await spawnHarness();
+    let stderr = "";
+    child.stderr?.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+
+    child.send({
+      jsonrpc: "2.0",
+      id: "run-parent-disconnect",
+      method: "run.execute",
+      params: {
+        runId: "run-parent-disconnect",
+        source: `
+          return await capabilities.fs.read({ path: "README.md" });
+        `,
+        input: {},
+        wrapperManifest: {
+          wrappers: [{ name: "fs.read" }],
+        },
+        deadlineAt: Date.now() + 500,
+      },
+    });
+
+    await waitForChildMessage(
+      child,
+      (message) => isCapabilityInvoke(message) && message.params?.wrapperName === "fs.read",
+    );
+
+    const response = await waitForChildMessage(
+      child,
+      (message) => isResponseMessage(message) && message.id === "run-parent-disconnect",
+    );
+    const close = await waitForClose(child);
+
+    expect(response.error).toMatchObject({
+      code: "RUN_DEADLINE_EXCEEDED",
+      message: "Code Mode wrapper deadline exceeded while waiting for parent response.",
+    });
+    expect(close.code).toBe(0);
+    expect(stderr).not.toContain("EPIPE");
+    expect(stderr).not.toContain("ERR_IPC_CHANNEL_CLOSED");
   });
 
   it("fails with RUN_DEADLINE_EXCEEDED before invoking a wrapper when the deadline has already passed", async () => {
@@ -223,6 +299,44 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
     expect(response.error).toMatchObject({
       code: "RUN_DEADLINE_EXCEEDED",
       message: "Code Mode wrapper deadline exceeded before invocation.",
+    });
+    expect(close.code).toBe(0);
+  });
+
+  it("ignores wrapper names that would mutate object prototypes", async () => {
+    const child = await spawnHarness();
+
+    child.send({
+      jsonrpc: "2.0",
+      id: "run-prototype-wrapper",
+      method: "run.execute",
+      params: {
+        runId: "run-prototype-wrapper",
+        source: `
+          return {
+            polluted: Boolean(({}).polluted),
+            protoWrapperType: typeof capabilities.__proto__,
+            safeWrapperType: typeof capabilities.safe.read,
+          };
+        `,
+        input: {},
+        wrapperManifest: {
+          wrappers: [{ name: "__proto__.polluted" }, { name: "safe.read" }],
+        },
+        deadlineAt: Date.now() + 2000,
+      },
+    });
+
+    const response = await waitForChildMessage(
+      child,
+      (message) => isResponseMessage(message) && message.id === "run-prototype-wrapper",
+    );
+    const close = await waitForClose(child);
+
+    expect(response.result).toMatchObject({
+      polluted: false,
+      protoWrapperType: "undefined",
+      safeWrapperType: "function",
     });
     expect(close.code).toBe(0);
   });
@@ -314,9 +428,7 @@ function isResponseMessage(message: JsonRpcMessage): message is JsonRpcMessage &
   return typeof message.id === "string" && ("result" in message || "error" in message);
 }
 
-function isCapabilityInvoke(
-  message: JsonRpcMessage,
-): message is JsonRpcMessage & {
+function isCapabilityInvoke(message: JsonRpcMessage): message is JsonRpcMessage & {
   id: string;
   method: "capability.invoke";
   params: { wrapperName: string; deadlineAt?: number };

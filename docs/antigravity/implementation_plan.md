@@ -1,10 +1,12 @@
 # Mission Control Frontend Consolidation — Implementation Plan
 
+> **Historical note (2026-05-18)**: This plan targets the legacy `apps/mission-control` compatibility shell and is superseded for current `1.0` product decisions by Mission Control Next in `apps/mission-control-next`. Use [docs/1_0_CONTRACT.md](../1_0_CONTRACT.md), [docs/1_0_RELEASE_EVIDENCE.md](../1_0_RELEASE_EVIDENCE.md), and [apps/mission-control-next/src/app/route-model.ts](../../apps/mission-control-next/src/app/route-model.ts) for current route and release-surface truth.
+
 > **Purpose**: A comprehensive, agent-executable plan for fixing the highest-impact frontend issues in GoatCitadel Mission Control. Each task is self-contained: an agent (Claude, Codex, human) should be able to pick up any task and execute it with only the information provided here and the codebase.
 >
-> **Companion doc**: [mission_control_review.md](file:///C:/Users/spurn/.gemini/antigravity/brain/b916550b-2c12-45c0-87f0-e5bef480b18f/mission_control_review.md) — full audit and rationale.
+> **Companion doc**: [mission_control_review.md](./mission_control_review.md) — historical audit and rationale.
 >
-> **Codebase root**: `f:\code\personal-ai\apps\mission-control\`
+> **Legacy codebase root**: `apps/mission-control`
 >
 > **Key directories**:
 > - Styles: `src/styles/` (22 CSS files, ~460KB total)

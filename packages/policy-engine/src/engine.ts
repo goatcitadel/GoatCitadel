@@ -1,9 +1,12 @@
 /* eslint-disable max-lines -- policy evaluation rules remain co-located to keep branching behavior reviewable. */
 import type {
   FilesystemReadAccessMode,
+  ApprovalLinkage,
+  EffectiveToolPolicy,
   ToolGrantConstraints,
   ToolAccessEvaluateRequest,
   ToolAccessEvaluateResponse,
+  ToolApprovalMode,
   ToolGrantCreateInput,
   ToolGrantRecord,
   ToolInvokeRequest,
@@ -15,12 +18,17 @@ import type { Storage } from "@goatcitadel/storage";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { ApprovalGate } from "./approval-gate.js";
-import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
+import { getVerifiedApprovalBypassId, hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { resolveEffectivePolicy } from "./policy-resolver.js";
 import { createDefaultToolRegistry, type ToolDefinition, type ToolRegistry } from "./tool-registry.js";
 import { matchesAnyToolPattern, matchesToolPattern } from "./tool-patterns.js";
 import { assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
-import { assertHostAllowed, evaluateDangerousHostBypass } from "./sandbox/network-guard.js";
+import {
+  assertHostAllowed,
+  assertNotPrivateOrReservedHost,
+  evaluateDangerousHostBypass,
+  redactUrlForError,
+} from "./sandbox/network-guard.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import { executeTool } from "./tool-executor.js";
 import {
@@ -40,10 +48,43 @@ interface AccessEvaluation {
   riskLevel: ToolRiskLevel;
   policyReason: string;
   grantToConsume?: string;
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+  approvalMode?: ToolApprovalMode;
 }
 
 function assertHostAllowedForConfig(hostOrUrl: string, config: ToolPolicyConfig): void {
   assertHostAllowed(hostOrUrl, config.sandbox.networkAllowlist);
+}
+
+function assertFirecrawlBaseUrlAllowedForConfig(hostOrUrl: string, config: ToolPolicyConfig): void {
+  const parsed = parseHttpUrlForPolicy(hostOrUrl, "firecrawlBaseUrl");
+  if (isCanonicalLocalFirecrawlBaseUrl(parsed)) {
+    return;
+  }
+  assertHostAllowedForConfig(parsed.toString(), config);
+  assertNotPrivateOrReservedHost(parsed.toString());
+}
+
+function parseHttpUrlForPolicy(value: string, label: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${label} is not a valid URL (${redactUrlForError(value)})`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`${label} must use http or https (${redactUrlForError(value)})`);
+  }
+  return parsed;
+}
+
+function isCanonicalLocalFirecrawlBaseUrl(parsed: URL): boolean {
+  return (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") && parsed.port === "3002";
+}
+
+function readFirecrawlBaseUrl(args: Record<string, unknown> | undefined): string {
+  return String(args?.firecrawlBaseUrl ?? process.env.FIRECRAWL_BASE_URL ?? "http://127.0.0.1:3002");
 }
 
 interface GrantDecision {
@@ -98,8 +139,11 @@ export class ToolPolicyEngine {
     return this.storage.toolGrants.create(input);
   }
 
-  public revokeGrant(grantId: string): boolean {
-    return this.storage.toolGrants.revoke(grantId);
+  public revokeGrant(grantId: string, revokedBy: string): boolean {
+    if (!revokedBy.trim()) {
+      throw new Error("revokedBy is required to revoke a tool grant");
+    }
+    return this.storage.toolGrants.revoke(grantId, undefined, revokedBy);
   }
 
   public evaluateAccess(input: ToolAccessEvaluateRequest): ToolAccessEvaluateResponse {
@@ -110,11 +154,15 @@ export class ToolPolicyEngine {
       sessionId: input.sessionId,
       workspaceId: input.workspaceId,
       taskId: input.taskId,
+      runId: input.runId,
       allowed: evaluation.allowed,
       reasonCodes: evaluation.reasonCodes,
       matchedGrantId: evaluation.matchedGrantId,
       requiresApproval: evaluation.requiresApproval,
       riskLevel: evaluation.riskLevel,
+      permissionProfileId: evaluation.permissionProfileId,
+      localOperatorOverrideId: evaluation.localOperatorOverrideId,
+      countsTowardLimits: false,
     });
 
     return {
@@ -124,10 +172,24 @@ export class ToolPolicyEngine {
       requiresApproval: evaluation.requiresApproval,
       matchedGrantId: evaluation.matchedGrantId,
       riskLevel: evaluation.riskLevel,
+      permissionProfileId: evaluation.permissionProfileId,
+      localOperatorOverrideId: evaluation.localOperatorOverrideId,
     };
   }
 
   public async invoke(request: ToolInvokeRequest): Promise<ToolInvokeResult> {
+    const directApprovalBypassId = getVerifiedApprovalBypassId(request, this.storage);
+    if (directApprovalBypassId) {
+      const result = await this.executeApprovedAction(
+        directApprovalBypassId,
+        request.signal,
+        request.externalRuntime === true ? { deferResolution: true } : undefined,
+      );
+      if (result) {
+        return result;
+      }
+    }
+
     const auditEventId = randomUUID();
     const startedAt = new Date().toISOString();
     const toolDef = this.registry.get(request.toolName);
@@ -141,11 +203,15 @@ export class ToolPolicyEngine {
       sessionId: request.sessionId,
       workspaceId: request.workspaceId,
       taskId: request.taskId,
+      runId: request.runId,
       allowed: evaluation.allowed,
       reasonCodes: evaluation.reasonCodes,
       matchedGrantId: evaluation.matchedGrantId,
       requiresApproval: evaluation.requiresApproval,
       riskLevel: evaluation.riskLevel,
+      permissionProfileId: evaluation.permissionProfileId,
+      localOperatorOverrideId: evaluation.localOperatorOverrideId,
+      countsTowardLimits: evaluation.allowed && !evaluation.requiresApproval && request.dryRun !== true,
     });
 
     if (!evaluation.allowed) {
@@ -154,6 +220,9 @@ export class ToolPolicyEngine {
         reasonCodes: evaluation.reasonCodes,
         riskLevel: evaluation.riskLevel,
         matchedGrantId: evaluation.matchedGrantId,
+        permissionProfileId: evaluation.permissionProfileId,
+        localOperatorOverrideId: evaluation.localOperatorOverrideId,
+        approvalMode: evaluation.approvalMode,
       });
       const completedAt = new Date().toISOString();
       const internalResult = buildInternalToolResult({
@@ -170,6 +239,10 @@ export class ToolPolicyEngine {
         startedAt,
         completedAt,
         matchedGrantId: evaluation.matchedGrantId,
+        reasonCodes: evaluation.reasonCodes,
+        permissionProfileId: evaluation.permissionProfileId,
+        localOperatorOverrideId: evaluation.localOperatorOverrideId,
+        approvalMode: evaluation.approvalMode,
         errorKind: "policy_block",
       });
       return {
@@ -182,44 +255,17 @@ export class ToolPolicyEngine {
       };
     }
 
-    await this.recordDangerProfileNetworkBypassIfNeeded(auditEventId, request);
+    await this.recordDangerProfileNetworkBypassIfNeeded(auditEventId, request, evaluation);
 
-    if (request.dryRun) {
-      const result = {
-        dryRun: true,
-        toolName: request.toolName,
-        policy: {
-          allowed: evaluation.allowed,
-          requiresApproval: evaluation.requiresApproval,
-          riskLevel: evaluation.riskLevel,
-          reasonCodes: evaluation.reasonCodes,
-        },
-      };
-      await this.recordInvocation(auditEventId, request, "executed", `${evaluation.policyReason}; dry-run`, result);
-      const completedAt = new Date().toISOString();
-      return {
-        outcome: "executed",
-        policyReason: `${evaluation.policyReason}; dry-run`,
-        auditEventId,
-        result,
-        internalCall,
-        internalResult: buildInternalToolResult({
-          toolName: request.toolName,
-          outcome: "executed",
-          result,
-          completedAt,
-        }),
-        audit: buildToolAuditRecord({
-          auditEventId,
-          request,
-          outcome: "executed",
-          policyReason: `${evaluation.policyReason}; dry-run`,
-          startedAt,
-          completedAt,
-          matchedGrantId: evaluation.matchedGrantId,
-        }),
-      };
-    }
+    // SECURITY (codex finding #16): If a request would require approval,
+    // a dry-run must surface that as `approval_required` (with dryRun
+    // metadata), not as `executed`. Previously the dry-run short-circuit
+    // fired BEFORE the requiresApproval branch, so callers that built
+    // their own pre-checks (e.g. `ToolInvocationCoordinatorService.evaluateMcpPolicy`)
+    // saw `outcome: "executed"` for tools the policy actually wanted to
+    // gate, and then went on to invoke the real tool. We now route
+    // `requiresApproval` first so the approval boundary is the same
+    // regardless of dryRun.
 
     if (evaluation.requiresApproval) {
       const expiresAt = new Date(Date.now() + DEFAULT_APPROVAL_TTL_MS).toISOString();
@@ -228,6 +274,7 @@ export class ToolPolicyEngine {
         riskLevel: evaluation.riskLevel,
         payload: request.args,
         preview: this.buildApprovalPreview(request),
+        linkage: buildToolApprovalLinkage(request, evaluation),
         expiresAt,
       });
 
@@ -259,6 +306,7 @@ export class ToolPolicyEngine {
         evaluation.policyReason,
         undefined,
         approval.approvalId,
+        evaluation,
       );
       const completedAt = new Date().toISOString();
 
@@ -284,9 +332,82 @@ export class ToolPolicyEngine {
           completedAt,
           approvalId: approval.approvalId,
           matchedGrantId: evaluation.matchedGrantId,
+          reasonCodes: evaluation.reasonCodes,
+          permissionProfileId: evaluation.permissionProfileId,
+          localOperatorOverrideId: evaluation.localOperatorOverrideId,
+          approvalMode: evaluation.approvalMode,
           errorKind: "approval_required",
         }),
       };
+    }
+
+    // SECURITY (codex finding #16): Dry-run preview for requests that do
+    // NOT require approval. We deliberately reach this branch only after
+    // the requiresApproval branch above has had a chance to surface as
+    // `approval_required` — otherwise dry-run becomes an approval bypass
+    // for any caller (MCP coordinator, etc.) that pre-checks with
+    // `{ dryRun: true }` and then proceeds when the outcome is "executed".
+    if (request.dryRun) {
+      const result = {
+        dryRun: true,
+        toolName: request.toolName,
+        policy: {
+          allowed: evaluation.allowed,
+          requiresApproval: evaluation.requiresApproval,
+          riskLevel: evaluation.riskLevel,
+          reasonCodes: evaluation.reasonCodes,
+        },
+      };
+      await this.recordInvocation(
+        auditEventId,
+        request,
+        "executed",
+        `${evaluation.policyReason}; dry-run`,
+        result,
+        undefined,
+        evaluation,
+      );
+      const completedAt = new Date().toISOString();
+      return {
+        outcome: "executed",
+        policyReason: `${evaluation.policyReason}; dry-run`,
+        auditEventId,
+        result,
+        internalCall,
+        internalResult: buildInternalToolResult({
+          toolName: request.toolName,
+          outcome: "executed",
+          result,
+          completedAt,
+        }),
+        audit: buildToolAuditRecord({
+          auditEventId,
+          request,
+          outcome: "executed",
+          policyReason: `${evaluation.policyReason}; dry-run`,
+          startedAt,
+          completedAt,
+          matchedGrantId: evaluation.matchedGrantId,
+          reasonCodes: evaluation.reasonCodes,
+          permissionProfileId: evaluation.permissionProfileId,
+          localOperatorOverrideId: evaluation.localOperatorOverrideId,
+          approvalMode: evaluation.approvalMode,
+        }),
+      };
+    }
+
+    if (request.externalRuntime) {
+      return this.executeAllowedRequest(
+        request,
+        auditEventId,
+        `${evaluation.policyReason}; external runtime`,
+        evaluation.grantToConsume,
+        startedAt,
+        evaluation.matchedGrantId,
+        undefined,
+        evaluation,
+        internalCall,
+      );
     }
 
     return this.executeAllowedRequest(
@@ -297,11 +418,16 @@ export class ToolPolicyEngine {
       startedAt,
       evaluation.matchedGrantId,
       undefined,
+      evaluation,
       internalCall,
     );
   }
 
-  public async executeApprovedAction(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined> {
+  public async executeApprovedAction(
+    approvalId: string,
+    signal?: AbortSignal,
+    options?: { deferResolution?: boolean; externalRuntimeReplay?: boolean },
+  ): Promise<ToolInvokeResult | undefined> {
     const pending = this.storage.pendingApprovalActions.find(approvalId);
     if (!pending || pending.resolutionStatus !== "pending") {
       return undefined;
@@ -335,31 +461,47 @@ export class ToolPolicyEngine {
       });
       return undefined;
     }
+    const executionRequest: ToolInvokeRequest =
+      options?.externalRuntimeReplay === true
+        ? {
+            ...approvedRequest,
+            dryRun: undefined,
+            externalRuntime: true,
+          }
+        : approvedRequest;
     const auditEventId = randomUUID();
     const startedAt = new Date().toISOString();
-    const approvedToolDef = this.registry.get(approvedRequest.toolName);
-    const approvedCapabilityPolicy = deriveToolCapabilityPolicy(approvedRequest.toolName, approvedToolDef);
-    const internalCall = buildInternalToolCall(approvedRequest, approvedCapabilityPolicy, startedAt);
-    const evaluation = this.evaluateAccessInternal(approvedRequest);
+    const approvedToolDef = this.registry.get(executionRequest.toolName);
+    const approvedCapabilityPolicy = deriveToolCapabilityPolicy(executionRequest.toolName, approvedToolDef);
+    const internalCall = buildInternalToolCall(executionRequest, approvedCapabilityPolicy, startedAt);
+    const evaluation = this.evaluateAccessInternal(executionRequest);
 
     this.storage.toolAccessDecisions.record({
-      toolName: approvedRequest.toolName,
-      agentId: approvedRequest.agentId,
-      sessionId: approvedRequest.sessionId,
-      taskId: approvedRequest.taskId,
+      toolName: executionRequest.toolName,
+      agentId: executionRequest.agentId,
+      sessionId: executionRequest.sessionId,
+      workspaceId: executionRequest.workspaceId,
+      taskId: executionRequest.taskId,
+      runId: executionRequest.runId,
       allowed: evaluation.allowed,
       reasonCodes: evaluation.reasonCodes,
       matchedGrantId: evaluation.matchedGrantId,
       requiresApproval: false,
       riskLevel: evaluation.riskLevel,
+      permissionProfileId: evaluation.permissionProfileId,
+      localOperatorOverrideId: evaluation.localOperatorOverrideId,
+      countsTowardLimits: evaluation.allowed,
     });
 
     if (!evaluation.allowed) {
       const reason = `blocked: ${evaluation.policyReason}`;
-      await this.recordBlocked(auditEventId, approvedRequest, reason, {
+      await this.recordBlocked(auditEventId, executionRequest, reason, {
         reasonCodes: evaluation.reasonCodes,
         riskLevel: evaluation.riskLevel,
         matchedGrantId: evaluation.matchedGrantId,
+        permissionProfileId: evaluation.permissionProfileId,
+        localOperatorOverrideId: evaluation.localOperatorOverrideId,
+        approvalMode: evaluation.approvalMode,
         approvalId,
       });
       this.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
@@ -376,58 +518,65 @@ export class ToolPolicyEngine {
         auditEventId,
         internalCall,
         internalResult: buildInternalToolResult({
-          toolName: approvedRequest.toolName,
+          toolName: executionRequest.toolName,
           outcome: "blocked",
           errorKind: "policy_block",
           completedAt,
         }),
         audit: buildToolAuditRecord({
           auditEventId,
-          request: approvedRequest,
+          request: executionRequest,
           outcome: "blocked",
           policyReason: reason,
           startedAt,
           completedAt,
           approvalId,
           matchedGrantId: evaluation.matchedGrantId,
+          reasonCodes: evaluation.reasonCodes,
+          permissionProfileId: evaluation.permissionProfileId,
+          localOperatorOverrideId: evaluation.localOperatorOverrideId,
+          approvalMode: evaluation.approvalMode,
           errorKind: "policy_block",
         }),
       };
     }
 
     const result = await this.executeAllowedRequest(
-      approvedRequest,
+      executionRequest,
       auditEventId,
       `allowed_via_approval:${approvalId}`,
       evaluation.grantToConsume,
       startedAt,
       evaluation.matchedGrantId,
       approvalId,
+      evaluation,
       internalCall,
     );
 
-    this.storage.pendingApprovalActions.markResolved(
-      approvalId,
-      result.outcome === "executed" ? "executed" : "failed",
-      {
-        outcome: result.outcome,
-        policyReason: result.policyReason,
-        auditEventId,
-        result: result.result,
-      },
-    );
+    if (options?.deferResolution !== true) {
+      this.storage.pendingApprovalActions.markResolved(
+        approvalId,
+        result.outcome === "executed" ? "executed" : "failed",
+        {
+          outcome: result.outcome,
+          policyReason: result.policyReason,
+          auditEventId,
+          result: result.result,
+        },
+      );
 
-    this.storage.approvalEvents.append({
-      approvalId,
-      eventType: "approved_action_executed",
-      actorId: "system",
-      payload: {
-        toolName: approvedRequest.toolName,
-        outcome: result.outcome,
-        policyReason: result.policyReason,
-        auditEventId,
-      },
-    });
+      this.storage.approvalEvents.append({
+        approvalId,
+        eventType: "approved_action_executed",
+        actorId: "system",
+        payload: {
+          toolName: approvedRequest.toolName,
+          outcome: result.outcome,
+          policyReason: result.policyReason,
+          auditEventId,
+        },
+      });
+    }
 
     return result;
   }
@@ -437,17 +586,29 @@ export class ToolPolicyEngine {
     const capabilityPolicy = deriveToolCapabilityPolicy(request.toolName, toolDef);
     const riskLevel = toolDef?.riskLevel ?? "caution";
     const shellRisk = this.evaluateShellRisk(request);
+    const policy = resolveEffectivePolicy(
+      this.config,
+      request.agentId,
+      request.policyContext?.permissionProfile,
+      request.policyContext?.localOperatorOverride,
+    );
+    const localOperatorOverrideAuditId = policy.localOperatorOverrideId;
+    const withPolicy = (evaluation: AccessEvaluation): AccessEvaluation => ({
+      ...evaluation,
+      permissionProfileId: policy.permissionProfileId,
+      localOperatorOverrideId: localOperatorOverrideAuditId,
+      approvalMode: policy.approvalMode,
+    });
     if (isBankrToolName(request.toolName) && !this.runtimeOptions.isBankrBuiltinEnabled()) {
-      return deny(riskLevel, "bankr_builtin_disabled", BANKR_OPTIONAL_MIGRATION_MESSAGE);
+      return withPolicy(deny(riskLevel, "bankr_builtin_disabled", BANKR_OPTIONAL_MIGRATION_MESSAGE));
     }
 
-    const policy = resolveEffectivePolicy(this.config, request.agentId);
     if (matchesAnyToolPattern(policy.denySet, request.toolName)) {
-      return deny(riskLevel, "policy_deny", "tool denied by policy");
+      return withPolicy(deny(riskLevel, "policy_deny", "tool denied by policy"));
     }
 
-    if (!toolDef && !matchesAnyToolPattern(policy.effectiveTools, request.toolName)) {
-      return deny(riskLevel, "unknown_tool", `unknown tool ${request.toolName}`);
+    if (!toolDef) {
+      return withPolicy(deny(riskLevel, "unknown_tool", `unknown tool ${request.toolName}`));
     }
 
     const grantDecision = this.resolveGrantDecision(request);
@@ -459,25 +620,30 @@ export class ToolPolicyEngine {
         matchedGrantId: grantDecision.grant.grantId,
         riskLevel,
         policyReason: "tool denied by scoped grant",
+        permissionProfileId: policy.permissionProfileId,
+        localOperatorOverrideId: localOperatorOverrideAuditId,
+        approvalMode: policy.approvalMode,
       };
     }
 
     const allowGrant = grantDecision?.decision === "allow" ? grantDecision.grant : undefined;
 
-    const structuralError = this.validateStructuralSafety(request, allowGrant);
+    const structuralError = this.validateStructuralSafety(request, policy, allowGrant);
     if (structuralError) {
-      return deny(riskLevel, "structural_safety_block", structuralError);
+      return withPolicy(deny(riskLevel, "structural_safety_block", structuralError));
     }
 
     if (isUntrustedToolEscalation(request.trustLevel ?? "trusted_operator", capabilityPolicy)) {
-      return deny(
-        riskLevel,
-        "untrusted_source_privileged_tool_block",
-        `tool ${request.toolName} is blocked because untrusted external content cannot escalate into privileged execution`,
+      return withPolicy(
+        deny(
+          riskLevel,
+          "untrusted_source_privileged_tool_block",
+          `tool ${request.toolName} is blocked because untrusted external content cannot escalate into privileged execution`,
+        ),
       );
     }
 
-    if (riskLevel !== "safe" && grantDecision?.decision === "allow") {
+    if (grantDecision?.decision === "allow") {
       const constraintsError = this.applyGrantConstraints(request, grantDecision.grant, toolDef);
       if (constraintsError) {
         return {
@@ -487,6 +653,9 @@ export class ToolPolicyEngine {
           matchedGrantId: grantDecision.grant.grantId,
           riskLevel,
           policyReason: constraintsError,
+          permissionProfileId: policy.permissionProfileId,
+          localOperatorOverrideId: localOperatorOverrideAuditId,
+          approvalMode: policy.approvalMode,
         };
       }
     }
@@ -494,11 +663,11 @@ export class ToolPolicyEngine {
     const inProfile = matchesAnyToolPattern(policy.effectiveTools, request.toolName);
     const hasAllowGrant = grantDecision?.decision === "allow";
     if (!inProfile && !hasAllowGrant) {
-      return deny(riskLevel, "policy_disallow", "tool not available in resolved policy");
+      return withPolicy(deny(riskLevel, "policy_disallow", "tool not available in resolved policy"));
     }
 
     let requiresApproval = policy.approvalMode === "approve_all" || Boolean(toolDef?.requiresApproval);
-    const outsideRootsReadRequiresApproval = this.requiresApprovalForOutsideRootsRead(request, allowGrant);
+    const outsideRootsReadRequiresApproval = this.requiresApprovalForOutsideRootsRead(request, policy, allowGrant);
 
     if (
       riskLevel === "danger" &&
@@ -521,6 +690,10 @@ export class ToolPolicyEngine {
     if (policy.approvalMode === "approve_risky" && riskLevel !== "safe") {
       requiresApproval = true;
     }
+    const codeModeRunPreapproved = Boolean(request.policyContext?.approvedCodeModeRunId);
+    if (codeModeRunPreapproved && riskLevel !== "nuclear" && !shellRisk?.risky && !outsideRootsReadRequiresApproval) {
+      requiresApproval = false;
+    }
     if (
       policy.approvalMode === "bypass" &&
       riskLevel !== "nuclear" &&
@@ -531,6 +704,15 @@ export class ToolPolicyEngine {
     }
 
     const reasonCodes = ["allowed"];
+    if (policy.permissionProfileId) {
+      reasonCodes.push("permission_profile");
+    }
+    if (localOperatorOverrideAuditId) {
+      reasonCodes.push("local_operator_override");
+    }
+    if (codeModeRunPreapproved) {
+      reasonCodes.push("approved_code_mode_run");
+    }
     if (policy.approvalMode === "bypass") {
       reasonCodes.push("approval_bypass_mode");
       if (riskLevel === "nuclear") {
@@ -544,6 +726,8 @@ export class ToolPolicyEngine {
     let policyReason = "allowed";
     if (policy.approvalMode === "bypass" && riskLevel === "nuclear") {
       policyReason = "nuclear-risk tools require approval even when normal approvals are bypassed";
+    } else if (codeModeRunPreapproved && !requiresApproval) {
+      policyReason = "allowed by approved Code Mode run";
     } else if (policy.approvalMode === "bypass") {
       policyReason = "allowed by bypass approval mode";
     } else if (requiresApproval) {
@@ -566,6 +750,9 @@ export class ToolPolicyEngine {
       riskLevel,
       policyReason,
       grantToConsume: grantDecision?.grant.grantId,
+      permissionProfileId: policy.permissionProfileId,
+      localOperatorOverrideId: localOperatorOverrideAuditId,
+      approvalMode: policy.approvalMode,
     };
   }
 
@@ -667,7 +854,9 @@ export class ToolPolicyEngine {
     }
 
     if (constraints.allowedPaths && constraints.allowedPaths.length > 0) {
-      const candidates = extractPathCandidates(request.args);
+      const candidates = extractPathCandidates(request.args).map((candidate) =>
+        this.resolvePathForGrantConstraint(candidate),
+      );
       if (candidates.length > 0) {
         const blocked = candidates.some(
           (candidate) => !isPathWithinAnyRoot(candidate, constraints.allowedPaths as string[]),
@@ -680,7 +869,9 @@ export class ToolPolicyEngine {
 
     const referenceRoots = getReferenceRootPaths(constraints);
     if (referenceRoots.length > 0) {
-      const candidates = extractPathCandidates(request.args);
+      const candidates = extractPathCandidates(request.args).map((candidate) =>
+        this.resolvePathForGrantConstraint(candidate),
+      );
       if (isMutationTool(toolDef) && candidates.some((candidate) => isPathWithinAnyRoot(candidate, referenceRoots))) {
         return "reference roots are read-only";
       }
@@ -704,22 +895,24 @@ export class ToolPolicyEngine {
 
   private validateStructuralSafety(
     request: ToolAccessEvaluateRequest,
+    policy?: EffectiveToolPolicy,
     allowGrant?: ToolGrantRecord,
   ): string | undefined {
     try {
-      const readPathError = this.validateReadPaths(request, allowGrant);
+      const readPathError = this.validateReadPaths(
+        request,
+        policy ?? resolveEffectivePolicy(this.config, request.agentId),
+        allowGrant,
+      );
       if (readPathError) {
         return readPathError;
       }
 
-      if (
-        request.toolName === "fs.write" ||
-        request.toolName === "fs.move" ||
-        request.toolName === "fs.delete" ||
-        request.toolName === "artifacts.create" ||
-        request.toolName === "presentations.create"
-      ) {
-        const pathValue = String(request.args?.path ?? request.args?.to ?? request.args?.from ?? "");
+      const writePathCandidates = extractWritePathCandidates(request);
+      if (requiresExplicitWritePath(request.toolName) && writePathCandidates.length === 0) {
+        return `${request.toolName} requires a target path.`;
+      }
+      for (const pathValue of writePathCandidates) {
         const referenceRoots = getReferenceRootPaths(allowGrant?.constraints);
         const targetsReferenceRoot = referenceRoots.length > 0 && isPathWithinAnyRoot(pathValue, referenceRoots);
         if (!targetsReferenceRoot) {
@@ -750,7 +943,7 @@ export class ToolPolicyEngine {
           const firecrawlBaseUrl = String(
             request.args?.firecrawlBaseUrl ?? process.env.FIRECRAWL_BASE_URL ?? "http://127.0.0.1:3002",
           );
-          assertHostAllowedForConfig(firecrawlBaseUrl, this.config);
+          assertFirecrawlBaseUrlAllowedForConfig(firecrawlBaseUrl, this.config);
         }
       }
 
@@ -758,6 +951,9 @@ export class ToolPolicyEngine {
         const target = String(request.args?.url ?? "");
         if (target) {
           assertHostAllowedForConfig(target, this.config);
+        }
+        if (request.args?.backend === "firecrawl") {
+          assertFirecrawlBaseUrlAllowedForConfig(readFirecrawlBaseUrl(request.args), this.config);
         }
       }
     } catch (error) {
@@ -767,8 +963,12 @@ export class ToolPolicyEngine {
     return undefined;
   }
 
-  private validateReadPaths(request: ToolAccessEvaluateRequest, allowGrant?: ToolGrantRecord): string | undefined {
-    const readAccessMode = this.getReadAccessMode();
+  private validateReadPaths(
+    request: ToolAccessEvaluateRequest,
+    policy: EffectiveToolPolicy,
+    allowGrant?: ToolGrantRecord,
+  ): string | undefined {
+    const readAccessMode = this.getReadAccessMode(policy);
     for (const target of extractReadPathCandidates(request)) {
       const access = resolveReadPathAccess(
         target,
@@ -781,10 +981,10 @@ export class ToolPolicyEngine {
       if (readAccessMode === "full_disk") {
         continue;
       }
-      if (this.hasApprovalBypass(request)) {
+      if (readAccessMode === "approval_required" && this.hasApprovalBypass(request)) {
         continue;
       }
-      if (this.grantAllowsReadPath(allowGrant, target) || this.grantAllowsReadPath(allowGrant, access.resolvedPath)) {
+      if (this.grantAllowsReadPath(allowGrant, access.resolvedPath)) {
         continue;
       }
       if (readAccessMode === "approval_required") {
@@ -797,9 +997,10 @@ export class ToolPolicyEngine {
 
   private requiresApprovalForOutsideRootsRead(
     request: ToolAccessEvaluateRequest,
+    policy: EffectiveToolPolicy,
     allowGrant?: ToolGrantRecord,
   ): boolean {
-    if (this.getReadAccessMode() !== "approval_required") {
+    if (this.getReadAccessMode(policy) !== "approval_required") {
       return false;
     }
     if (this.hasApprovalBypass(request)) {
@@ -811,11 +1012,7 @@ export class ToolPolicyEngine {
         this.config.sandbox.writeJailRoots,
         this.config.sandbox.readOnlyRoots,
       );
-      if (
-        !access.withinRoots &&
-        !this.grantAllowsReadPath(allowGrant, target) &&
-        !this.grantAllowsReadPath(allowGrant, access.resolvedPath)
-      ) {
+      if (!access.withinRoots && !this.grantAllowsReadPath(allowGrant, access.resolvedPath)) {
         return true;
       }
     }
@@ -834,8 +1031,17 @@ export class ToolPolicyEngine {
     return isPathWithinAnyRoot(resolvedPath, allowedPaths);
   }
 
-  private getReadAccessMode(): FilesystemReadAccessMode {
-    return this.config.sandbox.readAccessMode ?? "roots_only";
+  private resolvePathForGrantConstraint(pathValue: string): string {
+    try {
+      return resolveReadPathAccess(pathValue, this.config.sandbox.writeJailRoots, this.config.sandbox.readOnlyRoots)
+        .resolvedPath;
+    } catch {
+      return path.resolve(pathValue);
+    }
+  }
+
+  private getReadAccessMode(policy?: EffectiveToolPolicy): FilesystemReadAccessMode {
+    return policy?.readAccessMode ?? this.config.sandbox.readAccessMode ?? "roots_only";
   }
 
   private buildApprovalPreview(request: ToolInvokeRequest): Record<string, unknown> {
@@ -870,16 +1076,53 @@ export class ToolPolicyEngine {
     startedAt?: string,
     matchedGrantId?: string,
     approvalId?: string,
+    evaluation?: AccessEvaluation,
     internalCall?: ReturnType<typeof buildInternalToolCall>,
   ): Promise<ToolInvokeResult> {
-    try {
-      const result = await executeTool(request, this.config, this.storage, {
-        bankrBuiltinEnabled: this.runtimeOptions.isBankrBuiltinEnabled(),
+    if (grantIdToConsume && !this.storage.toolGrants.consumeOne(grantIdToConsume)) {
+      const reason = "blocked: one-time tool grant is no longer available";
+      await this.recordBlocked(auditEventId, request, reason, {
+        matchedGrantId: matchedGrantId ?? grantIdToConsume,
+        permissionProfileId: evaluation?.permissionProfileId,
+        localOperatorOverrideId: evaluation?.localOperatorOverrideId,
+        approvalMode: evaluation?.approvalMode,
+        reasonCodes: evaluation?.reasonCodes,
       });
-      if (grantIdToConsume) {
-        this.storage.toolGrants.consumeOne(grantIdToConsume);
-      }
-      await this.recordInvocation(auditEventId, request, "executed", policyReason, result);
+      const completedAt = new Date().toISOString();
+      return {
+        outcome: "blocked",
+        policyReason: reason,
+        auditEventId,
+        internalCall,
+        internalResult: buildInternalToolResult({
+          toolName: request.toolName,
+          outcome: "blocked",
+          errorKind: "policy_block",
+          completedAt,
+        }),
+        audit: buildToolAuditRecord({
+          auditEventId,
+          request,
+          outcome: "blocked",
+          policyReason: reason,
+          startedAt: startedAt ?? completedAt,
+          completedAt,
+          approvalId,
+          matchedGrantId: matchedGrantId ?? grantIdToConsume,
+          reasonCodes: evaluation?.reasonCodes,
+          permissionProfileId: evaluation?.permissionProfileId,
+          localOperatorOverrideId: evaluation?.localOperatorOverrideId,
+          approvalMode: evaluation?.approvalMode,
+          errorKind: "policy_block",
+        }),
+      };
+    }
+    if (request.externalRuntime) {
+      const result = {
+        externalRuntime: true,
+        toolName: request.toolName,
+      };
+      await this.recordInvocation(auditEventId, request, "executed", policyReason, result, approvalId, evaluation);
       const completedAt = new Date().toISOString();
       return {
         outcome: "executed",
@@ -902,12 +1145,55 @@ export class ToolPolicyEngine {
           completedAt,
           approvalId,
           matchedGrantId,
+          reasonCodes: evaluation?.reasonCodes,
+          permissionProfileId: evaluation?.permissionProfileId,
+          localOperatorOverrideId: evaluation?.localOperatorOverrideId,
+          approvalMode: evaluation?.approvalMode,
+        }),
+      };
+    }
+    try {
+      const result = await executeTool(request, this.config, this.storage, {
+        bankrBuiltinEnabled: this.runtimeOptions.isBankrBuiltinEnabled(),
+      });
+      await this.recordInvocation(auditEventId, request, "executed", policyReason, result, approvalId, evaluation);
+      const completedAt = new Date().toISOString();
+      return {
+        outcome: "executed",
+        policyReason,
+        auditEventId,
+        result,
+        internalCall,
+        internalResult: buildInternalToolResult({
+          toolName: request.toolName,
+          outcome: "executed",
+          result,
+          completedAt,
+        }),
+        audit: buildToolAuditRecord({
+          auditEventId,
+          request,
+          outcome: "executed",
+          policyReason,
+          startedAt: startedAt ?? completedAt,
+          completedAt,
+          approvalId,
+          matchedGrantId,
+          reasonCodes: evaluation?.reasonCodes,
+          permissionProfileId: evaluation?.permissionProfileId,
+          localOperatorOverrideId: evaluation?.localOperatorOverrideId,
+          approvalMode: evaluation?.approvalMode,
         }),
       };
     } catch (error) {
       const reason = `execution error: ${(error as Error).message}`;
       await this.recordBlocked(auditEventId, request, reason, {
         error: (error as Error).message,
+        matchedGrantId,
+        permissionProfileId: evaluation?.permissionProfileId,
+        localOperatorOverrideId: evaluation?.localOperatorOverrideId,
+        approvalMode: evaluation?.approvalMode,
+        reasonCodes: evaluation?.reasonCodes,
       });
       const completedAt = new Date().toISOString();
       return {
@@ -930,6 +1216,10 @@ export class ToolPolicyEngine {
           completedAt,
           approvalId,
           matchedGrantId,
+          reasonCodes: evaluation?.reasonCodes,
+          permissionProfileId: evaluation?.permissionProfileId,
+          localOperatorOverrideId: evaluation?.localOperatorOverrideId,
+          approvalMode: evaluation?.approvalMode,
           errorKind: "execution_error",
         }),
       };
@@ -943,23 +1233,51 @@ export class ToolPolicyEngine {
     details: Record<string, unknown>,
   ): Promise<void> {
     const now = new Date().toISOString();
+    const matchedGrantId = readNonEmptyString(details.matchedGrantId);
+    const permissionProfileId = readNonEmptyString(details.permissionProfileId);
+    const localOperatorOverrideId = readNonEmptyString(details.localOperatorOverrideId);
+    const approvalMode = readApprovalMode(details.approvalMode);
+    const reasonCodes = readReasonCodes(details.reasonCodes);
     this.storage.db
       .prepare(
         `
       INSERT INTO policy_blocks (
-        audit_event_id, timestamp, agent_id, session_id, tool_name, reason, details_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        audit_event_id, timestamp, agent_id, session_id, task_id, run_id, tool_name, reason, details_json,
+        matched_grant_id, permission_profile_id, local_operator_override_id, approval_mode, reason_codes_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
       )
-      .run(auditEventId, now, request.agentId, request.sessionId, request.toolName, reason, JSON.stringify(details));
+      .run(
+        auditEventId,
+        now,
+        request.agentId,
+        request.sessionId,
+        request.taskId ?? null,
+        request.runId ?? null,
+        request.toolName,
+        reason,
+        JSON.stringify(details),
+        matchedGrantId ?? null,
+        permissionProfileId ?? null,
+        localOperatorOverrideId ?? null,
+        approvalMode ?? null,
+        reasonCodes ? JSON.stringify(reasonCodes) : null,
+      );
 
     await this.storage.audit.append("policy_blocks", {
       auditEventId,
       agentId: request.agentId,
       sessionId: request.sessionId,
+      taskId: request.taskId,
+      runId: request.runId,
       toolName: request.toolName,
       reason,
       details,
+      matchedGrantId,
+      permissionProfileId,
+      localOperatorOverrideId,
+      approvalMode,
+      reasonCodes,
     });
   }
 
@@ -970,6 +1288,7 @@ export class ToolPolicyEngine {
     policyReason: string,
     result?: Record<string, unknown>,
     approvalId?: string,
+    evaluation?: AccessEvaluation,
   ): Promise<void> {
     const now = new Date().toISOString();
     const sanitizedArgs = sanitizeForModel(request.args);
@@ -978,9 +1297,10 @@ export class ToolPolicyEngine {
       .prepare(
         `
       INSERT INTO tool_invocations (
-        audit_event_id, timestamp, agent_id, session_id, task_id, tool_name,
-        outcome, policy_reason, args_json, result_json, approval_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        audit_event_id, timestamp, agent_id, session_id, task_id, run_id, tool_name,
+        outcome, policy_reason, args_json, result_json, approval_id, matched_grant_id,
+        permission_profile_id, local_operator_override_id, approval_mode, reason_codes_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
       )
       .run(
@@ -989,12 +1309,18 @@ export class ToolPolicyEngine {
         request.agentId,
         request.sessionId,
         request.taskId ?? null,
+        request.runId ?? null,
         request.toolName,
         outcome,
         policyReason,
         JSON.stringify(sanitizedArgs),
         sanitizedResult ? JSON.stringify(sanitizedResult) : null,
         approvalId ?? null,
+        evaluation?.matchedGrantId ?? null,
+        evaluation?.permissionProfileId ?? null,
+        evaluation?.localOperatorOverrideId ?? null,
+        evaluation?.approvalMode ?? null,
+        evaluation?.reasonCodes ? JSON.stringify(evaluation.reasonCodes) : null,
       );
 
     await this.storage.audit.append("tool_invocations", {
@@ -1002,10 +1328,16 @@ export class ToolPolicyEngine {
       agentId: request.agentId,
       sessionId: request.sessionId,
       taskId: request.taskId,
+      runId: request.runId,
       toolName: request.toolName,
       outcome,
       policyReason,
       approvalId,
+      matchedGrantId: evaluation?.matchedGrantId,
+      permissionProfileId: evaluation?.permissionProfileId,
+      localOperatorOverrideId: evaluation?.localOperatorOverrideId,
+      approvalMode: evaluation?.approvalMode,
+      reasonCodes: evaluation?.reasonCodes,
       args: sanitizedArgs,
       result: sanitizedResult,
     });
@@ -1014,8 +1346,10 @@ export class ToolPolicyEngine {
   private async recordDangerProfileNetworkBypassIfNeeded(
     auditEventId: string,
     request: ToolInvokeRequest,
+    evaluation?: AccessEvaluation,
   ): Promise<void> {
-    if ((this.config.tools.approvalMode ?? "approve_risky") !== "bypass") {
+    const accessEvaluation = evaluation ?? this.evaluateAccessInternal(request);
+    if (request.dryRun === true || accessEvaluation.approvalMode !== "bypass" || accessEvaluation.requiresApproval) {
       return;
     }
     const bypassedTargets = extractOutboundHostCandidates(request).flatMap((target) => {
@@ -1023,7 +1357,7 @@ export class ToolPolicyEngine {
       return decision.shouldAudit
         ? [
             {
-              target,
+              target: redactUrlForError(target),
               hostname: decision.hostname,
               reason: decision.reason,
             },
@@ -1040,6 +1374,8 @@ export class ToolPolicyEngine {
       sessionId: request.sessionId,
       taskId: request.taskId,
       toolName: request.toolName,
+      permissionProfileId: accessEvaluation.permissionProfileId,
+      localOperatorOverrideId: accessEvaluation.localOperatorOverrideId,
       targets: bypassedTargets,
     });
   }
@@ -1061,6 +1397,54 @@ function buildScopeCandidates(
   return out;
 }
 
+function buildToolApprovalLinkage(
+  request: ToolInvokeRequest,
+  evaluation: AccessEvaluation,
+): ApprovalLinkage | undefined {
+  const surface = readApprovalOriginSurface(request.surface ?? request.policyContext?.surface);
+  const linkage = stripUndefined({
+    workspaceId: readNonEmptyString(request.workspaceId ?? request.policyContext?.workspaceId),
+    sessionId: readNonEmptyString(request.sessionId ?? request.policyContext?.sessionId),
+    taskId: readNonEmptyString(request.taskId ?? request.policyContext?.taskId),
+    runId: readNonEmptyString(request.runId ?? request.policyContext?.runId),
+    originSurface: surface,
+    toolName: readNonEmptyString(request.toolName),
+    actionType: "tool.invoke",
+    operatorId: readNonEmptyString(request.policyContext?.operatorId ?? request.consentContext?.operatorId),
+    authActorId: readNonEmptyString(request.policyContext?.authActorId),
+    authActorSource: request.policyContext?.authActorSource,
+    permissionProfileId: readNonEmptyString(
+      evaluation.permissionProfileId ?? request.permissionProfileId ?? request.policyContext?.permissionProfileId,
+    ),
+    localOperatorOverrideId: readNonEmptyString(evaluation.localOperatorOverrideId),
+  });
+  return Object.keys(linkage).length > 0 ? linkage : undefined;
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readApprovalMode(value: unknown): ToolApprovalMode | undefined {
+  return value === "approve_all" || value === "approve_risky" || value === "bypass" ? value : undefined;
+}
+
+function readReasonCodes(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const reasonCodes = value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+  return reasonCodes.length > 0 ? reasonCodes : undefined;
+}
+
+function readApprovalOriginSurface(value: unknown): ApprovalLinkage["originSurface"] | undefined {
+  return value === "chat" || value === "cowork" || value === "code" ? value : undefined;
+}
+
+function stripUndefined<T extends Record<string, unknown>>(input: T): T {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) as T;
+}
+
 function extractOutboundHostCandidates(request: Pick<ToolAccessEvaluateRequest, "toolName" | "args">): string[] {
   if (request.toolName.startsWith("http.") || request.toolName === "webhook.send") {
     return stringTargets(request.args?.url, request.args?.host);
@@ -1080,7 +1464,11 @@ function extractOutboundHostCandidates(request: Pick<ToolAccessEvaluateRequest, 
     return targets;
   }
   if (request.toolName.startsWith("browser.")) {
-    return stringTargets(request.args?.url);
+    const targets = stringTargets(request.args?.url);
+    if (request.args?.backend === "firecrawl") {
+      targets.push(readFirecrawlBaseUrl(request.args));
+    }
+    return targets;
   }
   return [];
 }
@@ -1109,16 +1497,65 @@ function isMutationTool(toolDef?: ToolDefinition): boolean {
   if (!toolDef) {
     return false;
   }
-  return toolDef.riskLevel === "danger" || toolDef.riskLevel === "nuclear";
+  return toolDef.riskLevel === "danger" || toolDef.riskLevel === "nuclear" || isKnownMutatingToolName(toolDef.name);
 }
+
+function isKnownMutatingToolName(toolName: string): boolean {
+  return (
+    CAUTION_MUTATING_TOOL_NAMES.has(toolName) ||
+    /\.(send|react|unsend)$/u.test(toolName) ||
+    toolName === "webhook.send" ||
+    toolName === "calendar.create_event"
+  );
+}
+
+const CAUTION_MUTATING_TOOL_NAMES = new Set([
+  "fs.copy",
+  "git.branch.create",
+  "memory.write",
+  "memory.upsert",
+  "docs.ingest",
+  "embeddings.index",
+  "artifacts.create",
+  "documents.create",
+  "presentations.create",
+]);
 
 function extractHostCandidates(args?: Record<string, unknown>): string[] {
   if (!args) {
     return [];
   }
-  const values = [args.url, args.host, args.target]
-    .map((value) => (typeof value === "string" ? value.trim() : ""))
-    .filter(Boolean);
+  const values: string[] = [];
+  const pushIfString = (value: unknown): void => {
+    if (typeof value === "string" && value.trim()) {
+      values.push(value.trim());
+    }
+  };
+
+  pushIfString(args.url);
+  pushIfString(args.host);
+  pushIfString(args.target);
+
+  // SECURITY (codex finding #22): Matrix/Mattermost (and other channel)
+  // delivery paths accept attachments whose `url` is fetched gateway-side
+  // before the upload to the chat provider. The per-grant `allowedHosts`
+  // constraint must apply to those URLs too, otherwise a `channel.send`
+  // grant becomes a hidden network-read primitive that exfiltrates internal
+  // response bodies via the chat upload. We also visit `files[].url` for the
+  // same reason.
+  for (const collectionKey of ["attachments", "files"] as const) {
+    const collection = args[collectionKey];
+    if (Array.isArray(collection)) {
+      for (const item of collection) {
+        if (item && typeof item === "object") {
+          const record = item as Record<string, unknown>;
+          pushIfString(record.url);
+          pushIfString(record.href);
+          pushIfString(record.downloadUrl);
+        }
+      }
+    }
+  }
 
   const hosts = new Set<string>();
   for (const value of values) {
@@ -1130,6 +1567,10 @@ function extractHostCandidates(args?: Record<string, unknown>): string[] {
   }
   return [...hosts];
 }
+
+// Test-only export so the codex #22 regression suite can exercise the
+// attachment-walking behaviour without standing up an engine instance.
+export const extractHostCandidatesForTests = extractHostCandidates;
 
 function extractPathCandidates(args?: Record<string, unknown>): string[] {
   if (!args) {
@@ -1163,6 +1604,36 @@ function extractReadPathCandidates(request: ToolAccessEvaluateRequest): string[]
     return typeof args.source === "string" ? [args.source] : [];
   }
   return [];
+}
+
+function extractWritePathCandidates(request: ToolAccessEvaluateRequest): string[] {
+  const args = request.args;
+  if (!args) {
+    return [];
+  }
+  const readString = (value: unknown): string | undefined =>
+    typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  switch (request.toolName) {
+    case "fs.write":
+    case "artifacts.create":
+    case "documents.create":
+    case "presentations.create":
+      return [readString(args.path)].filter((value): value is string => Boolean(value));
+    case "fs.delete":
+      return [readString(args.path), readString(args.from)].filter((value): value is string => Boolean(value));
+    case "fs.copy":
+      return [readString(args.to)].filter((value): value is string => Boolean(value));
+    case "fs.move":
+      return [readString(args.from), readString(args.to)].filter((value): value is string => Boolean(value));
+    case "browser.screenshot":
+      return [readString(args.outputPath), readString(args.path)].filter((value): value is string => Boolean(value));
+    default:
+      return [];
+  }
+}
+
+function requiresExplicitWritePath(toolName: string): boolean {
+  return toolName === "fs.delete";
 }
 
 function matchesHostAllowlist(host: string, patterns: string[]): boolean {
@@ -1213,7 +1684,7 @@ function isPathWithinAnyRoot(candidate: string, roots: string[]): boolean {
 }
 
 function normalizePathForMatch(value: string): string {
-  return path.posix.normalize(value.replaceAll("\\", "/")).replace(/\/+$/, "");
+  return path.normalize(path.resolve(value)).replaceAll("\\", "/").replace(/\/+$/, "");
 }
 
 function deny(riskLevel: ToolRiskLevel, code: string, reason: string): AccessEvaluation {
@@ -1231,7 +1702,23 @@ function asToolInvokeRequest(value: Record<string, unknown>): ToolInvokeRequest 
   const agentId = String(value.agentId ?? "");
   const sessionId = String(value.sessionId ?? "");
   const args = (value.args ?? {}) as Record<string, unknown>;
+  const workspaceId = value.workspaceId ? String(value.workspaceId) : undefined;
   const taskId = value.taskId ? String(value.taskId) : undefined;
+  const runId = value.runId ? String(value.runId) : undefined;
+  const trustLevel =
+    value.trustLevel === "trusted_operator" ||
+    value.trustLevel === "trusted_workspace" ||
+    value.trustLevel === "mixed_untrusted" ||
+    value.trustLevel === "untrusted_external"
+      ? value.trustLevel
+      : undefined;
+  const sourceAttribution = Array.isArray(value.sourceAttribution)
+    ? (value.sourceAttribution as ToolInvokeRequest["sourceAttribution"])
+    : undefined;
+  const authContext =
+    value.authContext && typeof value.authContext === "object" && !Array.isArray(value.authContext)
+      ? (value.authContext as ToolInvokeRequest["authContext"])
+      : undefined;
   const consentContext =
     value.consentContext && typeof value.consentContext === "object"
       ? {
@@ -1247,6 +1734,7 @@ function asToolInvokeRequest(value: Record<string, unknown>): ToolInvokeRequest 
         }
       : undefined;
   const dryRun = typeof value.dryRun === "boolean" ? value.dryRun : undefined;
+  const externalRuntime = typeof value.externalRuntime === "boolean" ? value.externalRuntime : undefined;
 
   if (!toolName || !agentId || !sessionId) {
     throw new Error("Invalid pending action request payload");
@@ -1257,9 +1745,30 @@ function asToolInvokeRequest(value: Record<string, unknown>): ToolInvokeRequest 
     args,
     agentId,
     sessionId,
+    workspaceId,
     taskId,
+    runId,
+    trustLevel,
+    sourceAttribution,
+    authContext,
     consentContext,
+    permissionProfileId: value.permissionProfileId ? String(value.permissionProfileId) : undefined,
+    localOperatorOverrideId: value.localOperatorOverrideId ? String(value.localOperatorOverrideId) : undefined,
+    surface:
+      value.surface === "chat" ||
+      value.surface === "cowork" ||
+      value.surface === "code" ||
+      value.surface === "tools" ||
+      value.surface === "mcp" ||
+      value.surface === "all"
+        ? value.surface
+        : undefined,
+    policyContext:
+      value.policyContext && typeof value.policyContext === "object"
+        ? (value.policyContext as ToolInvokeRequest["policyContext"])
+        : undefined,
     dryRun,
+    externalRuntime,
   };
 }
 

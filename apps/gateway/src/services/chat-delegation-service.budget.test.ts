@@ -231,7 +231,7 @@ function createHarness(
 }
 
 describe("ChatDelegationService subagent budget enforcement", () => {
-  it("rejects a child spawn with max_depth_exceeded when parent depth meets the budget", async () => {
+  it("rejects max_depth_exceeded before child side effects while preserving failed step evidence", async () => {
     const { deps, service } = createHarness({
       subagentDefaults: { childTimeoutSeconds: 600, maxDepth: 2 },
     });
@@ -248,10 +248,21 @@ describe("ChatDelegationService subagent budget enforcement", () => {
         error: expect.stringMatching(/max_depth_exceeded/),
       }),
     );
+    expect(result.stitchedOutput).toContain("FAILED: max_depth_exceeded");
+    expect(result.steps[0]?.childSessionId).toBeUndefined();
+    expect(deps.createChatSession).not.toHaveBeenCalled();
+    expect(deps.inheritDelegatedSessionToolGrants).not.toHaveBeenCalled();
+    expect(deps.updateChatSessionPrefs).not.toHaveBeenCalled();
+    expect(deps.taskLifecycleService.registerTaskSubagent).not.toHaveBeenCalled();
+    expect(deps.taskLifecycleService.updateTaskSubagent).not.toHaveBeenCalled();
     expect(deps.agentSendChatMessage).not.toHaveBeenCalled();
-    expect(deps.taskLifecycleService.updateTaskSubagent).toHaveBeenCalledWith(
-      "delegate-session-1",
-      expect.objectContaining({ status: "failed" }),
+    expect(deps.taskLifecycleService.appendTaskActivity).toHaveBeenCalledWith(
+      "task-1",
+      expect.objectContaining({
+        activityType: "diagnostic",
+        message: expect.stringContaining("max_depth_exceeded"),
+        metadata: expect.objectContaining({ diagnosticCode: "max_depth_exceeded" }),
+      }),
     );
     expect(deps.storage.chatDelegationRuns.patch).toHaveBeenLastCalledWith(
       expect.any(String),
@@ -349,12 +360,9 @@ describe("ChatDelegationService subagent budget enforcement", () => {
     );
     expect(deps.storage.taskSubagents.findByAgentSessionId).toHaveBeenCalledWith("grandchild-session");
     expect(deps.agentSendChatMessage).not.toHaveBeenCalled();
-    expect(deps.taskLifecycleService.registerTaskSubagent).toHaveBeenCalledWith(
-      "task-1",
-      expect.objectContaining({
-        metadata: expect.objectContaining({ depth: 4 }),
-      }),
-    );
+    expect(deps.createChatSession).not.toHaveBeenCalled();
+    expect(deps.taskLifecycleService.registerTaskSubagent).not.toHaveBeenCalled();
+    expect(deps.taskLifecycleService.updateTaskSubagent).not.toHaveBeenCalled();
   });
 
   it("explicit parentSubagentDepth overrides the recursive lookup", async () => {
@@ -418,4 +426,188 @@ describe("ChatDelegationService subagent budget enforcement", () => {
     expect(observedSignal).toBeInstanceOf(AbortSignal);
     expect(observedSignal?.aborted).toBe(true);
   });
+
+  it("forwards streamed delegation aborts into child chat execution", async () => {
+    const { deps, service } = createHarness({
+      subagentDefaults: { childTimeoutSeconds: 600, maxDepth: 4 },
+    });
+    const controller = new AbortController();
+    let observedSignal: AbortSignal | undefined;
+    let agentStarted = () => undefined;
+    const agentStartedPromise = new Promise<void>((resolve) => {
+      agentStarted = resolve;
+    });
+    deps.agentSendChatMessage = vi.fn(
+      async (_childSessionId: string, _request: unknown, options?: { abortSignal?: AbortSignal }) => {
+        observedSignal = options?.abortSignal;
+        agentStarted();
+        await new Promise<never>((_resolve, reject) => {
+          const signal = options?.abortSignal;
+          if (signal?.aborted) {
+            reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+            return;
+          }
+          signal?.addEventListener(
+            "abort",
+            () => reject(signal.reason instanceof Error ? signal.reason : new Error("aborted")),
+            { once: true },
+          );
+        });
+      },
+    ) as never;
+
+    const stream = service.runChatDelegationStream(
+      "sess-1",
+      {
+        objective: "Run a streaming delegate",
+        roles: ["researcher"],
+      },
+      { abortSignal: controller.signal },
+    );
+
+    const first = await stream.next();
+    expect(first.value?.type).toBe("status");
+    await agentStartedPromise;
+    controller.abort(new Error("stream disconnected"));
+
+    await expect.poll(() => observedSignal?.aborted).toBe(true);
+    await stream.return?.(undefined);
+  });
+
+  it("records late child timeout success as diagnostics without promoting it to deliverable truth", async () => {
+    const { deps, service } = createHarness({
+      subagentDefaults: { childTimeoutSeconds: 0.01, maxDepth: 4 },
+    });
+    let resolveChild: (response: ChatSendMessageResponse) => void = () => undefined;
+    deps.agentSendChatMessage = vi.fn(async (childSessionId: string) =>
+      new Promise<ChatSendMessageResponse>((resolve) => {
+        resolveChild = resolve;
+      }).then(() =>
+        createChatResponse(childSessionId, {
+          assistantMessage: {
+            ...createChatResponse(childSessionId).assistantMessage!,
+            content: "late child success that must not become truth",
+          },
+          citations: [{ citationId: "late-cite", title: "Late source" }],
+        }),
+      ),
+    ) as never;
+
+    const result = await service.runChatDelegation("sess-1", {
+      objective: "Run a slow delegate that eventually succeeds",
+      roles: ["researcher"],
+    });
+
+    expect(result.steps[0]).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        error: expect.stringMatching(/timeout_exceeded/),
+        output: undefined,
+      }),
+    );
+    expect(result.stitchedOutput).toContain("FAILED: timeout_exceeded");
+    expect(result.stitchedOutput).not.toContain("late child success");
+    expect(result.citations).toEqual([]);
+    expect(deps.taskLifecycleService.appendTaskDeliverable).not.toHaveBeenCalled();
+
+    resolveChild(createChatResponse("delegate-session-1"));
+    await flushSettledPromises();
+
+    expect(deps.taskLifecycleService.appendTaskDeliverable).not.toHaveBeenCalled();
+    expect(deps.storage.chatDelegationSteps.patch).not.toHaveBeenCalledWith(
+      result.steps[0]?.stepId,
+      expect.objectContaining({ status: "completed" }),
+    );
+    expect(deps.taskLifecycleService.appendTaskActivity).toHaveBeenCalledWith(
+      "task-1",
+      expect.objectContaining({
+        activityType: "diagnostic",
+        message: expect.stringContaining("completed after its timeout"),
+        metadata: expect.objectContaining({
+          lateStatus: "completed",
+          ignoredAsDeliverableTruth: true,
+          citationCount: 1,
+          outputPreview: "late child success that must not become truth",
+        }),
+      }),
+    );
+    expect(deps.taskLifecycleService.updateTaskSubagent).toHaveBeenLastCalledWith(
+      "delegate-session-1",
+      expect.objectContaining({
+        status: "failed",
+        metadata: expect.objectContaining({
+          failureClass: "timeout",
+          diagnostics: expect.arrayContaining([
+            expect.objectContaining({ code: "timeout_exceeded" }),
+            expect.objectContaining({ code: "child_timeout", title: "Subagent completed after timeout" }),
+          ]),
+        }),
+      }),
+    );
+  });
+
+  it("records late child timeout failure as diagnostics without replacing timeout truth", async () => {
+    const { deps, service } = createHarness({
+      subagentDefaults: { childTimeoutSeconds: 0.01, maxDepth: 4 },
+    });
+    let rejectChild: (error: Error) => void = () => undefined;
+    deps.agentSendChatMessage = vi.fn(
+      async () =>
+        new Promise<ChatSendMessageResponse>((_resolve, reject) => {
+          rejectChild = reject;
+        }),
+    ) as never;
+
+    const result = await service.runChatDelegation("sess-1", {
+      objective: "Run a slow delegate that eventually fails",
+      roles: ["researcher"],
+    });
+
+    expect(result.steps[0]).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        error: expect.stringMatching(/timeout_exceeded/),
+      }),
+    );
+
+    rejectChild(new Error("late provider crash"));
+    await flushSettledPromises();
+
+    expect(deps.taskLifecycleService.appendTaskActivity).toHaveBeenCalledWith(
+      "task-1",
+      expect.objectContaining({
+        activityType: "diagnostic",
+        message: expect.stringContaining("late provider crash"),
+        metadata: expect.objectContaining({
+          lateStatus: "failed",
+          ignoredAsDeliverableTruth: true,
+          error: "late provider crash",
+        }),
+      }),
+    );
+    expect(deps.taskLifecycleService.updateTaskSubagent).toHaveBeenLastCalledWith(
+      "delegate-session-1",
+      expect.objectContaining({
+        status: "failed",
+        metadata: expect.objectContaining({
+          failureClass: "timeout",
+          diagnostics: expect.arrayContaining([
+            expect.objectContaining({ code: "timeout_exceeded" }),
+            expect.objectContaining({ code: "child_timeout", title: "Subagent failed after timeout" }),
+          ]),
+        }),
+      }),
+    );
+    expect(deps.storage.chatDelegationRuns.patch).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.objectContaining({ status: "failed", stitchedOutput: expect.stringContaining("timeout_exceeded") }),
+    );
+  });
 });
+
+async function flushSettledPromises(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  await Promise.resolve();
+}

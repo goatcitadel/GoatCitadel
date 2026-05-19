@@ -56,7 +56,7 @@ The first operator surface is `mission_control`.
 - The paired companion bootstrap contract now lives in `docs/COMPANION_CONTRACT.md` and `packages/contracts/src/companion.ts`.
 - The live follow-on parity report includes the resolved contract under the canvas lane.
 - The integration catalog now treats `automation.canvas-a2ui` as a named capability surface instead of a generic visual-workspace placeholder.
-- Mission Control can now generate and export an A2UI proof artifact from live runtime state before operators record a bundle.
+- Mission Control can now generate and export A2UI proof data from live runtime state before operators record a bundle.
 - The current concrete Mission-Control-first proof action is the Office Lab handoff plus directed move path: selecting an agent must change both the `Citadel One` readout and the Inspector panel from zone context to agent context, then a seat/tile command must appear in both the readout and the Inspector canvas-command field.
 
 ## Not Claimed Yet
@@ -68,4 +68,4 @@ The first operator surface is `mission_control`.
 
 ## Next Safe Slice
 
-Keep the exported Mission-Control-first A2UI proof artifact in `artifacts/follow-on-parity/a2ui/` current alongside the April 2, 2026 Android Canvas proof bundle, and only reopen the lane when the contract, deployment profile, or operator flow changes.
+Keep the Mission-Control-first A2UI proof flow aligned with the current verification artifact locations, and only reopen the lane when the contract, deployment profile, or operator flow changes. Do not cite `artifacts/follow-on-parity/a2ui/` as checked-in evidence unless that bundle is regenerated and committed.

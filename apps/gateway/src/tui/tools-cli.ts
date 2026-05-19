@@ -47,13 +47,12 @@ export async function runToolsCli(argv: string[], deps: Partial<ToolsCliDeps> = 
   if (parsed.command === "grant-add") {
     const toolPattern = String(parsed.values.tool ?? parsed.values.toolPattern ?? "").trim();
     const decision = String(parsed.values.decision ?? "allow") as "allow" | "deny";
-    const scope = String(parsed.values.scope ?? "session") as "global" | "session" | "agent" | "task";
+    const scope = String(parsed.values.scope ?? "session") as "global" | "workspace" | "session" | "agent" | "task";
     const scopeRef = String(parsed.values.scopeRef ?? parsed.values.scope_ref ?? "").trim();
     const grantType = String(parsed.values.grantType ?? parsed.values.grant_type ?? "persistent") as
       | "one_time"
       | "ttl"
       | "persistent";
-    const createdBy = String(parsed.values.createdBy ?? parsed.values.created_by ?? "cli").trim();
     const expiresAt = String(parsed.values.expiresAt ?? parsed.values.expires_at ?? "").trim();
     if (!toolPattern) {
       throw new Error("--tool is required");
@@ -65,7 +64,6 @@ export async function runToolsCli(argv: string[], deps: Partial<ToolsCliDeps> = 
       scope,
       scopeRef: scope === "global" ? undefined : scopeRef || undefined,
       grantType,
-      createdBy,
       expiresAt: expiresAt || undefined,
     });
     printJson(created, writeOutput);
@@ -101,7 +99,6 @@ export async function runToolsCli(argv: string[], deps: Partial<ToolsCliDeps> = 
     dryRun,
     consentContext: {
       source: "tui",
-      operatorId: "cli",
       reason: "tools-cli",
     },
   });

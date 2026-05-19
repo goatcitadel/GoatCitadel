@@ -21,6 +21,9 @@ const chatToolArtifactQuerySchema = z.object({
 });
 
 export function registerChatToolRoutes(fastify: FastifyInstance): void {
+  const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
+    request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
+
   fastify.get("/api/v1/chat/tools/approvals", async (request, reply) => {
     const query = chatToolApprovalsQuerySchema.safeParse(request.query);
     if (!query.success) {
@@ -70,6 +73,7 @@ export function registerChatToolRoutes(fastify: FastifyInstance): void {
         "approve",
         {
           allowScope: body.data.allowScope ?? "once",
+          resolvedBy: resolveActorId(request),
         },
       );
       return reply.send({
@@ -92,7 +96,9 @@ export function registerChatToolRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: body.error.flatten() });
     }
     try {
-      await fastify.services.chatTools.resolveChatToolApproval(body.data.sessionId, body.data.approvalId, "reject");
+      await fastify.services.chatTools.resolveChatToolApproval(body.data.sessionId, body.data.approvalId, "reject", {
+        resolvedBy: resolveActorId(request),
+      });
       return reply.send({ ok: true, approvalId: body.data.approvalId });
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });

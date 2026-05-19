@@ -51,7 +51,7 @@ export class ApprovalWaitRunService {
       approvalId: approval.approvalId,
       sessionId: approval.linkage?.sessionId,
       taskId: approval.linkage?.taskId,
-      runId: approval.linkage?.durableRunId,
+      runId: approval.linkage?.runId ?? approval.linkage?.durableRunId,
       proactiveRunId: approval.linkage?.proactiveRunId,
       workspaceId: approval.linkage?.workspaceId,
       connectorId: approval.linkage?.connectorId,

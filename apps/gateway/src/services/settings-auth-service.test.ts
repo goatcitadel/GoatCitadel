@@ -744,7 +744,7 @@ describe("settings-auth-service durable settings", () => {
     expect(settings.llm.providers).toEqual([]);
   });
 
-  it("clears blank auth fields while preserving explicit loopback bypass updates", () => {
+  it("clears blank auth fields while preserving explicit loopback bypass updates in open mode", () => {
     const host = buildHost();
     host.config.assistant.auth.mode = "basic";
     host.config.assistant.auth.allowLoopbackBypass = true;
@@ -753,7 +753,7 @@ describe("settings-auth-service durable settings", () => {
     host.config.assistant.auth.basic.password = "old-pass";
 
     const settings = updateAuthSettings(host, {
-      mode: "token",
+      mode: "none",
       allowLoopbackBypass: false,
       token: "   ",
       basicUsername: "   ",
@@ -761,7 +761,7 @@ describe("settings-auth-service durable settings", () => {
     });
 
     expect(settings).toMatchObject({
-      mode: "token",
+      mode: "none",
       allowLoopbackBypass: false,
       tokenConfigured: false,
       basicConfigured: false,
@@ -770,7 +770,59 @@ describe("settings-auth-service durable settings", () => {
     expect(host.config.assistant.auth.basic.username).toBeUndefined();
     expect(host.config.assistant.auth.basic.password).toBeUndefined();
   });
+
+  it("rejects protected auth modes until their credentials are effectively configured", () => {
+    const originalToken = process.env.GOATCITADEL_AUTH_TOKEN;
+    const originalBasicUsername = process.env.GOATCITADEL_AUTH_BASIC_USERNAME;
+    const originalBasicPassword = process.env.GOATCITADEL_AUTH_BASIC_PASSWORD;
+    delete process.env.GOATCITADEL_AUTH_TOKEN;
+    delete process.env.GOATCITADEL_AUTH_BASIC_USERNAME;
+    delete process.env.GOATCITADEL_AUTH_BASIC_PASSWORD;
+    const host = buildHost();
+    host.config.assistant.auth.mode = "none";
+    host.config.assistant.auth.token.value = undefined;
+    host.config.assistant.auth.basic.username = "operator";
+    host.config.assistant.auth.basic.password = undefined;
+
+    try {
+      expect(() =>
+        updateAuthSettings(host, {
+          mode: "token",
+          token: "   ",
+        }),
+      ).toThrow("Token auth mode requires a configured token before it can be saved.");
+      expect(host.config.assistant.auth.mode).toBe("none");
+
+      expect(() =>
+        updateAuthSettings(host, {
+          mode: "basic",
+        }),
+      ).toThrow("Basic auth mode requires both a username and password before it can be saved.");
+      expect(host.config.assistant.auth.mode).toBe("none");
+
+      const settings = updateAuthSettings(host, {
+        mode: "token",
+        token: "new-token",
+      });
+      expect(settings).toMatchObject({
+        mode: "token",
+        tokenConfigured: true,
+      });
+    } finally {
+      restoreEnv("GOATCITADEL_AUTH_TOKEN", originalToken);
+      restoreEnv("GOATCITADEL_AUTH_BASIC_USERNAME", originalBasicUsername);
+      restoreEnv("GOATCITADEL_AUTH_BASIC_PASSWORD", originalBasicPassword);
+    }
+  });
 });
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+    return;
+  }
+  process.env[key] = value;
+}
 
 describe("settings-auth-service device access lifecycle", () => {
   it("creates, approves, delivers, validates, and revokes a durable device grant", async () => {

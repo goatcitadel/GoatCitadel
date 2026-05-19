@@ -474,7 +474,10 @@ export class DurableRunService {
   cancelDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     const current = this.ctx.storage.durableRuns.getRun(runId);
-    if (current.status === "completed" || current.status === "failed" || current.status === "cancelled") {
+    if (current.status === "cancelled") {
+      return current;
+    }
+    if (current.status === "completed" || current.status === "failed") {
       throw new Error(`Durable run ${runId} is already terminal (${current.status})`);
     }
     const now = new Date().toISOString();

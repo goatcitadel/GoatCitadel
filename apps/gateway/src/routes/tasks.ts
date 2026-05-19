@@ -1,12 +1,21 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { AGENTIC_DIAGNOSTIC_CODES, type AgenticSubagentMetadata } from "@goatcitadel/contracts";
 import process from "node:process";
 import { z } from "zod";
 import { buildAgenticRuntimeAvailability } from "../services/agentic-capability-availability.js";
 import { probeAgenticHarnessAvailability } from "../services/agentic-harness-availability.js";
+import {
+  MAX_TASK_ARTIFACT_CLAIM_LABEL_CHARS,
+  MAX_TASK_ARTIFACT_CLAIM_VALUE_CHARS,
+  MAX_TASK_ARTIFACT_CLAIMS,
+} from "../services/task-artifact-verifier.js";
+import type { TaskWorkspaceAccessOptions } from "../services/task-lifecycle-service.js";
 import { sendRouteError } from "./_error-handler.js";
 
 const KANBAN_MUTATION_RATE_LIMIT_MAX = 180;
+
+const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
+  request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
 
 const statusSchema = z.enum(["planning", "inbox", "assigned", "in_progress", "testing", "review", "done", "blocked"]);
 
@@ -141,6 +150,10 @@ const agenticRunParamsSchema = z.object({
   runId: z.string().min(1),
 });
 
+const agenticRunAccessQuerySchema = z.object({
+  workspaceId: z.string().min(1).optional(),
+});
+
 const agenticControlSchema = z.object({
   action: z.enum(["pause", "cancel", "retry", "steer", "kill_child", "approve", "reject", "open_child"]),
   controlId: z.string().min(1).optional(),
@@ -183,9 +196,7 @@ const emitDistressBodySchema = z.object({
   evidenceRef: z.string().min(1).optional(),
 });
 
-const resolveDistressBodySchema = z.object({
-  resolvedBy: z.string().min(1).optional(),
-});
+const resolveDistressBodySchema = z.object({});
 
 const retryBudgetBodySchema = z.object({
   maxRetries: z.number().int().nonnegative(),
@@ -193,12 +204,12 @@ const retryBudgetBodySchema = z.object({
 
 const artifactClaimSchema = z.object({
   kind: z.enum(["file", "url", "commit_sha"]),
-  value: z.string().min(1),
-  label: z.string().min(1).optional(),
+  value: z.string().min(1).max(MAX_TASK_ARTIFACT_CLAIM_VALUE_CHARS),
+  label: z.string().min(1).max(MAX_TASK_ARTIFACT_CLAIM_LABEL_CHARS).optional(),
 });
 
 const verifyArtifactsBodySchema = z.object({
-  claims: z.array(artifactClaimSchema).min(1),
+  claims: z.array(artifactClaimSchema).min(1).max(MAX_TASK_ARTIFACT_CLAIMS),
 });
 
 const bulkActionBodySchema = z.discriminatedUnion("action", [
@@ -249,34 +260,61 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    return reply.send(fastify.services.tasks.listAgenticRuns(parsed.data));
+    try {
+      return reply.send(fastify.services.tasks.listAgenticRuns(parsed.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.get("/api/v1/agentic/runs/:runId/tree", async (request, reply) => {
     const parsed = agenticRunParamsSchema.safeParse(request.params);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
+    const query = agenticRunAccessQuerySchema.safeParse(request.query);
+    if (!parsed.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: parsed.success ? undefined : parsed.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
     }
     try {
-      return reply.send(fastify.services.tasks.getAgenticRunTree(parsed.data.runId));
+      return reply.send(
+        fastify.services.tasks.getAgenticRunTree(parsed.data.runId, {
+          workspaceId: query.data.workspaceId,
+        }),
+      );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
   });
 
   fastify.post("/api/v1/agentic/runs/:runId/control", async (request, reply) => {
+    await fastify.requireOperatorAuth(request, reply);
+    if (reply.sent) return reply;
     const params = agenticRunParamsSchema.safeParse(request.params);
+    const query = agenticRunAccessQuerySchema.safeParse(request.query);
     const body = agenticControlSchema.safeParse(request.body);
-    if (!params.success || !body.success) {
+    if (!params.success || !query.success || !body.success) {
       return reply.code(400).send({
         error: {
           params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
           body: body.success ? undefined : body.error.flatten(),
         },
       });
     }
     try {
-      return reply.send(fastify.services.tasks.invokeAgenticControl(params.data.runId, body.data));
+      return reply.send(
+        fastify.services.tasks.invokeAgenticControl(
+          params.data.runId,
+          {
+            ...body.data,
+            actorId: request.authActorId,
+          },
+          { workspaceId: query.data.workspaceId },
+        ),
+      );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -289,7 +327,9 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(fastify.services.tasks.appendTaskDiagnostic(taskId, parsed.data));
+      return reply
+        .code(201)
+        .send(fastify.services.tasks.appendTaskDiagnostic(taskId, parsed.data, readTaskWorkspaceAccess(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -327,7 +367,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/tasks/:taskId", async (request, reply) => {
     const taskId = (request.params as { taskId: string }).taskId;
     try {
-      return reply.send(fastify.services.tasks.getTask(taskId));
+      return reply.send(fastify.services.tasks.getTask(taskId, readTaskWorkspaceAccess(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -341,7 +381,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const task = fastify.services.tasks.updateTask(taskId, parsed.data);
+      const task = fastify.services.tasks.updateTask(taskId, parsed.data, readTaskWorkspaceAccess(request));
       return reply.send(task);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -372,9 +412,9 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
             if (confirmToken !== "PERMANENT_DELETE") {
               return undefined;
             }
-            return fastify.services.tasks.hardDeleteTask(taskId);
+            return fastify.services.tasks.hardDeleteTask(taskId, readTaskWorkspaceAccess(request));
           })()
-        : fastify.services.tasks.softDeleteTask(taskId, deletedBy, deleteReason);
+        : fastify.services.tasks.softDeleteTask(taskId, deletedBy, deleteReason, readTaskWorkspaceAccess(request));
 
     if (mode === "hard" && deleted === undefined) {
       if (confirmToken !== "PERMANENT_DELETE") {
@@ -390,7 +430,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post("/api/v1/tasks/:taskId/restore", async (request, reply) => {
     const taskId = (request.params as { taskId: string }).taskId;
-    const restored = fastify.services.tasks.restoreTask(taskId);
+    const restored = fastify.services.tasks.restoreTask(taskId, readTaskWorkspaceAccess(request));
     if (!restored) {
       return reply.code(404).send({ error: `Task ${taskId} not found or not deleted` });
     }
@@ -400,7 +440,9 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/tasks/:taskId/activities", async (request, reply) => {
     const taskId = (request.params as { taskId: string }).taskId;
     try {
-      return reply.send({ items: fastify.services.tasks.listTaskActivities(taskId) });
+      return reply.send({
+        items: fastify.services.tasks.listTaskActivities(taskId, 200, readTaskWorkspaceAccess(request)),
+      });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -414,7 +456,9 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.code(201).send(fastify.services.tasks.appendTaskActivity(taskId, parsed.data));
+      return reply
+        .code(201)
+        .send(fastify.services.tasks.appendTaskActivity(taskId, parsed.data, readTaskWorkspaceAccess(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -423,7 +467,9 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/tasks/:taskId/deliverables", async (request, reply) => {
     const taskId = (request.params as { taskId: string }).taskId;
     try {
-      return reply.send({ items: fastify.services.tasks.listTaskDeliverables(taskId) });
+      return reply.send({
+        items: fastify.services.tasks.listTaskDeliverables(taskId, 200, readTaskWorkspaceAccess(request)),
+      });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -437,7 +483,9 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.code(201).send(fastify.services.tasks.appendTaskDeliverable(taskId, parsed.data));
+      return reply
+        .code(201)
+        .send(fastify.services.tasks.appendTaskDeliverable(taskId, parsed.data, readTaskWorkspaceAccess(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -446,7 +494,9 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/tasks/:taskId/subagents", async (request, reply) => {
     const taskId = (request.params as { taskId: string }).taskId;
     try {
-      return reply.send({ items: fastify.services.tasks.listTaskSubagents(taskId) });
+      return reply.send({
+        items: fastify.services.tasks.listTaskSubagents(taskId, 200, readTaskWorkspaceAccess(request)),
+      });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -460,7 +510,9 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.code(201).send(fastify.services.tasks.registerTaskSubagent(taskId, parsed.data));
+      return reply
+        .code(201)
+        .send(fastify.services.tasks.registerTaskSubagent(taskId, parsed.data, readTaskWorkspaceAccess(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -474,7 +526,9 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      return reply.send(fastify.services.tasks.updateTaskSubagent(agentSessionId, parsed.data));
+      return reply.send(
+        fastify.services.tasks.updateTaskSubagent(agentSessionId, parsed.data, readTaskWorkspaceAccess(request)),
+      );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -487,7 +541,7 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = emitDistressBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      const task = fastify.services.tasks.emitDistressSignal(taskId, parsed.data);
+      const task = fastify.services.tasks.emitDistressSignal(taskId, parsed.data, readTaskWorkspaceAccess(request));
       return reply.code(201).send(task);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -499,7 +553,12 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = resolveDistressBodySchema.safeParse(request.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      const task = fastify.services.tasks.resolveDistressSignal(taskId, signalId, parsed.data);
+      const task = fastify.services.tasks.resolveDistressSignal(
+        taskId,
+        signalId,
+        { resolvedBy: resolveActorId(request) },
+        readTaskWorkspaceAccess(request),
+      );
       return reply.send(task);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -511,7 +570,11 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = retryBudgetBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      const task = fastify.services.tasks.setRetryBudget(taskId, parsed.data.maxRetries);
+      const task = fastify.services.tasks.setRetryBudget(
+        taskId,
+        parsed.data.maxRetries,
+        readTaskWorkspaceAccess(request),
+      );
       return reply.send(task);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -523,7 +586,11 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = verifyArtifactsBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      const task = await fastify.services.tasks.verifyTaskArtifacts(taskId, parsed.data.claims);
+      const task = await fastify.services.tasks.verifyTaskArtifacts(
+        taskId,
+        parsed.data.claims,
+        readTaskWorkspaceAccess(request),
+      );
       return reply.send(task);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -534,13 +601,46 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     const parsed = bulkActionBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     try {
-      const tasks = fastify.services.tasks.bulkUpdateTasks(parsed.data);
+      const tasks = fastify.services.tasks.bulkUpdateTasks(parsed.data, readTaskWorkspaceAccess(request));
       return reply.send({ tasks });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
   });
 };
+
+function readTaskWorkspaceAccess(request: FastifyRequest): TaskWorkspaceAccessOptions {
+  return {
+    workspaceId:
+      readWorkspaceIdFromQuery(request.query) ??
+      readWorkspaceIdFromBody(request.body) ??
+      readWorkspaceIdFromHeader(request.headers["x-goatcitadel-workspace-id"]),
+  };
+}
+
+function readWorkspaceIdFromQuery(query: unknown): string | undefined {
+  if (!query || typeof query !== "object") {
+    return undefined;
+  }
+  const value = (query as Record<string, unknown>).workspaceId;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readWorkspaceIdFromBody(body: unknown): string | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return undefined;
+  }
+  const value = (body as Record<string, unknown>).workspaceId;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readWorkspaceIdFromHeader(value: string | string[] | undefined): string | undefined {
+  if (!value || Array.isArray(value)) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
 
 function buildAgenticHarnessProbeOptions(generatedAt: string): Parameters<typeof probeAgenticHarnessAvailability>[0] {
   return {

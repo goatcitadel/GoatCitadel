@@ -1,5 +1,5 @@
-import type { FastifyInstance } from "fastify";
-import { isGoatError } from "@goatcitadel/contracts";
+import type { FastifyInstance, FastifyRequest } from "fastify";
+import { isGoatError, type ChatDelegateRequest } from "@goatcitadel/contracts";
 import { z } from "zod";
 import { sessionParamsSchema, getPublicChatSseErrorMessage } from "./chat.shared.js";
 import { writeSseChunk, writeSsePayload } from "./sse-writer.js";
@@ -20,6 +20,10 @@ const delegateBodySchema = z.object({
   providerId: z.string().optional(),
   model: z.string().optional(),
   steps: z.array(delegateStepSchema).optional(),
+  permissionProfileId: z.string().trim().min(1).optional(),
+  localOperatorOverrideId: z.string().trim().min(1).optional(),
+  policyRunId: z.string().trim().min(1).optional(),
+  policyTaskId: z.string().trim().min(1).optional(),
 });
 
 const delegationRunParamsSchema = z.object({
@@ -42,7 +46,23 @@ const delegateAcceptSchema = z.object({
   providerId: z.string().optional(),
   model: z.string().optional(),
   steps: z.array(delegateStepSchema).optional(),
+  permissionProfileId: z.string().trim().min(1).optional(),
+  localOperatorOverrideId: z.string().trim().min(1).optional(),
+  policyRunId: z.string().trim().min(1).optional(),
+  policyTaskId: z.string().trim().min(1).optional(),
 });
+
+function stampDelegateOperatorContext<TInput extends Partial<ChatDelegateRequest>>(
+  request: FastifyRequest,
+  input: TInput,
+): TInput {
+  return {
+    ...input,
+    operatorId: request.authActorId,
+    authActorId: request.authActorId,
+    authActorSource: request.authActorSource,
+  } as TInput;
+}
 
 export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
   fastify.post("/api/v1/chat/sessions/:sessionId/delegate", async (request, reply) => {
@@ -57,7 +77,12 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(await fastify.services.chatDelegate.runChatDelegation(params.data.sessionId, body.data));
+      return reply.send(
+        await fastify.services.chatDelegate.runChatDelegation(
+          params.data.sessionId,
+          stampDelegateOperatorContext(request, body.data),
+        ),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -120,7 +145,8 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
     try {
       for await (const chunk of fastify.services.chatDelegate.runChatDelegationStream(
         params.data.sessionId,
-        body.data,
+        stampDelegateOperatorContext(request, body.data),
+        { abortSignal: controller.signal },
       )) {
         if (controller.signal.aborted) {
           break;
@@ -194,7 +220,12 @@ export function registerChatDelegateRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(await fastify.services.chatDelegate.acceptChatDelegation(params.data.sessionId, body.data));
+      return reply.send(
+        await fastify.services.chatDelegate.acceptChatDelegation(
+          params.data.sessionId,
+          stampDelegateOperatorContext(request, body.data),
+        ),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

@@ -154,6 +154,41 @@ describe("SkillImportService loop 35 import behavior", () => {
     ]);
   });
 
+  it("blocks hosted bundle private hosts and private redirects", async () => {
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      service.validateImport({
+        sourceRef: "http://127.0.0.1/skill.md",
+        sourceType: "remote_bundle",
+        sourceProvider: "external",
+      }),
+    ).rejects.toThrow(/Private|loopback|reserved|hosted skill bundle/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fetchMock.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === "https://example.test/skill.md") {
+        return new Response("", {
+          status: 302,
+          headers: { location: "http://169.254.169.254/latest/meta-data" },
+        });
+      }
+      throw new Error(`Unexpected private follow ${url}`);
+    });
+
+    await expect(
+      service.validateImport({
+        sourceRef: "https://example.test/skill.md",
+        sourceType: "remote_bundle",
+        sourceProvider: "external",
+      }),
+    ).rejects.toThrow(/Private|metadata|reserved|hosted skill bundle/i);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("installs hosted bundles, writes source metadata, and marks the direct source installed", async () => {
     vi.stubGlobal(
       "fetch",

@@ -1,4 +1,4 @@
-import type { LlmApiStyle } from "./llm.js";
+import type { LlmApiStyle, ProviderProfile } from "./llm.js";
 
 export interface ProviderTemplateDefinition {
   providerId: string;
@@ -196,6 +196,19 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
   },
 ];
 
+export const builtinProviderProfiles: readonly ProviderProfile[] = providerTemplates.map((template) => ({
+  profileId: `builtin:${template.providerId}`,
+  providerId: template.providerId,
+  label: template.label,
+  source: "builtin",
+  status: "builtin",
+  baseUrl: template.baseUrl,
+  apiStyle: template.apiStyle ?? "openai-chat-completions",
+  defaultModel: template.defaultModel,
+  knownModels: template.knownModels,
+  modelDiscovery: resolveBuiltinModelDiscovery(template.providerId),
+}));
+
 const FOREIGN_MODEL_PROVIDER_IDS = new Set([
   "openrouter",
   "vercel",
@@ -219,6 +232,10 @@ const MODEL_PREFIX_PROVIDER_IDS: Record<string, string> = {
 
 export function findProviderTemplate(providerId: string): ProviderTemplateDefinition | undefined {
   return providerTemplates.find((template) => template.providerId === providerId);
+}
+
+export function findBuiltinProviderProfile(providerId: string): ProviderProfile | undefined {
+  return builtinProviderProfiles.find((profile) => profile.providerId === providerId);
 }
 
 export function providerAllowsForeignModelIds(providerId: string): boolean {
@@ -246,4 +263,15 @@ export function inferProviderForModelId(modelId: string): string | undefined {
   }
 
   return undefined;
+}
+
+function resolveBuiltinModelDiscovery(providerId: string): ProviderProfile["modelDiscovery"] {
+  if (providerId === "openrouter") {
+    return {
+      type: "openrouter",
+      url: "https://openrouter.ai/api/v1/models",
+      refreshIntervalHours: 24,
+    };
+  }
+  return { type: "none" };
 }

@@ -39,11 +39,13 @@ export function createDashboardRoutePort(deps: DashboardRoutePortDependencies): 
     costUsageAvailability: (from, to) => deps.storage.costLedger.usageAvailability(from, to),
     getDashboardState: () => {
       const sessions = deps.storage.sessions.list(200);
-      const pendingApprovals = deps.storage.approvals.list("pending", 10000).length;
+      const now = new Date();
+      const pendingApprovals = deps.storage.approvals
+        .list("pending", 10000)
+        .filter((approval) => !approval.expiresAt || Date.parse(approval.expiresAt) > now.getTime()).length;
       const activeSubagents = deps.storage.taskSubagents.activeCount();
       const taskStatusCounts = deps.storage.tasks.statusCounts();
       const recentEvents = deps.storage.realtimeEvents.list(100);
-      const now = new Date();
       const from = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
       const to = now.toISOString();
       const byDay = deps.storage.costLedger.summary("day", from, to);

@@ -12,9 +12,9 @@ function sseResponse(): Response {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(encoder.encode("data: {\"type\":\"delta\",\"delta\":\"hello\"}\n\n"));
-      controller.enqueue(encoder.encode("data: {\"type\":\"message_done\",\"content\":\"hello\"}\n\n"));
-      controller.enqueue(encoder.encode("data: {\"type\":\"done\"}\n\n"));
+      controller.enqueue(encoder.encode('data: {"type":"delta","delta":"hello"}\n\n'));
+      controller.enqueue(encoder.encode('data: {"type":"message_done","content":"hello"}\n\n'));
+      controller.enqueue(encoder.encode('data: {"type":"done"}\n\n'));
       controller.close();
     },
   });
@@ -159,7 +159,9 @@ describe("TuiApiClient coverage", () => {
       resolveSkills: ["help"],
       integrationCatalog: [],
       integrationConnections: [],
-      createIntegrationConnection: [{ catalogId: "x", label: "Coverage", enabled: true, status: "connected", config: {} }],
+      createIntegrationConnection: [
+        { catalogId: "x", label: "Coverage", enabled: true, status: "connected", config: {} },
+      ],
       updateIntegrationConnection: ["conn-1", { status: "connected" }],
       deleteIntegrationConnection: ["conn-1"],
       meshStatus: [],
@@ -177,7 +179,9 @@ describe("TuiApiClient coverage", () => {
       npuStop: [],
       npuRefresh: [],
       onboardingState: [],
-      onboardingBootstrap: [{ defaultToolProfile: "standard", budgetMode: "balanced", markComplete: false, completedBy: "coverage" }],
+      onboardingBootstrap: [
+        { defaultToolProfile: "standard", budgetMode: "balanced", markComplete: false, completedBy: "coverage" },
+      ],
       onboardingComplete: ["coverage"],
       runtimeSettings: [],
       patchRuntimeSettings: [{ budgetMode: "balanced" }],
@@ -219,14 +223,15 @@ describe("TuiApiClient coverage", () => {
       toolsCatalog: [],
       toolsEvaluateAccess: [{ toolName: "session.status", agentId: "agent", sessionId: "session-1", args: {} }],
       toolsListGrants: [{ limit: 10 }],
-      toolsCreateGrant: [{ toolPattern: "session.*", decision: "allow", scope: "global", createdBy: "coverage" }],
+      toolsCreateGrant: [{ toolPattern: "session.*", decision: "allow", scope: "global" }],
       toolsRevokeGrant: ["grant-1"],
       toolsInvoke: [{ toolName: "session.status", args: {}, agentId: "agent", sessionId: "session-1" }],
       streamHeaders: [],
     };
 
-    const methods = Object.getOwnPropertyNames(TuiApiClient.prototype)
-      .filter((name) => !["constructor", "request", "requestStream"].includes(name));
+    const methods = Object.getOwnPropertyNames(TuiApiClient.prototype).filter(
+      (name) => !["constructor", "request", "requestStream"].includes(name),
+    );
 
     let called = 0;
     for (const methodName of methods) {
@@ -234,10 +239,15 @@ describe("TuiApiClient coverage", () => {
       if (typeof method !== "function") {
         continue;
       }
-      const args = specialArgs[methodName] ?? Array.from({ length: (method as (...x: unknown[]) => unknown).length }, () => undefined);
+      const args =
+        specialArgs[methodName] ??
+        Array.from({ length: (method as (...x: unknown[]) => unknown).length }, () => undefined);
       if (methodName === "streamChatMessage") {
         const events: Array<Record<string, unknown>> = [];
-        for await (const event of (method as (...x: unknown[]) => AsyncIterable<Record<string, unknown>>).apply(client, args)) {
+        for await (const event of (method as (...x: unknown[]) => AsyncIterable<Record<string, unknown>>).apply(
+          client,
+          args,
+        )) {
           events.push(event);
         }
         expect(events.some((event) => event.type === "done")).toBe(true);
@@ -273,15 +283,21 @@ describe("TuiApiClient coverage", () => {
 
   it("surfaces malformed SSE payloads instead of silently swallowing them", async () => {
     const encoder = new TextEncoder();
-    const fetchMalformed = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(encoder.encode("data: {\"type\":\"delta\"\n\n"));
-        controller.close();
-      },
-    }), {
-      status: 200,
-      headers: { "content-type": "text/event-stream" },
-    }));
+    const fetchMalformed = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(encoder.encode('data: {"type":"delta"\n\n'));
+              controller.close();
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          },
+        ),
+    );
     vi.stubGlobal("fetch", fetchMalformed as unknown as typeof fetch);
 
     const client = new TuiApiClient({
@@ -290,10 +306,12 @@ describe("TuiApiClient coverage", () => {
       readOnly: false,
     });
 
-    await expect((async () => {
-      for await (const _event of client.streamChatMessage("session-1", { content: "hi" })) {
-        // no-op
-      }
-    })()).rejects.toThrow(/Malformed SSE event payload/);
+    await expect(
+      (async () => {
+        for await (const _event of client.streamChatMessage("session-1", { content: "hi" })) {
+          // no-op
+        }
+      })(),
+    ).rejects.toThrow(/Malformed SSE event payload/);
   });
 });

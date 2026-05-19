@@ -27,6 +27,7 @@ export type {
 } from "@goatcitadel/contracts";
 
 export interface FetchAgenticRunsInput {
+  workspaceId?: string;
   surface?: AgenticSurface;
   sessionId?: string;
   boardId?: string;
@@ -86,6 +87,7 @@ export async function fetchAgenticChannelDeliveries(
 
 export async function fetchAgenticRuns(input: FetchAgenticRunsInput = {}): Promise<AgenticRunsResponse> {
   const query = new URLSearchParams();
+  if (input.workspaceId) query.set("workspaceId", input.workspaceId);
   if (input.surface) query.set("surface", input.surface);
   if (input.sessionId) query.set("sessionId", input.sessionId);
   if (input.boardId) query.set("boardId", input.boardId);
@@ -96,12 +98,25 @@ export async function fetchAgenticRuns(input: FetchAgenticRunsInput = {}): Promi
   return request<AgenticRunsResponse>(`/api/v1/agentic/runs?${query.toString()}`);
 }
 
-export async function fetchAgenticRunTree(runId: string): Promise<AgenticRunTreeResponse> {
-  return request<AgenticRunTreeResponse>(`/api/v1/agentic/runs/${encodeURIComponent(runId)}/tree`);
+export async function fetchAgenticRunTree(
+  runId: string,
+  input: { workspaceId?: string } = {},
+): Promise<AgenticRunTreeResponse> {
+  const query = new URLSearchParams();
+  if (input.workspaceId) query.set("workspaceId", input.workspaceId);
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  return request<AgenticRunTreeResponse>(`/api/v1/agentic/runs/${encodeURIComponent(runId)}/tree${suffix}`);
 }
 
-export async function controlAgenticRun(runId: string, input: AgenticControlRequest): Promise<AgenticControlResponse> {
-  return request<AgenticControlResponse>(`/api/v1/agentic/runs/${encodeURIComponent(runId)}/control`, {
+export async function controlAgenticRun(
+  runId: string,
+  input: AgenticControlRequest,
+  options: { workspaceId?: string } = {},
+): Promise<AgenticControlResponse> {
+  const query = new URLSearchParams();
+  if (options.workspaceId) query.set("workspaceId", options.workspaceId);
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  return request<AgenticControlResponse>(`/api/v1/agentic/runs/${encodeURIComponent(runId)}/control${suffix}`, {
     method: "POST",
     body: JSON.stringify(input),
   });

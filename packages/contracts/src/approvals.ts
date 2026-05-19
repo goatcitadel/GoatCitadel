@@ -6,6 +6,7 @@ export interface ApprovalLinkage {
   turnId?: string;
   taskId?: string;
   workspaceId?: string;
+  runId?: string;
   durableRunId?: string;
   proactiveRunId?: string;
   originSurface?: import("./proactive.js").ProactiveOriginSurface;
@@ -16,6 +17,11 @@ export interface ApprovalLinkage {
   tokenId?: string;
   toolName?: string;
   actionType?: string;
+  operatorId?: string;
+  authActorId?: string;
+  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion";
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
 }
 
 export interface ApprovalExplanation {
@@ -72,6 +78,7 @@ export interface ApprovalRequest {
   status: ApprovalStatus;
   payload: Record<string, unknown>;
   preview: Record<string, unknown>;
+  rollbackNote?: string;
   linkage?: ApprovalLinkage;
   createdAt: string;
   expiresAt?: string;
@@ -90,6 +97,7 @@ export interface ApprovalCreateInput {
   riskLevel: ApprovalRequest["riskLevel"];
   payload: Record<string, unknown>;
   preview: Record<string, unknown>;
+  rollbackNote?: string;
   linkage?: ApprovalLinkage;
   expiresAt?: string | null;
 }
@@ -165,6 +173,7 @@ export interface ApprovalReplayEvent {
     | "created"
     | "resolved"
     | "pending_action_registered"
+    | "pending_action_refused"
     | "approved_action_executed"
     | "replayed"
     | "explanation_requested"

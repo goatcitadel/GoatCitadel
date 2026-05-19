@@ -13,7 +13,8 @@
   "dependencies": {
     "@goatcitadel/contracts": "workspace:*",
     "@goatcitadel/storage": "workspace:*",
-    "playwright": "^1.56.1"
+    "playwright": "^1.56.1",
+    "undici": "^6.24.1"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json",

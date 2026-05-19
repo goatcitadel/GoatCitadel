@@ -160,6 +160,9 @@ function resolveAbsoluteToolPath(
   if (isWithinWorkspaceBounds(resolvedTarget, context)) {
     return resolvedTarget;
   }
+  if (kind === "read") {
+    return resolvedTarget;
+  }
 
   throw new ValidationError({
     message: `Path "${rawPath}" is outside the workspace boundary and is not allowed.`,
@@ -280,6 +283,9 @@ function finalizeResolvedToolPath(
 ): string {
   const resolvedCandidate = resolvePathViaExistingAncestor(candidate);
   if (!isWithinWorkspaceBounds(resolvedCandidate, context)) {
+    if (kind === "read") {
+      return resolvedCandidate;
+    }
     throw new ValidationError({
       message: `Path "${rawPath}" is outside the workspace boundary and is not allowed for ${kind} operations.`,
     });

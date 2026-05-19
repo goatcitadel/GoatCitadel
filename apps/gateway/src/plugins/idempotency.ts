@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fp from "fastify-plugin";
 import type { FastifyRequest } from "fastify";
+import { isGenericChannelInboundPath } from "../services/generic-channel-webhook.js";
 import { isLineWebhookPath } from "../services/line-webhook.js";
 import { isNextcloudTalkWebhookPath } from "../services/nextcloud-talk-webhook.js";
 import { isSlackWebhookPath } from "../services/slack-webhook.js";
@@ -21,7 +22,6 @@ interface IdempotencyHeaderPluginOptions {
 
 const MUTATING_HTTP_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
 const GATEWAY_EVENTS_PATH = "/api/v1/gateway/events";
-const INBOUND_CHANNEL_PATH_PREFIX = "/api/v1/channels/";
 
 export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async (fastify, options) => {
   fastify.decorateRequest("idempotencyKey", "");
@@ -95,13 +95,12 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
 
 function shouldEnforceMutationIdempotency(request: FastifyRequest): boolean {
   const path = getNormalizedRoutePath(request);
-  return path.startsWith("/api/v1/") && path !== GATEWAY_EVENTS_PATH && !path.startsWith(INBOUND_CHANNEL_PATH_PREFIX);
+  return path.startsWith("/api/v1/") && path !== GATEWAY_EVENTS_PATH && !isGenericChannelInboundPath(path);
 }
 
 function isWebhookOrInboundPath(url: string): boolean {
-  const path = url.split("?", 1)[0] || url;
   return (
-    path.startsWith(INBOUND_CHANNEL_PATH_PREFIX) ||
+    isGenericChannelInboundPath(url) ||
     isLineWebhookPath(url) ||
     isNextcloudTalkWebhookPath(url) ||
     isSlackWebhookPath(url) ||

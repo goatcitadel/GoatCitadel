@@ -114,6 +114,7 @@ function composeStreamLifecycle(source: ChatTurnRuntimeHost): ChatTurnStreamLife
     closeActiveChatTurnStream: (turnId) => source.closeActiveChatTurnStream(turnId),
     completeActiveChatTurnStream: (turnId) => source.completeActiveChatTurnStream(turnId),
     createHydratedChatTurnTrace: (turnId, trace) => source.createHydratedChatTurnTrace(turnId, trace),
+    getActiveChatTurnStream: (turnId) => source.getActiveChatTurnStream(turnId),
     persistChatStreamChunk: (chunk, durableRunId) => source.persistChatStreamChunk(chunk, durableRunId),
     registerActiveChatTurnStream: (sessionId, turnId, durableRunId) =>
       source.registerActiveChatTurnStream(sessionId, turnId, durableRunId),
@@ -193,6 +194,7 @@ function composeRoutingAndPlanning(
   | "recordDevDiagnostic"
   | "resolveFallbackTargets"
   | "resolvePreparedTurnOrchestration"
+  | "resolveToolPolicyContext"
 > {
   return {
     buildChatOrchestrationSummary: (input) => source.buildChatOrchestrationSummary(input),
@@ -206,6 +208,9 @@ function composeRoutingAndPlanning(
     resolveFallbackTargets: (runtime, primaryProviderId, primaryModel) =>
       source.resolveFallbackTargets(runtime, primaryProviderId, primaryModel),
     resolvePreparedTurnOrchestration: (prepared) => source.resolvePreparedTurnOrchestration(prepared),
+    resolveToolPolicyContext: source.resolveToolPolicyContext
+      ? (input) => source.resolveToolPolicyContext!(input)
+      : undefined,
   };
 }
 

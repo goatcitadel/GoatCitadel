@@ -104,6 +104,17 @@ describe("mcp routes", () => {
       toolName: "tool.echo",
       agentId: "operator",
       sessionId: "sess-1",
+      policyContext: expect.objectContaining({
+        operatorId: "operator",
+        authActorId: "operator",
+        sessionId: "sess-1",
+        surface: "mcp",
+      }),
+      consentContext: {
+        operatorId: "operator",
+        source: "ui",
+        reason: "mcp.invoke",
+      },
     });
     expect(response.json()).toMatchObject({
       ok: false,

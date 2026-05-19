@@ -124,6 +124,8 @@ export function CodeWorkbenchPanel({
   onRevertFile?: (relativePath?: string) => void;
   onRevertAll?: () => void;
   onRunHelperSnippet: (language: string, source: string) => void;
+  onOpenApprovals?: (approvalId?: string) => void;
+  workspaceId?: string;
 }) {
   const codeBlocks = useMemo(
     () => extractCodeBlocks(selectedTurn?.assistantMessage?.content ?? ""),
@@ -582,7 +584,7 @@ export function CodeWorkbenchPanel({
               ) : !output?.output ? (
                 <div className="chat-code-workbench-empty">
                   <p>No run log output has landed yet.</p>
-                  <p>Helper runs from code-mode attach here as non-authoritative artifacts.</p>
+                  <p>Helper runs from Code Mode attach here with their governed run evidence when available.</p>
                 </div>
               ) : null}
             </div>

@@ -657,6 +657,6 @@ describe("ThreadedTimeline", () => {
       details.props.onToggle({ currentTarget: { open: true } });
     });
     expect(renderer.root.findByType("details").props.open).toBe(true);
-    expect(renderedText(renderer)).toContain("Final synthesized answer is shown in the main assistant message.");
+    expect(renderedText(renderer)).toContain("Delegated work is still running; final synthesis is not ready yet.");
   });
 });

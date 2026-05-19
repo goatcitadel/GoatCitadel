@@ -150,10 +150,7 @@ export class TuiApiClient {
       `/api/v1/approvals/${encodeURIComponent(approvalId)}/resolve`,
       {
         method: "POST",
-        body: JSON.stringify({
-          decision,
-          resolvedBy: "tui-operator",
-        }),
+        body: JSON.stringify({ decision }),
       },
       true,
     );
@@ -1069,7 +1066,7 @@ export class TuiApiClient {
   }
 
   public async toolsListGrants(input?: {
-    scope?: "global" | "session" | "agent" | "task";
+    scope?: "global" | "workspace" | "session" | "agent" | "task";
     scopeRef?: string;
     limit?: number;
   }): Promise<{ items: ToolGrantRecord[] }> {
@@ -1087,11 +1084,10 @@ export class TuiApiClient {
   public async toolsCreateGrant(input: {
     toolPattern: string;
     decision: "allow" | "deny";
-    scope: "global" | "session" | "agent" | "task";
+    scope: "global" | "workspace" | "session" | "agent" | "task";
     scopeRef?: string;
     grantType?: "one_time" | "ttl" | "persistent";
     constraints?: Record<string, unknown>;
-    createdBy: string;
     expiresAt?: string;
     usesRemaining?: number;
   }): Promise<ToolGrantRecord> {

@@ -119,7 +119,10 @@ export async function consumePreparedAgentChatTurn(
   const detachAbortListener = bindConsumeAbortToTurn(host, prepared.turnId, launchedDurableRunId, options?.abortSignal);
   try {
     const source: AsyncGenerator<InspectableChatStreamChunk> = useDurableExecution
-      ? host.streamPersistedChatTurnEvents(sessionId, prepared.turnId, { liveTail: true })
+      ? host.streamPersistedChatTurnEvents(sessionId, prepared.turnId, {
+          liveTail: true,
+          returnOnDurableInterrupt: true,
+        })
       : chatTurnStreamService.streamPreparedAgentChatTurn(
           host,
           sessionId,
@@ -127,6 +130,7 @@ export async function consumePreparedAgentChatTurn(
           prepared,
           threadEventType,
           resolvedOrchestration,
+          options?.abortSignal ? { abortSignal: options.abortSignal } : undefined,
         );
     for await (const chunk of source) {
       if (chunk.type === "message_done") {
@@ -212,6 +216,7 @@ export async function executePreparedAgentChatTurnBackground(
   resolvedOrchestration?: PreparedChatExecutionPlanResolution,
   options?: {
     skipMessageStart?: boolean;
+    abortSignal?: AbortSignal;
   },
 ): Promise<void> {
   try {
@@ -438,6 +443,7 @@ function persistDurableUnavailableFailure(
 export async function sendPreparedIntegrationChatTurn(
   host: ChatTurnDispatchHost,
   sessionId: string,
+  input: Partial<ChatSendMessageRequest>,
   prepared: PreparedAgentChatTurn,
   binding: ChatSessionBindingRecord,
   threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
@@ -478,7 +484,16 @@ export async function sendPreparedIntegrationChatTurn(
         target: binding.target,
         message: prepared.content,
         sessionId,
-        agentId: "operator",
+        workspaceId: prepared.workspaceId,
+        agentId: input.operatorId ?? input.authActorId ?? "operator",
+        operatorId: input.operatorId,
+        authActorId: input.authActorId,
+        authActorSource: input.authActorSource,
+        taskId: input.policyTaskId,
+        runId: input.policyRunId,
+        permissionProfileId: input.permissionProfileId,
+        localOperatorOverrideId: input.localOperatorOverrideId,
+        surface: input.mode ?? prepared.normalized.mode ?? prepared.prefs.mode,
         signal: options?.abortSignal,
       }),
     );
@@ -583,9 +598,11 @@ export async function sendPreparedIntegrationChatTurn(
 export async function* streamPreparedIntegrationChatTurn(
   host: ChatTurnDispatchHost,
   sessionId: string,
+  input: Partial<ChatSendMessageRequest>,
   prepared: PreparedAgentChatTurn,
   binding: ChatSessionBindingRecord,
   threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
+  options?: { abortSignal?: AbortSignal },
 ): AsyncGenerator<ChatStreamChunkDraft> {
   yield {
     type: "message_start",
@@ -596,7 +613,15 @@ export async function* streamPreparedIntegrationChatTurn(
     branchKind: prepared.branchKind,
     sourceTurnId: prepared.sourceTurnId,
   };
-  const response = await sendPreparedIntegrationChatTurn(host, sessionId, prepared, binding, threadEventType);
+  const response = await sendPreparedIntegrationChatTurn(
+    host,
+    sessionId,
+    input,
+    prepared,
+    binding,
+    threadEventType,
+    options,
+  );
   const content = response.assistantMessage?.content ?? "";
   for (const delta of splitIntoChunks(content, 120)) {
     yield {

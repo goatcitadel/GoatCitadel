@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ApprovalCreateInput,
@@ -10,12 +11,17 @@ import type {
   CapabilityProposalEventRecord,
   CapabilityProposalRecord,
   CandidateSkillVersionRecord,
+  CodeModeSandboxMetadata,
   CodeModeRunRecord,
   PendingApprovalAction,
+  PermissionProfileRecord,
+  ToolPolicyActorContext,
   ToolCatalogEntry,
+  ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import { CapabilitySystemService, __internal } from "./capability-system-service.js";
+import type { CapabilityRuntimeConfig } from "../config.js";
 
 const tempRoots: string[] = [];
 
@@ -28,7 +34,7 @@ afterEach(async () => {
 });
 
 describe("CapabilitySystemService", () => {
-  it("freezes sandbox metadata and emits callable-only wrapper manifests for Code Mode runs", async () => {
+  it("records current sandbox metadata and emits callable-only wrapper manifests for Code Mode runs", async () => {
     const harness = await createHarness({
       toolCatalog: [
         createTool("tool.safe_read", {
@@ -47,10 +53,12 @@ describe("CapabilitySystemService", () => {
     const run = await harness.service.createCodeModeRun({
       language: "typescript",
       source: "return { ok: true };",
+      originSurface: "code",
       requestedOutputIntent: "Summarize a file tree",
       saveCandidateOnSuccess: true,
     });
 
+    expect(run.originSurface).toBe("code");
     expect(run.sandbox).toMatchObject({
       required: true,
       available: false,
@@ -59,9 +67,15 @@ describe("CapabilitySystemService", () => {
     expect(harness.createApproval).toHaveBeenCalledWith(
       expect.objectContaining({
         payload: expect.objectContaining({
+          originSurface: "code",
           sandbox: expect.objectContaining({
             available: false,
           }),
+        }),
+        linkage: expect.objectContaining({
+          originSurface: "code",
+          toolName: "code_mode.run",
+          actionType: "code_mode.run",
         }),
       }),
     );
@@ -70,6 +84,7 @@ describe("CapabilitySystemService", () => {
       "capabilities",
       expect.objectContaining({
         runId: run.runId,
+        originSurface: "code",
         sandbox: expect.objectContaining({
           available: false,
           required: true,
@@ -86,6 +101,283 @@ describe("CapabilitySystemService", () => {
     expect(manifest.wrappers[0]).toMatchObject({ name: "tool.safe_read" });
   });
 
+  it("refreshes sandbox metadata for each Code Mode run creation", async () => {
+    const unavailableSandbox = {
+      runnerId: "goatcitadel.best-effort-host",
+      runnerVersion: "0.1.0",
+      platform: "win32",
+      isolationProfile: "best_effort_host/temp_only/no_network",
+      required: true,
+      available: false,
+      checksPassed: [],
+      checksFailed: ["best_effort_host_disabled"],
+    } satisfies CodeModeSandboxMetadata;
+    const availableSandbox = {
+      ...unavailableSandbox,
+      available: true,
+      checksPassed: ["windows_appcontainer_present"],
+      checksFailed: [],
+    } satisfies CodeModeSandboxMetadata;
+    const sandboxSequence = [unavailableSandbox, availableSandbox];
+    const harness = await createHarness({
+      resolveSandboxMetadata: () => sandboxSequence.shift() ?? availableSandbox,
+    });
+
+    const firstRun = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { run: 1 };",
+    });
+    const secondRun = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { run: 2 };",
+    });
+
+    expect(firstRun.sandbox).toMatchObject({ available: false });
+    expect(secondRun.sandbox).toMatchObject({ available: true });
+    expect(harness.createApproval).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          sandbox: expect.objectContaining({ available: true }),
+        }),
+      }),
+    );
+  });
+
+  it("keeps artifact evidence visible when Code Mode approval creation fails", async () => {
+    const harness = await createHarness();
+    harness.createApproval.mockRejectedValueOnce(new Error("approval store unavailable"));
+
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true };",
+        originSurface: "code",
+        requestedOutputIntent: "Capture approval creation failure.",
+      }),
+    ).rejects.toThrow("approval store unavailable");
+
+    const [failedRun] = harness.storage.codeModeRuns.list();
+    expect(failedRun).toMatchObject({
+      status: "failed",
+      originSurface: "code",
+      error: "approval store unavailable",
+      errorCode: "approval_create_failed",
+      errorDetails: expect.objectContaining({
+        phase: "approval_create",
+      }),
+    });
+    await expect(fs.stat(path.resolve(harness.rootDir, failedRun.codeArtifact.relPath))).resolves.toBeTruthy();
+    await expect(
+      fs.stat(path.resolve(harness.rootDir, failedRun.wrapperManifestArtifact.relPath)),
+    ).resolves.toBeTruthy();
+    await expect(
+      fs.stat(path.resolve(harness.rootDir, failedRun.policySnapshotArtifact.relPath)),
+    ).resolves.toBeTruthy();
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "code_mode_run_failed",
+      "capabilities",
+      expect.objectContaining({
+        runId: failedRun.runId,
+        errorCode: "approval_create_failed",
+      }),
+    );
+  });
+
+  it("fails pending Code Mode actions when registration fails after pending-action creation", async () => {
+    const harness = await createHarness();
+    harness.storage.approvalEvents.append.mockImplementationOnce(() => {
+      throw new Error("approval event store unavailable");
+    });
+
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true };",
+        originSurface: "code",
+      }),
+    ).rejects.toThrow("approval event store unavailable");
+
+    const [failedRun] = harness.storage.codeModeRuns.list();
+    expect(failedRun).toMatchObject({
+      status: "failed",
+      approvalId: "approval-1",
+      errorCode: "approval_registration_failed",
+    });
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({
+        runId: failedRun.runId,
+        errorCode: "approval_registration_failed",
+      }),
+    );
+    expect(harness.storage.approvals.resolve).toHaveBeenCalledWith(
+      "approval-1",
+      expect.objectContaining({
+        decision: "reject",
+        resolvedBy: "system",
+      }),
+    );
+    expect(harness.storage.approvals.get("approval-1")).toMatchObject({ status: "rejected" });
+  });
+
+  it("rejects Code Mode approvals when registration fails before a pending action exists", async () => {
+    const harness = await createHarness();
+    vi.spyOn(harness.storage.pendingApprovalActions, "upsertPending").mockImplementationOnce(() => {
+      throw new Error("pending action store unavailable");
+    });
+
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true };",
+        originSurface: "code",
+      }),
+    ).rejects.toThrow("pending action store unavailable");
+
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({
+        errorCode: "approval_registration_failed",
+      }),
+    );
+    expect(harness.storage.approvals.resolve).toHaveBeenCalledWith(
+      "approval-1",
+      expect.objectContaining({
+        decision: "reject",
+        resolvedBy: "system",
+      }),
+    );
+    expect(harness.storage.approvals.get("approval-1")).toMatchObject({ status: "rejected" });
+  });
+
+  it("executes Code Mode runs approved before expiry even if the worker starts after the approval TTL", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true, approvedAt: 'decision-time' };",
+      requestedOutputIntent: "Return approval-time execution proof.",
+    });
+    const approval = harness.approvals.get("approval-1");
+    expect(approval).toBeDefined();
+    harness.approvals.set("approval-1", {
+      ...approval!,
+      status: "approved",
+      resolvedAt: "2026-04-09T23:59:00.000Z",
+      expiresAt: "2020-01-01T00:00:00.000Z",
+    });
+    const pending = harness.storage.pendingApprovalActions.find("approval-1");
+    expect(pending).toBeDefined();
+    if (pending) {
+      pending.expiresAt = "2026-04-10T00:00:00.000Z";
+    }
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result).toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({
+        runId: run.runId,
+        status: "completed",
+      }),
+    });
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "completed",
+    });
+  });
+
+  it("stages the Code Mode harness inside the per-run temp root before launch", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      requestedOutputIntent: "Verify run-local harness staging.",
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result).toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({
+        runId: run.runId,
+        status: "completed",
+      }),
+    });
+    const runHarnessPath = path.join(harness.rootDir, "data", "code-mode-temp", run.runId, "code-mode-harness.mjs");
+    await expect(fs.stat(runHarnessPath)).resolves.toBeTruthy();
+  });
+
+  it("records launch-time sandbox failure metadata when required host isolation becomes unavailable", async () => {
+    const unavailableSandbox = {
+      runnerId: "goatcitadel.best-effort-host",
+      runnerVersion: "0.1.0",
+      platform: "win32",
+      isolationProfile: "best_effort_host/temp_only/no_network",
+      required: true,
+      available: false,
+      checksPassed: ["mode_best_effort_host"],
+      checksFailed: ["best_effort_host_disabled"],
+      failClosedReason: "Code Mode sandbox failed closed on win32: best_effort_host_disabled.",
+    } satisfies CodeModeSandboxMetadata;
+    const availableSandbox = {
+      ...unavailableSandbox,
+      available: true,
+      checksPassed: ["mode_best_effort_host", "win32_appcontainer_prerequisites_available"],
+      checksFailed: [],
+      failClosedReason: undefined,
+    } satisfies CodeModeSandboxMetadata;
+    const sandboxSequence = [availableSandbox, availableSandbox, unavailableSandbox];
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: true,
+        bestEffortHostEnabled: false,
+      },
+      resolveSandboxMetadata: () => sandboxSequence.shift() ?? unavailableSandbox,
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      requestedOutputIntent: "Should fail before launch if sandbox disappears.",
+    });
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+    const storedRun = harness.storage.codeModeRuns.get(run.runId);
+
+    expect(run.sandbox).toMatchObject({ available: true });
+    expect(result).toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({
+        runId: run.runId,
+        status: "failed",
+        sandbox: expect.objectContaining({
+          available: false,
+          checksFailed: expect.arrayContaining(["launch_preparation_failed"]),
+          failClosedReason: expect.stringContaining("launch preparation failed"),
+        }),
+      }),
+    });
+    expect(storedRun).toMatchObject({
+      status: "failed",
+      sandbox: expect.objectContaining({
+        available: false,
+        checksFailed: expect.arrayContaining(["launch_preparation_failed"]),
+        failClosedReason: expect.stringContaining("launch preparation failed"),
+      }),
+    });
+  });
+
   it("returns candidate and proposal detail and supports promotion, rollback, and revoke", async () => {
     const harness = await createHarness();
     const run = harness.storage.codeModeRuns.upsert({
@@ -94,6 +386,7 @@ describe("CapabilitySystemService", () => {
       language: "typescript",
       saveCandidateOnSuccess: true,
       capabilitySnapshotId: "cap-snap-1",
+      codeModeInputHash: "input-hash",
       wrapperManifestHash: "wrap-hash",
       policySnapshotHash: "policy-hash",
       codeHash: "code-hash",
@@ -120,7 +413,7 @@ describe("CapabilitySystemService", () => {
     });
 
     harness.storage.candidateSkillVersions.upsert(
-      createCandidateVersion({
+      await createCandidateVersion(harness.rootDir, {
         candidateId: "candidate-demo",
         versionId: "version-a",
         lifecycleState: "candidate",
@@ -129,7 +422,7 @@ describe("CapabilitySystemService", () => {
       }),
     );
     harness.storage.candidateSkillVersions.upsert(
-      createCandidateVersion({
+      await createCandidateVersion(harness.rootDir, {
         candidateId: "candidate-demo",
         versionId: "version-b",
         lifecycleState: "candidate",
@@ -192,6 +485,7 @@ describe("CapabilitySystemService", () => {
       requestedOutputIntent: "Listable run",
       saveCandidateOnSuccess: false,
       capabilitySnapshotId: snapshot.snapshotId,
+      codeModeInputHash: "input-hash",
       wrapperManifestHash: "wrapper-hash",
       policySnapshotHash: "policy-hash",
       codeHash: "code-hash",
@@ -305,6 +599,183 @@ describe("CapabilitySystemService", () => {
     ]);
   });
 
+  it("marks expired Code Mode approvals terminal when listing and reading run evidence", async () => {
+    const harness = await createHarness();
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      requestedOutputIntent: "Return a JSON object.",
+      saveCandidateOnSuccess: false,
+      sessionId: "session-code",
+    });
+    const approval = harness.approvals.get("approval-1");
+    if (!approval) {
+      throw new Error("missing approval-1");
+    }
+    harness.approvals.set("approval-1", {
+      ...approval,
+      status: "pending",
+      expiresAt: "2020-01-01T00:00:00.000Z",
+    });
+    const pending = harness.storage.pendingApprovalActions.find("approval-1");
+    if (pending) {
+      pending.expiresAt = "2020-01-01T00:00:00.000Z";
+    }
+
+    expect(harness.service.listCodeModeRuns({ sessionId: "session-code", limit: 5 })).toEqual([
+      expect.objectContaining({
+        runId: run.runId,
+        status: "expired",
+        error: "Code Mode approval expired before execution",
+      }),
+    ]);
+    expect(harness.service.getCodeModeRun(run.runId)).toMatchObject({
+      status: "expired",
+      error: "Code Mode approval expired before execution",
+    });
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({
+        runId: run.runId,
+        reason: "Code Mode approval expired before execution",
+      }),
+    );
+    expect(harness.storage.approvalEvents.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "approval-1",
+        eventType: "pending_action_refused",
+        payload: expect.objectContaining({
+          actionType: "code_mode.run",
+          runId: run.runId,
+          status: "expired",
+          error: "Code Mode approval expired before execution",
+        }),
+      }),
+    );
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "code_mode_run_failed",
+      "capabilities",
+      expect.objectContaining({
+        runId: run.runId,
+        approvalId: "approval-1",
+        status: "expired",
+        error: "Code Mode approval expired before execution",
+      }),
+    );
+  });
+
+  it("hydrates expired Code Mode approvals before applying status filters", async () => {
+    const harness = await createHarness();
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      requestedOutputIntent: "Return a JSON object.",
+      saveCandidateOnSuccess: false,
+      sessionId: "session-code",
+    });
+    const approval = harness.approvals.get("approval-1");
+    if (!approval) {
+      throw new Error("missing approval-1");
+    }
+    harness.approvals.set("approval-1", {
+      ...approval,
+      status: "pending",
+      expiresAt: "2020-01-01T00:00:00.000Z",
+    });
+    const pending = harness.storage.pendingApprovalActions.find("approval-1");
+    if (pending) {
+      pending.expiresAt = "2020-01-01T00:00:00.000Z";
+    }
+
+    expect(
+      harness.service.listCodeModeRuns({
+        sessionId: "session-code",
+        status: "approval_pending",
+        limit: 5,
+      }),
+    ).toEqual([]);
+    expect(
+      harness.service.listCodeModeRuns({
+        sessionId: "session-code",
+        status: "expired",
+        limit: 5,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        runId: run.runId,
+        status: "expired",
+        error: "Code Mode approval expired before execution",
+      }),
+    ]);
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledTimes(1);
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({
+        runId: run.runId,
+        reason: "Code Mode approval expired before execution",
+      }),
+    );
+  });
+
+  it("scans pending Code Mode approvals when status filters need read-time hydration", async () => {
+    const harness = await createHarness();
+    for (let index = 0; index < 501; index += 1) {
+      harness.storage.codeModeRuns.upsert({
+        runId: `completed-run-${index}`,
+        status: "completed",
+        language: "typescript",
+        saveCandidateOnSuccess: false,
+        capabilitySnapshotId: "snapshot-completed",
+        codeModeInputHash: `input-${index}`,
+        wrapperManifestHash: `wrapper-${index}`,
+        policySnapshotHash: `policy-${index}`,
+        codeHash: `code-${index}`,
+        codeArtifact: createArtifact(`completed-${index}-code.ts`),
+        wrapperManifestArtifact: createArtifact(`completed-${index}-wrapper.json`),
+        policySnapshotArtifact: createArtifact(`completed-${index}-policy.json`),
+        result: { ok: true },
+        createdAt: `2026-04-10T00:00:${String(index % 60).padStart(2, "0")}.000Z`,
+        startedAt: "2026-04-10T00:01:00.000Z",
+        finishedAt: "2026-04-10T00:02:00.000Z",
+      });
+    }
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      requestedOutputIntent: "Return a JSON object.",
+      saveCandidateOnSuccess: false,
+      sessionId: "session-code",
+    });
+    const approval = harness.approvals.get("approval-1");
+    if (!approval) {
+      throw new Error("missing approval-1");
+    }
+    harness.approvals.set("approval-1", {
+      ...approval,
+      status: "pending",
+      expiresAt: "2020-01-01T00:00:00.000Z",
+    });
+    const pending = harness.storage.pendingApprovalActions.find("approval-1");
+    if (pending) {
+      pending.expiresAt = "2020-01-01T00:00:00.000Z";
+    }
+
+    expect(
+      harness.service.listCodeModeRuns({
+        sessionId: "session-code",
+        status: "expired",
+        limit: 5,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        runId: run.runId,
+        status: "expired",
+      }),
+    ]);
+  });
+
   it("publishes an explicit advisory event when Code Mode runs without available host isolation", async () => {
     const harness = await createHarness({
       sandboxConfig: {
@@ -344,6 +815,235 @@ describe("CapabilitySystemService", () => {
       }),
     );
   });
+
+  it("persists structured Code Mode child errors", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "throw { code: 'BAD_INPUT', message: 'Invalid guest input', details: { field: 'path' } };",
+      requestedOutputIntent: "Return a structured failure.",
+      saveCandidateOnSuccess: false,
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+    const storedRun = harness.storage.codeModeRuns.get(run.runId);
+
+    expect(result.result).toMatchObject({
+      runId: run.runId,
+      status: "failed",
+      error: "BAD_INPUT: Invalid guest input",
+      errorCode: "BAD_INPUT",
+      errorDetails: { field: "path" },
+    });
+    expect(storedRun).toMatchObject({
+      status: "failed",
+      error: "BAD_INPUT: Invalid guest input",
+      errorCode: "BAD_INPUT",
+      errorDetails: { field: "path" },
+    });
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({
+        outcome: "failed",
+        runId: run.runId,
+      }),
+    );
+  });
+
+  it("does not rewrite completed Code Mode runs when stale approval replay is attempted", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      requestedOutputIntent: "Return a JSON object.",
+      saveCandidateOnSuccess: false,
+    });
+    harness.storage.codeModeRuns.upsert({
+      ...harness.storage.codeModeRuns.get(run.runId),
+      status: "completed",
+      result: { ok: true },
+      finishedAt: "2026-05-18T00:00:00.000Z",
+    });
+
+    await expect(harness.service.executeApprovedCodeModeRun("approval-1")).rejects.toThrow(
+      "only approval_pending runs can execute",
+    );
+
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "completed",
+      result: { ok: true },
+    });
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({
+        runId: run.runId,
+        reason: expect.stringContaining("only approval_pending runs can execute"),
+      }),
+    );
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "code_mode_run_refused",
+      "capabilities",
+      expect.objectContaining({
+        runId: run.runId,
+        status: "completed",
+        errorCode: "INVALID_RUN_STATE",
+      }),
+    );
+  });
+
+  it("fails oversized parent-to-child Code Mode requests immediately", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    const oversizedSource = `const payload = "${"x".repeat(140_000)}"; return { length: payload.length };`;
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: oversizedSource,
+      requestedOutputIntent: "Exercise parent IPC bounds.",
+      saveCandidateOnSuccess: false,
+    });
+
+    const startedAt = Date.now();
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+    const elapsedMs = Date.now() - startedAt;
+    const storedRun = harness.storage.codeModeRuns.get(run.runId);
+
+    expect(elapsedMs).toBeLessThan(2_000);
+    expect(result?.result).toMatchObject({
+      runId: run.runId,
+      status: "failed",
+      errorCode: "MESSAGE_TOO_LARGE",
+      error: "MESSAGE_TOO_LARGE: Code Mode IPC message exceeded the maximum allowed size.",
+    });
+    expect(storedRun).toMatchObject({
+      status: "failed",
+      errorCode: "MESSAGE_TOO_LARGE",
+      error: "MESSAGE_TOO_LARGE: Code Mode IPC message exceeded the maximum allowed size.",
+      errorDetails: expect.objectContaining({
+        direction: "parent_to_child",
+        method: "run.execute",
+      }),
+    });
+  });
+
+  it("records oversized child-to-parent Code Mode results as structured IPC failures", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: `return { payload: "x".repeat(150_000) };`,
+      requestedOutputIntent: "Exercise child IPC bounds.",
+      saveCandidateOnSuccess: false,
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+    const storedRun = harness.storage.codeModeRuns.get(run.runId);
+
+    expect(result?.result).toMatchObject({
+      runId: run.runId,
+      status: "failed",
+      errorCode: "MESSAGE_TOO_LARGE",
+      error: "MESSAGE_TOO_LARGE: Code Mode IPC message exceeded the maximum allowed size.",
+    });
+    expect(storedRun).toMatchObject({
+      status: "failed",
+      errorCode: "MESSAGE_TOO_LARGE",
+      error: "MESSAGE_TOO_LARGE: Code Mode IPC message exceeded the maximum allowed size.",
+      errorDetails: expect.objectContaining({
+        direction: "child_to_parent",
+      }),
+    });
+  });
+
+  it("fails Code Mode runs that return before awaiting wrapper calls", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "capabilities.tool.safe_read(); return { ok: true };",
+      requestedOutputIntent: "Exercise unawaited wrapper calls.",
+      saveCandidateOnSuccess: false,
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+    const storedRun = harness.storage.codeModeRuns.get(run.runId);
+
+    expect(result?.result).toMatchObject({
+      runId: run.runId,
+      status: "failed",
+      errorCode: "UNAWAITED_WRAPPER_CALL",
+    });
+    expect(storedRun).toMatchObject({
+      status: "failed",
+      errorCode: "UNAWAITED_WRAPPER_CALL",
+      errorDetails: expect.objectContaining({
+        pendingWrapperCallCount: expect.any(Number),
+      }),
+    });
+    expect(harness.invokeTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds timed-out Code Mode runs even when a wrapper ignores cancellation", async () => {
+    const invokeTool = vi.fn(async () => new Promise<ToolInvokeResult>(() => undefined));
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+      invokeTool,
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return await capabilities.tool.safe_read();",
+      requestedOutputIntent: "Exercise timeout around a stuck wrapper.",
+      saveCandidateOnSuccess: false,
+    });
+
+    const startedAt = Date.now();
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+    const storedRun = harness.storage.codeModeRuns.get(run.runId);
+
+    expect(Date.now() - startedAt).toBeLessThan(20_000);
+    expect(result?.result).toMatchObject({
+      runId: run.runId,
+      status: "failed",
+    });
+    expect(String(result?.result?.error)).toContain("Code Mode wrapper deadline exceeded");
+    expect(storedRun).toMatchObject({
+      status: "failed",
+    });
+    const wrapperSignal = invokeTool.mock.calls[0]?.[0].signal;
+    expect(wrapperSignal?.aborted).toBe(true);
+  }, 25_000);
 
   it("does not pass provider or gateway secrets into Code Mode child environments", () => {
     const priorOpenAi = process.env.OPENAI_API_KEY;
@@ -416,6 +1116,973 @@ describe("CapabilitySystemService", () => {
         }),
       }),
     );
+  });
+
+  it("persists current sandbox metadata when launch-time isolation drifts unavailable", async () => {
+    const availableSandbox = {
+      runnerId: "goatcitadel.best-effort-host",
+      runnerVersion: "0.2.0",
+      platform: "linux",
+      isolationProfile: "best_effort_host/temp_only/no_network",
+      required: true,
+      available: true,
+      checksPassed: ["linux_firejail_present"],
+      checksFailed: [],
+    } satisfies CodeModeSandboxMetadata;
+    const unavailableSandbox = {
+      ...availableSandbox,
+      available: false,
+      checksPassed: ["mode_best_effort_host"],
+      checksFailed: ["linux_firejail_missing"],
+      failClosedReason: "Code Mode sandbox failed closed: linux_firejail_missing.",
+    } satisfies CodeModeSandboxMetadata;
+    const sandboxSequence = [availableSandbox, unavailableSandbox];
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: true,
+        bestEffortHostEnabled: true,
+      },
+      resolveSandboxMetadata: () => sandboxSequence.shift() ?? unavailableSandbox,
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true, shouldNotExecute: true };",
+      requestedOutputIntent: "Return a JSON object.",
+      saveCandidateOnSuccess: false,
+    });
+
+    expect(run.sandbox).toMatchObject({ available: true, required: true });
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+    const storedRun = harness.storage.codeModeRuns.get(run.runId);
+
+    expect(result.result).toMatchObject({
+      runId: run.runId,
+      status: "failed",
+      sandbox: expect.objectContaining({
+        available: false,
+        checksFailed: expect.arrayContaining(["linux_firejail_missing"]),
+      }),
+    });
+    expect(storedRun.sandbox).toMatchObject({
+      available: false,
+      checksFailed: expect.arrayContaining(["linux_firejail_missing"]),
+    });
+    expect(harness.publishRealtime).not.toHaveBeenCalledWith(
+      "code_mode_run_started",
+      "capabilities",
+      expect.objectContaining({ runId: run.runId }),
+    );
+    expect(harness.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("fails explicitly when the approved sandbox posture changes before execution", async () => {
+    const approvedSandbox = {
+      runnerId: "goatcitadel.best-effort-host",
+      runnerVersion: "0.2.0",
+      platform: "linux",
+      isolationProfile: "best_effort_host/temp_only/no_network",
+      required: false,
+      available: true,
+      checksPassed: ["linux_firejail_present"],
+      checksFailed: [],
+    } satisfies CodeModeSandboxMetadata;
+    const driftedSandbox = {
+      ...approvedSandbox,
+      isolationProfile: "best_effort_host/temp_only/network_allowed",
+    } satisfies CodeModeSandboxMetadata;
+    const sandboxSequence = [approvedSandbox, driftedSandbox];
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: true,
+      },
+      resolveSandboxMetadata: () => sandboxSequence.shift() ?? driftedSandbox,
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { shouldNotExecute: true };",
+      requestedOutputIntent: "Return a JSON object.",
+      saveCandidateOnSuccess: false,
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result?.result).toMatchObject({
+      runId: run.runId,
+      status: "failed",
+      errorCode: "STATE_CONFLICT",
+      error: expect.stringContaining("approved sandbox posture changed"),
+    });
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({
+        errorCode: "STATE_CONFLICT",
+      }),
+    );
+    expect(harness.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("fails explicitly when approved sandbox availability downgrades before execution", async () => {
+    const approvedSandbox = {
+      runnerId: "goatcitadel.best-effort-host",
+      runnerVersion: "0.2.0",
+      platform: "linux",
+      isolationProfile: "best_effort_host/temp_only/no_network",
+      required: false,
+      available: true,
+      checksPassed: ["mode_best_effort_host", "best_effort_host_enabled", "linux_firejail_present"],
+      checksFailed: [],
+    } satisfies CodeModeSandboxMetadata;
+    const driftedSandbox = {
+      ...approvedSandbox,
+      available: false,
+      checksPassed: ["mode_best_effort_host", "best_effort_host_enabled"],
+      checksFailed: ["linux_firejail_missing"],
+      advisoryUnsandboxedReason:
+        "Host isolation unavailable on linux; running advisory trusted-code mode: linux_firejail_missing.",
+    } satisfies CodeModeSandboxMetadata;
+    const sandboxSequence = [approvedSandbox, driftedSandbox];
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: true,
+      },
+      resolveSandboxMetadata: () => sandboxSequence.shift() ?? driftedSandbox,
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { shouldNotExecute: true };",
+      requestedOutputIntent: "Return a JSON object.",
+      saveCandidateOnSuccess: false,
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result?.result).toMatchObject({
+      runId: run.runId,
+      status: "failed",
+      errorCode: "STATE_CONFLICT",
+      error: expect.stringContaining("approved sandbox posture changed at available"),
+    });
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({
+        errorCode: "STATE_CONFLICT",
+      }),
+    );
+    expect(harness.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("records unavailable sandbox metadata when launch preparation fails after an available probe", async () => {
+    const availableSandbox = {
+      runnerId: "goatcitadel.best-effort-host",
+      runnerVersion: "0.1.0",
+      platform: "win32",
+      isolationProfile: "best_effort_host/temp_only/no_network",
+      required: true,
+      available: true,
+      checksPassed: ["probe_available"],
+      checksFailed: [],
+    } satisfies CodeModeSandboxMetadata;
+    const harness = await createHarness({
+      resolveSandboxMetadata: () => availableSandbox,
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+    });
+    const blockingPath = path.join(harness.rootDir, "data/code-mode-temp", run.runId);
+    await fs.mkdir(path.dirname(blockingPath), { recursive: true });
+    await fs.writeFile(blockingPath, "not a directory", "utf8");
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+    const storedRun = harness.storage.codeModeRuns.get(run.runId);
+
+    expect(result?.result).toMatchObject({
+      runId: run.runId,
+      status: "failed",
+    });
+    expect(storedRun.sandbox).toMatchObject({
+      available: false,
+      required: true,
+      checksFailed: expect.arrayContaining(["launch_preparation_failed"]),
+    });
+    expect(storedRun.sandbox?.failClosedReason).toContain("launch preparation failed");
+  });
+
+  it("refuses Code Mode execution when the durable approval is not approved", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      requestedOutputIntent: "Return a JSON object.",
+      saveCandidateOnSuccess: false,
+    });
+    vi.mocked(harness.storage.approvals.get).mockImplementation((approvalId: string) => ({
+      approvalId,
+      kind: "code_mode.run",
+      riskLevel: "caution",
+      status: "pending",
+      payload: {},
+      preview: {},
+      linkage: {},
+      createdAt: "2026-04-10T00:00:00.000Z",
+      expiresAt: "2999-01-01T00:00:00.000Z",
+      explanationStatus: "not_requested",
+    }));
+
+    await expect(harness.service.executeApprovedCodeModeRun("approval-1")).rejects.toThrow(
+      "approval status is pending",
+    );
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({ reason: "approval status is pending" }),
+    );
+    expect(harness.storage.approvalEvents.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "approval-1",
+        eventType: "pending_action_refused",
+        payload: expect.objectContaining({
+          actionType: "code_mode.run",
+          runId: run.runId,
+          status: "failed",
+          error: "approval status is pending",
+        }),
+      }),
+    );
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "failed",
+      error: "approval status is pending",
+    });
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "code_mode_run_failed",
+      "capabilities",
+      expect.objectContaining({
+        runId: run.runId,
+        status: "failed",
+        error: "approval status is pending",
+      }),
+    );
+  });
+
+  it("expires a Code Mode pending action that was not resolved before its TTL", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      requestedOutputIntent: "Return a JSON object.",
+      saveCandidateOnSuccess: false,
+    });
+    const pending = harness.storage.pendingApprovalActions.find("approval-1");
+    expect(pending).toBeDefined();
+    if (pending) {
+      pending.expiresAt = "2020-01-01T00:00:00.000Z";
+    }
+
+    await expect(harness.service.executeApprovedCodeModeRun("approval-1")).rejects.toThrow(
+      "pending action expired before approval execution",
+    );
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({ reason: "Code Mode pending action expired before approval execution" }),
+    );
+    expect(harness.storage.approvalEvents.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "approval-1",
+        eventType: "pending_action_refused",
+        payload: expect.objectContaining({
+          actionType: "code_mode.run",
+          runId: run.runId,
+          status: "expired",
+        }),
+      }),
+    );
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "expired",
+      error: "Code Mode pending action expired before approval execution",
+    });
+  });
+
+  it("freezes Code Mode wrapper policy context at run approval time", async () => {
+    const resolvePolicyContext = vi.fn(
+      (): ToolPolicyActorContext => ({
+        operatorId: "operator-1",
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+        runId: "creation-run-placeholder",
+        surface: "code",
+        permissionProfileId: "profile-safe",
+        permissionProfile: {
+          profileId: "profile-safe",
+          label: "Safe",
+          builtin: true,
+          status: "active",
+          scope: "global",
+          approvalMode: "approve_all",
+          legacyToolProfile: "danger",
+          toolPatterns: ["tool.safe_read"],
+          allow: [],
+          deny: ["tool.denied"],
+          createdBy: "system",
+          createdAt: "2026-04-10T00:00:00.000Z",
+          updatedAt: "2026-04-10T00:00:00.000Z",
+        },
+        localOperatorOverrideId: "override-at-create",
+        localOperatorOverride: {
+          overrideId: "override-at-create",
+          operatorId: "operator-1",
+          scope: "run",
+          scopeRef: "creation-run-placeholder",
+          reason: "test override",
+          status: "active",
+          createdBy: "operator-1",
+          createdAt: "2026-04-10T00:00:00.000Z",
+          expiresAt: "2999-01-01T00:00:00.000Z",
+        },
+      }),
+    );
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+      resolvePolicyContext,
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source:
+        "const result = await capabilities.tool.safe_read({ path: 'README.md' }); return { result, marker: input.marker };",
+      originSurface: "code",
+      operatorId: "operator-1",
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      permissionProfileId: "profile-safe",
+      localOperatorOverrideId: "override-at-create",
+      input: { marker: "approved" },
+      requestedOutputIntent: "Read a safe file.",
+      saveCandidateOnSuccess: false,
+    });
+    expect(resolvePolicyContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operatorId: "operator-1",
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+        surface: "code",
+        permissionProfileId: "profile-safe",
+        localOperatorOverrideId: "override-at-create",
+      }),
+    );
+    expect(harness.createApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          runId: run.runId,
+          workspaceId: "workspace-1",
+          sessionId: "session-1",
+          originSurface: "code",
+          permissionProfileId: "profile-safe",
+          localOperatorOverrideId: "override-at-create",
+        }),
+        linkage: expect.objectContaining({
+          workspaceId: "workspace-1",
+          runId: run.runId,
+          sessionId: "session-1",
+          originSurface: "code",
+          toolName: "code_mode.run",
+          actionType: "code_mode.run",
+          permissionProfileId: "profile-safe",
+          localOperatorOverrideId: "override-at-create",
+        }),
+      }),
+    );
+    const pending = harness.storage.pendingApprovalActions.find("approval-1");
+    if (pending) {
+      pending.request.input = { marker: "tampered" };
+      pending.request.policyContext = {
+        permissionProfileId: "profile-tampered",
+        permissionProfile: {
+          profileId: "profile-tampered",
+          label: "Tampered",
+          builtin: false,
+          status: "active",
+          scope: "global",
+          approvalMode: "bypass",
+          toolPatterns: ["*"],
+          allow: ["*"],
+          deny: [],
+          createdBy: "test",
+          createdAt: "2026-04-10T00:00:00.000Z",
+          updatedAt: "2026-04-10T00:00:00.000Z",
+        },
+      };
+    }
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result?.result).toMatchObject({
+      runId: run.runId,
+      status: "completed",
+    });
+    expect(harness.storage.codeModeRuns.get(run.runId).result).toMatchObject({
+      marker: "approved",
+    });
+    expect(resolvePolicyContext).toHaveBeenCalledTimes(2);
+    expect(harness.invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "tool.safe_read",
+        policyContext: expect.objectContaining({
+          approvedCodeModeRunId: run.runId,
+          permissionProfileId: "profile-safe",
+          localOperatorOverrideId: "override-at-create",
+          localOperatorOverride: expect.objectContaining({
+            overrideId: "override-at-create",
+            status: "active",
+          }),
+          permissionProfile: expect.objectContaining({
+            approvalMode: "approve_all",
+            toolPatterns: ["tool.safe_read"],
+            deny: ["tool.denied"],
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("uses the session workspace as canonical for Code Mode policy resolution", async () => {
+    const resolvePolicyContext = vi.fn(
+      (input: { workspaceId?: string; sessionId?: string; runId?: string }): ToolPolicyActorContext => ({
+        ...input,
+        permissionProfileId: `profile-${input.workspaceId}`,
+        permissionProfile: createPermissionProfileRecord(`profile-${input.workspaceId}`),
+      }),
+    );
+    const harness = await createHarness({ resolvePolicyContext });
+    harness.storage.chatSessionMeta.patch("session-a", { workspaceId: "workspace-a" });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      sessionId: "session-a",
+      workspaceId: "workspace-a",
+      requestedOutputIntent: "Exercise workspace scoping.",
+    });
+
+    expect(run.workspaceId).toBe("workspace-a");
+    expect(run.permissionProfileId).toBe("profile-workspace-a");
+    expect(resolvePolicyContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-a",
+        workspaceId: "workspace-a",
+        runId: run.runId,
+      }),
+    );
+
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true };",
+        sessionId: "session-a",
+        workspaceId: "workspace-b",
+        requestedOutputIntent: "Try to borrow another workspace policy.",
+      }),
+    ).rejects.toThrow("does not match session session-a workspace workspace-a");
+  });
+
+  it("fails closed when a stored Code Mode policy snapshot only retains profile ids", async () => {
+    const frozenProfile: PermissionProfileRecord = {
+      profileId: "profile-safe",
+      label: "Safe",
+      builtin: true,
+      status: "active",
+      scope: "global",
+      approvalMode: "approve_all",
+      legacyToolProfile: "danger",
+      toolPatterns: ["tool.safe_read"],
+      allow: [],
+      deny: [],
+      createdBy: "system",
+      createdAt: "2026-04-10T00:00:00.000Z",
+      updatedAt: "2026-04-10T00:00:00.000Z",
+    };
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+      resolvePolicyContext: vi.fn(
+        (): ToolPolicyActorContext => ({
+          operatorId: "operator-1",
+          workspaceId: "workspace-1",
+          surface: "code",
+          permissionProfileId: "profile-safe",
+          permissionProfile: frozenProfile,
+        }),
+      ),
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "const result = await capabilities.tool.safe_read({ path: 'README.md' }); return { result };",
+      originSurface: "code",
+      operatorId: "operator-1",
+      workspaceId: "workspace-1",
+      permissionProfileId: "profile-safe",
+    });
+    const policyPath = path.resolve(harness.rootDir, run.policySnapshotArtifact.relPath);
+    const tamperedPolicy = JSON.parse(await fs.readFile(policyPath, "utf8")) as Record<string, unknown>;
+    if (
+      typeof tamperedPolicy.codeModePermissionContext === "object" &&
+      tamperedPolicy.codeModePermissionContext !== null
+    ) {
+      delete (tamperedPolicy.codeModePermissionContext as Record<string, unknown>).permissionProfile;
+    }
+    const tamperedContent = JSON.stringify(tamperedPolicy, null, 2);
+    await fs.writeFile(policyPath, tamperedContent, "utf8");
+    harness.storage.codeModeRuns.upsert({
+      ...run,
+      policySnapshotHash: sha256Text(JSON.stringify(tamperedPolicy)),
+      policySnapshotArtifact: {
+        ...run.policySnapshotArtifact,
+        sha256: sha256Text(tamperedContent),
+        bytes: Buffer.byteLength(tamperedContent, "utf8"),
+      },
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result?.result).toMatchObject({
+      runId: run.runId,
+      status: "failed",
+      error: "STATE_CONFLICT: Code Mode permission profile snapshot is missing profile profile-safe.",
+    });
+    expect(harness.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a Code Mode Local Operator Override is revoked before execution", async () => {
+    let overrideActive = true;
+    const resolvePolicyContext = vi.fn(
+      (): ToolPolicyActorContext => ({
+        operatorId: "operator-1",
+        workspaceId: "workspace-1",
+        surface: "code",
+        localOperatorOverrideId: overrideActive ? "override-at-create" : undefined,
+        localOperatorOverride: overrideActive
+          ? {
+              overrideId: "override-at-create",
+              operatorId: "operator-1",
+              scope: "run",
+              scopeRef: "code-run-placeholder",
+              reason: "test revoked override",
+              status: "active",
+              createdBy: "operator-1",
+              createdAt: "2026-04-10T00:00:00.000Z",
+              expiresAt: "2999-01-01T00:00:00.000Z",
+            }
+          : undefined,
+      }),
+    );
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+      resolvePolicyContext,
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      originSurface: "code",
+      operatorId: "operator-1",
+      workspaceId: "workspace-1",
+      localOperatorOverrideId: "override-at-create",
+    });
+    overrideActive = false;
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result?.result).toMatchObject({
+      runId: run.runId,
+      status: "failed",
+      error: "STATE_CONFLICT: Code Mode local operator override override-at-create is no longer active for this run.",
+    });
+    expect(resolvePolicyContext).toHaveBeenCalledTimes(2);
+    expect(harness.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("fails Code Mode run creation closed when an explicit override cannot resolve", async () => {
+    const resolvePolicyContext = vi.fn(() => {
+      throw new Error("override override-stale is expired or outside this run");
+    });
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+      resolvePolicyContext,
+    });
+
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true };",
+        originSurface: "code",
+        operatorId: "operator-1",
+        workspaceId: "workspace-1",
+        permissionProfileId: "profile-safe",
+        localOperatorOverrideId: "override-stale",
+      }),
+    ).rejects.toThrow("override override-stale is expired or outside this run");
+    expect(resolvePolicyContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operatorId: "operator-1",
+        workspaceId: "workspace-1",
+        surface: "code",
+        permissionProfileId: "profile-safe",
+        localOperatorOverrideId: "override-stale",
+      }),
+    );
+    expect(harness.storage.codeModeRuns.list()).toEqual([]);
+  });
+
+  it("does not silently drop an explicit Code Mode override when policy resolution omits it", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+      resolvePolicyContext: vi.fn(
+        (): ToolPolicyActorContext => ({
+          operatorId: "operator-1",
+          workspaceId: "workspace-1",
+          surface: "code",
+          permissionProfileId: "profile-safe",
+        }),
+      ),
+    });
+
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true };",
+        originSurface: "code",
+        operatorId: "operator-1",
+        workspaceId: "workspace-1",
+        localOperatorOverrideId: "override-1",
+      }),
+    ).rejects.toThrow("Local Operator Override override-1 is not active for this Code Mode run");
+    expect(harness.storage.codeModeRuns.list()).toEqual([]);
+  });
+
+  it("does not silently swap an explicit Code Mode permission profile during policy resolution", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+      resolvePolicyContext: vi.fn(
+        (): ToolPolicyActorContext => ({
+          operatorId: "operator-1",
+          workspaceId: "workspace-1",
+          surface: "code",
+          permissionProfileId: "profile-other",
+        }),
+      ),
+    });
+
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true };",
+        originSurface: "code",
+        operatorId: "operator-1",
+        workspaceId: "workspace-1",
+        permissionProfileId: "profile-safe",
+      }),
+    ).rejects.toThrow("Permission profile profile-safe is not active for this Code Mode run");
+    expect(harness.storage.codeModeRuns.list()).toEqual([]);
+  });
+
+  it("fails closed when the stored Code Mode run profile diverges from the frozen policy context", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+      resolvePolicyContext: vi.fn(
+        (): ToolPolicyActorContext => ({
+          operatorId: "operator-1",
+          workspaceId: "workspace-1",
+          surface: "code",
+          permissionProfileId: "profile-safe",
+        }),
+      ),
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      originSurface: "code",
+      operatorId: "operator-1",
+      workspaceId: "workspace-1",
+      permissionProfileId: "profile-safe",
+    });
+    harness.storage.codeModeRuns.upsert({
+      ...harness.storage.codeModeRuns.get(run.runId),
+      permissionProfileId: "profile-other",
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result?.result).toMatchObject({
+      runId: run.runId,
+      status: "failed",
+      error: "STATE_CONFLICT: Code Mode permission profile mismatch; expected profile-other.",
+      errorCode: "STATE_CONFLICT",
+    });
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({
+        error: "STATE_CONFLICT: Code Mode permission profile mismatch; expected profile-other.",
+        errorCode: "STATE_CONFLICT",
+      }),
+    );
+  });
+
+  it("keeps Code Mode origin surface in the run ledger without approval-linkage hydration", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      originSurface: "code",
+      requestedOutputIntent: "Return a JSON object.",
+      saveCandidateOnSuccess: false,
+      workspaceId: "workspace-code",
+      sessionId: "session-code",
+    });
+    harness.storage.codeModeRuns.upsert({ ...run, approvalId: undefined });
+
+    expect(harness.service.getCodeModeRun(run.runId)).toMatchObject({
+      runId: run.runId,
+      originSurface: "code",
+      approvalId: undefined,
+    });
+    expect(harness.service.listCodeModeRuns({ sessionId: "session-code", limit: 5 })).toEqual([
+      expect.objectContaining({
+        runId: run.runId,
+        originSurface: "code",
+        approvalId: undefined,
+      }),
+    ]);
+  });
+
+  it("fails before child execution when persisted Code Mode artifacts no longer match their hashes", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      originSurface: "code",
+      requestedOutputIntent: "Return a JSON object.",
+      saveCandidateOnSuccess: false,
+    });
+    await fs.writeFile(path.resolve(harness.rootDir, run.codeArtifact.relPath), "return { ok: false };", "utf8");
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+    const storedRun = harness.storage.codeModeRuns.get(run.runId);
+
+    expect(result).toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({
+        runId: run.runId,
+        status: "failed",
+        error: expect.stringContaining("Code Mode source artifact hash mismatch"),
+      }),
+    });
+    expect(storedRun).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("Code Mode source artifact hash mismatch"),
+    });
+    expect(harness.invokeTool).not.toHaveBeenCalled();
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({
+        runId: run.runId,
+        error: expect.stringContaining("Code Mode source artifact hash mismatch"),
+      }),
+    );
+  });
+
+  it.each([
+    {
+      label: "wrapper manifest",
+      artifact: (run: CodeModeRunRecord) => run.wrapperManifestArtifact,
+      tamperedContent: '{"wrappers":[]}\n',
+      expectedError: "Code Mode wrapper manifest artifact hash mismatch",
+    },
+    {
+      label: "policy snapshot",
+      artifact: (run: CodeModeRunRecord) => run.policySnapshotArtifact,
+      tamperedContent: '{"toolPolicy":{"tampered":true}}\n',
+      expectedError: "Code Mode policy snapshot artifact hash mismatch",
+    },
+  ])(
+    "fails before child execution when persisted Code Mode $label artifact no longer matches its hash",
+    async (caseItem) => {
+      const harness = await createHarness({
+        sandboxConfig: {
+          required: false,
+          bestEffortHostEnabled: false,
+        },
+      });
+
+      const run = await harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true };",
+        originSurface: "code",
+        requestedOutputIntent: "Return a JSON object.",
+        saveCandidateOnSuccess: false,
+      });
+      await fs.writeFile(
+        path.resolve(harness.rootDir, caseItem.artifact(run).relPath),
+        caseItem.tamperedContent,
+        "utf8",
+      );
+
+      const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+      const storedRun = harness.storage.codeModeRuns.get(run.runId);
+
+      expect(result).toMatchObject({
+        outcome: "executed",
+        result: expect.objectContaining({
+          runId: run.runId,
+          status: "failed",
+          error: expect.stringContaining(caseItem.expectedError),
+        }),
+      });
+      expect(storedRun).toMatchObject({
+        status: "failed",
+        error: expect.stringContaining(caseItem.expectedError),
+      });
+      expect(harness.invokeTool).not.toHaveBeenCalled();
+    },
+  );
+
+  it("fails before child execution when the frozen Code Mode input hash no longer matches", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      originSurface: "code",
+      input: { marker: "approved" },
+      requestedOutputIntent: "Return a JSON object.",
+      saveCandidateOnSuccess: false,
+    });
+    const policyPath = path.resolve(harness.rootDir, run.policySnapshotArtifact.relPath);
+    const tamperedPolicy = JSON.parse(await fs.readFile(policyPath, "utf8")) as Record<string, unknown>;
+    tamperedPolicy.codeModeInput = { marker: "tampered" };
+    const tamperedContent = JSON.stringify(tamperedPolicy, null, 2);
+    await fs.writeFile(policyPath, tamperedContent, "utf8");
+    harness.storage.codeModeRuns.upsert({
+      ...run,
+      policySnapshotHash: sha256Text(JSON.stringify(tamperedPolicy)),
+      policySnapshotArtifact: {
+        ...run.policySnapshotArtifact,
+        sha256: sha256Text(tamperedContent),
+        bytes: Buffer.byteLength(tamperedContent, "utf8"),
+      },
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+    const storedRun = harness.storage.codeModeRuns.get(run.runId);
+
+    expect(result).toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({
+        runId: run.runId,
+        status: "failed",
+        error: expect.stringContaining("Code Mode input snapshot hash mismatch"),
+      }),
+    });
+    expect(storedRun).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("Code Mode input snapshot hash mismatch"),
+    });
+    expect(harness.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("fails before child execution when the stored Code Mode input hash no longer matches", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      originSurface: "code",
+      input: { marker: "approved" },
+      requestedOutputIntent: "Return a JSON object.",
+      saveCandidateOnSuccess: false,
+    });
+    harness.storage.codeModeRuns.upsert({
+      ...run,
+      codeModeInputHash: sha256Text(JSON.stringify({ marker: "tampered" })),
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+    const storedRun = harness.storage.codeModeRuns.get(run.runId);
+
+    expect(result).toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({
+        runId: run.runId,
+        status: "failed",
+        error: expect.stringContaining("Code Mode stored input hash mismatch"),
+      }),
+    });
+    expect(storedRun).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("Code Mode stored input hash mismatch"),
+    });
+    expect(harness.invokeTool).not.toHaveBeenCalled();
   });
 
   it("stages a candidate bundle after approval and execution when candidate save is enabled", async () => {
@@ -506,33 +2173,49 @@ async function createHarness(input?: {
     required?: boolean;
     bestEffortHostEnabled?: boolean;
   };
+  resolvePolicyContext?: (input: {
+    operatorId?: string;
+    workspaceId?: string;
+    sessionId?: string;
+    taskId?: string;
+    runId?: string;
+    surface?: "chat" | "cowork" | "code";
+    permissionProfileId?: string;
+    localOperatorOverrideId?: string;
+  }) => ToolPolicyActorContext;
+  resolveSandboxMetadata?: (config: CapabilityRuntimeConfig["codeModeSandbox"]) => CodeModeSandboxMetadata;
+  invokeTool?: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
 }) {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-capability-system-"));
   tempRoots.push(rootDir);
-  const storage = createFakeStorage();
+  const approvals = new Map<string, ApprovalRequest>();
+  const storage = createFakeStorage(approvals);
   const publishRealtime = vi.fn();
   const invokeTool = vi.fn(
-    async (): Promise<ToolInvokeResult> => ({
-      outcome: "executed",
-      policyReason: "executed",
-      auditEventId: "audit-1",
-      result: { ok: true },
-    }),
+    input?.invokeTool ??
+      (async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        policyReason: "executed",
+        auditEventId: "audit-1",
+        result: { ok: true },
+      })),
   );
-  const createApproval = vi.fn(
-    async (request: ApprovalCreateInput): Promise<ApprovalRequest> => ({
+  const createApproval = vi.fn(async (request: ApprovalCreateInput): Promise<ApprovalRequest> => {
+    const approval: ApprovalRequest = {
       approvalId: "approval-1",
       kind: request.kind,
       riskLevel: request.riskLevel,
-      status: "pending",
+      status: "approved",
       payload: request.payload,
       preview: request.preview,
       linkage: request.linkage,
       createdAt: "2026-04-10T00:00:00.000Z",
       expiresAt: request.expiresAt ?? undefined,
       explanationStatus: "not_requested",
-    }),
-  );
+    };
+    approvals.set(approval.approvalId, approval);
+    return approval;
+  });
 
   const service = new CapabilitySystemService({
     rootDir,
@@ -557,25 +2240,29 @@ async function createHarness(input?: {
     createApproval,
     publishRealtime,
     readPolicySnapshot: () => ({ mode: "test" }),
+    resolvePolicyContext: input?.resolvePolicyContext,
+    resolveSandboxMetadata: input?.resolveSandboxMetadata,
   });
 
   return {
     rootDir,
     storage,
     service,
+    approvals,
     createApproval,
     publishRealtime,
     invokeTool,
   };
 }
 
-function createFakeStorage() {
+function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
   const snapshots = new Map<string, CapabilityCatalogSnapshotRecord>();
   const proposals = new Map<string, CapabilityProposalRecord>();
   const proposalEvents = new Map<string, CapabilityProposalEventRecord[]>();
   const codeModeRuns = new Map<string, CodeModeRunRecord>();
   const candidateVersions = new Map<string, CandidateSkillVersionRecord>();
   const pendingActions = new Map<string, PendingApprovalAction>();
+  const sessionMeta = new Map<string, { sessionId: string; workspaceId?: string }>();
 
   return {
     capabilityCatalogSnapshots: {
@@ -624,7 +2311,26 @@ function createFakeStorage() {
     },
     approvals: {
       get: vi.fn((approvalId: string) => {
-        throw new Error(`Missing approval ${approvalId}`);
+        const approval = approvalsById.get(approvalId);
+        if (!approval) {
+          throw new Error(`Missing approval ${approvalId}`);
+        }
+        return approval;
+      }),
+      resolve: vi.fn((approvalId: string, input: { decision: "approve" | "reject" | "edit"; resolvedBy: string }) => {
+        const approval = approvalsById.get(approvalId);
+        if (!approval) {
+          throw new Error(`Missing approval ${approvalId}`);
+        }
+        const status = input.decision === "approve" ? "approved" : input.decision === "reject" ? "rejected" : "edited";
+        const next = {
+          ...approval,
+          status,
+          resolvedBy: input.resolvedBy,
+          resolvedAt: "2026-04-10T00:01:00.000Z",
+        } satisfies ApprovalRequest;
+        approvalsById.set(approvalId, next);
+        return next;
       }),
     },
     codeModeRuns: {
@@ -704,9 +2410,39 @@ function createFakeStorage() {
       upsert: vi.fn(),
       listBySession: vi.fn(() => []),
     },
+    chatSessionMeta: {
+      get(sessionId: string) {
+        return sessionMeta.get(sessionId);
+      },
+      patch(sessionId: string, input: { workspaceId?: string }) {
+        const record = {
+          sessionId,
+          workspaceId: input.workspaceId,
+        };
+        sessionMeta.set(sessionId, record);
+        return record;
+      },
+    },
     runImmediateTransaction<T>(callback: () => T): T {
       return callback();
     },
+  };
+}
+
+function createPermissionProfileRecord(profileId: string): PermissionProfileRecord {
+  return {
+    profileId,
+    label: profileId,
+    builtin: false,
+    status: "active",
+    scope: "workspace",
+    approvalMode: "approve_all",
+    toolPatterns: ["tool.safe_read"],
+    allow: [],
+    deny: [],
+    createdBy: "test",
+    createdAt: "2026-04-10T00:00:00.000Z",
+    updatedAt: "2026-04-10T00:00:00.000Z",
   };
 }
 
@@ -740,28 +2476,73 @@ function createArtifact(filename: string): CapabilityArtifactRecord {
   };
 }
 
-function createCandidateVersion(
+async function createCandidateVersion(
+  rootDir: string,
   input: Pick<CandidateSkillVersionRecord, "candidateId" | "versionId" | "lifecycleState" | "originatingRunId"> & {
     updatedAt: string;
   },
-): CandidateSkillVersionRecord {
+): Promise<CandidateSkillVersionRecord> {
+  const bundleRoot = `data/capability-candidates/${input.candidateId}/${input.versionId}`;
+  const manifestArtifact = await createManagedArtifact(rootDir, bundleRoot, "manifest.json", { id: input.versionId });
+  const instructionArtifact = await createManagedArtifact(
+    rootDir,
+    bundleRoot,
+    "SKILL.md",
+    `# ${input.versionId}\n\nTest skill.`,
+    "text/markdown",
+  );
+  const proofArtifact = await createManagedArtifact(rootDir, bundleRoot, "proof.json", { ok: true });
+  const programArtifact = await createManagedArtifact(
+    rootDir,
+    bundleRoot,
+    "program.ts",
+    "export const ok = true;\n",
+    "text/typescript",
+  );
+  const schemaArtifact = await createManagedArtifact(rootDir, bundleRoot, "schemas.json", { input: {} });
   return {
     candidateId: input.candidateId,
     versionId: input.versionId,
     sourceKind: "code_mode_generated",
     title: input.versionId,
     summary: `${input.versionId} summary`,
-    bundleRoot: `data/capability-candidates/${input.candidateId}/${input.versionId}`,
+    bundleRoot,
     originatingRunId: input.originatingRunId,
     wrapperManifestHash: "wrap-hash",
     lifecycleState: input.lifecycleState,
-    manifestArtifact: createArtifact(`${input.versionId}-manifest.json`),
-    instructionArtifact: createArtifact(`${input.versionId}-skill.md`),
-    proofArtifact: createArtifact(`${input.versionId}-proof.json`),
-    programArtifact: createArtifact(`${input.versionId}-program.ts`),
-    schemaArtifact: createArtifact(`${input.versionId}-schemas.json`),
+    manifestArtifact,
+    instructionArtifact,
+    proofArtifact,
+    programArtifact,
+    schemaArtifact,
     createdAt: "2026-04-10T00:00:00.000Z",
     updatedAt: input.updatedAt,
     lastSuccessfulExecutionAt: "2026-04-10T00:00:00.000Z",
   };
+}
+
+async function createManagedArtifact(
+  rootDir: string,
+  bundleRoot: string,
+  filename: string,
+  value: Record<string, unknown> | string,
+  mimeType = "application/json",
+): Promise<CapabilityArtifactRecord> {
+  const relPath = `${bundleRoot}/${filename}`;
+  const absPath = path.resolve(rootDir, relPath);
+  const content = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  await fs.mkdir(path.dirname(absPath), { recursive: true });
+  await fs.writeFile(absPath, content, "utf8");
+  return {
+    artifactId: `artifact-${filename}`,
+    relPath,
+    sha256: sha256Text(content),
+    bytes: Buffer.byteLength(content),
+    mimeType,
+    createdAt: "2026-04-10T00:00:00.000Z",
+  };
+}
+
+function sha256Text(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }

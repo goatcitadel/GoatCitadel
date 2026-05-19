@@ -55,9 +55,53 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
     });
     expect(payload?.payload?.message).toContain("GoatCitadel approval action requested.");
     expect(payload?.payload?.message).toContain("Action token ID: rat_123");
+    expect(payload?.payload?.message).toContain("Requester: n/a");
+    expect(payload?.payload?.message).toContain("Rollback: n/a");
     expect(payload?.payload?.message).not.toContain("grat_token");
+    expect(payload?.payload?.message).toContain("Resolve this approval from Mission Control.");
+    expect(payload?.payload?.interactiveActions).toBeUndefined();
+  });
+
+  it("renders requester and rollback notes for integration approval delivery", () => {
+    const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
+      approval: createApproval({
+        payload: {
+          requesterActorId: "actor-1",
+          requesterDisplayName: "Operator One",
+          rollbackNote: "Restore the previous file from backup.",
+        },
+      }),
+      connector: createConnector("integration_connection", "active", ["approvals", "outbound_messages"], {
+        approvalDeliveryTarget: "#ops-approvals",
+      }),
+      token: "grat_token",
+      tokenId: "rat_123",
+      expiresAt: "2026-03-20T12:00:00.000Z",
+    });
+
+    expect(payload?.payload?.message).toContain("Requester: Operator One (actor-1)");
+    expect(payload?.payload?.message).toContain("Rollback: Restore the previous file from backup.");
+  });
+
+  it("adds integration approval buttons only when interactive actions are enabled", () => {
+    const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
+      approval: createApproval(),
+      connector: createConnector(
+        "integration_connection",
+        "active",
+        ["approvals", "outbound_messages", "interactive_actions"],
+        {
+          approvalDeliveryTarget: "#ops-approvals",
+          key: "discord",
+        },
+      ),
+      token: "grat_token",
+      tokenId: "rat_123",
+      expiresAt: "2026-03-20T12:00:00.000Z",
+    });
+
     expect(payload?.payload?.interactiveActions).toMatchObject({
-      platform: "telegram",
+      platform: "discord",
       tokenId: "rat_123",
       buttons: [
         { label: "Approve", callbackData: "gca:grat_token:a" },
@@ -81,14 +125,53 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
       connectorType: "mcp_server",
       action: "mcp.invoke",
       correlationId: "apr_123",
+      workspaceId: "workspace-1",
+      taskId: "task-1",
+      runId: "durable-run-1",
+      operatorId: "operator-1",
+      authActorId: "actor-1",
+      authActorSource: "loopback",
+      permissionProfileId: "profile-safe",
+      localOperatorOverrideId: "override-1",
+      originSurface: "cowork",
       payload: {
+        approvalId: "apr_123",
         toolName: "goatcitadel.approval.remote_action_ready",
+        workspaceId: "workspace-1",
+        taskId: "task-1",
+        runId: "durable-run-1",
+        operatorId: "operator-1",
+        authActorId: "actor-1",
+        authActorSource: "loopback",
+        permissionProfileId: "profile-safe",
+        localOperatorOverrideId: "override-1",
+        originSurface: "cowork",
         arguments: {
           approvalId: "apr_123",
           tokenId: "rat_123",
           token: "grat_token",
           actionType: "approval.resolve",
           expiresAt: "2026-03-20T12:00:00.000Z",
+          governance: {
+            workspaceId: "workspace-1",
+            taskId: "task-1",
+            runId: "durable-run-1",
+            operatorId: "operator-1",
+            authActorId: "actor-1",
+            authActorSource: "loopback",
+            permissionProfileId: "profile-safe",
+            localOperatorOverrideId: "override-1",
+            originSurface: "cowork",
+          },
+          linkage: {
+            workspaceId: "workspace-1",
+            taskId: "task-1",
+            durableRunId: "durable-run-1",
+            originSurface: "cowork",
+            operatorId: "operator-1",
+            authActorId: "actor-1",
+            authActorSource: "loopback",
+          },
         },
       },
     });
@@ -137,16 +220,30 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
   });
 });
 
-function createApproval(): ApprovalRequest {
+function createApproval(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
   return {
     approvalId: "apr_123",
     kind: "tool.invoke",
     riskLevel: "danger",
     status: "pending",
-    payload: { toolName: "fs.write" },
+    payload: {
+      toolName: "fs.write",
+      permissionProfileId: "profile-safe",
+      localOperatorOverrideId: "override-1",
+    },
     preview: { summary: "Write file" },
+    linkage: {
+      workspaceId: "workspace-1",
+      taskId: "task-1",
+      durableRunId: "durable-run-1",
+      originSurface: "cowork",
+      operatorId: "operator-1",
+      authActorId: "actor-1",
+      authActorSource: "loopback",
+    },
     createdAt: "2026-03-20T11:00:00.000Z",
     explanationStatus: "not_requested",
+    ...overrides,
   };
 }
 

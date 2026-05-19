@@ -19,7 +19,6 @@ export type OpsSection =
   | "approvals"
   | "costs"
   | "runtime"
-  | "quality"
   | "diagnostics"
   | "kanban";
 export type SettingsSection =
@@ -27,6 +26,7 @@ export type SettingsSection =
   | "providers"
   | "personalities"
   | "access"
+  | "permissions"
   | "budget"
   | "onboarding"
   | "runtime"
@@ -94,7 +94,7 @@ export const AREA_META: Record<PrimaryArea, AreaMeta> = {
     id: "library",
     label: "Library",
     kicker: "Knowledge",
-    description: "Agents, skills, memory, files, and prompt packs.",
+    description: "Agents, skills, capabilities, knowledge, memory, files, artifacts, and prompt packs.",
   },
   ops: {
     id: "ops",
@@ -194,6 +194,14 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       description: "Keep serving posture and spend visible while coding.",
       area: "ops",
       section: "runtime",
+    },
+    {
+      id: "code-approvals",
+      label: "Approvals",
+      description: "Review Code Mode and tool decisions from the coding lane.",
+      area: "ops",
+      section: "approvals",
+      preserveThread: true,
     },
     {
       id: "code-prompt-packs",
@@ -385,6 +393,13 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       section: "access",
     },
     {
+      id: "settings-permissions",
+      label: "Permissions",
+      description: "Permission profiles, active defaults, and local operator override evidence.",
+      area: "settings",
+      section: "permissions",
+    },
+    {
       id: "settings-runtime",
       label: "Runtime",
       description: "Mesh, local runtimes, backups, and serving posture.",
@@ -422,7 +437,7 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     {
       id: "settings-tools",
       label: "Tools",
-      description: "Tool grants and catalog policy.",
+      description: "Low-level tool catalog and scoped allow/deny grants.",
       area: "settings",
       section: "tools",
     },
@@ -498,9 +513,13 @@ export function parseAppRoute(input: string | URL): AppRoute {
   const parts = rawParts.map((part) => part.toLowerCase());
   const params = url.searchParams;
   const area = (parts[0] as PrimaryArea | undefined) ?? "chat";
+  const normalizedArea = isPrimaryArea(area) ? area : "chat";
+  const normalizedSection = area === "settings" && parts[1] === "safety" ? "permissions" : parts[1];
+  const routeArea = normalizedArea === "ops" && normalizedSection === "quality" ? "library" : normalizedArea;
+  const routeSection = normalizedArea === "ops" && normalizedSection === "quality" ? "prompt-packs" : normalizedSection;
   const nextRoute: AppRoute = normalizeAppRoute({
-    area: isPrimaryArea(area) ? area : "chat",
-    section: area === "projects" ? undefined : (parts[1] as AppRoute["section"]),
+    area: routeArea,
+    section: routeArea === "projects" ? undefined : (routeSection as AppRoute["section"]),
     sessionId: readParam(params, "sessionId"),
     turnId: readParam(params, "turnId"),
     artifactId: readParam(params, "artifactId"),

@@ -6,6 +6,7 @@ import type {
   CapabilityCatalogSnapshotRecord,
   CapabilityProposalDetailRecord,
   CapabilityProposalRecord,
+  CodeModeRunListOptions,
   CodeModeRunRecord,
   CodeModeRunRequest,
 } from "@goatcitadel/contracts";
@@ -77,12 +78,47 @@ export async function rollbackCapabilityCandidate(
   });
 }
 
-export async function fetchCodeModeRuns(limit = 100): Promise<{ items: CodeModeRunRecord[] }> {
-  return request(`/api/v1/code-mode/runs?limit=${Math.max(1, Math.min(limit, 500))}`);
+export async function fetchCodeModeRuns(
+  input: number | CodeModeRunListOptions = 100,
+): Promise<{ items: CodeModeRunRecord[] }> {
+  const options = typeof input === "number" ? { limit: input } : input;
+  const params = new URLSearchParams();
+  params.set("limit", String(Math.max(1, Math.min(options.limit ?? 100, 500))));
+  if (options.workspaceId) {
+    params.set("workspaceId", options.workspaceId);
+  }
+  if (options.sessionId) {
+    params.set("sessionId", options.sessionId);
+  }
+  if (options.turnId) {
+    params.set("turnId", options.turnId);
+  }
+  if (options.status) {
+    params.set("status", options.status);
+  }
+  return request(`/api/v1/code-mode/runs?${params.toString()}`);
 }
 
-export async function fetchCodeModeRun(runId: string): Promise<CodeModeRunRecord> {
-  return request(`/api/v1/code-mode/runs/${encodeURIComponent(runId)}`);
+export async function fetchCodeModeRun(
+  runId: string,
+  input?: {
+    sessionId?: string;
+    turnId?: string;
+    workspaceId?: string;
+  },
+): Promise<CodeModeRunRecord> {
+  const params = new URLSearchParams();
+  if (input?.sessionId) {
+    params.set("sessionId", input.sessionId);
+  }
+  if (input?.turnId) {
+    params.set("turnId", input.turnId);
+  }
+  if (input?.workspaceId) {
+    params.set("workspaceId", input.workspaceId);
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  return request(`/api/v1/code-mode/runs/${encodeURIComponent(runId)}${suffix}`);
 }
 
 export async function createCodeModeRun(input: CodeModeRunRequest): Promise<CodeModeRunRecord> {

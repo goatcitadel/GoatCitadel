@@ -5,6 +5,7 @@ import type {
   ResearchRunRecord,
   ResearchSourceRecord,
   ResearchSummaryRecord,
+  ToolPolicyActorContext,
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
@@ -14,6 +15,18 @@ interface ResearchServiceDeps {
   storage: Storage;
   invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
   createChatCompletion: (request: ChatCompletionRequest) => Promise<ChatCompletionResponse>;
+  resolveToolPolicyContext?: (input: {
+    operatorId?: string;
+    authActorId?: string;
+    authActorSource?: ToolPolicyActorContext["authActorSource"];
+    workspaceId?: string;
+    sessionId?: string;
+    taskId?: string;
+    runId?: string;
+    surface?: ToolPolicyActorContext["surface"];
+    permissionProfileId?: string;
+    localOperatorOverrideId?: string;
+  }) => ToolPolicyActorContext;
 }
 
 export class ResearchService {
@@ -25,8 +38,31 @@ export class ResearchService {
     mode: "quick" | "deep";
     providerId?: string;
     model?: string;
+    workspaceId?: string;
+    policyRunId?: string;
+    policyTaskId?: string;
+    operatorId?: string;
+    authActorId?: string;
+    authActorSource?: ToolPolicyActorContext["authActorSource"];
+    permissionProfileId?: string;
+    localOperatorOverrideId?: string;
+    surface?: ToolPolicyActorContext["surface"];
   }): Promise<ResearchSummaryRecord> {
     const runId = randomUUID();
+    const policyRunId = input.policyRunId ?? runId;
+    const policyTaskId = input.policyTaskId ?? runId;
+    const policyContext = this.deps.resolveToolPolicyContext?.({
+      operatorId: input.operatorId ?? input.authActorId,
+      authActorId: input.authActorId,
+      authActorSource: input.authActorSource,
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+      taskId: policyTaskId,
+      runId: policyRunId,
+      surface: input.surface ?? "chat",
+      permissionProfileId: input.permissionProfileId,
+      localOperatorOverrideId: input.localOperatorOverrideId,
+    });
     this.deps.storage.researchRuns.create({
       runId,
       sessionId: input.sessionId,
@@ -45,7 +81,15 @@ export class ResearchService {
         },
         agentId: "research",
         sessionId: input.sessionId,
+        workspaceId: input.workspaceId,
+        taskId: policyTaskId,
+        runId: policyRunId,
+        permissionProfileId: policyContext?.permissionProfileId ?? input.permissionProfileId,
+        localOperatorOverrideId: policyContext?.localOperatorOverrideId ?? input.localOperatorOverrideId,
+        surface: policyContext?.surface ?? input.surface ?? "chat",
+        policyContext,
         consentContext: {
+          operatorId: input.operatorId ?? input.authActorId,
           source: "agent",
           reason: `research:${input.mode}`,
         },
@@ -55,7 +99,7 @@ export class ResearchService {
       }
 
       const rawResults = Array.isArray(searchResult.result?.results)
-        ? searchResult.result?.results as Array<Record<string, unknown>>
+        ? (searchResult.result?.results as Array<Record<string, unknown>>)
         : [];
       const sources: ResearchSourceRecord[] = rawResults
         .slice(0, input.mode === "deep" ? 8 : 4)
@@ -95,7 +139,10 @@ export class ResearchService {
     }
   }
 
-  public getRun(sessionId: string, runId: string): {
+  public getRun(
+    sessionId: string,
+    runId: string,
+  ): {
     run: ResearchRunRecord;
     sources: ResearchSourceRecord[];
   } {
@@ -122,11 +169,13 @@ export class ResearchService {
       return "No external sources were available for this query.";
     }
 
-    const sourceLines = sources.map((source, index) => {
-      const title = source.title ?? source.url;
-      const snippet = source.snippet ? `\nSnippet: ${source.snippet}` : "";
-      return `${index + 1}. ${title}\nURL: ${source.url}${snippet}`;
-    }).join("\n\n");
+    const sourceLines = sources
+      .map((source, index) => {
+        const title = source.title ?? source.url;
+        const snippet = source.snippet ? `\nSnippet: ${source.snippet}` : "";
+        return `${index + 1}. ${title}\nURL: ${source.url}${snippet}`;
+      })
+      .join("\n\n");
 
     const response = await this.deps.createChatCompletion({
       providerId: input.providerId,
@@ -134,7 +183,8 @@ export class ResearchService {
       messages: [
         {
           role: "system",
-          content: "You are a concise research analyst. Summarize the findings in plain English and cite by source number.",
+          content:
+            "You are a concise research analyst. Summarize the findings in plain English and cite by source number.",
         },
         {
           role: "user",

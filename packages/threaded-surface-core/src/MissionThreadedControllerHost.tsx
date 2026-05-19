@@ -184,7 +184,7 @@ export interface MissionThreadedEmptyStateProps {
   onOpenCowork: () => void;
   onOpenCode: () => void;
   onOpenTasks: () => void;
-  onOpenApprovals: () => void;
+  onOpenApprovals: (approvalId?: string) => void;
 }
 
 export interface MissionThreadedDropTargetProps {
@@ -419,7 +419,7 @@ export function MissionThreadedControllerHost({
   onOpenCowork?: () => void;
   onOpenCode?: () => void;
   onOpenTasks?: () => void;
-  onOpenApprovals?: () => void;
+  onOpenApprovals?: (approvalId?: string) => void;
   onNavigateSurface?: (
     surface: ChatMode,
     options?: { sessionId?: string | null; turnId?: string | null; artifactId?: string | null },
@@ -631,10 +631,15 @@ export function MissionThreadedControllerHost({
       return null;
     }
     const surfaceMode = currentSessionMode === "code" ? "code" : "cowork";
-    const response = await fetchAgenticRuns({ sessionId: selectedSessionId, surface: surfaceMode, limit: 1 });
+    const response = await fetchAgenticRuns({
+      workspaceId,
+      sessionId: selectedSessionId,
+      surface: surfaceMode,
+      limit: 1,
+    });
     const runId = response.items[0]?.runId;
-    return runId ? fetchAgenticRunTree(runId) : null;
-  }, [currentSessionMode, selectedSessionId]);
+    return runId ? fetchAgenticRunTree(runId, { workspaceId }) : null;
+  }, [currentSessionMode, selectedSessionId, workspaceId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -916,7 +921,15 @@ export function MissionThreadedControllerHost({
         );
         return;
       }
-      const result = await parseChatCommand(sessionId, commandText);
+      const commandPolicyTurn =
+        thread?.turns.find(
+          (turn) => turn.turnId === (selectedTurnId ?? thread.selectedTurnId ?? thread.activeLeafTurnId),
+        ) ?? null;
+      const commandPolicyRunId = commandPolicyTurn?.trace.orchestration?.runId;
+      const result = await parseChatCommand(sessionId, commandText, {
+        surface: executionSurfaceMode,
+        ...(commandPolicyRunId ? { policyRunId: commandPolicyRunId } : {}),
+      });
       if (result.prefs) setPrefs(result.prefs);
       pushLocalNotice(formatCommandResult(result), result.ok ? "success" : "warning");
       if (result.command === "/project" || result.command === "/new") {
@@ -939,6 +952,7 @@ export function MissionThreadedControllerHost({
     },
     [
       loadSidebar,
+      executionSurfaceMode,
       pushLocalNotice,
       setInstalledSkills,
       setMcpServers,
@@ -946,6 +960,8 @@ export function MissionThreadedControllerHost({
       setPrefs,
       setQueuedOutbound,
       setUiError,
+      selectedTurnId,
+      thread,
     ],
   );
 
@@ -1300,11 +1316,15 @@ export function MissionThreadedControllerHost({
       setAgenticControlPending(control.action);
       setAgenticControlStatus(null);
       try {
-        const response = await controlAgenticRun(agenticRunTree.runId, {
-          action: control.action,
-          controlId: `${agenticRunTree.runId}:${control.action}:${Date.now()}`,
-          reason: "Mission Control operator action.",
-        });
+        const response = await controlAgenticRun(
+          agenticRunTree.runId,
+          {
+            action: control.action,
+            controlId: `${agenticRunTree.runId}:${control.action}:${Date.now()}`,
+            reason: "Mission Control operator action.",
+          },
+          { workspaceId },
+        );
         const refreshedTree = await resolveAgenticRunTree();
         setAgenticRunTree(refreshedTree);
         await refreshOrchestrationRun();
@@ -1402,6 +1422,12 @@ export function MissionThreadedControllerHost({
   const selectionSourceSummary = currentRoutePreflight
     ? formatSelectionSourceSummary(currentRoutePreflight.selectionSource)
     : selectionSourceLabel;
+  const visibleDelegationRun =
+    activeDelegationRun?.attachedTurnId &&
+    activeWorkflowTurn &&
+    activeDelegationRun.attachedTurnId !== activeWorkflowTurn.turnId
+      ? null
+      : activeDelegationRun;
   const coworkViewModel = useMemo(
     () =>
       deriveCoworkRunViewModel({
@@ -1412,14 +1438,13 @@ export function MissionThreadedControllerHost({
         orchestrationLoading,
         orchestrationError,
         executionPlan: activeWorkflowTurn?.trace.executionPlan,
-        delegationRun: activeDelegationRun,
+        delegationRun: visibleDelegationRun,
         activeTurn: activeWorkflowTurn,
         selectedTurn,
         workbenchState,
         agenticRunTree,
       }),
     [
-      activeDelegationRun,
       activeWorkflowTurn,
       agenticRunTree,
       coworkItems,
@@ -1429,6 +1454,7 @@ export function MissionThreadedControllerHost({
       orchestrationLoading,
       orchestrationRun,
       selectedTurn,
+      visibleDelegationRun,
       workbenchState,
     ],
   );
@@ -2313,13 +2339,6 @@ export function MissionThreadedControllerHost({
       : isCodeSurface
         ? "Pick a code session or start a new one. Bind a project only when you want execution-heavy work."
         : `Use the queue to reopen a session or start a new ${activeModePreset.label.toLowerCase()} run from the left rail.`;
-  const visibleDelegationRun =
-    activeDelegationRun?.attachedTurnId &&
-    activeWorkflowTurn &&
-    activeDelegationRun.attachedTurnId !== activeWorkflowTurn.turnId
-      ? null
-      : activeDelegationRun;
-
   const sessionRailData: MissionThreadedSessionRailData = {
     mode: messageMode,
     showProjectCreate,
@@ -2399,6 +2418,7 @@ export function MissionThreadedControllerHost({
         pendingUserInput,
         workspaceId: selectedSession.workspaceId ?? workspaceId,
         approvalPending,
+        approvalsCount,
         userInputPending,
         eventStreamStatus,
         onBottomStateChange: setFollowThreadOutput,
@@ -2425,6 +2445,7 @@ export function MissionThreadedControllerHost({
         onDismissDelegationSuggestion: () => setDelegationSuggestion(null),
         onApprovePending: (allowScope) => void handleApprovePending(allowScope),
         onDenyPending: () => void handleDenyPending(),
+        onOpenApprovals,
         onSubmitUserInput: (response) => void handleSubmitUserInput(response),
         onRefreshThread: () => void loadSessionCoreState(selectedSession.sessionId, { includeThread: true }),
         isDragActive,
@@ -2594,6 +2615,7 @@ export function MissionThreadedControllerHost({
         ? {
             kind: "code",
             props: {
+              workspaceId,
               selectedTurn,
               projectName: selectedProject?.name ?? undefined,
               needsProjectBinding: codeModeNeedsProjectBinding,
@@ -2662,6 +2684,7 @@ export function MissionThreadedControllerHost({
               onRevertFile: (relativePath) => void revertWorkbenchFile(relativePath),
               onRevertAll: () => void revertWorkbenchAll(),
               onRunHelperSnippet: (language, source) => void handleRunCodeHelper(language, source),
+              onOpenApprovals,
             },
           }
         : null;

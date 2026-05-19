@@ -268,7 +268,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
     }
     let cancelled = false;
     setDeliverables((current) => ({ ...current, loading: true, error: null }));
-    void fetchTaskDeliverables(selectedTask.taskId)
+    void fetchTaskDeliverables(selectedTask.taskId, selectedTask.workspaceId ?? activeWorkspaceId)
       .then((result) => {
         if (!cancelled) {
           setDeliverables({ loading: false, error: null, data: result.items });
@@ -282,7 +282,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
     return () => {
       cancelled = true;
     };
-  }, [selectedTask]);
+  }, [activeWorkspaceId, selectedTask]);
 
   const refreshCowork = async () => {
     try {
@@ -323,6 +323,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
     }
     try {
       await updateTask(selectedTask.taskId, {
+        workspaceId: selectedTask.workspaceId ?? activeWorkspaceId,
         title: detailDraft.title.trim() || selectedTask.title,
         description: detailDraft.description.trim() || undefined,
         status: detailDraft.status,
@@ -350,6 +351,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
     }
     try {
       await addTaskDeliverable(selectedTask.taskId, {
+        workspaceId: selectedTask.workspaceId ?? activeWorkspaceId,
         title: deliverableDraft.title.trim(),
         deliverableType: deliverableDraft.deliverableType,
         path: deliverableDraft.path.trim() || undefined,
@@ -361,7 +363,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
       });
       setNotice({ tone: "success", message: "Deliverable added." });
       setDeliverableDraft({ title: "", deliverableType: "artifact", path: "", description: "" });
-      const result = await fetchTaskDeliverables(selectedTask.taskId);
+      const result = await fetchTaskDeliverables(selectedTask.taskId, selectedTask.workspaceId ?? activeWorkspaceId);
       setDeliverables({ loading: false, error: null, data: result.items });
     } catch (error) {
       setNotice({ tone: "error", message: getErrorMessage(error) });
@@ -373,7 +375,11 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
       return;
     }
     try {
-      await deleteTask(selectedTask.taskId, { mode: "soft", deletedBy: "operator" });
+      await deleteTask(selectedTask.taskId, {
+        mode: "soft",
+        deletedBy: "operator",
+        workspaceId: selectedTask.workspaceId ?? activeWorkspaceId,
+      });
       recordRouteAction("cowork/tasks", "task.archived", { taskId: selectedTask.taskId });
       setNotice({ tone: "success", message: "Task moved to trash." });
       await refreshCowork();
@@ -387,7 +393,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
       return;
     }
     try {
-      await restoreTask(selectedTask.taskId);
+      await restoreTask(selectedTask.taskId, selectedTask.workspaceId ?? activeWorkspaceId);
       recordRouteAction("cowork/tasks", "task.restored", { taskId: selectedTask.taskId });
       setNotice({ tone: "success", message: "Task restored." });
       await refreshCowork();
@@ -742,6 +748,9 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
 
 function LibraryNativePage(props: NativeRoutePagesProps) {
   const section = routeSectionWithDefault(props.route, "agents");
+  if (section === "curator" || section === "memory") {
+    return renderLibrarySection(section, props);
+  }
 
   return (
     <NativePageFrame
@@ -899,7 +908,7 @@ function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: NativeRout
       <div className="mc-next-settings-grid">
         <NativeCard
           title="Agent profiles"
-          subtitle="Reusable profiles you can actually inspect and maintain in the new Library."
+          subtitle="Reusable profiles you can inspect and maintain in Library."
           density="compact"
           stats={[
             { label: "Profiles", value: String(data?.agents.length ?? 0) },
@@ -1064,7 +1073,7 @@ function LibraryAgentsSection({ activeWorkspaceId, route, navigate }: NativeRout
           </NativeCard>
           <QuickJumpCard
             title="Related routes"
-            subtitle="Keep adjacent Library surfaces within reach while staying inside the new shell."
+            subtitle="Keep adjacent Library surfaces within reach from this route."
             actions={[
               { label: "Skills", route: { area: "library", section: "skills", theme: route.theme } },
               { label: "Capabilities", route: { area: "library", section: "capabilities", theme: route.theme } },
@@ -1228,7 +1237,7 @@ function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps) {
           </NativeCard>
           <NativeCard
             title="Discovery and import posture"
-            subtitle="Sources and recent import history still visible in the calmer Library frame."
+            subtitle="Sources and recent import history stay visible in Library."
           >
             <LibraryMetricGrid
               items={[
@@ -1325,7 +1334,8 @@ function LibraryCapabilitiesSection({ route, navigate }: NativeRoutePagesProps) 
   }, [data?.capabilities, statusFilter]);
 
   const selectedCapability =
-    data?.capabilities.find((item) => item.capabilityId === selectedCapabilityId) ?? filteredCapabilities[0] ?? null;
+    filteredCapabilities.find((item) => item.capabilityId === selectedCapabilityId) ?? filteredCapabilities[0] ?? null;
+  const visibleSelectedCapabilityId = selectedCapability?.capabilityId ?? "";
   const statusCounts = useMemo(() => summarizeCapabilityCounts(data?.capabilities ?? []), [data?.capabilities]);
   const selectedStatus = selectedCapability ? deriveCapabilityStatus(selectedCapability) : null;
 
@@ -1335,7 +1345,7 @@ function LibraryCapabilitiesSection({ route, navigate }: NativeRoutePagesProps) 
       <div className="mc-next-settings-grid">
         <NativeCard
           title="Capability browser"
-          subtitle="Plain-language visibility into the skills, tools, providers, MCP entries, and generated capabilities GoatCitadel can use."
+          subtitle="Plain-language visibility into the skills, tools, providers, MCP entries, and generated capabilities GoatCitadel can inspect or use when callable."
           stats={[
             { label: "Total", value: String(data?.capabilities.length ?? 0) },
             { label: "Callable", value: String(data?.callableCount ?? 0) },
@@ -1364,7 +1374,7 @@ function LibraryCapabilitiesSection({ route, navigate }: NativeRoutePagesProps) 
                 body: `${item.kind} · ${item.category} · ${truncateText(item.summary, 140)}`,
               };
             })}
-            selectedId={selectedCapabilityId}
+            selectedId={visibleSelectedCapabilityId}
             onSelect={setSelectedCapabilityId}
             emptyLabel="No capabilities match this filter."
           />
@@ -2832,6 +2842,8 @@ function labelForLibrarySection(section: NonNullable<AppRoute["section"]>) {
       return "Skills";
     case "capabilities":
       return "Capabilities";
+    case "curator":
+      return "Skill Curator";
     case "memory":
       return "Memory";
     case "knowledge":
@@ -2853,6 +2865,8 @@ function descriptionForLibrarySection(section: NonNullable<AppRoute["section"]>,
       return `Installed reusable skills for ${workspaceName}.`;
     case "capabilities":
       return `Skills, tools, providers, MCP entries, and channel capabilities for ${workspaceName}.`;
+    case "curator":
+      return `Ranked skill status, immunity flags, and archive proposals for ${workspaceName}.`;
     case "memory":
       return `Durable memory posture and recent memory items for ${workspaceName}.`;
     case "knowledge":

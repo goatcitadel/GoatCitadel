@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import type { ToolPolicyConfig } from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
 import { stripHtmlNoiseTags, stripHtmlTags } from "./html-noise.js";
-import { assertHostAllowed } from "./sandbox/network-guard.js";
+import { assertHostAllowed, assertNotPrivateOrReservedHost, fetchAllowlisted } from "./sandbox/network-guard.js";
 import { assertWritePathInJail } from "./sandbox/path-jail.js";
 import { normalizeFirecrawlApiKeyEnvName } from "./safe-env-name.js";
 
@@ -877,8 +877,20 @@ function resolveBrowserSessionId(
   args: Record<string, unknown>,
   executionContext?: BrowserExecutionContext,
 ): string | undefined {
-  return asString(args.browserSessionId) ?? asString(args.sessionId) ?? asString(executionContext?.sessionId);
+  // SECURITY (codex finding #24): The browser session id determines
+  // which in-memory cookie/localStorage/credentials bucket Playwright
+  // will re-inject. Previously caller-supplied `args.browserSessionId`
+  // or `args.sessionId` won out over the execution context, so an
+  // attacker who could influence tool arguments could target ANY
+  // bucket in the global map — including a bucket holding authenticated
+  // state for a different chat session, simply by guessing its id.
+  // We now derive the bucket strictly from the execution context
+  // (chat session) and ignore caller overrides.
+  return asString(executionContext?.sessionId);
 }
+
+// Test-only export for browser-tools.session-id-override.security.test.ts.
+export const __resolveBrowserSessionIdForTests = resolveBrowserSessionId;
 
 function requireBrowserSessionId(
   args: Record<string, unknown>,
@@ -887,7 +899,7 @@ function requireBrowserSessionId(
 ): string {
   const browserSessionId = resolveBrowserSessionId(args, executionContext);
   if (!browserSessionId) {
-    throw new Error(`${toolName} requires browserSessionId or active session context`);
+    throw new Error(`${toolName} requires active session context`);
   }
   return browserSessionId;
 }
@@ -1313,10 +1325,35 @@ async function withBrowserPage(
       }, previousSessionState.sessionStorage);
     }
     const page = await context.newPage();
-    const response = await page.goto(url, {
-      timeout,
-      waitUntil,
-    });
+    let navigationGuardError: Error | undefined;
+    if (page.route) {
+      await page.route("**/*", async (route) => {
+        try {
+          const requestUrl = route.request().url();
+          assertAllowedHttpUrl(requestUrl);
+          assertHostAllowedForConfig(requestUrl, config);
+        } catch (error) {
+          navigationGuardError = error instanceof Error ? error : new Error(String(error));
+          await route.abort("blockedbyclient").catch(() => undefined);
+          return;
+        }
+        await route.continue();
+      });
+    }
+    const response = await page
+      .goto(url, {
+        timeout,
+        waitUntil,
+      })
+      .catch((error: unknown) => {
+        if (navigationGuardError) {
+          throw navigationGuardError;
+        }
+        throw error;
+      });
+    if (navigationGuardError) {
+      throw navigationGuardError;
+    }
 
     const finalUrl = page.url();
     assertAllowedHttpUrl(finalUrl);
@@ -1421,11 +1458,6 @@ async function ensurePlaywrightChromiumInstalled(): Promise<void> {
     });
   }
   return playwrightChromiumInstallPromise;
-}
-
-function composeAbortSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 }
 
 function throwIfBrowserExecutionAborted(signal?: AbortSignal): void {
@@ -1907,20 +1939,24 @@ async function summarizeSearchResultsWithOllama(
     renderedResults,
   ].join("\n");
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    signal: composeAbortSignal(15_000, input.signal),
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      prompt,
-      stream: false,
-      options: {
-        temperature: 0.2,
+  const response = await fetchAllowlisted(endpoint, {
+    allowlist: input.config.sandbox.networkAllowlist,
+    timeoutMs: 15_000,
+    init: {
+      method: "POST",
+      signal: input.signal,
+      headers: {
+        "Content-Type": "application/json",
       },
-    }),
+      body: JSON.stringify({
+        model,
+        prompt,
+        stream: false,
+        options: {
+          temperature: 0.2,
+        },
+      }),
+    },
   });
   if (!response.ok) {
     throw new Error(`Ollama search backend failed (${response.status} ${response.statusText}).`);
@@ -1962,6 +1998,41 @@ function resolveFirecrawlRuntimeConfig(args: Record<string, unknown>): {
   };
 }
 
+function isCanonicalLocalFirecrawlBaseUrl(baseUrl: string): boolean {
+  try {
+    const parsed = new URL(baseUrl);
+    return (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") && parsed.port === "3002";
+  } catch {
+    return false;
+  }
+}
+
+function assertFirecrawlBaseUrlAllowed(baseUrl: string, config: ToolPolicyConfig): void {
+  assertAllowedHttpUrl(baseUrl);
+  if (isCanonicalLocalFirecrawlBaseUrl(baseUrl)) {
+    return;
+  }
+  assertHostAllowedForConfig(baseUrl, config);
+  assertNotPrivateOrReservedHost(baseUrl);
+}
+
+async function fetchFirecrawlEndpoint(
+  firecrawl: { baseUrl: string; timeoutMs: number },
+  path: string,
+  config: ToolPolicyConfig,
+  init: RequestInit,
+): Promise<Response> {
+  const targetUrl = `${firecrawl.baseUrl}${path}`;
+  if (isCanonicalLocalFirecrawlBaseUrl(firecrawl.baseUrl)) {
+    return fetch(targetUrl, init);
+  }
+  return fetchAllowlisted(targetUrl, {
+    allowlist: config.sandbox.networkAllowlist,
+    timeoutMs: firecrawl.timeoutMs,
+    init,
+  });
+}
+
 function trimTrailingSlashes(value: string): string {
   let end = value.length;
   while (end > 0 && value.charCodeAt(end - 1) === 47) {
@@ -1978,11 +2049,10 @@ async function executeBrowserSearchViaFirecrawl(
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const firecrawl = resolveFirecrawlRuntimeConfig(args);
-  assertAllowedHttpUrl(firecrawl.baseUrl);
-  assertHostAllowedForConfig(firecrawl.baseUrl, config);
-  const response = await fetch(`${firecrawl.baseUrl}/v2/search`, {
+  assertFirecrawlBaseUrlAllowed(firecrawl.baseUrl, config);
+  const response = await fetchFirecrawlEndpoint(firecrawl, "/v2/search", config, {
     method: "POST",
-    signal: composeAbortSignal(firecrawl.timeoutMs, signal),
+    signal: signal ?? AbortSignal.timeout(firecrawl.timeoutMs),
     headers: {
       "Content-Type": "application/json",
       ...(firecrawl.apiKey ? { Authorization: `Bearer ${firecrawl.apiKey}` } : {}),
@@ -2081,11 +2151,13 @@ async function executeFirecrawlScrape(
   html: string;
 }> {
   const firecrawl = resolveFirecrawlRuntimeConfig(args);
-  assertAllowedHttpUrl(firecrawl.baseUrl);
-  assertHostAllowedForConfig(firecrawl.baseUrl, config);
-  const response = await fetch(`${firecrawl.baseUrl}/v2/scrape`, {
+  assertFirecrawlBaseUrlAllowed(firecrawl.baseUrl, config);
+  assertAllowedHttpUrl(url);
+  assertHostAllowedForConfig(url, config);
+  assertNotPrivateOrReservedHost(url);
+  const response = await fetchFirecrawlEndpoint(firecrawl, "/v2/scrape", config, {
     method: "POST",
-    signal: composeAbortSignal(firecrawl.timeoutMs, signal),
+    signal: signal ?? AbortSignal.timeout(firecrawl.timeoutMs),
     headers: {
       "Content-Type": "application/json",
       ...(firecrawl.apiKey ? { Authorization: `Bearer ${firecrawl.apiKey}` } : {}),
@@ -2104,6 +2176,9 @@ async function executeFirecrawlScrape(
   const html = asString(data.html) ?? "";
   const markdown = asString(data.markdown) ?? asString(data.content) ?? "";
   const finalUrl = asString(metadata.sourceURL) ?? asString(metadata.sourceUrl) ?? asString(data.url) ?? url;
+  assertAllowedHttpUrl(finalUrl);
+  assertHostAllowedForConfig(finalUrl, config);
+  assertNotPrivateOrReservedHost(finalUrl);
   return {
     finalUrl,
     title: asString(metadata.title) ?? asString(data.title) ?? extractHtmlTitle(html) ?? finalUrl,
@@ -2201,13 +2276,16 @@ async function fetchTextAllowlisted(
   assertAllowedHttpUrl(url);
   assertHostAllowedForConfig(url, config);
 
-  const response = await fetch(url, {
-    method: "GET",
-    redirect: "follow",
-    signal: composeAbortSignal(20_000, signal),
-    headers: {
-      "User-Agent": "GoatCitadel/1.1.1 (+https://localhost)",
-      Accept: "text/html,application/xhtml+xml",
+  const response = await fetchAllowlisted(url, {
+    allowlist: config.sandbox.networkAllowlist,
+    timeoutMs: 20_000,
+    init: {
+      method: "GET",
+      signal,
+      headers: {
+        "User-Agent": "GoatCitadel/1.0.0 (+https://localhost)",
+        Accept: "text/html,application/xhtml+xml",
+      },
     },
   });
 
@@ -2531,6 +2609,7 @@ type PlaywrightContext = {
 };
 
 type PlaywrightPage = {
+  route?: (url: string | RegExp, handler: (route: PlaywrightRoute) => Promise<void> | void) => Promise<void>;
   goto: (
     url: string,
     options: { timeout: number; waitUntil: "load" | "domcontentloaded" | "networkidle" },
@@ -2557,6 +2636,14 @@ type PlaywrightPage = {
   accessibility?: {
     snapshot: (options?: { interestingOnly?: boolean }) => Promise<AccessibilitySnapshotNode | null>;
   };
+};
+
+type PlaywrightRoute = {
+  request: () => {
+    url: () => string;
+  };
+  continue: () => Promise<void>;
+  abort: (errorCode?: string) => Promise<void>;
 };
 
 interface AccessibilitySnapshotNode {

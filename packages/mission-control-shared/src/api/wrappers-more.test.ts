@@ -121,7 +121,25 @@ describe("additional shared API wrappers", () => {
       },
     );
     await expectCall(capabilities.fetchCodeModeRuns(0), "/api/v1/code-mode/runs?limit=1");
+    await expectCall(
+      capabilities.fetchCodeModeRuns({
+        limit: 5,
+        workspaceId: "workspace/1",
+        sessionId: "session/1",
+        turnId: "turn/1",
+        status: "failed",
+      }),
+      "/api/v1/code-mode/runs?limit=5&workspaceId=workspace%2F1&sessionId=session%2F1&turnId=turn%2F1&status=failed",
+    );
     await expectCall(capabilities.fetchCodeModeRun("run/1"), "/api/v1/code-mode/runs/run%2F1");
+    await expectCall(
+      capabilities.fetchCodeModeRun("run/1", {
+        sessionId: "session/1",
+        turnId: "turn/1",
+        workspaceId: "workspace/1",
+      }),
+      "/api/v1/code-mode/runs/run%2F1?sessionId=session%2F1&turnId=turn%2F1&workspaceId=workspace%2F1",
+    );
     await expectCall(capabilities.createCodeModeRun({ prompt: "ship it" } as never), "/api/v1/code-mode/runs", {
       method: "POST",
     });
@@ -222,6 +240,7 @@ describe("additional shared API wrappers", () => {
     );
     await expectCall(
       agentic.fetchAgenticRuns({
+        workspaceId: "w",
         surface: "cowork" as never,
         sessionId: "s",
         boardId: "b",
@@ -230,12 +249,15 @@ describe("additional shared API wrappers", () => {
         cursor: "c",
         limit: 9,
       }),
-      "/api/v1/agentic/runs?surface=cowork&sessionId=s&boardId=b&parentRunId=p&status=running&cursor=c&limit=9",
+      "/api/v1/agentic/runs?workspaceId=w&surface=cowork&sessionId=s&boardId=b&parentRunId=p&status=running&cursor=c&limit=9",
     );
-    await expectCall(agentic.fetchAgenticRunTree("run/1"), "/api/v1/agentic/runs/run%2F1/tree");
     await expectCall(
-      agentic.controlAgenticRun("run/1", { action: "cancel" } as never),
-      "/api/v1/agentic/runs/run%2F1/control",
+      agentic.fetchAgenticRunTree("run/1", { workspaceId: "w" }),
+      "/api/v1/agentic/runs/run%2F1/tree?workspaceId=w",
+    );
+    await expectCall(
+      agentic.controlAgenticRun("run/1", { action: "cancel" } as never, { workspaceId: "w" }),
+      "/api/v1/agentic/runs/run%2F1/control?workspaceId=w",
       {
         method: "POST",
       },

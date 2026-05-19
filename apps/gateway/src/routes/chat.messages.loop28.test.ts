@@ -116,6 +116,100 @@ describe("chat message route-decision tails", () => {
     expect(editChatTurn).toHaveBeenCalledWith("sess-1", "turn-2", expect.objectContaining({ content: "edited" }));
   });
 
+  it("preserves permission profile, override, and policy linkage through turn entry routes", async () => {
+    const governance = {
+      permissionProfileId: "profile-release",
+      localOperatorOverrideId: "override-release",
+      policyRunId: "run-release",
+      policyTaskId: "task-release",
+    };
+    const sendDecision = routeDecision({ action: "send", fingerprint: "send-governed" });
+    const retryDecision = routeDecision({ action: "retry", turnId: "turn-1", fingerprint: "retry-governed" });
+    const editDecision = routeDecision({ action: "edit", turnId: "turn-2", fingerprint: "edit-governed" });
+    const routePreflight = vi.fn(async (_sessionId: string, input: { action: string; turnId?: string }) => {
+      if (input.action === "retry") {
+        return { decision: retryDecision };
+      }
+      if (input.action === "edit") {
+        return { decision: editDecision };
+      }
+      return { decision: sendDecision };
+    });
+    const agentSendChatMessage = vi.fn(async () => ({ turnId: "turn-send", status: "queued" }));
+    const agentSendChatMessageStream = vi.fn(async function* () {
+      yield { type: "status", message: "queued" };
+    });
+    const retryChatTurn = vi.fn(async () => ({ turnId: "turn-retry", status: "queued" }));
+    const editChatTurn = vi.fn(async () => ({ turnId: "turn-edit", status: "queued" }));
+    app = buildApp({
+      routePreflight,
+      agentSendChatMessage,
+      agentSendChatMessageStream,
+      retryChatTurn,
+      editChatTurn,
+    });
+
+    const send = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send",
+      payload: {
+        content: "send governed",
+        providerId: "openai",
+        model: "gpt-5.4",
+        routeDecision: sendDecision,
+        ...governance,
+      },
+    });
+    expect(send.statusCode).toBe(200);
+
+    const stream = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/agent-send/stream",
+      payload: {
+        content: "stream governed",
+        providerId: "openai",
+        model: "gpt-5.4",
+        routeDecision: sendDecision,
+        ...governance,
+      },
+    });
+    expect(stream.statusCode).toBe(200);
+
+    const retry = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/turns/turn-1/retry",
+      payload: {
+        providerId: "openai",
+        model: "gpt-5.4",
+        routeDecision: retryDecision,
+        ...governance,
+      },
+    });
+    expect(retry.statusCode).toBe(200);
+
+    const edit = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/turns/turn-2/edit",
+      payload: {
+        content: "edit governed",
+        providerId: "openai",
+        model: "gpt-5.4",
+        routeDecision: editDecision,
+        ...governance,
+      },
+    });
+    expect(edit.statusCode).toBe(200);
+
+    expect(agentSendChatMessage).toHaveBeenCalledWith("sess-1", expect.objectContaining(governance));
+    expect(agentSendChatMessageStream).toHaveBeenCalledWith(
+      "sess-1",
+      expect.objectContaining(governance),
+      expect.anything(),
+    );
+    expect(retryChatTurn).toHaveBeenCalledWith("sess-1", "turn-1", expect.objectContaining(governance));
+    expect(editChatTurn).toHaveBeenCalledWith("sess-1", "turn-2", expect.objectContaining(governance));
+  });
+
   it("rejects action, turn, invalid expiry, and route-preflight failures before mutating", async () => {
     const routePreflight = vi.fn(async () => {
       throw new Error("preflight unavailable");

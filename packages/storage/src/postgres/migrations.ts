@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Postgres migration ledger keeps every versioned migration in one append-only file so ordering, dependencies, and rollback context stay traceable. */
 import { buildPostgresRuntimeSchemaSql } from "./runtime-schema.js";
 
 export interface PostgresMigration {
@@ -968,6 +969,232 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     sql: `
       ALTER TABLE approvals
         ADD COLUMN IF NOT EXISTS shell_explanations_json TEXT;
+    `,
+  },
+  {
+    version: 38,
+    name: "permission_profiles_and_override_context",
+    sql: `
+      CREATE TABLE IF NOT EXISTS permission_profiles (
+        profile_id TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        description TEXT,
+        builtin INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        scope_ref TEXT,
+        approval_mode TEXT NOT NULL,
+        legacy_tool_profile TEXT,
+        tool_patterns_json TEXT NOT NULL,
+        allow_json TEXT NOT NULL,
+        deny_json TEXT NOT NULL,
+        read_access_mode TEXT,
+        default_for_surfaces_json TEXT NOT NULL DEFAULT '[]',
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_permission_profiles_scope_status
+        ON permission_profiles(scope, scope_ref, status, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS permission_profile_activations (
+        activation_id TEXT PRIMARY KEY,
+        profile_id TEXT NOT NULL,
+        operator_id TEXT,
+        workspace_id TEXT,
+        session_id TEXT,
+        surface TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_permission_profile_activations_lookup
+        ON permission_profile_activations(active, operator_id, workspace_id, session_id, surface, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS local_operator_overrides (
+        override_id TEXT PRIMARY KEY,
+        operator_id TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        scope_ref TEXT,
+        reason TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        revoked_at TEXT,
+        revoked_by TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_local_operator_overrides_active
+        ON local_operator_overrides(status, operator_id, scope, scope_ref, expires_at DESC);
+
+      ALTER TABLE tool_access_decisions
+        ADD COLUMN IF NOT EXISTS workspace_id TEXT,
+        ADD COLUMN IF NOT EXISTS permission_profile_id TEXT,
+        ADD COLUMN IF NOT EXISTS local_operator_override_id TEXT;
+
+      ALTER TABLE code_mode_runs
+        ADD COLUMN IF NOT EXISTS origin_surface TEXT,
+        ADD COLUMN IF NOT EXISTS workspace_id TEXT,
+        ADD COLUMN IF NOT EXISTS operator_id TEXT,
+        ADD COLUMN IF NOT EXISTS permission_profile_id TEXT,
+        ADD COLUMN IF NOT EXISTS permission_profile_label TEXT,
+        ADD COLUMN IF NOT EXISTS local_operator_override_id TEXT,
+        ADD COLUMN IF NOT EXISTS code_mode_input_hash TEXT;
+
+      ALTER TABLE local_operator_overrides
+        ADD COLUMN IF NOT EXISTS revoked_by TEXT;
+    `,
+  },
+  {
+    version: 39,
+    name: "permission_actor_and_code_mode_run_ledger_repairs",
+    sql: `
+      ALTER TABLE tool_grants
+        ADD COLUMN IF NOT EXISTS revoked_by TEXT;
+
+      ALTER TABLE code_mode_runs
+        ADD COLUMN IF NOT EXISTS origin_surface TEXT,
+        ADD COLUMN IF NOT EXISTS workspace_id TEXT,
+        ADD COLUMN IF NOT EXISTS operator_id TEXT,
+        ADD COLUMN IF NOT EXISTS permission_profile_id TEXT,
+        ADD COLUMN IF NOT EXISTS permission_profile_label TEXT,
+        ADD COLUMN IF NOT EXISTS local_operator_override_id TEXT,
+        ADD COLUMN IF NOT EXISTS code_mode_input_hash TEXT;
+    `,
+  },
+  {
+    version: 40,
+    name: "tool_access_decision_run_lineage",
+    sql: `
+      ALTER TABLE IF EXISTS tool_access_decisions
+        ADD COLUMN IF NOT EXISTS run_id TEXT;
+
+      DO $$
+      BEGIN
+        IF to_regclass('public.tool_access_decisions') IS NOT NULL THEN
+          CREATE INDEX IF NOT EXISTS idx_tool_access_decisions_run_time
+            ON tool_access_decisions(run_id, timestamp DESC);
+        END IF;
+      END $$;
+    `,
+  },
+  {
+    version: 41,
+    name: "tool_access_decision_countable_usage",
+    sql: `
+      ALTER TABLE IF EXISTS tool_access_decisions
+        ADD COLUMN IF NOT EXISTS counts_toward_limits INTEGER NOT NULL DEFAULT 1;
+    `,
+  },
+  {
+    version: 42,
+    name: "tool_invocation_permission_evidence",
+    sql: `
+      ALTER TABLE IF EXISTS tool_invocations
+        ADD COLUMN IF NOT EXISTS run_id TEXT,
+        ADD COLUMN IF NOT EXISTS matched_grant_id TEXT,
+        ADD COLUMN IF NOT EXISTS permission_profile_id TEXT,
+        ADD COLUMN IF NOT EXISTS local_operator_override_id TEXT,
+        ADD COLUMN IF NOT EXISTS approval_mode TEXT,
+        ADD COLUMN IF NOT EXISTS reason_codes_json TEXT;
+
+      ALTER TABLE IF EXISTS policy_blocks
+        ADD COLUMN IF NOT EXISTS task_id TEXT,
+        ADD COLUMN IF NOT EXISTS run_id TEXT,
+        ADD COLUMN IF NOT EXISTS matched_grant_id TEXT,
+        ADD COLUMN IF NOT EXISTS permission_profile_id TEXT,
+        ADD COLUMN IF NOT EXISTS local_operator_override_id TEXT,
+        ADD COLUMN IF NOT EXISTS approval_mode TEXT,
+        ADD COLUMN IF NOT EXISTS reason_codes_json TEXT;
+    `,
+  },
+  {
+    version: 43,
+    name: "code_mode_structured_error_evidence",
+    sql: `
+      ALTER TABLE IF EXISTS code_mode_runs
+        ADD COLUMN IF NOT EXISTS error_code TEXT,
+        ADD COLUMN IF NOT EXISTS error_details_json TEXT;
+    `,
+  },
+  {
+    version: 44,
+    name: "code_mode_run_sandbox_schema_parity",
+    sql: `
+      CREATE TABLE IF NOT EXISTS code_mode_runs (
+        run_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        language TEXT NOT NULL,
+        origin_surface TEXT,
+        workspace_id TEXT,
+        operator_id TEXT,
+        permission_profile_id TEXT,
+        permission_profile_label TEXT,
+        local_operator_override_id TEXT,
+        requested_output_intent TEXT,
+        save_candidate_on_success INTEGER NOT NULL DEFAULT 0,
+        capability_snapshot_id TEXT NOT NULL,
+        code_mode_input_hash TEXT,
+        wrapper_manifest_hash TEXT NOT NULL,
+        policy_snapshot_hash TEXT NOT NULL,
+        code_hash TEXT NOT NULL,
+        approval_id TEXT,
+        session_id TEXT,
+        turn_id TEXT,
+        sandbox_json TEXT,
+        code_artifact_json TEXT NOT NULL,
+        wrapper_manifest_artifact_json TEXT NOT NULL,
+        policy_snapshot_artifact_json TEXT NOT NULL,
+        stdout_artifact_json TEXT,
+        stderr_artifact_json TEXT,
+        stdout_preview TEXT,
+        stderr_preview TEXT,
+        stdout_truncated INTEGER NOT NULL DEFAULT 0,
+        stderr_truncated INTEGER NOT NULL DEFAULT 0,
+        result_json TEXT,
+        error_text TEXT,
+        error_code TEXT,
+        error_details_json TEXT,
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT
+      );
+
+      ALTER TABLE IF EXISTS code_mode_runs
+        ADD COLUMN IF NOT EXISTS origin_surface TEXT,
+        ADD COLUMN IF NOT EXISTS workspace_id TEXT,
+        ADD COLUMN IF NOT EXISTS operator_id TEXT,
+        ADD COLUMN IF NOT EXISTS permission_profile_id TEXT,
+        ADD COLUMN IF NOT EXISTS permission_profile_label TEXT,
+        ADD COLUMN IF NOT EXISTS local_operator_override_id TEXT,
+        ADD COLUMN IF NOT EXISTS code_mode_input_hash TEXT,
+        ADD COLUMN IF NOT EXISTS sandbox_json TEXT,
+        ADD COLUMN IF NOT EXISTS error_code TEXT,
+        ADD COLUMN IF NOT EXISTS error_details_json TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_code_mode_runs_status_created
+        ON code_mode_runs(status, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_code_mode_runs_session_created
+        ON code_mode_runs(session_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_code_mode_runs_approval
+        ON code_mode_runs(approval_id, created_at DESC);
+    `,
+  },
+  {
+    version: 45,
+    name: "orchestration_run_policy_context",
+    sql: `
+      ALTER TABLE IF EXISTS orchestration_runs
+        ADD COLUMN IF NOT EXISTS operator_id TEXT,
+        ADD COLUMN IF NOT EXISTS auth_actor_id TEXT,
+        ADD COLUMN IF NOT EXISTS auth_actor_source TEXT,
+        ADD COLUMN IF NOT EXISTS permission_profile_id TEXT,
+        ADD COLUMN IF NOT EXISTS local_operator_override_id TEXT;
     `,
   },
 ];

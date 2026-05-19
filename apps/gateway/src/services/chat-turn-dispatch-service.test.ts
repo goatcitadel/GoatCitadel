@@ -106,6 +106,16 @@ describe("chat turn dispatch durable ownership", () => {
     const response = await sendPreparedIntegrationChatTurn(
       host,
       "session-1",
+      {
+        mode: "chat",
+        operatorId: "operator-1",
+        authActorId: "actor-1",
+        authActorSource: "token",
+        policyRunId: "run-1",
+        policyTaskId: "task-1",
+        permissionProfileId: "profile-safe",
+        localOperatorOverrideId: "override-1",
+      },
       createPrepared("chat"),
       createBinding(),
       "chat_thread_turn_appended",
@@ -125,6 +135,15 @@ describe("chat turn dispatch durable ownership", () => {
         target: "target-1",
         sessionId: "session-1",
         message: "hello",
+        agentId: "operator-1",
+        operatorId: "operator-1",
+        authActorId: "actor-1",
+        authActorSource: "token",
+        runId: "run-1",
+        taskId: "task-1",
+        permissionProfileId: "profile-safe",
+        localOperatorOverrideId: "override-1",
+        surface: "chat",
       }),
     );
     expect(host.storage.chatTurnTraces.patch).toHaveBeenCalledWith(
@@ -148,6 +167,7 @@ describe("chat turn dispatch durable ownership", () => {
       sendPreparedIntegrationChatTurn(
         host,
         "session-1",
+        {},
         createPrepared("chat"),
         createBinding(),
         "chat_thread_turn_appended",
@@ -169,6 +189,7 @@ describe("chat turn dispatch durable ownership", () => {
     for await (const chunk of streamPreparedIntegrationChatTurn(
       host,
       "session-1",
+      {},
       createPrepared("chat"),
       createBinding(),
       "chat_thread_turn_appended",

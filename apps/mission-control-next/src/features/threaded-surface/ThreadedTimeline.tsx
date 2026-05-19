@@ -440,9 +440,7 @@ function ThreadDelegationSummary({
                 </li>
               ))}
             </ol>
-            {delegationRun.stitchedOutput ? (
-              <p>Final synthesized answer is shown in the main assistant message.</p>
-            ) : null}
+            {delegationRun.stitchedOutput ? <p>{describeDelegationStitchedOutput(delegationRun.status)}</p> : null}
           </div>
         </details>
       </section>
@@ -500,6 +498,20 @@ function ThreadDelegationSummary({
       </div>
     </section>
   );
+}
+
+function describeDelegationStitchedOutput(status?: string): string {
+  switch (status) {
+    case "completed":
+      return "Final synthesized answer is shown in the main assistant message.";
+    case "partial":
+      return "Partial stitched output is available; review the run details before treating it as final.";
+    case "failed":
+      return "Failure output is available in the run details.";
+    case "running":
+    default:
+      return "Delegated work is still running; final synthesis is not ready yet.";
+  }
 }
 
 export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
@@ -584,6 +596,7 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
       <ChatPendingApprovalPanel
         pendingApproval={pendingApproval}
         workspaceId={props.workspaceId}
+        approvalsHref={`/ops/approvals?approvalId=${encodeURIComponent(pendingApproval.approvalId)}`}
         pending={props.approvalPending}
         onApprove={props.onApprovePending}
         onDeny={props.onDenyPending}

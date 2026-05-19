@@ -68,6 +68,34 @@ describe("assertDeploymentProfileStartupSafety", () => {
     expect(() => assertDeploymentProfileStartupSafety(config, new Set(["https://citadel.example.com"]))).not.toThrow();
   });
 
+  it("rejects remote_hardened startup when persisted tool posture bypasses approvals", () => {
+    process.env.GOATCITADEL_ALLOWED_ORIGINS = "https://citadel.example.com";
+    const config = {
+      assistant: {
+        deploymentProfile: "remote_hardened",
+        toolApprovalMode: "bypass",
+        defaultToolProfile: "danger",
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+        },
+      },
+      toolPolicy: {
+        tools: {
+          approvalMode: "bypass",
+          profile: "danger",
+        },
+        sandbox: {
+          networkAllowlist: ["api.openai.com"],
+        },
+      },
+    } as unknown as GatewayRuntimeConfig;
+
+    expect(() => assertDeploymentProfileStartupSafety(config, new Set(["https://citadel.example.com"]))).toThrow(
+      /remote_hardened disables approval bypass/,
+    );
+  });
+
   it("rejects auth-none exposure outside local loopback defaults", () => {
     process.env.GOATCITADEL_ALLOWED_ORIGINS = "https://citadel.example.com";
     process.env.GOATCITADEL_ALLOW_TAILNET_DEV_ORIGINS = "true";

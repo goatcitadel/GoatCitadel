@@ -21,8 +21,11 @@ import type {
   ChatSessionPrefsPatch,
   ChatSessionRecord,
   ChatToolRunRecord,
+  ChatStreamUsageRecord,
   ChatTurnTraceRecord,
+  ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import type { TurnRuntime } from "@goatcitadel/orchestration";
 import type {
@@ -125,6 +128,18 @@ export interface ChatTurnStreamHost
     input: ChatSendMessageRequest,
     options?: { abortSignal?: AbortSignal },
   ): Promise<ChatSendMessageResponse>;
+  resolveToolPolicyContext?(input: {
+    operatorId?: string;
+    authActorId?: string;
+    authActorSource?: ToolPolicyActorContext["authActorSource"];
+    workspaceId?: string;
+    sessionId?: string;
+    taskId?: string;
+    runId?: string;
+    surface?: ToolPolicyActorContext["surface"];
+    permissionProfileId?: string;
+    localOperatorOverrideId?: string;
+  }): ToolPolicyActorContext;
   updateActiveLeafOrThrow(sessionId: string, previousActiveTurnId: string | undefined, nextActiveTurnId: string): void;
   collectCapabilityUpgradeSuggestions(input: {
     sessionId: string;
@@ -374,6 +389,11 @@ export async function executePreparedModeOrchestration(
           stepIndex,
           runId,
           signal,
+          operatorId: input.operatorId,
+          authActorId: input.authActorId,
+          authActorSource: input.authActorSource,
+          permissionProfileId: input.permissionProfileId,
+          localOperatorOverrideId: input.localOperatorOverrideId,
         }),
       onStepResult: async (step, allSteps) => {
         currentSteps = [...allSteps];
@@ -386,8 +406,11 @@ export async function executePreparedModeOrchestration(
         host.recordDevDiagnostic({
           level: step.status === "failed" ? "warn" : "info",
           category: "orchestration",
-          event: "orchestration.step.complete",
-          message: `Completed orchestration step ${step.role}`,
+          event: step.status === "running" ? "orchestration.step.waiting" : "orchestration.step.complete",
+          message:
+            step.status === "running"
+              ? `Orchestration step ${step.role} is waiting`
+              : `Completed orchestration step ${step.role}`,
           sessionId: prepared.session.sessionId,
           turnId: prepared.turnId,
           runId,
@@ -398,7 +421,13 @@ export async function executePreparedModeOrchestration(
           durationMs: step.durationMs,
           runtimeKind: "delegation.lifecycle",
           runtimeStatus:
-            step.status === "failed" && activeToolWork ? "degraded" : step.status === "failed" ? "failed" : "completed",
+            step.status === "running"
+              ? "running"
+              : step.status === "failed" && activeToolWork
+                ? "degraded"
+                : step.status === "failed"
+                  ? "failed"
+                  : "completed",
           runtimeError: step.error
             ? {
                 message: step.error,
@@ -409,6 +438,7 @@ export async function executePreparedModeOrchestration(
             stepId: step.stepId,
             role: step.role,
             status: step.status,
+            waitStatus: step.waitStatus,
             index: step.index,
             activeToolWork,
             activeToolRunCount: childToolRuns.filter(
@@ -429,8 +459,8 @@ export async function executePreparedModeOrchestration(
           childSessionId: step.childSessionId,
           childTurnId: step.childTurnId,
           citations: step.citations,
-          finishedAt: step.finishedAt,
-          durationMs: step.durationMs,
+          ...(step.finishedAt ? { finishedAt: step.finishedAt } : {}),
+          ...(typeof step.durationMs === "number" ? { durationMs: step.durationMs } : {}),
         });
         host.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
           steps: mergeExecutionPlanStepStatuses(
@@ -461,6 +491,7 @@ export async function executePreparedModeOrchestration(
     integritySignals: result.integritySignals,
     finalized: true,
   });
+  const orchestrationFinishedAt = summary.status === "running" ? undefined : new Date().toISOString();
   host.storage.chatDelegationRuns.patch(runId, {
     status: summary.status,
     visibility: summary.visibility,
@@ -475,23 +506,42 @@ export async function executePreparedModeOrchestration(
         result.finalStep?.providerId ?? result.stepResults.at(-1)?.providerId ?? runTrace.effectiveProviderId,
       effectiveModel: result.finalStep?.model ?? result.stepResults.at(-1)?.model ?? runTrace.effectiveModel,
     },
-    finishedAt: new Date().toISOString(),
+    ...(orchestrationFinishedAt ? { finishedAt: orchestrationFinishedAt } : {}),
   });
   host.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
-    status: summary.status === "failed" ? "failed" : summary.status === "partial" ? "partial" : "completed",
+    status:
+      summary.status === "running"
+        ? "running"
+        : summary.status === "failed"
+          ? "failed"
+          : summary.status === "partial"
+            ? "partial"
+            : "completed",
     summary: result.finalSummary,
-    finishedAt: new Date().toISOString(),
+    ...(orchestrationFinishedAt ? { finishedAt: orchestrationFinishedAt } : {}),
     steps: mergeExecutionPlanStepStatuses(
       host.storage.chatExecutionPlans.get(persistedExecutionPlan.planId).steps,
       result.stepResults,
     ),
   });
   await onProgress?.(summary);
+  const lifecycleEvent =
+    summary.status === "running"
+      ? "orchestration.run.waiting"
+      : summary.status === "failed"
+        ? "orchestration.run.failed"
+        : "orchestration.run.complete";
+  const lifecycleMessage =
+    summary.status === "running"
+      ? "Chat orchestration run is waiting."
+      : summary.status === "failed"
+        ? "Chat orchestration run failed."
+        : "Completed chat orchestration run.";
   host.recordDevDiagnostic({
     level: summary.status === "failed" ? "warn" : "info",
     category: "orchestration",
-    event: "orchestration.run.complete",
-    message: "Completed chat orchestration run",
+    event: lifecycleEvent,
+    message: lifecycleMessage,
     sessionId: prepared.session.sessionId,
     turnId: prepared.turnId,
     runId,
@@ -499,7 +549,7 @@ export async function executePreparedModeOrchestration(
     providerId: result.finalStep?.providerId ?? result.stepResults.at(-1)?.providerId,
     modelId: result.finalStep?.model ?? result.stepResults.at(-1)?.model,
     runtimeKind: "run.lifecycle",
-    runtimeStatus: summary.status === "failed" ? "failed" : "completed",
+    runtimeStatus: summary.status === "running" ? "running" : summary.status === "failed" ? "failed" : "completed",
     context: {
       status: summary.status,
       workflowTemplate: summary.workflowTemplate,
@@ -523,10 +573,16 @@ export async function executeDelegatedPlanStep(
     stepIndex: number;
     runId: string;
     signal?: AbortSignal;
+    operatorId?: string;
+    authActorId?: string;
+    authActorSource?: ChatSendMessageRequest["authActorSource"];
+    permissionProfileId?: string;
+    localOperatorOverrideId?: string;
   },
 ): Promise<OrchestrationStepExecutionResult> {
   const startedAt = new Date().toISOString();
   const delegatedRole = input.step.delegatedRole ?? input.step.role;
+  const orchestrationTaskId = `chat-orchestration:${prepared.turnId}`;
   const parentProjectId = host.storage.chatSessionProjects.get(prepared.session.sessionId)?.projectId;
   const childSession = host.createChatSession({
     workspaceId: prepared.workspaceId,
@@ -592,7 +648,7 @@ export async function executeDelegatedPlanStep(
     sessionId: prepared.session.sessionId,
     turnId: prepared.turnId,
     runId: input.runId,
-    taskId: `chat-orchestration:${prepared.turnId}`,
+    taskId: orchestrationTaskId,
     stepId: input.step.stepId,
     providerId: input.step.providerId ?? prepared.prefs.providerId,
     modelId: input.step.model ?? prepared.prefs.model,
@@ -612,6 +668,18 @@ export async function executeDelegatedPlanStep(
     if (input.signal?.aborted) {
       throw new ChatTurnCancelledError(prepared.turnId);
     }
+    const inheritedPolicyContext = host.resolveToolPolicyContext?.({
+      operatorId: input.operatorId,
+      authActorId: input.authActorId,
+      authActorSource: input.authActorSource,
+      workspaceId: prepared.workspaceId,
+      sessionId: prepared.session.sessionId,
+      taskId: orchestrationTaskId,
+      runId: input.runId,
+      surface: input.task.mode,
+      permissionProfileId: input.permissionProfileId,
+      localOperatorOverrideId: input.localOperatorOverrideId,
+    });
     delegatedDispatchStarted = true;
     const response = await host.agentSendChatMessage(
       childSession.sessionId,
@@ -628,19 +696,42 @@ export async function executeDelegatedPlanStep(
         retrievalMode: prepared.autonomy.retrievalMode,
         toolAutonomy: prepared.effectiveToolAutonomy,
         normalizationProfile: prepared.normalized.normalizationProfile,
+        operatorId: input.operatorId,
+        authActorId: input.authActorId,
+        authActorSource: input.authActorSource,
+        permissionProfileId: inheritedPolicyContext?.permissionProfileId,
+        localOperatorOverrideId: inheritedPolicyContext?.localOperatorOverrideId,
+        policyRunId: input.runId,
+        policyTaskId: orchestrationTaskId,
+        parentDelegationStepId: `${input.runId}:${input.step.stepId}`,
       }),
+      input.signal ? { abortSignal: input.signal } : undefined,
     );
     delegatedResponseReceived = true;
     if (input.signal?.aborted) {
       throw new ChatTurnCancelledError(prepared.turnId);
     }
 
+    const traceStatus = response.trace?.status;
+    const waitStatus =
+      traceStatus === "waiting_for_approval" ||
+      traceStatus === "waiting_for_user_input" ||
+      traceStatus === "waiting_for_tool"
+        ? traceStatus
+        : undefined;
+    const waiting = Boolean(waitStatus);
     const output =
       response.assistantMessage?.content?.trim() ||
       response.trace?.failure?.message?.trim() ||
-      "(delegate returned no output)";
-    const finishedAt = new Date().toISOString();
-    const failed = response.trace?.status === "failed" || response.trace?.status === "cancelled";
+      (traceStatus === "waiting_for_approval"
+        ? response.trace?.pendingApprovalSummary?.reason?.trim() || "Delegate is waiting for approval."
+        : traceStatus === "waiting_for_user_input"
+          ? response.trace?.pendingUserInput?.question?.trim() || "Delegate is waiting for user input."
+          : traceStatus === "waiting_for_tool"
+            ? "Delegate is still waiting on a tool result."
+            : "(delegate returned no output)");
+    const finishedAt = waiting ? undefined : new Date().toISOString();
+    const failed = traceStatus === "failed" || traceStatus === "cancelled";
     const failureGuidance =
       failed && response.trace?.failure?.message
         ? buildDelegationFailureGuidance(response.trace.failure.message, delegatedRole)
@@ -657,9 +748,14 @@ export async function executeDelegatedPlanStep(
       providerId: response.trace?.routing?.effectiveProviderId ?? input.step.providerId ?? prepared.prefs.providerId,
       model: response.trace?.model ?? input.step.model ?? prepared.prefs.model,
       startedAt,
-      finishedAt,
-      durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
-      status: failed ? "failed" : "completed",
+      ...(finishedAt
+        ? {
+            finishedAt,
+            durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
+          }
+        : {}),
+      status: waiting ? "running" : failed ? "failed" : "completed",
+      waitStatus,
       output,
       summary: truncateSummaryLine(output, 180),
       error: failed ? (response.trace?.failure?.message ?? output) : undefined,
@@ -674,16 +770,21 @@ export async function executeDelegatedPlanStep(
   } catch (error) {
     const finishedAt = new Date().toISOString();
     const message = error instanceof Error ? error.message : String(error);
+    const cancelled = Boolean(input.signal?.aborted) || isChatTurnCancelledError(error);
     const timeoutWithoutProviderResult = /\btimeout|timed out|deadline\b/i.test(message);
     host.recordDevDiagnostic({
-      level: "warn",
+      level: cancelled ? "info" : "warn",
       category: "orchestration",
-      event: timeoutWithoutProviderResult
-        ? "orchestration.step.timeout_without_provider_result"
-        : "orchestration.step.failed_before_result",
-      message: timeoutWithoutProviderResult
-        ? "Delegated orchestration step timed out before any provider result was returned"
-        : `Delegated orchestration step ${delegatedRole} failed before returning a result`,
+      event: cancelled
+        ? "orchestration.step.cancelled_before_result"
+        : timeoutWithoutProviderResult
+          ? "orchestration.step.timeout_without_provider_result"
+          : "orchestration.step.failed_before_result",
+      message: cancelled
+        ? `Delegated orchestration step ${delegatedRole} was cancelled before returning a result`
+        : timeoutWithoutProviderResult
+          ? "Delegated orchestration step timed out before any provider result was returned"
+          : `Delegated orchestration step ${delegatedRole} failed before returning a result`,
       sessionId: prepared.session.sessionId,
       turnId: prepared.turnId,
       runId: input.runId,
@@ -693,11 +794,11 @@ export async function executeDelegatedPlanStep(
       modelId: input.step.model ?? prepared.prefs.model,
       durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
       runtimeKind: "delegation.lifecycle",
-      runtimeStatus: "failed",
+      runtimeStatus: cancelled ? "cancelled" : "failed",
       runtimeError: {
         name: error instanceof Error ? error.name : undefined,
         message,
-        retryable: timeoutWithoutProviderResult,
+        retryable: !cancelled && timeoutWithoutProviderResult,
       },
       context: {
         childSessionId: childSession.sessionId,
@@ -719,8 +820,8 @@ export async function executeDelegatedPlanStep(
       startedAt,
       finishedAt,
       durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
-      status: "failed",
-      summary: `${toTitleCase(delegatedRole)} failed`,
+      status: cancelled ? "cancelled" : "failed",
+      summary: cancelled ? `${toTitleCase(delegatedRole)} cancelled` : `${toTitleCase(delegatedRole)} failed`,
       error: message,
       failureGuidance: buildDelegationFailureGuidance(message, delegatedRole),
       citations: [],
@@ -835,11 +936,13 @@ export async function* streamPreparedAgentChatTurn(
   resolvedOrchestration?: PreparedChatExecutionPlanResolution,
   options?: {
     skipMessageStart?: boolean;
+    abortSignal?: AbortSignal;
   },
 ): AsyncGenerator<ChatStreamChunkDraft> {
   const turnId = prepared.turnId;
   const assistantMessageId = prepared.assistantMessageId;
   const controller = host.beginActiveChatTurnExecution(sessionId, turnId, threadEventType);
+  const externalAbortListener = bindExternalAbortToController(options?.abortSignal, controller);
   host.steerService.registerActiveTurn({ sessionId, turnId });
 
   try {
@@ -858,7 +961,7 @@ export async function* streamPreparedAgentChatTurn(
     const modeOrchestration = resolvedOrchestration ?? (await host.resolvePreparedTurnOrchestration(prepared));
     if (modeOrchestration) {
       const mode = prepared.normalized.mode ?? prepared.prefs.mode;
-      const initialTrace = host.storage.chatTurnTraces.create({
+      const initialTrace = createOrRefreshRunningChatTurnTrace(host, {
         turnId,
         sessionId,
         userMessageId: prepared.userEventId,
@@ -995,18 +1098,22 @@ export async function* streamPreparedAgentChatTurn(
         };
       }
       const orchestrationToolRuns = collectOrchestrationToolRuns(host, orchestrationResult.summary.runId);
+      const waitingOrchestrationStep = orchestrationResult.summary.steps.find((step) => step.status === "running");
+      const orchestrationTraceStatus =
+        orchestrationResult.summary.status === "running"
+          ? (waitingOrchestrationStep?.waitStatus ?? "running")
+          : orchestrationResult.summary.status === "failed"
+            ? "failed"
+            : orchestrationResult.summary.status === "partial"
+              ? "partial"
+              : "completed";
 
       let hydratedTrace: ChatTurnTraceRecord = {
         ...host.storage.chatTurnTraces.patch(turnId, {
           assistantMessageId,
           executionPlanId: orchestrationResult.executionPlanId,
-          status:
-            orchestrationResult.summary.status === "failed"
-              ? "failed"
-              : orchestrationResult.summary.status === "partial"
-                ? "partial"
-                : "completed",
-          finishedAt: new Date().toISOString(),
+          status: orchestrationTraceStatus,
+          ...(orchestrationResult.summary.status === "running" ? {} : { finishedAt: new Date().toISOString() }),
           model:
             orchestrationResult.finalStep?.model ??
             orchestrationResult.summary.steps.at(-1)?.model ??
@@ -1158,14 +1265,7 @@ export async function* streamPreparedAgentChatTurn(
     }
 
     let finalText = "";
-    let assistantUsage:
-      | {
-          inputTokens?: number;
-          outputTokens?: number;
-          cachedInputTokens?: number;
-          costUsd?: number;
-        }
-      | undefined;
+    let assistantUsage: ChatStreamUsageRecord | undefined;
     let hasStreamedDelta = false;
     let streamLayerRepaired = false;
     let streamLayerRepair:
@@ -1219,6 +1319,13 @@ export async function* streamPreparedAgentChatTurn(
       subagentPolicy: prepared.normalized.subagentPolicy ?? prepared.prefs.subagentPolicy,
       normalizationProfile: prepared.normalized.normalizationProfile,
       toolAutonomy: prepared.effectiveToolAutonomy,
+      operatorId: input.operatorId,
+      authActorId: input.authActorId,
+      authActorSource: input.authActorSource,
+      permissionProfileId: input.permissionProfileId,
+      localOperatorOverrideId: input.localOperatorOverrideId,
+      policyRunId: input.policyRunId,
+      policyTaskId: input.policyTaskId,
       historyMessages: historyWithSteers,
       signal: controller.signal,
     })) {
@@ -1644,7 +1751,55 @@ export async function* streamPreparedAgentChatTurn(
     }
     throw error;
   } finally {
+    externalAbortListener?.();
     host.steerService.unregisterActiveTurn({ sessionId, turnId });
     host.endActiveChatTurnExecution(turnId, controller);
   }
+}
+
+function createOrRefreshRunningChatTurnTrace(
+  host: ChatTurnStreamHost,
+  input: Parameters<Storage["chatTurnTraces"]["create"]>[0],
+): ChatTurnTraceRecord {
+  try {
+    const existing = host.storage.chatTurnTraces.get(input.turnId);
+    if (existing.status === "cancelled") {
+      throw new ChatTurnCancelledError(input.turnId);
+    }
+    return host.storage.chatTurnTraces.patch(input.turnId, {
+      parentTurnId: input.parentTurnId,
+      branchKind: input.branchKind,
+      sourceTurnId: input.sourceTurnId,
+      assistantMessageId: input.assistantMessageId,
+      status: "running",
+      model: input.model,
+      effectiveToolAutonomy: input.effectiveToolAutonomy,
+      routing: input.routing,
+    });
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      return host.storage.chatTurnTraces.create(input);
+    }
+    throw error;
+  }
+}
+
+function bindExternalAbortToController(
+  externalSignal: AbortSignal | undefined,
+  controller: AbortController,
+): (() => void) | undefined {
+  if (!externalSignal) {
+    return undefined;
+  }
+  const abortController = (): void => {
+    controller.abort(externalSignal.reason);
+  };
+  if (externalSignal.aborted) {
+    abortController();
+    return undefined;
+  }
+  externalSignal.addEventListener("abort", abortController, { once: true });
+  return () => {
+    externalSignal.removeEventListener("abort", abortController);
+  };
 }

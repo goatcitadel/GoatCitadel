@@ -257,7 +257,7 @@ describe("orchestration engine", () => {
     expect(result.finalOutput).toContain("Planner");
   });
 
-  it("aborts downstream stages when no upstream handoff completed", async () => {
+  it("skips downstream stages when no upstream handoff completed", async () => {
     const createChatCompletion = vi.fn().mockRejectedValue(new Error("provider unavailable"));
 
     const result = await executeOrchestrationPlan({

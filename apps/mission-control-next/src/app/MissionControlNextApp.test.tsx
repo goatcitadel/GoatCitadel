@@ -180,8 +180,23 @@ vi.mock("./lazy-legacy-pages", () => ({
     createElement("div", { className: "mock-native-route" }, `Native ${route.area}/${route.section ?? "root"}`),
   LazyPromptPacksWorkbenchPage: ({ variant }: { variant: string }) =>
     createElement("div", { className: "mock-prompt-packs" }, `Prompt packs ${variant}`),
-  LazyThreadedSurfaceRoute: ({ surface }: { surface: string }) =>
-    createElement("div", { className: "mock-threaded-route" }, `Threaded ${surface}`),
+  LazyThreadedSurfaceRoute: ({
+    surface,
+    onOpenApprovals,
+  }: {
+    surface: string;
+    onOpenApprovals?: (approvalId?: string) => void;
+  }) =>
+    createElement(
+      "div",
+      { className: "mock-threaded-route" },
+      `Threaded ${surface}`,
+      createElement(
+        "button",
+        { type: "button", onClick: () => onOpenApprovals?.("approval-focused-1") },
+        "Open focused approval",
+      ),
+    ),
   preloadThreadedSurfaceRoute: vi.fn(() => Promise.resolve()),
 }));
 
@@ -371,7 +386,7 @@ describe("MissionControlNextApp", () => {
     await act(async () => {
       findButton(renderer, "Guided").props.onClick();
       findButton(renderer, "Light theme").props.onClick();
-      findButton(renderer, "Search sessions").props.onClick();
+      findButton(renderer, "Open context inspector").props.onClick();
     });
     expect(appMocks.setMode).toHaveBeenCalledWith("advanced");
     expect(appMocks.setTheme).toHaveBeenCalledWith("light");
@@ -434,6 +449,24 @@ describe("MissionControlNextApp", () => {
         ?.props.onClick();
     });
     expect(window.location.pathname).toBe("/ops/notifications");
+    expect(readNodeText(renderer.root.findByProps({ "aria-label": "Open notifications" }))).toBe("2");
+
+    await act(async () => {
+      renderer.root.findByProps({ "aria-label": "Open approvals" }).props.onClick();
+    });
+    expect(window.location.pathname).toBe("/ops/approvals");
+
+    await act(async () => {
+      renderer.root
+        .findAllByType("button")
+        .find(
+          (node) =>
+            String(node.props.className).includes("mc-next-status-pill-action") &&
+            readNodeText(node).includes("2 pending"),
+        )
+        ?.props.onClick();
+    });
+    expect(window.location.pathname).toBe("/ops/approvals");
 
     const workspaceSelect = renderer.root.findByType("select");
     await act(async () => {
@@ -470,6 +503,18 @@ describe("MissionControlNextApp", () => {
       popstateHandler?.();
     });
     expect(JSON.stringify(renderer.toJSON())).toContain("Threaded chat");
+  });
+
+  it("passes a focused Code approval id through threaded-surface approval navigation", async () => {
+    const renderer = await renderApp("http://localhost:5173/code");
+
+    await act(async () => {
+      findButton(renderer, "Open focused approval").props.onClick();
+    });
+    await flush();
+
+    expect(window.location.pathname).toBe("/ops/approvals");
+    expect(window.location.search).toContain("approvalId=approval-focused-1");
   });
 
   it("surfaces replay-gap events as an operator-visible recovery signal", async () => {

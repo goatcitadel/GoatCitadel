@@ -62,6 +62,16 @@ describe("Postgres runtime schema generation", () => {
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS shell_explanations_json TEXT/);
   });
 
+  it("repairs Code Mode run sandbox columns for older Postgres runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 44);
+
+    assert.equal(repairMigration?.name, "code_mode_run_sandbox_schema_parity");
+    assert.match(repairMigration?.sql ?? "", /CREATE TABLE IF NOT EXISTS code_mode_runs \(/);
+    assert.match(repairMigration?.sql ?? "", /sandbox_json TEXT/);
+    assert.match(repairMigration?.sql ?? "", /error_details_json TEXT/);
+    assert.match(repairMigration?.sql ?? "", /idx_code_mode_runs_approval/);
+  });
+
   it("repairs benchmark lease columns for older Postgres prompt-pack runtime tables", () => {
     const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 8);
 

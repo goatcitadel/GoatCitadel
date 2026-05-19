@@ -1,6 +1,7 @@
 import {
   ConflictError,
   type ChannelAttachmentInput,
+  type ChannelGovernanceInput,
   type ChannelReplyInput,
   ValidationError,
   type ChannelReactInput,
@@ -36,6 +37,17 @@ export async function dispatchConnectorDelivery(
     commsUnsend: (input: ChannelUnsendInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
     commsTyping: (input: ChannelTypingInput) => Promise<ChannelTypingResult | Record<string, unknown>>;
     invokeMcpTool: (input: McpInvokeRequest) => Promise<McpInvokeResponse>;
+    mcpInvokeContext?: Pick<
+      McpInvokeRequest,
+      | "workspaceId"
+      | "taskId"
+      | "runId"
+      | "permissionProfileId"
+      | "localOperatorOverrideId"
+      | "surface"
+      | "policyContext"
+      | "consentContext"
+    >;
     publishRealtime: (
       eventType: string,
       source: string,
@@ -78,7 +90,7 @@ export async function dispatchConnectorDelivery(
         });
       }
       requireConnectorCapability(connector, "interactive_actions", payload.action);
-      return dispatchMcpInvoke(connector, payload, deps.invokeMcpTool, deps.signal);
+      return dispatchMcpInvoke(connector, payload, deps.invokeMcpTool, deps.signal, deps.mcpInvokeContext);
 
     case "browser":
       if (payload.action !== "realtime.emit") {
@@ -131,6 +143,7 @@ async function dispatchIntegrationChannelAction(
 ): Promise<ConnectorDeliveryDispatchResult> {
   throwIfConnectorDeliveryAborted(deps.signal);
   const actionPayload = payload.payload ?? {};
+  const governance = buildChannelGovernanceContext(actionPayload, payload);
   const target = optionalString(actionPayload.target)
     ? normalizeConnectorDeliveryTarget(connector, requireNonEmptyString(actionPayload.target, "payload.target"))
     : undefined;
@@ -147,9 +160,7 @@ async function dispatchIntegrationChannelAction(
       message,
       attachments,
       interactiveActions: normalizeInteractiveActions(actionPayload.interactiveActions),
-      sessionId: optionalString(actionPayload.sessionId),
-      agentId: optionalString(actionPayload.agentId),
-      taskId: optionalString(actionPayload.taskId),
+      ...governance,
       signal: deps.signal,
     });
   } else if (payload.action === "channel.reply") {
@@ -164,9 +175,7 @@ async function dispatchIntegrationChannelAction(
       interactiveActions: normalizeInteractiveActions(actionPayload.interactiveActions),
       replyToMessageId: requireNonEmptyString(actionPayload.replyToMessageId, "payload.replyToMessageId"),
       replyToPartIndex: optionalInteger(actionPayload.replyToPartIndex),
-      sessionId: optionalString(actionPayload.sessionId),
-      agentId: optionalString(actionPayload.agentId),
-      taskId: optionalString(actionPayload.taskId),
+      ...governance,
       signal: deps.signal,
     });
   } else if (payload.action === "channel.react") {
@@ -178,9 +187,7 @@ async function dispatchIntegrationChannelAction(
       reaction: requireNonEmptyString(actionPayload.reaction, "payload.reaction"),
       partIndex: optionalInteger(actionPayload.partIndex),
       messageText: optionalString(actionPayload.messageText),
-      sessionId: optionalString(actionPayload.sessionId),
-      agentId: optionalString(actionPayload.agentId),
-      taskId: optionalString(actionPayload.taskId),
+      ...governance,
       signal: deps.signal,
     });
   } else if (payload.action === "channel.typing") {
@@ -190,9 +197,7 @@ async function dispatchIntegrationChannelAction(
       target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
       threadId: optionalString(actionPayload.threadId),
       durationMs: optionalInteger(actionPayload.durationMs),
-      sessionId: optionalString(actionPayload.sessionId),
-      agentId: optionalString(actionPayload.agentId),
-      taskId: optionalString(actionPayload.taskId),
+      ...governance,
       signal: deps.signal,
     });
   } else {
@@ -202,9 +207,7 @@ async function dispatchIntegrationChannelAction(
       target,
       messageId: requireNonEmptyString(actionPayload.messageId, "payload.messageId"),
       partIndex: optionalInteger(actionPayload.partIndex),
-      sessionId: optionalString(actionPayload.sessionId),
-      agentId: optionalString(actionPayload.agentId),
-      taskId: optionalString(actionPayload.taskId),
+      ...governance,
       signal: deps.signal,
     });
   }
@@ -219,24 +222,119 @@ async function dispatchIntegrationChannelAction(
   };
 }
 
+function buildChannelGovernanceContext(
+  actionPayload: Record<string, unknown>,
+  payload: ConnectorDeliveryWorkflowPayload,
+): ChannelGovernanceInput {
+  const context: ChannelGovernanceInput = {};
+  assignChannelOptional(context, "workspaceId", optionalString(actionPayload.workspaceId) ?? payload.workspaceId);
+  assignChannelOptional(context, "sessionId", optionalString(actionPayload.sessionId) ?? payload.sessionId);
+  assignChannelOptional(context, "agentId", optionalString(actionPayload.agentId) ?? payload.agentId);
+  assignChannelOptional(context, "taskId", optionalString(actionPayload.taskId) ?? payload.taskId);
+  assignChannelOptional(context, "runId", optionalString(actionPayload.runId) ?? payload.runId);
+  assignChannelOptional(context, "operatorId", optionalString(actionPayload.operatorId) ?? payload.operatorId);
+  assignChannelOptional(context, "authActorId", optionalString(actionPayload.authActorId) ?? payload.authActorId);
+  assignChannelOptional(
+    context,
+    "authActorSource",
+    normalizeAuthActorSource(actionPayload.authActorSource) ?? normalizeAuthActorSource(payload.authActorSource),
+  );
+  assignChannelOptional(
+    context,
+    "permissionProfileId",
+    optionalString(actionPayload.permissionProfileId) ?? payload.permissionProfileId,
+  );
+  assignChannelOptional(
+    context,
+    "localOperatorOverrideId",
+    optionalString(actionPayload.localOperatorOverrideId) ?? payload.localOperatorOverrideId,
+  );
+  assignChannelOptional(
+    context,
+    "surface",
+    normalizeMcpSurface(actionPayload.surface) ?? normalizeMcpSurface(payload.originSurface),
+  );
+  return context;
+}
+
+function assignChannelOptional<TKey extends keyof ChannelGovernanceInput>(
+  context: ChannelGovernanceInput,
+  key: TKey,
+  value: ChannelGovernanceInput[TKey] | undefined,
+): void {
+  if (value !== undefined) {
+    context[key] = value;
+  }
+}
+
+function normalizeAuthActorSource(value: unknown): ChannelGovernanceInput["authActorSource"] | undefined {
+  return value === "none" ||
+    value === "token" ||
+    value === "basic" ||
+    value === "loopback" ||
+    value === "sse" ||
+    value === "device" ||
+    value === "companion"
+    ? value
+    : undefined;
+}
+
 async function dispatchMcpInvoke(
   connector: ConnectorRecord,
   payload: ConnectorDeliveryWorkflowPayload,
   invokeMcpTool: (input: McpInvokeRequest) => Promise<McpInvokeResponse>,
   signal?: AbortSignal,
+  context?: Pick<
+    McpInvokeRequest,
+    | "workspaceId"
+    | "taskId"
+    | "runId"
+    | "permissionProfileId"
+    | "localOperatorOverrideId"
+    | "surface"
+    | "policyContext"
+    | "consentContext"
+  >,
 ): Promise<ConnectorDeliveryDispatchResult> {
   const actionPayload = payload.payload ?? {};
   const toolName = requireNonEmptyString(actionPayload.toolName, "payload.toolName");
   throwIfConnectorDeliveryAborted(signal);
-  const response = await invokeMcpTool({
+  const request: McpInvokeRequest = {
     serverId: connector.sourceId,
     toolName,
     arguments: normalizeRecord(actionPayload.arguments),
-    sessionId: optionalString(actionPayload.sessionId),
-    agentId: optionalString(actionPayload.agentId),
-    taskId: optionalString(actionPayload.taskId),
-    signal,
-  });
+  };
+  assignOptional(request, "sessionId", optionalString(actionPayload.sessionId) ?? payload.sessionId);
+  assignOptional(request, "agentId", optionalString(actionPayload.agentId) ?? payload.agentId);
+  assignOptional(
+    request,
+    "workspaceId",
+    optionalString(actionPayload.workspaceId) ?? payload.workspaceId ?? context?.workspaceId,
+  );
+  assignOptional(request, "taskId", optionalString(actionPayload.taskId) ?? payload.taskId ?? context?.taskId);
+  assignOptional(request, "runId", optionalString(actionPayload.runId) ?? payload.runId ?? context?.runId);
+  assignOptional(
+    request,
+    "permissionProfileId",
+    optionalString(actionPayload.permissionProfileId) ?? payload.permissionProfileId ?? context?.permissionProfileId,
+  );
+  assignOptional(
+    request,
+    "localOperatorOverrideId",
+    optionalString(actionPayload.localOperatorOverrideId) ??
+      payload.localOperatorOverrideId ??
+      context?.localOperatorOverrideId,
+  );
+  assignOptional(request, "surface", normalizeMcpSurface(actionPayload.surface) ?? context?.surface);
+  assignOptional(request, "policyContext", context?.policyContext);
+  assignOptional(request, "consentContext", context?.consentContext);
+  assignOptional(request, "signal", signal);
+  if (optionalString(actionPayload.approvalId) && !request.workspaceId) {
+    throw new ValidationError({
+      message: "MCP approval delivery requires workspaceId policy lineage.",
+    });
+  }
+  const response = await invokeMcpTool(request);
   throwIfConnectorDeliveryAborted(signal);
   if (!response.ok) {
     throw new Error(response.error ?? `MCP invoke failed for ${connector.connectorId}/${toolName}.`);
@@ -300,8 +398,30 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function normalizeMcpSurface(value: unknown): McpInvokeRequest["surface"] | undefined {
+  const surface = optionalString(value);
+  return surface === "chat" ||
+    surface === "cowork" ||
+    surface === "code" ||
+    surface === "tools" ||
+    surface === "mcp" ||
+    surface === "all"
+    ? surface
+    : undefined;
+}
+
 function optionalInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) ? value : undefined;
+}
+
+function assignOptional<TKey extends keyof McpInvokeRequest>(
+  request: McpInvokeRequest,
+  key: TKey,
+  value: McpInvokeRequest[TKey] | undefined,
+): void {
+  if (value !== undefined) {
+    request[key] = value;
+  }
 }
 
 function normalizeConnectorDeliveryTarget(connector: ConnectorRecord, rawTarget: string): string {

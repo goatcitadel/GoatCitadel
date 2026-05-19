@@ -145,6 +145,16 @@ export interface GatewayRouteCompositionPort {
   invokeTool: RouteDependencyMethod<"toolsInvoke", "invokeTool">;
   isConnectionUrlAllowlisted: IntegrationChannelServicePort["isConnectionUrlAllowlisted"];
   isFeatureEnabled: RouteDependencyMethod<"toolsInvoke", "isFeatureEnabled">;
+  activatePermissionProfile: RouteDependencyMethod<"tools", "activatePermissionProfile">;
+  archivePermissionProfile: RouteDependencyMethod<"tools", "archivePermissionProfile">;
+  createLocalOperatorOverride: RouteDependencyMethod<"tools", "createLocalOperatorOverride">;
+  createPermissionProfile: RouteDependencyMethod<"tools", "createPermissionProfile">;
+  evaluateToolAccess: RouteDependencyMethod<"tools", "evaluateToolAccess">;
+  listActiveLocalOperatorOverrides: RouteDependencyMethod<"tools", "listActiveLocalOperatorOverrides">;
+  listPermissionProfiles: RouteDependencyMethod<"tools", "listPermissionProfiles">;
+  resolveToolPolicyContext: RouteDependencyMethod<"tools", "resolveToolPolicyContext">;
+  revokeLocalOperatorOverride: RouteDependencyMethod<"tools", "revokeLocalOperatorOverride">;
+  updatePermissionProfile: RouteDependencyMethod<"tools", "updatePermissionProfile">;
   listBankrActionAudit: RouteDependencyMethod<"skills", "listBankrActionAudit">;
   listChannelDeliveryRuntime: RouteDependencyMethod<"comms", "listChannelDeliveryRuntime">;
   listChatMessages: RouteDependencyMethod<"chatMessages", "listChatMessages">;
@@ -334,6 +344,16 @@ export function createGatewayRouteCompositionPort(
     invokeTool: gateway.invokeTool.bind(gateway),
     isConnectionUrlAllowlisted: gateway.isConnectionUrlAllowlisted.bind(gateway),
     isFeatureEnabled: gateway.isFeatureEnabled.bind(gateway),
+    activatePermissionProfile: gateway.activatePermissionProfile.bind(gateway),
+    archivePermissionProfile: gateway.archivePermissionProfile.bind(gateway),
+    createLocalOperatorOverride: gateway.createLocalOperatorOverride.bind(gateway),
+    createPermissionProfile: gateway.createPermissionProfile.bind(gateway),
+    evaluateToolAccess: gateway.evaluateToolAccess.bind(gateway),
+    listActiveLocalOperatorOverrides: gateway.listActiveLocalOperatorOverrides.bind(gateway),
+    listPermissionProfiles: gateway.listPermissionProfiles.bind(gateway),
+    resolveToolPolicyContext: gateway.resolveToolPolicyContext.bind(gateway),
+    revokeLocalOperatorOverride: gateway.revokeLocalOperatorOverride.bind(gateway),
+    updatePermissionProfile: gateway.updatePermissionProfile.bind(gateway),
     listBankrActionAudit: gateway.listBankrActionAudit.bind(gateway),
     listChannelDeliveryRuntime: gateway.listChannelDeliveryRuntime.bind(gateway),
     listChatMessages: gateway.listChatMessages.bind(gateway),

@@ -6,6 +6,7 @@ describe("cors origin guard", () => {
     expect(isLoopbackDevOrigin("http://127.0.0.1:62949")).toBe(true);
     expect(isLoopbackDevOrigin("http://localhost:4173")).toBe(true);
     expect(isLoopbackDevOrigin("https://localhost:8443")).toBe(true);
+    expect(isLoopbackDevOrigin("http://[::1]:5173")).toBe(true);
   });
 
   it("rejects non-loopback origins from loopback helper", () => {

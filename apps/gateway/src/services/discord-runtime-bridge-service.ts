@@ -9,6 +9,7 @@ import type {
   PersonalityCatalogResponse,
 } from "@goatcitadel/contracts";
 import type { ApprovalResolveResult } from "./approval-types.js";
+import type { ChatCommandOptions } from "./chat-command-service.js";
 import {
   DEFAULT_CHANNEL_TOOLSET_POSTURE,
   findSharedChannelCommand,
@@ -108,7 +109,7 @@ export interface DiscordRuntimeBridgeHost {
     },
   ): Promise<{ deduped: boolean; session: { sessionId: string } }>;
   isChatTurnWriteConflict(error: unknown): boolean;
-  parseChatCommand(sessionId: string, commandText: string): Promise<{ message: string }>;
+  parseChatCommand(sessionId: string, commandText: string, options?: ChatCommandOptions): Promise<{ message: string }>;
   recordDevDiagnostic(input: {
     level: "info" | "warn" | "error";
     category: string;
@@ -136,6 +137,33 @@ export interface DiscordRuntimeBridgeHost {
 
 export function readDiscordRouteSessions(host: DiscordRuntimeBridgeHost): DiscordRouteSessionRecord[] {
   return host.storage.systemSettings.get<DiscordRouteSessionRecord[]>(DISCORD_ROUTE_SESSIONS_SETTING_KEY)?.value ?? [];
+}
+
+// SECURITY (codex finding #4): Operator allowlist for Discord-side commands
+// that mutate operator config (`/sethome`, etc.). The field is
+// `discordOperatorActors: string[]` (or legacy `operatorActorIds`) in
+// connection.config. Empty/missing means "no Discord user is an operator"
+// — operators can still change `defaultChannelId` via Mission Control.
+export function isDiscordChannelOperator(config: Record<string, unknown>, actorId: string): boolean {
+  if (!actorId.trim()) {
+    return false;
+  }
+  const candidates = [
+    Array.isArray(config.discordOperatorActors) ? config.discordOperatorActors : undefined,
+    Array.isArray((config as Record<string, unknown>).operatorActorIds)
+      ? (config as Record<string, unknown>).operatorActorIds
+      : undefined,
+  ];
+  for (const list of candidates) {
+    if (Array.isArray(list)) {
+      for (const entry of list) {
+        if (typeof entry === "string" && entry.trim() === actorId.trim()) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 export function writeDiscordRouteSessions(host: DiscordRuntimeBridgeHost, records: DiscordRouteSessionRecord[]): void {
@@ -337,7 +365,15 @@ export async function handleDiscordRuntimeSlashCommand(
   if (!sharedDefinition?.bypassesActiveRunGuard && host.hasRunningTurn(session.sessionId)) {
     return "A GoatCitadel run is already active for this Discord channel. Use /status to inspect it or /stop to cancel it before starting another request.";
   }
-  const result = await host.parseChatCommand(session.sessionId, commandText);
+  const result = await host.parseChatCommand(session.sessionId, commandText, {
+    resolvedBy: `discord:${input.actorId}`,
+    source: "channel",
+    channelContext: {
+      platform: "discord",
+      account: input.connectionId,
+      actorId: input.actorId,
+    },
+  });
   return result.message;
 }
 
@@ -350,7 +386,21 @@ async function handleDiscordSharedChannelCommand(
   switch (command.name) {
     case "status":
       return renderDiscordStatus(connection, input.target, host.getPersonalityCatalog?.());
-    case "sethome":
+    case "sethome": {
+      // SECURITY (codex finding #4): `/sethome` rewrites operator config
+      // (`defaultChannelId`/`defaultDiscordChannelId`) and reroutes future
+      // background/scheduled deliveries — including the watchdog
+      // notification path. Approved pairings / channel allowlist
+      // membership / `inboundDmPolicy=open` are chat-access boundaries,
+      // not operator boundaries. Require the actor to appear in the
+      // connection's Discord operator allowlist
+      // (`discordOperatorActors`/`operatorActorIds` in connection.config).
+      if (!isDiscordChannelOperator(connection.config, input.actorId)) {
+        return [
+          "Only operators can change the home channel.",
+          "Ask an operator to add your Discord user ID to the operator allowlist in GoatCitadel settings.",
+        ].join(" ");
+      }
       host.storage.integrationConnections.update(input.connectionId, {
         config: {
           ...connection.config,
@@ -362,6 +412,7 @@ async function handleDiscordSharedChannelCommand(
         lastError: null,
       });
       return `Home channel set to this Discord channel (${input.target}). Background summaries will use it when no more specific target is selected.`;
+    }
     case "skills":
       return renderDiscordSkills(connection.config);
     case "skill":

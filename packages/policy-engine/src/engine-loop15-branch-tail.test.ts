@@ -120,7 +120,7 @@ describe("ToolPolicyEngine loop 15 branch tails", () => {
     expect(result.audit?.startedAt).toBe(result.audit?.completedAt);
   });
 
-  it("treats an omitted approval mode as approve_risky when deciding bypass audit eligibility", async () => {
+  it("treats an omitted approval mode on the danger profile as bypass audit eligible", async () => {
     const { ToolPolicyEngine } = await import("./engine.js");
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(createConfig(), storage) as unknown as EngineWithBranchPrivates;
@@ -132,7 +132,19 @@ describe("ToolPolicyEngine loop 15 branch tails", () => {
       sessionId: "session",
     });
 
-    expect(storage.audit.append).not.toHaveBeenCalled();
+    expect(storage.audit.append).toHaveBeenCalledWith(
+      "tool_invocations",
+      expect.objectContaining({
+        event: "approval_bypass_mode_network_target",
+        auditEventId: "audit-default-mode",
+        toolName: "http.get",
+        targets: [
+          expect.objectContaining({
+            hostname: "blocked.example.test",
+          }),
+        ],
+      }),
+    );
   });
 
   it("falls back to an unknown shell pattern label when a risky classifier omits the match", async () => {

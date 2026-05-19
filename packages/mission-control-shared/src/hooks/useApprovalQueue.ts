@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApprovalRequest, RuntimeLifecycleResponse } from "@goatcitadel/contracts";
 import {
   fetchApprovalReplay,
@@ -50,6 +50,7 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<ApprovalView>("pending");
   const [selectedApprovalId, setSelectedApprovalId] = useState<string | null>(null);
+  const appliedFocusedApprovalIdRef = useRef<string | undefined>(undefined);
   const resolveAction = useAction();
   const bulkResolveAction = useAction();
 
@@ -347,9 +348,34 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
     () => (view === "pending" ? pendingItems : view === "history" ? historyItems : recoveryItems),
     [historyItems, pendingItems, recoveryItems, view],
   );
+  const focusedApproval = useMemo(
+    () => allItems.find((approval) => approval.approvalId === options.focusedApprovalId) ?? null,
+    [allItems, options.focusedApprovalId],
+  );
+
+  useEffect(() => {
+    if (!options.focusedApprovalId) {
+      appliedFocusedApprovalIdRef.current = undefined;
+      return;
+    }
+    if (!focusedApproval || appliedFocusedApprovalIdRef.current === options.focusedApprovalId) {
+      return;
+    }
+    appliedFocusedApprovalIdRef.current = options.focusedApprovalId;
+    const focusedView: ApprovalView =
+      focusedApproval.status === "pending" && !isExpiredApproval(focusedApproval)
+        ? "pending"
+        : hasRecoveryLinkage(focusedApproval)
+          ? "recovery"
+          : "history";
+    if (view !== focusedView) {
+      setView(focusedView);
+    }
+  }, [focusedApproval, options.focusedApprovalId, view]);
 
   const selectedApproval =
     visibleItems.find((approval) => approval.approvalId === selectedApprovalId) ??
+    focusedApproval ??
     visibleItems.find((approval) => approval.approvalId === options.focusedApprovalId) ??
     visibleItems[0] ??
     null;

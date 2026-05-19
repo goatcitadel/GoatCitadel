@@ -989,6 +989,9 @@ export async function triggerChatProactive(
   input?: {
     source?: "scheduler" | "manual" | "chat";
     reason?: string;
+    surface?: ChatMode;
+    permissionProfileId?: string;
+    localOperatorOverrideId?: string;
   },
 ): Promise<ProactiveRunRecord> {
   return request<ProactiveRunRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/proactive/trigger`, {
@@ -1120,6 +1123,13 @@ export async function fetchChatCommandCatalog(): Promise<{
 export async function parseChatCommand(
   sessionId: string,
   commandText: string,
+  options: {
+    policyRunId?: string;
+    policyTaskId?: string;
+    permissionProfileId?: string;
+    localOperatorOverrideId?: string;
+    surface?: ChatMode;
+  } = {},
 ): Promise<{
   ok: boolean;
   command: string;
@@ -1131,7 +1141,7 @@ export async function parseChatCommand(
 }> {
   return request(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/commands/parse`, {
     method: "POST",
-    body: JSON.stringify({ commandText }),
+    body: JSON.stringify({ commandText, ...options }),
   });
 }
 
@@ -1142,6 +1152,11 @@ export async function runChatResearch(
     mode?: "quick" | "deep";
     providerId?: string;
     model?: string;
+    policyRunId?: string;
+    policyTaskId?: string;
+    permissionProfileId?: string;
+    localOperatorOverrideId?: string;
+    surface?: ChatMode;
   },
 ): Promise<ResearchSummaryRecord> {
   return request<ResearchSummaryRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/research/run`, {

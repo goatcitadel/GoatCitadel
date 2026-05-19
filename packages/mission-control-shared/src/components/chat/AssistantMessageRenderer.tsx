@@ -71,7 +71,11 @@ export function AssistantMessageRenderer({
   className?: string;
 }) {
   const displayContent = role === "assistant" ? decodeJsonUnicodeEscapes(content) : content;
+  const assistantUiRuntimeEnabled =
+    (globalThis as { __GOATCITADEL_ENABLE_ASSISTANT_UI_RENDERER?: boolean })
+      .__GOATCITADEL_ENABLE_ASSISTANT_UI_RENDERER === true;
   const shouldUseFallback =
+    !assistantUiRuntimeEnabled ||
     typeof window === "undefined" ||
     typeof document === "undefined" ||
     typeof document.createElement !== "function" ||

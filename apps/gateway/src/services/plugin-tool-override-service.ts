@@ -13,6 +13,13 @@ export interface PluginToolOverrideClaimRecord extends IntegrationPluginToolOver
   claimedAt: string;
 }
 
+export interface PluginToolOverrideConflictWarning {
+  toolName: string;
+  pluginIds: string[];
+  status: "pending_owner_approval" | "approved";
+  message: string;
+}
+
 export interface PluginToolOverrideServiceDeps {
   getOwnerId(): string;
 }
@@ -102,6 +109,30 @@ export class PluginToolOverrideService {
 
   public listClaims(): PluginToolOverrideClaimRecord[] {
     return Array.from(this.claims.values()).map((record) => ({ ...record }));
+  }
+
+  public listConflictWarnings(): PluginToolOverrideConflictWarning[] {
+    const byToolAndStatus = new Map<string, PluginToolOverrideClaimRecord[]>();
+    for (const record of this.claims.values()) {
+      if (!record.override || record.status === "revoked") {
+        continue;
+      }
+      const key = `${record.toolName}::${record.status}`;
+      byToolAndStatus.set(key, [...(byToolAndStatus.get(key) ?? []), record]);
+    }
+    return [...byToolAndStatus.values()]
+      .filter((records) => records.length > 1)
+      .map((records) => {
+        const toolName = records[0]?.toolName ?? "unknown";
+        const status = records[0]?.status === "approved" ? "approved" : "pending_owner_approval";
+        const pluginIds = records.map((record) => record.pluginId).sort();
+        return {
+          toolName,
+          pluginIds,
+          status,
+          message: `Multiple plugins request ${status} override for ${toolName}: ${pluginIds.join(", ")}.`,
+        };
+      });
   }
 
   public resolveActiveOverride(toolName: string): PluginToolOverrideClaimRecord | undefined {

@@ -423,7 +423,12 @@ async function smokeTools(app: Awaited<ReturnType<typeof buildApp>>): Promise<vo
     "Idempotency-Key": smokeIdempotencyKey("smoke-tool-invoke-1"),
   });
   assert.equal(res.statusCode, 200);
-  assert.equal((res.body as { outcome: string }).outcome, "executed");
+  const body = res.body as { outcome: string; approvalId?: string };
+  if (body.outcome === "approval_required") {
+    assert.equal(typeof body.approvalId, "string");
+  } else {
+    assert.equal(body.outcome, "executed");
+  }
 }
 
 async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp>>): Promise<void> {
@@ -546,6 +551,8 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
     namespace: string;
     query: string;
     items: unknown[];
+    outcome?: string;
+    approvalId?: string;
   }>(
     app,
     "/api/v1/knowledge/memory/search",
@@ -560,7 +567,11 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
     },
   );
   assert.equal(memorySearch.statusCode, 200);
-  assert.equal(Array.isArray(memorySearch.body.items), true);
+  if (memorySearch.body.outcome === "approval_required") {
+    assert.equal(typeof memorySearch.body.approvalId, "string");
+  } else {
+    assert.equal(Array.isArray(memorySearch.body.items), true);
+  }
 
   const commsSend = await postJson<{ outcome?: string; approvalId?: string; deliveryId?: string; status?: string }>(
     app,

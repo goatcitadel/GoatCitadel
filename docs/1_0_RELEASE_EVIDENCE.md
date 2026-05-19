@@ -1,6 +1,6 @@
 # GoatCitadel 1.0 Release Evidence
 
-Last updated: 2026-05-15
+Last updated: 2026-05-18
 
 This document maps the public `1.0` claims to the repo-visible code paths, tests, and named verification lanes that back them.
 
@@ -65,9 +65,23 @@ Current shell posture for this map:
 - Operator-only approval control routes live in [apps/gateway/src/routes/approvals.ts](../apps/gateway/src/routes/approvals.ts).
 - Route-level auth evidence for operator access, device/companion denial, and signed companion mutation denial lives in [apps/gateway/src/routes/privileged-auth.test.ts](../apps/gateway/src/routes/privileged-auth.test.ts).
 - The capability-token remote resolution path remains separate from the operator-only control routes in [apps/gateway/src/routes/approvals.test.ts](../apps/gateway/src/routes/approvals.test.ts).
-- Remote approval creation is no longer naked public ingress: remote callers need a scoped approval-create token, idempotency key, source connector ID, and source trace ID before the route accepts the request.
+- Remote approval creation is no longer naked public ingress: remote or proxy-marked callers need a scoped approval-create token, idempotency key, source connector ID, and source trace ID before the route accepts the request.
 - Stack-backed operator-proof denial coverage for device and companion principals now includes the approval control plane in [scripts/verification/lib/scenarios.mjs](../scripts/verification/lib/scenarios.mjs).
-- `pnpm verify:auth:matrix` is the named privileged-route auth proof lane. It derives representative endpoints from the route-access manifest, requires every `/api/v1/**` route to be classified, probes representative endpoints by access class, and directly probes high-risk MCP/tools/LLM/integration/addon/capability/Code Mode families.
+- `pnpm verify:auth:matrix` is the named privileged-route auth proof lane. It derives representative endpoints from the route-access manifest, requires every `/api/v1/**` route to be explicitly classified, probes representative non-webhook endpoints by access class, and directly probes high-risk MCP/tools/LLM/integration/addon/capability/Code Mode families. Webhook routes are classified in the same manifest and covered by focused webhook signature/idempotency/rate-limit tests rather than generic auth probes.
+
+## Permission Profiles and Override Evidence
+
+- Permission profile and Local Operator Override persistence is anchored in [packages/storage/src/permission-profile-repo.ts](../packages/storage/src/permission-profile-repo.ts) with storage evidence in [packages/storage/src/permission-profile-repo.test.ts](../packages/storage/src/permission-profile-repo.test.ts).
+- Gateway profile selection, custom profile mutation, workspace activation filtering, and missing-profile activation failures are covered by [apps/gateway/src/routes/tools.permission-profiles.test.ts](../apps/gateway/src/routes/tools.permission-profiles.test.ts). Effective-profile resolution and Local Operator Override behavior are additionally covered by the policy-engine and storage tests named in this section.
+- Tool invocation and policy-block rows carry profile, override, approval-mode, matched-grant, task, run, and reason-code evidence through [packages/policy-engine/src/engine.ts](../packages/policy-engine/src/engine.ts), [packages/contracts/src/internal-tooling.ts](../packages/contracts/src/internal-tooling.ts), and the storage schemas in [packages/storage/src/sqlite.ts](../packages/storage/src/sqlite.ts) plus [packages/storage/src/postgres/migrations.ts](../packages/storage/src/postgres/migrations.ts), with targeted coverage in [packages/policy-engine/src/engine.test.ts](../packages/policy-engine/src/engine.test.ts). The lighter tool-access decision ledger stores the profile/override/matched-grant/risk/reason-code subset used for access evaluation traces.
+- Mission Control Next exposes profile selection, effective Chat/Cowork/Code state, and Local Operator Override state in [apps/mission-control-next/src/features/native-routes/SettingsNativePage.tsx](../apps/mission-control-next/src/features/native-routes/SettingsNativePage.tsx); threaded Chat/Cowork/Code headers query run/session effective state through [apps/mission-control-next/src/features/threaded-surface/ThreadedSurfaceRoute.tsx](../apps/mission-control-next/src/features/threaded-surface/ThreadedSurfaceRoute.tsx).
+- `pnpm verify:agentic:governance`, `pnpm verify:agentic:proof`, and the focused package tests named above are the current proof lanes for profile/override behavior, retained agentic evidence, Code Mode policy snapshots, and Chat/Cowork delegation inheritance. Orchestration phase-worker policy propagation should be cited only when covered by its own focused service test or release lane. Hard non-overridable boundaries are proved by `pnpm verify:auth:matrix`, `pnpm verify:code-mode:sandbox`, focused policy-engine boundary tests, and the Code Mode service/storage tests cited below. Local Operator Override is a time-boxed, audited local operator control; it does not bypass auth, deny-wins policy, path jails, disabled capabilities, SSRF/private-host blocks, or required Code Mode sandbox fail-closed behavior.
+
+## Code Mode Evidence
+
+- Code Mode approval/run execution, approval-time policy context, profile/override mismatch refusal, wrapper invocation constraints, pending-action expiry, artifact hash revalidation, sandbox launch failure metadata, and approved-before-expiry execution behavior are covered by [apps/gateway/src/services/capability-system-service.test.ts](../apps/gateway/src/services/capability-system-service.test.ts).
+- Code Mode run persistence, strict JSON/hash ledger reads, corruption detection, recorded artifact hashes, and immutable hash references are covered by [packages/storage/src/code-mode-run-repo.test.ts](../packages/storage/src/code-mode-run-repo.test.ts).
+- Host sandbox adapter and launch metadata behavior are covered by [apps/gateway/src/services/code-mode-sandbox-runner.test.ts](../apps/gateway/src/services/code-mode-sandbox-runner.test.ts).
 
 ## Hardening Pass Evidence
 
@@ -131,13 +145,13 @@ Current shell posture for this map:
 - Public release posture is defined in [README.md](../README.md), [CHANGELOG.md](../CHANGELOG.md), and [docs/1_0_CONTRACT.md](./1_0_CONTRACT.md).
 - Governance freshness and implementation-anchor checks live in [scripts/validate-governance-docs.mjs](../scripts/validate-governance-docs.mjs).
 - Tagged release assets are bound to the exact commit, workflow run, required lane statuses, artifact digests, proof ZIP digest, Trivy status, and accepted-failure list by [scripts/release/write-release-certificate.mjs](../scripts/release/write-release-certificate.mjs).
-- Required certificate lanes include `verify:ui:parity`, mapped to the `verification-truth-lanes.yml` workflow and covered by the umbrella `verification-1-0-release-proof.yml` matrix; `docs:check` is also a direct required certificate lane via `verification-docs-check.yml`.
+- Required certificate lanes include `verify:ui:parity`, `verify:code-mode:sandbox`, `verify:agentic:governance`, and `verify:agentic:proof`, mapped to direct verification workflows and covered by the umbrella `verification-1-0-release-proof.yml` matrix where declared; `docs:check` is also a direct required certificate lane via `verification-docs-check.yml`.
 - The release certificate records direct lane evidence and umbrella release-proof evidence separately. Umbrella proof may cover a missing or unavailable direct exact-SHA lane only for lanes explicitly listed in `releaseProofCoverage.coveredLanes`; it must not mask an exact-SHA direct lane failure. Direct-only lanes such as `security:trivy` and `docs:check` must be green in their own workflows.
 
 ## Closeout Validation Evidence
 
 - The May 15, 2026 backlog closeout status is captured in [docs/review/backlog-closeout-2026-05-15.md](./review/backlog-closeout-2026-05-15.md), which marks stale review findings as superseded only where the live checkout now has implementation and validation evidence.
-- Orchestration lifecycle closeout evidence includes active-run duplicate prevention, queued-only starts, cancellation truth, durable abort handling, final-phase limit enforcement, and worktree release regressions in the gateway orchestration service and route tests.
+- Orchestration lifecycle closeout evidence includes active-run duplicate prevention, queued-only starts, authenticated-actor cancellation truth, durable abort handling, final-phase limit enforcement, and worktree release regressions in the gateway orchestration service and route tests.
 - Security closeout evidence includes MCP/Firecrawl safe env-name validation, Code Mode env passthrough allowlisting, route-level secrets rate limits, and nuclear-risk bypass regression coverage.
 - Current-shell trust UX closeout evidence includes loopback bypass default-off onboarding/settings behavior, `Providers & Models` copy, key-on-file provider secret status, citation rendering, streaming `aria-live` status, and model picker runtime metadata tests.
 - Closeout validation keeps the contract and handbook anchored through `pnpm docs:check`, and `docs:check` is first-class release-certificate evidence rather than only an item nested inside `verify:fast`.

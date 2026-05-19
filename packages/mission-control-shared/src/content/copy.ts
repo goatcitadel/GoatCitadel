@@ -145,7 +145,7 @@ export const appCopy = {
     costs: "Review spend and switch to a lighter mode when needed.",
     settings: "Update providers and safety defaults in one place.",
     workspaces: "Select workspace context, then edit global or workspace guidance safely.",
-    tools: "Grant only what you need, then dry-run before going live.",
+    tools: "Grant only what you need; approval previews still require an operator before execution.",
     approvals: "Approve or reject risky actions waiting on you.",
     tasks: "Keep tasks organized and archive stale work as you go.",
     integrations: "Use guided setup first, then advanced JSON only if needed.",
@@ -543,7 +543,11 @@ export const pageCopy: Record<PageId, PageCopy> = {
         "Dry-run risky tool calls first.",
       ],
       terms: [
-        { term: "Scope precedence", meaning: "task > agent > session > workspace > global." },
+        {
+          term: "Scope precedence",
+          meaning:
+            "Deny grants win across matching scopes; allow grants then follow task > agent > session > workspace > global.",
+        },
         {
           term: "Grant",
           meaning: "An explicit allow or deny rule layered on top of approval mode and hard safety policy.",
@@ -623,7 +627,7 @@ export const pageCopy: Record<PageId, PageCopy> = {
       ],
       terms: [
         { term: "MCP Server", meaning: "A process or endpoint exposing tools/resources over MCP." },
-        { term: "OAuth", meaning: "Token-based auth flow for remote MCP services." },
+        { term: "Auth", meaning: "Local credentials or configuration needed by a registered MCP server." },
         { term: "Trust tier", meaning: "Trusted, restricted, or quarantined execution posture." },
         {
           term: "Template library",

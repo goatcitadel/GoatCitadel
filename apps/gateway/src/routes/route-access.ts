@@ -27,6 +27,7 @@ export interface RouteAccessManifestEntry {
   method: string;
   url: string;
   accessClass?: RouteAccessClass;
+  classificationSource?: "explicit" | "policy" | "default";
   tracked: boolean;
 }
 
@@ -47,10 +48,20 @@ const DEFAULT_API_ROUTE_ACCESS_CLASS: RouteAccessClass = "operator";
 const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessClass }> = [
   { prefix: "/api/v1/auth/device-requests", accessClass: "public" },
   { prefix: "/api/v1/auth/companion/session/refresh", accessClass: "public" },
+  { prefix: "/api/v1/auth/settings", accessClass: "operator" },
   { prefix: "/api/v1/approvals/remote-resolve", accessClass: "public" },
   { prefix: "/api/v1/events/stream", accessClass: "sse-read" },
   { prefix: "/api/v1/events", accessClass: "authenticated-read" },
+  { prefix: "/api/v1/agentic", accessClass: "operator" },
+  { prefix: "/api/v1/gateway", accessClass: "operator" },
+  { prefix: "/api/v1/runtime", accessClass: "operator" },
+  { prefix: "/api/v1/system", accessClass: "operator" },
+  { prefix: "/api/v1/observe", accessClass: "operator" },
+  { prefix: "/api/v1/secrets", accessClass: "operator" },
+  { prefix: "/api/v1/sessions", accessClass: "operator" },
+  { prefix: "/api/v1/chat", accessClass: "operator" },
   { prefix: "/api/v1/llm", accessClass: "operator" },
+  { prefix: "/api/v1/llamacpp", accessClass: "operator" },
   { prefix: "/api/v1/tools", accessClass: "operator" },
   { prefix: "/api/v1/mcp", accessClass: "operator" },
   { prefix: "/api/v1/addons", accessClass: "operator" },
@@ -58,10 +69,47 @@ const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessCla
   { prefix: "/api/v1/evidence", accessClass: "operator" },
   { prefix: "/api/v1/capabilities", accessClass: "operator" },
   { prefix: "/api/v1/code-mode", accessClass: "operator" },
+  { prefix: "/api/v1/costs", accessClass: "operator" },
+  { prefix: "/api/v1/cron", accessClass: "operator" },
+  { prefix: "/api/v1/dashboard", accessClass: "operator" },
+  { prefix: "/api/v1/skills", accessClass: "operator" },
+  { prefix: "/api/v1/orchestration", accessClass: "operator" },
+  { prefix: "/api/v1/operators", accessClass: "operator" },
+  { prefix: "/api/v1/assembly", accessClass: "operator" },
+  { prefix: "/api/v1/tasks", accessClass: "operator" },
+  { prefix: "/api/v1/files", accessClass: "operator" },
+  { prefix: "/api/v1/memory", accessClass: "operator" },
+  { prefix: "/api/v1/mesh", accessClass: "operator" },
+  { prefix: "/api/v1/onboarding", accessClass: "operator" },
+  { prefix: "/api/v1/demo", accessClass: "operator" },
+  { prefix: "/api/v1/npu", accessClass: "operator" },
+  { prefix: "/api/v1/ui/change-risk", accessClass: "operator" },
+  { prefix: "/api/v1/ui-change-risk", accessClass: "operator" },
+  { prefix: "/api/v1/agents", accessClass: "operator" },
+  { prefix: "/api/v1/subagents", accessClass: "operator" },
+  { prefix: "/api/v1/comms", accessClass: "operator" },
+  { prefix: "/api/v1/knowledge", accessClass: "operator" },
+  { prefix: "/api/v1/prompt-packs", accessClass: "operator" },
+  { prefix: "/api/v1/replay", accessClass: "operator" },
+  { prefix: "/api/v1/admin", accessClass: "operator" },
+  { prefix: "/api/v1/docs", accessClass: "operator" },
+  { prefix: "/api/v1/voice", accessClass: "operator" },
+  { prefix: "/api/v1/media", accessClass: "operator" },
+  { prefix: "/api/v1/daemon", accessClass: "operator" },
+  { prefix: "/api/v1/curator", accessClass: "operator" },
+  { prefix: "/api/v1/improvement", accessClass: "operator" },
+  { prefix: "/api/v1/workspaces", accessClass: "operator" },
+  { prefix: "/api/v1/hooks", accessClass: "operator" },
+  { prefix: "/api/v1/durable", accessClass: "operator" },
+  { prefix: "/api/v1/connectors", accessClass: "operator" },
+  { prefix: "/api/v1/settings", accessClass: "operator" },
+  { prefix: "/api/v1/personalities", accessClass: "operator" },
+  { prefix: "/api/v1/channels", accessClass: "operator" },
+  { prefix: "/api/v1/guidance", accessClass: "operator" },
   { prefix: "/api/v1/dev/diagnostics/stream", accessClass: "sse-read" },
   { prefix: "/api/v1/dev", accessClass: "operator" },
-  { prefix: "/api/v1/channels/:channel/inbound", accessClass: "webhook" },
   { prefix: "/api/v1/integrations/slack/oauth/callback", accessClass: "public" },
+  { prefix: "/api/v1/integrations/connections/:connectionId/:channel/inbound", accessClass: "webhook" },
   { prefix: "/api/v1/integrations/connections/:connectionId/telegram/webhook", accessClass: "webhook" },
   { prefix: "/api/v1/integrations/connections/:connectionId/whatsapp/webhook", accessClass: "webhook" },
   { prefix: "/api/v1/integrations/connections/:connectionId/slack/webhook", accessClass: "webhook" },
@@ -128,6 +176,9 @@ async function enforceRouteAccessClass(
     case "sse-read": {
       const authMode = resolveConfiguredAuthMode(fastify);
       if (!authMode || authMode === "none") {
+        return;
+      }
+      if (request.authActorSource === "companion" && request.authCompanionSessionId) {
         return;
       }
       const allowedSources = new Set(["sse", "token", "basic", "loopback"]);
@@ -238,13 +289,16 @@ export function installRouteAccessTracking(fastify: FastifyInstance): void {
 
   fastify.addHook("onRoute", (routeOptions: RouteOptions) => {
     const methods = Array.isArray(routeOptions.method) ? routeOptions.method : [routeOptions.method];
-    const accessClass =
-      routeOptions.config?.goatcitadelRouteAccessClass ?? resolveRouteAccessClassForRouteUrl(routeOptions.url);
+    const classification = resolveRouteAccessClassification(
+      routeOptions.url,
+      routeOptions.config?.goatcitadelRouteAccessClass,
+    );
     for (const method of methods) {
       fastify.routeAccessManifest.push({
         method: method.toUpperCase(),
         url: routeOptions.url,
-        accessClass,
+        accessClass: classification.accessClass,
+        classificationSource: classification.source,
         tracked: requiresTrackedRouteAccessClass(routeOptions.url),
       });
     }
@@ -253,7 +307,11 @@ export function installRouteAccessTracking(fastify: FastifyInstance): void {
 
 export function listMissingTrackedRouteAccessClasses(fastify: FastifyInstance): RouteAccessManifestEntry[] {
   return fastify.routeAccessManifest.filter(
-    (entry) => entry.tracked && entry.method !== "HEAD" && entry.method !== "OPTIONS" && !entry.accessClass,
+    (entry) =>
+      entry.tracked &&
+      entry.method !== "HEAD" &&
+      entry.method !== "OPTIONS" &&
+      (!entry.accessClass || entry.classificationSource === "default"),
   );
 }
 
@@ -265,13 +323,21 @@ function resolveRouteAccessClass(
   declaredAccessClass: RouteAccessClass | undefined,
   request: FastifyRequest,
 ): RouteAccessClass | undefined {
-  return declaredAccessClass ?? resolveRouteAccessClassForRouteUrl(request.routeOptions.url || request.url);
+  return resolveRouteAccessClassification(request.routeOptions.url || request.url, declaredAccessClass).accessClass;
 }
 
-function resolveRouteAccessClassForRouteUrl(url: string): RouteAccessClass | undefined {
+function resolveRouteAccessClassification(
+  url: string,
+  declaredAccessClass?: RouteAccessClass,
+): { accessClass?: RouteAccessClass; source?: RouteAccessManifestEntry["classificationSource"] } {
+  if (declaredAccessClass) {
+    return { accessClass: declaredAccessClass, source: "explicit" };
+  }
   if (!requiresTrackedRouteAccessClass(url)) {
-    return undefined;
+    return {};
   }
   const policy = ROUTE_ACCESS_POLICIES.find((item) => url.startsWith(item.prefix));
-  return policy?.accessClass ?? DEFAULT_API_ROUTE_ACCESS_CLASS;
+  return policy
+    ? { accessClass: policy.accessClass, source: "policy" }
+    : { accessClass: DEFAULT_API_ROUTE_ACCESS_CLASS, source: "default" };
 }

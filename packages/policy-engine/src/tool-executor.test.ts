@@ -31,6 +31,18 @@ const EXAMPLE_HOST = new URL("https://example.com").hostname;
 const LOOPBACK_HOST = new URL("http://127.0.0.1").hostname;
 
 const storageStub = {
+  approvals: {
+    get: vi.fn((approvalId: string) => ({
+      approvalId,
+      kind: "tool",
+      riskLevel: "caution",
+      status: "approved",
+      payload: {},
+      preview: {},
+      createdAt: new Date().toISOString(),
+      explanationStatus: "not_requested",
+    })),
+  },
   pendingApprovalActions: {
     find: vi.fn(() => undefined),
   },
@@ -61,6 +73,17 @@ describe("executeTool", () => {
   beforeEach(() => {
     mocked.isBrowserToolName.mockReset();
     mocked.executeBrowserTool.mockReset();
+    vi.mocked(storageStub.approvals.get).mockReset();
+    vi.mocked(storageStub.approvals.get).mockImplementation((approvalId: string) => ({
+      approvalId,
+      kind: "tool",
+      riskLevel: "caution",
+      status: "approved",
+      payload: {},
+      preview: {},
+      createdAt: new Date().toISOString(),
+      explanationStatus: "not_requested",
+    }));
     vi.mocked(storageStub.pendingApprovalActions.find).mockReset();
     vi.mocked(storageStub.pendingApprovalActions.find).mockReturnValue(undefined);
   });
@@ -204,6 +227,161 @@ describe("executeTool", () => {
     }
   });
 
+  it("does not let scoped read grants bypass realpath checks through a symlinked child path", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), `tool-executor-grant-realpath-${randomUUID()}-`));
+    const grantedRoot = path.join(root, "granted");
+    const outsideRoot = path.join(root, "outside");
+    const linkPath = path.join(grantedRoot, "linked");
+    await fs.mkdir(grantedRoot, { recursive: true });
+    await fs.mkdir(outsideRoot, { recursive: true });
+    await fs.writeFile(path.join(outsideRoot, "secret.txt"), "outside secret", "utf8");
+    await fs.symlink(outsideRoot, linkPath, "junction");
+
+    const storageWithGrant = {
+      toolGrants: {
+        list: vi.fn(() => [
+          {
+            grantId: "grant-realpath",
+            toolPattern: "file.read_range",
+            decision: "allow",
+            scope: "session",
+            scopeRef: "sess-grant",
+            grantType: "persistent",
+            constraints: { allowedPaths: [grantedRoot] },
+            createdBy: "test",
+            createdAt: new Date().toISOString(),
+          },
+        ]),
+      },
+    } as unknown as Storage;
+
+    try {
+      await expect(
+        executeTool(
+          {
+            toolName: "file.read_range",
+            args: { path: path.join(linkPath, "secret.txt"), startLine: 1, endLine: 1 },
+            agentId: "agent",
+            sessionId: "sess-grant",
+          },
+          policyConfig,
+          storageWithGrant,
+        ),
+      ).rejects.toThrow(/outside read allowlist/i);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let scoped read grants widen full-disk read execution through a symlinked child path", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), `tool-executor-grant-full-disk-${randomUUID()}-`));
+    const grantedRoot = path.join(root, "granted");
+    const outsideRoot = path.join(root, "outside");
+    const linkPath = path.join(grantedRoot, "linked");
+    await fs.mkdir(grantedRoot, { recursive: true });
+    await fs.mkdir(outsideRoot, { recursive: true });
+    await fs.writeFile(path.join(outsideRoot, "secret.txt"), "outside secret", "utf8");
+    await fs.symlink(outsideRoot, linkPath, "junction");
+
+    const storageWithGrant = {
+      toolGrants: {
+        list: vi.fn(() => [
+          {
+            grantId: "grant-full-disk-realpath",
+            toolPattern: "file.read_range",
+            decision: "allow",
+            scope: "session",
+            scopeRef: "sess-grant",
+            grantType: "persistent",
+            constraints: { allowedPaths: [grantedRoot] },
+            createdBy: "test",
+            createdAt: new Date().toISOString(),
+          },
+        ]),
+      },
+    } as unknown as Storage;
+
+    try {
+      await expect(
+        executeTool(
+          {
+            toolName: "file.read_range",
+            args: { path: path.join(linkPath, "secret.txt"), startLine: 1, endLine: 1 },
+            agentId: "agent",
+            sessionId: "sess-grant",
+          },
+          {
+            ...policyConfig,
+            sandbox: {
+              ...policyConfig.sandbox,
+              writeJailRoots: [grantedRoot],
+              readOnlyRoots: [],
+              readAccessMode: "full_disk",
+            },
+          },
+          storageWithGrant,
+        ),
+      ).rejects.toThrow(/outside read allowlist/i);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("applies workspace-scoped read grants during physical file execution", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const filePath = path.join(os.tmpdir(), `tool-executor-workspace-${randomUUID()}.ts`);
+    await fs.writeFile(filePath, ["red", "green", "blue"].join("\n"), "utf8");
+
+    const storageWithGrant = {
+      toolGrants: {
+        list: vi.fn((scope: string, scopeRef: string) => {
+          if (scope !== "workspace" || scopeRef !== "workspace-1") {
+            return [];
+          }
+          return [
+            {
+              grantId: "grant-workspace-1",
+              toolPattern: "file.read_range",
+              decision: "allow",
+              scope: "workspace",
+              scopeRef: "workspace-1",
+              grantType: "persistent",
+              constraints: { allowedPaths: ["*"] },
+              createdBy: "test",
+              createdAt: new Date().toISOString(),
+            },
+          ];
+        }),
+      },
+    } as unknown as Storage;
+
+    try {
+      const result = await executeTool(
+        {
+          toolName: "file.read_range",
+          args: { path: filePath, startLine: 1, endLine: 2 },
+          agentId: "agent",
+          sessionId: "sess-workspace",
+          workspaceId: "workspace-1",
+        },
+        policyConfig,
+        storageWithGrant,
+      );
+
+      expect(result).toMatchObject({
+        path: filePath,
+        startLine: 1,
+        endLine: 2,
+        content: "red\ngreen",
+      });
+      expect(storageWithGrant.toolGrants.list).toHaveBeenCalledWith("workspace", "workspace-1", 500);
+    } finally {
+      await fs.rm(filePath, { force: true });
+    }
+  });
+
   it("allows outside-root file reads only when approval context matches a pending approval action", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const filePath = path.join(os.tmpdir(), `tool-executor-approved-${randomUUID()}.ts`);
@@ -234,7 +412,13 @@ describe("executeTool", () => {
             reason: "approval:apr_read_123",
           },
         },
-        policyConfig,
+        {
+          ...policyConfig,
+          sandbox: {
+            ...policyConfig.sandbox,
+            readAccessMode: "approval_required",
+          },
+        },
         storageStub,
       );
 
@@ -242,6 +426,60 @@ describe("executeTool", () => {
         path: filePath,
         content: "alpha\nbeta",
       });
+    } finally {
+      await fs.rm(filePath, { force: true });
+    }
+  });
+
+  it("does not let approval context bypass roots-only read posture", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const filePath = path.join(os.tmpdir(), `tool-executor-roots-only-${randomUUID()}.ts`);
+    await fs.writeFile(filePath, ["alpha", "beta"].join("\n"), "utf8");
+    vi.mocked(storageStub.pendingApprovalActions.find).mockReturnValue({
+      approvalId: "apr_roots_only",
+      actionType: "tool.invoke",
+      request: {
+        toolName: "file.read_range",
+        args: { path: filePath, startLine: 1, endLine: 2 },
+        agentId: "agent",
+        sessionId: "sess-roots-only",
+      },
+      createdAt: "2026-03-21T00:00:00.000Z",
+      expiresAt: "2099-03-21T00:15:00.000Z",
+      resolutionStatus: "pending",
+    });
+
+    try {
+      await expect(
+        executeTool(
+          {
+            toolName: "file.read_range",
+            args: { path: filePath, startLine: 1, endLine: 2 },
+            agentId: "agent",
+            sessionId: "sess-roots-only",
+            consentContext: {
+              source: "ui",
+              reason: "approval:apr_roots_only",
+            },
+            policyContext: {
+              permissionProfile: {
+                profileId: "profile-approval-reads",
+                label: "Approval reads",
+                approvalMode: "approve_risky",
+                readAccessMode: "approval_required",
+              } as never,
+            },
+          },
+          {
+            ...policyConfig,
+            sandbox: {
+              ...policyConfig.sandbox,
+              readAccessMode: "roots_only",
+            },
+          },
+          storageStub,
+        ),
+      ).rejects.toThrow(/outside read allowlist/i);
     } finally {
       await fs.rm(filePath, { force: true });
     }
@@ -4009,6 +4247,35 @@ describe("executeTool", () => {
       expect(result.security).toMatchObject({
         sanitizedForModel: true,
       });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("redacts URLs in redirect errors before they can reach tool transcripts", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => new Response("", { status: 302 })) as unknown as typeof fetch;
+
+    try {
+      let captured = "";
+      try {
+        await executeTool(
+          {
+            toolName: "http.get",
+            args: { url: "https://example.com/api/bot-secret-token?password=hunter2" },
+            agentId: "agent",
+            sessionId: "sess-http-redirect-redact",
+          },
+          policyConfig,
+          storageStub,
+        );
+      } catch (error) {
+        captured = error instanceof Error ? error.message : String(error);
+      }
+      expect(captured).toBe("Redirect missing location for https://example.com");
+      expect(captured).not.toContain("bot-secret-token");
+      expect(captured).not.toContain("hunter2");
     } finally {
       globalThis.fetch = originalFetch;
     }

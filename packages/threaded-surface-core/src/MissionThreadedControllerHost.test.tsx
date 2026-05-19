@@ -1098,7 +1098,12 @@ describe("MissionThreadedControllerHost", () => {
     });
 
     expect(createCodeModeRunMock).toHaveBeenCalledWith(
-      expect.objectContaining({ language: "typescript", source: "export const x = 1;", sessionId: "session-1" }),
+      expect.objectContaining({
+        language: "typescript",
+        source: "export const x = 1;",
+        originSurface: "code",
+        sessionId: "session-1",
+      }),
     );
   });
 
@@ -1121,10 +1126,17 @@ describe("MissionThreadedControllerHost", () => {
       await flushEffects();
     });
 
-    expect(fetchAgenticRunsMock).toHaveBeenCalledWith({ sessionId: "session-1", surface: "cowork", limit: 1 });
+    expect(fetchAgenticRunsMock).toHaveBeenCalledWith({
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      surface: "cowork",
+      limit: 1,
+    });
+    expect(fetchAgenticRunTreeMock).toHaveBeenCalledWith("agentic-run-1", { workspaceId: "workspace-1" });
     expect(controlAgenticRunMock).toHaveBeenCalledWith(
       "agentic-run-1",
       expect.objectContaining({ action: "pause", reason: "Mission Control operator action." }),
+      { workspaceId: "workspace-1" },
     );
   });
 
@@ -1243,7 +1255,8 @@ describe("MissionThreadedControllerHost", () => {
   });
 
   it("executes command refresh branches and clears diagnostics without a thread", async () => {
-    await renderHost();
+    mockSurfaceMode = "cowork";
+    await renderHost({ lockSurface: true, surface: "cowork" });
     const outboundInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as any;
     const sessionData = useChatSessionDataMock.mock.results.at(-1)?.value as any;
 
@@ -1286,7 +1299,7 @@ describe("MissionThreadedControllerHost", () => {
       await outboundInput.handleCommandExecution("session-1", "/goal pause");
       await flushEffects();
     });
-    expect(parseChatCommandMock).toHaveBeenLastCalledWith("session-1", "/goal pause");
+    expect(parseChatCommandMock).toHaveBeenLastCalledWith("session-1", "/goal pause", { surface: "cowork" });
 
     parseChatCommandMock.mockClear();
     await act(async () => {
@@ -1840,7 +1853,9 @@ describe("MissionThreadedControllerHost", () => {
       codeProps?.onRunHelperSnippet("ts", "throw new Error('x')");
       await flushEffects(8);
     });
-    expect(createCodeModeRunMock).toHaveBeenCalledWith(expect.objectContaining({ language: "typescript" }));
+    expect(createCodeModeRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({ language: "typescript", originSurface: "code" }),
+    );
 
     setupMocks();
     mockSurfaceMode = "chat";

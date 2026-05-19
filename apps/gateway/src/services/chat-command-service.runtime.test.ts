@@ -74,6 +74,8 @@ function createDeps(): ChatCommandDependencies {
     scorePromptPackLatestRunByCode: vi.fn(async () => ({ overrideVerdict: "pass" })),
     runPromptPackFromChat: vi.fn(async () => [{ testCode: "TEST-001" }]),
     listSkills: vi.fn(() => [{ skillId: "skill-a", state: "enabled", note: "ready" }]),
+    listChatSessions: vi.fn(() => []),
+    listMemoryItems: vi.fn(() => []),
     setSkillState: vi.fn((skillId: string, state: string) => ({ skillId, state })),
     listSkillSources: vi.fn(async () => ({
       items: [
@@ -183,8 +185,137 @@ describe("chat command runtime dispatch", () => {
     expect(deps.scorePromptPackLatestRunByCode).toHaveBeenCalledWith(
       expect.objectContaining({ testCode: "TEST-01", routingScore: 2 }),
     );
-    expect(deps.resolveChatToolApproval).toHaveBeenCalledWith("session-1", "approval-1", "approve");
-    expect(deps.resolveChatToolApproval).toHaveBeenCalledWith("session-1", "approval-2", "reject");
+    expect(deps.resolveChatToolApproval).toHaveBeenCalledWith("session-1", "approval-1", "approve", {
+      resolvedBy: "chat-command",
+    });
+    expect(deps.resolveChatToolApproval).toHaveBeenCalledWith("session-1", "approval-2", "reject", {
+      resolvedBy: "chat-command",
+    });
+  });
+
+  it("stamps approval slash commands with the request actor when provided", async () => {
+    const deps = createDeps();
+
+    await expect(
+      parseChatCommand(deps, "session-1", "/approve approval-actor", { resolvedBy: "operator-test" }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      parseChatCommand(deps, "session-1", "/deny approval-deny", { resolvedBy: "operator-test" }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(deps.resolveChatToolApproval).toHaveBeenCalledWith("session-1", "approval-actor", "approve", {
+      resolvedBy: "operator-test",
+    });
+    expect(deps.resolveChatToolApproval).toHaveBeenCalledWith("session-1", "approval-deny", "reject", {
+      resolvedBy: "operator-test",
+    });
+  });
+
+  it("uses channel /memory as lookup while preserving chat memory mode commands", async () => {
+    const deps = createDeps();
+    vi.mocked(deps.listChatSessionLearnedMemory).mockReturnValue({
+      conflicts: [],
+      items: [
+        {
+          itemId: "mem_deploy_123456",
+          sessionId: "session-1",
+          itemType: "project_context",
+          content: "Deployment requires the signed installer proof lane.",
+          confidence: 0.9,
+          status: "active",
+          redacted: false,
+          createdAt: "2026-05-18T00:00:00.000Z",
+          updatedAt: "2026-05-18T00:00:00.000Z",
+        },
+      ],
+    });
+
+    await expect(parseChatCommand(deps, "session-1", "/memory on")).resolves.toMatchObject({
+      ok: true,
+      message: "Memory mode set to on.",
+    });
+    await expect(
+      parseChatCommand(deps, "session-1", "/memory installer", {
+        source: "channel",
+        channelContext: { platform: "discord", account: "conn-1", actorId: "user-1" },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      message: expect.stringContaining("[mem_depl] project_context"),
+    });
+  });
+
+  it("renders compact channel recall results from scoped session search", async () => {
+    const deps = createDeps();
+    vi.mocked(deps.listChatSessions).mockReturnValue([
+      {
+        sessionId: "session-1",
+        sessionKey: "discord:conn-1:room-1",
+        workspaceId: "default",
+        scope: "channel",
+        includeInHistory: true,
+        pinned: false,
+        lifecycleStatus: "active",
+        channel: "discord",
+        account: "conn-1",
+        updatedAt: "2026-05-18T00:00:00.000Z",
+        lastActivityAt: "2026-05-18T00:00:00.000Z",
+        tokenTotal: 0,
+        costUsdTotal: 0,
+        title: "Release session",
+        searchHits: [
+          {
+            messageId: "msg_release_123456",
+            excerpt: "Release proof used the installer workflow.",
+            score: 10,
+          },
+        ],
+      } as never,
+    ]);
+
+    await expect(
+      parseChatCommand(deps, "session-1", "/recall installer workflow", {
+        source: "channel",
+        channelContext: { platform: "discord", account: "conn-1", actorId: "user-1" },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      message: expect.stringContaining("[msg_rele] Release session"),
+    });
+  });
+
+  it("passes slash-command delegation through the caller governance context", async () => {
+    const deps = createDeps();
+
+    await expect(
+      parseChatCommand(deps, "session-1", "/delegate QA,Ops :: verify the release", {
+        resolvedBy: "operator-test",
+        operatorId: "operator-test",
+        authActorId: "operator-test",
+        authActorSource: "loopback",
+        policyRunId: "parent-run-1",
+        policyTaskId: "parent-task-1",
+        permissionProfileId: "profile-safe",
+        localOperatorOverrideId: "override-1",
+        surface: "cowork",
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(deps.runChatDelegation).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        objective: "verify the release",
+        roles: ["qa", "ops"],
+        policyRunId: "parent-run-1",
+        policyTaskId: "parent-task-1",
+        operatorId: "operator-test",
+        authActorId: "operator-test",
+        authActorSource: "loopback",
+        permissionProfileId: "profile-safe",
+        localOperatorOverrideId: "override-1",
+        surface: "cowork",
+      }),
+    );
   });
 
   it("returns explicit usage failures for malformed commands", async () => {

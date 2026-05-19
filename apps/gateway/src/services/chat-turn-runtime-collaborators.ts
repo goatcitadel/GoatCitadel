@@ -60,11 +60,19 @@ export interface ChatTurnStreamLifecycleControl {
     options?: {
       sinceEventId?: string;
       liveTail?: boolean;
+      returnOnDurableInterrupt?: boolean;
+      signal?: AbortSignal;
     },
   ): AsyncGenerator<ChatStreamChunk>;
   persistChatStreamChunk(chunk: ChatStreamChunkDraft, durableRunId?: string): void;
   createHydratedChatTurnTrace(turnId: string, trace: ChatTurnTraceRecord): ChatTurnTraceRecord;
   registerActiveChatTurnStream(sessionId: string, turnId: string, durableRunId?: string): void;
+  getActiveChatTurnStream(turnId: string):
+    | {
+        sessionId: string;
+        runId?: string;
+      }
+    | undefined;
   completeActiveChatTurnStream(turnId: string): void;
   closeActiveChatTurnStream(turnId: string): void;
 }

@@ -197,7 +197,7 @@ describe("client broad coverage sweep", () => {
       streamChatMessage: ["coverage-session", { content: "coverage" }, () => undefined],
       streamAgentChatMessage: ["coverage-session", { content: "coverage" }, () => undefined],
       streamChatDelegation: ["coverage-session", { content: "delegate" }, () => undefined],
-      resolveApproval: ["missing-approval", { approved: false, resolvedBy: "coverage" }],
+      resolveApproval: ["missing-approval", { decision: "reject" }],
       retryDurableRun: ["missing-run", { reason: "coverage", actorId: "coverage" }],
       wakeDurableRun: ["missing-run", { eventType: "coverage", payload: {} }],
       createWorkspace: [{ name: "Coverage Workspace", slug: "coverage-workspace" }],
@@ -239,24 +239,26 @@ describe("client broad coverage sweep", () => {
 
     let invoked = 0;
     for (const [name, fn] of asFunctions) {
-      const argList = overrides[name] ?? Array.from({ length: Math.max(fn.length, 1) }, (_, index) => {
-        if (index === 0) {
-          if (name.startsWith("create") || name.startsWith("update") || name.startsWith("patch")) {
+      const argList =
+        overrides[name] ??
+        Array.from({ length: Math.max(fn.length, 1) }, (_, index) => {
+          if (index === 0) {
+            if (name.startsWith("create") || name.startsWith("update") || name.startsWith("patch")) {
+              return {};
+            }
+            if (name.startsWith("fetch") || name.startsWith("get")) {
+              return "coverage-id";
+            }
+            return "coverage";
+          }
+          if (index === 1) {
             return {};
           }
-          if (name.startsWith("fetch") || name.startsWith("get")) {
-            return "coverage-id";
+          if (index === 2) {
+            return 25;
           }
-          return "coverage";
-        }
-        if (index === 1) {
-          return {};
-        }
-        if (index === 2) {
-          return 25;
-        }
-        return undefined;
-      });
+          return undefined;
+        });
 
       try {
         const result = fn(...argList);

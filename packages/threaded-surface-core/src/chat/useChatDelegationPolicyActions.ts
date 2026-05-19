@@ -158,6 +158,35 @@ export function inferDelegationRunStatus(
   return fallback;
 }
 
+function formatDelegationNotice(
+  label: string,
+  result: ChatDelegateResponse,
+): { message: string; tone: "success" | "neutral" | "warning" } {
+  const status = result.status ?? inferDelegationRunStatus(result.steps);
+  if (status === "running") {
+    return {
+      message: `${label} is waiting:\n${result.stitchedOutput}`,
+      tone: "neutral",
+    };
+  }
+  if (status === "partial") {
+    return {
+      message: `${label} finished partially:\n${result.stitchedOutput}`,
+      tone: "neutral",
+    };
+  }
+  if (status === "failed") {
+    return {
+      message: `${label} failed:\n${result.stitchedOutput}`,
+      tone: "warning",
+    };
+  }
+  return {
+    message: `${label} completed:\n${result.stitchedOutput}`,
+    tone: "success",
+  };
+}
+
 export function createSeedDelegationSteps(request: ChatDelegateRequest): ActiveChatDelegationStep[] {
   if (request.steps?.length) {
     return request.steps
@@ -401,11 +430,16 @@ export function useChatDelegationPolicyActions(input: {
     }
     setSending(true);
     try {
+      const policyRunId = activeDelegationRun?.runId ?? activeWorkflowTurn?.trace.orchestration?.runId;
+      const policyTaskId = activeDelegationRun?.taskId;
       const summary = await runChatResearch(session.sessionId, {
         query,
         mode: prefs?.webMode === "deep" ? "deep" : "quick",
         providerId: prefs?.providerId ?? selectedProviderId,
         model: prefs?.model ?? selectedModel,
+        ...(policyRunId ? { policyRunId } : {}),
+        ...(policyTaskId ? { policyTaskId } : {}),
+        surface: surfaceMode,
       });
       pushLocalNotice(`Research summary:\n${summary.summary}\n\nSources: ${summary.sources.length}`, "success");
       setError(null);
@@ -423,6 +457,11 @@ export function useChatDelegationPolicyActions(input: {
     prefs?.webMode,
     selectedModel,
     selectedProviderId,
+    activeDelegationRun?.taskId,
+    activeDelegationRun?.runId,
+    activeWorkflowTurn?.trace.orchestration?.runId,
+    activeWorkflowTurn?.turnId,
+    surfaceMode,
     pushLocalNotice,
     sending,
     setError,
@@ -460,7 +499,8 @@ export function useChatDelegationPolicyActions(input: {
     try {
       const run = await triggerChatProactive(selectedSession.sessionId, {
         source: "manual",
-        reason: "Operator triggered from chat workspace.",
+        reason: `Operator triggered from ${surfaceMode} workspace.`,
+        surface: surfaceMode,
       });
       setProactiveRuns((current) => [run, ...current].slice(0, 30));
       pushLocalNotice(`Proactive run ${run.status}: ${run.reasoningSummary}`);
@@ -469,7 +509,7 @@ export function useChatDelegationPolicyActions(input: {
     } finally {
       setSending(false);
     }
-  }, [pushLocalNotice, selectedSession, sending, setError, setProactiveRuns, setSending]);
+  }, [pushLocalNotice, selectedSession, sending, setError, setProactiveRuns, setSending, surfaceMode]);
 
   const handleSuggestDelegation = useCallback(async () => {
     if (!selectedSession || sending) return;
@@ -610,6 +650,8 @@ export function useChatDelegationPolicyActions(input: {
     (objective: string, roles: string[], mode: NonNullable<ChatDelegateRequest["mode"]>) => {
       const graph = buildDelegationGraph(selectedTurn, roles);
       const route = resolveDelegationRoute(prefs, selectedProviderId, selectedModel);
+      const policyRunId = activeDelegationRun?.runId ?? activeWorkflowTurn?.trace.orchestration?.runId;
+      const policyTaskId = activeDelegationRun?.taskId;
       return {
         objective,
         roles: graph.roles,
@@ -617,10 +659,23 @@ export function useChatDelegationPolicyActions(input: {
         surfaceMode,
         providerId: route.providerId,
         model: route.model,
+        ...(policyRunId ? { policyRunId } : {}),
+        ...(policyTaskId ? { policyTaskId } : {}),
         ...(graph.steps?.length ? { steps: graph.steps } : {}),
       } satisfies ChatDelegateRequest;
     },
-    [prefs?.model, prefs?.providerId, selectedModel, selectedProviderId, selectedTurn, surfaceMode],
+    [
+      activeDelegationRun?.taskId,
+      activeDelegationRun?.runId,
+      activeWorkflowTurn?.trace.orchestration?.runId,
+      activeWorkflowTurn?.turnId,
+      prefs?.model,
+      prefs?.providerId,
+      selectedModel,
+      selectedProviderId,
+      selectedTurn,
+      surfaceMode,
+    ],
   );
 
   const handleAcceptDelegation = useCallback(async () => {
@@ -632,7 +687,8 @@ export function useChatDelegationPolicyActions(input: {
         buildDelegationRequest(delegationSuggestion.objective, delegationSuggestion.roles, delegationSuggestion.mode),
         "Delegation",
       );
-      pushLocalNotice(`Delegation completed:\n${accepted.stitchedOutput}`, "success");
+      const notice = formatDelegationNotice("Delegation", accepted);
+      pushLocalNotice(notice.message, notice.tone);
       setDelegationSuggestion(null);
       await loadSidebar();
     } catch (err) {
@@ -681,7 +737,8 @@ export function useChatDelegationPolicyActions(input: {
           buildDelegationRequest(`${preset.prefix}${baseObjective}`, [...preset.roles], preset.mode),
           preset.label,
         );
-        pushLocalNotice(`${preset.label} completed:\n${result.stitchedOutput}`, "success");
+        const notice = formatDelegationNotice(preset.label, result);
+        pushLocalNotice(notice.message, notice.tone);
         setDelegationSuggestion(null);
         await loadSidebar();
       } catch (err) {
@@ -751,7 +808,8 @@ export function useChatDelegationPolicyActions(input: {
           "Delegation",
         );
         if (!cancelled) {
-          pushLocalNotice(`Delegation completed:\n${accepted.stitchedOutput}`, "success");
+          const notice = formatDelegationNotice("Delegation", accepted);
+          pushLocalNotice(notice.message, notice.tone);
           await loadSidebar();
         }
       } catch (err) {

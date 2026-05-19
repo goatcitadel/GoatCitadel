@@ -282,6 +282,49 @@ function outputItemsMissingProof(workbenchState?: ChatSessionWorkbenchRecord | n
   return workbenchState ? workbenchState.validationStatus !== "passed" : false;
 }
 
+function buildDelegationOutputTitle(status?: ActiveChatDelegationRun["status"]): string {
+  switch (status) {
+    case "completed":
+      return "Stitched result available";
+    case "partial":
+      return "Partial stitched result available";
+    case "failed":
+      return "Failed delegation output available";
+    case "running":
+    default:
+      return "Delegation output still in progress";
+  }
+}
+
+function buildDelegationOutputNote(status?: ActiveChatDelegationRun["status"]): string {
+  switch (status) {
+    case "completed":
+      return "Open run details to inspect the completed stitched delegation result.";
+    case "partial":
+      return "Open run details before treating the stitched delegation output as final.";
+    case "failed":
+      return "Open run details to inspect failure evidence and any partial output.";
+    case "running":
+    default:
+      return "Open run details to inspect current delegated work; final synthesis is not ready yet.";
+  }
+}
+
+function buildDelegationCompletenessLabel(status?: ActiveChatDelegationRun["status"]): string {
+  switch (status) {
+    case "completed":
+      return "Completeness: delegation complete";
+    case "partial":
+      return "Completeness: delegation partial";
+    case "failed":
+      return "Completeness: delegation failed";
+    case "running":
+      return "Completeness: delegation running";
+    default:
+      return "Completeness: delegation status unknown";
+  }
+}
+
 function readContinuationGateFromCheckpoint(
   checkpoints: OrchestrationCheckpointRecord[],
 ): ContinuationGateDecision | undefined {
@@ -495,7 +538,9 @@ export function deriveCoworkRunViewModel(input: {
   const toolRuns = currentTrace?.toolRuns.length ?? 0;
   const failedToolRunCount = currentTrace?.toolRuns.filter((run) => run.status === "failed").length ?? 0;
   const planState = orchestrationRun?.status ?? orchestration?.status ?? currentTrace?.status ?? "idle";
-  const delegationRunLoaded = Boolean(orchestration?.runId && delegationRun?.runId === orchestration.runId);
+  const delegationRunLoaded = Boolean(
+    delegationRun && (!orchestration?.runId || delegationRun.runId === orchestration.runId),
+  );
   const executionState = formatExecutionState(
     orchestrationRun?.executionState ??
       (delegationRunLoaded ? delegationRun?.status : undefined) ??
@@ -671,7 +716,7 @@ export function deriveCoworkRunViewModel(input: {
       : orchestrationRun
         ? "Completeness: full"
         : delegationRunLoaded
-          ? "Completeness: delegation-backed"
+          ? buildDelegationCompletenessLabel(delegationRun?.status)
           : "Completeness: trace-backed";
 
   const operatorActionItems = limitItems(
@@ -745,8 +790,8 @@ export function deriveCoworkRunViewModel(input: {
         ? [
             {
               id: "stitched-output",
-              title: "Stitched result available",
-              note: "Open run details to inspect the stitched delegation result.",
+              title: buildDelegationOutputTitle(delegationRun.status),
+              note: buildDelegationOutputNote(delegationRun.status),
             },
           ]
         : []),

@@ -94,12 +94,14 @@ export async function scoutCapabilityUpgradeSuggestions(
   input: CapabilityScoutInput,
 ): Promise<ChatCapabilityUpgradeSuggestion[]> {
   const presentationArtifactIntent = detectPresentationArtifactIntent(input.content);
-  if (!looksToolOrientedRequest(input.content) && !presentationArtifactIntent) {
+  const documentArtifactIntent = !presentationArtifactIntent && detectDocumentArtifactIntent(input.content);
+  if (!looksToolOrientedRequest(input.content) && !presentationArtifactIntent && !documentArtifactIntent) {
     return [];
   }
   if (
     !looksLikeCapabilityGap(input.assistantText, input.trace) &&
-    !looksLikeMissingRequestedPresentationArtifact(input, presentationArtifactIntent)
+    !looksLikeMissingRequestedPresentationArtifact(input, presentationArtifactIntent) &&
+    !looksLikeMissingRequestedDocumentArtifact(input, documentArtifactIntent)
   ) {
     return [];
   }
@@ -178,7 +180,9 @@ export async function scoutCapabilityUpgradeSuggestions(
   const directSourceUrl = extractDirectSourceUrl(input.content);
   const searchQuery = presentationArtifactIntent
     ? "powerpoint presentation slides deck pptx"
-    : buildCapabilitySearchQuery(input.content);
+    : documentArtifactIntent
+      ? "document generation docx pdf markdown html csv json"
+      : buildCapabilitySearchQuery(input.content);
   if (directSourceUrl || searchQuery) {
     try {
       const sourceResults = directSourceUrl
@@ -300,11 +304,39 @@ function looksLikeMissingRequestedPresentationArtifact(
   return !claimsCreatedDeck;
 }
 
+function looksLikeMissingRequestedDocumentArtifact(input: CapabilityScoutInput, documentIntent: boolean): boolean {
+  if (!documentIntent) {
+    return false;
+  }
+  const ranDocumentTool = (input.trace?.toolRuns ?? []).some(
+    (run) => run.toolName === "documents.create" && run.status === "executed",
+  );
+  if (ranDocumentTool) {
+    return false;
+  }
+  const assistantText = input.assistantText.toLowerCase();
+  const claimsCreatedDocument =
+    /\b(docx?|word\s+doc(?:ument)?|pdf|markdown|md|html|csv|json|txt|report|brief|memo|document)\b/.test(
+      assistantText,
+    ) &&
+    /\b(created|saved|exported|attached|workspace|artifact|\.(?:docx|pdf|md|html|csv|json|txt))\b/.test(assistantText);
+  return !claimsCreatedDocument;
+}
+
 function detectPresentationArtifactIntent(content: string): boolean {
   const normalized = content.toLowerCase();
   return (
     /\b(power\s?point|pptx?|(?:slide|pitch|investor|presentation)\s+deck|slides?|presentation)\b/.test(normalized) &&
     /\b(create|make|build|generate|put|turn|export|save|write|produce|deliver|format|file)\b/.test(normalized)
+  );
+}
+
+function detectDocumentArtifactIntent(content: string): boolean {
+  const normalized = content.toLowerCase();
+  return (
+    /\b(docx?|word\s+doc(?:ument)?|pdf|markdown|md|html|csv|json|text\s+file|txt|report|brief|memo|handout|worksheet|document)\b/.test(
+      normalized,
+    ) && /\b(create|make|build|generate|put|turn|export|save|write|produce|deliver|format|file)\b/.test(normalized)
   );
 }
 

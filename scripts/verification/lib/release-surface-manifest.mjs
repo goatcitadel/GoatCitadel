@@ -89,6 +89,14 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = [
     interaction: "open-inspector",
   },
   {
+    slug: "projects",
+    href: "/projects",
+    readyText: "Project containers",
+    expectedArea: "projects",
+    expectedSection: "root",
+    interaction: "open-inspector",
+  },
+  {
     slug: "library-agents",
     href: "/library/agents",
     readyText: "Agents",
@@ -102,6 +110,14 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = [
     readyText: "Skills",
     expectedArea: "library",
     expectedSection: "skills",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "library-capabilities",
+    href: "/library/capabilities",
+    readyText: "Capability browser",
+    expectedArea: "library",
+    expectedSection: "capabilities",
     interaction: "open-inspector",
   },
   {
@@ -185,6 +201,14 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = [
     interaction: "open-inspector",
   },
   {
+    slug: "ops-notifications",
+    href: "/ops/notifications",
+    readyText: "Operator notifications",
+    expectedArea: "ops",
+    expectedSection: "notifications",
+    interaction: "open-inspector",
+  },
+  {
     slug: "ops-approvals",
     href: "/ops/approvals",
     readyText: "Approvals",
@@ -233,6 +257,14 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = [
     interaction: "open-inspector",
   },
   {
+    slug: "settings-onboarding",
+    href: "/settings/onboarding",
+    readyText: "Start Here",
+    expectedArea: "settings",
+    expectedSection: "onboarding",
+    interaction: "open-inspector",
+  },
+  {
     slug: "settings-providers",
     href: "/settings/providers",
     readyText: "Providers",
@@ -241,11 +273,27 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = [
     interaction: "open-inspector",
   },
   {
+    slug: "settings-personalities",
+    href: "/settings/personalities",
+    readyText: "Personalities",
+    expectedArea: "settings",
+    expectedSection: "personalities",
+    interaction: "open-inspector",
+  },
+  {
     slug: "settings-access",
     href: "/settings/access",
     readyText: "Access",
     expectedArea: "settings",
     expectedSection: "access",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "settings-permissions",
+    href: "/settings/permissions",
+    readyText: "Permission profiles",
+    expectedArea: "settings",
+    expectedSection: "permissions",
     interaction: "open-inspector",
   },
   {
@@ -262,6 +310,14 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = [
     readyText: "Workspaces",
     expectedArea: "settings",
     expectedSection: "workspaces",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "settings-budget",
+    href: "/settings/budget",
+    readyText: "Budget",
+    expectedArea: "settings",
+    expectedSection: "budget",
     interaction: "open-inspector",
   },
   {
@@ -366,6 +422,18 @@ export const NEXT_LEGACY_REDIRECT_MANIFEST = [
     slug: "legacy-space-settings-runtime",
     href: "/?space=configure&page=settings&tab=runtime",
     expectedPath: "/settings/runtime",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "legacy-space-settings-permissions",
+    href: "/?space=configure&page=settings&tab=permissions",
+    expectedPath: "/settings/permissions",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "legacy-space-settings-workspaces",
+    href: "/?space=configure&page=settings&tab=workspaces",
+    expectedPath: "/settings/workspaces",
     interaction: "open-inspector",
   },
   {

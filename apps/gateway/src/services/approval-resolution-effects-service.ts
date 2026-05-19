@@ -57,6 +57,7 @@ export interface ApprovalEffectsServiceContext {
     | "pendingApprovalActions"
     | "approvalInbox"
     | "chatInlineApprovals"
+    | "chatDelegationSteps"
     | "chatTurnTraces"
   >;
   publishRealtime(
@@ -139,6 +140,21 @@ export class ApprovalEffectsService {
     }
     const enqueued: ApprovalEffectRecord[] = [];
     const wakePayload = buildWakePayload(approval, input);
+    const pendingAction = this.ctx.storage.pendingApprovalActions.find(approval.approvalId);
+    if (input.decision === "approve" && pendingAction?.resolutionStatus === "pending") {
+      enqueued.push(
+        this.ctx.storage.approvalEffects.upsert({
+          approvalId: approval.approvalId,
+          effectKind: "pending_action_execute",
+          targetKind: "pending_action",
+          targetId: approval.approvalId,
+          payload: {
+            actionType: pendingAction.actionType,
+          },
+        }),
+      );
+    }
+
     const approvalWaitRunId = this.ctx.storage.approvalWaitRuns.getRunId(approval.approvalId);
     if (approvalWaitRunId) {
       enqueued.push(
@@ -180,22 +196,23 @@ export class ApprovalEffectsService {
         }),
       );
     }
-
-    const pendingAction = this.ctx.storage.pendingApprovalActions.find(approval.approvalId);
-    if (input.decision === "approve" && pendingAction?.resolutionStatus === "pending") {
+    for (const parentTurn of this.resolveDelegationParentWakeTargets(approval)) {
       enqueued.push(
         this.ctx.storage.approvalEffects.upsert({
           approvalId: approval.approvalId,
-          effectKind: "pending_action_execute",
-          targetKind: "pending_action",
-          targetId: approval.approvalId,
+          effectKind: "linked_chat_turn_wake",
+          targetKind: "chat_turn",
+          targetId: parentTurn.turnId,
           payload: {
-            actionType: pendingAction.actionType,
+            ...wakePayload,
+            turnId: parentTurn.turnId,
+            runId: parentTurn.runId,
+            childSessionId: parentTurn.childSessionId,
+            delegationRunId: parentTurn.delegationRunId,
           },
         }),
       );
     }
-
     if (approval.linkage?.tokenId) {
       const inboxItem = this.ctx.storage.approvalInbox.findByApprovalAndToken(
         approval.approvalId,
@@ -677,6 +694,14 @@ export class ApprovalEffectsService {
     const workspaceId = this.deps.resolveApprovalHookWorkspaceId({
       approvalId: approval.approvalId,
       ...(approval.payload ?? {}),
+      workspaceId:
+        typeof approval.linkage?.workspaceId === "string" && approval.linkage.workspaceId.trim()
+          ? approval.linkage.workspaceId.trim()
+          : approval.payload.workspaceId,
+      sessionId:
+        typeof approval.linkage?.sessionId === "string" && approval.linkage.sessionId.trim()
+          ? approval.linkage.sessionId.trim()
+          : approval.payload.sessionId,
     });
     this.deps.enqueueAfterHooks({
       workspaceId,
@@ -728,6 +753,40 @@ export class ApprovalEffectsService {
       return { turnId, runId };
     } catch {
       return undefined;
+    }
+  }
+
+  private resolveDelegationParentWakeTargets(
+    approval: ApprovalRequest,
+  ): Array<{ turnId: string; runId: string; childSessionId: string; delegationRunId: string }> {
+    const childSessionId =
+      typeof approval.linkage?.sessionId === "string" && approval.linkage.sessionId.trim()
+        ? approval.linkage.sessionId.trim()
+        : undefined;
+    if (!childSessionId) {
+      return [];
+    }
+    try {
+      const parentByChildSession = this.ctx.storage.chatDelegationSteps.listParentsByChildSessionIds(
+        [childSessionId],
+        approval.linkage?.workspaceId,
+      );
+      const parent = parentByChildSession.get(childSessionId);
+      if (!parent) {
+        return [];
+      }
+      return this.ctx.storage.chatTurnTraces
+        .listBySession(parent.parentSessionId)
+        .filter((trace) => trace.orchestration?.runId === parent.runId)
+        .map((trace) => ({
+          turnId: trace.turnId,
+          runId: trace.durable?.runId?.trim() ?? "",
+          childSessionId,
+          delegationRunId: parent.runId,
+        }))
+        .filter((target) => Boolean(target.runId));
+    } catch {
+      return [];
     }
   }
 

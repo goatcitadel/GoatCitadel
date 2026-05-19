@@ -46,13 +46,16 @@ Secondary references:
 | Inline prompts | High | Behavior existed; visual needed to stay aligned with compact in-thread blocking. | Existing blocking behavior preserved; shared compact buttons/chips apply. |
 | Mobile/narrow | Medium | Must avoid rail/composer crush after density changes. | Existing collapse rules preserved; needs visual regression review after final baseline update. |
 
-## Remaining Follow-Up
+## Historical Follow-Up From This Snapshot
 
-- Update visual baselines once the unified redesign is accepted.
-- Continue extracting large native route sections out of `NativeRoutePages.tsx`; current CSS convergence avoids blocking the UI iteration.
-- Add a dedicated visual fixture for `+` menu open state and inline approval open state so future regressions catch oversized popovers.
+- Visual baselines needed approval at the time of this redesign-branch snapshot; use current visual-regression artifacts
+  for release truth.
+- Continue extracting large native route sections out of `NativeRoutePages.tsx`; current CSS convergence avoided
+  blocking the UI iteration at the time of review.
+- A dedicated visual fixture for `+` menu open state and inline approval open state remained a branch-local follow-up.
 
 ## Validation Notes
 
 - `pnpm verify:surface:regression` passed after mobile top-bar and task-board overflow fixes.
-- `pnpm verify:visual:regression` still fails because every baseline is from the old Mission Control visual system; this is expected for this redesign branch and should be resolved by approving/rebaselining the new compact shell.
+- Historical note: this redesign-branch snapshot observed `pnpm verify:visual:regression` failing against old Mission Control
+  baselines. Current release evidence should be taken from fresh visual regression artifacts, not this stale note.

@@ -45,7 +45,15 @@ export async function ensureBundledPostgresRuntime(
     throw new Error("Bundled Postgres is configured but not reachable, and autoStart is disabled.");
   }
 
-  let nativeStartupError: Error | undefined;
+  // SECURITY (codex finding #3): If an operator explicitly configured a
+  // native bundled Postgres (via `assistant.database.bundledPostgres.binDir`)
+  // and that startup fails, we must NOT silently fall back to the Docker
+  // backend. Native bound 127.0.0.1 by design; the Docker backend
+  // (`--publish ${port}:5432`, `trust` auth) used to bind all interfaces
+  // and accepted unauthenticated connections — that's a security-posture
+  // downgrade that should never happen behind the operator's back. Fail
+  // closed instead and surface the native error.
+  const nativeConfigured = isNativeBundledPostgresConfigured(config);
   try {
     const nativeRuntime = await tryStartNativeBundledPostgres(config);
     if (nativeRuntime) {
@@ -54,7 +62,12 @@ export async function ensureBundledPostgresRuntime(
       return nativeRuntime;
     }
   } catch (error) {
-    nativeStartupError = normalizeError(error);
+    if (nativeConfigured) {
+      throw normalizeError(error);
+    }
+    // Native binaries were not configured; the error here means we did
+    // not even attempt native startup. Fall through to Docker as a
+    // best-effort default.
   }
 
   const dockerRuntime = await tryStartDockerBundledPostgres(config);
@@ -64,13 +77,13 @@ export async function ensureBundledPostgresRuntime(
     return dockerRuntime;
   }
 
-  if (nativeStartupError) {
-    throw nativeStartupError;
-  }
-
   throw new Error(
     "Bundled Postgres is enabled but no managed runtime backend is available. Configure assistant.database.bundledPostgres.binDir with Postgres binaries or start Docker Desktop.",
   );
+}
+
+function isNativeBundledPostgresConfigured(config: GatewayRuntimeConfig): boolean {
+  return Boolean(config.assistant.database.bundledPostgres.binDir?.trim());
 }
 
 async function tryStartNativeBundledPostgres(
@@ -179,6 +192,16 @@ async function tryStartDockerBundledPostgres(
     };
   }
 
+  // SECURITY (codex finding #2): The bundled Postgres container previously
+  // bound `--publish ${port}:5432`, which Docker maps to all host
+  // interfaces (`0.0.0.0:${port}->5432`) by default. Combined with
+  // `POSTGRES_HOST_AUTH_METHOD=trust`, this exposed an unauthenticated
+  // superuser Postgres on the network. We now explicitly bind the publish
+  // to `127.0.0.1` so the bundled instance is unreachable from outside
+  // the host, matching the native bundled adapter's `-h 127.0.0.1`
+  // behaviour. The full fix would also generate a password and use
+  // scram-sha-256; that requires changes in the gateway's Postgres
+  // connection string resolution and is filed for follow-up.
   execFileSync(
     "docker",
     [
@@ -187,7 +210,7 @@ async function tryStartDockerBundledPostgres(
       "--name",
       containerName,
       "--publish",
-      `${config.assistant.database.bundledPostgres.port}:5432`,
+      `127.0.0.1:${config.assistant.database.bundledPostgres.port}:5432`,
       "--volume",
       `${dataDir}:/var/lib/postgresql/data`,
       "--env",

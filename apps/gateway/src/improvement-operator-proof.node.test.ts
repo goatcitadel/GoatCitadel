@@ -29,12 +29,14 @@ describe("improvement operator proof", () => {
 
     const priorRoot = process.env.GOATCITADEL_ROOT_DIR;
     const priorAuthMode = process.env.GOATCITADEL_AUTH_MODE;
+    const priorDatabaseDriver = process.env.GOATCITADEL_DATABASE_DRIVER;
     const priorDisableSecretStore = process.env.GOATCITADEL_DISABLE_SECRET_STORE;
     const priorImprovementLedgerFlag = process.env.GOATCITADEL_FEATURE_IMPROVEMENT_LEDGER_V1_ENABLED;
     const priorImprovementActivationFlag = process.env.GOATCITADEL_FEATURE_IMPROVEMENT_ACTIVATION_V1_ENABLED;
 
     process.env.GOATCITADEL_ROOT_DIR = tempRoot;
     process.env.GOATCITADEL_AUTH_MODE = "none";
+    process.env.GOATCITADEL_DATABASE_DRIVER = "sqlite";
     process.env.GOATCITADEL_DISABLE_SECRET_STORE = "true";
     process.env.GOATCITADEL_FEATURE_IMPROVEMENT_LEDGER_V1_ENABLED = "true";
     process.env.GOATCITADEL_FEATURE_IMPROVEMENT_ACTIVATION_V1_ENABLED = "true";
@@ -129,6 +131,11 @@ describe("improvement operator proof", () => {
         delete process.env.GOATCITADEL_AUTH_MODE;
       } else {
         process.env.GOATCITADEL_AUTH_MODE = priorAuthMode;
+      }
+      if (priorDatabaseDriver === undefined) {
+        delete process.env.GOATCITADEL_DATABASE_DRIVER;
+      } else {
+        process.env.GOATCITADEL_DATABASE_DRIVER = priorDatabaseDriver;
       }
       if (priorDisableSecretStore === undefined) {
         delete process.env.GOATCITADEL_DISABLE_SECRET_STORE;

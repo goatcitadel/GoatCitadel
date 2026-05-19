@@ -608,6 +608,7 @@ export async function getChatSessionWorkbenchOutput(
     .slice(0, 8)
     .map((run) => ({
       runId: run.runId,
+      turnId: run.turnId,
       status: run.status,
       language: run.language,
       requestedOutputIntent: run.requestedOutputIntent,

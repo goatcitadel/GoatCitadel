@@ -80,9 +80,15 @@ describe("telegram channel commands", () => {
     expect(result.response?.text).toContain("trace unavailable");
   });
 
-  it("sets the current chat as the home channel", async () => {
+  it("sets the current chat as the home channel for an operator-allowlisted actor", async () => {
+    // SECURITY (codex finding #5): /sethome now requires the actor to
+    // be on the per-connection operator allowlist. Non-operators get a
+    // rejection message instead of a config mutation.
     const result = await handleTelegramChannelCommand({
-      connection: baseConnection,
+      connection: {
+        ...baseConnection,
+        config: { telegramOperatorActors: ["777"] },
+      },
       chatId: "-100123",
       actorId: "777",
       content: "/sethome",
@@ -96,6 +102,19 @@ describe("telegram channel commands", () => {
       }),
     );
     expect(result.response?.text).toContain("Home channel set");
+  });
+
+  it("rejects /sethome from non-operator actors (codex #5)", async () => {
+    const result = await handleTelegramChannelCommand({
+      connection: baseConnection,
+      chatId: "-100123",
+      actorId: "777",
+      content: "/sethome",
+    });
+
+    expect(result.handled).toBe(true);
+    expect(result.configPatch).toBeUndefined();
+    expect(result.response?.text).toContain("Only operators");
   });
 
   it("sets and clears visible personality overlays per chat", async () => {
@@ -159,5 +178,45 @@ describe("telegram channel commands", () => {
 
     expect(result.response?.text).toContain("Terminal");
     expect(result.response?.text).toContain("always required");
+  });
+
+  it("guards non-bypass commands while a Telegram run is active", async () => {
+    const result = await handleTelegramChannelCommand({
+      connection: baseConnection,
+      chatId: "-100123",
+      actorId: "777",
+      content: "/skills",
+      isActiveRun: () => true,
+    });
+
+    expect(result.handled).toBe(true);
+    expect(result.response?.text).toContain("run is already active");
+    expect(result.response?.text).toContain("/status");
+  });
+
+  it("allows bypass commands while a Telegram run is active", async () => {
+    const result = await handleTelegramChannelCommand({
+      connection: baseConnection,
+      chatId: "-100123",
+      actorId: "777",
+      content: "/status",
+      isActiveRun: () => true,
+    });
+
+    expect(result.response?.text).toContain("GoatCitadel Telegram status");
+  });
+
+  it("routes channel memory lookup through the chat command dispatcher", async () => {
+    const runChatCommand = vi.fn(async () => ({ message: "Memory results\n- [mem_1234] fact: hello" }));
+    const result = await handleTelegramChannelCommand({
+      connection: baseConnection,
+      chatId: "-100123",
+      actorId: "777",
+      content: "/memory hello",
+      runChatCommand,
+    });
+
+    expect(runChatCommand).toHaveBeenCalledWith("/memory hello");
+    expect(result.response?.text).toContain("Memory results");
   });
 });

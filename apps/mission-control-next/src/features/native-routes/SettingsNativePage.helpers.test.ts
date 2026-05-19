@@ -13,6 +13,8 @@ import {
   deriveLlamaCppAlias,
   deriveSetupCenterItems,
   describeToolApprovalMode,
+  describeToolGrantAvailability,
+  describeToolProfile,
   descriptionForSettingsSection,
   formatCapabilities,
   formatCheckedAtLabel,
@@ -22,12 +24,15 @@ import {
   formatPersonalityCategoryLabel,
   formatPersonalityStatus,
   formatProviderCredentialLabel,
+  formatProviderModelsMeta,
   formatProviderProbeSourceMeta,
   formatProviderProbeStateLabel,
+  getProviderApiStyleWarning,
   getErrorMessage,
   isLikelyLocalProviderBaseUrl,
   isRuntimeInvokableMcpServer,
   isStoredOpenAICodexOAuthFlow,
+  isToolGrantAvailable,
   isTrustedOpenAICodexVerificationUrl,
   matchesToolGrant,
   normalizeBudgetMode,
@@ -42,12 +47,15 @@ import {
   readStoredOpenAICodexOAuthFlowFrom,
   readStoredOpenAICodexOAuthFlow,
   removeStoredOpenAICodexOAuthFlow,
+  resetLocalOperatorOverrideScopeRefForScope,
   setupMeta,
   splitCommaList,
   splitLineList,
   writeStoredOpenAICodexOAuthFlow,
   wizardStateForChecklist,
+  labelForLocalOperatorOverrideScope,
   labelForSettingsSection,
+  resolveLocalOperatorOverrideScopeRef,
 } from "./SettingsNativePage";
 
 describe("SettingsNativePage helpers", () => {
@@ -63,6 +71,21 @@ describe("SettingsNativePage helpers", () => {
     expect(readConnectionConfigString({ oauthConnectedAt: " 2026-05-14T00:00:00.000Z " }, "oauthConnectedAt")).toBe(
       "2026-05-14T00:00:00.000Z",
     );
+  });
+
+  it("labels and resolves Local Operator Override scopes", () => {
+    expect(labelForLocalOperatorOverrideScope("workspace")).toBe("Current workspace");
+    expect(labelForLocalOperatorOverrideScope("session")).toBe("Specific session");
+    expect(labelForLocalOperatorOverrideScope("run")).toBe("Specific run");
+    expect(labelForLocalOperatorOverrideScope("operator")).toBe("This operator");
+    expect(resolveLocalOperatorOverrideScopeRef("workspace", "ignored", "workspace-1")).toBe("workspace-1");
+    expect(resolveLocalOperatorOverrideScopeRef("operator", "ignored", "workspace-1")).toBeUndefined();
+    expect(resolveLocalOperatorOverrideScopeRef("session", " session-1 ", "workspace-1")).toBe("session-1");
+    expect(resolveLocalOperatorOverrideScopeRef("run", "   ", "workspace-1")).toBeUndefined();
+    expect(resetLocalOperatorOverrideScopeRefForScope("workspace", "workspace-1")).toBe("workspace-1");
+    expect(resetLocalOperatorOverrideScopeRefForScope("session", "workspace-1")).toBe("");
+    expect(resetLocalOperatorOverrideScopeRefForScope("run", "workspace-1")).toBe("");
+    expect(resetLocalOperatorOverrideScopeRefForScope("operator", "workspace-1")).toBe("");
   });
 
   it("derives llama.cpp aliases from paths and model filenames", () => {
@@ -147,12 +170,16 @@ describe("SettingsNativePage helpers", () => {
     expect(normalizeToolApprovalMode("bad")).toBe("approve_risky");
     expect(describeToolApprovalMode("approve_all")).toBe("Ask every time");
     expect(describeToolApprovalMode("approve_risky")).toBe("Ask for risky work");
-    expect(describeToolApprovalMode("bypass")).toBe("Bypass prompts");
+    expect(describeToolApprovalMode("bypass")).toBe("Skip normal prompts");
+    expect(describeToolProfile("danger")).toContain("prompt behavior still comes from the approval mode");
+    expect(describeToolProfile("danger")).not.toContain("skips normal prompts");
     expect(normalizeBudgetMode("power")).toBe("power");
     expect(normalizeBudgetMode("turbo")).toBe("balanced");
     expect(labelForSettingsSection("mcp")).toBe("MCP");
+    expect(labelForSettingsSection("permissions")).toBe("Permissions");
     expect(labelForSettingsSection("missing")).toBe("Unknown");
     expect(descriptionForSettingsSection("addons")).toContain("optional add-on");
+    expect(descriptionForSettingsSection("permissions")).toContain("permission profiles");
     expect(descriptionForSettingsSection("missing")).toContain("not registered");
   });
 
@@ -167,8 +194,33 @@ describe("SettingsNativePage helpers", () => {
     expect(readDraftString({ key: 1 }, "key")).toBeUndefined();
     expect(matchesToolGrant({ toolPattern: "browser.*" } as any, "browser.search")).toBe(true);
     expect(matchesToolGrant({ toolPattern: "*" } as any, "browser.search")).toBe(true);
+    expect(matchesToolGrant({ toolPattern: "*.search" } as any, "browser.search")).toBe(true);
+    expect(matchesToolGrant({ toolPattern: "mcp.*.invoke" } as any, "mcp.github.invoke")).toBe(true);
+    expect(matchesToolGrant({ toolPattern: "mcp.*.invoke" } as any, "mcp.github.read")).toBe(false);
     expect(matchesToolGrant({ toolPattern: "browser.search" } as any, "browser.search")).toBe(true);
     expect(matchesToolGrant({ toolPattern: "browser.open" } as any, "browser.search")).toBe(false);
+    expect(
+      isToolGrantAvailable(
+        { grantType: "ttl", expiresAt: "2026-05-17T00:10:00.000Z" } as any,
+        Date.parse("2026-05-17T00:00:00.000Z"),
+      ),
+    ).toBe(true);
+    expect(
+      isToolGrantAvailable(
+        { grantType: "ttl", expiresAt: "2026-05-16T23:59:00.000Z" } as any,
+        Date.parse("2026-05-17T00:00:00.000Z"),
+      ),
+    ).toBe(false);
+    expect(isToolGrantAvailable({ grantType: "persistent", revokedAt: "2026-05-17T00:00:00.000Z" } as any)).toBe(false);
+    expect(isToolGrantAvailable({ grantType: "one_time", usesRemaining: 0 } as any)).toBe(false);
+    expect(isToolGrantAvailable({ grantType: "one_time", usesRemaining: 1 } as any)).toBe(true);
+    expect(
+      describeToolGrantAvailability(
+        { grantType: "ttl", expiresAt: "2026-05-16T23:59:00.000Z" } as any,
+        Date.parse("2026-05-17T00:00:00.000Z"),
+      ),
+    ).toContain("expired");
+    expect(describeToolGrantAvailability({ grantType: "one_time", usesRemaining: 0 } as any)).toBe("exhausted");
     expect(isRuntimeInvokableMcpServer({ transport: "stdio" })).toBe(true);
     expect(isRuntimeInvokableMcpServer({ transport: "http", url: " goatcitadel://approval-inbox " })).toBe(true);
     expect(isRuntimeInvokableMcpServer({ transport: "http", url: "https://example.test" })).toBe(false);
@@ -252,6 +304,24 @@ describe("SettingsNativePage helpers", () => {
       "401",
     );
     expect(formatProviderProbeSourceMeta({ modelProbeSource: "error_fallback" })).toBe("Fallback after probe error");
+    expect(formatProviderModelsMeta(undefined, 0)).toBe("Not probed");
+    expect(formatProviderModelsMeta({ modelProbeState: "ready", modelProbeSource: "live" }, 2)).toBe("Live verified");
+    expect(formatProviderModelsMeta({ modelProbeState: "ready", modelProbeSource: "live" }, 0)).toBe(
+      "No verified model list",
+    );
+    expect(formatProviderModelsMeta({ modelProbeState: "fallback", modelProbeSource: "template_fallback" }, 3)).toBe(
+      "Suggested, not account-verified",
+    );
+    expect(formatProviderModelsMeta({ modelProbeState: "error", modelProbeSource: "error_fallback" }, 0)).toBe(
+      "Probe failed",
+    );
+    expect(formatProviderModelsMeta({ modelProbeState: "empty", modelProbeSource: "live" }, 0)).toBe(
+      "No verified model list",
+    );
+    expect(getProviderApiStyleWarning({ providerId: "openai", apiStyle: "openai-codex-responses" })).toContain(
+      "only executed",
+    );
+    expect(getProviderApiStyleWarning({ providerId: "openai-codex", apiStyle: "openai-codex-responses" })).toBeNull();
     expect(formatCheckedAtLabel()).toBe("Not checked yet");
     expect(formatCheckedAtLabel("not-a-date")).toBe("Last check unavailable");
     expect(formatCheckedAtLabel("2026-05-14T12:00:00.000Z")).toContain("2026");

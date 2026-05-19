@@ -87,6 +87,32 @@ describe("dashboard settings routes", () => {
     });
   });
 
+  it("returns settings hardening errors for remote hardened approval bypass", async () => {
+    const updateSettings = vi.fn(() => {
+      throw new Error("remote_hardened disables approval bypass.");
+    });
+
+    app = Fastify();
+    app.decorate("services", { settings: { updateSettings } } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/settings",
+      payload: {
+        deploymentProfile: "remote_hardened",
+        toolApprovalMode: "bypass",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "remote_hardened disables approval bypass." });
+    expect(updateSettings).toHaveBeenCalledWith({
+      deploymentProfile: "remote_hardened",
+      toolApprovalMode: "bypass",
+    });
+  });
+
   it("routes canonical personality catalog APIs to settings services", async () => {
     const catalog = {
       defaultPersonalityId: "operator",

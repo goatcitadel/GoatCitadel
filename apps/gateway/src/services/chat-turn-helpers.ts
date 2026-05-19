@@ -181,7 +181,10 @@ export function buildDelegationFailureGuidance(error: string, role: string): str
   if (/\bauth|login|token|credential|permission\b/.test(normalized)) {
     return `${toTitleCase(role)} hit an auth or permission barrier. Reconnect the required account or switch to another source.`;
   }
-  if (/\btimeout|timed out|deadline|aborted\b/.test(normalized)) {
+  if (/\babort|aborted|cancelled|canceled\b/.test(normalized)) {
+    return `${toTitleCase(role)} was cancelled before it completed. Retry only if that work is still needed.`;
+  }
+  if (/\btimeout|timed out|deadline\b/.test(normalized)) {
     return `${toTitleCase(role)} ran out of time. Retry with a narrower brief or fewer sources.`;
   }
   if (/\bblocked|deny|denied|approval|policy|jail\b/.test(normalized)) {

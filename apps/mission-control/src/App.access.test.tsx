@@ -2226,7 +2226,7 @@ describe("App gateway access gate", () => {
       "approval-device-approve",
       expect.objectContaining({
         decision: "approve",
-        resolvedBy: "mission-control:localhost",
+        resolutionNote: "Approved from Mission Control.",
       }),
     );
     expect(renderTreeText(renderer!)).toContain("Tablet Chrome was approved.");

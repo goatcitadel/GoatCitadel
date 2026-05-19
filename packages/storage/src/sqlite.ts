@@ -826,6 +826,88 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "approvals", "shell_explanations_json", "TEXT");
     },
   },
+  {
+    version: 84,
+    name: "permission_profiles_and_override_context",
+    up: createPermissionProfilesAndOverrideSchema,
+  },
+  {
+    version: 85,
+    name: "permission_revocation_actor",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "tool_grants", "revoked_by", "TEXT");
+      addColumnIfMissingIfTableExists(db, "local_operator_overrides", "revoked_by", "TEXT");
+    },
+  },
+  {
+    version: 86,
+    name: "tool_access_decision_run_lineage",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "tool_access_decisions", "run_id", "TEXT");
+      if (tableExists(db, "tool_access_decisions")) {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_tool_access_decisions_run_time
+            ON tool_access_decisions(run_id, timestamp DESC);
+        `);
+      }
+    },
+  },
+  {
+    version: 87,
+    name: "tool_access_decision_countable_usage",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(
+        db,
+        "tool_access_decisions",
+        "counts_toward_limits",
+        "INTEGER NOT NULL DEFAULT 1",
+      );
+    },
+  },
+  {
+    version: 88,
+    name: "tool_invocation_permission_evidence",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "tool_invocations", "run_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "tool_invocations", "matched_grant_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "tool_invocations", "permission_profile_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "tool_invocations", "local_operator_override_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "tool_invocations", "approval_mode", "TEXT");
+      addColumnIfMissingIfTableExists(db, "tool_invocations", "reason_codes_json", "TEXT");
+
+      addColumnIfMissingIfTableExists(db, "policy_blocks", "task_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "policy_blocks", "run_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "policy_blocks", "matched_grant_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "policy_blocks", "permission_profile_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "policy_blocks", "local_operator_override_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "policy_blocks", "approval_mode", "TEXT");
+      addColumnIfMissingIfTableExists(db, "policy_blocks", "reason_codes_json", "TEXT");
+    },
+  },
+  {
+    version: 89,
+    name: "code_mode_structured_error_evidence",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "code_mode_runs", "error_code", "TEXT");
+      addColumnIfMissingIfTableExists(db, "code_mode_runs", "error_details_json", "TEXT");
+    },
+  },
+  {
+    version: 90,
+    name: "code_mode_run_sandbox_schema_parity",
+    up: ensureCodeModeRunSandboxSchemaParity,
+  },
+  {
+    version: 91,
+    name: "orchestration_run_policy_context",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "orchestration_runs", "operator_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "orchestration_runs", "auth_actor_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "orchestration_runs", "auth_actor_source", "TEXT");
+      addColumnIfMissingIfTableExists(db, "orchestration_runs", "permission_profile_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "orchestration_runs", "local_operator_override_id", "TEXT");
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -1044,12 +1126,18 @@ function createBaseSchema(db: DatabaseSync): void {
       agent_id TEXT NOT NULL,
       session_id TEXT NOT NULL,
       task_id TEXT,
+      run_id TEXT,
       tool_name TEXT NOT NULL,
       outcome TEXT NOT NULL,
       policy_reason TEXT NOT NULL,
       args_json TEXT NOT NULL,
       result_json TEXT,
-      approval_id TEXT
+      approval_id TEXT,
+      matched_grant_id TEXT,
+      permission_profile_id TEXT,
+      local_operator_override_id TEXT,
+      approval_mode TEXT,
+      reason_codes_json TEXT
     );
 
     CREATE TABLE IF NOT EXISTS policy_blocks (
@@ -1057,9 +1145,16 @@ function createBaseSchema(db: DatabaseSync): void {
       timestamp TEXT NOT NULL,
       agent_id TEXT NOT NULL,
       session_id TEXT NOT NULL,
+      task_id TEXT,
+      run_id TEXT,
       tool_name TEXT NOT NULL,
       reason TEXT NOT NULL,
-      details_json TEXT NOT NULL
+      details_json TEXT NOT NULL,
+      matched_grant_id TEXT,
+      permission_profile_id TEXT,
+      local_operator_override_id TEXT,
+      approval_mode TEXT,
+      reason_codes_json TEXT
     );
 
     CREATE TABLE IF NOT EXISTS cost_ledger (
@@ -1200,6 +1295,11 @@ function createBaseSchema(db: DatabaseSync): void {
       total_iterations INTEGER NOT NULL DEFAULT 0,
       workspace_id TEXT,
       durable_run_id TEXT,
+      operator_id TEXT,
+      auth_actor_id TEXT,
+      auth_actor_source TEXT,
+      permission_profile_id TEXT,
+      local_operator_override_id TEXT,
       execution_state TEXT,
       worktree_path TEXT,
       worktree_status TEXT,
@@ -1843,6 +1943,7 @@ function createNativeToolsExpansionSchema(db: DatabaseSync): void {
       created_at TEXT NOT NULL,
       expires_at TEXT,
       revoked_at TEXT,
+      revoked_by TEXT,
       uses_remaining INTEGER
     );
 
@@ -1858,17 +1959,76 @@ function createNativeToolsExpansionSchema(db: DatabaseSync): void {
       agent_id TEXT NOT NULL,
       session_id TEXT NOT NULL,
       task_id TEXT,
+      run_id TEXT,
       allowed INTEGER NOT NULL,
       reason_codes_json TEXT NOT NULL,
       matched_grant_id TEXT,
       requires_approval INTEGER NOT NULL,
-      risk_level TEXT NOT NULL
+      risk_level TEXT NOT NULL,
+      counts_toward_limits INTEGER NOT NULL DEFAULT 1
     );
 
     CREATE INDEX IF NOT EXISTS idx_tool_access_decisions_tool_time
       ON tool_access_decisions(tool_name, timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_tool_access_decisions_agent_time
       ON tool_access_decisions(agent_id, timestamp DESC);
+
+    CREATE TABLE IF NOT EXISTS permission_profiles (
+      profile_id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      description TEXT,
+      builtin INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      scope_ref TEXT,
+      approval_mode TEXT NOT NULL,
+      legacy_tool_profile TEXT,
+      tool_patterns_json TEXT NOT NULL,
+      allow_json TEXT NOT NULL,
+      deny_json TEXT NOT NULL,
+      read_access_mode TEXT,
+      default_for_surfaces_json TEXT NOT NULL DEFAULT '[]',
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      archived_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_permission_profiles_scope_status
+      ON permission_profiles(scope, scope_ref, status, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS permission_profile_activations (
+      activation_id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL,
+      operator_id TEXT,
+      workspace_id TEXT,
+      session_id TEXT,
+      surface TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_permission_profile_activations_lookup
+      ON permission_profile_activations(active, operator_id, workspace_id, session_id, surface, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS local_operator_overrides (
+      override_id TEXT PRIMARY KEY,
+      operator_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      scope_ref TEXT,
+      reason TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      revoked_at TEXT,
+      revoked_by TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_local_operator_overrides_active
+      ON local_operator_overrides(status, operator_id, scope, scope_ref, expires_at DESC);
 
     CREATE TABLE IF NOT EXISTS knowledge_documents (
       doc_id TEXT PRIMARY KEY,
@@ -2661,9 +2821,11 @@ function createCapabilitySystemV1Schema(db: DatabaseSync): void {
       run_id TEXT PRIMARY KEY,
       status TEXT NOT NULL,
       language TEXT NOT NULL,
+      origin_surface TEXT,
       requested_output_intent TEXT,
       save_candidate_on_success INTEGER NOT NULL DEFAULT 0,
       capability_snapshot_id TEXT NOT NULL,
+      code_mode_input_hash TEXT,
       wrapper_manifest_hash TEXT NOT NULL,
       policy_snapshot_hash TEXT NOT NULL,
       code_hash TEXT NOT NULL,
@@ -2681,6 +2843,8 @@ function createCapabilitySystemV1Schema(db: DatabaseSync): void {
       stderr_truncated INTEGER NOT NULL DEFAULT 0,
       result_json TEXT,
       error_text TEXT,
+      error_code TEXT,
+      error_details_json TEXT,
       created_at TEXT NOT NULL,
       started_at TEXT,
       finished_at TEXT
@@ -2697,6 +2861,109 @@ function createCapabilitySystemV1Schema(db: DatabaseSync): void {
   addColumnIfMissingIfTableExists(db, "chat_inline_approvals", "kind", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_inline_approvals", "risk_level", "TEXT");
   addColumnIfMissingIfTableExists(db, "chat_inline_approvals", "details_json", "TEXT");
+  createPermissionProfilesAndOverrideSchema(db);
+}
+
+function createPermissionProfilesAndOverrideSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS permission_profiles (
+      profile_id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      description TEXT,
+      builtin INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      scope_ref TEXT,
+      approval_mode TEXT NOT NULL,
+      legacy_tool_profile TEXT,
+      tool_patterns_json TEXT NOT NULL,
+      allow_json TEXT NOT NULL,
+      deny_json TEXT NOT NULL,
+      read_access_mode TEXT,
+      default_for_surfaces_json TEXT NOT NULL DEFAULT '[]',
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      archived_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_permission_profiles_scope_status
+      ON permission_profiles(scope, scope_ref, status, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS permission_profile_activations (
+      activation_id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL,
+      operator_id TEXT,
+      workspace_id TEXT,
+      session_id TEXT,
+      surface TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_permission_profile_activations_lookup
+      ON permission_profile_activations(active, operator_id, workspace_id, session_id, surface, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS local_operator_overrides (
+      override_id TEXT PRIMARY KEY,
+      operator_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      scope_ref TEXT,
+      reason TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      revoked_at TEXT,
+      revoked_by TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_local_operator_overrides_active
+      ON local_operator_overrides(status, operator_id, scope, scope_ref, expires_at DESC);
+  `);
+
+  addColumnIfMissingIfTableExists(db, "tool_access_decisions", "workspace_id", "TEXT");
+  addColumnIfMissingIfTableExists(db, "tool_access_decisions", "run_id", "TEXT");
+  addColumnIfMissingIfTableExists(db, "tool_access_decisions", "permission_profile_id", "TEXT");
+  addColumnIfMissingIfTableExists(db, "tool_access_decisions", "local_operator_override_id", "TEXT");
+  addColumnIfMissingIfTableExists(db, "tool_access_decisions", "counts_toward_limits", "INTEGER NOT NULL DEFAULT 1");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "origin_surface", "TEXT");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "workspace_id", "TEXT");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "operator_id", "TEXT");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "permission_profile_id", "TEXT");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "permission_profile_label", "TEXT");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "local_operator_override_id", "TEXT");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "code_mode_input_hash", "TEXT");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "error_code", "TEXT");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "error_details_json", "TEXT");
+  addColumnIfMissingIfTableExists(db, "tool_grants", "revoked_by", "TEXT");
+  addColumnIfMissingIfTableExists(db, "local_operator_overrides", "revoked_by", "TEXT");
+}
+
+function ensureCodeModeRunSandboxSchemaParity(db: DatabaseSync): void {
+  if (!tableExists(db, "code_mode_runs")) {
+    createCapabilitySystemV1Schema(db);
+  }
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "origin_surface", "TEXT");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "workspace_id", "TEXT");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "operator_id", "TEXT");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "permission_profile_id", "TEXT");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "permission_profile_label", "TEXT");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "local_operator_override_id", "TEXT");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "sandbox_json", "TEXT");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "code_mode_input_hash", "TEXT");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "error_code", "TEXT");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "error_details_json", "TEXT");
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_code_mode_runs_status_created
+      ON code_mode_runs(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_code_mode_runs_session_created
+      ON code_mode_runs(session_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_code_mode_runs_approval
+      ON code_mode_runs(approval_id, created_at DESC);
+  `);
 }
 
 function createBankrSafetySchema(db: DatabaseSync): void {

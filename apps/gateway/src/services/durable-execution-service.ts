@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Durable execution helpers and workflow registry stay co-located so lease, recovery, and step replay stay traceable together. */
 /**
  * Durable execution helpers and workflow registry.
  *
@@ -38,6 +39,7 @@ import * as chatTurnDispatchService from "./chat-turn-dispatch-service.js";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import type { DurableChatTurnExecutionPayload, DurableChatTurnUserInputResumeRecord } from "./chat-turn-types.js";
 import type { CuratorService } from "./curator-service.js";
+import { parseOrchestrationWorkflowPayload as parseOrchestrationLifecycleWorkflowPayload } from "./orchestration-lifecycle-state-helpers.js";
 import type { DurableRunService } from "./durable-run-service.js";
 import type { HooksService } from "./hooks-service.js";
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
@@ -153,6 +155,7 @@ type DurableConnectorDeliveryWorkflowHost = DurableWorkflowCompletionHost &
     | "commsTyping"
     | "invokeMcpTool"
     | "publishRealtime"
+    | "resolveDurableRunHookWorkspaceId"
   >;
 
 type DurableHookDeliveryWorkflowHost = DurableWorkflowCompletionHost &
@@ -183,14 +186,18 @@ function buildConnectorDeliveryRealtimeLinks(input: {
   payload?: Record<string, unknown>;
 }): NonNullable<RealtimeEvent["links"]> {
   const payload = input.payload ?? {};
+  const nestedPayload =
+    payload.payload && typeof payload.payload === "object" && !Array.isArray(payload.payload)
+      ? (payload.payload as Record<string, unknown>)
+      : {};
   const readString = (key: keyof NonNullable<RealtimeEvent["links"]>) => {
-    const value = payload[key];
+    const value = nestedPayload[key] ?? payload[key];
     return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
   };
   const sessionId = readString("sessionId");
   const turnId = readString("turnId");
   const proactiveRunId = readString("proactiveRunId");
-  const approvalId = readString("approvalId");
+  const approvalId = readString("approvalId") ?? readOptionalString(payload.correlationId);
   const taskId = readString("taskId");
   const workspaceId = readString("workspaceId");
   const messageId = readString("messageId");
@@ -205,6 +212,10 @@ function buildConnectorDeliveryRealtimeLinks(input: {
     ...(workspaceId ? { workspaceId } : {}),
     ...(messageId ? { messageId } : {}),
   };
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function buildDurableRealtimeOptions(input: {
@@ -352,19 +363,7 @@ export function parseHookDeliveryWorkflowPayload(run: DurableRunRecord): HookDel
 }
 
 export function parseOrchestrationWorkflowPayload(run: DurableRunRecord): OrchestrationPlanWorkflowPayload | undefined {
-  const payload = run.payload as Partial<OrchestrationPlanWorkflowPayload> | undefined;
-  if (!payload || payload.version !== "orchestration.plan.execute.v1") {
-    return undefined;
-  }
-  if (
-    typeof payload.orchestrationRunId !== "string" ||
-    typeof payload.planId !== "string" ||
-    typeof payload.workspaceId !== "string" ||
-    typeof payload.requestedAt !== "string"
-  ) {
-    return undefined;
-  }
-  return payload as OrchestrationPlanWorkflowPayload;
+  return parseOrchestrationLifecycleWorkflowPayload(run);
 }
 
 export function createDurableWorkflowExecutorRegistry(
@@ -516,7 +515,11 @@ export function buildDurableWorkflowExecutors(
     "orchestration.plan.execute": {
       execute: async (run, context) => {
         const result = await hosts.orchestration.executeDurableOrchestrationRun(run, context);
-        if (result.outcome === "paused" || result.outcome === "failed" || result.outcome === "cancelled") {
+        if (result.outcome === "failed") {
+          failDurableWorkflowRun(hosts.orchestration, run.runId, result.checkpointState);
+          return;
+        }
+        if (result.outcome === "paused" || result.outcome === "cancelled") {
           return;
         }
         completeDurableWorkflowRun(hosts.orchestration, run.runId, result.checkpointState);
@@ -575,6 +578,9 @@ function completeDurableWorkflowRun(
 ): void {
   const now = new Date().toISOString();
   const current = host.storage.durableRuns.getRun(runId);
+  if (!canCompleteCurrentDurableRunStatus(current.status)) {
+    return;
+  }
   host.storage.durableRuns.updateRun({
     runId,
     status: "completed",
@@ -602,6 +608,55 @@ function completeDurableWorkflowRun(
     buildDurableRealtimeOptions({ runId }),
   );
   host.recordImprovementDurableRunCompletion?.(host.storage.durableRuns.getRun(runId), checkpointState);
+}
+
+function failDurableWorkflowRun(
+  host: DurableWorkflowCompletionHost,
+  runId: string,
+  checkpointState: Record<string, unknown>,
+): void {
+  const now = new Date().toISOString();
+  const current = host.storage.durableRuns.getRun(runId);
+  if (!canCompleteCurrentDurableRunStatus(current.status)) {
+    return;
+  }
+  const lastError =
+    typeof checkpointState.error === "string"
+      ? checkpointState.error
+      : typeof checkpointState.lastError === "string"
+        ? checkpointState.lastError
+        : "Durable workflow failed.";
+  host.storage.durableRuns.updateRun({
+    runId,
+    status: "failed",
+    updatedAt: now,
+    finishedAt: now,
+    clearLease: true,
+    lastError,
+    expectedVersion: current.version,
+  });
+  host.storage.durableRuns.createCheckpoint({
+    runId,
+    checkpointKind: "run_failed",
+    state: checkpointState,
+    createdAt: now,
+  });
+  host.recordDurableTimelineEvent(runId, "run_failed", checkpointState);
+  host.publishRealtime(
+    "system",
+    "durable",
+    {
+      type: "durable_run_failed",
+      runId,
+      checkpoint: checkpointState,
+      error: lastError,
+    },
+    buildDurableRealtimeOptions({ runId }),
+  );
+}
+
+function canCompleteCurrentDurableRunStatus(status: DurableRunRecord["status"]): boolean {
+  return status === "queued" || status === "running";
 }
 
 export async function executeDurableApprovalWaitRun(
@@ -650,6 +705,7 @@ export async function executeDurableConnectorDeliveryRun(
   if (payload.simulateFailureReason?.trim()) {
     throw new Error(payload.simulateFailureReason.trim());
   }
+  const operatorId = payload.operatorId ?? payload.authActorId ?? "system-durable";
   const dispatch = await dispatchConnectorDelivery(connector, payload, {
     commsSend: (input) => host.commsSend(input),
     commsReply: (input) => host.commsReply(input),
@@ -657,6 +713,31 @@ export async function executeDurableConnectorDeliveryRun(
     commsUnsend: (input) => host.commsUnsend(input),
     commsTyping: (input) => host.commsTyping(input),
     invokeMcpTool: (input) => host.invokeMcpTool({ ...input, signal: context?.signal }),
+    mcpInvokeContext: {
+      workspaceId: payload.workspaceId ?? host.resolveDurableRunHookWorkspaceId(run),
+      taskId: payload.taskId,
+      runId: payload.runId ?? run.runId,
+      permissionProfileId: payload.permissionProfileId,
+      localOperatorOverrideId: payload.localOperatorOverrideId,
+      surface: normalizeDurableConnectorSurface(payload.originSurface) ?? "mcp",
+      policyContext: {
+        operatorId,
+        authActorId: payload.authActorId,
+        authActorSource: payload.authActorSource,
+        workspaceId: payload.workspaceId ?? host.resolveDurableRunHookWorkspaceId(run),
+        sessionId: payload.sessionId,
+        taskId: payload.taskId,
+        runId: payload.runId ?? run.runId,
+        surface: normalizeDurableConnectorSurface(payload.originSurface) ?? "mcp",
+        permissionProfileId: payload.permissionProfileId,
+        localOperatorOverrideId: payload.localOperatorOverrideId,
+      },
+      consentContext: {
+        operatorId,
+        source: "agent",
+        reason: `durable connector delivery:${run.runId}`,
+      },
+    },
     publishRealtime: (eventType, source, eventPayload, options) =>
       host.publishRealtime(eventType, source, eventPayload, options),
     signal: context?.signal,
@@ -683,7 +764,7 @@ export async function executeDurableConnectorDeliveryRun(
       links: buildConnectorDeliveryRealtimeLinks({
         runId: run.runId,
         connectorId: connector.connectorId,
-        payload: payload.payload,
+        payload: payload as unknown as Record<string, unknown>,
       }),
     },
   );
@@ -765,6 +846,7 @@ export async function executeDurableChatTurnRun(
     turnId: payload.turnId,
     assistantMessageId: payload.assistantMessageId,
   });
+  throwIfDurableWorkflowAborted(context);
   host.registerActiveChatTurnStream(payload.sessionId, payload.turnId, run.runId);
   await chatTurnDispatchService.executePreparedAgentChatTurnBackground(
     host,
@@ -774,7 +856,10 @@ export async function executeDurableChatTurnRun(
     payload.threadEventType,
     run.runId,
     undefined,
-    { skipMessageStart: true },
+    {
+      skipMessageStart: true,
+      ...(context?.signal ? { abortSignal: context.signal } : {}),
+    },
   );
 }
 
@@ -797,7 +882,10 @@ function isDurableChatTurnRecoverable(
   if (!trace) {
     return { recoverable: true };
   }
-  if (trace.assistantMessageId) {
+  const assistantMessage = trace.assistantMessageId
+    ? host.storage.chatMessages.get(trace.assistantMessageId)
+    : undefined;
+  if (assistantMessage?.role === "assistant") {
     return { recoverable: false, reason: "Assistant output was already persisted before interruption." };
   }
   const toolRuns = host.storage.chatToolRuns.listByTurn(payload.turnId);
@@ -984,4 +1072,15 @@ function isDurableWorkflowAbortError(error: unknown, context?: DurableWorkflowEx
   return (
     error === signal.reason || (error instanceof Error && (error.name === "AbortError" || /abort/i.test(error.message)))
   );
+}
+
+function normalizeDurableConnectorSurface(value: string | undefined): McpInvokeRequest["surface"] | undefined {
+  return value === "chat" ||
+    value === "cowork" ||
+    value === "code" ||
+    value === "tools" ||
+    value === "mcp" ||
+    value === "all"
+    ? value
+    : undefined;
 }

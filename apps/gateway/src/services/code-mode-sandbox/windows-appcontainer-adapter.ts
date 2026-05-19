@@ -30,12 +30,13 @@ export class WindowsAppContainerSandboxAdapter implements CodeModeHostSandboxAda
     }
 
     if (isAppContainerCapable(this.dependencies.osRelease)) {
-      checks.checksPassed.push(
-        "win32_appcontainer_prerequisites_available",
-        "network_isolation_enforced",
-        "temp_workspace_enforced",
-        "privilege_reduction_enforced",
-        "windows_job_limits_enforced",
+      checks.checksPassed.push("win32_appcontainer_prerequisites_available");
+      checks.checksFailed.push(
+        "win32_node_ipc_not_preserved",
+        "network_isolation_not_enforced",
+        "temp_workspace_not_enforced",
+        "privilege_reduction_not_enforced",
+        "windows_job_limits_not_enforced",
       );
     } else {
       checks.checksFailed.push("win32_appcontainer_os_unsupported");
@@ -66,6 +67,15 @@ export class WindowsAppContainerSandboxAdapter implements CodeModeHostSandboxAda
         checksFailed: [
           ...(powershellPath ? [] : ["win32_powershell_missing"]),
           ...(isAppContainerCapable(this.dependencies.osRelease) ? [] : ["win32_appcontainer_os_unsupported"]),
+          ...(isAppContainerCapable(this.dependencies.osRelease)
+            ? [
+                "win32_node_ipc_not_preserved",
+                "network_isolation_not_enforced",
+                "temp_workspace_not_enforced",
+                "privilege_reduction_not_enforced",
+                "windows_job_limits_not_enforced",
+              ]
+            : []),
         ],
       }),
     );

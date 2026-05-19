@@ -141,6 +141,8 @@ describe("isHostAllowed", () => {
   it("blocks every private, malformed, multicast, and unique-local address family", () => {
     for (const host of [
       "10.0.0.5",
+      "100.64.0.4",
+      "100.127.255.254",
       "127.0.0.1",
       "0.0.0.0",
       "169.254.8.9",
@@ -161,6 +163,10 @@ describe("isHostAllowed", () => {
         approvalState: "blocked",
       });
     }
+    expect(evaluateHostEgress("100.128.0.1", ["*"])).toMatchObject({
+      allowed: true,
+      approvalState: "not_required",
+    });
   });
 
   it("allows public IPs and blocks non-loopback local hostnames even when matched", () => {
@@ -175,7 +181,7 @@ describe("isHostAllowed", () => {
     });
   });
 
-  it("uses dangerous-profile bypass only for public unallowlisted hosts", () => {
+  it("marks dangerous-profile public unallowlisted hosts for low-level bypass audit", () => {
     expect(evaluateDangerousHostBypass(OPENAI_CHAT_URL, [OPENAI_HOST])).toMatchObject({
       blocked: false,
       shouldAudit: false,
@@ -184,15 +190,18 @@ describe("isHostAllowed", () => {
       blocked: true,
       shouldAudit: false,
     });
-    expect(evaluateDangerousHostBypass("https://unlisted.example", [])).toMatchObject({
-      blocked: false,
-      shouldAudit: true,
-      hostname: "unlisted.example",
-      reason: "Danger profile bypassed network allowlist for https://unlisted.example",
-    });
+    expect(evaluateDangerousHostBypass("https://user:secret@unlisted.example/callback?token=secret", [])).toMatchObject(
+      {
+        blocked: false,
+        shouldAudit: true,
+        hostname: "unlisted.example",
+        reason:
+          "Low-level bypass audit marker for public network target outside the allowlist: https://unlisted.example",
+      },
+    );
   });
 
-  it("throws from strict guards and permits dangerous-profile public bypasses", () => {
+  it("throws from strict guards and leaves public bypass handling to the engine", () => {
     expect(() => assertHostAllowed(OPENAI_CHAT_URL, [])).toThrow(/not yet allowlisted/i);
     expect(() => assertHostAllowed(OPENAI_CHAT_URL, [OPENAI_HOST])).not.toThrow();
     expect(() => assertHostAllowedInDangerProfile("https://unlisted.example", [])).not.toThrow();

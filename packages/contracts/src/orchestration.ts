@@ -1,3 +1,5 @@
+import type { ToolPolicyActorContext } from "./policy.js";
+
 export type LoopMode = "fresh-context" | "compaction";
 export type RunMode = "auto" | "hitl";
 export type OrchestrationExecutionState =
@@ -25,7 +27,7 @@ export interface OrchestrationPhase {
 export interface OrchestrationPhaseExecutionResult {
   phaseId: string;
   ownerAgentId: string;
-  status: "completed" | "failed";
+  status: "completed" | "failed" | "waiting";
   startedAt: string;
   finishedAt: string;
   outputSummary?: string;
@@ -61,7 +63,15 @@ export interface OrchestrationPlan {
   waves: OrchestrationWave[];
 }
 
-export interface OrchestrationRun {
+export interface OrchestrationRunPolicyContext {
+  operatorId?: string;
+  authActorId?: string;
+  authActorSource?: ToolPolicyActorContext["authActorSource"];
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+}
+
+export interface OrchestrationRun extends OrchestrationRunPolicyContext {
   runId: string;
   planId: string;
   status: "queued" | "running" | "paused" | "failed" | "completed" | "stopped_by_limit" | "cancelled";

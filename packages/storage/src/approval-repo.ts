@@ -124,7 +124,12 @@ export class ApprovalRepository {
       riskLevel: input.riskLevel,
       status: "pending",
       linkageJson: serializeApprovalLinkage(input.linkage),
-      payloadJson: JSON.stringify(embedApprovalLinkage(input.payload, input.linkage)),
+      payloadJson: JSON.stringify(
+        embedApprovalLinkage(
+          input.rollbackNote ? { ...input.payload, rollbackNote: input.rollbackNote } : input.payload,
+          input.linkage,
+        ),
+      ),
       previewJson: JSON.stringify(input.preview),
       explanationStatus: "not_requested",
       createdAt: now,
@@ -247,6 +252,7 @@ function mapRow(row: ApprovalRow): ApprovalRequest {
     status: row.status,
     payload: stripApprovalLinkage(rawPayload),
     preview: stripApprovalLinkage(rawPreview),
+    rollbackNote: readApprovalString(rawPayload.rollbackNote ?? rawPreview.rollbackNote),
     linkage,
     createdAt: row.created_at,
     expiresAt: row.expires_at ?? undefined,
@@ -258,6 +264,10 @@ function mapRow(row: ApprovalRow): ApprovalRequest {
     explanationError: row.explanation_error ?? undefined,
     shellExplanations,
   };
+}
+
+function readApprovalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function toApprovalRow(row: unknown): ApprovalRow | undefined {

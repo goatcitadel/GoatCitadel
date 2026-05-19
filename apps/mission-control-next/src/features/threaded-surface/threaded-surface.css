@@ -839,6 +839,16 @@
   background: linear-gradient(to top, var(--background) 72%, transparent);
 }
 
+.mc-next-threaded-composer-policy {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 8px;
+}
+
+.mc-next-threaded-composer-policy .status-chip {
+  max-width: 100%;
+}
+
 .mc-next-threaded-thread-card:has(.mc-next-thread-blocking-prompt) + .mc-next-threaded-composer-card {
   opacity: 0.58;
   filter: saturate(0.72);

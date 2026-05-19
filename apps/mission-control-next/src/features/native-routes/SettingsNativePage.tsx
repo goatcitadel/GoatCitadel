@@ -1,10 +1,20 @@
 /* eslint-disable max-lines -- SettingsNativePage intentionally keeps the new settings routes in one editable module while the product surface is still settling. */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import { providerTemplates, type CapabilityPackPreview } from "@goatcitadel/contracts";
 import {
   AlertTriangle,
   Cable,
   CheckCircle2,
+  Code2,
   Gauge,
   HardDrive,
   KeyRound,
@@ -34,14 +44,21 @@ import type {
   IntegrationFormSchema,
   McpServerRecord,
   OnboardingState,
+  FilesystemReadAccessMode,
+  LocalOperatorOverrideScope,
+  LocalOperatorOverrideRecord,
   PersonalityPreset,
   PersonalityPresetCategory,
+  PermissionProfileRecord,
+  PermissionSurface,
   ToolApprovalMode,
   ToolProfile,
   ToolGrantRecord,
 } from "@goatcitadel/contracts";
 import {
   archiveWorkspace,
+  activatePermissionProfile,
+  archivePermissionProfile,
   bootstrapOnboarding,
   completeOnboarding,
   connectMcpServer,
@@ -49,6 +66,8 @@ import {
   createIntegrationConnection,
   createMcpServer,
   createPersonality,
+  createLocalOperatorOverride,
+  createPermissionProfile,
   createToolGrant,
   createWorkspace,
   deleteOpenAICodexOAuthCredential,
@@ -83,7 +102,10 @@ import {
   fetchNpuModels,
   fetchOpenAICodexOAuthStatus,
   fetchOnboardingState,
+  fetchActiveLocalOperatorOverrides,
+  fetchEffectivePermissionProfile,
   fetchPersonalities,
+  fetchPermissionProfiles,
   fetchDemoState,
   fetchProviderSecretStatus,
   fetchSettings,
@@ -105,6 +127,7 @@ import {
   resolveGatewayInstallToken,
   restoreWorkspace,
   revokeDeviceAccessGrant,
+  revokeLocalOperatorOverride,
   revokeToolGrant,
   runMcpServerHealthCheck,
   saveProviderSecret,
@@ -126,6 +149,7 @@ import {
   updateIntegrationConnection,
   updateMcpServer,
   updatePersonality,
+  updatePermissionProfile,
   updateWorkspace,
   validateChannelSetupDraft,
   type IntegrationConnection,
@@ -238,6 +262,8 @@ function renderSettingsSection(props: SettingsSectionProps) {
       return <PersonalitiesSection {...props} />;
     case "access":
       return <AccessSection {...props} />;
+    case "permissions":
+      return <PermissionsSection {...props} />;
     case "runtime":
       return <RuntimeSection {...props} />;
     case "workspaces":
@@ -330,6 +356,16 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
             <SettingsActionList
               items={[
                 {
+                  label: "Start Here",
+                  description: "Review onboarding status, setup defaults, and first-run posture.",
+                  onClick: () => navigate({ area: "settings", section: "onboarding", theme: route.theme }),
+                },
+                {
+                  label: "Budget",
+                  description: "Set cost posture and review budget guidance.",
+                  onClick: () => navigate({ area: "settings", section: "budget", theme: route.theme }),
+                },
+                {
                   label: "Providers",
                   description: "Choose active model routing and manage provider secrets.",
                   onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }),
@@ -370,6 +406,11 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
                   onClick: () => navigate({ area: "settings", section: "tools", theme: route.theme }),
                 },
                 {
+                  label: "Permissions",
+                  description: "Choose operator profiles, defaults, and Local Operator Override state.",
+                  onClick: () => navigate({ area: "settings", section: "permissions", theme: route.theme }),
+                },
+                {
                   label: "Add-ons",
                   description: "Install and control optional add-on runtimes.",
                   onClick: () => navigate({ area: "settings", section: "addons", theme: route.theme }),
@@ -384,7 +425,13 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
 }
 
 function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSectionProps) {
-  const load = useCallback(async () => fetchOnboardingState(), []);
+  const load = useCallback(async () => {
+    const [onboarding, runtimeSettings] = await Promise.all([
+      fetchOnboardingState(),
+      fetchSettings().catch(() => null),
+    ]);
+    return { ...onboarding, runtimeSettings };
+  }, []);
   const { loading, error, data, reload } = useAsyncLoad(load);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [defaultsDraft, setDefaultsDraft] = useState<{
@@ -411,7 +458,20 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
     });
   }, [data]);
 
+  const onboardingPromptSkippingRestriction = !data?.runtimeSettings
+    ? "Settings could not be loaded, so first-run defaults that skip normal prompts stay unavailable."
+    : data.runtimeSettings.deploymentProfile === "remote_hardened"
+      ? "Remote Hardened keeps first-run defaults that skip normal prompts unavailable."
+      : null;
+
   const applyDefaults = async () => {
+    if (
+      onboardingPromptSkippingRestriction &&
+      (defaultsDraft.defaultToolProfile === "danger" || defaultsDraft.toolApprovalMode === "bypass")
+    ) {
+      setNotice({ tone: "warning", message: onboardingPromptSkippingRestriction });
+      return;
+    }
     try {
       await bootstrapOnboarding({
         defaultToolProfile: defaultsDraft.defaultToolProfile,
@@ -492,16 +552,24 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
                 <select
                   className="mc-next-settings-input"
                   value={defaultsDraft.defaultToolProfile}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const nextProfile = normalizeToolProfile(event.target.value);
+                    if (onboardingPromptSkippingRestriction && nextProfile === "danger") {
+                      return;
+                    }
                     setDefaultsDraft((current) => ({
                       ...current,
-                      defaultToolProfile: normalizeToolProfile(event.target.value),
-                    }))
-                  }
+                      defaultToolProfile: nextProfile,
+                    }));
+                  }}
                 >
                   {TOOL_PROFILE_OPTIONS.map((profile) => (
-                    <option key={profile} value={profile}>
-                      {profile}
+                    <option
+                      key={profile}
+                      value={profile}
+                      disabled={Boolean(onboardingPromptSkippingRestriction && profile === "danger")}
+                    >
+                      {describeToolProfileLabel(profile)}
                     </option>
                   ))}
                 </select>
@@ -511,15 +579,23 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
                 <select
                   className="mc-next-settings-input"
                   value={defaultsDraft.toolApprovalMode}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const nextMode = normalizeToolApprovalMode(event.target.value);
+                    if (onboardingPromptSkippingRestriction && nextMode === "bypass") {
+                      return;
+                    }
                     setDefaultsDraft((current) => ({
                       ...current,
-                      toolApprovalMode: normalizeToolApprovalMode(event.target.value),
-                    }))
-                  }
+                      toolApprovalMode: nextMode,
+                    }));
+                  }}
                 >
                   {TOOL_APPROVAL_MODE_OPTIONS.map((mode) => (
-                    <option key={mode} value={mode}>
+                    <option
+                      key={mode}
+                      value={mode}
+                      disabled={Boolean(onboardingPromptSkippingRestriction && mode === "bypass")}
+                    >
                       {describeToolApprovalMode(mode)}
                     </option>
                   ))}
@@ -527,6 +603,9 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
                 <p className="mc-next-settings-field-note">
                   {describeToolApprovalModeHelp(defaultsDraft.toolApprovalMode)}
                 </p>
+                {onboardingPromptSkippingRestriction ? (
+                  <p className="mc-next-settings-field-note">{onboardingPromptSkippingRestriction}</p>
+                ) : null}
               </SettingsField>
               <SettingsField label="Budget mode">
                 <select
@@ -1365,6 +1444,33 @@ export function formatProviderProbeSourceMeta(provider?: {
   return formatCheckedAtLabel(provider.modelProbeCheckedAt);
 }
 
+export function formatProviderModelsMeta(
+  provider:
+    | {
+        modelProbeState?: "not_checked" | "ready" | "fallback" | "empty" | "error";
+        modelProbeSource?: "live" | "template_fallback" | "error_fallback";
+      }
+    | undefined,
+  modelCount: number,
+): string {
+  if (!provider || !provider.modelProbeState || provider.modelProbeState === "not_checked") {
+    return "Not probed";
+  }
+  if (provider.modelProbeSource === "template_fallback" || provider.modelProbeState === "fallback") {
+    return "Suggested, not account-verified";
+  }
+  if (provider.modelProbeSource === "error_fallback" || provider.modelProbeState === "error") {
+    return "Probe failed";
+  }
+  if (provider.modelProbeState === "empty") {
+    return "No verified model list";
+  }
+  if (provider.modelProbeState === "ready" && provider.modelProbeSource === "live") {
+    return modelCount > 0 ? "Live verified" : "No verified model list";
+  }
+  return modelCount > 0 ? "Suggested, not account-verified" : "No verified model list";
+}
+
 export function formatCheckedAtLabel(value?: string): string {
   if (!value) {
     return "Not checked yet";
@@ -1523,6 +1629,14 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       ? "Local runtime"
       : "Remote provider"
     : "Provider pending";
+  const selectedProviderExecutionApiStyle = selectedProvider?.resolvedApiStyle ?? selectedProvider?.apiStyle;
+  const selectedProviderApiMeta =
+    selectedProvider &&
+    selectedProviderExecutionApiStyle &&
+    selectedProviderExecutionApiStyle !== selectedProvider.apiStyle
+      ? `Gateway executes ${selectedProviderExecutionApiStyle}`
+      : "Matches configured API";
+  const providerApiStyleWarning = getProviderApiStyleWarning(providerDraft);
   const editorHint =
     editorMode === "new"
       ? "Create a new provider definition without expanding the gateway."
@@ -2237,7 +2351,17 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
               <>
                 <SettingsMetricGrid
                   items={[
-                    { label: "Default model", value: selectedProvider.defaultModel, meta: selectedProvider.apiStyle },
+                    { label: "Default model", value: selectedProvider.defaultModel, meta: "Configured fallback" },
+                    {
+                      label: "Configured API",
+                      value: selectedProvider.apiStyle,
+                      meta: "Saved provider setting",
+                    },
+                    {
+                      label: "Execution API",
+                      value: selectedProviderExecutionApiStyle ?? selectedProvider.apiStyle,
+                      meta: selectedProviderApiMeta,
+                    },
                     {
                       label: selectedProviderIsCodexOAuth || selectedProviderIsClaudeCodeOAuth ? "OAuth" : "API key",
                       value: selectedProviderIsCodexOAuth
@@ -2270,10 +2394,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                     {
                       label: "Provider models",
                       value: String(availableModels.length),
-                      meta:
-                        selectedProvider.modelProbeState === "fallback"
-                          ? "Suggested, not verified"
-                          : "Known to the runtime",
+                      meta: formatProviderModelsMeta(selectedProvider, availableModels.length),
                     },
                     {
                       label: "Runtime posture",
@@ -2428,6 +2549,9 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                   ))}
                 </select>
                 <p className="mc-next-settings-field-note">{describeProviderApiStyle(providerDraft.apiStyle)}</p>
+                {providerApiStyleWarning ? (
+                  <p className="mc-next-settings-field-note">{providerApiStyleWarning}</p>
+                ) : null}
               </SettingsField>
               <SettingsField label="Default model">
                 <input
@@ -2618,6 +2742,15 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
                 { label: "Workspace", value: activeWorkspaceName },
               ]}
             >
+              {data.settings.auth.plan?.warnings?.length ? (
+                <SettingsActionList
+                  items={data.settings.auth.plan.warnings.map((warning) => ({
+                    label: "Auth warning",
+                    description: warning,
+                    tone: "warning",
+                  }))}
+                />
+              ) : null}
               <SettingsFieldGrid>
                 <SettingsField label="Auth mode">
                   <select
@@ -4943,6 +5076,711 @@ function McpSection(_props: SettingsSectionProps) {
   );
 }
 
+// The "all" API surface is exposed through its own explicit action, not the per-surface action row.
+const PERMISSION_SURFACE_OPTIONS = [
+  "chat",
+  "cowork",
+  "code",
+  "tools",
+  "mcp",
+] as const satisfies readonly PermissionSurface[];
+const PERMISSION_PROFILE_DEFAULT_SURFACE_OPTIONS = [
+  "chat",
+  "cowork",
+  "code",
+  "tools",
+  "mcp",
+  "all",
+] as const satisfies readonly PermissionSurface[];
+const LOCAL_OPERATOR_OVERRIDE_SCOPE_OPTIONS = [
+  "workspace",
+  "session",
+  "run",
+  "operator",
+] as const satisfies readonly LocalOperatorOverrideScope[];
+const READ_ACCESS_MODE_OPTIONS = ["", "roots_only", "approval_required", "full_disk"] as const satisfies readonly (
+  | FilesystemReadAccessMode
+  | ""
+)[];
+
+interface EffectivePermissionSurfaceState {
+  surface: (typeof PERMISSION_SURFACE_OPTIONS)[number];
+  profileId?: string;
+  profileLabel?: string;
+  approvalMode?: string;
+  localOperatorOverrideId?: string;
+  localOperatorOverride?: LocalOperatorOverrideRecord;
+}
+
+type PermissionProfileEditorDraft = {
+  label: string;
+  description: string;
+  approvalMode: ToolApprovalMode;
+  toolPatterns: string;
+  allow: string;
+  deny: string;
+  readAccessMode: FilesystemReadAccessMode | "";
+  defaultForSurfaces: PermissionSurface[];
+};
+
+function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
+  const load = useCallback(async () => {
+    const effectiveLoadsPromise = Promise.all(
+      PERMISSION_SURFACE_OPTIONS.map(async (surface) => ({
+        surface,
+        load: await nativeLoad(
+          `Effective ${surface} permission profile`,
+          fetchEffectivePermissionProfile({ workspaceId: activeWorkspaceId, surface }),
+          {},
+        ),
+      })),
+    );
+    const [profiles, effectiveLoads, activeOverrides, settings] = await Promise.all([
+      nativeLoad("Permission profiles", fetchPermissionProfiles({ workspaceId: activeWorkspaceId }), { items: [] }),
+      effectiveLoadsPromise,
+      nativeLoad("Active Local Operator Overrides", fetchActiveLocalOperatorOverrides(), { items: [] }),
+      fetchSettings().catch(() => null),
+    ]);
+    return {
+      issues: nativeLoadIssues([profiles, ...effectiveLoads.map((item) => item.load), activeOverrides]),
+      profiles: profiles.data.items,
+      effective: effectiveLoads.map(({ surface, load }) => readEffectivePermissionSurfaceState(surface, load.data)),
+      activeOverrides: activeOverrides.data.items,
+      settings,
+    };
+  }, [activeWorkspaceId]);
+  const { loading, error, data, reload } = useAsyncLoad(load);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [selectedProfileId, setSelectedProfileId] = useState("safe");
+  const [profileDraft, setProfileDraft] = useState<PermissionProfileEditorDraft>(createEmptyPermissionProfileDraft);
+  const [profileEditDraft, setProfileEditDraft] = useState<PermissionProfileEditorDraft>(
+    createEmptyPermissionProfileDraft,
+  );
+  const [overrideDraft, setOverrideDraft] = useState({
+    scope: "workspace" as LocalOperatorOverrideScope,
+    scopeRef: activeWorkspaceId,
+    reason: "",
+    ttlSeconds: 600,
+  });
+  const [overrideAcknowledged, setOverrideAcknowledged] = useState(false);
+  const [recentLocalOverride, setRecentLocalOverride] = useState<LocalOperatorOverrideRecord | null>(null);
+  const selectedProfile =
+    data?.profiles.find((profile) => profile.profileId === selectedProfileId) ?? data?.profiles[0];
+  const effectiveOverride = data?.effective.find((item) => item.localOperatorOverride)?.localOperatorOverride;
+  const activeOverrides = collectActiveLocalOperatorOverrides([
+    effectiveOverride,
+    ...(data?.activeOverrides ?? []),
+    recentLocalOverride,
+  ]);
+  const primaryActiveOverride = activeOverrides[0];
+  const chatEffectiveProfileLabel =
+    data?.effective.find((item) => item.surface === "chat")?.profileLabel ?? "Unavailable";
+  const settingsUnavailable = !data?.settings;
+  const isRemoteHardened = data?.settings?.deploymentProfile === "remote_hardened";
+  const promptSkippingProfileRestriction = settingsUnavailable
+    ? "Settings could not be loaded, so profiles that skip normal prompts stay unavailable."
+    : isRemoteHardened
+      ? "Remote Hardened keeps profiles that skip normal prompts unavailable."
+      : null;
+  const localOperatorOverrideRestriction = settingsUnavailable
+    ? "Settings could not be loaded, so Local Operator Override stays unavailable."
+    : isRemoteHardened
+      ? "Remote Hardened mode keeps Local Operator Override unavailable."
+      : null;
+  const selectedProfileBypassesPrompts = selectedProfile?.approvalMode === "bypass";
+  const activationBlockedByRemoteHardened = Boolean(promptSkippingProfileRestriction && selectedProfileBypassesPrompts);
+
+  useEffect(() => {
+    setOverrideDraft((current) =>
+      current.scope === "workspace"
+        ? {
+            ...current,
+            scopeRef: activeWorkspaceId,
+          }
+        : current,
+    );
+  }, [activeWorkspaceId]);
+
+  useEffect(() => {
+    if (!data?.profiles.length) return;
+    setSelectedProfileId((current) =>
+      data.profiles.some((profile) => profile.profileId === current) ? current : data.profiles[0]!.profileId,
+    );
+  }, [data?.profiles]);
+
+  useEffect(() => {
+    if (effectiveOverride) {
+      setRecentLocalOverride(effectiveOverride);
+    }
+  }, [effectiveOverride]);
+
+  useEffect(() => {
+    if (!selectedProfile || selectedProfile.builtin) {
+      setProfileEditDraft(createEmptyPermissionProfileDraft());
+      return;
+    }
+    setProfileEditDraft(createPermissionProfileDraftFromRecord(selectedProfile));
+  }, [selectedProfile]);
+
+  const handleActivateProfile = async (profileId: string, surface: PermissionSurface) => {
+    const profile = data?.profiles.find((item) => item.profileId === profileId);
+    if (promptSkippingProfileRestriction && profile?.approvalMode === "bypass") {
+      setNotice({ tone: "warning", message: promptSkippingProfileRestriction });
+      return;
+    }
+    try {
+      await activatePermissionProfile({ profileId, workspaceId: activeWorkspaceId, surface });
+      setNotice({ tone: "success", message: `${labelForPermissionProfile(profileId, data?.profiles)} activated.` });
+      await reload();
+    } catch (activateError) {
+      setNotice({ tone: "error", message: getErrorMessage(activateError) });
+    }
+  };
+
+  const handleCreateProfile = async () => {
+    if (!profileDraft.label.trim()) {
+      setNotice({ tone: "warning", message: "Profile name is required." });
+      return;
+    }
+    if (promptSkippingProfileRestriction && profileDraft.approvalMode === "bypass") {
+      setNotice({ tone: "warning", message: promptSkippingProfileRestriction });
+      return;
+    }
+    try {
+      const created = await createPermissionProfile({
+        scope: "workspace",
+        scopeRef: activeWorkspaceId,
+        ...permissionProfileDraftToMutation(profileDraft),
+      });
+      setSelectedProfileId(created.profileId);
+      setProfileDraft(createEmptyPermissionProfileDraft());
+      setNotice({ tone: "success", message: "Permission profile created." });
+      await reload();
+    } catch (createError) {
+      setNotice({ tone: "error", message: getErrorMessage(createError) });
+    }
+  };
+
+  const handleUpdateSelectedProfile = async () => {
+    if (!selectedProfile || selectedProfile.builtin) {
+      setNotice({ tone: "warning", message: "Select a custom permission profile to edit." });
+      return;
+    }
+    if (!profileEditDraft.label.trim()) {
+      setNotice({ tone: "warning", message: "Profile name is required." });
+      return;
+    }
+    if (promptSkippingProfileRestriction && profileEditDraft.approvalMode === "bypass") {
+      setNotice({ tone: "warning", message: promptSkippingProfileRestriction });
+      return;
+    }
+    try {
+      const updated = await updatePermissionProfile(selectedProfile.profileId, {
+        ...permissionProfileDraftToMutation(profileEditDraft),
+      });
+      setSelectedProfileId(updated.profileId);
+      setNotice({ tone: "success", message: "Permission profile updated." });
+      await reload();
+    } catch (updateError) {
+      setNotice({ tone: "error", message: getErrorMessage(updateError) });
+    }
+  };
+
+  const handleArchiveSelectedProfile = async () => {
+    if (!selectedProfile || selectedProfile.builtin) {
+      setNotice({ tone: "warning", message: "Select a custom permission profile to archive." });
+      return;
+    }
+    try {
+      await archivePermissionProfile(selectedProfile.profileId);
+      setSelectedProfileId("safe");
+      setNotice({ tone: "success", message: "Permission profile archived." });
+      await reload();
+    } catch (archiveError) {
+      setNotice({ tone: "error", message: getErrorMessage(archiveError) });
+    }
+  };
+
+  const handleStartOverride = async () => {
+    if (localOperatorOverrideRestriction) {
+      setNotice({ tone: "warning", message: localOperatorOverrideRestriction });
+      return;
+    }
+    if (!overrideDraft.reason.trim()) {
+      setNotice({ tone: "warning", message: "Add a reason before starting Local Operator Override." });
+      return;
+    }
+    const scopeRef = resolveLocalOperatorOverrideScopeRef(
+      overrideDraft.scope,
+      overrideDraft.scopeRef,
+      activeWorkspaceId,
+    );
+    if (overrideDraft.scope !== "operator" && !scopeRef) {
+      setNotice({ tone: "warning", message: "Add a target for this Local Operator Override scope." });
+      return;
+    }
+    if (!overrideAcknowledged) {
+      setNotice({
+        tone: "warning",
+        message:
+          "Confirm that this grants broad local tool access, skips normal prompts, and keeps hard safety boundaries in force.",
+      });
+      return;
+    }
+    try {
+      const override = await createLocalOperatorOverride({
+        scope: overrideDraft.scope,
+        scopeRef,
+        reason: overrideDraft.reason.trim(),
+        ttlSeconds: overrideDraft.ttlSeconds,
+      });
+      setRecentLocalOverride(override);
+      setOverrideDraft((current) => ({
+        ...current,
+        reason: "",
+        ttlSeconds: 600,
+        scopeRef: current.scope === "workspace" ? activeWorkspaceId : current.scopeRef,
+      }));
+      setOverrideAcknowledged(false);
+      setNotice({
+        tone: "warning",
+        message: `Local Operator Override ${override.overrideId} is active until ${formatDateTime(override.expiresAt)}.`,
+      });
+      await reload();
+    } catch (overrideError) {
+      setNotice({ tone: "error", message: getErrorMessage(overrideError) });
+    }
+  };
+
+  const handleRevokeOverride = async (overrideId?: string) => {
+    if (!overrideId) {
+      setNotice({ tone: "warning", message: "No active Local Operator Override to end." });
+      return;
+    }
+    try {
+      const revoked = await revokeLocalOperatorOverride(overrideId);
+      const revokedAt = revoked.revokedAt ? ` at ${formatDateTime(revoked.revokedAt)}` : "";
+      const revokedBy = revoked.revokedBy ? ` by ${revoked.revokedBy}` : "";
+      const revokedStatus = revoked.status ? ` (${revoked.status})` : "";
+      setRecentLocalOverride((current) => (current?.overrideId === overrideId ? null : current));
+      setNotice({
+        tone: "success",
+        message: `Local Operator Override ${revoked.overrideId} ended${revokedBy}${revokedAt}${revokedStatus}.`,
+      });
+      await reload();
+    } catch (revokeError) {
+      setNotice({ tone: "error", message: getErrorMessage(revokeError) });
+    }
+  };
+
+  return (
+    <SettingsSectionShell loading={loading} error={error}>
+      {notice ? <SettingsNotice notice={notice} /> : null}
+      {data ? (
+        <SettingsGrid variant="three-column">
+          <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
+          <SettingsPanel
+            title="Permission profiles"
+            subtitle="Profiles define normal defaults; hard denies, scoped grants, auth, path jails, and disabled capabilities still win."
+            stats={[
+              { label: "Profiles", value: String(data.profiles.length) },
+              { label: "Chat effective", value: chatEffectiveProfileLabel },
+            ]}
+          >
+            <SettingsSelectableList
+              items={data.profiles.map((profile) => ({
+                id: profile.profileId,
+                title: profile.label,
+                meta: profile.builtin ? "Built-in" : profile.scope,
+                body: profile.description ?? describePermissionProfile(profile),
+              }))}
+              selectedId={selectedProfile?.profileId ?? ""}
+              onSelect={setSelectedProfileId}
+              emptyLabel="No permission profiles returned by the gateway."
+              maxHeight="22rem"
+            />
+          </SettingsPanel>
+          <SettingsStack>
+            <SettingsPanel
+              title={selectedProfile?.label ?? "Profile"}
+              subtitle={selectedProfile ? describePermissionProfile(selectedProfile) : "Select a profile to activate."}
+              stats={[
+                {
+                  label: "Approval mode",
+                  value: selectedProfile ? describeToolApprovalMode(selectedProfile.approvalMode) : "-",
+                },
+                { label: "Tool patterns", value: String(selectedProfile?.toolPatterns.length ?? 0) },
+                { label: "Read access", value: selectedProfile?.readAccessMode ?? "Global default" },
+              ]}
+            >
+              {selectedProfile ? (
+                <>
+                  <SettingsActionList
+                    items={selectedProfile.toolPatterns.map((pattern) => ({
+                      label: pattern,
+                      description: "Profile tool pattern",
+                    }))}
+                    emptyLabel="This profile does not add tool patterns."
+                  />
+                  <SettingsActionList
+                    items={[
+                      {
+                        label: "Allow",
+                        description: (selectedProfile.allow ?? []).length
+                          ? (selectedProfile.allow ?? []).join(", ")
+                          : "No extra allow patterns",
+                      },
+                      {
+                        label: "Deny",
+                        description: (selectedProfile.deny ?? []).length
+                          ? (selectedProfile.deny ?? []).join(", ")
+                          : "No profile deny patterns",
+                      },
+                      {
+                        label: "Default surfaces",
+                        description: selectedProfile.defaultForSurfaces?.length
+                          ? selectedProfile.defaultForSurfaces.join(", ")
+                          : "No automatic surface default",
+                      },
+                    ]}
+                    emptyLabel="No profile policy details."
+                  />
+                  {activationBlockedByRemoteHardened ? (
+                    <p className="mc-next-settings-field-note">{promptSkippingProfileRestriction}</p>
+                  ) : null}
+                  <SettingsButtonRow>
+                    <button
+                      type="button"
+                      className="mc-next-button"
+                      disabled={activationBlockedByRemoteHardened}
+                      onClick={() => void handleActivateProfile(selectedProfile.profileId, "all")}
+                    >
+                      <ShieldCheck size={16} />
+                      Use for all surfaces
+                    </button>
+                    <button
+                      type="button"
+                      className="mc-next-button-secondary"
+                      disabled={activationBlockedByRemoteHardened}
+                      onClick={() => void handleActivateProfile(selectedProfile.profileId, "code")}
+                    >
+                      <Code2 size={16} />
+                      Use for Code
+                    </button>
+                  </SettingsButtonRow>
+                  <SettingsButtonRow>
+                    {PERMISSION_SURFACE_OPTIONS.filter((surface) => surface !== "code").map((surface) => (
+                      <button
+                        key={surface}
+                        type="button"
+                        className="mc-next-button-secondary"
+                        disabled={activationBlockedByRemoteHardened}
+                        onClick={() => void handleActivateProfile(selectedProfile.profileId, surface)}
+                      >
+                        <ShieldCheck size={16} />
+                        Use for {surface.toUpperCase()}
+                      </button>
+                    ))}
+                  </SettingsButtonRow>
+                </>
+              ) : (
+                <SettingsEmptyState label="Select a profile." />
+              )}
+            </SettingsPanel>
+            {selectedProfile && !selectedProfile.builtin ? (
+              <SettingsPanel title="Edit custom profile" subtitle="Update or archive the selected profile.">
+                <PermissionProfileDraftFields
+                  draft={profileEditDraft}
+                  bypassUnavailableReason={promptSkippingProfileRestriction ?? undefined}
+                  setDraft={setProfileEditDraft}
+                />
+                <SettingsButtonRow>
+                  <button type="button" className="mc-next-button" onClick={() => void handleUpdateSelectedProfile()}>
+                    <Save size={16} />
+                    Save profile
+                  </button>
+                  <button
+                    type="button"
+                    className="mc-next-button-secondary"
+                    onClick={() => void handleArchiveSelectedProfile()}
+                  >
+                    <Trash2 size={16} />
+                    Archive profile
+                  </button>
+                </SettingsButtonRow>
+              </SettingsPanel>
+            ) : null}
+            <SettingsPanel title="Custom profile" subtitle="Create a workspace-scoped profile for your own workflow.">
+              <PermissionProfileDraftFields
+                draft={profileDraft}
+                bypassUnavailableReason={promptSkippingProfileRestriction ?? undefined}
+                setDraft={setProfileDraft}
+              />
+              <SettingsButtonRow>
+                <button type="button" className="mc-next-button" onClick={() => void handleCreateProfile()}>
+                  <Plus size={16} />
+                  Create profile
+                </button>
+              </SettingsButtonRow>
+            </SettingsPanel>
+          </SettingsStack>
+          <SettingsPanel
+            title="Active defaults"
+            subtitle="Effective profile and temporary local override state by surface."
+          >
+            <SettingsActionList
+              items={(data.effective ?? []).map((item) => ({
+                label: item.surface.toUpperCase(),
+                description: `${item.profileLabel ?? item.profileId ?? "Safe"}${
+                  item.approvalMode ? `, ${describeToolApprovalMode(normalizeToolApprovalMode(item.approvalMode))}` : ""
+                }${
+                  item.localOperatorOverrideId
+                    ? `, override ${item.localOperatorOverrideId} until ${formatDateTime(item.localOperatorOverride?.expiresAt)}`
+                    : ""
+                }`,
+              }))}
+              emptyLabel="No effective profile state returned."
+            />
+          </SettingsPanel>
+          <SettingsPanel
+            title="Local Operator Override"
+            subtitle={
+              isRemoteHardened
+                ? "Remote Hardened mode keeps Local Operator Override unavailable."
+                : settingsUnavailable
+                  ? "Settings could not be loaded, so Local Operator Override stays unavailable."
+                  : "A time-boxed local action that skips normal prompts and grants broad local tool access for the selected scope. Deny rules, auth, path jails, network blocks, disabled capabilities, and Code Mode policy and artifact checks remain enforced."
+            }
+            stats={[
+              { label: "Status", value: activeOverrides.length ? `${activeOverrides.length} active` : "Inactive" },
+              {
+                label: "Next expiry",
+                value: primaryActiveOverride ? formatDateTime(primaryActiveOverride.expiresAt) : "-",
+              },
+            ]}
+          >
+            {activeOverrides.length ? (
+              <SettingsActionList
+                items={activeOverrides.map((override) => ({
+                  label: override.overrideId,
+                  description: `${override.reason} · started by ${override.createdBy} · operator ${override.operatorId}`,
+                  meta: `${override.scope}${override.scopeRef ? ` · ${override.scopeRef}` : ""} · expires ${formatDateTime(override.expiresAt)}`,
+                  onClick: () => void handleRevokeOverride(override.overrideId),
+                  actionLabel: "End",
+                }))}
+                emptyLabel="No active override evidence."
+              />
+            ) : null}
+            <SettingsField label="Reason">
+              <textarea
+                className="mc-next-settings-input"
+                value={overrideDraft.reason}
+                onChange={(event) => setOverrideDraft((current) => ({ ...current, reason: event.target.value }))}
+                rows={4}
+                placeholder="Why this local run needs temporary fast-path execution"
+              />
+            </SettingsField>
+            <SettingsField label="Scope">
+              <select
+                className="mc-next-settings-input"
+                value={overrideDraft.scope}
+                onChange={(event) =>
+                  setOverrideDraft((current) => {
+                    const scope = event.target.value as LocalOperatorOverrideScope;
+                    return {
+                      ...current,
+                      scope,
+                      scopeRef: resetLocalOperatorOverrideScopeRefForScope(scope, activeWorkspaceId),
+                    };
+                  })
+                }
+              >
+                {LOCAL_OPERATOR_OVERRIDE_SCOPE_OPTIONS.map((scope) => (
+                  <option key={scope} value={scope}>
+                    {labelForLocalOperatorOverrideScope(scope)}
+                  </option>
+                ))}
+              </select>
+            </SettingsField>
+            {overrideDraft.scope !== "operator" ? (
+              <SettingsField label={overrideDraft.scope === "workspace" ? "Workspace" : "Target id"}>
+                <input
+                  className="mc-next-settings-input"
+                  value={overrideDraft.scope === "workspace" ? activeWorkspaceId : (overrideDraft.scopeRef ?? "")}
+                  onChange={(event) => setOverrideDraft((current) => ({ ...current, scopeRef: event.target.value }))}
+                  disabled={overrideDraft.scope === "workspace"}
+                  placeholder={overrideDraft.scope === "session" ? "session id" : "run id"}
+                />
+              </SettingsField>
+            ) : null}
+            <SettingsField label="Duration">
+              <select
+                className="mc-next-settings-input"
+                value={overrideDraft.ttlSeconds}
+                onChange={(event) =>
+                  setOverrideDraft((current) => ({ ...current, ttlSeconds: Number(event.target.value) }))
+                }
+              >
+                <option value={300}>5 minutes</option>
+                <option value={600}>10 minutes</option>
+                <option value={1800}>30 minutes</option>
+                <option value={3600}>60 minutes</option>
+              </select>
+            </SettingsField>
+            <label className="mc-next-settings-check">
+              <input
+                type="checkbox"
+                checked={overrideAcknowledged}
+                onChange={(event) => setOverrideAcknowledged(event.target.checked)}
+                disabled={Boolean(localOperatorOverrideRestriction)}
+              />
+              <span>
+                I understand this grants broad local tool access and skips normal prompts for the selected scope. Deny
+                rules, auth, path, network, disabled-capability, Code Mode policy, and artifact checks still apply.
+              </span>
+            </label>
+            <SettingsButtonRow>
+              <button
+                type="button"
+                className="mc-next-button-danger"
+                disabled={Boolean(localOperatorOverrideRestriction) || !overrideAcknowledged}
+                onClick={() => void handleStartOverride()}
+              >
+                <AlertTriangle size={16} />
+                Start temporary override
+              </button>
+            </SettingsButtonRow>
+          </SettingsPanel>
+        </SettingsGrid>
+      ) : null}
+    </SettingsSectionShell>
+  );
+}
+
+function PermissionProfileDraftFields({
+  draft,
+  bypassUnavailableReason,
+  setDraft,
+}: {
+  draft: PermissionProfileEditorDraft;
+  bypassUnavailableReason?: string;
+  setDraft: Dispatch<SetStateAction<PermissionProfileEditorDraft>>;
+}) {
+  const bypassUnavailable = Boolean(bypassUnavailableReason);
+  return (
+    <SettingsFieldGrid>
+      <SettingsField label="Name">
+        <input
+          className="mc-next-settings-input"
+          value={draft.label}
+          onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))}
+          placeholder="Review mode, research mode, release captain"
+        />
+      </SettingsField>
+      <SettingsField label="Approval behavior">
+        <select
+          className="mc-next-settings-input"
+          value={draft.approvalMode}
+          onChange={(event) => {
+            const nextMode = normalizeToolApprovalMode(event.target.value);
+            if (bypassUnavailable && nextMode === "bypass") {
+              return;
+            }
+            setDraft((current) => ({
+              ...current,
+              approvalMode: nextMode,
+            }));
+          }}
+        >
+          {TOOL_APPROVAL_MODE_OPTIONS.map((mode) => (
+            <option key={mode} value={mode} disabled={bypassUnavailable && mode === "bypass"}>
+              {bypassUnavailable && mode === "bypass"
+                ? `${describeToolApprovalMode(mode)} (unavailable)`
+                : describeToolApprovalMode(mode)}
+            </option>
+          ))}
+        </select>
+        {bypassUnavailableReason ? <p className="mc-next-settings-field-note">{bypassUnavailableReason}</p> : null}
+      </SettingsField>
+      <SettingsField label="Description" span={2}>
+        <textarea
+          className="mc-next-settings-input"
+          value={draft.description}
+          onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
+          rows={3}
+          placeholder="Why this profile exists and when to use it"
+        />
+      </SettingsField>
+      <SettingsField label="Read access">
+        <select
+          className="mc-next-settings-input"
+          value={draft.readAccessMode}
+          onChange={(event) =>
+            setDraft((current) => ({
+              ...current,
+              readAccessMode: event.target.value as FilesystemReadAccessMode | "",
+            }))
+          }
+        >
+          {READ_ACCESS_MODE_OPTIONS.map((mode) => (
+            <option key={mode || "default"} value={mode}>
+              {describeReadAccessMode(mode)}
+            </option>
+          ))}
+        </select>
+      </SettingsField>
+      <SettingsField label="Default surfaces">
+        {PERMISSION_PROFILE_DEFAULT_SURFACE_OPTIONS.map((surface) => (
+          <label key={surface} className="mc-next-settings-toggle">
+            <input
+              type="checkbox"
+              checked={draft.defaultForSurfaces.includes(surface)}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  defaultForSurfaces: togglePermissionProfileSurface(
+                    current.defaultForSurfaces,
+                    surface,
+                    event.target.checked,
+                  ),
+                }))
+              }
+            />
+            <span>{surface.toUpperCase()}</span>
+          </label>
+        ))}
+      </SettingsField>
+      <SettingsField label="Tool patterns" span={2}>
+        <textarea
+          className="mc-next-settings-input"
+          value={draft.toolPatterns}
+          onChange={(event) => setDraft((current) => ({ ...current, toolPatterns: event.target.value }))}
+          rows={5}
+          placeholder={"session.status\nmemory.read"}
+        />
+      </SettingsField>
+      <SettingsField label="Allow patterns">
+        <textarea
+          className="mc-next-settings-input"
+          value={draft.allow}
+          onChange={(event) => setDraft((current) => ({ ...current, allow: event.target.value }))}
+          rows={4}
+          placeholder="Optional allow patterns"
+        />
+      </SettingsField>
+      <SettingsField label="Deny patterns">
+        <textarea
+          className="mc-next-settings-input"
+          value={draft.deny}
+          onChange={(event) => setDraft((current) => ({ ...current, deny: event.target.value }))}
+          rows={4}
+          placeholder="Optional deny patterns"
+        />
+      </SettingsField>
+    </SettingsFieldGrid>
+  );
+}
+
 function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
   const load = useCallback(async () => {
     const [tools, grants, settings] = await Promise.all([
@@ -4968,6 +5806,7 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
     scope: "workspace",
     grantType: "persistent",
     scopeRef: activeWorkspaceId,
+    expiresAt: defaultToolGrantExpiry(),
   });
 
   const filteredTools = useMemo(() => {
@@ -4992,6 +5831,11 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
       current && filteredTools.some((item) => item.toolName === current) ? current : filteredTools[0]?.toolName || "",
     );
   }, [filteredTools]);
+  const approvalBypassRestriction = !data?.settings
+    ? "Settings could not be loaded, so routine prompt skipping stays unavailable."
+    : data.settings.deploymentProfile === "remote_hardened"
+      ? "Remote Hardened mode keeps routine prompt skipping unavailable."
+      : null;
 
   useEffect(() => {
     if (data?.settings?.toolApprovalMode) {
@@ -5015,14 +5859,21 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
       setNotice({ tone: "warning", message: "Tool pattern is required." });
       return;
     }
+    const grantScope = grantForm.scope as "global" | "session" | "workspace" | "agent" | "task";
+    const scopeRef = grantScope === "global" ? undefined : grantForm.scopeRef.trim();
+    if ((grantScope === "session" || grantScope === "agent" || grantScope === "task") && !scopeRef) {
+      setNotice({ tone: "warning", message: `Add a ${grantScope} id before creating this tool grant.` });
+      return;
+    }
     try {
+      const expiresAt = grantForm.grantType === "ttl" ? grantForm.expiresAt.trim() : undefined;
       await createToolGrant({
         toolPattern: grantForm.toolPattern.trim(),
         decision: grantForm.decision as "allow" | "deny",
-        scope: grantForm.scope as "global" | "session" | "workspace" | "agent" | "task",
-        scopeRef: grantForm.scope === "global" ? undefined : grantForm.scopeRef.trim() || undefined,
+        scope: grantScope,
+        scopeRef,
         grantType: grantForm.grantType as "persistent" | "ttl" | "one_time",
-        createdBy: "operator",
+        ...(expiresAt ? { expiresAt } : {}),
       });
       setNotice({ tone: "success", message: "Tool grant created." });
       await reload();
@@ -5042,6 +5893,10 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
   };
 
   const handleSaveApprovalMode = async () => {
+    if (approvalBypassRestriction && approvalModeDraft === "bypass") {
+      setNotice({ tone: "warning", message: approvalBypassRestriction });
+      return;
+    }
     try {
       await patchSettings({ toolApprovalMode: approvalModeDraft });
       setNotice({ tone: "success", message: "Tool approval mode saved." });
@@ -5058,12 +5913,14 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
         <SettingsGrid variant="three-column">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
           <SettingsPanel
-            title="Approval mode"
-            subtitle="Choose when GoatCitadel asks before running otherwise-allowed tools."
+            title="Global tool prompt mode"
+            subtitle="Base prompt behavior for otherwise-allowed tools when no active permission profile overrides it."
             stats={[
               {
                 label: "Current",
-                value: describeToolApprovalMode(data.settings?.toolApprovalMode ?? "approve_risky"),
+                value: data.settings?.toolApprovalMode
+                  ? describeToolApprovalMode(data.settings.toolApprovalMode)
+                  : "Unavailable",
               },
               { label: "Hard blocks", value: "Always enforced" },
             ]}
@@ -5072,14 +5929,26 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
               <select
                 className="mc-next-settings-input"
                 value={approvalModeDraft}
-                onChange={(event) => setApprovalModeDraft(normalizeToolApprovalMode(event.target.value))}
+                onChange={(event) => {
+                  const nextMode = normalizeToolApprovalMode(event.target.value);
+                  if (approvalBypassRestriction && nextMode === "bypass") {
+                    return;
+                  }
+                  setApprovalModeDraft(nextMode);
+                }}
               >
                 {TOOL_APPROVAL_MODE_OPTIONS.map((mode) => (
-                  <option key={mode} value={mode}>
+                  <option key={mode} value={mode} disabled={Boolean(approvalBypassRestriction && mode === "bypass")}>
                     {describeToolApprovalMode(mode)}
+                    {approvalBypassRestriction && mode === "bypass" ? " (Unavailable)" : ""}
                   </option>
                 ))}
               </select>
+              {approvalBypassRestriction ? (
+                <p className="mc-next-settings-field-note">
+                  {approvalBypassRestriction} Hard blocks and explicit auth stay enforced.
+                </p>
+              ) : null}
             </SettingsField>
             <SettingsButtonRow>
               <button type="button" className="mc-next-button" onClick={() => void handleSaveApprovalMode()}>
@@ -5120,10 +5989,7 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
                 maxHeight="min(48vh, 28rem)"
               />
             </SettingsPanel>
-            <SettingsPanel
-              title="Create tool grant"
-              subtitle="Create a workspace or global policy grant for the selected tool."
-            >
+            <SettingsPanel title="Create tool grant" subtitle="Create a scoped policy grant for the selected tool.">
               <SettingsFieldGrid>
                 <SettingsField label="Tool pattern">
                   <input
@@ -5150,7 +6016,7 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
                       setGrantForm((current) => ({
                         ...current,
                         scope: event.target.value,
-                        scopeRef: event.target.value === "workspace" ? activeWorkspaceId : current.scopeRef,
+                        scopeRef: event.target.value === "workspace" ? activeWorkspaceId : "",
                       }))
                     }
                   >
@@ -5173,13 +6039,32 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
                   <select
                     className="mc-next-settings-input"
                     value={grantForm.grantType}
-                    onChange={(event) => setGrantForm((current) => ({ ...current, grantType: event.target.value }))}
+                    onChange={(event) =>
+                      setGrantForm((current) => ({
+                        ...current,
+                        grantType: event.target.value,
+                        expiresAt:
+                          event.target.value === "ttl" && !current.expiresAt
+                            ? defaultToolGrantExpiry()
+                            : current.expiresAt,
+                      }))
+                    }
                   >
                     <option value="persistent">Persistent</option>
                     <option value="ttl">TTL</option>
                     <option value="one_time">One time</option>
                   </select>
                 </SettingsField>
+                {grantForm.grantType === "ttl" ? (
+                  <SettingsField label="Expires at">
+                    <input
+                      className="mc-next-settings-input"
+                      value={grantForm.expiresAt}
+                      onChange={(event) => setGrantForm((current) => ({ ...current, expiresAt: event.target.value }))}
+                      placeholder="2099-01-01T00:00:00.000Z"
+                    />
+                  </SettingsField>
+                ) : null}
               </SettingsFieldGrid>
               <SettingsButtonRow>
                 <button type="button" className="mc-next-button" onClick={() => void handleCreateGrant()}>
@@ -5191,7 +6076,7 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
           </SettingsStack>
           <SettingsPanel
             title={selectedTool?.toolName ?? "Tool detail"}
-            subtitle="Selected catalog entry and active grants."
+            subtitle="Selected catalog entry and tool grants."
             scrollBody
             bodyMaxHeight="min(72vh, 42rem)"
           >
@@ -5206,8 +6091,12 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
                     },
                     {
                       label: "Available grants",
-                      value: String(data.grants.filter((item) => matchesToolGrant(item, selectedTool.toolName)).length),
-                      meta: "Matched by tool pattern",
+                      value: String(
+                        data.grants.filter(
+                          (item) => matchesToolGrant(item, selectedTool.toolName) && isToolGrantAvailable(item),
+                        ).length,
+                      ),
+                      meta: "Active, unexpired matches",
                     },
                   ]}
                 />
@@ -5219,15 +6108,19 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
               <SettingsEmptyState label="Choose a tool from the catalog to inspect it." />
             )}
             <SettingsActionList
-              items={data.grants.map((item) => ({
-                id: item.grantId,
-                label: item.toolPattern,
-                description: `${item.scope}${item.scopeRef ? `:${item.scopeRef}` : ""} · ${item.decision} · ${item.grantType}`,
-                meta: item.revokedAt ? "revoked" : "active",
-                onClick: item.revokedAt ? undefined : () => void handleRevokeGrant(item.grantId),
-                actionLabel: item.revokedAt ? "Revoked" : "Revoke",
-              }))}
-              emptyLabel="No tool grants created yet."
+              items={data.grants
+                .filter((item) => (selectedTool ? matchesToolGrant(item, selectedTool.toolName) : true))
+                .map((item) => ({
+                  id: item.grantId,
+                  label: item.toolPattern,
+                  description: `${item.scope}${item.scopeRef ? `:${item.scopeRef}` : ""} · ${item.decision} · ${item.grantType}${
+                    item.revokedBy ? ` · revoked by ${item.revokedBy}` : ""
+                  }`,
+                  meta: describeToolGrantAvailability(item),
+                  onClick: item.revokedAt ? undefined : () => void handleRevokeGrant(item.grantId),
+                  actionLabel: item.revokedAt ? "Revoked" : "Revoke",
+                }))}
+              emptyLabel={selectedTool ? "No tool grants match this catalog entry." : "No tool grants created yet."}
               maxHeight="min(42vh, 24rem)"
             />
           </SettingsPanel>
@@ -5577,7 +6470,7 @@ function AddonsSection(_props: SettingsSectionProps) {
                         }
                       >
                         <ShieldCheck size={16} />
-                        Install disabled
+                        Install pack
                       </button>
                     </SettingsButtonRow>
                   </>
@@ -6150,13 +7043,54 @@ export function collectDefinitionFieldHints(definition: ChannelSetupDefinition) 
 }
 
 export function matchesToolGrant(grant: ToolGrantRecord, toolName: string) {
-  if (grant.toolPattern === toolName) {
+  const pattern = grant.toolPattern.trim();
+  if (!pattern) {
+    return false;
+  }
+  if (pattern === "*") {
     return true;
   }
-  if (grant.toolPattern.endsWith("*")) {
-    return toolName.startsWith(grant.toolPattern.slice(0, -1));
+  if (!pattern.includes("*")) {
+    return pattern === toolName;
   }
-  return false;
+  const escaped = pattern.replace(/[|\\{}()[\]^$+?.]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`).test(toolName);
+}
+
+export function isToolGrantAvailable(grant: ToolGrantRecord, nowMs = Date.now()) {
+  if (grant.revokedAt) {
+    return false;
+  }
+  if (grant.expiresAt) {
+    const expiry = Date.parse(grant.expiresAt);
+    if (Number.isFinite(expiry) && expiry <= nowMs) {
+      return false;
+    }
+  }
+  if (grant.grantType === "one_time") {
+    return (grant.usesRemaining ?? 0) > 0;
+  }
+  return true;
+}
+
+export function describeToolGrantAvailability(grant: ToolGrantRecord, nowMs = Date.now()) {
+  if (grant.revokedAt) {
+    return `revoked ${formatDateTime(grant.revokedAt)}`;
+  }
+  if (grant.expiresAt) {
+    const expiry = Date.parse(grant.expiresAt);
+    if (Number.isFinite(expiry) && expiry <= nowMs) {
+      return `expired ${formatDateTime(grant.expiresAt)}`;
+    }
+  }
+  if (grant.grantType === "one_time" && (grant.usesRemaining ?? 0) <= 0) {
+    return "exhausted";
+  }
+  return "available";
+}
+
+export function defaultToolGrantExpiry(nowMs = Date.now()) {
+  return new Date(nowMs + 60 * 60 * 1000).toISOString();
 }
 
 export function parseJsonObject(value: string, fallback: Record<string, unknown> = {}) {
@@ -6183,6 +7117,77 @@ export function splitLineList(value: string) {
     .split(/\r?\n/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+export function splitLineOrCommaList(value: string) {
+  return value
+    .split(/\r?\n|,/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+export function createEmptyPermissionProfileDraft(): PermissionProfileEditorDraft {
+  return {
+    label: "",
+    description: "",
+    approvalMode: "approve_all",
+    toolPatterns: "session.status\nmemory.read",
+    allow: "",
+    deny: "",
+    readAccessMode: "",
+    defaultForSurfaces: [],
+  };
+}
+
+export function createPermissionProfileDraftFromRecord(profile: PermissionProfileRecord): PermissionProfileEditorDraft {
+  return {
+    label: profile.label,
+    description: profile.description ?? "",
+    approvalMode: profile.approvalMode,
+    toolPatterns: profile.toolPatterns.join("\n"),
+    allow: (profile.allow ?? []).join("\n"),
+    deny: (profile.deny ?? []).join("\n"),
+    readAccessMode: profile.readAccessMode ?? "",
+    defaultForSurfaces: profile.defaultForSurfaces ?? [],
+  };
+}
+
+export function permissionProfileDraftToMutation(draft: PermissionProfileEditorDraft) {
+  const description = draft.description.trim();
+  return {
+    label: draft.label.trim(),
+    description: description || undefined,
+    approvalMode: draft.approvalMode,
+    toolPatterns: splitLineOrCommaList(draft.toolPatterns),
+    allow: splitLineOrCommaList(draft.allow),
+    deny: splitLineOrCommaList(draft.deny),
+    readAccessMode: draft.readAccessMode || undefined,
+    defaultForSurfaces: draft.defaultForSurfaces,
+  };
+}
+
+export function togglePermissionProfileSurface(
+  current: PermissionSurface[],
+  surface: PermissionSurface,
+  checked: boolean,
+): PermissionSurface[] {
+  if (checked) {
+    return current.includes(surface) ? current : [...current, surface];
+  }
+  return current.filter((item) => item !== surface);
+}
+
+function describeReadAccessMode(mode: FilesystemReadAccessMode | "") {
+  switch (mode) {
+    case "roots_only":
+      return "Workspace roots only";
+    case "approval_required":
+      return "Ask before broader reads";
+    case "full_disk":
+      return "Full local disk reads";
+    default:
+      return "Global default";
+  }
 }
 
 export function deriveSetupCenterItems(onboarding: OnboardingState): Array<{
@@ -6256,12 +7261,90 @@ export function normalizeToolProfile(value: string | undefined): ToolProfile {
   return TOOL_PROFILE_OPTIONS.includes(value as ToolProfile) ? (value as ToolProfile) : "standard";
 }
 
+function readEffectivePermissionSurfaceState(
+  surface: EffectivePermissionSurfaceState["surface"],
+  context: Record<string, unknown>,
+): EffectivePermissionSurfaceState {
+  const profile = isRecord(context.permissionProfile) ? context.permissionProfile : undefined;
+  const override = readLocalOperatorOverride(context.localOperatorOverride);
+  return {
+    surface,
+    profileId: readString(context.permissionProfileId) ?? readString(profile?.profileId),
+    profileLabel: readString(context.permissionProfileLabel) ?? readString(profile?.label),
+    approvalMode: readString(context.permissionProfileApprovalMode) ?? readString(profile?.approvalMode),
+    localOperatorOverrideId: readString(context.localOperatorOverrideId) ?? override?.overrideId,
+    localOperatorOverride: override,
+  };
+}
+
+function readLocalOperatorOverride(value: unknown): LocalOperatorOverrideRecord | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const overrideId = readString(record.overrideId);
+  const operatorId = readString(record.operatorId);
+  const reason = readString(record.reason);
+  const createdAt = readString(record.createdAt);
+  const expiresAt = readString(record.expiresAt);
+  if (!overrideId || !operatorId || !reason || !createdAt || !expiresAt) {
+    return undefined;
+  }
+  return {
+    overrideId,
+    operatorId,
+    scope: (readString(record.scope) as LocalOperatorOverrideRecord["scope"] | undefined) ?? "workspace",
+    scopeRef: readString(record.scopeRef),
+    reason,
+    status: (readString(record.status) as LocalOperatorOverrideRecord["status"] | undefined) ?? "active",
+    createdBy: readString(record.createdBy) ?? operatorId,
+    createdAt,
+    expiresAt,
+    revokedAt: readString(record.revokedAt),
+    revokedBy: readString(record.revokedBy),
+  };
+}
+
+function isActiveLocalOperatorOverride(
+  override: LocalOperatorOverrideRecord | null | undefined,
+): override is LocalOperatorOverrideRecord {
+  if (!override || override.status !== "active" || override.revokedAt) {
+    return false;
+  }
+  const expiresAtMs = Date.parse(override.expiresAt);
+  return Number.isFinite(expiresAtMs) ? expiresAtMs > Date.now() : true;
+}
+
+function collectActiveLocalOperatorOverrides(
+  overrides: Array<LocalOperatorOverrideRecord | null | undefined>,
+): LocalOperatorOverrideRecord[] {
+  const seen = new Set<string>();
+  return overrides
+    .filter(isActiveLocalOperatorOverride)
+    .filter((override) => {
+      if (seen.has(override.overrideId)) {
+        return false;
+      }
+      seen.add(override.overrideId);
+      return true;
+    })
+    .sort((left, right) => Date.parse(left.expiresAt) - Date.parse(right.expiresAt));
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 export function describeToolApprovalMode(value: ToolApprovalMode): string {
   if (value === "approve_all") {
     return "Ask every time";
   }
   if (value === "bypass") {
-    return "Bypass prompts";
+    return "Skip normal prompts";
   }
   return "Ask for risky work";
 }
@@ -6271,9 +7354,59 @@ export function describeToolApprovalModeHelp(value: ToolApprovalMode): string {
     return "Every otherwise-allowed tool call asks first; useful for audits and first-run learning.";
   }
   if (value === "bypass") {
-    return "Allowed tools run without prompts, while hard policy blocks still apply. Use only in trusted local workflows.";
+    return "Allowed tools run without normal prompts in local profiles except nuclear-risk, risky-shell, and read work outside the active read posture. Remote Hardened rejects this mode; hard policy blocks still apply.";
   }
   return "Low-risk allowed tools can run, but caution, danger, and nuclear-risk work asks first.";
+}
+
+export function describePermissionProfile(profile: PermissionProfileRecord): string {
+  if (profile.description?.trim()) {
+    return profile.description.trim();
+  }
+  const posture = describeToolApprovalMode(profile.approvalMode);
+  const scope = profile.scope === "global" ? "global" : `${profile.scope} scoped`;
+  return `${posture}; ${scope}; ${profile.toolPatterns.length} tool pattern${
+    profile.toolPatterns.length === 1 ? "" : "s"
+  }.`;
+}
+
+export function labelForPermissionProfile(profileId: string, profiles: PermissionProfileRecord[] = []): string {
+  return profiles.find((profile) => profile.profileId === profileId)?.label ?? profileId;
+}
+
+export function labelForLocalOperatorOverrideScope(scope: LocalOperatorOverrideScope): string {
+  switch (scope) {
+    case "operator":
+      return "This operator";
+    case "session":
+      return "Specific session";
+    case "run":
+      return "Specific run";
+    default:
+      return "Current workspace";
+  }
+}
+
+export function resolveLocalOperatorOverrideScopeRef(
+  scope: LocalOperatorOverrideScope,
+  draftScopeRef: string | undefined,
+  activeWorkspaceId: string,
+): string | undefined {
+  if (scope === "operator") {
+    return undefined;
+  }
+  if (scope === "workspace") {
+    return activeWorkspaceId;
+  }
+  const trimmed = draftScopeRef?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+export function resetLocalOperatorOverrideScopeRefForScope(
+  scope: LocalOperatorOverrideScope,
+  activeWorkspaceId: string,
+): string {
+  return scope === "workspace" ? activeWorkspaceId : "";
 }
 
 export function describeToolProfile(value: ToolProfile): string {
@@ -6289,9 +7422,23 @@ export function describeToolProfile(value: ToolProfile): string {
     case "chat-agent":
       return "Chat-friendly tools without turning the surface into a full coding workstation.";
     case "danger":
-      return "Broadest local tool profile. Pair it with strict approvals unless this machine is fully trusted.";
+      return "Broadest local tool access profile for fully trusted machines; prompt behavior still comes from the approval mode and hard blocks stay enforced.";
     default:
       return "Balanced default for normal local work without opening the broadest tool set.";
+  }
+}
+
+export function describeToolProfileLabel(value: ToolProfile): string {
+  switch (value) {
+    case "chat-agent":
+      return "Chat Agent";
+    case "danger":
+      return "Trusted Local Power";
+    default:
+      return value
+        .split("-")
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" ");
   }
 }
 
@@ -6335,6 +7482,16 @@ function describeProviderApiStyle(value: ProviderEditorDraft["apiStyle"]): strin
     return "Use for Anthropic Claude providers that speak the Messages API.";
   }
   return "Use for older OpenAI-compatible chat-completions endpoints such as many proxy or local servers.";
+}
+
+export function getProviderApiStyleWarning(provider: {
+  providerId?: string;
+  apiStyle?: ProviderEditorDraft["apiStyle"];
+}): string | null {
+  if (provider.apiStyle === "openai-codex-responses" && provider.providerId !== "openai-codex") {
+    return "Codex Responses is only executed for the built-in OpenAI Codex OAuth provider; other providers resolve to their supported execution API.";
+  }
+  return null;
 }
 
 function formatSecretStatusMeta(source: string | undefined, hasSecret: boolean): string {
@@ -6539,6 +7696,8 @@ function iconForSettingsSection(section: string) {
       return Sparkles;
     case "access":
       return ShieldCheck;
+    case "permissions":
+      return ShieldCheck;
     case "runtime":
       return Gauge;
     case "workspaces":
@@ -6572,6 +7731,8 @@ export function labelForSettingsSection(section: string) {
       return "Personalities";
     case "access":
       return "Access";
+    case "permissions":
+      return "Permissions";
     case "runtime":
       return "Runtime";
     case "workspaces":
@@ -6605,6 +7766,8 @@ export function descriptionForSettingsSection(section: string) {
       return "Manage Chat tone presets and choose the global Chat default.";
     case "access":
       return "Manage gateway auth posture, install tokens, and device access.";
+    case "permissions":
+      return "Manage permission profiles, active defaults, and time-boxed local override controls with operator evidence.";
     case "runtime":
       return "Configure local runtimes and control the processes behind them.";
     case "workspaces":

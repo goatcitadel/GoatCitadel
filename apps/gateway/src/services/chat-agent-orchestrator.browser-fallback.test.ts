@@ -3969,7 +3969,7 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
       sessionId: "sess-nav-final-url-reuse-1",
       turnId: "turn-nav-final-url-reuse-1",
       userMessageId: "msg-nav-final-url-reuse-1",
-      content: "Find the top 5 uses for REST APIs.",
+      content: "Search the web for the top 5 uses for REST APIs.",
       mode: "chat",
       providerId: "glm",
       model: "glm-5",
@@ -3977,7 +3977,7 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
-      historyMessages: [{ role: "user", content: "Find the top 5 uses for REST APIs." }],
+      historyMessages: [{ role: "user", content: "Search the web for the top 5 uses for REST APIs." }],
     });
 
     expect(result.turnTrace.failure).toBeUndefined();
@@ -6344,7 +6344,7 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
       sessionId: "sess-synth-timeout-1",
       turnId: randomUUID(),
       userMessageId: "msg-synth-timeout-1",
-      content: "Find AI tooling references from our notes",
+      content: "Search the web for AI tooling references",
       mode: "chat",
       providerId: "glm",
       model: "glm-5",
@@ -6352,7 +6352,7 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
-      historyMessages: [{ role: "user", content: "Find AI tooling references from our notes" }],
+      historyMessages: [{ role: "user", content: "Search the web for AI tooling references" }],
     });
 
     // During testing we intentionally give synthesis a much larger timeout so

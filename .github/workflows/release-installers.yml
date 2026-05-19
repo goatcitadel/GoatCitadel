@@ -31,9 +31,17 @@ env:
 jobs:
   windows:
     runs-on: ${{ matrix.runner }}
+    # SECURITY (codex finding #7): The signing secrets are intentionally
+    # NOT declared at the job level. Job-level `env` is inherited by every
+    # step, including `pnpm install`, `cargo` commands, and third-party
+    # setup actions, any of which could be compromised (malicious
+    # dependency, build script, action) and exfiltrate the cert + password.
+    # We only expose `WINDOWS_SIGN_CERT_BASE64` / `WINDOWS_SIGN_CERT_PASSWORD`
+    # via per-step `env:` on the two signing steps, and only check for
+    # their presence (not value) in the pre-flight gate.
     env:
-      WINDOWS_SIGN_CERT_BASE64: ${{ secrets.WINDOWS_SIGN_CERT_BASE64 }}
-      WINDOWS_SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
+      WINDOWS_SIGN_CERT_BASE64_PRESENT: ${{ secrets.WINDOWS_SIGN_CERT_BASE64 != '' }}
+      WINDOWS_SIGN_CERT_PASSWORD_PRESENT: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -71,25 +79,48 @@ jobs:
         working-directory: apps/mission-control-desktop/src-tauri
         run: cargo test
 
+      - name: Verify desktop runtime proof lane
+        run: pnpm verify:desktop
+
       - name: Build desktop executable
         run: pnpm package:desktop --target ${{ matrix.target }}
 
       - name: Require signing secrets for public releases
-        if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.allow_unsigned != 'true') && (env.WINDOWS_SIGN_CERT_BASE64 == '' || env.WINDOWS_SIGN_CERT_PASSWORD == '') }}
+        if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.allow_unsigned != 'true') && (env.WINDOWS_SIGN_CERT_BASE64_PRESENT != 'true' || env.WINDOWS_SIGN_CERT_PASSWORD_PRESENT != 'true') }}
         run: |
           echo "WINDOWS_SIGN_CERT_BASE64 and WINDOWS_SIGN_CERT_PASSWORD are required for public release installers."
           exit 1
 
       - name: Sign desktop executable
-        if: ${{ env.WINDOWS_SIGN_CERT_BASE64 != '' && env.WINDOWS_SIGN_CERT_PASSWORD != '' }}
+        if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.allow_unsigned != 'true') && env.WINDOWS_SIGN_CERT_BASE64_PRESENT == 'true' && env.WINDOWS_SIGN_CERT_PASSWORD_PRESENT == 'true' }}
         shell: pwsh
+        env:
+          # SECURITY (codex finding #7): secrets are scoped to THIS step
+          # only — they are not present in env during pnpm install, cargo,
+          # or third-party setup steps. SECURITY (codex finding #10): we
+          # also resolve signtool via the Windows SDK install path rather
+          # than `Get-Command`, so a malicious earlier step cannot plant
+          # a fake signtool.exe on PATH and exfiltrate the cert+password.
+          WINDOWS_SIGN_CERT_BASE64: ${{ secrets.WINDOWS_SIGN_CERT_BASE64 }}
+          WINDOWS_SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
         run: |
-          $certPath = Join-Path $env:RUNNER_TEMP "goatcitadel-signing-cert.pfx"
-          [System.IO.File]::WriteAllBytes($certPath, [System.Convert]::FromBase64String($env:WINDOWS_SIGN_CERT_BASE64))
-          $signtool = (Get-Command signtool.exe -ErrorAction Stop).Source
-          & $signtool sign /fd SHA256 /f $certPath /p $env:WINDOWS_SIGN_CERT_PASSWORD /tr http://timestamp.digicert.com /td SHA256 "artifacts/installers/desktop/${{ matrix.target }}/GoatCitadel-Mission-Control-Desktop.exe"
-          & $signtool verify /pa "artifacts/installers/desktop/${{ matrix.target }}/GoatCitadel-Mission-Control-Desktop.exe"
-          Remove-Item -LiteralPath $certPath -Force
+          $certName = "goatcitadel-signing-cert-$([Guid]::NewGuid()).pfx"
+          $certPath = Join-Path $env:RUNNER_TEMP $certName
+          try {
+            [System.IO.File]::WriteAllBytes($certPath, [System.Convert]::FromBase64String($env:WINDOWS_SIGN_CERT_BASE64))
+            # Resolve signtool from the Windows 10/11 SDK install path
+            # rather than searching PATH (codex finding #10).
+            $sdkRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+            $signtool = Get-ChildItem -Path $sdkRoot -Recurse -Filter 'signtool.exe' -ErrorAction Stop |
+              Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+              Sort-Object -Property @{Expression={[Version]($_.Directory.Parent.Name)}; Descending=$true} |
+              Select-Object -ExpandProperty FullName -First 1
+            if (-not $signtool) { throw "signtool.exe not found in Windows SDK at $sdkRoot" }
+            & $signtool sign /fd SHA256 /f $certPath /p $env:WINDOWS_SIGN_CERT_PASSWORD /tr http://timestamp.digicert.com /td SHA256 "artifacts/installers/desktop/${{ matrix.target }}/GoatCitadel-Mission-Control-Desktop.exe"
+            & $signtool verify /pa "artifacts/installers/desktop/${{ matrix.target }}/GoatCitadel-Mission-Control-Desktop.exe"
+          } finally {
+            Remove-Item -LiteralPath $certPath -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Build packaged bundle
         run: pnpm package:bundle --target ${{ matrix.target }}
@@ -101,15 +132,30 @@ jobs:
         run: pnpm package:windows --target ${{ matrix.target }}
 
       - name: Sign Windows installer
-        if: ${{ env.WINDOWS_SIGN_CERT_BASE64 != '' && env.WINDOWS_SIGN_CERT_PASSWORD != '' }}
+        if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.allow_unsigned != 'true') && env.WINDOWS_SIGN_CERT_BASE64_PRESENT == 'true' && env.WINDOWS_SIGN_CERT_PASSWORD_PRESENT == 'true' }}
         shell: pwsh
+        env:
+          # SECURITY (codex finding #7, #10): secrets scoped to this step
+          # only; signtool resolved from the Windows SDK path rather than
+          # PATH search.
+          WINDOWS_SIGN_CERT_BASE64: ${{ secrets.WINDOWS_SIGN_CERT_BASE64 }}
+          WINDOWS_SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
         run: |
-          $certPath = Join-Path $env:RUNNER_TEMP "goatcitadel-signing-cert.pfx"
-          [System.IO.File]::WriteAllBytes($certPath, [System.Convert]::FromBase64String($env:WINDOWS_SIGN_CERT_BASE64))
-          $signtool = (Get-Command signtool.exe -ErrorAction Stop).Source
-          & $signtool sign /fd SHA256 /f $certPath /p $env:WINDOWS_SIGN_CERT_PASSWORD /tr http://timestamp.digicert.com /td SHA256 "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe"
-          & $signtool verify /pa "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe"
-          Remove-Item -LiteralPath $certPath -Force
+          $certName = "goatcitadel-signing-cert-$([Guid]::NewGuid()).pfx"
+          $certPath = Join-Path $env:RUNNER_TEMP $certName
+          try {
+            [System.IO.File]::WriteAllBytes($certPath, [System.Convert]::FromBase64String($env:WINDOWS_SIGN_CERT_BASE64))
+            $sdkRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+            $signtool = Get-ChildItem -Path $sdkRoot -Recurse -Filter 'signtool.exe' -ErrorAction Stop |
+              Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+              Sort-Object -Property @{Expression={[Version]($_.Directory.Parent.Name)}; Descending=$true} |
+              Select-Object -ExpandProperty FullName -First 1
+            if (-not $signtool) { throw "signtool.exe not found in Windows SDK at $sdkRoot" }
+            & $signtool sign /fd SHA256 /f $certPath /p $env:WINDOWS_SIGN_CERT_PASSWORD /tr http://timestamp.digicert.com /td SHA256 "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe"
+            & $signtool verify /pa "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe"
+          } finally {
+            Remove-Item -LiteralPath $certPath -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Smoke install Windows installer
         shell: pwsh
@@ -228,7 +274,8 @@ jobs:
         run: |
           node scripts/release/wait-for-release-proof.mjs \
             --repository "$GITHUB_REPOSITORY" \
-            --commit "$GITHUB_SHA"
+            --commit "$GITHUB_SHA" \
+            --timeout-ms 14400000
 
       - name: Write commit-bound release certificate
         env:

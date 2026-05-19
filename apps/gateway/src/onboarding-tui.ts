@@ -721,9 +721,9 @@ async function promptRuntimeDefaults(
         description: "Require approval for risky or policy-gated actions.",
       },
       {
-        name: "Bypass approval prompts",
+        name: "Skip normal prompts (not for Remote Hardened)",
         value: "bypass",
-        description: "Skip prompts for allowed actions. Hard safety blocks still apply.",
+        description: "Skip prompts for allowed actions in local profiles. Remote Hardened rejects this mode.",
       },
     ],
   });

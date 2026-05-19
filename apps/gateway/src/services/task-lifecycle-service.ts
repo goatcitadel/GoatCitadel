@@ -24,7 +24,7 @@ import type {
   TaskSubagentUpdateInput,
   TaskUpdateInput,
 } from "@goatcitadel/contracts";
-import { ValidationError } from "@goatcitadel/contracts";
+import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { emitDistressSignal, resolveDistressSignal, type EmitDistressInput } from "./task-distress-engine.js";
 import { verifyClaimedArtifacts, type ArtifactProbers } from "./task-artifact-verifier.js";
 import type { Storage } from "@goatcitadel/storage";
@@ -59,6 +59,10 @@ export interface TaskLifecycleServiceDependencies {
   probers?: ArtifactProbers;
 }
 
+export interface TaskWorkspaceAccessOptions {
+  workspaceId?: string;
+}
+
 export class TaskLifecycleService {
   public constructor(private readonly deps: TaskLifecycleServiceDependencies) {}
 
@@ -78,8 +82,8 @@ export class TaskLifecycleService {
     });
   }
 
-  public getTask(taskId: string): TaskRecord {
-    return this.deps.storage.tasks.get(taskId);
+  public getTask(taskId: string, options?: TaskWorkspaceAccessOptions): TaskRecord {
+    return this.requireTaskInWorkspace(taskId, options);
   }
 
   public createTask(input: TaskCreateInput): TaskRecord {
@@ -91,7 +95,8 @@ export class TaskLifecycleService {
     return created;
   }
 
-  public updateTask(taskId: string, input: TaskUpdateInput): TaskRecord {
+  public updateTask(taskId: string, input: TaskUpdateInput, options?: TaskWorkspaceAccessOptions): TaskRecord {
+    this.requireTaskInWorkspace(taskId, options);
     if (input.status === "done") {
       const deliverables = this.deps.storage.taskDeliverables.countByTask(taskId);
       if (deliverables < 1) {
@@ -106,8 +111,12 @@ export class TaskLifecycleService {
     return updated;
   }
 
-  public emitDistressSignal(taskId: string, input: EmitDistressInput): TaskRecord {
-    const current = this.deps.storage.tasks.get(taskId);
+  public emitDistressSignal(
+    taskId: string,
+    input: EmitDistressInput,
+    options?: TaskWorkspaceAccessOptions,
+  ): TaskRecord {
+    const current = this.requireTaskInWorkspace(taskId, options);
     const next = emitDistressSignal(current.distressSignals, input);
     const updated = this.deps.storage.tasks.update(taskId, { distressSignals: next });
     const newSignal = next.find((s) => !current.distressSignals?.some((existing) => existing.signalId === s.signalId));
@@ -119,8 +128,13 @@ export class TaskLifecycleService {
     return updated;
   }
 
-  public resolveDistressSignal(taskId: string, signalId: string, input: { resolvedBy?: string } = {}): TaskRecord {
-    const current = this.deps.storage.tasks.get(taskId);
+  public resolveDistressSignal(
+    taskId: string,
+    signalId: string,
+    input: { resolvedBy?: string } = {},
+    options?: TaskWorkspaceAccessOptions,
+  ): TaskRecord {
+    const current = this.requireTaskInWorkspace(taskId, options);
     const next = resolveDistressSignal(current.distressSignals, signalId, input);
     const matched = current.distressSignals?.some((s) => s.signalId === signalId && !s.resolvedAt);
     if (!matched) {
@@ -137,11 +151,11 @@ export class TaskLifecycleService {
     return updated;
   }
 
-  public setRetryBudget(taskId: string, maxRetries: number): TaskRecord {
+  public setRetryBudget(taskId: string, maxRetries: number, options?: TaskWorkspaceAccessOptions): TaskRecord {
     if (!Number.isInteger(maxRetries) || maxRetries < 0) {
       throw new ValidationError({ message: "maxRetries must be a non-negative integer" });
     }
-    const current = this.deps.storage.tasks.get(taskId);
+    const current = this.requireTaskInWorkspace(taskId, options);
     const retryBudget: TaskRetryBudget = {
       maxRetries,
       retryCount: current.retryBudget?.retryCount ?? 0,
@@ -149,8 +163,8 @@ export class TaskLifecycleService {
     return this.deps.storage.tasks.update(taskId, { retryBudget });
   }
 
-  public recordRetryAttempt(taskId: string, reason: string): TaskRecord {
-    const current = this.deps.storage.tasks.get(taskId);
+  public recordRetryAttempt(taskId: string, reason: string, options?: TaskWorkspaceAccessOptions): TaskRecord {
+    const current = this.requireTaskInWorkspace(taskId, options);
     const budget = current.retryBudget ?? { maxRetries: 0, retryCount: 0 };
     const nextCount = budget.retryCount + 1;
     const now = new Date().toISOString();
@@ -210,10 +224,10 @@ export class TaskLifecycleService {
     return updated;
   }
 
-  public bulkUpdateTasks(input: BulkTaskAction): TaskRecord[] {
+  public bulkUpdateTasks(input: BulkTaskAction, options?: TaskWorkspaceAccessOptions): TaskRecord[] {
     return input.taskIds.map((taskId) => {
       if (input.action === "unblock") {
-        const current = this.deps.storage.tasks.get(taskId);
+        const current = this.requireTaskInWorkspace(taskId, options);
         const retryBudget = current.retryBudget
           ? { ...current.retryBudget, retryCount: 0, exhaustedAt: undefined }
           : undefined;
@@ -225,21 +239,25 @@ export class TaskLifecycleService {
         return updated;
       }
       if (input.action === "retry") {
-        return this.recordRetryAttempt(taskId, input.reason);
+        return this.recordRetryAttempt(taskId, input.reason, options);
       }
       if (input.action === "reassign") {
-        return this.updateTask(taskId, { assignedAgentId: input.assignedAgentId });
+        return this.updateTask(taskId, { assignedAgentId: input.assignedAgentId }, options);
       }
-      return this.updateTask(taskId, { status: "done" });
+      return this.updateTask(taskId, { status: "done" }, options);
     });
   }
 
-  public async verifyTaskArtifacts(taskId: string, claims: TaskArtifactClaim[]): Promise<TaskRecord> {
+  public async verifyTaskArtifacts(
+    taskId: string,
+    claims: TaskArtifactClaim[],
+    options?: TaskWorkspaceAccessOptions,
+  ): Promise<TaskRecord> {
+    const current = this.requireTaskInWorkspace(taskId, options);
     if (!this.deps.probers) {
       throw new ValidationError({ message: "Artifact verification probers not configured" });
     }
     const verification = await verifyClaimedArtifacts(claims, this.deps.probers);
-    const current = this.deps.storage.tasks.get(taskId);
     const merged = [...(current.artifactVerification ?? []), ...verification];
     const missingCount = verification.filter((v) => v.status === "missing").length;
     const failedCount = verification.filter((v) => v.status === "failed").length;
@@ -311,9 +329,9 @@ export class TaskLifecycleService {
     };
   }
 
-  public getAgenticRunTree(runId: string): AgenticRunTreeResponse {
+  public getAgenticRunTree(runId: string, options?: TaskWorkspaceAccessOptions): AgenticRunTreeResponse {
     const normalizedRunId = sanitizeRequired(runId, "runId");
-    const tasks = this.listTasksInAgenticRun(normalizedRunId);
+    const tasks = this.listTasksInAgenticRun(normalizedRunId, options);
     if (tasks.length === 0) {
       throw new ValidationError({ message: `Agentic run not found: ${normalizedRunId}` });
     }
@@ -475,8 +493,9 @@ export class TaskLifecycleService {
       signalId?: string;
       createdAt?: string;
     },
+    options?: TaskWorkspaceAccessOptions,
   ): AgenticDiagnosticSignal {
-    const task = this.deps.storage.tasks.get(taskId);
+    const task = this.requireTaskInWorkspace(taskId, options);
     const diagnostic: AgenticDiagnosticSignal = {
       signalId: input.signalId ?? randomUUID(),
       code: input.code,
@@ -494,24 +513,32 @@ export class TaskLifecycleService {
         failureClass: task.agenticContext?.failureClass ?? mapDiagnosticToFailureClass(diagnostic.code),
       },
     });
-    this.appendTaskActivity(taskId, {
-      activityType: "diagnostic",
-      message: diagnostic.summary,
-      metadata: diagnostic as unknown as Record<string, unknown>,
-    });
+    this.appendTaskActivity(
+      taskId,
+      {
+        activityType: "diagnostic",
+        message: diagnostic.summary,
+        metadata: diagnostic as unknown as Record<string, unknown>,
+      },
+      options,
+    );
     try {
       this.deps.recordAgenticDiagnosticSignal?.({ task, diagnostic });
     } catch (error) {
       try {
-        this.appendTaskActivity(taskId, {
-          activityType: "diagnostic",
-          message: "Agentic diagnostic was saved, but improvement-ledger mirroring failed.",
-          metadata: {
-            code: "agentic_diagnostic_mirror_failed",
-            diagnosticSignalId: diagnostic.signalId,
-            error: error instanceof Error ? error.message : String(error),
+        this.appendTaskActivity(
+          taskId,
+          {
+            activityType: "diagnostic",
+            message: "Agentic diagnostic was saved, but improvement-ledger mirroring failed.",
+            metadata: {
+              code: "agentic_diagnostic_mirror_failed",
+              diagnosticSignalId: diagnostic.signalId,
+              error: error instanceof Error ? error.message : String(error),
+            },
           },
-        });
+          options,
+        );
       } catch (activityError) {
         process.stderr.write(
           `[task-lifecycle] failed to record agentic diagnostic mirror failure: ${
@@ -523,8 +550,12 @@ export class TaskLifecycleService {
     return diagnostic;
   }
 
-  public invokeAgenticControl(runId: string, input: AgenticControlRequest): AgenticControlResponse {
-    const task = this.findRootTaskForRun(runId);
+  public invokeAgenticControl(
+    runId: string,
+    input: AgenticControlRequest,
+    options?: TaskWorkspaceAccessOptions,
+  ): AgenticControlResponse {
+    const task = this.findRootTaskForRun(runId, options);
     const now = new Date().toISOString();
     const controlId = input.controlId?.trim();
     if (controlId) {
@@ -603,6 +634,10 @@ export class TaskLifecycleService {
       if (!input.agentSessionId) {
         throw new ValidationError({ field: "agentSessionId", message: "agentSessionId is required for kill_child." });
       }
+      const subagent = this.deps.storage.taskSubagents.findByAgentSessionId(input.agentSessionId);
+      if (!subagent || subagent.taskId !== task.taskId) {
+        throw new NotFoundError({ entity: "Sub-agent session", id: input.agentSessionId });
+      }
       this.deps.storage.taskSubagents.updateByAgentSessionId(input.agentSessionId, {
         status: "killed",
         endedAt: now,
@@ -653,8 +688,16 @@ export class TaskLifecycleService {
     };
   }
 
-  public softDeleteTask(taskId: string, deletedBy?: string, deleteReason?: string): boolean {
-    const existing = this.deps.storage.tasks.find(taskId);
+  public softDeleteTask(
+    taskId: string,
+    deletedBy?: string,
+    deleteReason?: string,
+    options?: TaskWorkspaceAccessOptions,
+  ): boolean {
+    const existing = this.findTaskInWorkspace(taskId, options);
+    if (!existing) {
+      return false;
+    }
     const deleted = this.deps.storage.tasks.softDelete(taskId, deletedBy, deleteReason);
     if (deleted) {
       this.publishTaskEvent("task_deleted", { taskId, mode: "soft" }, buildTaskRealtimeLinks(existing, taskId));
@@ -662,7 +705,10 @@ export class TaskLifecycleService {
     return deleted;
   }
 
-  public restoreTask(taskId: string): boolean {
+  public restoreTask(taskId: string, options?: TaskWorkspaceAccessOptions): boolean {
+    if (!this.findTaskInWorkspace(taskId, options)) {
+      return false;
+    }
     const restored = this.deps.storage.tasks.restore(taskId);
     if (restored) {
       this.publishTaskEvent(
@@ -674,8 +720,11 @@ export class TaskLifecycleService {
     return restored;
   }
 
-  public hardDeleteTask(taskId: string): boolean {
-    const existing = this.deps.storage.tasks.find(taskId);
+  public hardDeleteTask(taskId: string, options?: TaskWorkspaceAccessOptions): boolean {
+    const existing = this.findTaskInWorkspace(taskId, options);
+    if (!existing) {
+      return false;
+    }
     const deleted = this.deps.storage.tasks.hardDelete(taskId);
     if (deleted) {
       this.publishTaskEvent("task_deleted", { taskId, mode: "hard" }, buildTaskRealtimeLinks(existing, taskId));
@@ -683,21 +732,26 @@ export class TaskLifecycleService {
     return deleted;
   }
 
-  private findRootTaskForRun(runId: string): TaskRecord {
+  private findRootTaskForRun(runId: string, options?: TaskWorkspaceAccessOptions): TaskRecord {
     const normalizedRunId = sanitizeRequired(runId, "runId");
-    const task = this.findTaskByAgenticRunId(normalizedRunId);
+    const task = this.findTaskByAgenticRunId(normalizedRunId, options);
     if (!task) {
       throw new ValidationError({ message: `Agentic run not found: ${normalizedRunId}` });
     }
     return task;
   }
 
-  private listTasksInAgenticRun(runId: string): TaskRecord[] {
-    return this.scanActiveTasks((task) => isTaskInAgenticRun(task, runId));
+  private listTasksInAgenticRun(runId: string, options?: TaskWorkspaceAccessOptions): TaskRecord[] {
+    return this.scanActiveTasks(
+      (task) => isTaskInAgenticRun(task, runId) && this.isTaskAllowedForWorkspace(task, options),
+    );
   }
 
-  private findTaskByAgenticRunId(runId: string): TaskRecord | undefined {
-    return this.scanActiveTasks((task) => task.agenticContext?.runId === runId, { stopAfterFirst: true })[0];
+  private findTaskByAgenticRunId(runId: string, options?: TaskWorkspaceAccessOptions): TaskRecord | undefined {
+    return this.scanActiveTasks(
+      (task) => task.agenticContext?.runId === runId && this.isTaskAllowedForWorkspace(task, options),
+      { stopAfterFirst: true },
+    )[0];
   }
 
   private scanActiveTasks(
@@ -728,43 +782,68 @@ export class TaskLifecycleService {
     }
   }
 
-  public listTaskActivities(taskId: string, limit = 200): TaskActivityRecord[] {
-    this.deps.storage.tasks.get(taskId);
+  public listTaskActivities(taskId: string, limit = 200, options?: TaskWorkspaceAccessOptions): TaskActivityRecord[] {
+    this.requireTaskInWorkspace(taskId, options);
     return this.deps.storage.taskActivities.listByTask(taskId, limit);
   }
 
-  public appendTaskActivity(taskId: string, input: TaskActivityCreateInput): TaskActivityRecord {
-    const task = this.deps.storage.tasks.get(taskId);
+  public appendTaskActivity(
+    taskId: string,
+    input: TaskActivityCreateInput,
+    options?: TaskWorkspaceAccessOptions,
+  ): TaskActivityRecord {
+    const task = this.requireTaskInWorkspace(taskId, options);
     const activity = this.deps.storage.taskActivities.append(taskId, input);
     this.publishTaskEvent("activity_logged", { taskId, activity }, buildTaskRealtimeLinks(task));
     return activity;
   }
 
-  public listTaskDeliverables(taskId: string, limit = 200): TaskDeliverableRecord[] {
-    this.deps.storage.tasks.get(taskId);
+  public listTaskDeliverables(
+    taskId: string,
+    limit = 200,
+    options?: TaskWorkspaceAccessOptions,
+  ): TaskDeliverableRecord[] {
+    this.requireTaskInWorkspace(taskId, options);
     return this.deps.storage.taskDeliverables.listByTask(taskId, limit);
   }
 
-  public appendTaskDeliverable(taskId: string, input: TaskDeliverableCreateInput): TaskDeliverableRecord {
-    const task = this.deps.storage.tasks.get(taskId);
+  public appendTaskDeliverable(
+    taskId: string,
+    input: TaskDeliverableCreateInput,
+    options?: TaskWorkspaceAccessOptions,
+  ): TaskDeliverableRecord {
+    const task = this.requireTaskInWorkspace(taskId, options);
     const deliverable = this.deps.storage.taskDeliverables.append(taskId, input);
     this.publishTaskEvent("deliverable_added", { taskId, deliverable }, buildTaskRealtimeLinks(task));
     return deliverable;
   }
 
-  public listTaskSubagents(taskId: string, limit = 200): TaskSubagentSession[] {
-    this.deps.storage.tasks.get(taskId);
+  public listTaskSubagents(taskId: string, limit = 200, options?: TaskWorkspaceAccessOptions): TaskSubagentSession[] {
+    this.requireTaskInWorkspace(taskId, options);
     return this.deps.storage.taskSubagents.listByTask(taskId, limit);
   }
 
-  public registerTaskSubagent(taskId: string, input: TaskSubagentCreateInput): TaskSubagentSession {
-    const task = this.deps.storage.tasks.get(taskId);
+  public registerTaskSubagent(
+    taskId: string,
+    input: TaskSubagentCreateInput,
+    options?: TaskWorkspaceAccessOptions,
+  ): TaskSubagentSession {
+    const task = this.requireTaskInWorkspace(taskId, options);
     const session = this.deps.storage.taskSubagents.create(taskId, input);
     this.publishTaskEvent("subagent_registered", { taskId, session }, buildTaskRealtimeLinks(task));
     return session;
   }
 
-  public updateTaskSubagent(agentSessionId: string, input: TaskSubagentUpdateInput): TaskSubagentSession {
+  public updateTaskSubagent(
+    agentSessionId: string,
+    input: TaskSubagentUpdateInput,
+    options?: TaskWorkspaceAccessOptions,
+  ): TaskSubagentSession {
+    const current = this.deps.storage.taskSubagents.findByAgentSessionId(agentSessionId);
+    if (!current) {
+      throw new NotFoundError({ entity: "Sub-agent session", id: agentSessionId });
+    }
+    this.requireTaskInWorkspace(current.taskId, options);
     const updated = this.deps.storage.taskSubagents.updateByAgentSessionId(agentSessionId, {
       ...input,
       endedAt: input.endedAt ?? (input.status && input.status !== "active" ? new Date().toISOString() : undefined),
@@ -778,13 +857,36 @@ export class TaskLifecycleService {
     return updated;
   }
 
+  private requireTaskInWorkspace(taskId: string, options?: TaskWorkspaceAccessOptions): TaskRecord {
+    const task = this.deps.storage.tasks.get(taskId);
+    if (!this.isTaskAllowedForWorkspace(task, options)) {
+      throw new NotFoundError({ entity: "Task", id: taskId });
+    }
+    return task;
+  }
+
+  private findTaskInWorkspace(taskId: string, options?: TaskWorkspaceAccessOptions): TaskRecord | undefined {
+    const task = this.deps.storage.tasks.find(taskId);
+    if (!task || !this.isTaskAllowedForWorkspace(task, options)) {
+      return undefined;
+    }
+    return task;
+  }
+
+  private isTaskAllowedForWorkspace(task: TaskRecord, options?: TaskWorkspaceAccessOptions): boolean {
+    if (!options) {
+      return true;
+    }
+    return (task.workspaceId ?? DEFAULT_WORKSPACE_ID) === this.normalizeWorkspaceId(options.workspaceId);
+  }
+
   private normalizeWorkspaceId(workspaceId?: string): string {
     if (!workspaceId?.trim()) {
       return DEFAULT_WORKSPACE_ID;
     }
     const normalized = workspaceId.trim();
     if (!/^[a-zA-Z0-9._-]{1,80}$/.test(normalized)) {
-      throw new Error("workspaceId contains unsupported characters");
+      throw new ValidationError({ field: "workspaceId", message: "workspaceId contains unsupported characters" });
     }
     return normalized;
   }
@@ -910,11 +1012,11 @@ function buildAgenticControls(task: TaskRecord): AgenticRunTreeResponse["control
     },
     {
       action: "cancel",
-      label: "Cancel run",
+      label: "Record cancel intent",
       enabled: status !== "completed" && status !== "done" && status !== "cancelled" && status !== "stopped_by_limit",
       runtimeEffect: "state_only",
       reason:
-        "Cancels the durable board state; live runtime cancellation is only applied where an executor is attached.",
+        "Records cancellation in Cowork board state; live runtime cancellation is only applied where an executor is attached.",
     },
     {
       action: "retry",
@@ -1030,7 +1132,7 @@ function buildIdempotentControlReplay(
   const runtimeEffect = isAgenticRuntimeEffect(existing.metadata?.runtimeEffect)
     ? existing.metadata.runtimeEffect
     : "state_only";
-  const status = existing.metadata?.resultStatus === "rejected" ? "rejected" : "recorded";
+  const status = isAgenticControlStatus(existing.metadata?.resultStatus) ? existing.metadata.resultStatus : "recorded";
   return {
     action: input.action,
     taskId: task.taskId,
@@ -1041,6 +1143,10 @@ function buildIdempotentControlReplay(
     idempotentReplay: true,
     message: "Control was already recorded; the duplicate request was treated as an idempotent replay.",
   };
+}
+
+function isAgenticControlStatus(value: unknown): value is AgenticControlResponse["status"] {
+  return value === "recorded" || value === "applied" || value === "rejected";
 }
 
 function isAgenticRuntimeEffect(value: unknown): value is AgenticControlResponse["runtimeEffect"] {

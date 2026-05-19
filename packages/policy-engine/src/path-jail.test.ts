@@ -25,6 +25,10 @@ describe("assertWritePathInJail", () => {
     expect(() => assertWritePathInJail("./workspace/../secret.txt", ["./workspace"])).toThrow(/outside write jail/i);
   });
 
+  it("allows dot-prefixed filenames that are not traversal segments", () => {
+    expect(() => assertWritePathInJail("./workspace/..note.txt", ["./workspace"])).not.toThrow();
+  });
+
   it("allows writes under a configured jail root that does not exist yet", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-path-jail-missing-root-"));
     tempDirs.push(root);

@@ -153,6 +153,7 @@ describe("agentSendChatMessage abort signal coverage", () => {
       await sendPreparedIntegrationChatTurn(
         host,
         "session-1",
+        { mode: "chat" },
         createPrepared("chat"),
         createBinding(),
         "chat_thread_turn_appended",
@@ -185,6 +186,7 @@ describe("agentSendChatMessage abort signal coverage", () => {
       const pending = sendPreparedIntegrationChatTurn(
         host,
         "session-1",
+        { mode: "chat" },
         createPrepared("chat"),
         createBinding(),
         "chat_thread_turn_appended",

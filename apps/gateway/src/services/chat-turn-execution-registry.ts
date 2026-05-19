@@ -135,4 +135,8 @@ export class ChatTurnExecutionRegistry {
   public getActiveStream(turnId: string): ActiveChatTurnStreamExecution | undefined {
     return this.activeStreams.get(turnId);
   }
+
+  public listActiveStreamsForSession(sessionId: string): ActiveChatTurnStreamExecution[] {
+    return [...this.activeStreams.values()].filter((stream) => stream.sessionId === sessionId && !stream.completed);
+  }
 }

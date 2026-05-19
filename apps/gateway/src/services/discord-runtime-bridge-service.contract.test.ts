@@ -295,11 +295,32 @@ describe("discord-runtime-bridge-service contract behavior", () => {
     expect(response).toContain("Approved approval-1");
   });
 
-  it("renders shared Discord command views and updates home/personality settings", async () => {
+  it("passes Discord actor provenance into chat command fallback handling", async () => {
+    const host = createHost();
+
+    await handleDiscordRuntimeSlashCommand(host, {
+      connectionId: "discord-1",
+      target: "channel-1",
+      actorId: "user-1",
+      commandText: "/model gpt-5.4",
+      sourceCommandId: "cmd-model",
+    });
+
+    expect(host.parseChatCommand).toHaveBeenCalledWith(expect.any(String), "/model gpt-5.4", {
+      channelContext: { account: "discord-1", actorId: "user-1", platform: "discord" },
+      resolvedBy: "discord:user-1",
+      source: "channel",
+    });
+  });
+
+  it("renders shared Discord command views and updates home/personality settings for operator-allowlisted actor (codex #4)", async () => {
     const host = createHost();
     host.getPersonalityCatalog = undefined;
     host.storage.integrationConnections.update("discord-1", {
       config: {
+        // SECURITY (codex finding #4): /sethome now requires the actor
+        // to be in the per-connection Discord operator allowlist.
+        discordOperatorActors: ["user-1"],
         channelSkillBindings: [
           { skillId: "researcher", alias: "Researcher", enabled: true },
           { skillId: "hidden", alias: "Hidden", enabled: false },

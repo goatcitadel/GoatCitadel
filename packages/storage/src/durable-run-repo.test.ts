@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { createDatabase } from "./sqlite.js";
 import { DurableRunRepository } from "./durable-run-repo.js";
 import { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
+import type { DatabaseClient, DbStatement } from "./db.js";
 
 const createdFiles: string[] = [];
 
@@ -609,6 +610,40 @@ describe("DurableRunRepository", () => {
       assert.equal(summary.prunedOrphans, 0);
       assert.equal(summary.prunedAged, 0);
       assert.equal(summary.finalBytes, 0);
+    });
+
+    it("uses a Postgres-native checkpoint byte count query", () => {
+      const preparedSql: string[] = [];
+      const statement: DbStatement = {
+        run: () => ({ changes: 0 }),
+        get: <T = unknown>() => ({ bytes: 0 }) as T,
+        all: <T = unknown>() => [] as T[],
+      };
+      const db: DatabaseClient = {
+        dialect: "postgres",
+        prepare(sql) {
+          preparedSql.push(sql);
+          return statement;
+        },
+        exec() {
+          // no-op
+        },
+        close() {
+          // no-op
+        },
+        transaction(_mode, callback) {
+          return callback();
+        },
+      };
+
+      const repo = new DurableRunRepository(db);
+      const summary = repo.pruneCheckpoints({ keepPerRun: 50, diskBudgetBytes: 1024 });
+
+      assert.equal(summary.finalBytes, 0);
+      const byteCountSql = preparedSql.filter((sql) => sql.includes(" AS bytes FROM durable_checkpoints"));
+      assert.ok(byteCountSql.length > 0, "expected checkpoint byte count query to run");
+      assert.ok(byteCountSql.every((sql) => sql.includes("OCTET_LENGTH(state_json)")));
+      assert.ok(!byteCountSql.some((sql) => /\bBLOB\b/i.test(sql)));
     });
 
     it("accounts for UTF-8 byte length of multi-byte characters in disk budget", () => {

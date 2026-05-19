@@ -1,4 +1,5 @@
 import type { ChannelProbeReport } from "./channel-probes.js";
+import type { PermissionSurface, ToolPolicyActorContext } from "./policy.js";
 
 export type McpTransport = "stdio" | "http" | "sse";
 export type McpServerStatus = "disconnected" | "connecting" | "connected" | "error";
@@ -110,7 +111,18 @@ export interface McpInvokeRequest {
   arguments?: Record<string, unknown>;
   agentId?: string;
   sessionId?: string;
+  workspaceId?: string;
   taskId?: string;
+  runId?: string;
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+  surface?: PermissionSurface;
+  policyContext?: ToolPolicyActorContext;
+  consentContext?: {
+    operatorId?: string;
+    source?: "ui" | "tui" | "agent";
+    reason?: string;
+  };
   signal?: AbortSignal;
 }
 

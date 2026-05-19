@@ -16,12 +16,16 @@ describe("mcp approval inbox", () => {
   });
 
   it("recognizes the internal approval inbox server and exposes its tools", () => {
+    const tools = createInternalMcpApprovalInboxTools("srv-1");
     expect(isInternalMcpApprovalInboxServer({ url: MCP_APPROVAL_INBOX_URL })).toBe(true);
-    expect(createInternalMcpApprovalInboxTools("srv-1").map((tool) => tool.toolName)).toEqual([
+    expect(tools.map((tool) => tool.toolName)).toEqual([
       MCP_APPROVAL_DELIVERY_TOOL_NAME,
       MCP_APPROVAL_INBOX_LIST_TOOL_NAME,
       MCP_APPROVAL_INBOX_RESOLVE_TOOL_NAME,
     ]);
+    expect(
+      tools.find((tool) => tool.toolName === MCP_APPROVAL_INBOX_RESOLVE_TOOL_NAME)?.inputSchema.properties,
+    ).not.toHaveProperty("resolvedBy");
   });
 
   it("receives, lists, and returns pending inbox state until follow-up effects finalize it", async () => {
@@ -98,7 +102,6 @@ describe("mcp approval inbox", () => {
         arguments: {
           inboxItemId: item.inboxItemId,
           decision: "approve",
-          resolvedBy: "operator:mcp",
         },
       },
       {
@@ -202,7 +205,7 @@ describe("mcp approval inbox", () => {
             createdAt: "2026-03-21T12:00:00.000Z",
             updatedAt: "2026-03-21T12:05:00.000Z",
             resolvedAt: "2026-03-21T12:05:00.000Z",
-            resolvedBy: "operator:mcp",
+            resolvedBy: "mcp:srv-1",
             expiresAt: "2026-03-21T12:30:00.000Z",
             deliveryCount: 1,
             lastDeliveredAt: "2026-03-21T12:00:00.000Z",
@@ -225,7 +228,7 @@ describe("mcp approval inbox", () => {
           createdAt: "2026-03-21T12:00:00.000Z",
           updatedAt: "2026-03-21T12:05:00.000Z",
           resolvedAt: "2026-03-21T12:05:00.000Z",
-          resolvedBy: "operator:mcp",
+          resolvedBy: "mcp:srv-1",
           expiresAt: "2026-03-21T12:30:00.000Z",
           deliveryCount: 1,
           lastDeliveredAt: "2026-03-21T12:00:00.000Z",
@@ -259,7 +262,6 @@ describe("mcp approval inbox", () => {
         arguments: {
           inboxItemId: "inbox-1",
           decision: "approve",
-          resolvedBy: "operator:mcp",
         },
       },
       {
@@ -275,7 +277,6 @@ describe("mcp approval inbox", () => {
         arguments: {
           inboxItemId: "inbox-1",
           decision: "approve",
-          resolvedBy: "operator:mcp",
         },
       },
       {

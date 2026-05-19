@@ -34,6 +34,8 @@ describe("chat delegate routes", () => {
         providerId: "openai",
         model: "gpt-5.4",
         steps: [{ role: "Researcher", parallelizable: true }],
+        permissionProfileId: "profile-parent",
+        localOperatorOverrideId: "override-parent",
       },
     });
     expect(run.statusCode).toBe(200);
@@ -45,6 +47,8 @@ describe("chat delegate routes", () => {
       providerId: "openai",
       model: "gpt-5.4",
       steps: [{ role: "Researcher", parallelizable: true }],
+      permissionProfileId: "profile-parent",
+      localOperatorOverrideId: "override-parent",
     });
 
     const fetched = await app.inject({
@@ -75,6 +79,10 @@ describe("chat delegate routes", () => {
         roles: ["Planner"],
         mode: "sequential",
         steps: [{ stepId: "step-1", role: "Planner", index: 0 }],
+        permissionProfileId: "profile-parent",
+        localOperatorOverrideId: "override-parent",
+        policyRunId: "parent-run-1",
+        policyTaskId: "parent-task-1",
       },
     });
     expect(accepted.statusCode).toBe(200);
@@ -84,6 +92,10 @@ describe("chat delegate routes", () => {
       roles: ["Planner"],
       mode: "sequential",
       steps: [{ stepId: "step-1", role: "Planner", index: 0 }],
+      permissionProfileId: "profile-parent",
+      localOperatorOverrideId: "override-parent",
+      policyRunId: "parent-run-1",
+      policyTaskId: "parent-task-1",
     });
   });
 

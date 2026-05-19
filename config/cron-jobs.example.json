@@ -4,7 +4,8 @@
       "jobId": "self_improvement_weekly_replay",
       "name": "Self-Improvement Weekly Replay",
       "schedule": "0 2 * * 0 America/Los_Angeles",
-      "enabled": true
+      "description": "SECURITY (codex finding #27): disabled by default because it samples recent chat turn traces and tool runs (including args_json/result_json) and ships them to the configured LLM provider without a redaction pass. Enable explicitly only after reviewing what is sent.",
+      "enabled": false
     },
     {
       "jobId": "private_beta_backup_daily",

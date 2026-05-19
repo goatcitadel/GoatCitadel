@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { PendingApprovalAction, ToolInvokeRequest } from "@goatcitadel/contracts";
+import type { ApprovalRequest, PendingApprovalAction, ToolInvokeRequest } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
@@ -61,6 +61,16 @@ describe("approval bypass support", () => {
     const storage = createStorageWithPendingApproval({
       createdAt: "not-a-date",
       request: request as unknown as Record<string, unknown>,
+    });
+
+    expect(hasVerifiedApprovalBypass(request, storage)).toBe(false);
+  });
+
+  it("rejects pending approvals until the canonical approval row is approved", () => {
+    const request = createToolInvokeRequest();
+    const storage = createStorageWithPendingApproval({
+      request: request as unknown as Record<string, unknown>,
+      approvalStatus: "pending",
     });
 
     expect(hasVerifiedApprovalBypass(request, storage)).toBe(false);
@@ -270,19 +280,44 @@ function createToolInvokeRequest(overrides: Partial<ToolInvokeRequest> = {}): To
   } as ToolInvokeRequest;
 }
 
-function createStorageWithPendingApproval(overrides: Partial<PendingApprovalAction> = {}): Storage {
+function createStorageWithPendingApproval(
+  overrides: Partial<PendingApprovalAction> & { approvalStatus?: ApprovalRequest["status"] } = {},
+): Storage {
+  const { approvalStatus, ...pendingOverrides } = overrides;
   const pending: PendingApprovalAction = {
     approvalId: "approval-1",
     actionType: "tool.invoke",
     request: createToolInvokeRequest() as unknown as Record<string, unknown>,
     createdAt: new Date(Date.now() - 1_000).toISOString(),
     resolutionStatus: "pending",
-    ...overrides,
+    ...pendingOverrides,
   };
 
   return {
+    approvals: {
+      get: vi.fn((approvalId: string) =>
+        createApprovalRequest({
+          approvalId,
+          status: approvalStatus ?? "approved",
+        }),
+      ),
+    },
     pendingApprovalActions: {
       find: vi.fn(() => pending),
     },
   } as unknown as Storage;
+}
+
+function createApprovalRequest(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
+  return {
+    approvalId: "approval-1",
+    kind: "tool",
+    riskLevel: "caution",
+    status: "approved",
+    payload: {},
+    preview: {},
+    createdAt: "2026-03-21T00:00:00.000Z",
+    explanationStatus: "not_requested",
+    ...overrides,
+  };
 }

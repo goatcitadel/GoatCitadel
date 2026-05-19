@@ -29,7 +29,7 @@ describe("WindowsAppContainerSandboxAdapter loop30 coverage", () => {
     );
   });
 
-  it("sanitizes profile names and quotes PowerShell literals containing apostrophes", async () => {
+  it("fails closed before generating profile scripts while Windows IPC preservation is unavailable", async () => {
     const root = await createTempRoot();
     const runTempRoot = path.join(root, "run");
     const adapter = new WindowsAppContainerSandboxAdapter({
@@ -38,20 +38,17 @@ describe("WindowsAppContainerSandboxAdapter loop30 coverage", () => {
       resolveCommand: () => "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
     });
 
-    await adapter.prepareLaunch({
-      runId: "run with unsafe chars !@#",
-      nodePath: path.join(root, "node's", "node.exe"),
-      harnessPath: path.join(root, "harness's.mjs"),
-      runTempRoot,
-      heapMb: 128,
-      env: { GOATCITADEL_CODE_MODE: "1" },
-    });
-
-    const launcher = await fs.readFile(path.join(runTempRoot, "code-mode-appcontainer-launcher.ps1"), "utf8");
-
-    expect(launcher).toContain("$profileName = 'GoatCitadel.CodeMode.run_with_unsafe_chars____'");
-    expect(launcher).toContain("node''s");
-    expect(launcher).toContain("harness''s.mjs");
+    await expect(
+      adapter.prepareLaunch({
+        runId: "run with unsafe chars !@#",
+        nodePath: path.join(root, "node's", "node.exe"),
+        harnessPath: path.join(root, "harness's.mjs"),
+        runTempRoot,
+        heapMb: 128,
+        env: { GOATCITADEL_CODE_MODE: "1" },
+      }),
+    ).rejects.toThrow("win32_node_ipc_not_preserved");
+    await expect(fs.stat(path.join(runTempRoot, "code-mode-appcontainer-launcher.ps1"))).rejects.toThrow();
   });
 });
 

@@ -118,7 +118,7 @@ Local unsigned rebuild and verification path:
 pnpm package:desktop --target windows-x64
 pnpm package:bundle --target windows-x64
 pnpm package:windows --target windows-x64
-Get-FileHash .\dist\installers\GoatCitadel-Setup-windows-x64.exe -Algorithm SHA256
+Get-FileHash .\artifacts\installers\windows\GoatCitadel-Setup-windows-x64.exe -Algorithm SHA256
 pnpm verify:install
 pnpm verify:desktop
 pnpm verify:fast

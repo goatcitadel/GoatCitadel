@@ -48,7 +48,7 @@ describe("ApprovalRuntimeService", () => {
     expect(service.createToolGrant({ toolPattern: "session.*", decision: "allow", scope: "global" } as never)).toEqual({
       grantId: "grant-2",
     });
-    expect(service.revokeToolGrant("grant-1")).toBe(true);
+    expect(service.revokeToolGrant("grant-1", "operator-test")).toBe(true);
     await expect(service.createApproval({ reason: "Needs review" } as never)).resolves.toEqual({
       approvalId: "approval-1",
     });
@@ -84,6 +84,7 @@ describe("ApprovalRuntimeService", () => {
     });
 
     expect(lifecycle.listToolGrants).toHaveBeenCalledWith(host, undefined, undefined, 200);
+    expect(lifecycle.revokeToolGrant).toHaveBeenCalledWith(host, "grant-1", "operator-test");
     expect(lifecycle.listApprovals).toHaveBeenCalledWith(host, undefined, 100);
     expect(lifecycle.getApprovalReplay).toHaveBeenCalledWith(host, "approval-1", "operator");
   });

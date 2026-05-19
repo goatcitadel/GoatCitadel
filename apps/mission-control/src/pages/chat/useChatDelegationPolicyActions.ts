@@ -316,11 +316,16 @@ export function useChatDelegationPolicyActions(input: {
     }
     setSending(true);
     try {
+      const policyRunId = activeDelegationRun?.runId ?? activeWorkflowTurn?.trace.orchestration?.runId;
+      const policyTaskId = activeDelegationRun?.taskId;
       const summary = await runChatResearch(session.sessionId, {
         query,
         mode: prefs?.webMode === "deep" ? "deep" : "quick",
         providerId: prefs?.providerId,
         model: prefs?.model,
+        ...(policyRunId ? { policyRunId } : {}),
+        ...(policyTaskId ? { policyTaskId } : {}),
+        surface: prefs?.mode ?? "chat",
       });
       pushLocalNotice(`Research summary:\n${summary.summary}\n\nSources: ${summary.sources.length}`, "success");
       setError(null);
@@ -374,6 +379,7 @@ export function useChatDelegationPolicyActions(input: {
       const run = await triggerChatProactive(selectedSession.sessionId, {
         source: "manual",
         reason: "Operator triggered from chat workspace.",
+        surface: prefs?.mode ?? "chat",
       });
       setProactiveRuns((current) => [run, ...current].slice(0, 30));
       pushLocalNotice(`Proactive run ${run.status}: ${run.reasoningSummary}`);
@@ -549,6 +555,8 @@ export function useChatDelegationPolicyActions(input: {
   const buildDelegationRequest = useCallback(
     (objective: string, roles: string[], mode: NonNullable<ChatDelegateRequest["mode"]>) => {
       const graph = buildDelegationGraph(selectedTurn, roles);
+      const policyRunId = activeDelegationRun?.runId ?? activeWorkflowTurn?.trace.orchestration?.runId;
+      const policyTaskId = activeDelegationRun?.taskId;
       return {
         objective,
         roles: graph.roles,
@@ -556,10 +564,21 @@ export function useChatDelegationPolicyActions(input: {
         surfaceMode: prefs?.mode ?? "chat",
         providerId: prefs?.providerId,
         model: prefs?.model,
+        ...(policyRunId ? { policyRunId } : {}),
+        ...(policyTaskId ? { policyTaskId } : {}),
         ...(graph.steps?.length ? { steps: graph.steps } : {}),
       } satisfies ChatDelegateRequest;
     },
-    [prefs?.model, prefs?.providerId, selectedTurn],
+    [
+      activeDelegationRun?.taskId,
+      activeDelegationRun?.runId,
+      activeWorkflowTurn?.trace.orchestration?.runId,
+      activeWorkflowTurn?.turnId,
+      prefs?.mode,
+      prefs?.model,
+      prefs?.providerId,
+      selectedTurn,
+    ],
   );
 
   const handleAcceptDelegation = useCallback(async () => {

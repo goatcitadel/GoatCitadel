@@ -160,9 +160,9 @@ Before running the manual plan:
 
 - Cover every manifest route:
   - Chat, Cowork, Code, Projects
-  - Library: agents, memory, files, prompt packs, artifacts
-  - Ops: activity, approvals, runtime, diagnostics, sessions, schedules, improvement, costs
-  - Settings: general, providers, workspaces, access, runtime, add-ons, integrations, channels, MCP, tools
+  - Library: agents, skills, memory, files, prompt packs, artifacts, capabilities, knowledge, curator
+  - Ops: activity, approvals, runtime, diagnostics, sessions, schedules, improvement, costs, notifications, kanban
+  - Settings: general, onboarding, providers, workspaces, personalities, access, permissions, runtime, budget, add-ons, integrations, channels, MCP, tools
 - Expected:
   - each route loads via direct URL
   - page label matches the selected route

@@ -7,6 +7,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
 import { parseSkillMarkdown } from "@goatcitadel/skills";
+import { fetchAllowlisted } from "@goatcitadel/policy-engine";
 import type {
   SkillImportCandidate,
   SkillImportHistoryRecord,
@@ -882,7 +883,7 @@ export class SkillImportService {
       const response = await fetch(targetUrl, {
         signal: controller.signal,
         headers: {
-          "user-agent": "GoatCitadel/0.1",
+          "user-agent": "GoatCitadel/1.0.0",
         },
       });
       clearTimeout(timeout);
@@ -1832,17 +1833,39 @@ async function resolveGitHeadRevision(repoDir: string): Promise<string | undefin
   return stdout || undefined;
 }
 
+// SECURITY (codex finding #14): The marketplace allowlist is the security
+// boundary that prevents `lookupSkillSources` from being used as an
+// authenticated SSRF primitive. Compare against `URL.host` exactly — never
+// against substrings of the request — so attacker-supplied URLs like
+// `http://127.0.0.1:2375/version?x=https://skillsmp.com/` cannot satisfy the
+// check.
+const MARKETPLACE_HOSTS = new Set<string>([
+  "skillsmp.com",
+  "www.skillsmp.com",
+  "agentskill.sh",
+  "www.agentskill.sh",
+  "clawhub.ai",
+  "www.clawhub.ai",
+]);
+
 async function resolveMarketplaceUpstream(sourceUrl: string): Promise<string | undefined> {
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 9000);
-    const response = await fetch(sourceUrl, {
-      signal: controller.signal,
-      headers: {
-        "user-agent": "GoatCitadel/0.1",
+    const parsed = new URL(sourceUrl);
+    if (!MARKETPLACE_HOSTS.has(parsed.host.toLowerCase())) {
+      return undefined;
+    }
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return undefined;
+    }
+    const response = await fetchAllowlisted(parsed.toString(), {
+      allowlist: [...MARKETPLACE_HOSTS],
+      timeoutMs: 9000,
+      init: {
+        headers: {
+          "user-agent": "GoatCitadel/1.0.0",
+        },
       },
     });
-    clearTimeout(timeout);
     if (!response.ok) {
       return undefined;
     }
@@ -1863,8 +1886,23 @@ function isHostedSkillBundleUrl(value: string): boolean {
 }
 
 function isMarketplaceListingUrl(value: string): boolean {
-  return /https?:\/\/(?:www\.)?(?:skillsmp\.com|agentskill\.sh|clawhub\.ai)\//i.test(value);
+  // SECURITY (codex finding #14): Parse the value as a URL and check the
+  // exact host against `MARKETPLACE_HOSTS`. Previously this used an
+  // unanchored substring regex (`/https?:\/\/(...)\//i.test(value)`) which
+  // matched any input containing a marketplace URL anywhere — including
+  // `http://127.0.0.1:2375/version?x=https://skillsmp.com/`, turning the
+  // skill-lookup endpoint into a SSRF primitive against the Docker socket
+  // and other internal services.
+  try {
+    const parsed = new URL(value.trim());
+    return MARKETPLACE_HOSTS.has(parsed.host.toLowerCase());
+  } catch {
+    return false;
+  }
 }
+
+// Test-only export for skill-import.marketplace-host.security.test.ts.
+export const __isMarketplaceListingUrlForTests = isMarketplaceListingUrl;
 
 async function materializeHostedSkillBundle(sourceUrl: string, targetDir: string): Promise<void> {
   const bundleUrl = new URL(sourceUrl);
@@ -1874,7 +1912,7 @@ async function materializeHostedSkillBundle(sourceUrl: string, targetDir: string
   for (const file of HOSTED_SKILL_BUNDLE_FILES) {
     const fileUrl = new URL(file.remoteName, baseUrl);
     try {
-      const response = await fetchWithTimeout(fileUrl.toString());
+      const response = await fetchHostedSkillBundleFile(fileUrl.toString());
       if (!response.ok) {
         if (file.required) {
           throw new Error(`HTTP ${response.status}`);
@@ -1888,7 +1926,7 @@ async function materializeHostedSkillBundle(sourceUrl: string, targetDir: string
       }
     } catch (error) {
       if (file.required) {
-        throw new Error(`Failed to fetch hosted skill bundle from ${fileUrl.toString()}: ${(error as Error).message}`, {
+        throw new Error(`Failed to fetch hosted skill bundle file ${file.localName}: ${(error as Error).message}`, {
           cause: error,
         });
       }
@@ -1900,19 +1938,16 @@ async function materializeHostedSkillBundle(sourceUrl: string, targetDir: string
   }
 }
 
-async function fetchWithTimeout(url: string): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 9000);
-  try {
-    return await fetch(url, {
-      signal: controller.signal,
+async function fetchHostedSkillBundleFile(url: string): Promise<Response> {
+  return fetchAllowlisted(url, {
+    allowlist: ["*"],
+    timeoutMs: 9000,
+    init: {
       headers: {
-        "user-agent": "GoatCitadel/0.1",
+        "user-agent": "GoatCitadel/1.0.0",
       },
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
+    },
+  });
 }
 
 function getProviderLabel(provider: SkillSourceProvider): string {

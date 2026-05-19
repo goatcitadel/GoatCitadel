@@ -408,7 +408,7 @@ describe("GatewayService loop 27 large service coverage", () => {
         decision: "allow",
         scope: "session",
         scopeRef: "session-1",
-        grantType: "one_time",
+        grantType: "ttl",
       }),
     );
     expect(publishRealtime).toHaveBeenCalledWith(

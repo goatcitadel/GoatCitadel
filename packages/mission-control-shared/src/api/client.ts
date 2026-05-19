@@ -582,16 +582,25 @@ export {
 } from "./memory.js";
 export {
   createToolGrant,
+  activatePermissionProfile,
+  archivePermissionProfile,
+  createLocalOperatorOverride,
+  createPermissionProfile,
   evaluateToolAccess,
+  fetchActiveLocalOperatorOverrides,
   fetchApprovalReplay,
   fetchApprovals,
+  fetchEffectivePermissionProfile,
+  fetchPermissionProfiles,
   fetchToolCatalog,
   fetchToolGrants,
   invokeTool,
   resolveApproval,
   resolveApprovalsBulk,
   resolveApprovalWithRemoteToken,
+  revokeLocalOperatorOverride,
   revokeToolGrant,
+  updatePermissionProfile,
 } from "./approvals.js";
 export {
   fetchCronJob,

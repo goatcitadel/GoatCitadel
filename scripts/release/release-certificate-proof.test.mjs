@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { resolveLaneProof } from "./release-certificate-proof.mjs";
 
 const spec = {
@@ -80,4 +81,41 @@ test("does not use an umbrella proof from a different commit", () => {
   assert.equal(lane.status, "missing");
   assert.equal(lane.proofSource, "lane-workflow");
   assert.equal(lane.substitutedByReleaseProof, false);
+});
+
+test("keeps direct-only lanes on their direct workflow even when umbrella proof succeeded", () => {
+  const lane = resolveLaneProof({
+    spec: {
+      name: "verify:fast",
+      workflowFile: "verification-fast.yml",
+      required: true,
+      releaseProofCovered: false,
+    },
+    directRun: {
+      status: "missing",
+      conclusion: null,
+      html_url: null,
+      id: null,
+      head_sha: null,
+    },
+    releaseProofRun,
+    releaseProofWorkflowFile: "verification-1-0-release-proof.yml",
+    targetCommit: "abc123",
+  });
+
+  assert.equal(lane.status, "missing");
+  assert.equal(lane.proofSource, "lane-workflow");
+  assert.equal(lane.substitutedByReleaseProof, false);
+  assert.equal(lane.releaseProofRun, null);
+});
+
+test("release certificate treats verify:fast as direct-only proof", () => {
+  const writer = fs.readFileSync(new URL("./write-release-certificate.mjs", import.meta.url), "utf8");
+  const coveredBlock = writer.match(/const RELEASE_PROOF_COVERED_LANES = \[([\s\S]*?)\];/);
+  assert.ok(coveredBlock, "release proof covered lane list should be present");
+  assert.doesNotMatch(coveredBlock[1], /"verify:fast"/);
+  assert.match(
+    writer,
+    /\{ name: "verify:fast", workflowFile: "verification-fast\.yml", required: true \}/,
+  );
 });

@@ -63,11 +63,15 @@ describe("Loop 19 chat delegate and realtime route tails", () => {
     expect(streamed.headers.vary).toBe("Origin");
     expect(streamed.body).toContain(": connected");
     expect(streamed.body).toContain('"type":"step_started"');
-    expect(chatDelegate.runChatDelegationStream).toHaveBeenCalledWith("session-1", {
-      objective: "Review this",
-      roles: ["QA"],
-      mode: "sequential",
-    });
+    expect(chatDelegate.runChatDelegationStream).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        objective: "Review this",
+        roles: ["QA"],
+        mode: "sequential",
+      }),
+      expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
+    );
 
     const failed = await app.inject({
       method: "POST",

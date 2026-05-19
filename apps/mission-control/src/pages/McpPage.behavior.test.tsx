@@ -557,7 +557,6 @@ describe("McpPage behavior", () => {
         arguments: {
           inboxItemId: "inbox-1",
           decision: "approve",
-          resolvedBy: "mission-control:mcp",
         },
       });
     } finally {

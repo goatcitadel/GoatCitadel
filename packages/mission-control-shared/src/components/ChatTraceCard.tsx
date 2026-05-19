@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   getChatTurnRecoveryActionLabel,
   getChatTurnRecoveryActionSummary,
+  type ChatUsageCostSource,
   type ChatTurnTraceRecord,
 } from "@goatcitadel/contracts";
 import { ChatToolArtifactInspector } from "./chat/ChatToolArtifactInspector";
@@ -29,6 +30,42 @@ function formatTime(value?: string): string {
 function formatRoutingTarget(providerId?: string, model?: string): string | null {
   const parts = [providerId, model].filter((value): value is string => Boolean(value));
   return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function formatTokenCount(value: number | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : "n/a";
+}
+
+function formatCostUsd(value: number | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "n/a";
+  }
+  if (value === 0) {
+    return "$0";
+  }
+  return `$${value < 0.01 ? value.toFixed(6) : value.toFixed(4)}`;
+}
+
+function formatLatency(value: number | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "n/a";
+  }
+  return value >= 1000 ? `${(value / 1000).toFixed(2)}s` : `${Math.round(value)}ms`;
+}
+
+function formatCostSource(value: ChatUsageCostSource | undefined): string {
+  switch (value) {
+    case "provider_reported":
+      return "provider reported";
+    case "estimated":
+      return "estimated";
+    case "mixed":
+      return "mixed";
+    case "unknown":
+      return "unknown";
+    default:
+      return "not recorded";
+  }
 }
 
 function summarizeTraceRouting(trace: ChatTurnTraceRecord): {
@@ -70,6 +107,11 @@ export function ChatTraceCard({
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const fallbackAttemptCount = getTraceFallbackAttemptCount(trace);
   const routingSummary = summarizeTraceRouting(trace);
+  const runtimeUsage = trace.completion?.usage;
+  const hasRuntimeEvidence =
+    Boolean(runtimeUsage) ||
+    trace.completion?.latencyMs !== undefined ||
+    trace.completion?.providerCallCount !== undefined;
   return (
     <article className="chat-trace-card">
       <header className="chat-trace-head">
@@ -108,6 +150,13 @@ export function ChatTraceCard({
               ) : null}
               <p>Failure class: {trace.failure.failureClass}</p>
               <p>{trace.failure.message}</p>
+              {trace.failure.provider ? (
+                <p>
+                  Provider error:{" "}
+                  {[trace.failure.provider.code, trace.failure.provider.message].filter(Boolean).join(" - ") ||
+                    "details unavailable"}
+                </p>
+              ) : null}
               <p>Retryable: {trace.failure.retryable === false ? "no" : "yes"}</p>
             </div>
           ) : null}
@@ -150,6 +199,19 @@ export function ChatTraceCard({
             {trace.routing.effectiveApiStyle ? <p>Upstream API: {trace.routing.effectiveApiStyle}</p> : null}
             {trace.routing.fallbackReason ? <p>Fallback reason: {trace.routing.fallbackReason}</p> : null}
           </div>
+          {hasRuntimeEvidence ? (
+            <div className="chat-trace-section">
+              <strong>Runtime evidence</strong>
+              <p>Input tokens: {formatTokenCount(runtimeUsage?.inputTokens)}</p>
+              <p>Output tokens: {formatTokenCount(runtimeUsage?.outputTokens)}</p>
+              <p>Cached input tokens: {formatTokenCount(runtimeUsage?.cachedInputTokens)}</p>
+              <p>{`Cost: ${formatCostUsd(runtimeUsage?.costUsd)} (${formatCostSource(runtimeUsage?.costSource)})`}</p>
+              <p>Provider latency: {formatLatency(trace.completion?.latencyMs)}</p>
+              {trace.completion?.providerCallCount !== undefined ? (
+                <p>Provider calls: {trace.completion.providerCallCount}</p>
+              ) : null}
+            </div>
+          ) : null}
           {trace.toolRuns.length > 0 ? (
             <div className="chat-trace-section">
               <strong>Tool timeline</strong>

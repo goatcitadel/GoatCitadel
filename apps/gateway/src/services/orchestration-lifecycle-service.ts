@@ -16,6 +16,7 @@ import {
   type OrchestrationPhase,
   type OrchestrationPhaseExecutionResult,
   type OrchestrationRun,
+  type OrchestrationRunPolicyContext,
   type RealtimeEvent,
   ValidationError,
 } from "@goatcitadel/contracts";
@@ -76,6 +77,7 @@ export interface OrchestrationLifecycleRuntimeDeps {
       run: OrchestrationRun;
       phase: OrchestrationPhase;
       durableRun: DurableRunRecord;
+      policyContext?: OrchestrationRunPolicyContext;
       signal?: AbortSignal;
     }): Promise<OrchestrationPhaseExecutionResult>;
   };
@@ -191,8 +193,7 @@ function isWorkflowAbort(error: unknown, context?: DurableWorkflowExecutionConte
   if (!(error instanceof Error)) {
     return false;
   }
-  const normalized = `${error.name} ${error.message}`.toLowerCase();
-  return normalized.includes("abort") || normalized.includes("cancel");
+  return error.name === "AbortError" || error.name === "OrchestrationWorkflowAbortedError";
 }
 
 async function markOrchestrationRunCancelled(
@@ -333,6 +334,11 @@ async function allocateOrchestrationOwnership(
       orchestrationRunId: run.runId,
       planId: plan.planId,
       workspaceId,
+      operatorId: run.operatorId,
+      authActorId: run.authActorId,
+      authActorSource: run.authActorSource,
+      permissionProfileId: run.permissionProfileId,
+      localOperatorOverrideId: run.localOperatorOverrideId,
       requestedAt: new Date().toISOString(),
     },
     metadata: buildDurableMetadata(plan, run, {
@@ -436,11 +442,13 @@ export async function createOrchestrationPlan(
   host: OrchestrationLifecycleHost,
   runtime: OrchestrationLifecycleRuntimeDeps,
   plan: OrchestrationPlan,
+  policyContext: OrchestrationRunPolicyContext = {},
 ): Promise<OrchestrationRun> {
   host.storage.orchestration.upsertPlan(plan);
   const created = host.orchestrationEngine.createRun(plan);
   const persisted = host.storage.orchestration.createRun({
     ...created,
+    ...policyContext,
     workspaceId: DEFAULT_WORKSPACE_ID,
     executionState: "created",
     worktreeStatus: "uninitialized",
@@ -461,21 +469,34 @@ export async function runOrchestrationPlan(
   host: OrchestrationLifecycleHost,
   runtime: OrchestrationLifecycleRuntimeDeps,
   planId: string,
+  policyContext: OrchestrationRunPolicyContext = {},
 ): Promise<OrchestrationRun> {
-  let plan = host.storage.orchestration.getPlan(planId);
+  const plan = host.storage.orchestration.getPlan(planId);
   host.orchestrationEngine.validate(plan);
   const activeRun = host.storage.orchestration.findActiveRunByPlan(planId);
   if (activeRun) {
     if (activeRun.durableRunId && activeRun.executionState === "queued") {
       host.requestDurableRunProcessing(activeRun.durableRunId);
     }
+    if (activeRun.durableRunId && activeRun.executionState === "worktree_ready") {
+      return queueOrchestrationRun(host, plan, activeRun);
+    }
     return activeRun;
   }
-  const run = await createOrchestrationPlan(host, runtime, plan);
+  const run = await createOrchestrationPlan(host, runtime, plan, policyContext);
   if (run.status === "failed") {
     return run;
   }
 
+  return queueOrchestrationRun(host, plan, run);
+}
+
+async function queueOrchestrationRun(
+  host: OrchestrationLifecycleHost,
+  planInput: OrchestrationPlan,
+  run: OrchestrationRun,
+): Promise<OrchestrationRun> {
+  let plan = planInput;
   const runBeforeHook = await host.hooksService.runInlineHooks<OrchestrationRunHookPatch>({
     workspaceId: run.workspaceId ?? DEFAULT_WORKSPACE_ID,
     trigger: "orchestration.run.before",
@@ -587,11 +608,11 @@ export async function approvePhase(
   if (phaseBeforeHook.patch) {
     plan = applyOrchestrationPhaseHookPatch(plan, phaseId, phaseBeforeHook.patch);
     host.orchestrationEngine.validate(plan);
-    host.storage.orchestration.upsertPlan(plan);
     const patchedPhase = findPhaseInPlan(plan, phaseId);
     if (plan.mode !== "hitl" && !patchedPhase.requiresApproval) {
       throw new Error(`Phase ${phaseId} is not approval-gated for run ${runId}`);
     }
+    host.storage.orchestration.upsertPlan(plan);
   }
 
   const nextRun: OrchestrationRun = {
@@ -700,6 +721,13 @@ export async function executeDurableOrchestrationRun(
   if (run.durableRunId !== durableRun.runId) {
     throw new Error(`Orchestration run ${run.runId} is not linked to durable run ${durableRun.runId}.`);
   }
+  const policyContext: OrchestrationRunPolicyContext = {
+    operatorId: payload.operatorId ?? run.operatorId,
+    authActorId: payload.authActorId ?? run.authActorId,
+    authActorSource: payload.authActorSource ?? run.authActorSource,
+    permissionProfileId: payload.permissionProfileId ?? run.permissionProfileId,
+    localOperatorOverrideId: payload.localOperatorOverrideId ?? run.localOperatorOverrideId,
+  };
 
   const recordUpdate = (
     next: OrchestrationRun,
@@ -803,6 +831,7 @@ export async function executeDurableOrchestrationRun(
         run,
         phase,
         durableRun,
+        policyContext,
         signal: context?.signal,
       });
       throwIfWorkflowAborted(context);
@@ -842,7 +871,32 @@ export async function executeDurableOrchestrationRun(
       artifacts: execution.artifacts,
       error: execution.error,
     };
-    persistRunEvent(host, run, execution.status === "failed" ? "phase.failed" : "phase.executed", executionPayload);
+    persistRunEvent(
+      host,
+      run,
+      execution.status === "failed"
+        ? "phase.failed"
+        : execution.status === "waiting"
+          ? "phase.waiting"
+          : "phase.executed",
+      executionPayload,
+    );
+
+    if (execution.status === "waiting") {
+      recordUpdate(
+        {
+          ...run,
+          status: "paused",
+          executionState: "paused_for_approval",
+          lastError: undefined,
+        },
+        undefined,
+      );
+      publishRunRealtime(host, plan, run, {
+        event: "phase_waiting",
+      });
+      continue;
+    }
 
     if (execution.status === "failed") {
       recordUpdate(

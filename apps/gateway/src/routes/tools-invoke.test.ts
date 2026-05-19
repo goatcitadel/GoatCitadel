@@ -49,8 +49,18 @@ describe("tools invoke route", () => {
 
   it("passes validated requests to the gateway with safety metadata", async () => {
     const invokeTool = vi.fn(async (input) => ({ ok: true, input }));
+    const resolveToolPolicyContext = vi.fn((input) => ({
+      ...input,
+      permissionProfileId: input.permissionProfileId ?? "safe",
+      permissionProfile: { profileId: input.permissionProfileId ?? "safe", label: "Safe" },
+    }));
     app = Fastify();
+    app.decorateRequest("authActorId", "operator-test");
+    app.decorateRequest("authActorSource", "loopback");
     app.decorate("services", {
+      tools: {
+        resolveToolPolicyContext,
+      },
       toolsInvoke: {
         invokeTool,
         isFeatureEnabled: vi.fn((flag: string) => flag === "computerUseGuardrailsV1Enabled"),
@@ -76,6 +86,11 @@ describe("tools invoke route", () => {
           boundary: "tool_host_boundary",
           secretRefs: ["keychain:goatcitadel:provider:openai"],
         },
+        permissionProfileId: "safe",
+        surface: "code",
+        consentContext: {
+          reason: " approval:client-supplied ",
+        },
       },
     });
 
@@ -90,10 +105,18 @@ describe("tools invoke route", () => {
           },
         }),
         trustLevel: "trusted_workspace",
+        policyContext: expect.objectContaining({
+          authActorId: "operator-test",
+          permissionProfileId: "safe",
+          surface: "code",
+        }),
         authContext: {
           boundary: "tool_host_boundary",
           secretRefs: ["keychain:goatcitadel:provider:openai"],
         },
+        consentContext: expect.objectContaining({
+          reason: " approval:client-supplied ",
+        }),
       }),
     );
   });

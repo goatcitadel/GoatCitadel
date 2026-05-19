@@ -178,6 +178,64 @@ describe("ChatAgentOrchestrator loop 24 coverage", () => {
     expect(result.assistantContent).toContain(".pptx");
   });
 
+  it("probes document access with safe args and creates a document fallback when the model answers with text", async () => {
+    let capturedRequest: ChatCompletionRequest | undefined;
+    const createChatCompletion = vi.fn(async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
+      capturedRequest = request;
+      return completion("I can draft the report, but I did not create a document file.");
+    });
+    const evaluateToolAccess = vi.fn((input: { toolName: string; args?: Record<string, unknown> }) => ({
+      allowed: input.toolName !== "documents.create" || typeof input.args?.path === "string",
+    }));
+    const invokeTool = vi.fn(
+      async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        result: {
+          path: "F:\\code\\personal-ai\\workspace\\goatcitadel_out\\free-time-report.pdf",
+          bytesWritten: 6789,
+          format: request.args.format,
+          title: request.args.title,
+        },
+      }),
+    );
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["documents.create"]),
+      createChatCompletion,
+      invokeTool,
+      evaluateToolAccess,
+    });
+
+    const result = await orchestrator.run(
+      turnInput({
+        mode: "cowork",
+        content: "Create a real PDF report file about the top 10 things to do in free time.",
+        historyMessages: [
+          {
+            role: "user",
+            content: "Create a real PDF report file about the top 10 things to do in free time.",
+          },
+        ],
+      }),
+    );
+
+    const documentProbe = evaluateToolAccess.mock.calls.find(([input]) => input.toolName === "documents.create")?.[0];
+    expect(documentProbe?.args?.path).toBe("./workspace/goatcitadel_out/tool-access-probe.docx");
+    expect(extractRequestToolNames(capturedRequest)).toContain("documents_create");
+    expect(invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "documents.create",
+        args: expect.objectContaining({
+          path: expect.stringContaining("top-10-things-to-do-in-free-time"),
+          format: "pdf",
+          title: "Top 10 Things To Do In Free Time",
+        }),
+      }),
+    );
+    expect(result.assistantContent).toContain("Created the document artifact");
+    expect(result.assistantContent).toContain(".pdf");
+  });
+
   it("blocks delegated non-code Prompt Lab local file calls before runtime invocation", async () => {
     const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>();
     const executeToolCall = createExecuteToolCall({ invokeTool });

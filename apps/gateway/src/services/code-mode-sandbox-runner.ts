@@ -44,7 +44,16 @@ export async function prepareCodeModeSandboxLaunch(
 ): Promise<PreparedCodeModeSandboxLaunch> {
   await fs.mkdir(input.runTempRoot, { recursive: true });
   const adapter = selectCodeModeHostSandboxAdapter(options);
-  const metadata = options.metadata ?? adapter.probe(config);
+  const currentMetadata = adapter.probe(config);
+  if (options.metadata) {
+    const mismatchedField = findSandboxMetadataMismatch(options.metadata, currentMetadata);
+    if (mismatchedField) {
+      throw new Error(
+        `Code Mode sandbox posture changed before launch at ${mismatchedField}; refusing to execute run.`,
+      );
+    }
+  }
+  const metadata = options.metadata ?? currentMetadata;
   if (!metadata.available) {
     assertCodeModeSandboxAvailable(metadata);
     return {
@@ -61,4 +70,33 @@ export async function prepareCodeModeSandboxLaunch(
 
 export function resolveCurrentCodeModeSandboxMetadata(config: CodeModeSandboxConfig): CodeModeSandboxMetadata {
   return resolveCodeModeSandboxMetadata(config, { platform: process.platform });
+}
+
+function findSandboxMetadataMismatch(
+  expected: CodeModeSandboxMetadata,
+  current: CodeModeSandboxMetadata,
+): string | undefined {
+  const scalarMismatch = (
+    [
+      "runnerId",
+      "runnerVersion",
+      "platform",
+      "isolationProfile",
+      "required",
+      "available",
+      "failClosedReason",
+      "advisoryUnsandboxedReason",
+    ] as const
+  ).find((field) => expected[field] !== current[field]);
+  return (
+    scalarMismatch ??
+    (["checksPassed", "checksFailed"] as const).find((field) => !sameSandboxCheckList(expected[field], current[field]))
+  );
+}
+
+function sameSandboxCheckList(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((value, index) => value === right[index]);
 }

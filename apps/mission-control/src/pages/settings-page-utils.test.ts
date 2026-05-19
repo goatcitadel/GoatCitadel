@@ -31,9 +31,9 @@ describe("settings-page-utils", () => {
     expect(formatVoiceDate()).toBe("-");
     expect(formatVoiceDate("not-a-date")).toBe("not-a-date");
     expect(formatVoiceDate("2026-05-14T12:00:00.000Z")).toContain("2026");
-    expect(formatDeploymentProfileLabel("local_dev")).toBe("local_dev");
-    expect(formatDeploymentProfileLabel("trusted_local")).toBe("trusted_local");
-    expect(formatDeploymentProfileLabel("remote_hardened")).toBe("remote_hardened");
+    expect(formatDeploymentProfileLabel("local_dev")).toBe("Local Dev");
+    expect(formatDeploymentProfileLabel("trusted_local")).toBe("Trusted Local");
+    expect(formatDeploymentProfileLabel("remote_hardened")).toBe("Remote Hardened");
   });
 
   it("reads files as base64 payloads and rejects unreadable values", async () => {

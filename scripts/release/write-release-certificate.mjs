@@ -10,9 +10,11 @@ const repoRoot = path.resolve(scriptDir, "../..");
 
 const RELEASE_PROOF_WORKFLOW_FILE = "verification-1-0-release-proof.yml";
 const RELEASE_PROOF_COVERED_LANES = [
-  "verify:fast",
   "verify:runtime:truth",
   "verify:auth:matrix",
+  "verify:code-mode:sandbox",
+  "verify:agentic:governance",
+  "verify:agentic:proof",
   "verify:ui:parity",
   "verify:memory:truth",
   "verify:realtime:truth",
@@ -30,6 +32,9 @@ const REQUIRED_LANE_SPECS = [
   { name: "verify:fast", workflowFile: "verification-fast.yml", required: true },
   { name: "verify:runtime:truth", workflowFile: "verification-truth-lanes.yml", required: true },
   { name: "verify:auth:matrix", workflowFile: "verification-truth-lanes.yml", required: true },
+  { name: "verify:code-mode:sandbox", workflowFile: "verification-agentic-code-mode.yml", required: true },
+  { name: "verify:agentic:governance", workflowFile: "verification-agentic-code-mode.yml", required: true },
+  { name: "verify:agentic:proof", workflowFile: "verification-agentic-code-mode.yml", required: true },
   { name: "verify:ui:parity", workflowFile: "verification-truth-lanes.yml", required: true },
   { name: "verify:memory:truth", workflowFile: "verification-truth-lanes.yml", required: true },
   { name: "verify:realtime:truth", workflowFile: "verification-truth-lanes.yml", required: true },

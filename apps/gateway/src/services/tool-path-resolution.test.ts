@@ -230,32 +230,34 @@ describe("resolveToolRequestPaths", () => {
     expect(resolvedStat.args.path).toBe(projectRoot);
   });
 
-  it("rejects absolute read paths outside the workspace boundary", async () => {
+  it("preserves absolute outside-workspace read paths for policy evaluation", async () => {
     const { projectRoot, workspaceRoot, outsideRoot } = await createWorkspaceFixture();
+    const outsideFile = path.join(outsideRoot, "escape.txt");
     const request: ToolInvokeRequest = {
       toolName: "file.read_range",
-      args: { path: path.join(outsideRoot, "escape.txt") },
+      args: { path: outsideFile },
       agentId: "agent",
       sessionId: "session",
     };
 
-    await fs.writeFile(path.join(outsideRoot, "escape.txt"), "nope\n", "utf8");
+    await fs.writeFile(outsideFile, "nope\n", "utf8");
 
-    expect(() =>
-      resolveToolRequestPaths(request, {
-        workspaceRoot,
-        projectRoot,
-        projectWorkspacePath: "fixtures/prompt-pack-workspace",
-      }),
-    ).toThrow(ValidationError);
+    const resolved = resolveToolRequestPaths(request, {
+      workspaceRoot,
+      projectRoot,
+      projectWorkspacePath: "fixtures/prompt-pack-workspace",
+    });
+
+    expect(resolved.args.path).toBe(await fs.realpath(outsideFile));
   });
 
-  it("rejects symlinked relative read paths that escape the workspace boundary", async () => {
+  it("resolves symlinked relative read paths that escape the workspace boundary for policy evaluation", async () => {
     const { workspaceRoot, outsideRoot } = await createWorkspaceFixture();
     const outsideDir = path.join(outsideRoot, "linked-outside");
     const linkDir = path.join(workspaceRoot, "linked-outside");
+    const outsideFile = path.join(outsideDir, "secret.txt");
     await fs.mkdir(outsideDir, { recursive: true });
-    await fs.writeFile(path.join(outsideDir, "secret.txt"), "shh\n", "utf8");
+    await fs.writeFile(outsideFile, "shh\n", "utf8");
     await createDirectoryLink(outsideDir, linkDir);
 
     const request: ToolInvokeRequest = {
@@ -265,11 +267,11 @@ describe("resolveToolRequestPaths", () => {
       sessionId: "session",
     };
 
-    expect(() =>
-      resolveToolRequestPaths(request, {
-        workspaceRoot,
-      }),
-    ).toThrow(ValidationError);
+    const resolved = resolveToolRequestPaths(request, {
+      workspaceRoot,
+    });
+
+    expect(resolved.args.path).toBe(await fs.realpath(outsideFile));
   });
 
   it("rejects symlinked relative write targets that escape the workspace boundary", async () => {

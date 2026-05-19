@@ -57,7 +57,7 @@ export function composeRuntimeAdminRouteDependencies(
         String(entry.name ?? entry.toolName ?? entry.id ?? ""),
       );
     },
-    createOrchestrationPlan: (plan) => gateway.createOrchestrationPlan(plan),
+    createOrchestrationPlan: (plan, policyContext) => gateway.createOrchestrationPlan(plan, policyContext),
   });
   const warnedOutsideRootPathFingerprints = new Set<string>();
 
@@ -175,11 +175,11 @@ export function composeRuntimeAdminRouteDependencies(
         onboardingStateService.markOnboardingComplete(onboardingStateHost, completedBy),
     },
     orchestration: {
-      createOrchestrationPlan: (plan) => gateway.createOrchestrationPlan(plan),
-      createPlanFromRecipe: (input) => workflowRecipes.createPlanFromRecipe(input),
+      createOrchestrationPlan: (plan, policyContext) => gateway.createOrchestrationPlan(plan, policyContext),
+      createPlanFromRecipe: (input, policyContext) => workflowRecipes.createPlanFromRecipe(input, policyContext),
       listRecipeTemplates: () => ({ items: workflowRecipes.listTemplates() }),
       previewRecipe: (input) => workflowRecipes.previewRecipe(input),
-      runOrchestrationPlan: (planId) => gateway.runOrchestrationPlan(planId),
+      runOrchestrationPlan: (planId, policyContext) => gateway.runOrchestrationPlan(planId, policyContext),
       cancelOrchestrationRun: (runId, actorId, workspaceId) =>
         gateway.cancelOrchestrationRun(runId, actorId, workspaceId),
       approvePhase: (runId, phaseId, approvedBy, costIncrementUsd, workspaceId) =>

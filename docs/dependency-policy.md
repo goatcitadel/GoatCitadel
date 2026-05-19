@@ -28,9 +28,8 @@ This document defines the minimum dependency hygiene expected for GoatCitadel `1
 
 ## Supported Runtime Surfaces
 
-- Windows x64 and arm64 installers
-- macOS x64 and arm64 installers
-- Linux x64 tarball installer
+- Windows x64 and arm64 installers are the current CI-built release installer surfaces.
+- macOS x64/arm64 and Linux x64 remain source/shared-host development surfaces until the release workflow emits native artifacts, signing/notarization evidence, and smoke proof for those targets.
 
 ## Release Constraints
 

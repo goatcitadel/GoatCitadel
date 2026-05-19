@@ -50,7 +50,7 @@ describe("voice runtime download helpers", () => {
 
     expect(await fs.readFile(destinationPath, "utf8")).toBe("voice model bytes");
     expect(fetchMock).toHaveBeenCalledWith("https://example.test/model.bin", {
-      headers: { "User-Agent": "GoatCitadel/0.6" },
+      headers: { "User-Agent": "GoatCitadel/1.0.0" },
     });
   });
 

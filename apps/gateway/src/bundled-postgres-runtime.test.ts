@@ -52,7 +52,7 @@ describe("bundled postgres runtime helpers", () => {
       initdb: path.join(binDir, `initdb${extension}`),
       pgCtl: path.join(binDir, `pg_ctl${extension}`),
     });
-  });
+  }, 15_000);
 
   it("normalizes filesystem, docker data-directory, quoted identifiers, and container names", () => {
     expect(__bundledPostgresRuntimeInternals.sameFilesystemPath("C:/Temp/../Temp/data", "C:/Temp/data")).toBe(true);

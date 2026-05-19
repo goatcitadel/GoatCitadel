@@ -399,16 +399,33 @@ function blocked(
 }
 
 function normalizeActionType(raw: string | undefined, prompt: string | undefined): BankrActionType {
+  const inferred = inferActionTypeFromPrompt(prompt);
   if (raw) {
     const normalized = raw.trim().toLowerCase();
     if (BANKR_ACTION_TYPES.includes(normalized as BankrActionType)) {
-      return normalized as BankrActionType;
+      // SECURITY (codex finding #28): When the caller claims `actionType:
+      // "read"` but the prompt clearly asks for a write action (e.g.
+      // `bankr.read` with prompt "transfer 50 USDC to 0x..."), trust the
+      // prompt-inferred action type so the request flows through the
+      // write-gates (per-action cap, daily cap, approval requirement)
+      // rather than the read-only fast path. Without this override, a
+      // caller could bypass every Bankr safety control by lying about
+      // `actionType`.
+      const claimed = normalized as BankrActionType;
+      if (claimed === "read" && inferred && WRITE_ACTION_TYPES.has(inferred)) {
+        return inferred;
+      }
+      return claimed;
     }
   }
 
+  return inferred ?? "read";
+}
+
+function inferActionTypeFromPrompt(prompt: string | undefined): BankrActionType | undefined {
   const source = (prompt ?? "").toLowerCase();
   if (!source) {
-    return "read";
+    return undefined;
   }
   if (/\b(deploy|launch)\b/.test(source)) {
     return "deploy";
@@ -425,7 +442,7 @@ function normalizeActionType(raw: string | undefined, prompt: string | undefined
   if (/\b(buy|sell|swap|trade|order|dca|twap|long|short|leverage|bet)\b/.test(source)) {
     return "trade";
   }
-  return "read";
+  return undefined;
 }
 
 function normalizeChain(rawChain: string | undefined, prompt: string | undefined): string | undefined {

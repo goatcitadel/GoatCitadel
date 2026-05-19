@@ -15,10 +15,16 @@ const createSchema = z.object({
       turnId: z.string().min(1).optional(),
       taskId: z.string().min(1).optional(),
       workspaceId: z.string().min(1).optional(),
+      runId: z.string().min(1).optional(),
       durableRunId: z.string().min(1).optional(),
       proactiveRunId: z.string().min(1).optional(),
+      originSurface: z.enum(["chat", "cowork", "code"]).optional(),
       connectorId: z.string().min(1).optional(),
       traceId: z.string().min(1).optional(),
+      toolName: z.string().min(1).optional(),
+      actionType: z.string().min(1).optional(),
+      permissionProfileId: z.string().min(1).optional(),
+      localOperatorOverrideId: z.string().min(1).optional(),
     })
     .optional(),
   expiresAt: z.string().datetime().nullable().optional(),
@@ -30,13 +36,20 @@ const resolveSchema = z.object({
   decision: z.enum(["approve", "reject", "edit"]),
   editedPayload: z.record(z.unknown()).optional(),
   resolutionNote: z.string().optional(),
-  resolvedBy: z.string().min(1),
 });
 
+// SECURITY (codex finding #21): The bulk-resolve route previously accepted
+// `decision: "approve"`, which would let an authenticated principal (or an
+// XSS in an operator session) approve and execute every pending dangerous
+// action with a single request. There is no legitimate "approve everything
+// pending" use case — each privileged action must be reviewed individually
+// — so we restrict the bulk route to rejection. A future operator-only
+// per-id bulk-approve route can be added with explicit confirmation and a
+// hard batch cap; until then the absence of any bulk-approve path is the
+// safer default.
 const bulkResolveSchema = z.object({
-  decision: z.enum(["approve", "reject"]),
+  decision: z.literal("reject"),
   resolutionNote: z.string().optional(),
-  resolvedBy: z.string().min(1).optional(),
   status: z.literal("pending").optional(),
 });
 
@@ -152,7 +165,7 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       const result = await approvals.resolveApprovalsBulk({
         ...parsed.data,
-        resolvedBy: parsed.data.resolvedBy ?? resolveActorId(request),
+        resolvedBy: resolveActorId(request),
       });
       return reply.send(result);
     } catch (error) {
@@ -172,7 +185,10 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     try {
-      const result = await approvals.resolveApproval(approvalId, parsed.data);
+      const result = await approvals.resolveApproval(approvalId, {
+        ...parsed.data,
+        resolvedBy: resolveActorId(request),
+      });
       return reply.send(result);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -221,9 +237,8 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: "Invalid approval ID format." });
     }
     const approvalId = params.data.approvalId;
-    const query = request.query as { replayedBy?: string };
     try {
-      return reply.send(approvals.getApprovalReplay(approvalId, query.replayedBy ?? "operator"));
+      return reply.send(approvals.getApprovalReplay(approvalId, resolveActorId(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -232,11 +247,14 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
 
 function isLoopbackRequest(request: {
   ip?: string;
+  ips?: string[];
   raw: { socket: { remoteAddress?: string | null } };
   headers: Record<string, unknown>;
 }): boolean {
-  const forwardedFor = request.headers["x-forwarded-for"];
-  if (typeof forwardedFor === "string" && forwardedFor.trim()) {
+  const proxyHopCount = Array.isArray(request.ips) ? request.ips.length : 0;
+  const hasProxyProvenance =
+    "x-forwarded-for" in request.headers || "forwarded" in request.headers || proxyHopCount > 1;
+  if (hasProxyProvenance) {
     return false;
   }
   const remoteAddress = request.raw.socket.remoteAddress ?? request.ip ?? "";
@@ -255,6 +273,7 @@ function validateApprovalCreateIngress(
     headers: Record<string, unknown>;
     authActorSource?: string;
     ip?: string;
+    ips?: string[];
     raw: { socket: { remoteAddress?: string | null } };
   },
   input: { sourceConnectorId?: string; sourceTraceId?: string },

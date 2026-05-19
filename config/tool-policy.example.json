@@ -1,8 +1,35 @@
 {
   "tools": {
+    "profile": "chat-agent",
     "approvalMode": "approve_risky",
-    "allow": ["*"],
-    "deny": []
+    "allow": [
+      "session.*",
+      "chat.*",
+      "memory.*",
+      "skills.*",
+      "fs.read",
+      "fs.list",
+      "fs.stat",
+      "file.read_range",
+      "file.find",
+      "code.search",
+      "docs.*",
+      "knowledge.*"
+    ],
+    "deny": [
+      "fs.write",
+      "fs.delete",
+      "fs.copy",
+      "fs.move",
+      "shell.exec",
+      "mcp.invoke",
+      "browser.cookies.get",
+      "browser.storage.get",
+      "bankr.write",
+      "calendar.create",
+      "calendar.update",
+      "calendar.delete"
+    ]
   },
   "agents": {},
   "sandbox": {

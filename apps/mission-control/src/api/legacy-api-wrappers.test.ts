@@ -95,6 +95,7 @@ describe("legacy Mission Control API wrappers", () => {
     const improvement = await import("./improvement");
     const promptPacks = await import("./prompt-packs");
     const memory = await import("./memory");
+    const capabilities = await import("./capabilities");
 
     await improvement.fetchImprovementSignals(999, "workspace-1");
     expect(lastRequest()[0]).toBe("/api/v1/improvement/signals?limit=500&workspaceId=workspace-1");
@@ -127,6 +128,26 @@ describe("legacy Mission Control API wrappers", () => {
 
     await memory.fetchMemoryItemHistory("memory/id", 0);
     expect(lastRequest()[0]).toBe("/api/v1/memory/items/memory%2Fid/history?limit=1");
+
+    await capabilities.fetchCodeModeRuns({
+      limit: 999,
+      workspaceId: "workspace/1",
+      sessionId: "session/1",
+      turnId: "turn/1",
+      status: "failed",
+    });
+    expect(lastRequest()[0]).toBe(
+      "/api/v1/code-mode/runs?limit=500&workspaceId=workspace%2F1&sessionId=session%2F1&turnId=turn%2F1&status=failed",
+    );
+
+    await capabilities.fetchCodeModeRun("run/1", {
+      workspaceId: "workspace/1",
+      sessionId: "session/1",
+      turnId: "turn/1",
+    });
+    expect(lastRequest()[0]).toBe(
+      "/api/v1/code-mode/runs/run%2F1?sessionId=session%2F1&turnId=turn%2F1&workspaceId=workspace%2F1",
+    );
   });
 
   it("wires chat project, workbench, attachment, and delegation transports", async () => {

@@ -424,7 +424,6 @@ export function McpPage() {
           arguments: {
             inboxItemId: item.inboxItemId,
             decision,
-            resolvedBy: "mission-control:mcp",
           },
         });
         if (!response.ok) {
@@ -738,114 +737,117 @@ export function McpPage() {
             title="Register MCP Server"
             subtitle="Use this for adapters that are not already covered by the template library."
           >
-          <p className="office-subtitle">
-            Manual registration stays on local stdio for the visible `1.0` path. The built-in Approval Inbox still ships
-            through its template.
-          </p>
-          <div className="controls-row">
-            <label htmlFor="mcpLabel">
-              Label <HelpHint label="Server label help" text="Human-readable name used in server list and logs." />
-            </label>
-            <input
-              id="mcpLabel"
-              value={label}
-              onChange={(event) => setLabel(event.target.value)}
-              placeholder="Docs MCP"
-            />
-          </div>
-          <div className="controls-row">
-            <label htmlFor="mcpTransport">Transport</label>
-            <GCSelect
-              id="mcpTransport"
-              value={transport}
-              onChange={(value) => setTransport(value as Transport)}
-              options={[{ value: "stdio", label: "stdio" }]}
-            />
-            <label htmlFor="mcpAuth">Auth</label>
-            <GCSelect
-              id="mcpAuth"
-              value={authType}
-              onChange={(value) => setAuthType(value as "none" | "token" | "oauth2")}
-              options={[
-                { value: "none", label: "none" },
-                { value: "token", label: "token" },
-                { value: "oauth2", label: "oauth2" },
-              ]}
-            />
-          </div>
-          <div className="controls-row">
-            <label htmlFor="mcpCategory">Category</label>
-            <GCSelect
-              id="mcpCategory"
-              value={category}
-              onChange={(value) => setCategory(value as McpCategory)}
-              options={[
-                { value: "development", label: "development" },
-                { value: "browser", label: "browser" },
-                { value: "automation", label: "automation" },
-                { value: "research", label: "research" },
-                { value: "data", label: "data" },
-                { value: "creative", label: "creative" },
-                { value: "orchestration", label: "orchestration" },
-                { value: "other", label: "other" },
-              ]}
-            />
-            <label htmlFor="mcpTrustTier">Trust</label>
-            <GCSelect
-              id="mcpTrustTier"
-              value={trustTier}
-              onChange={(value) => setTrustTier(value as McpTrustTier)}
-              options={[
-                { value: "trusted", label: "trusted" },
-                { value: "restricted", label: "restricted" },
-                { value: "quarantined", label: "quarantined" },
-              ]}
-            />
-            <label htmlFor="mcpCostTier">Cost</label>
-            <GCSelect
-              id="mcpCostTier"
-              value={costTier}
-              onChange={(value) => setCostTier(value as McpCostTier)}
-              options={[
-                { value: "free", label: "free" },
-                { value: "mixed", label: "mixed" },
-                { value: "paid", label: "paid" },
-                { value: "unknown", label: "unknown" },
-              ]}
-            />
-          </div>
-          {transport === "stdio" ? (
+            <p className="office-subtitle">
+              Manual registration stays on local stdio for the visible `1.0` path. The built-in Approval Inbox still
+              ships through its template.
+            </p>
             <div className="controls-row">
-              <label htmlFor="mcpCommand">
-                Command{" "}
-                <HelpHint
-                  label="stdio command help"
-                  text="Absolute path or command on PATH used to start the local MCP process."
-                />
+              <label htmlFor="mcpLabel">
+                Label <HelpHint label="Server label help" text="Human-readable name used in server list and logs." />
               </label>
               <input
-                id="mcpCommand"
-                value={command}
-                onChange={(event) => setCommand(event.target.value)}
-                placeholder="npx @modelcontextprotocol/server-filesystem"
+                id="mcpLabel"
+                value={label}
+                onChange={(event) => setLabel(event.target.value)}
+                placeholder="Docs MCP"
               />
             </div>
-          ) : (
             <div className="controls-row">
-              <label htmlFor="mcpUrl">URL</label>
-              <input
-                id="mcpUrl"
-                value={url}
-                onChange={(event) => setUrl(event.target.value)}
-                placeholder="https://mcp.example.com/stream"
+              <label htmlFor="mcpTransport">Transport</label>
+              <GCSelect
+                id="mcpTransport"
+                value={transport}
+                onChange={(value) => setTransport(value as Transport)}
+                options={[{ value: "stdio", label: "stdio" }]}
+              />
+              <label htmlFor="mcpAuth">Auth</label>
+              <GCSelect
+                id="mcpAuth"
+                value={authType}
+                onChange={(value) => setAuthType(value as "none" | "token" | "oauth2")}
+                options={[
+                  { value: "none", label: "none" },
+                  { value: "token", label: "token" },
+                  { value: "oauth2", label: "oauth2" },
+                ]}
               />
             </div>
-          )}
+            <div className="controls-row">
+              <label htmlFor="mcpCategory">Category</label>
+              <GCSelect
+                id="mcpCategory"
+                value={category}
+                onChange={(value) => setCategory(value as McpCategory)}
+                options={[
+                  { value: "development", label: "development" },
+                  { value: "browser", label: "browser" },
+                  { value: "automation", label: "automation" },
+                  { value: "research", label: "research" },
+                  { value: "data", label: "data" },
+                  { value: "creative", label: "creative" },
+                  { value: "orchestration", label: "orchestration" },
+                  { value: "other", label: "other" },
+                ]}
+              />
+              <label htmlFor="mcpTrustTier">Trust</label>
+              <GCSelect
+                id="mcpTrustTier"
+                value={trustTier}
+                onChange={(value) => setTrustTier(value as McpTrustTier)}
+                options={[
+                  { value: "trusted", label: "trusted" },
+                  { value: "restricted", label: "restricted" },
+                  { value: "quarantined", label: "quarantined" },
+                ]}
+              />
+              <label htmlFor="mcpCostTier">Cost</label>
+              <GCSelect
+                id="mcpCostTier"
+                value={costTier}
+                onChange={(value) => setCostTier(value as McpCostTier)}
+                options={[
+                  { value: "free", label: "free" },
+                  { value: "mixed", label: "mixed" },
+                  { value: "paid", label: "paid" },
+                  { value: "unknown", label: "unknown" },
+                ]}
+              />
+            </div>
+            {transport === "stdio" ? (
+              <div className="controls-row">
+                <label htmlFor="mcpCommand">
+                  Command{" "}
+                  <HelpHint
+                    label="stdio command help"
+                    text="Absolute path or command on PATH used to start the local MCP process."
+                  />
+                </label>
+                <input
+                  id="mcpCommand"
+                  value={command}
+                  onChange={(event) => setCommand(event.target.value)}
+                  placeholder="npx @modelcontextprotocol/server-filesystem"
+                />
+              </div>
+            ) : (
+              <div className="controls-row">
+                <label htmlFor="mcpUrl">URL</label>
+                <input
+                  id="mcpUrl"
+                  value={url}
+                  onChange={(event) => setUrl(event.target.value)}
+                  placeholder="https://mcp.example.com/stream"
+                />
+              </div>
+            )}
             <ActionButton label="Add Server" pending={busy} onClick={handleCreateServer} />
           </Panel>
         }
         inspector={
-          <Panel title="Servers" subtitle="Select a server to connect it, run health checks, and tune first-use policy.">
+          <Panel
+            title="Servers"
+            subtitle="Select a server to connect it, run health checks, and tune first-use policy."
+          >
             <div className="virtual-list-shell">
               <Virtuoso
                 data={servers}
@@ -853,7 +855,10 @@ export function McpPage() {
                   <div className="virtual-list-item chat-list-item" key={server.serverId}>
                     <button
                       type="button"
-                      className={["gc-button", `chat-list-button${selectedServerId === server.serverId ? " active" : ""}`]
+                      className={[
+                        "gc-button",
+                        `chat-list-button${selectedServerId === server.serverId ? " active" : ""}`,
+                      ]
                         .filter(Boolean)
                         .join(" ")}
                       onClick={() => setSelectedServerId(server.serverId)}

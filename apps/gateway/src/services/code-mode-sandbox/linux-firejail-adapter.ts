@@ -92,19 +92,39 @@ export class LinuxFirejailSandboxAdapter implements CodeModeHostSandboxAdapter {
   }
 }
 
+// Test-only export for linux-firejail-adapter.security.test.ts.
+export const __buildFirejailProfileForTests = buildFirejailProfile;
+
 function buildFirejailProfile(runTempRoot: string): string {
   rejectUnsafeProfilePath(runTempRoot);
   const quotedRunTempRoot = quoteFirejailPath(runTempRoot);
+  // SECURITY (codex finding #18): The previous profile used
+  // `read-only /` + a writable run-temp dir. That blocked WRITES to the
+  // host filesystem but permitted READS of the entire host fs. Because
+  // the guest runs inside Node's `vm` (which the code itself documents
+  // as not a security sandbox), a malicious Code Mode payload could
+  // escape to Node APIs and `fs.readFileSync('/etc/passwd', '...')` to
+  // exfiltrate host configuration, workspace data, or secrets.
+  //
+  // We now use `private` + `whitelist ${runTempRoot}` so the guest gets
+  // a fresh empty $HOME and only the run workspace is visible. Combined
+  // with `private-dev`, `private-tmp`, `net none`, `seccomp`,
+  // `caps.drop all`, and `nonewprivs`, this dramatically narrows the
+  // host-read surface. Code Mode is still a governed trusted-code
+  // surface, not hostile-code sandboxing; `vm` is not a security
+  // boundary, and a future bubblewrap-based adapter can offer stronger
+  // host-isolation guarantees.
   return [
     "# GoatCitadel Code Mode host sandbox profile.",
     "quiet",
+    "private",
     "private-dev",
     "private-tmp",
     "net none",
     "nonewprivs",
     "caps.drop all",
     "seccomp",
-    "read-only /",
+    `whitelist ${quotedRunTempRoot}`,
     `read-write ${quotedRunTempRoot}`,
     `noblacklist ${quotedRunTempRoot}`,
     "",

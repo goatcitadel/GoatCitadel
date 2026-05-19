@@ -19,6 +19,14 @@ export function assertDeploymentProfileStartupSafety(
   if (config.assistant.auth.allowLoopbackBypass) {
     errors.push("remote_hardened requires allowLoopbackBypass=false.");
   }
+  const approvalMode = config.toolPolicy.tools?.approvalMode ?? config.assistant.toolApprovalMode;
+  if (
+    approvalMode === "bypass" ||
+    config.assistant.defaultToolProfile === "danger" ||
+    config.toolPolicy.tools?.profile === "danger"
+  ) {
+    errors.push("remote_hardened disables approval bypass.");
+  }
 
   const explicitOrigins = process.env.GOATCITADEL_ALLOWED_ORIGINS?.trim();
   const hasNonLoopbackOrigin = [...allowedOrigins].some((origin) => !isLoopbackDevOrigin(origin));

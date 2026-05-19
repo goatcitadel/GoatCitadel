@@ -53,6 +53,36 @@ describe("approvals routes", () => {
     expect(response.statusCode).toBe(403);
   });
 
+  it.each([
+    ["Forwarded", { forwarded: "for=100.64.0.9;proto=https" }],
+    ["empty X-Forwarded-For", { "x-forwarded-for": "" }],
+  ])("does not treat proxy-marked loopback approval creation as local: %s", async (_label, headers) => {
+    const createApproval = vi.fn();
+    const built = buildApp({
+      createApproval,
+    });
+    app = built.app;
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals",
+      headers: {
+        "idempotency-key": "approval-create-proxy-marked",
+        ...headers,
+      },
+      payload: {
+        kind: "tool.invoke",
+        riskLevel: "danger",
+        payload: {},
+        preview: {},
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(createApproval).not.toHaveBeenCalled();
+  });
+
   it("allows remote approval creation with a scoped token and source metadata", async () => {
     vi.stubEnv("GOATCITADEL_REMOTE_APPROVAL_CREATE_TOKEN", "remote-create-token");
     const createApproval = vi.fn(async () => ({
@@ -83,6 +113,15 @@ describe("approvals routes", () => {
         riskLevel: "danger",
         payload: {},
         preview: {},
+        linkage: {
+          workspaceId: "workspace-1",
+          runId: "run-1",
+          originSurface: "cowork",
+          toolName: "browser.search",
+          actionType: "tool.invoke",
+          permissionProfileId: "profile-safe",
+          localOperatorOverrideId: "override-1",
+        },
         sourceConnectorId: "slack",
         sourceTraceId: "evt-123",
       },
@@ -93,6 +132,13 @@ describe("approvals routes", () => {
     expect(createApproval).toHaveBeenCalledWith(
       expect.objectContaining({
         linkage: expect.objectContaining({
+          workspaceId: "workspace-1",
+          runId: "run-1",
+          originSurface: "cowork",
+          toolName: "browser.search",
+          actionType: "tool.invoke",
+          permissionProfileId: "profile-safe",
+          localOperatorOverrideId: "override-1",
           connectorId: "slack",
           traceId: "evt-123",
         }),
@@ -254,7 +300,7 @@ describe("approvals routes", () => {
       payload: {
         decision: "reject",
         status: "pending",
-        resolvedBy: "operator",
+        resolvedBy: "spoofed-client",
         resolutionNote: "Clear pending approvals",
       },
     });
@@ -263,7 +309,7 @@ describe("approvals routes", () => {
     expect(resolveApprovalsBulk).toHaveBeenCalledWith({
       decision: "reject",
       status: "pending",
-      resolvedBy: "operator",
+      resolvedBy: "ip:127.0.0.1",
       resolutionNote: "Clear pending approvals",
     });
     expect(response.json()).toMatchObject({
@@ -273,9 +319,39 @@ describe("approvals routes", () => {
     });
   });
 
+  it("server-stamps single approval resolution actor", async () => {
+    const resolveApproval = vi.fn(async () => ({
+      approval: {
+        approvalId: "3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d",
+        status: "approved",
+      },
+    }));
+    const built = buildApp({
+      resolveApproval,
+    });
+    app = built.app;
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals/3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d/resolve",
+      payload: {
+        decision: "approve",
+        resolvedBy: "spoofed-client",
+      },
+      remoteAddress: "127.0.0.1",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(resolveApproval).toHaveBeenCalledWith("3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d", {
+      decision: "approve",
+      resolvedBy: "ip:127.0.0.1",
+    });
+  });
+
   it("uses request actor fallback when bulk-resolve omits resolvedBy", async () => {
     const resolveApprovalsBulk = vi.fn(async () => ({
-      decision: "approve",
+      decision: "reject",
       status: "pending",
       resolvedCount: 1,
       skippedCount: 0,
@@ -292,16 +368,35 @@ describe("approvals routes", () => {
       method: "POST",
       url: "/api/v1/approvals/bulk-resolve",
       payload: {
-        decision: "approve",
+        decision: "reject",
       },
       remoteAddress: "127.0.0.1",
     });
 
     expect(response.statusCode).toBe(200);
     expect(resolveApprovalsBulk).toHaveBeenCalledWith({
-      decision: "approve",
+      decision: "reject",
       resolvedBy: "ip:127.0.0.1",
     });
+  });
+
+  // SECURITY (codex finding #21): bulk-resolve no longer accepts
+  // decision: "approve"; per-id explicit approval is required. See
+  // docs/review/codex-security-findings-2026-05-18.md.
+  it("rejects decision=approve at the bulk-resolve route (codex #21)", async () => {
+    const resolveApprovalsBulk = vi.fn();
+    const built = buildApp({ resolveApprovalsBulk });
+    app = built.app;
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals/bulk-resolve",
+      payload: { decision: "approve" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(resolveApprovalsBulk).not.toHaveBeenCalled();
   });
 
   it("uses request actor fallback when issuing remote action tokens", async () => {
@@ -363,11 +458,12 @@ describe("approvals routes", () => {
 
     const response = await app.inject({
       method: "GET",
-      url: "/api/v1/approvals/3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d/replay",
+      url: "/api/v1/approvals/3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d/replay?replayedBy=spoofed-client",
+      remoteAddress: "127.0.0.1",
     });
 
     expect(response.statusCode).toBe(200);
-    expect(getApprovalReplay).toHaveBeenCalledWith("3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d", "operator");
+    expect(getApprovalReplay).toHaveBeenCalledWith("3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d", "ip:127.0.0.1");
     expect(response.json()).toMatchObject({
       durableRunId: "durable-run-42",
     });

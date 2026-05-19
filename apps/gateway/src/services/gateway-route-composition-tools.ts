@@ -108,18 +108,28 @@ export function composeToolsMcpRouteDependencies(
       },
     },
     tools: {
+      activatePermissionProfile: (input) => gateway.activatePermissionProfile(input),
+      archivePermissionProfile: (profileId, archivedBy) => gateway.archivePermissionProfile(profileId, archivedBy),
+      createLocalOperatorOverride: (input) => gateway.createLocalOperatorOverride(input),
+      createPermissionProfile: (input) => gateway.createPermissionProfile(input),
       createToolGrant: (input) => gateway.approvalRuntime.createToolGrant(input),
       evaluateToolAccess: (input) =>
-        gateway.policyEngine.evaluateAccess({
+        gateway.evaluateToolAccess({
           ...input,
           workspaceId:
             input.workspaceId ??
             gateway.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ??
             DEFAULT_WORKSPACE_ID,
         }),
+      listPermissionProfiles: (includeArchived) => gateway.listPermissionProfiles(includeArchived),
+      listActiveLocalOperatorOverrides: (operatorId) => gateway.listActiveLocalOperatorOverrides(operatorId),
       listToolCatalog: () => gateway.policyEngine.listCatalog(),
       listToolGrants: (scope, scopeRef, limit) => gateway.approvalRuntime.listToolGrants(scope, scopeRef, limit),
-      revokeToolGrant: (grantId) => gateway.approvalRuntime.revokeToolGrant(grantId),
+      resolveToolPolicyContext: (input) => gateway.resolveToolPolicyContext(input),
+      revokeLocalOperatorOverride: (overrideId, revokedBy) =>
+        gateway.revokeLocalOperatorOverride(overrideId, revokedBy),
+      revokeToolGrant: (grantId, revokedBy) => gateway.approvalRuntime.revokeToolGrant(grantId, revokedBy),
+      updatePermissionProfile: (profileId, input) => gateway.updatePermissionProfile(profileId, input),
     },
     toolsInvoke: {
       getDeploymentProfile: () => gateway.config.assistant.deploymentProfile,

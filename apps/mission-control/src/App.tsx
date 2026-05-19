@@ -584,7 +584,6 @@ export function App() {
       try {
         await resolveApproval(activeDeviceAccessPrompt.approvalId, {
           decision,
-          resolvedBy: buildMissionControlResolverId(),
           resolutionNote: decision === "approve" ? "Approved from Mission Control." : "Rejected from Mission Control.",
         });
         dismissDeviceAccessPrompt(activeDeviceAccessPrompt.approvalId);

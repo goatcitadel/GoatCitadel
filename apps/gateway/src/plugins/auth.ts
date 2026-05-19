@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { SseTokenIssueResponse } from "@goatcitadel/contracts";
 import { enterRequestAttribution } from "@goatcitadel/storage";
 import { timingSafeStringEqual } from "../services/crypto-equals.js";
+import { isGenericChannelInboundPath } from "../services/generic-channel-webhook.js";
 import { isLineWebhookPath } from "../services/line-webhook.js";
 import { isNextcloudTalkWebhookPath } from "../services/nextcloud-talk-webhook.js";
 import { isSlackWebhookPath } from "../services/slack-webhook.js";
@@ -101,6 +102,7 @@ export const authPlugin = fp(async (fastify) => {
       return;
     }
     if (
+      isGenericChannelInboundPath(request.url) ||
       isLineWebhookPath(request.url) ||
       isNextcloudTalkWebhookPath(request.url) ||
       isSlackWebhookPath(request.url) ||
@@ -115,6 +117,10 @@ export const authPlugin = fp(async (fastify) => {
       setAuthActor(request, "auth:none", "none");
       return;
     }
+    if (isRemoteApprovalResolveRequest(request)) {
+      setAuthActor(request, "approval-remote-resolve", "none");
+      return;
+    }
     if (isRemoteApprovalCreateRequest(request) && validateRemoteApprovalCreateToken(request)) {
       const provided = readHeaderToken(request.headers[REMOTE_APPROVAL_CREATE_TOKEN_HEADER]);
       setAuthActor(request, `approval-create:${tokenFingerprint(provided ?? "unknown")}`, "none");
@@ -122,13 +128,40 @@ export const authPlugin = fp(async (fastify) => {
     }
 
     const remoteAddress = request.raw.socket.remoteAddress ?? request.ip;
-    const forwardedFor = request.headers["x-forwarded-for"];
-    const loopbackRequest = !forwardedFor && isLoopbackAddress(remoteAddress);
+    // SECURITY (codex finding #19): Treat a request as loopback only when
+    // it carries NO proxy provenance at all — neither `X-Forwarded-For` nor
+    // `Forwarded`. A reverse proxy that bridges remote clients to a
+    // 127.0.0.1-bound gateway can strip proxy headers (intentionally or by
+    // misconfig), in which case `request.raw.socket.remoteAddress === 127.0.0.1`
+    // and a remote attacker would otherwise satisfy `loopbackRequest`. We
+    // also defer to `request.ips` when Fastify's `trustProxy` is configured;
+    // if `ips.length > 1` the request travelled through a proxy. Defence in
+    // depth — we still treat the bypass as an exception rather than a rule.
+    //
+    // Check header *presence*, not just truthiness — a proxy that emits an
+    // empty `X-Forwarded-For: ` header still indicates the request crossed
+    // a proxy boundary, even though `Boolean("") === false`.
+    const proxyHopCount = Array.isArray(request.ips) ? request.ips.length : 0;
+    const hasProxyProvenance =
+      "x-forwarded-for" in request.headers || "forwarded" in request.headers || proxyHopCount > 1;
+    const loopbackRequest = !hasProxyProvenance && isLoopbackAddress(remoteAddress);
     if (auth.allowLoopbackBypass && loopbackRequest) {
       setAuthActor(request, `loopback:${normalizeActorSuffix(remoteAddress)}`, "loopback");
       return;
     }
 
+    // The onboarding-recovery bypass is the only way for a fresh install
+    // (no token, no basic credentials yet) to authenticate the first
+    // operator without manual file edits. Keep it independent of
+    // `auth.allowLoopbackBypass` so first-run onboarding still works when
+    // the operator disables the broader loopback shortcut.
+    //
+    // SECURITY (codex finding #19): The reverse-proxy attack scenario the
+    // finding describes is already neutralised above by the much stricter
+    // `hasProxyProvenance` check — any request with `X-Forwarded-For`,
+    // `Forwarded`, or `request.ips.length > 1` is no longer treated as a
+    // loopback request, even if `request.raw.socket.remoteAddress` looks
+    // like 127.0.0.1.
     if (
       loopbackRequest &&
       isOnboardingRecoveryRoute(request.url) &&
@@ -443,6 +476,10 @@ function isLoopbackAddress(ip: string): boolean {
 
 function isRemoteApprovalCreateRequest(request: FastifyRequest): boolean {
   return request.method.toUpperCase() === "POST" && request.url.split("?", 1)[0] === "/api/v1/approvals";
+}
+
+function isRemoteApprovalResolveRequest(request: FastifyRequest): boolean {
+  return request.method.toUpperCase() === "POST" && request.url.split("?", 1)[0] === "/api/v1/approvals/remote-resolve";
 }
 
 function validateRemoteApprovalCreateToken(request: FastifyRequest): boolean {

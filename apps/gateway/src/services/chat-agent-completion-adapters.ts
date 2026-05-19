@@ -119,8 +119,18 @@ export function resolveAllowedModelToolCallName(
   if (mapped) {
     return mapped;
   }
+  // SECURITY (codex finding #29): When the schema map is empty, do NOT
+  // pass the raw tool name through. Previously this branch returned
+  // `rawToolName`, which made `parseSerializedToolCalls` accept any
+  // `<function=...>...</function>` fragment the model emitted — even
+  // tools that were never in the turn's selected schema. Prompt-injection
+  // sources (web pages, MCP results, documents) could induce the model
+  // to quote such markup, after which the orchestrator would execute
+  // safe-auto tools the agent was never supposed to have access to.
+  // An empty map is also the production signal that something is
+  // mis-wired upstream — we'd rather fail closed than execute.
   if (modelToCanonical.size === 0) {
-    return rawToolName;
+    return undefined;
   }
   const allowedCanonicalNames = new Set(modelToCanonical.values());
   return allowedCanonicalNames.has(rawToolName) ? rawToolName : undefined;

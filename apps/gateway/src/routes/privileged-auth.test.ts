@@ -109,7 +109,7 @@ function createGatewayMocks() {
   }));
   const listApprovals = vi.fn(() => []);
   const resolveApprovalsBulk = vi.fn(async () => ({
-    decision: "approve",
+    decision: "reject",
     status: "pending",
     resolvedCount: 1,
     skippedCount: 0,
@@ -390,7 +390,7 @@ describe("privileged auth boundary", () => {
         url: "/api/v1/approvals/bulk-resolve",
         headers: { Authorization: "Bearer test-token" },
         payload: {
-          decision: "approve",
+          decision: "reject",
         },
       }),
       app.inject({
@@ -466,8 +466,28 @@ describe("privileged auth boundary", () => {
       }),
     ]);
 
-    for (const response of responses) {
-      expect(response.statusCode).toBeLessThan(300);
+    const routeLabels = [
+      "GET /admin/retention",
+      "GET /durable/diagnostics",
+      "GET /auth/devices",
+      "GET /auth/companion/sessions",
+      "GET /approvals",
+      "GET /approvals/:id/replay",
+      "POST /approvals/:id/resolve",
+      "POST /approvals/bulk-resolve",
+      "POST /approvals/:id/remote-token",
+      "POST /auth/install-token",
+      "GET /memory/maintenance/status",
+      "GET /memory/items",
+      "POST /memory/maintenance/run-now",
+      "POST /orchestration/plans",
+      "GET /orchestration/runs/:id",
+    ];
+    for (const [index, response] of responses.entries()) {
+      expect(
+        response.statusCode,
+        `${routeLabels[index] ?? `case ${index}`} returned ${response.statusCode}: ${response.body}`,
+      ).toBeLessThan(300);
     }
     expect(built.spies.getRetentionPolicy).toHaveBeenCalledTimes(1);
     expect(built.spies.getDurableDiagnostics).toHaveBeenCalledTimes(1);

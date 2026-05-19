@@ -87,8 +87,8 @@ describe("chat attachment routes", () => {
       url: "/api/v1/chat/attachments/attachment-1/content?disposition=inline",
     });
     expect(content.statusCode).toBe(200);
-    expect(content.headers["content-type"]).toBe("text/plain");
-    expect(content.headers["content-disposition"]).toBe('inline; filename="note%20with%20spaces.txt"');
+    expect(content.headers["content-type"]).toBe("application/octet-stream");
+    expect(content.headers["content-disposition"]).toBe('attachment; filename="note%20with%20spaces.txt"');
     expect(content.body).toBe("hello");
 
     getChatAttachment.mockImplementationOnce(() => {

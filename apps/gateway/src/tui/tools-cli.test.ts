@@ -65,13 +65,11 @@ describe("tools cli", () => {
         "--tool",
         "shell.*",
         "--scope",
-        "agent",
+        "workspace",
         "--scope-ref",
-        "coder",
+        "workspace-1",
         "--grant-type",
         "ttl",
-        "--created-by",
-        "operator",
         "--expires-at",
         "2026-05-14T00:00:00.000Z",
       ],
@@ -81,10 +79,9 @@ describe("tools cli", () => {
     expect(harness.client.toolsCreateGrant).toHaveBeenCalledWith({
       toolPattern: "shell.*",
       decision: "allow",
-      scope: "agent",
-      scopeRef: "coder",
+      scope: "workspace",
+      scopeRef: "workspace-1",
       grantType: "ttl",
-      createdBy: "operator",
       expiresAt: "2026-05-14T00:00:00.000Z",
     });
     expect(JSON.parse(harness.output.join(""))).toEqual({ grantId: "grant-1" });
@@ -132,7 +129,6 @@ describe("tools cli", () => {
       dryRun: true,
       consentContext: {
         source: "tui",
-        operatorId: "cli",
         reason: "tools-cli",
       },
     });

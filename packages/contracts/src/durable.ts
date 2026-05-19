@@ -1,3 +1,5 @@
+import type { OrchestrationRunPolicyContext } from "./orchestration.js";
+
 export type DurableRunStatus =
   | "queued"
   | "running"
@@ -57,6 +59,16 @@ export interface ConnectorDeliveryWorkflowPayload {
   connectorId: string;
   connectorType?: string;
   action: string;
+  workspaceId?: string;
+  sessionId?: string;
+  agentId?: string;
+  taskId?: string;
+  runId?: string;
+  operatorId?: string;
+  authActorId?: string;
+  authActorSource?: import("./policy.js").ToolPolicyActorContext["authActorSource"];
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
   payload?: Record<string, unknown>;
   correlationId?: string;
   traceId?: string;
@@ -64,7 +76,7 @@ export interface ConnectorDeliveryWorkflowPayload {
   simulateFailureReason?: string;
 }
 
-export interface OrchestrationPlanWorkflowPayload {
+export interface OrchestrationPlanWorkflowPayload extends OrchestrationRunPolicyContext {
   version: "orchestration.plan.execute.v1";
   orchestrationRunId: string;
   planId: string;

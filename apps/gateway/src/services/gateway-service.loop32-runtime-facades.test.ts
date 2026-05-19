@@ -12,9 +12,15 @@ vi.mock("node:sqlite", () => ({
 import { GatewayService } from "./gateway-service.js";
 
 const tempRoots: string[] = [];
+const originalAllowedOrigins = process.env.GOATCITADEL_ALLOWED_ORIGINS;
 
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => fsPromises.rm(root, { recursive: true, force: true })));
+  if (originalAllowedOrigins === undefined) {
+    delete process.env.GOATCITADEL_ALLOWED_ORIGINS;
+  } else {
+    process.env.GOATCITADEL_ALLOWED_ORIGINS = originalAllowedOrigins;
+  }
 });
 
 function createGatewayHarness(): GatewayService & Record<string, any> {
@@ -135,15 +141,47 @@ describe("GatewayService loop32 runtime facade behavior", () => {
       { providerId: "openai", model: "gpt-fallback" },
       { providerId: "moonshot", model: "kimi-k2" },
     ]);
+    process.env.GOATCITADEL_ALLOWED_ORIGINS = "http://localhost:5173";
     expect(() =>
       GatewayService.prototype.assertDeploymentProfileUpdate.call(gateway, {
         deploymentProfile: "remote_hardened",
         auth: { mode: "none", allowLoopbackBypass: true },
         networkAllowlist: ["*"],
       }),
-    ).toThrow(
-      "remote_hardened requires token or basic auth. remote_hardened disables loopback bypass. remote_hardened forbids wildcard outbound host allowlists.",
-    );
+    ).toThrow(/remote_hardened requires token or basic auth.*explicit non-loopback.*wildcard outbound host allowlists/);
+    gateway.config.assistant.auth.mode = "token";
+    gateway.config.assistant.auth.allowLoopbackBypass = false;
+    gateway.config.toolPolicy.sandbox.networkAllowlist = ["api.openai.com"];
+    process.env.GOATCITADEL_ALLOWED_ORIGINS = "https://citadel.example.com";
+    expect(() =>
+      GatewayService.prototype.assertDeploymentProfileUpdate.call(gateway, {
+        deploymentProfile: "remote_hardened",
+        toolApprovalMode: "bypass",
+      }),
+    ).toThrow("remote_hardened disables approval bypass.");
+    expect(() =>
+      GatewayService.prototype.assertDeploymentProfileUpdate.call(gateway, {
+        deploymentProfile: "remote_hardened",
+        defaultToolProfile: "danger",
+      }),
+    ).toThrow("remote_hardened disables danger tool profiles.");
+    gateway.config.toolPolicy.tools.profile = "danger";
+    expect(() =>
+      GatewayService.prototype.assertDeploymentProfileUpdate.call(gateway, {
+        deploymentProfile: "remote_hardened",
+        toolApprovalMode: "approve_risky",
+        defaultToolProfile: "minimal",
+      }),
+    ).toThrow("remote_hardened disables danger tool profiles.");
+    gateway.config.toolPolicy.tools.profile = "balanced";
+    process.env.GOATCITADEL_ALLOWED_ORIGINS = "http://localhost:5173";
+    expect(() =>
+      GatewayService.prototype.assertDeploymentProfileUpdate.call(gateway, {
+        deploymentProfile: "remote_hardened",
+        toolApprovalMode: "approve_risky",
+        defaultToolProfile: "minimal",
+      }),
+    ).toThrow("remote_hardened requires explicit non-loopback GOATCITADEL_ALLOWED_ORIGINS.");
     expect(() =>
       GatewayService.prototype.assertFirecrawlRuntimeUpdate.call(gateway, {
         web: { firecrawl: { enabled: true, baseUrl: "https://blocked.firecrawl.test" } },

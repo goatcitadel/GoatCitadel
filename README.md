@@ -36,7 +36,7 @@ It is not only a chat UI. GoatCitadel is meant to help users talk with AI, super
 - Chat, Cowork, and Code are distinct operator surfaces backed by shared runtime foundations.
 - Durable execution owns the shipped resumable mission-session Chat / Cowork / Code flow set.
 - The capability system governs tools, runtime skills, generated candidates, proposals, and Code Mode runs through inspectable and callable catalogs.
-- Code Mode v1 is a governed trusted-code surface with explicit operator approval and immutable artifacts. It is not a hostile-code sandbox claim.
+- Code Mode v1 is a governed trusted-code surface with explicit operator approval, recorded artifact hashes, and execution-time hash checks. It is not a hostile-code sandbox claim.
 - Native Windows desktop hosting and installer paths are part of the product shape.
 - Docker is a supported local/shared-host runtime boundary, but it does not replace auth, approvals, path jails, allowlists, or policy.
 - Public claims should stay aligned with [docs/1_0_CONTRACT.md](./docs/1_0_CONTRACT.md), [docs/CANONICAL_RUNTIME_STATE_MODEL.md](./docs/CANONICAL_RUNTIME_STATE_MODEL.md), and the current implementation.
@@ -61,7 +61,7 @@ Start with the public site:
 
 Use the repo docs below when you need implementation-level setup, validation, release proof, or contribution guidance.
 
-### Windows installer
+### Windows source bootstrap
 
 Power-user one-liner:
 
@@ -76,7 +76,7 @@ iwr https://raw.githubusercontent.com/goatcitadel/GoatCitadel/main/install.ps1 -
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-The Windows installer adds the `goatcitadel` and `goat` launchers and opens the native Mission Control desktop host. The desktop host starts the same local gateway and web Mission Control runtime behind the scenes.
+This source bootstrap clones or updates the repo and adds the `goatcitadel` and `goat` command launchers. It is not the packaged Windows `.exe` installer. The packaged installer release assets install the native Mission Control desktop host; the source bootstrap opens the local Mission Control web runtime through the launcher.
 
 Full setup, update, uninstall, and troubleshooting guidance lives in [docs/INSTALL_SETUP_TESTING.md](./docs/INSTALL_SETUP_TESTING.md).
 
@@ -147,10 +147,23 @@ Focused release and runtime proof lanes:
 
 ```bash
 pnpm verify:fast
+pnpm security:trivy
+pnpm verify:auth:matrix
 pnpm verify:runtime:truth
 pnpm verify:durable:recovery
+pnpm verify:code-mode:sandbox
+pnpm verify:agentic:governance
+pnpm verify:agentic:proof
+pnpm verify:operator:proof
+pnpm verify:ui:parity
+pnpm verify:memory:truth
+pnpm verify:realtime:truth
+pnpm verify:architecture:metrics
 pnpm verify:surface:regression
 pnpm verify:visual:regression
+pnpm verify:backup:roundtrip
+pnpm verify:catalog:parity
+pnpm verify:api:compat
 pnpm verify:desktop
 ```
 
@@ -210,7 +223,7 @@ Safe public claims today:
 - the gateway is the control plane for orchestration, approvals, memory, integrations, audit, policy, and runtime APIs
 - durable execution owns the shipped mission-session resumable flow set
 - the capability system governs tools, runtime skills, generated candidates, proposals, and Code Mode runs
-- Code Mode v1 is a trusted-code, approval-gated, artifact-preserving surface
+- Code Mode v1 is a trusted-code, approval-gated surface with recorded artifact hashes and execution-time hash checks
 - visible `beta` integrations in Mission Control now expose real operator actions backed by runtime handlers instead of diagnostics-only catalog shells
 - backup create/list/verify are shipped, and backup verify reports both archive integrity and `contractVerified` minimum-set truth
 - filesystem-backed restore is offline-only for `1.0`; the live admin restore route returns `offline_restore_required` instead of mutating an active runtime
@@ -218,8 +231,8 @@ Safe public claims today:
 - Docker adds a useful runtime boundary when paired with auth and policy configuration
 - `@goatcitadel/extensions-sdk` is the published author boundary for add-ons and integration plugins
 - `verify:backup:roundtrip` now restores and verifies the full minimum operator backup set: SQLite state, transcripts, audit logs, and every runtime `config/*.json` file
-- `verify:catalog:parity` now executes real operator actions for visible runtime-backed non-channel entries instead of stopping at metadata checks
-- `verify:api:compat` snapshots REST schemas and realtime event envelopes and fails on breaking diffs
+- `verify:catalog:parity` now executes the runtime-backed operator action classes declared in its parity scenario instead of stopping at metadata checks
+- `verify:api:compat` snapshots REST route/status compatibility and realtime event envelopes; it is not a full response-schema diff
 
 Do not claim without fresh proof:
 

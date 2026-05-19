@@ -19,3 +19,24 @@ export interface ToolInvokeConsentContext {
   source?: "ui" | "tui" | "agent";
   reason?: string;
 }
+
+const CAUTION_MUTATING_TOOL_NAMES = new Set([
+  "fs.copy",
+  "git.branch.create",
+  "memory.write",
+  "memory.upsert",
+  "docs.ingest",
+  "embeddings.index",
+  "artifacts.create",
+  "documents.create",
+  "presentations.create",
+]);
+
+export function isKnownMutatingToolName(toolName: string): boolean {
+  return (
+    CAUTION_MUTATING_TOOL_NAMES.has(toolName) ||
+    /\.(send|react|unsend)$/u.test(toolName) ||
+    toolName === "webhook.send" ||
+    toolName === "calendar.create_event"
+  );
+}

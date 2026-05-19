@@ -788,6 +788,66 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "knowledge",
   },
   {
+    name: "documents.create",
+    category: "knowledge",
+    riskLevel: "caution",
+    requiresApproval: false,
+    description: "Create a real document artifact in a jailed workspace path.",
+    argSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description:
+            "Output path for the document. Supported extensions include .md, .txt, .html, .json, .csv, .docx, and .pdf.",
+        },
+        format: {
+          type: "string",
+          enum: ["markdown", "md", "txt", "html", "json", "csv", "docx", "pdf"],
+        },
+        title: { type: "string" },
+        body: { type: "string" },
+        sections: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              heading: { type: "string" },
+              title: { type: "string" },
+              body: { type: "string" },
+              bullets: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+        rows: { type: "array" },
+      },
+      required: ["path", "title"],
+    },
+    examples: [
+      {
+        title: "Create a Word document",
+        args: {
+          path: "./workspace/artifacts/free-time-report.docx",
+          format: "docx",
+          title: "Free Time Report",
+          sections: [
+            {
+              heading: "Recommended Activities",
+              bullets: ["Read", "Walk", "Cook something new"],
+            },
+          ],
+        },
+      },
+    ],
+    pack: "knowledge",
+    recommendedContexts: ["chat", "cowork", "code"],
+    preferredForIntents: ["document_generation", "artifact_output", "report", "pdf", "docx", "markdown"],
+    usageHints: [
+      "Use when the user asks for a real document file such as DOCX, PDF, HTML, Markdown, text, JSON, or CSV.",
+      "Do not satisfy a requested document artifact with text-only prose when this tool is available.",
+    ],
+  },
+  {
     name: "presentations.create",
     category: "knowledge",
     riskLevel: "caution",

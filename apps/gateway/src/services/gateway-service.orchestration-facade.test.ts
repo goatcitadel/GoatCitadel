@@ -46,8 +46,18 @@ describe("GatewayService orchestration facade delegation", () => {
       worktrees: gateway.orchestrationWorktreeService,
       phaseExecutor: gateway.orchestrationPhaseExecutionService,
     };
-    expect(orchestrationLifecycleService.createOrchestrationPlan).toHaveBeenCalledWith(gateway, runtimeDeps, plan);
-    expect(orchestrationLifecycleService.runOrchestrationPlan).toHaveBeenCalledWith(gateway, runtimeDeps, "plan-1");
+    expect(orchestrationLifecycleService.createOrchestrationPlan).toHaveBeenCalledWith(
+      gateway,
+      runtimeDeps,
+      plan,
+      undefined,
+    );
+    expect(orchestrationLifecycleService.runOrchestrationPlan).toHaveBeenCalledWith(
+      gateway,
+      runtimeDeps,
+      "plan-1",
+      undefined,
+    );
   });
 
   it("keeps read and approval facade calls on the legacy host-only path", async () => {

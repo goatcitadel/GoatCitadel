@@ -255,6 +255,50 @@ describe("tool executor tail coverage", () => {
     expect(deck.includes("ppt/slides/slide1.xml")).toBe(true);
   });
 
+  it("creates real document artifacts inside the write jail", async () => {
+    const root = createRoot();
+    const config = createConfig(root);
+    const storage = createKnowledgeStorage();
+    const docxPath = path.join(root, "free-time-report.docx");
+    const pdfPath = path.join(root, "free-time-report.pdf");
+
+    const docx = await executeTool(
+      request("documents.create", {
+        path: docxPath,
+        format: "docx",
+        title: "Free Time Report",
+        sections: [
+          {
+            heading: "Activities",
+            body: "A concise set of options.",
+            bullets: ["Read", "Walk", "Cook"],
+          },
+        ],
+      }),
+      config,
+      storage,
+    );
+    const pdf = await executeTool(
+      request("documents.create", {
+        path: pdfPath,
+        format: "pdf",
+        title: "Free Time Report",
+        body: "Choose one active, one creative, and one restful option.",
+      }),
+      config,
+      storage,
+    );
+
+    const docxBytes = fs.readFileSync(docxPath);
+    const pdfBytes = fs.readFileSync(pdfPath);
+    expect(docx).toMatchObject({ path: path.resolve(docxPath), format: "docx" });
+    expect(pdf).toMatchObject({ path: path.resolve(pdfPath), format: "pdf", mimeType: "application/pdf" });
+    expect(docxBytes.subarray(0, 2).toString("utf8")).toBe("PK");
+    expect(docxBytes.includes("word/document.xml")).toBe(true);
+    expect(pdfBytes.subarray(0, 5).toString("utf8")).toBe("%PDF-");
+    expect(pdfBytes.includes("/Type /Catalog")).toBe(true);
+  });
+
   it("builds citations from partial source rows and sanitizes secret-like fields", async () => {
     const root = createRoot();
     const config = createConfig(root);

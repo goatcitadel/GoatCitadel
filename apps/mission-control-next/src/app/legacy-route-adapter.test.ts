@@ -72,6 +72,12 @@ describe("legacy route adapter", () => {
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=configure&page=settings&tab=personalities")).toBe(
       "/settings/personalities",
     );
+    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=configure&page=settings&tab=permissions")).toBe(
+      "/settings/permissions",
+    );
+    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=configure&page=settings&tab=workspaces")).toBe(
+      "/settings/workspaces",
+    );
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=configure&page=settings&tab=access")).toBe(
       "/settings/access",
     );

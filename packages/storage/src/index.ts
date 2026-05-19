@@ -34,6 +34,7 @@ import { AgentProfileRepository } from "./agent-profile-repo.js";
 import { ImportedAgentCatalogRepository } from "./imported-agent-catalog-repo.js";
 import { ToolGrantRepository } from "./tool-grant-repo.js";
 import { ToolAccessDecisionRepository } from "./tool-access-decision-repo.js";
+import { PermissionProfileRepository } from "./permission-profile-repo.js";
 import { KnowledgeRepository } from "./knowledge-repo.js";
 import { CommsDeliveryRepository } from "./comms-delivery-repo.js";
 import { ChatProjectRepository } from "./chat-project-repo.js";
@@ -134,6 +135,7 @@ export class Storage {
   public readonly memoryQmdRuns: MemoryQmdRunRepository;
   public readonly toolGrants: ToolGrantRepository;
   public readonly toolAccessDecisions: ToolAccessDecisionRepository;
+  public readonly permissionProfiles: PermissionProfileRepository;
   public readonly knowledge: KnowledgeRepository;
   public readonly commsDeliveries: CommsDeliveryRepository;
   public readonly chatProjects: ChatProjectRepository;
@@ -234,6 +236,7 @@ export class Storage {
     this.memoryQmdRuns = new MemoryQmdRunRepository(this.db);
     this.toolGrants = new ToolGrantRepository(this.db);
     this.toolAccessDecisions = new ToolAccessDecisionRepository(this.db);
+    this.permissionProfiles = new PermissionProfileRepository(this.db);
     this.knowledge = new KnowledgeRepository(this.db);
     this.commsDeliveries = new CommsDeliveryRepository(this.db);
     this.chatProjects = new ChatProjectRepository(this.db);

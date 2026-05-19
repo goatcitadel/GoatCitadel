@@ -20,7 +20,11 @@ import type {
   DiscordRuntimeStatus,
   IntegrationConnection,
 } from "@goatcitadel/contracts";
-import { normalizeChannelApprovalToken } from "./channel-command-contract.js";
+import {
+  SHARED_CHANNEL_COMMANDS,
+  findSharedChannelCommand,
+  normalizeChannelApprovalToken,
+} from "./channel-command-contract.js";
 
 const log = logger.child("discord-runtime-service");
 
@@ -560,6 +564,9 @@ export class DiscordRuntimeService {
     if (guildRule.users && guildRule.users.length > 0 && !guildRule.users.includes(message.author.id)) {
       return false;
     }
+    if (!hasAllowedDiscordRole(guildRule, message.member)) {
+      return false;
+    }
     if (guildRule.requireMention && runtime.connectedBotId && !message.mentions.users.has(runtime.connectedBotId)) {
       return false;
     }
@@ -611,6 +618,9 @@ export class DiscordRuntimeService {
     if (guildRule.users && guildRule.users.length > 0 && !guildRule.users.includes(interaction.user.id)) {
       return false;
     }
+    if (!hasAllowedDiscordRole(guildRule, interaction.member)) {
+      return false;
+    }
     const commandText = buildCommandTextFromInteraction(interaction);
     await this.handleAcceptedCommand(interaction, async () =>
       this.callbacks.onSlashCommand({
@@ -652,6 +662,9 @@ export class DiscordRuntimeService {
       return false;
     }
     if (guildRule.users && guildRule.users.length > 0 && !guildRule.users.includes(interaction.user.id)) {
+      return false;
+    }
+    if (!hasAllowedDiscordRole(guildRule, interaction.member)) {
       return false;
     }
     return true;
@@ -944,14 +957,36 @@ function sanitizeGuildRules(value: unknown): Record<string, DiscordGuildAccessRu
         ? Boolean((rawRule as { requireMention?: boolean }).requireMention)
         : true;
     const users = sanitizeStringArray((rawRule as { users?: unknown }).users);
+    const roles = sanitizeStringArray((rawRule as { roles?: unknown }).roles);
     const channels = sanitizeStringArray((rawRule as { channels?: unknown }).channels);
     result[guildId] = {
       requireMention,
       users: users.length > 0 ? users : undefined,
+      roles: roles.length > 0 ? roles : undefined,
       channels: channels.length > 0 ? channels : undefined,
     };
   }
   return result;
+}
+
+function hasAllowedDiscordRole(rule: DiscordGuildAccessRule, member: unknown): boolean {
+  if (!rule.roles || rule.roles.length === 0) {
+    return true;
+  }
+  const roleIds = readDiscordMemberRoleIds(member);
+  return rule.roles.some((roleId) => roleIds.has(roleId));
+}
+
+function readDiscordMemberRoleIds(member: unknown): Set<string> {
+  const roles = (member as { roles?: unknown } | null | undefined)?.roles;
+  if (Array.isArray(roles)) {
+    return new Set(roles.filter((item): item is string => typeof item === "string"));
+  }
+  const cache = (roles as { cache?: { keys?: () => IterableIterator<string> } } | null | undefined)?.cache;
+  if (typeof cache?.keys === "function") {
+    return new Set(cache.keys());
+  }
+  return new Set();
 }
 
 function sanitizeStringArray(value: unknown): string[] {
@@ -978,6 +1013,10 @@ function formatDiscordModelChoiceLabel(model: string, provider?: string): string
 }
 
 function buildCommandTextFromInteraction(interaction: ChatInputCommandInteraction): string {
+  const sharedCommandText = buildSharedCommandTextFromInteraction(interaction);
+  if (sharedCommandText) {
+    return sharedCommandText;
+  }
   switch (interaction.commandName) {
     case "help":
       return "/help";
@@ -1092,6 +1131,52 @@ function buildCommandTextFromInteraction(interaction: ChatInputCommandInteractio
   }
 }
 
+function buildSharedCommandTextFromInteraction(interaction: ChatInputCommandInteraction): string | undefined {
+  const definition = findSharedChannelCommand(interaction.commandName);
+  if (!definition?.platforms.includes("discord")) {
+    return undefined;
+  }
+  switch (definition.name) {
+    case "new": {
+      const title = interaction.options.getString("title");
+      return title ? "/new " + title : "/new";
+    }
+    case "skill": {
+      const name = interaction.options.getString("name");
+      return name ? "/skill " + name : "/skill";
+    }
+    case "memory": {
+      const query = interaction.options.getString("query", true);
+      return "/memory " + query;
+    }
+    case "recall": {
+      const query = interaction.options.getString("query", true);
+      return "/recall " + query;
+    }
+    case "search": {
+      const query = interaction.options.getString("query", true);
+      return "/search " + query;
+    }
+    case "personality": {
+      const requested = interaction.options.getString("name");
+      return requested ? "/personality " + requested : "/personality";
+    }
+    case "run": {
+      const subcommand = readDiscordSubcommand(interaction);
+      if (subcommand === "details") {
+        return "/run details " + interaction.options.getString("run_id", true);
+      }
+      return "/run research " + interaction.options.getString("query", true);
+    }
+    case "approve":
+      return "/approve " + readDiscordApprovalToken(interaction);
+    case "deny":
+      return "/deny " + readDiscordApprovalToken(interaction);
+    default:
+      return "/" + definition.name;
+  }
+}
+
 function readDiscordSubcommand(interaction: ChatInputCommandInteraction): string | undefined {
   try {
     return interaction.options.getSubcommand(false) || undefined;
@@ -1114,8 +1199,10 @@ function getErrorMessage(error: unknown): string {
 
 function buildDiscordSlashCommandDefinitions(): RESTPostAPIApplicationCommandsJSONBody[] {
   const stringChoice = (value: string) => ({ name: value, value });
+  const sharedCommands = buildSharedDiscordSlashCommandDefinitions();
+  const sharedNames = new Set(sharedCommands.map((command) => command.name));
 
-  return [
+  const discordSpecificCommands = [
     new SlashCommandBuilder().setName("help").setDescription("Show GoatCitadel chat commands."),
     new SlashCommandBuilder().setName("status").setDescription("Show GoatCitadel channel status."),
     new SlashCommandBuilder()
@@ -1404,7 +1491,67 @@ function buildDiscordSlashCommandDefinitions(): RESTPostAPIApplicationCommandsJS
       .addStringOption((option) =>
         option.setName("action_token").setDescription("Remote approval action token.").setRequired(true),
       ),
-  ].map((builder) => builder.toJSON());
+  ]
+    .map((builder) => builder.toJSON())
+    .filter((command) => !sharedNames.has(command.name));
+  return [...sharedCommands, ...discordSpecificCommands];
+}
+
+function buildSharedDiscordSlashCommandDefinitions(): RESTPostAPIApplicationCommandsJSONBody[] {
+  return SHARED_CHANNEL_COMMANDS.filter((definition) => definition.platforms.includes("discord")).map((definition) =>
+    buildSharedDiscordSlashCommandDefinition(definition.name, definition.description),
+  );
+}
+
+function buildSharedDiscordSlashCommandDefinition(
+  name: string,
+  description: string,
+): RESTPostAPIApplicationCommandsJSONBody {
+  const builder = new SlashCommandBuilder().setName(name).setDescription(description);
+  switch (name) {
+    case "new":
+      builder.addStringOption((option) => option.setName("title").setDescription("Optional session title."));
+      break;
+    case "skill":
+      builder.addStringOption((option) => option.setName("name").setDescription("Visible skill binding name."));
+      break;
+    case "memory":
+      builder.addStringOption((option) =>
+        option.setName("query").setDescription("Memory query, or auto/on/off to set memory mode.").setRequired(true),
+      );
+      break;
+    case "recall":
+    case "search":
+      builder.addStringOption((option) => option.setName("query").setDescription("Lookup query.").setRequired(true));
+      break;
+    case "personality":
+      builder.addStringOption((option) => option.setName("name").setDescription("Personality id, or none."));
+      break;
+    case "run":
+      builder
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName("research")
+            .setDescription("Run quick research.")
+            .addStringOption((option) => option.setName("query").setDescription("Research query.").setRequired(true)),
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName("details")
+            .setDescription("Show details for a run id.")
+            .addStringOption((option) => option.setName("run_id").setDescription("Run id.").setRequired(true)),
+        );
+      break;
+    case "approve":
+    case "deny":
+      builder.addStringOption((option) =>
+        option.setName("action_token").setDescription("Remote approval action token.").setRequired(true),
+      );
+      break;
+    default:
+      break;
+  }
+  return builder.toJSON();
 }
 
 export const __discordRuntimeServiceInternals = {

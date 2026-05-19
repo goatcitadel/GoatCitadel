@@ -5,6 +5,7 @@ import {
   fetchAgenticChannelDeliveries,
   fetchAgenticRuntimeAvailability,
 } from "@goatcitadel/mission-control-shared/api/agentic";
+import { fetchCodeModeRun, fetchCodeModeRuns } from "@goatcitadel/mission-control-shared/api/capabilities";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { WorkbenchFileTree } from "@goatcitadel/mission-control-shared/components/WorkbenchFileTree";
 import {
@@ -21,8 +22,15 @@ vi.mock("@goatcitadel/mission-control-shared/api/agentic", () => ({
   fetchAgenticRuntimeAvailability: vi.fn(),
 }));
 
+vi.mock("@goatcitadel/mission-control-shared/api/capabilities", () => ({
+  fetchCodeModeRun: vi.fn(),
+  fetchCodeModeRuns: vi.fn(),
+}));
+
 const mockedFetchAgenticRuntimeAvailability = vi.mocked(fetchAgenticRuntimeAvailability);
 const mockedFetchAgenticChannelDeliveries = vi.mocked(fetchAgenticChannelDeliveries);
+const mockedFetchCodeModeRun = vi.mocked(fetchCodeModeRun);
+const mockedFetchCodeModeRuns = vi.mocked(fetchCodeModeRuns);
 
 function instanceText(value: unknown): string {
   if (typeof value === "string" || typeof value === "number") {
@@ -148,6 +156,7 @@ function buildCodePanel(
   return {
     kind: "code",
     props: {
+      workspaceId: "workspace-1",
       selectedTurn: {
         turnId: "turn-1",
         sessionId: "session-1",
@@ -286,6 +295,134 @@ describe("ThreadedWorkflowPanel", () => {
           updatedAt: "2026-05-05T12:05:00.000Z",
         },
       ],
+    });
+    mockedFetchCodeModeRuns.mockResolvedValue({
+      items: [
+        {
+          runId: "helper-1",
+          status: "completed",
+          language: "typescript",
+          originSurface: "code",
+          requestedOutputIntent: "workbench_helper",
+          saveCandidateOnSuccess: false,
+          capabilitySnapshotId: "cap-snap-1",
+          codeModeInputHash: "input-hash-1234567890",
+          wrapperManifestHash: "wrapper-hash-1234567890",
+          policySnapshotHash: "policy-hash-1234567890",
+          codeHash: "code-hash-1234567890",
+          approvalId: "approval-code-1",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          codeArtifact: {
+            artifactId: "artifact-code",
+            relPath: "data/code-mode-artifacts/helper-1/source.ts",
+            sha256: "code-hash-1234567890",
+            bytes: 32,
+            mimeType: "text/typescript",
+            createdAt: "2026-05-05T12:00:00.000Z",
+          },
+          wrapperManifestArtifact: {
+            artifactId: "artifact-wrapper",
+            relPath: "data/code-mode-artifacts/helper-1/wrapper-manifest.json",
+            sha256: "wrapper-artifact-hash",
+            bytes: 32,
+            mimeType: "application/json",
+            createdAt: "2026-05-05T12:00:00.000Z",
+          },
+          policySnapshotArtifact: {
+            artifactId: "artifact-policy",
+            relPath: "data/code-mode-artifacts/helper-1/policy-snapshot.json",
+            sha256: "policy-artifact-hash",
+            bytes: 32,
+            mimeType: "application/json",
+            createdAt: "2026-05-05T12:00:00.000Z",
+          },
+          stdoutPreview: "stdout from ledger",
+          stderrPreview: "stderr from ledger",
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          createdAt: "2026-05-05T12:00:00.000Z",
+          startedAt: "2026-05-05T12:00:01.000Z",
+          finishedAt: "2026-05-05T12:00:02.000Z",
+        },
+      ],
+    });
+    mockedFetchCodeModeRun.mockResolvedValue({
+      runId: "helper-1",
+      status: "completed",
+      language: "typescript",
+      originSurface: "code",
+      requestedOutputIntent: "workbench_helper",
+      saveCandidateOnSuccess: false,
+      capabilitySnapshotId: "cap-snap-1",
+      codeModeInputHash: "input-hash-1234567890",
+      wrapperManifestHash: "wrapper-hash-1234567890",
+      policySnapshotHash: "policy-hash-1234567890",
+      codeHash: "code-hash-1234567890",
+      approvalId: "approval-code-1",
+      permissionProfileId: "trusted_local_power",
+      permissionProfileLabel: "Trusted Local Power",
+      localOperatorOverrideId: "override-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      sandbox: {
+        runnerId: "trusted-code-runner",
+        runnerVersion: "1",
+        platform: "linux",
+        isolationProfile: "trusted-code execution",
+        required: true,
+        available: true,
+        checksPassed: ["sandbox_ready"],
+        checksFailed: [],
+      },
+      codeArtifact: {
+        artifactId: "artifact-code",
+        relPath: "data/code-mode-artifacts/helper-1/source.ts",
+        sha256: "code-hash-1234567890",
+        bytes: 32,
+        mimeType: "text/typescript",
+        createdAt: "2026-05-05T12:00:00.000Z",
+      },
+      wrapperManifestArtifact: {
+        artifactId: "artifact-wrapper",
+        relPath: "data/code-mode-artifacts/helper-1/wrapper-manifest.json",
+        sha256: "wrapper-artifact-hash",
+        bytes: 32,
+        mimeType: "application/json",
+        createdAt: "2026-05-05T12:00:00.000Z",
+      },
+      policySnapshotArtifact: {
+        artifactId: "artifact-policy",
+        relPath: "data/code-mode-artifacts/helper-1/policy-snapshot.json",
+        sha256: "policy-artifact-hash",
+        bytes: 32,
+        mimeType: "application/json",
+        createdAt: "2026-05-05T12:00:00.000Z",
+      },
+      stdoutArtifact: {
+        artifactId: "artifact-stdout",
+        relPath: "data/code-mode-artifacts/helper-1/stdout.log",
+        sha256: "stdout-hash-1234567890",
+        bytes: 2,
+        mimeType: "text/plain",
+        createdAt: "2026-05-05T12:00:02.000Z",
+      },
+      stderrArtifact: {
+        artifactId: "artifact-stderr",
+        relPath: "data/code-mode-artifacts/helper-1/stderr.log",
+        sha256: "stderr-hash-1234567890",
+        bytes: 4,
+        mimeType: "text/plain",
+        createdAt: "2026-05-05T12:00:02.000Z",
+      },
+      stdoutPreview: "stdout from detail",
+      stderrPreview: "stderr from detail",
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      result: { ok: true },
+      createdAt: "2026-05-05T12:00:00.000Z",
+      startedAt: "2026-05-05T12:00:01.000Z",
+      finishedAt: "2026-05-05T12:00:02.000Z",
     });
   });
 
@@ -1027,6 +1164,7 @@ describe("ThreadedWorkflowPanel", () => {
     const onRevertFile = vi.fn();
     const onRunHelperSnippet = vi.fn();
     const onCloseGeneratedArtifact = vi.fn();
+    const onOpenApprovals = vi.fn();
     let renderer: ReactTestRenderer | undefined;
 
     await act(async () => {
@@ -1052,6 +1190,7 @@ describe("ThreadedWorkflowPanel", () => {
               helperRuns: [
                 {
                   runId: "helper-1",
+                  turnId: "turn-1",
                   language: "typescript",
                   status: "passed",
                   stdoutPreview: "ok",
@@ -1073,6 +1212,7 @@ describe("ThreadedWorkflowPanel", () => {
             onExportPatch,
             onRevertFile,
             onRunHelperSnippet,
+            onOpenApprovals,
           })}
         />,
       );
@@ -1104,10 +1244,41 @@ describe("ThreadedWorkflowPanel", () => {
         .findAllByType("button")
         .find((button) => button.children.includes("Export"))
         ?.props.onClick();
+      await Promise.resolve();
     });
     expect(onExportPatch).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(renderer!.toJSON())).toContain("Validation passed.");
     expect(JSON.stringify(renderer!.toJSON())).toContain("warn");
+    expect(mockedFetchCodeModeRuns).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+      turnId: "turn-1",
+      limit: 25,
+    });
+    expect(mockedFetchCodeModeRun).toHaveBeenCalledWith("helper-1", {
+      sessionId: "session-1",
+      turnId: "turn-1",
+      workspaceId: "workspace-1",
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Code Mode run detail");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("approval-code-1");
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Open approval queue"))
+        ?.props.onClick();
+    });
+    expect(onOpenApprovals).toHaveBeenCalledWith("approval-code-1");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Trusted Local Power");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("override-1");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Code");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Sandbox posture");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("trusted-code execution");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Input hash");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("input-...7890");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("data/code-mode-artifacts/helper-1/source.ts");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("stdout from detail");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("stderr from detail");
 
     await act(async () => {
       renderer!.root
@@ -1164,6 +1335,224 @@ describe("ThreadedWorkflowPanel", () => {
         ?.props.onClick();
     });
     expect(onCloseGeneratedArtifact).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears stale Code Mode run detail while fetching a newly selected run", async () => {
+    let resolveSecondRun: (value: unknown) => void = () => undefined;
+    mockedFetchCodeModeRuns.mockResolvedValueOnce({
+      items: [
+        {
+          runId: "helper-1",
+          status: "completed",
+          language: "typescript",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          approvalId: "approval-old",
+          createdAt: "2026-05-05T12:02:00.000Z",
+        },
+        {
+          runId: "helper-2",
+          status: "running",
+          language: "typescript",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          approvalId: "approval-new",
+          createdAt: "2026-05-05T12:01:00.000Z",
+        },
+      ] as any,
+    });
+    mockedFetchCodeModeRun.mockImplementation((runId: string) => {
+      if (runId === "helper-1") {
+        return Promise.resolve({
+          runId: "helper-1",
+          status: "completed",
+          language: "typescript",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          approvalId: "approval-old",
+          createdAt: "2026-05-05T12:02:00.000Z",
+        } as any);
+      }
+      return new Promise((resolve) => {
+        resolveSecondRun = resolve;
+      }) as any;
+    });
+
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(<ThreadedWorkflowPanel panel={buildCodePanel()} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Run log"))
+        ?.props.onClick();
+      await Promise.resolve();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("approval-old");
+
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .filter((button) => button.children.includes("Inspect run"))[1]
+        ?.props.onClick();
+      await Promise.resolve();
+    });
+    const loadingRender = JSON.stringify(renderer!.toJSON());
+    expect(loadingRender).toContain("Loading run detail...");
+    expect(loadingRender).not.toContain("approval-old");
+
+    await act(async () => {
+      resolveSecondRun({
+        runId: "helper-2",
+        status: "running",
+        language: "typescript",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        approvalId: "approval-new",
+        createdAt: "2026-05-05T12:01:00.000Z",
+      });
+      await Promise.resolve();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("approval-new");
+  });
+
+  it("keeps Code Mode run detail scoped to the selected turn", async () => {
+    mockedFetchCodeModeRuns.mockResolvedValueOnce({
+      items: [
+        {
+          runId: "other-turn-run",
+          status: "completed",
+          language: "typescript",
+          sessionId: "session-1",
+          turnId: "turn-other",
+          approvalId: "approval-other",
+          permissionProfileLabel: "Wrong Turn Profile",
+          createdAt: "2026-05-05T12:03:00.000Z",
+        },
+        {
+          runId: "current-turn-run",
+          status: "completed",
+          language: "typescript",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          approvalId: "approval-current",
+          permissionProfileLabel: "Current Turn Profile",
+          createdAt: "2026-05-05T12:01:00.000Z",
+        },
+      ] as any,
+    });
+    mockedFetchCodeModeRun.mockResolvedValueOnce({
+      runId: "current-turn-run",
+      status: "completed",
+      language: "typescript",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      approvalId: "approval-current",
+      permissionProfileLabel: "Current Turn Profile",
+      createdAt: "2026-05-05T12:01:00.000Z",
+    } as any);
+
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(<ThreadedWorkflowPanel panel={buildCodePanel()} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Run log"))
+        ?.props.onClick();
+      await Promise.resolve();
+    });
+
+    const rendered = JSON.stringify(renderer!.toJSON());
+    expect(mockedFetchCodeModeRuns).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+      turnId: "turn-1",
+      limit: 25,
+    });
+    expect(mockedFetchCodeModeRun).toHaveBeenCalledWith("current-turn-run", {
+      sessionId: "session-1",
+      turnId: "turn-1",
+      workspaceId: "workspace-1",
+    });
+    expect(rendered).toContain("approval-current");
+    expect(rendered).toContain("Current Turn Profile");
+    expect(rendered).not.toContain("approval-other");
+    expect(rendered).not.toContain("Wrong Turn Profile");
+  });
+
+  it("keeps legacy Code Mode helper runs visible when turn lineage is missing", async () => {
+    mockedFetchCodeModeRuns.mockResolvedValueOnce({
+      items: [
+        {
+          runId: "legacy-helper-run",
+          status: "completed",
+          language: "typescript",
+          sessionId: "session-1",
+          approvalId: "approval-legacy",
+          permissionProfileLabel: "Legacy Helper Profile",
+          createdAt: "2026-05-05T12:01:00.000Z",
+        },
+      ] as any,
+    });
+    mockedFetchCodeModeRun.mockResolvedValueOnce({
+      runId: "legacy-output-run",
+      status: "completed",
+      language: "typescript",
+      sessionId: "session-1",
+      approvalId: "approval-legacy",
+      permissionProfileLabel: "Legacy Helper Profile",
+      stdoutPreview: "legacy detail stdout",
+      createdAt: "2026-05-05T12:02:00.000Z",
+    } as any);
+
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(
+        <ThreadedWorkflowPanel
+          panel={buildCodePanel({
+            output: {
+              state: buildCodePanel().props.workbenchState,
+              output: "Helper completed.",
+              helperRuns: [
+                {
+                  runId: "legacy-output-run",
+                  language: "typescript",
+                  status: "completed",
+                  stdoutPreview: "legacy stdout",
+                  createdAt: "2026-05-05T12:02:00.000Z",
+                },
+              ],
+            } as any,
+          })}
+        />,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Run log"))
+        ?.props.onClick();
+      await Promise.resolve();
+    });
+
+    const rendered = JSON.stringify(renderer!.toJSON());
+    expect(rendered).toContain("legacy...-run");
+    expect(rendered).toContain("legacy stdout");
+    expect(rendered).toContain("Legacy Helper Profile");
+    expect(mockedFetchCodeModeRun).toHaveBeenCalledWith("legacy-output-run", {
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+    });
   });
 
   it("renders cowork run maps, blockers, tabs, and operator action callbacks", async () => {

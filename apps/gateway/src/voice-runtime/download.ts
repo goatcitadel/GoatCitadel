@@ -9,7 +9,7 @@ import AdmZip from "adm-zip";
 export async function downloadFile(url: string, destinationPath: string, expectedSha256: string): Promise<void> {
   const response = await fetch(url, {
     headers: {
-      "User-Agent": "GoatCitadel/0.6",
+      "User-Agent": "GoatCitadel/1.0.0",
     },
   });
   if (!response.ok) {
@@ -19,7 +19,9 @@ export async function downloadFile(url: string, destinationPath: string, expecte
   const buffer = Buffer.from(arrayBuffer);
   const sha256 = createHash("sha256").update(buffer).digest("hex");
   if (sha256 !== expectedSha256) {
-    throw new Error(`Checksum mismatch for ${path.basename(destinationPath)} (expected ${expectedSha256}, got ${sha256})`);
+    throw new Error(
+      `Checksum mismatch for ${path.basename(destinationPath)} (expected ${expectedSha256}, got ${sha256})`,
+    );
   }
   await fs.mkdir(path.dirname(destinationPath), { recursive: true });
   await fs.writeFile(destinationPath, buffer);

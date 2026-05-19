@@ -356,6 +356,9 @@ describe("useChatDelegationPolicyActions", () => {
       mode: "quick",
       providerId: "openai",
       model: "gpt-5.5",
+      policyRunId: "run-existing",
+      policyTaskId: "task-existing",
+      surface: "chat",
     });
     expect(latestHarness?.notices.at(-1)?.content).toContain("Research summary:");
 
@@ -399,6 +402,7 @@ describe("useChatDelegationPolicyActions", () => {
     expect(triggerChatProactiveMock).toHaveBeenCalledWith("session-1", {
       source: "manual",
       reason: "Operator triggered from chat workspace.",
+      surface: "chat",
     });
     expect(latestHarness?.proactiveRuns[0]?.runId).toBe("proactive-1");
   });
@@ -439,6 +443,28 @@ describe("useChatDelegationPolicyActions", () => {
     expect(latestHarness?.loadSidebar).toHaveBeenCalled();
   });
 
+  it("carries active workflow lineage into manual delegation requests", async () => {
+    await act(async () => {
+      create(<Harness thread={makeThread(true)} />);
+      await flushEffects();
+    });
+
+    await act(async () => {
+      await latestHarness?.result.handleSuggestDelegation();
+    });
+    await act(async () => {
+      await latestHarness?.result.handleAcceptDelegation();
+    });
+
+    expect(runChatDelegationMock).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        policyRunId: "run-existing",
+        policyTaskId: "task-existing",
+      }),
+    );
+  });
+
   it("guards code delegation project binding and streams code delegation progress", async () => {
     await act(async () => {
       create(<Harness surfaceMode="code" codeModeNeedsProjectBinding />);
@@ -476,7 +502,7 @@ describe("useChatDelegationPolicyActions", () => {
         "Coder completed ship cycle step 1/2.",
         "Qa failed ship cycle step 2/2: test failed",
         "Ops skipped ship cycle step 3/2: Dependency did not settle successfully.",
-        expect.stringContaining("Ship cycle completed:"),
+        expect.stringContaining("Ship cycle partially completed;"),
       ]),
     );
     expect(latestHarness?.result.activeDelegationRun?.runId).toBe("run-stream");
@@ -518,6 +544,7 @@ describe("useChatDelegationPolicyActions", () => {
       mode: "deep",
       providerId: "openai",
       model: "gpt-5.5",
+      surface: "chat",
     });
     expect(latestHarness?.errors).toContain("research down");
 
@@ -665,6 +692,12 @@ describe("useChatDelegationPolicyActions", () => {
     );
     expect(runChatDelegationMock.mock.calls.at(-1)?.[1]).not.toHaveProperty("steps");
     expect(latestHarness?.result.activeDelegationRun?.status).toBe("failed");
+    expect(latestHarness?.notices.map((item) => item.content)).toEqual(
+      expect.arrayContaining([expect.stringContaining("Delegation failed;")]),
+    );
+    expect(latestHarness?.notices.map((item) => item.content)).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("Delegation completed:")]),
+    );
   });
 
   it("surfaces stream failures and missing final delegation payloads", async () => {

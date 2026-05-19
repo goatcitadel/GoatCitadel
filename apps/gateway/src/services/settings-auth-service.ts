@@ -680,22 +680,55 @@ export function updateAuthSettings(
   deps: SettingsRuntimeDependencies,
   input: AuthSettingsUpdateInput,
 ): AuthRuntimeSettings {
-  if (input.mode) {
-    deps.config.assistant.auth.mode = input.mode;
-  }
-  if (input.allowLoopbackBypass !== undefined) {
-    deps.config.assistant.auth.allowLoopbackBypass = input.allowLoopbackBypass;
-  }
-  if (input.token !== undefined) {
-    deps.config.assistant.auth.token.value = input.token.trim() || undefined;
-  }
-  if (input.basicUsername !== undefined) {
-    deps.config.assistant.auth.basic.username = input.basicUsername.trim() || undefined;
-  }
-  if (input.basicPassword !== undefined) {
-    deps.config.assistant.auth.basic.password = input.basicPassword.trim() || undefined;
-  }
+  const currentAuth = deps.config.assistant.auth;
+  const nextAuth: GatewayRuntimeConfig["assistant"]["auth"] = {
+    ...currentAuth,
+    mode: input.mode ?? currentAuth.mode,
+    allowLoopbackBypass: input.allowLoopbackBypass ?? currentAuth.allowLoopbackBypass,
+    token: {
+      ...currentAuth.token,
+      value: input.token !== undefined ? input.token.trim() || undefined : currentAuth.token.value,
+    },
+    basic: {
+      ...currentAuth.basic,
+      username:
+        input.basicUsername !== undefined ? input.basicUsername.trim() || undefined : currentAuth.basic.username,
+      password:
+        input.basicPassword !== undefined ? input.basicPassword.trim() || undefined : currentAuth.basic.password,
+    },
+  };
+  const candidatePlan = createGatewayAuthCredentialPlan({
+    runtimeConfig: {
+      ...deps.config,
+      assistant: {
+        ...deps.config.assistant,
+        auth: nextAuth,
+      },
+    },
+    env: process.env,
+    configAuth: readAssistantAuthConfigSnapshotSync(deps.config.rootDir),
+  });
+  assertAuthModeHasEffectiveCredential(candidatePlan);
+
+  deps.config.assistant.auth.mode = nextAuth.mode;
+  deps.config.assistant.auth.allowLoopbackBypass = nextAuth.allowLoopbackBypass;
+  deps.config.assistant.auth.token.value = nextAuth.token.value;
+  deps.config.assistant.auth.basic.username = nextAuth.basic.username;
+  deps.config.assistant.auth.basic.password = nextAuth.basic.password;
   return getAuthRuntimeSettings(deps);
+}
+
+function assertAuthModeHasEffectiveCredential(plan: AuthRuntimeSettings["plan"]): void {
+  if (plan.mode === "token" && !plan.token.configured) {
+    throw new ValidationError({
+      message: "Token auth mode requires a configured token before it can be saved.",
+    });
+  }
+  if (plan.mode === "basic" && !(plan.basicUsername.configured && plan.basicPassword.configured)) {
+    throw new ValidationError({
+      message: "Basic auth mode requires both a username and password before it can be saved.",
+    });
+  }
 }
 
 export async function resolveDeviceAccessApproval(

@@ -9,14 +9,71 @@ function encodeMessageBytes(message) {
   return Buffer.byteLength(JSON.stringify(message), "utf8");
 }
 
+function createMessageTooLargeError(details = {}) {
+  return {
+    code: "MESSAGE_TOO_LARGE",
+    message: "Code Mode IPC message exceeded the maximum allowed size.",
+    details: {
+      maxBytes: MAX_MESSAGE_BYTES,
+      ...details,
+    },
+  };
+}
+
 function sendRpc(message) {
   if (!process.send) {
     throw new Error("Code Mode IPC channel is unavailable.");
   }
-  if (encodeMessageBytes(message) > MAX_MESSAGE_BYTES) {
-    throw new Error("Code Mode IPC message exceeded the maximum allowed size.");
+  if (process.connected === false) {
+    throw new Error("Code Mode IPC channel is closed.");
   }
-  process.send(message);
+  const bytes = encodeMessageBytes(message);
+  if (bytes > MAX_MESSAGE_BYTES) {
+    throw createMessageTooLargeError({
+      bytes,
+      direction: "child_to_parent",
+      id: typeof message?.id === "string" ? message.id : undefined,
+      method: typeof message?.method === "string" ? message.method : undefined,
+    });
+  }
+  process.send(message, (error) => {
+    if (error) {
+      cancelledReason = error instanceof Error ? error.message : String(error);
+      rejectPendingRpc({
+        code: "IPC_SEND_FAILED",
+        message: cancelledReason,
+      });
+    }
+  });
+}
+
+function sendRpcBestEffort(message) {
+  try {
+    sendRpc(message);
+    return true;
+  } catch (error) {
+    const serialized = serializeError(error);
+    if (serialized.code === "MESSAGE_TOO_LARGE" && message && typeof message === "object" && "id" in message) {
+      try {
+        sendRpc({
+          jsonrpc: "2.0",
+          id: typeof message.id === "string" ? message.id : null,
+          error: serialized,
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+}
+
+function closeAfterRun() {
+  if (typeof process.disconnect === "function" && process.connected) {
+    process.disconnect();
+  }
+  setTimeout(() => process.exit(0), 100);
 }
 
 function serializeError(error) {
@@ -99,7 +156,32 @@ async function invokeWrapper(wrapperName, args, deadlineAt) {
   inFlightWrapperCall = wrapperName;
   try {
     return await new Promise((resolve, reject) => {
-      pendingRpc.set(id, { resolve, reject });
+      let settled = false;
+      let timeoutHandle;
+      const settle = (callback, value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
+        pendingRpc.delete(id);
+        callback(value);
+      };
+      pendingRpc.set(id, {
+        resolve: (value) => settle(resolve, value),
+        reject: (error) => settle(reject, error),
+      });
+      if (typeof deadlineAt === "number" && Number.isFinite(deadlineAt)) {
+        timeoutHandle = setTimeout(() => {
+          settle(reject, {
+            code: "RUN_DEADLINE_EXCEEDED",
+            message: "Code Mode wrapper deadline exceeded while waiting for parent response.",
+            details: { wrapperName },
+          });
+        }, Math.max(1, deadlineAt - Date.now()));
+      }
       sendRpc({
         jsonrpc: "2.0",
         id,
@@ -118,13 +200,16 @@ async function invokeWrapper(wrapperName, args, deadlineAt) {
 }
 
 function buildCapabilities(wrapperManifest, deadlineAt) {
-  const root = {};
+  const root = Object.create(null);
   const wrappers = Array.isArray(wrapperManifest?.wrappers) ? wrapperManifest.wrappers : [];
   for (const wrapper of wrappers) {
     if (!wrapper || typeof wrapper.name !== "string") {
       continue;
     }
     const segments = wrapper.name.split(".");
+    if (segments.some((segment) => isUnsafeCapabilitySegment(segment))) {
+      continue;
+    }
     let cursor = root;
     for (let index = 0; index < segments.length; index += 1) {
       const segment = segments[index];
@@ -137,13 +222,17 @@ function buildCapabilities(wrapperManifest, deadlineAt) {
       } else {
         const existing = cursor[segment];
         if (!existing || typeof existing !== "object") {
-          cursor[segment] = {};
+          cursor[segment] = Object.create(null);
         }
         cursor = cursor[segment];
       }
     }
   }
   return Object.freeze(root);
+}
+
+function isUnsafeCapabilitySegment(segment) {
+  return segment === "__proto__" || segment === "prototype" || segment === "constructor";
 }
 
 function deepFreeze(value, seen = new WeakSet()) {
@@ -168,6 +257,20 @@ function normalizeResult(result) {
     return result;
   }
   return { value: result };
+}
+
+function assertNoUnawaitedWrapperCalls() {
+  if (pendingRpc.size === 0 && !inFlightWrapperCall) {
+    return;
+  }
+  throw {
+    code: "UNAWAITED_WRAPPER_CALL",
+    message: "Code Mode wrapper calls must be awaited before the run returns.",
+    details: {
+      pendingWrapperCallCount: pendingRpc.size,
+      activeWrapperCall: inFlightWrapperCall,
+    },
+  };
 }
 
 async function executeRun(params) {
@@ -239,6 +342,7 @@ async function executeRun(params) {
         ? Math.max(1, deadlineAt - Date.now())
         : undefined,
   });
+  assertNoUnawaitedWrapperCalls();
   return normalizeResult(value);
 }
 
@@ -256,6 +360,7 @@ process.on("disconnect", () => {
     code: "IPC_DISCONNECTED",
     message: cancelledReason,
   });
+  process.exit(0);
 });
 
 process.on("message", async (message) => {
@@ -263,13 +368,14 @@ process.on("message", async (message) => {
     return;
   }
   if (encodeMessageBytes(message) > MAX_MESSAGE_BYTES) {
-    sendRpc({
+    sendRpcBestEffort({
       jsonrpc: "2.0",
       id: typeof message.id === "string" ? message.id : null,
-      error: {
-        code: "MESSAGE_TOO_LARGE",
-        message: "Code Mode IPC message exceeded the maximum allowed size.",
-      },
+      error: createMessageTooLargeError({
+        bytes: encodeMessageBytes(message),
+        direction: "parent_to_child",
+        method: typeof message.method === "string" ? message.method : undefined,
+      }),
     });
     return;
   }
@@ -303,7 +409,7 @@ process.on("message", async (message) => {
   }
 
   if (currentRunPromise) {
-    sendRpc({
+    sendRpcBestEffort({
       jsonrpc: "2.0",
       id: message.id,
       error: {
@@ -316,24 +422,20 @@ process.on("message", async (message) => {
 
   currentRunPromise = executeRun(message.params)
     .then((result) => {
-      sendRpc({
+      sendRpcBestEffort({
         jsonrpc: "2.0",
         id: message.id,
         result,
       });
-      if (typeof process.disconnect === "function" && process.connected) {
-        process.disconnect();
-      }
+      closeAfterRun();
     })
     .catch((error) => {
-      sendRpc({
+      sendRpcBestEffort({
         jsonrpc: "2.0",
         id: message.id,
         error: serializeError(error),
       });
-      if (typeof process.disconnect === "function" && process.connected) {
-        process.disconnect();
-      }
+      closeAfterRun();
     })
     .finally(() => {
       currentRunPromise = null;

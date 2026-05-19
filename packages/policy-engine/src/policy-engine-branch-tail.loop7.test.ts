@@ -151,10 +151,12 @@ describe("policy-engine branch-tail coverage", () => {
     const config = createConfig();
     const context = { sessionId: "browser-loop7" };
 
-    await expect(executeBrowserTool("browser.cookies.get", {}, config)).rejects.toThrow(/requires browserSessionId/);
-    await expect(
-      executeBrowserTool("browser.cookies.set", { browserSessionId: "browser-loop7", cookies: [] }, config),
-    ).rejects.toThrow(/requires a cookie object/);
+    await expect(executeBrowserTool("browser.cookies.get", {}, config)).rejects.toThrow(
+      /requires active session context/,
+    );
+    await expect(executeBrowserTool("browser.cookies.set", { cookies: [] }, config, context)).rejects.toThrow(
+      /requires a cookie object/,
+    );
 
     const setCookies = await executeBrowserTool(
       "browser.cookies.set",
@@ -391,7 +393,7 @@ describe("policy-engine branch-tail coverage", () => {
       ...createConfig(),
       sandbox: {
         ...createConfig().sandbox,
-        networkAllowlist: ["example.com"],
+        networkAllowlist: ["example.com", "127.0.0.1:3003"],
       },
     };
     const engine = new ToolPolicyEngine(config, storage);
@@ -425,7 +427,7 @@ describe("policy-engine branch-tail coverage", () => {
         sourceType: "url",
         source: "https://example.com/docs",
         backend: "firecrawl",
-        firecrawlBaseUrl: "http://127.0.0.1:3002",
+        firecrawlBaseUrl: "http://127.0.0.1:3003",
       },
       agentId: "agent-loop7",
       sessionId: "session-loop7",
@@ -438,7 +440,7 @@ describe("policy-engine branch-tail coverage", () => {
       "policy_blocks",
       expect.objectContaining({
         details: expect.objectContaining({ reasonCodes: ["structural_safety_block"] }),
-        reason: expect.stringContaining("Private, loopback, or reserved host is blocked"),
+        reason: expect.stringContaining("Private, metadata, or reserved host is blocked"),
       }),
     );
     expect(storage.audit.append).not.toHaveBeenCalledWith(

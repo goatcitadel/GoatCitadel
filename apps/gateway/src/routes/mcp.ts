@@ -69,7 +69,12 @@ const invokeSchema = z.object({
   arguments: z.record(z.unknown()).optional(),
   agentId: z.string().optional(),
   sessionId: z.string().optional(),
+  workspaceId: z.string().optional(),
   taskId: z.string().optional(),
+  runId: z.string().optional(),
+  permissionProfileId: z.string().optional(),
+  localOperatorOverrideId: z.string().optional(),
+  surface: z.enum(["chat", "cowork", "code", "tools", "mcp", "all"]).optional(),
 });
 
 const READ_ROUTE_OPTIONS = {
@@ -220,7 +225,41 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(await fastify.services.mcp.invokeMcpTool(parsed.data));
+      const actorId = request.authActorId?.trim() || parsed.data.agentId?.trim() || "operator";
+      const policyContext = fastify.services.tools?.resolveToolPolicyContext?.({
+        operatorId: actorId,
+        authActorId: actorId,
+        authActorSource: request.authActorSource,
+        workspaceId: parsed.data.workspaceId,
+        sessionId: parsed.data.sessionId,
+        taskId: parsed.data.taskId,
+        runId: parsed.data.runId,
+        surface: parsed.data.surface ?? "mcp",
+        permissionProfileId: parsed.data.permissionProfileId,
+        localOperatorOverrideId: parsed.data.localOperatorOverrideId,
+      }) ?? {
+        operatorId: actorId,
+        authActorId: actorId,
+        authActorSource: request.authActorSource,
+        workspaceId: parsed.data.workspaceId,
+        sessionId: parsed.data.sessionId,
+        taskId: parsed.data.taskId,
+        runId: parsed.data.runId,
+        surface: parsed.data.surface ?? "mcp",
+        permissionProfileId: parsed.data.permissionProfileId,
+        localOperatorOverrideId: parsed.data.localOperatorOverrideId,
+      };
+      return reply.send(
+        await fastify.services.mcp.invokeMcpTool({
+          ...parsed.data,
+          policyContext,
+          consentContext: {
+            operatorId: actorId,
+            source: "ui",
+            reason: "mcp.invoke",
+          },
+        }),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

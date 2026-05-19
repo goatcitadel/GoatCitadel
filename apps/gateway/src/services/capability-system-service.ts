@@ -11,6 +11,7 @@ import type {
   ApprovalRequest,
   CandidateLifecycleActionResult,
   CandidateSkillDetailRecord,
+  CandidateSkillVersionRecord,
   CapabilityArtifactRecord,
   CapabilityCatalogEntry,
   CapabilityCatalogScope,
@@ -22,12 +23,17 @@ import type {
   CodeModeSandboxMetadata,
   CodeModeRunRecord,
   CodeModeRunRequest,
+  CodeModeRunListOptions,
   LoadedSkill,
   SkillLifecycleRecord,
   SkillListItem,
   SkillRuntimeState,
   SkillStateRecord,
   ToolCatalogEntry,
+  LocalOperatorOverrideRecord,
+  PermissionProfileRecord,
+  PermissionSurface,
+  ToolPolicyActorContext,
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
@@ -42,6 +48,7 @@ import {
 } from "./code-mode-sandbox-runner.js";
 
 const CODE_MODE_RUN_TIMEOUT_MS = 15_000;
+const CODE_MODE_WRAPPER_SETTLE_TIMEOUT_MS = 500;
 const CODE_MODE_OUTPUT_CAPTURE_LIMIT_BYTES = 64 * 1024;
 const CODE_MODE_IPC_MAX_BYTES = 128 * 1024;
 const CODE_MODE_HEAP_MB = 64;
@@ -59,6 +66,17 @@ export interface CapabilitySystemServiceOptions {
   createApproval: (input: ApprovalCreateInput) => Promise<ApprovalRequest>;
   publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => void;
   readPolicySnapshot: () => Record<string, unknown>;
+  resolveSandboxMetadata?: (config: CapabilityRuntimeConfig["codeModeSandbox"]) => CodeModeSandboxMetadata;
+  resolvePolicyContext?: (input: {
+    operatorId?: string;
+    workspaceId?: string;
+    sessionId?: string;
+    taskId?: string;
+    runId?: string;
+    surface?: CodeModeOriginSurface;
+    permissionProfileId?: string;
+    localOperatorOverrideId?: string;
+  }) => ToolPolicyActorContext;
 }
 
 interface CodeModeWrapperManifest {
@@ -93,19 +111,38 @@ interface BoundedCaptureState {
   truncated: boolean;
 }
 
+type CodeModeOriginSurface = NonNullable<CodeModeRunRequest["originSurface"]>;
+
+class CodeModeSandboxLaunchFailure extends Error {
+  public constructor(
+    message: string,
+    public readonly sandbox: CodeModeSandboxMetadata,
+  ) {
+    super(message);
+    this.name = "CodeModeSandboxLaunchFailure";
+  }
+}
+
 export class CapabilitySystemService {
   private readonly candidateRoot: string;
   private readonly artifactRoot: string;
   private readonly tempRoot: string;
   private readonly harnessPath: string;
-  private readonly sandboxMetadata: CodeModeSandboxMetadata;
+  private readonly resolveSandboxMetadata: (
+    config: CapabilityRuntimeConfig["codeModeSandbox"],
+  ) => CodeModeSandboxMetadata;
 
   public constructor(private readonly options: CapabilitySystemServiceOptions) {
     this.candidateRoot = resolveManagedRoot(options.rootDir, options.runtimeConfig.candidateRoot);
     this.artifactRoot = resolveManagedRoot(options.rootDir, options.runtimeConfig.codeModeArtifactRoot);
     this.tempRoot = resolveManagedRoot(options.rootDir, options.runtimeConfig.tempRoot);
     this.harnessPath = path.join(this.tempRoot, "code-mode-harness.mjs");
-    this.sandboxMetadata = resolveCodeModeSandboxMetadata(options.runtimeConfig.codeModeSandbox);
+    this.resolveSandboxMetadata =
+      options.resolveSandboxMetadata ?? ((config) => resolveCodeModeSandboxMetadata(config));
+  }
+
+  private resolveCurrentSandboxMetadata(): CodeModeSandboxMetadata {
+    return this.resolveSandboxMetadata(this.options.runtimeConfig.codeModeSandbox);
   }
 
   public ensureSkillLifecycleBackfill(): void {
@@ -229,6 +266,7 @@ export class CapabilitySystemService {
   public promoteCandidate(candidateId: string, versionId?: string): CandidateLifecycleActionResult {
     const versions = this.requireCandidateVersions(candidateId);
     const selected = versionId ? this.requireCandidateVersion(candidateId, versionId) : versions[0]!;
+    this.verifyCandidateVersionArtifacts(selected);
     const changedVersionIds = new Set<string>();
     const occurredAt = new Date().toISOString();
     this.options.storage.runImmediateTransaction(() => {
@@ -286,6 +324,7 @@ export class CapabilitySystemService {
   public rollbackCandidate(candidateId: string, targetVersionId: string): CandidateLifecycleActionResult {
     const versions = this.requireCandidateVersions(candidateId);
     const target = this.requireCandidateVersion(candidateId, targetVersionId);
+    this.verifyCandidateVersionArtifacts(target);
     const occurredAt = new Date().toISOString();
     const changedVersionIds = new Set<string>();
     this.options.storage.runImmediateTransaction(() => {
@@ -316,12 +355,58 @@ export class CapabilitySystemService {
     };
   }
 
-  public listCodeModeRuns(limit = 100): CodeModeRunRecord[] {
-    return this.options.storage.codeModeRuns.list(limit);
+  public listCodeModeRuns(options: number | CodeModeRunListOptions = 100): CodeModeRunRecord[] {
+    const filters = normalizeCodeModeRunListOptions(options);
+    const runs = this.listStoredCodeModeRunsForRead(filters).map((run) => this.hydrateCodeModeRunForRead(run));
+    return filters.status
+      ? runs.filter((run) => run.status === filters.status).slice(0, filters.limit)
+      : runs.slice(0, filters.limit);
   }
 
   public getCodeModeRun(runId: string): CodeModeRunRecord {
-    return this.options.storage.codeModeRuns.get(runId);
+    return this.hydrateCodeModeRunForRead(this.options.storage.codeModeRuns.get(runId));
+  }
+
+  private listStoredCodeModeRuns(filters: Required<Pick<CodeModeRunListOptions, "limit">> & CodeModeRunListOptions) {
+    const repository = this.options.storage.codeModeRuns as typeof this.options.storage.codeModeRuns & {
+      listFiltered?: (options: CodeModeRunListOptions) => CodeModeRunRecord[];
+    };
+    if (repository.listFiltered) {
+      return repository.listFiltered(filters);
+    }
+    return repository
+      .list(filters.limit)
+      .filter((run) => (filters.workspaceId ? run.workspaceId === filters.workspaceId : true))
+      .filter((run) => (filters.sessionId ? run.sessionId === filters.sessionId : true))
+      .filter((run) => (filters.turnId ? run.turnId === filters.turnId : true))
+      .filter((run) => (filters.status ? run.status === filters.status : true));
+  }
+
+  private listStoredCodeModeRunsForRead(
+    filters: Required<Pick<CodeModeRunListOptions, "limit">> & CodeModeRunListOptions,
+  ): CodeModeRunRecord[] {
+    if (filters.status === "expired" || filters.status === "approval_pending") {
+      const repository = this.options.storage.codeModeRuns as typeof this.options.storage.codeModeRuns & {
+        listFilteredForStatusHydration?: (
+          options: CodeModeRunListOptions & { status: CodeModeRunRecord["status"] },
+        ) => CodeModeRunRecord[];
+      };
+      if (repository.listFilteredForStatusHydration) {
+        return repository.listFilteredForStatusHydration({
+          workspaceId: filters.workspaceId,
+          sessionId: filters.sessionId,
+          turnId: filters.turnId,
+          status: filters.status,
+        });
+      }
+      return repository
+        .list(Number.MAX_SAFE_INTEGER)
+        .filter((run) => (filters.workspaceId ? run.workspaceId === filters.workspaceId : true))
+        .filter((run) => (filters.sessionId ? run.sessionId === filters.sessionId : true))
+        .filter((run) => (filters.turnId ? run.turnId === filters.turnId : true))
+        .filter((run) => run.status === filters.status || run.status === "approval_pending");
+    }
+    return this.listStoredCodeModeRuns(filters);
   }
 
   public listChatPendingApprovals(sessionId: string): CodeModeApprovalQueueItem[] {
@@ -379,12 +464,47 @@ export class CapabilitySystemService {
     const snapshot = this.freezeCatalogSnapshot();
     const createdAt = new Date().toISOString();
     const wrapperManifest = this.buildWrapperManifest(snapshot, createdAt);
-    const policySnapshot = this.options.readPolicySnapshot();
     const codeHash = sha256Text(source);
     const wrapperManifestHash = sha256Text(JSON.stringify(wrapperManifest));
-    const policySnapshotHash = sha256Text(JSON.stringify(policySnapshot));
     const runId = `code-run-${randomUUID()}`;
-    const sandbox = this.sandboxMetadata;
+    const runInput = request.input ?? {};
+    const runInputHash = sha256Text(JSON.stringify(runInput));
+    const sandbox = this.resolveCurrentSandboxMetadata();
+    const originSurface = normalizeCodeModeOriginSurface(request.originSurface);
+    const sessionWorkspaceId = request.sessionId
+      ? this.options.storage.chatSessionMeta.get(request.sessionId)?.workspaceId
+      : undefined;
+    const workspaceId = resolveCodeModeWorkspaceId({
+      sessionId: request.sessionId,
+      requestWorkspaceId: request.workspaceId,
+      sessionWorkspaceId,
+    });
+    const policyContext = this.options.resolvePolicyContext?.({
+      operatorId: request.operatorId,
+      workspaceId,
+      sessionId: request.sessionId,
+      runId,
+      surface: originSurface,
+      permissionProfileId: request.permissionProfileId,
+      localOperatorOverrideId: request.localOperatorOverrideId,
+    });
+    if (request.permissionProfileId && policyContext?.permissionProfileId !== request.permissionProfileId) {
+      throw new ValidationError({
+        message: `Permission profile ${request.permissionProfileId} is not active for this Code Mode run.`,
+      });
+    }
+    if (request.localOperatorOverrideId && policyContext?.localOperatorOverrideId !== request.localOperatorOverrideId) {
+      throw new ValidationError({
+        message: `Local Operator Override ${request.localOperatorOverrideId} is not active for this Code Mode run.`,
+      });
+    }
+    const policySnapshot = {
+      ...this.options.readPolicySnapshot(),
+      codeModePermissionContext: serializePolicyContext(policyContext),
+      codeModeInput: runInput,
+      codeModeInputHash: runInputHash,
+    };
+    const policySnapshotHash = sha256Text(JSON.stringify(policySnapshot));
 
     const codeArtifact = await this.persistManagedTextArtifact(
       this.artifactRoot,
@@ -408,8 +528,10 @@ export class CapabilitySystemService {
 
     const approvalPayload = buildCodeModeApprovalPayload({
       runId,
+      workspaceId,
       codeHash,
       wrapperManifestHash,
+      inputHash: runInputHash,
       capabilitySnapshotId: snapshot.snapshotId,
       requestedOutputIntent: request.requestedOutputIntent,
       saveCandidateOnSuccess: Boolean(request.saveCandidateOnSuccess),
@@ -418,30 +540,111 @@ export class CapabilitySystemService {
       affectedResources: wrapperManifest.wrappers.map((wrapper) => wrapper.name),
       sessionId: request.sessionId,
       turnId: request.turnId,
+      originSurface,
       sandbox,
+      permissionProfileId: policyContext?.permissionProfileId,
+      permissionProfileLabel: policyContext?.permissionProfile?.label,
+      localOperatorOverrideId: policyContext?.localOperatorOverrideId,
+    });
+    const approvalLinkage = buildCodeModeApprovalLinkage({
+      workspaceId,
+      runId,
+      sessionId: request.sessionId,
+      turnId: request.turnId,
+      originSurface,
+      permissionProfileId: policyContext?.permissionProfileId,
+      localOperatorOverrideId: policyContext?.localOperatorOverrideId,
     });
 
-    const approval = await this.options.createApproval({
-      kind: "code_mode.run",
-      riskLevel: "caution",
-      payload: approvalPayload,
-      preview: approvalPayload,
-      linkage: {
+    const buildFailedRunRecord = (
+      error: unknown,
+      errorCode: "approval_create_failed" | "approval_registration_failed",
+      phase: "approval_create" | "approval_registration",
+      approvalId?: string,
+    ): CodeModeRunRecord => {
+      const normalized = normalizeCodeModeIpcError(error);
+      const failedAt = new Date().toISOString();
+      return this.options.storage.codeModeRuns.upsert({
+        runId,
+        status: "failed",
+        language: request.language,
+        originSurface,
+        workspaceId,
+        operatorId: request.operatorId,
+        permissionProfileId: policyContext?.permissionProfileId,
+        permissionProfileLabel: policyContext?.permissionProfile?.label,
+        localOperatorOverrideId: policyContext?.localOperatorOverrideId,
+        requestedOutputIntent: request.requestedOutputIntent,
+        saveCandidateOnSuccess: Boolean(request.saveCandidateOnSuccess),
+        capabilitySnapshotId: snapshot.snapshotId,
+        codeModeInputHash: runInputHash,
+        wrapperManifestHash,
+        policySnapshotHash,
+        codeHash,
+        approvalId,
         sessionId: request.sessionId,
         turnId: request.turnId,
-        toolName: "code_mode.run",
-        actionType: "code_mode.run",
-      },
-      expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
-    });
+        sandbox,
+        codeArtifact,
+        wrapperManifestArtifact,
+        policySnapshotArtifact,
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        error: normalized.message,
+        errorCode,
+        errorDetails: {
+          phase,
+          ...(approvalId ? { approvalId } : {}),
+          ...(normalized.code ? { causeCode: normalized.code } : {}),
+          ...(normalized.details ? { causeDetails: normalized.details } : {}),
+        },
+        createdAt,
+        finishedAt: failedAt,
+      });
+    };
+    const publishCreationFailure = (record: CodeModeRunRecord) => {
+      this.options.publishRealtime("code_mode_run_failed", "capabilities", {
+        runId: record.runId,
+        approvalId: record.approvalId,
+        capabilitySnapshotId: record.capabilitySnapshotId,
+        originSurface,
+        sandbox,
+        permissionProfileId: record.permissionProfileId,
+        localOperatorOverrideId: record.localOperatorOverrideId,
+        errorCode: record.errorCode,
+        error: record.error,
+      });
+    };
+
+    let approval: ApprovalRequest;
+    try {
+      approval = await this.options.createApproval({
+        kind: "code_mode.run",
+        riskLevel: "caution",
+        payload: approvalPayload,
+        preview: approvalPayload,
+        linkage: approvalLinkage,
+        expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+      });
+    } catch (error) {
+      publishCreationFailure(buildFailedRunRecord(error, "approval_create_failed", "approval_create"));
+      throw error;
+    }
 
     const runRecord: CodeModeRunRecord = {
       runId,
       status: "approval_pending",
       language: request.language,
+      originSurface,
+      workspaceId,
+      operatorId: request.operatorId,
+      permissionProfileId: policyContext?.permissionProfileId,
+      permissionProfileLabel: policyContext?.permissionProfile?.label,
+      localOperatorOverrideId: policyContext?.localOperatorOverrideId,
       requestedOutputIntent: request.requestedOutputIntent,
       saveCandidateOnSuccess: Boolean(request.saveCandidateOnSuccess),
       capabilitySnapshotId: snapshot.snapshotId,
+      codeModeInputHash: runInputHash,
       wrapperManifestHash,
       policySnapshotHash,
       codeHash,
@@ -458,39 +661,87 @@ export class CapabilitySystemService {
     };
     const stored = this.options.storage.codeModeRuns.upsert(runRecord);
 
-    this.options.storage.pendingApprovalActions.upsertPending({
-      approvalId: approval.approvalId,
-      actionType: "code_mode.run",
-      request: {
-        runId: stored.runId,
-        input: request.input ?? {},
-      },
-      createdAt,
-    });
-    this.options.storage.approvalEvents.append({
-      approvalId: approval.approvalId,
-      eventType: "pending_action_registered",
-      actorId: "system",
-      payload: {
-        actionType: "code_mode.run",
-        runId: stored.runId,
-      },
-    });
-
-    if (request.sessionId) {
-      this.options.storage.chatInlineApprovals.upsert({
+    try {
+      this.options.storage.pendingApprovalActions.upsertPending({
         approvalId: approval.approvalId,
-        sessionId: request.sessionId,
-        turnId: request.turnId ?? `code-mode-${stored.runId}`,
-        kind: "code_mode.run",
-        toolName: "Code Mode v1",
-        status: "pending",
-        reason: asOptionalString(approvalPayload.description) ?? "Code Mode v1 run pending approval.",
-        riskLevel: "caution",
-        expiresAt: approval.expiresAt,
-        details: approvalPayload,
+        actionType: "code_mode.run",
+        request: {
+          runId: stored.runId,
+          input: runInput,
+          originSurface,
+          workspaceId,
+          operatorId: request.operatorId,
+          policyContext: serializePolicyContext(policyContext),
+        },
         createdAt,
+        expiresAt: approval.expiresAt,
       });
+      this.options.storage.approvalEvents.append({
+        approvalId: approval.approvalId,
+        eventType: "pending_action_registered",
+        actorId: "system",
+        payload: {
+          actionType: "code_mode.run",
+          runId: stored.runId,
+          originSurface,
+          permissionProfileId: stored.permissionProfileId,
+          localOperatorOverrideId: stored.localOperatorOverrideId,
+        },
+      });
+
+      if (request.sessionId) {
+        this.options.storage.chatInlineApprovals.upsert({
+          approvalId: approval.approvalId,
+          sessionId: request.sessionId,
+          turnId: request.turnId ?? `code-mode-${stored.runId}`,
+          kind: "code_mode.run",
+          toolName: "Code Mode v1",
+          status: "pending",
+          reason: asOptionalString(approvalPayload.description) ?? "Code Mode v1 run pending approval.",
+          riskLevel: "caution",
+          expiresAt: approval.expiresAt,
+          details: approvalPayload,
+          createdAt,
+        });
+      }
+    } catch (error) {
+      const failureDetails = {
+        runId,
+        error: error instanceof Error ? error.message : String(error),
+        errorCode: "approval_registration_failed",
+      };
+      publishCreationFailure(
+        buildFailedRunRecord(error, "approval_registration_failed", "approval_registration", approval.approvalId),
+      );
+      try {
+        this.options.storage.pendingApprovalActions.markResolved(approval.approvalId, "failed", failureDetails);
+      } catch (pendingResolveError) {
+        // If pending-action creation itself failed, there is nothing to resolve.
+        void pendingResolveError;
+      }
+      try {
+        this.options.storage.approvals.resolve(approval.approvalId, {
+          decision: "reject",
+          resolvedBy: "system",
+          resolutionNote: "Code Mode approval registration failed before execution could be queued.",
+        });
+      } catch (approvalResolveError) {
+        void approvalResolveError;
+      }
+      try {
+        this.options.storage.approvalEvents.append({
+          approvalId: approval.approvalId,
+          eventType: "pending_action_refused",
+          actorId: "system",
+          payload: {
+            actionType: "code_mode.run",
+            ...failureDetails,
+          },
+        });
+      } catch (eventError) {
+        void eventError;
+      }
+      throw error;
     }
 
     this.options.publishRealtime("code_mode_run_created", "capabilities", {
@@ -499,9 +750,12 @@ export class CapabilitySystemService {
       capabilitySnapshotId: stored.capabilitySnapshotId,
       wrapperManifestHash: stored.wrapperManifestHash,
       codeHash: stored.codeHash,
+      originSurface,
       sandbox,
+      permissionProfileId: stored.permissionProfileId,
+      localOperatorOverrideId: stored.localOperatorOverrideId,
     });
-    return stored;
+    return this.hydrateCodeModeRunForRead(stored);
   }
 
   public async executeApprovedCodeModeRun(
@@ -521,30 +775,141 @@ export class CapabilitySystemService {
     }
 
     const existing = this.options.storage.codeModeRuns.get(runId);
-    const runInput = isRecord(pending.request.input) ? pending.request.input : {};
-    const startedAt = new Date().toISOString();
-    const sandbox = existing.sandbox ?? this.sandboxMetadata;
-    this.options.storage.codeModeRuns.upsert({
-      ...existing,
-      status: "running",
-      startedAt,
-      sandbox,
-    });
-    this.options.publishRealtime("code_mode_run_started", "capabilities", {
-      runId,
-      approvalId,
-      startedAt,
-      sandbox,
-    });
-
-    const source = await fs.readFile(path.resolve(this.options.rootDir, existing.codeArtifact.relPath), "utf8");
-    const wrapperManifest = JSON.parse(
-      await fs.readFile(path.resolve(this.options.rootDir, existing.wrapperManifestArtifact.relPath), "utf8"),
-    ) as CodeModeWrapperManifest;
-    const compiledSource = transpileGuestSource(existing.language, source);
-
+    const approval = this.options.storage.approvals.get(approvalId);
+    if (existing.status !== "approval_pending") {
+      const reason = `Code Mode run ${runId} is ${existing.status}; only approval_pending runs can execute.`;
+      this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", { runId, reason });
+      this.options.storage.approvalEvents.append({
+        approvalId,
+        eventType: "pending_action_refused",
+        actorId: "system",
+        payload: {
+          actionType: "code_mode.run",
+          runId: existing.runId,
+          status: existing.status,
+          error: reason,
+        },
+      });
+      this.options.publishRealtime("code_mode_run_refused", "capabilities", {
+        runId: existing.runId,
+        approvalId,
+        status: existing.status,
+        error: reason,
+        errorCode: "INVALID_RUN_STATE",
+        sandbox: existing.sandbox,
+      });
+      throw new ConflictError({ message: reason });
+    }
+    if (approval.kind !== "code_mode.run" || approval.status !== "approved") {
+      const reason =
+        approval.kind !== "code_mode.run"
+          ? `approval kind ${approval.kind} cannot execute Code Mode`
+          : `approval status is ${approval.status}`;
+      const refusedAt = new Date().toISOString();
+      const refusedRun = this.options.storage.codeModeRuns.upsert({
+        ...existing,
+        status: "failed",
+        error: reason,
+        sandbox: existing.sandbox ?? this.resolveCurrentSandboxMetadata(),
+        finishedAt: refusedAt,
+      });
+      this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
+      this.options.storage.approvalEvents.append({
+        approvalId,
+        eventType: "pending_action_refused",
+        actorId: "system",
+        payload: {
+          actionType: "code_mode.run",
+          runId: refusedRun.runId,
+          status: refusedRun.status,
+          error: reason,
+        },
+      });
+      this.options.publishRealtime("code_mode_run_failed", "capabilities", {
+        runId: refusedRun.runId,
+        approvalId,
+        status: refusedRun.status,
+        error: reason,
+        sandbox: refusedRun.sandbox,
+      });
+      throw new ConflictError({ message: `Code Mode run ${runId} refused: ${reason}.` });
+    }
+    if (!isCodeModePendingActionExecutable(pending, approval)) {
+      const reason = "Code Mode pending action expired before approval execution";
+      const refusedAt = new Date().toISOString();
+      const refusedRun = this.options.storage.codeModeRuns.upsert({
+        ...existing,
+        status: "expired",
+        error: reason,
+        sandbox: existing.sandbox ?? this.resolveCurrentSandboxMetadata(),
+        finishedAt: refusedAt,
+      });
+      this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
+      this.options.storage.approvalEvents.append({
+        approvalId,
+        eventType: "pending_action_refused",
+        actorId: "system",
+        payload: {
+          actionType: "code_mode.run",
+          runId: refusedRun.runId,
+          status: refusedRun.status,
+          error: reason,
+          pendingExpiresAt: pending.expiresAt,
+          approvalResolvedAt: approval.resolvedAt,
+        },
+      });
+      this.options.publishRealtime("code_mode_run_failed", "capabilities", {
+        runId: refusedRun.runId,
+        approvalId,
+        status: refusedRun.status,
+        error: reason,
+        sandbox: refusedRun.sandbox,
+      });
+      throw new ConflictError({ message: `Code Mode run ${runId} refused: ${reason}.` });
+    }
+    let sandbox = this.resolveCurrentSandboxMetadata();
     let finalRun = existing;
+
     try {
+      assertApprovedSandboxPostureStillCurrent(existing.sandbox, sandbox);
+      if (existing.approvalId && existing.approvalId !== approvalId) {
+        throw new ConflictError({
+          message: `Code Mode approval ${approvalId} is not linked to run ${runId}.`,
+        });
+      }
+      const source = await this.readVerifiedManagedArtifactText(existing.codeArtifact, {
+        label: "Code Mode source artifact",
+        expectedSha256: existing.codeHash,
+      });
+      const wrapperManifestRaw = await this.readVerifiedManagedArtifactText(existing.wrapperManifestArtifact, {
+        label: "Code Mode wrapper manifest artifact",
+      });
+      const policySnapshotRaw = await this.readVerifiedManagedArtifactText(existing.policySnapshotArtifact, {
+        label: "Code Mode policy snapshot artifact",
+      });
+      const wrapperManifest = JSON.parse(wrapperManifestRaw) as CodeModeWrapperManifest;
+      const policySnapshot = JSON.parse(policySnapshotRaw) as Record<string, unknown>;
+      assertJsonValueHash(wrapperManifest, existing.wrapperManifestHash, "Code Mode wrapper manifest artifact");
+      assertJsonValueHash(policySnapshot, existing.policySnapshotHash, "Code Mode policy snapshot artifact");
+      const runPolicyContext = buildCodeModeRunPolicyContext({
+        run: existing,
+        pendingRequest: pending.request,
+        policySnapshot,
+      });
+      assertCodeModeRunPolicyContextMatchesStoredRun(existing, runPolicyContext);
+      const livePolicyContext = this.options.resolvePolicyContext?.({
+        operatorId: existing.operatorId,
+        workspaceId: existing.workspaceId,
+        sessionId: existing.sessionId,
+        runId: existing.runId,
+        surface: normalizeCodeModeOriginSurface(existing.originSurface),
+        permissionProfileId: existing.permissionProfileId,
+        localOperatorOverrideId: existing.localOperatorOverrideId,
+      });
+      assertLiveCodeModePolicyContextMatchesStoredRun(existing, livePolicyContext);
+      const runInput = readFrozenCodeModeInput(policySnapshot, pending.request.input, existing.codeModeInputHash);
+      const wrapperPolicyContext = buildCodeModeWrapperPolicyContext(runPolicyContext, existing);
+      const compiledSource = transpileGuestSource(existing.language, source);
       throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution started.`);
       if (!sandbox.available) {
         this.options.publishRealtime("code_mode_sandbox_unavailable", "capabilities", {
@@ -555,6 +920,19 @@ export class CapabilitySystemService {
         });
       }
       assertCodeModeSandboxAvailable(sandbox);
+      const startedAt = new Date().toISOString();
+      finalRun = this.options.storage.codeModeRuns.upsert({
+        ...existing,
+        status: "running",
+        startedAt,
+        sandbox,
+      });
+      this.options.publishRealtime("code_mode_run_started", "capabilities", {
+        runId,
+        approvalId,
+        startedAt,
+        sandbox,
+      });
       await this.ensureHarnessFile();
       const execution = await this.executeChildHarness({
         runId,
@@ -563,6 +941,9 @@ export class CapabilitySystemService {
         input: runInput,
         requestedOutputIntent: existing.requestedOutputIntent,
         wrapperManifest,
+        policyContext: wrapperPolicyContext,
+        workspaceId: existing.workspaceId,
+        parentSessionId: existing.sessionId,
         signal,
       });
       throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted after execution started.`);
@@ -589,7 +970,7 @@ export class CapabilitySystemService {
       }
 
       finalRun = this.options.storage.codeModeRuns.upsert({
-        ...existing,
+        ...finalRun,
         status: execution.failed ? "failed" : "completed",
         sandbox,
         stdoutArtifact,
@@ -600,6 +981,8 @@ export class CapabilitySystemService {
         stderrTruncated: execution.stderr.truncated,
         result: execution.result,
         error: execution.error,
+        errorCode: execution.errorCode,
+        errorDetails: execution.errorDetails,
         startedAt,
         finishedAt: new Date().toISOString(),
       });
@@ -616,10 +999,14 @@ export class CapabilitySystemService {
         }
       }
 
-      this.options.storage.pendingApprovalActions.markResolved(approvalId, "executed", {
-        outcome: finalRun.status,
-        runId: finalRun.runId,
-      });
+      this.options.storage.pendingApprovalActions.markResolved(
+        approvalId,
+        finalRun.status === "completed" ? "executed" : "failed",
+        {
+          outcome: finalRun.status,
+          runId: finalRun.runId,
+        },
+      );
       this.options.storage.approvalEvents.append({
         approvalId,
         eventType: "approved_action_executed",
@@ -638,6 +1025,8 @@ export class CapabilitySystemService {
           approvalId,
           status: finalRun.status,
           error: finalRun.error,
+          errorCode: finalRun.errorCode,
+          errorDetails: finalRun.errorDetails,
           sandbox,
         },
       );
@@ -650,26 +1039,52 @@ export class CapabilitySystemService {
           runId: finalRun.runId,
           status: finalRun.status,
           codeHash: finalRun.codeHash,
+          ...(finalRun.error ? { error: finalRun.error } : {}),
+          ...(finalRun.errorCode ? { errorCode: finalRun.errorCode } : {}),
+          ...(finalRun.errorDetails ? { errorDetails: finalRun.errorDetails } : {}),
           sandbox,
         },
       };
     } catch (error) {
+      if (error instanceof CodeModeSandboxLaunchFailure) {
+        sandbox = error.sandbox;
+      }
+      const normalizedError = normalizeCodeModeIpcError(error);
       finalRun = this.options.storage.codeModeRuns.upsert({
         ...finalRun,
         status: "failed",
         sandbox,
-        error: error instanceof Error ? error.message : String(error),
-        startedAt,
+        error: normalizedError.message,
+        errorCode: normalizedError.code,
+        errorDetails: normalizedError.details,
+        startedAt: finalRun.startedAt,
         finishedAt: new Date().toISOString(),
       });
       this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", {
         runId: finalRun.runId,
         error: finalRun.error,
+        errorCode: finalRun.errorCode,
+        errorDetails: finalRun.errorDetails,
+      });
+      this.options.storage.approvalEvents.append({
+        approvalId,
+        eventType: "approved_action_executed",
+        actorId: "system",
+        payload: {
+          actionType: "code_mode.run",
+          runId: finalRun.runId,
+          status: finalRun.status,
+          error: finalRun.error,
+          errorCode: finalRun.errorCode,
+          errorDetails: finalRun.errorDetails,
+        },
       });
       this.options.publishRealtime("code_mode_run_failed", "capabilities", {
         runId: finalRun.runId,
         approvalId,
         error: finalRun.error,
+        errorCode: finalRun.errorCode,
+        errorDetails: finalRun.errorDetails,
         sandbox,
       });
       return {
@@ -680,9 +1095,75 @@ export class CapabilitySystemService {
           runId: finalRun.runId,
           status: finalRun.status,
           error: finalRun.error,
+          ...(finalRun.errorCode ? { errorCode: finalRun.errorCode } : {}),
+          ...(finalRun.errorDetails ? { errorDetails: finalRun.errorDetails } : {}),
           sandbox,
         },
       };
+    }
+  }
+
+  private hydrateCodeModeRunForRead(run: CodeModeRunRecord): CodeModeRunRecord {
+    return this.hydrateCodeModeRunLinkage(this.terminalizeExpiredCodeModeRun(run));
+  }
+
+  private terminalizeExpiredCodeModeRun(run: CodeModeRunRecord): CodeModeRunRecord {
+    if (run.status !== "approval_pending" || !run.approvalId) {
+      return run;
+    }
+    let approval: ApprovalRequest | undefined;
+    try {
+      approval = this.options.storage.approvals.get(run.approvalId);
+    } catch {
+      approval = undefined;
+    }
+    const pending = this.options.storage.pendingApprovalActions.find(run.approvalId);
+    if (!isCodeModeApprovalExpiredForRead(approval, pending)) {
+      return run;
+    }
+    const reason = "Code Mode approval expired before execution";
+    const expired = this.options.storage.codeModeRuns.upsert({
+      ...run,
+      status: "expired",
+      error: reason,
+      sandbox: run.sandbox ?? this.resolveCurrentSandboxMetadata(),
+      finishedAt: run.finishedAt ?? new Date().toISOString(),
+    });
+    this.options.storage.pendingApprovalActions.markResolved(run.approvalId, "failed", { runId: run.runId, reason });
+    this.options.storage.approvalEvents.append({
+      approvalId: run.approvalId,
+      eventType: "pending_action_refused",
+      actorId: "system",
+      payload: {
+        actionType: "code_mode.run",
+        runId: expired.runId,
+        status: expired.status,
+        error: reason,
+        approvalStatus: approval?.status,
+        approvalExpiresAt: approval?.expiresAt,
+        pendingExpiresAt: pending?.expiresAt,
+      },
+    });
+    this.options.publishRealtime("code_mode_run_failed", "capabilities", {
+      runId: expired.runId,
+      approvalId: run.approvalId,
+      status: expired.status,
+      error: reason,
+      sandbox: expired.sandbox,
+    });
+    return expired;
+  }
+
+  private hydrateCodeModeRunLinkage(run: CodeModeRunRecord): CodeModeRunRecord {
+    if (run.originSurface || !run.approvalId) {
+      return run;
+    }
+    try {
+      const approval = this.options.storage.approvals.get(run.approvalId);
+      const originSurface = normalizeCodeModeOriginSurface(approval.linkage?.originSurface);
+      return originSurface ? { ...run, originSurface } : run;
+    } catch {
+      return run;
     }
   }
 
@@ -726,6 +1207,32 @@ export class CapabilitySystemService {
       throw new NotFoundError({ entity: "candidate skill version", id: versionId });
     }
     return version;
+  }
+
+  private verifyCandidateVersionArtifacts(version: CandidateSkillVersionRecord): void {
+    const artifacts = [
+      { label: "Candidate manifest", artifact: version.manifestArtifact },
+      { label: "Candidate instructions", artifact: version.instructionArtifact },
+      { label: "Candidate proof", artifact: version.proofArtifact },
+      ...(version.programArtifact ? [{ label: "Candidate program", artifact: version.programArtifact }] : []),
+      ...(version.schemaArtifact ? [{ label: "Candidate schemas", artifact: version.schemaArtifact }] : []),
+    ];
+    for (const item of artifacts) {
+      const targetPath = path.resolve(this.options.rootDir, item.artifact.relPath);
+      assertPathInsideRoot(targetPath, this.candidateRoot, item.label);
+      const content = fsSync.readFileSync(targetPath, "utf8");
+      if (sha256Text(content) !== item.artifact.sha256) {
+        this.options.publishRealtime("candidate_skill_artifact_tamper_detected", "capabilities", {
+          candidateId: version.candidateId,
+          versionId: version.versionId,
+          artifactId: item.artifact.artifactId,
+          label: item.label,
+        });
+        throw new ConflictError({
+          message: `${item.label} hash mismatch; refusing to promote candidate skill.`,
+        });
+      }
+    }
   }
 
   private buildInspectableCatalog(): CapabilityCatalogEntry[] {
@@ -828,27 +1335,41 @@ export class CapabilitySystemService {
     input: Record<string, unknown>;
     requestedOutputIntent?: string;
     wrapperManifest: CodeModeWrapperManifest;
+    policyContext?: ToolPolicyActorContext;
+    workspaceId?: string;
+    parentSessionId?: string;
     signal?: AbortSignal;
   }): Promise<{
     result?: Record<string, unknown>;
     error?: string;
+    errorCode?: string;
+    errorDetails?: Record<string, unknown>;
     failed: boolean;
     stdout: BoundedCaptureState;
     stderr: BoundedCaptureState;
   }> {
     const runTempRoot = path.join(this.tempRoot, input.runId);
-    const preparedSandbox = await prepareCodeModeSandboxLaunch(
-      this.options.runtimeConfig.codeModeSandbox,
-      {
-        runId: input.runId,
-        nodePath: process.execPath,
-        harnessPath: this.harnessPath,
-        runTempRoot,
-        heapMb: CODE_MODE_HEAP_MB,
-        env: createMinimalSyntheticEnv(),
-      },
-      { metadata: input.sandbox },
-    );
+    let preparedSandbox: Awaited<ReturnType<typeof prepareCodeModeSandboxLaunch>>;
+    try {
+      const harnessPath = await this.prepareRunHarnessFile(runTempRoot);
+      preparedSandbox = await prepareCodeModeSandboxLaunch(
+        this.options.runtimeConfig.codeModeSandbox,
+        {
+          runId: input.runId,
+          nodePath: process.execPath,
+          harnessPath,
+          runTempRoot,
+          heapMb: CODE_MODE_HEAP_MB,
+          env: createMinimalSyntheticEnv(),
+        },
+        { metadata: input.sandbox },
+      );
+    } catch (error) {
+      throw new CodeModeSandboxLaunchFailure(
+        error instanceof Error ? error.message : String(error),
+        buildCodeModeSandboxLaunchFailureMetadata(input.sandbox, error),
+      );
+    }
 
     const child = spawn(preparedSandbox.launch.executable, preparedSandbox.launch.args, {
       shell: preparedSandbox.launch.shell,
@@ -859,12 +1380,17 @@ export class CapabilitySystemService {
 
     const stdout = createBoundedCapture();
     const stderr = createBoundedCapture();
+    const runAbortController = new AbortController();
     const abortChild = (reason?: string) => {
+      const message = reason ?? `Code Mode run ${input.runId} was aborted.`;
+      if (!runAbortController.signal.aborted) {
+        runAbortController.abort(new Error(message));
+      }
       replyToChild({
         jsonrpc: "2.0",
         method: "run.cancel",
         params: {
-          reason: reason ?? `Code Mode run ${input.runId} was aborted.`,
+          reason: message,
         },
       });
       setTimeout(() => {
@@ -883,14 +1409,31 @@ export class CapabilitySystemService {
         reject: (error: unknown) => void;
       }
     >();
+    const activeWrapperTasks = new Set<Promise<void>>();
 
-    const replyToChild = (message: Record<string, unknown>): void => {
+    const sendMessageToChild = (message: Record<string, unknown>): boolean => {
       if (!child.connected) {
-        return;
+        return false;
+      }
+      try {
+        child.send(message, () => {
+          // The child may exit while an async wrapper call is finishing. A closed
+          // IPC channel is already represented by the run result, so do not leak
+          // EPIPE/ERR_IPC_CHANNEL_CLOSED as an unhandled process rejection.
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const replyToChild = (message: Record<string, unknown>): boolean => {
+      if (!child.connected) {
+        return false;
       }
       const bytes = Buffer.byteLength(JSON.stringify(message), "utf8");
       if (bytes > CODE_MODE_IPC_MAX_BYTES) {
-        child.send({
+        return sendMessageToChild({
           jsonrpc: "2.0",
           id: message.id ?? null,
           error: {
@@ -898,9 +1441,8 @@ export class CapabilitySystemService {
             message: "Code Mode IPC message exceeded the maximum allowed size.",
           },
         });
-        return;
       }
-      child.send(message);
+      return sendMessageToChild(message);
     };
 
     const settlePending = (error: unknown): void => {
@@ -916,7 +1458,15 @@ export class CapabilitySystemService {
       }
       const bytes = Buffer.byteLength(JSON.stringify(message), "utf8");
       if (bytes > CODE_MODE_IPC_MAX_BYTES) {
-        settlePending(new Error("Code Mode IPC message exceeded the maximum allowed size."));
+        settlePending({
+          code: "MESSAGE_TOO_LARGE",
+          message: "Code Mode IPC message exceeded the maximum allowed size.",
+          details: {
+            bytes,
+            maxBytes: CODE_MODE_IPC_MAX_BYTES,
+            direction: "child_to_parent",
+          },
+        });
         child.kill();
         return;
       }
@@ -928,7 +1478,7 @@ export class CapabilitySystemService {
         }
         pendingRequests.delete(message.id);
         if (Object.hasOwn(message, "error")) {
-          pending.reject(message.error ?? new Error("Unknown Code Mode IPC error."));
+          pending.reject(normalizeCodeModeIpcError(message.error));
         } else {
           pending.resolve(message.result);
         }
@@ -939,7 +1489,7 @@ export class CapabilitySystemService {
         return;
       }
 
-      void (async () => {
+      const wrapperTask = (async () => {
         try {
           const params = isRecord(message.params) ? message.params : {};
           const wrapperName = asOptionalString(params.wrapperName);
@@ -963,13 +1513,16 @@ export class CapabilitySystemService {
             toolName: wrapperName,
             args: isRecord(params.args) ? params.args : {},
             agentId: `code-mode:${input.runId}`,
-            sessionId: input.runId,
+            sessionId: input.parentSessionId ?? input.runId,
             taskId: input.runId,
-            signal: input.signal,
+            runId: input.runId,
+            workspaceId: input.workspaceId,
+            signal: runAbortController.signal,
             consentContext: {
               source: "agent",
               reason: `code-mode:${input.runId}`,
             },
+            policyContext: input.policyContext,
           });
           if (invocationResult.outcome !== "executed") {
             throw new ConflictError({
@@ -997,6 +1550,8 @@ export class CapabilitySystemService {
           });
         }
       })();
+      activeWrapperTasks.add(wrapperTask);
+      void wrapperTask.finally(() => activeWrapperTasks.delete(wrapperTask));
     });
 
     const exitPromise = new Promise<void>((resolve, reject) => {
@@ -1017,17 +1572,34 @@ export class CapabilitySystemService {
 
     const sendRequest = <TResult>(method: string, params: Record<string, unknown>): Promise<TResult> => {
       const id = `rpc-${randomUUID()}`;
+      const message = {
+        jsonrpc: "2.0",
+        id,
+        method,
+        params,
+      };
+      const bytes = Buffer.byteLength(JSON.stringify(message), "utf8");
+      if (bytes > CODE_MODE_IPC_MAX_BYTES) {
+        return Promise.reject({
+          code: "MESSAGE_TOO_LARGE",
+          message: "Code Mode IPC message exceeded the maximum allowed size.",
+          details: {
+            bytes,
+            maxBytes: CODE_MODE_IPC_MAX_BYTES,
+            direction: "parent_to_child",
+            method,
+          },
+        });
+      }
       return new Promise<TResult>((resolve, reject) => {
         pendingRequests.set(id, {
           resolve: (value) => resolve(value as TResult),
           reject,
         });
-        replyToChild({
-          jsonrpc: "2.0",
-          id,
-          method,
-          params,
-        });
+        if (!sendMessageToChild(message)) {
+          pendingRequests.delete(id);
+          reject(new Error("Code Mode child IPC channel closed before request could be sent."));
+        }
       });
     };
 
@@ -1061,6 +1633,7 @@ export class CapabilitySystemService {
         deadlineAt: Date.now() + CODE_MODE_RUN_TIMEOUT_MS,
         wrapperManifest: input.wrapperManifest,
       });
+      await waitForWrapperTasksToSettle(activeWrapperTasks);
       await exitPromise;
       return {
         result: normalizeRunResult(result),
@@ -1072,10 +1645,17 @@ export class CapabilitySystemService {
       if (!child.killed) {
         child.kill();
       }
+      if (!runAbortController.signal.aborted) {
+        runAbortController.abort(normalizeCodeModeIpcError(error));
+      }
+      await waitForWrapperTasksToSettle(activeWrapperTasks);
       await exitPromise.catch(() => undefined);
+      const normalizedError = normalizeCodeModeIpcError(error);
       return {
         failed: true,
-        error: error instanceof Error ? error.message : String(error),
+        error: normalizedError.message,
+        errorCode: normalizedError.code,
+        errorDetails: normalizedError.details,
         stdout: stdout.finish(),
         stderr: stderr.finish(),
       };
@@ -1095,6 +1675,17 @@ export class CapabilitySystemService {
       return;
     }
     await fs.writeFile(this.harnessPath, CODE_MODE_CHILD_SOURCE, "utf8");
+  }
+
+  private async prepareRunHarnessFile(runTempRoot: string): Promise<string> {
+    await fs.mkdir(runTempRoot, { recursive: true });
+    const runHarnessPath = path.join(runTempRoot, "code-mode-harness.mjs");
+    const nextHash = sha256Text(CODE_MODE_CHILD_SOURCE);
+    const existing = fsSync.existsSync(runHarnessPath) ? await fs.readFile(runHarnessPath, "utf8") : undefined;
+    if (!existing || sha256Text(existing) !== nextHash) {
+      await fs.writeFile(runHarnessPath, CODE_MODE_CHILD_SOURCE, "utf8");
+    }
+    return runHarnessPath;
   }
 
   private async stageCandidateBundle(
@@ -1258,6 +1849,23 @@ export class CapabilitySystemService {
       createdAt: new Date().toISOString(),
     };
   }
+
+  private async readVerifiedManagedArtifactText(
+    artifact: CapabilityArtifactRecord,
+    options: { label: string; expectedSha256?: string },
+  ): Promise<string> {
+    const targetPath = path.resolve(this.options.rootDir, artifact.relPath);
+    assertPathInsideRoot(targetPath, this.artifactRoot, options.label);
+    const content = await fs.readFile(targetPath, "utf8");
+    const actualSha256 = sha256Text(content);
+    const expectedSha256 = options.expectedSha256 ?? artifact.sha256;
+    if (actualSha256 !== artifact.sha256 || actualSha256 !== expectedSha256) {
+      throw new ConflictError({
+        message: `${options.label} hash mismatch; refusing to execute Code Mode run.`,
+      });
+    }
+    return content;
+  }
 }
 
 function buildSkillLifecycleRecord(skill: LoadedSkill): SkillLifecycleRecord {
@@ -1364,6 +1972,14 @@ function sha256Text(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+function assertJsonValueHash(value: unknown, expectedSha256: string, label: string): void {
+  if (sha256Text(JSON.stringify(value)) !== expectedSha256) {
+    throw new ConflictError({
+      message: `${label} value hash mismatch; refusing to execute Code Mode run.`,
+    });
+  }
+}
+
 function sanitizePathSegment(value: string): string {
   return Array.from(value, (segment) => {
     const code = segment.charCodeAt(0);
@@ -1378,15 +1994,461 @@ function normalizeRelPath(value: string): string {
   return value.replace(/\\/gu, "/");
 }
 
+function assertPathInsideRoot(targetPath: string, rootDir: string, label: string): void {
+  const relative = path.relative(rootDir, targetPath);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new ValidationError({ message: `${label} is outside the managed artifact root.` });
+  }
+}
+
 function buildCodePreview(source: string): string {
   const compact = source.replace(/\s+/gu, " ").trim();
   return compact.length > 220 ? `${compact.slice(0, 217)}...` : compact;
+}
+
+function normalizeCodeModeOriginSurface(value: unknown): CodeModeOriginSurface | undefined {
+  return value === "chat" || value === "cowork" || value === "code" ? value : undefined;
+}
+
+function resolveCodeModeWorkspaceId(input: {
+  sessionId?: string;
+  requestWorkspaceId?: string;
+  sessionWorkspaceId?: string;
+}): string | undefined {
+  if (!input.sessionId) {
+    return input.requestWorkspaceId;
+  }
+  const sessionWorkspaceId = input.sessionWorkspaceId?.trim();
+  const requestWorkspaceId = input.requestWorkspaceId?.trim();
+  if (sessionWorkspaceId) {
+    if (requestWorkspaceId && requestWorkspaceId !== sessionWorkspaceId) {
+      throw new ValidationError({
+        message: `Code Mode workspaceId ${requestWorkspaceId} does not match session ${input.sessionId} workspace ${sessionWorkspaceId}.`,
+      });
+    }
+    return sessionWorkspaceId;
+  }
+  return requestWorkspaceId;
+}
+
+function serializePolicyContext(context: ToolPolicyActorContext | undefined): Record<string, unknown> | undefined {
+  if (!context) {
+    return undefined;
+  }
+  return {
+    operatorId: context.operatorId,
+    authActorId: context.authActorId,
+    authActorSource: context.authActorSource,
+    workspaceId: context.workspaceId,
+    sessionId: context.sessionId,
+    taskId: context.taskId,
+    runId: context.runId,
+    approvedCodeModeRunId: context.approvedCodeModeRunId,
+    surface: context.surface,
+    permissionProfileId: context.permissionProfileId,
+    permissionProfileLabel: context.permissionProfile?.label,
+    permissionProfileApprovalMode: context.permissionProfile?.approvalMode,
+    permissionProfile: context.permissionProfile ? serializePermissionProfile(context.permissionProfile) : undefined,
+    localOperatorOverrideId: context.localOperatorOverrideId,
+    localOperatorOverrideExpiresAt: context.localOperatorOverride?.expiresAt,
+    localOperatorOverrideScope: context.localOperatorOverride?.scope,
+    localOperatorOverride: context.localOperatorOverride
+      ? serializeLocalOperatorOverride(context.localOperatorOverride)
+      : undefined,
+  };
+}
+
+function deserializePolicyContext(value: unknown): ToolPolicyActorContext | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const permissionProfile = deserializePermissionProfile(value.permissionProfile);
+  const localOperatorOverride = deserializeLocalOperatorOverride(value.localOperatorOverride);
+  return {
+    operatorId: asOptionalString(value.operatorId),
+    authActorId: asOptionalString(value.authActorId),
+    authActorSource: asOptionalString(value.authActorSource) as ToolPolicyActorContext["authActorSource"],
+    workspaceId: asOptionalString(value.workspaceId),
+    sessionId: asOptionalString(value.sessionId),
+    taskId: asOptionalString(value.taskId),
+    runId: asOptionalString(value.runId),
+    approvedCodeModeRunId: asOptionalString(value.approvedCodeModeRunId),
+    surface: asPermissionSurface(value.surface),
+    permissionProfileId: permissionProfile?.profileId ?? asOptionalString(value.permissionProfileId),
+    permissionProfile,
+    localOperatorOverrideId: localOperatorOverride?.overrideId ?? asOptionalString(value.localOperatorOverrideId),
+    localOperatorOverride,
+  };
+}
+
+function buildCodeModeRunPolicyContext(input: {
+  run: CodeModeRunRecord;
+  pendingRequest: Record<string, unknown>;
+  policySnapshot: Record<string, unknown>;
+}): ToolPolicyActorContext | undefined {
+  const frozenFromSnapshot = deserializePolicyContext(input.policySnapshot.codeModePermissionContext);
+  const frozen = frozenFromSnapshot ?? deserializePolicyContext(input.pendingRequest.policyContext);
+  return {
+    ...frozen,
+    operatorId: frozen?.operatorId ?? input.run.operatorId,
+    workspaceId: frozen?.workspaceId ?? input.run.workspaceId,
+    sessionId: frozen?.sessionId ?? input.run.sessionId,
+    runId: input.run.runId,
+    taskId: frozen?.taskId ?? input.run.runId,
+    surface: frozen?.surface ?? normalizeCodeModeOriginSurface(input.run.originSurface),
+    permissionProfileId: frozen?.permissionProfileId ?? input.run.permissionProfileId,
+    localOperatorOverrideId: frozen?.localOperatorOverrideId ?? input.run.localOperatorOverrideId,
+  };
+}
+
+function isCodeModePendingActionExecutable(
+  pending: { expiresAt?: string },
+  approval: Pick<ApprovalRequest, "status" | "resolvedAt">,
+): boolean {
+  if (!pending.expiresAt) {
+    return true;
+  }
+  const expiresAtMs = Date.parse(pending.expiresAt);
+  if (!Number.isFinite(expiresAtMs)) {
+    return false;
+  }
+  if (Date.now() <= expiresAtMs) {
+    return true;
+  }
+  if (approval.status !== "approved" || !approval.resolvedAt) {
+    return false;
+  }
+  const resolvedAtMs = Date.parse(approval.resolvedAt);
+  return Number.isFinite(resolvedAtMs) && resolvedAtMs <= expiresAtMs;
+}
+
+function isCodeModeApprovalExpiredForRead(
+  approval: Pick<ApprovalRequest, "status" | "expiresAt" | "resolvedAt"> | undefined,
+  pending: { expiresAt?: string; resolutionStatus?: string } | undefined,
+): boolean {
+  const now = Date.now();
+  if (approval?.expiresAt) {
+    const approvalExpiresAtMs = Date.parse(approval.expiresAt);
+    if (Number.isFinite(approvalExpiresAtMs) && approvalExpiresAtMs <= now && approval.status !== "approved") {
+      return true;
+    }
+  }
+  if (!pending?.expiresAt || pending.resolutionStatus !== "pending") {
+    return false;
+  }
+  const pendingExpiresAtMs = Date.parse(pending.expiresAt);
+  if (!Number.isFinite(pendingExpiresAtMs) || pendingExpiresAtMs > now) {
+    return false;
+  }
+  if (approval?.status !== "approved" || !approval.resolvedAt) {
+    return true;
+  }
+  const resolvedAtMs = Date.parse(approval.resolvedAt);
+  return !Number.isFinite(resolvedAtMs) || resolvedAtMs > pendingExpiresAtMs;
+}
+
+function assertCodeModeRunPolicyContextMatchesStoredRun(
+  run: CodeModeRunRecord,
+  context: ToolPolicyActorContext | undefined,
+): void {
+  if (run.permissionProfileId && context?.permissionProfileId !== run.permissionProfileId) {
+    throw new ConflictError({
+      message: `Code Mode permission profile mismatch; expected ${run.permissionProfileId}.`,
+    });
+  }
+  if (run.permissionProfileId && context?.permissionProfile?.profileId !== run.permissionProfileId) {
+    throw new ConflictError({
+      message: `Code Mode permission profile snapshot is missing profile ${run.permissionProfileId}.`,
+    });
+  }
+  if (run.localOperatorOverrideId && context?.localOperatorOverrideId !== run.localOperatorOverrideId) {
+    throw new ConflictError({
+      message: `Code Mode local operator override mismatch; expected ${run.localOperatorOverrideId}.`,
+    });
+  }
+  if (run.localOperatorOverrideId && context?.localOperatorOverride?.overrideId !== run.localOperatorOverrideId) {
+    throw new ConflictError({
+      message: `Code Mode local operator override snapshot is missing override ${run.localOperatorOverrideId}.`,
+    });
+  }
+}
+
+function assertLiveCodeModePolicyContextMatchesStoredRun(
+  run: CodeModeRunRecord,
+  context: ToolPolicyActorContext | undefined,
+): void {
+  if (run.permissionProfileId && context?.permissionProfileId !== run.permissionProfileId) {
+    throw new ConflictError({
+      message: `Code Mode permission profile ${run.permissionProfileId} is no longer active for this run.`,
+    });
+  }
+  if (run.localOperatorOverrideId && context?.localOperatorOverrideId !== run.localOperatorOverrideId) {
+    throw new ConflictError({
+      message: `Code Mode local operator override ${run.localOperatorOverrideId} is no longer active for this run.`,
+    });
+  }
+}
+
+function assertApprovedSandboxPostureStillCurrent(
+  approved: CodeModeSandboxMetadata | undefined,
+  current: CodeModeSandboxMetadata,
+): void {
+  if (!approved) {
+    return;
+  }
+  const mismatchedField = (
+    [
+      "runnerId",
+      "runnerVersion",
+      "platform",
+      "isolationProfile",
+      "required",
+      "available",
+      "failClosedReason",
+      "advisoryUnsandboxedReason",
+    ] as const
+  ).find((field) => approved[field] !== current[field]);
+  const mismatchedArrayField =
+    mismatchedField ??
+    (["checksPassed", "checksFailed"] as const).find((field) => !sameSandboxCheckList(approved[field], current[field]));
+  if (!mismatchedArrayField) {
+    return;
+  }
+  throw new ConflictError({
+    message: `Code Mode approved sandbox posture changed at ${mismatchedArrayField}; refusing to execute run.`,
+  });
+}
+
+function sameSandboxCheckList(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((value, index) => value === right[index]);
+}
+
+function readFrozenCodeModeInput(
+  policySnapshot: Record<string, unknown>,
+  legacyPendingInput: unknown,
+  expectedInputHash?: string,
+): Record<string, unknown> {
+  const frozenInput = isRecord(policySnapshot.codeModeInput) ? policySnapshot.codeModeInput : undefined;
+  const runInput = frozenInput ?? (isRecord(legacyPendingInput) ? legacyPendingInput : {});
+  const inputHash = asOptionalString(policySnapshot.codeModeInputHash);
+  const computedInputHash = sha256Text(JSON.stringify(runInput));
+  if (inputHash && computedInputHash !== inputHash) {
+    throw new ConflictError({ message: "Code Mode input snapshot hash mismatch; refusing to execute run." });
+  }
+  if (expectedInputHash && computedInputHash !== expectedInputHash) {
+    throw new ConflictError({ message: "Code Mode stored input hash mismatch; refusing to execute run." });
+  }
+  return runInput;
+}
+
+function buildCodeModeWrapperPolicyContext(
+  context: ToolPolicyActorContext | undefined,
+  run: CodeModeRunRecord,
+): ToolPolicyActorContext {
+  return {
+    ...context,
+    operatorId: context?.operatorId ?? run.operatorId,
+    workspaceId: context?.workspaceId ?? run.workspaceId,
+    sessionId: context?.sessionId ?? run.sessionId,
+    taskId: run.runId,
+    runId: run.runId,
+    approvedCodeModeRunId: run.runId,
+    surface: context?.surface ?? normalizeCodeModeOriginSurface(run.originSurface) ?? "code",
+    permissionProfileId: context?.permissionProfileId ?? run.permissionProfileId,
+    localOperatorOverrideId: context?.localOperatorOverrideId ?? run.localOperatorOverrideId,
+    localOperatorOverride: context?.localOperatorOverride,
+  };
+}
+
+function serializePermissionProfile(profile: PermissionProfileRecord): Record<string, unknown> {
+  return {
+    profileId: profile.profileId,
+    label: profile.label,
+    description: profile.description,
+    builtin: profile.builtin,
+    status: profile.status,
+    scope: profile.scope,
+    scopeRef: profile.scopeRef,
+    approvalMode: profile.approvalMode,
+    legacyToolProfile: profile.legacyToolProfile,
+    toolPatterns: profile.toolPatterns,
+    allow: profile.allow,
+    deny: profile.deny,
+    readAccessMode: profile.readAccessMode,
+    defaultForSurfaces: profile.defaultForSurfaces,
+    createdBy: profile.createdBy,
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt,
+    archivedAt: profile.archivedAt,
+  };
+}
+
+function deserializePermissionProfile(value: unknown): PermissionProfileRecord | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const profileId = asOptionalString(value.profileId);
+  const label = asOptionalString(value.label);
+  const approvalMode = asOptionalString(value.approvalMode);
+  if (!profileId || !label || !isToolApprovalMode(approvalMode)) {
+    return undefined;
+  }
+  return {
+    profileId,
+    label,
+    description: asOptionalString(value.description),
+    builtin: value.builtin === true,
+    status: value.status === "archived" ? "archived" : "active",
+    scope: isPermissionProfileScope(value.scope) ? value.scope : "operator",
+    scopeRef: asOptionalString(value.scopeRef),
+    approvalMode,
+    legacyToolProfile: asOptionalString(value.legacyToolProfile),
+    toolPatterns: asStringArray(value.toolPatterns),
+    allow: asStringArray(value.allow),
+    deny: asStringArray(value.deny),
+    readAccessMode: isFilesystemReadAccessMode(value.readAccessMode) ? value.readAccessMode : undefined,
+    defaultForSurfaces: asPermissionSurfaceArray(value.defaultForSurfaces),
+    createdBy: asOptionalString(value.createdBy) ?? "system",
+    createdAt: asOptionalString(value.createdAt) ?? new Date(0).toISOString(),
+    updatedAt: asOptionalString(value.updatedAt) ?? new Date(0).toISOString(),
+    archivedAt: asOptionalString(value.archivedAt),
+  };
+}
+
+function serializeLocalOperatorOverride(record: LocalOperatorOverrideRecord): Record<string, unknown> {
+  return {
+    overrideId: record.overrideId,
+    operatorId: record.operatorId,
+    scope: record.scope,
+    scopeRef: record.scopeRef,
+    reason: record.reason,
+    status: record.status,
+    createdBy: record.createdBy,
+    createdAt: record.createdAt,
+    expiresAt: record.expiresAt,
+    revokedAt: record.revokedAt,
+  };
+}
+
+function deserializeLocalOperatorOverride(value: unknown): LocalOperatorOverrideRecord | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const overrideId = asOptionalString(value.overrideId);
+  const operatorId = asOptionalString(value.operatorId);
+  const reason = asOptionalString(value.reason);
+  const createdAt = asOptionalString(value.createdAt);
+  const expiresAt = asOptionalString(value.expiresAt);
+  if (!overrideId || !operatorId || !reason || !createdAt || !expiresAt) {
+    return undefined;
+  }
+  return {
+    overrideId,
+    operatorId,
+    scope: isLocalOperatorOverrideScope(value.scope) ? value.scope : "session",
+    scopeRef: asOptionalString(value.scopeRef),
+    reason,
+    status: isLocalOperatorOverrideStatus(value.status) ? value.status : "active",
+    createdBy: asOptionalString(value.createdBy) ?? operatorId,
+    createdAt,
+    expiresAt,
+    revokedAt: asOptionalString(value.revokedAt),
+  };
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function asPermissionSurface(value: unknown): PermissionSurface | undefined {
+  return isPermissionSurface(value) ? value : undefined;
+}
+
+function asPermissionSurfaceArray(value: unknown): PermissionSurface[] | undefined {
+  const surfaces = Array.isArray(value) ? value.filter(isPermissionSurface) : [];
+  return surfaces.length > 0 ? surfaces : undefined;
+}
+
+function isToolApprovalMode(value: unknown): value is PermissionProfileRecord["approvalMode"] {
+  return value === "approve_all" || value === "approve_risky" || value === "bypass";
+}
+
+function isPermissionProfileScope(value: unknown): value is PermissionProfileRecord["scope"] {
+  return value === "global" || value === "operator" || value === "workspace";
+}
+
+function isFilesystemReadAccessMode(value: unknown): value is PermissionProfileRecord["readAccessMode"] {
+  return value === "roots_only" || value === "approval_required" || value === "full_disk";
+}
+
+function isPermissionSurface(value: unknown): value is PermissionSurface {
+  return (
+    value === "chat" ||
+    value === "cowork" ||
+    value === "code" ||
+    value === "tools" ||
+    value === "mcp" ||
+    value === "all"
+  );
+}
+
+function isLocalOperatorOverrideScope(value: unknown): value is LocalOperatorOverrideRecord["scope"] {
+  return value === "operator" || value === "workspace" || value === "session" || value === "run";
+}
+
+function isLocalOperatorOverrideStatus(value: unknown): value is LocalOperatorOverrideRecord["status"] {
+  return value === "active" || value === "expired" || value === "revoked";
+}
+
+function normalizeCodeModeRunListOptions(
+  options: number | CodeModeRunListOptions,
+): Required<Pick<CodeModeRunListOptions, "limit">> & CodeModeRunListOptions {
+  if (typeof options === "number") {
+    return { limit: normalizeListLimit(options) };
+  }
+  return {
+    limit: normalizeListLimit(options.limit),
+    ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
+    ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+    ...(options.turnId ? { turnId: options.turnId } : {}),
+    ...(options.status ? { status: options.status } : {}),
+  };
+}
+
+function normalizeListLimit(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(1, Math.min(500, Math.floor(value))) : 100;
+}
+
+function buildCodeModeApprovalLinkage(input: {
+  workspaceId?: string;
+  runId?: string;
+  sessionId?: string;
+  turnId?: string;
+  originSurface?: CodeModeOriginSurface;
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+}): ApprovalCreateInput["linkage"] {
+  return {
+    workspaceId: input.workspaceId,
+    runId: input.runId,
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    originSurface: input.originSurface,
+    toolName: "code_mode.run",
+    actionType: "code_mode.run",
+    permissionProfileId: input.permissionProfileId,
+    localOperatorOverrideId: input.localOperatorOverrideId,
+  };
 }
 
 function buildCodeModeApprovalPayload(input: {
   runId: string;
   codeHash: string;
   wrapperManifestHash: string;
+  inputHash: string;
   capabilitySnapshotId: string;
   requestedOutputIntent?: string;
   saveCandidateOnSuccess: boolean;
@@ -1395,23 +2457,35 @@ function buildCodeModeApprovalPayload(input: {
   affectedResources: string[];
   sessionId?: string;
   turnId?: string;
+  workspaceId?: string;
+  originSurface?: CodeModeOriginSurface;
   sandbox: CodeModeSandboxMetadata;
+  permissionProfileId?: string;
+  permissionProfileLabel?: string;
+  localOperatorOverrideId?: string;
 }): Record<string, unknown> {
   return {
     runId: input.runId,
+    workspaceId: input.workspaceId,
     sessionId: input.sessionId,
     turnId: input.turnId,
-    description: "Start a sandbox-gated Code Mode v1 run with the frozen wrapper manifest and policy snapshot.",
+    originSurface: input.originSurface,
+    description:
+      "Start a policy-governed Code Mode v1 run with sandbox posture recorded and rechecked, plus a frozen wrapper manifest and policy snapshot.",
     riskLevel: "caution",
     affectedResources: input.affectedResources,
     codeHash: input.codeHash,
     wrapperManifestHash: input.wrapperManifestHash,
+    inputHash: input.inputHash,
     capabilitySnapshotId: input.capabilitySnapshotId,
     inspectPath: input.inspectPath,
     codePreview: input.codePreview,
     requestedOutputIntent: input.requestedOutputIntent,
     saveCandidateOnSuccess: input.saveCandidateOnSuccess,
     sandbox: input.sandbox,
+    permissionProfileId: input.permissionProfileId,
+    permissionProfileLabel: input.permissionProfileLabel,
+    localOperatorOverrideId: input.localOperatorOverrideId,
   };
 }
 
@@ -1473,6 +2547,44 @@ function normalizeRunResult(result: unknown): Record<string, unknown> {
   return { value: result };
 }
 
+function normalizeCodeModeIpcError(error: unknown): {
+  code?: string;
+  message: string;
+  details?: Record<string, unknown>;
+} {
+  if (isRecord(error)) {
+    const code = asOptionalString(error.code);
+    const message = asOptionalString(error.message) ?? "Unknown Code Mode IPC error.";
+    const details = isRecord(error.details) ? error.details : undefined;
+    const normalizedMessage = code && !message.startsWith(`${code}:`) ? `${code}: ${message}` : message;
+    return { code, message: normalizedMessage, details };
+  }
+  if (error instanceof Error) {
+    return { message: error.message };
+  }
+  return { message: typeof error === "string" && error.trim() ? error.trim() : "Unknown Code Mode IPC error." };
+}
+
+function buildCodeModeSandboxLaunchFailureMetadata(
+  sandbox: CodeModeSandboxMetadata,
+  error: unknown,
+): CodeModeSandboxMetadata {
+  const message = error instanceof Error ? error.message : String(error);
+  const checksFailed = [...new Set([...sandbox.checksFailed, "launch_preparation_failed"])];
+  const failureMessage = `Code Mode sandbox launch preparation failed: ${message}`;
+  return {
+    ...sandbox,
+    available: false,
+    checksFailed,
+    ...(sandbox.required
+      ? { failClosedReason: sandbox.failClosedReason ?? failureMessage, advisoryUnsandboxedReason: undefined }
+      : {
+          advisoryUnsandboxedReason: sandbox.advisoryUnsandboxedReason ?? failureMessage,
+          failClosedReason: undefined,
+        }),
+  };
+}
+
 function createMinimalSyntheticEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     GOATCITADEL_CODE_MODE: "1",
@@ -1523,6 +2635,20 @@ function createBoundedCapture(): {
       };
     },
   };
+}
+
+async function waitForWrapperTasksToSettle(tasks: Set<Promise<void>>): Promise<void> {
+  const snapshot = [...tasks];
+  if (snapshot.length === 0) {
+    return;
+  }
+  await Promise.race([
+    Promise.allSettled(snapshot),
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, CODE_MODE_WRAPPER_SETTLE_TIMEOUT_MS);
+      timer.unref?.();
+    }),
+  ]);
 }
 
 function toPreview(value: string): string | undefined {

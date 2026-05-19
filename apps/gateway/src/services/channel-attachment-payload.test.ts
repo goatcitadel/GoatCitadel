@@ -18,11 +18,14 @@ describe("resolveChannelSendAttachments", () => {
       bytes: Buffer.from("test"),
     }));
 
-    const attachments = await resolveChannelSendAttachments({
-      attachmentIds: ["11111111-1111-4111-8111-111111111111"],
-    }, {
-      readChatAttachmentContent,
-    });
+    const attachments = await resolveChannelSendAttachments(
+      {
+        attachmentIds: ["11111111-1111-4111-8111-111111111111"],
+      },
+      {
+        readChatAttachmentContent,
+      },
+    );
 
     expect(readChatAttachmentContent).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
     expect(attachments).toEqual([
@@ -51,17 +54,18 @@ describe("resolveChannelSendAttachments", () => {
       bytes: Buffer.from("hello"),
     }));
 
-    const attachments = await resolveChannelSendAttachments({
-      attachments: [
-        { url: "https://example.com/runbook", title: "Runbook" },
-        { attachmentId: "22222222-2222-4222-8222-222222222222" },
-      ],
-      attachmentIds: [
-        "22222222-2222-4222-8222-222222222222",
-      ],
-    }, {
-      readChatAttachmentContent,
-    });
+    const attachments = await resolveChannelSendAttachments(
+      {
+        attachments: [
+          { url: "https://example.com/runbook", title: "Runbook" },
+          { attachmentId: "22222222-2222-4222-8222-222222222222" },
+        ],
+        attachmentIds: ["22222222-2222-4222-8222-222222222222"],
+      },
+      {
+        readChatAttachmentContent,
+      },
+    );
 
     expect(readChatAttachmentContent).toHaveBeenCalledTimes(1);
     expect(attachments).toEqual([
@@ -101,5 +105,18 @@ describe("resolveChannelSendAttachments", () => {
         },
       ),
     ).rejects.toThrow("exceeds");
+  });
+
+  it("rejects malformed persisted inline base64 before replay", async () => {
+    await expect(
+      resolveChannelSendAttachments(
+        {
+          attachments: [{ dataBase64: "not valid base64!", title: "tampered.bin" }],
+        },
+        {
+          readChatAttachmentContent: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow("base64 alphabet");
   });
 });

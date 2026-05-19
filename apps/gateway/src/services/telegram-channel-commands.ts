@@ -29,6 +29,8 @@ export interface TelegramCommandContext {
   actorDisplayName?: string;
   content: string;
   personalityCatalog?: PersonalityCatalogResponse;
+  isActiveRun?: () => boolean;
+  runChatCommand?: (commandText: string) => Promise<{ message: string }>;
   cancelActiveSession?: () => Promise<TelegramStopCommandOutcome>;
   resolveApprovalToken?: (
     token: string,
@@ -58,13 +60,41 @@ export async function handleTelegramChannelCommand(context: TelegramCommandConte
     return { handled: false };
   }
   const command = normalized.command;
+  const definition = SHARED_CHANNEL_COMMANDS.find((item) => item.name === normalized.name);
+  if (context.isActiveRun?.() && !definition?.bypassesActiveRunGuard) {
+    return respond(
+      command,
+      context,
+      "A GoatCitadel run is already active for this chat. Available now: /status, /stop, /approve, /deny.",
+    );
+  }
 
   switch (normalized.name) {
     case "start":
       return respond(command, context, renderStart(context));
     case "status":
       return respond(command, context, renderStatus(context));
-    case "sethome":
+    case "sethome": {
+      // SECURITY (codex finding #5): `/sethome` mutates operator config
+      // (`defaultChannelId`/`defaultChatId`) and reroutes future
+      // background/scheduled deliveries. Approved pairings alone are not
+      // enough — that's a chat-access boundary, not an operator boundary.
+      // Require the actor to appear in the connection's operator
+      // allowlist (`telegramOperatorActors` in connection.config).
+      if (!isTelegramChannelOperator(context.connection.config, context.actorId)) {
+        return {
+          handled: true,
+          command,
+          response: sendMessage(
+            context.chatId,
+            [
+              "Only operators can change the home channel.",
+              "",
+              "Ask an operator to add your Telegram actor ID to the operator allowlist in GoatCitadel settings.",
+            ].join("\n"),
+          ),
+        };
+      }
       return {
         handled: true,
         command,
@@ -82,6 +112,7 @@ export async function handleTelegramChannelCommand(context: TelegramCommandConte
           ].join("\n"),
         ),
       };
+    }
     case "new":
       return {
         handled: true,
@@ -101,6 +132,10 @@ export async function handleTelegramChannelCommand(context: TelegramCommandConte
       return respond(command, context, renderSkills(context));
     case "skill":
       return respond(command, context, renderSkill(normalized.argText, context));
+    case "memory":
+    case "recall":
+    case "search":
+      return handleLookupCommand(command, context, normalized.commandText);
     case "tools":
       return respond(command, context, renderTools());
     case "personality":
@@ -118,6 +153,18 @@ export async function handleTelegramChannelCommand(context: TelegramCommandConte
     default:
       return { handled: false };
   }
+}
+
+async function handleLookupCommand(
+  command: string,
+  context: TelegramCommandContext,
+  commandText: string,
+): Promise<TelegramCommandResult> {
+  if (!context.runChatCommand) {
+    return respond(command, context, "Channel lookup is not available on this Telegram route yet.");
+  }
+  const result = await context.runChatCommand(commandText);
+  return respond(command, context, result.message);
 }
 
 async function handleStopCommand(command: string, context: TelegramCommandContext): Promise<TelegramCommandResult> {
@@ -345,4 +392,31 @@ function readRecord(value: unknown): Record<string, unknown> {
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+// SECURITY (codex finding #5): Operator allowlist for Telegram-side commands
+// that mutate operator config. The field is `telegramOperatorActors:
+// string[]` (or legacy `operatorActorIds`) in connection.config. Empty/
+// missing means "no Telegram user is an operator" — operators can still
+// change `defaultChannelId` via Mission Control directly.
+export function isTelegramChannelOperator(config: Record<string, unknown>, actorId: string): boolean {
+  if (!actorId.trim()) {
+    return false;
+  }
+  const candidates = [
+    Array.isArray(config.telegramOperatorActors) ? config.telegramOperatorActors : undefined,
+    Array.isArray((config as Record<string, unknown>).operatorActorIds)
+      ? (config as Record<string, unknown>).operatorActorIds
+      : undefined,
+  ];
+  for (const list of candidates) {
+    if (Array.isArray(list)) {
+      for (const entry of list) {
+        if (typeof entry === "string" && entry.trim() === actorId.trim()) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }

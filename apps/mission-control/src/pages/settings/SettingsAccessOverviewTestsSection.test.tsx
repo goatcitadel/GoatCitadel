@@ -173,7 +173,7 @@ describe("settings section components", () => {
     const text = rendererText(renderer);
     expect(text).toContain("Current settings");
     expect(text).toContain("desktop");
-    expect(text).toContain("remote_hardened");
+    expect(text).toContain("Remote Hardened");
     expect(text).toContain("Local-trusted auth");
     expect(text).toContain("llamacpp");
     expect(text).toContain("llama-3.2");

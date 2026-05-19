@@ -1,3 +1,5 @@
+import type { PermissionSurface } from "./policy.js";
+
 export interface ChannelAttachmentInput {
   url?: string;
   title?: string;
@@ -6,7 +8,21 @@ export interface ChannelAttachmentInput {
   attachmentId?: string;
 }
 
-export interface ChannelSendInput {
+export interface ChannelGovernanceInput {
+  workspaceId?: string;
+  sessionId?: string;
+  agentId?: string;
+  taskId?: string;
+  runId?: string;
+  operatorId?: string;
+  authActorId?: string;
+  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion";
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+  surface?: PermissionSurface;
+}
+
+export interface ChannelSendInput extends ChannelGovernanceInput {
   connectionId: string;
   target: string;
   message: string;
@@ -21,22 +37,16 @@ export interface ChannelSendInput {
   replyToPartIndex?: number;
   effectId?: string;
   subject?: string;
-  sessionId?: string;
-  agentId?: string;
-  taskId?: string;
   signal?: AbortSignal;
 }
 
-export interface ChannelReactInput {
+export interface ChannelReactInput extends ChannelGovernanceInput {
   connectionId: string;
   messageId: string;
   reaction: string;
   target?: string;
   partIndex?: number;
   messageText?: string;
-  sessionId?: string;
-  agentId?: string;
-  taskId?: string;
   signal?: AbortSignal;
 }
 
@@ -44,25 +54,19 @@ export interface ChannelReplyInput extends ChannelSendInput {
   replyToMessageId: string;
 }
 
-export interface ChannelUnsendInput {
+export interface ChannelUnsendInput extends ChannelGovernanceInput {
   connectionId: string;
   messageId: string;
   target?: string;
   partIndex?: number;
-  sessionId?: string;
-  agentId?: string;
-  taskId?: string;
   signal?: AbortSignal;
 }
 
-export interface ChannelTypingInput {
+export interface ChannelTypingInput extends ChannelGovernanceInput {
   connectionId: string;
   target: string;
   threadId?: string;
   durationMs?: number;
-  sessionId?: string;
-  agentId?: string;
-  taskId?: string;
   signal?: AbortSignal;
 }
 

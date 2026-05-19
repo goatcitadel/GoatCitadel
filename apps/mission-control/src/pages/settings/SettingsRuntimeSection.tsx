@@ -97,7 +97,7 @@ export function SettingsRuntimeSection(props: SettingsRuntimeSectionProps) {
             Deployment Profile
             <HelpHint
               label="Deployment profile help"
-              text="local_dev is loose for iteration, trusted_local enables browser state tools on a trusted machine, and remote_hardened requires explicit auth and tighter confirmation flows."
+              text="Local Dev is loose for iteration, Trusted Local enables browser state tools on a trusted machine, and Remote Hardened requires explicit auth, host allowlists, and approval bypass disabled."
             />
           </label>
           <GCSelect
@@ -105,16 +105,17 @@ export function SettingsRuntimeSection(props: SettingsRuntimeSectionProps) {
             value={deploymentProfile}
             onChange={(value) => onDeploymentProfileChange(value as DeploymentProfile)}
             options={[
-              { value: "local_dev", label: "local_dev" },
-              { value: "trusted_local", label: "trusted_local" },
-              { value: "remote_hardened", label: "remote_hardened" },
+              { value: "local_dev", label: "Local Dev" },
+              { value: "trusted_local", label: "Trusted Local" },
+              { value: "remote_hardened", label: "Remote Hardened" },
             ]}
           />
         </div>
         {deploymentProfile === "remote_hardened" ? (
           <FieldHelp>
             Hardened mode fails closed unless auth is enabled, loopback bypass stays off, outbound hosts are explicitly
-            allowlisted, and browser submit flows include verification plus confirm-before-submit.
+            allowlisted, approval bypass is unavailable, and browser submit flows include verification plus
+            confirm-before-submit.
           </FieldHelp>
         ) : null}
         <div className="controls-row">

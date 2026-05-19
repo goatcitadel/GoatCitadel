@@ -320,6 +320,35 @@ describe("ApprovalsRoutePage", () => {
     expect(approvalHarness.onRejectAllPending).toHaveBeenCalledTimes(1);
   });
 
+  it("routes Code Mode approvals back to the Code surface when origin linkage is present", async () => {
+    const navigate = vi.fn();
+    approvalHarness.overrides = {
+      selectedApproval: {
+        ...(approvalHarness.approval as any),
+        kind: "code_mode.run",
+        linkage: {
+          ...(approvalHarness.approval as any).linkage,
+          originSurface: "code",
+        },
+      },
+    };
+    let renderer: ReactTestRenderer | undefined;
+
+    await act(async () => {
+      renderer = create(renderPage({ navigate }));
+    });
+
+    await act(async () => {
+      findLink(renderer!.root, "Open live session").props.onClick({ preventDefault: vi.fn() });
+    });
+    expect(navigate).toHaveBeenCalledWith({
+      area: "code",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      approvalId: "11111111-1111-4111-8111-111111111111",
+    });
+  });
+
   it("renders empty, loading, error, busy, and alternate explainer states", () => {
     approvalHarness.overrides = {
       visibleItems: [],

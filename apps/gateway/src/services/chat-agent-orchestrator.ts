@@ -7,7 +7,9 @@ import type {
   ChatExecutionPlanRecord,
   ChatMode,
   ChatNormalizationProfile,
+  ChatProviderFailureRecord,
   ChatStreamChunkDraft,
+  ChatStreamUsageRecord,
   ChatThinkingLevel,
   ChatToolRunRecord,
   ChatTurnBranchKind,
@@ -23,8 +25,9 @@ import type {
   ToolCatalogEntry,
   ToolInvokeRequest,
   ToolInvokeResult,
+  ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
-import { getChatTurnRecoveryAction, type ChatTurnRecoveryAction } from "@goatcitadel/contracts";
+import { getChatTurnRecoveryAction, NotFoundError, type ChatTurnRecoveryAction } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import { estimateTokensFromText } from "@goatcitadel/memory-core";
 import type { Storage } from "@goatcitadel/storage";
@@ -328,6 +331,13 @@ export interface ChatAgentTurnInput {
   subagentPolicy?: "off" | "ask_when_useful" | "auto_when_useful";
   normalizationProfile?: ChatNormalizationProfile;
   toolAutonomy: "safe_auto" | "manual";
+  operatorId?: string;
+  authActorId?: string;
+  authActorSource?: ToolPolicyActorContext["authActorSource"];
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+  policyRunId?: string;
+  policyTaskId?: string;
   historyMessages: ChatCompletionRequest["messages"];
   outputMessageId?: string;
   signal?: AbortSignal;
@@ -337,12 +347,7 @@ export interface ChatAgentTurnResult {
   turnTrace: ChatTurnTraceRecord;
   assistantContent: string;
   assistantModel?: string;
-  usage?: {
-    inputTokens?: number;
-    outputTokens?: number;
-    cachedInputTokens?: number;
-    costUsd?: number;
-  };
+  usage?: ChatStreamUsageRecord;
   requiresApproval?: {
     approvalId: string;
     toolName?: string;
@@ -379,7 +384,13 @@ export interface ChatAgentOrchestratorDeps {
     toolName: string;
     sessionId: string;
     agentId: string;
+    taskId?: string;
+    runId?: string;
     args?: Record<string, unknown>;
+    permissionProfileId?: string;
+    localOperatorOverrideId?: string;
+    surface?: ToolPolicyActorContext["surface"];
+    policyContext?: ToolPolicyActorContext;
   }) => {
     allowed: boolean;
     requiresApproval: boolean;
@@ -426,16 +437,18 @@ export class ChatAgentOrchestrator {
   public async *runStream(input: ChatAgentTurnInput): AsyncGenerator<ChatStreamChunkDraft> {
     throwIfChatTurnCancelled(input);
     const now = new Date().toISOString();
+    const presentationArtifactIntent = detectPresentationArtifactIntent(input.content);
     const intents = {
       liveData: detectLiveDataIntent(input.content),
       webLookup: detectWebLookupIntent(input.content, input.historyMessages),
       time: detectTimeIntent(input.content),
       localFile: detectLocalFileIntent(input.content),
-      presentationArtifact: detectPresentationArtifactIntent(input.content),
+      presentationArtifact: presentationArtifactIntent,
+      documentArtifact: !presentationArtifactIntent && detectDocumentArtifactIntent(input.content),
       missingLogPayload: detectMissingLogPayloadIntent(input.content),
     };
     const loopGuardState = initializeToolLoopGuardState(this.deps.toolLoopDetection);
-    const trace = this.deps.storage.chatTurnTraces.create({
+    const trace = createOrRefreshAgentStreamTrace(this.deps.storage, {
       turnId: input.turnId,
       sessionId: input.sessionId,
       userMessageId: input.userMessageId,
@@ -559,7 +572,11 @@ export class ChatAgentOrchestrator {
       cachedInputTokens: 0,
       costUsd: 0,
     };
+    const usageCostSources = new Set<NonNullable<ChatStreamUsageRecord["costSource"]>>();
     let usageObserved = false;
+    let completionLatencyMs = 0;
+    let completionLatencyObserved = false;
+    let providerCallCount = 0;
     let circuitBreakerReason: string | undefined;
     let circuitBreakerFailureClass: ChatTurnFailureClass | undefined;
     let suppressIncompleteCompletionRepair = false;
@@ -1806,49 +1823,58 @@ export class ChatAgentOrchestrator {
           };
 
           let completion: ChatCompletionResponse;
-          if (this.deps.createChatCompletionStream) {
-            let streamYieldedVisibleChunk = false;
-            try {
-              const aggregate = createCompletionStreamAggregate();
-              for await (const rawChunk of this.deps.createChatCompletionStream({
-                ...completionRequest,
-                stream: true,
-              })) {
-                const streamed = absorbCompletionStreamChunk(aggregate, rawChunk);
-                if (streamed.delta && !streamed.sawToolCall) {
-                  streamYieldedVisibleChunk = true;
-                  yield {
-                    type: "delta",
-                    sessionId: input.sessionId,
-                    turnId: input.turnId,
-                    messageId: input.outputMessageId,
-                    delta: streamed.delta,
-                  };
+          const completionStartedAt = Date.now();
+          try {
+            if (this.deps.createChatCompletionStream) {
+              let streamYieldedVisibleChunk = false;
+              try {
+                const aggregate = createCompletionStreamAggregate();
+                providerCallCount += 1;
+                for await (const rawChunk of this.deps.createChatCompletionStream({
+                  ...completionRequest,
+                  stream: true,
+                })) {
+                  const streamed = absorbCompletionStreamChunk(aggregate, rawChunk);
+                  if (streamed.delta && !streamed.sawToolCall) {
+                    streamYieldedVisibleChunk = true;
+                    yield {
+                      type: "delta",
+                      sessionId: input.sessionId,
+                      turnId: input.turnId,
+                      messageId: input.outputMessageId,
+                      delta: streamed.delta,
+                    };
+                  }
                 }
+                completion = buildCompletionFromAggregate(aggregate);
+              } catch (error) {
+                log.warn("completion stream failed", {
+                  providerId: input.providerId,
+                  model: input.model,
+                  sessionId: input.sessionId,
+                  turnId: input.turnId,
+                  fallback: streamYieldedVisibleChunk ? "suppressed_after_partial_output" : "non_streaming_completion",
+                  error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
+                });
+                if (streamYieldedVisibleChunk) {
+                  suppressIncompleteCompletionRepair = true;
+                  throw new Error(
+                    "Streaming completion failed after partial output; non-streaming fallback suppressed.",
+                    {
+                      cause: error,
+                    },
+                  );
+                }
+                providerCallCount += 1;
+                completion = await this.deps.createChatCompletion(completionRequest);
               }
-              completion = buildCompletionFromAggregate(aggregate);
-            } catch (error) {
-              log.warn("completion stream failed", {
-                providerId: input.providerId,
-                model: input.model,
-                sessionId: input.sessionId,
-                turnId: input.turnId,
-                fallback: streamYieldedVisibleChunk ? "suppressed_after_partial_output" : "non_streaming_completion",
-                error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
-              });
-              if (streamYieldedVisibleChunk) {
-                suppressIncompleteCompletionRepair = true;
-                throw new Error(
-                  "Streaming completion failed after partial output; non-streaming fallback suppressed.",
-                  {
-                    cause: error,
-                  },
-                );
-              }
+            } else {
+              providerCallCount += 1;
               completion = await this.deps.createChatCompletion(completionRequest);
             }
-          } else {
-            completion = await this.deps.createChatCompletion(completionRequest);
+          } finally {
+            completionLatencyObserved = true;
+            completionLatencyMs += Date.now() - completionStartedAt;
           }
           assistantModel = typeof completion.model === "string" ? completion.model : assistantModel;
           const completionUsage = parseUsageFromCompletion(completion);
@@ -1858,6 +1884,9 @@ export class ChatAgentOrchestrator {
             usageTotals.outputTokens += completionUsage.outputTokens ?? 0;
             usageTotals.cachedInputTokens += completionUsage.cachedInputTokens ?? 0;
             usageTotals.costUsd += completionUsage.costUsd ?? 0;
+            if (completionUsage.costSource) {
+              usageCostSources.add(completionUsage.costSource);
+            }
           }
           const completionRouting = completion.routing as ChatTurnTraceRecord["routing"] | undefined;
           if (completionRouting) {
@@ -2273,12 +2302,15 @@ export class ChatAgentOrchestrator {
           );
         } else {
           finalStatus = "failed";
+          const failureClass = classifyChatTurnFailure({
+            error,
+            toolRuns,
+          });
           finalFailure = buildChatTurnFailureRecord(
-            classifyChatTurnFailure({
-              error,
-              toolRuns,
-            }),
+            failureClass,
             (error as Error).message,
+            getChatTurnRecoveryAction(failureClass),
+            extractProviderFailureRecord(error),
           );
           completionState = {
             ...completionState,
@@ -2301,7 +2333,7 @@ export class ChatAgentOrchestrator {
       input.toolAutonomy !== "manual" &&
       intents.presentationArtifact &&
       toolSchema.canonicalToModel.has("presentations.create") &&
-      !toolRuns.some((run) => run.toolName === "presentations.create") &&
+      !toolRuns.some((run) => run.toolName === "presentations.create" && run.status === "executed") &&
       toolRunCount < executionBudget.maxToolRunsPerTurn
     ) {
       throwIfChatTurnCancelled(input);
@@ -2334,6 +2366,53 @@ export class ChatAgentOrchestrator {
       }
       const preRepairContent = assistantContent;
       assistantContent = mergePresentationArtifactDeliveryContent(assistantContent, syntheticRun.record);
+      if (assistantContent !== preRepairContent) {
+        markCompletionRepair("degraded_answer_synthesis", "orchestrator", preRepairContent, assistantContent);
+      }
+      if (syntheticRun.record.status === "executed" && finalStatus === "failed") {
+        finalStatus = "completed";
+      }
+    }
+
+    if (
+      !approvalPayload &&
+      finalStatus !== "cancelled" &&
+      input.toolAutonomy !== "manual" &&
+      intents.documentArtifact &&
+      toolSchema.canonicalToModel.has("documents.create") &&
+      !toolRuns.some((run) => run.toolName === "documents.create" && run.status === "executed") &&
+      toolRunCount < executionBudget.maxToolRunsPerTurn
+    ) {
+      throwIfChatTurnCancelled(input);
+      const rawArgs = buildSyntheticDocumentCreateArgs(input);
+      this.deps.storage.chatTurnTraces.patch(input.turnId, {
+        status: "waiting_for_tool",
+      });
+      const syntheticRun = await this.executeToolCall({
+        input,
+        turnId: input.turnId,
+        toolName: "documents.create",
+        rawArgs,
+        localFileIntent,
+        priorToolRuns: toolRuns,
+        turnBudgetDeadline,
+      });
+      toolRuns.push(syntheticRun.record);
+      rememberToolLoopHistory(loopGuardState, syntheticRun.record);
+      yield {
+        type: "tool_start",
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        toolRun: {
+          ...syntheticRun.record,
+          status: "started",
+        },
+      };
+      if (syntheticRun.chunk) {
+        yield syntheticRun.chunk;
+      }
+      const preRepairContent = assistantContent;
+      assistantContent = mergeDocumentArtifactDeliveryContent(assistantContent, syntheticRun.record);
       if (assistantContent !== preRepairContent) {
         markCompletionRepair("degraded_answer_synthesis", "orchestrator", preRepairContent, assistantContent);
       }
@@ -2505,12 +2584,22 @@ export class ChatAgentOrchestrator {
       finalStatus,
       approvalPending: Boolean(approvalPayload),
     });
+    const finalizedCompletionWithRuntime: NonNullable<ChatTurnTraceRecord["completion"]> = {
+      ...finalizedCompletion,
+      ...(usageObserved
+        ? {
+            usage: buildTraceUsageRecord(usageTotals, resolveUsageCostSource(usageCostSources)),
+          }
+        : {}),
+      ...(completionLatencyObserved ? { latencyMs: completionLatencyMs } : {}),
+      ...(providerCallCount > 0 ? { providerCallCount } : {}),
+    };
     const updatedTrace = this.deps.storage.chatTurnTraces.patch(input.turnId, {
       status: finalStatus,
       model: assistantModel,
       citations,
       failure: finalFailure,
-      completion: finalizedCompletion,
+      completion: finalizedCompletionWithRuntime,
       routing: {
         ...routingState,
         liveDataIntent: intents.liveData,
@@ -2539,12 +2628,7 @@ export class ChatAgentOrchestrator {
           type: "usage",
           sessionId: input.sessionId,
           turnId: input.turnId,
-          usage: {
-            inputTokens: usageTotals.inputTokens,
-            outputTokens: usageTotals.outputTokens,
-            cachedInputTokens: usageTotals.cachedInputTokens,
-            costUsd: usageTotals.costUsd,
-          },
+          usage: buildTraceUsageRecord(usageTotals, resolveUsageCostSource(usageCostSources)),
         };
       }
       yield {
@@ -2553,8 +2637,8 @@ export class ChatAgentOrchestrator {
         turnId: input.turnId,
         messageId: outputMessageId,
         content: assistantContent,
-        repaired: Boolean(finalizedCompletion.repaired),
-        repair: finalizedCompletion.repair,
+        repaired: Boolean(finalizedCompletionWithRuntime.repaired),
+        repair: finalizedCompletionWithRuntime.repair,
       };
     }
 
@@ -2565,7 +2649,7 @@ export class ChatAgentOrchestrator {
       trace: hydratedTrace,
     };
 
-    if (finalizedCompletion.status === "complete") {
+    if (finalizedCompletionWithRuntime.status === "complete") {
       yield {
         type: "done",
         sessionId: input.sessionId,
@@ -2578,13 +2662,26 @@ export class ChatAgentOrchestrator {
   private async buildToolSchema(
     input: Pick<
       ChatAgentTurnInput,
-      "sessionId" | "webMode" | "mode" | "content" | "historyMessages" | "normalizationProfile"
+      | "sessionId"
+      | "webMode"
+      | "mode"
+      | "content"
+      | "historyMessages"
+      | "normalizationProfile"
+      | "operatorId"
+      | "authActorId"
+      | "authActorSource"
+      | "permissionProfileId"
+      | "localOperatorOverrideId"
+      | "policyRunId"
+      | "policyTaskId"
     >,
     intents: {
       liveData: boolean;
       webLookup: boolean;
       localFile: boolean;
       presentationArtifact: boolean;
+      documentArtifact: boolean;
     },
   ): Promise<{
     tools: Array<Record<string, unknown>>;
@@ -2708,7 +2805,22 @@ export class ChatAgentOrchestrator {
           toolName: tool.toolName,
           sessionId: input.sessionId,
           agentId: "assistant",
+          taskId: input.policyTaskId,
+          runId: input.policyRunId,
           args: buildToolAccessProbeArgs(tool.toolName),
+          permissionProfileId: input.permissionProfileId,
+          localOperatorOverrideId: input.localOperatorOverrideId,
+          surface: input.mode,
+          policyContext: {
+            operatorId: input.operatorId,
+            authActorId: input.authActorId,
+            authActorSource: input.authActorSource,
+            taskId: input.policyTaskId,
+            runId: input.policyRunId,
+            surface: input.mode,
+            permissionProfileId: input.permissionProfileId,
+            localOperatorOverrideId: input.localOperatorOverrideId,
+          },
         });
         if (!access.allowed) {
           continue;
@@ -2728,6 +2840,7 @@ export class ChatAgentOrchestrator {
           webLookupIntent,
           localFileIntent,
           presentationArtifactIntent: intents.presentationArtifact,
+          documentArtifactIntent: intents.documentArtifact,
           memoryLookupIntent,
           memoryPersistenceIntent,
           projectBound,
@@ -2745,6 +2858,7 @@ export class ChatAgentOrchestrator {
       webLookupIntent,
       localFileIntent,
       presentationArtifactIntent: intents.presentationArtifact,
+      documentArtifactIntent: intents.documentArtifact,
       memoryLookupIntent,
       memoryPersistenceIntent,
       explicitToolMentions,
@@ -2944,10 +3058,26 @@ export class ChatAgentOrchestrator {
         args: preflight.args,
         agentId: "assistant",
         sessionId: input.input.sessionId,
+        taskId: input.input.policyTaskId,
+        runId: input.input.policyRunId,
+        surface: input.input.mode,
         signal: input.input.signal,
+        permissionProfileId: input.input.permissionProfileId,
+        localOperatorOverrideId: input.input.localOperatorOverrideId,
         consentContext: {
+          operatorId: input.input.operatorId,
           source: "agent",
           reason: `chat mode ${input.input.mode}`,
+        },
+        policyContext: {
+          operatorId: input.input.operatorId,
+          authActorId: input.input.authActorId,
+          authActorSource: input.input.authActorSource,
+          taskId: input.input.policyTaskId,
+          runId: input.input.policyRunId,
+          surface: input.input.mode,
+          permissionProfileId: input.input.permissionProfileId,
+          localOperatorOverrideId: input.input.localOperatorOverrideId,
         },
       });
       const persistedToolResult = await this.persistToolArtifactsIfNeeded({
@@ -3522,10 +3652,26 @@ export class ChatAgentOrchestrator {
           args: alternateArgs,
           agentId: "assistant",
           sessionId: input.turnInput.sessionId,
+          taskId: input.turnInput.policyTaskId,
+          runId: input.turnInput.policyRunId,
+          surface: input.turnInput.mode,
           signal: input.turnInput.signal,
+          permissionProfileId: input.turnInput.permissionProfileId,
+          localOperatorOverrideId: input.turnInput.localOperatorOverrideId,
           consentContext: {
+            operatorId: input.turnInput.operatorId,
             source: "agent",
             reason: `chat mode ${input.turnInput.mode}`,
+          },
+          policyContext: {
+            operatorId: input.turnInput.operatorId,
+            authActorId: input.turnInput.authActorId,
+            authActorSource: input.turnInput.authActorSource,
+            taskId: input.turnInput.policyTaskId,
+            runId: input.turnInput.policyRunId,
+            surface: input.turnInput.mode,
+            permissionProfileId: input.turnInput.permissionProfileId,
+            localOperatorOverrideId: input.turnInput.localOperatorOverrideId,
           },
         });
         if (result.outcome !== "executed") {
@@ -3638,10 +3784,26 @@ export class ChatAgentOrchestrator {
           args: alternateArgs,
           agentId: "assistant",
           sessionId: input.turnInput.sessionId,
+          taskId: input.turnInput.policyTaskId,
+          runId: input.turnInput.policyRunId,
+          surface: input.turnInput.mode,
           signal: input.turnInput.signal,
+          permissionProfileId: input.turnInput.permissionProfileId,
+          localOperatorOverrideId: input.turnInput.localOperatorOverrideId,
           consentContext: {
+            operatorId: input.turnInput.operatorId,
             source: "agent",
             reason: `search engine fallback (${engine}) after ${input.classification.failureClass}`,
+          },
+          policyContext: {
+            operatorId: input.turnInput.operatorId,
+            authActorId: input.turnInput.authActorId,
+            authActorSource: input.turnInput.authActorSource,
+            taskId: input.turnInput.policyTaskId,
+            runId: input.turnInput.policyRunId,
+            surface: input.turnInput.mode,
+            permissionProfileId: input.turnInput.permissionProfileId,
+            localOperatorOverrideId: input.turnInput.localOperatorOverrideId,
           },
         });
         if (result.outcome !== "executed") {
@@ -3944,6 +4106,7 @@ export class ChatAgentOrchestrator {
     if (
       input.toolName !== "fs.write" &&
       input.toolName !== "artifacts.create" &&
+      input.toolName !== "documents.create" &&
       input.toolName !== "presentations.create"
     ) {
       return undefined;
@@ -3971,10 +4134,26 @@ export class ChatAgentOrchestrator {
       args: fallbackArgs,
       agentId: "assistant",
       sessionId: input.input.sessionId,
+      taskId: input.input.policyTaskId,
+      runId: input.input.policyRunId,
+      surface: input.input.mode,
       signal: input.input.signal,
+      permissionProfileId: input.input.permissionProfileId,
+      localOperatorOverrideId: input.input.localOperatorOverrideId,
       consentContext: {
+        operatorId: input.input.operatorId,
         source: "agent",
         reason: `chat mode ${input.input.mode}; safe write fallback`,
+      },
+      policyContext: {
+        operatorId: input.input.operatorId,
+        authActorId: input.input.authActorId,
+        authActorSource: input.input.authActorSource,
+        taskId: input.input.policyTaskId,
+        runId: input.input.policyRunId,
+        surface: input.input.mode,
+        permissionProfileId: input.input.permissionProfileId,
+        localOperatorOverrideId: input.input.localOperatorOverrideId,
       },
     });
 
@@ -4341,6 +4520,7 @@ function buildEssentialToolSet(input: {
   webLookupIntent: boolean;
   localFileIntent: boolean;
   presentationArtifactIntent: boolean;
+  documentArtifactIntent: boolean;
   memoryLookupIntent: boolean;
   memoryPersistenceIntent: boolean;
   explicitToolMentions: Set<string>;
@@ -4368,6 +4548,9 @@ function buildEssentialToolSet(input: {
   }
   if (input.presentationArtifactIntent) {
     tools.add("presentations.create");
+  }
+  if (input.documentArtifactIntent) {
+    tools.add("documents.create");
   }
   if (!input.suppressLocalPathTools && (input.localFileIntent || input.projectBound || input.mode === "code")) {
     tools.add("fs.list");
@@ -4400,6 +4583,14 @@ function buildToolAccessProbeArgs(toolName: string): Record<string, unknown> {
       path: "./workspace/goatcitadel_out/tool-access-probe.pptx",
       title: "Tool access probe",
       slides: [{ title: "Probe", bullets: ["Verifies the tool can write inside the workspace jail."] }],
+    };
+  }
+  if (toolName === "documents.create") {
+    return {
+      path: "./workspace/goatcitadel_out/tool-access-probe.docx",
+      format: "docx",
+      title: "Tool access probe",
+      body: "Verifies the tool can write inside the workspace jail.",
     };
   }
   if (toolName === "artifacts.create") {
@@ -4435,6 +4626,7 @@ function scoreToolForTurn(input: {
   webLookupIntent: boolean;
   localFileIntent: boolean;
   presentationArtifactIntent: boolean;
+  documentArtifactIntent: boolean;
   memoryLookupIntent: boolean;
   memoryPersistenceIntent: boolean;
   projectBound: boolean;
@@ -4480,6 +4672,15 @@ function scoreToolForTurn(input: {
   if (input.presentationArtifactIntent) {
     score += scoreToolIntentMatch(tool, ["presentation", "slide_deck", "powerpoint", "artifact_output"], 9);
     if (tool.toolName === "presentations.create") {
+      score += 18;
+    }
+    if (tool.toolName === "artifacts.create") {
+      score += 2;
+    }
+  }
+  if (input.documentArtifactIntent) {
+    score += scoreToolIntentMatch(tool, ["document_generation", "artifact_output", "report", "pdf", "docx"], 9);
+    if (tool.toolName === "documents.create") {
       score += 18;
     }
     if (tool.toolName === "artifacts.create") {
@@ -4692,12 +4893,7 @@ function toPlainRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function parseUsageFromCompletion(completion: ChatCompletionResponse): {
-  inputTokens?: number;
-  outputTokens?: number;
-  cachedInputTokens?: number;
-  costUsd?: number;
-} | null {
+function parseUsageFromCompletion(completion: ChatCompletionResponse): ChatStreamUsageRecord | null {
   const usage = completion.usage as Record<string, unknown> | undefined;
   if (!usage || typeof usage !== "object") {
     return null;
@@ -4706,6 +4902,7 @@ function parseUsageFromCompletion(completion: ChatCompletionResponse): {
   const outputTokens = readUsageNumber(usage.completion_tokens) ?? readUsageNumber(usage.output_tokens);
   const cachedInputTokens = readUsageNumber(usage.cached_prompt_tokens) ?? readUsageNumber(usage.cached_input_tokens);
   const costUsd = readUsageNumber(usage.cost_usd) ?? readUsageNumber(usage.total_cost_usd);
+  const costSource = costUsd !== undefined ? readUsageCostSource(usage) : undefined;
   if (
     inputTokens === undefined &&
     outputTokens === undefined &&
@@ -4719,7 +4916,55 @@ function parseUsageFromCompletion(completion: ChatCompletionResponse): {
     outputTokens,
     cachedInputTokens,
     costUsd,
+    costSource,
   };
+}
+
+function buildTraceUsageRecord(
+  totals: {
+    inputTokens: number;
+    outputTokens: number;
+    cachedInputTokens: number;
+    costUsd: number;
+  },
+  costSource?: ChatStreamUsageRecord["costSource"],
+): ChatStreamUsageRecord {
+  return {
+    inputTokens: totals.inputTokens,
+    outputTokens: totals.outputTokens,
+    cachedInputTokens: totals.cachedInputTokens,
+    costUsd: totals.costUsd,
+    ...(costSource ? { costSource } : {}),
+  };
+}
+
+function resolveUsageCostSource(
+  sources: Set<NonNullable<ChatStreamUsageRecord["costSource"]>>,
+): ChatStreamUsageRecord["costSource"] | undefined {
+  if (sources.size === 0) {
+    return undefined;
+  }
+  if (sources.size === 1) {
+    return [...sources][0];
+  }
+  return "mixed";
+}
+
+function readUsageCostSource(usage: Record<string, unknown>): ChatStreamUsageRecord["costSource"] | undefined {
+  const raw = typeof usage.cost_source === "string" ? usage.cost_source : usage.costSource;
+  if (raw === "provider_reported" || raw === "estimated" || raw === "mixed" || raw === "unknown") {
+    return raw;
+  }
+  if (raw === "provider-reported" || raw === "provider") {
+    return "provider_reported";
+  }
+  if (raw === "estimate") {
+    return "estimated";
+  }
+  if (usage.cost_estimated === true || usage.estimated === true) {
+    return "estimated";
+  }
+  return undefined;
 }
 
 function readUsageNumber(value: unknown): number | undefined {
@@ -4772,6 +5017,21 @@ function detectPresentationArtifactIntent(content: string): boolean {
   );
 }
 
+function detectDocumentArtifactIntent(content: string): boolean {
+  const normalized = content.toLowerCase();
+  const documentPhrase =
+    /\b(docx?|word\s+doc(?:ument)?|pdf|markdown|md|html|csv|json|text\s+file|txt|report|brief|memo|handout|worksheet|document)\b/.test(
+      normalized,
+    );
+  if (!documentPhrase) {
+    return false;
+  }
+  return (
+    /\b(create|make|build|generate|put|turn|export|save|write|produce|deliver)\b/.test(normalized) ||
+    /\b(file|format|artifact|download|docx?|pdf|markdown|html|csv|json)\b/.test(normalized)
+  );
+}
+
 function buildSyntheticPresentationCreateArgs(input: ChatAgentTurnInput): Record<string, unknown> {
   const task = extractPrimaryUserTaskContent(input.content) ?? input.content;
   const title = inferPresentationTitle(task);
@@ -4781,6 +5041,24 @@ function buildSyntheticPresentationCreateArgs(input: ChatAgentTurnInput): Record
     title,
     subtitle: "Generated by GoatCitadel Cowork",
     slides: buildSyntheticPresentationSlides(task, title),
+  };
+}
+
+function buildSyntheticDocumentCreateArgs(input: ChatAgentTurnInput): Record<string, unknown> {
+  const task = extractPrimaryUserTaskContent(input.content) ?? input.content;
+  const title = inferDocumentTitle(task);
+  const format = inferDocumentFormat(task);
+  const path = buildSafeWriteFallbackPath(
+    input.sessionId,
+    "documents.create",
+    `${title}.${documentFormatExtension(format)}`,
+  );
+  return {
+    path: path ?? `./workspace/goatcitadel_out/document.${documentFormatExtension(format)}`,
+    format,
+    title,
+    body: `Generated document for: ${task.trim().replace(/\s+/g, " ").slice(0, 500)}`,
+    sections: buildSyntheticDocumentSections(task),
   };
 }
 
@@ -4799,6 +5077,55 @@ function inferPresentationTitle(content: string): string {
       .match(/\b(?:power\s?point|pptx?|presentation|slides?|deck)\b\s+(?:about|on|for)?\s*(.{8,100}?)(?:\.|$|\n)/i)?.[1]
       ?.trim();
   return titleCasePresentationText(topic ?? "Presentation");
+}
+
+function inferDocumentTitle(content: string): string {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  const quotedTitle = normalized.match(/["'`](.{8,90}?)["'`]/)?.[1]?.trim();
+  if (quotedTitle) {
+    return titleCasePresentationText(quotedTitle);
+  }
+  if (/\bfree time\b/i.test(normalized) && /\btop\s*10\b/i.test(normalized)) {
+    return "Top 10 Things To Do In Free Time";
+  }
+  const topic =
+    normalized.match(/\b(?:about|on|for)\s+(.{8,100}?)(?:\.|$|\n)/i)?.[1]?.trim() ??
+    normalized
+      .match(
+        /\b(?:docx?|document|report|brief|memo|handout|worksheet|pdf|markdown|html|csv|json)\b\s+(?:about|on|for)?\s*(.{8,100}?)(?:\.|$|\n)/i,
+      )?.[1]
+      ?.trim();
+  return titleCasePresentationText(topic ?? "Document");
+}
+
+function inferDocumentFormat(content: string): string {
+  const normalized = content.toLowerCase();
+  if (/\bpdf\b/.test(normalized)) {
+    return "pdf";
+  }
+  if (/\b(docx?|word\s+doc(?:ument)?)\b/.test(normalized)) {
+    return "docx";
+  }
+  if (/\bhtml?\b/.test(normalized)) {
+    return "html";
+  }
+  if (/\bcsv\b/.test(normalized)) {
+    return "csv";
+  }
+  if (/\bjson\b/.test(normalized)) {
+    return "json";
+  }
+  if (/\b(?:txt|text\s+file)\b/.test(normalized)) {
+    return "txt";
+  }
+  if (/\b(?:md|markdown)\b/.test(normalized)) {
+    return "markdown";
+  }
+  return "docx";
+}
+
+function documentFormatExtension(format: string): string {
+  return format === "markdown" ? "md" : format;
 }
 
 function titleCasePresentationText(value: string): string {
@@ -4898,6 +5225,48 @@ function buildSyntheticPresentationSlides(content: string, title: string): Array
   ];
 }
 
+function buildSyntheticDocumentSections(content: string): Array<{ heading: string; body: string; bullets: string[] }> {
+  const bullets = extractPresentationBulletsFromPrompt(content);
+  if (/\bfree time\b/i.test(content)) {
+    return [
+      {
+        heading: "Recommended Activities",
+        body: "A balanced free-time plan mixes active, creative, social, and restorative options.",
+        bullets: [
+          "Read or learn something new",
+          "Walk, exercise, or explore locally",
+          "Cook, create, volunteer, connect, and rest",
+        ],
+      },
+      {
+        heading: "How To Choose",
+        body: "Pick activities based on available time, energy level, budget, and whether you want solitude or company.",
+        bullets: [
+          "Keep low-friction options ready",
+          "Rotate familiar favorites with new experiments",
+          "Notice what leaves you better afterward",
+        ],
+      },
+    ];
+  }
+  return [
+    {
+      heading: "Summary",
+      body: "This document turns the requested response into a real file artifact.",
+      bullets,
+    },
+    {
+      heading: "Next Steps",
+      body: "Review the generated file, then refine sections, formatting, or audience-specific details as needed.",
+      bullets: [
+        "Confirm the intended audience",
+        "Adjust wording and emphasis",
+        "Add source citations when the task used research",
+      ],
+    },
+  ];
+}
+
 function extractPresentationBulletsFromPrompt(content: string): string[] {
   const lines = content
     .split(/\r?\n|[.;]/)
@@ -4951,6 +5320,51 @@ function looksLikeMissingPresentationArtifactContent(content: string): boolean {
   );
 }
 
+function mergeDocumentArtifactDeliveryContent(existingContent: string, toolRun: ChatToolRunRecord): string {
+  if (toolRun.status !== "executed") {
+    const failure = toolRun.error ?? "the document tool did not complete";
+    const fallback = `I tried to create the document artifact with \`documents.create\`, but ${failure}.`;
+    return existingContent.trim().length > 0 ? `${existingContent.trim()}\n\n${fallback}` : fallback;
+  }
+  const result = (toolRun.result ?? {}) as Record<string, unknown>;
+  const path =
+    typeof result.path === "string"
+      ? result.path
+      : typeof result.fallbackPath === "string"
+        ? result.fallbackPath
+        : typeof toolRun.args?.path === "string"
+          ? toolRun.args.path
+          : "the requested document path";
+  const format = typeof result.format === "string" ? result.format.toUpperCase() : undefined;
+  const bytesWritten = typeof result.bytesWritten === "number" ? result.bytesWritten : undefined;
+  const delivery = [
+    `Created the document artifact at \`${path}\`.`,
+    format ? `Format: ${format}.` : undefined,
+    bytesWritten !== undefined ? `Size: ${bytesWritten} bytes.` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const trimmed = existingContent.trim();
+  if (!trimmed || looksLikeMissingDocumentArtifactContent(trimmed)) {
+    return delivery;
+  }
+  if (trimmed.includes(path)) {
+    return trimmed;
+  }
+  return `${trimmed}\n\n${delivery}`;
+}
+
+function looksLikeMissingDocumentArtifactContent(content: string): boolean {
+  return (
+    /\b(?:could not|couldn't|unable to|did not|didn't|not able to|no verified|not created|was not created)\b/i.test(
+      content,
+    ) &&
+    /\b(?:docx?|word\s+doc(?:ument)?|pdf|markdown|md|html|csv|json|txt|report|brief|memo|document|artifact|file)\b/i.test(
+      content,
+    )
+  );
+}
+
 function detectLiveDataIntent(content: string): boolean {
   return hasLiveDataKeywords(content.toLowerCase()) || Boolean(derivePromptSpecificWebQuery(content));
 }
@@ -4969,11 +5383,16 @@ function detectWebLookupIntent(content: string, historyMessages: ChatCompletionR
   return (
     detectLiveDataIntent(content) ||
     detectDirectUrlIntent(content) ||
+    detectWebPageInteractionIntent(content) ||
     Boolean(derivePromptSpecificWebQuery(content)) ||
     /\bresearch\s+whether\b/i.test(content) ||
     /\buse\s+available\s+lookup\b/i.test(content) ||
     detectWebFollowUpIntent(content, historyMessages)
   );
+}
+
+function detectWebPageInteractionIntent(content: string): boolean {
+  return /\b(?:open|visit|load|extract|read|scrape|navigate\s+to)\b.{0,40}\b(?:web\s+)?page\b/i.test(content);
 }
 
 function detectWebFollowUpIntent(content: string, historyMessages: ChatCompletionRequest["messages"]): boolean {
@@ -5550,6 +5969,9 @@ function inferToolArgValue(toolName: string, field: string, userContent: string)
       toolName === "browser.interact")
   ) {
     return extractFirstUrl(userContent);
+  }
+  if (field === "selector" && toolName === "browser.extract") {
+    return "body";
   }
   return undefined;
 }
@@ -13806,12 +14228,12 @@ function extractExplicitToolLikeReferences(content: string): Set<string> {
   const matches = new Set<string>();
   const normalized = content.toLowerCase();
   for (const match of normalized.matchAll(
-    /\b(browser|http|file|code|memory|shell|git|tests|lint|time|artifacts|presentations)\.[a-z][a-z0-9_.-]*\b/g,
+    /\b(browser|http|file|code|memory|shell|git|tests|lint|time|artifacts|documents|presentations)\.[a-z][a-z0-9_.-]*\b/g,
   )) {
     matches.add(match[0]!);
   }
   for (const match of normalized.matchAll(
-    /\b(browser|http|file|code|memory|shell|git|tests|lint|time|artifacts|presentations)_[a-z][a-z0-9_-]*\b/g,
+    /\b(browser|http|file|code|memory|shell|git|tests|lint|time|artifacts|documents|presentations)_[a-z][a-z0-9_-]*\b/g,
   )) {
     const raw = match[0]!;
     const namespaceEnd = raw.indexOf("_");
@@ -13898,9 +14320,22 @@ function buildSafeWriteFallbackPath(sessionId: string, toolName: string, origina
   const ext = (match?.[2] ?? "").trim();
   const safeBaseName =
     sanitizePathSegment(baseName) ||
-    (toolName === "presentations.create" ? "presentation" : toolName === "artifacts.create" ? "artifact" : "output");
+    (toolName === "presentations.create"
+      ? "presentation"
+      : toolName === "documents.create"
+        ? "document"
+        : toolName === "artifacts.create"
+          ? "artifact"
+          : "output");
   const fallbackExt =
-    ext || (toolName === "presentations.create" ? ".pptx" : toolName === "artifacts.create" ? ".md" : ".txt");
+    ext ||
+    (toolName === "presentations.create"
+      ? ".pptx"
+      : toolName === "documents.create"
+        ? ".docx"
+        : toolName === "artifacts.create"
+          ? ".md"
+          : ".txt");
   return `${SAFE_WRITE_FALLBACK_DIR}/${safeBaseName}-${safeSessionId}${fallbackExt}`;
 }
 
@@ -14040,6 +14475,40 @@ function buildToolFailureFallbackMessage(userPrompt: string, toolRuns: ChatToolR
   return lines.join("\n\n");
 }
 
+function createOrRefreshAgentStreamTrace(
+  storage: Storage,
+  input: Parameters<Storage["chatTurnTraces"]["create"]>[0],
+): ChatTurnTraceRecord {
+  try {
+    const existing = storage.chatTurnTraces.get(input.turnId);
+    if (existing.status === "cancelled") {
+      throw createAbortError("Chat turn cancelled.");
+    }
+    return storage.chatTurnTraces.patch(input.turnId, {
+      parentTurnId: input.parentTurnId,
+      branchKind: input.branchKind,
+      sourceTurnId: input.sourceTurnId,
+      assistantMessageId: input.assistantMessageId,
+      status: "running",
+      model: input.model,
+      effectiveToolAutonomy: input.effectiveToolAutonomy,
+      routing: input.routing,
+      loopGuard: input.loopGuard,
+    });
+  } catch (error) {
+    if (error instanceof NotFoundError) {
+      return storage.chatTurnTraces.create(input);
+    }
+    throw error;
+  }
+}
+
+function createAbortError(message: string): Error {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+
 function throwIfChatTurnCancelled(input: Pick<ChatAgentTurnInput, "signal">): void {
   if (!input.signal?.aborted) {
     return;
@@ -14058,10 +14527,10 @@ function isChatTurnAbortError(error: unknown, signal?: AbortSignal): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
-  const name = error.name.toLowerCase();
-  const message = error.message.toLowerCase();
   return (
-    name.includes("abort") || name.includes("cancel") || message.includes("aborted") || message.includes("cancelled")
+    error.name === "AbortError" ||
+    error.name === "ChatTurnCancelledError" ||
+    (error as { code?: unknown }).code === "TURN_CANCELLED"
   );
 }
 
@@ -14069,13 +14538,39 @@ function buildChatTurnFailureRecord(
   failureClass: ChatTurnFailureClass,
   message: string,
   recommendedAction: ChatTurnRecoveryAction = getChatTurnRecoveryAction(failureClass),
+  provider?: ChatProviderFailureRecord,
 ): ChatTurnFailureRecord {
   return {
     failureClass,
     message,
     retryable: failureClass !== "auth_required",
     recommendedAction,
+    ...(provider ? { provider } : {}),
   };
+}
+
+function extractProviderFailureRecord(error: unknown): ChatProviderFailureRecord | undefined {
+  const providerFailure = toPlainRecord((error as { providerFailure?: unknown } | undefined)?.providerFailure);
+  if (providerFailure) {
+    const provider: ChatProviderFailureRecord = {
+      code: readProviderFailureString(providerFailure.code),
+      message: readProviderFailureString(providerFailure.message),
+      status: readProviderFailureString(providerFailure.status),
+      responseId: readProviderFailureString(providerFailure.responseId ?? providerFailure.response_id),
+      type: readProviderFailureString(providerFailure.type),
+    };
+    if (Object.values(provider).some(Boolean)) {
+      return provider;
+    }
+  }
+  if (error instanceof Error && error.cause) {
+    return extractProviderFailureRecord(error.cause);
+  }
+  return undefined;
+}
+
+function readProviderFailureString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function classifyChatTurnFailure(input: { error?: unknown; toolRuns: ChatToolRunRecord[] }): ChatTurnFailureClass {

@@ -79,6 +79,11 @@ describe("OrchestrationRepository", () => {
       totalIterations: 0,
       workspaceId: "default",
       durableRunId: "durable-run-1",
+      operatorId: "operator-1",
+      authActorId: "auth-operator-1",
+      authActorSource: "loopback",
+      permissionProfileId: "trusted-local-power",
+      localOperatorOverrideId: "override-1",
       executionState: "worktree_ready",
       worktreePath: "F:/code/personal-ai/.worktrees/run-1",
       worktreeStatus: "ready",
@@ -99,6 +104,11 @@ describe("OrchestrationRepository", () => {
 
     const persistedRun = repo.getRun("run-1");
     assert.equal(persistedRun.durableRunId, "durable-run-1");
+    assert.equal(persistedRun.operatorId, "operator-1");
+    assert.equal(persistedRun.authActorId, "auth-operator-1");
+    assert.equal(persistedRun.authActorSource, "loopback");
+    assert.equal(persistedRun.permissionProfileId, "trusted-local-power");
+    assert.equal(persistedRun.localOperatorOverrideId, "override-1");
     assert.equal(persistedRun.executionState, "paused_for_approval");
     assert.equal(persistedRun.worktreeStatus, "ready");
     assert.equal(persistedRun.pendingApprovalPhaseId, "phase-1");

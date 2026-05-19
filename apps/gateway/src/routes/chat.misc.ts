@@ -2,6 +2,9 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { sessionParamsSchema } from "./chat.shared.js";
 
+const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
+  request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
+
 const prefsPatchSchema = z.object({
   mode: z.enum(["chat", "cowork", "code"]).optional(),
   providerId: z.string().optional(),
@@ -37,6 +40,11 @@ const prefsPatchSchema = z.object({
 
 const commandParseSchema = z.object({
   commandText: z.string().min(1),
+  policyRunId: z.string().optional(),
+  policyTaskId: z.string().optional(),
+  permissionProfileId: z.string().optional(),
+  localOperatorOverrideId: z.string().optional(),
+  surface: z.enum(["chat", "cowork", "code"]).optional(),
 });
 
 const researchRunSchema = z.object({
@@ -44,6 +52,11 @@ const researchRunSchema = z.object({
   mode: z.enum(["quick", "deep"]).default("quick"),
   providerId: z.string().optional(),
   model: z.string().optional(),
+  policyRunId: z.string().optional(),
+  policyTaskId: z.string().optional(),
+  permissionProfileId: z.string().optional(),
+  localOperatorOverrideId: z.string().optional(),
+  surface: z.enum(["chat", "cowork", "code"]).optional(),
 });
 
 const researchParamsSchema = z.object({
@@ -67,6 +80,9 @@ const proactivePolicyPatchSchema = z.object({
 const proactiveTriggerSchema = z.object({
   source: z.enum(["scheduler", "manual", "chat"]).optional(),
   reason: z.string().optional(),
+  surface: z.enum(["chat", "cowork", "code"]).optional(),
+  permissionProfileId: z.string().optional(),
+  localOperatorOverrideId: z.string().optional(),
 });
 
 const proactiveRunListSchema = z.object({
@@ -209,7 +225,19 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(await chatSupport().parseChatCommand(params.data.sessionId, body.data.commandText));
+      return reply.send(
+        await chatSupport().parseChatCommand(params.data.sessionId, body.data.commandText, {
+          resolvedBy: resolveActorId(request),
+          operatorId: resolveActorId(request),
+          authActorId: request.authActorId,
+          authActorSource: request.authActorSource,
+          policyRunId: body.data.policyRunId,
+          policyTaskId: body.data.policyTaskId,
+          permissionProfileId: body.data.permissionProfileId,
+          localOperatorOverrideId: body.data.localOperatorOverrideId,
+          surface: body.data.surface ?? "chat",
+        }),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -227,7 +255,15 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(await chatSupport().runChatResearch(params.data.sessionId, body.data));
+      return reply.send(
+        await chatSupport().runChatResearch(params.data.sessionId, {
+          ...body.data,
+          operatorId: resolveActorId(request),
+          authActorId: request.authActorId,
+          authActorSource: request.authActorSource,
+          surface: body.data.surface ?? "chat",
+        }),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -287,7 +323,14 @@ export function registerChatMiscRoutes(fastify: FastifyInstance): void {
       });
     }
     try {
-      return reply.send(await chatSupport().triggerChatSessionProactive(params.data.sessionId, body.data));
+      return reply.send(
+        await chatSupport().triggerChatSessionProactive(params.data.sessionId, {
+          ...body.data,
+          operatorId: resolveActorId(request),
+          authActorId: request.authActorId,
+          authActorSource: request.authActorSource,
+        }),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

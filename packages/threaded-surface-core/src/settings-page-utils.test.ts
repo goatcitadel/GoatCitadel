@@ -47,9 +47,9 @@ describe("settings-page-utils", () => {
   });
 
   it("formats deployment profiles and dates defensively", () => {
-    expect(formatDeploymentProfileLabel("local_dev")).toBe("local_dev");
-    expect(formatDeploymentProfileLabel("trusted_local")).toBe("trusted_local");
-    expect(formatDeploymentProfileLabel("remote_hardened")).toBe("remote_hardened");
+    expect(formatDeploymentProfileLabel("local_dev")).toBe("Local Dev");
+    expect(formatDeploymentProfileLabel("trusted_local")).toBe("Trusted Local");
+    expect(formatDeploymentProfileLabel("remote_hardened")).toBe("Remote Hardened");
     expect(formatVoiceDate(undefined)).toBe("-");
     expect(formatVoiceDate("not-a-date")).toBe("not-a-date");
     expect(formatVoiceDate("2026-05-04T12:00:00.000Z")).not.toBe("2026-05-04T12:00:00.000Z");

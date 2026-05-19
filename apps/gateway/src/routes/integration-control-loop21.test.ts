@@ -414,11 +414,61 @@ describe("Loop 21 route facade coverage", () => {
     const tools = {
       listToolCatalog: vi.fn(() => [{ name: "browser.search" }]),
       evaluateToolAccess: vi.fn((input) => ({ decision: "allow", input })),
+      resolveToolPolicyContext: vi.fn((input) => ({
+        ...input,
+        permissionProfileId: input.permissionProfileId ?? "safe",
+        permissionProfile: { profileId: input.permissionProfileId ?? "safe", label: "Safe" },
+      })),
+      listPermissionProfiles: vi.fn(() => [
+        { profileId: "safe", label: "Safe", approvalMode: "approve_all", builtin: true, scope: "global" },
+        {
+          profileId: "profile-owned",
+          label: "Owned",
+          approvalMode: "approve_all",
+          builtin: false,
+          scope: "operator",
+          scopeRef: "operator-test",
+          createdBy: "operator-test",
+        },
+        {
+          profileId: "profile-other",
+          label: "Other",
+          approvalMode: "approve_all",
+          builtin: false,
+          scope: "operator",
+          scopeRef: "operator-other",
+          createdBy: "operator-other",
+        },
+      ]),
+      listActiveLocalOperatorOverrides: vi.fn(() => [
+        { overrideId: "override-1", operatorId: "operator-test", status: "active" },
+      ]),
+      createPermissionProfile: vi.fn((input) => ({ profileId: "profile-1", ...input })),
+      updatePermissionProfile: vi.fn((profileId: string, input) => ({ profileId, ...input })),
+      archivePermissionProfile: vi.fn(() => true),
+      activatePermissionProfile: vi.fn((input) => ({ activationId: "activation-1", active: true, ...input })),
+      createLocalOperatorOverride: vi.fn((input) => ({ overrideId: "override-1", status: "active", ...input })),
+      revokeLocalOperatorOverride: vi.fn((overrideId: string, revokedBy?: string) => ({
+        overrideId,
+        operatorId: "operator-test",
+        scope: "workspace",
+        scopeRef: "workspace-1",
+        reason: "focused local run",
+        status: "revoked",
+        createdBy: "operator-test",
+        createdAt: "2026-05-17T20:00:00.000Z",
+        expiresAt: "2026-05-17T20:10:00.000Z",
+        revokedAt: "2026-05-17T20:05:00.000Z",
+        revokedBy,
+      })),
       listToolGrants: vi.fn((scope?: string, scopeRef?: string, limit?: number) => [{ scope, scopeRef, limit }]),
       createToolGrant: vi.fn((input) => ({ grantId, ...input })),
       revokeToolGrant: vi.fn(() => true),
     };
     app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    app.decorateRequest("authActorId", "operator-test");
+    app.decorateRequest("authActorSource", "loopback");
     app.decorate("services", { media, tools } as never);
     await app.register(mediaRoutes);
     await app.register(toolsRoutes);
@@ -480,6 +530,123 @@ describe("Loop 21 route facade coverage", () => {
       payload: { toolName: "browser.search", agentId: "agent-1", sessionId: "session-1", args: { q: "goat" } },
     });
     expect(evaluated.json()).toMatchObject({ decision: "allow" });
+    expect(tools.resolveToolPolicyContext).toHaveBeenCalledWith(
+      expect.objectContaining({ authActorId: "operator-test", permissionProfileId: undefined }),
+    );
+    expect((await app.inject({ method: "GET", url: "/api/v1/tools/permission-profiles" })).json()).toMatchObject({
+      items: expect.arrayContaining([expect.objectContaining({ profileId: "safe" })]),
+    });
+    expect((await app.inject({ method: "GET", url: "/api/v1/tools/local-operator-overrides" })).json()).toMatchObject({
+      items: [{ overrideId: "override-1", operatorId: "operator-test", status: "active" }],
+    });
+    expect(tools.listActiveLocalOperatorOverrides).toHaveBeenCalledWith("operator-test");
+    await app.inject({
+      method: "GET",
+      url: "/api/v1/tools/permission-profiles/effective?operatorId=spoofed&workspaceId=workspace-1&taskId=task-1&runId=run-1&surface=code",
+    });
+    expect(tools.resolveToolPolicyContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operatorId: "operator-test",
+        authActorId: "operator-test",
+        workspaceId: "workspace-1",
+        taskId: "task-1",
+        runId: "run-1",
+      }),
+    );
+    const createdProfile = await app.inject({
+      method: "POST",
+      url: "/api/v1/tools/permission-profiles",
+      payload: { label: "Review", approvalMode: "approve_all", toolPatterns: ["session.status"] },
+    });
+    expect(createdProfile.statusCode).toBe(201);
+    expect(tools.createPermissionProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ createdBy: "operator-test", scope: "operator", scopeRef: "operator-test" }),
+    );
+    expect(
+      (
+        await app.inject({
+          method: "PATCH",
+          url: "/api/v1/tools/permission-profiles/profile-owned",
+          payload: { description: "owned update" },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(tools.updatePermissionProfile).toHaveBeenCalledWith(
+      "profile-owned",
+      expect.objectContaining({ updatedBy: "operator-test", description: "owned update" }),
+    );
+    await expect(
+      app.inject({
+        method: "PATCH",
+        url: "/api/v1/tools/permission-profiles/profile-other",
+        payload: { description: "blocked update" },
+      }),
+    ).resolves.toMatchObject({ statusCode: 403 });
+    await expect(
+      app.inject({
+        method: "PATCH",
+        url: "/api/v1/tools/permission-profiles/safe",
+        payload: { description: "blocked builtin update" },
+      }),
+    ).resolves.toMatchObject({ statusCode: 403 });
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/tools/permission-profiles/safe/archive" }),
+    ).resolves.toMatchObject({ statusCode: 403 });
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/tools/permission-profiles/profile-other/archive" }),
+    ).resolves.toMatchObject({ statusCode: 403 });
+    expect(
+      (await app.inject({ method: "POST", url: "/api/v1/tools/permission-profiles/profile-owned/archive" })).json(),
+    ).toEqual({
+      archived: true,
+      profileId: "profile-owned",
+    });
+    expect(tools.archivePermissionProfile).toHaveBeenCalledWith("profile-owned", "operator-test");
+    await expect(
+      app.inject({
+        method: "POST",
+        url: "/api/v1/tools/permission-profiles",
+        payload: { label: "Unsafe global", scope: "global", approvalMode: "bypass" },
+      }),
+    ).resolves.toMatchObject({ statusCode: 400 });
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/tools/permission-profiles/activate",
+      payload: { profileId: "safe", operatorId: "spoofed", workspaceId: "workspace-1", surface: "code" },
+    });
+    expect(tools.activatePermissionProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "safe", operatorId: "operator-test", createdBy: "operator-test" }),
+    );
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/v1/tools/local-operator-overrides",
+          payload: { scope: "workspace", scopeRef: "workspace-1", reason: "focused local run", ttlSeconds: 300 },
+        })
+      ).statusCode,
+    ).toBe(201);
+    await expect(
+      app.inject({
+        method: "POST",
+        url: "/api/v1/tools/local-operator-overrides",
+        payload: { scope: "run", reason: "missing target", ttlSeconds: 300 },
+      }),
+    ).resolves.toMatchObject({ statusCode: 400 });
+    expect(
+      (await app.inject({ method: "POST", url: "/api/v1/tools/local-operator-overrides/override-1/revoke" })).json(),
+    ).toMatchObject({
+      revoked: true,
+      overrideId: "override-1",
+      status: "revoked",
+      revokedAt: "2026-05-17T20:05:00.000Z",
+      revokedBy: "operator-test",
+      override: { overrideId: "override-1", status: "revoked", revokedBy: "operator-test" },
+    });
+    expect(tools.revokeLocalOperatorOverride).toHaveBeenCalledWith("override-1", "operator-test");
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/tools/local-operator-overrides/override-other/revoke" }),
+    ).resolves.toMatchObject({ statusCode: 404 });
     await app.inject({ method: "GET", url: "/api/v1/tools/grants?scope=session&scopeRef=session-1&limit=2" });
     expect(tools.listToolGrants).toHaveBeenCalledWith("session", "session-1", 2);
     expect(
@@ -497,10 +664,52 @@ describe("Loop 21 route facade coverage", () => {
         })
       ).statusCode,
     ).toBe(201);
+    await expect(
+      app.inject({
+        method: "POST",
+        url: "/api/v1/tools/grants",
+        payload: {
+          toolPattern: "browser.*",
+          decision: "allow",
+          scope: "session",
+          scopeRef: "session-1",
+          grantType: "ttl",
+        },
+      }),
+    ).resolves.toMatchObject({ statusCode: 400 });
+    await expect(
+      app.inject({
+        method: "POST",
+        url: "/api/v1/tools/grants",
+        payload: {
+          toolPattern: "browser.*",
+          decision: "allow",
+          scope: "session",
+          scopeRef: "session-1",
+          grantType: "one_time",
+          usesRemaining: 2,
+        },
+      }),
+    ).resolves.toMatchObject({ statusCode: 400 });
+    await expect(
+      app.inject({
+        method: "POST",
+        url: "/api/v1/tools/grants",
+        payload: {
+          toolPattern: "browser.*",
+          decision: "allow",
+          scope: "session",
+          scopeRef: "session-1",
+          expiresAt: "2099-01-01T00:00:00.000Z",
+        },
+      }),
+    ).resolves.toMatchObject({ statusCode: 400 });
     expect((await app.inject({ method: "POST", url: `/api/v1/tools/grants/${grantId}/revoke` })).json()).toEqual({
       revoked: true,
       grantId,
+      revokedBy: "operator-test",
     });
+    expect(tools.revokeToolGrant).toHaveBeenCalledWith(grantId, "operator-test");
     await expect(
       app.inject({ method: "POST", url: "/api/v1/tools/access/evaluate", payload: {} }),
     ).resolves.toMatchObject({
@@ -519,7 +728,7 @@ describe("Loop 21 route facade coverage", () => {
       app.inject({
         method: "POST",
         url: "/api/v1/tools/grants",
-        payload: { toolPattern: "browser.*", decision: "allow", scope: "global", createdBy: "operator" },
+        payload: { toolPattern: "browser.*", decision: "allow", scope: "global" },
       }),
     ).resolves.toMatchObject({ statusCode: 400 });
     tools.revokeToolGrant.mockReturnValueOnce(false);

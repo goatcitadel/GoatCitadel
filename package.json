@@ -121,7 +121,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^24.3.0",
+    "@types/node": "^22.15.0",
     "@typescript/native-preview": "beta",
     "@vitest/coverage-v8": "^3.2.4",
     "c8": "^10.1.3",

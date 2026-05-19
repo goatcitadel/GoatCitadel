@@ -11,7 +11,7 @@ export interface PresentationPptxInput {
   createdAt?: Date;
 }
 
-interface ZipEntry {
+export interface ZipEntry {
   name: string;
   data: Buffer;
 }
@@ -288,7 +288,7 @@ function escapeXml(value: string): string {
   });
 }
 
-function createStoredZip(entries: ZipEntry[]): Buffer {
+export function createStoredZip(entries: ZipEntry[]): Buffer {
   const localParts: Buffer[] = [];
   const centralParts: Buffer[] = [];
   let offset = 0;

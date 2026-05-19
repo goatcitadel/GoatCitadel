@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CuratorTickWorkflowPayload, DurableRunRecord } from "@goatcitadel/contracts";
+import type {
+  ApprovalRequest,
+  ConnectorRecord,
+  CuratorTickWorkflowPayload,
+  DurableRunRecord,
+} from "@goatcitadel/contracts";
 vi.mock("@goatcitadel/storage", () => ({}));
 vi.mock("sqlite", () => ({}));
 vi.mock("./connector-delivery.js", () => ({
@@ -30,6 +35,7 @@ import {
   parseProactiveTickWorkflowPayload,
   type DurableWorkflowExecutorHosts,
 } from "./durable-execution-service.js";
+import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -60,7 +66,7 @@ function buildRun(): DurableRunRecord {
   };
 }
 
-function createHosts(outcome: "paused" | "completed" | "cancelled"): {
+function createHosts(outcome: "paused" | "completed" | "failed" | "cancelled"): {
   hosts: DurableWorkflowExecutorHosts;
   durableRuns: {
     getRun: ReturnType<typeof vi.fn>;
@@ -96,6 +102,7 @@ function createHosts(outcome: "paused" | "completed" | "cancelled"): {
     outcome,
     checkpointState: {
       orchestrationRunId: "orch-run-1",
+      ...(outcome === "failed" ? { error: "phase failed" } : {}),
       executionState: outcome === "paused" ? "paused_for_approval" : outcome,
       worktreeStatus: "ready",
     },
@@ -284,6 +291,13 @@ describe("durable-execution-service orchestration workflow", () => {
       expect.objectContaining({ runId: run.runId, status: "completed" }),
     );
 
+    const cancelledHost = createApprovalWaitHost({ ...run, status: "cancelled", version: 2 }, "approved");
+    await executeDurableApprovalWaitRun(cancelledHost as never, run);
+    expect(cancelledHost.storage.durableRuns.updateRun).not.toHaveBeenCalled();
+    expect(cancelledHost.storage.durableRuns.createCheckpoint).not.toHaveBeenCalled();
+    expect(cancelledHost.recordDurableTimelineEvent).not.toHaveBeenCalled();
+    expect(cancelledHost.publishRealtime).not.toHaveBeenCalled();
+
     const controller = new AbortController();
     controller.abort("lease lost");
     await expect(
@@ -366,6 +380,14 @@ describe("durable-execution-service orchestration workflow", () => {
       version: "connector.delivery.v1",
       connectorId: "connector-slack",
       action: "send",
+      workspaceId: "workspace-1",
+      taskId: "policy-task-1",
+      runId: "policy-run-1",
+      operatorId: "operator-1",
+      authActorId: "actor-1",
+      authActorSource: "loopback",
+      permissionProfileId: "profile-safe",
+      localOperatorOverrideId: "override-1",
       payload: {
         sessionId: " session-1 ",
         turnId: "turn-1",
@@ -391,6 +413,7 @@ describe("durable-execution-service orchestration workflow", () => {
       commsUnsend: vi.fn(),
       commsTyping: vi.fn(),
       invokeMcpTool: vi.fn(),
+      resolveDurableRunHookWorkspaceId: vi.fn(() => "workspace-1"),
       storage: {
         durableRuns: {
           getRun: vi.fn(() => storedRun),
@@ -407,7 +430,23 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(dispatchConnectorDelivery).toHaveBeenCalledWith(
       expect.objectContaining({ connectorId: "connector-slack" }),
       expect.objectContaining({ action: "send" }),
-      expect.any(Object),
+      expect.objectContaining({
+        mcpInvokeContext: expect.objectContaining({
+          workspaceId: "workspace-1",
+          taskId: "policy-task-1",
+          runId: "policy-run-1",
+          permissionProfileId: "profile-safe",
+          localOperatorOverrideId: "override-1",
+          policyContext: expect.objectContaining({
+            operatorId: "operator-1",
+            authActorId: "actor-1",
+            authActorSource: "loopback",
+            permissionProfileId: "profile-safe",
+            localOperatorOverrideId: "override-1",
+          }),
+          consentContext: expect.objectContaining({ operatorId: "operator-1" }),
+        }),
+      }),
     );
     expect(publishRealtime).toHaveBeenCalledWith(
       "connector_delivery_completed",
@@ -437,6 +476,97 @@ describe("durable-execution-service orchestration workflow", () => {
       expect.objectContaining({
         runId: run.runId,
         state: expect.objectContaining({ connectorId: "connector-slack", dispatchKind: "send" }),
+      }),
+    );
+  });
+
+  it("preserves approval delivery lineage from real remote-token connector payloads", async () => {
+    vi.mocked(dispatchConnectorDelivery).mockResolvedValue({
+      capabilityId: "outbound_messages",
+      dispatchKind: "integration_channel_send",
+      result: { delivered: true },
+    } as never);
+    const approval = {
+      approvalId: "approval-real-1",
+      kind: "tool.invoke",
+      riskLevel: "danger",
+      status: "pending",
+      payload: {
+        workspaceId: "workspace-real",
+        sessionId: "session-real",
+        taskId: "task-real",
+        runId: "policy-run-real",
+        operatorId: "operator-real",
+        authActorId: "actor-real",
+        authActorSource: "loopback",
+        permissionProfileId: "profile-real",
+        localOperatorOverrideId: "override-real",
+      },
+      preview: {},
+      createdAt: "2026-05-18T00:00:00.000Z",
+      updatedAt: "2026-05-18T00:00:00.000Z",
+    } as ApprovalRequest;
+    const connector = {
+      connectorId: "connector-approval",
+      connectorType: "integration_connection",
+      sourceId: "channel-approval",
+      status: "active",
+      capabilities: [
+        { id: "approvals", enabled: true },
+        { id: "outbound_messages", enabled: true },
+        { id: "interactive_actions", enabled: true },
+      ],
+      metadata: {
+        approvalDeliveryTarget: "#approvals",
+        approvalDeliveryPlatform: "slack",
+      },
+    } as unknown as ConnectorRecord;
+    const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
+      approval,
+      connector,
+      token: "token-secret",
+      tokenId: "token-1",
+      expiresAt: "2026-05-18T00:15:00.000Z",
+    });
+    expect(payload).toBeDefined();
+    const run = buildRunWithPayload("connector.delivery", payload!);
+    const storedRun = { ...run };
+    const publishRealtime = vi.fn();
+    const host = {
+      requireConnectorRecord: vi.fn(() => connector),
+      commsSend: vi.fn(),
+      commsReply: vi.fn(),
+      commsReact: vi.fn(),
+      commsUnsend: vi.fn(),
+      commsTyping: vi.fn(),
+      invokeMcpTool: vi.fn(),
+      resolveDurableRunHookWorkspaceId: vi.fn(() => "workspace-real"),
+      storage: {
+        durableRuns: {
+          getRun: vi.fn(() => storedRun),
+          updateRun: vi.fn(),
+          createCheckpoint: vi.fn(),
+        },
+      },
+      recordDurableTimelineEvent: vi.fn(),
+      publishRealtime,
+    };
+
+    await executeDurableConnectorDeliveryRun(host as never, run);
+
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "connector_delivery_completed",
+      "connectors",
+      expect.any(Object),
+      expect.objectContaining({
+        links: expect.objectContaining({
+          runId: run.runId,
+          connectorId: "connector-approval",
+          approvalId: "approval-real-1",
+          sessionId: "session-real",
+          taskId: "task-real",
+          workspaceId: "workspace-real",
+        }),
       }),
     );
   });
@@ -590,6 +720,62 @@ describe("durable-execution-service orchestration workflow", () => {
     );
   });
 
+  it("passes durable chat worker cancellation into the active turn dispatcher", async () => {
+    vi.mocked(executePreparedAgentChatTurnBackground).mockResolvedValue(undefined as never);
+    const run = buildRunWithPayload("chat.turn.execute", {
+      version: "chat.turn.execute.v1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      userMessageId: "user-1",
+      assistantMessageId: "assistant-1",
+      branchKind: "new",
+      threadEventType: "chat_thread_turn_appended",
+      request: { content: "original" },
+    });
+    const prepareAgentChatTurn = vi.fn(async (_sessionId: string, request: Record<string, unknown>) => ({
+      turnId: "turn-1",
+      branchKind: "new",
+      userMessage: { messageId: "user-1", content: request.content },
+      assistantMessage: { messageId: "assistant-1", content: "" },
+    }));
+    const abortController = new AbortController();
+    const host = {
+      storage: {
+        chatMessages: {
+          get: vi.fn(() => ({
+            messageId: "user-1",
+            sessionId: "session-1",
+            role: "user",
+            content: "Ship it",
+          })),
+        },
+      },
+      prepareAgentChatTurn,
+      registerActiveChatTurnStream: vi.fn(),
+      persistChatStreamChunk: vi.fn(),
+    };
+
+    await executeDurableChatTurnRun(host as never, run, { signal: abortController.signal });
+
+    expect(prepareAgentChatTurn).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        signal: abortController.signal,
+      }),
+      expect.any(Object),
+    );
+    expect(executePreparedAgentChatTurnBackground).toHaveBeenCalledWith(
+      host,
+      "session-1",
+      expect.objectContaining({ signal: abortController.signal }),
+      expect.any(Object),
+      "chat_thread_turn_appended",
+      run.runId,
+      undefined,
+      { skipMessageStart: true, abortSignal: abortController.signal },
+    );
+  });
+
   it("marks proactive tick workflows unrecoverable with durable and session links", async () => {
     const run = buildRunWithPayload("proactive.tick", {
       version: "proactive.tick.v1",
@@ -645,6 +831,9 @@ describe("durable-execution-service orchestration workflow", () => {
             assistantMessageId: undefined,
           })),
         },
+        chatMessages: {
+          get: vi.fn(() => undefined),
+        },
         chatToolRuns: {
           listByTurn: vi.fn(() => []),
         },
@@ -668,6 +857,18 @@ describe("durable-execution-service orchestration workflow", () => {
       sessionId: "session-1",
       userMessageId: "user-1",
       assistantMessageId: "assistant-1",
+    });
+    expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({ recoverable: true });
+
+    host.storage.chatTurnTraces.get.mockReturnValueOnce({
+      turnId: "turn-1",
+      sessionId: "session-1",
+      userMessageId: "user-1",
+      assistantMessageId: "assistant-1",
+    });
+    host.storage.chatMessages.get.mockReturnValueOnce({
+      messageId: "assistant-1",
+      role: "assistant",
     });
     expect(isDurableWorkflowRecoverable(host as never, run)).toEqual({
       recoverable: false,
@@ -764,6 +965,48 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(executeDurableOrchestrationRun).toHaveBeenCalledWith(run, undefined);
     expect(durableRuns.updateRun).not.toHaveBeenCalled();
     expect(durableRuns.createCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("marks failed orchestration.plan.execute runs failed in the durable registry", async () => {
+    const { hosts, durableRuns, publishRealtime, recordDurableTimelineEvent, executeDurableOrchestrationRun } =
+      createHosts("failed");
+    const registry = createDurableWorkflowExecutorRegistry(buildDurableWorkflowExecutors(hosts));
+    const run = buildRun();
+
+    await registry.executeWorkflow(run);
+
+    expect(executeDurableOrchestrationRun).toHaveBeenCalledWith(run, undefined);
+    expect(durableRuns.updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "durable-run-1",
+        status: "failed",
+        clearLease: true,
+        lastError: "phase failed",
+      }),
+    );
+    expect(durableRuns.createCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "durable-run-1",
+        checkpointKind: "run_failed",
+      }),
+    );
+    expect(recordDurableTimelineEvent).toHaveBeenCalledWith(
+      "durable-run-1",
+      "run_failed",
+      expect.objectContaining({
+        orchestrationRunId: "orch-run-1",
+      }),
+    );
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "system",
+      "durable",
+      expect.objectContaining({
+        type: "durable_run_failed",
+        runId: "durable-run-1",
+        error: "phase failed",
+      }),
+      expect.any(Object),
+    );
   });
 
   it("completes orchestration.plan.execute runs through the durable registry", async () => {

@@ -22,7 +22,7 @@ export interface ApprovalRuntime {
     limit?: number,
   ): ToolGrantRecord[];
   createToolGrant(input: ToolGrantCreateInput): ToolGrantRecord;
-  revokeToolGrant(grantId: string): boolean;
+  revokeToolGrant(grantId: string, revokedBy: string): boolean;
   createApproval(input: ApprovalCreateInput): Promise<ApprovalRequest>;
   createApprovalRemoteActionToken(
     approvalId: string,
@@ -56,6 +56,7 @@ export interface ApprovalRuntime {
     decision: "approve" | "reject",
     options?: {
       allowScope?: "once" | "session" | "workspace";
+      resolvedBy?: string;
     },
   ): Promise<{
     allowScope: "once" | "session" | "workspace";
@@ -81,8 +82,8 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
     return approvalLifecycleService.createToolGrant(this.host, input);
   }
 
-  public revokeToolGrant(grantId: string): boolean {
-    return approvalLifecycleService.revokeToolGrant(this.host, grantId);
+  public revokeToolGrant(grantId: string, revokedBy: string): boolean {
+    return approvalLifecycleService.revokeToolGrant(this.host, grantId, revokedBy);
   }
 
   public async createApproval(input: ApprovalCreateInput): Promise<ApprovalRequest> {
@@ -142,6 +143,7 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
     decision: "approve" | "reject",
     options?: {
       allowScope?: "once" | "session" | "workspace";
+      resolvedBy?: string;
     },
   ): Promise<{
     allowScope: "once" | "session" | "workspace";

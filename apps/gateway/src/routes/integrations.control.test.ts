@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { IntegrationPluginRecord } from "@goatcitadel/contracts";
 import { buildInstalledIntegrationPluginRecord } from "../services/integration-plugin-author-contract.js";
+import { buildGenericChannelInboundSignature } from "../services/generic-channel-webhook.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import {
@@ -11,6 +12,7 @@ import {
 
 describe("integrations control routes", () => {
   let app: FastifyInstance | null = null;
+  const connectionId = "11111111-1111-1111-1111-111111111111";
 
   afterEach(async () => {
     await cleanupIntegrationTestApp(app);
@@ -27,11 +29,12 @@ describe("integrations control routes", () => {
 
     const response = await app.inject({
       method: "POST",
-      url: "/api/v1/channels/discord/inbound",
+      url: `/api/v1/integrations/connections/${connectionId}/discord/inbound`,
       headers: {
         "content-length": String(300 * 1024),
       },
       payload: {
+        eventId: "evt-oversized",
         account: "acct-1",
         actorId: "user-1",
         content: "hello",
@@ -49,29 +52,48 @@ describe("integrations control routes", () => {
     }));
     app = Fastify();
     decorateIntegrationServices(app, {
+      getIntegrationConnection: vi.fn(() => ({
+        connectionId,
+        key: "discord",
+        enabled: true,
+        status: "connected",
+        config: {
+          inboundSecret: "generic-secret",
+        },
+      })),
       ingestChannelMessage,
     });
     await app.register(integrationsRoutes);
+    const payload = {
+      eventId: "evt-1",
+      account: connectionId,
+      actorId: "user-1",
+      content: "hello from inbound",
+      metadata: {
+        source: "test",
+      },
+    };
+    const body = JSON.stringify(payload);
+    const timestamp = String(Math.floor(Date.now() / 1000));
 
     const response = await app.inject({
       method: "POST",
-      url: "/api/v1/channels/discord/inbound",
-      payload: {
-        account: "acct-1",
-        actorId: "user-1",
-        content: "hello from inbound",
-        metadata: {
-          source: "test",
-        },
+      url: `/api/v1/integrations/connections/${connectionId}/discord/inbound`,
+      headers: {
+        "content-type": "application/json",
+        "x-goatcitadel-channel-timestamp": timestamp,
+        "x-goatcitadel-channel-signature": buildGenericChannelInboundSignature(timestamp, body, "generic-secret"),
       },
+      payload: body,
     });
 
     expect(response.statusCode).toBe(200);
     expect(ingestChannelMessage).toHaveBeenCalledWith(
       "discord",
-      undefined,
+      `generic-channel:${connectionId}:discord:evt-1`,
       expect.objectContaining({
-        account: "acct-1",
+        account: connectionId,
+        eventId: "evt-1",
         actorId: "user-1",
         content: "hello from inbound",
       }),

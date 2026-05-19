@@ -88,7 +88,7 @@ describe("chat-agent-completion-adapters edge cases", () => {
   });
 
   it("normalizes provider tool names without colliding with existing names", () => {
-    expect(resolveAllowedModelToolCallName("browser.search", new Map())).toBe("browser.search");
+    expect(resolveAllowedModelToolCallName("browser.search", new Map())).toBeUndefined();
     expect(resolveAllowedModelToolCallName("blocked", new Map([["model_search", "browser.search"]]))).toBeUndefined();
     expect(resolveAllowedModelToolCallName("browser.search", new Map([["model_search", "browser.search"]]))).toBe(
       "browser.search",

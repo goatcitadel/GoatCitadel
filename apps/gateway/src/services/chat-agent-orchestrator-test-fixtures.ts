@@ -6,6 +6,7 @@ import type {
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 import {
   ChatAgentOrchestrator,
   type ChatAgentOrchestratorDeps,
@@ -142,6 +143,40 @@ export function createToolCatalog(toolNames: string[] = ["browser.search"]): Too
         pack: "core",
         recommendedContexts: ["chat", "cowork"],
         preferredForIntents: ["presentation", "slide_deck", "powerpoint", "artifact_output"],
+      };
+    }
+    if (toolName === "documents.create") {
+      return {
+        toolName: "documents.create",
+        category: "knowledge",
+        riskLevel: "caution",
+        requiresApproval: false,
+        description: "Create a document artifact",
+        argSchema: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+            format: { type: "string" },
+            title: { type: "string" },
+            body: { type: "string" },
+            sections: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  heading: { type: "string" },
+                  body: { type: "string" },
+                  bullets: { type: "array", items: { type: "string" } },
+                },
+              },
+            },
+          },
+          required: ["path", "title"],
+        },
+        examples: [],
+        pack: "core",
+        recommendedContexts: ["chat", "cowork"],
+        preferredForIntents: ["document_generation", "artifact_output", "report", "pdf", "docx"],
       };
     }
     if (toolName === "browser.extract") {
@@ -512,6 +547,13 @@ export function createMockStorage(): unknown {
   const toolRuns = new Map<string, ChatToolRunRecord>();
   return {
     chatTurnTraces: {
+      get(turnId: string): ChatTurnTraceRecord {
+        const current = traces.get(turnId);
+        if (!current) {
+          throw new NotFoundError(`chat turn trace ${turnId} not found`);
+        }
+        return current;
+      },
       create(input: Omit<ChatTurnTraceRecord, "toolRuns" | "citations">): ChatTurnTraceRecord {
         const record: ChatTurnTraceRecord = {
           ...input,

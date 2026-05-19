@@ -1391,10 +1391,11 @@ async function viewTools(client: TuiApiClient): Promise<void> {
         { name: "deny", value: "deny" },
       ],
     });
-    const scope = await select<"global" | "session" | "agent" | "task">({
+    const scope = await select<"global" | "workspace" | "session" | "agent" | "task">({
       message: "Scope",
       choices: [
         { name: "global", value: "global" },
+        { name: "workspace", value: "workspace" },
         { name: "session", value: "session" },
         { name: "agent", value: "agent" },
         { name: "task", value: "task" },
@@ -1409,8 +1410,7 @@ async function viewTools(client: TuiApiClient): Promise<void> {
         { name: "persistent", value: "persistent" },
       ],
     });
-    const expiresAt = await input({ message: "Expires at ISO (optional)" });
-    const createdBy = await input({ message: "Created by", default: "tui-operator" });
+    const expiresAt = grantType === "ttl" ? await input({ message: "Expires at ISO (required for TTL)" }) : "";
     const confirmed = await confirm({ message: "Create grant?", default: false });
     if (!confirmed) {
       return;
@@ -1422,8 +1422,7 @@ async function viewTools(client: TuiApiClient): Promise<void> {
       scope,
       scopeRef: scope === "global" ? undefined : scopeRef.trim() || undefined,
       grantType,
-      expiresAt: expiresAt.trim() || undefined,
-      createdBy: createdBy.trim() || "tui-operator",
+      ...(grantType === "ttl" ? { expiresAt: expiresAt.trim() || undefined } : {}),
     });
     console.log(JSON.stringify(created, null, 2));
     await pause();
@@ -1457,7 +1456,6 @@ async function viewTools(client: TuiApiClient): Promise<void> {
     dryRun: true,
     consentContext: {
       source: "tui",
-      operatorId: "tui-operator",
       reason: "tools dry-run",
     },
   });
@@ -2111,7 +2109,7 @@ async function viewOnboarding(client: TuiApiClient): Promise<void> {
       choices: [
         { name: "Ask every time", value: "approve_all" },
         { name: "Ask for risky work", value: "approve_risky" },
-        { name: "Bypass approval prompts", value: "bypass" },
+        { name: "Skip normal prompts (not for Remote Hardened)", value: "bypass" },
       ],
     });
     const budgetMode = await select<"saver" | "balanced" | "power">({
@@ -2189,7 +2187,7 @@ async function viewSettings(client: TuiApiClient, profilePath: string, profileNa
       choices: [
         { name: "Ask every time", value: "approve_all" },
         { name: "Ask for risky work", value: "approve_risky" },
-        { name: "Bypass approval prompts", value: "bypass" },
+        { name: "Skip normal prompts (not for Remote Hardened)", value: "bypass" },
       ],
     });
     const confirmed = await confirm({ message: "Apply gateway approval mode update?", default: false });

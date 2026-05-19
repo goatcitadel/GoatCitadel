@@ -25,6 +25,13 @@ interface BuildDelegatedChatSendRequestInput {
   toolAutonomy?: ChatSessionPrefsRecord["toolAutonomy"];
   normalizationProfile?: ChatSendMessageRequest["normalizationProfile"];
   parentDelegationStepId?: string;
+  operatorId?: string;
+  authActorId?: string;
+  authActorSource?: ChatSendMessageRequest["authActorSource"];
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+  policyRunId?: string;
+  policyTaskId?: string;
 }
 
 export function buildDelegatedChatSendRequest(input: BuildDelegatedChatSendRequestInput): ChatSendMessageRequest {
@@ -55,5 +62,12 @@ export function buildDelegatedChatSendRequest(input: BuildDelegatedChatSendReque
     normalizationProfile: input.normalizationProfile,
     prefsOverride,
     parentDelegationStepId: input.parentDelegationStepId,
+    operatorId: input.operatorId,
+    authActorId: input.authActorId,
+    authActorSource: input.authActorSource,
+    permissionProfileId: input.permissionProfileId,
+    localOperatorOverrideId: input.localOperatorOverrideId,
+    policyRunId: input.policyRunId,
+    policyTaskId: input.policyTaskId,
   };
 }

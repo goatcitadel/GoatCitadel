@@ -8,6 +8,8 @@ export type SecretResolutionBoundary = "provider_boundary" | "tool_host_boundary
 
 export type EgressApprovalState = "not_required" | "approval_required" | "blocked";
 
+export type ToolAuditApprovalMode = "approve_all" | "approve_risky" | "bypass";
+
 export interface EgressDecision {
   target: string;
   hostname: string;
@@ -97,9 +99,13 @@ export interface ToolAuditRecord {
   trustLevel: ToolExecutionTrustLevel;
   outcome: "executed" | "approval_required" | "blocked";
   policyReason: string;
+  reasonCodes?: string[];
   startedAt: string;
   completedAt: string;
   approvalId?: string;
   matchedGrantId?: string;
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+  approvalMode?: ToolAuditApprovalMode;
   errorKind?: ToolErrorKind;
 }

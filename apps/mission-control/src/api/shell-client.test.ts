@@ -166,7 +166,7 @@ describe("shell-client request parity", () => {
       value: fetchMock,
     });
 
-    await expect(resolveApproval("approval-1", { decision: "approve", resolvedBy: "operator" })).rejects.toThrow(/503/);
+    await expect(resolveApproval("approval-1", { decision: "approve" })).rejects.toThrow(/503/);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

@@ -101,14 +101,18 @@ describe("ChatAgentOrchestrator loop37 preflight and fallback behavior", () => {
     const orchestrator = createOrchestrator(createChatCompletion, invokeTool, ["browser.search"]);
 
     const result = await orchestrator.run(
-      turnInput("sess-loop37-empty-synthesis", "Search for GoatCitadel runtime coverage and summarize the result.", {
-        mode: "chat",
-        webMode: "auto",
-      }),
+      turnInput(
+        "sess-loop37-empty-synthesis",
+        "Search the web for GoatCitadel runtime coverage and summarize the result.",
+        {
+          mode: "chat",
+          webMode: "auto",
+        },
+      ),
     );
 
     expect(createChatCompletion).toHaveBeenCalledTimes(3);
-    expect(result.assistantContent).toContain("Useful partial result");
+    expect(result.assistantContent).toContain("Based on the sources I did retrieve");
     expect(result.assistantContent).toContain("Runtime coverage report");
     expect(result.turnTrace.status).toBe("completed");
     expect(result.turnTrace.failure).toMatchObject({

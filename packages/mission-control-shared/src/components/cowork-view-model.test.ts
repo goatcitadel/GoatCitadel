@@ -123,7 +123,7 @@ describe("deriveCoworkRunViewModel", () => {
     });
 
     expect(viewModel.sourceLabel).toBe("Source: delegation run");
-    expect(viewModel.completenessLabel).toBe("Completeness: delegation-backed");
+    expect(viewModel.completenessLabel).toBe("Completeness: delegation complete");
     expect(viewModel.stageCards.find((item) => item.label === "Execution")?.value).toBe("completed");
     expect(viewModel.stateGaps).not.toContain("Canonical run not loaded");
   });
@@ -358,6 +358,10 @@ describe("deriveCoworkRunViewModel", () => {
     expect(viewModel.evidenceSummary.label).toBe("Evidence: pause gate");
     expect(viewModel.roleItems.items.some((item) => item.id === "delegation-delegate-1")).toBe(true);
     expect(viewModel.outputItems.items.map((item) => item.id)).toEqual(["stitched-output", "worktree-state"]);
+    expect(viewModel.outputItems.items[0]).toMatchObject({
+      title: "Delegation output still in progress",
+      note: expect.stringContaining("final synthesis is not ready"),
+    });
     expect(viewModel.runMap.planNodes[0]).toEqual(
       expect.objectContaining({ id: "role-role-1", label: "Researcher", status: "failed" }),
     );
@@ -512,6 +516,7 @@ describe("deriveCoworkRunViewModel", () => {
     expect(viewModel.blockers.find((blocker) => blocker.id === "durable-recovery")?.summary).toBe(
       "Worker state is lease lost for the linked durable run.",
     );
+    expect(viewModel.completenessLabel).toBe("Completeness: delegation running");
     expect(viewModel.runMap.planNodes[0]).toEqual(
       expect.objectContaining({ id: "delegation-delegate-1", label: "Analyst", meta: "child-1" }),
     );

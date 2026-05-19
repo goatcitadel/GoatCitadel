@@ -274,14 +274,14 @@ Execution model:
 
 - All calls still go through `POST /api/v1/tools/invoke` and the policy engine.
 - Helper endpoints exist for API-first UX, but they do not bypass policy.
-- Grant scopes are evaluated in precedence order `task > agent > session > global`.
+- Deny grants win across all matching scopes. Allow grants are then evaluated in precedence order `task > agent > session > workspace > global`.
 - Grants and access decisions are persisted in SQLite (`tool_grants`, `tool_access_decisions`).
 
 ### 4.4 Channel Inbound Adapters
 
-Endpoint: `POST /api/v1/channels/:channel/inbound`
+Endpoint: `POST /api/v1/integrations/connections/:connectionId/:channel/inbound`
 
-Purpose: allows external channels (for example Discord or Slack connectors) to map into canonical gateway event ingestion without bypassing session routing or accounting.
+Purpose: allows configured external channel connections (for example Discord or Slack connectors) to map into canonical gateway event ingestion without bypassing connection ownership, session routing, or accounting.
 
 Behavior:
 
@@ -516,6 +516,10 @@ Office implementation details:
 
 ## 10. API Surface Reference
 
+This is a curated engineering reference, not an exhaustive route manifest. Use the live gateway route-access manifest,
+OpenAPI/catalog sources, and focused route tests for complete API coverage, especially for capabilities, Code Mode,
+permission profiles, and verification-only development routes.
+
 Operator-facing mutating JSON endpoints require `Idempotency-Key` and block duplicate execution.
 
 ### Health and Streams
@@ -628,7 +632,7 @@ Operator-facing mutating JSON endpoints require `Idempotency-Key` and block dupl
 - `POST /api/v1/integrations/connections`
 - `PATCH /api/v1/integrations/connections/:connectionId`
 - `DELETE /api/v1/integrations/connections/:connectionId`
-- `POST /api/v1/channels/:channel/inbound`
+- `POST /api/v1/integrations/connections/:connectionId/:channel/inbound`
 
 ### Comms Helpers
 
@@ -770,8 +774,8 @@ Release-proof expectation:
 
 - `verify:backup:roundtrip` must seed, mutate, restore, and verify all four classes above, including every runtime `config/*.json` file present at backup time.
 - `verify:visual:regression` must compare checked-in baselines for every current Mission Control Next release-surface route, not just capture screenshots, and it must stay read-only; intentional baseline updates go through `verify:visual:rebaseline`.
-- `verify:catalog:parity` must execute real operator actions for the visible runtime-backed non-channel classes it claims to cover.
-- `verify:api:compat` must snapshot REST schemas and realtime event envelopes and fail on breaking diffs.
+- `verify:catalog:parity` must execute the runtime-backed operator action classes declared in its parity scenario; it is not a proof that every future visible catalog entry has a live action.
+- `verify:api:compat` must snapshot REST route/status compatibility and realtime event envelopes; it is not a full response-schema diff.
 
 If `index.db` is lost but logs remain:
 
@@ -797,7 +801,7 @@ These are implementation realities to include in architectural/code review:
 - File writes in mission control files tab are direct content writes; no diff editor yet.
 - No multi-user authorization model; auth is gateway-level only.
 - No built-in secrets manager; provider keys can be runtime-persisted if provided inline.
-- No formal rate limiter for public-hosting scenarios.
+- Route-class rate limiting exists; public-hosting reviews should still verify deployment-specific quotas and abuse controls.
 - Replay/import utilities for rebuilding SQLite from logs are not yet shipped.
 - Mobile companion runtime remains a placeholder track (docs-first, no production mobile control plane yet).
 - Mobile companion research lives in `docs/mobile_app_research_report.md` and is the input source for future implementation.

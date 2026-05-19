@@ -27,7 +27,7 @@ const requiredFiles = [
 
 const requiredHeadings = {
   "CHANGELOG.md": ["# Changelog", "## [Unreleased]", "## [1.0.0]"],
-  "AGENTS.md": ["# GoatCitadel Agent Conventions", "## Agent Roles", "## Safety Boundaries (Non-Overridable)"],
+  "AGENTS.md": ["# AGENTS.md - GoatCitadel", "## Current Product Truth", "## Agent Roles", "## Safety Boundaries (Non-Overridable)"],
   "CONTRIBUTING.md": ["# Contributing to GoatCitadel", "## Quality Gates", "## Governance Docs Policy"],
   "SECURITY.md": ["# Security Policy", "## Reporting a Vulnerability", "## Security Invariants"],
   "docs/1_0_CONTRACT.md": [
@@ -60,6 +60,8 @@ const workspacePackageFiles = [
   "package.json",
   "apps/gateway/package.json",
   "apps/mission-control/package.json",
+  "apps/mission-control-next/package.json",
+  "apps/mission-control-desktop/package.json",
   "packages/contracts/package.json",
   "packages/extensions-sdk/package.json",
   "packages/gateway-core/package.json",
@@ -89,6 +91,20 @@ for (const relPath of requiredFiles) {
       errors.push(`File ${relPath} missing required heading: ${heading}`);
     }
   }
+}
+
+const agentsGuide = await readFile(path.join(root, "AGENTS.md"), "utf8");
+if (
+  !/apps\/mission-control-next` is the canonical `1\.0` Mission Control shell/i.test(agentsGuide) ||
+  !/apps\/mission-control` is compatibility-only/i.test(agentsGuide)
+) {
+  errors.push("AGENTS.md must keep the canonical Mission Control Next and compatibility-only legacy shell guidance explicit.");
+}
+if (!/trusted-code surface/i.test(agentsGuide) || !/Do not claim hostile-code sandboxing/i.test(agentsGuide)) {
+  errors.push("AGENTS.md must keep Code Mode guidance truthful and avoid hostile-code sandbox claims.");
+}
+if (!/## Source of Truth Order/.test(agentsGuide) || !/current implementation under `apps\/` and `packages\/`/.test(agentsGuide)) {
+  errors.push("AGENTS.md must preserve the implementation-first source-of-truth order.");
 }
 
 const handbookPath = path.join(root, "docs", "ENGINEERING_HANDBOOK.md");
@@ -130,11 +146,11 @@ if (/Remaining non-adopted chat flows/i.test(handbook)) {
 if (!/offline_restore_required/i.test(handbook) || !/offline-only/i.test(handbook)) {
   errors.push("docs/ENGINEERING_HANDBOOK.md must describe filesystem-backed restore as offline-only and name the offline_restore_required live-route response.");
 }
-if (!/verify:catalog:parity` must execute real operator actions/i.test(handbook)) {
-  errors.push("docs/ENGINEERING_HANDBOOK.md must describe catalog-parity as runtime action proof, not metadata-only checks.");
+if (!/verify:catalog:parity` must execute the runtime-backed operator action classes declared in its parity scenario/i.test(handbook)) {
+  errors.push("docs/ENGINEERING_HANDBOOK.md must describe catalog-parity as scenario-backed runtime action proof, not blanket catalog coverage.");
 }
-if (!/verify:api:compat` must snapshot REST schemas and realtime event envelopes/i.test(handbook)) {
-  errors.push("docs/ENGINEERING_HANDBOOK.md must describe the REST/SSE additive-compatibility lane.");
+if (!/verify:api:compat` must snapshot REST route\/status compatibility and realtime event envelopes/i.test(handbook)) {
+  errors.push("docs/ENGINEERING_HANDBOOK.md must describe the REST/SSE additive-compatibility lane without claiming full response-schema diffs.");
 }
 
 const runtimeStatePath = path.join(root, "docs", "CANONICAL_RUNTIME_STATE_MODEL.md");
@@ -203,10 +219,10 @@ if (!/release-1\.0\.0/i.test(readme)) {
 if (!/offline_restore_required/i.test(readme) || !/offline-only/i.test(readme)) {
   errors.push("README.md must describe filesystem-backed restore as offline-only and name the offline_restore_required live-route response.");
 }
-if (!/verify:catalog:parity` now executes real operator actions/i.test(readme)) {
+if (!/verify:catalog:parity` now executes the runtime-backed operator action classes declared in its parity scenario/i.test(readme)) {
   errors.push("README.md must describe verify:catalog:parity as runtime action proof.");
 }
-if (!/verify:api:compat` snapshots REST schemas and realtime event envelopes/i.test(readme)) {
+if (!/verify:api:compat` snapshots REST route\/status compatibility and realtime event envelopes/i.test(readme)) {
   errors.push("README.md must describe the REST/SSE compatibility lane.");
 }
 
@@ -219,6 +235,33 @@ if (!/docs\/1_0_CONTRACT\.md/.test(installDoc)) {
 }
 if (/Target release: `0\.9\.0-beta\.1`/i.test(installDoc) || /public beta testers/i.test(installDoc)) {
   errors.push("docs/INSTALL_SETUP_TESTING.md must not describe the target release as beta.");
+}
+
+const reproducibleReleaseDoc = await readFile(path.join(root, "docs", "reproducible-release.md"), "utf8");
+if (!/Node `22\.x` in GitHub Actions/i.test(reproducibleReleaseDoc)) {
+  errors.push("docs/reproducible-release.md must match the Node 22 release installer workflow.");
+}
+if (/Node `24\.x`/i.test(reproducibleReleaseDoc)) {
+  errors.push("docs/reproducible-release.md must not reintroduce stale Node 24 release tooling claims.");
+}
+
+const smokeTestsDoc = await readFile(path.join(root, "docs", "smoke-tests.md"), "utf8");
+if (!/Windows x64 and Windows arm64 installer packages are built in CI/i.test(smokeTestsDoc)) {
+  errors.push("docs/smoke-tests.md must scope installer CI smoke expectations to the shipped Windows installer targets.");
+}
+if (!/Unsigned workflow-dispatch artifacts are development packaging smoke only/i.test(smokeTestsDoc)) {
+  errors.push("docs/smoke-tests.md must distinguish signed public releases from unsigned workflow-dispatch artifacts.");
+}
+if (/Installer packages are built in CI for every supported target/i.test(smokeTestsDoc)) {
+  errors.push("docs/smoke-tests.md must not claim every supported platform has installer CI packages.");
+}
+
+const dependencyPolicyDoc = await readFile(path.join(root, "docs", "dependency-policy.md"), "utf8");
+if (!/Windows x64 and arm64 installers are the current CI-built release installer surfaces/i.test(dependencyPolicyDoc)) {
+  errors.push("docs/dependency-policy.md must scope release installer support to current Windows installer surfaces.");
+}
+if (/macOS x64 and arm64 installers/i.test(dependencyPolicyDoc) || /Linux x64 tarball installer/i.test(dependencyPolicyDoc)) {
+  errors.push("docs/dependency-policy.md must not claim macOS/Linux native installers until release proof exists.");
 }
 
 const channelGuide = await readFile(path.join(root, "docs", "COMMUNICATION_CHANNEL_SETUP_GUIDE.md"), "utf8");
@@ -241,6 +284,9 @@ if (!/@goatcitadel\/extensions-sdk@1\.0\.0/.test(pluginSdkDoc)) {
 }
 
 const contract = await readFile(path.join(root, "docs", "1_0_CONTRACT.md"), "utf8");
+if (!/^Last updated: 2026-05-18$/m.test(contract)) {
+  errors.push("docs/1_0_CONTRACT.md must carry the current 2026-05-18 freshness header.");
+}
 if (!/local-first AI workbench/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must define GoatCitadel 1.0 as a local-first AI workbench.");
 }
@@ -274,10 +320,12 @@ if (!/offline CLI-only/i.test(contract) || !/offline_restore_required/i.test(con
 if (!/contractVerified/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must describe backup verify as reporting contractVerified minimum-set truth.");
 }
-if (!/verify:catalog:parity` is green and executes real runtime-backed operator actions/i.test(contract)) {
+if (!/verify:catalog:parity` is green and executes the runtime-backed operator action classes declared in its parity scenario/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must require catalog-parity runtime action proof.");
 }
-if (!/verify:api:compat` is green and fails on breaking REST route\/schema or realtime event-envelope diffs/i.test(contract)) {
+if (
+  !/verify:api:compat` is green and fails on removed REST routes, removed methods\/statuses, or realtime event-envelope regressions covered by its captured compatibility scenario/i.test(contract)
+) {
   errors.push("docs/1_0_CONTRACT.md must require the REST/SSE additive-compatibility gate.");
 }
 if (!/mesh-core/i.test(contract) || !/targeted service coverage/i.test(contract) || !/full release evidence/i.test(contract)) {
@@ -294,6 +342,12 @@ if (/semantic pre-release versions/i.test(changelog) || /public surface is still
 
 const releaseEvidencePath = path.join(root, "docs", "1_0_RELEASE_EVIDENCE.md");
 const releaseEvidence = await readFile(releaseEvidencePath, "utf8");
+if (!/^Last updated: 2026-05-18$/m.test(releaseEvidence)) {
+  errors.push("docs/1_0_RELEASE_EVIDENCE.md must carry the current 2026-05-18 freshness header.");
+}
+if (!/Permission Profiles and Override Evidence/i.test(releaseEvidence)) {
+  errors.push("docs/1_0_RELEASE_EVIDENCE.md must map Permission Profiles and Local Operator Override evidence.");
+}
 for (const [index, line] of releaseEvidence.split(/\r?\n/).entries()) {
   if (
     /\]\(\.\.\/apps\/mission-control\//.test(line) &&
@@ -346,12 +400,50 @@ if (RELEASE_SURFACE_MANIFEST.length !== 15) {
   errors.push("scripts/verification/lib/release-surface-manifest.mjs must freeze the 15 legacy compatibility release-taxonomy surfaces.");
 }
 
-if (NEXT_RELEASE_SURFACE_MANIFEST.length !== 32) {
-  errors.push("scripts/verification/lib/release-surface-manifest.mjs must freeze the 32 Mission Control Next release-surface routes.");
+const nextRouteModelSource = await readFile(
+  path.join(root, "apps", "mission-control-next", "src", "app", "route-model.ts"),
+  "utf8",
+);
+const canonicalNextReleaseRoutes = deriveMissionControlNextReleaseRoutes(nextRouteModelSource);
+const manifestRouteKeys = new Set(NEXT_RELEASE_SURFACE_MANIFEST.map(nextReleaseRouteKey));
+const canonicalRouteKeys = new Set(canonicalNextReleaseRoutes.map(nextReleaseRouteKey));
+if (NEXT_RELEASE_SURFACE_MANIFEST.length !== canonicalNextReleaseRoutes.length) {
+  errors.push(
+    `scripts/verification/lib/release-surface-manifest.mjs must cover the ${canonicalNextReleaseRoutes.length} canonical Mission Control Next release-surface routes.`,
+  );
+}
+for (const route of canonicalNextReleaseRoutes) {
+  const key = nextReleaseRouteKey(route);
+  if (!manifestRouteKeys.has(key)) {
+    errors.push(
+      `Mission Control Next release-surface manifest is missing canonical route ${route.expectedArea}/${route.expectedSection}.`,
+    );
+  }
+}
+for (const route of NEXT_RELEASE_SURFACE_MANIFEST) {
+  const key = nextReleaseRouteKey(route);
+  if (!canonicalRouteKeys.has(key)) {
+    errors.push(`Mission Control Next release-surface manifest includes non-canonical route ${route.slug} (${key}).`);
+  }
 }
 
 if (NEXT_VISUAL_REGRESSION_MANIFEST.length !== NEXT_RELEASE_SURFACE_MANIFEST.length) {
   errors.push("scripts/verification/lib/release-surface-manifest.mjs must visually cover every Mission Control Next release-surface route.");
+}
+
+for (const route of NEXT_RELEASE_SURFACE_MANIFEST) {
+  if (route.expectedArea && !nextRouteModelSource.includes(`"${route.expectedArea}"`)) {
+    errors.push(`Mission Control Next release-surface route ${route.slug} references unknown area ${route.expectedArea}.`);
+  }
+  if (
+    route.expectedSection &&
+    route.expectedSection !== "root" &&
+    !nextRouteModelSource.includes(`"${route.expectedSection}"`)
+  ) {
+    errors.push(
+      `Mission Control Next release-surface route ${route.slug} references unknown section ${route.expectedSection}.`,
+    );
+  }
 }
 
 for (const route of NEXT_VISUAL_REGRESSION_MANIFEST) {
@@ -405,4 +497,33 @@ function extractRelativeMarkdownLinks(content) {
     links.push(target);
   }
   return links;
+}
+
+function deriveMissionControlNextReleaseRoutes(source) {
+  const coworkSections = extractTypeUnionLiterals(source, "CoworkSection");
+  const librarySections = extractTypeUnionLiterals(source, "LibrarySection");
+  const opsSections = extractTypeUnionLiterals(source, "OpsSection");
+  const settingsSections = extractTypeUnionLiterals(source, "SettingsSection");
+  return [
+    { expectedArea: "chat", expectedSection: "root" },
+    ...coworkSections.map((section) => ({ expectedArea: "cowork", expectedSection: section })),
+    { expectedArea: "code", expectedSection: "root" },
+    { expectedArea: "projects", expectedSection: "root" },
+    ...librarySections.map((section) => ({ expectedArea: "library", expectedSection: section })),
+    ...opsSections.map((section) => ({ expectedArea: "ops", expectedSection: section })),
+    ...settingsSections.map((section) => ({ expectedArea: "settings", expectedSection: section })),
+  ];
+}
+
+function extractTypeUnionLiterals(source, typeName) {
+  const match = source.match(new RegExp(`export type ${typeName} =([\\s\\S]*?);`));
+  if (!match) {
+    errors.push(`apps/mission-control-next/src/app/route-model.ts is missing ${typeName}.`);
+    return [];
+  }
+  return [...match[1].matchAll(/"([^"]+)"/g)].map((item) => item[1]);
+}
+
+function nextReleaseRouteKey(route) {
+  return `${route.expectedArea}/${route.expectedSection ?? "root"}`;
 }

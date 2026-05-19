@@ -25,7 +25,7 @@ The release lane treats these files as the minimum rebuild inputs:
 
 ## Toolchain
 
-- Node `24.x` in GitHub Actions
+- Node `22.x` in GitHub Actions
 - pnpm `10.31.0`
 - Rust stable MSVC for the Tauri desktop host
 - Inno Setup `6.x` for Windows packaging

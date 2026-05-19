@@ -201,6 +201,51 @@ describe("ChatTraceCard", () => {
     expect(text).toContain("Requested openai · gpt-4.1-mini -> Effective glm · glm-5 · primary blocked by remote site");
   });
 
+  it("renders per-turn runtime evidence and provider failure details", async () => {
+    const trace = {
+      ...makeTrace(),
+      completion: {
+        status: "complete",
+        repaired: false,
+        usage: {
+          inputTokens: 1234,
+          outputTokens: 56,
+          cachedInputTokens: 78,
+          costUsd: 0.00123,
+          costSource: "estimated",
+        },
+        latencyMs: 987,
+        providerCallCount: 2,
+      },
+      failure: {
+        failureClass: "unknown",
+        message: "Provider rejected the streamed response.",
+        retryable: true,
+        provider: {
+          code: "rate_limit_exceeded",
+          message: "Quota exceeded.",
+          status: "failed",
+          responseId: "resp-1",
+          type: "rate_limit_error",
+        },
+      },
+    } as unknown as ChatTurnTraceRecord;
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChatTraceCard trace={trace} workspaceId="default" defaultCollapsed={false} />);
+    });
+    const text = collectText(renderer.toJSON()).replace(/\s+/g, " ").trim();
+
+    expect(text).toContain("Provider error: rate_limit_exceeded - Quota exceeded.");
+    expect(text).toContain("Runtime evidence");
+    expect(text).toContain("Input tokens: 1234");
+    expect(text).toContain("Output tokens: 56");
+    expect(text).toContain("Cached input tokens: 78");
+    expect(text).toContain("Cost: $0.001230 (estimated)");
+    expect(text).toContain("Provider latency: 987ms");
+    expect(text).toContain("Provider calls: 2");
+  });
+
   it("toggles from a sparse collapsed trace into default routing and time fallbacks", async () => {
     const sparseTrace = {
       ...makeTrace(),
@@ -237,6 +282,7 @@ describe("ChatTraceCard", () => {
     expect(text).toContain("Fallback tiers attempted: none");
     expect(text).toContain("Requested: not recorded");
     expect(text).toContain("Effective: not recorded");
+    expect(text).not.toContain("Runtime evidence");
   });
 
   it("renders citations, orchestration details, final URLs, and non-retry failures", async () => {

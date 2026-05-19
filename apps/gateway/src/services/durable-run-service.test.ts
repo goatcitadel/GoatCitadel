@@ -530,6 +530,42 @@ describe("DurableRunService", () => {
     },
   );
 
+  it("treats repeated operator cancellation of an already-cancelled durable run as idempotent", () => {
+    const run = {
+      ...createRun("run-already-cancelled", "cancelled"),
+      finishedAt: "2026-03-14T00:00:05.000Z",
+      lastError: "cancelled by operator-1",
+    };
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const publishRealtime = vi.fn();
+    const service = new DurableRunService(
+      createContext(runs, checkpoints, timeline, { publishRealtime }) as unknown as ServiceContext,
+    );
+
+    const secondCancel = service.cancelDurableRun(run.runId, "operator-2");
+
+    expect(secondCancel).toBe(run);
+    expect(runs.get(run.runId)?.version).toBe(run.version);
+    expect(timeline).toEqual([]);
+    expect(publishRealtime).not.toHaveBeenCalled();
+  });
+
+  it("rejects pause attempts for already-cancelled durable runs", () => {
+    const run = {
+      ...createRun("run-cancelled-pause", "cancelled"),
+      finishedAt: "2026-03-14T00:00:05.000Z",
+      lastError: "cancelled by operator-1",
+    };
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const service = new DurableRunService(createContext(runs, [], []) as unknown as ServiceContext);
+
+    expect(() => service.pauseDurableRun(run.runId, "operator-2")).toThrow(
+      "Durable run run-cancelled-pause is already terminal (cancelled)",
+    );
+  });
+
   it("records checkpoint continuation gates and continues workflow execution", async () => {
     const run = createRun("run-checkpoint", "queued", "connector.delivery");
     const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);

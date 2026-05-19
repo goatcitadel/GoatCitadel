@@ -9,6 +9,7 @@ import { resolveUiTarget } from "../../lib/ui-target.mjs";
 import { repoRoot, sanitizeFilePart, spawnVerificationProcess, writeText } from "./shared.mjs";
 
 let gatewayWorkspaceBuildEnsured = false;
+const uiBuildKeys = new Set();
 const WINDOWS_CMD_PATH = "C:\\Windows\\System32\\cmd.exe";
 
 export async function prepareVerificationRuntime(runId) {
@@ -42,7 +43,10 @@ export async function startVerificationStack(context, options = {}) {
     ...options.gatewayEnv,
   };
 
-  const gateway = await startProcess(context, "gateway", [pnpmCommand(), "--dir", repoRoot, "dev:gateway"], gatewayEnv);
+  const gateway =
+    options.gatewayMode === "built"
+      ? await startProcess(context, "gateway", [process.execPath, path.join(repoRoot, "apps", "gateway", "dist", "main.js")], gatewayEnv)
+      : await startProcess(context, "gateway", [pnpmCommand(), "--dir", repoRoot, "dev:gateway"], gatewayEnv);
   let ui;
   let uiPort;
   let uiUrl;
@@ -57,22 +61,42 @@ export async function startVerificationStack(context, options = {}) {
         VITE_GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "false",
         ...options.uiEnv,
       };
+      if (options.uiMode === "preview") {
+        await ensureVerificationUiBuild(context, uiTarget.packageName, uiEnv);
+      }
       ui = await startProcess(
         context,
         "ui",
-        [
-          pnpmCommand(),
-          "--dir",
-          repoRoot,
-          "--filter",
-          uiTarget.packageName,
-          "exec",
-          "vite",
-          "--host",
-          "127.0.0.1",
-          "--port",
-          String(uiPort),
-        ],
+        options.uiMode === "preview"
+          ? [
+              pnpmCommand(),
+              "--dir",
+              repoRoot,
+              "--filter",
+              uiTarget.packageName,
+              "exec",
+              "vite",
+              "preview",
+              "--host",
+              "127.0.0.1",
+              "--port",
+              String(uiPort),
+              "--strictPort",
+            ]
+          : [
+              pnpmCommand(),
+              "--dir",
+              repoRoot,
+              "--filter",
+              uiTarget.packageName,
+              "exec",
+              "vite",
+              "--host",
+              "127.0.0.1",
+              "--port",
+              String(uiPort),
+              "--strictPort",
+            ],
         uiEnv,
       );
       await waitForHttp(uiUrl, `${uiTarget.displayName} UI`, 180000, ui);
@@ -311,17 +335,61 @@ async function ensureGatewayWorkspaceBuild(context) {
   gatewayWorkspaceBuildEnsured = true;
 }
 
+async function ensureVerificationUiBuild(context, packageName, uiEnv) {
+  const buildKey = JSON.stringify({
+    packageName,
+    gatewayUrl: uiEnv.VITE_GATEWAY_URL,
+    visualRegressionMode: uiEnv.VITE_GOATCITADEL_VISUAL_REGRESSION_MODE,
+  });
+  if (uiBuildKeys.has(buildKey)) {
+    return;
+  }
+
+  const logLines = [
+    "verification startup builds the UI before preview mode so visual proof does not run against Vite HMR/watch state.",
+    "",
+    `$ pnpm --dir <repoRoot> --filter ${packageName} build`,
+    "",
+  ];
+  const result = runPnpmSyncWithEnv(["--dir", repoRoot, "--filter", packageName, "build"], uiEnv);
+  logLines.push(
+    result.stdout ?? "",
+    result.stderr ?? "",
+    result.error ? `${result.error.name}: ${result.error.message}` : "",
+  );
+
+  const buildLogPath = path.join(
+    context.artifactRoot,
+    "diagnostics",
+    `ui-build-${sanitizeFilePart(packageName)}.log`,
+  );
+  await writeText(buildLogPath, logLines.join("\n"));
+  if (result.error || result.status !== 0) {
+    throw new Error(`Failed to build verification UI ${packageName}. See ${buildLogPath}`);
+  }
+
+  uiBuildKeys.add(buildKey);
+}
+
 function runPnpmSync(args) {
+  return runPnpmSyncWithEnv(args, process.env);
+}
+
+function runPnpmSyncWithEnv(args, extraEnv) {
+  const env = {
+    ...process.env,
+    ...extraEnv,
+  };
   if (process.platform === "win32") {
     return spawnSync(WINDOWS_CMD_PATH, ["/d", "/s", "/c", pnpmCommand(), ...args], {
       cwd: repoRoot,
-      env: process.env,
+      env,
       encoding: "utf8",
     });
   }
   return spawnSync(pnpmCommand(), args, {
     cwd: repoRoot,
-    env: process.env,
+    env,
     encoding: "utf8",
   });
 }

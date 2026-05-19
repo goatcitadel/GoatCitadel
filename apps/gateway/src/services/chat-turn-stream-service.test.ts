@@ -51,6 +51,18 @@ describe("streamPreparedAgentChatTurn", () => {
 
   it("executes delegated steps through a child session with filtered prompt-lab local tools", async () => {
     const host = createHost();
+    host.resolveToolPolicyContext = vi.fn((input) => ({
+      operatorId: input.operatorId,
+      authActorId: input.authActorId,
+      authActorSource: input.authActorSource,
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+      taskId: input.taskId,
+      runId: input.runId,
+      surface: input.surface,
+      permissionProfileId: input.permissionProfileId,
+      localOperatorOverrideId: input.localOperatorOverrideId,
+    }));
     host.agentSendChatMessage = vi.fn(async () => ({
       sessionId: "delegate-session",
       userMessage: { messageId: "delegate-user" },
@@ -70,6 +82,7 @@ describe("streamPreparedAgentChatTurn", () => {
       routing: { effectiveProviderId: "delegate-provider" },
     })) as never;
     const prepared = createPreparedTurn({ mode: "cowork", normalizationProfile: "prompt_pack_harness" });
+    const abortController = new AbortController();
 
     const result = await executeDelegatedPlanStep(host, prepared, {
       ...createDelegatedStepInput(),
@@ -83,9 +96,30 @@ describe("streamPreparedAgentChatTurn", () => {
           summary: "Planner summary",
         },
       ],
+      operatorId: "operator-1",
+      authActorId: "operator-1",
+      authActorSource: "token",
+      permissionProfileId: "profile-parent",
+      localOperatorOverrideId: "override-parent",
+      signal: abortController.signal,
     } as never);
 
-    const delegatedRequest = vi.mocked(host.agentSendChatMessage).mock.calls[0]?.[1] as { content: string };
+    const delegatedRequest = vi.mocked(host.agentSendChatMessage).mock.calls[0]?.[1] as {
+      content: string;
+      permissionProfileId?: string;
+      localOperatorOverrideId?: string;
+      policyRunId?: string;
+      policyTaskId?: string;
+      parentDelegationStepId?: string;
+    };
+    expect(host.resolveToolPolicyContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        permissionProfileId: "profile-parent",
+        localOperatorOverrideId: "override-parent",
+        taskId: "chat-orchestration:turn-1",
+        runId: "run-1",
+      }),
+    );
     expect(host.createChatSession).toHaveBeenCalledWith(
       expect.objectContaining({
         workspaceId: "default",
@@ -105,6 +139,12 @@ describe("streamPreparedAgentChatTurn", () => {
     expect(delegatedRequest.content).toContain("Prior handoffs");
     expect(delegatedRequest.content).toContain("browser.search");
     expect(delegatedRequest.content).not.toContain("file.find");
+    expect(delegatedRequest.permissionProfileId).toBe("profile-parent");
+    expect(delegatedRequest.localOperatorOverrideId).toBe("override-parent");
+    expect(delegatedRequest.policyRunId).toBe("run-1");
+    expect(delegatedRequest.policyTaskId).toBe("chat-orchestration:turn-1");
+    expect(delegatedRequest.parentDelegationStepId).toBe("run-1:orch-step-synthesis");
+    expect(vi.mocked(host.agentSendChatMessage).mock.calls[0]?.[2]).toEqual({ abortSignal: abortController.signal });
     expect(result).toEqual(
       expect.objectContaining({
         status: "completed",
@@ -211,14 +251,16 @@ describe("streamPreparedAgentChatTurn", () => {
     expect(host.agentSendChatMessage).not.toHaveBeenCalled();
     expect(result).toEqual(
       expect.objectContaining({
-        status: "failed",
+        status: "cancelled",
+        summary: "synthesis cancelled",
         error: "turn-1",
         childSessionId: "delegate-session",
       }),
     );
     expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({
-        event: "orchestration.step.failed_before_result",
+        event: "orchestration.step.cancelled_before_result",
+        runtimeStatus: "cancelled",
         context: expect.objectContaining({
           delegatedDispatchStarted: false,
           delegatedResponseReceived: false,

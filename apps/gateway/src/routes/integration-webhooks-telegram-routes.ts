@@ -161,6 +161,39 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
               actorDisplayName: readTelegramMetadataString(parsed.metadata, "actorDisplayName"),
               content: parsed.content,
               personalityCatalog: resolveRoutePersonalityCatalog(fastify),
+              isActiveRun: () => {
+                const sessionId = resolveTelegramChannelSessionId(connection.config, {
+                  account: parsed.account,
+                  peer: parsed.peer,
+                  room: parsed.room,
+                  threadId: parsed.threadId,
+                });
+                return sessionId ? fastify.services.integrationWebhooks.hasRunningTurn(sessionId) : false;
+              },
+              runChatCommand: async (commandText) => {
+                const sessionId = resolveTelegramChannelSessionId(connection.config, {
+                  account: parsed.account,
+                  peer: parsed.peer,
+                  room: parsed.room,
+                  threadId: parsed.threadId,
+                });
+                if (!sessionId) {
+                  return {
+                    message:
+                      "Channel lookup needs an active Telegram channel session. Send a normal message first or use /new to start one.",
+                  };
+                }
+                const result = await fastify.services.integrationWebhooks.parseChatCommand(sessionId, commandText, {
+                  resolvedBy: `telegram:${parsed.actorId}`,
+                  source: "channel",
+                  channelContext: {
+                    platform: "telegram",
+                    account: parsed.account,
+                    actorId: parsed.actorId,
+                  },
+                });
+                return { message: result.message };
+              },
               cancelActiveSession: async () => {
                 const sessionId = resolveTelegramChannelSessionId(connection.config, {
                   account: parsed.account,

@@ -127,9 +127,7 @@ describe("shared API wrapper tail coverage", () => {
     await expectCall(approvals.resolveApprovalsBulk({ decision: "reject" }), "/api/v1/approvals/bulk-resolve", {
       method: "POST",
     });
-    await expect(apiMocks.request.mock.calls.at(-1)?.[1]?.body).toBe(
-      JSON.stringify({ decision: "reject", resolvedBy: "operator" }),
-    );
+    await expect(apiMocks.request.mock.calls.at(-1)?.[1]?.body).toBe(JSON.stringify({ decision: "reject" }));
     await expectCall(
       approvals.resolveApprovalWithRemoteToken("remote-token", "approve"),
       "/api/v1/approvals/remote-resolve",
@@ -145,9 +143,31 @@ describe("shared API wrapper tail coverage", () => {
       "/api/v1/tools/grants?scope=workspace&scopeRef=workspace+1&limit=7",
     );
     await expectCall(approvals.fetchToolGrants(), "/api/v1/tools/grants?limit=300");
-    await expectCall(approvals.createToolGrant({ toolName: "fs.read" } as never), "/api/v1/tools/grants", {
-      method: "POST",
-    });
+    await expectCall(
+      approvals.fetchEffectivePermissionProfile({ workspaceId: "workspace 1", surface: "code" }),
+      "/api/v1/tools/permission-profiles/effective?workspaceId=workspace+1&surface=code",
+    );
+    await expectCall(approvals.fetchActiveLocalOperatorOverrides(), "/api/v1/tools/local-operator-overrides");
+    await expectCall(
+      approvals.createToolGrant({
+        toolPattern: "fs.read",
+        decision: "allow",
+        scope: "workspace",
+        scopeRef: "workspace-1",
+      }),
+      "/api/v1/tools/grants",
+      {
+        method: "POST",
+      },
+    );
+    await expect(apiMocks.request.mock.calls.at(-1)?.[1]?.body).toBe(
+      JSON.stringify({
+        toolPattern: "fs.read",
+        decision: "allow",
+        scope: "workspace",
+        scopeRef: "workspace-1",
+      }),
+    );
     await expectCall(approvals.revokeToolGrant("grant/1"), "/api/v1/tools/grants/grant%2F1/revoke", {
       method: "POST",
     });

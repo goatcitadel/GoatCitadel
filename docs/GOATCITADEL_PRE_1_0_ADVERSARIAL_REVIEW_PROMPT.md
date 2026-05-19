@@ -1,5 +1,7 @@
 # GoatCitadel Pre-1.0 Adversarial Architecture and Readiness Review
 
+> Historical review prompt. Rebaseline the milestone language and route list against current `main`, `docs/1_0_CONTRACT.md`, and `apps/mission-control-next` before using this as a release-blocking checklist.
+
 You are performing a deep, adversarial, repo-grounded code review of GoatCitadel.
 
 Your job is not to be polite.

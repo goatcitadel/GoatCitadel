@@ -233,6 +233,7 @@ function buildMetadataRecord(input) {
     ],
     buildCommands: [
       "pnpm install --frozen-lockfile",
+      "pnpm package:desktop --target <target>",
       "pnpm package:bundle --target <target>",
       "pnpm package:windows --target <target>",
       "pnpm dlx @cyclonedx/cyclonedx-npm --output-format json --output-file <sbom>",

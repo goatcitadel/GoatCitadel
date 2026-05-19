@@ -21,6 +21,15 @@ export function parseOrchestrationWorkflowPayload(run: DurableRunRecord): Orches
   ) {
     return undefined;
   }
+  if (
+    !isOptionalString(payload.operatorId) ||
+    !isOptionalString(payload.authActorId) ||
+    !isOptionalString(payload.authActorSource) ||
+    !isOptionalString(payload.permissionProfileId) ||
+    !isOptionalString(payload.localOperatorOverrideId)
+  ) {
+    return undefined;
+  }
   return payload as OrchestrationPlanWorkflowPayload;
 }
 
@@ -41,9 +50,18 @@ export function buildDurableMetadata(
       currentWaveId: run.currentWaveId ?? null,
       currentPhaseId: run.currentPhaseId ?? null,
       pendingApprovalPhaseId: run.pendingApprovalPhaseId ?? null,
+      operatorId: run.operatorId ?? null,
+      authActorId: run.authActorId ?? null,
+      authActorSource: run.authActorSource ?? null,
+      permissionProfileId: run.permissionProfileId ?? null,
+      localOperatorOverrideId: run.localOperatorOverrideId ?? null,
       ...overrides,
     },
   };
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
 }
 
 export function buildCheckpointDetails(
@@ -74,6 +92,13 @@ export function buildCheckpointDetails(
       pendingApprovalPhaseId: run.pendingApprovalPhaseId ?? null,
       pendingApprovedBy: run.pendingApprovedBy ?? null,
       pendingCostIncrementUsd: run.pendingCostIncrementUsd ?? null,
+    },
+    policyState: {
+      operatorId: run.operatorId ?? null,
+      authActorId: run.authActorId ?? null,
+      authActorSource: run.authActorSource ?? null,
+      permissionProfileId: run.permissionProfileId ?? null,
+      localOperatorOverrideId: run.localOperatorOverrideId ?? null,
     },
     ...extras,
   };

@@ -105,6 +105,10 @@ vi.mock("./library/MemoryRoutePage", () => ({
   MemoryRoutePage: () => "Memory child route",
 }));
 
+vi.mock("./library/CuratorRoutePage", () => ({
+  CuratorRoutePage: () => "Curator child route",
+}));
+
 vi.mock("./ops/ApprovalsRoutePage", () => ({
   ApprovalsRoutePage: () => "Approvals child route",
 }));
@@ -664,7 +668,12 @@ describe("NativeRoutePages library coverage", () => {
     expect(collectText((await mount("ops", "runtime")).root)).toContain("Runtime child route");
     expect(collectText((await mount("projects", "alpha")).root)).toContain("Projects child route");
     expect(collectText((await mount("settings", "general")).root)).toContain("Settings child route");
-    expect(collectText((await mount("library", "memory")).root)).toContain("Memory child route");
+    const memoryText = collectText((await mount("library", "memory")).root);
+    expect(memoryText).toContain("Memory child route");
+    expect(memoryText).not.toContain("Durable memory posture");
+    const curatorText = collectText((await mount("library", "curator")).root);
+    expect(curatorText).toContain("Curator child route");
+    expect(curatorText).not.toContain("Agents");
   });
 
   it("covers skills, capability browsing, knowledge, files, and artifacts", async () => {
@@ -681,6 +690,7 @@ describe("NativeRoutePages library coverage", () => {
 
     const capabilities = await mount("library", "capabilities");
     expect(collectText(capabilities.root)).toContain("Capability browser");
+    expect(collectText(capabilities.root)).toContain("can inspect or use when callable");
     await click(findButton(capabilities.root, "Degraded"));
     expect(collectText(capabilities.root)).toContain("Review proposal");
     await click(findButton(capabilities.root, "Review proposal"));
@@ -767,7 +777,11 @@ describe("NativeRoutePages library coverage", () => {
     );
 
     await click(findButton(cowork.root, "Move to trash"));
-    expect(routeMocks.deleteTask).toHaveBeenCalledWith("task-planning", { mode: "soft", deletedBy: "operator" });
+    expect(routeMocks.deleteTask).toHaveBeenCalledWith("task-planning", {
+      mode: "soft",
+      deletedBy: "operator",
+      workspaceId: "default",
+    });
 
     await click(findButton(cowork.root, "Open approvals"));
     expect(navigate).toHaveBeenCalledWith({ area: "ops", section: "approvals", theme: "ops" });
@@ -791,7 +805,7 @@ describe("NativeRoutePages library coverage", () => {
     }));
     const trashOnly = await mount("cowork");
     await click(exactButton(trashOnly.root, "Restore"));
-    expect(routeMocks.restoreTask).toHaveBeenCalledWith("task-deleted");
+    expect(routeMocks.restoreTask).toHaveBeenCalledWith("task-deleted", "default");
 
     setupResponses();
     const board = await mount("cowork", "board");

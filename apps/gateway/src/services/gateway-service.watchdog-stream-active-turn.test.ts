@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChatStreamChunk, ChatStreamChunkDraft, ChatTurnTraceRecord } from "@goatcitadel/contracts";
+import {
+  NotFoundError,
+  type ChatStreamChunk,
+  type ChatStreamChunkDraft,
+  type ChatTurnTraceRecord,
+} from "@goatcitadel/contracts";
 import { GatewayService } from "./gateway-service.js";
 import { ChatTurnExecutionRegistry } from "./chat-turn-execution-registry.js";
 
@@ -343,7 +348,11 @@ describe("GatewayService active-turn cancellation facade behavior", () => {
             .fn()
             .mockReturnValueOnce([])
             .mockReturnValueOnce([createTrace({ status: "queued" })])
-            .mockReturnValueOnce([createTrace({ status: "completed" })]),
+            .mockReturnValueOnce([createTrace({ status: "completed" })])
+            .mockReturnValueOnce([]),
+        },
+        chatStreamEvents: {
+          getLatestSequence: vi.fn(() => 0),
         },
       },
       chatTurnExecutionRegistry: new ChatTurnExecutionRegistry(),
@@ -352,6 +361,9 @@ describe("GatewayService active-turn cancellation facade behavior", () => {
     expect(GatewayService.prototype.hasRunningTurn.call(gateway, "session-1")).toBe(false);
     expect(GatewayService.prototype.hasRunningTurn.call(gateway, "session-1")).toBe(true);
     expect(GatewayService.prototype.hasRunningTurn.call(gateway, "session-1")).toBe(false);
+
+    GatewayService.prototype.registerActiveChatTurnStream.call(gateway, "session-1", "turn-stream", "run-stream");
+    expect(GatewayService.prototype.hasRunningTurn.call(gateway, "session-1")).toBe(true);
 
     const controller = GatewayService.prototype.beginActiveChatTurnExecution.call(
       gateway,
@@ -388,15 +400,23 @@ describe("GatewayService active-turn cancellation facade behavior", () => {
     });
     const cancelChatTurn = vi.fn(async () => ({ trace: cancelledTrace }));
     const cancelDurableRun = vi.fn();
+    const getRun = vi
+      .fn()
+      .mockReturnValueOnce({ status: "running" })
+      .mockReturnValueOnce({ status: "cancelled" })
+      .mockReturnValueOnce({ status: "running" });
     const gateway = createGatewayHarness({
+      chatTurnExecutionRegistry: new ChatTurnExecutionRegistry(),
       storage: {
         chatTurnTraces: {
           listBySession: vi
             .fn()
             .mockReturnValueOnce([])
             .mockReturnValueOnce([createTrace({ status: "completed" }), activeTrace])
-            .mockReturnValueOnce([activeTrace])
             .mockReturnValueOnce([activeTrace]),
+        },
+        durableRuns: {
+          getRun,
         },
       },
       chatTurnRuntime: {
@@ -423,17 +443,7 @@ describe("GatewayService active-turn cancellation facade behavior", () => {
       trace: cancelledTrace,
     });
     expect(cancelChatTurn).toHaveBeenCalledWith("session-1", "turn-active", "tester");
-    expect(cancelDurableRun).toHaveBeenCalledWith("runtime-run", "tester");
-
-    cancelDurableRun.mockImplementationOnce(() => {
-      throw new Error("durable offline");
-    });
-    await expect(
-      GatewayService.prototype.cancelLatestActiveChatTurnForSession.call(gateway, "session-1", "tester"),
-    ).resolves.toMatchObject({
-      status: "cancelled",
-      durableCancelled: false,
-    });
+    expect(cancelDurableRun).not.toHaveBeenCalled();
 
     cancelChatTurn.mockRejectedValueOnce(new Error("cancel failed"));
     await expect(
@@ -444,6 +454,82 @@ describe("GatewayService active-turn cancellation facade behavior", () => {
       turnId: "turn-active",
       durableRunId: "trace-run",
       error: "cancel failed",
+    });
+  });
+
+  it("cancels a just-launched active stream before its trace row is visible", async () => {
+    const cancelledTrace = createTrace({
+      turnId: "turn-stream",
+      status: "cancelled",
+      durable: { runId: "run-stream", status: "cancelled" },
+    });
+    const cancelChatTurn = vi.fn(async () => ({ trace: cancelledTrace }));
+    const gateway = createGatewayHarness({
+      chatTurnExecutionRegistry: new ChatTurnExecutionRegistry(),
+      storage: {
+        chatStreamEvents: {
+          getLatestSequence: vi.fn(() => 0),
+        },
+        chatTurnTraces: {
+          listBySession: vi.fn(() => []),
+        },
+        durableRuns: {
+          getRun: vi.fn().mockReturnValueOnce({ status: "running" }).mockReturnValueOnce({ status: "cancelled" }),
+        },
+      },
+      chatTurnRuntime: {
+        cancelChatTurn,
+      },
+    });
+    GatewayService.prototype.registerActiveChatTurnStream.call(gateway, "session-1", "turn-stream", "run-stream");
+
+    await expect(
+      GatewayService.prototype.cancelLatestActiveChatTurnForSession.call(gateway, "session-1", "tester"),
+    ).resolves.toMatchObject({
+      status: "cancelled",
+      sessionId: "session-1",
+      turnId: "turn-stream",
+      durableRunId: "run-stream",
+      durableCancelled: true,
+      trace: cancelledTrace,
+    });
+    expect(cancelChatTurn).toHaveBeenCalledWith("session-1", "turn-stream", "tester");
+  });
+
+  it("reports linked durable runs that were already terminal instead of claiming a fresh durable cancel", async () => {
+    const activeTrace = createTrace({
+      turnId: "turn-active",
+      durable: { runId: "trace-run", status: "running" },
+    });
+    const cancelledTrace = createTrace({
+      turnId: "turn-active",
+      status: "cancelled",
+      durable: { runId: "trace-run", status: "completed" },
+    });
+    const gateway = createGatewayHarness({
+      chatTurnExecutionRegistry: new ChatTurnExecutionRegistry(),
+      storage: {
+        chatTurnTraces: {
+          listBySession: vi.fn(() => [activeTrace]),
+        },
+        durableRuns: {
+          getRun: vi.fn(() => ({ status: "completed" })),
+        },
+      },
+      chatTurnRuntime: {
+        cancelChatTurn: vi.fn(async () => ({ trace: cancelledTrace })),
+      },
+    });
+
+    await expect(
+      GatewayService.prototype.cancelLatestActiveChatTurnForSession.call(gateway, "session-1", "tester"),
+    ).resolves.toMatchObject({
+      status: "cancelled",
+      sessionId: "session-1",
+      turnId: "turn-active",
+      durableRunId: "trace-run",
+      durableCancelled: false,
+      trace: cancelledTrace,
     });
   });
 });
@@ -517,6 +603,110 @@ describe("GatewayService retained stream facade behavior", () => {
       delta: "later",
     });
     expect(purgeBefore).toHaveBeenCalledWith(expect.stringMatching(/T.*Z$/));
+  });
+
+  it("marks active durable streams cancelled even when the trace row is not visible yet", () => {
+    let createdTrace: ChatTurnTraceRecord | undefined;
+    const create = vi.fn((input: Partial<ChatTurnTraceRecord>) => {
+      createdTrace = createTrace({
+        ...input,
+        status: input.status ?? "running",
+      });
+      return createdTrace;
+    });
+    const patch = vi.fn((turnId: string, input: Partial<ChatTurnTraceRecord>) => {
+      if (!createdTrace || createdTrace.turnId !== turnId) {
+        throw new Error(`Missing created trace ${turnId}`);
+      }
+      createdTrace = createTrace({
+        ...createdTrace,
+        ...input,
+        status: input.status ?? createdTrace.status,
+      });
+      return createdTrace;
+    });
+    const gateway = createGatewayHarness({
+      chatTurnExecutionRegistry: new ChatTurnExecutionRegistry(),
+      recordDevDiagnostic: vi.fn(),
+      publishRealtime: vi.fn(),
+      storage: {
+        chatStreamEvents: {
+          getLatestSequence: vi.fn(() => 0),
+        },
+        chatTurnTraces: {
+          get: vi.fn(() => {
+            throw new NotFoundError({ entity: "Chat turn trace", id: "turn-1" });
+          }),
+          create,
+          patch,
+        },
+        chatToolRuns: {
+          listByTurn: vi.fn(() => []),
+        },
+        chatSessionPrefs: {
+          get: vi.fn(() => undefined),
+        },
+        durableRuns: {
+          getRun: vi.fn(() => ({
+            runId: "run-1",
+            workflowKey: "chat.turn.execute",
+            status: "cancelled",
+            version: 2,
+            createdAt: "2026-05-14T00:00:00.000Z",
+            updatedAt: "2026-05-14T00:00:01.000Z",
+            payload: {
+              version: "chat.turn.execute.v1",
+              sessionId: "session-1",
+              turnId: "turn-1",
+              userMessageId: "user-message-1",
+              assistantMessageId: "assistant-reserved-1",
+              branchKind: "append",
+              threadEventType: "chat_thread_turn_appended",
+              request: {
+                content: "hello",
+                mode: "chat",
+                webMode: "auto",
+                memoryMode: "auto",
+                thinkingLevel: "standard",
+              },
+            },
+            metadata: {},
+          })),
+        },
+      },
+    });
+    const active = GatewayService.prototype.registerActiveChatTurnStream.call(gateway, "session-1", "turn-1", "run-1");
+    active.startedAt = "2026-05-14T00:00:00.000Z";
+
+    const trace = GatewayService.prototype.markChatTurnCancelled.call(gateway, "session-1", "turn-1", "tester");
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        turnId: "turn-1",
+        sessionId: "session-1",
+        userMessageId: "user-message-1",
+        status: "running",
+        durable: {
+          runId: "run-1",
+          status: "cancelled",
+        },
+      }),
+    );
+    expect(patch).toHaveBeenCalledWith(
+      "turn-1",
+      expect.objectContaining({
+        status: "cancelled",
+      }),
+    );
+    expect(trace).toMatchObject({
+      turnId: "turn-1",
+      sessionId: "session-1",
+      status: "cancelled",
+      durable: {
+        runId: "run-1",
+        status: "cancelled",
+      },
+    });
   });
 
   it("streams persisted chunks, falls back from mismatched cursors, and envelopes ephemeral chunks", async () => {

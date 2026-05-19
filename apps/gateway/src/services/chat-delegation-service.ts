@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- Chat delegation centralizes run persistence, child sessions, dependency ordering, and synthesis truth. */
 import { randomUUID } from "node:crypto";
 import type {
+  AgenticDiagnosticSignal,
   AgenticSubagentMetadata,
   AgenticTaskContext,
   ChatCitationRecord,
@@ -18,10 +19,14 @@ import type {
   ChatSessionPrefsRecord,
   ChatSessionRecord,
   ChatTurnTraceRecord,
+  SubagentSessionStatus,
   TaskSubagentSession,
+  TaskStatus,
+  ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
 import { chatModeRequiresProjectBinding, ValidationError } from "@goatcitadel/contracts";
 import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
+import type { ChildTimeoutLateSettleEvent } from "./subagent-budget-enforcer.js";
 import {
   buildDelegationFailureGuidance,
   DEFAULT_DELEGATION_ROLES,
@@ -47,6 +52,10 @@ interface ChatDelegationProgressStatusEvent {
 export interface ChatDelegationProgressCallbacks {
   onStatus?: (event: ChatDelegationProgressStatusEvent) => Promise<void> | void;
   onStep?: (step: ChatDelegationStepRecord) => Promise<void> | void;
+}
+
+export interface ChatDelegationRunOptions {
+  abortSignal?: AbortSignal;
 }
 
 interface NormalizedDelegationStep {
@@ -137,7 +146,7 @@ export interface ChatDelegationServiceHost {
       taskId: string,
       input: { deliverableType: "artifact"; title: string; description: string },
     ): unknown;
-    updateTask(taskId: string, patch: { status: "review" | "blocked" }): unknown;
+    updateTask(taskId: string, patch: { status: TaskStatus }): unknown;
     updateTaskAgenticContext(taskId: string, patch: Partial<AgenticTaskContext>): unknown;
     registerTaskSubagent(
       taskId: string,
@@ -145,7 +154,7 @@ export interface ChatDelegationServiceHost {
     ): unknown;
     updateTaskSubagent(
       agentSessionId: string,
-      patch: { status: "completed" | "failed"; endedAt: string; metadata?: AgenticSubagentMetadata },
+      patch: { status: SubagentSessionStatus; endedAt?: string; metadata?: AgenticSubagentMetadata },
     ): unknown;
   };
   getSession(sessionId: string): unknown;
@@ -160,6 +169,18 @@ export interface ChatDelegationServiceHost {
   }): ChatSessionRecord;
   inheritDelegatedSessionToolGrants(parentSessionId: string, childSessionId: string): void;
   updateChatSessionPrefs(sessionId: string, patch: Partial<ChatSessionPrefsRecord>): ChatSessionPrefsRecord;
+  resolveToolPolicyContext?(input: {
+    operatorId?: string;
+    authActorId?: string;
+    authActorSource?: ToolPolicyActorContext["authActorSource"];
+    workspaceId?: string;
+    sessionId?: string;
+    taskId?: string;
+    runId?: string;
+    surface?: ToolPolicyActorContext["surface"];
+    permissionProfileId?: string;
+    localOperatorOverrideId?: string;
+  }): ToolPolicyActorContext;
   agentSendChatMessage(
     sessionId: string,
     input: ChatSendMessageRequest,
@@ -188,6 +209,7 @@ export class ChatDelegationService {
     sessionId: string,
     input: ChatDelegateRequest,
     callbacks?: ChatDelegationProgressCallbacks,
+    options: ChatDelegationRunOptions = {},
   ): Promise<ChatDelegateResponse> {
     const deps = this.deps;
     deps.getSession(sessionId);
@@ -216,6 +238,7 @@ export class ChatDelegationService {
     if (chatModeRequiresProjectBinding(executionMode) && !parentProjectId) {
       throw new ValidationError({ message: "Code delegation requires a project-bound parent session." });
     }
+    throwIfChatDelegationAborted(options.abortSignal);
 
     const runId = randomUUID();
     const maxSpawn = mode === "parallel" ? 4 : 1;
@@ -230,6 +253,7 @@ export class ChatDelegationService {
       agenticContext: {
         boardId: `cowork:${sessionWorkspaceId}`,
         runId,
+        parentRunId: input.policyRunId,
         childRunIds,
         parentSessionId: sessionId,
         surface: executionMode,
@@ -280,6 +304,47 @@ export class ChatDelegationService {
     const inferredParentDepth = resolveInferredParentDepth(deps, sessionId);
     const parentDepth = input.parentSubagentDepth ?? inferredParentDepth;
     const childDepth = computeChildDepth(parentDepth);
+    let inheritedPolicyContext: ToolPolicyActorContext | undefined;
+    try {
+      inheritedPolicyContext = deps.resolveToolPolicyContext?.({
+        operatorId: input.operatorId,
+        authActorId: input.authActorId,
+        authActorSource: input.authActorSource,
+        workspaceId: sessionWorkspaceId,
+        sessionId,
+        taskId: task.taskId,
+        runId,
+        surface: executionMode,
+        permissionProfileId: input.permissionProfileId,
+        localOperatorOverrideId: input.localOperatorOverrideId,
+      });
+    } catch (error) {
+      const finishedAt = new Date().toISOString();
+      const message = formatUnknownError(error);
+      deps.storage.chatDelegationRuns.patch(runId, {
+        status: "failed",
+        stitchedOutput: `FAILED: ${message}`,
+        citations: [],
+        finishedAt,
+      });
+      deps.taskLifecycleService.appendTaskActivity(task.taskId, {
+        activityType: "diagnostic",
+        message: `Delegation failed before dispatch: ${message}`,
+        metadata: { runId, sessionId, surfaceMode: executionMode, error: message },
+      });
+      deps.taskLifecycleService.updateTask(task.taskId, { status: "blocked" });
+      deps.taskLifecycleService.updateTaskAgenticContext(task.taskId, {
+        status: "failed",
+        activeChildCount: 0,
+        failureClass: "other",
+      });
+      await callbacks?.onStatus?.({
+        runId,
+        taskId: task.taskId,
+        message: "Delegation failed before dispatch.",
+      });
+      throw error;
+    }
 
     const executeDelegationStep = async (step: NormalizedDelegationStep): Promise<DelegationStepExecutionResult> => {
       const startedAt = new Date().toISOString();
@@ -294,36 +359,6 @@ export class ChatDelegationService {
       });
       await callbacks?.onStep?.(runningStep);
 
-      const childSession = deps.createChatSession({
-        workspaceId: sessionWorkspaceId,
-        title: `Delegate · ${toTitleCase(step.role)}`,
-        projectId: parentProjectId,
-        mode: executionMode,
-      });
-      deps.inheritDelegatedSessionToolGrants(sessionId, childSession.sessionId);
-      deps.updateChatSessionPrefs(childSession.sessionId, {
-        mode: executionMode,
-        planningMode: "off",
-        providerId,
-        model,
-        webMode: prefs.webMode,
-        memoryMode: prefs.memoryMode,
-        thinkingLevel: prefs.thinkingLevel,
-        speedMode: prefs.speedMode,
-        subagentPolicy: "off",
-        toolAutonomy: prefs.toolAutonomy,
-        orchestrationEnabled: false,
-        orchestrationIntensity: "minimal",
-        orchestrationVisibility: "explicit",
-        orchestrationProviderPreference: prefs.orchestrationProviderPreference,
-        orchestrationReviewDepth: prefs.orchestrationReviewDepth,
-        orchestrationParallelism: "sequential",
-        codeAutoApply: prefs.codeAutoApply,
-        proactiveMode: "off",
-        retrievalMode: prefs.retrievalMode,
-        reflectionMode: "off",
-      });
-      const agentSessionId = childSession.sessionId;
       const childRunId = `${runId}:${step.stepId}`;
       const childMetadataBase: AgenticSubagentMetadata = {
         runId: childRunId,
@@ -335,18 +370,53 @@ export class ChatDelegationService {
         dependsOnStepIds: step.dependsOnStepIds,
         heartbeatAt: startedAt,
       };
-      deps.taskLifecycleService.registerTaskSubagent(task.taskId, {
-        agentSessionId,
-        agentName: step.role,
-        metadata: childMetadataBase,
-      });
-
       const dependencyContext = step.dependsOnStepIds
         .map((dependencyStepId) => completedOutputs.get(dependencyStepId))
         .filter((item): item is { role: string; output: string } => Boolean(item));
+      let registeredAgentSessionId: string | undefined;
+      let childSessionId: string | undefined;
+      let subagentDiagnostics: AgenticDiagnosticSignal[] = [];
 
       try {
+        throwIfChatDelegationAborted(options.abortSignal);
         enforceMaxDepth({ depth: childDepth, maxDepth: subagentDefaults.maxDepth });
+        const childSession = deps.createChatSession({
+          workspaceId: sessionWorkspaceId,
+          title: `Delegate · ${toTitleCase(step.role)}`,
+          projectId: parentProjectId,
+          mode: executionMode,
+        });
+        const agentSessionId = childSession.sessionId;
+        registeredAgentSessionId = agentSessionId;
+        childSessionId = agentSessionId;
+        deps.inheritDelegatedSessionToolGrants(sessionId, agentSessionId);
+        deps.updateChatSessionPrefs(agentSessionId, {
+          mode: executionMode,
+          planningMode: "off",
+          providerId,
+          model,
+          webMode: prefs.webMode,
+          memoryMode: prefs.memoryMode,
+          thinkingLevel: prefs.thinkingLevel,
+          speedMode: prefs.speedMode,
+          subagentPolicy: "off",
+          toolAutonomy: prefs.toolAutonomy,
+          orchestrationEnabled: false,
+          orchestrationIntensity: "minimal",
+          orchestrationVisibility: "explicit",
+          orchestrationProviderPreference: prefs.orchestrationProviderPreference,
+          orchestrationReviewDepth: prefs.orchestrationReviewDepth,
+          orchestrationParallelism: "sequential",
+          codeAutoApply: prefs.codeAutoApply,
+          proactiveMode: "off",
+          retrievalMode: prefs.retrievalMode,
+          reflectionMode: "off",
+        });
+        deps.taskLifecycleService.registerTaskSubagent(task.taskId, {
+          agentSessionId,
+          agentName: step.role,
+          metadata: childMetadataBase,
+        });
         const taskFirstMessage = buildSubagentTaskFirstMessage({
           role: step.role,
           objective,
@@ -354,11 +424,38 @@ export class ChatDelegationService {
           parentDelegationStepId: step.stepId,
           sharedContext: dependencyContext,
         });
-        const response = await runWithChildTimeout({
+        const response = await runWithChildTimeout<ChatSendMessageResponse>({
           timeoutSeconds: subagentDefaults.childTimeoutSeconds,
+          onLateSettle: (event) => {
+            const diagnostic = buildLateChildTimeoutDiagnostic({ event, role: step.role, stepId: step.stepId });
+            subagentDiagnostics = [...subagentDiagnostics, diagnostic];
+            deps.taskLifecycleService.updateTaskSubagent(agentSessionId, {
+              status: "failed",
+              endedAt: diagnostic.createdAt,
+              metadata: {
+                ...childMetadataBase,
+                heartbeatAt: diagnostic.createdAt,
+                failureClass: "timeout",
+                diagnostics: subagentDiagnostics,
+              },
+            });
+            deps.taskLifecycleService.appendTaskActivity(task.taskId, {
+              activityType: "diagnostic",
+              agentId: step.role,
+              message: diagnostic.summary,
+              metadata: buildLateChildTimeoutActivityMetadata({
+                event,
+                runId,
+                childRunId,
+                stepId: step.stepId,
+                childSessionId: agentSessionId,
+                diagnostic,
+              }),
+            });
+          },
           run: async (signal) =>
             deps.agentSendChatMessage(
-              childSession.sessionId,
+              agentSessionId,
               buildDelegatedChatSendRequest({
                 content: taskFirstMessage,
                 parentDelegationStepId: step.stepId,
@@ -372,20 +469,32 @@ export class ChatDelegationService {
                 subagentPolicy: "off",
                 retrievalMode: prefs.retrievalMode ?? "standard",
                 toolAutonomy: prefs.toolAutonomy,
+                operatorId: input.operatorId,
+                authActorId: input.authActorId,
+                authActorSource: input.authActorSource,
+                permissionProfileId: inheritedPolicyContext?.permissionProfileId,
+                localOperatorOverrideId: inheritedPolicyContext?.localOperatorOverrideId,
+                policyRunId: runId,
+                policyTaskId: task.taskId,
               }),
-              { abortSignal: signal },
+              { abortSignal: composeChatDelegationAbortSignal(signal, options.abortSignal) },
             ),
         });
         const traceStatus = response.trace?.status;
         const waitingForApproval = traceStatus === "waiting_for_approval";
         const waitingForUserInput = traceStatus === "waiting_for_user_input";
         const stillActive = traceStatus === "waiting_for_tool";
-        const failed =
-          traceStatus === "failed" ||
-          traceStatus === "cancelled" ||
-          waitingForApproval ||
-          waitingForUserInput ||
-          stillActive;
+        const waiting = waitingForApproval || waitingForUserInput || stillActive;
+        const failed = traceStatus === "failed";
+        const cancelled = traceStatus === "cancelled";
+        const incomplete = failed || cancelled;
+        const stepStatus: ChatDelegationStepRecord["status"] = waiting
+          ? "running"
+          : cancelled
+            ? "cancelled"
+            : failed
+              ? "failed"
+              : "completed";
         const output =
           response.assistantMessage?.content?.trim() ||
           response.trace?.failure?.message?.trim() ||
@@ -396,59 +505,74 @@ export class ChatDelegationService {
               : stillActive
                 ? "Delegate is still waiting on a tool result."
                 : "(delegate returned no output)");
-        const finishedAt = new Date().toISOString();
+        const observedAt = new Date().toISOString();
         const completedStep = deps.storage.chatDelegationSteps.patch(step.stepId, {
-          status: failed ? "failed" : "completed",
+          status: stepStatus,
           providerId: response.trace?.routing?.effectiveProviderId ?? providerId,
           model: response.trace?.model ?? model,
           label: step.role,
           summary: truncateSummaryLine(output, 180),
           output,
-          error: failed ? (response.trace?.failure?.message ?? output) : undefined,
-          failureGuidance: failed ? buildDelegationFailureGuidance(output, step.role) : undefined,
+          error: incomplete ? (response.trace?.failure?.message ?? output) : undefined,
+          failureGuidance: incomplete ? buildDelegationFailureGuidance(output, step.role) : undefined,
           durableRunId: response.trace?.durable?.runId,
-          childSessionId: childSession.sessionId,
+          childSessionId: agentSessionId,
           childTurnId: response.turnId,
           citations: response.citations ?? [],
-          finishedAt,
-          durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
+          ...(waiting
+            ? {}
+            : {
+                finishedAt: observedAt,
+                durationMs: Math.max(0, Date.parse(observedAt) - Date.parse(startedAt)),
+              }),
         });
         await callbacks?.onStep?.(completedStep);
-        const handoffEvidence = !failed
-          ? {
-              summary: output.slice(0, 1000),
-              artifactRefs: [`delegation-step:${step.stepId}`],
-              sourceStepId: step.stepId,
-              createdAt: finishedAt,
-            }
-          : undefined;
+        const handoffEvidence =
+          !incomplete && !waiting
+            ? {
+                summary: output.slice(0, 1000),
+                artifactRefs: [`delegation-step:${step.stepId}`],
+                sourceStepId: step.stepId,
+                createdAt: observedAt,
+              }
+            : undefined;
+        const subagentStatus: SubagentSessionStatus = waiting
+          ? waitingForApproval || waitingForUserInput
+            ? "paused"
+            : "active"
+          : incomplete
+            ? "failed"
+            : "completed";
         deps.taskLifecycleService.updateTaskSubagent(agentSessionId, {
-          status: failed ? "failed" : "completed",
-          endedAt: finishedAt,
+          status: subagentStatus,
+          ...(waiting ? {} : { endedAt: observedAt }),
           metadata: {
             ...childMetadataBase,
-            heartbeatAt: finishedAt,
-            failureClass: failed ? "missing_handoff" : undefined,
+            heartbeatAt: observedAt,
+            failureClass: incomplete ? "missing_handoff" : undefined,
             handoffEvidence,
           },
         });
         deps.taskLifecycleService.appendTaskActivity(task.taskId, {
-          activityType: failed ? "diagnostic" : "handoff",
+          activityType: incomplete ? "diagnostic" : waiting ? "comment" : "handoff",
           agentId: step.role,
-          message: failed
-            ? `${step.role} failed delegation step ${step.index + 1}/${delegationSteps.length}.`
-            : `${step.role} completed delegation step ${step.index + 1}/${delegationSteps.length}.`,
+          message: incomplete
+            ? `${step.role} ${cancelled ? "cancelled" : "failed"} delegation step ${step.index + 1}/${delegationSteps.length}.`
+            : waiting
+              ? `${step.role} is waiting on delegation step ${step.index + 1}/${delegationSteps.length}.`
+              : `${step.role} completed delegation step ${step.index + 1}/${delegationSteps.length}.`,
           metadata: {
             runId,
             childRunId,
             stepId: step.stepId,
-            childSessionId: childSession.sessionId,
+            childSessionId: agentSessionId,
             childTurnId: response.turnId,
             durableRunId: response.trace?.durable?.runId,
+            waitStatus: waiting ? traceStatus : undefined,
             handoffEvidence,
           },
         });
-        if (!failed) {
+        if (!incomplete && !waiting) {
           deps.taskLifecycleService.appendTaskDeliverable(task.taskId, {
             deliverableType: "artifact",
             title: `${toTitleCase(step.role)} step`,
@@ -476,29 +600,32 @@ export class ChatDelegationService {
           output,
           citations: response.citations ?? [],
           trace: completionRouting,
-          completed: !failed,
+          completed: !incomplete && !waiting,
         };
       } catch (error) {
         const finishedAt = new Date().toISOString();
-        const message = (error as Error).message;
+        const message = formatUnknownError(error);
+        const aborted = isChatDelegationAbortError(error, options.abortSignal);
         const isBudgetError = error instanceof SubagentBudgetError;
         const budgetCode = isBudgetError ? error.code : undefined;
         const failedStep = deps.storage.chatDelegationSteps.patch(step.stepId, {
-          status: "failed",
+          status: aborted ? "cancelled" : "failed",
           label: step.role,
           error: message,
-          summary: isBudgetError
-            ? budgetCode === "timeout_exceeded"
-              ? "Child timed out."
-              : "Maximum delegation depth exceeded."
-            : undefined,
+          summary: aborted
+            ? "Child cancelled."
+            : isBudgetError
+              ? budgetCode === "timeout_exceeded"
+                ? "Child timed out."
+                : "Maximum delegation depth exceeded."
+              : undefined,
           failureGuidance: buildDelegationFailureGuidance(message, step.role),
-          childSessionId: childSession.sessionId,
+          ...(childSessionId ? { childSessionId } : {}),
           finishedAt,
           durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
         });
         await callbacks?.onStep?.(failedStep);
-        const budgetDiagnostic = isBudgetError
+        const budgetDiagnostic: AgenticDiagnosticSignal | undefined = isBudgetError
           ? {
               signalId: randomUUID(),
               code: budgetCode as "timeout_exceeded" | "max_depth_exceeded",
@@ -509,25 +636,38 @@ export class ChatDelegationService {
               createdAt: finishedAt,
             }
           : undefined;
-        deps.taskLifecycleService.updateTaskSubagent(agentSessionId, {
-          status: "failed",
-          endedAt: finishedAt,
-          metadata: {
-            ...childMetadataBase,
-            heartbeatAt: finishedAt,
-            failureClass: isBudgetError ? "timeout" : "crash",
-            diagnostics: budgetDiagnostic ? [budgetDiagnostic] : undefined,
-          },
-        });
+        if (budgetDiagnostic) {
+          subagentDiagnostics = [...subagentDiagnostics, budgetDiagnostic];
+        }
+        if (registeredAgentSessionId) {
+          deps.taskLifecycleService.updateTaskSubagent(registeredAgentSessionId, {
+            status: aborted ? "killed" : "failed",
+            endedAt: finishedAt,
+            metadata: {
+              ...childMetadataBase,
+              heartbeatAt: finishedAt,
+              failureClass: aborted
+                ? "other"
+                : isBudgetError
+                  ? budgetCode === "timeout_exceeded"
+                    ? "timeout"
+                    : "spawn_failure"
+                  : "crash",
+              diagnostics: subagentDiagnostics.length > 0 ? subagentDiagnostics : undefined,
+            },
+          });
+        }
         deps.taskLifecycleService.appendTaskActivity(task.taskId, {
           activityType: "diagnostic",
           agentId: step.role,
-          message: `${step.role} failed delegation step ${step.index + 1}/${delegationSteps.length}: ${message}`,
+          message: `${step.role} ${aborted ? "cancelled" : "failed"} delegation step ${step.index + 1}/${delegationSteps.length}: ${message}`,
           metadata: {
             runId,
             childRunId,
             stepId: step.stepId,
+            ...(childSessionId ? { childSessionId } : {}),
             error: message,
+            ...(aborted ? { cancellation: "abort_signal" } : {}),
             ...(isBudgetError ? { diagnosticCode: budgetCode } : {}),
           },
         });
@@ -543,13 +683,26 @@ export class ChatDelegationService {
     for (const stage of stages) {
       const runnableSteps: NormalizedDelegationStep[] = [];
       for (const step of stage) {
-        const failedDependencies = step.dependsOnStepIds.reduce<ChatDelegationStepRecord[]>((out, dependencyStepId) => {
-          const dependency = stepResults.get(dependencyStepId)?.step;
-          if (dependency && dependency.status !== "completed") {
-            out.push(dependency);
-          }
-          return out;
-        }, []);
+        const unresolvedDependencies = step.dependsOnStepIds.reduce<ChatDelegationStepRecord[]>(
+          (out, dependencyStepId) => {
+            const dependency = stepResults.get(dependencyStepId)?.step;
+            if (dependency && dependency.status !== "completed") {
+              out.push(dependency);
+            }
+            return out;
+          },
+          [],
+        );
+        const waitingDependencies = unresolvedDependencies.filter(
+          (dependency) => dependency.status === "running" || dependency.status === "pending",
+        );
+        const failedDependencies = unresolvedDependencies.filter(
+          (dependency) =>
+            dependency.status === "failed" || dependency.status === "skipped" || dependency.status === "cancelled",
+        );
+        if (waitingDependencies.length > 0) {
+          continue;
+        }
         if (failedDependencies.length === 0) {
           runnableSteps.push(step);
           continue;
@@ -563,9 +716,9 @@ export class ChatDelegationService {
           label: step.role,
           index: step.index,
           status: "skipped",
-          error: `Skipped because dependency failed: ${failedDependencyRoles.join(", ")}`,
+          error: `Skipped because dependency did not complete: ${failedDependencyRoles.join(", ")}`,
           failureGuidance: buildDelegationFailureGuidance(
-            `Blocked by dependency failure from ${failedDependencyRoles.join(", ")}`,
+            `Blocked by incomplete dependency from ${failedDependencyRoles.join(", ")}`,
             step.role,
           ),
           startedAt,
@@ -576,7 +729,7 @@ export class ChatDelegationService {
         deps.taskLifecycleService.appendTaskActivity(task.taskId, {
           activityType: "comment",
           agentId: step.role,
-          message: `${step.role} skipped delegation step ${step.index + 1}/${delegationSteps.length} due to failed dependency.`,
+          message: `${step.role} skipped delegation step ${step.index + 1}/${delegationSteps.length} due to incomplete dependency.`,
           metadata: {
             runId,
             stepId: step.stepId,
@@ -603,22 +756,39 @@ export class ChatDelegationService {
       const body =
         step.status === "completed"
           ? (step.output ?? "(delegate returned no output)")
-          : step.status === "skipped"
-            ? `SKIPPED: ${step.error ?? "Dependency did not complete."}`
-            : `FAILED: ${step.error ?? step.output ?? "Delegate failed without an error message."}`;
+          : step.status === "running" || step.status === "pending"
+            ? `WAITING: ${step.output ?? "Delegate is still running."}`
+            : step.status === "cancelled"
+              ? `CANCELLED: ${step.error ?? step.output ?? "Delegate was cancelled."}`
+              : step.status === "skipped"
+                ? `SKIPPED: ${step.error ?? "Dependency did not complete."}`
+                : `FAILED: ${step.error ?? step.output ?? "Delegate failed without an error message."}`;
       return `### ${toTitleCase(step.role)}\n${body}`;
     });
     const stitchedOutput = stitchedSections.join("\n\n").trim();
     const completedSteps = persistedSteps.filter((step) => step.status === "completed").length;
-    const nonCompletedSteps = persistedSteps.length - completedSteps;
+    const activeSteps = persistedSteps.filter((step) => step.status === "running" || step.status === "pending").length;
+    const terminalSteps = persistedSteps.filter(
+      (step) =>
+        step.status === "completed" ||
+        step.status === "failed" ||
+        step.status === "skipped" ||
+        step.status === "cancelled",
+    ).length;
     const status: ChatDelegationRunRecord["status"] =
-      nonCompletedSteps === 0 ? "completed" : completedSteps > 0 ? "partial" : "failed";
+      activeSteps > 0
+        ? "running"
+        : terminalSteps === persistedSteps.length && completedSteps === persistedSteps.length
+          ? "completed"
+          : completedSteps > 0
+            ? "partial"
+            : "failed";
     deps.storage.chatDelegationRuns.patch(runId, {
       status,
       stitchedOutput,
       citations,
       trace,
-      finishedAt,
+      ...(status === "running" ? {} : { finishedAt }),
     });
     deps.taskLifecycleService.appendTaskActivity(task.taskId, {
       activityType: "comment",
@@ -628,34 +798,37 @@ export class ChatDelegationService {
         completedSteps,
         failedSteps: persistedSteps.filter((step) => step.status === "failed").length,
         skippedSteps: persistedSteps.filter((step) => step.status === "skipped").length,
+        cancelledSteps: persistedSteps.filter((step) => step.status === "cancelled").length,
         steps: delegationSteps.length,
       },
     });
     deps.taskLifecycleService.updateTask(task.taskId, {
-      status: completedSteps > 0 && status === "completed" ? "review" : "blocked",
+      status:
+        status === "running" ? "in_progress" : completedSteps > 0 && status === "completed" ? "review" : "blocked",
     });
     deps.taskLifecycleService.updateTaskAgenticContext(task.taskId, {
-      status: status === "completed" ? "completed" : "failed",
-      activeChildCount: 0,
-      failureClass: status === "completed" ? undefined : "missing_handoff",
-      handoffEvidence: stitchedOutput.trim()
-        ? [
-            {
-              summary: stitchedOutput.slice(0, 1000),
-              artifactRefs: persistedSteps
-                .filter((step) => step.status === "completed")
-                .map((step) => `delegation-step:${step.stepId}`),
-              createdAt: finishedAt,
-            },
-          ]
-        : undefined,
+      status: status === "running" ? "running" : status === "completed" ? "completed" : "failed",
+      activeChildCount: activeSteps,
+      failureClass: status === "running" || status === "completed" ? undefined : "missing_handoff",
+      handoffEvidence:
+        status !== "running" && stitchedOutput.trim()
+          ? [
+              {
+                summary: stitchedOutput.slice(0, 1000),
+                artifactRefs: persistedSteps
+                  .filter((step) => step.status === "completed")
+                  .map((step) => `delegation-step:${step.stepId}`),
+                createdAt: finishedAt,
+              },
+            ]
+          : undefined,
     });
 
     deps.extractAndPersistLearnedMemory(sessionId, objective, {
       role: "user",
       sourceRef: runId,
     });
-    if (stitchedOutput.trim()) {
+    if (status === "completed" && stitchedOutput.trim()) {
       deps.extractAndPersistLearnedMemory(sessionId, stitchedOutput, {
         role: "assistant",
         sourceRef: runId,
@@ -670,6 +843,7 @@ export class ChatDelegationService {
     return {
       runId,
       taskId: task.taskId,
+      status,
       steps: persistedSteps,
       stitchedOutput,
       citations,
@@ -680,6 +854,7 @@ export class ChatDelegationService {
   public async *runChatDelegationStream(
     sessionId: string,
     input: ChatDelegateRequest,
+    options: ChatDelegationRunOptions = {},
   ): AsyncGenerator<{
     type: "status" | "step" | "done" | "error";
     runId?: string;
@@ -714,23 +889,28 @@ export class ChatDelegationService {
       notify?.();
     };
 
-    void this.runChatDelegation(sessionId, input, {
-      onStatus: async (event) => {
-        push({
-          type: "status",
-          runId: event.runId,
-          taskId: event.taskId,
-          message: event.message,
-        });
+    void this.runChatDelegation(
+      sessionId,
+      input,
+      {
+        onStatus: async (event) => {
+          push({
+            type: "status",
+            runId: event.runId,
+            taskId: event.taskId,
+            message: event.message,
+          });
+        },
+        onStep: async (step) => {
+          push({
+            type: "step",
+            runId: step.runId,
+            step,
+          });
+        },
       },
-      onStep: async (step) => {
-        push({
-          type: "step",
-          runId: step.runId,
-          step,
-        });
-      },
-    })
+      options,
+    )
       .then((result) => {
         push({
           type: "done",
@@ -817,20 +997,36 @@ export class ChatDelegationService {
         return this.runChatDelegation(sessionId, {
           objective: objectiveFromSuggestion || input.objective,
           roles: rolesFromSuggestion.length > 0 ? rolesFromSuggestion : input.roles,
-          mode: "sequential",
+          mode: input.mode ?? "sequential",
           providerId: input.providerId,
           model: input.model,
           surfaceMode: input.surfaceMode,
+          steps: input.steps,
+          operatorId: input.operatorId,
+          authActorId: input.authActorId,
+          authActorSource: input.authActorSource,
+          permissionProfileId: input.permissionProfileId,
+          localOperatorOverrideId: input.localOperatorOverrideId,
+          policyRunId: input.policyRunId,
+          policyTaskId: input.policyTaskId,
         });
       }
     }
     return this.runChatDelegation(sessionId, {
       objective: input.objective,
       roles: input.roles,
-      mode: "sequential",
+      mode: input.mode ?? "sequential",
       providerId: input.providerId,
       model: input.model,
       surfaceMode: input.surfaceMode,
+      steps: input.steps,
+      operatorId: input.operatorId,
+      authActorId: input.authActorId,
+      authActorSource: input.authActorSource,
+      permissionProfileId: input.permissionProfileId,
+      localOperatorOverrideId: input.localOperatorOverrideId,
+      policyRunId: input.policyRunId,
+      policyTaskId: input.policyTaskId,
     });
   }
 
@@ -974,6 +1170,32 @@ function buildDelegationStages(steps: readonly NormalizedDelegationStep[]): Norm
   return stages;
 }
 
+function composeChatDelegationAbortSignal(childSignal: AbortSignal, parentSignal?: AbortSignal): AbortSignal {
+  if (!parentSignal) {
+    return childSignal;
+  }
+  return AbortSignal.any([childSignal, parentSignal]);
+}
+
+function throwIfChatDelegationAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  if (signal.reason instanceof Error) {
+    throw signal.reason;
+  }
+  const error = new Error("Chat delegation cancelled.");
+  error.name = "AbortError";
+  throw error;
+}
+
+function isChatDelegationAbortError(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) {
+    return true;
+  }
+  return error instanceof Error && error.name === "AbortError";
+}
+
 function dedupeStrings(values: readonly string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -1028,6 +1250,65 @@ export function buildSubagentTaskFirstMessage(input: BuildSubagentTaskFirstMessa
   ].join("\n");
 }
 
+function buildLateChildTimeoutDiagnostic(input: {
+  event: ChildTimeoutLateSettleEvent<ChatSendMessageResponse>;
+  role: string;
+  stepId: string;
+}): AgenticDiagnosticSignal {
+  const roleLabel = toTitleCase(input.role);
+  const createdAt = new Date().toISOString();
+  if (input.event.status === "completed") {
+    return {
+      signalId: randomUUID(),
+      code: "child_timeout",
+      severity: "warning",
+      title: "Subagent completed after timeout",
+      summary: `${roleLabel} completed after its timeout; recorded as diagnostics only and ignored as deliverable truth.`,
+      evidenceRef: `delegation-step:${input.stepId}`,
+      createdAt,
+    };
+  }
+  return {
+    signalId: randomUUID(),
+    code: "child_timeout",
+    severity: "warning",
+    title: "Subagent failed after timeout",
+    summary: `${roleLabel} failed after its timeout: ${formatUnknownError(input.event.error)}`,
+    evidenceRef: `delegation-step:${input.stepId}`,
+    createdAt,
+  };
+}
+
+function buildLateChildTimeoutActivityMetadata(input: {
+  event: ChildTimeoutLateSettleEvent<ChatSendMessageResponse>;
+  runId: string;
+  childRunId: string;
+  stepId: string;
+  childSessionId: string;
+  diagnostic: AgenticDiagnosticSignal;
+}): Record<string, unknown> {
+  const metadata: Record<string, unknown> = {
+    runId: input.runId,
+    childRunId: input.childRunId,
+    stepId: input.stepId,
+    childSessionId: input.childSessionId,
+    diagnosticCode: input.diagnostic.code,
+    diagnosticSignalId: input.diagnostic.signalId,
+    lateStatus: input.event.status,
+    elapsedMs: input.event.elapsedMs,
+    ignoredAsDeliverableTruth: true,
+  };
+  if (input.event.status === "completed") {
+    metadata.childTurnId = input.event.value.turnId;
+    metadata.durableRunId = input.event.value.trace?.durable?.runId;
+    metadata.citationCount = input.event.value.citations?.length ?? 0;
+    metadata.outputPreview = input.event.value.assistantMessage?.content?.slice(0, 1000);
+    return metadata;
+  }
+  metadata.error = formatUnknownError(input.event.error);
+  return metadata;
+}
+
 async function mapWithConcurrency<TInput, TOutput>(
   items: readonly TInput[],
   concurrency: number,
@@ -1058,6 +1339,13 @@ function safeJsonParse<T>(raw: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function formatUnknownError(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return String(error);
 }
 
 /**

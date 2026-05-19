@@ -253,6 +253,7 @@ describe("useChatDelegationPolicyActions loop 24 behavior", () => {
       expect(apiMocks.triggerChatProactive).toHaveBeenCalledWith("session-1", {
         source: "manual",
         reason: "Operator triggered from chat workspace.",
+        surface: "code",
       });
       expect(latest?.proactiveRuns).toHaveLength(1);
       expect(latest?.notices.at(-1)?.content).toBe("Proactive run completed: No action needed.");

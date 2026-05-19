@@ -574,15 +574,6 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
         );
       case "notifications": {
         const items = [
-          ...(data.dashboard?.pendingApprovals
-            ? [
-                {
-                  title: "Approvals need review",
-                  meta: `${data.dashboard.pendingApprovals} pending`,
-                  body: "Risky or approval-gated work is waiting for an operator decision.",
-                },
-              ]
-            : []),
           ...(data.sourceStatus.health.status === "ok" && !data.health?.daemonStatus.running
             ? [
                 {
@@ -593,7 +584,7 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
               ]
             : []),
           ...(data.timeline?.events.items ?? [])
-            .filter((item) => /error|failed|repair|approval|runtime/i.test(item.eventType))
+            .filter((item) => /error|failed|repair|runtime/i.test(item.eventType) && !/approval/i.test(item.eventType))
             .slice(0, 10)
             .map((item) => ({
               title: item.eventType,
@@ -908,7 +899,7 @@ export function descriptionForOpsSection(section: NonNullable<AppRoute["section"
     case "improvement":
       return "Replay and improvement signals that stay visible to the operator.";
     case "notifications":
-      return "Operator-facing runtime issues, approvals, and repair opportunities.";
+      return "Operator-facing runtime issues and repair opportunities.";
     case "costs":
       return "Spend coverage, QMD efficiency, and current usage posture.";
     case "runtime":

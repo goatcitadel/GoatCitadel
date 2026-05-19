@@ -268,7 +268,18 @@ describe("ChatProactiveService", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-04T19:00:00.000Z"));
     try {
-      const harness = createHarness();
+      const resolveToolPolicyContext = vi.fn(
+        (input: Parameters<NonNullable<ChatProactiveServiceCallbacks["resolveToolPolicyContext"]>>[0]) => ({
+          ...input,
+          permissionProfileId: input.permissionProfileId ?? "safe",
+          localOperatorOverrideId: input.localOperatorOverrideId,
+        }),
+      );
+      const harness = createHarness({
+        callbacks: {
+          resolveToolPolicyContext,
+        },
+      });
       const { service, durableRunService, invokeTool, state, publishRealtime } = harness;
       const planSpy = vi.spyOn(
         service as unknown as { planProactiveActions: (sessionId: string) => Promise<unknown> },
@@ -309,7 +320,14 @@ describe("ChatProactiveService", () => {
         } satisfies ToolInvokeResult;
       });
 
-      const started = await service.triggerChatSessionProactive(state.session.sessionId, { source: "manual" });
+      const started = await service.triggerChatSessionProactive(state.session.sessionId, {
+        source: "manual",
+        operatorId: "operator-1",
+        authActorId: "operator-1",
+        authActorSource: "token",
+        permissionProfileId: "profile-1",
+        localOperatorOverrideId: "override-1",
+      });
       const parentRunId = started.linkedDurableRunId!;
       await service.executeDurableProactiveTickRun(state.durableRuns.get(parentRunId)!);
 
@@ -323,8 +341,24 @@ describe("ChatProactiveService", () => {
 
       expect(blockedRun.status).toBe("blocked");
       expect(blockedRun.stopReason).toBe("approval_block");
+      expect(blockedRun.resumeMetadata).toMatchObject({
+        operatorId: "operator-1",
+        authActorId: "operator-1",
+        authActorSource: "token",
+        permissionProfileId: "profile-1",
+        localOperatorOverrideId: "override-1",
+      });
       expect(blockedActions.map((action) => action.status)).toEqual(["executed", "blocked"]);
       expect(invokeTool).toHaveBeenCalledTimes(2);
+      expect(resolveToolPolicyContext).toHaveBeenCalledWith(
+        expect.objectContaining({
+          operatorId: "operator-1",
+          authActorId: "operator-1",
+          authActorSource: "token",
+          permissionProfileId: "profile-1",
+          localOperatorOverrideId: "override-1",
+        }),
+      );
       expect(publishRealtime).toHaveBeenCalledWith(
         "proactive_tick_started",
         "chat",
@@ -422,7 +456,15 @@ describe("ChatProactiveService", () => {
 
       expect(completedRun.status).toBe("executed");
       expect(completedRun.stopReason).toBe("completed");
-      expect(completedRun.resumeMetadata).toMatchObject({ resumedFromApproval: true, approvalId });
+      expect(completedRun.resumeMetadata).toMatchObject({
+        operatorId: "operator-1",
+        authActorId: "operator-1",
+        authActorSource: "token",
+        permissionProfileId: "profile-1",
+        localOperatorOverrideId: "override-1",
+        resumedFromApproval: true,
+        approvalId,
+      });
       expect(completedActions.map((action) => action.actionId)).toEqual([firstActionId, secondActionId]);
       expect(completedActions.map((action) => action.status)).toEqual(["executed", "executed"]);
       expect(completedActions[0]?.result).toEqual({ ok: true, step: 1 });

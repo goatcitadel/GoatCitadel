@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { ValidationError } from "@goatcitadel/contracts";
 import { tasksRoutes } from "./tasks.js";
 
 describe("tasks routes", () => {
@@ -84,10 +85,14 @@ describe("tasks routes", () => {
     });
 
     expect(response.statusCode).toBe(201);
-    expect(appendTaskActivity).toHaveBeenCalledWith("task-1", {
-      activityType: "comment",
-      message: "Moved task ownership out of the gateway.",
-    });
+    expect(appendTaskActivity).toHaveBeenCalledWith(
+      "task-1",
+      {
+        activityType: "comment",
+        message: "Moved task ownership out of the gateway.",
+      },
+      { workspaceId: undefined },
+    );
     expect(response.json()).toMatchObject({
       activityId: "activity-1",
       taskId: "task-1",
@@ -192,13 +197,17 @@ describe("tasks routes", () => {
 
     expect(created.statusCode).toBe(201);
     expect(created.json()).toMatchObject({ taskId: "task-1", title: "Runtime validation" });
-    expect(updateTask).toHaveBeenCalledWith("task-1", {
-      title: "Runtime validation updated",
-      assignedAgentId: null,
-    });
+    expect(updateTask).toHaveBeenCalledWith(
+      "task-1",
+      {
+        title: "Runtime validation updated",
+        assignedAgentId: null,
+      },
+      { workspaceId: undefined },
+    );
     expect(updated.json()).toMatchObject({ taskId: "task-1", title: "Runtime validation updated" });
     expect(softDeleted.json()).toEqual({ deleted: true, taskId: "task-1", mode: "soft" });
-    expect(softDeleteTask).toHaveBeenCalledWith("task-1", "operator", "cleanup");
+    expect(softDeleteTask).toHaveBeenCalledWith("task-1", "operator", "cleanup", { workspaceId: undefined });
     expect(restored.json()).toEqual({ restored: true, taskId: "task-1" });
     expect(hardDeleted.json()).toEqual({ deleted: true, taskId: "task-1", mode: "hard" });
   });
@@ -269,13 +278,14 @@ describe("tasks routes", () => {
       method: "GET",
       url: "/api/v1/agentic/runs?workspaceId=default&status=running&surface=code&limit=25",
     });
-    const tree = await app.inject({ method: "GET", url: "/api/v1/agentic/runs/run-1/tree" });
+    const tree = await app.inject({ method: "GET", url: "/api/v1/agentic/runs/run-1/tree?workspaceId=default" });
     const control = await app.inject({
       method: "POST",
-      url: "/api/v1/agentic/runs/run-1/control",
+      url: "/api/v1/agentic/runs/run-1/control?workspaceId=default",
       payload: {
         action: "steer",
         instruction: "stay scoped",
+        actorId: "spoofed-client",
       },
     });
     const diagnostic = await app.inject({
@@ -309,7 +319,11 @@ describe("tasks routes", () => {
       limit: 25,
     });
     expect(tree.json()).toEqual({ runId: "run-1", children: [] });
+    expect(getAgenticRunTree).toHaveBeenCalledWith("run-1", { workspaceId: "default" });
     expect(control.json()).toMatchObject({ accepted: true, action: "steer", instruction: "stay scoped" });
+    expect(invokeAgenticControl).toHaveBeenCalledWith("run-1", expect.objectContaining({ actorId: "operator-test" }), {
+      workspaceId: "default",
+    });
     expect(diagnostic.statusCode).toBe(201);
     expect(timeoutDiagnostic.statusCode).toBe(201);
     expect(appendTaskDiagnostic).toHaveBeenCalledWith(
@@ -318,6 +332,7 @@ describe("tasks routes", () => {
         code: "missing_claimed_test",
         severity: "warning",
       }),
+      { workspaceId: undefined },
     );
     expect(appendTaskDiagnostic).toHaveBeenCalledWith(
       "task-1",
@@ -325,7 +340,28 @@ describe("tasks routes", () => {
         code: "timeout_exceeded",
         severity: "critical",
       }),
+      { workspaceId: undefined },
     );
+  });
+
+  it("maps invalid agentic run list workspace errors through the route error handler", async () => {
+    const listAgenticRuns = vi.fn(() => {
+      throw new ValidationError({ field: "workspaceId", message: "workspaceId contains unsupported characters" });
+    });
+
+    app = buildApp({ listAgenticRuns });
+    await app.register(tasksRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/agentic/runs?workspaceId=bad%2Fworkspace",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: "workspaceId contains unsupported characters",
+      code: "FIELD_INVALID",
+    });
   });
 
   it("emits a distress signal through the task route service", async () => {
@@ -353,6 +389,7 @@ describe("tasks routes", () => {
     expect(emitDistressSignal).toHaveBeenCalledWith(
       "task-1",
       expect.objectContaining({ code: "worker_crash", severity: "critical" }),
+      { workspaceId: undefined },
     );
     expect(response.json()).toMatchObject({
       distressSignals: [expect.objectContaining({ code: "worker_crash" })],
@@ -381,11 +418,18 @@ describe("tasks routes", () => {
     const response = await app.inject({
       method: "DELETE",
       url: "/api/v1/tasks/task-1/distress/signal-1",
-      payload: { resolvedBy: "operator" },
+      payload: { resolvedBy: "spoofed-client" },
     });
 
     expect(response.statusCode).toBe(200);
-    expect(resolveDistressSignal).toHaveBeenCalledWith("task-1", "signal-1", { resolvedBy: "operator" });
+    expect(resolveDistressSignal).toHaveBeenCalledWith(
+      "task-1",
+      "signal-1",
+      { resolvedBy: "operator-test" },
+      {
+        workspaceId: undefined,
+      },
+    );
     expect(response.json()).toMatchObject({ taskId: "task-1", distressSignals: [] });
   });
 
@@ -405,7 +449,7 @@ describe("tasks routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(setRetryBudget).toHaveBeenCalledWith("task-1", 3);
+    expect(setRetryBudget).toHaveBeenCalledWith("task-1", 3, { workspaceId: undefined });
     expect(response.json()).toMatchObject({ retryBudget: { maxRetries: 3 } });
   });
 
@@ -424,9 +468,52 @@ describe("tasks routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(verifyTaskArtifacts).toHaveBeenCalledWith("task-1", [
-      expect.objectContaining({ kind: "file", value: "dist/output.js" }),
-    ]);
+    expect(verifyTaskArtifacts).toHaveBeenCalledWith(
+      "task-1",
+      [expect.objectContaining({ kind: "file", value: "dist/output.js" })],
+      { workspaceId: undefined },
+    );
+  });
+
+  it("passes workspace expectations to direct task routes and caps artifact batches", async () => {
+    const getTask = vi.fn(() => ({ taskId: "task-1", workspaceId: "workspace-a" }));
+    const verifyTaskArtifacts = vi.fn(() => Promise.resolve({ taskId: "task-1", workspaceId: "workspace-a" }));
+
+    app = buildApp({ getTask, verifyTaskArtifacts });
+    await app.register(tasksRoutes);
+
+    const task = await app.inject({
+      method: "GET",
+      url: "/api/v1/tasks/task-1?workspaceId=workspace-a",
+    });
+    const verified = await app.inject({
+      method: "POST",
+      url: "/api/v1/tasks/task-1/verify-artifacts?workspaceId=workspace-a",
+      payload: {
+        claims: [{ kind: "file", value: "dist/output.js" }],
+      },
+    });
+    const tooManyClaims = await app.inject({
+      method: "POST",
+      url: "/api/v1/tasks/task-1/verify-artifacts?workspaceId=workspace-a",
+      payload: {
+        claims: Array.from({ length: 26 }, (_value, index) => ({
+          kind: "file",
+          value: `dist/output-${index}.js`,
+        })),
+      },
+    });
+
+    expect(task.statusCode).toBe(200);
+    expect(verified.statusCode).toBe(200);
+    expect(tooManyClaims.statusCode).toBe(400);
+    expect(getTask).toHaveBeenCalledWith("task-1", { workspaceId: "workspace-a" });
+    expect(verifyTaskArtifacts).toHaveBeenCalledWith(
+      "task-1",
+      [expect.objectContaining({ kind: "file", value: "dist/output.js" })],
+      { workspaceId: "workspace-a" },
+    );
+    expect(verifyTaskArtifacts).toHaveBeenCalledTimes(1);
   });
 
   it("bulk updates tasks via reassign action", async () => {
@@ -449,11 +536,14 @@ describe("tasks routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(bulkUpdateTasks).toHaveBeenCalledWith({
-      action: "reassign",
-      taskIds: ["task-1", "task-2"],
-      assignedAgentId: "agent-2",
-    });
+    expect(bulkUpdateTasks).toHaveBeenCalledWith(
+      {
+        action: "reassign",
+        taskIds: ["task-1", "task-2"],
+        assignedAgentId: "agent-2",
+      },
+      { workspaceId: undefined },
+    );
     expect(response.json()).toMatchObject({
       tasks: [expect.objectContaining({ taskId: "task-1" }), expect.objectContaining({ taskId: "task-2" })],
     });
@@ -496,6 +586,9 @@ describe("tasks routes", () => {
 
 function buildApp(taskOverrides: Record<string, unknown>): FastifyInstance {
   const next = Fastify();
+  next.decorate("requireOperatorAuth", async () => undefined);
+  next.decorateRequest("authActorId", "operator-test");
+  next.decorateRequest("authActorSource", "loopback");
   next.decorate("services", {
     tasks: {
       appendTaskActivity: vi.fn(),

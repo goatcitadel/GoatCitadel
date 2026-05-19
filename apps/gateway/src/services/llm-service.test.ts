@@ -4,6 +4,11 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { LlmConfigFile } from "@goatcitadel/contracts";
 import { Agent, ProxyAgent } from "undici";
+import {
+  absorbCompletionStreamChunk,
+  buildCompletionFromAggregate,
+  createCompletionStreamAggregate,
+} from "./chat-agent-completion-adapters.js";
 import { LlmService } from "./llm-service.js";
 import { SecretStoreService, SecretStoreUnavailableError } from "./secret-store-service.js";
 
@@ -1587,6 +1592,145 @@ describe("LlmService", () => {
     ]);
   });
 
+  it("keeps streamed OpenAI Responses function calls on distinct aggregate indexes", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "gpt-5.4-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(
+        [
+          'data: {"type":"response.output_item.done","item":{"id":"item_alpha","type":"function_call","call_id":"call_alpha","name":"lookup_alpha","arguments":"{\\"alpha\\":1}"}}',
+          "",
+          'data: {"type":"response.output_text.delta","delta":"checking","response_id":"resp_stream_tools"}',
+          "",
+          'data: {"type":"response.output_item.done","item":{"id":"item_beta","type":"function_call","call_id":"call_beta","name":"lookup_beta","arguments":"{\\"beta\\":2}"}}',
+          "",
+          'data: {"type":"response.completed","response":{"id":"resp_stream_tools","model":"gpt-5.4-mini","output":[]}}',
+          "",
+          "data: [DONE]",
+          "",
+        ].join("\n"),
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      const aggregate = createCompletionStreamAggregate();
+      for await (const chunk of service.chatCompletionsStream({
+        providerId: "openai",
+        model: "gpt-5.4-mini",
+        messages: [{ role: "user", content: "Call both tools." }],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "lookup_alpha",
+              description: "Lookup alpha.",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+          {
+            type: "function",
+            function: {
+              name: "lookup_beta",
+              description: "Lookup beta.",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+      })) {
+        absorbCompletionStreamChunk(aggregate, chunk);
+      }
+
+      const completion = buildCompletionFromAggregate(aggregate);
+      const toolCalls =
+        ((completion.choices?.[0]?.message as Record<string, unknown> | undefined)?.tool_calls as
+          | Array<{ id: string; function: { name: string; arguments: string } }>
+          | undefined) ?? [];
+
+      expect(toolCalls).toHaveLength(2);
+      expect(toolCalls.map((call) => call.id)).toEqual(["call_alpha", "call_beta"]);
+      expect(toolCalls.map((call) => call.function.name)).toEqual(["lookup_alpha", "lookup_beta"]);
+      expect(toolCalls.map((call) => call.function.arguments)).toEqual(['{"alpha":1}', '{"beta":2}']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("preserves provider details from OpenAI Responses stream failures", async () => {
+    const config: LlmConfigFile = {
+      activeProviderId: "openai",
+      providers: [
+        {
+          providerId: "openai",
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiStyle: "openai-responses",
+          defaultModel: "gpt-5.4-mini",
+        },
+      ],
+    };
+
+    const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(
+        [
+          'data: {"type":"response.failed","response":{"id":"resp_failed_1","status":"failed","error":{"code":"invalid_request_error","type":"invalid_request_error","message":"Unsupported service_tier: auto"}}}',
+          "",
+          "data: [DONE]",
+          "",
+        ].join("\n"),
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    try {
+      let caught: unknown;
+      try {
+        for await (const _chunk of service.chatCompletionsStream({
+          providerId: "openai",
+          model: "gpt-5.4-mini",
+          messages: [{ role: "user", content: "hello" }],
+        })) {
+          // consume stream
+        }
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toContain("Unsupported service_tier: auto");
+      expect((caught as Error & { providerFailure?: Record<string, unknown> }).providerFailure).toMatchObject({
+        code: "invalid_request_error",
+        message: "Unsupported service_tier: auto",
+        status: "failed",
+        responseId: "resp_failed_1",
+        type: "invalid_request_error",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("encodes assistant conversation history as output_text for OpenAI Responses payloads", async () => {
     const config: LlmConfigFile = {
       activeProviderId: "openai",
@@ -2413,6 +2557,7 @@ describe("LlmService", () => {
       });
 
       expect(response.usage?.cost_usd).toBe(0.00114);
+      expect(response.usage?.cost_source).toBe("estimated");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -2893,7 +3038,14 @@ describe("LlmService", () => {
     });
   });
 
-  it("normalizes legacy headers into canonical request headers on export", () => {
+  // SECURITY (codex finding #15): `exportConfigFile` is called by the GET
+  // /api/v1/llm/config endpoint, which is reachable to device/companion
+  // tokens. Previously the export included `provider.request.headers`,
+  // which can hold `Authorization`/`X-API-Key` values. The export must
+  // now strip headers entirely. The legacy normalisation still merges
+  // `headers` into `request.headers` internally, but the export must
+  // hide both.
+  it("scrubs legacy and canonical headers from exported provider config (codex #15)", () => {
     const config: LlmConfigFile = {
       activeProviderId: "openai",
       providers: [
@@ -2903,9 +3055,9 @@ describe("LlmService", () => {
           baseUrl: "https://api.openai.com/v1",
           apiStyle: "openai-responses",
           defaultModel: "gpt-5.4-mini",
-          headers: { "X-Legacy": "1" },
+          headers: { "X-Legacy": "1", Authorization: "Bearer secret-legacy-bearer" },
           request: {
-            headers: { "X-Canonical": "1" },
+            headers: { "X-Canonical": "1", Authorization: "Bearer secret-canonical-bearer" },
           },
         },
       ],
@@ -2914,11 +3066,13 @@ describe("LlmService", () => {
     const service = new LlmService(config, process.env, { secretStore: createNoopSecretStore() });
     const exported = service.exportConfigFile();
 
-    expect(exported.providers[0]?.request?.headers).toEqual({
-      "X-Legacy": "1",
-      "X-Canonical": "1",
-    });
+    expect(exported.providers[0]?.request?.headers).toBeUndefined();
     expect(exported.providers[0]?.headers).toBeUndefined();
+    // Defence in depth — the exported JSON must not contain either bearer
+    // value as a substring, even via some unexpected pass-through field.
+    const serialized = JSON.stringify(exported);
+    expect(serialized).not.toContain("secret-legacy-bearer");
+    expect(serialized).not.toContain("secret-canonical-bearer");
   });
 
   it("keeps vendor-compatible providers on chat completions even when configured as openai-responses", () => {

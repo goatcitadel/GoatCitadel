@@ -828,10 +828,12 @@ describe("SettingsNativePage broad native sections", () => {
     expect(generalText).toContain("No active provider");
 
     const quickRouteButtons = buttons(general.root, "Open");
-    expect(quickRouteButtons).toHaveLength(13);
+    expect(quickRouteButtons).toHaveLength(16);
     for (const button of quickRouteButtons) {
       await click(button);
     }
+    expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "onboarding", theme: "ops" });
+    expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "budget", theme: "ops" });
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "providers", theme: "ops" });
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "personalities", theme: "ops" });
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "runtime", theme: "ops" });
@@ -840,6 +842,7 @@ describe("SettingsNativePage broad native sections", () => {
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "channels", theme: "ops" });
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "mcp", theme: "ops" });
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "tools", theme: "ops" });
+    expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "permissions", theme: "ops" });
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "addons", theme: "ops" });
 
     navigate.mockClear();
@@ -1043,7 +1046,15 @@ describe("SettingsNativePage broad native sections", () => {
     await change(tools.root.findAllByType("input").find((input) => input.props.value === "shell.run")!, "shell.exec");
     await change(tools.root.findAllByType("select").find((select) => select.props.value === "allow")!, "deny");
     await change(tools.root.findAllByType("select").find((select) => select.props.value === "workspace")!, "session");
-    await change(tools.root.findAllByType("input").find((input) => input.props.value === "default")!, "session-1");
+    await change(
+      tools.root
+        .findAllByType("input")
+        .find(
+          (input) =>
+            input.props.className === "mc-next-settings-input" && input.props.value === "" && !input.props.disabled,
+        )!,
+      "session-1",
+    );
     await change(tools.root.findAllByType("select").find((select) => select.props.value === "persistent")!, "one_time");
     await click(findButton(tools.root, "Create grant"));
     expect(settingsMocks.createToolGrant).toHaveBeenCalledWith(
@@ -1066,7 +1077,7 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(addons.root, "Launch"));
     await click(findButton(addons.root, "Stop"));
     await click(findButton(addons.root, "Uninstall"));
-    await click(findButton(addons.root, "Install disabled"));
+    await click(findButton(addons.root, "Install pack"));
     expect(settingsMocks.installAddon).toHaveBeenCalledWith("pixel-office", {
       actorId: "operator",
       confirmRepoDownload: true,
@@ -1076,6 +1087,26 @@ describe("SettingsNativePage broad native sections", () => {
     expect(settingsMocks.stopAddon).toHaveBeenCalledWith("pixel-office");
     expect(settingsMocks.uninstallAddon).toHaveBeenCalledWith("pixel-office");
     expect(settingsMocks.installCapabilityPack).toHaveBeenCalledWith("operator-pack", { actorId: "operator" });
+  });
+
+  it("renders gateway auth credential-plan warnings on the access page", async () => {
+    settingsMocks.fetchSettings.mockResolvedValueOnce({
+      ...settings,
+      auth: {
+        ...settings.auth,
+        plan: {
+          mode: "token",
+          warnings: ["Gateway auth mode is token, but no token is configured."],
+          token: { configured: false, source: "none" },
+          basicUsername: { configured: false, source: "none" },
+          basicPassword: { configured: false, source: "none" },
+        },
+      },
+    });
+
+    const access = await mount("access");
+
+    expect(collectText(access.root)).toContain("Gateway auth mode is token, but no token is configured.");
   });
 
   it("covers integration detail actions and native load warnings", async () => {

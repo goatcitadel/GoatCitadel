@@ -478,9 +478,20 @@ describe("shared API wrappers", () => {
       method: "POST",
     });
     await expectCall(tasks.fetchTaskDeliverables("task/1"), "/api/v1/tasks/task%2F1/deliverables");
+    await expectCall(
+      tasks.fetchTaskDeliverables("task/1", "workspace"),
+      "/api/v1/tasks/task%2F1/deliverables?workspaceId=workspace",
+    );
     await expectCall(tasks.addTaskDeliverable("task/1", { title: "Artifact" }), "/api/v1/tasks/task%2F1/deliverables", {
       method: "POST",
     });
+    await expectCall(
+      tasks.addTaskDeliverable("task/1", { title: "Artifact", workspaceId: "workspace" }),
+      "/api/v1/tasks/task%2F1/deliverables?workspaceId=workspace",
+      {
+        method: "POST",
+      },
+    );
     await expectCall(tasks.fetchTaskSubagents("task/1"), "/api/v1/tasks/task%2F1/subagents");
     await expectCall(
       tasks.registerTaskSubagent("task/1", { agentSessionId: "agent/1" }),

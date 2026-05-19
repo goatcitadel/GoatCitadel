@@ -11,6 +11,7 @@ import {
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import type { Storage } from "@goatcitadel/storage";
+import { assertNoAssembledPromptInjection } from "./assembled-prompt-injection-guard.js";
 
 const log = logger.child("improvement-service");
 import type {
@@ -4826,6 +4827,7 @@ export class ImprovementService {
       excerpts.outputExcerpt ?? "(none)",
     ].join("\n");
     try {
+      assertNoAssembledPromptInjection(`Grade strictly. JSON only.\n${prompt}`);
       const completion = await withTimeout(
         this.callbacks.createChatCompletion({
           providerId: defaults.providerId,

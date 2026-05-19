@@ -229,6 +229,86 @@ describe("browser tools coverage sweep", () => {
     expect(isBrowserToolName("shell.exec")).toBe(false);
   });
 
+  it("blocks Playwright navigation redirects to private hosts before request continuation", async () => {
+    const config = createConfig(tempRoot);
+    config.sandbox.networkAllowlist = [EXAMPLE_HOST];
+    const abortedUrls: string[] = [];
+    const continuedUrls: string[] = [];
+    let routeHandler:
+      | ((route: {
+          request: () => { url: () => string };
+          continue: () => Promise<void>;
+          abort: (errorCode?: string) => Promise<void>;
+        }) => Promise<void> | void)
+      | undefined;
+    const routeFor = (url: string) => ({
+      request: () => ({ url: () => url }),
+      continue: async () => {
+        continuedUrls.push(url);
+      },
+      abort: async () => {
+        abortedUrls.push(url);
+      },
+    });
+    const page = {
+      route: async (_pattern: string, handler: NonNullable<typeof routeHandler>) => {
+        routeHandler = handler;
+      },
+      goto: async (url: string) => {
+        await routeHandler?.(routeFor(url));
+        await routeHandler?.(routeFor("http://127.0.0.1/private"));
+        return { status: () => 200 };
+      },
+      waitForLoadState: async () => undefined,
+      waitForSelector: async () => undefined,
+      waitForTimeout: async () => undefined,
+      title: async () => "redirected",
+      url: () => "http://127.0.0.1/private",
+      evaluate: async () => "",
+      locator: () => ({ first: () => ({ innerText: async () => "", click: async () => undefined }) }),
+      screenshot: async () => undefined,
+      keyboard: { press: async () => undefined },
+    };
+    mocked.launch.mockResolvedValueOnce({
+      newContext: async () => ({
+        newPage: async () => page,
+      }),
+      close: async () => undefined,
+    } as never);
+
+    await expect(
+      executeBrowserTool(
+        "browser.screenshot",
+        { url: "https://example.com/start", outputPath: path.join(tempRoot, "redirect.png") },
+        config,
+      ),
+    ).rejects.toThrow(/Private|loopback|reserved/i);
+    expect(continuedUrls).toEqual(["https://example.com/start"]);
+    expect(abortedUrls).toEqual(["http://127.0.0.1/private"]);
+  });
+
+  it("blocks native HTML fetch redirects to private hosts", async () => {
+    const config = createConfig(tempRoot);
+    config.sandbox.networkAllowlist = [EXAMPLE_HOST];
+    mocked.launch.mockRejectedValueOnce(new Error("missing browser runtime"));
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === "https://example.com/start") {
+        return new Response("", {
+          status: 302,
+          headers: { location: "http://127.0.0.1/private" },
+        });
+      }
+      throw new Error(`Unexpected private follow ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(executeBrowserTool("browser.navigate", { url: "https://example.com/start" }, config)).rejects.toThrow(
+      /Private|loopback|reserved/i,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("executes search/navigate/extract/screenshot/interact flows", async () => {
     const config = createConfig(tempRoot);
 
@@ -646,9 +726,10 @@ describe("browser tools coverage sweep", () => {
         },
       ]) as never,
     );
-    globalThis.fetch = vi.fn(async (input) => {
+    globalThis.fetch = vi.fn(async (input, init) => {
       const url = String(input);
       if (url.includes("/api/generate")) {
+        expect(init).toHaveProperty("dispatcher");
         return new Response(JSON.stringify({ response: "Local summary from Ollama." }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -840,6 +921,76 @@ describe("browser tools coverage sweep", () => {
     expect(extract.extractionMode).toBe("firecrawl-html-selector");
   });
 
+  it("rejects Firecrawl-reported final URLs on private hosts", async () => {
+    const config = createConfig(tempRoot);
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              markdown: "private content must not be returned",
+              metadata: {
+                title: "Private",
+                sourceURL: "http://127.0.0.1/private",
+                statusCode: 200,
+              },
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      executeBrowserTool(
+        "browser.navigate",
+        {
+          url: "https://example.com/firecrawl-page",
+          backend: "firecrawl",
+          firecrawlBaseUrl: "http://127.0.0.1:3002",
+          firecrawlFallbackToNative: false,
+        },
+        config,
+      ),
+    ).rejects.toThrow(/Private, metadata, or reserved host is blocked/);
+  });
+
+  it("rejects unsafe Firecrawl scrape targets before delegating to Firecrawl", async () => {
+    const config = createConfig(tempRoot);
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: {} }), { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(
+      executeBrowserTool(
+        "browser.navigate",
+        {
+          url: "file:///etc/passwd",
+          backend: "firecrawl",
+          firecrawlBaseUrl: "http://127.0.0.1:3002",
+          firecrawlFallbackToNative: false,
+        },
+        config,
+      ),
+    ).rejects.toThrow(/Unsupported URL protocol for browser tool: file:/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await expect(
+      executeBrowserTool(
+        "browser.navigate",
+        {
+          url: "http://169.254.169.254/latest/meta-data",
+          backend: "firecrawl",
+          firecrawlBaseUrl: "http://127.0.0.1:3002",
+          firecrawlFallbackToNative: false,
+        },
+        config,
+      ),
+    ).rejects.toThrow(/Private|reserved|metadata/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("does not read Firecrawl API keys from non-Firecrawl env-name input", async () => {
     const priorOpenAi = process.env.OPENAI_API_KEY;
     const priorFirecrawl = process.env.FIRECRAWL_API_KEY;
@@ -877,6 +1028,62 @@ describe("browser tools coverage sweep", () => {
         process.env.FIRECRAWL_API_KEY = priorFirecrawl;
       }
     }
+  });
+
+  it("rejects non-canonical loopback Firecrawl browser base URLs", async () => {
+    const config = createConfig(tempRoot);
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(
+      executeBrowserTool(
+        "browser.search",
+        {
+          query: "coverage",
+          backend: "firecrawl",
+          firecrawlBaseUrl: "http://127.0.0.1:9999",
+          firecrawlFallbackToNative: false,
+        },
+        config,
+      ),
+    ).rejects.toThrow(/Private|reserved|metadata/i);
+    await expect(
+      executeBrowserTool(
+        "browser.search",
+        {
+          query: "coverage",
+          backend: "firecrawl",
+          firecrawlBaseUrl: "http://127.0.0.1",
+          firecrawlFallbackToNative: false,
+        },
+        config,
+      ),
+    ).rejects.toThrow(/Private|reserved|metadata/i);
+    await expect(
+      executeBrowserTool(
+        "browser.navigate",
+        {
+          url: "https://example.com/article",
+          backend: "firecrawl",
+          firecrawlBaseUrl: "http://localhost:9999",
+          firecrawlFallbackToNative: false,
+        },
+        config,
+      ),
+    ).rejects.toThrow(/Private|reserved|metadata/i);
+    await expect(
+      executeBrowserTool(
+        "browser.navigate",
+        {
+          url: "https://example.com/article",
+          backend: "firecrawl",
+          firecrawlBaseUrl: "http://localhost:80",
+          firecrawlFallbackToNative: false,
+        },
+        config,
+      ),
+    ).rejects.toThrow(/Private|reserved|metadata/i);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("throws Firecrawl errors when fallback is disabled", async () => {
@@ -1295,13 +1502,15 @@ describe("browser tools coverage sweep", () => {
     expect(clearedCookies.removed).toBe(1);
   });
 
-  it("accepts browser session ids from tool args and session aliases", async () => {
+  it("ignores caller-supplied browser session ids and uses active session context", async () => {
     const config = createConfig(tempRoot);
+    const executionContext = { sessionId: "sess-context-state" };
 
     await executeBrowserTool(
       "browser.context.configure",
       { browserSessionId: "sess-arg-state", locale: "en-GB" },
       config,
+      executionContext,
     );
     await executeBrowserTool(
       "browser.storage.set",
@@ -1310,9 +1519,10 @@ describe("browser tools coverage sweep", () => {
         origin: "https://example.com",
         storage: "local",
         key: "theme",
-        value: "arg",
+        value: "context",
       },
       config,
+      executionContext,
     );
     expect(
       (
@@ -1320,30 +1530,18 @@ describe("browser tools coverage sweep", () => {
           "browser.storage.get",
           { browserSessionId: "sess-arg-state", origin: "https://example.com" },
           config,
+          executionContext,
         )
       ).localStorage,
-    ).toEqual({ theme: "arg" });
+    ).toEqual({ theme: "context" });
 
-    await executeBrowserTool(
-      "browser.storage.set",
-      {
-        sessionId: "sess-alias-state",
-        origin: "https://example.com",
-        storage: "session",
-        key: "token",
-        value: "alias",
-      },
-      config,
-    );
-    expect(
-      (
-        await executeBrowserTool(
-          "browser.storage.get",
-          { sessionId: "sess-alias-state", origin: "https://example.com", storage: "session" },
-          config,
-        )
-      ).sessionStorage,
-    ).toEqual({ token: "alias" });
+    await expect(
+      executeBrowserTool(
+        "browser.storage.get",
+        { browserSessionId: "sess-arg-state", origin: "https://example.com" },
+        config,
+      ),
+    ).rejects.toThrow(/requires active session context/i);
   });
 
   it("validates cookie input and filters cookies by domain, path, and URL", async () => {
@@ -1446,7 +1644,9 @@ describe("browser tools coverage sweep", () => {
     const config = createConfig(tempRoot);
     const executionContext = { sessionId: "sess-browser-state-edges" };
 
-    await expect(executeBrowserTool("browser.cookies.get", {}, config)).rejects.toThrow(/requires browserSessionId/i);
+    await expect(executeBrowserTool("browser.cookies.get", {}, config)).rejects.toThrow(
+      /requires active session context/i,
+    );
     await expect(executeBrowserTool("browser.cookies.set", { cookies: [] }, config, executionContext)).rejects.toThrow(
       /requires a cookie object/i,
     );

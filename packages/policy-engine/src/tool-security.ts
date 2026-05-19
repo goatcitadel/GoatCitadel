@@ -46,6 +46,7 @@ export function deriveToolCapabilityPolicy(
     toolName === "fs.move" ||
     toolName === "fs.delete" ||
     toolName === "artifacts.create" ||
+    toolName === "documents.create" ||
     toolName === "presentations.create";
   const mutatesRemoteState =
     isNetworkWrite ||
@@ -232,10 +233,14 @@ export function buildToolAuditRecord(input: {
   request: ToolInvokeRequest;
   outcome: ToolAuditRecord["outcome"];
   policyReason: string;
+  reasonCodes?: string[];
   startedAt: string;
   completedAt: string;
   approvalId?: string;
   matchedGrantId?: string;
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+  approvalMode?: ToolAuditRecord["approvalMode"];
   errorKind?: ToolErrorKind;
 }): ToolAuditRecord {
   return {
@@ -248,10 +253,14 @@ export function buildToolAuditRecord(input: {
     trustLevel: resolveToolTrustLevel(input.request),
     outcome: input.outcome,
     policyReason: input.policyReason,
+    reasonCodes: input.reasonCodes,
     startedAt: input.startedAt,
     completedAt: input.completedAt,
     approvalId: input.approvalId,
     matchedGrantId: input.matchedGrantId,
+    permissionProfileId: input.permissionProfileId,
+    localOperatorOverrideId: input.localOperatorOverrideId,
+    approvalMode: input.approvalMode,
     errorKind: input.errorKind,
   };
 }

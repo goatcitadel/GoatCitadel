@@ -4,6 +4,19 @@ import { z } from "zod";
 const MAX_ATTACHMENT_UPLOAD_BYTES = 20 * 1024 * 1024;
 const MAX_ATTACHMENT_UPLOAD_BODY_LIMIT_BYTES = Math.ceil((MAX_ATTACHMENT_UPLOAD_BYTES * 4) / 3) + 16 * 1024;
 
+// SECURITY (codex finding #9): MIME types that can be safely served
+// inline because they cannot execute scripts in the embedding origin.
+// `image/svg+xml` is intentionally OMITTED — SVG supports `<script>`
+// blocks and is a stored-XSS vector.
+export const CHAT_ATTACHMENT_PASSIVE_INLINE_MIME = new Set<string>([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+]);
+
 const attachmentUploadSchema = z.object({
   sessionId: z.string().min(1),
   projectId: z.string().optional(),
@@ -67,11 +80,26 @@ export function registerChatAttachmentRoutes(fastify: FastifyInstance): void {
       const { record, bytes } = await fastify.services.chatAttachments.readChatAttachmentContent(
         params.data.attachmentId,
       );
-      reply.header("Content-Type", record.mimeType || "application/octet-stream");
-      reply.header(
-        "Content-Disposition",
-        `${query.data.disposition}; filename="${encodeURIComponent(record.fileName)}"`,
-      );
+      // SECURITY (codex finding #9): Attachments are uploaded with an
+      // uploader-supplied MIME type. Without these headers, a `text/html`
+      // or `image/svg+xml` attachment opened "inline" executes scripts
+      // in the Mission Control origin and becomes stored XSS. We:
+      //   1. always set `X-Content-Type-Options: nosniff` so browsers
+      //      cannot upgrade a benign type into an active one,
+      //   2. restrict `inline` disposition to a strict passive-MIME
+      //      allowlist; everything else is forced to a download with
+      //      `application/octet-stream`,
+      //   3. force `Content-Disposition: attachment` on the download
+      //      path regardless of the upload mime hint.
+      const isPassiveInline =
+        query.data.disposition === "inline" &&
+        CHAT_ATTACHMENT_PASSIVE_INLINE_MIME.has((record.mimeType || "").toLowerCase());
+      const responseContentType = isPassiveInline ? record.mimeType : "application/octet-stream";
+      const responseDisposition = isPassiveInline ? "inline" : "attachment";
+      reply.header("X-Content-Type-Options", "nosniff");
+      reply.header("Content-Security-Policy", "default-src 'none'; sandbox");
+      reply.header("Content-Type", responseContentType);
+      reply.header("Content-Disposition", `${responseDisposition}; filename="${encodeURIComponent(record.fileName)}"`);
       return reply.send(bytes);
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });

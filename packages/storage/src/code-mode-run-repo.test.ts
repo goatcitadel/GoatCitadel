@@ -46,9 +46,16 @@ function run(overrides: Partial<CodeModeRunRecord> = {}): CodeModeRunRecord {
     runId: "run-a",
     status: "running",
     language: "typescript",
+    originSurface: "code",
+    workspaceId: "workspace-a",
+    operatorId: "operator-a",
+    permissionProfileId: "profile-a",
+    permissionProfileLabel: "Profile A",
+    localOperatorOverrideId: "override-a",
     requestedOutputIntent: "skill_wrapper",
     saveCandidateOnSuccess: true,
     capabilitySnapshotId: "snapshot-a",
+    codeModeInputHash: "input-sha",
     wrapperManifestHash: "wrapper-sha",
     policySnapshotHash: "policy-sha",
     codeHash: "code-sha",
@@ -76,6 +83,8 @@ function run(overrides: Partial<CodeModeRunRecord> = {}): CodeModeRunRecord {
     stderrTruncated: true,
     result: { candidateId: "candidate-a" },
     error: "none",
+    errorCode: "CODE_MODE_CHILD_ERROR",
+    errorDetails: { detail: true },
     createdAt: "2026-03-26T00:00:00.000Z",
     startedAt: "2026-03-26T00:00:01.000Z",
     finishedAt: "2026-03-26T00:00:02.000Z",
@@ -96,6 +105,7 @@ describe("CodeModeRunRepository", () => {
         runId: "run-b",
         status: "queued",
         language: "javascript",
+        originSurface: undefined,
         requestedOutputIntent: undefined,
         saveCandidateOnSuccess: false,
         approvalId: undefined,
@@ -110,6 +120,8 @@ describe("CodeModeRunRepository", () => {
         stderrTruncated: false,
         result: undefined,
         error: undefined,
+        errorCode: undefined,
+        errorDetails: undefined,
         startedAt: undefined,
         finishedAt: undefined,
         createdAt: "2026-03-26T00:01:00.000Z",
@@ -117,6 +129,7 @@ describe("CodeModeRunRepository", () => {
     );
 
     assert.equal(first.requestedOutputIntent, "skill_wrapper");
+    assert.equal(first.originSurface, "code");
     assert.equal(first.saveCandidateOnSuccess, true);
     assert.equal(first.sandbox?.runnerId, "runner-a");
     assert.equal(first.stdoutArtifact?.artifactId, "stdout-artifact");
@@ -125,7 +138,10 @@ describe("CodeModeRunRepository", () => {
     assert.equal(first.stderrTruncated, true);
     assert.deepEqual(first.result, { candidateId: "candidate-a" });
     assert.equal(first.error, "none");
+    assert.equal(first.errorCode, "CODE_MODE_CHILD_ERROR");
+    assert.deepEqual(first.errorDetails, { detail: true });
     assert.equal(minimal.requestedOutputIntent, undefined);
+    assert.equal(minimal.originSurface, undefined);
     assert.equal(minimal.saveCandidateOnSuccess, false);
     assert.equal(minimal.sandbox, undefined);
     assert.equal(minimal.stdoutArtifact, undefined);
@@ -136,6 +152,13 @@ describe("CodeModeRunRepository", () => {
       run({
         runId: "run-a",
         status: "completed",
+        originSurface: undefined,
+        workspaceId: undefined,
+        operatorId: undefined,
+        permissionProfileId: undefined,
+        permissionProfileLabel: undefined,
+        localOperatorOverrideId: undefined,
+        requestedOutputIntent: undefined,
         approvalId: undefined,
         sandbox: undefined,
         stdoutArtifact: undefined,
@@ -146,11 +169,24 @@ describe("CodeModeRunRepository", () => {
         stderrTruncated: false,
         result: { ok: true },
         error: undefined,
+        errorCode: undefined,
+        errorDetails: undefined,
         finishedAt: "2026-03-26T00:03:00.000Z",
       }),
     );
     assert.equal(completed.status, "completed");
-    assert.equal(completed.approvalId, undefined);
+    assert.equal(completed.originSurface, "code");
+    assert.equal(completed.workspaceId, "workspace-a");
+    assert.equal(completed.operatorId, "operator-a");
+    assert.equal(completed.permissionProfileId, "profile-a");
+    assert.equal(completed.permissionProfileLabel, "Profile A");
+    assert.equal(completed.localOperatorOverrideId, "override-a");
+    assert.equal(completed.requestedOutputIntent, "skill_wrapper");
+    assert.equal(completed.approvalId, "approval-a");
+    assert.equal(completed.codeModeInputHash, "input-sha");
+    assert.equal(completed.wrapperManifestHash, "wrapper-sha");
+    assert.equal(completed.policySnapshotHash, "policy-sha");
+    assert.equal(completed.codeHash, "code-sha");
     assert.deepEqual(completed.result, { ok: true });
     assert.equal(completed.stdoutTruncated, false);
 
@@ -163,25 +199,37 @@ describe("CodeModeRunRepository", () => {
     );
   });
 
-  it("falls back for malformed stored JSON payloads", () => {
+  it("filters listed runs by workspace scope", () => {
+    const { repo } = createStore();
+    repo.upsert(run({ runId: "run-a", workspaceId: "workspace-a", createdAt: "2026-03-26T00:00:00.000Z" }));
+    repo.upsert(run({ runId: "run-b", workspaceId: "workspace-b", createdAt: "2026-03-26T00:01:00.000Z" }));
+    repo.upsert(run({ runId: "run-c", workspaceId: undefined, createdAt: "2026-03-26T00:02:00.000Z" }));
+
+    assert.deepEqual(
+      repo.listFiltered({ workspaceId: "workspace-a", limit: 10 }).map((item) => item.runId),
+      ["run-a"],
+    );
+    assert.deepEqual(
+      repo.listFiltered({ workspaceId: "workspace-b", limit: 10 }).map((item) => item.runId),
+      ["run-b"],
+    );
+  });
+
+  it("throws for malformed stored JSON payloads instead of hiding ledger corruption", () => {
     const { db, repo } = createStore();
-    repo.upsert(run());
+    const corrupt = (runId: string, field: string, expected: RegExp) => {
+      repo.upsert(run({ runId }));
+      setRawField(db, runId, field, "{bad json");
+      assert.throws(() => repo.get(runId), expected);
+    };
 
-    setRawField(db, "run-a", "sandbox_json", "{bad json");
-    setRawField(db, "run-a", "code_artifact_json", "{bad json");
-    setRawField(db, "run-a", "wrapper_manifest_artifact_json", "{bad json");
-    setRawField(db, "run-a", "policy_snapshot_artifact_json", "{bad json");
-    setRawField(db, "run-a", "stdout_artifact_json", "{bad json");
-    setRawField(db, "run-a", "stderr_artifact_json", "{bad json");
-    setRawField(db, "run-a", "result_json", "{bad json");
-
-    const loaded = repo.get("run-a");
-    assert.equal(loaded.sandbox, undefined);
-    assert.deepEqual(loaded.codeArtifact, {});
-    assert.deepEqual(loaded.wrapperManifestArtifact, {});
-    assert.deepEqual(loaded.policySnapshotArtifact, {});
-    assert.equal(loaded.stdoutArtifact, undefined);
-    assert.equal(loaded.stderrArtifact, undefined);
-    assert.deepEqual(loaded.result, {});
+    corrupt("run-sandbox", "sandbox_json", /corrupt sandbox_json metadata/);
+    corrupt("run-code", "code_artifact_json", /corrupt code_artifact_json metadata/);
+    corrupt("run-wrapper", "wrapper_manifest_artifact_json", /corrupt wrapper_manifest_artifact_json metadata/);
+    corrupt("run-policy", "policy_snapshot_artifact_json", /corrupt policy_snapshot_artifact_json metadata/);
+    corrupt("run-stdout", "stdout_artifact_json", /corrupt stdout_artifact_json metadata/);
+    corrupt("run-stderr", "stderr_artifact_json", /corrupt stderr_artifact_json metadata/);
+    corrupt("run-result", "result_json", /corrupt result_json metadata/);
+    corrupt("run-error-details", "error_details_json", /corrupt error_details_json metadata/);
   });
 });

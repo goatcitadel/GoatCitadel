@@ -47,7 +47,9 @@ export async function resolveChannelSendAttachments(
       mimeType: content.record.mimeType,
       dataBase64: content.bytes.toString("base64"),
     };
-    const existingIndex = attachments.findIndex((item) => item.attachmentId === attachmentId && !item.url && !item.dataBase64);
+    const existingIndex = attachments.findIndex(
+      (item) => item.attachmentId === attachmentId && !item.url && !item.dataBase64,
+    );
     if (existingIndex >= 0) {
       attachments[existingIndex] = {
         ...attachments[existingIndex],
@@ -78,12 +80,9 @@ function normalizeExplicitAttachments(input: ChannelAttachmentInput[] | undefine
     }))
     .filter((attachment) =>
       Boolean(
-        attachment.url
-        || attachment.title
-        || attachment.mimeType
-        || attachment.dataBase64
-        || attachment.attachmentId,
-      ))
+        attachment.url || attachment.title || attachment.mimeType || attachment.dataBase64 || attachment.attachmentId,
+      ),
+    )
     .map((attachment) => {
       const normalized = { ...attachment };
       validateChannelAttachment(normalized);
@@ -108,15 +107,27 @@ function validateChannelAttachment(attachment: ChannelAttachmentInput): void {
     }
   }
   if (attachment.dataBase64) {
-    const estimatedBytes = estimateBase64Bytes(attachment.dataBase64);
-    if (estimatedBytes > MAX_INLINE_ATTACHMENT_BYTES) {
+    const bytes = decodeChannelAttachmentBase64(attachment.dataBase64);
+    if (bytes.length > MAX_INLINE_ATTACHMENT_BYTES) {
       throw new Error(`Channel inline attachment exceeds the ${MAX_INLINE_ATTACHMENT_BYTES} byte limit.`);
     }
   }
 }
 
-function estimateBase64Bytes(value: string): number {
+function decodeChannelAttachmentBase64(value: string): Buffer {
   const normalized = value.replace(/\s+/g, "");
-  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
-  return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
+  if (!normalized) {
+    throw new Error("Channel inline attachment base64 is empty.");
+  }
+  if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(normalized)) {
+    throw new Error("Channel inline attachment contains characters outside the base64 alphabet.");
+  }
+  if (normalized.length % 4 !== 0) {
+    throw new Error("Channel inline attachment base64 length must be a multiple of 4.");
+  }
+  const bytes = Buffer.from(normalized, "base64");
+  if (bytes.toString("base64") !== normalized) {
+    throw new Error("Channel inline attachment base64 is not canonical.");
+  }
+  return bytes;
 }

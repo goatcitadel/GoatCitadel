@@ -160,6 +160,7 @@ describe("useChatDelegationPolicyActions", () => {
       mode: "deep",
       providerId: "openai",
       model: "gpt-5.4-mini",
+      surface: "code",
     });
     expect(latest?.notices.at(-1)).toEqual({
       content: "Research summary:\nResearch result\n\nSources: 1",

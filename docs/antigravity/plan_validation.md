@@ -1,12 +1,12 @@
 # Implementation Plan Validation — Post-Review
 
-> **Context**: The original implementation plan was reviewed by Codex. Six specific concerns were raised. This document validates each against the actual codebase.
+> **Historical note (2026-05-18)**: This validation targets the legacy `apps/mission-control` compatibility shell and an older Antigravity implementation plan. The canonical `1.0` Mission Control shell is now `apps/mission-control-next`; use [docs/1_0_CONTRACT.md](../1_0_CONTRACT.md), [docs/1_0_RELEASE_EVIDENCE.md](../1_0_RELEASE_EVIDENCE.md), and [apps/mission-control-next/src/app/route-model.ts](../../apps/mission-control-next/src/app/route-model.ts) for current product truth. The evidence below is preserved as historical review material, not current executable guidance.
 
 ---
 
 ## A. Overall Judgment
 
-The implementation plan is **directionally strong but requires targeted corrections before another agent should execute it**. Four of the six concerns are confirmed or partially confirmed as genuine implementation risks. The plan's biggest liability is not its strategy — the phasing and priority ordering are correct — but its specificity in certain spots where the specificity is *wrong*: it mis-describes the current state of `reset.css`, understates the legacy variable inventory, and proposes a collapse mechanism for StatusStrip that won't survive route changes. These are fixable with surgical edits to the plan, not a rewrite. Roughly 70% of the plan can be executed as-is. The remaining 30% needs the corrections described below.
+The historical implementation plan was **directionally strong but required targeted corrections before another agent should execute that legacy-shell plan**. Four of the six concerns were confirmed or partially confirmed as genuine implementation risks for that snapshot. The plan's biggest liability was not its strategy — the phasing and priority ordering were correct — but its specificity in certain spots where the specificity was *wrong*: it mis-described the current state of `reset.css`, understated the legacy variable inventory, and proposed a collapse mechanism for StatusStrip that would not survive route changes. These were fixable with surgical edits to the plan, not a rewrite. Roughly 70% of the plan could be executed as-is at the time. The remaining 30% needed the corrections described below.
 
 ---
 
@@ -19,8 +19,8 @@ The implementation plan is **directionally strong but requires targeted correcti
 **Why**: The proposed `defaultCollapsed` prop is a `useState` initializer. React's `useState` only reads the initializer on **first mount**. `StatusStrip` is rendered inside `App.tsx` lines 1225-1242, wrapped by `{route.space === "operate" ? ... : null}`. When the user navigates away from Operate and back, React may unmount+remount the component (depends on render path), but when navigating *within* Operate — say from Chat (`route.page === "surface"`) to Tasks (`route.page === "tasks"`) — the component is **not unmounted**, because the conditional `route.space === "operate"` stays true. So the `expanded` state persists from the first render.
 
 **Evidence**:
-- [StatusStrip.tsx](file:///f:/code/personal-ai/apps/mission-control/src/components/StatusStrip.tsx) line 47: `const [expanded, setExpanded] = useState(() => !readCompactViewport());` — one-time init
-- [App.tsx](file:///f:/code/personal-ai/apps/mission-control/src/App.tsx) line 1225: `{route.space === "operate" ? ( <StatusStrip ... /> ) : null}` — stays mounted across all Operate pages
+- [StatusStrip.tsx](../../apps/mission-control/src/components/StatusStrip.tsx) line 47: `const [expanded, setExpanded] = useState(() => !readCompactViewport());` — one-time init
+- [App.tsx](../../apps/mission-control/src/App.tsx) line 1225: `{route.space === "operate" ? ( <StatusStrip ... /> ) : null}` — stays mounted across all Operate pages
 - The proposed `defaultCollapsed={route.page === "surface"}` would only take effect on first Operate mount. Switching Chat → Tasks → Chat would NOT re-collapse.
 
 **Recommended correction**: Replace the `defaultCollapsed` prop with a **controlled `collapsed` prop** that App.tsx derives from the current route. The component should use `useEffect` to sync local expanded state when the controlled prop changes, or (simpler) remove local state entirely and let the parent own expanded/collapsed.
@@ -55,7 +55,7 @@ This gives: auto-collapsed on Chat/Cowork/Code, auto-expanded on Tasks/Approvals
 
 **Why**: The plan's proposed props (`workspaceName`, `modelLabel`, `providerLabel`, `approvalsCount`, `onSwitchToCode`, `onOpenTasks`, `onOpenApprovals`) are a mix of data that lives at completely different levels.
 
-**Evidence from actual render site** — [ChatPage.tsx](file:///f:/code/personal-ai/apps/mission-control/src/pages/ChatPage.tsx) line 1207-1212:
+**Evidence from the legacy render site** — [ChatPage.tsx](../../apps/mission-control/src/pages/ChatPage.tsx) line 1207-1212:
 ```tsx
 <MissionControlEmptyState
   mode={messageMode}
@@ -103,9 +103,9 @@ button, input, select, textarea { font: inherit; }
 
 Line 17-22 already includes a `font: inherit` rule for buttons. The plan proposes adding `font-weight: 600`, `padding: 8px 10px`, `border-radius`, `border`, `cursor: pointer`, and `transition` — these are **visual defaults, not resets**. This would turn `reset.css` into exactly the kind of global styling layer that legacy-base.css is, just smaller. Codex is right that this creates the next generation of the same problem.
 
-**Evidence**: [reset.css](file:///f:/code/personal-ai/apps/mission-control/src/styles/reset.css) — 23 lines, already has `button { font: inherit; }`.
+**Evidence**: [reset.css](../../apps/mission-control/src/styles/reset.css) — 23 lines, already has `button { font: inherit; }`.
 
-**Better home**: `primitives.css` already exists and defines visual base patterns for `.panel`, `.stat-card`, `.page-tab`, and `.data-toolbar` ([primitives.css](file:///f:/code/personal-ai/apps/mission-control/src/styles/primitives.css), 161 lines). A `.gc-button` base class belongs here, alongside the existing `.page-tab` and `.stat-card` patterns.
+**Better home**: `primitives.css` already exists and defines visual base patterns for `.panel`, `.stat-card`, `.page-tab`, and `.data-toolbar` ([primitives.css](../../apps/mission-control/src/styles/primitives.css), 161 lines). A `.gc-button` base class belongs here, alongside the existing `.page-tab` and `.stat-card` patterns.
 
 **Recommended correction**: Task 2.1 should:
 1. NOT touch `reset.css` at all (it's already correct)
@@ -164,7 +164,7 @@ Full bridge block should include:
 **Status: Confirmed.**
 
 **Evidence**:
-- [Root package.json](file:///f:/code/personal-ai/package.json) line 5: `"packageManager": "pnpm@10.31.0"` — repo uses **pnpm**, not npm
+- [Root package.json](../../package.json) line 5: `"packageManager": "pnpm@10.31.0"` — repo uses **pnpm**, not npm
 - No `stylelint` in any `devDependencies` (root or mission-control)
 - Available scripts in root: `pnpm build`, `pnpm test`, `pnpm typecheck`, `pnpm lint`, `pnpm dev:ui`
 - Available scripts in mission-control: `pnpm dev`, `pnpm build`, `pnpm typecheck`, `pnpm test`

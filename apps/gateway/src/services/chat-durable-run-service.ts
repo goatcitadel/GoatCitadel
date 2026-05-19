@@ -17,6 +17,7 @@ export type ChatDurableThreadEventType =
   | "chat_thread_turn_edited";
 
 interface DurableRunStore {
+  getRun?(runId: string): DurableRunRecord;
   updateRun(input: {
     runId: string;
     status?: DurableRunStatus;
@@ -77,6 +78,7 @@ export interface ChatDurableRunBeginDeps {
     },
     durableRunId?: string,
   ): void;
+  persistInitialTrace?(prepared: PreparedAgentChatTurn, input: ChatSendMessageRequest, run: DurableRunRecord): void;
   requestDurableRunProcessing(runId: string): void;
 }
 
@@ -111,6 +113,7 @@ export function beginDurableChatRun(
       objective: prepared.content,
     },
   });
+  deps.persistInitialTrace?.(prepared, input, run);
   deps.persistChatStreamChunk(
     {
       type: "message_start",
@@ -134,8 +137,23 @@ export function finalizeDurableChatRun(
   trace: ChatTurnTraceRecord,
 ): void {
   const now = new Date().toISOString();
+  const currentRun = deps.durableRuns.getRun?.(runId);
+  if (currentRun && isTerminalDurableChatRunStatus(currentRun.status)) {
+    deps.patchDurableTraceIfPresent(prepared.turnId, {
+      durable: {
+        runId,
+        status: currentRun.status,
+        checkpointKind: checkpointKindForTerminalDurableChatRunStatus(currentRun.status),
+      },
+    });
+    return;
+  }
   const checkpointState = buildDurableCheckpointState(deps, prepared, trace);
-  if (trace.status === "waiting_for_approval" || trace.status === "waiting_for_user_input") {
+  if (
+    trace.status === "waiting_for_approval" ||
+    trace.status === "waiting_for_user_input" ||
+    trace.status === "waiting_for_tool"
+  ) {
     deps.durableRuns.updateRun({
       runId,
       status: "waiting",
@@ -209,6 +227,22 @@ export function finalizeDurableChatRun(
       checkpointKind,
     },
   });
+}
+
+function isTerminalDurableChatRunStatus(status: DurableRunStatus): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled" || status === "dead_lettered";
+}
+
+function checkpointKindForTerminalDurableChatRunStatus(
+  status: DurableRunStatus,
+): DurableCheckpointRecord["checkpointKind"] {
+  if (status === "completed") {
+    return "run_completed";
+  }
+  if (status === "cancelled") {
+    return "run_cancelled";
+  }
+  return "run_failed";
 }
 
 function buildDurableCheckpointState(

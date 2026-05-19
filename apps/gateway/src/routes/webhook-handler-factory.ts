@@ -1,6 +1,7 @@
 import { Readable } from "node:stream";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import type { ChatCommandOptions } from "../services/chat-command-service.js";
 
 export const CHANNEL_INBOUND_MAX_BYTES = 256 * 1024;
 
@@ -14,6 +15,7 @@ export type WebhookRawBodyRequest = {
   telegramRawBody?: Buffer;
   whatsappRawBody?: Buffer;
   lineRawBody?: Buffer;
+  genericChannelRawBody?: Buffer;
 };
 
 type RawBodyKey = keyof WebhookRawBodyRequest;
@@ -100,6 +102,14 @@ export type IntegrationWebhookRouteLike = {
       status: string;
     };
   }>;
+  hasRunningTurn: (sessionId: string) => boolean;
+  parseChatCommand: (
+    sessionId: string,
+    commandText: string,
+    options?: ChatCommandOptions,
+  ) => Promise<{
+    message: string;
+  }>;
   updateIntegrationConnection: (
     connectionId: string,
     patch: {
@@ -172,6 +182,10 @@ export function createWebhookHandler<TParsed>(
     if (rejectOversizedWebhookPayload(request, reply)) {
       return;
     }
+    const hostHeaderError = validateWebhookHostHeader(request);
+    if (hostHeaderError) {
+      return reply.code(400).send({ error: hostHeaderError });
+    }
 
     const params = connectionParamsSchema.safeParse(request.params);
     if (!params.success) {
@@ -220,6 +234,23 @@ export function createWebhookHandler<TParsed>(
     });
     return reply.send(response);
   };
+}
+
+export function validateWebhookHostHeader(request: Pick<FastifyRequest, "headers">): string | undefined {
+  const host = readHeaderValue(request.headers.host);
+  if (!host) {
+    return undefined;
+  }
+  const trimmed = host.trim();
+  if (trimmed !== host || /[\s/@\\]/u.test(trimmed)) {
+    return "Malformed Host header";
+  }
+  try {
+    new URL(`http://${trimmed}`);
+    return undefined;
+  } catch {
+    return "Malformed Host header";
+  }
 }
 
 export async function dispatchInboundWebhookMessage(

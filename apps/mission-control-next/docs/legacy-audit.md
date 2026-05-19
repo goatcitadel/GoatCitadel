@@ -2,6 +2,10 @@
 
 Updated: 2026-04-22
 
+Historical note: this audit captures the April legacy-shell replacement pass. The current `mission-control-next`
+release-surface manifest has since grown to include additional native Library, Ops, and Settings routes; use
+`scripts/verification/lib/release-surface-manifest.mjs` and `src/app/route-model.ts` for the live route list.
+
 ## Why this exists
 
 `mission-control-next` was still acting mostly as a shell around lazy-loaded pages from `apps/mission-control/src/pages`. That meant the new IA and shell kept inheriting:
@@ -25,8 +29,8 @@ Updated: 2026-04-22
 | `ops/activity`, `ops/sessions`, `ops/schedules`, `ops/improvement` | `TimelinePage` |
 | `ops/approvals` | `ApprovalsPage` |
 | `ops/costs`, `ops/runtime` | `HealthPage` |
-| `ops/quality` | native `PromptPacksWorkbenchPage` |
-| `settings/general`, `settings/providers`, `settings/access`, `settings/budget`, `settings/onboarding` | `GeneralHubPage` |
+| `library/prompt-packs` | native `PromptPacksWorkbenchPage` |
+| `settings/general`, `settings/providers`, `settings/access`, `settings/budget`, `settings/onboarding`, `settings/permissions`, `settings/personalities` | `GeneralHubPage` / native settings panels |
 | `settings/runtime` | `RuntimeHubPage` |
 | `settings/workspaces`, `settings/addons` | `WorkspacesHubPage` |
 | `settings/integrations`, `settings/channels`, `settings/mcp` | `IntegrationsHubPage` |
@@ -42,6 +46,8 @@ These routes now render next-native route pages from `apps/mission-control-next/
 - `library/knowledge`
 - `library/files`
 - `library/artifacts`
+- `library/capabilities`
+- `library/curator`
 - `ops/activity`
 - `ops/sessions`
 - `ops/schedules`
@@ -50,11 +56,15 @@ These routes now render next-native route pages from `apps/mission-control-next/
 - `ops/costs`
 - `ops/runtime`
 - `ops/diagnostics`
+- `ops/kanban`
+- `ops/notifications`
 - `settings/general`
 - `settings/providers`
 - `settings/access`
 - `settings/budget`
 - `settings/onboarding`
+- `settings/permissions`
+- `settings/personalities`
 - `settings/runtime`
 - `settings/workspaces`
 - `settings/addons`

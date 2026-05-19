@@ -93,7 +93,16 @@ export class ApprovalEffectRepository {
           status = 'pending'
           OR (status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= @now)
         )
-      ORDER BY created_at ASC, effect_id ASC
+      ORDER BY
+        CASE effect_kind
+          WHEN 'pending_action_execute' THEN 0
+          WHEN 'approval_wait_wake' THEN 1
+          WHEN 'proactive_run_wake' THEN 2
+          WHEN 'linked_chat_turn_wake' THEN 3
+          ELSE 4
+        END ASC,
+        created_at ASC,
+        effect_id ASC
       LIMIT @limit
     `);
     this.claimEffectStmt = db.prepare(`
@@ -119,7 +128,6 @@ export class ApprovalEffectRepository {
           updated_at = @updatedAt,
           version = version + 1
       WHERE effect_id = @effectId
-        AND version = @expectedVersion
         AND status = 'running'
         AND claimed_by = @workerId
     `);
@@ -135,7 +143,6 @@ export class ApprovalEffectRepository {
           completed_at = @completedAt,
           version = version + 1
       WHERE effect_id = @effectId
-        AND version = @expectedVersion
         AND status = 'running'
         AND claimed_by = @workerId
     `);
@@ -151,7 +158,6 @@ export class ApprovalEffectRepository {
           completed_at = @completedAt,
           version = version + 1
       WHERE effect_id = @effectId
-        AND version = @expectedVersion
         AND status = 'running'
         AND claimed_by = @workerId
     `);
@@ -167,7 +173,6 @@ export class ApprovalEffectRepository {
           completed_at = @completedAt,
           version = version + 1
       WHERE effect_id = @effectId
-        AND version = @expectedVersion
         AND status = 'running'
         AND claimed_by = @workerId
     `);
@@ -291,14 +296,13 @@ export class ApprovalEffectRepository {
   public renewEffectLease(
     effectId: string,
     workerId: string,
-    expectedVersion: number,
+    _expectedVersion: number,
     now: string,
     leaseExpiresAt: string,
   ): ApprovalEffectRecord | undefined {
     const update = this.renewLeaseStmt.run({
       effectId,
       workerId,
-      expectedVersion,
       leaseExpiresAt,
       updatedAt: now,
     });
@@ -308,7 +312,7 @@ export class ApprovalEffectRepository {
   public completeEffect(
     effectId: string,
     workerId: string,
-    expectedVersion: number,
+    _expectedVersion: number,
     input: {
       result?: Record<string, unknown>;
       updatedAt?: string;
@@ -320,7 +324,6 @@ export class ApprovalEffectRepository {
     const update = this.completeEffectStmt.run({
       effectId,
       workerId,
-      expectedVersion,
       resultJson: JSON.stringify(input.result ?? {}),
       updatedAt,
       completedAt,
@@ -331,7 +334,7 @@ export class ApprovalEffectRepository {
   public skipEffect(
     effectId: string,
     workerId: string,
-    expectedVersion: number,
+    _expectedVersion: number,
     input: {
       result?: Record<string, unknown>;
       updatedAt?: string;
@@ -343,7 +346,6 @@ export class ApprovalEffectRepository {
     const update = this.skipEffectStmt.run({
       effectId,
       workerId,
-      expectedVersion,
       resultJson: JSON.stringify(input.result ?? {}),
       updatedAt,
       completedAt,
@@ -354,7 +356,7 @@ export class ApprovalEffectRepository {
   public failEffect(
     effectId: string,
     workerId: string,
-    expectedVersion: number,
+    _expectedVersion: number,
     input: {
       result?: Record<string, unknown>;
       lastError: string;
@@ -367,7 +369,6 @@ export class ApprovalEffectRepository {
     const update = this.failEffectStmt.run({
       effectId,
       workerId,
-      expectedVersion,
       resultJson: JSON.stringify(input.result ?? {}),
       lastError: input.lastError,
       updatedAt,

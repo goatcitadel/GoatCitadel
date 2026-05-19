@@ -1,7 +1,38 @@
+import { lookup as nodeDnsLookup } from "node:dns";
+import type { LookupAddress, LookupOptions } from "node:dns";
 import { isIP } from "node:net";
 import type { EgressDecision } from "@goatcitadel/contracts";
+import { Agent } from "undici";
+import type { Dispatcher } from "undici";
 
 const DISALLOWED_HOSTS = new Set(["0.0.0.0", "169.254.169.254", "metadata.google.internal", "100.100.100.200"]);
+
+// SECURITY (codex finding #25b, #26): Channel integrations embed secrets in
+// URLs (BlueBubbles `?password=…`, Telegram `/bot<token>/…`, Zalo path tokens).
+// When `assertHostAllowed` throws, callers like `commsInvoke` propagate
+// `error.message` into delivery error records — which previously exposed the
+// raw URL including query/path/userinfo. Always pass user-supplied URLs
+// through `redactUrlForError` before formatting an Error message.
+export function redactUrlForError(input: string): string {
+  if (typeof input !== "string" || !input.trim()) {
+    return "<empty>";
+  }
+  try {
+    const url = new URL(input.trim());
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    // Bare host inputs like `localhost:8080` reach here. Strip anything after
+    // the first `/` (path), `?` (query), and `@` (userinfo) so we never echo
+    // secret-bearing path/query data when the input was URL-shaped but
+    // missing a scheme.
+    const trimmed = input.trim();
+    const withoutPath = trimmed.split(/[/?#]/, 1)[0] ?? "";
+    const withoutUserinfo = withoutPath.includes("@")
+      ? withoutPath.slice(withoutPath.lastIndexOf("@") + 1)
+      : withoutPath;
+    return withoutUserinfo || "<unparseable>";
+  }
+}
 
 export function isHostAllowed(hostOrUrl: string, allowlist: string[]): boolean {
   return evaluateHostEgress(hostOrUrl, allowlist).allowed;
@@ -38,14 +69,15 @@ export function evaluateHostEgress(hostOrUrl: string, allowlist: string[]): Egre
   );
 
   if (!matchedPattern) {
+    const redacted = redactUrlForError(hostOrUrl);
     return {
       target: hostOrUrl,
       hostname,
       allowed: false,
       approvalState: isPrivateOrReserved ? "blocked" : "approval_required",
       reason: isPrivateOrReserved
-        ? `Private, loopback, or reserved host is blocked: ${hostOrUrl}`
-        : `Host is not yet allowlisted: ${hostOrUrl}`,
+        ? `Private, loopback, or reserved host is blocked: ${redacted}`
+        : `Host is not yet allowlisted: ${redacted}`,
     };
   }
 
@@ -76,7 +108,7 @@ export function evaluateHostEgress(hostOrUrl: string, allowlist: string[]): Egre
     hostname,
     allowed: false,
     approvalState: "blocked",
-    reason: `Private, metadata, or reserved host is blocked: ${hostOrUrl}`,
+    reason: `Private, metadata, or reserved host is blocked: ${redactUrlForError(hostOrUrl)}`,
     matchedAllowlistPattern: matchedPattern,
   };
 }
@@ -86,6 +118,116 @@ export function assertHostAllowed(hostOrUrl: string, allowlist: string[]): void 
   if (!decision.allowed) {
     throw new Error(decision.reason);
   }
+}
+
+// SECURITY (codex finding #11, #12): For features like Firecrawl ingestion
+// where the user/agent supplies an arbitrary base URL that may legitimately
+// be on any public host, we still must block private/reserved/loopback/
+// metadata destinations. This helper enforces only the SSRF half of the
+// allowlist: it accepts any public host, rejects any private one.
+export function assertNotPrivateOrReservedHost(hostOrUrl: string): void {
+  const parsed = parseHost(hostOrUrl);
+  if (parsed.invalidReason) {
+    throw new Error(`${parsed.invalidReason.trim()} (${redactUrlForError(hostOrUrl)})`);
+  }
+  if (!parsed.host && !parsed.hostname) {
+    throw new Error(`Host is empty: ${redactUrlForError(hostOrUrl)}`);
+  }
+  if (isPrivateOrReservedHost(parsed.hostname.toLowerCase())) {
+    throw new Error(`Private, metadata, or reserved host is blocked: ${redactUrlForError(hostOrUrl)}`);
+  }
+}
+
+const DEFAULT_FETCH_TIMEOUT_MS = 15_000;
+const DEFAULT_FETCH_MAX_REDIRECTS = 5;
+
+export interface FetchAllowlistedOptions {
+  allowlist: string[];
+  timeoutMs?: number;
+  maxRedirects?: number;
+  init?: RequestInit;
+  dnsLookup?: DnsLookupFunction;
+}
+
+type DnsLookupFunction = (
+  hostname: string,
+  options: LookupOptions,
+  callback: (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family?: number) => void,
+) => void;
+
+// SECURITY (codex finding #11, #12, #14, #22, #23): A single outbound HTTP
+// helper that:
+//   1. validates the host against the egress allowlist,
+//   2. does manual redirect handling and re-validates each hop against the
+//      same allowlist (so allowlisted public hosts cannot 30x to private/
+//      metadata addresses),
+//   3. caps the redirect chain,
+//   4. never includes the request URL in error messages (use the redacted
+//      form so secret-bearing query/path data does not leak into delivery
+//      errors or model tool transcripts).
+//
+// Callers replacing bare `fetch()` must NOT layer their own follow-redirect
+// logic on top of this — the helper already follows redirects safely.
+export async function fetchAllowlisted(url: string, options: FetchAllowlistedOptions): Promise<Response> {
+  const allowlist = options.allowlist;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+  const maxRedirects = options.maxRedirects ?? DEFAULT_FETCH_MAX_REDIRECTS;
+  let currentUrl = url;
+  let hops = 0;
+  let lastResponse: Response | undefined;
+
+  while (true) {
+    assertHostAllowed(currentUrl, allowlist);
+
+    const controller = new AbortController();
+    const userSignal = options.init?.signal;
+    if (userSignal) {
+      if (userSignal.aborted) {
+        controller.abort(userSignal.reason);
+      } else {
+        userSignal.addEventListener("abort", () => controller.abort(userSignal.reason), { once: true });
+      }
+    }
+    const timeout = setTimeout(() => controller.abort(new Error("fetchAllowlisted timed out")), timeoutMs);
+
+    try {
+      lastResponse = await fetchGuardedOnce(currentUrl, allowlist, {
+        ...options.init,
+        redirect: "manual",
+        signal: controller.signal,
+        dnsLookup: options.dnsLookup,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (lastResponse.status < 300 || lastResponse.status >= 400) {
+      return lastResponse;
+    }
+
+    const location = lastResponse.headers.get("location");
+    if (!location) {
+      return lastResponse;
+    }
+    hops += 1;
+    if (hops > maxRedirects) {
+      throw new Error(`fetchAllowlisted blocked: too many redirects (${hops}) from ${redactUrlForError(url)}`);
+    }
+    try {
+      currentUrl = new URL(location, currentUrl).toString();
+    } catch {
+      throw new Error(`fetchAllowlisted blocked: malformed redirect Location from ${redactUrlForError(url)}`);
+    }
+  }
+}
+
+export async function fetchAllowlistedOnce(url: string, options: FetchAllowlistedOptions): Promise<Response> {
+  assertHostAllowed(url, options.allowlist);
+  return fetchGuardedOnce(url, options.allowlist, {
+    ...options.init,
+    redirect: options.init?.redirect ?? "manual",
+    dnsLookup: options.dnsLookup,
+  });
 }
 
 export function evaluateDangerousHostBypass(
@@ -118,7 +260,7 @@ export function evaluateDangerousHostBypass(
     blocked: false,
     shouldAudit: true,
     hostname: decision.hostname,
-    reason: `Danger profile bypassed network allowlist for ${hostOrUrl}`,
+    reason: `Low-level bypass audit marker for public network target outside the allowlist: ${redactUrlForError(hostOrUrl)}`,
   };
 }
 
@@ -211,7 +353,7 @@ function invalidHost(input: string, reason: string): { host: string; hostname: s
   return {
     host: "",
     hostname: "",
-    invalidReason: `${reason} ${input}`,
+    invalidReason: `${reason} ${redactUrlForError(input)}`,
   };
 }
 
@@ -276,9 +418,125 @@ function isPrivateOrReservedHost(hostname: string): boolean {
   return false;
 }
 
+async function fetchGuardedOnce(
+  url: string,
+  allowlist: string[],
+  init: RequestInit & { dnsLookup?: DnsLookupFunction },
+): Promise<Response> {
+  const { dnsLookup, ...fetchInit } = init;
+  const dispatcher = createGuardedDispatcher(url, allowlist, dnsLookup);
+  try {
+    return await fetch(url, {
+      ...fetchInit,
+      dispatcher,
+    } as RequestInit & { dispatcher: Dispatcher });
+  } catch (error) {
+    await dispatcher.close().catch(() => undefined);
+    const cause = (error as { cause?: unknown }).cause;
+    if (cause instanceof Error && cause.message.includes("resolved address is blocked")) {
+      throw cause;
+    }
+    throw error;
+  }
+}
+
+function createGuardedDispatcher(url: string, allowlist: string[], dnsLookup?: DnsLookupFunction): Dispatcher {
+  return new Agent({
+    connect: {
+      lookup: createGuardedLookup(url, allowlist, dnsLookup ?? nodeDnsLookup),
+    },
+    keepAliveTimeout: 1,
+    keepAliveMaxTimeout: 1,
+  });
+}
+
+function createGuardedLookup(hostOrUrl: string, allowlist: string[], dnsLookup: DnsLookupFunction): DnsLookupFunction {
+  return (hostname, options, callback) => {
+    dnsLookup(hostname, options, (error, address, family) => {
+      if (error) {
+        callback(error, address, family);
+        return;
+      }
+      const normalized = normalizeLookupCallbackResult(address, family, options);
+      const blockedAddress = findBlockedResolvedAddress(hostOrUrl, allowlist, normalized.address);
+      if (blockedAddress) {
+        callback(
+          new Error(`Private, metadata, or reserved resolved address is blocked: ${redactUrlForError(hostOrUrl)}`),
+          normalized.address,
+          normalized.family,
+        );
+        return;
+      }
+      callback(null, normalized.address, normalized.family);
+    });
+  };
+}
+
+function normalizeLookupCallbackResult(
+  address: string | LookupAddress[],
+  family: number | undefined,
+  options: LookupOptions,
+): { address: string | LookupAddress[]; family?: number } {
+  if ((options as LookupOptions & { all?: boolean }).all) {
+    return {
+      address: Array.isArray(address) ? address : [{ address, family: family ?? inferAddressFamily(address) }],
+    };
+  }
+  if (Array.isArray(address)) {
+    const first = address[0];
+    return {
+      address: first?.address ?? "",
+      family: first?.family,
+    };
+  }
+  return {
+    address,
+    family: family ?? inferAddressFamily(address),
+  };
+}
+
+function inferAddressFamily(address: string): number {
+  const version = isIP(stripIpv6Brackets(address.toLowerCase()));
+  return version === 4 || version === 6 ? version : 0;
+}
+
+function findBlockedResolvedAddress(
+  hostOrUrl: string,
+  allowlist: string[],
+  address: string | LookupAddress[],
+): string | undefined {
+  const addresses = Array.isArray(address) ? address.map((entry) => entry.address) : [address];
+  return addresses.find(
+    (candidate) =>
+      isPrivateOrReservedHost(stripIpv6Brackets(candidate.toLowerCase())) &&
+      !isResolvedLoopbackAllowed(hostOrUrl, allowlist, candidate),
+  );
+}
+
+function isResolvedLoopbackAllowed(hostOrUrl: string, allowlist: string[], resolvedAddress: string): boolean {
+  const parsed = parseHost(hostOrUrl);
+  if (parsed.invalidReason) {
+    return false;
+  }
+  const host = parsed.host.toLowerCase();
+  const hostname = parsed.hostname.toLowerCase();
+  const matchedPattern = allowlist.find(
+    (pattern) => matchesAllowlistPattern(host, pattern) || matchesAllowlistPattern(hostname, pattern),
+  );
+  if (!matchedPattern || !isExplicitLoopbackPattern(matchedPattern, hostname)) {
+    return false;
+  }
+  return isLoopbackAddress(resolvedAddress);
+}
+
+function isLoopbackAddress(address: string): boolean {
+  const normalized = stripIpv6Brackets(address.toLowerCase());
+  return normalized === "::1" || normalized === "127.0.0.1" || normalized === "::ffff:127.0.0.1";
+}
+
 function isPrivateOrReservedIpv4(host: string): boolean {
   const parts = host.split(".").map((part) => Number(part));
-  const [a = -1, b = -1] = parts;
+  const [a = -1, b = -1, c = -1] = parts;
   if (a === 10 || a === 127 || a === 0) {
     return true;
   }
@@ -286,6 +544,21 @@ function isPrivateOrReservedIpv4(host: string): boolean {
     return true;
   }
   if (a === 192 && b === 168) {
+    return true;
+  }
+  if (a === 192 && b === 0 && (c === 0 || c === 2)) {
+    return true;
+  }
+  if (a === 192 && b === 88 && c === 99) {
+    return true;
+  }
+  if (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) {
+    return true;
+  }
+  if (a === 203 && b === 0 && c === 113) {
+    return true;
+  }
+  if (a === 100 && b >= 64 && b <= 127) {
     return true;
   }
   if (a === 172 && b >= 16 && b <= 31) {
@@ -307,7 +580,12 @@ function isBlockedIpv6(host: string): boolean {
     lower.startsWith("fe8") ||
     lower.startsWith("fe9") ||
     lower.startsWith("fea") ||
-    lower.startsWith("feb")
+    lower.startsWith("feb") ||
+    lower.startsWith("fec") ||
+    lower.startsWith("fed") ||
+    lower.startsWith("fee") ||
+    lower.startsWith("fef") ||
+    lower.startsWith("2001:db8:")
   ) {
     return true;
   }

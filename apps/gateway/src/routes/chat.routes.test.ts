@@ -978,25 +978,29 @@ describe("chat routes additional coverage", () => {
     expect(response.body).toContain('"type":"status"');
     expect(response.body).toContain('"type":"step"');
     expect(response.body).toContain('"type":"done"');
-    expect(runChatDelegationStream).toHaveBeenCalledWith("sess-1", {
-      objective: "Implement the fix",
-      roles: ["Architect", "QA"],
-      mode: "parallel",
-      steps: [
-        {
-          stepId: "step-1",
-          index: 0,
-          role: "Architect",
-          parallelizable: true,
-        },
-        {
-          stepId: "step-2",
-          index: 1,
-          role: "QA",
-          parallelizable: true,
-        },
-      ],
-    });
+    expect(runChatDelegationStream).toHaveBeenCalledWith(
+      "sess-1",
+      expect.objectContaining({
+        objective: "Implement the fix",
+        roles: ["Architect", "QA"],
+        mode: "parallel",
+        steps: [
+          {
+            stepId: "step-1",
+            index: 0,
+            role: "Architect",
+            parallelizable: true,
+          },
+          {
+            stepId: "step-2",
+            index: 1,
+            role: "QA",
+            parallelizable: true,
+          },
+        ],
+      }),
+      expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
+    );
     expect(response.body.indexOf('"stepId":"step-2"')).toBeLessThan(response.body.indexOf('"stepId":"step-1"'));
     expect(response.body).toContain('"durableRunId":"durable-child-1"');
   });

@@ -5,6 +5,7 @@ import type {
   ChatCompletionResponse,
   ChatMessageRecord,
   ChatMode,
+  ChatTurnLifecycleStatus,
   ChatOrchestrationSpecialistSelection,
   ChatOrchestrationIntensity,
   ChatOrchestrationRouteDecision,
@@ -104,7 +105,8 @@ export interface OrchestrationStepExecutionResult {
   startedAt: string;
   finishedAt?: string;
   durationMs?: number;
-  status: "completed" | "failed" | "skipped";
+  status: "completed" | "failed" | "skipped" | "running" | "cancelled";
+  waitStatus?: Extract<ChatTurnLifecycleStatus, "waiting_for_tool" | "waiting_for_approval" | "waiting_for_user_input">;
   output?: string;
   summary?: string;
   error?: string;

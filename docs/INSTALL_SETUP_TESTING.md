@@ -12,17 +12,17 @@ Related guides:
 
 GoatCitadel supports three valid install paths:
 
-1. Installer-first: best for most users and standard 1.0 deployments.
-2. Manual/dev install: best for contributors and raw GitHub validation.
+1. Packaged Windows installer: best for most Windows users and standard 1.0 deployments when using release `.exe` assets.
+2. Source bootstrap/manual install: best for contributors, raw GitHub validation, and users running `install.ps1` / `install.sh` from the repo.
 3. Docker/Compose: best for a safer single-host or shared-host runtime boundary.
 
-Default installer home is under your user home directory:
+Default local install home is under your user home directory:
 
 - base dir: `~/.GoatCitadel`
 - app dir: `~/.GoatCitadel/app`
 - launcher dir: `~/.GoatCitadel/bin`
 
-The Windows installer also installs the native Mission Control desktop host. Start Menu and desktop shortcuts open the desktop host by default; the host starts the same gateway and web Mission Control runtime behind the scenes and keeps it warm while the app is open.
+The packaged Windows `.exe` installer also installs the native Mission Control desktop host. Start Menu and desktop shortcuts open the desktop host by default; the host starts the same gateway and web Mission Control runtime behind the scenes and keeps it warm while the app is open. The PowerShell source bootstrap below installs command launchers for a repo checkout; it does not create packaged desktop shortcuts.
 
 The installer-safe launcher surface is the packaged runtime surface: `help`, `status`, `launch`, `up`, `stop`, and `uninstall`. Source-tree commands that shell out to workspace tooling, such as deep verification lanes, require a raw clone with `pnpm install` unless a release note explicitly says that command has been packaged.
 
@@ -35,8 +35,8 @@ Current first-party repair/install flows cover local workspace dependencies, Pla
 
 You can override the install root:
 
-- PowerShell installer: `-InstallDir <path>`
-- shell installer: `--install-dir <path>`
+- PowerShell source bootstrap: `-InstallDir <path>`
+- shell source bootstrap: `--install-dir <path>`
 - CLI install/update path: `goatcitadel install --install-dir <path>` or `goatcitadel update --install-dir <path>`
 - environment fallback: `GOATCITADEL_HOME=<path>`
 
@@ -62,9 +62,11 @@ node --version
 corepack --version
 ```
 
-## Path A: Installer-First
+## Path A: Source Bootstrap
 
 ### Windows
+
+The commands below run the source bootstrap script. They clone or update GoatCitadel and add command launchers; they are not the packaged Windows `.exe` installer path.
 
 Safer download-and-run flow:
 
@@ -148,7 +150,7 @@ PowerShell note:
 
 - use `goatcitadel` or `goat`
 - onboarding uses the live gateway API, so start with `goat up`
-- the desktop app is the Windows shortcut default, but `goatcitadel launch` still opens Mission Control in the browser
+- packaged Windows installer shortcuts open the desktop app by default, but source bootstrap launchers use `goatcitadel launch` to open Mission Control in the browser
 - run `pnpm verify:install`, `pnpm verify:desktop`, or `goatcitadel doctor --deep` from a source checkout unless the installed release explicitly advertises those as packaged commands
 - GoatCitadel does not install `gc` because PowerShell already uses it as the built-in alias for `Get-Content`
 - if `goatcitadel` is not found immediately after install, open a new PowerShell window
@@ -183,7 +185,7 @@ goat uninstall --force
 Notes:
 
 - uninstall removes the configured GoatCitadel base directory, including `app`, `bin`, tools, and local runtime data
-- it also removes the launcher PATH registration added by the installer
+- it also removes the launcher PATH registration added by the source bootstrap
 - open a new shell after uninstall so PATH changes take effect
 
 ## Path B: Manual / Dev Install
@@ -538,7 +540,7 @@ This rebuilds the screenshot gallery from a sanitized demo runtime, not your liv
 2. Check `http://127.0.0.1:8787/health`.
 3. If auth is enabled, configure credentials in Mission Control Settings.
 
-### Installed launcher exists but a command is missing
+### Source launcher exists but a command is missing
 
 Re-run:
 
@@ -546,7 +548,7 @@ Re-run:
 goatcitadel update
 ```
 
-The installer now delegates directly to the repo CLI, so launcher drift should no longer happen.
+The source bootstrap launcher now delegates directly to the repo CLI, so launcher drift should no longer happen.
 
 ### Port 8787 or 5173 is already in use
 

@@ -273,7 +273,11 @@ describe("NativeRoutePages Cowork task board", () => {
     await act(async () => {
       findButton(renderer!.root, "Move to trash").props.onClick();
     });
-    expect(mocks.deleteTask).toHaveBeenCalledWith("task-1", { mode: "soft", deletedBy: "operator" });
+    expect(mocks.deleteTask).toHaveBeenCalledWith("task-1", {
+      mode: "soft",
+      deletedBy: "operator",
+      workspaceId: "default",
+    });
   });
 
   it("restores deleted tasks when the trash view returns a selected task", async () => {
@@ -306,7 +310,7 @@ describe("NativeRoutePages Cowork task board", () => {
       findButton(renderer!.root, "Restore").props.onClick();
     });
 
-    expect(mocks.restoreTask).toHaveBeenCalledWith("task-1");
+    expect(mocks.restoreTask).toHaveBeenCalledWith("task-1", "default");
   });
 });
 

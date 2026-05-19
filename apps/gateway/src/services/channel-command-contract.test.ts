@@ -42,6 +42,25 @@ describe("channel command normalization", () => {
     });
   });
 
+  it("normalizes channel lookup commands on Telegram and Discord", () => {
+    expect(normalizeChannelCommandInput("/memory release proof", { platform: "telegram" })).toMatchObject({
+      handled: true,
+      name: "memory",
+      commandText: "/memory release proof",
+      argText: "release proof",
+    });
+    expect(normalizeChannelCommandInput("/recall installer", { platform: "discord" })).toMatchObject({
+      handled: true,
+      name: "recall",
+      commandText: "/recall installer",
+    });
+    expect(normalizeChannelCommandInput("/search approvals", { platform: "discord" })).toMatchObject({
+      handled: true,
+      name: "search",
+      commandText: "/search approvals",
+    });
+  });
+
   it("rejects commands that are not supported on the requested platform", () => {
     expect(normalizeChannelCommandInput("/start", { platform: "discord" })).toMatchObject({
       handled: false,

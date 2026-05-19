@@ -1,5 +1,12 @@
 import type {
   ApprovalBulkResolveResult,
+  LocalOperatorOverrideCreateInput,
+  LocalOperatorOverrideRecord,
+  PermissionProfileActivationInput,
+  PermissionProfileActivationRecord,
+  PermissionProfileCreateInput,
+  PermissionProfileRecord,
+  PermissionProfileUpdateInput,
   ToolAccessEvaluateRequest,
   ToolAccessEvaluateResponse,
   ToolCatalogEntry,
@@ -9,6 +16,11 @@ import type {
 } from "@goatcitadel/contracts";
 import type { ApprovalReplayResponse, ApprovalResolveResponse, ApprovalsResponse } from "./types.js";
 import { request } from "./client-core.js";
+
+type ToolGrantCreateRequestInput = Omit<ToolGrantCreateInput, "createdBy">;
+type PermissionProfileCreateRequestInput = Omit<PermissionProfileCreateInput, "createdBy" | "scope"> & {
+  scope?: Exclude<NonNullable<PermissionProfileCreateInput["scope"]>, "global">;
+};
 
 export async function fetchApprovals(
   status?: "pending" | "approved" | "rejected" | "edited",
@@ -28,23 +40,18 @@ export async function resolveApproval(
     method: "POST",
     body: JSON.stringify({
       decision,
-      resolvedBy: "operator",
     }),
   });
 }
 
 export async function resolveApprovalsBulk(input: {
   decision: "approve" | "reject";
-  resolvedBy?: string;
   resolutionNote?: string;
   status?: "pending";
 }): Promise<ApprovalBulkResolveResult> {
   return request<ApprovalBulkResolveResult>("/api/v1/approvals/bulk-resolve", {
     method: "POST",
-    body: JSON.stringify({
-      ...input,
-      resolvedBy: input.resolvedBy ?? "operator",
-    }),
+    body: JSON.stringify(input),
   });
 }
 
@@ -92,18 +99,129 @@ export async function fetchToolGrants(input?: {
   return request<{ items: ToolGrantRecord[] }>(`/api/v1/tools/grants?${search.toString()}`);
 }
 
-export async function createToolGrant(input: ToolGrantCreateInput): Promise<ToolGrantRecord> {
+export async function fetchPermissionProfiles(input?: {
+  includeArchived?: boolean;
+  workspaceId?: string;
+}): Promise<{ items: PermissionProfileRecord[] }> {
+  const search = new URLSearchParams();
+  if (input?.includeArchived) {
+    search.set("includeArchived", "true");
+  }
+  if (input?.workspaceId) {
+    search.set("workspaceId", input.workspaceId);
+  }
+  return request<{ items: PermissionProfileRecord[] }>(
+    `/api/v1/tools/permission-profiles${search.size > 0 ? `?${search.toString()}` : ""}`,
+  );
+}
+
+export async function fetchEffectivePermissionProfile(input?: {
+  workspaceId?: string;
+  sessionId?: string;
+  taskId?: string;
+  runId?: string;
+  surface?: "chat" | "cowork" | "code" | "tools" | "mcp" | "all";
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+}): Promise<Record<string, unknown>> {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(input ?? {})) {
+    if (value) search.set(key, value);
+  }
+  return request<Record<string, unknown>>(
+    `/api/v1/tools/permission-profiles/effective${search.size > 0 ? `?${search.toString()}` : ""}`,
+  );
+}
+
+export async function fetchActiveLocalOperatorOverrides(): Promise<{ items: LocalOperatorOverrideRecord[] }> {
+  return request<{ items: LocalOperatorOverrideRecord[] }>("/api/v1/tools/local-operator-overrides");
+}
+
+export async function createPermissionProfile(
+  input: PermissionProfileCreateRequestInput,
+): Promise<PermissionProfileRecord> {
+  return request<PermissionProfileRecord>("/api/v1/tools/permission-profiles", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updatePermissionProfile(
+  profileId: string,
+  input: Omit<PermissionProfileUpdateInput, "updatedBy">,
+): Promise<PermissionProfileRecord> {
+  return request<PermissionProfileRecord>(`/api/v1/tools/permission-profiles/${encodeURIComponent(profileId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function archivePermissionProfile(profileId: string): Promise<{ archived: boolean; profileId: string }> {
+  return request<{ archived: boolean; profileId: string }>(
+    `/api/v1/tools/permission-profiles/${encodeURIComponent(profileId)}/archive`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
+}
+
+export async function activatePermissionProfile(
+  input: Omit<PermissionProfileActivationInput, "createdBy">,
+): Promise<PermissionProfileActivationRecord> {
+  return request<PermissionProfileActivationRecord>("/api/v1/tools/permission-profiles/activate", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function createLocalOperatorOverride(
+  input: Omit<LocalOperatorOverrideCreateInput, "operatorId" | "createdBy">,
+): Promise<LocalOperatorOverrideRecord> {
+  return request<LocalOperatorOverrideRecord>("/api/v1/tools/local-operator-overrides", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function revokeLocalOperatorOverride(overrideId: string): Promise<{
+  revoked: boolean;
+  overrideId: string;
+  status?: LocalOperatorOverrideRecord["status"];
+  revokedAt?: string;
+  revokedBy?: string;
+  override?: LocalOperatorOverrideRecord;
+}> {
+  return request<{
+    revoked: boolean;
+    overrideId: string;
+    status?: LocalOperatorOverrideRecord["status"];
+    revokedAt?: string;
+    revokedBy?: string;
+    override?: LocalOperatorOverrideRecord;
+  }>(`/api/v1/tools/local-operator-overrides/${encodeURIComponent(overrideId)}/revoke`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function createToolGrant(input: ToolGrantCreateRequestInput): Promise<ToolGrantRecord> {
   return request<ToolGrantRecord>("/api/v1/tools/grants", {
     method: "POST",
     body: JSON.stringify(input),
   });
 }
 
-export async function revokeToolGrant(grantId: string): Promise<{ revoked: boolean; grantId: string }> {
-  return request<{ revoked: boolean; grantId: string }>(`/api/v1/tools/grants/${encodeURIComponent(grantId)}/revoke`, {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
+export async function revokeToolGrant(
+  grantId: string,
+): Promise<{ revoked: boolean; grantId: string; revokedBy?: string }> {
+  return request<{ revoked: boolean; grantId: string; revokedBy?: string }>(
+    `/api/v1/tools/grants/${encodeURIComponent(grantId)}/revoke`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
 }
 
 export async function invokeTool(input: {
@@ -115,7 +233,6 @@ export async function invokeTool(input: {
   taskId?: string;
   dryRun?: boolean;
   consentContext?: {
-    operatorId?: string;
     source?: "ui" | "tui" | "agent";
     reason?: string;
   };

@@ -20,8 +20,9 @@ import type {
   ResearchRunRecord,
   ResearchSourceRecord,
   ResearchSummaryRecord,
+  ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
-import type { ChatCommandResult } from "./chat-command-service.js";
+import type { ChatCommandOptions, ChatCommandResult } from "./chat-command-service.js";
 
 export interface ChatSupportRouteDependencies {
   commands: {
@@ -30,7 +31,7 @@ export interface ChatSupportRouteDependencies {
       usage: string;
       description: string;
     }>;
-    parseChatCommand(sessionId: string, commandText: string): Promise<ChatCommandResult>;
+    parseChatCommand(sessionId: string, commandText: string, options?: ChatCommandOptions): Promise<ChatCommandResult>;
   };
   learnedMemory: {
     listChatSessionLearnedMemory(
@@ -70,6 +71,9 @@ export interface ChatSupportRouteDependencies {
       input?: {
         source?: ProactiveTriggerSource;
         reason?: string;
+        operatorId?: string;
+        authActorId?: string;
+        authActorSource?: ToolPolicyActorContext["authActorSource"];
       },
     ): Promise<ProactiveRunRecord>;
     updateChatSessionProactivePolicy(
@@ -101,6 +105,14 @@ export interface ChatSupportRouteDependencies {
         mode: "quick" | "deep";
         providerId?: string;
         model?: string;
+        policyRunId?: string;
+        policyTaskId?: string;
+        operatorId?: string;
+        authActorId?: string;
+        authActorSource?: ToolPolicyActorContext["authActorSource"];
+        permissionProfileId?: string;
+        localOperatorOverrideId?: string;
+        surface?: ToolPolicyActorContext["surface"];
       },
     ): Promise<ResearchSummaryRecord>;
   };
@@ -149,8 +161,10 @@ export class ChatSupportRouteService {
     return this.deps.commands.listChatCommandCatalog();
   }
 
-  public parseChatCommand(sessionId: string, commandText: string) {
-    return this.deps.commands.parseChatCommand(sessionId, commandText);
+  public parseChatCommand(sessionId: string, commandText: string, options?: ChatCommandOptions) {
+    return options
+      ? this.deps.commands.parseChatCommand(sessionId, commandText, options)
+      : this.deps.commands.parseChatCommand(sessionId, commandText);
   }
 
   public runChatResearch(

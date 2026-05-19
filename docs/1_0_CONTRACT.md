@@ -1,6 +1,6 @@
 # GoatCitadel 1.0 Contract
 
-Last updated: 2026-04-22
+Last updated: 2026-05-18
 
 This document defines the product promise, visible scope, trust posture, upgrade guarantees, and release gates required before GoatCitadel may describe itself as `1.0`.
 
@@ -101,13 +101,16 @@ GoatCitadel may not claim `1.0` until all of these are true:
 
 - `verify:operator:proof` is green
 - `verify:durable:recovery` is green and includes stack-backed restart/recovery proof
-- `verify:surface:regression` is green across the current Mission Control Next release-surface manifest derived from the canonical route set
-- `verify:catalog:parity` is green and executes real runtime-backed operator actions for the visible non-channel catalog classes it claims to cover
-- `verify:visual:regression` is green and compares checked-in dark/light desktop/mobile baselines for every current Mission Control Next release-surface route derived from the canonical release-surface manifest; it stays read-only and any intentional baseline maintenance goes through `verify:visual:rebaseline`
+- `verify:surface:regression` is green across the current Mission Control Next release-surface manifest; governance/docs checks compare that manifest with the canonical route model so newly promoted routes do not silently fall out of release coverage
+- `verify:catalog:parity` is green and executes the runtime-backed operator action classes declared in its parity scenario; it is not a proof that every future visible catalog entry has a live action
+- `verify:visual:regression` is green and compares checked-in dark/light desktop/mobile baselines for every current Mission Control Next release-surface route declared in the canonical release-surface manifest; it stays read-only and any intentional baseline maintenance goes through `verify:visual:rebaseline`
 - `verify:backup:roundtrip` is green and restores the full minimum operator backup set (`data/index.db`, `data/transcripts/*.jsonl`, `data/audit/*.jsonl`, `config/*.json`)
-- `verify:api:compat` is green and fails on breaking REST route/schema or realtime event-envelope diffs
+- `verify:api:compat` is green and fails on removed REST routes, removed methods/statuses, or realtime event-envelope regressions covered by its captured compatibility scenario; it is not a full response-schema diff
 - `verify:runtime:truth` is green as a bespoke end-to-end proof lane for the canonical wait/resume/restart/recovery operator story in the current shell
 - `verify:auth:matrix` is green as a bespoke end-to-end proof lane for the privileged control-plane route set
+- `verify:code-mode:sandbox` is green and proves Code Mode sandbox metadata and fail-closed posture remain truthful; wrapper/artifact integrity stays covered by the focused Code Mode service and storage tests cited in release evidence
+- `verify:agentic:governance` is green as targeted contract and behavior proof for policy/profile/override governance anchors across Chat, Cowork, Code, tools, approvals, and durable ownership
+- `verify:agentic:proof` is green as aggregate targeted contract and behavior proof for retained agentic evidence, orchestration lineage anchors, and the governance/harness proof families; it is not a live end-to-end product proof
 - `verify:ui:parity` is green as current-shell seeded-fact proof plus legacy compatibility-surface smoke while the legacy compatibility shell remains shipped
 - `verify:memory:truth` is green as a bespoke end-to-end proof lane for TTL/lifecycle truth
 - `verify:realtime:truth` is green as a bespoke end-to-end proof lane for replay-gap, compatibility-fallback, and explicit-event-envelope behavior

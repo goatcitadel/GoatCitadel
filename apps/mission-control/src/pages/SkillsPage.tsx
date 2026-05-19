@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import type {
   CandidateSkillDetailRecord,
   CapabilityCatalogEntry,
+  CodeModeSandboxMetadata,
   CapabilityProposalDetailRecord,
   CapabilityProposalRecord,
   SkillMergedSourceResult,
@@ -64,6 +65,16 @@ export {
   deriveSkillCategoryLabel,
   deriveSourceCategoryLabel,
 } from "./skills/skills-page-helpers";
+
+function describeOriginatingRunSandbox(sandbox: CodeModeSandboxMetadata): string {
+  if (sandbox.available) {
+    return "available";
+  }
+  if (!sandbox.required) {
+    return "advisory unsandboxed";
+  }
+  return "failed closed";
+}
 
 interface SkillActivationPolicyState {
   guardedAutoThreshold: number;
@@ -1295,7 +1306,7 @@ export function SkillsPage() {
                 ) : null}
                 {candidateDetail.originatingRun?.sandbox ? (
                   <span className="token-chip">
-                    Sandbox: {candidateDetail.originatingRun.sandbox.available ? "available" : "failed closed"}
+                    Sandbox: {describeOriginatingRunSandbox(candidateDetail.originatingRun.sandbox)}
                   </span>
                 ) : null}
               </div>
@@ -1304,6 +1315,9 @@ export function SkillsPage() {
               ) : null}
               {candidateDetail.originatingRun?.sandbox?.failClosedReason ? (
                 <p className="table-subtext">{candidateDetail.originatingRun.sandbox.failClosedReason}</p>
+              ) : null}
+              {candidateDetail.originatingRun?.sandbox?.advisoryUnsandboxedReason ? (
+                <p className="table-subtext">{candidateDetail.originatingRun.sandbox.advisoryUnsandboxedReason}</p>
               ) : null}
               <table className="gc-data-table">
                 <thead>

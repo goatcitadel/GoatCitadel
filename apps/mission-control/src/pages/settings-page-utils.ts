@@ -53,12 +53,12 @@ export function formatVoiceDate(value?: string): string {
 
 export function formatDeploymentProfileLabel(value: "local_dev" | "trusted_local" | "remote_hardened"): string {
   if (value === "trusted_local") {
-    return "trusted_local";
+    return "Trusted Local";
   }
   if (value === "remote_hardened") {
-    return "remote_hardened";
+    return "Remote Hardened";
   }
-  return "local_dev";
+  return "Local Dev";
 }
 
 export function fileToBase64(file: File): Promise<string> {

@@ -13,14 +13,20 @@ import type {
 import { clampInt } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
-import { assertReadPathAllowed, assertWritePathInJail } from "./sandbox/path-jail.js";
-import { assertHostAllowed } from "./sandbox/network-guard.js";
+import { assertReadPathAllowed, assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
+import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "./sandbox/network-guard.js";
 import { executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
 import { collectLeakDetections, sanitizeForModel } from "./tool-security.js";
 import { ingestDocumentViaBackend, searchIngestedContext } from "./ingestion-backends.js";
 import { matchesToolPattern } from "./tool-patterns.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import { createPresentationPptx, type PresentationSlide } from "./presentation-pptx.js";
+import {
+  createDocumentArtifact,
+  documentArtifactExtension,
+  type DocumentArtifactFormat,
+  type DocumentArtifactSection,
+} from "./document-artifacts.js";
 import {
   appendBankrActionAudit,
   evaluateBankrActionPreview,
@@ -168,6 +174,8 @@ export async function executeTool(
       return finalizeToolResult(await embeddingsQuery(request.args, storage));
     case "artifacts.create":
       return finalizeToolResult(await artifactsCreate(request.args, config));
+    case "documents.create":
+      return finalizeToolResult(await documentsCreate(request.args, config));
     case "presentations.create":
       return finalizeToolResult(await presentationsCreate(request.args, config));
     case "channel.send":
@@ -1099,6 +1107,36 @@ async function artifactsCreate(args: Record<string, unknown>, config: ToolPolicy
   return { path: full, bytesWritten: out.length, template };
 }
 
+async function documentsCreate(args: Record<string, unknown>, config: ToolPolicyConfig) {
+  const requestedPath = required(args.path, "path");
+  const format = resolveDocumentFormat(asString(args.format), requestedPath);
+  const p = ensureDocumentPath(requestedPath, format);
+  assertWritePathInJail(p, config.sandbox.writeJailRoots);
+  const full = path.resolve(p);
+  const title = truncateText(asString(args.title) ?? inferTitleFromPath(full) ?? "Document", 120);
+  const body = truncateText(asString(args.body) ?? asString(args.content) ?? "", 12000);
+  const artifact = createDocumentArtifact(format, {
+    title,
+    body,
+    sections: normalizeDocumentSections(args.sections, body),
+    rows: normalizeDocumentRows(args.rows),
+  });
+  await fs.mkdir(path.dirname(full), { recursive: true });
+  if (artifact.binary) {
+    await fs.writeFile(full, artifact.data);
+  } else {
+    await fs.writeFile(full, artifact.data, "utf8");
+  }
+  return {
+    path: full,
+    bytesWritten: Buffer.isBuffer(artifact.data) ? artifact.data.length : Buffer.byteLength(artifact.data, "utf8"),
+    format,
+    mimeType: artifact.mimeType,
+    title,
+    sectionCount: normalizeDocumentSections(args.sections, body).length,
+  };
+}
+
 async function presentationsCreate(args: Record<string, unknown>, config: ToolPolicyConfig) {
   const requestedPath = required(args.path, "path");
   const p = ensurePptxPath(requestedPath);
@@ -1121,6 +1159,88 @@ async function presentationsCreate(args: Record<string, unknown>, config: ToolPo
     title,
     slideCount: slides.length + 1,
   };
+}
+
+function resolveDocumentFormat(rawFormat: string | undefined, requestedPath: string): DocumentArtifactFormat {
+  const raw = (rawFormat ?? path.extname(requestedPath).replace(/^\./, "")).trim().toLowerCase();
+  switch (raw) {
+    case "":
+    case "md":
+    case "markdown":
+      return "markdown";
+    case "txt":
+    case "text":
+      return "txt";
+    case "html":
+    case "htm":
+      return "html";
+    case "json":
+      return "json";
+    case "csv":
+      return "csv";
+    case "doc":
+    case "docx":
+    case "word":
+      return "docx";
+    case "pdf":
+      return "pdf";
+    default:
+      throw new Error(`Unsupported document format: ${raw}`);
+  }
+}
+
+function ensureDocumentPath(value: string, format: DocumentArtifactFormat): string {
+  const extension = documentArtifactExtension(format);
+  if (new RegExp(`${escapeRegExp(extension)}$`, "i").test(value)) {
+    return value;
+  }
+  const parsed = path.parse(value);
+  const fileName = parsed.name ? `${parsed.name}${extension}` : `document${extension}`;
+  return path.join(parsed.dir, fileName);
+}
+
+function inferTitleFromPath(value: string): string | undefined {
+  const baseName = path.basename(value, path.extname(value)).replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!baseName) {
+    return undefined;
+  }
+  return baseName.replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function normalizeDocumentSections(value: unknown, fallbackBody: string): DocumentArtifactSection[] {
+  const rawSections = Array.isArray(value) ? value : [];
+  const sections = rawSections
+    .map((item, index) => {
+      const section = record(item);
+      const heading = truncateText(asString(section.heading) ?? asString(section.title) ?? `Section ${index + 1}`, 100);
+      const body = truncateText(asString(section.body) ?? asString(section.content) ?? "", 2000);
+      const bullets = normalizeDocumentBullets(section.bullets);
+      return { heading, body, bullets };
+    })
+    .filter((section) => section.heading || section.body || section.bullets.length > 0)
+    .slice(0, 40);
+  if (sections.length > 0) {
+    return sections;
+  }
+  return fallbackBody ? [{ heading: "Summary", body: fallbackBody, bullets: [] }] : [];
+}
+
+function normalizeDocumentRows(value: unknown): Array<Record<string, unknown> | unknown[]> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  return value
+    .map((item) => (Array.isArray(item) ? item : record(item)))
+    .filter((item) => (Array.isArray(item) ? item.length > 0 : Object.keys(item).length > 0))
+    .slice(0, 500);
+}
+
+function normalizeDocumentBullets(value: unknown): string[] {
+  const rawItems = Array.isArray(value) ? value : typeof value === "string" ? value.split(/\r?\n|;/g) : [];
+  return rawItems
+    .map((item) => truncateText(asString(item) ?? "", 220))
+    .filter((item) => item.length > 0)
+    .slice(0, 12);
 }
 
 function ensurePptxPath(value: string): string {
@@ -1169,6 +1289,10 @@ function normalizePresentationBullets(value: unknown): string[] {
 function truncateText(value: string, maxLength: number): string {
   const normalized = value.trim().replace(/\s+/g, " ");
   return normalized.length > maxLength ? `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}...` : normalized;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function finalizeToolResult(result: Record<string, unknown>): Record<string, unknown> {
@@ -4684,10 +4808,13 @@ async function fetchAllowlisted(
     assertHostAllowed(current, allowlist);
     let response: Response;
     for (let attempt = 0; ; attempt += 1) {
-      response = await fetch(current, {
-        ...init,
-        redirect: "manual",
-        signal: composeAbortSignal(20000, signal),
+      response = await fetchAllowlistedOnce(current, {
+        allowlist,
+        init: {
+          ...init,
+          redirect: "manual",
+          signal: composeAbortSignal(20000, signal),
+        },
       });
       if (!RETRYABLE_HTTP_STATUSES.has(response.status) || attempt >= MAX_HTTP_RETRIES) {
         break;
@@ -4699,11 +4826,11 @@ async function fetchAllowlisted(
     }
     const location = response.headers.get("location");
     if (!location) {
-      throw new Error(`Redirect missing location for ${current}`);
+      throw new Error(`Redirect missing location for ${redactUrlForError(current)}`);
     }
     current = new URL(location, current).toString();
   }
-  throw new Error(`Too many redirects for ${url}`);
+  throw new Error(`Too many redirects for ${redactUrlForError(url)}`);
 }
 
 async function waitForHttpRetry(response: Response, attempt: number, signal?: AbortSignal): Promise<void> {
@@ -5000,24 +5127,60 @@ function canBypassReadPath(
   config: ToolPolicyConfig,
   storage?: Storage,
 ): boolean {
-  if (config.sandbox.readAccessMode === "full_disk") {
-    return true;
-  }
-  if (typeof request.consentContext?.reason === "string" && request.consentContext.reason.startsWith("approval:")) {
-    return true;
-  }
+  const readAccessMode = getStrictestReadAccessMode(
+    config.sandbox.readAccessMode,
+    request.policyContext?.permissionProfile?.readAccessMode,
+  );
   const grants = resolveMatchingAllowGrants(request, storage);
+  const grantsWithPathConstraints = grants
+    .map((grant) => ({
+      grant,
+      allowedPaths: getAllowedGrantReadPaths(grant),
+    }))
+    .filter((entry) => entry.allowedPaths.length > 0);
+  const resolvedPath = resolveReadPathAccess(
+    targetPath,
+    config.sandbox.writeJailRoots,
+    config.sandbox.readOnlyRoots,
+  ).resolvedPath;
+  if (grantsWithPathConstraints.length > 0) {
+    return grantsWithPathConstraints.some((entry) => isPathWithinAnyGrantRoot(resolvedPath, entry.allowedPaths));
+  }
+  if (readAccessMode === "full_disk") {
+    return true;
+  }
+  if (readAccessMode === "approval_required" && storage && hasVerifiedApprovalBypass(request, storage)) {
+    return true;
+  }
   if (grants.length === 0) {
     return false;
   }
-  const resolvedPath = path.resolve(targetPath);
   return grants.some((grant) => {
-    const allowedPaths = grant.constraints?.allowedPaths;
-    if (!allowedPaths || allowedPaths.length === 0) {
+    const allowedPaths = getAllowedGrantReadPaths(grant);
+    if (allowedPaths.length === 0) {
       return false;
     }
     return isPathWithinAnyGrantRoot(resolvedPath, allowedPaths);
   });
+}
+
+function getAllowedGrantReadPaths(grant: ToolGrantRecord): string[] {
+  return [
+    ...(grant.constraints?.allowedPaths ?? []),
+    ...(grant.constraints?.referenceRoots ?? []).map((item) => item.rootPath),
+  ];
+}
+
+function getStrictestReadAccessMode(
+  configMode?: ToolPolicyConfig["sandbox"]["readAccessMode"],
+  profileMode?: ToolPolicyConfig["sandbox"]["readAccessMode"],
+): ToolPolicyConfig["sandbox"]["readAccessMode"] {
+  const rank = { roots_only: 0, approval_required: 1, full_disk: 2 } as const;
+  const normalizedConfigMode = configMode ?? "roots_only";
+  if (!profileMode) {
+    return normalizedConfigMode;
+  }
+  return rank[profileMode] < rank[normalizedConfigMode] ? profileMode : normalizedConfigMode;
 }
 
 function resolveMatchingAllowGrants(request: ToolInvokeRequest, storage?: Storage): ToolGrantRecord[] {
@@ -5039,13 +5202,16 @@ function resolveMatchingAllowGrants(request: ToolInvokeRequest, storage?: Storag
 
 function buildGrantScopeCandidates(
   request: ToolInvokeRequest,
-): Array<{ scope: "task" | "agent" | "session" | "global"; scopeRef: string }> {
-  const out: Array<{ scope: "task" | "agent" | "session" | "global"; scopeRef: string }> = [];
+): Array<{ scope: "task" | "agent" | "session" | "workspace" | "global"; scopeRef: string }> {
+  const out: Array<{ scope: "task" | "agent" | "session" | "workspace" | "global"; scopeRef: string }> = [];
   if (request.taskId) {
     out.push({ scope: "task", scopeRef: request.taskId });
   }
   out.push({ scope: "agent", scopeRef: request.agentId });
   out.push({ scope: "session", scopeRef: request.sessionId });
+  if (request.workspaceId) {
+    out.push({ scope: "workspace", scopeRef: request.workspaceId });
+  }
   out.push({ scope: "global", scopeRef: "global" });
   return out;
 }

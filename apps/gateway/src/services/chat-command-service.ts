@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Chat command parser/dispatcher keeps slash-command surface centralized so handler dispatch, lookup, and lifecycle stay traceable in one place. */
 /**
  * Chat slash-command parser/dispatcher.
  *
@@ -8,19 +9,23 @@
 
 import type {
   ChatMode,
+  ChatDelegateResponse,
   ChatProactiveMode,
   ChatReflectionMode,
   ChatRetrievalMode,
+  ChatSessionListQuery,
   ChatSessionPrefsRecord,
   ChatSessionRecord,
   ChatThinkingLevel,
   ChatWebMode,
   LearnedMemoryConflictRecord,
   LearnedMemoryItemRecord,
+  MemoryItemRecord,
   McpServerRecord,
   McpServerTemplateRecord,
   PersonalityCatalogResponse,
   ResearchSummaryRecord,
+  ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
 import { getPersonalityPreset, normalizePersonalityId } from "./channel-personalities.js";
 import { parseDelegateCommand, parsePipelineCommand, parseSlashCommand } from "./chat-command-helpers.js";
@@ -89,6 +94,13 @@ export interface ChatCommandDependencies {
     sessionId: string,
     limit?: number,
   ): { items: LearnedMemoryItemRecord[]; conflicts: LearnedMemoryConflictRecord[] };
+  listChatSessions(query?: ChatSessionListQuery): ChatSessionRecord[];
+  listMemoryItems(input?: {
+    namespace?: string;
+    status?: MemoryItemRecord["status"] | "all";
+    query?: string;
+    limit?: number;
+  }): MemoryItemRecord[];
   listMcpServers(): McpServerRecord[];
   listMcpTemplates(): Array<McpServerTemplateRecord & { installed: boolean }>;
   listSkills(): Array<{ skillId: string; state: string; note?: string }>;
@@ -128,7 +140,12 @@ export interface ChatCommandDependencies {
     }>;
   }>;
   normalizeWorkspaceId(workspaceId?: string): string;
-  resolveChatToolApproval(sessionId: string, approvalId: string, decision: "approve" | "reject"): Promise<unknown>;
+  resolveChatToolApproval(
+    sessionId: string,
+    approvalId: string,
+    decision: "approve" | "reject",
+    options?: { resolvedBy?: string },
+  ): Promise<unknown>;
   runChatDelegation(
     sessionId: string,
     input: {
@@ -136,6 +153,14 @@ export interface ChatCommandDependencies {
       roles: string[];
       mode: "sequential";
       surfaceMode?: ChatMode;
+      policyRunId?: string;
+      policyTaskId?: string;
+      operatorId?: string;
+      authActorId?: string;
+      authActorSource?: ToolPolicyActorContext["authActorSource"];
+      permissionProfileId?: string;
+      localOperatorOverrideId?: string;
+      surface?: ToolPolicyActorContext["surface"];
       steps?: Array<{
         stepId: string;
         index: number;
@@ -143,17 +168,20 @@ export interface ChatCommandDependencies {
         dependsOnStepIds?: string[];
       }>;
     },
-  ): Promise<{
-    runId: string;
-    taskId?: string;
-    steps: import("@goatcitadel/contracts").ChatDelegationStepRecord[];
-    stitchedOutput?: string;
-  }>;
+  ): Promise<ChatDelegateResponse>;
   runChatResearch(
     sessionId: string,
     input: {
       query: string;
       mode: "quick";
+      policyRunId?: string;
+      policyTaskId?: string;
+      operatorId?: string;
+      authActorId?: string;
+      authActorSource?: ToolPolicyActorContext["authActorSource"];
+      permissionProfileId?: string;
+      localOperatorOverrideId?: string;
+      surface?: ToolPolicyActorContext["surface"];
     },
   ): Promise<ResearchSummaryRecord>;
   runMemoryMaintenanceNow(input: { workspaceId: string; triggerSource: "manual" }): { runId: string };
@@ -199,6 +227,25 @@ export type ChatCommandResult = {
   session?: ChatSessionRecord;
 };
 
+export type ChatCommandOptions = {
+  resolvedBy?: string;
+  source?: "chat" | "channel";
+  channelContext?: {
+    platform: "telegram" | "discord" | string;
+    account?: string;
+    actorId?: string;
+    workspaceId?: string;
+  };
+  policyRunId?: string;
+  policyTaskId?: string;
+  operatorId?: string;
+  authActorId?: string;
+  authActorSource?: ToolPolicyActorContext["authActorSource"];
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+  surface?: ToolPolicyActorContext["surface"];
+};
+
 export interface ChatCommandCatalogItem {
   command: string;
   usage: string;
@@ -216,7 +263,21 @@ export function listChatCommandCatalog(): ChatCommandCatalogItem[] {
       description: "Override provider/model for this session.",
     },
     { command: "/web", usage: "/web auto|off|quick|deep", description: "Set web retrieval behavior." },
-    { command: "/memory", usage: "/memory auto|on|off", description: "Set memory behavior." },
+    {
+      command: "/memory",
+      usage: "/memory auto|on|off or /memory <query>",
+      description: "Set memory behavior, or search learned memory from a channel.",
+    },
+    {
+      command: "/recall",
+      usage: "/recall <query>",
+      description: "Search persisted session transcript history from a channel.",
+    },
+    {
+      command: "/search",
+      usage: "/search <query>",
+      description: "Search learned memory and session history from a channel.",
+    },
     {
       command: "/goal",
       usage: "/goal [pause|resume|clear|<objective>] [--max-iterations N] [--budget-usd N]",
@@ -305,6 +366,7 @@ export async function parseChatCommand(
   deps: ChatCommandDependencies,
   sessionId: string,
   commandText: string,
+  options?: ChatCommandOptions,
 ): Promise<ChatCommandResult> {
   deps.getSession(sessionId);
   const parsed = parseSlashCommand(commandText);
@@ -428,14 +490,33 @@ export async function parseChatCommand(
   if (command === "/memory") {
     const memoryMode = (args[0] ?? "").toLowerCase() as "auto" | "on" | "off";
     if (!["auto", "on", "off"].includes(memoryMode)) {
+      if (options?.source === "channel") {
+        return renderChannelLookupCommand(deps, sessionId, command, args, options);
+      }
       return { ok: false, command, args, message: "Usage: /memory auto|on|off" };
     }
     const prefs = deps.updateChatSessionPrefs(sessionId, { memoryMode });
     return { ok: true, command, args, prefs, message: `Memory mode set to ${prefs.memoryMode}.` };
   }
 
+  if (command === "/recall" || command === "/search") {
+    if (options?.source !== "channel") {
+      return { ok: false, command, args, message: `Usage: ${command} <query>` };
+    }
+    return renderChannelLookupCommand(deps, sessionId, command, args, options);
+  }
+
   if (command === "/goal") {
-    const result = await handleGoalCommand(deps, sessionId, args);
+    const result = await handleGoalCommand(deps, sessionId, args, {
+      policyRunId: options?.policyRunId,
+      policyTaskId: options?.policyTaskId,
+      operatorId: options?.operatorId ?? options?.authActorId ?? options?.resolvedBy,
+      authActorId: options?.authActorId,
+      authActorSource: options?.authActorSource,
+      permissionProfileId: options?.permissionProfileId,
+      localOperatorOverrideId: options?.localOperatorOverrideId,
+      surface: options?.surface ?? "chat",
+    });
     return {
       ok: result.ok,
       command,
@@ -617,6 +698,14 @@ export async function parseChatCommand(
     const research = await deps.runChatResearch(sessionId, {
       query,
       mode: "quick",
+      policyRunId: options?.policyRunId,
+      policyTaskId: options?.policyTaskId,
+      operatorId: options?.operatorId ?? options?.authActorId ?? options?.resolvedBy,
+      authActorId: options?.authActorId,
+      authActorSource: options?.authActorSource,
+      permissionProfileId: options?.permissionProfileId,
+      localOperatorOverrideId: options?.localOperatorOverrideId,
+      surface: options?.surface ?? "chat",
     });
     return {
       ok: true,
@@ -636,12 +725,20 @@ export async function parseChatCommand(
       objective,
       roles,
       mode: "sequential",
+      policyRunId: options?.policyRunId,
+      policyTaskId: options?.policyTaskId,
+      operatorId: options?.operatorId ?? options?.authActorId ?? options?.resolvedBy,
+      authActorId: options?.authActorId,
+      authActorSource: options?.authActorSource,
+      permissionProfileId: options?.permissionProfileId,
+      localOperatorOverrideId: options?.localOperatorOverrideId,
+      surface: options?.surface ?? "chat",
     });
     return {
       ok: true,
       command,
       args,
-      message: `Delegation ${run.runId} completed with ${run.steps.length} steps.`,
+      message: `Delegation ${run.runId} ${formatDelegationCommandStatus(run.status)} with ${run.steps.length} steps.`,
     };
   }
 
@@ -654,12 +751,20 @@ export async function parseChatCommand(
       objective: parsedPipeline.objective,
       roles: parsedPipeline.roles,
       mode: "sequential",
+      policyRunId: options?.policyRunId,
+      policyTaskId: options?.policyTaskId,
+      operatorId: options?.operatorId ?? options?.authActorId ?? options?.resolvedBy,
+      authActorId: options?.authActorId,
+      authActorSource: options?.authActorSource,
+      permissionProfileId: options?.permissionProfileId,
+      localOperatorOverrideId: options?.localOperatorOverrideId,
+      surface: options?.surface ?? "chat",
     });
     return {
       ok: true,
       command,
       args,
-      message: `Pipeline ${parsedPipeline.template} completed (${run.steps.length} steps).`,
+      message: `Pipeline ${parsedPipeline.template} ${formatDelegationCommandStatus(run.status)} (${run.steps.length} steps).`,
     };
   }
 
@@ -999,6 +1104,14 @@ export async function parseChatCommand(
     const research = await deps.runChatResearch(sessionId, {
       query,
       mode: "quick",
+      policyRunId: options?.policyRunId,
+      policyTaskId: options?.policyTaskId,
+      operatorId: options?.operatorId ?? options?.authActorId ?? options?.resolvedBy,
+      authActorId: options?.authActorId,
+      authActorSource: options?.authActorSource,
+      permissionProfileId: options?.permissionProfileId,
+      localOperatorOverrideId: options?.localOperatorOverrideId,
+      surface: options?.surface ?? "chat",
     });
     return {
       ok: true,
@@ -1014,7 +1127,9 @@ export async function parseChatCommand(
     if (!approvalId) {
       return { ok: false, command, args, message: "Usage: /approve <approval-id>" };
     }
-    await deps.resolveChatToolApproval(sessionId, approvalId, "approve");
+    await deps.resolveChatToolApproval(sessionId, approvalId, "approve", {
+      resolvedBy: resolveCommandActor(options),
+    });
     return { ok: true, command, args, message: `Approved ${approvalId}.` };
   }
 
@@ -1023,7 +1138,9 @@ export async function parseChatCommand(
     if (!approvalId) {
       return { ok: false, command, args, message: "Usage: /deny <approval-id>" };
     }
-    await deps.resolveChatToolApproval(sessionId, approvalId, "reject");
+    await deps.resolveChatToolApproval(sessionId, approvalId, "reject", {
+      resolvedBy: resolveCommandActor(options),
+    });
     return { ok: true, command, args, message: `Denied ${approvalId}.` };
   }
 
@@ -1033,4 +1150,170 @@ export async function parseChatCommand(
     args,
     message: `Unknown command ${command}. Use /help.`,
   };
+}
+
+type ChannelLookupResult = {
+  source: "memory" | "recall";
+  id: string;
+  label: string;
+  excerpt: string;
+  updatedAt?: string;
+};
+
+function renderChannelLookupCommand(
+  deps: ChatCommandDependencies,
+  sessionId: string,
+  command: string,
+  args: string[],
+  options: ChatCommandOptions,
+): ChatCommandResult {
+  const query = args.join(" ").trim();
+  if (!query) {
+    return {
+      ok: false,
+      command,
+      args,
+      message: `Usage: ${command} <query>`,
+    };
+  }
+  const workspaceId = deps.normalizeWorkspaceId(
+    options.channelContext?.workspaceId ?? deps.storage.chatSessionMeta.ensure(sessionId).workspaceId,
+  );
+  const memoryResults = command === "/recall" ? [] : searchChannelMemory(deps, sessionId, workspaceId, query);
+  const recallResults =
+    command === "/memory" ? [] : searchChannelSessions(deps, sessionId, workspaceId, query, options);
+  const results = [...memoryResults, ...recallResults].slice(0, 5);
+  const actorCopy = options.channelContext?.actorId
+    ? ` requester ${options.channelContext.actorId}`
+    : " this requester";
+  const scopeCopy = `Results are scoped to${actorCopy} and workspace ${workspaceId}.`;
+  if (results.length === 0) {
+    return {
+      ok: true,
+      command,
+      args,
+      message: `${scopeCopy}\nNo ${describeLookupKind(command)} results matched "${query}".`,
+    };
+  }
+  return {
+    ok: true,
+    command,
+    args,
+    message: [
+      scopeCopy,
+      `${describeLookupKind(command)} results for "${query}":`,
+      ...results.map((item) => `- [${item.id.slice(0, 8)}] ${item.label}: ${truncateLookupLine(item.excerpt)}`),
+    ].join("\n"),
+  };
+}
+
+function searchChannelMemory(
+  deps: ChatCommandDependencies,
+  sessionId: string,
+  workspaceId: string,
+  query: string,
+): ChannelLookupResult[] {
+  const lowerQuery = query.toLowerCase();
+  const learned = deps
+    .listChatSessionLearnedMemory(sessionId, 50)
+    .items.filter((item) => item.status === "active" && item.content.toLowerCase().includes(lowerQuery))
+    .map((item) => ({
+      source: "memory" as const,
+      id: item.itemId,
+      label: item.itemType,
+      excerpt: item.content,
+      updatedAt: item.updatedAt,
+    }));
+  let lifecycle: ChannelLookupResult[];
+  try {
+    lifecycle = deps.listMemoryItems({ namespace: workspaceId, status: "active", query, limit: 5 }).map((item) => ({
+      source: "memory" as const,
+      id: item.itemId,
+      label: item.title || item.namespace,
+      excerpt: item.content,
+      updatedAt: item.updatedAt,
+    }));
+  } catch {
+    lifecycle = [];
+  }
+  return dedupeLookupResults([...learned, ...lifecycle]).slice(0, 5);
+}
+
+function searchChannelSessions(
+  deps: ChatCommandDependencies,
+  sessionId: string,
+  workspaceId: string,
+  query: string,
+  options: ChatCommandOptions,
+): ChannelLookupResult[] {
+  const channel = options.channelContext?.platform;
+  const account = options.channelContext?.account;
+  return deps
+    .listChatSessions({ workspaceId, q: query, limit: 20, includeHidden: false })
+    .filter((session) => {
+      if (session.sessionId === sessionId) {
+        return true;
+      }
+      if (!channel) {
+        return false;
+      }
+      return session.channel === channel && (!account || session.account === account);
+    })
+    .slice(0, 5)
+    .map((session) => {
+      const firstHit = session.searchHits?.[0];
+      return {
+        source: "recall" as const,
+        id: firstHit?.messageId ?? session.sessionId,
+        label: session.title ?? session.sessionKey,
+        excerpt: firstHit?.excerpt ?? session.title ?? session.sessionKey,
+        updatedAt: session.updatedAt,
+      };
+    });
+}
+
+function dedupeLookupResults(items: ChannelLookupResult[]): ChannelLookupResult[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = `${item.source}:${item.id}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function describeLookupKind(command: string): string {
+  if (command === "/memory") {
+    return "Memory";
+  }
+  if (command === "/recall") {
+    return "Recall";
+  }
+  return "Memory and recall";
+}
+
+function truncateLookupLine(value: string): string {
+  const oneLine = value.replace(/\s+/g, " ").trim();
+  return oneLine.length <= 110 ? oneLine : `${oneLine.slice(0, 107).trimEnd()}...`;
+}
+
+function resolveCommandActor(options: ChatCommandOptions | undefined): string {
+  return options?.resolvedBy?.trim() || options?.authActorId?.trim() || options?.operatorId?.trim() || "chat-command";
+}
+
+function formatDelegationCommandStatus(status: string | undefined): string {
+  switch (status) {
+    case "running":
+      return "is waiting";
+    case "partial":
+      return "finished partially";
+    case "failed":
+      return "failed";
+    case "completed":
+      return "completed";
+    default:
+      return "finished";
+  }
 }

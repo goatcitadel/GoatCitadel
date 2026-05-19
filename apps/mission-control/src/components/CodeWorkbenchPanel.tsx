@@ -455,7 +455,7 @@ export function CodeWorkbenchPanel({
               ) : !output?.output ? (
                 <div className="chat-code-workbench-empty">
                   <p>No run log output has landed yet.</p>
-                  <p>Helper runs from code-mode attach here as non-authoritative artifacts.</p>
+                  <p>Helper runs from code-mode attach here as governed run evidence when available.</p>
                 </div>
               ) : null}
             </div>

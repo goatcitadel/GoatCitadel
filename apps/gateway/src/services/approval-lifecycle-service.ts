@@ -72,6 +72,7 @@ export interface ApprovalLifecycleHost {
     | "chatSessionMeta"
     | "chatTurnTraces"
     | "chatToolRuns"
+    | "codeModeRuns"
     | "runImmediateTransaction"
   >;
 
@@ -146,12 +147,16 @@ export function createToolGrant(host: ApprovalLifecycleHost, input: ToolGrantCre
   return grant;
 }
 
-export function revokeToolGrant(host: ApprovalLifecycleHost, grantId: string): boolean {
-  const revoked = host.policyEngine.revokeGrant(grantId);
+export function revokeToolGrant(host: ApprovalLifecycleHost, grantId: string, revokedBy: string): boolean {
+  if (!revokedBy.trim()) {
+    throw new ValidationError({ code: "FIELD_REQUIRED", field: "revokedBy" });
+  }
+  const revoked = host.policyEngine.revokeGrant(grantId, revokedBy);
   if (revoked) {
     host.publishRealtime("system", "tools", {
       type: "tool_grant_revoked",
       grantId,
+      revokedBy,
     });
   }
   return revoked;
@@ -394,7 +399,17 @@ export async function createApproval(
   host: ApprovalLifecycleHost,
   input: ApprovalCreateInput,
 ): Promise<ApprovalRequest> {
-  const approvalHookWorkspaceId = host.resolveApprovalHookWorkspaceId(input.payload);
+  const approvalHookWorkspaceId = host.resolveApprovalHookWorkspaceId({
+    ...(input.payload ?? {}),
+    workspaceId:
+      typeof input.linkage?.workspaceId === "string" && input.linkage.workspaceId.trim()
+        ? input.linkage.workspaceId.trim()
+        : input.payload.workspaceId,
+    sessionId:
+      typeof input.linkage?.sessionId === "string" && input.linkage.sessionId.trim()
+        ? input.linkage.sessionId.trim()
+        : input.payload.sessionId,
+  });
   const approvalHookEntityId = randomUUID();
   const requestHook = await host.hooksService.runInlineHooks({
     workspaceId: approvalHookWorkspaceId,
@@ -548,8 +563,12 @@ export async function resolveApproval(
   input: ApprovalResolveInput,
 ): Promise<ApprovalResolveResult> {
   const current = host.storage.approvals.get(approvalId);
+  const pendingAction = host.storage.pendingApprovalActions.find(approvalId);
   const expiresAt = current.expiresAt ? Date.parse(current.expiresAt) : Number.NaN;
   if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+    markCodeModeRunTerminalForPendingApproval(host, pendingAction, "expired", {
+      reason: `Approval ${approvalId} has expired and can no longer be resolved.`,
+    });
     throw new ValidationError({
       message: `Approval ${approvalId} has expired and can no longer be resolved.`,
     });
@@ -557,8 +576,6 @@ export async function resolveApproval(
   if (current.kind === DEVICE_ACCESS_APPROVAL_KIND) {
     return host.resolveDeviceAccessApproval(current, input);
   }
-
-  const pendingAction = host.storage.pendingApprovalActions.find(approvalId);
 
   let approval!: ApprovalRequest;
   host.storage.runImmediateTransaction(() => {
@@ -575,9 +592,15 @@ export async function resolveApproval(
       },
     });
 
+    markChatInlineApprovalResolved(host, approval, input);
+
     if (input.decision !== "approve" && pendingAction && pendingAction.resolutionStatus === "pending") {
       host.storage.pendingApprovalActions.markResolved(approvalId, "rejected", {
         decision: input.decision,
+      });
+      markCodeModeRunTerminalForPendingApproval(host, pendingAction, "rejected", {
+        decision: input.decision,
+        reason: `Approval ${approvalId} resolved with ${input.decision}.`,
       });
     }
 
@@ -609,12 +632,73 @@ export async function resolveApproval(
   };
 }
 
+function markCodeModeRunTerminalForPendingApproval(
+  host: ApprovalLifecycleHost,
+  pendingAction: ReturnType<ApprovalLifecycleHost["storage"]["pendingApprovalActions"]["find"]>,
+  status: "rejected" | "expired",
+  details: Record<string, unknown>,
+): void {
+  if (!pendingAction || pendingAction.actionType !== "code_mode.run" || pendingAction.resolutionStatus !== "pending") {
+    return;
+  }
+  const runId = typeof pendingAction.request.runId === "string" ? pendingAction.request.runId : undefined;
+  if (!runId) {
+    return;
+  }
+  const existing = host.storage.codeModeRuns.find(runId);
+  if (!existing || existing.status !== "approval_pending") {
+    return;
+  }
+  const finishedAt = new Date().toISOString();
+  host.storage.codeModeRuns.upsert({
+    ...existing,
+    status,
+    error: typeof details.reason === "string" ? details.reason : undefined,
+    finishedAt,
+  });
+  if (status === "expired") {
+    host.storage.pendingApprovalActions.markResolved(pendingAction.approvalId, "failed", {
+      ...details,
+      status,
+      runId,
+    });
+  }
+}
+
 function withApprovalFollowUp(approval: ApprovalRequest, effects: ApprovalEffectRecord[]): ApprovalRequest {
   const followUp = deriveApprovalFollowUp(effects);
   return {
     ...approval,
     followUp,
   };
+}
+
+function markChatInlineApprovalResolved(
+  host: ApprovalLifecycleHost,
+  approval: ApprovalRequest,
+  input: ApprovalResolveInput,
+): void {
+  const inlineApproval = host.storage.chatInlineApprovals.get(approval.approvalId);
+  if (!inlineApproval || inlineApproval.status !== "pending") {
+    return;
+  }
+  const approved = input.decision === "approve" || input.decision === "edit";
+  host.storage.chatInlineApprovals.upsert({
+    approvalId: inlineApproval.approvalId,
+    sessionId: inlineApproval.sessionId,
+    turnId: inlineApproval.turnId,
+    kind: inlineApproval.kind,
+    toolName: inlineApproval.toolName,
+    status: approved ? "approved" : "denied",
+    reason: input.resolutionNote ?? (approved ? `Resolved as ${input.decision} by operator.` : "Rejected by operator."),
+    riskLevel: inlineApproval.riskLevel,
+    details: {
+      ...(inlineApproval.details ?? {}),
+      decision: input.decision,
+    },
+    expiresAt: inlineApproval.expiresAt,
+    resolvedBy: input.resolvedBy,
+  });
 }
 
 function deriveApprovalFollowUp(effects: ApprovalEffectRecord[]): ApprovalRequest["followUp"] {
@@ -664,6 +748,7 @@ export async function resolveChatToolApproval(
   decision: "approve" | "reject",
   options?: {
     allowScope?: "once" | "session" | "workspace";
+    resolvedBy?: string;
   },
 ): Promise<{
   allowScope: "once" | "session" | "workspace";
@@ -694,7 +779,14 @@ export async function resolveChatToolApproval(
       resumed: false,
     };
   }
+  const expiresAt = approval.expiresAt ? Date.parse(approval.expiresAt) : Number.NaN;
+  if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+    throw new ValidationError({
+      message: `Approval ${approvalId} has expired and can no longer be resolved.`,
+    });
+  }
   const allowScope = decision === "approve" ? (options?.allowScope ?? "once") : "once";
+  const resolvedBy = options?.resolvedBy?.trim() || "operator";
   const toolPattern = turn?.toolName ?? existingInlineApproval?.toolName ?? approval.kind;
   let grant: ToolGrantRecord | undefined;
   if (decision === "approve" && allowScope !== "once") {
@@ -712,12 +804,12 @@ export async function resolveChatToolApproval(
         scope,
         scopeRef,
         grantType: "persistent",
-        createdBy: "chat-operator",
+        createdBy: resolvedBy,
       });
   }
   const resolution = await host.resolveApproval(approvalId, {
     decision,
-    resolvedBy: "chat-operator",
+    resolvedBy,
     resolutionNote: buildChatApprovalResolutionNote(decision, allowScope),
   });
   const resume = resolution.resolutionEffects?.chatTurnResume ?? { resumed: false as const };
@@ -728,7 +820,7 @@ export async function resolveChatToolApproval(
     toolName: turn?.toolName ?? existingInlineApproval?.toolName,
     status: decision === "approve" ? "approved" : "denied",
     reason: decision === "approve" ? "approved by operator" : "denied by operator",
-    resolvedBy: "chat-operator",
+    resolvedBy,
     details: {
       ...(existingInlineApproval?.details ?? {}),
       allowScope,

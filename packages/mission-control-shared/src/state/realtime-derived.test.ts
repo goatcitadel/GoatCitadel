@@ -57,21 +57,19 @@ describe("realtime-derived", () => {
       timestamp: "2026-04-22T00:00:00.000Z",
       payload: {},
     });
-    const notification = deriveRealtimeNotification({
-      eventId: "evt-approval",
-      sequence: 3,
-      eventType: "approval_resolved",
-      source: "approvals",
-      timestamp: "2026-04-22T00:00:00.000Z",
-      payload: {},
-    });
 
     expect(result.truthMode).toBe("compatibility");
     expect(result.usedCompatibilityInference).toBe(true);
-    expect(notification).toMatchObject({
-      groupKey: "ops-approvals",
-      truthMode: "compatibility",
-    });
+    expect(
+      deriveRealtimeNotification({
+        eventId: "evt-approval",
+        sequence: 3,
+        eventType: "approval_resolved",
+        source: "approvals",
+        timestamp: "2026-04-22T00:00:00.000Z",
+        payload: {},
+      }),
+    ).toBeUndefined();
     expect(
       deriveRealtimeEventTone({
         eventId: "evt-approval",
@@ -139,12 +137,14 @@ describe("realtime-derived", () => {
   });
 
   it("derives notifications from explicit links, replay gaps, compatibility keywords, and quiet events", () => {
-    expect(deriveRealtimeNotification(event({ links: { approvalId: "approval-1" } }))).toMatchObject({
-      tone: "warning",
-      message: "Approval state changed. Review the inbox in Ops.",
-      groupKey: "ops-approvals",
-      truthMode: "authoritative",
-    });
+    expect(deriveRealtimeNotification(event({ links: { approvalId: "approval-1" } }))).toBeUndefined();
+    expect(
+      deriveRealtimeNotification(event({ links: { approvalId: "approval-1", sessionId: "session-1" } })),
+    ).toBeUndefined();
+    expect(
+      deriveRealtimeNotification(event({ links: { approvalId: "approval-1", taskId: "task-1" } })),
+    ).toBeUndefined();
+    expect(deriveRealtimeNotification(event({ eventType: "approval_task_changed" }))).toBeUndefined();
     expect(deriveRealtimeNotification(event({ links: { taskId: "task-1" } }))).toMatchObject({
       tone: "info",
       groupKey: "cowork-tasks",

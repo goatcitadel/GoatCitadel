@@ -254,4 +254,57 @@ describe("idempotencyHeaderPlugin", () => {
       await app.close();
     }
   });
+
+  it("requires idempotency keys for normal channel setup mutations", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const { app } = await buildApp((fastify) => {
+      fastify.post("/api/v1/channels/drafts", async (request) => {
+        calls.push((request as { body: Record<string, unknown> }).body);
+        return { ok: true };
+      });
+    });
+
+    try {
+      const missing = await app.inject({
+        method: "POST",
+        url: "/api/v1/channels/drafts",
+        payload: { channel: "discord" },
+      });
+      const accepted = await app.inject({
+        method: "POST",
+        url: "/api/v1/channels/drafts",
+        headers: { "Idempotency-Key": "idem-channel-draft-1" },
+        payload: { channel: "discord" },
+      });
+
+      expect(missing.statusCode).toBe(400);
+      expect(accepted.statusCode).toBe(200);
+      expect(calls).toEqual([{ channel: "discord" }]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("does not require operator idempotency headers for generic signed inbound webhooks", async () => {
+    const calls: string[] = [];
+    const { app } = await buildApp((fastify) => {
+      fastify.post("/api/v1/integrations/connections/:connectionId/:channel/inbound", async (request) => {
+        calls.push(request.idempotencyKey);
+        return { ok: true };
+      });
+    });
+
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/discord/inbound",
+        payload: { eventId: "evt-1" },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(calls).toEqual([""]);
+    } finally {
+      await app.close();
+    }
+  });
 });

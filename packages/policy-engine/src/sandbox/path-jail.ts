@@ -44,7 +44,13 @@ export function resolveReadPathAccess(
 
 function isWithin(root: string, target: string): boolean {
   const rel = path.relative(root, target);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  if (rel === "") {
+    return true;
+  }
+  if (path.isAbsolute(rel)) {
+    return false;
+  }
+  return !rel.split(/[\\/]+/u).includes("..");
 }
 
 function isWithinAnyRoot(target: string, roots: string[]): boolean {

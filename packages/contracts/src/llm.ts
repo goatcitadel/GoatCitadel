@@ -93,6 +93,52 @@ export interface LlmProviderConfig {
   capabilities?: Partial<LlmProviderCapabilities>;
 }
 
+export type ProviderProfileSource = "builtin" | "plugin" | "remote_manifest";
+export type ProviderProfileStatus = "builtin" | "pending_owner_approval" | "approved" | "rejected" | "disabled";
+
+export interface ProviderProfileModelDiscovery {
+  type: "none" | "openai-compatible" | "openrouter" | "nous-portal";
+  url?: string;
+  refreshIntervalHours?: number;
+}
+
+export interface ProviderProfileErrorMapping {
+  retryableStatusCodes?: number[];
+  authStatusCodes?: number[];
+  rateLimitStatusCodes?: number[];
+}
+
+export interface ProviderProfile {
+  profileId: string;
+  providerId: string;
+  label: string;
+  source: ProviderProfileSource;
+  status: ProviderProfileStatus;
+  baseUrl: string;
+  apiStyle: LlmApiStyle;
+  defaultModel: string;
+  authMode?: LlmProviderAuthMode;
+  request?: LlmProviderRequestConfig;
+  capabilities?: Partial<LlmProviderCapabilities>;
+  knownModels?: string[];
+  modelDiscovery?: ProviderProfileModelDiscovery;
+  errorMapping?: ProviderProfileErrorMapping;
+  pluginId?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+}
+
+export interface LlmDiscoveredModelRecord {
+  providerId: string;
+  modelId: string;
+  label?: string;
+  source: "openrouter" | "nous-portal" | "provider-profile";
+  status: "available_not_configured" | "approved" | "rejected";
+  discoveredAt: string;
+  contextWindow?: number;
+  outputTokenLimit?: number;
+}
+
 export interface LlmConfigFile {
   activeProviderId: string;
   activeModel?: string;

@@ -205,6 +205,13 @@ async function buildApp(authPatch: Partial<AuthConfig>): Promise<FastifyInstance
     body: request.body,
   }));
 
+  app.post("/api/v1/approvals/remote-resolve", async (request) => ({
+    ok: true,
+    actorId: request.authActorId,
+    actorSource: request.authActorSource,
+    body: request.body,
+  }));
+
   return app;
 }
 
@@ -611,6 +618,49 @@ describe("auth plugin", () => {
     });
   });
 
+  it("accepts approved companion bearer tokens on event stream reads", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "alpha-token", queryParam: "access_token" },
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/events/stream",
+      headers: {
+        Authorization: "Bearer companion-bearer",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      actorSource: "companion",
+      actorId: "companion:test-session",
+    });
+  });
+
+  it("does not require operator auth on generic channel inbound webhook paths", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "alpha-token", queryParam: "access_token" },
+    });
+    app.post("/api/v1/integrations/connections/:connectionId/:channel/inbound", async (request) => ({
+      ok: true,
+      actorSource: request.authActorSource,
+    }));
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/discord/inbound",
+      payload: { eventId: "evt-1" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      actorSource: "none",
+    });
+  });
+
   it("rejects unsigned companion mutating requests", async () => {
     app = await buildApp({
       mode: "token",
@@ -709,6 +759,35 @@ describe("auth plugin", () => {
       requestId: "request-device-1",
       approvalId: "approval-device-1",
       status: "pending",
+    });
+  });
+
+  it("allows remote approval resolution requests to reach scoped-token validation", async () => {
+    app = await buildApp({
+      mode: "token",
+      token: { value: "alpha-token", queryParam: "access_token" },
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals/remote-resolve",
+      headers: {
+        Authorization: "Bearer wrong-token",
+      },
+      payload: {
+        token: "remote-action-token",
+        decision: "reject",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      actorSource: "none",
+      actorId: "approval-remote-resolve",
+      body: {
+        token: "remote-action-token",
+        decision: "reject",
+      },
     });
   });
 });

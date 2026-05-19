@@ -1,0 +1,324 @@
+import { afterEach, describe, it } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import type { DatabaseClient } from "./db.js";
+import { PermissionProfileRepository } from "./permission-profile-repo.js";
+import { createDatabase } from "./sqlite.js";
+
+const createdFiles: string[] = [];
+
+afterEach(() => {
+  for (const file of createdFiles.splice(0)) {
+    try {
+      fs.rmSync(file, { force: true });
+      fs.rmSync(`${file}-wal`, { force: true });
+      fs.rmSync(`${file}-shm`, { force: true });
+    } catch {
+      // ignore cleanup noise
+    }
+  }
+});
+
+describe("PermissionProfileRepository", () => {
+  it("ships safe and trusted local built-ins and activates custom profiles by surface", () => {
+    const { repo } = createStore();
+
+    const builtins = repo.listProfiles();
+    assert.equal(builtins.find((profile) => profile.profileId === "safe")?.approvalMode, "approve_all");
+    assert.equal(builtins.find((profile) => profile.profileId === "trusted_local_power")?.approvalMode, "bypass");
+
+    const custom = repo.createProfile({
+      label: "Code Review",
+      scope: "workspace",
+      scopeRef: "workspace-a",
+      approvalMode: "approve_risky",
+      toolPatterns: ["session.status", "docs.search"],
+      createdBy: "operator-a",
+    });
+
+    repo.activateProfile({
+      profileId: custom.profileId,
+      workspaceId: "workspace-a",
+      surface: "code",
+      createdBy: "operator-a",
+    });
+
+    assert.equal(
+      repo.resolveContext({
+        operatorId: "operator-a",
+        workspaceId: "workspace-a",
+        sessionId: "session-a",
+        surface: "code",
+      }).permissionProfile.profileId,
+      custom.profileId,
+    );
+    assert.equal(
+      repo.resolveContext({
+        operatorId: "operator-b",
+        workspaceId: "workspace-a",
+        sessionId: "session-a",
+        surface: "code",
+      }).permissionProfile.profileId,
+      custom.profileId,
+    );
+    assert.equal(
+      repo.resolveContext({
+        operatorId: "operator-a",
+        workspaceId: "workspace-a",
+        sessionId: "session-a",
+        surface: "chat",
+      }).permissionProfile.profileId,
+      "safe",
+    );
+    assert.equal(
+      repo.resolveContext({
+        operatorId: "operator-a",
+        workspaceId: "workspace-a",
+        profileId: custom.profileId,
+      }).permissionProfile.profileId,
+      custom.profileId,
+    );
+    assert.throws(
+      () =>
+        repo.resolveContext({
+          operatorId: "operator-a",
+          workspaceId: "workspace-b",
+          profileId: custom.profileId,
+        }),
+      /not active for the requested operator\/workspace\/session scope/,
+    );
+    assert.throws(
+      () =>
+        repo.activateProfile({
+          profileId: custom.profileId,
+          operatorId: "operator-a",
+          workspaceId: "workspace-b",
+          surface: "code",
+          createdBy: "operator-a",
+        }),
+      /cannot be activated outside its workspace scope/,
+    );
+    assert.throws(
+      () =>
+        repo.createProfile({
+          label: "Global custom",
+          scope: "global" as never,
+          approvalMode: "bypass",
+          createdBy: "operator-a",
+        }),
+      /Custom permission profiles cannot use global scope/,
+    );
+  });
+
+  it("reconciles active profile activations for exact owner context", () => {
+    const { repo } = createStore();
+    const custom = repo.createProfile({
+      label: "Workspace Code",
+      scope: "workspace",
+      scopeRef: "workspace-a",
+      approvalMode: "approve_risky",
+      defaultForSurfaces: ["code", "chat"],
+      createdBy: "operator-a",
+    });
+
+    repo.activateProfile({
+      profileId: custom.profileId,
+      workspaceId: "workspace-a",
+      surface: "code",
+      createdBy: "operator-a",
+    });
+    repo.activateProfile({
+      profileId: custom.profileId,
+      workspaceId: "workspace-a",
+      surface: "chat",
+      createdBy: "operator-a",
+    });
+
+    assert.equal(
+      repo.deactivateProfileActivations({
+        profileId: custom.profileId,
+        workspaceId: "workspace-a",
+      }),
+      2,
+    );
+    assert.equal(
+      repo.resolveContext({
+        operatorId: "operator-a",
+        workspaceId: "workspace-a",
+        surface: "code",
+      }).permissionProfile.profileId,
+      "safe",
+    );
+  });
+
+  it("clears stale surface activations when a profile is activated for all surfaces", () => {
+    const { repo } = createStore();
+    const chatProfile = repo.createProfile({
+      label: "Chat Only",
+      scope: "workspace",
+      scopeRef: "workspace-a",
+      approvalMode: "approve_risky",
+      createdBy: "operator-a",
+    });
+    const allProfile = repo.createProfile({
+      label: "All Surfaces",
+      scope: "workspace",
+      scopeRef: "workspace-a",
+      approvalMode: "bypass",
+      createdBy: "operator-a",
+    });
+
+    repo.activateProfile({
+      profileId: chatProfile.profileId,
+      workspaceId: "workspace-a",
+      surface: "chat",
+      createdBy: "operator-a",
+    });
+    repo.activateProfile({
+      profileId: allProfile.profileId,
+      workspaceId: "workspace-a",
+      surface: "all",
+      createdBy: "operator-a",
+    });
+
+    assert.equal(
+      repo.resolveContext({ operatorId: "operator-a", workspaceId: "workspace-a", surface: "chat" }).permissionProfile
+        .profileId,
+      allProfile.profileId,
+    );
+    assert.equal(
+      repo.resolveContext({ operatorId: "operator-a", workspaceId: "workspace-a", surface: "code" }).permissionProfile
+        .profileId,
+      allProfile.profileId,
+    );
+  });
+
+  it("matches explicit and scoped local operator overrides and expires them", () => {
+    const { repo } = createStore();
+
+    const workspaceOverride = repo.createLocalOperatorOverride({
+      operatorId: "operator-a",
+      scope: "workspace",
+      scopeRef: "workspace-a",
+      reason: "release verification",
+      ttlSeconds: 60,
+      createdBy: "operator-a",
+    });
+    assert.equal(
+      repo.resolveContext({ operatorId: "operator-a", workspaceId: "workspace-a" }).localOperatorOverride?.overrideId,
+      workspaceOverride.overrideId,
+    );
+    assert.equal(
+      repo.resolveContext({ operatorId: "operator-b", workspaceId: "workspace-a" }).localOperatorOverride?.overrideId,
+      undefined,
+    );
+    assert.throws(
+      () =>
+        repo.resolveContext({
+          operatorId: "operator-b",
+          workspaceId: "workspace-a",
+          overrideId: workspaceOverride.overrideId,
+        }),
+      /not active for the requested operator\/workspace\/session\/run scope/,
+    );
+    assert.throws(
+      () =>
+        repo.createLocalOperatorOverride({
+          operatorId: "operator-a",
+          scope: "run",
+          reason: "missing target",
+          ttlSeconds: 60,
+          createdBy: "operator-a",
+        }),
+      /scopeRef/,
+    );
+
+    const runOverride = repo.createLocalOperatorOverride({
+      operatorId: "operator-a",
+      scope: "run",
+      scopeRef: "run-a",
+      reason: "focused code mode run",
+      ttlSeconds: 60,
+      createdBy: "operator-a",
+    });
+    assert.equal(
+      repo.resolveContext({
+        operatorId: "operator-a",
+        workspaceId: "workspace-b",
+        sessionId: "session-b",
+        runId: "run-a",
+      }).localOperatorOverride?.overrideId,
+      runOverride.overrideId,
+    );
+    assert.equal(
+      repo.resolveContext({
+        operatorId: "operator-a",
+        workspaceId: "workspace-b",
+        sessionId: "session-b",
+        taskId: "run-a",
+      }).localOperatorOverride?.overrideId,
+      undefined,
+    );
+
+    assert.equal(
+      repo.revokeLocalOperatorOverride(runOverride.overrideId, "2026-05-17T20:10:00.000Z", "operator-1"),
+      true,
+    );
+    assert.equal(repo.getLocalOperatorOverride(runOverride.overrideId).revokedBy, "operator-1");
+    assert.equal(
+      repo.resolveContext({
+        operatorId: "operator-a",
+        workspaceId: "workspace-b",
+        sessionId: "session-b",
+        runId: "run-a",
+      }).localOperatorOverride?.overrideId,
+      undefined,
+    );
+  });
+
+  it("prefers the most specific matching local operator override", () => {
+    const { repo } = createStore();
+
+    const runOverride = repo.createLocalOperatorOverride(
+      {
+        operatorId: "operator-a",
+        scope: "run",
+        scopeRef: "run-a",
+        reason: "narrow run override",
+        ttlSeconds: 60,
+        createdBy: "operator-a",
+      },
+      "2099-05-17T20:00:00.000Z",
+    );
+    repo.createLocalOperatorOverride(
+      {
+        operatorId: "operator-a",
+        scope: "operator",
+        reason: "broader later operator override",
+        ttlSeconds: 600,
+        createdBy: "operator-a",
+      },
+      "2099-05-17T20:01:00.000Z",
+    );
+
+    assert.equal(
+      repo.resolveContext({
+        operatorId: "operator-a",
+        workspaceId: "workspace-a",
+        sessionId: "session-a",
+        runId: "run-a",
+      }).localOperatorOverride?.overrideId,
+      runOverride.overrideId,
+    );
+  });
+});
+
+function createStore(): { db: DatabaseClient; repo: PermissionProfileRepository } {
+  const dbPath = path.join(os.tmpdir(), `goatcitadel-permission-profile-${randomUUID()}.db`);
+  createdFiles.push(dbPath);
+  const db = createDatabase({ dbPath });
+  return { db, repo: new PermissionProfileRepository(db) };
+}

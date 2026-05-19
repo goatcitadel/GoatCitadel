@@ -8,19 +8,34 @@ export function hasVerifiedApprovalBypass(
   request: ToolAccessEvaluateRequest | ToolInvokeRequest,
   storage: Storage,
 ): boolean {
+  return getVerifiedApprovalBypassId(request, storage) !== undefined;
+}
+
+export function getVerifiedApprovalBypassId(
+  request: ToolAccessEvaluateRequest | ToolInvokeRequest,
+  storage: Storage,
+): string | undefined {
   const approvalId = extractApprovalId(request);
   if (!approvalId) {
-    return false;
+    return undefined;
   }
   const pending = storage.pendingApprovalActions.find(approvalId);
   if (!pending || pending.actionType !== "tool.invoke" || pending.resolutionStatus !== "pending") {
-    return false;
+    return undefined;
   }
   if (!isPendingApprovalStillFresh(pending.createdAt, pending.expiresAt)) {
-    return false;
+    return undefined;
+  }
+  try {
+    const approval = storage.approvals.get(approvalId);
+    if (approval.status !== "approved") {
+      return undefined;
+    }
+  } catch {
+    return undefined;
   }
   const storedRequest = pending.request as Partial<ToolInvokeRequest>;
-  return requestMatchesPendingApproval(request, storedRequest);
+  return requestMatchesPendingApproval(request, storedRequest) ? approvalId : undefined;
 }
 
 function extractApprovalId(request: ToolAccessEvaluateRequest | ToolInvokeRequest): string | undefined {
@@ -40,9 +55,33 @@ function requestMatchesPendingApproval(
     storedRequest.toolName === request.toolName &&
     storedRequest.agentId === request.agentId &&
     storedRequest.sessionId === request.sessionId &&
+    (storedRequest.workspaceId ?? undefined) === (request.workspaceId ?? undefined) &&
     (storedRequest.taskId ?? undefined) === (request.taskId ?? undefined) &&
+    (storedRequest.runId ?? undefined) === (request.runId ?? undefined) &&
+    (storedRequest.trustLevel ?? undefined) === (request.trustLevel ?? undefined) &&
+    governanceField(storedRequest, "permissionProfileId") === governanceField(request, "permissionProfileId") &&
+    governanceField(storedRequest, "localOperatorOverrideId") === governanceField(request, "localOperatorOverrideId") &&
+    governanceField(storedRequest, "surface") === governanceField(request, "surface") &&
+    stableStringify(storedRequest.sourceAttribution ?? []) ===
+      stableStringify((request as Partial<ToolInvokeRequest>).sourceAttribution ?? []) &&
+    stableStringify(storedRequest.authContext ?? {}) ===
+      stableStringify((request as Partial<ToolInvokeRequest>).authContext ?? {}) &&
+    (storedRequest.dryRun ?? undefined) === ((request as ToolInvokeRequest).dryRun ?? undefined) &&
+    (storedRequest.externalRuntime ?? undefined) === ((request as ToolInvokeRequest).externalRuntime ?? undefined) &&
     stableStringify(storedRequest.args ?? {}) === stableStringify(request.args ?? {})
   );
+}
+
+function governanceField(
+  request: Partial<ToolInvokeRequest> | ToolAccessEvaluateRequest | ToolInvokeRequest,
+  key: "permissionProfileId" | "localOperatorOverrideId" | "surface",
+): string | undefined {
+  const topLevelValue = request[key];
+  if (typeof topLevelValue === "string") {
+    return topLevelValue;
+  }
+  const contextValue = request.policyContext?.[key];
+  return typeof contextValue === "string" ? contextValue : undefined;
 }
 
 function isPendingApprovalStillFresh(createdAt: string, expiresAt?: string): boolean {

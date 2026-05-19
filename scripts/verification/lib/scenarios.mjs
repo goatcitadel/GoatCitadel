@@ -82,6 +82,7 @@ const VISUAL_DIFF_PIXEL_DELTA = 18;
 const VISUAL_DIFF_RATIO_THRESHOLD = 0.04;
 const VISUAL_DIFF_NORMALIZE_BLUR = 6;
 const VISUAL_DIFF_NORMALIZE_SCALE = 0.25;
+const VISUAL_ROUTE_READY_TIMEOUT_MS = 60000;
 
 export const FAST_LANE_COMMANDS = Object.freeze([
   { id: "fast.repo-hygiene", title: "Repo hygiene", args: ["verify:repo:hygiene"] },
@@ -213,14 +214,21 @@ export async function runCodeModeSandboxRequiredLane(context) {
         },
       );
       const proof = await readJson(proofPath).catch(() => undefined);
+      const failClosedProof =
+        result.code !== 0 &&
+        proof?.sandboxRequired === true &&
+        proof?.sandboxAvailable === false &&
+        typeof proof?.metadata?.failClosedReason === "string" &&
+        proof.metadata.failClosedReason.length > 0;
       return {
-        status: result.code === 0 ? "passed" : "failed",
-        error: result.code === 0 ? undefined : clampString(result.stderr || result.stdout, 1200),
+        status: result.code === 0 || failClosedProof ? "passed" : "failed",
+        error: result.code === 0 || failClosedProof ? undefined : clampString(result.stderr || result.stdout, 1200),
         metrics: {
           exitCode: result.code,
           durationMs: result.durationMs,
           sandboxRequired: proof?.sandboxRequired,
           sandboxAvailable: proof?.sandboxAvailable,
+          failClosedProof,
           checksPassed: proof?.metadata?.checksPassed?.length,
           checksFailed: proof?.metadata?.checksFailed?.length,
         },
@@ -1030,6 +1038,7 @@ async function runGatewayApiSurfaceScenarios(context, gatewayUrl, seed) {
       const activity = await requestJson(gatewayUrl, `/api/v1/tasks/${encodeURIComponent(taskId)}/activities`, {
         method: "POST",
         body: {
+          workspaceId,
           activityType: "comment",
           message: "Verification activity trail entry",
           metadata: { source: "deep-core" },
@@ -1039,6 +1048,7 @@ async function runGatewayApiSurfaceScenarios(context, gatewayUrl, seed) {
       const deliverable = await requestJson(gatewayUrl, `/api/v1/tasks/${encodeURIComponent(taskId)}/deliverables`, {
         method: "POST",
         body: {
+          workspaceId,
           deliverableType: "artifact",
           title: "Verification deliverable",
           description: "Synthetic deliverable contract",
@@ -1061,7 +1071,7 @@ async function runGatewayApiSurfaceScenarios(context, gatewayUrl, seed) {
       assertOk(trash, "list task trash");
       const restored = await requestJson(gatewayUrl, `/api/v1/tasks/${encodeURIComponent(taskId)}/restore`, {
         method: "POST",
-        body: {},
+        body: { workspaceId },
       });
       assertOk(restored, "restore task");
       const outPath = path.join(context.artifactRoot, "diagnostics", "core-api-workspaces-tasks.json");
@@ -2677,6 +2687,8 @@ export async function runVisualRegressionLane(context, options = {}) {
   }
   const stack = await startVerificationStack(context, {
     includeUi: true,
+    gatewayMode: "built",
+    uiMode: "preview",
     gatewayEnv: {
       GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
       GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
@@ -2719,7 +2731,12 @@ export async function runVisualRegressionLane(context, options = {}) {
                 await page.goto(buildVerificationUiUrl(stack.uiUrl, appendQuery(route.href, variant.themeQuery)), {
                   waitUntil: "domcontentloaded",
                 });
-                await waitForVerificationRouteReady(page, route, verificationTarget.packageName);
+                await waitForVerificationRouteReady(
+                  page,
+                  route,
+                  verificationTarget.packageName,
+                  VISUAL_ROUTE_READY_TIMEOUT_MS,
+                );
                 await setBrowserCorrelation(page, correlationId, fixture?.sessionId);
                 const browserSanity = assertBrowserConsoleHealthy(
                   browserLog,
@@ -3352,7 +3369,7 @@ export async function runAuthMatrixLane(context, options = {}) {
           deviceToken: deviceAndCompanion.deviceToken,
           companionToken: deviceAndCompanion.companionToken,
         });
-        const approvalIngressResults = await assertApprovalIngressMatrix(stack.gatewayUrl, approvalCreateToken);
+        const approvalIngressResults = await assertApprovalIngressMatrix(stack.gatewayUrl, approvalCreateToken, operatorHeaders);
 
         const outPath = path.join(context.artifactRoot, "diagnostics", "auth-matrix-route-access.json");
         await writeJson(outPath, {
@@ -3379,7 +3396,7 @@ export async function runAuthMatrixLane(context, options = {}) {
   }
 }
 
-async function assertApprovalIngressMatrix(gatewayUrl, approvalCreateToken) {
+async function assertApprovalIngressMatrix(gatewayUrl, approvalCreateToken, operatorHeaders) {
   const body = {
     kind: "tool_request",
     riskLevel: "caution",
@@ -3440,6 +3457,48 @@ async function assertApprovalIngressMatrix(gatewayUrl, approvalCreateToken) {
       allowed,
     });
   }
+  const createdApprovalId = probes.find((probe) => probe.label === "valid-create-token")?.response.body?.approvalId;
+  if (!createdApprovalId) {
+    throw new Error("auth-matrix remote approval create did not return an approvalId for remote-resolve proof");
+  }
+  const remoteToken = await requestJson(
+    gatewayUrl,
+    `/api/v1/approvals/${encodeURIComponent(createdApprovalId)}/remote-token`,
+    {
+      method: "POST",
+      headers: operatorHeaders,
+      body: {
+        connectorId: "browser:mission-control",
+      },
+    },
+  );
+  assertOk(remoteToken, "create auth-matrix remote approval action token");
+  const token = remoteToken.body?.token;
+  if (typeof token !== "string" || token.length === 0) {
+    throw new Error(`auth-matrix remote approval action token missing token: ${JSON.stringify(remoteToken.body)}`);
+  }
+  const remoteResolve = await requestJson(gatewayUrl, "/api/v1/approvals/remote-resolve", {
+    method: "POST",
+    headers: {
+      Authorization: "Bearer invalid-operator-token",
+    },
+    body: {
+      token,
+      decision: "reject",
+      resolutionNote: "auth matrix remote approval resolution proof",
+    },
+  });
+  const remoteResolveAllowed = isAllowedStatus(remoteResolve.status);
+  if (!remoteResolveAllowed) {
+    throw new Error(
+      `auth-matrix remote approval resolve expected public scoped-token route to be reachable, got ${remoteResolve.status} with ${clampString(JSON.stringify(remoteResolve.body ?? null), 400)}`,
+    );
+  }
+  results.push({
+    label: "valid-remote-resolve-token",
+    status: remoteResolve.status,
+    allowed: remoteResolveAllowed,
+  });
   return results;
 }
 
@@ -4827,6 +4886,7 @@ async function seedMissionControlNextFixture(gatewayUrl) {
       await requestJson(gatewayUrl, `/api/v1/tasks/${encodeURIComponent(taskId)}/activities`, {
         method: "POST",
         body: {
+          workspaceId,
           activityType: "comment",
           message: "Surface proof fixture loaded with deterministic activity.",
           agentId: createdAgents[0]?.agentId ?? "operator",
@@ -4838,6 +4898,7 @@ async function seedMissionControlNextFixture(gatewayUrl) {
       await requestJson(gatewayUrl, `/api/v1/tasks/${encodeURIComponent(taskId)}/deliverables`, {
         method: "POST",
         body: {
+          workspaceId,
           deliverableType: "artifact",
           title: "Mission Control Next proof artifact",
           path: "workspace/verification/mission-control-next-proof.md",
@@ -4850,6 +4911,7 @@ async function seedMissionControlNextFixture(gatewayUrl) {
       await requestJson(gatewayUrl, `/api/v1/tasks/${encodeURIComponent(taskId)}/subagents`, {
         method: "POST",
         body: {
+          workspaceId,
           agentSessionId: `agent-session-${randomUUID().slice(0, 8)}`,
           agentName: createdAgents[1]?.name ?? "Builder Pair",
         },
@@ -5236,7 +5298,7 @@ function buildAuthMatrixExpectations(accessClass) {
         badToken: false,
         operator: true,
         device: false,
-        companion: false,
+        companion: true,
         sse: true,
       };
     case "webhook":

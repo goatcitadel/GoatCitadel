@@ -378,6 +378,7 @@ describe("integration provider webhook routes", () => {
       config: {
         botToken: "telegram-bot-token",
         webhookSecret: "telegram-webhook-secret",
+        telegramOperatorActors: ["777"],
         telegramPairing: {
           approved: [{ actorId: "777", approvedAt: "2026-05-02T12:00:00.000Z", displayName: "Ada" }],
           pending: [],

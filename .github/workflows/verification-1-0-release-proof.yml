@@ -23,6 +23,12 @@ jobs:
             artifactSlug: runtime-truth
           - laneScript: verify:auth:matrix
             artifactSlug: auth-matrix
+          - laneScript: verify:code-mode:sandbox
+            artifactSlug: code-mode-sandbox
+          - laneScript: verify:agentic:governance
+            artifactSlug: agentic-governance
+          - laneScript: verify:agentic:proof
+            artifactSlug: agentic-proof
           - laneScript: verify:ui:parity
             artifactSlug: ui-parity
           - laneScript: verify:memory:truth
@@ -104,6 +110,14 @@ jobs:
           scan-type: fs
           scan-ref: .
           scanners: vuln,secret,misconfig
-          skip-dirs: node_modules,tmp,apps/mission-control/dist-node
+          skip-dirs: >-
+            .git,.codex-tmp,.turbo,.worktrees,node_modules,tmp,artifacts,
+            apps/gateway/backups,apps/gateway/coverage,apps/gateway/coverage-exercise,
+            apps/gateway/coverage-smoke,apps/gateway/dist,
+            apps/mission-control-desktop/src-tauri/target,
+            apps/mission-control/coverage,apps/mission-control/dist,
+            apps/mission-control/dist-node,apps/mission-control-next/coverage,
+            apps/mission-control-next/dist,data/audit,data/transcripts
+          timeout: 15m
           severity: HIGH,CRITICAL
           exit-code: "1"

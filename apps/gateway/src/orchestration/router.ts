@@ -448,10 +448,19 @@ function buildFallbackSuccessCriteria(role: OrchestrationRole, expectedOutput: s
 
 function buildFallbackSuggestedTools(role: OrchestrationRole, workflowTemplate: string, objective = ""): string[] {
   const needsPresentation = detectPresentationArtifactIntent(objective);
-  const withPresentation = (tools: string[]) =>
-    needsPresentation && (role === "synthesizer" || role === "worker")
-      ? ["presentations.create", ...tools.filter((tool) => tool !== "presentations.create")]
-      : tools;
+  const needsDocument = !needsPresentation && detectDocumentArtifactIntent(objective);
+  const withArtifactTools = (tools: string[]) => {
+    if (role !== "synthesizer" && role !== "worker") {
+      return tools;
+    }
+    if (needsPresentation) {
+      return ["presentations.create", ...tools.filter((tool) => tool !== "presentations.create")];
+    }
+    if (needsDocument) {
+      return ["documents.create", ...tools.filter((tool) => tool !== "documents.create")];
+    }
+    return tools;
+  };
   switch (role) {
     case "researcher":
       return workflowTemplate.includes("research")
@@ -463,9 +472,9 @@ function buildFallbackSuggestedTools(role: OrchestrationRole, workflowTemplate: 
     case "qa-validator":
       return ["code.search", "file.read_range", "tests.run", "lint.run"];
     case "worker":
-      return withPresentation(["memory.search", "code.search", "file.find"]);
+      return withArtifactTools(["memory.search", "code.search", "file.find"]);
     case "synthesizer":
-      return withPresentation([]);
+      return withArtifactTools([]);
     default:
       return [];
   }
@@ -476,6 +485,15 @@ function detectPresentationArtifactIntent(content: string): boolean {
   return (
     /\b(power\s?point|pptx?|(?:slide|pitch|investor|presentation)\s+deck|slides?|presentation)\b/.test(normalized) &&
     /\b(create|make|build|generate|put|turn|export|save|write|produce|deliver|format|file)\b/.test(normalized)
+  );
+}
+
+function detectDocumentArtifactIntent(content: string): boolean {
+  const normalized = content.toLowerCase();
+  return (
+    /\b(docx?|word\s+doc(?:ument)?|pdf|markdown|md|html|csv|json|text\s+file|txt|report|brief|memo|handout|worksheet|document)\b/.test(
+      normalized,
+    ) && /\b(create|make|build|generate|put|turn|export|save|write|produce|deliver|format|file)\b/.test(normalized)
   );
 }
 

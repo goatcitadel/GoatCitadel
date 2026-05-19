@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type {
   OrchestrationPlan,
   OrchestrationRun,
+  OrchestrationRunPolicyContext,
   SkillListItem,
   WorkflowRecipeAgent,
   WorkflowRecipeApproval,
@@ -42,7 +43,10 @@ const DEFAULT_LIMITS: Required<WorkflowRecipeLimits> = {
 export interface WorkflowRecipeServiceHost {
   listSkills(): SkillListItem[];
   listToolNames?(): string[];
-  createOrchestrationPlan(plan: OrchestrationPlan): Promise<OrchestrationRun>;
+  createOrchestrationPlan(
+    plan: OrchestrationPlan,
+    policyContext?: OrchestrationRunPolicyContext,
+  ): Promise<OrchestrationRun>;
 }
 
 export class WorkflowRecipeService {
@@ -66,9 +70,14 @@ export class WorkflowRecipeService {
     };
   }
 
-  public async createPlanFromRecipe(input: WorkflowRecipePlanCreateRequest): Promise<WorkflowRecipePlanCreateResponse> {
+  public async createPlanFromRecipe(
+    input: WorkflowRecipePlanCreateRequest,
+    policyContext?: OrchestrationRunPolicyContext,
+  ): Promise<WorkflowRecipePlanCreateResponse> {
     const preview = this.previewRecipe(input);
-    const run = await this.host.createOrchestrationPlan(preview.plan);
+    const run = policyContext
+      ? await this.host.createOrchestrationPlan(preview.plan, policyContext)
+      : await this.host.createOrchestrationPlan(preview.plan);
     return {
       ...preview,
       run,

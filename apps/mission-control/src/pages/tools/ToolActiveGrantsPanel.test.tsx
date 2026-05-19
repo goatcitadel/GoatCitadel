@@ -62,7 +62,7 @@ describe("ToolActiveGrantsPanel", () => {
     );
 
     expandPanel(renderer);
-    expect(rendererText(renderer)).toContain("Active Grants");
+    expect(rendererText(renderer)).toContain("Tool Grants");
     expect(rendererText(renderer)).toContain("1 visible");
     expect(rendererText(renderer)).toContain("workspace : default");
     expect(rendererText(renderer)).toContain("2026-04-01T12:00:00.000Z");

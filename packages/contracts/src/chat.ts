@@ -30,7 +30,7 @@ export type ChatOrchestrationParallelism = "auto" | "sequential" | "parallel";
 export type ChatCodeAutoApplyPosture = "manual" | "low_risk_auto" | "aggressive_auto";
 export type ChatTurnBranchKind = "append" | "retry" | "edit";
 export type ChatDelegationMode = "sequential" | "parallel";
-export type ChatDelegationStepStatus = "pending" | "running" | "completed" | "failed" | "skipped";
+export type ChatDelegationStepStatus = "pending" | "running" | "completed" | "failed" | "skipped" | "cancelled";
 export type ChatDelegationRunStatus = "running" | "completed" | "failed" | "partial";
 
 export type ChatInputPart =
@@ -386,6 +386,7 @@ export interface ChatSessionWorkbenchRevertResponse {
 
 export interface ChatSessionWorkbenchOutputRunSummary {
   runId: string;
+  turnId?: string;
   status: import("./capabilities.js").CodeModeRunRecord["status"];
   language: import("./capabilities.js").CodeModeRunRecord["language"];
   requestedOutputIntent?: string;
@@ -761,6 +762,7 @@ export interface ChatTurnFailureRecord {
   message: string;
   retryable?: boolean;
   recommendedAction?: ChatTurnRecoveryAction;
+  provider?: ChatProviderFailureRecord;
 }
 
 export interface ChatTurnRepairRecord {
@@ -776,6 +778,19 @@ export interface ChatTurnCompletionRecord {
   status: ChatTurnCompletionStatus;
   repaired: boolean;
   repair?: ChatTurnRepairRecord;
+  usage?: ChatStreamUsageRecord;
+  latencyMs?: number;
+  providerCallCount?: number;
+}
+
+export type ChatUsageCostSource = "provider_reported" | "estimated" | "mixed" | "unknown";
+
+export interface ChatProviderFailureRecord {
+  code?: string;
+  message?: string;
+  status?: string;
+  responseId?: string;
+  type?: string;
 }
 
 export interface ChatTurnDurableRecord {
@@ -927,6 +942,7 @@ export interface ChatOrchestrationStepSummary {
   label?: string;
   index: number;
   status: ChatDelegationStepStatus;
+  waitStatus?: Extract<ChatTurnLifecycleStatus, "waiting_for_tool" | "waiting_for_approval" | "waiting_for_user_input">;
   specialistCandidateId?: string;
   specialistTitle?: string;
   specialistRole?: string;
@@ -1177,6 +1193,13 @@ export interface ChatDelegateRequest {
   providerId?: string;
   model?: string;
   steps?: ChatDelegateStepRequest[];
+  operatorId?: string;
+  authActorId?: string;
+  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion";
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+  policyRunId?: string;
+  policyTaskId?: string;
   /**
    * Depth of the parent run in the subagent tree. Children are spawned at
    * `parentSubagentDepth + 1` and are subject to the configured maxDepth
@@ -1188,6 +1211,7 @@ export interface ChatDelegateRequest {
 export interface ChatDelegateResponse {
   runId: string;
   taskId: string;
+  status: ChatDelegationRunStatus;
   executionPlanId?: string;
   steps: ChatDelegationStepRecord[];
   stitchedOutput: string;
@@ -1328,6 +1352,14 @@ export interface ChatDelegateAcceptRequest {
   surfaceMode?: ChatMode;
   providerId?: string;
   model?: string;
+  steps?: ChatDelegateStepRequest[];
+  operatorId?: string;
+  authActorId?: string;
+  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion";
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+  policyRunId?: string;
+  policyTaskId?: string;
 }
 
 export interface ChatSendMessageRequest {
@@ -1348,6 +1380,13 @@ export interface ChatSendMessageRequest {
   normalizationProfile?: ChatNormalizationProfile;
   commandText?: string;
   prefsOverride?: ChatSessionPrefsPatch;
+  operatorId?: string;
+  authActorId?: string;
+  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion";
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+  policyRunId?: string;
+  policyTaskId?: string;
   /**
    * When set, the constructed user message will carry parentDelegationStepId so the
    * child transcript links back to the parent's delegation step record. Used by
@@ -1465,6 +1504,7 @@ export interface ChatStreamUsageRecord {
   outputTokens?: number;
   cachedInputTokens?: number;
   costUsd?: number;
+  costSource?: ChatUsageCostSource;
 }
 
 export interface ChatStreamApprovalRecord {

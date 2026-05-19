@@ -127,12 +127,121 @@ describe("approval-resolution-effects-service", () => {
     );
 
     expect(upsert.mock.calls.map(([input]) => input.effectKind)).toEqual([
+      "pending_action_execute",
       "approval_wait_wake",
       "proactive_run_wake",
       "linked_chat_turn_wake",
-      "pending_action_execute",
       "approval_inbox_follow_up",
       "approval_after_hooks",
+    ]);
+  });
+
+  it("wakes the child delegated turn and parent orchestration when a child subagent approval resolves", () => {
+    const upsert = vi.fn((input: Record<string, unknown>) => ({
+      effectId: String(input.targetId),
+      approvalId: String(input.approvalId),
+      effectKind: input.effectKind,
+      targetKind: input.targetKind,
+      targetId: String(input.targetId),
+      idempotencyKey: "key",
+      status: "pending",
+      attemptCount: 0,
+      payload: (input.payload as Record<string, unknown>) ?? {},
+      result: {},
+      version: 1,
+      createdAt: "2026-04-11T00:00:00.000Z",
+      updatedAt: "2026-04-11T00:00:00.000Z",
+    }));
+    const ctx = {
+      storage: {
+        approvalEffects: { upsert, claimNextPendingEffect: vi.fn(), get: vi.fn(), listByApproval: vi.fn() },
+        approvalWaitRuns: { getRunId: vi.fn(() => undefined) },
+        pendingApprovalActions: { find: vi.fn(() => undefined) },
+        approvalInbox: { findByApprovalAndToken: vi.fn(() => undefined) },
+        chatInlineApprovals: { get: vi.fn(() => undefined) },
+        chatTurnTraces: {
+          get: vi.fn(() => ({ durable: { runId: "child-durable-run" } })),
+          listBySession: vi.fn(() => [
+            {
+              turnId: "parent-turn-1",
+              durable: { runId: "parent-durable-run" },
+              orchestration: { runId: "delegation-run-1" },
+            },
+          ]),
+        },
+        chatDelegationSteps: {
+          listParentsByChildSessionIds: vi.fn(
+            () =>
+              new Map([
+                [
+                  "child-session-1",
+                  {
+                    parentSessionId: "parent-session-1",
+                    runId: "delegation-run-1",
+                    stepId: "step-1",
+                    role: "qa",
+                    index: 0,
+                  },
+                ],
+              ]),
+          ),
+        },
+      },
+      publishRealtime: vi.fn(),
+    } as unknown as ServiceContext;
+    const service = new ApprovalEffectsService(ctx, {
+      backgroundTasks: new Set(),
+      wakeDurableRun: vi.fn(),
+      requestRunProcessing: vi.fn(),
+      findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+      executeCodeModePendingApproval: vi.fn(),
+      executeApprovedPendingAction: vi.fn(),
+      enqueueAfterHooks: vi.fn(),
+      resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+    });
+
+    service.enqueueResolutionEffects(
+      {
+        approvalId: "approval-1",
+        kind: "shell.exec",
+        riskLevel: "danger",
+        status: "approved",
+        payload: {},
+        preview: {},
+        linkage: {
+          sessionId: "child-session-1",
+          turnId: "child-turn-1",
+          workspaceId: "workspace-1",
+        },
+        createdAt: "2026-04-11T00:00:00.000Z",
+        resolvedAt: "2026-04-11T00:01:00.000Z",
+        resolvedBy: "operator",
+        explanationStatus: "not_requested",
+      } satisfies ApprovalRequest,
+      {
+        decision: "approve",
+        resolvedBy: "operator",
+      },
+    );
+
+    const linkedWakeInputs = upsert.mock.calls
+      .map(([input]) => input)
+      .filter((input) => {
+        return input.effectKind === "linked_chat_turn_wake";
+      });
+    expect(linkedWakeInputs).toEqual([
+      expect.objectContaining({
+        targetId: "child-turn-1",
+        payload: expect.objectContaining({ runId: "child-durable-run" }),
+      }),
+      expect.objectContaining({
+        targetId: "parent-turn-1",
+        payload: expect.objectContaining({
+          runId: "parent-durable-run",
+          childSessionId: "child-session-1",
+          delegationRunId: "delegation-run-1",
+        }),
+      }),
     ]);
   });
 

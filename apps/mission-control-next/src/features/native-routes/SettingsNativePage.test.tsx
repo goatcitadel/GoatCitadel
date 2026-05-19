@@ -1,6 +1,6 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DeviceAccessGrantListResponse } from "@goatcitadel/contracts";
+import type { DeviceAccessGrantListResponse, LocalOperatorOverrideRecord } from "@goatcitadel/contracts";
 import { SettingsNativePage } from "./SettingsNativePage";
 
 const mocks = vi.hoisted(() => ({
@@ -19,6 +19,105 @@ const mocks = vi.hoisted(() => ({
     },
   })),
   fetchDeviceAccessGrants: vi.fn(async (): Promise<DeviceAccessGrantListResponse> => ({ items: [] })),
+  fetchToolCatalog: vi.fn(async () => ({
+    items: [
+      {
+        toolName: "browser.search",
+        category: "browser",
+        description: "Search the web",
+        pack: "core",
+        riskLevel: "low",
+      },
+    ],
+  })),
+  fetchToolGrants: vi.fn(async () => ({ items: [] })),
+  createToolGrant: vi.fn(async (input) => ({
+    grantId: "grant-ttl",
+    createdAt: "2026-05-02T18:00:00.000Z",
+    createdBy: "operator",
+    ...input,
+  })),
+  revokeToolGrant: vi.fn(async (grantId: string) => ({ revoked: true, grantId, revokedBy: "operator" })),
+  fetchPermissionProfiles: vi.fn(async () => ({
+    items: [
+      {
+        profileId: "safe",
+        label: "Safe",
+        scope: "global",
+        builtin: true,
+        approvalMode: "approve_all",
+        toolPatterns: ["*"],
+        createdAt: "2026-05-02T18:00:00.000Z",
+        updatedAt: "2026-05-02T18:00:00.000Z",
+      },
+      {
+        profileId: "trusted_local_power",
+        label: "Trusted Local Power",
+        description: "Run allowed local tools without normal prompts.",
+        scope: "global",
+        builtin: true,
+        approvalMode: "bypass",
+        toolPatterns: ["*"],
+        allow: ["*"],
+        deny: [],
+        createdAt: "2026-05-02T18:00:00.000Z",
+        updatedAt: "2026-05-02T18:00:00.000Z",
+      },
+    ],
+  })),
+  fetchActiveLocalOperatorOverrides: vi.fn(
+    async (): Promise<{ items: LocalOperatorOverrideRecord[] }> => ({ items: [] }),
+  ),
+  fetchEffectivePermissionProfile: vi.fn(async () => ({
+    permissionProfileId: "safe",
+    permissionProfileLabel: "Safe",
+    permissionProfileApprovalMode: "approve_all",
+  })),
+  createLocalOperatorOverride: vi.fn(async () => ({
+    overrideId: "override-session-1",
+    operatorId: "operator",
+    scope: "session",
+    scopeRef: "session-1",
+    reason: "Run local tools for this session",
+    status: "active",
+    createdBy: "operator",
+    createdAt: "2026-05-02T18:00:00.000Z",
+    expiresAt: "2099-05-02T18:10:00.000Z",
+  })),
+  createPermissionProfile: vi.fn(async (input) => ({
+    profileId: "profile-created",
+    scope: "workspace",
+    scopeRef: "default",
+    builtin: false,
+    createdBy: "operator",
+    createdAt: "2026-05-02T18:00:00.000Z",
+    updatedAt: "2026-05-02T18:00:00.000Z",
+    ...input,
+  })),
+  updatePermissionProfile: vi.fn(async (profileId: string, input) => ({
+    profileId,
+    label: input.label ?? "Updated profile",
+    scope: "workspace",
+    scopeRef: "default",
+    builtin: false,
+    approvalMode: input.approvalMode ?? "approve_all",
+    toolPatterns: input.toolPatterns ?? ["session.status"],
+    createdAt: "2026-05-02T18:00:00.000Z",
+    updatedAt: "2026-05-02T18:10:00.000Z",
+  })),
+  activatePermissionProfile: vi.fn(async (input) => ({
+    activationId: "activation-1",
+    createdAt: "2026-05-02T18:00:00.000Z",
+    ...input,
+  })),
+  archivePermissionProfile: vi.fn(async (profileId: string) => ({ archived: true, profileId })),
+  revokeLocalOperatorOverride: vi.fn(async (overrideId: string) => ({
+    revoked: true,
+    overrideId,
+    status: "revoked",
+    revokedAt: "2026-05-02T18:05:00.000Z",
+    revokedBy: "operator",
+  })),
   revokeDeviceAccessGrant: vi.fn(async (grantId: string) => ({
     grant: {
       grantId,
@@ -363,10 +462,12 @@ const mocks = vi.hoisted(() => ({
         baseUrl: "https://api.openai.com/v1",
         defaultModel: "gpt-5.4-mini",
         apiStyle: "openai-responses",
+        resolvedApiStyle: "openai-responses",
         models: ["gpt-5.4-mini"],
         hasApiKey: true,
         apiKeySource: "keychain",
         modelProbeState: "ready" as const,
+        modelProbeSource: "live" as const,
         modelProbeCheckedAt: "2026-04-22T10:00:00.000Z",
       },
     ],
@@ -392,7 +493,20 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     fetchProviderSecretStatus: mocks.fetchProviderSecretStatus,
     fetchOpenAICodexOAuthStatus: mocks.fetchOpenAICodexOAuthStatus,
     fetchSettings: mocks.fetchSettings,
+    fetchToolCatalog: mocks.fetchToolCatalog,
+    fetchToolGrants: mocks.fetchToolGrants,
+    createToolGrant: mocks.createToolGrant,
+    revokeToolGrant: mocks.revokeToolGrant,
     fetchDeviceAccessGrants: mocks.fetchDeviceAccessGrants,
+    fetchPermissionProfiles: mocks.fetchPermissionProfiles,
+    fetchActiveLocalOperatorOverrides: mocks.fetchActiveLocalOperatorOverrides,
+    fetchEffectivePermissionProfile: mocks.fetchEffectivePermissionProfile,
+    createLocalOperatorOverride: mocks.createLocalOperatorOverride,
+    createPermissionProfile: mocks.createPermissionProfile,
+    updatePermissionProfile: mocks.updatePermissionProfile,
+    activatePermissionProfile: mocks.activatePermissionProfile,
+    archivePermissionProfile: mocks.archivePermissionProfile,
+    revokeLocalOperatorOverride: mocks.revokeLocalOperatorOverride,
     revokeDeviceAccessGrant: mocks.revokeDeviceAccessGrant,
     resolveGatewayInstallToken: mocks.resolveGatewayInstallToken,
     bootstrapOnboarding: mocks.bootstrapOnboarding,
@@ -693,6 +807,57 @@ beforeEach(async () => {
   mocks.deletePersonality.mockResolvedValue({ defaultPersonalityId: "default", items: [] });
   mocks.setDefaultPersonality.mockResolvedValue({ defaultPersonalityId: "operator", items: [] });
   mocks.fetchDeviceAccessGrants.mockResolvedValue({ items: [] });
+  mocks.fetchPermissionProfiles.mockResolvedValue({
+    items: [
+      {
+        profileId: "safe",
+        label: "Safe",
+        scope: "global",
+        builtin: true,
+        approvalMode: "approve_all",
+        toolPatterns: ["*"],
+        createdAt: "2026-05-02T18:00:00.000Z",
+        updatedAt: "2026-05-02T18:00:00.000Z",
+      },
+      {
+        profileId: "trusted_local_power",
+        label: "Trusted Local Power",
+        description: "Run allowed local tools without normal prompts.",
+        scope: "global",
+        builtin: true,
+        approvalMode: "bypass",
+        toolPatterns: ["*"],
+        allow: ["*"],
+        deny: [],
+        createdAt: "2026-05-02T18:00:00.000Z",
+        updatedAt: "2026-05-02T18:00:00.000Z",
+      },
+    ],
+  });
+  mocks.fetchActiveLocalOperatorOverrides.mockResolvedValue({ items: [] });
+  mocks.fetchEffectivePermissionProfile.mockResolvedValue({
+    permissionProfileId: "safe",
+    permissionProfileLabel: "Safe",
+    permissionProfileApprovalMode: "approve_all",
+  });
+  mocks.createLocalOperatorOverride.mockResolvedValue({
+    overrideId: "override-session-1",
+    operatorId: "operator",
+    scope: "session",
+    scopeRef: "session-1",
+    reason: "Run local tools for this session",
+    status: "active",
+    createdBy: "operator",
+    createdAt: "2026-05-02T18:00:00.000Z",
+    expiresAt: "2099-05-02T18:10:00.000Z",
+  });
+  mocks.revokeLocalOperatorOverride.mockResolvedValue({
+    revoked: true,
+    overrideId: "override-session-1",
+    status: "revoked",
+    revokedAt: "2026-05-02T18:05:00.000Z",
+    revokedBy: "operator",
+  });
   mocks.fetchOnboardingState.mockResolvedValue({
     completed: false,
     checklist: [
@@ -829,10 +994,12 @@ beforeEach(async () => {
         baseUrl: "https://api.openai.com/v1",
         defaultModel: "gpt-5.4-mini",
         apiStyle: "openai-responses",
+        resolvedApiStyle: "openai-responses",
         models: ["gpt-5.4-mini"],
         hasApiKey: true,
         apiKeySource: "keychain",
         modelProbeState: "ready" as const,
+        modelProbeSource: "live" as const,
         modelProbeCheckedAt: "2026-04-22T10:00:00.000Z",
       },
     ],
@@ -1073,6 +1240,673 @@ describe("SettingsNativePage personalities", () => {
   });
 });
 
+describe("SettingsNativePage permissions", () => {
+  it("keeps all-surfaces activation as one dedicated action", async () => {
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = renderPage("permissions");
+    });
+    await flushAsyncUpdates();
+
+    const activationLabels = renderer!.root
+      .findAll((node) => node.type === "button" && collectText(node).includes("Use for"))
+      .map((node) => collectText(node).trim().toLowerCase());
+    expect(activationLabels).toContain("use for all surfaces");
+    expect(activationLabels).toContain("use for code");
+    expect(activationLabels.some((label) => label !== "use for all surfaces" && label !== "use for code")).toBe(true);
+    expect(activationLabels).not.toContain("use for all");
+
+    await act(async () => {
+      findButton(renderer!.root, "Use for all surfaces").props.onClick();
+    });
+    await flushAsyncUpdates();
+    expect(mocks.activatePermissionProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "safe", workspaceId: "default", surface: "all" }),
+    );
+  });
+
+  it("edits and archives custom permission profiles", async () => {
+    mocks.fetchPermissionProfiles.mockResolvedValue({
+      items: [
+        {
+          profileId: "safe",
+          label: "Safe",
+          scope: "global",
+          builtin: true,
+          approvalMode: "approve_all",
+          toolPatterns: ["*"],
+          createdAt: "2026-05-02T18:00:00.000Z",
+          updatedAt: "2026-05-02T18:00:00.000Z",
+        },
+        {
+          profileId: "profile-review",
+          label: "Review profile",
+          description: "Initial profile",
+          scope: "workspace",
+          scopeRef: "default",
+          builtin: false,
+          approvalMode: "approve_risky",
+          toolPatterns: ["session.status", "browser.search"],
+          allow: ["browser.search"],
+          deny: ["shell.exec"],
+          readAccessMode: "roots_only",
+          defaultForSurfaces: ["code"],
+          createdBy: "operator",
+          createdAt: "2026-05-02T18:00:00.000Z",
+          updatedAt: "2026-05-02T18:00:00.000Z",
+        },
+      ],
+    } as any);
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = renderPage("permissions");
+    });
+    await flushAsyncUpdates();
+
+    await act(async () => {
+      findInputByPlaceholder(renderer!.root, "Review mode, research mode, release captain").props.onChange({
+        target: { value: "Research fast path" },
+      });
+    });
+    const createTextareas = renderer!.root.findAllByType("textarea");
+    await act(async () => {
+      createTextareas
+        .find((node) => node.props.placeholder === "Why this profile exists and when to use it")!
+        .props.onChange({ target: { value: "Use for local research runs." } });
+      createTextareas
+        .find((node) => node.props.placeholder === "Optional allow patterns")!
+        .props.onChange({ target: { value: "browser.search\nmemory.read" } });
+      createTextareas
+        .find((node) => node.props.placeholder === "Optional deny patterns")!
+        .props.onChange({ target: { value: "shell.exec" } });
+    });
+    const createSelects = renderer!.root.findAllByType("select");
+    await act(async () => {
+      createSelects.find((node) => node.props.value === "")!.props.onChange({ target: { value: "full_disk" } });
+    });
+    const createSurfaceCheckboxes = renderer!.root.findAll(
+      (node) => node.type === "input" && node.props.type === "checkbox",
+    );
+    await act(async () => {
+      createSurfaceCheckboxes[2]!.props.onChange({ target: { checked: true } });
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Create profile").props.onClick();
+    });
+    await flushAsyncUpdates();
+    expect(mocks.createPermissionProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: "Research fast path",
+        description: "Use for local research runs.",
+        scope: "workspace",
+        scopeRef: "default",
+        allow: ["browser.search", "memory.read"],
+        deny: ["shell.exec"],
+        readAccessMode: "full_disk",
+        defaultForSurfaces: ["code"],
+      }),
+    );
+
+    await act(async () => {
+      findButton(renderer!.root, "Review profile").props.onClick();
+    });
+    expect(collectText(renderer!.root)).toContain("Edit custom profile");
+
+    const nameInput = renderer!.root.findAll(
+      (node) => node.type === "input" && node.props.value === "Review profile",
+    )[0];
+    await act(async () => {
+      nameInput!.props.onChange({ target: { value: "Review profile v2" } });
+    });
+    const descriptionTextarea = renderer!.root.findAll(
+      (node) => node.type === "textarea" && node.props.value === "Initial profile",
+    )[0];
+    await act(async () => {
+      descriptionTextarea!.props.onChange({ target: { value: "Tighter review profile" } });
+    });
+    const patternsTextarea = renderer!.root.findAll(
+      (node) => node.type === "textarea" && node.props.value === "session.status\nbrowser.search",
+    )[0];
+    await act(async () => {
+      patternsTextarea!.props.onChange({ target: { value: "session.status\nbrowser.open" } });
+    });
+    const allowTextarea = renderer!.root.findAll(
+      (node) => node.type === "textarea" && node.props.value === "browser.search",
+    )[0];
+    const denyTextarea = renderer!.root.findAll(
+      (node) => node.type === "textarea" && node.props.value === "shell.exec",
+    )[0];
+    await act(async () => {
+      allowTextarea!.props.onChange({ target: { value: "browser.search\nfs.read" } });
+      denyTextarea!.props.onChange({ target: { value: "shell.exec\nbrowser.open" } });
+    });
+    const readAccessSelect = renderer!.root.findAll(
+      (node) => node.type === "select" && node.props.value === "roots_only",
+    )[0];
+    await act(async () => {
+      readAccessSelect!.props.onChange({ target: { value: "approval_required" } });
+    });
+    const editSurfaceCheckboxes = renderer!.root.findAll(
+      (node) => node.type === "input" && node.props.type === "checkbox",
+    );
+    await act(async () => {
+      editSurfaceCheckboxes[0]!.props.onChange({ target: { checked: true } });
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Save profile").props.onClick();
+    });
+    await flushAsyncUpdates();
+
+    expect(mocks.updatePermissionProfile).toHaveBeenCalledWith(
+      "profile-review",
+      expect.objectContaining({
+        label: "Review profile v2",
+        description: "Tighter review profile",
+        toolPatterns: ["session.status", "browser.open"],
+        allow: ["browser.search", "fs.read"],
+        deny: ["shell.exec", "browser.open"],
+        readAccessMode: "approval_required",
+        defaultForSurfaces: ["code", "chat"],
+      }),
+    );
+
+    await act(async () => {
+      findButton(renderer!.root, "Archive profile").props.onClick();
+    });
+    await flushAsyncUpdates();
+    expect(mocks.archivePermissionProfile).toHaveBeenCalledWith("profile-review");
+  });
+
+  it("keeps skip-routine custom profiles unavailable in Remote Hardened mode", async () => {
+    mocks.fetchSettings.mockResolvedValueOnce({
+      auth: {
+        mode: "token",
+        allowLoopbackBypass: false,
+        tokenConfigured: true,
+        basicConfigured: false,
+      },
+      llm: {
+        activeProviderId: "openai",
+        activeModel: "gpt-5.4-mini",
+        providers: [],
+        providerConfigs: [],
+      },
+      deploymentProfile: "remote_hardened",
+      toolApprovalMode: "approve_risky",
+    } as any);
+    mocks.fetchPermissionProfiles.mockResolvedValue({
+      items: [
+        {
+          profileId: "safe",
+          label: "Safe",
+          scope: "global",
+          builtin: true,
+          approvalMode: "approve_all",
+          toolPatterns: ["*"],
+          createdAt: "2026-05-02T18:00:00.000Z",
+          updatedAt: "2026-05-02T18:00:00.000Z",
+        },
+        {
+          profileId: "trusted_local_power",
+          label: "Trusted Local Power",
+          scope: "global",
+          builtin: true,
+          approvalMode: "bypass",
+          toolPatterns: ["*"],
+          createdAt: "2026-05-02T18:00:00.000Z",
+          updatedAt: "2026-05-02T18:00:00.000Z",
+        },
+        {
+          profileId: "profile-fast",
+          label: "Fast profile",
+          scope: "workspace",
+          scopeRef: "default",
+          builtin: false,
+          approvalMode: "bypass",
+          toolPatterns: ["*"],
+          createdBy: "operator",
+          createdAt: "2026-05-02T18:00:00.000Z",
+          updatedAt: "2026-05-02T18:00:00.000Z",
+        },
+      ],
+    } as any);
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = renderPage("permissions");
+    });
+    await flushAsyncUpdates();
+
+    const bypassOptions = renderer!.root.findAll((node) => node.type === "option" && node.props.value === "bypass");
+    expect(bypassOptions.length).toBeGreaterThan(0);
+    expect(bypassOptions.every((node) => node.props.disabled === true)).toBe(true);
+    expect(collectText(renderer!.root)).toContain(
+      "Remote Hardened keeps profiles that skip normal prompts unavailable.",
+    );
+
+    await act(async () => {
+      findButton(renderer!.root, "Trusted Local Power").props.onClick();
+    });
+    const disabledActivationButtons = renderer!.root.findAll(
+      (node) => node.type === "button" && collectText(node).includes("Use for"),
+    );
+    expect(disabledActivationButtons.length).toBeGreaterThan(0);
+    expect(disabledActivationButtons.every((button) => button.props.disabled === true)).toBe(true);
+    await act(async () => {
+      disabledActivationButtons[0]!.props.onClick();
+    });
+    await flushAsyncUpdates();
+    expect(mocks.activatePermissionProfile).not.toHaveBeenCalled();
+    expect(collectText(renderer!.root)).toContain(
+      "Remote Hardened keeps profiles that skip normal prompts unavailable.",
+    );
+
+    await act(async () => {
+      findButton(renderer!.root, "Fast profile").props.onClick();
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Save profile").props.onClick();
+    });
+    await flushAsyncUpdates();
+
+    expect(mocks.updatePermissionProfile).not.toHaveBeenCalled();
+    expect(collectText(renderer!.root)).toContain(
+      "Remote Hardened keeps profiles that skip normal prompts unavailable.",
+    );
+
+    const overrideButton = findButton(renderer!.root, "Start temporary override");
+    expect(overrideButton.props.disabled).toBe(true);
+    await act(async () => {
+      overrideButton.props.onClick();
+    });
+    await flushAsyncUpdates();
+    expect(mocks.createLocalOperatorOverride).not.toHaveBeenCalled();
+    expect(collectText(renderer!.root)).toContain("Remote Hardened mode keeps Local Operator Override unavailable.");
+  });
+
+  it("fails closed for prompt-skipping controls when settings cannot be loaded", async () => {
+    mocks.fetchSettings.mockRejectedValueOnce(new Error("settings unavailable"));
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = renderPage("permissions");
+    });
+    await flushAsyncUpdates();
+
+    await act(async () => {
+      findButton(renderer!.root, "Trusted Local Power").props.onClick();
+    });
+    expect(collectText(renderer!.root)).toContain(
+      "Settings could not be loaded, so profiles that skip normal prompts stay unavailable.",
+    );
+
+    const disabledActivationButtons = renderer!.root.findAll(
+      (node) => node.type === "button" && collectText(node).includes("Use for"),
+    );
+    expect(disabledActivationButtons.length).toBeGreaterThan(0);
+    expect(disabledActivationButtons.every((button) => button.props.disabled === true)).toBe(true);
+    await act(async () => {
+      disabledActivationButtons[0]!.props.onClick();
+    });
+    await flushAsyncUpdates();
+    expect(mocks.activatePermissionProfile).not.toHaveBeenCalled();
+
+    const overrideButton = findButton(renderer!.root, "Start temporary override");
+    expect(overrideButton.props.disabled).toBe(true);
+    await act(async () => {
+      overrideButton.props.onClick();
+    });
+    await flushAsyncUpdates();
+    expect(mocks.createLocalOperatorOverride).not.toHaveBeenCalled();
+    expect(collectText(renderer!.root)).toContain(
+      "Settings could not be loaded, so Local Operator Override stays unavailable.",
+    );
+  });
+
+  it("keeps session-scoped Local Operator Override evidence visible after effective-state reloads", async () => {
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = renderPage("permissions");
+    });
+    await flushAsyncUpdates();
+
+    const scopeSelect = renderer!.root.findAllByType("select").find((node) => node.props.value === "workspace");
+    expect(scopeSelect).toBeDefined();
+    await act(async () => {
+      scopeSelect!.props.onChange({ target: { value: "session" } });
+    });
+    await act(async () => {
+      findInputByPlaceholder(renderer!.root, "session id").props.onChange({ target: { value: "session-1" } });
+    });
+    const reasonTextarea = renderer!.root.findAll(
+      (node) =>
+        node.type === "textarea" && node.props.placeholder === "Why this local run needs temporary fast-path execution",
+    )[0];
+    expect(reasonTextarea).toBeDefined();
+    await act(async () => {
+      reasonTextarea!.props.onChange({ target: { value: "Run local tools for this session" } });
+    });
+    const overrideButton = findButton(renderer!.root, "Start temporary override");
+    expect(overrideButton.props.disabled).toBe(true);
+    const overrideAcknowledgement = renderer!.root
+      .findAll((node) => node.type === "input" && node.props.type === "checkbox" && node.props.disabled !== true)
+      .at(-1);
+    expect(overrideAcknowledgement).toBeDefined();
+    await act(async () => {
+      overrideAcknowledgement!.props.onChange({ target: { checked: true } });
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Start temporary override").props.onClick();
+    });
+    await flushAsyncUpdates();
+
+    expect(mocks.createLocalOperatorOverride).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "session",
+        scopeRef: "session-1",
+      }),
+    );
+    expect(collectText(renderer!.root)).toContain("override-session-1");
+    expect(findButton(renderer!.root, "End")).toBeDefined();
+    const initialText = collectText(renderer!.root);
+    expect(initialText).toContain("broad local tool access");
+    expect(initialText).toContain("normal prompts");
+
+    await act(async () => {
+      renderer!.unmount();
+    });
+    mocks.fetchActiveLocalOperatorOverrides.mockResolvedValue({
+      items: [
+        {
+          overrideId: "override-session-1",
+          operatorId: "operator",
+          scope: "session",
+          scopeRef: "session-1",
+          reason: "Run local tools for this session",
+          status: "active",
+          createdBy: "operator",
+          createdAt: "2026-05-02T18:00:00.000Z",
+          expiresAt: "2099-05-02T18:10:00.000Z",
+        },
+        {
+          overrideId: "override-run-2",
+          operatorId: "operator",
+          scope: "run",
+          scopeRef: "run-2",
+          reason: "Run local tools for this run",
+          status: "active",
+          createdBy: "operator",
+          createdAt: "2026-05-02T18:00:00.000Z",
+          expiresAt: "2099-05-02T18:20:00.000Z",
+        },
+      ],
+    });
+    await act(async () => {
+      renderer = renderPage("permissions");
+    });
+    await flushAsyncUpdates();
+    expect(collectText(renderer!.root)).toContain("override-session-1");
+    expect(collectText(renderer!.root)).toContain("override-run-2");
+    expect(renderer!.root.findAll((node) => node.type === "button" && collectText(node).includes("End"))).toHaveLength(
+      2,
+    );
+  });
+
+  it("reads nested effective permission profiles from the gateway response", async () => {
+    mocks.fetchEffectivePermissionProfile.mockResolvedValue({
+      permissionProfile: {
+        profileId: "safe",
+        label: "Nested Safe",
+        approvalMode: "approve_all",
+      },
+      localOperatorOverride: {
+        overrideId: "override-nested",
+        operatorId: "operator",
+        scope: "session",
+        scopeRef: "session-1",
+        reason: "Nested gateway state",
+        status: "active",
+        createdBy: "operator",
+        createdAt: "2026-05-02T18:00:00.000Z",
+        expiresAt: "2099-05-02T18:10:00.000Z",
+      },
+    } as any);
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = renderPage("permissions");
+    });
+    await flushAsyncUpdates();
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("Nested Safe");
+    expect(text).toContain("override-nested");
+  });
+});
+
+describe("SettingsNativePage tools", () => {
+  it("keeps approval bypass unavailable in Remote Hardened mode", async () => {
+    mocks.fetchSettings.mockResolvedValueOnce({
+      auth: {
+        mode: "token",
+        allowLoopbackBypass: false,
+        tokenConfigured: true,
+        basicConfigured: false,
+      },
+      llm: {
+        activeProviderId: "openai",
+        activeModel: "gpt-5.4-mini",
+        providers: [],
+        providerConfigs: [],
+      },
+      deploymentProfile: "remote_hardened",
+      toolApprovalMode: "approve_risky",
+    } as any);
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage("tools");
+    });
+    await flushAsyncUpdates();
+
+    const bypassOption = renderer!.root.findAll((node) => node.type === "option" && node.props.value === "bypass")[0];
+    expect(bypassOption).toBeDefined();
+    expect(bypassOption!.props.disabled).toBe(true);
+    expect(collectText(renderer!.root)).toContain("Remote Hardened mode keeps routine prompt skipping unavailable");
+
+    const approvalSelect = renderer!.root.findAll(
+      (node) => node.type === "select" && node.props.value === "approve_risky",
+    )[0];
+    expect(approvalSelect).toBeDefined();
+    await act(async () => {
+      approvalSelect!.props.onChange({ target: { value: "bypass" } });
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Save mode").props.onClick();
+    });
+    await flushAsyncUpdates();
+
+    expect(mocks.patchSettings).not.toHaveBeenCalledWith(expect.objectContaining({ toolApprovalMode: "bypass" }));
+    expect(mocks.patchSettings).toHaveBeenCalledWith({ toolApprovalMode: "approve_risky" });
+  });
+
+  it("keeps approval bypass unavailable when settings cannot be loaded", async () => {
+    mocks.fetchSettings.mockRejectedValueOnce(new Error("settings unavailable"));
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage("tools");
+    });
+    await flushAsyncUpdates();
+
+    const bypassOption = renderer!.root.findAll((node) => node.type === "option" && node.props.value === "bypass")[0];
+    expect(bypassOption).toBeDefined();
+    expect(bypassOption!.props.disabled).toBe(true);
+    const text = collectText(renderer!.root);
+    expect(text).toContain("Settings could not be loaded, so routine prompt skipping stays unavailable.");
+    expect(text).toContain("Unavailable Current");
+
+    const approvalSelect = renderer!.root.findAll(
+      (node) => node.type === "select" && node.props.value === "approve_risky",
+    )[0];
+    await act(async () => {
+      approvalSelect!.props.onChange({ target: { value: "bypass" } });
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Save mode").props.onClick();
+    });
+    await flushAsyncUpdates();
+
+    expect(mocks.patchSettings).not.toHaveBeenCalledWith(expect.objectContaining({ toolApprovalMode: "bypass" }));
+  });
+
+  it("counts only usable matching grants as available for a selected tool", async () => {
+    mocks.fetchToolGrants.mockResolvedValueOnce({
+      items: [
+        {
+          grantId: "grant-active",
+          toolPattern: "browser.*",
+          decision: "allow",
+          scope: "workspace",
+          scopeRef: "default",
+          grantType: "persistent",
+          createdBy: "operator",
+          createdAt: "2026-05-02T18:00:00.000Z",
+        },
+        {
+          grantId: "grant-revoked",
+          toolPattern: "browser.search",
+          decision: "allow",
+          scope: "workspace",
+          scopeRef: "default",
+          grantType: "persistent",
+          createdBy: "operator",
+          createdAt: "2026-05-02T18:00:00.000Z",
+          revokedAt: "2026-05-02T19:00:00.000Z",
+        },
+        {
+          grantId: "grant-expired",
+          toolPattern: "browser.search",
+          decision: "allow",
+          scope: "workspace",
+          scopeRef: "default",
+          grantType: "ttl",
+          createdBy: "operator",
+          createdAt: "2026-05-02T18:00:00.000Z",
+          expiresAt: "2026-05-02T19:00:00.000Z",
+        },
+        {
+          grantId: "grant-spent",
+          toolPattern: "browser.search",
+          decision: "allow",
+          scope: "workspace",
+          scopeRef: "default",
+          grantType: "one_time",
+          createdBy: "operator",
+          createdAt: "2026-05-02T18:00:00.000Z",
+          usesRemaining: 0,
+        },
+        {
+          grantId: "grant-other",
+          toolPattern: "fs.write",
+          decision: "allow",
+          scope: "workspace",
+          scopeRef: "default",
+          grantType: "persistent",
+          createdBy: "operator",
+          createdAt: "2026-05-02T18:00:00.000Z",
+        },
+      ],
+    } as any);
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage("tools");
+    });
+    await flushAsyncUpdates();
+
+    const availableMetric = renderer!.root
+      .findAll((node) => node.props.className === "mc-next-settings-metric")
+      .find((node) => collectText(node).includes("Available grants"));
+
+    expect(availableMetric).toBeDefined();
+    expect(collectText(availableMetric!)).toContain("Available grants 1 Active, unexpired matches");
+  });
+
+  it("submits TTL grants with an explicit expiry", async () => {
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage("tools");
+    });
+    await flushAsyncUpdates();
+
+    const grantTypeSelect = renderer!.root.findAll(
+      (node) => node.type === "select" && node.props?.value === "persistent",
+    )[0];
+    await act(async () => {
+      grantTypeSelect!.props.onChange({ target: { value: "ttl" } });
+    });
+
+    const expiresAtInput = findInputByPlaceholder(renderer!.root, "2099-01-01T00:00:00.000Z");
+    await act(async () => {
+      expiresAtInput.props.onChange({ target: { value: "2099-01-01T00:00:00.000Z" } });
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Create grant").props.onClick();
+    });
+    await flushAsyncUpdates();
+
+    expect(mocks.createToolGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolPattern: "browser.search",
+        grantType: "ttl",
+        expiresAt: "2099-01-01T00:00:00.000Z",
+      }),
+    );
+    expect(collectText(renderer!.root)).toContain("Create a scoped policy grant for the selected tool.");
+  });
+
+  it("clears workspace scope refs before creating non-workspace tool grants", async () => {
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage("tools");
+    });
+    await flushAsyncUpdates();
+
+    const scopeSelect = renderer!.root.findAll(
+      (node) => node.type === "select" && node.props?.value === "workspace",
+    )[0];
+    await act(async () => {
+      scopeSelect!.props.onChange({ target: { value: "session" } });
+    });
+    const scopeRefInput = renderer!.root.findAll(
+      (node) =>
+        node.type === "input" &&
+        node.props.className === "mc-next-settings-input" &&
+        !node.props.placeholder &&
+        node.props.disabled !== true &&
+        node.props.value === "",
+    )[0];
+    expect(scopeRefInput).toBeDefined();
+
+    await act(async () => {
+      findButton(renderer!.root, "Create grant").props.onClick();
+    });
+    await flushAsyncUpdates();
+    expect(mocks.createToolGrant).not.toHaveBeenCalled();
+    expect(collectText(renderer!.root)).toContain("Add a session id before creating this tool grant.");
+
+    await act(async () => {
+      scopeRefInput!.props.onChange({ target: { value: "session-1" } });
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Create grant").props.onClick();
+    });
+    await flushAsyncUpdates();
+
+    expect(mocks.createToolGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "session",
+        scopeRef: "session-1",
+      }),
+    );
+  });
+});
+
 describe("SettingsNativePage providers", () => {
   it("renders onboarding, budget, and unknown sections without silently falling through to General", async () => {
     let renderer: ReactTestRenderer | null = null;
@@ -1125,6 +1959,85 @@ describe("SettingsNativePage providers", () => {
     expect(text).toContain("Unknown settings section");
     expect(text).toContain("Open General");
     expect(text).not.toContain("Mission Control posture");
+  });
+
+  it("keeps prompt-skipping first-run defaults unavailable in Remote Hardened mode", async () => {
+    mocks.fetchSettings.mockResolvedValueOnce({
+      auth: {
+        mode: "token",
+        allowLoopbackBypass: false,
+        tokenConfigured: true,
+        basicConfigured: false,
+      },
+      llm: {
+        activeProviderId: "openai",
+        activeModel: "gpt-5.4-mini",
+        providers: [],
+        providerConfigs: [],
+      },
+      deploymentProfile: "remote_hardened",
+    } as any);
+    mocks.fetchOnboardingState.mockResolvedValueOnce({
+      completed: false,
+      checklist: [
+        {
+          id: "llm",
+          label: "Provider configured",
+          status: "complete",
+          detail: "Ready.",
+        },
+      ],
+      settings: {
+        defaultToolProfile: "danger",
+        toolApprovalMode: "bypass",
+        budgetMode: "balanced",
+        networkAllowlist: ["api.openai.com"],
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          tokenConfigured: true,
+          basicConfigured: false,
+        },
+        llm: {
+          activeProviderId: "openai",
+          activeModel: "gpt-5.4-mini",
+          providers: [],
+        },
+        mesh: {
+          enabled: false,
+          mode: "lan",
+          nodeId: "",
+          mdns: true,
+          staticPeers: [],
+          requireMtls: false,
+          tailnetEnabled: false,
+        },
+      },
+    } as any);
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderPage("onboarding");
+    });
+    await flushAsyncUpdates();
+
+    const dangerOption = renderer!.root.findAll((node) => node.type === "option" && node.props.value === "danger")[0];
+    const bypassOption = renderer!.root.findAll((node) => node.type === "option" && node.props.value === "bypass")[0];
+    expect(dangerOption?.props.disabled).toBe(true);
+    expect(bypassOption?.props.disabled).toBe(true);
+    expect(collectText(renderer!.root)).toContain(
+      "Remote Hardened keeps first-run defaults that skip normal prompts unavailable.",
+    );
+
+    await act(async () => {
+      findButton(renderer!.root, "Apply defaults").props.onClick();
+    });
+    await flushAsyncUpdates();
+
+    expect(mocks.bootstrapOnboarding).not.toHaveBeenCalled();
+    expect(collectText(renderer!.root)).toContain(
+      "Remote Hardened keeps first-run defaults that skip normal prompts unavailable.",
+    );
   });
 
   it("renders repeated device access grants without duplicate row keys", async () => {
@@ -1267,9 +2180,13 @@ describe("SettingsNativePage providers", () => {
       expect(initialText).toContain("Providers & Models");
       expect(initialText).toContain("Provider API style");
       expect(initialText).toContain("Use for modern OpenAI-compatible Responses endpoints");
+      expect(initialText).toContain("Configured API");
+      expect(initialText).toContain("Execution API");
+      expect(initialText).toContain("Matches configured API");
       expect(initialText).toContain("Key on file in OS secure storage");
       expect(initialText).toContain("never sent back to the browser");
       expect(initialText).toContain("Provider models");
+      expect(initialText).toContain("Live verified");
 
       await act(async () => {
         findButton(renderer!.root, "Refresh models").props.onClick();
@@ -1298,6 +2215,55 @@ describe("SettingsNativePage providers", () => {
     } finally {
       Object.assign(globalThis, { window: previousWindow });
     }
+  });
+
+  it("shows configured versus execution API style and cautious model-probe truth", async () => {
+    mocks.providerCatalogState = {
+      config: {
+        activeProviderId: "custom",
+        activeModel: "custom-model",
+        providers: [],
+        providerConfigs: [
+          {
+            providerId: "custom",
+            label: "Custom",
+            baseUrl: "https://custom.example/v1",
+            apiStyle: "openai-codex-responses",
+            defaultModel: "custom-model",
+          },
+        ],
+      },
+      providers: [
+        {
+          providerId: "custom",
+          label: "Custom",
+          baseUrl: "https://custom.example/v1",
+          defaultModel: "custom-model",
+          apiStyle: "openai-codex-responses",
+          resolvedApiStyle: "openai-chat-completions",
+          models: [],
+          hasApiKey: false,
+          apiKeySource: "none",
+          modelProbeState: "not_checked" as const,
+        },
+      ],
+      loading: false,
+      error: null,
+    };
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage();
+    });
+    const text = collectText(renderer!.root);
+
+    expect(text).toContain("Configured API");
+    expect(text).toContain("openai-codex-responses");
+    expect(text).toContain("Execution API");
+    expect(text).toContain("openai-chat-completions");
+    expect(text).toContain("Gateway executes openai-chat-completions");
+    expect(text).toContain("Not probed");
+    expect(text).toContain("Codex Responses is only executed for the built-in OpenAI Codex OAuth provider");
   });
 
   it("renders OAuth controls and hides API-key controls for OpenAI Codex", async () => {

@@ -129,6 +129,17 @@ describe("useApprovalQueue", () => {
     expect(hook.result.visibleItems.map((item) => item.approvalId)).toEqual(["expired-1", "approved-1"]);
   });
 
+  it("focuses resolved approvals by switching to history instead of selecting an unrelated pending item", async () => {
+    const hook = await renderApprovalQueue({ focusedApprovalId: "approved-1" });
+
+    await flushAsync();
+
+    expect(hook.result.view).toBe("history");
+    expect(hook.result.selectedApproval?.approvalId).toBe("approved-1");
+    expect(hook.result.selectedApprovalId).toBe("approved-1");
+    expect(hook.result.visibleItems.map((item) => item.approvalId)).toEqual(["expired-1", "approved-1"]);
+  });
+
   it("can be disabled without loading approvals", async () => {
     const hook = await renderApprovalQueue({ enabled: false });
 

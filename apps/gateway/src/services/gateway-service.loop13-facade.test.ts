@@ -240,6 +240,22 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
       orchestration: {
         createCheckpoint: vi.fn((input: Record<string, unknown>) => ({ checkpointId: "cp-1", ...input })),
       },
+      permissionProfiles: {
+        resolveContext: vi.fn((input: Record<string, unknown>) => ({
+          permissionProfile: {
+            profileId: input.profileId ?? "safe",
+            name: "Safe",
+            description: "Ask before tool actions.",
+            builtIn: true,
+            archived: false,
+            toolApprovalMode: "approve_all",
+            toolProfile: "minimal",
+            readAccessMode: "approval_required",
+            createdAt: "2026-05-17T00:00:00.000Z",
+            updatedAt: "2026-05-17T00:00:00.000Z",
+          },
+        })),
+      },
       remoteActionTokens: {
         findByTokenHash: vi.fn(),
         get: vi.fn(),
@@ -467,7 +483,9 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
         resolveApprovalWithRemoteToken: vi.fn(async (input: unknown) => ({ input, remote: true })),
         resolveApprovalWithRemoteTokenId: vi.fn(async (input: unknown) => ({ input, remoteId: true })),
         resolveApprovalsBulk: vi.fn(async (input: unknown) => ({ input, resolved: 2 })),
-        revokeToolGrant: vi.fn((grantId: string) => grantId === "grant-1"),
+        revokeToolGrant: vi.fn(
+          (grantId: string, revokedBy: string) => grantId === "grant-1" && revokedBy === "operator-test",
+        ),
       },
       approvalWaitRunService: {
         buildApprovalLinkage: vi.fn((linkage: unknown) => ({ linkage })),
@@ -511,7 +529,7 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
     ).toMatchObject({
       grantId: "grant-1",
     });
-    expect(GatewayService.prototype.revokeToolGrant.call(gateway, "grant-1")).toBe(true);
+    expect(GatewayService.prototype.revokeToolGrant.call(gateway, "grant-1", "operator-test")).toBe(true);
     await expect(
       GatewayService.prototype.createApproval.call(gateway, { kind: "tool" } as never),
     ).resolves.toMatchObject({
@@ -623,8 +641,7 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
         decision: "allow",
         scope: "session",
         scopeRef: "session-1",
-        grantType: "one_time",
-        usesRemaining: 1,
+        grantType: "ttl",
       }),
     );
     expect(publishRealtime).toHaveBeenLastCalledWith(
@@ -632,6 +649,82 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
       "tools",
       expect.objectContaining({ type: "internal_tool_grant_created", toolName: "browser.search" }),
     );
+  });
+
+  it("does not resolve local operator overrides in remote hardened deployments", () => {
+    const resolveContext = vi.fn((input: Record<string, unknown>) => ({
+      permissionProfile: {
+        profileId: "safe",
+        label: "Safe",
+        builtin: true,
+        status: "active",
+        scope: "global",
+        approvalMode: "approve_all",
+        toolPatterns: ["*"],
+        createdBy: "system",
+        createdAt: "2026-05-17T00:00:00.000Z",
+        updatedAt: "2026-05-17T00:00:00.000Z",
+      },
+      localOperatorOverride: input.disableLocalOperatorOverrides
+        ? undefined
+        : {
+            overrideId: "local-override-1",
+            operatorId: "operator-1",
+            scope: "operator",
+            reason: "stale local override",
+            status: "active",
+            createdBy: "operator-1",
+            createdAt: "2026-05-17T00:00:00.000Z",
+            expiresAt: "2099-05-17T00:00:00.000Z",
+          },
+    }));
+    const { gateway } = createGatewayHarness({
+      config: {
+        rootDir: "F:/code/personal-ai",
+        assistant: {
+          deploymentProfile: "remote_hardened",
+        },
+      },
+      storage: {
+        permissionProfiles: { resolveContext },
+      },
+    });
+
+    const context = GatewayService.prototype.resolveToolPolicyContext.call(gateway, {
+      operatorId: "operator-1",
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+    });
+
+    expect(context.localOperatorOverrideId).toBeUndefined();
+    expect(resolveContext).toHaveBeenCalledWith(expect.objectContaining({ disableLocalOperatorOverrides: true }));
+    expect(() =>
+      GatewayService.prototype.resolveToolPolicyContext.call(gateway, {
+        operatorId: "operator-1",
+        localOperatorOverrideId: "local-override-1",
+      }),
+    ).toThrow(/remote_hardened/);
+
+    resolveContext.mockReturnValueOnce({
+      permissionProfile: {
+        profileId: "trusted_local_power",
+        label: "Trusted Local Power",
+        builtin: true,
+        status: "active",
+        scope: "global",
+        approvalMode: "bypass",
+        toolPatterns: ["*"],
+        createdBy: "system",
+        createdAt: "2026-05-17T00:00:00.000Z",
+        updatedAt: "2026-05-17T00:00:00.000Z",
+      },
+    });
+    expect(() =>
+      GatewayService.prototype.resolveToolPolicyContext.call(gateway, {
+        operatorId: "operator-1",
+        permissionProfileId: "trusted_local_power",
+      }),
+    ).toThrow(/Bypass permission profiles are unavailable/);
   });
 
   it("validates remote action tokens and enqueues connector approval delivery runs", () => {
@@ -648,7 +741,7 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
     const createDurableRun = vi.fn((input: Record<string, unknown>) => ({ runId: "delivery-run", input }));
     const { gateway } = createGatewayHarness({
       createDurableRun,
-      getCurrentRequestAttribution: vi.fn(() => ({ traceId: "trace-1", originSurface: "test" })),
+      getCurrentRequestAttribution: vi.fn(() => ({ traceId: "trace-1", originSurface: "chat" })),
       isFeatureEnabled: vi.fn(() => true),
     });
     gateway.storage.remoteActionTokens.findByTokenHash = vi.fn(() => currentToken);
@@ -686,6 +779,11 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
         riskLevel: "medium",
         status: "pending",
         preview: { summary: "Approve tool" },
+        linkage: {
+          originSurface: "cowork",
+          runId: "run-approval-1",
+          permissionProfileId: "safe",
+        },
       } as never,
       {
         connectorId: "browser-1",
@@ -702,6 +800,12 @@ describe("GatewayService Loop 13 approval, tool, and durable facades", () => {
     expect(createDurableRun).toHaveBeenCalledWith(
       expect.objectContaining({
         workflowKey: "connector.delivery",
+        payload: expect.objectContaining({
+          traceId: "trace-1",
+          originSurface: "cowork",
+          runId: "run-approval-1",
+          permissionProfileId: "safe",
+        }),
         metadata: expect.objectContaining({ approvalId: "approval-1", connectorId: "browser-1" }),
       }),
     );

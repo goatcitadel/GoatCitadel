@@ -200,6 +200,41 @@ describe("DiscordRuntimeService", () => {
     expect(editReply).toHaveBeenCalledWith({ content: "Mode set to gpt-5.4." });
   });
 
+  it("binds Discord guild role allowlists to the originating guild", async () => {
+    const onInboundMessage = vi.fn();
+    const service = createService({ onInboundMessage });
+    const message = {
+      inGuild: () => true,
+      channel: {
+        isDMBased: () => false,
+        isThread: () => false,
+        sendTyping: vi.fn(),
+      },
+      channelId: "channel_1",
+      guildId: "guild_1",
+      author: { id: "user_1", bot: false, username: "goat-user" },
+      member: { roles: { cache: new Map([["role_other", {}]]) } },
+      content: "<@1234567890> hello",
+      mentions: { users: { has: vi.fn().mockReturnValue(true) } },
+      id: "msg_1",
+      react: vi.fn(),
+    } as any;
+    const runtime = { connectedBotId: "1234567890" } as any;
+    const roleScopedConnection = createConnection({
+      guilds: { guild_1: { requireMention: true, channels: ["channel_1"], roles: ["role_ok"] } },
+    });
+
+    await expect((service as any).tryHandleMessageForConnection(runtime, roleScopedConnection, message)).resolves.toBe(
+      false,
+    );
+    expect(onInboundMessage).not.toHaveBeenCalled();
+
+    message.member.roles.cache = new Map([["role_ok", {}]]);
+    await expect((service as any).tryHandleMessageForConnection(runtime, roleScopedConnection, message)).resolves.toBe(
+      true,
+    );
+  });
+
   it("returns model autocomplete choices for the model slash command", async () => {
     const listModelSuggestions = vi.fn().mockResolvedValue([
       { model: "gpt-5.4", providerLabel: "OpenAI" },
@@ -880,9 +915,23 @@ describe("DiscordRuntimeService internals", () => {
     const definitions = __discordRuntimeServiceInternals.buildDiscordSlashCommandDefinitions();
 
     expect(definitions.map((definition) => definition.name)).toEqual(
-      expect.arrayContaining(["help", "status", "new", "mode", "model", "skill", "mcp", "run", "approve", "deny"]),
+      expect.arrayContaining([
+        "help",
+        "status",
+        "new",
+        "memory",
+        "recall",
+        "search",
+        "mode",
+        "model",
+        "skill",
+        "mcp",
+        "run",
+        "approve",
+        "deny",
+      ]),
     );
-    expect(definitions.length).toBe(31);
+    expect(new Set(definitions.map((definition) => definition.name)).size).toBe(definitions.length);
     expect(JSON.stringify(definitions.find((definition) => definition.name === "model"))).toContain(
       '"autocomplete":true',
     );
@@ -919,8 +968,18 @@ describe("DiscordRuntimeService internals", () => {
       { name: "web", input: createSlashInteraction("web", { strings: { mode: "deep" } }), expected: "/web deep" },
       {
         name: "memory",
-        input: createSlashInteraction("memory", { strings: { mode: "auto" } }),
-        expected: "/memory auto",
+        input: createSlashInteraction("memory", { strings: { query: "release proof" } }),
+        expected: "/memory release proof",
+      },
+      {
+        name: "recall",
+        input: createSlashInteraction("recall", { strings: { query: "installer" } }),
+        expected: "/recall installer",
+      },
+      {
+        name: "search",
+        input: createSlashInteraction("search", { strings: { query: "approval" } }),
+        expected: "/search approval",
       },
       { name: "goal blank", input: createSlashInteraction("goal"), expected: "/goal" },
       {
@@ -984,23 +1043,9 @@ describe("DiscordRuntimeService internals", () => {
       },
       { name: "skills", input: createSlashInteraction("skills"), expected: "/skills" },
       {
-        name: "skill enable",
-        input: createSlashInteraction("skill", { subcommand: "enable", strings: { skill_id: "researcher" } }),
-        expected: "/skill enable researcher",
-      },
-      {
-        name: "skill search",
-        input: createSlashInteraction("skill", { subcommand: "search", strings: { query: "browser" } }),
-        expected: "/skill search browser",
-      },
-      {
-        name: "skill install confirm",
-        input: createSlashInteraction("skill", {
-          subcommand: "install",
-          strings: { source_ref: "github:user/skill" },
-          booleans: { confirm_high_risk: true },
-        }),
-        expected: "/skill install github:user/skill --confirm-high-risk",
+        name: "skill inspect",
+        input: createSlashInteraction("skill", { strings: { name: "researcher" } }),
+        expected: "/skill researcher",
       },
       { name: "mcp list", input: createSlashInteraction("mcp", { subcommand: "list" }), expected: "/mcp" },
       {

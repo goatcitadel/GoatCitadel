@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { findProviderTemplate, inferProviderForModelId, providerAllowsForeignModelIds } from "./provider-templates.js";
+import {
+  builtinProviderProfiles,
+  findBuiltinProviderProfile,
+  findProviderTemplate,
+  inferProviderForModelId,
+  providerAllowsForeignModelIds,
+} from "./provider-templates.js";
 
 describe("provider templates", () => {
   it("uses GPT-5.4 defaults for OpenAI-family templates", () => {
@@ -37,6 +43,21 @@ describe("provider templates", () => {
       defaultModel: "gpt-5.5",
       apiStyle: "openai-codex-responses",
       knownModels: ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini"],
+    });
+  });
+
+  it("exposes built-in provider profiles without changing template behavior", () => {
+    expect(builtinProviderProfiles).toHaveLength(21);
+    expect(findBuiltinProviderProfile("openai")).toMatchObject({
+      profileId: "builtin:openai",
+      source: "builtin",
+      status: "builtin",
+      apiStyle: "openai-responses",
+      defaultModel: "gpt-5.4",
+    });
+    expect(findBuiltinProviderProfile("openrouter")?.modelDiscovery).toMatchObject({
+      type: "openrouter",
+      refreshIntervalHours: 24,
     });
   });
 

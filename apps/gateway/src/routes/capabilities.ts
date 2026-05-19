@@ -38,9 +38,13 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
   const codeModeRunBodySchema = z.object({
     language: z.enum(["javascript", "typescript"]),
     source: z.string().min(1),
+    originSurface: z.enum(["chat", "cowork", "code"]).optional(),
     input: z.record(z.unknown()).optional(),
     requestedOutputIntent: z.string().trim().min(1).optional(),
     saveCandidateOnSuccess: z.boolean().optional(),
+    workspaceId: z.string().trim().min(1).optional(),
+    permissionProfileId: z.string().trim().min(1).optional(),
+    localOperatorOverrideId: z.string().trim().min(1).optional(),
     sessionId: z.string().trim().min(1).optional(),
     turnId: z.string().trim().min(1).optional(),
   });
@@ -49,8 +53,18 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     runId: z.string().min(1),
   });
 
+  const runDetailQuerySchema = z.object({
+    sessionId: z.string().trim().min(1).optional(),
+    turnId: z.string().trim().min(1).optional(),
+    workspaceId: z.string().trim().min(1).optional(),
+  });
+
   const runsQuerySchema = z.object({
     limit: z.coerce.number().int().min(1).max(500).optional(),
+    workspaceId: z.string().trim().min(1).optional(),
+    sessionId: z.string().trim().min(1).optional(),
+    turnId: z.string().trim().min(1).optional(),
+    status: z.enum(["approval_pending", "queued", "running", "completed", "failed", "rejected", "expired"]).optional(),
   });
 
   fastify.get("/api/v1/capabilities/catalog", async (request, reply) => {
@@ -188,18 +202,33 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
+    const filters = parsed.data.workspaceId || parsed.data.sessionId || parsed.data.turnId || parsed.data.status;
     return reply.send({
-      items: fastify.services.capabilities.listCodeModeRuns(parsed.data.limit ?? 100),
+      items: fastify.services.capabilities.listCodeModeRuns(filters ? parsed.data : (parsed.data.limit ?? 100)),
     });
   });
 
   fastify.get("/api/v1/code-mode/runs/:runId", async (request, reply) => {
     const parsed = runParamsSchema.safeParse(request.params);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
+    const query = runDetailQuerySchema.safeParse(request.query);
+    if (!parsed.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: parsed.success ? undefined : parsed.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
     }
     try {
-      return reply.send(fastify.services.capabilities.getCodeModeRun(parsed.data.runId));
+      const run = fastify.services.capabilities.getCodeModeRun(parsed.data.runId);
+      if (
+        (query.data.sessionId && run.sessionId !== query.data.sessionId) ||
+        (query.data.turnId && run.turnId !== query.data.turnId) ||
+        (query.data.workspaceId && run.workspaceId !== query.data.workspaceId)
+      ) {
+        return reply.code(404).send({ error: `Code Mode run ${parsed.data.runId} not found in requested scope` });
+      }
+      return reply.send(run);
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }
@@ -211,9 +240,23 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.code(201).send(await fastify.services.capabilities.createCodeModeRun(parsed.data));
+      return reply.code(201).send(
+        await fastify.services.capabilities.createCodeModeRun({
+          ...parsed.data,
+          operatorId: request.authActorId,
+          originSurface: parsed.data.originSurface ?? readCodeModeOriginSurface(request.headers),
+        }),
+      );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
   });
 };
+
+function readCodeModeOriginSurface(
+  headers: Record<string, string | string[] | undefined>,
+): "chat" | "cowork" | "code" | undefined {
+  const raw = headers["x-goatcitadel-origin-surface"];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return value === "chat" || value === "cowork" || value === "code" ? value : undefined;
+}

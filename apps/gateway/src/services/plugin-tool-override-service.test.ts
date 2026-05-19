@@ -130,6 +130,30 @@ describe("PluginToolOverrideService", () => {
     );
   });
 
+  it("surfaces pending override conflicts for doctor diagnostics", () => {
+    const service = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
+    service.registerOverrideClaim({
+      pluginId: "first",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+    service.registerOverrideClaim({
+      pluginId: "second",
+      toolName: "web_search",
+      override: true,
+      claimedAt: "2026-05-15T00:00:00.000Z",
+    });
+
+    expect(service.listConflictWarnings()).toEqual([
+      expect.objectContaining({
+        toolName: "web_search",
+        pluginIds: ["first", "second"],
+        status: "pending_owner_approval",
+      }),
+    ]);
+  });
+
   it("allows approving a different toolName even when one plugin already has an approved override", () => {
     const service = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
     service.registerOverrideClaim({

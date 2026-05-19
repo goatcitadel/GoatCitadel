@@ -46,6 +46,22 @@ describe("tool registry", () => {
     });
   });
 
+  it("exposes document creation as a governed artifact tool", () => {
+    const catalog = createDefaultToolRegistry().toCatalog();
+    const tool = catalog.find((item) => item.toolName === "documents.create");
+
+    expect(tool).toMatchObject({
+      category: "knowledge",
+      riskLevel: "caution",
+      requiresApproval: false,
+      pack: "knowledge",
+    });
+    expect(tool?.preferredForIntents).toContain("document_generation");
+    expect(tool?.argSchema).toMatchObject({
+      required: ["path", "title"],
+    });
+  });
+
   it("excludes bankr tools by default", () => {
     const catalog = createDefaultToolRegistry().toCatalog();
     expect(catalog.some((tool) => tool.toolName.startsWith("bankr."))).toBe(false);

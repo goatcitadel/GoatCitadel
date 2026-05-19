@@ -1,6 +1,8 @@
 /* eslint-disable max-lines */
 import { useEffect, useMemo, useState } from "react";
+import type { CodeModeRunRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedWorkflowPanel } from "@goatcitadel/threaded-surface-core";
+import { fetchCodeModeRun, fetchCodeModeRuns } from "@goatcitadel/mission-control-shared/api/capabilities";
 import { AgenticRuntimeVisibilityPanel } from "@goatcitadel/mission-control-shared/components/AgenticRuntimeVisibilityPanel";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { MonacoDiffEditor } from "@goatcitadel/mission-control-shared/components/MonacoDiffEditor";
@@ -14,6 +16,25 @@ type WorkbenchPaneId = "files" | "selected-diff" | "repo-diff" | "output" | "sni
 type AgenticControlItem = NonNullable<
   Extract<MissionThreadedWorkflowPanel, { kind: "cowork" }>["props"]["viewModel"]["agenticRuntime"]
 >["controls"][number];
+
+interface CodeModeRunLedgerItem {
+  runId: string;
+  status?: string;
+  language?: string;
+  approvalId?: string;
+  originSurface?: CodeModeRunRecord["originSurface"];
+  workspaceId?: string;
+  sessionId?: string;
+  turnId?: string;
+  requestedOutputIntent?: string;
+  stdoutPreview?: string;
+  stderrPreview?: string;
+  stdoutTruncated?: boolean;
+  stderrTruncated?: boolean;
+  createdAt?: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
 
 function CodeSourceChooser({
   availableProjects,
@@ -665,6 +686,59 @@ export function shortId(value: string): string {
   return value.length <= 12 ? value : `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
 
+function formatShortHash(value?: string): string {
+  return value ? shortId(value) : "missing";
+}
+
+function formatOriginSurface(value?: CodeModeRunRecord["originSurface"]): string {
+  if (value === "code") {
+    return "Code";
+  }
+  if (value === "cowork") {
+    return "Cowork";
+  }
+  if (value === "chat") {
+    return "Chat";
+  }
+  return "not recorded";
+}
+
+function formatRunTimestamp(value?: string): string {
+  if (!value) {
+    return "not recorded";
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : value;
+}
+
+function formatSandboxPosture(value?: CodeModeRunRecord["sandbox"]): string {
+  if (!value) {
+    return "not recorded";
+  }
+  const failed = value.checksFailed.length ? ` · failed: ${value.checksFailed.join(", ")}` : "";
+  const failClosed = value.failClosedReason ? ` · fail-closed: ${value.failClosedReason}` : "";
+  const advisory = value.advisoryUnsandboxedReason ? ` · advisory: ${value.advisoryUnsandboxedReason}` : "";
+  return `${value.isolationProfile} on ${value.platform} · ${
+    value.required ? "required" : "not required"
+  } · ${value.available ? "available" : "unavailable"}${failed}${failClosed}${advisory}`;
+}
+
+function formatRunPermissionProfile(value: CodeModeRunRecord): string {
+  const label = value.permissionProfileLabel?.trim();
+  const id = value.permissionProfileId?.trim();
+  if (label && id && label !== id) {
+    return `${label} (${shortId(id)})`;
+  }
+  return label || id || "not recorded";
+}
+
+function formatArtifactPath(value?: CodeModeRunRecord["codeArtifact"]): string {
+  if (!value) {
+    return "not recorded";
+  }
+  return `${value.relPath} · ${formatShortHash(value.sha256)}`;
+}
+
 const VALIDATION_COMMAND_PRESETS = [
   { label: "Typecheck", command: "pnpm typecheck" },
   { label: "Test", command: "pnpm test" },
@@ -726,6 +800,8 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
     onRevertFile,
     onRevertAll,
     onRunHelperSnippet,
+    onOpenApprovals,
+    workspaceId,
   } = panel.props;
   const codeBlocks = useMemo(
     () => extractCodeBlocks(selectedTurn?.assistantMessage?.content ?? ""),
@@ -738,9 +814,47 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
   const [validationCommand, setValidationCommand] = useState("pnpm test");
   const [pendingFilePath, setPendingFilePath] = useState<string | null>(null);
   const [confirmRevertAllOpen, setConfirmRevertAllOpen] = useState(false);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [runList, setRunList] = useState<CodeModeRunRecord[]>([]);
+  const [runListLoading, setRunListLoading] = useState(false);
+  const [runListError, setRunListError] = useState<string | null>(null);
+  const [runDetail, setRunDetail] = useState<CodeModeRunRecord | null>(null);
+  const [runDetailLoading, setRunDetailLoading] = useState(false);
+  const [runDetailError, setRunDetailError] = useState<string | null>(null);
   const hasPatchDiff = Boolean(diff?.diff.trim());
   const activeBlock = codeBlocks[activeBlockIndex] ?? null;
   const activePatchBlock = activeBlock && isPendingPatchBlock(activeBlock) ? activeBlock : null;
+  const codeLedgerSessionId = workbenchState?.sessionId ?? selectedTurn?.trace.sessionId ?? null;
+  const codeLedgerTurnId = selectedTurn?.turnId ?? null;
+  const codeLedgerWorkspaceId = workspaceId ?? null;
+  const visibleRunItems = useMemo<CodeModeRunLedgerItem[]>(() => {
+    const byId = new Map<string, CodeModeRunLedgerItem>();
+    for (const run of runList) {
+      if (codeLedgerTurnId && run.turnId && run.turnId !== codeLedgerTurnId) {
+        continue;
+      }
+      byId.set(run.runId, run);
+    }
+    for (const helperRun of output?.helperRuns ?? []) {
+      const helperRunTurnId =
+        "turnId" in helperRun && typeof helperRun.turnId === "string" ? helperRun.turnId : undefined;
+      if (codeLedgerTurnId && helperRunTurnId && helperRunTurnId !== codeLedgerTurnId) {
+        continue;
+      }
+      const existing = byId.get(helperRun.runId);
+      byId.set(helperRun.runId, { ...existing, ...helperRun });
+    }
+    return [...byId.values()].sort((left, right) => {
+      const leftTime = left.createdAt ? new Date(left.createdAt).getTime() : 0;
+      const rightTime = right.createdAt ? new Date(right.createdAt).getTime() : 0;
+      return rightTime - leftTime;
+    });
+  }, [codeLedgerTurnId, output?.helperRuns, runList]);
+  const visibleRunIds = useMemo(() => visibleRunItems.map((run) => run.runId).join("|"), [visibleRunItems]);
+  const selectedRunSummary = useMemo(
+    () => visibleRunItems.find((run) => run.runId === selectedRunId) ?? visibleRunItems[0] ?? null,
+    [selectedRunId, visibleRunItems],
+  );
   const draftConflictReason = hasDirtyDraft ? "Save or discard the file draft before running repo operations." : null;
   const worktreeBlockedReason = !readyForRepoOps ? "Create a ready worktree before running repo operations." : null;
   const applyBlockedReason =
@@ -765,6 +879,94 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
   useEffect(() => {
     setActiveBlockIndex(0);
   }, [codeBlocks.length, selectedTurn?.turnId]);
+
+  useEffect(() => {
+    const runIds = visibleRunIds ? visibleRunIds.split("|").filter(Boolean) : [];
+    if (runIds.length === 0) {
+      setSelectedRunId(null);
+      return;
+    }
+    setSelectedRunId((current) => (current && runIds.includes(current) ? current : runIds[0]!));
+  }, [visibleRunIds]);
+
+  useEffect(() => {
+    if (!codeLedgerSessionId) {
+      setRunList([]);
+      setRunListError(null);
+      setRunListLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setRunListLoading(true);
+    setRunListError(null);
+    fetchCodeModeRuns({
+      sessionId: codeLedgerSessionId,
+      ...(codeLedgerWorkspaceId ? { workspaceId: codeLedgerWorkspaceId } : {}),
+      ...(codeLedgerTurnId ? { turnId: codeLedgerTurnId } : {}),
+      limit: 25,
+    })
+      .then((response) => {
+        if (!cancelled) {
+          setRunList(response.items);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setRunList([]);
+          setRunListError(error instanceof Error ? error.message : "Unable to load Code Mode run ledger.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setRunListLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [codeLedgerSessionId, codeLedgerTurnId, codeLedgerWorkspaceId]);
+
+  useEffect(() => {
+    if (!selectedRunSummary?.runId) {
+      setRunDetail(null);
+      setRunDetailError(null);
+      setRunDetailLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setRunDetailLoading(true);
+    setRunDetailError(null);
+    setRunDetail(null);
+    const detailFilters = {
+      ...((selectedRunSummary.sessionId ?? codeLedgerSessionId)
+        ? { sessionId: selectedRunSummary.sessionId ?? codeLedgerSessionId ?? undefined }
+        : {}),
+      ...(selectedRunSummary.turnId ? { turnId: selectedRunSummary.turnId } : {}),
+      ...((selectedRunSummary.workspaceId ?? codeLedgerWorkspaceId)
+        ? { workspaceId: selectedRunSummary.workspaceId ?? codeLedgerWorkspaceId ?? undefined }
+        : {}),
+    };
+    fetchCodeModeRun(selectedRunSummary.runId, detailFilters)
+      .then((detail) => {
+        if (!cancelled) {
+          setRunDetail(detail);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setRunDetail(null);
+          setRunDetailError(error instanceof Error ? error.message : "Unable to load Code Mode run detail.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setRunDetailLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRunSummary?.runId, codeLedgerSessionId, codeLedgerTurnId, codeLedgerWorkspaceId]);
 
   useEffect(() => {
     if (generatedArtifact) {
@@ -1076,26 +1278,171 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
             <div className="mc-next-workbench-pane">
               <div className="mc-next-panel-list-head">
                 <strong>Run log</strong>
-                <span>{output?.helperRuns.length ?? 0} helper runs</span>
+                <span>{visibleRunItems.length} Code Mode runs</span>
               </div>
               {output?.output ? (
                 <WorkbenchMonacoEditor value={output.output} language="markdown" readOnly height={240} />
               ) : (
                 <p>No run log or helper output yet.</p>
               )}
-              {output?.helperRuns.length ? (
+              {visibleRunItems.length ? (
                 <ul className="mc-next-workbench-helper-list">
-                  {output.helperRuns.map((run) => (
+                  {visibleRunItems.map((run) => (
                     <li key={run.runId}>
                       <div className="mc-next-panel-list-head">
-                        <strong>{run.language}</strong>
-                        <span>{run.status}</span>
+                        <strong>{run.language ?? "Code Mode"}</strong>
+                        <span>{run.status ?? "recorded"}</span>
                       </div>
+                      <p>
+                        {shortId(run.runId)}
+                        {run.requestedOutputIntent ? ` · ${run.requestedOutputIntent}` : ""}
+                      </p>
                       {run.stdoutPreview ? <p>{run.stdoutPreview}</p> : null}
                       {run.stderrPreview ? <p>{run.stderrPreview}</p> : null}
+                      <button
+                        type="button"
+                        className={`mc-next-panel-button${selectedRunSummary?.runId === run.runId ? " active" : ""}`}
+                        onClick={() => setSelectedRunId(run.runId)}
+                      >
+                        Inspect run
+                      </button>
                     </li>
                   ))}
                 </ul>
+              ) : null}
+              {selectedRunSummary ? (
+                <section className="mc-next-workbench-run-detail">
+                  <div className="mc-next-panel-list-head">
+                    <strong>Code Mode run detail</strong>
+                    <span>{shortId(selectedRunSummary.runId)}</span>
+                  </div>
+                  {runDetailLoading ? <p>Loading run detail...</p> : null}
+                  {runDetailError ? <div className="mc-next-panel-banner warning">{runDetailError}</div> : null}
+                  {runDetail ? (
+                    <>
+                      <ul className="mc-next-context-list">
+                        <li>
+                          <strong>Status</strong>
+                          <p>{runDetail.status}</p>
+                        </li>
+                        <li>
+                          <strong>Approval</strong>
+                          <p>{runDetail.approvalId ?? "not linked"}</p>
+                          {runDetail.approvalId && onOpenApprovals ? (
+                            <button
+                              type="button"
+                              className="mc-next-panel-button"
+                              onClick={() => onOpenApprovals(runDetail.approvalId)}
+                            >
+                              Open approval queue
+                            </button>
+                          ) : null}
+                        </li>
+                        <li>
+                          <strong>Permission profile</strong>
+                          <p>{formatRunPermissionProfile(runDetail)}</p>
+                        </li>
+                        <li>
+                          <strong>Local Operator Override</strong>
+                          <p>{runDetail.localOperatorOverrideId ?? "not recorded"}</p>
+                        </li>
+                        <li>
+                          <strong>Surface</strong>
+                          <p>{formatOriginSurface(runDetail.originSurface)}</p>
+                        </li>
+                        <li>
+                          <strong>Created</strong>
+                          <p>{formatRunTimestamp(runDetail.createdAt)}</p>
+                        </li>
+                        <li>
+                          <strong>Started</strong>
+                          <p>{formatRunTimestamp(runDetail.startedAt)}</p>
+                        </li>
+                        <li>
+                          <strong>Finished</strong>
+                          <p>{formatRunTimestamp(runDetail.finishedAt)}</p>
+                        </li>
+                        <li>
+                          <strong>Sandbox posture</strong>
+                          <p>{formatSandboxPosture(runDetail.sandbox)}</p>
+                        </li>
+                        <li>
+                          <strong>Source hash</strong>
+                          <p>{formatShortHash(runDetail.codeHash)}</p>
+                        </li>
+                        <li>
+                          <strong>Input hash</strong>
+                          <p>{formatShortHash(runDetail.codeModeInputHash)}</p>
+                        </li>
+                        <li>
+                          <strong>Wrapper hash</strong>
+                          <p>{formatShortHash(runDetail.wrapperManifestHash)}</p>
+                        </li>
+                        <li>
+                          <strong>Policy hash</strong>
+                          <p>{formatShortHash(runDetail.policySnapshotHash)}</p>
+                        </li>
+                        <li>
+                          <strong>Source artifact</strong>
+                          <p>{formatArtifactPath(runDetail.codeArtifact)}</p>
+                        </li>
+                        <li>
+                          <strong>Wrapper artifact</strong>
+                          <p>{formatArtifactPath(runDetail.wrapperManifestArtifact)}</p>
+                        </li>
+                        <li>
+                          <strong>Policy artifact</strong>
+                          <p>{formatArtifactPath(runDetail.policySnapshotArtifact)}</p>
+                        </li>
+                        <li>
+                          <strong>Stdout artifact</strong>
+                          <p>{formatArtifactPath(runDetail.stdoutArtifact)}</p>
+                        </li>
+                        <li>
+                          <strong>Stderr artifact</strong>
+                          <p>{formatArtifactPath(runDetail.stderrArtifact)}</p>
+                        </li>
+                      </ul>
+                      {runDetail.stdoutPreview ? (
+                        <div className="mc-next-workbench-output-preview">
+                          <strong>Stdout preview{runDetail.stdoutTruncated ? " (truncated)" : ""}</strong>
+                          <WorkbenchMonacoEditor
+                            value={runDetail.stdoutPreview}
+                            language="text"
+                            readOnly
+                            height={120}
+                          />
+                        </div>
+                      ) : null}
+                      {runDetail.stderrPreview ? (
+                        <div className="mc-next-workbench-output-preview">
+                          <strong>Stderr preview{runDetail.stderrTruncated ? " (truncated)" : ""}</strong>
+                          <WorkbenchMonacoEditor
+                            value={runDetail.stderrPreview}
+                            language="text"
+                            readOnly
+                            height={120}
+                          />
+                        </div>
+                      ) : null}
+                      {runDetail.result ? (
+                        <WorkbenchMonacoEditor
+                          value={JSON.stringify(runDetail.result, null, 2)}
+                          language="json"
+                          readOnly
+                          height={180}
+                        />
+                      ) : null}
+                      {runDetail.errorCode ? (
+                        <div className="mc-next-panel-banner warning">
+                          {runDetail.errorCode}
+                          {runDetail.errorDetails ? ` · ${JSON.stringify(runDetail.errorDetails)}` : ""}
+                        </div>
+                      ) : null}
+                      {runDetail.error ? <div className="mc-next-panel-banner warning">{runDetail.error}</div> : null}
+                    </>
+                  ) : null}
+                </section>
               ) : null}
             </div>
           ) : null}
@@ -1183,23 +1530,24 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
           </section>
           <section className="mc-next-panel-list">
             <div className="mc-next-panel-list-head">
-              <strong>Validation history</strong>
-              <span>{output?.helperRuns.length ?? 0} runs</span>
+              <strong>Code Mode ledger</strong>
+              <span>{runListLoading ? "loading" : `${visibleRunItems.length} runs`}</span>
             </div>
-            {output?.helperRuns.length ? (
+            {runListError ? <div className="mc-next-panel-banner warning">{runListError}</div> : null}
+            {visibleRunItems.length ? (
               <ul>
-                {output.helperRuns.slice(0, 5).map((run) => (
+                {visibleRunItems.slice(0, 5).map((run) => (
                   <li key={run.runId}>
-                    <strong>{run.language}</strong>
+                    <strong>{shortId(run.runId)}</strong>
                     <p>
-                      {run.status}
+                      {run.language ?? "Code Mode"} · {run.status ?? "recorded"}
                       {run.createdAt ? ` · ${new Date(run.createdAt).toLocaleTimeString()}` : ""}
                     </p>
                   </li>
                 ))}
               </ul>
             ) : (
-              <p>No validation commands have been captured yet.</p>
+              <p>No Code Mode runs have been captured yet.</p>
             )}
           </section>
           <AgenticRuntimeVisibilityPanel surface="code" className="mc-next-panel-list" deliveryLimit={3} />

@@ -17,9 +17,9 @@ Only `callableCatalog` may feed planning, wrapper generation, or runtime selecti
 
 Primary lifecycle/trust concepts:
 
-- categories: `built_in`, `optional`, `project_local`, `self_generated`, `community_imported`, `proposal`
+- categories: `built_in`, `optional`, `project_local`, `self_generated`, `community_imported`
 - skill lifecycle: `draft`, `candidate`, `approved`, `trusted`, `deprecated`, `revoked`
-- proposal status: `proposal`, `validation`, `approval_pending`, `approved`, `activated`, `rejected`, `revoked`
+- proposal status: `proposed`, `validating`, `pending_approval`, `approved`, `rejected`, `activated`, `failed`
 
 ## Repo Mapping
 
@@ -86,7 +86,7 @@ Operator truth:
 
 - Linux uses a firejail-based best-effort host adapter when available
 - macOS uses `sandbox-exec` while the adapter remains available on the host
-- Windows uses an AppContainer-style launcher path when prerequisites are present
+- Windows currently fails closed when required host isolation cannot preserve the Node IPC contract; AppContainer-style launcher support remains a constrained adapter path, not a general hostile-code sandbox claim
 - if required host isolation is unavailable, Code Mode fails closed
 - if isolation is advisory only, the run may proceed but must surface unsandboxed/advisory metadata to the operator
 
@@ -94,7 +94,7 @@ Operator truth:
 
 Production runs launch a child-process harness with:
 
-- `spawn(process.execPath, [absoluteHarnessPath], ...)`
+- a direct `spawn(...)` of either the Node harness or the host-isolation adapter executable
 - `shell: false`
 - fixed `cwd`
 - minimal synthetic env only
@@ -108,12 +108,11 @@ Parent and child communicate over framed JSON-RPC on the IPC channel.
 
 Required properties:
 
-- request id
-- correlation id
+- JSON-RPC request id
 - bounded message size
 - timeout propagation
 - cancellation
-- structured errors
+- structured errors with durable `errorCode` and `errorDetails` evidence when the child or wrapper boundary rejects a call
 
 Wrapper calls cross the boundary through `capability.invoke`. The parent remains authoritative for policy and actual tool execution.
 
@@ -125,24 +124,33 @@ Guest code does not receive ambient Node or browser globals:
 - no `require`
 - no `import`
 - no `fetch`
-- no filesystem access
+- no ambient filesystem access; approved deterministic wrappers remain the only filesystem path
 - no timers or scheduler primitives
 
 TypeScript is transpiled as an isolated single-file string.
 
 `async/await` is allowed over approved wrapper promises, but parallel wrapper invocation is rejected deterministically.
 
-## Immutable Run Artifacts
+## Hash-Verified Run Artifacts
 
-Every Code Mode run stores:
+Every Code Mode run stores stable run identity, status, source/artifact hashes, and the artifact refs needed to revalidate execution. When available for the run, it also stores:
 
 - `capabilitySnapshotId`
+- `originSurface`
+- `workspaceId`
+- `operatorId`
+- `permissionProfileId`
+- `permissionProfileLabel`
+- `localOperatorOverrideId`
+- `codeModeInputHash`
 - `wrapperManifestHash`
 - `policySnapshotHash`
 - `codeHash`
-- durable refs to the actual wrapper manifest, policy snapshot, and submitted code artifacts
+- durable refs to the actual wrapper manifest, policy snapshot containing the frozen input, and submitted code artifacts
 
-Stdout and stderr are captured as bounded streams. Truncation markers are persisted in both the run record and the event trail.
+Stdout and stderr are captured as bounded streams. Truncation state is persisted on the run record and artifact previews.
+
+If approval creation or post-approval pending-action registration fails after source, wrapper manifest, and policy snapshot artifacts are written, the run ledger stores a failed Code Mode run with the artifact refs, failure phase, and error code. This keeps artifact evidence inspectable instead of leaving managed files with no operator-visible run record.
 
 ## Skills, Candidates, and Proposals
 

@@ -44,7 +44,7 @@ describe("dashboard route service", () => {
     const state = await service.getDashboardState();
     expect(state).toMatchObject({
       sessions: [{ sessionId: "session-1" }],
-      pendingApprovals: 2,
+      pendingApprovals: 1,
       activeSubagents: 4,
       taskStatusCounts: [{ status: "todo", count: 3 }],
       recentEvents: [{ eventId: "recent-1" }],
@@ -97,7 +97,10 @@ function createDeps() {
         listOperatorSummaries: vi.fn(() => [{ operatorId: "operator-1" }]),
       },
       approvals: {
-        list: vi.fn(() => [{ approvalId: "approval-1" }, { approvalId: "approval-2" }]),
+        list: vi.fn(() => [
+          { approvalId: "approval-1", expiresAt: "2999-01-01T00:00:00.000Z" },
+          { approvalId: "approval-2", expiresAt: "2000-01-01T00:00:00.000Z" },
+        ]),
       },
       taskSubagents: {
         activeCount: vi.fn(() => 4),

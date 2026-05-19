@@ -13,6 +13,7 @@ import type {
   BrowserProofLaneDraft,
   FollowOnParityReport,
   FollowOnProofLaneArtifactRecord,
+  GatewayAuthCredentialPlan,
   IntegrationActionInvokeInput,
   IntegrationActionInvokeResult,
   IntegrationFormSchema,
@@ -68,6 +69,7 @@ export interface CostSummaryResponse {
 
 export interface TaskRecord {
   taskId: string;
+  workspaceId?: string;
   title: string;
   description?: string;
   status: "planning" | "inbox" | "assigned" | "in_progress" | "testing" | "review" | "done" | "blocked";
@@ -417,6 +419,7 @@ export interface RuntimeSettingsResponse {
     allowLoopbackBypass: boolean;
     tokenConfigured: boolean;
     basicConfigured: boolean;
+    plan?: GatewayAuthCredentialPlan;
   };
   llm: {
     activeProviderId: string;

@@ -241,6 +241,11 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
     });
 
     expect((GatewayService.prototype as any).isDurableTurnStillStreaming.call(gateway, "turn-1")).toBe(true);
+    expect(
+      (GatewayService.prototype as any).isDurableTurnStillStreaming.call(gateway, "turn-1", {
+        includeInterrupts: false,
+      }),
+    ).toBe(false);
     expect(gateway.storage.durableRuns.getRun).toHaveBeenCalledWith("run-from-stream");
 
     const fallbackGateway = createGatewayHarness({
@@ -342,6 +347,9 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
         chatSessionMeta: {
           get: vi.fn(() => ({ workspaceId: "workspace-1" })),
         },
+        permissionProfiles: {
+          resolveContext: vi.fn(() => ({ permissionProfile: { profileId: "safe" } })),
+        },
       },
     });
 
@@ -357,6 +365,54 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
         sessionId: "session-1",
         toolName: "browser.search",
         workspaceId: "workspace-1",
+        policyContext: expect.objectContaining({ permissionProfileId: "safe" }),
+      }),
+    );
+  });
+
+  it("applies runtime browser defaults before tool access evaluation", () => {
+    const evaluateAccess = vi.fn((input: Record<string, unknown>) => ({ allowed: true, input }));
+    const gateway = createGatewayHarness({
+      config: {
+        assistant: {
+          web: {
+            firecrawl: {
+              enabled: true,
+              baseUrl: "https://firecrawl.example",
+              apiKeyEnv: "FIRECRAWL_API_KEY",
+              timeoutMs: 12_000,
+              defaultReadBackend: "firecrawl",
+              fallbackToNative: false,
+            },
+          },
+        },
+      },
+      policyEngine: { evaluateAccess },
+      storage: {
+        chatSessionMeta: {
+          get: vi.fn(() => ({ workspaceId: "workspace-1" })),
+        },
+        permissionProfiles: {
+          resolveContext: vi.fn(() => ({ permissionProfile: { profileId: "safe" } })),
+        },
+      },
+    });
+
+    GatewayService.prototype.evaluateToolAccess.call(gateway, {
+      sessionId: "session-1",
+      toolName: "browser.search",
+      args: { query: "status" },
+    } as never);
+
+    expect(evaluateAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.objectContaining({
+          backend: "firecrawl",
+          firecrawlBaseUrl: "https://firecrawl.example",
+          firecrawlTimeoutMs: 12_000,
+          firecrawlApiKeyEnv: "FIRECRAWL_API_KEY",
+          firecrawlFallbackToNative: false,
+        }),
       }),
     );
   });

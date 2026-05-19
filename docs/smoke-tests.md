@@ -1,6 +1,6 @@
 # Smoke Tests
 
-These are the minimum operator-facing smoke checks for a tagged release package.
+These are the minimum operator-facing smoke checks for release artifacts and source installs.
 
 ## Common expectation
 
@@ -19,7 +19,7 @@ goat doctor --deep
 Invoke-WebRequest http://127.0.0.1:8787/health
 ```
 
-## macOS
+## macOS source/shared-host smoke
 
 ```bash
 goatcitadel launch
@@ -27,7 +27,7 @@ goat doctor --deep
 curl -fsS http://127.0.0.1:8787/health
 ```
 
-## Linux
+## Linux source/shared-host smoke
 
 ```bash
 goatcitadel launch
@@ -37,6 +37,7 @@ curl -fsS http://127.0.0.1:8787/health
 
 ## Release Proof Expectations
 
-- Installer packages are built in CI for every supported target.
-- The release package includes signed artifacts, checksums, a CycloneDX SBOM, and provenance metadata.
+- Windows x64 and Windows arm64 installer packages are built in CI for the currently supported installer targets.
+- Public signed Windows releases include signed artifacts, checksums, a CycloneDX SBOM, and provenance metadata. Unsigned workflow-dispatch artifacts are development packaging smoke only.
+- macOS and Linux entries above are source/shared-host runtime smoke checks unless a future packaging lane explicitly adds native installers for those platforms.
 - Cross-platform regression and operator-proof lanes remain governed by the release gates in `docs/1_0_CONTRACT.md`.

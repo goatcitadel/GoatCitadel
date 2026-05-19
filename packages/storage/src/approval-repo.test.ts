@@ -101,6 +101,26 @@ describe("ApprovalRepository", () => {
     assert.equal(repo.get(withExpiry.approvalId).expiresAt, "2026-03-22T16:15:00.000Z");
   });
 
+  it("persists rollback notes without synthesizing missing values", () => {
+    const repo = createRepo();
+    const withoutRollback = repo.create({
+      kind: "shell.exec",
+      riskLevel: "danger",
+      payload: { command: "dir" },
+      preview: { command: "dir" },
+    });
+    const withRollback = repo.create({
+      kind: "fs.write",
+      riskLevel: "danger",
+      payload: { path: "workspace/note.md" },
+      preview: { path: "workspace/note.md" },
+      rollbackNote: "Restore workspace/note.md from the prior backup.",
+    });
+
+    assert.equal(repo.get(withoutRollback.approvalId).rollbackNote, undefined);
+    assert.equal(repo.get(withRollback.approvalId).rollbackNote, "Restore workspace/note.md from the prior backup.");
+  });
+
   it("prevents double resolution of the same approval", () => {
     const repo = createRepo();
     const created = repo.create({

@@ -174,7 +174,7 @@ function createGateway() {
     approvalRuntime: {
       createToolGrant: fn((input: unknown) => ({ input, grantId: "grant-1" })),
       listToolGrants: fn((scope: string, scopeRef: string, limit?: number) => [{ scope, scopeRef, limit }]),
-      revokeToolGrant: fn((grantId: string) => ({ grantId, revoked: true })),
+      revokeToolGrant: fn((grantId: string, revokedBy: string) => ({ grantId, revoked: true, revokedBy })),
     },
     assemblyService: {
       createRun: fn((input: unknown) => ({ input, runId: "assembly-1" })),
@@ -234,6 +234,7 @@ function createGateway() {
     },
     bulkSetSkillState: fn((skillIds: string[], state: string, note?: string) => [{ skillIds, state, note }]),
     createChatCompletion: fn((request: unknown) => ({ request, id: "completion-1" })),
+    evaluateToolAccess: fn((input: unknown) => ({ input, allowed: true })),
     getBankrOptionalMigrationMessage: fn(() => "optional"),
     getBankrSafetyPolicy: fn(() => ({ mode: "preview" })),
     getSkillActivationPolicy: fn(() => ({ defaultState: "enabled" })),
@@ -469,7 +470,11 @@ describe("route composition loop 15 delegates", () => {
     expect(deps.tools.listToolGrants("session", "session-1", 9)).toEqual([
       { scope: "session", scopeRef: "session-1", limit: 9 },
     ]);
-    expect(deps.tools.revokeToolGrant("grant-1")).toEqual({ grantId: "grant-1", revoked: true });
+    expect(deps.tools.revokeToolGrant("grant-1", "operator-test")).toEqual({
+      grantId: "grant-1",
+      revoked: true,
+      revokedBy: "operator-test",
+    });
     expect(deps.toolsInvoke.getDeploymentProfile()).toBe("local_dev");
     expect(deps.toolsInvoke.invokeTool({ toolName: "browser.search" })).toEqual({
       input: { toolName: "browser.search" },

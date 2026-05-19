@@ -1143,6 +1143,19 @@
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--mc-area-color) 12%, transparent);
 }
 
+.mc-next-settings-check {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.48rem;
+  align-items: flex-start;
+  color: var(--text-secondary);
+  font: 400 12px/1.4 var(--mc-font-sans);
+}
+
+.mc-next-settings-check input {
+  margin-top: 0.15rem;
+}
+
 .mc-next-settings-textarea {
   min-height: 5.2rem;
   resize: vertical;

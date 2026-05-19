@@ -51,6 +51,9 @@ export async function executeOrchestrationPlan(input: {
       completedSteps.push(execution);
       await input.callbacks.onStepResult?.(execution, [...completedSteps]);
     }
+    if (executions.some((execution) => execution.status === "running")) {
+      break;
+    }
     const stageHadSuccess = executions.some((execution) => execution.status === "completed");
     if (!stageHadSuccess) {
       break;
@@ -492,6 +495,18 @@ function buildFinalOutput(
   if (finalStep?.output?.trim()) {
     return finalStep.output.trim();
   }
+  const waitingLines = steps
+    .filter((step) => step.status === "running")
+    .map((step) => `- ${toTitleCase(step.role)}: ${step.output ?? step.summary ?? "waiting on delegated work"}`);
+  if (waitingLines.length > 0) {
+    return [
+      mode === "code"
+        ? "The multi-agent code workflow is waiting before it can continue."
+        : "The orchestrated workflow is waiting before it can continue.",
+      "Current waits:",
+      ...waitingLines,
+    ].join("\n");
+  }
   const failureLines = steps
     .filter((step) => step.status === "failed")
     .map((step) => `- ${toTitleCase(step.role)}: ${step.error ?? "unknown failure"}`);
@@ -518,6 +533,13 @@ async function repairFinalOutputIfNeeded(input: {
   finalStep?: OrchestrationStepExecutionResult;
   integritySignals?: string[];
 }> {
+  if (input.steps.some((step) => step.status === "running")) {
+    return {
+      output: input.initialOutput,
+      finalStep: input.finalStep,
+      integritySignals: ["orchestration_waiting_on_child"],
+    };
+  }
   const requiredLabels = getRequiredWorkstreamLabels(input.plan);
   const missingRequiredLabels = requiredLabels.length > 0 && !hasRequiredLabels(input.initialOutput, requiredLabels);
   const synthesisExpected = input.plan.steps.some((step) => step.role === "synthesizer");

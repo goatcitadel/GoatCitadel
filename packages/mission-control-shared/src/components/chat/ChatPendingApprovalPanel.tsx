@@ -22,11 +22,12 @@ export interface ChatPendingApprovalState {
 export function ChatPendingApprovalPanel(props: {
   pendingApproval: ChatPendingApprovalState | null;
   workspaceId?: string;
+  approvalsHref?: string;
   pending: boolean;
   onApprove: (allowScope: "once" | "session" | "workspace") => void;
   onDeny: () => void;
 }) {
-  const { pendingApproval, workspaceId, pending, onApprove, onDeny } = props;
+  const { pendingApproval, workspaceId, approvalsHref, pending, onApprove, onDeny } = props;
   if (!pendingApproval) {
     return null;
   }
@@ -61,7 +62,9 @@ export function ChatPendingApprovalPanel(props: {
         affectedResources={pendingApproval.affectedResources}
         codePreview={pendingApproval.codePreview}
         pending={pending}
-        approvalsHref={`?space=operate&page=approvals&approvalId=${encodeURIComponent(pendingApproval.approvalId)}`}
+        approvalsHref={
+          approvalsHref ?? `?space=operate&page=approvals&approvalId=${encodeURIComponent(pendingApproval.approvalId)}`
+        }
         workspaceAllowAvailable={Boolean(workspaceId?.trim())}
         onApproveOnce={() => onApprove("once")}
         onApproveInSession={() => onApprove("session")}

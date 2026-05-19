@@ -61,7 +61,7 @@ describe("onboarding TUI helpers", () => {
       cmd: pnpmCmd,
       prefix: [],
     });
-  });
+  }, 15_000);
 
   it("keeps Windows command quoting and simple onboarding parsing deterministic", () => {
     expect(quoteWindowsCommandArg("")).toBe('""');

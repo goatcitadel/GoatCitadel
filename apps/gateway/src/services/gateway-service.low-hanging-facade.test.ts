@@ -8,10 +8,92 @@ vi.mock("node:sqlite", () => ({
 import { GatewayService } from "./gateway-service.js";
 
 function createGatewayHarness() {
-  return Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
+  const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
+  gateway.config = { assistant: { deploymentProfile: "local_dev" } };
+  return gateway;
 }
 
 describe("GatewayService low-hanging facade delegation", () => {
+  it("replays approved dry-run MCP pending actions through the MCP runtime", async () => {
+    const gateway = createGatewayHarness();
+    const pending = {
+      approvalId: "approval-mcp",
+      actionType: "tool.invoke",
+      resolutionStatus: "pending",
+      createdAt: "2026-05-18T00:00:00.000Z",
+      request: {
+        toolName: "mcp.invoke",
+        args: { serverId: "srv-1", toolName: "tool.echo", arguments: { value: "hello" } },
+        agentId: "operator",
+        sessionId: "session-1",
+        dryRun: true,
+      },
+    };
+    const markResolved = vi.fn();
+    const approvalEventsAppend = vi.fn();
+    gateway.refreshApprovedPendingToolPolicyContext = vi.fn();
+    gateway.enrichMcpInvokePolicyContext = vi.fn((input: unknown) => input);
+    gateway.storage = {
+      pendingApprovalActions: {
+        find: vi.fn(() => pending),
+        markResolved,
+      },
+      approvalEvents: {
+        append: approvalEventsAppend,
+      },
+    };
+    gateway.policyEngine = {
+      executeApprovedAction: vi.fn(async () => ({
+        outcome: "executed",
+        policyReason: "allowed_via_approval:approval-mcp",
+        auditEventId: "audit-1",
+        result: { externalRuntime: true, toolName: "mcp.invoke" },
+      })),
+    };
+    gateway.toolInvocationCoordinator = {
+      invokeApprovedMcpRuntime: vi.fn(async () => ({
+        ok: true,
+        output: { payload: "approved" },
+      })),
+      invokeApprovedExternalRuntimeTool: vi.fn(),
+    };
+
+    const result = await (GatewayService.prototype as any).executeApprovedPendingAction.call(gateway, "approval-mcp");
+
+    expect(gateway.policyEngine.executeApprovedAction).toHaveBeenCalledWith("approval-mcp", undefined, {
+      deferResolution: true,
+      externalRuntimeReplay: true,
+    });
+    expect(gateway.toolInvocationCoordinator.invokeApprovedMcpRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serverId: "srv-1",
+        toolName: "tool.echo",
+        arguments: { value: "hello" },
+        sessionId: "session-1",
+      }),
+    );
+    expect(result).toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({
+        externalRuntime: true,
+        toolName: "mcp.invoke",
+        ok: true,
+      }),
+    });
+    expect(markResolved).toHaveBeenCalledWith(
+      "approval-mcp",
+      "executed",
+      expect.objectContaining({ outcome: "executed" }),
+    );
+    expect(approvalEventsAppend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "approval-mcp",
+        eventType: "approved_action_executed",
+        payload: expect.objectContaining({ externalRuntime: true, outcome: "executed" }),
+      }),
+    );
+  });
+
   it("delegates dev diagnostics recording and logger attachment", () => {
     const gateway = createGatewayHarness();
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -252,6 +334,9 @@ describe("GatewayService low-hanging facade delegation", () => {
       chatSessionMeta: {
         get: vi.fn(() => ({ workspaceId: "workspace-meta" })),
       },
+      permissionProfiles: {
+        resolveContext: vi.fn(() => ({ permissionProfile: { profileId: "safe" } })),
+      },
     };
     gateway.approvalRuntime = {
       listToolGrants: vi.fn((scope: string, scopeRef: string, limit: number) => [{ scope, scopeRef, limit }]),
@@ -300,6 +385,7 @@ describe("GatewayService low-hanging facade delegation", () => {
         agentId: "agent-1",
         sessionId: "session-1",
         workspaceId: "workspace-meta",
+        policyContext: expect.objectContaining({ permissionProfileId: "safe" }),
       },
       allowed: true,
     });
@@ -317,6 +403,7 @@ describe("GatewayService low-hanging facade delegation", () => {
         agentId: "agent-1",
         sessionId: "session-1",
         workspaceId: "workspace-explicit",
+        policyContext: expect.objectContaining({ permissionProfileId: "safe" }),
       },
       allowed: true,
     });
@@ -342,7 +429,7 @@ describe("GatewayService low-hanging facade delegation", () => {
       },
       grantId: "grant-1",
     });
-    expect(GatewayService.prototype.revokeToolGrant.call(gateway, "grant-1")).toBe(true);
+    expect(GatewayService.prototype.revokeToolGrant.call(gateway, "grant-1", "tester")).toBe(true);
 
     await expect(
       GatewayService.prototype.createApproval.call(gateway, {
@@ -453,6 +540,300 @@ describe("GatewayService low-hanging facade delegation", () => {
       approvalId: "approval-1",
       linkage: { runId: "run-1" },
     });
+  });
+
+  it("reconciles custom permission profile default surfaces into activations", () => {
+    const gateway = createGatewayHarness();
+    const baseProfile = {
+      profileId: "profile-review",
+      label: "Review",
+      builtin: false,
+      status: "active",
+      scope: "workspace",
+      scopeRef: "workspace-a",
+      approvalMode: "approve_risky",
+      toolPatterns: ["session.status"],
+      allow: [],
+      deny: [],
+      defaultForSurfaces: ["code", "cowork"],
+      createdBy: "operator-a",
+      createdAt: "2026-05-17T00:00:00.000Z",
+      updatedAt: "2026-05-17T00:00:00.000Z",
+    };
+    const deactivateProfileActivations = vi.fn(() => 0);
+    const activateProfile = vi.fn((input: unknown) => ({ activationId: "activation-1", ...input }));
+    gateway.storage = {
+      permissionProfiles: {
+        createProfile: vi.fn(() => baseProfile),
+        getProfile: vi.fn(() => baseProfile),
+        updateProfile: vi.fn(() => ({
+          ...baseProfile,
+          defaultForSurfaces: ["chat"],
+          updatedAt: "2026-05-17T00:10:00.000Z",
+        })),
+        deactivateProfileActivations,
+        activateProfile,
+      },
+    };
+    gateway.publishRealtime = vi.fn();
+
+    GatewayService.prototype.createPermissionProfile.call(gateway, {
+      label: "Review",
+      scope: "workspace",
+      scopeRef: "workspace-a",
+      approvalMode: "approve_risky",
+      defaultForSurfaces: ["code", "cowork"],
+      createdBy: "operator-a",
+    });
+
+    expect(deactivateProfileActivations).toHaveBeenCalledWith({
+      profileId: "profile-review",
+      operatorId: undefined,
+      workspaceId: "workspace-a",
+    });
+    expect(activateProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "profile-review", operatorId: undefined, surface: "code" }),
+    );
+    expect(activateProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "profile-review", operatorId: undefined, surface: "cowork" }),
+    );
+
+    activateProfile.mockClear();
+    GatewayService.prototype.updatePermissionProfile.call(gateway, "profile-review", {
+      updatedBy: "operator-a",
+      defaultForSurfaces: ["chat"],
+    });
+    expect(activateProfile).toHaveBeenCalledTimes(1);
+    expect(activateProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "profile-review", operatorId: undefined, surface: "chat" }),
+    );
+  });
+
+  it("resolves custom permission profile defaults after create and update", () => {
+    const gateway = createGatewayHarness();
+    const fallbackProfile = {
+      profileId: "safe",
+      label: "Safe",
+      builtin: true,
+      status: "active",
+      scope: "global",
+      approvalMode: "approve_all",
+      toolPatterns: ["*"],
+      createdBy: "system",
+      createdAt: "2026-05-17T00:00:00.000Z",
+      updatedAt: "2026-05-17T00:00:00.000Z",
+    };
+    let profile = {
+      profileId: "profile-review",
+      label: "Review",
+      builtin: false,
+      status: "active",
+      scope: "workspace",
+      scopeRef: "workspace-a",
+      approvalMode: "approve_risky",
+      toolPatterns: ["session.status"],
+      allow: [],
+      deny: [],
+      defaultForSurfaces: ["code", "cowork"],
+      createdBy: "operator-a",
+      createdAt: "2026-05-17T00:00:00.000Z",
+      updatedAt: "2026-05-17T00:00:00.000Z",
+    };
+    const activeSurfaces = new Set<string>();
+    gateway.storage = {
+      permissionProfiles: {
+        createProfile: vi.fn(() => profile),
+        getProfile: vi.fn(() => profile),
+        updateProfile: vi.fn((_profileId: string, input: { defaultForSurfaces?: string[] }) => {
+          profile = {
+            ...profile,
+            defaultForSurfaces: input.defaultForSurfaces ?? profile.defaultForSurfaces,
+            updatedAt: "2026-05-17T00:10:00.000Z",
+          };
+          return profile;
+        }),
+        deactivateProfileActivations: vi.fn(() => {
+          activeSurfaces.clear();
+          return 0;
+        }),
+        activateProfile: vi.fn((input: { surface?: string }) => {
+          if (input.surface) {
+            activeSurfaces.add(input.surface);
+          }
+          return { activationId: `activation-${input.surface}`, ...input };
+        }),
+        resolveContext: vi.fn((input: { surface?: string }) => ({
+          permissionProfile: input.surface && activeSurfaces.has(input.surface) ? profile : fallbackProfile,
+        })),
+      },
+    };
+    gateway.publishRealtime = vi.fn();
+
+    GatewayService.prototype.createPermissionProfile.call(gateway, {
+      label: "Review",
+      scope: "workspace",
+      scopeRef: "workspace-a",
+      approvalMode: "approve_risky",
+      defaultForSurfaces: ["code", "cowork"],
+      createdBy: "operator-a",
+    });
+    expect(
+      GatewayService.prototype.resolveToolPolicyContext.call(gateway, {
+        operatorId: "operator-a",
+        workspaceId: "workspace-a",
+        surface: "code",
+      }).permissionProfileId,
+    ).toBe("profile-review");
+    expect(
+      GatewayService.prototype.resolveToolPolicyContext.call(gateway, {
+        operatorId: "operator-a",
+        workspaceId: "workspace-a",
+        surface: "chat",
+      }).permissionProfileId,
+    ).toBe("safe");
+
+    GatewayService.prototype.updatePermissionProfile.call(gateway, "profile-review", {
+      updatedBy: "operator-a",
+      defaultForSurfaces: ["chat"],
+    });
+    expect(
+      GatewayService.prototype.resolveToolPolicyContext.call(gateway, {
+        operatorId: "operator-a",
+        workspaceId: "workspace-a",
+        surface: "code",
+      }).permissionProfileId,
+    ).toBe("safe");
+    expect(
+      GatewayService.prototype.resolveToolPolicyContext.call(gateway, {
+        operatorId: "operator-a",
+        workspaceId: "workspace-a",
+        surface: "chat",
+      }).permissionProfileId,
+    ).toBe("profile-review");
+  });
+
+  it("rejects bypass permission profile mutation and activation in remote hardened mode", () => {
+    const gateway = createGatewayHarness();
+    gateway.publishRealtime = vi.fn();
+    gateway.config.assistant.deploymentProfile = "remote_hardened";
+    const safeProfile = {
+      profileId: "profile-safe",
+      label: "Safe custom",
+      builtin: false,
+      status: "active",
+      scope: "operator",
+      scopeRef: "operator-a",
+      approvalMode: "approve_all",
+      toolPatterns: ["session.status"],
+      createdBy: "operator-a",
+      createdAt: "2026-05-17T00:00:00.000Z",
+      updatedAt: "2026-05-17T00:00:00.000Z",
+    };
+    const bypassProfile = {
+      ...safeProfile,
+      profileId: "profile-bypass",
+      approvalMode: "bypass",
+    };
+    const createProfile = vi.fn(() => bypassProfile);
+    const updateProfile = vi.fn((profileId: string, input: Record<string, unknown>) => ({
+      ...(profileId === "profile-bypass" ? bypassProfile : safeProfile),
+      ...input,
+      profileId,
+    }));
+    const activateProfile = vi.fn(() => ({ activationId: "activation-1" }));
+    gateway.storage = {
+      chatSessionMeta: {
+        get: vi.fn(() => ({ workspaceId: "workspace-a" })),
+      },
+      permissionProfiles: {
+        createProfile,
+        getProfile: vi.fn((profileId: string) => (profileId === "profile-bypass" ? bypassProfile : safeProfile)),
+        updateProfile,
+        activateProfile,
+      },
+    };
+
+    expect(() =>
+      GatewayService.prototype.createPermissionProfile.call(gateway, {
+        label: "Bypass",
+        scope: "operator",
+        approvalMode: "bypass",
+        createdBy: "operator-a",
+      }),
+    ).toThrow(/Bypass permission profiles are unavailable/);
+    expect(createProfile).not.toHaveBeenCalled();
+
+    expect(() =>
+      GatewayService.prototype.updatePermissionProfile.call(gateway, "profile-safe", {
+        updatedBy: "operator-a",
+        approvalMode: "bypass",
+      }),
+    ).toThrow(/Bypass permission profiles are unavailable/);
+    expect(updateProfile).not.toHaveBeenCalled();
+
+    expect(() =>
+      GatewayService.prototype.updatePermissionProfile.call(gateway, "profile-bypass", {
+        updatedBy: "operator-a",
+        label: "Still bypass",
+      }),
+    ).toThrow(/Bypass permission profiles are unavailable/);
+    expect(updateProfile).not.toHaveBeenCalled();
+
+    expect(
+      GatewayService.prototype.updatePermissionProfile.call(gateway, "profile-bypass", {
+        updatedBy: "operator-a",
+        approvalMode: "approve_risky",
+      }),
+    ).toMatchObject({
+      profileId: "profile-bypass",
+      approvalMode: "approve_risky",
+    });
+    expect(updateProfile).toHaveBeenCalledTimes(1);
+
+    expect(() =>
+      GatewayService.prototype.activatePermissionProfile.call(gateway, {
+        profileId: "profile-bypass",
+        operatorId: "operator-a",
+        createdBy: "operator-a",
+      }),
+    ).toThrow(/Bypass permission profiles are unavailable/);
+    expect(activateProfile).not.toHaveBeenCalled();
+
+    const resolvedBypassContext = {
+      permissionProfileId: "profile-bypass",
+      permissionProfile: bypassProfile,
+      approvedCodeModeRunId: "code-run-1",
+    };
+    expect(() =>
+      (
+        GatewayService.prototype as unknown as {
+          enrichToolPolicyContext: (input: unknown) => unknown;
+        }
+      ).enrichToolPolicyContext.call(gateway, {
+        toolName: "fs.write",
+        args: {},
+        agentId: "agent",
+        sessionId: "session-1",
+        policyContext: resolvedBypassContext,
+      }),
+    ).toThrow(/Bypass permission profiles are unavailable/);
+    expect(() =>
+      (
+        GatewayService.prototype as unknown as {
+          enrichMcpInvokePolicyContext: (input: unknown) => unknown;
+        }
+      ).enrichMcpInvokePolicyContext.call(gateway, {
+        serverId: "mcp-1",
+        toolName: "tool",
+        args: {},
+        sessionId: "session-1",
+        policyContext: {
+          permissionProfileId: "profile-safe",
+          permissionProfile: safeProfile,
+          localOperatorOverrideId: "override-1",
+        },
+      }),
+    ).toThrow(/Local Operator Override is unavailable/);
   });
 
   it("queues channel sends and merges persisted and runtime delivery status", async () => {

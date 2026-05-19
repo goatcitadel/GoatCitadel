@@ -20,17 +20,15 @@ export function isLoopbackDevOrigin(origin: string): boolean {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return false;
     }
-    const host = parsed.hostname.trim().toLowerCase();
-    return host === "localhost"
-      || host === "127.0.0.1"
-      || host === "::1";
+    const host = normalizeOriginHostname(parsed.hostname);
+    return host === "localhost" || host === "127.0.0.1" || host === "::1";
   } catch {
     return false;
   }
 }
 
 export function isTailnetOrPrivateHost(hostname: string, shortHostAllowlist: Set<string>): boolean {
-  const host = hostname.trim().toLowerCase();
+  const host = normalizeOriginHostname(hostname);
   if (!host) {
     return false;
   }
@@ -47,12 +45,20 @@ export function isTailnetOrPrivateHost(hostname: string, shortHostAllowlist: Set
   return isPrivateOrCarrierGradeIpv4(host);
 }
 
+function normalizeOriginHostname(hostname: string): string {
+  const normalized = hostname.trim().toLowerCase();
+  if (normalized.startsWith("[") && normalized.endsWith("]")) {
+    return normalized.slice(1, -1);
+  }
+  return normalized;
+}
+
 export function resolveTailnetShortHostAllowlist(env: Record<string, string | undefined> = process.env): Set<string> {
   const out = new Set<string>();
-  const fromEnv = env.GOATCITADEL_TAILNET_DEV_HOSTS
-    ?.split(",")
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean) ?? [];
+  const fromEnv =
+    env.GOATCITADEL_TAILNET_DEV_HOSTS?.split(",")
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean) ?? [];
   for (const entry of fromEnv) {
     if (/^[a-z0-9-]+$/iu.test(entry) && !entry.includes(".")) {
       out.add(entry);

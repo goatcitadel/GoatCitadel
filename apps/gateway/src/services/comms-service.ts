@@ -63,6 +63,7 @@ export async function commsSend(
       sessionId: input.sessionId ?? COMMS_SESSION,
       agentId: input.agentId ?? KNOWLEDGE_AGENT,
       taskId: input.taskId,
+      ...buildChannelToolGovernance(input),
       signal: input.signal,
     },
     "comms_send",
@@ -99,6 +100,7 @@ export async function commsReact(
       sessionId: input.sessionId ?? COMMS_SESSION,
       agentId: input.agentId ?? KNOWLEDGE_AGENT,
       taskId: input.taskId,
+      ...buildChannelToolGovernance(input),
       signal: input.signal,
     },
     "comms_react",
@@ -122,6 +124,7 @@ export async function commsUnsend(
       sessionId: input.sessionId ?? COMMS_SESSION,
       agentId: input.agentId ?? KNOWLEDGE_AGENT,
       taskId: input.taskId,
+      ...buildChannelToolGovernance(input),
       signal: input.signal,
     },
     "comms_unsend",
@@ -170,6 +173,51 @@ function throwIfCommsAborted(signal?: AbortSignal): void {
   throw signal.reason instanceof Error
     ? signal.reason
     : new Error(typeof signal.reason === "string" ? signal.reason : "Comms delivery aborted.");
+}
+
+function buildChannelToolGovernance(
+  input: ChannelSendInput | ChannelReactInput | ChannelUnsendInput,
+): Partial<ToolInvokeRequest> {
+  const sessionId = input.sessionId ?? COMMS_SESSION;
+  const agentId = input.agentId ?? KNOWLEDGE_AGENT;
+  const policyContext =
+    input.operatorId ||
+    input.authActorId ||
+    input.authActorSource ||
+    input.workspaceId ||
+    input.taskId ||
+    input.runId ||
+    input.permissionProfileId ||
+    input.localOperatorOverrideId ||
+    input.surface
+      ? {
+          operatorId: input.operatorId,
+          authActorId: input.authActorId,
+          authActorSource: input.authActorSource,
+          workspaceId: input.workspaceId,
+          sessionId,
+          taskId: input.taskId,
+          runId: input.runId,
+          permissionProfileId: input.permissionProfileId,
+          localOperatorOverrideId: input.localOperatorOverrideId,
+          surface: input.surface,
+        }
+      : undefined;
+  return {
+    workspaceId: input.workspaceId,
+    runId: input.runId,
+    permissionProfileId: input.permissionProfileId,
+    localOperatorOverrideId: input.localOperatorOverrideId,
+    surface: input.surface,
+    policyContext,
+    consentContext: input.operatorId
+      ? {
+          operatorId: input.operatorId,
+          source: "agent",
+          reason: `channel delivery ${agentId}`,
+        }
+      : undefined,
+  };
 }
 
 export async function commsGmailRead(

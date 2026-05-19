@@ -244,6 +244,9 @@ describe("durable routes", () => {
       app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/cancel", payload: { actorId: "operator:3" } }),
     ).resolves.toMatchObject({ statusCode: 200 });
     await expect(
+      app.inject({ method: "POST", url: "/api/v1/durable/runs/run-1/cancel", payload: { actorId: "operator:3" } }),
+    ).resolves.toMatchObject({ statusCode: 200 });
+    await expect(
       app.inject({
         method: "POST",
         url: "/api/v1/durable/runs/run-1/events/wake",
@@ -256,6 +259,7 @@ describe("durable routes", () => {
 
     expect(pauseRun).toHaveBeenCalledWith("run-1", "ip:127.0.0.1");
     expect(resumeRun).toHaveBeenCalledWith("run-1", "ip:127.0.0.1");
+    expect(cancelRun).toHaveBeenCalledTimes(2);
     expect(cancelRun).toHaveBeenCalledWith("run-1", "ip:127.0.0.1");
     expect(wakeRun).toHaveBeenCalledWith("run-1", {
       eventKey: "approval.resolved",

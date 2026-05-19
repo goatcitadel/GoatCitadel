@@ -269,6 +269,67 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
     });
   });
 
+  it("treats a text-only document response as a missing artifact capability", async () => {
+    const listSkillSources = vi.fn(
+      async (): Promise<SkillSourceListResponse> => ({
+        generatedAt: new Date().toISOString(),
+        providers: [],
+        items: [
+          {
+            sourceProvider: "local",
+            sourceUrl: "file:///skills/docx",
+            name: "Document Builder",
+            description: "Creates DOCX and PDF files from structured outlines.",
+            tags: ["document", "docx", "pdf", "report"],
+            canonicalKey: "local:document-builder",
+            alternateProviders: [],
+            qualityScore: 0.9,
+            freshnessScore: 0.8,
+            trustScore: 0.8,
+            combinedScore: 8.8,
+          },
+        ],
+      }),
+    );
+
+    const suggestions = await scoutCapabilityUpgradeSuggestions({
+      content: "Create a real PDF report file from these recommendations.",
+      assistantText: "Here is the report outline in text form.",
+      sessionId: "session-1",
+      trace: createTrace(),
+      deps: {
+        listToolCatalog: createToolCatalog,
+        evaluateToolAccess: vi.fn(() => ({
+          toolName: "browser.search",
+          allowed: true,
+          matchedGrantId: undefined,
+          reasonCodes: [],
+          requiresApproval: false,
+          riskLevel: "safe" as const,
+        })),
+        listSkills: vi.fn(() => []),
+        resolveSkillActivation: vi.fn(() => ({ suppressed: [] })),
+        listSkillSources,
+        lookupSkillSources: vi.fn(
+          async (): Promise<SkillSourceLookupResponse> => ({
+            query: "document generation docx pdf markdown html csv json",
+            generatedAt: new Date().toISOString(),
+            providers: [],
+            items: [],
+          }),
+        ),
+        listMcpTemplates: vi.fn((): Array<McpServerTemplateRecord & { installed: boolean }> => []),
+        listMcpTemplateDiscovery: vi.fn((): McpTemplateDiscoveryResult[] => []),
+      },
+    });
+
+    expect(listSkillSources).toHaveBeenCalledWith("document generation docx pdf markdown html csv json", 6);
+    expect(suggestions[0]).toMatchObject({
+      kind: "skill_import",
+      candidateId: "local:document-builder",
+    });
+  });
+
   it("stays quiet for normal conversational replies without a capability gap", async () => {
     const suggestions = await scoutCapabilityUpgradeSuggestions({
       content: "Tell me a short story about a lighthouse.",

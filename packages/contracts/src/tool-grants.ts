@@ -1,4 +1,5 @@
 import type { ToolExecutionTrustLevel } from "./internal-tooling.js";
+import type { ToolPolicyActorContext } from "./policy.js";
 import type { ToolRiskLevel } from "./tools.js";
 
 export type ToolGrantScope = "global" | "session" | "workspace" | "agent" | "task";
@@ -32,6 +33,7 @@ export interface ToolGrantRecord {
   createdAt: string;
   expiresAt?: string;
   revokedAt?: string;
+  revokedBy?: string;
   usesRemaining?: number;
 }
 
@@ -61,10 +63,17 @@ export interface ToolAccessEvaluateRequest {
   sessionId: string;
   workspaceId?: string;
   taskId?: string;
+  runId?: string;
   args?: Record<string, unknown>;
   trustLevel?: ToolExecutionTrustLevel;
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+  surface?: ToolPolicyActorContext["surface"];
+  policyContext?: ToolPolicyActorContext;
 }
 
 export interface ToolAccessEvaluateResponse extends ToolAccessDecision {
   toolName: string;
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
 }

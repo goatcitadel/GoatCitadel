@@ -1,4 +1,20 @@
-import type { ChatDelegationStepRecord, ChatMode, LearnedMemoryItemRecord } from "@goatcitadel/contracts";
+import type {
+  ChatDelegationStepRecord,
+  ChatMode,
+  LearnedMemoryItemRecord,
+  ToolPolicyActorContext,
+} from "@goatcitadel/contracts";
+
+export interface ChatGoalCommandPolicyContext {
+  policyRunId?: string;
+  policyTaskId?: string;
+  operatorId?: string;
+  authActorId?: string;
+  authActorSource?: ToolPolicyActorContext["authActorSource"];
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+  surface?: ToolPolicyActorContext["surface"];
+}
 
 export interface ChatGoalCommandDependencies {
   extractAndPersistLearnedMemory(
@@ -18,6 +34,14 @@ export interface ChatGoalCommandDependencies {
       roles: string[];
       mode: "sequential";
       surfaceMode?: ChatMode;
+      policyRunId?: string;
+      policyTaskId?: string;
+      operatorId?: string;
+      authActorId?: string;
+      authActorSource?: ToolPolicyActorContext["authActorSource"];
+      permissionProfileId?: string;
+      localOperatorOverrideId?: string;
+      surface?: ToolPolicyActorContext["surface"];
       steps?: Array<{
         stepId: string;
         index: number;
@@ -79,6 +103,7 @@ export async function handleGoalCommand(
   deps: ChatGoalCommandDependencies,
   sessionId: string,
   args: string[],
+  policyContext: ChatGoalCommandPolicyContext = {},
 ): Promise<{ ok: boolean; message: string }> {
   const parsedGoal = parseGoalCommandArgs(args);
   if (parsedGoal.action === "status") {
@@ -139,6 +164,7 @@ export async function handleGoalCommand(
   try {
     const loop = await runGoalLoop(deps, sessionId, objective, loopOptions, {
       persistGoalMemory: shouldPersistGoalMemory,
+      policyContext,
     });
     return {
       ok: loop.ok,
@@ -154,7 +180,7 @@ async function runGoalLoop(
   sessionId: string,
   objective: string,
   options: GoalLoopOptions,
-  runtimeOptions: { persistGoalMemory?: boolean } = {},
+  runtimeOptions: { persistGoalMemory?: boolean; policyContext?: ChatGoalCommandPolicyContext } = {},
 ): Promise<GoalLoopResult> {
   if (runtimeOptions.persistGoalMemory !== false) {
     deps.extractAndPersistLearnedMemory(sessionId, serializeGoalMemory(objective, options), {
@@ -188,6 +214,14 @@ async function runGoalLoop(
           roles: ["coder", "qa"],
           mode: "sequential",
           surfaceMode: options.surfaceMode,
+          policyRunId: runtimeOptions.policyContext?.policyRunId,
+          policyTaskId: runtimeOptions.policyContext?.policyTaskId,
+          operatorId: runtimeOptions.policyContext?.operatorId,
+          authActorId: runtimeOptions.policyContext?.authActorId,
+          authActorSource: runtimeOptions.policyContext?.authActorSource,
+          permissionProfileId: runtimeOptions.policyContext?.permissionProfileId,
+          localOperatorOverrideId: runtimeOptions.policyContext?.localOperatorOverrideId,
+          surface: runtimeOptions.policyContext?.surface,
           steps: [
             {
               stepId: `goal-${iteration}-implement`,

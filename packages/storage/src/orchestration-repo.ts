@@ -42,6 +42,11 @@ interface OrchestrationRunRow {
   total_iterations: number;
   workspace_id: string | null;
   durable_run_id: string | null;
+  operator_id: string | null;
+  auth_actor_id: string | null;
+  auth_actor_source: string | null;
+  permission_profile_id: string | null;
+  local_operator_override_id: string | null;
   execution_state: NonNullable<OrchestrationRun["executionState"]> | null;
   worktree_path: string | null;
   worktree_status: NonNullable<OrchestrationRun["worktreeStatus"]> | null;
@@ -95,13 +100,17 @@ export class OrchestrationRepository {
       INSERT INTO orchestration_runs (
         run_id, plan_id, status, started_at, ended_at,
         current_wave_id, current_phase_id, total_cost_usd, total_iterations,
-        workspace_id, durable_run_id, execution_state, worktree_path,
+        workspace_id, durable_run_id, operator_id, auth_actor_id,
+        auth_actor_source, permission_profile_id, local_operator_override_id,
+        execution_state, worktree_path,
         worktree_status, worktree_base_ref, pending_approval_phase_id,
         pending_approved_by, pending_cost_increment_usd, last_error
       ) VALUES (
         @runId, @planId, @status, @startedAt, @endedAt,
         @currentWaveId, @currentPhaseId, @totalCostUsd, @totalIterations,
-        @workspaceId, @durableRunId, @executionState, @worktreePath,
+        @workspaceId, @durableRunId, @operatorId, @authActorId,
+        @authActorSource, @permissionProfileId, @localOperatorOverrideId,
+        @executionState, @worktreePath,
         @worktreeStatus, @worktreeBaseRef, @pendingApprovalPhaseId,
         @pendingApprovedBy, @pendingCostIncrementUsd, @lastError
       )
@@ -117,6 +126,11 @@ export class OrchestrationRepository {
         total_iterations = @totalIterations,
         workspace_id = @workspaceId,
         durable_run_id = @durableRunId,
+        operator_id = @operatorId,
+        auth_actor_id = @authActorId,
+        auth_actor_source = @authActorSource,
+        permission_profile_id = @permissionProfileId,
+        local_operator_override_id = @localOperatorOverrideId,
         execution_state = @executionState,
         worktree_path = @worktreePath,
         worktree_status = @worktreeStatus,
@@ -138,6 +152,11 @@ export class OrchestrationRepository {
         total_iterations = @totalIterations,
         workspace_id = @workspaceId,
         durable_run_id = @durableRunId,
+        operator_id = @operatorId,
+        auth_actor_id = @authActorId,
+        auth_actor_source = @authActorSource,
+        permission_profile_id = @permissionProfileId,
+        local_operator_override_id = @localOperatorOverrideId,
         execution_state = @executionState,
         worktree_path = @worktreePath,
         worktree_status = @worktreeStatus,
@@ -230,6 +249,11 @@ export class OrchestrationRepository {
       totalIterations: run.totalIterations,
       workspaceId: run.workspaceId ?? null,
       durableRunId: run.durableRunId ?? null,
+      operatorId: run.operatorId ?? null,
+      authActorId: run.authActorId ?? null,
+      authActorSource: run.authActorSource ?? null,
+      permissionProfileId: run.permissionProfileId ?? null,
+      localOperatorOverrideId: run.localOperatorOverrideId ?? null,
       executionState: run.executionState ?? null,
       worktreePath: run.worktreePath ?? null,
       worktreeStatus: run.worktreeStatus ?? null,
@@ -254,6 +278,11 @@ export class OrchestrationRepository {
       totalIterations: run.totalIterations,
       workspaceId: run.workspaceId ?? null,
       durableRunId: run.durableRunId ?? null,
+      operatorId: run.operatorId ?? null,
+      authActorId: run.authActorId ?? null,
+      authActorSource: run.authActorSource ?? null,
+      permissionProfileId: run.permissionProfileId ?? null,
+      localOperatorOverrideId: run.localOperatorOverrideId ?? null,
       executionState: run.executionState ?? null,
       worktreePath: run.worktreePath ?? null,
       worktreeStatus: run.worktreeStatus ?? null,
@@ -281,6 +310,11 @@ export class OrchestrationRepository {
       totalIterations: run.totalIterations,
       workspaceId: run.workspaceId ?? null,
       durableRunId: run.durableRunId ?? null,
+      operatorId: run.operatorId ?? null,
+      authActorId: run.authActorId ?? null,
+      authActorSource: run.authActorSource ?? null,
+      permissionProfileId: run.permissionProfileId ?? null,
+      localOperatorOverrideId: run.localOperatorOverrideId ?? null,
       executionState: run.executionState ?? null,
       worktreePath: run.worktreePath ?? null,
       worktreeStatus: run.worktreeStatus ?? null,
@@ -392,6 +426,12 @@ function mapRunRow(row: OrchestrationRunRow): OrchestrationRun {
     totalIterations: row.total_iterations,
     workspaceId: row.workspace_id ?? undefined,
     durableRunId: row.durable_run_id ?? undefined,
+    operatorId: row.operator_id ?? undefined,
+    authActorId: row.auth_actor_id ?? undefined,
+    authActorSource:
+      row.auth_actor_source === null ? undefined : (row.auth_actor_source as OrchestrationRun["authActorSource"]),
+    permissionProfileId: row.permission_profile_id ?? undefined,
+    localOperatorOverrideId: row.local_operator_override_id ?? undefined,
     executionState: row.execution_state ?? undefined,
     worktreePath: row.worktree_path ?? undefined,
     worktreeStatus: row.worktree_status ?? undefined,
@@ -433,6 +473,11 @@ function isOrchestrationRunRow(value: unknown): value is OrchestrationRunRow {
     typeof value.total_iterations === "number" &&
     (typeof value.workspace_id === "string" || value.workspace_id === null) &&
     (typeof value.durable_run_id === "string" || value.durable_run_id === null) &&
+    (typeof value.operator_id === "string" || value.operator_id === null) &&
+    (typeof value.auth_actor_id === "string" || value.auth_actor_id === null) &&
+    (typeof value.auth_actor_source === "string" || value.auth_actor_source === null) &&
+    (typeof value.permission_profile_id === "string" || value.permission_profile_id === null) &&
+    (typeof value.local_operator_override_id === "string" || value.local_operator_override_id === null) &&
     (typeof value.execution_state === "string" || value.execution_state === null) &&
     (typeof value.worktree_path === "string" || value.worktree_path === null) &&
     (typeof value.worktree_status === "string" || value.worktree_status === null) &&

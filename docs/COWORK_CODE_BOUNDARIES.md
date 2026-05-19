@@ -28,7 +28,7 @@ Cowork must show enough state for an operator to understand what is running, wha
 
 - repository inspection, patch planning, implementation, test selection, and validation reporting
 - code-focused claims about files touched, tests run, failures found, and follow-up risk
-- Code Mode runs that are governed by capability snapshots, policy snapshots, approval state, and immutable artifacts
+- Code Mode runs that are governed by capability snapshots, policy snapshots, approval state, recorded artifact hashes, and execution-time hash checks
 
 Code Mode is a trusted-code, operator-governed surface. It is not a hostile-code sandbox claim. Host isolation adapters may provide additional defense when available, and required isolation must fail closed when the host cannot satisfy it, but that is different from promising arbitrary hostile-code containment.
 

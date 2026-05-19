@@ -307,10 +307,19 @@ function createGateway() {
     patchSessionAutonomyPrefs: fn((sessionId: string, patch: unknown) => ({ sessionId, patch })),
     acceptChatDelegation: fn((sessionId: string, input: unknown) => ({ sessionId, input, accepted: true })),
     runChatDelegation: fn((sessionId: string, input: unknown) => ({ sessionId, input, run: true })),
-    runChatDelegationStream: fn((sessionId: string, input: unknown) => ({ sessionId, input, stream: true })),
+    runChatDelegationStream: fn((sessionId: string, input: unknown, options?: unknown) => ({
+      sessionId,
+      input,
+      options,
+      stream: true,
+    })),
     suggestChatDelegation: fn((sessionId: string, input: unknown) => ({ sessionId, input, suggestions: [] })),
     listChatMessages: fn((sessionId: string, limit: number, cursor?: string) => ({ sessionId, limit, cursor })),
-    parseChatCommand: fn((sessionId: string, commandText: string) => ({ sessionId, commandText })),
+    parseChatCommand: fn((sessionId: string, commandText: string, options?: unknown) => ({
+      sessionId,
+      commandText,
+      options,
+    })),
     updateChatSessionPrefs: fn((sessionId: string, input: unknown) => ({ sessionId, input })),
     runChatResearch: fn((sessionId: string, input: unknown) => ({ sessionId, input })),
     invokeAndUnwrap: fn(async (request: unknown, realtimeType: string) => ({ request, realtimeType })),
@@ -428,7 +437,10 @@ describe("composeChatRouteDependencies", () => {
     });
     expect(() => deps.chatDelegate.getChatDelegationRun("session-1", "foreign-run")).toThrow(NotFoundError);
     expect(deps.chatDelegate.runChatDelegation("session-1", { goal: "ship" })).toMatchObject({ run: true });
-    expect(deps.chatDelegate.runChatDelegationStream("session-1", { goal: "ship" })).toMatchObject({ stream: true });
+    const abortController = new AbortController();
+    expect(
+      deps.chatDelegate.runChatDelegationStream("session-1", { goal: "ship" }, { abortSignal: abortController.signal }),
+    ).toMatchObject({ stream: true, options: { abortSignal: abortController.signal } });
     expect(deps.chatDelegate.suggestChatDelegation("session-1", { goal: "ship" })).toMatchObject({ suggestions: [] });
 
     expect(deps.chatTools.getChatToolArtifactContent("artifact-1", { encoding: "text" })).toMatchObject({
@@ -492,8 +504,11 @@ describe("composeChatRouteDependencies", () => {
     });
 
     expect(deps.chatSupport.commands.listChatCommandCatalog()).toEqual([{ command: "/delegate" }]);
-    expect(deps.chatSupport.commands.parseChatCommand("session-1", "/delegate qa")).toMatchObject({
+    expect(
+      deps.chatSupport.commands.parseChatCommand("session-1", "/delegate qa", { resolvedBy: "operator-test" }),
+    ).toMatchObject({
       commandText: "/delegate qa",
+      options: { resolvedBy: "operator-test" },
     });
     expect(deps.chatSupport.learnedMemory.listChatSessionLearnedMemory("session-1", 3)).toEqual([
       { sessionId: "session-1", limit: 3 },

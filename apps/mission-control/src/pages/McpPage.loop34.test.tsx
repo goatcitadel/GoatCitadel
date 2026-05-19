@@ -509,7 +509,6 @@ describe("McpPage loop 34 edge behavior", () => {
         arguments: {
           inboxItemId: "inbox-1",
           decision: "reject",
-          resolvedBy: "mission-control:mcp",
         },
       });
     } finally {

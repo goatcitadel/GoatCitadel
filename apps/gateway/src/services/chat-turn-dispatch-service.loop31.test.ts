@@ -72,6 +72,7 @@ describe("chat turn dispatch loop 31 execution coverage", () => {
       expect.objectContaining({ turnId: "turn-1" }),
       "chat_thread_turn_appended",
       undefined,
+      undefined,
     );
     expect(response).toMatchObject({
       sessionId: "session-1",
@@ -129,7 +130,10 @@ describe("chat turn dispatch loop 31 execution coverage", () => {
       "chat_thread_turn_appended",
     );
     expect(host.registerActiveChatTurnStream).toHaveBeenCalledWith("session-1", "turn-1", "run-1");
-    expect(host.streamPersistedChatTurnEvents).toHaveBeenCalledWith("session-1", "turn-1", { liveTail: true });
+    expect(host.streamPersistedChatTurnEvents).toHaveBeenCalledWith("session-1", "turn-1", {
+      liveTail: true,
+      returnOnDurableInterrupt: true,
+    });
     expect(streamPreparedAgentChatTurn).not.toHaveBeenCalled();
     expect(response.assistantMessage?.content).toBe("Durable answer.");
     expect(response.model).toBe("durable-model");

@@ -12,6 +12,25 @@ import type {
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { stripHtmlNoiseTags, stripHtmlTags } from "./html-noise.js";
+import { assertNotPrivateOrReservedHost, fetchAllowlisted, redactUrlForError } from "./sandbox/network-guard.js";
+import { normalizeFirecrawlApiKeyEnvName } from "./safe-env-name.js";
+
+// SECURITY (codex finding #12): `sourceType` is the discriminator that
+// decides whether a URL or a local file is fetched. Previously the field was
+// cast (`as "file" | "url" | "text"`) without a runtime check, so an
+// attacker-supplied value like `"URL"` (uppercase) passed the policy-engine
+// `sourceType === "url"` validation, then fell through to the URL-ingestion
+// branch at runtime. Validate strictly here.
+const VALID_SOURCE_TYPES = new Set<string>(["file", "url", "text"]);
+type IngestionSourceType = "file" | "url" | "text";
+
+function parseSourceType(value: unknown): IngestionSourceType {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!VALID_SOURCE_TYPES.has(normalized)) {
+    throw new Error(`sourceType must be one of file|url|text (got ${JSON.stringify(value)})`);
+  }
+  return normalized as IngestionSourceType;
+}
 
 const DEFAULT_URL_CACHE_TTL_SECONDS = 3600;
 
@@ -35,7 +54,7 @@ export async function ingestDocumentViaBackend(input: {
   chunks: RetrievedContextChunk[];
 }> {
   const args = input.request.args;
-  const sourceType = requiredString(args.sourceType, "sourceType") as "file" | "url" | "text";
+  const sourceType = parseSourceType(args.sourceType);
   const source = requiredString(args.source, "source");
   const namespace = requiredString(args.namespace, "namespace");
   const backendName = normalizeBackend(args.backend);
@@ -199,7 +218,7 @@ async function fetchDocument(input: {
   fetchUrl: (url: string) => Promise<FetchUrlResult>;
 }): Promise<FetchResult> {
   const args = input.request.args;
-  const sourceType = requiredString(args.sourceType, "sourceType") as "file" | "url" | "text";
+  const sourceType = parseSourceType(args.sourceType);
   const source = requiredString(args.source, "source");
   if (sourceType === "file") {
     const rawText = await fs.readFile(path.resolve(source), "utf8");
@@ -228,26 +247,91 @@ async function fetchDocument(input: {
   }
 
   if (input.backend === "firecrawl") {
+    // SECURITY (codex finding #11, #23): The Firecrawl base URL and the URL
+    // it scrapes are both user-controlled. We must:
+    //   (a) refuse private/loopback/metadata destinations for the base URL
+    //       so this endpoint cannot be used as a SSRF primitive to reach
+    //       169.254.169.254, the Docker socket, or other internal hosts,
+    //   (b) refuse the same for `source` so that an attacker cannot ask
+    //       Firecrawl to scrape a private URL on our behalf,
+    //   (c) use only Firecrawl-specific API key env names so tool args
+    //       cannot exfiltrate unrelated local secrets,
+    //   (d) use `fetchAllowlisted`, which does manual redirect handling
+    //       and re-validates each hop plus resolved socket address against
+    //       the private-host guard for the Firecrawl API request.
     const firecrawlBaseUrl =
       optionalString(args.firecrawlBaseUrl) ?? process.env.FIRECRAWL_BASE_URL ?? "http://127.0.0.1:3002";
     const firecrawlTimeoutMs = positiveInt(args.firecrawlTimeoutMs) ?? 20_000;
-    const firecrawlApiKeyEnv = optionalString(args.firecrawlApiKeyEnv) ?? "FIRECRAWL_API_KEY";
+    const firecrawlApiKeyEnv =
+      normalizeFirecrawlApiKeyEnvName(optionalString(args.firecrawlApiKeyEnv)) ??
+      normalizeFirecrawlApiKeyEnvName(process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV) ??
+      "FIRECRAWL_API_KEY";
     const firecrawlApiKey = process.env[firecrawlApiKeyEnv]?.trim();
-    const response = await fetch(`${firecrawlBaseUrl.replace(/\/$/, "")}/v2/scrape`, {
-      method: "POST",
-      signal: AbortSignal.timeout(firecrawlTimeoutMs),
-      headers: {
-        "Content-Type": "application/json",
-        ...(firecrawlApiKey ? { Authorization: `Bearer ${firecrawlApiKey}` } : {}),
-      },
-      body: JSON.stringify({
-        url: source,
-        formats: ["markdown", "html"],
-      }),
-    });
+    // Allow loopback for the base URL only when it matches the canonical
+    // local default (so the bundled Firecrawl docker compose still works).
+    let parsedBase: URL;
+    try {
+      parsedBase = new URL(firecrawlBaseUrl);
+    } catch {
+      throw new Error(`firecrawlBaseUrl is not a valid URL (${redactUrlForError(firecrawlBaseUrl)})`);
+    }
+    const isCanonicalLocalBase =
+      (parsedBase.hostname === "127.0.0.1" || parsedBase.hostname === "localhost") && parsedBase.port === "3002";
+    if (!isCanonicalLocalBase) {
+      assertNotPrivateOrReservedHost(parsedBase.toString());
+    }
+    // Refuse to scrape a private or non-HTTP source URL — Firecrawl would
+    // happily fetch it for us.
+    assertHttpUrl(source, "source");
+    assertNotPrivateOrReservedHost(source);
+
+    const targetUrl = `${firecrawlBaseUrl.replace(/\/$/, "")}/v2/scrape`;
+    // For canonical localhost Firecrawl we go through plain fetch so the
+    // loopback allowance applies; otherwise we use fetchAllowlisted with a
+    // wildcard allowlist (still blocks private hosts and resolved private IPs).
+    const fetchOnce = async (): Promise<Response> => {
+      const init: RequestInit = {
+        method: "POST",
+        signal: AbortSignal.timeout(firecrawlTimeoutMs),
+        headers: {
+          "Content-Type": "application/json",
+          ...(firecrawlApiKey ? { Authorization: `Bearer ${firecrawlApiKey}` } : {}),
+        },
+        body: JSON.stringify({
+          url: source,
+          formats: ["markdown", "html"],
+        }),
+      };
+      if (isCanonicalLocalBase) {
+        return fetch(targetUrl, init);
+      }
+      return fetchAllowlisted(targetUrl, {
+        allowlist: ["*"],
+        timeoutMs: firecrawlTimeoutMs,
+        init,
+      });
+    };
+    const response = await fetchOnce();
     const payload = (await response.json()) as Record<string, unknown>;
     const data = record(payload.data);
     const metadata = record(data.metadata);
+    // SECURITY (codex finding #11): Even though we validated the original
+    // `source` URL, Firecrawl may report a different final URL after its
+    // own redirect chain. If that final URL points to a private host, do
+    // not return the response body — the redirect could have taken us to
+    // a metadata endpoint via an open redirector.
+    const reportedSourceUrl = optionalString(metadata.sourceURL) ?? optionalString(data.url);
+    if (reportedSourceUrl) {
+      try {
+        assertHttpUrl(reportedSourceUrl, "Firecrawl final URL");
+        assertNotPrivateOrReservedHost(reportedSourceUrl);
+      } catch (error) {
+        throw new Error(
+          `Firecrawl returned a final URL on a private/reserved host; refusing to return content: ${redactUrlForError(reportedSourceUrl)}`,
+          { cause: error },
+        );
+      }
+    }
     const markdown = optionalString(data.markdown) ?? optionalString(data.content) ?? optionalString(data.html) ?? "";
     const title = optionalString(metadata.title) ?? optionalString(data.title) ?? optionalString(args.title);
     return {
@@ -417,6 +501,18 @@ function requiredString(value: unknown, field: string): string {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function assertHttpUrl(value: string, label: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${label} is not a valid URL (${redactUrlForError(value)})`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`${label} must use http or https (${redactUrlForError(value)})`);
+  }
 }
 
 function positiveInt(value: unknown): number | undefined {

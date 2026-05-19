@@ -198,6 +198,7 @@ export function composeIntegrationChannelRouteDependencies(
       hasRunningTurn: (sessionId) => gateway.hasRunningTurn(sessionId),
       ingestChannelMessage: (channel, idempotencyKey, input) =>
         gateway.ingestChannelMessage(channel, idempotencyKey, input),
+      parseChatCommand: (sessionId, commandText, options) => gateway.parseChatCommand(sessionId, commandText, options),
       recordDevDiagnostic: (input) => gateway.recordDevDiagnostic(input),
       respondToExistingChatMessage: (sessionId, messageId, input) =>
         gateway.respondToExistingChatMessage(sessionId, messageId, input),

@@ -39,4 +39,63 @@ describe("runWithChildTimeout", () => {
       }),
     ).rejects.toThrowError(/timeout_exceeded/);
   });
+  it("reports late child completion after timeout without changing the timeout result", async () => {
+    const lateEvents: unknown[] = [];
+    let resolveRun: (value: string) => void = () => undefined;
+    const result = runWithChildTimeout({
+      timeoutSeconds: 0.01,
+      run: async () =>
+        new Promise<string>((resolve) => {
+          resolveRun = resolve;
+        }),
+      onLateSettle: (event) => {
+        lateEvents.push(event);
+      },
+    });
+
+    await expect(result).rejects.toThrowError(/timeout_exceeded/);
+    resolveRun("late success");
+    await flushSettledPromises();
+
+    expect(lateEvents).toEqual([
+      expect.objectContaining({
+        status: "completed",
+        value: "late success",
+        elapsedMs: expect.any(Number),
+      }),
+    ]);
+  });
+  it("reports late child failure after timeout without replacing the timeout error", async () => {
+    const lateEvents: unknown[] = [];
+    let rejectRun: (error: Error) => void = () => undefined;
+    const result = runWithChildTimeout({
+      timeoutSeconds: 0.01,
+      run: async () =>
+        new Promise<string>((_resolve, reject) => {
+          rejectRun = reject;
+        }),
+      onLateSettle: (event) => {
+        lateEvents.push(event);
+      },
+    });
+
+    await expect(result).rejects.toThrowError(/timeout_exceeded/);
+    rejectRun(new Error("late child crash"));
+    await flushSettledPromises();
+
+    expect(lateEvents).toEqual([
+      expect.objectContaining({
+        status: "failed",
+        error: expect.objectContaining({ message: "late child crash" }),
+        elapsedMs: expect.any(Number),
+      }),
+    ]);
+  });
 });
+
+async function flushSettledPromises(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  await Promise.resolve();
+}

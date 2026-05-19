@@ -354,7 +354,6 @@ describe("ToolsPage load discipline", () => {
         scope: "session",
         scopeRef: "sess-1",
         grantType: "persistent",
-        createdBy: "operator",
         expiresAt: undefined,
       });
       expect(apiMocks.createToolGrant).toHaveBeenCalledWith({
@@ -363,7 +362,6 @@ describe("ToolsPage load discipline", () => {
         scope: "session",
         scopeRef: "sess-1",
         grantType: "persistent",
-        createdBy: "operator",
       });
       expect(apiMocks.evaluateToolAccess).toHaveBeenCalledWith({
         toolName: "fs.list",
@@ -382,7 +380,6 @@ describe("ToolsPage load discipline", () => {
         dryRun: true,
         consentContext: {
           source: "ui",
-          operatorId: "operator",
           reason: "tool access dry-run",
         },
       });
@@ -546,15 +543,11 @@ describe("ToolsPage load discipline", () => {
         durationSelect.props.onChange({ target: { value: "ttl" } });
       });
       const expiresInput = renderer.root.findAllByType("input").find((node) => node.props.type === "datetime-local");
-      const createdByInput = renderer.root
-        .findAllByType("input")
-        .find((node) => node.props.value === "operator" && node.props.type !== "checkbox");
-      if (!expiresInput || !createdByInput) {
-        throw new Error("Expected ttl and created-by inputs");
+      if (!expiresInput) {
+        throw new Error("Expected ttl input");
       }
       await act(async () => {
         expiresInput.props.onChange({ target: { value: "2026-05-14T15:30" } });
-        createdByInput.props.onChange({ target: { value: "" } });
       });
 
       await clickButton(renderer, "Create Grant");
@@ -567,7 +560,6 @@ describe("ToolsPage load discipline", () => {
           scope: "global",
           scopeRef: undefined,
           grantType: "ttl",
-          createdBy: "operator",
           expiresAt: "2026-05-14T22:30:00.000Z",
         }),
       );
@@ -662,7 +654,6 @@ describe("ToolsPage load discipline", () => {
         dryRun: true,
         consentContext: {
           source: "ui",
-          operatorId: "operator",
           reason: "tool access dry-run",
         },
       });

@@ -145,14 +145,11 @@ export function deriveRealtimeNotification(event: RealtimeEvent): DerivedRealtim
     };
   }
 
-  if (event.links?.approvalId) {
-    return {
-      tone: "warning",
-      message: "Approval state changed. Review the inbox in Ops.",
-      groupKey: "ops-approvals",
-      truthMode: "authoritative",
-    };
+  const haystack = buildEventHaystack(event);
+  if (event.links?.approvalId || haystack.includes("approval")) {
+    return undefined;
   }
+
   if (event.links?.taskId) {
     return {
       tone: "info",
@@ -170,15 +167,6 @@ export function deriveRealtimeNotification(event: RealtimeEvent): DerivedRealtim
     };
   }
 
-  const haystack = buildEventHaystack(event);
-  if (haystack.includes("approval")) {
-    return {
-      tone: "warning",
-      message: "Approval state changed. Review the inbox in Ops.",
-      groupKey: "ops-approvals",
-      truthMode: "compatibility",
-    };
-  }
   if (haystack.includes("task")) {
     return {
       tone: "info",

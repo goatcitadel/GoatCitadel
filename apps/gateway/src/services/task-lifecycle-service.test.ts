@@ -218,13 +218,27 @@ describe("TaskLifecycleService agentic runtime", () => {
 
     const result = service.invokeAgenticControl("agentic-run-1", {
       action: "pause",
+      controlId: "pause-durable-once",
       actorId: "operator",
     });
     expect(pauseDurableRun).toHaveBeenCalledWith("durable-run-1", "operator");
     expect(result).toMatchObject({
       taskId: task.taskId,
+      controlId: "pause-durable-once",
       status: "applied",
       runtimeEffect: "runtime_pause",
+    });
+    const replay = service.invokeAgenticControl("agentic-run-1", {
+      action: "pause",
+      controlId: "pause-durable-once",
+      actorId: "operator",
+    });
+    expect(pauseDurableRun).toHaveBeenCalledTimes(1);
+    expect(replay).toMatchObject({
+      controlId: "pause-durable-once",
+      status: "applied",
+      runtimeEffect: "runtime_pause",
+      idempotentReplay: true,
     });
     expect(storage.tasks.get(task.taskId).agenticContext?.status).toBe("paused");
   });
@@ -491,15 +505,15 @@ describe("TaskLifecycleService.verifyTaskArtifacts", () => {
   it("records verification results and emits artifact_missing distress when any claim is missing", async () => {
     const { service, storage } = createService({
       probers: {
-        fs: { statExists: async (p: string) => p !== "/missing.txt" },
+        fs: { statExists: async (p: string) => p !== "missing.txt" },
         http: { headOk: async () => true },
         git: { hasCommit: async () => true },
       },
     });
     const task = service.createTask({ title: "t", status: "in_progress" });
     const updated = await service.verifyTaskArtifacts(task.taskId, [
-      { kind: "file", value: "/exists.txt" },
-      { kind: "file", value: "/missing.txt" },
+      { kind: "file", value: "exists.txt" },
+      { kind: "file", value: "missing.txt" },
     ]);
     const persisted = storage.tasks.get(task.taskId);
     expect(persisted.artifactVerification?.length).toBe(2);
@@ -518,7 +532,7 @@ describe("TaskLifecycleService.verifyTaskArtifacts", () => {
       },
     });
     const task = service.createTask({ title: "t", status: "in_progress" });
-    const updated = await service.verifyTaskArtifacts(task.taskId, [{ kind: "file", value: "/ok.txt" }]);
+    const updated = await service.verifyTaskArtifacts(task.taskId, [{ kind: "file", value: "ok.txt" }]);
     expect(updated.status).toBe("in_progress");
     expect(updated.distressSignals?.find((s) => s.code === "artifact_missing")).toBeUndefined();
   });
@@ -526,7 +540,7 @@ describe("TaskLifecycleService.verifyTaskArtifacts", () => {
   it("throws ValidationError when probers are not configured", async () => {
     const { service } = createService(); // no probers
     const task = service.createTask({ title: "t" });
-    await expect(service.verifyTaskArtifacts(task.taskId, [{ kind: "file", value: "/x" }])).rejects.toThrow(
+    await expect(service.verifyTaskArtifacts(task.taskId, [{ kind: "file", value: "x" }])).rejects.toThrow(
       /probers not configured/i,
     );
   });
@@ -537,13 +551,49 @@ describe("TaskLifecycleService.verifyTaskArtifacts", () => {
         fs: { statExists: async () => true },
         http: { headOk: async () => true },
         git: { hasCommit: async () => true },
+        networkAllowlist: ["x"],
       },
     });
     const task = service.createTask({ title: "t", status: "in_progress" });
-    await service.verifyTaskArtifacts(task.taskId, [{ kind: "file", value: "/a.txt" }]);
+    await service.verifyTaskArtifacts(task.taskId, [{ kind: "file", value: "a.txt" }]);
     await service.verifyTaskArtifacts(task.taskId, [{ kind: "url", value: "https://x" }]);
     const persisted = storage.tasks.get(task.taskId);
     expect(persisted.artifactVerification?.length).toBe(2);
+  });
+
+  it("loads task existence before probing claimed artifacts", async () => {
+    const statExists = vi.fn(async () => true);
+    const { service } = createService({
+      probers: {
+        fs: { statExists },
+        http: { headOk: async () => true },
+        git: { hasCommit: async () => true },
+      },
+    });
+
+    await expect(service.verifyTaskArtifacts("missing-task", [{ kind: "file", value: "safe.txt" }])).rejects.toThrow(
+      /Task missing-task not found/,
+    );
+    expect(statExists).not.toHaveBeenCalled();
+  });
+
+  it("checks workspace scope before probing claimed artifacts", async () => {
+    const statExists = vi.fn(async () => true);
+    const { service } = createService({
+      probers: {
+        fs: { statExists },
+        http: { headOk: async () => true },
+        git: { hasCommit: async () => true },
+      },
+    });
+    const task = service.createTask({ workspaceId: "workspace-a", title: "Scoped task", status: "in_progress" });
+
+    await expect(
+      service.verifyTaskArtifacts(task.taskId, [{ kind: "file", value: "safe.txt" }], {
+        workspaceId: "workspace-b",
+      }),
+    ).rejects.toThrow(/Task .* not found/);
+    expect(statExists).not.toHaveBeenCalled();
   });
 });
 
@@ -639,5 +689,118 @@ describe("TaskLifecycleService.bulkUpdateTasks", () => {
     expect(() => service.bulkUpdateTasks({ action: "close", taskIds: [a.taskId] })).toThrow(
       /at least one deliverable/i,
     );
+  });
+});
+
+describe("TaskLifecycleService workspace access", () => {
+  it("hides direct task reads and mutations when workspace expectations do not match", () => {
+    const { service } = createService();
+    const task = service.createTask({ workspaceId: "workspace-a", title: "Scoped task", status: "in_progress" });
+
+    expect(() => service.getTask(task.taskId, { workspaceId: "workspace-b" })).toThrow(/Task .* not found/);
+    expect(() => service.updateTask(task.taskId, { title: "wrong workspace" }, { workspaceId: "workspace-b" })).toThrow(
+      /Task .* not found/,
+    );
+    expect(service.softDeleteTask(task.taskId, "operator", "wrong workspace", { workspaceId: "workspace-b" })).toBe(
+      false,
+    );
+    expect(service.getTask(task.taskId, { workspaceId: "workspace-a" }).title).toBe("Scoped task");
+  });
+
+  it("applies bulk workspace checks before Kanban mutations", () => {
+    const { service } = createService();
+    const task = service.createTask({ workspaceId: "workspace-a", title: "Blocked task", status: "blocked" });
+
+    expect(() =>
+      service.bulkUpdateTasks({ action: "unblock", taskIds: [task.taskId] }, { workspaceId: "workspace-b" }),
+    ).toThrow(/Task .* not found/);
+    expect(
+      service.bulkUpdateTasks({ action: "unblock", taskIds: [task.taskId] }, { workspaceId: "workspace-a" })[0],
+    ).toMatchObject({ taskId: task.taskId, status: "assigned" });
+  });
+
+  it("scopes agentic run tree and control endpoints to the requested workspace", () => {
+    const { service } = createService();
+    const task = service.createTask({
+      workspaceId: "workspace-a",
+      title: "Scoped run",
+      status: "in_progress",
+      agenticContext: {
+        runId: "run-workspace-a",
+        status: "running",
+        surface: "cowork",
+      },
+    });
+
+    expect(() => service.getAgenticRunTree("run-workspace-a", { workspaceId: "workspace-b" })).toThrow(
+      /Agentic run not found/,
+    );
+    expect(() =>
+      service.invokeAgenticControl(
+        "run-workspace-a",
+        {
+          action: "pause",
+          actorId: "operator",
+        },
+        { workspaceId: "workspace-b" },
+      ),
+    ).toThrow(/Agentic run not found/);
+    expect(service.getAgenticRunTree("run-workspace-a", { workspaceId: "workspace-a" })).toMatchObject({
+      runId: "run-workspace-a",
+    });
+    expect(
+      service.invokeAgenticControl(
+        "run-workspace-a",
+        {
+          action: "pause",
+          actorId: "operator",
+        },
+        { workspaceId: "workspace-a" },
+      ),
+    ).toMatchObject({
+      taskId: task.taskId,
+      action: "pause",
+    });
+  });
+
+  it("rejects kill_child controls for subagents outside the selected run", () => {
+    const { service, storage } = createService();
+    const runA = service.createTask({
+      workspaceId: "workspace-a",
+      title: "Run A",
+      status: "in_progress",
+      agenticContext: {
+        runId: "run-a",
+        status: "running",
+        surface: "cowork",
+      },
+    });
+    const runB = service.createTask({
+      workspaceId: "workspace-a",
+      title: "Run B",
+      status: "in_progress",
+      agenticContext: {
+        runId: "run-b",
+        status: "running",
+        surface: "cowork",
+      },
+    });
+    service.registerTaskSubagent(runB.taskId, {
+      agentSessionId: "run-b-child",
+      agentName: "analyst",
+    });
+
+    expect(() =>
+      service.invokeAgenticControl("run-a", {
+        action: "kill_child",
+        controlId: "wrong-run-child",
+        agentSessionId: "run-b-child",
+        actorId: "operator",
+      }),
+    ).toThrow(/Sub-agent session run-b-child not found/);
+    expect(storage.taskSubagents.getByAgentSessionId("run-b-child").status).toBe("active");
+    expect(
+      storage.taskActivities.listByTask(runA.taskId).filter((activity) => activity.activityType === "control"),
+    ).toHaveLength(0);
   });
 });

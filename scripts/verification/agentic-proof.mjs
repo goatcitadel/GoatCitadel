@@ -226,6 +226,80 @@ const CHECK_GROUPS = Object.freeze({
       ]),
       fileContains("apps/gateway/src/services/durable-run-service.ts", ["checkpointKind", "run_resumed"]),
       fileContains("packages/contracts/src/durable.ts", ["approval.wait", "approvalId"]),
+      commandCheck(
+        "Permission profiles and Local Operator Override storage behavior",
+        "pnpm",
+        ["--filter", "@goatcitadel/storage", "exec", "tsx", "--test", "src/permission-profile-repo.test.ts"],
+        {
+          timeoutMs: 120_000,
+        },
+      ),
+      commandCheck(
+        "Gateway permission profile and plugin override governance behavior",
+        "pnpm",
+        [
+          "--filter",
+          "@goatcitadel/gateway",
+          "exec",
+          "vitest",
+          "run",
+          "--reporter",
+          "verbose",
+          "src/routes/tools.permission-profiles.test.ts",
+          "src/services/plugin-tool-override-service.test.ts",
+          "src/services/tool-invocation-coordinator-service.test.ts",
+        ],
+        {
+          timeoutMs: 180_000,
+          expectedStdout: [
+            "routes execution to plugin override handler when an active override exists",
+            "blocks plugin overrides when final policy would require approval",
+          ],
+        },
+      ),
+      commandCheck(
+        "Subagent permission inheritance and approval wait truth",
+        "pnpm",
+        [
+          "--filter",
+          "@goatcitadel/gateway",
+          "exec",
+          "vitest",
+          "run",
+          "--reporter",
+          "verbose",
+          "src/services/chat-delegation-service.loop20-worker-a.test.ts",
+        ],
+        {
+          timeoutMs: 180_000,
+          expectedStdout: [
+            "carries the parent permission profile and override into delegated child turns",
+            "keeps waiting delegate responses active",
+          ],
+        },
+      ),
+      commandCheck(
+        "Code Mode profile and override inheritance behavior",
+        "pnpm",
+        [
+          "--filter",
+          "@goatcitadel/gateway",
+          "exec",
+          "vitest",
+          "run",
+          "--reporter",
+          "verbose",
+          "src/services/capability-system-service.test.ts",
+        ],
+        {
+          timeoutMs: 180_000,
+          expectedStdout: [
+            "freezes Code Mode wrapper policy context at run approval time",
+            "does not silently swap an explicit Code Mode permission profile during policy resolution",
+            "expires a Code Mode pending action that was not resolved before its TTL",
+          ],
+        },
+      ),
     ],
   },
   marketplace: {
@@ -314,12 +388,19 @@ const CHECK_GROUPS = Object.freeze({
       commandCheck(
         "Improvement ledger approval-gated mutation behavior",
         "pnpm",
-        ["exec", "tsx", "--test", "apps/gateway/src/services/improvement-service.node.test.ts"],
+        [
+          "exec",
+          "tsx",
+          "--test",
+          "apps/gateway/src/services/improvement-service.node.test.ts",
+          "apps/gateway/src/improvement-operator-proof.node.test.ts",
+        ],
         {
           timeoutMs: 180_000,
           expectedStdout: [
             "persists agentic bridge proposals as governed candidates with mutationApplied=false",
             "keeps review-first skill drift proposals from mutating through direct activation",
+            "serves ledger and legacy improvement endpoints without server errors",
           ],
         },
       ),

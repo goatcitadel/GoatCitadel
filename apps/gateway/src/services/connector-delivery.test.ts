@@ -32,10 +32,18 @@ describe("dispatchConnectorDelivery", () => {
 
     const result = await dispatchConnectorDelivery(
       createConnector("integration_connection", "integration:channel-1", "channel-1", ["outbound_messages"]),
-      createPayload("channel.send", {
-        target: "#ops",
-        message: "hello from durable delivery",
-      }),
+      {
+        ...createPayload("channel.send", {
+          target: "#ops",
+          message: "hello from durable delivery",
+        }),
+        workspaceId: "workspace-1",
+        taskId: "root-task-1",
+        runId: "run-1",
+        permissionProfileId: "trusted_local_power",
+        localOperatorOverrideId: "local-override-1",
+        originSurface: "cowork",
+      },
       {
         commsSend,
         commsReply: vi.fn(async () => ({})),
@@ -47,15 +55,19 @@ describe("dispatchConnectorDelivery", () => {
       },
     );
 
-    expect(commsSend).toHaveBeenCalledWith({
-      connectionId: "channel-1",
-      target: "#ops",
-      message: "hello from durable delivery",
-      attachments: undefined,
-      sessionId: undefined,
-      agentId: undefined,
-      taskId: undefined,
-    });
+    expect(commsSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: "channel-1",
+        target: "#ops",
+        message: "hello from durable delivery",
+        workspaceId: "workspace-1",
+        taskId: "root-task-1",
+        runId: "run-1",
+        permissionProfileId: "trusted_local_power",
+        localOperatorOverrideId: "local-override-1",
+        surface: "cowork",
+      }),
+    );
     expect(result).toMatchObject({
       capabilityId: "outbound_messages",
       dispatchKind: "integration_channel_send",
@@ -276,14 +288,88 @@ describe("dispatchConnectorDelivery", () => {
       toolName: "search.docs",
       arguments: { q: "durable workflows" },
       sessionId: "sess-1",
-      agentId: undefined,
-      taskId: undefined,
     });
     expect(result).toMatchObject({
       capabilityId: "interactive_actions",
       dispatchKind: "mcp_invoke",
       result: { toolResult: "ok" },
     });
+  });
+
+  it("passes durable MCP lineage context when provided", async () => {
+    const invokeMcpTool = vi.fn(
+      async (_input: McpInvokeRequest): Promise<McpInvokeResponse> => ({
+        ok: true,
+        output: { toolResult: "ok" },
+      }),
+    );
+
+    await dispatchConnectorDelivery(
+      createConnector("mcp_server", "mcp:server-1", "server-1", ["interactive_actions"]),
+      createPayload("mcp.invoke", {
+        toolName: "search.docs",
+        arguments: { q: "durable workflows" },
+        sessionId: "sess-1",
+      }),
+      {
+        commsSend: vi.fn(),
+        commsReply: vi.fn(),
+        commsReact: vi.fn(),
+        commsUnsend: vi.fn(),
+        commsTyping: vi.fn(),
+        invokeMcpTool,
+        publishRealtime: vi.fn(),
+        mcpInvokeContext: {
+          workspaceId: "workspace-1",
+          taskId: "task-1",
+          runId: "durable-run-1",
+          permissionProfileId: "profile-safe",
+          localOperatorOverrideId: "override-1",
+          surface: "cowork",
+          consentContext: {
+            operatorId: "system-durable",
+            source: "agent",
+            reason: "durable connector delivery:durable-run-1",
+          },
+        },
+      },
+    );
+
+    expect(invokeMcpTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "workspace-1",
+        taskId: "task-1",
+        runId: "durable-run-1",
+        permissionProfileId: "profile-safe",
+        localOperatorOverrideId: "override-1",
+        surface: "cowork",
+        consentContext: expect.objectContaining({
+          operatorId: "system-durable",
+        }),
+      }),
+    );
+  });
+
+  it("fails closed when MCP approval delivery is missing workspace lineage", async () => {
+    await expect(
+      dispatchConnectorDelivery(
+        createConnector("mcp_server", "mcp:server-1", "server-1", ["interactive_actions"]),
+        createPayload("mcp.invoke", {
+          approvalId: "approval-1",
+          toolName: "goatcitadel.approval.remote_action_ready",
+          arguments: { approvalId: "approval-1", actionType: "approval.resolve" },
+        }),
+        {
+          commsSend: vi.fn(),
+          commsReply: vi.fn(),
+          commsReact: vi.fn(),
+          commsUnsend: vi.fn(),
+          commsTyping: vi.fn(),
+          invokeMcpTool: vi.fn(),
+          publishRealtime: vi.fn(),
+        },
+      ),
+    ).rejects.toThrow("workspaceId policy lineage");
   });
 
   it("emits realtime events for browser connectors", async () => {

@@ -177,6 +177,36 @@ describe("chat-durable-run-service", () => {
     ]);
   });
 
+  it("marks tool waits as durable waiting checkpoints", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({
+      status: "waiting_for_tool",
+      failure: {
+        failureClass: "tool_wait",
+        message: "Waiting for browser.search to finish",
+        retryable: true,
+        recommendedAction: "resume_tool_wait",
+      },
+    });
+    const state = createFinalizeState();
+
+    finalizeDurableChatRun(state.deps, "run-waiting", prepared, trace);
+
+    expect(state.runs.get("run-waiting")?.status).toBe("waiting");
+    expect(state.runs.get("run-waiting")?.finishedAt).toBeUndefined();
+    expect(state.checkpoints).toEqual([
+      expect.objectContaining({
+        runId: "run-waiting",
+        checkpointKind: "run_waiting",
+        state: expect.objectContaining({
+          currentStep: "waiting_for_tool",
+          blocker: "Waiting for browser.search to finish",
+          nextAction: "resume_tool_wait",
+        }),
+      }),
+    ]);
+  });
+
   it("marks cancelled traces as durable cancellation checkpoints", () => {
     const prepared = createPreparedTurn();
     const trace = createTrace({
@@ -211,6 +241,119 @@ describe("chat-durable-run-service", () => {
             runId: "run-cancelled",
             status: "cancelled",
             checkpointKind: "run_cancelled",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("does not duplicate durable cancellation checkpoints after an operator cancel already settled the run", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({
+      status: "cancelled",
+    });
+    const state = createFinalizeState();
+    state.runs.set("run-cancelled", {
+      ...createRun("run-cancelled", "cancelled"),
+      lastError: "cancelled by tester",
+      finishedAt: "2026-04-10T00:00:00.000Z",
+    });
+
+    finalizeDurableChatRun(state.deps, "run-cancelled", prepared, trace);
+
+    expect(state.runs.get("run-cancelled")).toMatchObject({
+      status: "cancelled",
+      lastError: "cancelled by tester",
+      finishedAt: "2026-04-10T00:00:00.000Z",
+    });
+    expect(state.checkpoints).toEqual([]);
+    expect(state.timelineEvents).toEqual([]);
+    expect(state.tracePatches).toEqual([
+      {
+        turnId: "turn-1",
+        patch: {
+          durable: {
+            runId: "run-cancelled",
+            status: "cancelled",
+            checkpointKind: "run_cancelled",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("does not let late completed traces overwrite an operator-cancelled durable run", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({
+      status: "completed",
+      completion: {
+        status: "complete",
+        finishReason: "stop",
+        repaired: false,
+      },
+    });
+    const state = createFinalizeState();
+    state.runs.set("run-cancelled", {
+      ...createRun("run-cancelled", "cancelled"),
+      lastError: "cancelled by operator",
+      finishedAt: "2026-04-10T00:00:00.000Z",
+    });
+
+    finalizeDurableChatRun(state.deps, "run-cancelled", prepared, trace);
+
+    expect(state.runs.get("run-cancelled")).toMatchObject({
+      status: "cancelled",
+      lastError: "cancelled by operator",
+      finishedAt: "2026-04-10T00:00:00.000Z",
+    });
+    expect(state.checkpoints).toEqual([]);
+    expect(state.timelineEvents).toEqual([]);
+    expect(state.tracePatches).toEqual([
+      {
+        turnId: "turn-1",
+        patch: {
+          durable: {
+            runId: "run-cancelled",
+            status: "cancelled",
+            checkpointKind: "run_cancelled",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("does not let late traces rewrite already-terminal durable runs", () => {
+    const prepared = createPreparedTurn();
+    const trace = createTrace({
+      status: "waiting_for_approval",
+      failure: {
+        failureClass: "approval_required",
+        message: "late approval wait",
+        retryable: true,
+      },
+    });
+    const state = createFinalizeState();
+    state.runs.set("run-terminal", {
+      ...createRun("run-terminal", "completed"),
+      finishedAt: "2026-04-10T00:02:00.000Z",
+    });
+
+    finalizeDurableChatRun(state.deps, "run-terminal", prepared, trace);
+
+    expect(state.runs.get("run-terminal")).toMatchObject({
+      status: "completed",
+      finishedAt: "2026-04-10T00:02:00.000Z",
+    });
+    expect(state.checkpoints).toEqual([]);
+    expect(state.timelineEvents).toEqual([]);
+    expect(state.tracePatches).toEqual([
+      {
+        turnId: "turn-1",
+        patch: {
+          durable: {
+            runId: "run-terminal",
+            status: "completed",
+            checkpointKind: "run_completed",
           },
         },
       },
@@ -514,6 +657,13 @@ function createFinalizeState(options?: {
   const tracePatches: Array<{ turnId: string; patch: Record<string, unknown> }> = [];
   const deps: ChatDurableRunFinalizeDeps = {
     durableRuns: {
+      getRun: (runId) => {
+        const current = runs.get(runId);
+        if (!current) {
+          throw new Error(`Unknown run ${runId}`);
+        }
+        return current;
+      },
       updateRun: (input) => updateRun(runs, input.runId, input),
       createCheckpoint: (input) => {
         const record: DurableCheckpointRecord = {

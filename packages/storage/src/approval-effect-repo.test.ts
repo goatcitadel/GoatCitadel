@@ -140,7 +140,7 @@ describe("ApprovalEffectRepository", () => {
       }),
       undefined,
     );
-    const completed = repo.completeEffect(pending.effectId, "worker-1", renewed!.version, {
+    const completed = repo.completeEffect(pending.effectId, "worker-1", claimed!.version, {
       result: { resumed: true },
       updatedAt: "2026-03-21T10:04:00.000Z",
     });
@@ -223,6 +223,42 @@ describe("ApprovalEffectRepository", () => {
     );
     assert.equal(claimedRecovered?.effectId, expired.effectId);
     assert.equal(claimedRecovered?.attemptCount, 1);
+  });
+
+  it("claims pending approved action execution before durable wake effects", () => {
+    const { repo, db } = createRepoWithDb();
+    insertApproval(db, "approval-1");
+    const createdAt = "2026-03-21T10:00:00.000Z";
+
+    repo.upsert({
+      approvalId: "approval-1",
+      effectKind: "approval_wait_wake",
+      targetKind: "durable_run",
+      targetId: "approval-wait-1",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    repo.upsert({
+      approvalId: "approval-1",
+      effectKind: "linked_chat_turn_wake",
+      targetKind: "chat_turn",
+      targetId: "turn-1",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    const pendingAction = repo.upsert({
+      approvalId: "approval-1",
+      effectKind: "pending_action_execute",
+      targetKind: "pending_action",
+      targetId: "approval-1",
+      createdAt,
+      updatedAt: createdAt,
+    });
+
+    const claimed = repo.claimNextPendingEffect("worker-1", createdAt, "2026-03-21T10:05:00.000Z");
+
+    assert.equal(claimed?.effectId, pendingAction.effectId);
+    assert.equal(claimed?.effectKind, "pending_action_execute");
   });
 
   it("maps legacy wake-effect rows into current approval effect records", () => {

@@ -2,6 +2,14 @@ import type { TaskActivityRecord, TaskDeliverableRecord, TaskRecord, TaskSubagen
 import type { TaskArtifactClaim, TaskDistressSignalCode, TaskDistressSeverity } from "@goatcitadel/contracts";
 import { request } from "./client-core.js";
 
+function withWorkspaceQuery(path: string, workspaceId?: string): string {
+  const trimmed = workspaceId?.trim();
+  if (!trimmed) {
+    return path;
+  }
+  return `${path}${path.includes("?") ? "&" : "?"}workspaceId=${encodeURIComponent(trimmed)}`;
+}
+
 export async function fetchTasks(
   status?: TaskRecord["status"],
   workspaceId?: string,
@@ -49,9 +57,10 @@ export async function updateTask(
   taskId: string,
   input: Partial<Pick<TaskRecord, "status" | "priority" | "title" | "description" | "dueAt">> & {
     assignedAgentId?: string | null;
+    workspaceId?: string;
   },
 ): Promise<TaskRecord> {
-  return request<TaskRecord>(`/api/v1/tasks/${encodeURIComponent(taskId)}`, {
+  return request<TaskRecord>(withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}`, input.workspaceId), {
     method: "PATCH",
     body: JSON.stringify(input),
   });
@@ -59,11 +68,17 @@ export async function updateTask(
 
 export async function deleteTask(
   taskId: string,
-  input?: { mode?: "soft" | "hard"; deletedBy?: string; deleteReason?: string; confirmToken?: string },
+  input?: {
+    mode?: "soft" | "hard";
+    deletedBy?: string;
+    deleteReason?: string;
+    confirmToken?: string;
+    workspaceId?: string;
+  },
 ): Promise<{ deleted: boolean; taskId: string; mode: "soft" | "hard" }> {
   const mode = input?.mode ?? "soft";
   return request<{ deleted: boolean; taskId: string; mode: "soft" | "hard" }>(
-    `/api/v1/tasks/${encodeURIComponent(taskId)}?mode=${mode}`,
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}?mode=${mode}`, input?.workspaceId),
     {
       method: "DELETE",
       body: JSON.stringify({
@@ -71,20 +86,32 @@ export async function deleteTask(
         deletedBy: input?.deletedBy,
         deleteReason: input?.deleteReason,
         confirmToken: input?.confirmToken,
+        workspaceId: input?.workspaceId,
       }),
     },
   );
 }
 
-export async function restoreTask(taskId: string): Promise<{ restored: boolean; taskId: string }> {
-  return request<{ restored: boolean; taskId: string }>(`/api/v1/tasks/${encodeURIComponent(taskId)}/restore`, {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
+export async function restoreTask(
+  taskId: string,
+  workspaceId?: string,
+): Promise<{ restored: boolean; taskId: string }> {
+  return request<{ restored: boolean; taskId: string }>(
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/restore`, workspaceId),
+    {
+      method: "POST",
+      body: JSON.stringify({ workspaceId }),
+    },
+  );
 }
 
-export async function fetchTaskActivities(taskId: string): Promise<{ items: TaskActivityRecord[] }> {
-  return request<{ items: TaskActivityRecord[] }>(`/api/v1/tasks/${encodeURIComponent(taskId)}/activities`);
+export async function fetchTaskActivities(
+  taskId: string,
+  workspaceId?: string,
+): Promise<{ items: TaskActivityRecord[] }> {
+  return request<{ items: TaskActivityRecord[] }>(
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/activities`, workspaceId),
+  );
 }
 
 export async function addTaskActivity(
@@ -93,20 +120,30 @@ export async function addTaskActivity(
     message: string;
     activityType?: TaskActivityRecord["activityType"];
     agentId?: string;
+    workspaceId?: string;
   },
 ): Promise<TaskActivityRecord> {
-  return request<TaskActivityRecord>(`/api/v1/tasks/${encodeURIComponent(taskId)}/activities`, {
-    method: "POST",
-    body: JSON.stringify({
-      activityType: input.activityType ?? "comment",
-      message: input.message,
-      agentId: input.agentId,
-    }),
-  });
+  return request<TaskActivityRecord>(
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/activities`, input.workspaceId),
+    {
+      method: "POST",
+      body: JSON.stringify({
+        workspaceId: input.workspaceId,
+        activityType: input.activityType ?? "comment",
+        message: input.message,
+        agentId: input.agentId,
+      }),
+    },
+  );
 }
 
-export async function fetchTaskDeliverables(taskId: string): Promise<{ items: TaskDeliverableRecord[] }> {
-  return request<{ items: TaskDeliverableRecord[] }>(`/api/v1/tasks/${encodeURIComponent(taskId)}/deliverables`);
+export async function fetchTaskDeliverables(
+  taskId: string,
+  workspaceId?: string,
+): Promise<{ items: TaskDeliverableRecord[] }> {
+  return request<{ items: TaskDeliverableRecord[] }>(
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/deliverables`, workspaceId),
+  );
 }
 
 export async function addTaskDeliverable(
@@ -116,31 +153,44 @@ export async function addTaskDeliverable(
     deliverableType?: TaskDeliverableRecord["deliverableType"];
     path?: string;
     description?: string;
+    workspaceId?: string;
   },
 ): Promise<TaskDeliverableRecord> {
-  return request<TaskDeliverableRecord>(`/api/v1/tasks/${encodeURIComponent(taskId)}/deliverables`, {
-    method: "POST",
-    body: JSON.stringify({
-      deliverableType: input.deliverableType ?? "artifact",
-      title: input.title,
-      path: input.path,
-      description: input.description,
-    }),
-  });
+  return request<TaskDeliverableRecord>(
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/deliverables`, input.workspaceId),
+    {
+      method: "POST",
+      body: JSON.stringify({
+        workspaceId: input.workspaceId,
+        deliverableType: input.deliverableType ?? "artifact",
+        title: input.title,
+        path: input.path,
+        description: input.description,
+      }),
+    },
+  );
 }
 
-export async function fetchTaskSubagents(taskId: string): Promise<{ items: TaskSubagentSession[] }> {
-  return request<{ items: TaskSubagentSession[] }>(`/api/v1/tasks/${encodeURIComponent(taskId)}/subagents`);
+export async function fetchTaskSubagents(
+  taskId: string,
+  workspaceId?: string,
+): Promise<{ items: TaskSubagentSession[] }> {
+  return request<{ items: TaskSubagentSession[] }>(
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/subagents`, workspaceId),
+  );
 }
 
 export async function registerTaskSubagent(
   taskId: string,
-  input: { agentSessionId: string; agentName?: string },
+  input: { agentSessionId: string; agentName?: string; workspaceId?: string },
 ): Promise<TaskSubagentSession> {
-  return request<TaskSubagentSession>(`/api/v1/tasks/${encodeURIComponent(taskId)}/subagents`, {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
+  return request<TaskSubagentSession>(
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/subagents`, input.workspaceId),
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 export async function updateTaskSubagent(
@@ -162,36 +212,62 @@ export interface EmitTaskDistressBody {
   evidenceRef?: string;
 }
 
-export async function emitTaskDistress(taskId: string, input: EmitTaskDistressBody): Promise<TaskRecord> {
-  return request<TaskRecord>(`/api/v1/tasks/${encodeURIComponent(taskId)}/distress`, {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
+export async function emitTaskDistress(
+  taskId: string,
+  input: EmitTaskDistressBody & { workspaceId?: string },
+): Promise<TaskRecord> {
+  return request<TaskRecord>(
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/distress`, input.workspaceId),
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 export async function resolveTaskDistress(
   taskId: string,
   signalId: string,
-  input?: { resolvedBy?: string },
+  input?: { workspaceId?: string },
 ): Promise<TaskRecord> {
-  return request<TaskRecord>(`/api/v1/tasks/${encodeURIComponent(taskId)}/distress/${encodeURIComponent(signalId)}`, {
-    method: "DELETE",
-    body: JSON.stringify(input ?? {}),
-  });
+  return request<TaskRecord>(
+    withWorkspaceQuery(
+      `/api/v1/tasks/${encodeURIComponent(taskId)}/distress/${encodeURIComponent(signalId)}`,
+      input?.workspaceId,
+    ),
+    {
+      method: "DELETE",
+      body: JSON.stringify(input ?? {}),
+    },
+  );
 }
 
-export async function setTaskRetryBudget(taskId: string, maxRetries: number): Promise<TaskRecord> {
-  return request<TaskRecord>(`/api/v1/tasks/${encodeURIComponent(taskId)}/retry-budget`, {
-    method: "POST",
-    body: JSON.stringify({ maxRetries }),
-  });
+export async function setTaskRetryBudget(
+  taskId: string,
+  maxRetries: number,
+  workspaceId?: string,
+): Promise<TaskRecord> {
+  return request<TaskRecord>(
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/retry-budget`, workspaceId),
+    {
+      method: "POST",
+      body: JSON.stringify({ maxRetries, workspaceId }),
+    },
+  );
 }
 
-export async function verifyTaskArtifacts(taskId: string, claims: TaskArtifactClaim[]): Promise<TaskRecord> {
-  return request<TaskRecord>(`/api/v1/tasks/${encodeURIComponent(taskId)}/verify-artifacts`, {
-    method: "POST",
-    body: JSON.stringify({ claims }),
-  });
+export async function verifyTaskArtifacts(
+  taskId: string,
+  claims: TaskArtifactClaim[],
+  workspaceId?: string,
+): Promise<TaskRecord> {
+  return request<TaskRecord>(
+    withWorkspaceQuery(`/api/v1/tasks/${encodeURIComponent(taskId)}/verify-artifacts`, workspaceId),
+    {
+      method: "POST",
+      body: JSON.stringify({ claims, workspaceId }),
+    },
+  );
 }
 
 export type BulkTaskActionInput =
@@ -200,7 +276,9 @@ export type BulkTaskActionInput =
   | { action: "reassign"; taskIds: string[]; assignedAgentId: string }
   | { action: "close"; taskIds: string[] };
 
-export async function bulkTaskAction(input: BulkTaskActionInput): Promise<{ tasks: TaskRecord[] }> {
+export async function bulkTaskAction(
+  input: BulkTaskActionInput & { workspaceId?: string },
+): Promise<{ tasks: TaskRecord[] }> {
   return request<{ tasks: TaskRecord[] }>(`/api/v1/tasks/bulk`, {
     method: "POST",
     body: JSON.stringify(input),

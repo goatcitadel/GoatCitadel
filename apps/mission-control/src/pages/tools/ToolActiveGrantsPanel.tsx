@@ -15,7 +15,7 @@ export function ToolActiveGrantsPanel(props: ToolActiveGrantsPanelProps) {
 
   return (
     <Panel
-      title="Active Grants"
+      title="Tool Grants"
       subtitle="Review, filter, and revoke scoped permissions."
       collapsible
       defaultExpanded={false}
@@ -29,7 +29,7 @@ export function ToolActiveGrantsPanel(props: ToolActiveGrantsPanelProps) {
             <input
               value={grantFilter}
               onChange={(event) => setGrantFilter(event.target.value)}
-              placeholder="Search tool, scope, decision, created by..."
+              placeholder="Search tool, scope, decision, or grant type..."
             />
           </div>
         }

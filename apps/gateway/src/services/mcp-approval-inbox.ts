@@ -107,7 +107,6 @@ export function createInternalMcpApprovalInboxTools(serverId: string): McpToolRe
           decision: { type: "string" },
           editedPayload: { type: "object" },
           resolutionNote: { type: "string" },
-          resolvedBy: { type: "string" },
         },
         required: ["inboxItemId", "decision"],
       },
@@ -244,7 +243,7 @@ async function resolveInboxItem(
   checkResolveRateLimit(serverId);
   const inboxItemId = requireNonEmptyString(args?.inboxItemId, "inboxItemId");
   const decision = requireEnumValue(args?.decision, ["approve", "reject", "edit"], "decision");
-  const resolvedBy = optionalString(args?.resolvedBy) ?? "operator:mcp";
+  const resolvedBy = `mcp:${serverId}`;
   const item = deps.approvalInbox.get(inboxItemId);
   if (item.receiverId !== serverId || item.receiverKind !== "mcp") {
     throw new ConflictError({

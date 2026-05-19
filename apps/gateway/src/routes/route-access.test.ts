@@ -61,6 +61,7 @@ describe("route access manifest", () => {
       ),
     ).toMatchObject({
       accessClass: "device",
+      classificationSource: "explicit",
       tracked: true,
     });
 
@@ -68,6 +69,7 @@ describe("route access manifest", () => {
       app.routeAccessManifest.find((entry) => entry.method === "GET" && entry.url === "/api/v1/events/stream"),
     ).toMatchObject({
       accessClass: "sse-read",
+      classificationSource: "explicit",
       tracked: true,
     });
 
@@ -75,6 +77,7 @@ describe("route access manifest", () => {
       app.routeAccessManifest.find((entry) => entry.method === "POST" && entry.url === "/api/v1/orchestration/plans"),
     ).toMatchObject({
       accessClass: "operator",
+      classificationSource: "explicit",
       tracked: true,
     });
   });
@@ -98,11 +101,19 @@ describe("route access manifest", () => {
     app.get("/api/v1/addons/catalog", async () => ({ ok: true }));
     app.get("/api/v1/capabilities/catalog", async () => ({ ok: true }));
     app.post("/api/v1/code-mode/runs", async () => ({ ok: true }));
+    app.post("/api/v1/integrations/connections/:connectionId/:channel/inbound", async () => ({ ok: true }));
     app.post("/api/v1/integrations/connections/:connectionId/telegram/webhook", async () => ({ ok: true }));
     app.get("/api/v1/unclassified/new-surface", async () => ({ ok: true }));
     await app.ready();
 
-    expect(listMissingTrackedRouteAccessClasses(app)).toEqual([]);
+    expect(listMissingTrackedRouteAccessClasses(app)).toEqual([
+      expect.objectContaining({
+        method: "GET",
+        url: "/api/v1/unclassified/new-surface",
+        accessClass: "operator",
+        classificationSource: "default",
+      }),
+    ]);
     for (const url of [
       "/api/v1/llm/providers",
       "/api/v1/tools/catalog",
@@ -113,6 +124,7 @@ describe("route access manifest", () => {
     ]) {
       expect(app.routeAccessManifest.find((entry) => entry.url === url)).toMatchObject({
         accessClass: "operator",
+        classificationSource: "policy",
         tracked: true,
       });
     }
@@ -120,6 +132,17 @@ describe("route access manifest", () => {
       app.routeAccessManifest.find((entry) => entry.method === "GET" && entry.url === "/api/v1/tools/catalog"),
     ).toMatchObject({
       accessClass: "operator",
+      classificationSource: "policy",
+      tracked: true,
+    });
+    expect(
+      app.routeAccessManifest.find(
+        (entry) =>
+          entry.method === "POST" && entry.url === "/api/v1/integrations/connections/:connectionId/:channel/inbound",
+      ),
+    ).toMatchObject({
+      accessClass: "webhook",
+      classificationSource: "policy",
       tracked: true,
     });
     expect(
@@ -129,6 +152,7 @@ describe("route access manifest", () => {
       ),
     ).toMatchObject({
       accessClass: "webhook",
+      classificationSource: "policy",
       tracked: true,
     });
     expect(
@@ -137,6 +161,7 @@ describe("route access manifest", () => {
       ),
     ).toMatchObject({
       accessClass: "operator",
+      classificationSource: "default",
       tracked: true,
     });
   });
@@ -179,6 +204,9 @@ describe("route access manifest", () => {
     app.addHook("onRequest", async (request) => {
       const source = request.headers["x-auth-source"];
       (request as { authActorSource?: string }).authActorSource = typeof source === "string" ? source : "none";
+      const companionSessionId = request.headers["x-companion-session-id"];
+      (request as { authCompanionSessionId?: string }).authCompanionSessionId =
+        typeof companionSessionId === "string" ? companionSessionId : undefined;
     });
     app.get("/read", withRouteAccess(app, "authenticated-read"), async () => ({ ok: true }));
     app.get("/sse", withRouteAccess(app, "sse-read"), async () => ({ ok: true }));
@@ -194,6 +222,21 @@ describe("route access manifest", () => {
     expect((await app.inject({ method: "GET", url: "/sse" })).statusCode).toBe(403);
     expect((await app.inject({ method: "GET", url: "/sse", headers: { "x-auth-source": "sse" } })).statusCode).toBe(
       200,
+    );
+    expect(
+      (await app.inject({ method: "GET", url: "/sse", headers: { "x-auth-source": "companion" } })).statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/sse",
+          headers: { "x-auth-source": "companion", "x-companion-session-id": "session-1" },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/sse", headers: { "x-auth-source": "device" } })).statusCode).toBe(
+      403,
     );
 
     expect((await app.inject({ method: "GET", url: "/loopback" })).statusCode).toBe(403);

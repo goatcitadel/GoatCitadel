@@ -251,6 +251,120 @@ describe("ingestion backend coverage", () => {
     }
   });
 
+  it("does not read Firecrawl API keys from non-Firecrawl env-name input", async () => {
+    const priorBaseUrl = process.env.FIRECRAWL_BASE_URL;
+    const priorFirecrawlKey = process.env.FIRECRAWL_API_KEY;
+    const priorOpenAiKey = process.env.OPENAI_API_KEY;
+    const priorConfiguredKeyEnv = process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV;
+    const priorFetch = globalThis.fetch;
+    process.env.FIRECRAWL_BASE_URL = "https://firecrawl.example/";
+    delete process.env.FIRECRAWL_API_KEY;
+    process.env.OPENAI_API_KEY = "openai-secret";
+    const storage = createKnowledgeStorage();
+    const fetchMock = vi.fn(async (_input, init) => {
+      expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBeUndefined();
+      return new Response(
+        JSON.stringify({
+          data: {
+            markdown: "safe firecrawl response",
+            metadata: {},
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      await ingestDocumentViaBackend({
+        request: createRequest({
+          sourceType: "url",
+          source: "https://example.com/firecrawl",
+          namespace: "web",
+          backend: "firecrawl",
+          firecrawlApiKeyEnv: "OPENAI_API_KEY",
+        }),
+        storage,
+        fetchUrl: vi.fn(),
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://firecrawl.example/v2/scrape",
+        expect.objectContaining({
+          headers: expect.not.objectContaining({
+            Authorization: expect.any(String),
+          }),
+        }),
+      );
+    } finally {
+      if (priorBaseUrl === undefined) {
+        delete process.env.FIRECRAWL_BASE_URL;
+      } else {
+        process.env.FIRECRAWL_BASE_URL = priorBaseUrl;
+      }
+      if (priorFirecrawlKey === undefined) {
+        delete process.env.FIRECRAWL_API_KEY;
+      } else {
+        process.env.FIRECRAWL_API_KEY = priorFirecrawlKey;
+      }
+      if (priorOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = priorOpenAiKey;
+      }
+      if (priorConfiguredKeyEnv === undefined) {
+        delete process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV;
+      } else {
+        process.env.GOATCITADEL_FIRECRAWL_API_KEY_ENV = priorConfiguredKeyEnv;
+      }
+      globalThis.fetch = priorFetch;
+    }
+  });
+
+  it("rejects non-canonical loopback Firecrawl ingest base URLs", async () => {
+    const priorFetch = globalThis.fetch;
+    const storage = createKnowledgeStorage();
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      await expect(
+        ingestDocumentViaBackend({
+          request: createRequest({
+            sourceType: "url",
+            source: "https://example.com/firecrawl",
+            namespace: "web",
+            backend: "firecrawl",
+            firecrawlBaseUrl: "http://127.0.0.1",
+          }),
+          storage,
+          fetchUrl: vi.fn(),
+        }),
+      ).rejects.toThrow(/Private|reserved|metadata/i);
+
+      await expect(
+        ingestDocumentViaBackend({
+          request: createRequest({
+            sourceType: "url",
+            source: "https://example.com/firecrawl",
+            namespace: "web",
+            backend: "firecrawl",
+            firecrawlBaseUrl: "http://localhost:80",
+          }),
+          storage,
+          fetchUrl: vi.fn(),
+        }),
+      ).rejects.toThrow(/Private|reserved|metadata/i);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = priorFetch;
+    }
+  });
+
   it("covers firecrawl request defaults and html-only response fallback", async () => {
     const priorBaseUrl = process.env.FIRECRAWL_BASE_URL;
     const priorApiKey = process.env.FIRECRAWL_API_KEY;
@@ -344,6 +458,55 @@ describe("ingestion backend coverage", () => {
         rawText: "",
         contentType: "text/html",
       });
+    } finally {
+      globalThis.fetch = priorFetch;
+    }
+  });
+
+  it("rejects non-http Firecrawl source and reported final URLs", async () => {
+    const priorFetch = globalThis.fetch;
+    const storage = createKnowledgeStorage();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              markdown: "must not be returned",
+              metadata: { sourceURL: "file:///etc/passwd" },
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      await expect(
+        ingestDocumentViaBackend({
+          request: createRequest({
+            sourceType: "url",
+            source: "file:///etc/passwd",
+            namespace: "web",
+            backend: "firecrawl",
+          }),
+          storage,
+          fetchUrl: vi.fn(),
+        }),
+      ).rejects.toThrow(/source must use http or https/i);
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      await expect(
+        ingestDocumentViaBackend({
+          request: createRequest({
+            sourceType: "url",
+            source: "https://example.com/firecrawl-file-final",
+            namespace: "web",
+            backend: "firecrawl",
+          }),
+          storage,
+          fetchUrl: vi.fn(),
+        }),
+      ).rejects.toThrow(/Firecrawl returned a final URL/i);
     } finally {
       globalThis.fetch = priorFetch;
     }

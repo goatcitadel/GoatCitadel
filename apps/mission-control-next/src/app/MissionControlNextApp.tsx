@@ -296,8 +296,7 @@ export function MissionControlNextApp() {
   ]);
   const inspectorEntry = detailEntry ?? passiveInspectorEntry;
   const pendingApprovals = status.dashboard?.pendingApprovals ?? 0;
-  const operatorNotificationCount =
-    pendingApprovals + (status.health?.daemonStatus?.running ? 0 : 1) + (notifications.length > 0 ? 1 : 0);
+  const operatorNotificationCount = (status.health?.daemonStatus?.running ? 0 : 1) + (notifications.length > 0 ? 1 : 0);
   const railSignalTitle = route.area === "settings" ? "Configuration posture" : "Operator posture";
   const railSignalLines =
     route.area === "settings"
@@ -377,7 +376,7 @@ export function MissionControlNextApp() {
   }, []);
 
   useEffect(() => {
-    if (route.area === "ops" && route.section === "quality") {
+    if (window.location.pathname.toLowerCase() === "/ops/quality") {
       navigate(
         {
           area: "library",
@@ -586,8 +585,7 @@ export function MissionControlNextApp() {
             <div className="mc-next-topbar-right">
               <button type="button" className="mc-next-command-search" onClick={() => setInspectorOpen(true)}>
                 <Search size={15} />
-                <span>Search sessions, agents, files...</span>
-                <kbd>⌘K</kbd>
+                <span>Open context inspector</span>
               </button>
               <button
                 type="button"
@@ -624,7 +622,15 @@ export function MissionControlNextApp() {
               </label>
               <div className="mc-next-topbar-status">
                 <span className="mc-next-badge">{realtimeStatusCopy.badge}</span>
-                <span className="mc-next-badge">{pendingApprovals} approvals</span>
+                <button
+                  type="button"
+                  className="mc-next-badge mc-next-badge-button"
+                  onClick={() => navigate({ area: "ops", section: "approvals", theme: route.theme ?? theme })}
+                  aria-label="Open approvals"
+                  title="Open approvals"
+                >
+                  {pendingApprovals} approvals
+                </button>
               </div>
               <button
                 type="button"
@@ -786,7 +792,12 @@ export function MissionControlNextApp() {
           <footer className="mc-next-status-strip" aria-label="Mission Control status strip">
             <StatusPill icon={<ShieldCheck size={15} />} label={gatewayAccess.message} value="Gateway ready" />
             <StatusPill icon={<Activity size={15} />} label="Live updates" value={realtimeStatusCopy.strip} />
-            <StatusPill icon={<Workflow size={15} />} label="Approvals" value={`${pendingApprovals} pending`} />
+            <StatusPill
+              icon={<Workflow size={15} />}
+              label="Approvals"
+              value={`${pendingApprovals} pending`}
+              onClick={() => navigate({ area: "ops", section: "approvals", theme: route.theme ?? theme })}
+            />
             <StatusPill
               icon={<BookOpenText size={15} />}
               label="Sessions"
@@ -831,7 +842,9 @@ export function renderRouteContent(input: {
         onOpenCowork={() => input.navigate({ area: "cowork", theme: route.theme, sessionId: route.sessionId })}
         onOpenCode={() => input.navigate({ area: "code", theme: route.theme, sessionId: route.sessionId })}
         onOpenTasks={() => input.navigate({ area: "cowork", section: "tasks", theme: route.theme })}
-        onOpenApprovals={() => input.navigate({ area: "ops", section: "approvals", theme: route.theme })}
+        onOpenApprovals={(approvalId?: string) =>
+          input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
+        }
         onNavigateSurface={(surface, options) =>
           input.navigate({
             area: surface,
@@ -858,7 +871,9 @@ export function renderRouteContent(input: {
         lockSurface
         onOpenCode={() => input.navigate({ area: "code", theme: route.theme, sessionId: route.sessionId })}
         onOpenTasks={() => input.navigate({ area: "cowork", section: "tasks", theme: route.theme })}
-        onOpenApprovals={() => input.navigate({ area: "ops", section: "approvals", theme: route.theme })}
+        onOpenApprovals={(approvalId?: string) =>
+          input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
+        }
         onNavigateSurface={(surface, options) =>
           input.navigate({
             area: surface,
@@ -882,7 +897,9 @@ export function renderRouteContent(input: {
         lockSurface
         onOpenCowork={() => input.navigate({ area: "cowork", theme: route.theme, sessionId: route.sessionId })}
         onOpenTasks={() => input.navigate({ area: "cowork", section: "tasks", theme: route.theme })}
-        onOpenApprovals={() => input.navigate({ area: "ops", section: "approvals", theme: route.theme })}
+        onOpenApprovals={(approvalId?: string) =>
+          input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
+        }
         onNavigateSurface={(surface, options) =>
           input.navigate({
             area: surface,
@@ -942,7 +959,11 @@ export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSec
         id: "settings-identity",
         label: "Identity",
         items: items.filter(
-          (item) => item.section === "access" || item.section === "personalities" || item.section === "providers",
+          (item) =>
+            item.section === "access" ||
+            item.section === "permissions" ||
+            item.section === "personalities" ||
+            item.section === "providers",
         ),
       },
       {
@@ -1027,16 +1048,34 @@ export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSec
   return [{ id: `${area}-primary`, items }];
 }
 
-function StatusPill({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
-  return (
-    <div className="mc-next-status-pill">
+function StatusPill({
+  icon,
+  label,
+  value,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  onClick?: () => void;
+}) {
+  const content = (
+    <>
       <span className="mc-next-status-icon">{icon}</span>
       <div>
         <span>{label}</span>
         <strong>{value}</strong>
       </div>
-    </div>
+    </>
   );
+  if (onClick) {
+    return (
+      <button type="button" className="mc-next-status-pill mc-next-status-pill-action" onClick={onClick} title={label}>
+        {content}
+      </button>
+    );
+  }
+  return <div className="mc-next-status-pill">{content}</div>;
 }
 
 export function resolveShellThemeClass(theme: "dark" | "light"): "theme-signal-noir" | "theme-citadel-light" {

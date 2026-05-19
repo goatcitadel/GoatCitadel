@@ -56,8 +56,8 @@ export class CapabilitiesRouteService {
     return this.capabilities.rollbackCandidate(candidateId, targetVersionId);
   }
 
-  public listCodeModeRuns(limit = 100) {
-    return this.capabilities.listCodeModeRuns(limit);
+  public listCodeModeRuns(input: Parameters<CapabilitiesRoutePort["listCodeModeRuns"]>[0] = 100) {
+    return this.capabilities.listCodeModeRuns(input);
   }
 
   public getCodeModeRun(runId: string) {

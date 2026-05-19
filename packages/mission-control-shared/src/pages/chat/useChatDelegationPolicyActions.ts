@@ -140,6 +140,39 @@ function inferDelegationRunStatus(steps: ActiveChatDelegationStep[], fallback: C
   return fallback;
 }
 
+function resolveDelegationResponseStatus(
+  response: ChatDelegateResponse,
+  fallback: ChatDelegationRunStatus = "running",
+): ChatDelegationRunStatus {
+  return response.status ?? inferDelegationRunStatus(response.steps.map(toActiveDelegationStep), fallback);
+}
+
+function buildDelegationCompletionNotice(
+  label: string,
+  response: ChatDelegateResponse,
+): { content: string; tone: "success" | "warning" } {
+  const status = resolveDelegationResponseStatus(response);
+  const stitchedOutput = response.stitchedOutput?.trim();
+  const suffix = stitchedOutput ? `\n${stitchedOutput}` : "";
+  switch (status) {
+    case "completed":
+      return { content: `${label} completed:${suffix}`, tone: "success" };
+    case "partial":
+      return {
+        content: `${label} partially completed; review run details before using the stitched output.${suffix}`,
+        tone: "warning",
+      };
+    case "failed":
+      return {
+        content: `${label} failed; review run details before using the stitched output.${suffix}`,
+        tone: "warning",
+      };
+    case "running":
+    default:
+      return { content: `${label} is waiting for delegated work to finish.${suffix}`, tone: "warning" };
+  }
+}
+
 function createSeedDelegationSteps(request: ChatDelegateRequest): ActiveChatDelegationStep[] {
   if (request.steps?.length) {
     return request.steps
@@ -318,11 +351,16 @@ export function useChatDelegationPolicyActions(input: {
     }
     setSending(true);
     try {
+      const policyRunId = activeDelegationRun?.runId ?? activeWorkflowTurn?.trace.orchestration?.runId;
+      const policyTaskId = activeDelegationRun?.taskId;
       const summary = await runChatResearch(session.sessionId, {
         query,
         mode: prefs?.webMode === "deep" ? "deep" : "quick",
         providerId: prefs?.providerId,
         model: prefs?.model,
+        ...(policyRunId ? { policyRunId } : {}),
+        ...(policyTaskId ? { policyTaskId } : {}),
+        surface: "chat",
       });
       pushLocalNotice(`Research summary:\n${summary.summary}\n\nSources: ${summary.sources.length}`, "success");
       setError(null);
@@ -376,6 +414,7 @@ export function useChatDelegationPolicyActions(input: {
       const run = await triggerChatProactive(selectedSession.sessionId, {
         source: "manual",
         reason: "Operator triggered from chat workspace.",
+        surface: "chat",
       });
       setProactiveRuns((current) => [run, ...current].slice(0, 30));
       pushLocalNotice(`Proactive run ${run.status}: ${run.reasoningSummary}`);
@@ -432,7 +471,7 @@ export function useChatDelegationPolicyActions(input: {
           label,
           objective: request.objective,
           mode: request.mode ?? "sequential",
-          status: inferDelegationRunStatus(result.steps.map(toActiveDelegationStep)),
+          status: resolveDelegationResponseStatus(result),
           steps: result.steps.map(toActiveDelegationStep).sort((left, right) => left.index - right.index),
           stitchedOutput: result.stitchedOutput,
         });
@@ -521,7 +560,7 @@ export function useChatDelegationPolicyActions(input: {
               label: current?.label ?? label,
               objective: current?.objective ?? request.objective,
               mode: current?.mode ?? request.mode ?? "sequential",
-              status: inferDelegationRunStatus(steps),
+              status: resolveDelegationResponseStatus(chunk.result!),
               steps,
               stitchedOutput: chunk.result!.stitchedOutput,
             }));
@@ -553,16 +592,28 @@ export function useChatDelegationPolicyActions(input: {
   const buildDelegationRequest = useCallback(
     (objective: string, roles: string[], mode: NonNullable<ChatDelegateRequest["mode"]>) => {
       const graph = buildDelegationGraph(selectedTurn, roles);
+      const policyRunId = activeDelegationRun?.runId ?? activeWorkflowTurn?.trace.orchestration?.runId;
+      const policyTaskId = activeDelegationRun?.taskId;
       return {
         objective,
         roles: graph.roles,
         mode,
         providerId: prefs?.providerId,
         model: prefs?.model,
+        ...(policyRunId ? { policyRunId } : {}),
+        ...(policyTaskId ? { policyTaskId } : {}),
         ...(graph.steps?.length ? { steps: graph.steps } : {}),
       } satisfies ChatDelegateRequest;
     },
-    [prefs?.model, prefs?.providerId, selectedTurn],
+    [
+      activeDelegationRun?.taskId,
+      activeDelegationRun?.runId,
+      activeWorkflowTurn?.trace.orchestration?.runId,
+      activeWorkflowTurn?.turnId,
+      prefs?.model,
+      prefs?.providerId,
+      selectedTurn,
+    ],
   );
 
   const handleAcceptDelegation = useCallback(async () => {
@@ -574,7 +625,8 @@ export function useChatDelegationPolicyActions(input: {
         buildDelegationRequest(delegationSuggestion.objective, delegationSuggestion.roles, delegationSuggestion.mode),
         "Delegation",
       );
-      pushLocalNotice(`Delegation completed:\n${accepted.stitchedOutput}`, "success");
+      const notice = buildDelegationCompletionNotice("Delegation", accepted);
+      pushLocalNotice(notice.content, notice.tone);
       setDelegationSuggestion(null);
       await loadSidebar();
     } catch (err) {
@@ -623,7 +675,8 @@ export function useChatDelegationPolicyActions(input: {
           buildDelegationRequest(`${preset.prefix}${baseObjective}`, [...preset.roles], preset.mode),
           preset.label,
         );
-        pushLocalNotice(`${preset.label} completed:\n${result.stitchedOutput}`, "success");
+        const notice = buildDelegationCompletionNotice(preset.label, result);
+        pushLocalNotice(notice.content, notice.tone);
         setDelegationSuggestion(null);
         await loadSidebar();
       } catch (err) {

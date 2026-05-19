@@ -135,15 +135,23 @@ export interface CodeModeSandboxMetadata {
   checksPassed: string[];
   checksFailed: string[];
   failClosedReason?: string;
+  advisoryUnsandboxedReason?: string;
 }
 
 export interface CodeModeRunRecord {
   runId: string;
   status: CodeModeRunStatus;
   language: CodeModeLanguage;
+  originSurface?: import("./proactive.js").ProactiveOriginSurface;
+  workspaceId?: string;
+  operatorId?: string;
+  permissionProfileId?: string;
+  permissionProfileLabel?: string;
+  localOperatorOverrideId?: string;
   requestedOutputIntent?: string;
   saveCandidateOnSuccess: boolean;
   capabilitySnapshotId: string;
+  codeModeInputHash: string;
   wrapperManifestHash: string;
   policySnapshotHash: string;
   codeHash: string;
@@ -162,6 +170,8 @@ export interface CodeModeRunRecord {
   stderrTruncated: boolean;
   result?: Record<string, unknown>;
   error?: string;
+  errorCode?: string;
+  errorDetails?: Record<string, unknown>;
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
@@ -170,11 +180,24 @@ export interface CodeModeRunRecord {
 export interface CodeModeRunRequest {
   language: CodeModeLanguage;
   source: string;
+  originSurface?: import("./proactive.js").ProactiveOriginSurface;
+  workspaceId?: string;
+  operatorId?: string;
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
   input?: Record<string, unknown>;
   requestedOutputIntent?: string;
   saveCandidateOnSuccess?: boolean;
   sessionId?: string;
   turnId?: string;
+}
+
+export interface CodeModeRunListOptions {
+  limit?: number;
+  workspaceId?: string;
+  sessionId?: string;
+  turnId?: string;
+  status?: CodeModeRunStatus;
 }
 
 export interface CandidateSkillDetailRecord {

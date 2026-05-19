@@ -514,6 +514,18 @@
   font-weight: 650;
 }
 
+.mc-next-badge-button {
+  appearance: none;
+  cursor: pointer;
+  font: inherit;
+}
+
+.mc-next-badge-button:hover,
+.mc-next-badge-button:focus-visible {
+  border-color: color-mix(in oklab, var(--mc-area-color) 45%, var(--mc-border-subtle));
+  color: var(--foreground);
+}
+
 .mc-next-button,
 .mc-next-button-secondary,
 .mc-next-button-ghost,
@@ -1005,6 +1017,19 @@
   border: 0;
   background: transparent;
   box-shadow: none;
+}
+
+.mc-next-status-pill-action {
+  appearance: none;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+
+.mc-next-status-pill-action:hover strong,
+.mc-next-status-pill-action:focus-visible strong {
+  color: color-mix(in oklab, var(--mc-area-color) 72%, var(--foreground));
 }
 
 .mc-next-status-pill div {

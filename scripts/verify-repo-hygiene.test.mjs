@@ -6,12 +6,12 @@ test("repo hygiene flags tracked ignored local settings and generated installer 
   const findings = collectRepoHygieneFindings({
     trackedFiles: [
       ".claude/settings.local.json",
-      "artifacts/installers/windows-native/GoatCitadel-Setup-windows-x64.exe",
+      "artifacts/installers/windows/GoatCitadel-Setup-windows-x64.exe",
     ],
-    ignoredTrackedFiles: [".claude/settings.local.json", "artifacts/installers/windows-native/GoatCitadel-Setup-windows-x64.exe"],
+    ignoredTrackedFiles: [".claude/settings.local.json", "artifacts/installers/windows/GoatCitadel-Setup-windows-x64.exe"],
     fileInfoByPath: new Map([
       [".claude/settings.local.json", { size: 128 }],
-      ["artifacts/installers/windows-native/GoatCitadel-Setup-windows-x64.exe", { size: 1_000_000 }],
+      ["artifacts/installers/windows/GoatCitadel-Setup-windows-x64.exe", { size: 1_000_000 }],
     ]),
     readTextFile: (filePath) =>
       filePath === ".claude/settings.local.json" ? '{"path":"F:/code/personal-ai"}' : "",

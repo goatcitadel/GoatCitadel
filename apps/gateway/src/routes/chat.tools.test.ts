@@ -17,6 +17,8 @@ describe("chat tool routes", () => {
 
   function createApp(chatTools: Record<string, unknown>) {
     app = Fastify();
+    app.decorateRequest("authActorId", "operator-test");
+    app.decorateRequest("authActorSource", "loopback");
     app.decorate("services", { chatTools } as never);
     registerChatToolRoutes(app);
     return app;
@@ -143,9 +145,11 @@ describe("chat tool routes", () => {
     expect(workspaceApproval.json()).toMatchObject({ allowScope: "workspace", approvalId: "approval-2" });
     expect(resolveChatToolApproval).toHaveBeenCalledWith("session-1", "approval-1", "approve", {
       allowScope: "once",
+      resolvedBy: "operator-test",
     });
     expect(resolveChatToolApproval).toHaveBeenCalledWith("session-1", "approval-2", "approve", {
       allowScope: "workspace",
+      resolvedBy: "operator-test",
     });
     expect(invalidApproval.statusCode).toBe(400);
     expect(failedApproval.statusCode).toBe(400);
@@ -153,7 +157,9 @@ describe("chat tool routes", () => {
     expect(invalidDenial.statusCode).toBe(400);
     expect(denial.statusCode).toBe(200);
     expect(denial.json()).toEqual({ ok: true, approvalId: "approval-4" });
-    expect(resolveChatToolApproval).toHaveBeenCalledWith("session-1", "approval-4", "reject");
+    expect(resolveChatToolApproval).toHaveBeenCalledWith("session-1", "approval-4", "reject", {
+      resolvedBy: "operator-test",
+    });
     expect(failedDenial.statusCode).toBe(400);
     expect(failedDenial.json()).toEqual({ error: "approval already resolved" });
   });

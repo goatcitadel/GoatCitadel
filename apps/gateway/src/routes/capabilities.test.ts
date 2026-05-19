@@ -63,6 +63,9 @@ describe("capabilities routes", () => {
       getCodeModeRun: vi.fn((runId: string) => ({
         runId,
         status: "completed",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        workspaceId: "workspace-1",
       })),
       createCodeModeRun: vi.fn(async (payload: Record<string, unknown>) => ({
         runId: "code-run-created",
@@ -76,6 +79,8 @@ describe("capabilities routes", () => {
   async function registerCapabilitiesService(overrides: Record<string, unknown> = {}) {
     const service = createCapabilitiesService(overrides);
     app = Fastify();
+    app.decorateRequest("authActorId", "operator-test");
+    app.decorateRequest("authActorSource", "loopback");
     app.decorate("services", {
       capabilities: service,
     } as never);
@@ -95,6 +100,8 @@ describe("capabilities routes", () => {
     ]);
 
     app = Fastify();
+    app.decorateRequest("authActorId", "operator-test");
+    app.decorateRequest("authActorSource", "loopback");
     app.decorate("services", {
       capabilities: {
         listCapabilityCatalog,
@@ -128,6 +135,8 @@ describe("capabilities routes", () => {
     }));
 
     app = Fastify();
+    app.decorateRequest("authActorId", "operator-test");
+    app.decorateRequest("authActorSource", "loopback");
     app.decorate("services", {
       capabilities: {
         createCapabilityProposal,
@@ -183,6 +192,7 @@ describe("capabilities routes", () => {
       requestedOutputIntent: payload.requestedOutputIntent,
       saveCandidateOnSuccess: payload.saveCandidateOnSuccess,
       capabilitySnapshotId: "cap-snap-1",
+      codeModeInputHash: "input-hash",
       wrapperManifestHash: "wrap-hash",
       policySnapshotHash: "policy-hash",
       codeHash: "code-hash",
@@ -210,6 +220,8 @@ describe("capabilities routes", () => {
     }));
 
     app = Fastify();
+    app.decorateRequest("authActorId", "operator-test");
+    app.decorateRequest("authActorSource", "loopback");
     app.decorate("services", {
       capabilities: {
         createCodeModeRun,
@@ -234,9 +246,12 @@ describe("capabilities routes", () => {
       payload: {
         language: "typescript",
         source: "return { ok: true };",
+        originSurface: "code",
         input: { path: "/tmp/demo" },
         requestedOutputIntent: "Summarize files",
         saveCandidateOnSuccess: true,
+        permissionProfileId: "trusted-local-power",
+        localOperatorOverrideId: "override-1",
       },
     });
 
@@ -244,14 +259,42 @@ describe("capabilities routes", () => {
     expect(createCodeModeRun).toHaveBeenCalledWith({
       language: "typescript",
       source: "return { ok: true };",
+      originSurface: "code",
       input: { path: "/tmp/demo" },
       requestedOutputIntent: "Summarize files",
       saveCandidateOnSuccess: true,
+      permissionProfileId: "trusted-local-power",
+      localOperatorOverrideId: "override-1",
+      operatorId: "operator-test",
     });
     expect(response.json()).toMatchObject({
       runId: "code-run-1",
       status: "approval_pending",
       capabilitySnapshotId: "cap-snap-1",
+    });
+  });
+
+  it("falls back to the Code Mode origin surface header when the request body omits it", async () => {
+    const service = await registerCapabilitiesService();
+
+    const response = await app!.inject({
+      method: "POST",
+      url: "/api/v1/code-mode/runs",
+      headers: {
+        "x-goatcitadel-origin-surface": "code",
+      },
+      payload: {
+        language: "typescript",
+        source: "return { ok: true };",
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(service.createCodeModeRun).toHaveBeenCalledWith({
+      language: "typescript",
+      source: "return { ok: true };",
+      originSurface: "code",
+      operatorId: "operator-test",
     });
   });
 
@@ -378,6 +421,24 @@ describe("capabilities routes", () => {
     expect(runsResponse.json()).toEqual({ items: [{ runId: "code-run-3" }] });
   });
 
+  it("forwards Code Mode run filters when listing runs", async () => {
+    const service = await registerCapabilitiesService();
+
+    const response = await app!.inject({
+      method: "GET",
+      url: "/api/v1/code-mode/runs?limit=5&workspaceId=workspace-1&sessionId=session-1&turnId=turn-1&status=approval_pending",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(service.listCodeModeRuns).toHaveBeenCalledWith({
+      limit: 5,
+      workspaceId: "workspace-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      status: "approval_pending",
+    });
+  });
+
   it("reads snapshot, proposal, and Code Mode details by id", async () => {
     const service = await registerCapabilitiesService();
 
@@ -403,6 +464,23 @@ describe("capabilities routes", () => {
     expect(snapshotResponse.json()).toEqual({ snapshotId: "snapshot-1", items: [] });
     expect(proposalResponse.json()).toMatchObject({ proposalId: "proposal-1" });
     expect(runResponse.json()).toMatchObject({ runId: "code-run-1" });
+  });
+
+  it("scopes Code Mode run details by session, turn, and workspace query", async () => {
+    const service = await registerCapabilitiesService();
+
+    const okResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/code-mode/runs/code-run-1?sessionId=session-1&turnId=turn-1&workspaceId=workspace-1",
+    });
+    const wrongTurnResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/code-mode/runs/code-run-1?sessionId=session-1&turnId=turn-other&workspaceId=workspace-1",
+    });
+
+    expect(okResponse.statusCode).toBe(200);
+    expect(wrongTurnResponse.statusCode).toBe(404);
+    expect(service.getCodeModeRun).toHaveBeenCalledWith("code-run-1");
   });
 
   it("maps missing read details to 404 responses", async () => {

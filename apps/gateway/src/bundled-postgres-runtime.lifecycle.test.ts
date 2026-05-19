@@ -191,7 +191,7 @@ describe("bundled postgres runtime lifecycle", () => {
     expect(handle?.strategy).toBe("docker");
     expect(mocks.execFileSync).toHaveBeenCalledWith(
       "docker",
-      expect.arrayContaining(["run", "--detach", "--publish", "45432:5432"]),
+      expect.arrayContaining(["run", "--detach", "--publish", "127.0.0.1:45432:5432"]),
       expect.any(Object),
     );
 
@@ -317,7 +317,7 @@ describe("bundled postgres runtime lifecycle", () => {
     );
   });
 
-  it("falls back to Docker when configured native startup fails", async () => {
+  it("fails closed instead of falling back to Docker when configured native startup fails", async () => {
     const rootDir = await makeTempDir();
     const binDir = path.join(rootDir, "pg-bin");
     await fs.mkdir(binDir, { recursive: true });
@@ -347,12 +347,12 @@ describe("bundled postgres runtime lifecycle", () => {
       { queryOne: { present: 1 } },
     );
 
-    const handle = await ensureBundledPostgresRuntime(buildConfig(rootDir, { binDir: "pg-bin" }));
-
-    expect(handle?.strategy).toBe("docker");
-    expect(mocks.execFileSync).toHaveBeenCalledWith(
+    await expect(ensureBundledPostgresRuntime(buildConfig(rootDir, { binDir: "pg-bin" }))).rejects.toThrow(
+      /pg_ctl native start failed/,
+    );
+    expect(mocks.execFileSync).not.toHaveBeenCalledWith(
       "docker",
-      expect.arrayContaining(["run", "--detach", "--publish", "45432:5432"]),
+      expect.arrayContaining(["run", "--detach"]),
       expect.any(Object),
     );
   });

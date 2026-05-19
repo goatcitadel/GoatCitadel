@@ -1,10 +1,28 @@
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
+import { promisify } from "node:util";
+import { fetchAllowlisted } from "@goatcitadel/policy-engine";
 import type { ArtifactProbers } from "./task-artifact-verifier.js";
 import type { TaskLifecycleService } from "./task-lifecycle-service.js";
 
-export function createDefaultArtifactProbers(): ArtifactProbers {
+const execFileAsync = promisify(execFile);
+const DEFAULT_ARTIFACT_HTTP_TIMEOUT_MS = 5_000;
+const DEFAULT_ARTIFACT_GIT_TIMEOUT_MS = 5_000;
+
+export interface DefaultArtifactProberOptions {
+  fileReadRoots?: string[];
+  networkAllowlist?: string[];
+  maxConcurrency?: number;
+  httpTimeoutMs?: number;
+  gitTimeoutMs?: number;
+}
+
+export function createDefaultArtifactProbers(options: DefaultArtifactProberOptions = {}): ArtifactProbers {
+  const networkAllowlist = normalizeList(options.networkAllowlist) ?? [];
   return {
+    fileReadRoots: normalizeList(options.fileReadRoots) ?? [process.cwd()],
+    networkAllowlist,
+    maxConcurrency: options.maxConcurrency,
     fs: {
       statExists: async (filePath: string) => {
         try {
@@ -18,9 +36,16 @@ export function createDefaultArtifactProbers(): ArtifactProbers {
     http: {
       headOk: async (url: string) => {
         try {
-          const response = await fetch(url, { method: "HEAD" });
+          const response = await fetchAllowlisted(url, {
+            allowlist: networkAllowlist,
+            timeoutMs: Math.max(1, options.httpTimeoutMs ?? DEFAULT_ARTIFACT_HTTP_TIMEOUT_MS),
+            init: { method: "HEAD" },
+          });
           return response.ok;
-        } catch {
+        } catch (error) {
+          if (isPolicyBlockError(error)) {
+            throw error;
+          }
           return false;
         }
       },
@@ -28,7 +53,10 @@ export function createDefaultArtifactProbers(): ArtifactProbers {
     git: {
       hasCommit: async (sha: string) => {
         try {
-          execFileSync("git", ["cat-file", "-e", sha], { stdio: "ignore" });
+          await execFileAsync("git", ["cat-file", "-e", sha], {
+            timeout: Math.max(1, options.gitTimeoutMs ?? DEFAULT_ARTIFACT_GIT_TIMEOUT_MS),
+            windowsHide: true,
+          });
           return true;
         } catch {
           return false;
@@ -36,6 +64,21 @@ export function createDefaultArtifactProbers(): ArtifactProbers {
       },
     },
   };
+}
+
+function isPolicyBlockError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return /blocked|allowlisted/i.test(error.message);
+}
+
+function normalizeList(values: string[] | undefined): string[] | undefined {
+  if (!values) {
+    return undefined;
+  }
+  const normalized = values.map((value) => value.trim()).filter(Boolean);
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 export function createDurableTaskAutoBlockBridge(lifecycle: TaskLifecycleService) {

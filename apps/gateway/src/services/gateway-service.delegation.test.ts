@@ -41,6 +41,7 @@ function buildPrefs(): ChatSessionPrefsRecord {
 
 function createDelegationHarness() {
   const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, unknown>;
+  gateway.config = { assistant: { deploymentProfile: "local_dev" } };
   const prefs = buildPrefs();
   const steps = new Map<string, ChatDelegationStepRecord>();
   const sessionRoles = new Map<string, string>();
@@ -171,6 +172,9 @@ function createDelegationHarness() {
     chatSessionProjects: {
       get: vi.fn(() => ({ projectId: "proj-1" })),
     },
+    permissionProfiles: {
+      resolveContext: vi.fn(() => ({ permissionProfile: { profileId: "safe" } })),
+    },
     chatDelegationRuns: {
       create: vi.fn(),
       patch: vi.fn(),
@@ -221,6 +225,7 @@ function createDelegationHarness() {
         chatSessionPrefs: { ensure: ReturnType<typeof vi.fn> };
         chatSessionMeta: { ensure: ReturnType<typeof vi.fn> };
         chatSessionProjects: { get: ReturnType<typeof vi.fn> };
+        permissionProfiles: { resolveContext: ReturnType<typeof vi.fn> };
         chatDelegationRuns: { create: ReturnType<typeof vi.fn>; patch: ReturnType<typeof vi.fn> };
         chatDelegationSteps: {
           create: ReturnType<typeof vi.fn>;

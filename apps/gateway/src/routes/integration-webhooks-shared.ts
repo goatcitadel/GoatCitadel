@@ -59,6 +59,16 @@ export function resolveLineChannelSecret(config: Record<string, unknown>): strin
   );
 }
 
+export function resolveGenericChannelInboundSecret(config: Record<string, unknown>): string | undefined {
+  return (
+    readConfigSecret(config, "inboundSecret", "inboundSecretEnv") ??
+    readConfigSecret(config, "webhookSecret", "webhookSecretEnv") ??
+    readConfigSecret(config, "signingSecret", "signingSecretEnv") ??
+    readConfigSecret(config, "channelSecret", "channelSecretEnv") ??
+    readConfigSecret(config, "secret", "secretEnv")
+  );
+}
+
 const ALLOWED_SECRET_ENV_PREFIXES = [
   "GOATCITADEL_",
   "GC_",

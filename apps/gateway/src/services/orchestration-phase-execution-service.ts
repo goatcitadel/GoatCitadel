@@ -12,6 +12,7 @@ import type {
   OrchestrationPhaseExecutionResult,
   OrchestrationPlan,
   OrchestrationRun,
+  OrchestrationRunPolicyContext,
 } from "@goatcitadel/contracts";
 
 const DEFAULT_WORKSPACE_ID = "default";
@@ -20,7 +21,11 @@ export interface OrchestrationPhaseExecutionServiceDeps {
   readonly rootDir: string;
   createChatSession(input: ChatSessionCreateInput): ChatSessionRecord;
   updateChatSessionPrefs(sessionId: string, input: ChatSessionPrefsPatch): ChatSessionPrefsRecord;
-  agentSendChatMessage(sessionId: string, input: ChatSendMessageRequest): Promise<ChatSendMessageResponse>;
+  agentSendChatMessage(
+    sessionId: string,
+    input: ChatSendMessageRequest,
+    options?: { abortSignal?: AbortSignal },
+  ): Promise<ChatSendMessageResponse>;
   normalizeWorkspaceId(workspaceId: string): string;
 }
 
@@ -29,6 +34,7 @@ export interface OrchestrationPhaseExecutionInput {
   run: OrchestrationRun;
   phase: OrchestrationPhase;
   durableRun: DurableRunRecord;
+  policyContext?: OrchestrationRunPolicyContext;
   signal?: AbortSignal;
 }
 
@@ -36,9 +42,7 @@ export class OrchestrationPhaseExecutionService {
   public constructor(private readonly deps: OrchestrationPhaseExecutionServiceDeps) {}
 
   public async execute(input: OrchestrationPhaseExecutionInput): Promise<OrchestrationPhaseExecutionResult> {
-    if (input.signal?.aborted) {
-      throw input.signal.reason instanceof Error ? input.signal.reason : new Error("Orchestration phase aborted.");
-    }
+    throwIfPhaseAborted(input.signal);
     const startedAt = new Date().toISOString();
     const workspaceId = this.deps.normalizeWorkspaceId(input.run.workspaceId ?? DEFAULT_WORKSPACE_ID);
     const specText = await this.readPhaseSpec(input.run, input.phase);
@@ -75,19 +79,31 @@ export class OrchestrationPhaseExecutionService {
     ].join("\n");
 
     try {
-      const response = await this.deps.agentSendChatMessage(childSession.sessionId, {
-        content: prompt,
-        mode: "cowork",
-        memoryMode: "auto",
-        prefsOverride: {
+      const response = await this.deps.agentSendChatMessage(
+        childSession.sessionId,
+        {
+          content: prompt,
           mode: "cowork",
-          planningMode: "off",
           memoryMode: "auto",
-          toolAutonomy: "safe_auto",
-          orchestrationEnabled: false,
+          prefsOverride: {
+            mode: "cowork",
+            planningMode: "off",
+            memoryMode: "auto",
+            toolAutonomy: "safe_auto",
+            orchestrationEnabled: false,
+          },
+          operatorId: input.policyContext?.operatorId,
+          authActorId: input.policyContext?.authActorId,
+          authActorSource: input.policyContext?.authActorSource,
+          permissionProfileId: input.policyContext?.permissionProfileId,
+          localOperatorOverrideId: input.policyContext?.localOperatorOverrideId,
+          policyRunId: input.run.runId,
+          policyTaskId: input.phase.phaseId,
+          signal: input.signal,
         },
-        signal: input.signal,
-      });
+        input.signal ? { abortSignal: input.signal } : undefined,
+      );
+      throwIfPhaseAborted(input.signal);
       const assistantText = response.assistantMessage?.content?.trim() ?? "";
       const finishedAt = new Date().toISOString();
       const costUsd = response.assistantMessage?.costUsd;
@@ -95,10 +111,11 @@ export class OrchestrationPhaseExecutionService {
       const outputTokens = response.assistantMessage?.tokenOutput;
       const traceStatus = response.trace?.status;
       const failure = response.trace?.failure?.message ?? response.trace?.failure?.failureClass;
+      const waiting = traceStatus === "waiting_for_approval" || traceStatus === "waiting_for_user_input";
       return {
         phaseId: input.phase.phaseId,
         ownerAgentId: input.phase.ownerAgentId,
-        status: traceStatus === "failed" || !assistantText ? "failed" : "completed",
+        status: waiting ? "waiting" : traceStatus === "failed" || !assistantText ? "failed" : "completed",
         startedAt,
         finishedAt,
         outputSummary: summarizePhaseOutput(assistantText || failure),
@@ -114,6 +131,9 @@ export class OrchestrationPhaseExecutionService {
         error: traceStatus === "failed" ? (failure ?? "Phase chat turn failed.") : undefined,
       };
     } catch (error) {
+      if (isPhaseAbortError(error, input.signal)) {
+        throw error;
+      }
       return {
         phaseId: input.phase.phaseId,
         ownerAgentId: input.phase.ownerAgentId,
@@ -140,6 +160,23 @@ export class OrchestrationPhaseExecutionService {
       return `Unable to read ${phase.specPath}: ${error instanceof Error ? error.message : String(error)}`;
     }
   }
+}
+
+function throwIfPhaseAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  throw signal.reason instanceof Error ? signal.reason : new Error("Orchestration phase aborted.");
+}
+
+function isPhaseAbortError(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) {
+    return true;
+  }
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return error.name === "AbortError" || error.name === "OrchestrationPhaseAbortedError";
 }
 
 function summarizePhaseOutput(value: string | undefined): string | undefined {

@@ -10,8 +10,13 @@ export const channelParamsSchema = z.object({
   channel: z.string().min(1),
 });
 
+export const channelConnectionInboundParamsSchema = z.object({
+  connectionId: z.string().uuid(),
+  channel: z.string().min(1),
+});
+
 export const channelInboundSchema = z.object({
-  eventId: z.string().optional(),
+  eventId: z.string().min(1),
   account: z.string().min(1),
   peer: z.string().optional(),
   room: z.string().optional(),

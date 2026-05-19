@@ -10,6 +10,8 @@ import type {
 import type { ApprovalReplayResponse, ApprovalResolveResponse, ApprovalsResponse } from "./types.js";
 import { request } from "./client-core.js";
 
+type ToolGrantCreateRequestInput = Omit<ToolGrantCreateInput, "createdBy">;
+
 export async function fetchApprovals(
   status?: "pending" | "approved" | "rejected" | "edited",
 ): Promise<ApprovalsResponse> {
@@ -28,23 +30,18 @@ export async function resolveApproval(
     method: "POST",
     body: JSON.stringify({
       decision,
-      resolvedBy: "operator",
     }),
   });
 }
 
 export async function resolveApprovalsBulk(input: {
   decision: "approve" | "reject";
-  resolvedBy?: string;
   resolutionNote?: string;
   status?: "pending";
 }): Promise<ApprovalBulkResolveResult> {
   return request<ApprovalBulkResolveResult>("/api/v1/approvals/bulk-resolve", {
     method: "POST",
-    body: JSON.stringify({
-      ...input,
-      resolvedBy: input.resolvedBy ?? "operator",
-    }),
+    body: JSON.stringify(input),
   });
 }
 
@@ -92,18 +89,23 @@ export async function fetchToolGrants(input?: {
   return request<{ items: ToolGrantRecord[] }>(`/api/v1/tools/grants?${search.toString()}`);
 }
 
-export async function createToolGrant(input: ToolGrantCreateInput): Promise<ToolGrantRecord> {
+export async function createToolGrant(input: ToolGrantCreateRequestInput): Promise<ToolGrantRecord> {
   return request<ToolGrantRecord>("/api/v1/tools/grants", {
     method: "POST",
     body: JSON.stringify(input),
   });
 }
 
-export async function revokeToolGrant(grantId: string): Promise<{ revoked: boolean; grantId: string }> {
-  return request<{ revoked: boolean; grantId: string }>(`/api/v1/tools/grants/${encodeURIComponent(grantId)}/revoke`, {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
+export async function revokeToolGrant(
+  grantId: string,
+): Promise<{ revoked: boolean; grantId: string; revokedBy?: string }> {
+  return request<{ revoked: boolean; grantId: string; revokedBy?: string }>(
+    `/api/v1/tools/grants/${encodeURIComponent(grantId)}/revoke`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
 }
 
 export async function invokeTool(input: {
@@ -115,7 +117,6 @@ export async function invokeTool(input: {
   taskId?: string;
   dryRun?: boolean;
   consentContext?: {
-    operatorId?: string;
     source?: "ui" | "tui" | "agent";
     reason?: string;
   };

@@ -191,6 +191,22 @@ function translateSettingsTab(tab?: string): AppRoute["section"] {
       return "providers";
     case "personalities":
       return "personalities";
+    case "permissions":
+      return "permissions";
+    case "workspaces":
+      return "workspaces";
+    case "tools":
+      return "tools";
+    case "integrations":
+      return "integrations";
+    case "channels":
+      return "channels";
+    case "mcp":
+      return "mcp";
+    case "addons":
+      return "addons";
+    case "onboarding":
+      return "onboarding";
     case "access":
       return "access";
     case "budget":

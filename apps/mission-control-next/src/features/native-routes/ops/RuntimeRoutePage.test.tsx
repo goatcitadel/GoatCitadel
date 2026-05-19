@@ -500,6 +500,26 @@ describe("RuntimeRoutePage", () => {
     expect(noDataMarkup).not.toContain("Activity feed");
   });
 
+  it("keeps approvals out of the notifications open count", () => {
+    const markup = renderToStaticMarkup(
+      <RuntimeRoutePage
+        route={{ area: "ops", section: "notifications", theme: "ops" } as any}
+        activeWorkspaceId="default"
+        activeWorkspaceName="Default"
+        pendingApprovals={2}
+        navigate={vi.fn()}
+        setActiveWorkspaceId={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain("Pending approvals");
+    expect(markup).toContain("2");
+    expect(markup).toContain("Open");
+    expect(markup).toContain("0");
+    expect(markup).not.toContain("Approvals need review");
+    expect(markup).not.toContain("approval.created");
+  });
+
   it("filters the activity feed by error, approval, and runtime signals", async () => {
     runtimeSnapshotOverrides.data = {
       dashboard: {

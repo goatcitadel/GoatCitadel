@@ -40,7 +40,7 @@ describe("WindowsAppContainerSandboxAdapter loop32 diagnostics", () => {
     await expect(fs.stat(path.join(root, "run", "code-mode-appcontainer-launcher.ps1"))).rejects.toThrow();
   });
 
-  it("returns an explicit launch spec with enforced temp workspace metadata", async () => {
+  it("reports IPC preservation as the current Windows launch blocker", async () => {
     const root = await makeTempRoot();
     const runTempRoot = path.join(root, "run");
     const powershell = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
@@ -50,28 +50,24 @@ describe("WindowsAppContainerSandboxAdapter loop32 diagnostics", () => {
       resolveCommand: (command) => (command === "powershell.exe" ? powershell : undefined),
     });
 
-    const spec = await adapter.prepareLaunch({
-      runId: "loop32-run",
-      nodePath: path.join(root, "node.exe"),
-      harnessPath: path.join(root, "harness.mjs"),
-      runTempRoot,
-      heapMb: 384,
-      env: { GOATCITADEL_CODE_MODE: "1" },
+    const metadata = adapter.probe(baseConfig());
+    expect(metadata).toMatchObject({
+      available: false,
+      platform: "win32",
     });
+    expect(metadata.checksFailed).toContain("win32_node_ipc_not_preserved");
 
-    expect(spec).toMatchObject({
-      executable: powershell,
-      cwd: runTempRoot,
-      env: { GOATCITADEL_CODE_MODE: "1" },
-      shell: false,
-      enforcedWorkspaceRoot: runTempRoot,
-      advisoryUnsandboxed: false,
-    });
-    expect(spec.args).toEqual(expect.arrayContaining(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"]));
-    expect(spec.generatedArtifacts).toHaveLength(1);
-    await expect(fs.readFile(spec.generatedArtifacts[0]!, "utf8")).resolves.toContain(
-      "GoatCitadel.CodeMode.loop32-run",
-    );
+    await expect(
+      adapter.prepareLaunch({
+        runId: "loop32-run",
+        nodePath: path.join(root, "node.exe"),
+        harnessPath: path.join(root, "harness.mjs"),
+        runTempRoot,
+        heapMb: 384,
+        env: { GOATCITADEL_CODE_MODE: "1" },
+      }),
+    ).rejects.toThrow("win32_node_ipc_not_preserved");
+    await expect(fs.stat(path.join(runTempRoot, "code-mode-appcontainer-launcher.ps1"))).rejects.toThrow();
   });
 });
 

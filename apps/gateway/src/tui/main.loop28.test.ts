@@ -714,7 +714,6 @@ describe("tui main loop28 entry coverage", () => {
       "browser.search",
       "session-1",
       "2026-05-16T00:00:00.000Z",
-      "tester",
       "",
       "task-1",
       "Checked runtime",
@@ -758,7 +757,6 @@ describe("tui main loop28 entry coverage", () => {
       scopeRef: "session-1",
       grantType: "ttl",
       expiresAt: "2026-05-16T00:00:00.000Z",
-      createdBy: "tester",
     });
     expect(state.client.appendTaskActivity).toHaveBeenCalledWith("task-1", {
       activityType: "comment",
@@ -1112,7 +1110,6 @@ describe("tui main loop28 entry coverage", () => {
       dryRun: true,
       consentContext: {
         source: "tui",
-        operatorId: "tui-operator",
         reason: "tools dry-run",
       },
     });

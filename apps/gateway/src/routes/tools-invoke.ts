@@ -9,6 +9,7 @@ const bodySchema = z.object({
   sessionId: z.string().min(1),
   workspaceId: z.string().min(1).optional(),
   taskId: z.string().optional(),
+  runId: z.string().optional(),
   trustLevel: z.enum(["trusted_operator", "trusted_workspace", "mixed_untrusted", "untrusted_external"]).optional(),
   sourceAttribution: z
     .array(
@@ -34,18 +35,18 @@ const bodySchema = z.object({
     .object({
       operatorId: z.string().optional(),
       source: z.enum(["ui", "tui", "agent"]).optional(),
-      reason: z
-        .string()
-        .optional()
-        .transform((value) =>
-          // SEC: Strip "approval:" prefix from client-supplied reason to prevent
-          // bypass of the risky-shell approval gate. Only the engine itself may
-          // set this prefix after verifying a real approval record.
-          value && value.startsWith("approval:") ? value.slice("approval:".length) : value,
-        ),
+      // SECURITY (codex finding #17): No client-side sanitization of
+      // `reason`. Approval reasons are treated as operator-visible
+      // explanation text unless the policy engine can verify the id
+      // against an approved canonical approval row and an exact pending
+      // action request match.
+      reason: z.string().optional(),
     })
     .optional(),
   dryRun: z.boolean().optional(),
+  permissionProfileId: z.string().min(1).optional(),
+  localOperatorOverrideId: z.string().min(1).optional(),
+  surface: z.enum(["chat", "cowork", "code", "tools", "mcp", "all"]).optional(),
 });
 
 export const toolsInvokeRoute: FastifyPluginAsync = async (fastify) => {
@@ -94,7 +95,33 @@ export const toolsInvokeRoute: FastifyPluginAsync = async (fastify) => {
       };
     }
 
-    const result = await fastify.services.toolsInvoke.invokeTool(requestInput);
+    let policyContext;
+    try {
+      policyContext = fastify.services.tools.resolveToolPolicyContext({
+        operatorId: request.authActorId,
+        authActorId: request.authActorId,
+        authActorSource: request.authActorSource,
+        workspaceId: requestInput.workspaceId,
+        sessionId: requestInput.sessionId,
+        taskId: requestInput.taskId,
+        runId: requestInput.runId,
+        surface: requestInput.surface,
+        permissionProfileId: requestInput.permissionProfileId,
+        localOperatorOverrideId: requestInput.localOperatorOverrideId,
+      });
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+
+    const result = await fastify.services.toolsInvoke.invokeTool({
+      ...requestInput,
+      consentContext: {
+        ...(requestInput.consentContext ?? {}),
+        operatorId: request.authActorId,
+        source: requestInput.consentContext?.source ?? "ui",
+      },
+      policyContext,
+    });
     return reply.send(result);
   });
 };

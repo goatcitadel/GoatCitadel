@@ -7,6 +7,9 @@ export type NormalizedChannelCommandName =
   | "new"
   | "skills"
   | "skill"
+  | "memory"
+  | "recall"
+  | "search"
   | "tools"
   | "personality"
   | "stop"
@@ -45,6 +48,18 @@ export const SHARED_CHANNEL_COMMANDS: ChannelCommandDefinition[] = [
   command("skills", "List visible channel skill bindings.", { platforms: ["telegram", "discord"] }),
   command("skill", "Invoke or inspect a visible channel skill binding.", {
     argsHint: "<name>",
+    platforms: ["telegram", "discord"],
+  }),
+  command("memory", "Search recent learned memory for this channel session.", {
+    argsHint: "<query>|auto|on|off",
+    platforms: ["telegram", "discord"],
+  }),
+  command("recall", "Search persisted session transcript history for this channel workspace.", {
+    argsHint: "<query>",
+    platforms: ["telegram", "discord"],
+  }),
+  command("search", "Search learned memory and persisted sessions together.", {
+    argsHint: "<query>",
     platforms: ["telegram", "discord"],
   }),
   command("tools", "List channel tool families and approval posture.", {
@@ -140,6 +155,10 @@ export const DEFAULT_CHANNEL_TOOLSET_POSTURE: ChannelToolsetPosture[] = [
 export function findSharedChannelCommand(name: string): ChannelCommandDefinition | undefined {
   const normalized = name.trim().toLowerCase().replace(/^\//, "");
   return SHARED_CHANNEL_COMMANDS.find((item) => item.name === normalized || item.aliases.includes(normalized));
+}
+
+export function listSharedChannelCommandsForPlatform(platform: string): ChannelCommandDefinition[] {
+  return SHARED_CHANNEL_COMMANDS.filter((item) => item.platforms.includes(platform));
 }
 
 export function normalizeChannelCommandInput(

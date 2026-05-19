@@ -93,7 +93,6 @@ export function ToolsPage() {
   const [scopeRef, setScopeRef] = useState("demo-session");
   const [grantType, setGrantType] = useState<GrantType>("ttl");
   const [expiresAt, setExpiresAt] = useState("");
-  const [createdBy, setCreatedBy] = useState("operator");
   const [workingPreset, setWorkingPreset] = useState<QuickPreset | null>(null);
   const [creatingGrant, setCreatingGrant] = useState(false);
   const [grantWizardStep, setGrantWizardStep] = useState<1 | 2 | 3>(1);
@@ -142,7 +141,7 @@ export function ToolsPage() {
       return grants;
     }
     return grants.filter((grant) =>
-      `${grant.toolPattern} ${grant.decision} ${grant.scope}:${grant.scopeRef} ${grant.grantType} ${grant.createdBy}`
+      `${grant.toolPattern} ${grant.decision} ${grant.scope}:${grant.scopeRef} ${grant.grantType}`
         .toLowerCase()
         .includes(q),
     );
@@ -316,7 +315,6 @@ export function ToolsPage() {
         scope,
         scopeRef: normalizedScopeRef || undefined,
         grantType,
-        createdBy: createdBy.trim() || "operator",
         expiresAt: expiresAt.trim() || undefined,
       } as const;
       await createToolGrant(input);
@@ -347,7 +345,6 @@ export function ToolsPage() {
           scope,
           scopeRef: normalizedScopeRef || undefined,
           grantType: "persistent",
-          createdBy: createdBy.trim() || "operator",
         });
       }
       await load({ background: true });
@@ -421,7 +418,6 @@ export function ToolsPage() {
         dryRun: true,
         consentContext: {
           source: "ui",
-          operatorId: "operator",
           reason: "tool access dry-run",
         },
       });
@@ -809,13 +805,13 @@ export function ToolsPage() {
                 {grantAdvanced ? (
                   <div className="controls-row">
                     <label>
-                      Created by
+                      Grant provenance
                       <HelpHint
-                        label="Created by help"
-                        text="Audit label for who made the grant. Use your operator name."
+                        label="Grant provenance help"
+                        text="The gateway stamps the authenticated operator when it creates the grant."
                       />
                     </label>
-                    <input value={createdBy} onChange={(event) => setCreatedBy(event.target.value)} />
+                    <p className="tools-summary">Stamped by the gateway from the current operator session.</p>
                   </div>
                 ) : null}
                 <p className="tools-summary">Summary: {grantSummary}</p>

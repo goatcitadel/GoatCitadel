@@ -9,7 +9,7 @@ This is a targeted architecture and refactor-planning exercise focused on the ga
 Repo:
 
 - `https://github.com/goatcitadel/GoatCitadel`
-- `F:\code\personal-ai`
+- Local checkout path, when available: `F:\code\personal-ai`. For external reviewers, use the cloned repo root instead.
 
 Your mission is to determine how GoatCitadel's gateway should be decomposed into a cleaner, more modular, more testable, more observable architecture without breaking runtime behavior.
 

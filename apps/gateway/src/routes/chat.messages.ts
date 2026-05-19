@@ -1,4 +1,5 @@
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { ChatSendMessageRequest } from "@goatcitadel/contracts";
 import { z } from "zod";
 import {
   sessionParamsSchema,
@@ -72,6 +73,10 @@ const sendMessageSchema = z.object({
   useMemory: z.boolean().optional(),
   attachments: z.array(z.string()).optional(),
   mode: z.enum(["chat", "cowork", "code"]).optional(),
+  permissionProfileId: z.string().min(1).optional(),
+  localOperatorOverrideId: z.string().min(1).optional(),
+  policyRunId: z.string().min(1).optional(),
+  policyTaskId: z.string().min(1).optional(),
   webMode: z.enum(["auto", "off", "quick", "deep"]).optional(),
   memoryMode: z.enum(["auto", "on", "off"]).optional(),
   thinkingLevel: z.enum(["off", "minimal", "standard", "extended", "deep"]).optional(),
@@ -118,6 +123,18 @@ const retryTurnSchema = sendMessageSchema.partial().extend({
 });
 
 const editTurnSchema = sendMessageSchema;
+
+function stampChatOperatorContext<TInput extends Partial<ChatSendMessageRequest>>(
+  request: FastifyRequest,
+  input: TInput,
+): TInput {
+  return {
+    ...input,
+    operatorId: request.authActorId,
+    authActorId: request.authActorId,
+    authActorSource: request.authActorSource,
+  } as TInput;
+}
 
 const routePreflightSchema = z.object({
   action: z.enum(["send", "retry", "edit"]),
@@ -221,7 +238,10 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       if (decisionRejected) {
         return;
       }
-      const sent = await fastify.services.chatMessages.agentSendChatMessage(params.data.sessionId, body.data);
+      const sent = await fastify.services.chatMessages.agentSendChatMessage(
+        params.data.sessionId,
+        stampChatOperatorContext(request, body.data),
+      );
       return reply.send(sent);
     } catch (error) {
       return sendChatWriteError(reply, error);
@@ -288,7 +308,11 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
     }
 
     return streamSseReply(reply, request, params.data.sessionId, (signal) =>
-      fastify.services.chatMessages.agentSendChatMessageStream(params.data.sessionId, body.data, signal),
+      fastify.services.chatMessages.agentSendChatMessageStream(
+        params.data.sessionId,
+        stampChatOperatorContext(request, body.data),
+        signal,
+      ),
     );
   });
 
@@ -405,7 +429,11 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         return;
       }
       return reply.send(
-        await fastify.services.chatMessages.retryChatTurn(params.data.sessionId, params.data.turnId, body.data),
+        await fastify.services.chatMessages.retryChatTurn(
+          params.data.sessionId,
+          params.data.turnId,
+          stampChatOperatorContext(request, body.data),
+        ),
       );
     } catch (error) {
       return sendChatWriteError(reply, error);
@@ -437,7 +465,12 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       return sendChatWriteError(reply, error);
     }
     return streamSseReply(reply, request, params.data.sessionId, (signal) =>
-      fastify.services.chatMessages.retryChatTurnStream(params.data.sessionId, params.data.turnId, body.data, signal),
+      fastify.services.chatMessages.retryChatTurnStream(
+        params.data.sessionId,
+        params.data.turnId,
+        stampChatOperatorContext(request, body.data),
+        signal,
+      ),
     );
   });
 
@@ -463,7 +496,11 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
         return;
       }
       return reply.send(
-        await fastify.services.chatMessages.editChatTurn(params.data.sessionId, params.data.turnId, body.data),
+        await fastify.services.chatMessages.editChatTurn(
+          params.data.sessionId,
+          params.data.turnId,
+          stampChatOperatorContext(request, body.data),
+        ),
       );
     } catch (error) {
       return sendChatWriteError(reply, error);
@@ -495,7 +532,12 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
       return sendChatWriteError(reply, error);
     }
     return streamSseReply(reply, request, params.data.sessionId, (signal) =>
-      fastify.services.chatMessages.editChatTurnStream(params.data.sessionId, params.data.turnId, body.data, signal),
+      fastify.services.chatMessages.editChatTurnStream(
+        params.data.sessionId,
+        params.data.turnId,
+        stampChatOperatorContext(request, body.data),
+        signal,
+      ),
     );
   });
 

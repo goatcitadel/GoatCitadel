@@ -174,6 +174,7 @@ describe("orchestration lifecycle loop43 durable edge behavior", () => {
     await expect(approvePhase(approvalRemoved.host, "run-1", "phase-1", "operator")).rejects.toThrow(
       "not approval-gated",
     );
+    expect(approvalRemoved.host.storage.orchestration.upsertPlan).not.toHaveBeenCalled();
     expect(approvalRemoved.host.storage.orchestration.updateRunIfCurrentState).not.toHaveBeenCalled();
   });
 

@@ -123,7 +123,7 @@ describe("deriveCoworkRunViewModel", () => {
     });
 
     expect(viewModel.sourceLabel).toBe("Source: delegation run");
-    expect(viewModel.completenessLabel).toBe("Completeness: delegation-backed");
+    expect(viewModel.completenessLabel).toBe("Completeness: delegation complete");
     expect(viewModel.stageCards.find((item) => item.label === "Execution")?.value).toBe("completed");
     expect(viewModel.stateGaps).not.toContain("Canonical run not loaded");
   });
@@ -512,6 +512,9 @@ describe("deriveCoworkRunViewModel", () => {
     expect(viewModel.blockers.find((blocker) => blocker.id === "durable-recovery")?.summary).toBe(
       "Worker state is lease lost for the linked durable run.",
     );
+    expect(viewModel.sourceLabel).toBe("Source: delegation run");
+    expect(viewModel.completenessLabel).toBe("Completeness: delegation running");
+    expect(viewModel.now.summary).toContain("running");
     expect(viewModel.runMap.planNodes[0]).toEqual(
       expect.objectContaining({ id: "delegation-delegate-1", label: "Analyst", meta: "child-1" }),
     );

@@ -26,6 +26,7 @@ import type {
   RealtimeEvent,
   SessionMeta,
   TaskRecord,
+  ToolPolicyActorContext,
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
@@ -60,6 +61,12 @@ interface ProactiveTriggerInput {
   source?: ProactiveTriggerSource;
   reason?: string;
   prefs?: SessionAutonomyPrefs;
+  operatorId?: string;
+  authActorId?: string;
+  authActorSource?: ToolPolicyActorContext["authActorSource"];
+  surface?: ProactiveOriginSurface;
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
 }
 
 interface ProactivePlannedAction {
@@ -109,6 +116,19 @@ export interface ChatProactiveServiceCallbacks {
 
   invokeTool(request: ToolInvokeRequest): Promise<ToolInvokeResult>;
 
+  resolveToolPolicyContext?(input: {
+    operatorId?: string;
+    authActorId?: string;
+    authActorSource?: ToolPolicyActorContext["authActorSource"];
+    workspaceId?: string;
+    sessionId?: string;
+    taskId?: string;
+    runId?: string;
+    surface?: ToolPolicyActorContext["surface"];
+    permissionProfileId?: string;
+    localOperatorOverrideId?: string;
+  }): ToolPolicyActorContext;
+
   detectDelegationRoles(text: string): string[];
 
   createDurableRun(input: DurableRunCreateRequest): DurableRunRecord;
@@ -147,6 +167,23 @@ function safeJsonParse<T>(raw: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function normalizeAuthActorSource(value: unknown): ToolPolicyActorContext["authActorSource"] | undefined {
+  const source = optionalString(value);
+  return source === "none" ||
+    source === "token" ||
+    source === "basic" ||
+    source === "loopback" ||
+    source === "sse" ||
+    source === "device" ||
+    source === "companion"
+    ? source
+    : undefined;
 }
 
 function buildTaskRealtimeLinks(task?: TaskRecord, fallbackTaskId?: string): NonNullable<RealtimeEvent["links"]> {
@@ -473,6 +510,32 @@ export class ChatProactiveService {
       throw new Error(`Proactive run ${runId} not found.`);
     }
     return mapProactiveRunRow(row);
+  }
+
+  private readProactiveRunActor(runId: string): {
+    operatorId: string;
+    authActorId: string;
+    authActorSource: ToolPolicyActorContext["authActorSource"];
+    permissionProfileId?: string;
+    localOperatorOverrideId?: string;
+  } {
+    try {
+      const metadata = this.readProactiveRun(runId).resumeMetadata;
+      const operatorId = optionalString(metadata?.operatorId) ?? "system-proactive";
+      return {
+        operatorId,
+        authActorId: optionalString(metadata?.authActorId) ?? operatorId,
+        authActorSource: normalizeAuthActorSource(metadata?.authActorSource) ?? "none",
+        permissionProfileId: optionalString(metadata?.permissionProfileId),
+        localOperatorOverrideId: optionalString(metadata?.localOperatorOverrideId),
+      };
+    } catch {
+      return {
+        operatorId: "system-proactive",
+        authActorId: "system-proactive",
+        authActorSource: "none",
+      };
+    }
   }
 
   // ── run persistence ──────────────────────────────────────────────
@@ -1114,14 +1177,36 @@ export class ChatProactiveService {
       });
     }
     try {
+      const workspaceId = this.getSessionWorkspaceId(action.sessionId);
+      const surface = action.originSurface ?? this.getSessionOriginSurface(action.sessionId);
+      const actor = this.readProactiveRunActor(action.runId);
+      const policyContext = this.callbacks.resolveToolPolicyContext?.({
+        operatorId: actor.operatorId,
+        authActorId: actor.authActorId,
+        authActorSource: actor.authActorSource,
+        workspaceId,
+        sessionId: action.sessionId,
+        taskId: action.linkedTaskId,
+        runId: durableRunId,
+        surface,
+        permissionProfileId: actor.permissionProfileId,
+        localOperatorOverrideId: actor.localOperatorOverrideId,
+      });
       const result = await this.callbacks.invokeTool({
         toolName: action.toolName,
         args: action.args ?? {},
         agentId: "proactive",
         sessionId: action.sessionId,
+        workspaceId,
         taskId: action.linkedTaskId,
+        runId: durableRunId,
+        surface,
+        permissionProfileId: policyContext?.permissionProfileId,
+        localOperatorOverrideId: policyContext?.localOperatorOverrideId,
+        policyContext,
         signal,
         consentContext: {
+          operatorId: actor.operatorId,
           source: "agent",
           reason: "proactive durable execution",
         },
@@ -1296,6 +1381,7 @@ export class ChatProactiveService {
           linkedDurableRunId: run.runId,
           error: undefined,
           resumeMetadata: {
+            ...(proactiveRun.resumeMetadata ?? {}),
             resumedFromApproval: true,
             approvalId,
           },
@@ -1661,6 +1747,7 @@ export class ChatProactiveService {
           originSurface,
           stopReason: "approval_block",
           resumeMetadata: {
+            ...(proactiveRun.resumeMetadata ?? {}),
             resumableFromApproval: true,
             approvalId: executed.approvalId,
             blockedActionId: executed.actionId,
@@ -1894,7 +1981,7 @@ export class ChatProactiveService {
     this.callbacks.getSession(sessionId);
     const prefs = input.prefs ?? this.getSessionAutonomyPrefs(sessionId);
     const source = input.source ?? "manual";
-    const originSurface = this.getSessionOriginSurface(sessionId);
+    const originSurface = input.surface ?? this.getSessionOriginSurface(sessionId);
     const existingActiveRun = this.findActiveProactiveTickRun(sessionId);
     if (existingActiveRun) {
       return existingActiveRun;
@@ -1930,6 +2017,20 @@ export class ChatProactiveService {
       linkedDurableRunId: durableRun.runId,
       confidence: 0,
       reasoningSummary: input.reason ?? `proactive tick (${source})`,
+      resumeMetadata:
+        input.operatorId ||
+        input.authActorId ||
+        input.authActorSource ||
+        input.permissionProfileId ||
+        input.localOperatorOverrideId
+          ? {
+              operatorId: input.operatorId,
+              authActorId: input.authActorId,
+              authActorSource: input.authActorSource,
+              permissionProfileId: input.permissionProfileId,
+              localOperatorOverrideId: input.localOperatorOverrideId,
+            }
+          : undefined,
       suggestedActions: [],
       executedActions: [],
       startedAt: now,

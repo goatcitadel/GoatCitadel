@@ -260,6 +260,27 @@ describe("orchestration router", () => {
     ).not.toContain("presentations.create");
   });
 
+  it("suggests document creation for Cowork file deliverables", () => {
+    const input = createInput({
+      mode: "cowork",
+      objective: "Turn the recommendations into a real PDF report file.",
+      prefs: createPrefs({
+        mode: "cowork",
+        orchestrationVisibility: "explicit",
+      }),
+    });
+    input.policy = resolveModePolicy("cowork");
+
+    const plan = buildOrchestrationPlan(input);
+    const synthesisStep = plan.steps.find((step) => step.role === "synthesizer");
+
+    expect(synthesisStep?.suggestedTools).toContain("documents.create");
+    expect(synthesisStep?.suggestedTools).not.toContain("presentations.create");
+    expect(
+      plan.steps.filter((step) => step.role === "researcher").flatMap((step) => step.suggestedTools ?? []),
+    ).not.toContain("documents.create");
+  });
+
   it("preserves explicit Cowork workstreams for final synthesis", () => {
     const input = createInput({
       mode: "cowork",

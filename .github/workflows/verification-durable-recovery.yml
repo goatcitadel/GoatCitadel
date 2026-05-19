@@ -15,6 +15,7 @@ on:
       - main
     paths:
       - "apps/gateway/**"
+      - "packages/storage/**"
       - "scripts/verification/**"
       - ".github/workflows/verification-durable-recovery.yml"
       - "package.json"

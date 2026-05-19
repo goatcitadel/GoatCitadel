@@ -134,6 +134,7 @@ function createHarness(options: { prefs?: ChatSessionPrefsRecord; projectId?: st
     }),
     inheritDelegatedSessionToolGrants: vi.fn(),
     updateChatSessionPrefs: vi.fn(),
+    resolveToolPolicyContext: undefined,
     agentSendChatMessage: vi.fn(async (childSessionId: string) => createChatResponse(childSessionId)),
     extractAndPersistLearnedMemory: vi.fn(),
     scheduleChatMemoryContextPrewarm: vi.fn(),
@@ -245,19 +246,32 @@ describe("ChatDelegationService loop 20 coverage", () => {
       suggestionId: "action-1",
       objective: "Request objective",
       roles: ["coder"],
+      mode: "parallel",
+      steps: [
+        { stepId: "architect-step", role: "Architect", index: 0, parallelizable: true },
+        { stepId: "qa-step", role: "QA", index: 1, dependsOnStepIds: ["architect-step"] },
+      ],
       providerId: "anthropic",
       model: "claude-sonnet",
       surfaceMode: "cowork",
+      policyRunId: "parent-run-1",
+      policyTaskId: "parent-task-1",
     });
 
     expect(parsedResult).toBe(parsed.response);
     expect(parsed.runSpy).toHaveBeenCalledWith("sess-1", {
       objective: "Stored objective",
       roles: ["Architect", "QA"],
-      mode: "sequential",
+      mode: "parallel",
       providerId: "anthropic",
       model: "claude-sonnet",
       surfaceMode: "cowork",
+      steps: [
+        { stepId: "architect-step", role: "Architect", index: 0, parallelizable: true },
+        { stepId: "qa-step", role: "QA", index: 1, dependsOnStepIds: ["architect-step"] },
+      ],
+      policyRunId: "parent-run-1",
+      policyTaskId: "parent-task-1",
     });
 
     const malformed = createAcceptHarness("{not-json");
@@ -274,7 +288,48 @@ describe("ChatDelegationService loop 20 coverage", () => {
       providerId: undefined,
       model: undefined,
       surfaceMode: undefined,
+      steps: undefined,
+      policyRunId: undefined,
+      policyTaskId: undefined,
     });
+  });
+
+  it("marks the run and task failed when inherited policy resolution fails before dispatch", async () => {
+    const { deps, service } = createHarness();
+    deps.resolveToolPolicyContext = vi.fn(() => {
+      throw new Error("permission profile is no longer active");
+    }) as never;
+
+    await expect(
+      service.runChatDelegation("sess-1", {
+        objective: "Review the permission profile boundary",
+        roles: ["Runtime Policy"],
+        mode: "sequential",
+        surfaceMode: "cowork",
+        operatorId: "operator-1",
+        permissionProfileId: "profile-stale",
+      }),
+    ).rejects.toThrow("permission profile is no longer active");
+
+    expect(deps.agentSendChatMessage).not.toHaveBeenCalled();
+    expect(deps.storage.chatDelegationRuns.patch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        status: "failed",
+        stitchedOutput: "FAILED: permission profile is no longer active",
+        citations: [],
+        finishedAt: expect.any(String),
+      }),
+    );
+    expect(deps.taskLifecycleService.updateTask).toHaveBeenCalledWith("task-1", { status: "blocked" });
+    expect(deps.taskLifecycleService.updateTaskAgenticContext).toHaveBeenCalledWith(
+      "task-1",
+      expect.objectContaining({
+        status: "failed",
+        activeChildCount: 0,
+        failureClass: "other",
+      }),
+    );
   });
 
   it("validates objective, code project binding, and custom step dependencies before creating work", async () => {
@@ -372,9 +427,118 @@ describe("ChatDelegationService loop 20 coverage", () => {
         metadata: expect.objectContaining({ dependsOnStepIds: [result.steps[0]?.stepId] }),
       }),
     );
+    expect(deps.extractAndPersistLearnedMemory).toHaveBeenCalledWith(
+      "sess-1",
+      expect.stringContaining("delegate-session-1 output"),
+      expect.objectContaining({ role: "assistant", sourceRef: result.runId }),
+    );
+    expect(deps.scheduleChatMemoryContextPrewarm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess-1",
+        prompt: expect.stringContaining("delegate-session-1 output"),
+      }),
+    );
   });
 
-  it("classifies waiting delegate responses as failed steps with actionable output", async () => {
+  it("treats cancelled dependency steps as terminal blockers for downstream delegation", async () => {
+    const { deps, service } = createHarness();
+    deps.agentSendChatMessage = vi.fn(async (childSessionId: string) => {
+      const response = createChatResponse(childSessionId);
+      return {
+        ...response,
+        assistantMessage: {
+          ...response.assistantMessage,
+          content: "",
+        },
+        trace: {
+          ...response.trace,
+          status: "cancelled",
+          failure: { message: "operator cancelled child run" },
+        },
+      } as ChatSendMessageResponse;
+    }) as never;
+
+    const result = await service.runChatDelegation("sess-1", {
+      objective: "Do not run downstream work after cancellation",
+      roles: ["architect", "qa"],
+      mode: "parallel",
+      steps: [
+        { stepId: "architect-step", role: "architect", index: 0 },
+        { stepId: "qa-step", role: "qa", index: 1, dependsOnStepIds: ["architect-step"] },
+      ],
+    });
+
+    expect(deps.agentSendChatMessage).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("failed");
+    expect(result.steps.map((step) => step.status)).toEqual(["cancelled", "skipped"]);
+    expect(result.stitchedOutput).toContain("CANCELLED: operator cancelled child run");
+    expect(result.stitchedOutput).toContain("SKIPPED: Skipped because dependency did not complete: architect");
+    expect(deps.storage.chatDelegationRuns.patch).toHaveBeenCalledWith(
+      result.runId,
+      expect.objectContaining({ status: "failed", stitchedOutput: expect.stringContaining("CANCELLED") }),
+    );
+    expect(deps.taskLifecycleService.appendTaskActivity).toHaveBeenCalledWith(
+      "task-1",
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          cancelledSteps: 1,
+          skippedSteps: 1,
+        }),
+      }),
+    );
+  });
+
+  it("carries the parent permission profile and override into delegated child turns", async () => {
+    const { deps, service } = createHarness();
+    deps.resolveToolPolicyContext = vi.fn((input) => ({
+      operatorId: input.operatorId,
+      authActorId: input.authActorId,
+      authActorSource: input.authActorSource,
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+      taskId: input.taskId,
+      runId: input.runId,
+      surface: input.surface,
+      permissionProfileId: "profile-parent",
+      localOperatorOverrideId: "override-parent",
+    }));
+
+    const result = await service.runChatDelegation("sess-1", {
+      objective: "Delegate under parent policy",
+      roles: ["researcher"],
+      mode: "sequential",
+      operatorId: "operator-1",
+      authActorId: "operator-1",
+      authActorSource: "token",
+      permissionProfileId: "profile-parent",
+      localOperatorOverrideId: "override-parent",
+    });
+
+    expect(deps.resolveToolPolicyContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operatorId: "operator-1",
+        workspaceId: "default",
+        sessionId: "sess-1",
+        taskId: "task-1",
+        runId: result.runId,
+        surface: "cowork",
+        permissionProfileId: "profile-parent",
+        localOperatorOverrideId: "override-parent",
+      }),
+    );
+    expect(deps.agentSendChatMessage).toHaveBeenCalledWith(
+      "delegate-session-1",
+      expect.objectContaining({
+        permissionProfileId: "profile-parent",
+        localOperatorOverrideId: "override-parent",
+        policyRunId: result.runId,
+        policyTaskId: "task-1",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("keeps waiting delegate responses active with actionable output", async () => {
     const { deps, service } = createHarness();
     deps.agentSendChatMessage = vi.fn(async (childSessionId: string) =>
       createChatResponse(childSessionId, {
@@ -404,23 +568,34 @@ describe("ChatDelegationService loop 20 coverage", () => {
 
     expect(result.steps[0]).toEqual(
       expect.objectContaining({
-        status: "failed",
+        status: "running",
         output: "approval gate tripped",
-        error: "approval gate tripped",
-        failureGuidance: expect.stringContaining("Researcher"),
+        error: undefined,
+        failureGuidance: undefined,
       }),
     );
     expect(deps.taskLifecycleService.updateTaskSubagent).toHaveBeenCalledWith(
       "delegate-session-1",
       expect.objectContaining({
-        status: "failed",
-        metadata: expect.objectContaining({ failureClass: "missing_handoff" }),
+        status: "paused",
+        metadata: expect.objectContaining({ failureClass: undefined }),
       }),
     );
     expect(deps.storage.chatDelegationRuns.patch).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ status: "failed", stitchedOutput: expect.stringContaining("FAILED") }),
+      expect.objectContaining({ status: "running", stitchedOutput: expect.stringContaining("WAITING") }),
     );
+    expect(deps.taskLifecycleService.updateTask).toHaveBeenCalledWith(
+      "task-1",
+      expect.objectContaining({ status: "in_progress" }),
+    );
+    expect(deps.extractAndPersistLearnedMemory).toHaveBeenCalledTimes(1);
+    expect(deps.extractAndPersistLearnedMemory).toHaveBeenCalledWith(
+      "sess-1",
+      "Read a local project file",
+      expect.objectContaining({ role: "user" }),
+    );
+    expect(deps.scheduleChatMemoryContextPrewarm).not.toHaveBeenCalled();
   });
 
   it("records thrown delegate failures as crashed subagents and blocked runs", async () => {
@@ -456,6 +631,13 @@ describe("ChatDelegationService loop 20 coverage", () => {
         message: expect.stringContaining("provider transport crashed"),
       }),
     );
+    expect(deps.extractAndPersistLearnedMemory).toHaveBeenCalledTimes(1);
+    expect(deps.extractAndPersistLearnedMemory).toHaveBeenCalledWith(
+      "sess-1",
+      "Run a fragile delegated task",
+      expect.objectContaining({ role: "user" }),
+    );
+    expect(deps.scheduleChatMemoryContextPrewarm).not.toHaveBeenCalled();
   });
 
   it("propagates stream errors after draining already queued chunks", async () => {

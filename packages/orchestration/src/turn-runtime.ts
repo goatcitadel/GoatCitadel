@@ -9,6 +9,7 @@ import type {
   ChatTurnBranchKind,
   ChatTurnTraceRecord,
   ChatWebMode,
+  ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
 
 export interface TurnRuntimeRequest {
@@ -29,6 +30,13 @@ export interface TurnRuntimeRequest {
   subagentPolicy?: ChatSubagentPolicy;
   toolAutonomy: "safe_auto" | "manual";
   normalizationProfile?: ChatNormalizationProfile;
+  operatorId?: string;
+  authActorId?: string;
+  authActorSource?: ToolPolicyActorContext["authActorSource"];
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+  policyRunId?: string;
+  policyTaskId?: string;
   historyMessages: ChatCompletionRequest["messages"];
   outputMessageId?: string;
   signal?: AbortSignal;

@@ -13,6 +13,126 @@ export type ToolProfile = "minimal" | "standard" | "coding" | "ops" | "research"
 
 export type FilesystemReadAccessMode = "roots_only" | "approval_required" | "full_disk";
 
+export type PermissionProfileBuiltinId = "safe" | "trusted_local_power";
+export type PermissionProfileStatus = "active" | "archived";
+export type PermissionProfileScope = "global" | "operator" | "workspace";
+export type PermissionProfileCreateScope = Exclude<PermissionProfileScope, "global">;
+export type PermissionProfileActivationScope = "operator" | "workspace" | "session";
+export type PermissionSurface = "chat" | "cowork" | "code" | "tools" | "mcp" | "all";
+
+export interface PermissionProfileRecord {
+  profileId: string;
+  label: string;
+  description?: string;
+  builtin: boolean;
+  status: PermissionProfileStatus;
+  scope: PermissionProfileScope;
+  scopeRef?: string;
+  approvalMode: ToolApprovalMode;
+  legacyToolProfile?: string;
+  toolPatterns: string[];
+  allow: string[];
+  deny: string[];
+  readAccessMode?: FilesystemReadAccessMode;
+  defaultForSurfaces?: PermissionSurface[];
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string;
+}
+
+export interface PermissionProfileCreateInput {
+  label: string;
+  description?: string;
+  scope?: PermissionProfileCreateScope;
+  scopeRef?: string;
+  approvalMode: ToolApprovalMode;
+  legacyToolProfile?: string;
+  toolPatterns?: string[];
+  allow?: string[];
+  deny?: string[];
+  readAccessMode?: FilesystemReadAccessMode;
+  defaultForSurfaces?: PermissionSurface[];
+  createdBy: string;
+}
+
+export interface PermissionProfileUpdateInput {
+  label?: string;
+  description?: string;
+  approvalMode?: ToolApprovalMode;
+  legacyToolProfile?: string;
+  toolPatterns?: string[];
+  allow?: string[];
+  deny?: string[];
+  readAccessMode?: FilesystemReadAccessMode;
+  defaultForSurfaces?: PermissionSurface[];
+  updatedBy: string;
+}
+
+export interface PermissionProfileActivationRecord {
+  activationId: string;
+  profileId: string;
+  operatorId?: string;
+  workspaceId?: string;
+  sessionId?: string;
+  surface?: PermissionSurface;
+  active: boolean;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PermissionProfileActivationInput {
+  profileId: string;
+  operatorId?: string;
+  workspaceId?: string;
+  sessionId?: string;
+  surface?: PermissionSurface;
+  createdBy: string;
+}
+
+export type LocalOperatorOverrideScope = "operator" | "workspace" | "session" | "run";
+export type LocalOperatorOverrideStatus = "active" | "expired" | "revoked";
+
+export interface LocalOperatorOverrideRecord {
+  overrideId: string;
+  operatorId: string;
+  scope: LocalOperatorOverrideScope;
+  scopeRef?: string;
+  reason: string;
+  status: LocalOperatorOverrideStatus;
+  createdBy: string;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt?: string;
+  revokedBy?: string;
+}
+
+export interface LocalOperatorOverrideCreateInput {
+  operatorId: string;
+  scope: LocalOperatorOverrideScope;
+  scopeRef?: string;
+  reason: string;
+  ttlSeconds: number;
+  createdBy: string;
+}
+
+export interface ToolPolicyActorContext {
+  operatorId?: string;
+  authActorId?: string;
+  authActorSource?: "none" | "token" | "basic" | "loopback" | "sse" | "device" | "companion";
+  permissionProfileId?: string;
+  permissionProfile?: PermissionProfileRecord;
+  localOperatorOverrideId?: string;
+  localOperatorOverride?: LocalOperatorOverrideRecord;
+  surface?: PermissionSurface;
+  workspaceId?: string;
+  sessionId?: string;
+  taskId?: string;
+  runId?: string;
+  approvedCodeModeRunId?: string;
+}
+
 export type ToolLoopDetectorKind = "repeated_same_call" | "no_progress_polling" | "ping_pong";
 
 export interface ToolLoopDetectionConfig {
@@ -51,6 +171,7 @@ export interface ToolInvokeRequest {
   sessionId: string;
   workspaceId?: string;
   taskId?: string;
+  runId?: string;
   signal?: AbortSignal;
   trustLevel?: ToolExecutionTrustLevel;
   sourceAttribution?: ContextSourceAttribution[];
@@ -63,7 +184,12 @@ export interface ToolInvokeRequest {
     source?: "ui" | "tui" | "agent";
     reason?: string;
   };
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+  surface?: PermissionSurface;
+  policyContext?: ToolPolicyActorContext;
   dryRun?: boolean;
+  externalRuntime?: boolean;
 }
 
 export interface ToolInvokeResult {
@@ -81,7 +207,11 @@ export interface ToolInvokeResult {
 export interface EffectiveToolPolicy {
   approvalMode: ToolApprovalMode;
   profile?: string;
+  permissionProfileId?: string;
+  permissionProfileLabel?: string;
+  localOperatorOverrideId?: string;
   allowSet: Set<string>;
   denySet: Set<string>;
   effectiveTools: Set<string>;
+  readAccessMode?: FilesystemReadAccessMode;
 }

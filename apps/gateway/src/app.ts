@@ -60,6 +60,7 @@ import { connectorsRoutes } from "./routes/connectors.js";
 import { createGatewayLogger, isVerboseLoggingEnabled } from "./runtime-ux.js";
 import { isLoopbackDevOrigin, isTailnetDevOrigin, resolveTailnetShortHostAllowlist } from "./cors-origin-guard.js";
 import { assertDeploymentProfileStartupSafety } from "./deployment-profile-guard.js";
+import { assertAuthTokenIsNotPlaceholder } from "./startup-guard.js";
 import { isSuspiciousEncodedPath } from "./path-guard.js";
 import { enterDevDiagnosticsContext } from "./dev-diagnostics/service.js";
 import { installRouteAccessTracking } from "./routes/route-access.js";
@@ -299,6 +300,11 @@ export async function buildApp() {
     bindHost: process.env.GATEWAY_HOST ?? "127.0.0.1",
     tailnetDevOriginsEnabled: allowTailnetDevOrigins,
   });
+  // SECURITY (codex finding #1): Refuse to boot in token mode with the
+  // shipped placeholder token. Must run after the deployment profile
+  // guard so deploys that legitimately use auth.mode=none (local_dev)
+  // are not blocked.
+  assertAuthTokenIsNotPlaceholder(app.gatewayConfig.assistant.auth);
   await app.register(authPlugin);
   await app.register(idempotencyHeaderPlugin, {
     mutationStore: app.gatewayRuntime.mutationIdempotencyStore,

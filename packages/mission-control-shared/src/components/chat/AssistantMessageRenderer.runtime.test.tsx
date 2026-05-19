@@ -60,6 +60,7 @@ vi.mock("@assistant-ui/react-markdown", () => ({
 import { AssistantMessageRenderer } from "./AssistantMessageRenderer";
 
 function installRuntimeDom() {
+  vi.stubGlobal("__GOATCITADEL_ENABLE_ASSISTANT_UI_RENDERER", true);
   vi.stubGlobal("window", {
     setTimeout: globalThis.setTimeout,
     clearTimeout: vi.fn(globalThis.clearTimeout),

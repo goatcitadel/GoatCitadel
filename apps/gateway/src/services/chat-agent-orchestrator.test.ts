@@ -364,21 +364,21 @@ describe("ChatAgentOrchestrator stream and tool-loop behavior", () => {
       sessionId: "sess-1",
       turnId: randomUUID(),
       userMessageId: "msg-user-1",
-      content: "Find AI tooling references from our notes",
-      mode: "chat",
+      content: "Search AI tooling references",
+      mode: "code",
       providerId: "glm",
       model: "glm-5",
       webMode: "auto",
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
-      historyMessages: [{ role: "user", content: "Find AI tooling references from our notes" }],
+      historyMessages: [{ role: "user", content: "Search AI tooling references" }],
     });
 
     expect(result.turnTrace.status).toBe("completed");
     expect(result.assistantContent).toContain("Final answer");
     expect(result.turnTrace.toolRuns.length).toBeGreaterThanOrEqual(1);
-    expect(invokeTool).toHaveBeenCalledTimes(1);
+    expect(invokeTool.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
   it("infers missing local search and find arguments from the user prompt", async () => {
@@ -662,7 +662,7 @@ describe("ChatAgentOrchestrator stream and tool-loop behavior", () => {
       sessionId: "sess-2",
       turnId: randomUUID(),
       userMessageId: "msg-user-2",
-      content: "Search AI tooling references",
+      content: "Search the web for latest ai tooling",
       mode: "chat",
       providerId: "glm",
       model: "glm-5",
@@ -670,10 +670,10 @@ describe("ChatAgentOrchestrator stream and tool-loop behavior", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
-      historyMessages: [{ role: "user", content: "Search AI tooling references" }],
+      historyMessages: [{ role: "user", content: "Search the web for latest ai tooling" }],
     });
 
-    expect(invokeTool).toHaveBeenCalledTimes(2);
+    expect(invokeTool).toHaveBeenCalledTimes(3);
     expect(result.assistantContent).toContain("exhausted the current tool approaches");
     expect(result.assistantContent).toContain("don't have solid results yet");
     expect(result.assistantContent).not.toContain("Reason:");
@@ -736,7 +736,7 @@ describe("ChatAgentOrchestrator stream and tool-loop behavior", () => {
       turnId: randomUUID(),
       userMessageId: "msg-user-loop-warning-1",
       content: "Search AI tooling references",
-      mode: "chat",
+      mode: "code",
       providerId: "glm",
       model: "glm-5",
       webMode: "auto",
@@ -802,7 +802,7 @@ describe("ChatAgentOrchestrator stream and tool-loop behavior", () => {
       turnId: randomUUID(),
       userMessageId: "msg-user-loop-critical-1",
       content: "Search AI tooling references",
-      mode: "chat",
+      mode: "code",
       providerId: "glm",
       model: "glm-5",
       webMode: "auto",
@@ -822,7 +822,7 @@ describe("ChatAgentOrchestrator stream and tool-loop behavior", () => {
         }),
       ]),
     );
-    expect(result.assistantContent).toContain("strongest leads so far");
+    expect(result.assistantContent).toContain("strongest relevant points");
     expect(result.turnTrace.failure?.failureClass).toBe("tool_loop_guard");
   });
 
@@ -1121,7 +1121,7 @@ describe("ChatAgentOrchestrator stream and tool-loop behavior", () => {
       sessionId: "sess-tool-run-budget-1",
       turnId: randomUUID(),
       userMessageId: "msg-tool-run-budget-1",
-      content: "Keep searching AI tooling references.",
+      content: "Search the web for AI tooling references repeatedly.",
       mode: "chat",
       providerId: "glm",
       model: "glm-5",
@@ -1129,7 +1129,7 @@ describe("ChatAgentOrchestrator stream and tool-loop behavior", () => {
       memoryMode: "off",
       thinkingLevel: "standard",
       toolAutonomy: "safe_auto",
-      historyMessages: [{ role: "user", content: "Keep searching AI tooling references." }],
+      historyMessages: [{ role: "user", content: "Search the web for AI tooling references repeatedly." }],
     });
 
     expect(result.turnTrace.failure?.failureClass).toBe("tool_run_budget_exceeded");

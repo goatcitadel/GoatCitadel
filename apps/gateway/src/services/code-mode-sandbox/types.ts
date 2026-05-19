@@ -67,7 +67,10 @@ export function buildSandboxMetadata(input: {
     available,
     checksPassed,
     checksFailed,
-    failClosedReason: available ? undefined : buildFailClosedReason(input.platform, checksFailed),
+    failClosedReason:
+      available || !input.config.required ? undefined : buildFailClosedReason(input.platform, checksFailed),
+    advisoryUnsandboxedReason:
+      available || input.config.required ? undefined : buildAdvisoryUnsandboxedReason(input.platform, checksFailed),
   };
 }
 
@@ -118,6 +121,11 @@ export function rejectUnsafeProfilePath(value: string): void {
 function buildFailClosedReason(platform: CodeModeSandboxPlatform, checksFailed: string[]): string {
   const reason = checksFailed.join(", ");
   return `Code Mode sandbox failed closed on ${platform}: ${reason}.`;
+}
+
+function buildAdvisoryUnsandboxedReason(platform: CodeModeSandboxPlatform, checksFailed: string[]): string {
+  const reason = checksFailed.join(", ");
+  return `Host isolation unavailable on ${platform}; running advisory trusted-code mode: ${reason}.`;
 }
 
 function dedupe(values: string[]): string[] {

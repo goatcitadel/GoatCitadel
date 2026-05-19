@@ -23,3 +23,21 @@ config/*.json
 *.log
 tmp-*.log
 .codex-*.log
+
+# SECURITY (codex finding #1): Never copy environment files into the
+# Docker build context. They typically hold provider API keys, gateway
+# auth tokens, and Postgres passwords; the build context becomes a layer
+# inside the image, so a leaked or pulled image would expose them.
+.env
+.env.*
+*.env
+**/.env
+**/.env.*
+# Keys / certs that would similarly leak via image layers.
+*.pem
+*.key
+*.pfx
+*.p12
+# Lock files explicitly OK to copy — kept here as a hint that the deny
+# list above is not exhaustive; if you add a new secret-bearing file
+# pattern, list it here too.

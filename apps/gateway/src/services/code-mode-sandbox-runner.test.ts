@@ -56,6 +56,8 @@ describe("code-mode-sandbox-runner", () => {
 
     expect(metadata).toMatchObject({ available: false, required: false });
     expect(metadata.checksFailed).toContain("darwin_sandbox_exec_missing");
+    expect(metadata.failClosedReason).toBeUndefined();
+    expect(metadata.advisoryUnsandboxedReason).toContain("Host isolation unavailable");
     expect(() => assertCodeModeSandboxAvailable(metadata)).not.toThrow();
   });
 
@@ -99,6 +101,41 @@ describe("code-mode-sandbox-runner", () => {
         metadata,
       }),
     ).rejects.toThrow(metadata.failClosedReason);
+  });
+
+  it("rejects stale available metadata before launch when availability downgrades", async () => {
+    const root = await createTempRoot();
+    const staleMetadata = resolveCodeModeSandboxMetadata(baseConfig({ required: true, bestEffortHostEnabled: true }), {
+      platform: "linux",
+      resolveCommand: commandResolver({ firejail: "/usr/bin/firejail" }),
+    });
+
+    await expect(
+      prepareCodeModeSandboxLaunch(baseConfig({ required: true, bestEffortHostEnabled: true }), launchInput(root), {
+        platform: "linux",
+        resolveCommand: commandResolver({}),
+        metadata: staleMetadata,
+      }),
+    ).rejects.toThrow("Code Mode sandbox posture changed before launch");
+  });
+
+  it("rejects stale available metadata before launch when the probed posture changes but stays available", async () => {
+    const root = await createTempRoot();
+    const approvedMetadata = {
+      ...resolveCodeModeSandboxMetadata(baseConfig({ required: true, bestEffortHostEnabled: true }), {
+        platform: "linux",
+        resolveCommand: commandResolver({ firejail: "/usr/bin/firejail" }),
+      }),
+      runnerVersion: "0.1.0-approved",
+    };
+
+    await expect(
+      prepareCodeModeSandboxLaunch(baseConfig({ required: true, bestEffortHostEnabled: true }), launchInput(root), {
+        platform: "linux",
+        resolveCommand: commandResolver({ firejail: "/usr/bin/firejail" }),
+        metadata: approvedMetadata,
+      }),
+    ).rejects.toThrow("Code Mode sandbox posture changed before launch at runnerVersion");
   });
 
   it("selects the Linux firejail adapter and reports all enforced checks when available", async () => {
@@ -172,7 +209,7 @@ describe("code-mode-sandbox-runner", () => {
     expect(prepared.launch.args.slice(0, 2)).toEqual(["-f", path.join(root, "run", "code-mode-seatbelt.sb")]);
   });
 
-  it("selects the Windows AppContainer adapter and reports job-limit enforcement", async () => {
+  it("selects the Windows AppContainer adapter but fails closed while Node IPC is not preserved", async () => {
     const root = await createTempRoot();
     const options: HostSandboxAdapterSelectionOptions = {
       platform: "win32",
@@ -186,33 +223,59 @@ describe("code-mode-sandbox-runner", () => {
       baseConfig({ required: true, bestEffortHostEnabled: true }),
       options,
     );
-    const prepared = await prepareCodeModeSandboxLaunch(
-      baseConfig({ required: true, bestEffortHostEnabled: true }),
-      launchInput(root),
-      {
-        ...options,
-        metadata,
-      },
-    );
-
-    expect(metadata).toMatchObject({ platform: "win32", available: true });
+    expect(metadata).toMatchObject({ platform: "win32", available: false });
     expect(metadata.checksPassed).toEqual(
+      expect.arrayContaining(["win32_powershell_present", "win32_appcontainer_prerequisites_available"]),
+    );
+    expect(metadata.checksFailed).toEqual(
       expect.arrayContaining([
-        "win32_powershell_present",
-        "win32_appcontainer_prerequisites_available",
-        "network_isolation_enforced",
-        "temp_workspace_enforced",
-        "privilege_reduction_enforced",
-        "windows_job_limits_enforced",
+        "win32_node_ipc_not_preserved",
+        "network_isolation_not_enforced",
+        "temp_workspace_not_enforced",
+        "privilege_reduction_not_enforced",
+        "windows_job_limits_not_enforced",
       ]),
     );
-    expect(prepared.launch.executable).toContain("powershell.exe");
-    expect(prepared.launch.args).toContain("-ExecutionPolicy");
-    const launcher = await fs.readFile(path.join(root, "run", "code-mode-appcontainer-launcher.ps1"), "utf8");
-    expect(launcher).toContain("PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES");
-    expect(launcher).toContain(
-      "CreateProcessW(nodePath, commandLine, IntPtr.Zero, IntPtr.Zero, false, EXTENDED_STARTUPINFO_PRESENT",
+    await expect(
+      prepareCodeModeSandboxLaunch(baseConfig({ required: true, bestEffortHostEnabled: true }), launchInput(root), {
+        ...options,
+        metadata,
+      }),
+    ).rejects.toThrow("win32_node_ipc_not_preserved");
+    await expect(fs.stat(path.join(root, "run", "code-mode-appcontainer-launcher.ps1"))).rejects.toThrow();
+  });
+
+  it("falls back to advisory unsandboxed Windows launch only when sandbox is not required", async () => {
+    const root = await createTempRoot();
+    const options: HostSandboxAdapterSelectionOptions = {
+      platform: "win32",
+      osRelease: "10.0.22631",
+      resolveCommand: commandResolver({
+        "powershell.exe": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      }),
+    };
+
+    const prepared = await prepareCodeModeSandboxLaunch(
+      baseConfig({ required: false, bestEffortHostEnabled: true }),
+      launchInput(root),
+      options,
     );
+
+    expect(prepared.metadata).toMatchObject({ platform: "win32", available: false, required: false });
+    expect(prepared.metadata.checksFailed).toEqual(
+      expect.arrayContaining([
+        "win32_node_ipc_not_preserved",
+        "network_isolation_not_enforced",
+        "temp_workspace_not_enforced",
+        "privilege_reduction_not_enforced",
+        "windows_job_limits_not_enforced",
+      ]),
+    );
+    expect(prepared.launch).toMatchObject({
+      executable: process.execPath,
+      advisoryUnsandboxed: true,
+      enforcedWorkspaceRoot: path.join(root, "run"),
+    });
   });
 
   it("reports unavailable metadata for unsupported platforms", () => {

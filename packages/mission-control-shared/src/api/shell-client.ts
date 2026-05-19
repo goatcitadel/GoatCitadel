@@ -31,6 +31,10 @@ import {
 import { connectEventStream } from "./client.js";
 import { isTrustedGatewayHost } from "./http-internal.js";
 
+type ApprovalResolveRequestInput = Omit<ApprovalResolveInput, "resolvedBy"> & {
+  resolvedBy?: never;
+};
+
 export type { RealtimeEvent, GatewayAuthState, GatewayAuthStorageMode, GatewayBootstrapResult };
 export type {
   GatewayAccessPreflightResult,
@@ -93,7 +97,7 @@ export async function pollGatewayDeviceAccessRequestStatus(
 
 export async function resolveApproval(
   approvalId: string,
-  input: ApprovalResolveInput,
+  input: ApprovalResolveRequestInput,
 ): Promise<{ approval: ApprovalRequest }> {
   return request<{ approval: ApprovalRequest }>(`/api/v1/approvals/${encodeURIComponent(approvalId)}/resolve`, {
     method: "POST",

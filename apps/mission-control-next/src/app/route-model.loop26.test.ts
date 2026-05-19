@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildAppHref, parseAppRoute, RAIL_ITEMS, getRouteLabel } from "./route-model";
+import { buildAppHref, buildNavigationTarget, parseAppRoute, RAIL_ITEMS, getRouteLabel } from "./route-model";
 
 describe("mission-control-next route model loop 26 tails", () => {
   it("keeps generic area paths deterministic when a section is omitted", () => {
@@ -13,6 +13,36 @@ describe("mission-control-next route model loop 26 tails", () => {
     expect(parseAppRoute("http://goatcitadel.local/projects?projectId=query-project")).toMatchObject({
       area: "projects",
       projectId: "query-project",
+    });
+  });
+
+  it("keeps /settings/safety as an alias for the permissions section", () => {
+    expect(parseAppRoute("/settings/safety")).toMatchObject({
+      area: "settings",
+      section: "permissions",
+    });
+  });
+
+  it("keeps focused Code approval context when using the Code rail approvals shortcut", () => {
+    const approvalsEntry = RAIL_ITEMS.code.find((item) => item.id === "code-approvals");
+    expect(approvalsEntry).toBeDefined();
+
+    expect(
+      buildNavigationTarget(
+        {
+          area: "code",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          approvalId: "approval-focused-1",
+        },
+        approvalsEntry!,
+      ),
+    ).toMatchObject({
+      area: "ops",
+      section: "approvals",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      approvalId: "approval-focused-1",
     });
   });
 });

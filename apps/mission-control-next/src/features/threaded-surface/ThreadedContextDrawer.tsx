@@ -18,9 +18,13 @@ function formatRouteSummary(props: MissionThreadedContextDockProps): string {
 export function ThreadedContextDrawer({
   surface,
   props,
+  permissionSummary,
+  permissionOverrideActive,
 }: {
   surface: ChatMode;
   props: MissionThreadedContextDockProps;
+  permissionSummary?: string;
+  permissionOverrideActive?: boolean;
 }) {
   const [activeTab, setActiveTab] = useState<DrawerTab>("context");
   const projectOptions = useMemo(() => props.projectOptions ?? [], [props.projectOptions]);
@@ -50,6 +54,9 @@ export function ThreadedContextDrawer({
                 {props.streamEnabled ? "Streaming on" : "Streaming off"}
               </StatusChip>
               <StatusChip tone="muted">{props.planningMode}</StatusChip>
+              {permissionSummary ? (
+                <StatusChip tone={permissionOverrideActive ? "warning" : "muted"}>{permissionSummary}</StatusChip>
+              ) : null}
               <StatusChip tone="muted">{formatSelectionSource(props.routePreflight?.selectionSource)}</StatusChip>
             </div>
             <div className="mc-next-context-actions">

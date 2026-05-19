@@ -46,12 +46,7 @@ export interface AuthSettingsUpdateInput {
   basicPassword?: string;
 }
 
-export type IntegrationKind =
-  | "channel"
-  | "model_provider"
-  | "productivity"
-  | "automation"
-  | "platform";
+export type IntegrationKind = "channel" | "model_provider" | "productivity" | "automation" | "platform";
 
 export type IntegrationMaturity = "native" | "plugin" | "disabled" | "beta" | "planned";
 export type IntegrationRuntimeAvailability = "runnable" | "blocked";
@@ -146,6 +141,7 @@ export type DiscordGuildPolicy = "off" | "allowlist";
 export interface DiscordGuildAccessRule {
   requireMention: boolean;
   users?: string[];
+  roles?: string[];
   channels?: string[];
 }
 

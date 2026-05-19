@@ -3,7 +3,12 @@ import { createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ThreadedSurfacePage, formatRelativeTime, getArchiveActionLabel } from "./ThreadedSurfacePage";
+import {
+  ThreadedSurfacePage,
+  formatRelativeTime,
+  formatThreadedPermissionSummary,
+  getArchiveActionLabel,
+} from "./ThreadedSurfacePage";
 
 vi.mock("./ThreadedWorkflowPanel", () => ({
   ThreadedWorkflowPanel: ({ panel }: { panel: { kind: string } }) => (
@@ -332,6 +337,17 @@ describe("ThreadedSurfacePage", () => {
     expect(formatRelativeTime("2026-05-14T11:45:00.000Z")).toBe("15m ago");
     expect(formatRelativeTime("2026-05-14T09:00:00.000Z")).toBe("3h ago");
     expect(formatRelativeTime("2026-05-12T12:00:00.000Z")).toBe("2d ago");
+    expect(formatThreadedPermissionSummary({ profileLabel: "Safe", approvalMode: "approve_all" })).toBe(
+      "Policy: Safe · asks every time",
+    );
+    expect(
+      formatThreadedPermissionSummary({
+        profileLabel: "Trusted Local Power",
+        approvalMode: "bypass",
+        localOperatorOverrideId: "override-1",
+        overrideExpiresAt: "2026-05-17T20:30:00.000Z",
+      }),
+    ).toBe("Policy: Trusted Local Power · skips normal prompts · override until 20:30 UTC");
   });
 
   it("hides delegated child sessions under a collapsed parent by default", () => {
@@ -358,6 +374,31 @@ describe("ThreadedSurfacePage", () => {
     );
 
     expect(markup).toContain(">Archive<");
+  });
+
+  it("shows the effective permission state directly above the composer", () => {
+    const markup = renderToStaticMarkup(
+      <ThreadedSurfacePage
+        surface="code"
+        permissionState={{
+          profileLabel: "Trusted Local Power",
+          approvalMode: "bypass",
+          localOperatorOverrideId: "override-1",
+        }}
+        input={
+          {
+            ...buildInput(),
+            messageMode: "code",
+            activeSessionSurfaceProps: buildActiveSessionProps({ mode: "code" }),
+            emptyStateProps: null,
+          } as any
+        }
+      />,
+    );
+
+    expect(markup).toContain('aria-label="Composer policy state"');
+    expect(markup).toContain("Policy: Trusted Local Power");
+    expect(markup).toContain("skips normal prompts");
   });
 
   it("renders a quick restore action for archived sessions", () => {
@@ -726,7 +767,7 @@ describe("ThreadedSurfacePage", () => {
         ...(buildInput() as any).sessionRail,
         showProjectCreate: true,
         selectedTag: "coverage",
-        availableFolders: [{ id: "folder-1", name: "Pinned", count: 2 }],
+        availableFolders: [{ folderId: "folder-1", name: "Pinned", count: 2 }],
         onProjectNameChange: vi.fn(),
         onProjectPathChange: vi.fn(),
         onCreateProject: vi.fn(),

@@ -1,5 +1,7 @@
 # GoatCitadel Mission Control — Full-Spectrum Frontend & Design Review
 
+> **Historical note (2026-05-18)**: This Antigravity review describes the legacy `apps/mission-control` compatibility shell and an older Operate/Observe/Configure IA snapshot. The canonical `1.0` Mission Control shell is now `apps/mission-control-next`; use [docs/1_0_CONTRACT.md](../1_0_CONTRACT.md), [docs/1_0_RELEASE_EVIDENCE.md](../1_0_RELEASE_EVIDENCE.md), and [apps/mission-control-next/src/app/route-model.ts](../../apps/mission-control-next/src/app/route-model.ts) for current product truth.
+
 > **Reviewer posture**: Principal product designer / creative director / staff frontend engineer / design-systems architect.  
 > **Inspection scope**: 22 CSS files (460KB+), 15 page-level components, App.tsx (1364 lines), page-registry routing, two theme implementations (signal-noir + citadel-light), ui-preferences system, surfaces.css, and 26 screenshots across all major surfaces.
 

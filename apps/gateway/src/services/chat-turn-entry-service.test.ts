@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessageRecord, ChatTurnTraceRecord } from "@goatcitadel/contracts";
+import { NotFoundError } from "@goatcitadel/contracts";
 
 const dispatchMocks = vi.hoisted(() => ({
   consumePreparedAgentChatTurn: vi.fn(async (_host, sessionId, _request, prepared, eventType) => ({
@@ -22,7 +23,7 @@ const dispatchMocks = vi.hoisted(() => ({
     routing: {},
   })),
   launchPreparedAgentChatTurnStream: vi.fn(),
-  sendPreparedIntegrationChatTurn: vi.fn(async (_host, sessionId, prepared, binding, eventType) => ({
+  sendPreparedIntegrationChatTurn: vi.fn(async (_host, sessionId, _input, prepared, binding, eventType) => ({
     sessionId,
     userMessage: prepared.userMessage,
     transport: binding.transport,
@@ -32,7 +33,7 @@ const dispatchMocks = vi.hoisted(() => ({
     routing: {},
   })),
   shouldUseDurableExecution: vi.fn(() => false),
-  streamPreparedIntegrationChatTurn: vi.fn(async function* (_host, sessionId, prepared, binding, eventType) {
+  streamPreparedIntegrationChatTurn: vi.fn(async function* (_host, sessionId, _input, prepared, binding, eventType) {
     yield {
       type: "done",
       sessionId,
@@ -227,6 +228,8 @@ function createHost(turnRuntimeResult: Record<string, unknown>) {
     beginActiveChatTurnExecution: vi.fn(() => controller),
     endActiveChatTurnExecution: vi.fn(),
     getActiveChatTurnExecution: vi.fn(() => ({ sessionId: "session-1", controller })),
+    getActiveChatTurnStream: vi.fn(() => undefined),
+    cancelDurableChatRun: vi.fn(),
     markChatTurnCancelled: vi.fn((_sessionId, turnId, cancelledBy) =>
       createTrace({
         turnId,
@@ -242,6 +245,10 @@ function createHost(turnRuntimeResult: Record<string, unknown>) {
       yield { type: "trace_update", sessionId: "session-1", turnId, trace: createTrace({ turnId }), options };
       yield { type: "done", sessionId: "session-1", turnId };
     }),
+    persistChatStreamChunk: vi.fn(),
+    registerActiveChatTurnStream: vi.fn(),
+    completeActiveChatTurnStream: vi.fn(),
+    closeActiveChatTurnStream: vi.fn(),
     ingestEvent: vi.fn(),
     collectCapabilityUpgradeSuggestions: vi.fn(async () => []),
     collectSpecialistCandidateSuggestions: vi.fn(() => []),
@@ -328,6 +335,43 @@ describe("agentSendChatMessage", () => {
       expect.anything(),
     );
     expect(host.endActiveChatTurnExecution).toHaveBeenCalled();
+  });
+
+  it("inherits actor, permission profile, and override context for automatic proactive suggestions", async () => {
+    const host = createHost({
+      assistantContent: "Architect and QA can split the work.",
+      assistantModel: "primary-model",
+      usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
+      requiresApproval: false,
+      turnTrace: createTrace({ status: "completed" }),
+    });
+    host.prepareAgentChatTurn = vi.fn(async () =>
+      createPreparedTurn({
+        content: "Architect and QA should review this implementation.",
+      }),
+    ) as never;
+
+    await agentSendChatMessage(host, "session-1", {
+      content: "Architect and QA should review this implementation.",
+      mode: "cowork",
+      operatorId: "operator-1",
+      authActorId: "operator-1",
+      authActorSource: "token",
+      permissionProfileId: "profile-1",
+      localOperatorOverrideId: "override-1",
+    });
+
+    expect(host.triggerChatSessionProactive).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        source: "chat",
+        operatorId: "operator-1",
+        authActorId: "operator-1",
+        authActorSource: "token",
+        permissionProfileId: "profile-1",
+        localOperatorOverrideId: "override-1",
+      }),
+    );
   });
 
   it("persists approval waits without writing an assistant message", async () => {
@@ -533,6 +577,7 @@ describe("agentSendChatMessage", () => {
     expect(dispatchMocks.sendPreparedIntegrationChatTurn).toHaveBeenCalledWith(
       host,
       "session-1",
+      expect.objectContaining({ content: "hello", mode: "chat" }),
       expect.objectContaining({ turnId: "turn-1" }),
       expect.objectContaining({ transport: "discord" }),
       "chat_thread_turn_appended",
@@ -541,6 +586,7 @@ describe("agentSendChatMessage", () => {
     expect(dispatchMocks.sendPreparedIntegrationChatTurn).toHaveBeenCalledWith(
       host,
       "session-1",
+      expect.objectContaining({ mode: "chat" }),
       expect.objectContaining({ turnId: "turn-1" }),
       expect.objectContaining({ transport: "discord" }),
       "chat_thread_turn_retried",
@@ -548,6 +594,7 @@ describe("agentSendChatMessage", () => {
     expect(dispatchMocks.sendPreparedIntegrationChatTurn).toHaveBeenCalledWith(
       host,
       "session-1",
+      expect.objectContaining({ content: "edited prompt" }),
       expect.objectContaining({ turnId: "turn-1" }),
       expect.objectContaining({ transport: "discord" }),
       "chat_thread_turn_edited",
@@ -570,6 +617,7 @@ describe("agentSendChatMessage", () => {
     expect(dispatchMocks.streamPreparedIntegrationChatTurn).toHaveBeenCalledWith(
       host,
       "session-1",
+      expect.objectContaining({ content: "hello" }),
       expect.objectContaining({ turnId: "turn-1" }),
       expect.objectContaining({ transport: "slack" }),
       "chat_thread_turn_appended",
@@ -592,6 +640,7 @@ describe("agentSendChatMessage", () => {
     expect(dispatchMocks.streamPreparedIntegrationChatTurn).toHaveBeenCalledWith(
       host,
       "session-1",
+      expect.objectContaining({ mode: "chat" }),
       expect.objectContaining({ turnId: "turn-1" }),
       expect.objectContaining({ transport: "slack" }),
       "chat_thread_turn_retried",
@@ -599,6 +648,7 @@ describe("agentSendChatMessage", () => {
     expect(dispatchMocks.streamPreparedIntegrationChatTurn).toHaveBeenCalledWith(
       host,
       "session-1",
+      expect.objectContaining({ content: "edit" }),
       expect.objectContaining({ turnId: "turn-1" }),
       expect.objectContaining({ transport: "slack" }),
       "chat_thread_turn_edited",
@@ -635,6 +685,7 @@ describe("agentSendChatMessage", () => {
 
   it("cancels active turns, rejects cross-session cancellation, and resumes persisted streams", async () => {
     const host = createHost({});
+    host.storage.chatTurnTraces.get = vi.fn(() => createTrace({ durable: { runId: "durable-run-1" } })) as never;
 
     const cancelled = await cancelChatTurn(host, "session-1", "turn-1", "operator");
     const resumed = await collectChunks(resumeAgentChatTurnStream(host, "session-1", "turn-1", "event-4"));
@@ -647,6 +698,17 @@ describe("agentSendChatMessage", () => {
       }),
     );
     expect(host.markChatTurnCancelled).toHaveBeenCalledWith("session-1", "turn-1", "operator");
+    expect(host.cancelDurableChatRun).toHaveBeenCalledWith("durable-run-1", "operator");
+    expect(host.persistChatStreamChunk).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "trace_update",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        trace: expect.objectContaining({ status: "cancelled" }),
+      }),
+      "durable-run-1",
+    );
+    expect(host.completeActiveChatTurnStream).toHaveBeenCalledWith("turn-1");
     expect(host.streamPersistedChatTurnEvents).toHaveBeenCalledWith("session-1", "turn-1", {
       sinceEventId: "event-4",
       liveTail: true,
@@ -658,6 +720,30 @@ describe("agentSendChatMessage", () => {
     await expect(collectChunks(resumeAgentChatTurnStream(host, "session-1", "turn-1"))).rejects.toThrow(
       /does not belong/,
     );
+  });
+
+  it("cancels a just-launched durable stream before its trace row is visible", async () => {
+    const host = createHost({});
+    host.storage.chatTurnTraces.get = vi.fn(() => {
+      throw new NotFoundError({ entity: "Chat turn", id: "turn-1" });
+    }) as never;
+    host.getActiveChatTurnStream = vi.fn(() => ({
+      sessionId: "session-1",
+      runId: "durable-run-fast",
+    })) as never;
+
+    const cancelled = await cancelChatTurn(host, "session-1", "turn-1", "operator");
+
+    expect(cancelled).toEqual(
+      expect.objectContaining({
+        sessionId: "session-1",
+        turnId: "turn-1",
+        cancelled: true,
+      }),
+    );
+    expect(host.cancelDurableChatRun).toHaveBeenCalledWith("durable-run-fast", "operator");
+    expect(host.markChatTurnCancelled).toHaveBeenCalledWith("session-1", "turn-1", "operator");
+    expect(host.completeActiveChatTurnStream).toHaveBeenCalledWith("turn-1");
   });
 
   it("preflights chat routes through the live route resolver and validates retry context", async () => {

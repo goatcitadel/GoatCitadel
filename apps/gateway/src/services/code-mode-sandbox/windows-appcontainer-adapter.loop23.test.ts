@@ -25,11 +25,13 @@ describe("WindowsAppContainerSandboxAdapter loop 23", () => {
     expect(metadata.checksPassed).toEqual(
       expect.arrayContaining(["win32_adapter_present", "win32_powershell_present"]),
     );
-    expect(metadata.checksFailed).toEqual(["best_effort_host_disabled"]);
+    expect(metadata.checksFailed).toEqual(
+      expect.arrayContaining(["best_effort_host_disabled", "win32_node_ipc_not_preserved"]),
+    );
     expect(metadata.failClosedReason).toContain("best_effort_host_disabled");
   });
 
-  it("prefers Windows PowerShell when both shells are resolvable and preserves quoted launch paths", async () => {
+  it("fails closed before writing a launcher until Windows IPC preservation is implemented", async () => {
     const root = await createTempRoot();
     const quotedRoot = path.join(root, "quote'root");
     const runTempRoot = path.join(quotedRoot, "run");
@@ -42,30 +44,17 @@ describe("WindowsAppContainerSandboxAdapter loop 23", () => {
           : "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
     });
 
-    const launch = await adapter.prepareLaunch({
-      runId: "run; unsafe-ish",
-      nodePath: path.join(quotedRoot, "node.exe"),
-      harnessPath: path.join(quotedRoot, "harness.mjs"),
-      runTempRoot,
-      heapMb: 128,
-      env: { GOATCITADEL_CODE_MODE: "1" },
-    });
-    const launcher = await fs.readFile(path.join(runTempRoot, "code-mode-appcontainer-launcher.ps1"), "utf8");
-
-    expect(launch.executable).toBe("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
-    expect(launch.args).toEqual([
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      path.join(runTempRoot, "code-mode-appcontainer-launcher.ps1"),
-    ]);
-    expect(launcher).toContain("$profileName = 'GoatCitadel.CodeMode.run__unsafe-ish'");
-    expect(launcher).toContain("quote''root");
-    expect(launch.enforcedWorkspaceRoot).toBe(runTempRoot);
-    expect(launch.advisoryUnsandboxed).toBe(false);
+    await expect(
+      adapter.prepareLaunch({
+        runId: "run; unsafe-ish",
+        nodePath: path.join(quotedRoot, "node.exe"),
+        harnessPath: path.join(quotedRoot, "harness.mjs"),
+        runTempRoot,
+        heapMb: 128,
+        env: { GOATCITADEL_CODE_MODE: "1" },
+      }),
+    ).rejects.toThrow("win32_node_ipc_not_preserved");
+    await expect(fs.stat(path.join(runTempRoot, "code-mode-appcontainer-launcher.ps1"))).rejects.toThrow();
   });
 });
 

@@ -23,9 +23,12 @@ const CURRENT_EVENT_REGEX =
 const EXPLICIT_WEB_PHRASES = [
   "look online",
   "search online",
+  "search the web",
+  "search the internet",
   "browse the web",
   "web search",
   "use internet",
+  "use the internet",
   "search web",
   "browser.search",
   "browser.navigate",

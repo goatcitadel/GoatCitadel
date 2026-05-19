@@ -251,13 +251,46 @@ describe("orchestration-lifecycle-service", () => {
     const runtime = createRuntimeDeps();
     const plan = buildPlan();
 
-    const result = await createOrchestrationPlan(host, runtime, plan);
+    const result = await createOrchestrationPlan(host, runtime, plan, {
+      operatorId: "operator-1",
+      authActorId: "auth-operator-1",
+      authActorSource: "loopback",
+      permissionProfileId: "trusted-local-power",
+      localOperatorOverrideId: "override-1",
+    });
 
     expect(result.runId).toBe("run-1");
     expect(result.durableRunId).toBe("durable-run-1");
     expect(result.worktreeStatus).toBe("ready");
+    expect(result).toMatchObject({
+      operatorId: "operator-1",
+      authActorId: "auth-operator-1",
+      authActorSource: "loopback",
+      permissionProfileId: "trusted-local-power",
+      localOperatorOverrideId: "override-1",
+    });
     expect(host.storage.orchestration.upsertPlan).toHaveBeenCalledWith(plan);
+    expect(host.storage.orchestration.createRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operatorId: "operator-1",
+        authActorId: "auth-operator-1",
+        authActorSource: "loopback",
+        permissionProfileId: "trusted-local-power",
+        localOperatorOverrideId: "override-1",
+      }),
+    );
     expect(host.createDurableRun).toHaveBeenCalled();
+    expect(host.createDurableRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          operatorId: "operator-1",
+          authActorId: "auth-operator-1",
+          authActorSource: "loopback",
+          permissionProfileId: "trusted-local-power",
+          localOperatorOverrideId: "override-1",
+        }),
+      }),
+    );
     expect(host.pauseDurableRun).toHaveBeenCalledWith("durable-run-1", "orchestration");
     expect(runtime.worktrees.allocate).toHaveBeenCalled();
     expect(host.createCheckpoint).toHaveBeenCalledWith(
@@ -343,6 +376,36 @@ describe("orchestration-lifecycle-service", () => {
     expect(result).toBe(activeRun);
     expect(host.storage.orchestration.createRun).not.toHaveBeenCalled();
     expect(runtime.worktrees.allocate).not.toHaveBeenCalled();
+    expect(host.requestDurableRunProcessing).toHaveBeenCalledWith("durable-active");
+  });
+
+  it("queues an active worktree-ready run instead of leaving it paused forever", async () => {
+    const activeRun: OrchestrationRun = {
+      ...buildRun(),
+      runId: "run-active",
+      durableRunId: "durable-active",
+      executionState: "worktree_ready",
+      worktreeStatus: "ready",
+      worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-active",
+    };
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          findActiveRunByPlan: vi.fn(() => activeRun),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+    const runtime = createRuntimeDeps();
+
+    const result = await runOrchestrationPlan(host, runtime, "plan-1");
+
+    expect(result.runId).toBe("run-active");
+    expect(result.executionState).toBe("queued");
+    expect(host.storage.orchestration.createRun).not.toHaveBeenCalled();
+    expect(runtime.worktrees.allocate).not.toHaveBeenCalled();
+    expect(host.resumeDurableRun).toHaveBeenCalledWith("durable-active", "orchestration");
     expect(host.requestDurableRunProcessing).toHaveBeenCalledWith("durable-active");
   });
 
@@ -595,6 +658,11 @@ describe("orchestration-lifecycle-service", () => {
             executionState: "queued",
             worktreeStatus: "ready",
             worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+            operatorId: "operator-1",
+            authActorId: "auth-operator-1",
+            authActorSource: "loopback",
+            permissionProfileId: "trusted-local-power",
+            localOperatorOverrideId: "override-1",
           })),
         },
       } as OrchestrationLifecycleHost["storage"],
@@ -611,6 +679,13 @@ describe("orchestration-lifecycle-service", () => {
         phase: expect.objectContaining({ phaseId: "phase-1" }),
         run: expect.objectContaining({ currentPhaseId: "phase-1" }),
         durableRun: expect.objectContaining({ runId: "durable-run-1" }),
+        policyContext: expect.objectContaining({
+          operatorId: "operator-1",
+          authActorId: "auth-operator-1",
+          authActorSource: "loopback",
+          permissionProfileId: "trusted-local-power",
+          localOperatorOverrideId: "override-1",
+        }),
       }),
     );
     expect(host.orchestrationEngine.advancePhase).toHaveBeenCalledWith(
@@ -621,6 +696,57 @@ describe("orchestration-lifecycle-service", () => {
     );
     expect(host.pauseDurableRun).toHaveBeenCalledWith("durable-run-1", "orchestration");
     expect(host.recordDurableTimelineEvent).toHaveBeenCalledWith("durable-run-1", "run_started", expect.any(Object));
+  });
+
+  it("pauses orchestration when a child phase turn is waiting instead of failing the phase", async () => {
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...createHost().storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            durableRunId: "durable-run-1",
+            executionState: "queued",
+            worktreeStatus: "ready",
+            worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+    const runtime = createRuntimeDeps({
+      phaseExecutor: {
+        execute: vi.fn(async () => ({
+          phaseId: "phase-1",
+          ownerAgentId: "agent-1",
+          status: "waiting" as const,
+          startedAt: "2026-04-12T00:00:01.000Z",
+          finishedAt: "2026-04-12T00:00:02.000Z",
+          outputSummary: "Waiting for operator approval.",
+          childSessionId: "sess_phase",
+          childTurnId: "turn_phase",
+          childRunId: "durable-child-1",
+        })),
+      },
+    });
+
+    const result = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+
+    expect(result.outcome).toBe("paused");
+    expect(host.orchestrationEngine.advancePhase).not.toHaveBeenCalled();
+    expect(host.pauseDurableRun).toHaveBeenCalledWith("durable-run-1", "orchestration");
+    expect(host.storage.orchestration.updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "paused",
+        executionState: "paused_for_approval",
+      }),
+    );
+    expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "phase.waiting",
+      expect.objectContaining({
+        childRunId: "durable-child-1",
+      }),
+    );
   });
 
   it("cancels orchestration runs with durable, checkpoint, realtime, and worktree cleanup truth", async () => {
@@ -678,6 +804,36 @@ describe("orchestration-lifecycle-service", () => {
       }),
       expect.any(Object),
     );
+  });
+
+  it("does not classify ordinary phase failures mentioning cancelled as workflow aborts", async () => {
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            durableRunId: "durable-run-1",
+            executionState: "queued",
+            worktreeStatus: "ready",
+            worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+    const runtime = createRuntimeDeps({
+      phaseExecutor: {
+        execute: vi.fn(async () => {
+          throw new Error("provider cancelled request upstream");
+        }),
+      },
+    });
+
+    await expect(executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"))).rejects.toThrow(
+      "provider cancelled request upstream",
+    );
+    expect(host.cancelDurableRun).not.toHaveBeenCalled();
   });
 
   it("marks durable orchestration execution cancelled when the workflow aborts during a phase", async () => {

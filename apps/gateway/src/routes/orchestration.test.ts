@@ -258,7 +258,10 @@ describe("orchestration routes", () => {
     });
 
     expect(response.statusCode).toBe(201);
-    expect(createPlanFromRecipe).toHaveBeenCalledWith(expect.objectContaining({ source: expect.any(String) }));
+    expect(createPlanFromRecipe).toHaveBeenCalledWith(
+      expect.objectContaining({ source: expect.any(String) }),
+      expect.objectContaining({ operatorId: expect.stringMatching(/^ip:/) }),
+    );
     expect(response.json()).toMatchObject({ run: { runId: "run-1" } });
   });
 
@@ -272,6 +275,8 @@ describe("orchestration routes", () => {
     const listRunCheckpoints = vi.fn(() => [{ checkpointId: "cp-1" }]);
     const listRunContexts = vi.fn(() => [{ contextId: "ctx-1" }]);
     app = Fastify();
+    app.decorateRequest("authActorId", "operator-auth");
+    app.decorateRequest("authActorSource", "loopback");
     app.decorate("services", {
       orchestration: {
         runPlan: runOrchestrationPlan,
@@ -287,9 +292,22 @@ describe("orchestration routes", () => {
     const runResponse = await app.inject({
       method: "POST",
       url: "/api/v1/orchestration/plans/plan-1/run",
+      payload: {
+        permissionProfileId: "trusted-local-power",
+        localOperatorOverrideId: "override-1",
+      },
     });
     expect(runResponse.statusCode).toBe(200);
-    expect(runOrchestrationPlan).toHaveBeenCalledWith("plan-1");
+    expect(runOrchestrationPlan).toHaveBeenCalledWith(
+      "plan-1",
+      expect.objectContaining({
+        operatorId: "operator-auth",
+        authActorId: "operator-auth",
+        authActorSource: "loopback",
+        permissionProfileId: "trusted-local-power",
+        localOperatorOverrideId: "override-1",
+      }),
+    );
 
     const cancelResponse = await app.inject({
       method: "POST",
@@ -300,7 +318,7 @@ describe("orchestration routes", () => {
       },
     });
     expect(cancelResponse.statusCode).toBe(202);
-    expect(cancelRun).toHaveBeenCalledWith("run-1", "operator-a", "workspace-a");
+    expect(cancelRun).toHaveBeenCalledWith("run-1", "operator-auth", "workspace-a");
     expect(cancelResponse.json()).toMatchObject({
       run: { status: "cancelled", executionState: "cancelled" },
       checkpoints: [{ checkpointKind: "run_cancelled" }],
@@ -392,6 +410,7 @@ describe("orchestration routes", () => {
       checkpoints: [{ checkpointId: "cp-1", checkpointKind: "phase_approved" }],
     }));
     app = Fastify();
+    app.decorateRequest("authActorId", "operator-auth");
     app.decorate("services", { orchestration: { approvePhase } } as never);
     app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
     await app.register(orchestrationRoutes);
@@ -407,7 +426,7 @@ describe("orchestration routes", () => {
     });
 
     expect(response.statusCode).toBe(202);
-    expect(approvePhase).toHaveBeenCalledWith("run-1", "phase-2", "operator", 0.5, undefined);
+    expect(approvePhase).toHaveBeenCalledWith("run-1", "phase-2", "operator-auth", 0.5, undefined);
     expect(response.json()).toMatchObject({
       run: {
         executionState: "resume_requested",

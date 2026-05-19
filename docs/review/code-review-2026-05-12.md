@@ -1,5 +1,9 @@
 # GoatCitadel Code Review — 2026-05-12
 
+Historical note: this document preserves the adversarial review snapshot from May 12, 2026. Several findings and
+the headline verdict have since been superseded by later fixes and release evidence; use `docs/1_0_RELEASE_EVIDENCE.md`,
+`docs/review/backlog-closeout-2026-05-15.md`, and current verification artifacts for the live release posture.
+
 ## 1. What the owner asked for
 
 > "I want you to put together a plan for a read-only code review of this entire codebase. There have been major updates recently and major fixes done. I need to make sure that there's no bugs, things are optimized for performance, and that all the functionality expects as it should for an agentic ai orchestration system. Be brutal and adversarial in the assessment. In the review, I will need a list of everything found and the reason why you put it there, this is because codex has done most of the coding so i need to keep it there and will be providing this code review to codex to review. I need to make sure that the entire ui/ux is smooth. That the chat in all 3, chat/cowork/code feels very smooth and modern. i want to make sure that chat provides the best possible responses regardless of model used, i want to make sure that cowork does an incredibly job of agent orchestration for longer tasks and other things that cowork is useful for, and i need to make sure that code makes sense in general on the page. I also need to make sure that all the settings are clearly labeled and that in general everything makes sense in the explanations on the page for the layman or the engineer. if you have any other improvements that you think of while doing the code review, please include that in the code review report. it should include what i want above, what you found and why it's an issue or what you think about it, and then i want a summary of everything and where you think this stands as a shippable product, and then i want you to provide recommended next steps"
@@ -26,7 +30,7 @@
 
 ## 3. Headline Verdict
 
-**Not shippable as 1.0 today.** GoatCitadel's plumbing is unusually strong — durable execution, dead-letter recovery, OAuth/PKCE, deny-wins policy, real-DB integration coverage in the agentic lanes — but its **central product claim is unimplemented**: the orchestration engine described to users as "cowork does an incredible job of agent orchestration" is a state-machine animator that emits `phase_executed` events without ever invoking an agent, an LLM call, or a tool (**F-001**, R6-C1). Auto-mode runs "complete" in microseconds doing zero work. Cost tracking is permanently zero in auto mode (**F-002**, R6-C2). On top of that, the canonical Settings UI ships a different default for the auth-bypass flag than the legacy UI (**F-006**, R5-CC-1), the Chat surface is missing every modern keyboard shortcut the owner explicitly requested (**F-021**, R4-CHAT-001), and `apps/gateway/src/services/chat-agent-orchestrator.ts` is 14,183 LOC — 17.7× the owner's 800-LOC cap (**F-024**, R8-001). Until **F-001**, **F-002**, **F-006**, the worktree leak (**F-003**), and the SSE backpressure absence (**F-005**) are addressed, 1.0 should remain in the pre-release gate.
+**Historical verdict from this snapshot, now superseded.** GoatCitadel's plumbing was already unusually strong — durable execution, dead-letter recovery, OAuth/PKCE, deny-wins policy, real-DB integration coverage in the agentic lanes — but this May 12 snapshot judged several release claims not yet ready. It included an outdated Settings loopback-bypass default finding (**F-006**, R5-CC-1) that has since been superseded. Use current source and `docs/1_0_RELEASE_EVIDENCE.md` for the live release posture.
 
 ## 4. Findings
 
@@ -90,16 +94,15 @@ Findings are sequentially numbered F-001…F-NNN across the whole review. Severi
 - **Suggested direction:** Check `raw.write()` return; on `false` await `'drain'` (or pause the source generator). Cap progress queue at e.g. 256 items and drop oldest non-`final` updates with a warning event. Apply to `events.ts` keep-alive and `subscribeRealtime` writer (line 192).
 - **Confidence:** High
 
-### F-006 — Canonical Settings UI and legacy UI ship different defaults for `allowLoopbackBypass`
+### F-006 — Historical: Settings UI loopback-bypass default mismatch
 - **Source:** R5-CC-1
 - **Severity:** CRITICAL
 - **Category:** Settings / Security
-- **Location:** `apps/mission-control-next/src/features/native-routes/SettingsNativePage.tsx:2437-2443` (`allowLoopbackBypass: true` initial state); `apps/mission-control/src/pages/SettingsPage.tsx:119` (`useState(false)`)
-- **Observed:** Canonical UI initializes the Access form with the loopback-bypass flag ON. Legacy initializes OFF. Two UIs, two defaults, for an authentication-bypass flag.
-- **Why it matters:** A fresh install on the canonical shell saves a posture that disables auth from any loopback origin. Label "Allow local loopback sessions without full auth" sounds benign and has no risk callout.
-- **Evidence:** `SettingsNativePage.tsx:2438` literal `allowLoopbackBypass: true,`. Label at 2545 carries no warning.
-- **Suggested direction:** Default the canonical Access form to `false`. Add a `<FieldHelp>` block explaining the trade-off. Confirm `auth.allowLoopbackBypass` server-side default also defaults safe.
-- **Confidence:** High
+- **Location at snapshot time:** Mission Control Next Access settings and legacy Settings.
+- **Observed then:** The review reported a default mismatch for the loopback-bypass flag between the canonical and legacy settings UIs.
+- **Current status:** Superseded by later Mission Control Next Access work. Re-check current source before quoting this finding as live evidence.
+- **Suggested direction:** Keep the current Access form safe by default and explicit about loopback-bypass tradeoffs.
+- **Confidence:** Historical snapshot only.
 
 ### F-007 — Provider API-key storage UI never tells the user the key does not roundtrip back to the browser
 - **Source:** R5-CC-2
@@ -203,25 +206,26 @@ Findings are sequentially numbered F-001…F-NNN across the whole review. Severi
 ### 4.2 HIGH (28 items)
 
 ### F-016 — `coverage:gate` and `coverage:gate:production` are never invoked by any verification lane or CI workflow
+- **Status update 2026-05-18:** Superseded for the current verification workflow shape. `verification-fast.yml`
+  runs `pnpm coverage:collect && pnpm coverage:gate:production`, and the release-proof workflow includes
+  `verify:fast` as an umbrella lane. Release certificates still require the direct `verification-fast.yml`
+  workflow for the production coverage and Postgres gates; this item remains historical branch context.
 - **Source:** R7-C3
-- **Severity:** HIGH
+- **Severity:** Closed historical finding
 - **Category:** Testing
-- **Location:** `package.json:48-50`; `scripts/coverage-gate.mjs`; `.github/workflows/verification-1-0-release-proof.yml`
-- **Observed:** The gate is implemented and tiered (storage 90%/80%, gateway 80%/70%, UI 75%/60%) but no workflow under `.github/workflows/` references it. `verification-1-0-release-proof.yml` lists 14 required lanes — coverage is not one.
-- **Why it matters:** A PR dropping storage coverage from 91% to 30% is invisible to merge.
-- **Evidence:** Grep returns only `package.json`, `CONTRIBUTING.md:30-31`, `INSTALL_SETUP_TESTING.md:431-432`.
-- **Suggested direction:** Add `verification-coverage.yml` running `pnpm coverage:collect && pnpm coverage:gate:production`; add to required-checks matrix in the 1.0 release-proof workflow.
+- **Location:** `package.json:48-50`; `scripts/coverage-gate.mjs`; `.github/workflows/verification-fast.yml`
+- **Current state:** `verification-fast.yml` runs `pnpm verify:fast`,
+  `pnpm coverage:collect && pnpm coverage:gate:production`, and Postgres storage checks as distinct proof steps.
+- **Remaining note:** Keep this entry only as branch-history context; do not treat it as an open action on current `main`.
 - **Confidence:** High
 
-### F-017 — `packages/storage/src/postgres/server-encoding.test.ts` is unreachable by `pnpm test` due to non-recursive glob
+### F-017 — Historical: `packages/storage/src/postgres/server-encoding.test.ts` was unreachable by `pnpm test`
 - **Source:** R7-C4
 - **Severity:** HIGH
 - **Category:** Testing
 - **Location:** `packages/storage/package.json:20`
-- **Observed:** `"test": "tsx --test src/*.test.ts"` — non-recursive. The only test under `src/postgres/` is silently skipped.
-- **Why it matters:** WIN1252 encoding correctness for Postgres ops has a real test that never runs. Combined with F-014, every layer of the Postgres path is under-verified.
-- **Evidence:** Confirmed via filesystem and package.json read.
-- **Suggested direction:** Change to `"test": "tsx --test 'src/**/*.test.ts'"`.
+- **Current state:** `packages/storage/package.json` now uses a recursive test glob, so the Postgres encoding test is no longer silently skipped by the package test lane.
+- **Remaining note:** Keep this entry only as branch-history context; do not treat it as an open action on current `main`.
 - **Confidence:** High
 
 ### F-018 — MCP `allowedEnvKeys` grants arbitrary host-env read to untrusted child processes
@@ -248,6 +252,7 @@ Findings are sequentially numbered F-001…F-NNN across the whole review. Severi
 
 ### F-020 — `approvalMode: bypass` silently removes all approval gates for danger and nuclear tools
 - **Source:** R2-003
+- **Current status:** Superseded by the current policy engine: bypass/trusted-local fast paths no longer remove the retained nuclear/risky-shell approval gates or hard deny/path/network/capability blocks. Treat this as historical review context unless fresh tests reproduce it.
 - **Severity:** HIGH
 - **Category:** Security
 - **Location:** `packages/policy-engine/src/engine.ts:524-526`
@@ -353,11 +358,12 @@ Findings are sequentially numbered F-001…F-NNN across the whole review. Severi
 - **Source:** R2-005
 - **Severity:** HIGH
 - **Category:** Security
+- **Status update (2026-05-17):** Resolved in the current Code Mode runtime. Code Mode child execution now uses a minimal synthetic environment, and gateway regressions assert provider/auth secrets are stripped before child execution. This finding is retained as historical review context, not an active current defect.
 - **Location:** `apps/gateway/src/services/code-mode-sandbox/types.ts:18-25, 99-109`; `linux-firejail-adapter.ts:85`; `windows-appcontainer-adapter.ts:87`
-- **Observed:** `CodeModeSandboxLaunchInput.env: NodeJS.ProcessEnv` is passed directly to the child process. Firejail cuts network on Linux; Windows AppContainer and macOS seatbelt may not block outbound. The advisory unsandboxed path has no restrictions at all.
-- **Why it matters:** Code Mode runs shell commands in worktrees. Commands influenced by agent/user content can exfiltrate `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOATCITADEL_AUTH_TOKEN` if not stripped at the boundary.
-- **Suggested direction:** Apply a `MCP_SAFE_ENV_KEYS`-style allowlist inside `prepareCodeModeSandboxLaunch`, or build a `buildCodeModeChildEnv` helper analogous to `buildMcpChildEnv`.
-- **Confidence:** Medium
+- **Observed at review time:** `CodeModeSandboxLaunchInput.env: NodeJS.ProcessEnv` was passed directly to the child process. That is no longer the current launch posture.
+- **Why it mattered at review time:** Code Mode runs shell commands in worktrees. Commands influenced by agent/user content could exfiltrate provider/auth secrets if those secrets reached the child environment.
+- **Resolution direction:** Implemented with a minimal synthetic Code Mode child environment and regression coverage for stripped provider/auth secrets.
+- **Confidence:** Resolved in current runtime; re-check the Code Mode child environment tests if this area changes.
 
 ### F-031 — Loopback bypass grants full operator-level access without any token, regardless of `auth.mode`
 - **Source:** R2-006
@@ -534,6 +540,7 @@ Findings are sequentially numbered F-001…F-NNN across the whole review. Severi
 - **Severity:** MEDIUM
 - **Category:** Settings / Security UX
 - **Location:** `apps/mission-control/src/pages/SettingsPage.tsx:88-90`; `apps/mission-control/src/pages/settings-page-utils.ts:54-62`
+- **Current status:** Partially superseded. Raw deployment-profile labels now map to human-readable labels in the shared and legacy settings helpers. The remote-bind default/banner recommendation remains a distinct runtime-posture follow-up.
 - **Observed:** Initial state `useState("local_dev")`. `formatDeploymentProfileLabel` returns raw snake_case. No detection of non-loopback bind.
 - **Suggested direction:** When `GATEWAY_HOST != 127.0.0.1`, default to `remote_hardened`. Banner if mismatch. Map enum to human labels.
 - **Confidence:** High
@@ -1300,7 +1307,7 @@ Issues flagged by >=2 reviewers are documented here. Each is a high-confidence p
 | `allowLoopbackBypass` default ON in canonical Settings; loopback bypass is full operator-level access | F-006 + F-031 | R5-CC-1 (default mismatch) + R2-006 (bypass is operator-level) | HIGH - settings UX exposes a real auth-bypass; combined with R2 = ship blocker |
 | Streaming has no aria-live for screen readers across multiple surfaces | F-022 | R4-CHAT-002 (chat bubble) + R4-CC-003 (sparse live regions) | HIGH - two lens-passes on the same a11y blocker |
 | File-size monolith debt has spread beyond gateway-service.ts | F-008 + F-011 + F-080 + F-081 | R1-003 (LlmService) + R1-012 (chat-turn-stream) + R8-001 (chat-agent-orchestrator) + R8-003 (SettingsNativePage) + R8-006 (prompt-pack-service) + R8-007 (improvement-service / tool-executor / sqlite) | HIGH - 7 reviewer signals; the 800-LOC rule is functionally not enforced |
-| Coverage-truthfulness is degraded: harness inflates lines + gate not in CI + storage glob misses files | F-015 + F-016 + F-017 | R7-C2, R7-C3, R7-C4 (one reviewer but three independent failure modes; cited as convergent because each undermines the others) | HIGH |
+| Coverage-truthfulness was degraded: harness inflated lines + gate was not in CI + the storage glob historically missed files; F-016/F-017 are now closed in current repo evidence, while F-015 remains a separate coverage-assertion quality item | F-015 + F-016 + F-017 | R7-C2, R7-C3, R7-C4 (one reviewer but three independent failure modes; cited as convergent because each undermines the others) | HIGH |
 | Cowork run-map and subagent fan-out are flat/uninformative | F-038 | R4-COWORK-002 (run-map gray cards) + R4-COWORK-007 (subagent flat list) + R6-M7 (3-item timeline cap) | MEDIUM-HIGH - three independent UX/orchestration signals on the same data surface |
 | ARIA tabs pattern missing on cowork tab row + code-source chooser tabs | F-063 | R4-COWORK-013 + R4-CODE-009 | MEDIUM-HIGH |
 | Mid-path glob ownership-conflict detection broken (string-prefix overlap only) | F-012 | R6-C5 (engine ownership) + R8-018 (hardcoded repair routing) - related-class concern around stringly-typed path matching | MEDIUM-HIGH |
@@ -1375,7 +1382,7 @@ Reproducing R5's comprehension scorecard (1-5 scale; lower = worse):
 The owner said "major fixes done." Last 50 commits sketch:
 
 - **Architecture-metrics helpers (commits `9470a3e3` through `0459f6c7`, 8 commits):** Hardening the verification-lane parser. The metrics they produce are a **counter**, not a **constraint** - R7-H2 / **F-016 family**. The fixes are real (more robust parsing, edge-case handling, TS-parser usage), but the underlying lane cannot forbid X-from-Y imports. The work is solid; the lane it serves is too soft. Held.
-- **Verification-lane stabilization (`ac68d0d0`, `8871c7f0`, `0d6e0b86`, `4827de2c`, `40caf39f`):** Multiple "fix verification" / "fix coverage review regressions" commits. R7 confirms `verify:durable:recovery` is genuinely meaningful (real process restart + dead-letter recovery). However `coverage:gate` is still not wired to CI (**F-016**), `coverage-exercise.ts` is still `assert.notEqual(500)` theatre (**F-015**), and the storage glob is still non-recursive (**F-017**). The fixes hold for what they cover; the lanes outside that scope remain broken. Partial.
+- **Verification-lane stabilization (`ac68d0d0`, `8871c7f0`, `0d6e0b86`, `4827de2c`, `40caf39f`):** Multiple "fix verification" / "fix coverage review regressions" commits. R7 confirms `verify:durable:recovery` is genuinely meaningful (real process restart + dead-letter recovery). Current verification now wires `coverage:gate` through `verify:fast` (**F-016 closed**) and the storage package now uses recursive test discovery (**F-017 closed**); `coverage-exercise.ts` precision (**F-015**) remains separate historical debt. Partial.
 - **GitHub security/quality alert sweeps (`9128e8ed`, `ad209b79`, `58404894`, `e322a5fa`, `955e06e9`):** Multi-commit cleanup of GitHub Code Scanning findings. R2 found new HIGH security issues (MCP env passthrough **F-018**, Firecrawl env-name injection **F-019**, approval bypass **F-020**) that are not surfaced by GitHub's analyzers - these require domain-aware review. The auto-scan fixes are useful but address a different category of risk. Held narrowly.
 - **Storage coverage expansion (~20 commits, `e1c78ab1` -> `64e3f88d`, `0205057a`, `3719ed48` etc.):** Substantial real work. Per-repository tests added. R7-C1 still fires though: the Postgres path uses `FakePool` - the exact mock the owner explicitly forbade in auto-memory. Storage coverage expansion is real for SQLite; for Postgres it's adversarial mocking. Mixed.
 
@@ -1433,8 +1440,8 @@ HIGH findings + compounding mediums, grouped by area.
 - **F-031** - Add startup warning when `allowLoopbackBypass=true` and `GATEWAY_HOST != 127.0.0.1`.
 
 **Testing.**
-- **F-016** - Add `verification-coverage.yml` workflow; wire `coverage:gate:production` into the required-checks matrix.
-- **F-017** - Fix the storage glob to `src/**/*.test.ts`.
+- **F-016** - Closed: `verify:fast` now runs `coverage:collect` and `coverage:gate:production`.
+- **F-017** - Closed: the storage package test lane now uses a recursive `src/**/*.test.ts` glob; keep server-encoding coverage proved through the package test lane.
 
 **Performance.**
 - **F-032** - Add `ChatSessionPrefsRepository.listBySessionIds`. Stop fetching 20,000 sessions per call.
@@ -1514,8 +1521,7 @@ After fixing each CRITICAL, confirm in this order before claiming completion:
 - [ ] **F-013** - Manually fail a run via `failWorkflowRun`. Re-trigger durable resume. Confirm engine throws on attempted `startRun`; confirm the run does not revert to phase 1.
 - [ ] **F-014** - Run `pnpm --filter @goatcitadel/storage test` against a real Postgres (testcontainers or compose). Confirm migrator tests, client tests, and sync-worker tests execute against the live DB.
 - [ ] **F-015** - Replace one `notEqual(500)` in `coverage-exercise.ts` with a precise assertion that fails today. Confirm the failure surfaces in `pnpm coverage:gate:production`.
-- [ ] **F-016** - `verification-coverage.yml` workflow runs `coverage:gate:production` on PR; confirm it appears in the required-checks list of `verification-1-0-release-proof.yml`.
-- [ ] **F-017** - `pnpm --filter @goatcitadel/storage test 2>&1 | grep server-encoding` returns a passing test line. (Today: empty.)
+- [x] **F-016** - `verify:fast` runs `coverage:gate:production`, and release proof includes `verify:fast`.
+- [x] **F-017** - Storage package tests now use recursive discovery; rerun `pnpm --filter @goatcitadel/storage test` for current server-encoding proof instead of relying on the historical empty grep.
 
 Once all 17 boxes are checked, re-run the convergence map in Section 5 - at least 5 convergent issues should be resolved.
-
