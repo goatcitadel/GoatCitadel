@@ -11,6 +11,7 @@ interface Harness {
   rootDir: string;
   storage: Storage;
   service: ImprovementService;
+  callbacks: ImprovementServiceCallbacks;
   routingPolicies: Record<string, unknown>;
   repairPolicies: Record<string, unknown>;
   published: Array<{ eventType: string; source: string; payload: Record<string, unknown> }>;
@@ -478,7 +479,7 @@ function createHarness(): Harness {
     // accidentally hits this mock without overriding it fails loudly via
     // assertion mismatch instead of crashing on `undefined.choices`. Tests
     // that rely on specific completion content should call
-    // `(callbacks.createChatCompletion as Mock).mockImplementationOnce(...)`.
+    // `(harness.callbacks.createChatCompletion as Mock).mockImplementationOnce(...)`.
     createChatCompletion: vi.fn(async () => ({
       id: "mock-chatcmpl-1",
       object: "chat.completion",
@@ -501,7 +502,7 @@ function createHarness(): Harness {
   } as unknown as ImprovementServiceCallbacks;
 
   const service = new ImprovementService(ctx, callbacks);
-  const harness = { rootDir, storage, service, routingPolicies, repairPolicies, published };
+  const harness = { rootDir, storage, service, callbacks, routingPolicies, repairPolicies, published };
   harnesses.push(harness);
   return harness;
 }
