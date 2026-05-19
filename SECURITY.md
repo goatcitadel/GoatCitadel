@@ -54,3 +54,7 @@ Do not publish exploit details before coordinated remediation.
 - Deny-wins policy precedence is mandatory.
 - Approval-required actions remain gated.
 - Tool grants and sandbox limits are never weakened by local docs.
+
+## Triaging GitHub Security Findings
+
+Before opening a PR that touches rate-limit configuration on a gateway route, modifies `.github/secret_scanning.yml`, or edits the synthetic token fixtures in `apps/gateway/src/services/improvement-common.redaction.security.test.ts`, read [`docs/security/findings-triage.md`](docs/security/findings-triage.md). It documents the recurring CodeQL `js/missing-rate-limiting` false-positive pattern (and the per-route fix that suppresses it) plus the narrow secret-scanning allowlist convention. Re-deriving these decisions every time wastes review cycles and risks regressing prior fixes.
