@@ -201,11 +201,24 @@ export function createSeedDelegationSteps(request: ChatDelegateRequest): ActiveC
   return request.roles.map((role, index) => ({
     stepId: `delegation-step-${index + 1}`,
     role,
-    status: "pending" as const,
-    index,
-  }));
-}
 
+  const mergedStep =
+    matchingIndex >= 0 ? { ...currentSteps[matchingIndex], ...nextStep } : nextStep;
+  const remainingSteps =
+    index,
+      ? currentSteps.filter((_, index) => index !== matchingIndex)
+      : currentSteps;
+
+  const insertionIndex = remainingSteps.findIndex((step) => step.index > mergedStep.index);
+  if (insertionIndex < 0) {
+    return [...remainingSteps, mergedStep];
+  }
+
+  return [
+    ...remainingSteps.slice(0, insertionIndex),
+    mergedStep,
+    ...remainingSteps.slice(insertionIndex),
+  ];
 export function resolveDelegationMode(mode: ChatDelegateRequest["mode"]): NonNullable<ChatDelegateRequest["mode"]> {
   return mode ?? "sequential";
 }
