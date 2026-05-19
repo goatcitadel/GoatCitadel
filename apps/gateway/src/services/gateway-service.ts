@@ -10,12 +10,7 @@ import { EventIngestService, logger } from "@goatcitadel/gateway-core";
 const log = logger.child("gateway-service");
 import { MeshService } from "@goatcitadel/mesh-core";
 import { OrchestrationEngine, type TurnRuntime } from "@goatcitadel/orchestration";
-import {
-  ToolPolicyEngine,
-  assertNotPrivateOrReservedHost,
-  assertWritePathInJail,
-  fetchAllowlisted,
-} from "@goatcitadel/policy-engine";
+import { ToolPolicyEngine, assertWritePathInJail, fetchAllowlisted } from "@goatcitadel/policy-engine";
 import { SkillsService } from "@goatcitadel/skills";
 import {
   type Storage,
@@ -6510,16 +6505,18 @@ export class GatewayService {
     // then trigger an action/diagnostic to send `Authorization: Bearer
     // <OPENAI_API_KEY>` to the attacker host.
     //
-    // We refuse private/loopback/metadata destinations outright, including
-    // public-looking hostnames that resolve to private addresses. Loopback
-    // bridge URLs (e.g. iMessage bridge on 127.0.0.1) must be opted in via
-    // the operator-configured outbound allowlist that the policy engine
-    // already maintains — this helper is the wrong layer to special-case
-    // them, and the operator-strict diagnostics route in PR-2/PR-3 will
-    // perform the per-call allowlist enforcement.
-    assertNotPrivateOrReservedHost(url);
+    // We refuse private/loopback/metadata destinations unless the operator
+    // has explicitly added the loopback host to the outbound allowlist that
+    // the policy engine already maintains (e.g., the iMessage bridge on
+    // 127.0.0.1). Listing the operator allowlist FIRST and the public-host
+    // wildcard LAST means `evaluateHostEgress` (in network-guard) matches
+    // explicit loopback patterns first and only falls through to "*" for
+    // genuine public hosts. Bare-IP RFC1918, AWS metadata, GCP metadata,
+    // link-local, and ULA addresses are still blocked because "*" is not
+    // an explicit loopback pattern.
+    const operatorAllowlist = this.config.toolPolicy.sandbox.networkAllowlist;
     return fetchAllowlisted(url, {
-      allowlist: ["*"],
+      allowlist: [...operatorAllowlist, "*"],
       timeoutMs: 5000,
       init,
     });

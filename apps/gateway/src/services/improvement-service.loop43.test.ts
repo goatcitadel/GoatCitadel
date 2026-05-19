@@ -66,6 +66,11 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
     vi.useFakeTimers({ now: new Date("2026-05-17T09:30:00.000Z") });
     const harness = createHarness();
     harness.service.ensureWeeklyImprovementCronJob();
+    // First-run default is disabled (codex finding #27). Opt the operator in
+    // before forcing the run, since the scheduler skips disabled jobs even
+    // when force=true (matches the first loop43 test in this file).
+    const created = harness.storage.cronJobs.get("improvement_weekly");
+    harness.storage.cronJobs.upsert({ ...created!, enabled: true }, new Date().toISOString());
 
     await harness.service.runWeeklyImprovementSchedulerIfDue({ force: true });
 

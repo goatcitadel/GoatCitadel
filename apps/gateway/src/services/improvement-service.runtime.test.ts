@@ -175,8 +175,11 @@ describe("ImprovementService runtime coverage", () => {
     harness.service.stopScheduler();
     harness.service.stopScheduler();
     harness.service.ensureWeeklyImprovementCronJob();
+    // First-run default is disabled (codex finding #27) — operator opts in
+    // from Mission Control settings before the weekly job ships chat/tool
+    // traces to the LLM judge.
     expect(harness.storage.cronJobs.get("improvement_weekly")).toMatchObject({
-      enabled: true,
+      enabled: false,
       schedule: "0 2 * * 0 America/Los_Angeles",
     });
 

@@ -448,7 +448,10 @@ describe("ImprovementService ledger lifecycle", () => {
 
     harness.service.ensureWeeklyImprovementCronJob();
     const cronJob = harness.storage.cronJobs.get("improvement_weekly");
-    assert.equal(cronJob?.enabled, true);
+    // First-run default is disabled (codex finding #27): the weekly job ships
+    // sampled chat/tool traces to the LLM judge and must not start running
+    // until an operator explicitly opts in from Mission Control settings.
+    assert.equal(cronJob?.enabled, false);
     assert.equal(cronJob?.schedule, "0 2 * * 0 America/Los_Angeles");
 
     const startedAt = "2026-05-10T02:00:00.000Z";
