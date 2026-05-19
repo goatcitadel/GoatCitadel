@@ -32,7 +32,7 @@ Do not:
 
 ### Why CodeQL keeps flagging these
 
-The gateway registers `@fastify/rate-limit` with `global: false` and uses an `onRoute` hook in [`apps/gateway/src/app.ts`](../../apps/gateway/src/app.ts) (search for `addHook("onRoute"`) to auto-classify every route into a per-IP bucket:
+The gateway registers `@fastify/rate-limit` with `global: false` and uses an `onRoute` hook in [`apps/gateway/src/app.ts`](../../apps/gateway/src/app.ts) (search for `addHook("onRoute")`) to auto-classify every route into a per-IP bucket:
 
 | Bucket | Default `max` / minute | Triggers when… |
 |---|---:|---|
