@@ -117,7 +117,7 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
-  if (value === "--node-version") {
+    if (value === "--node-version") {
       parsed.nodeVersion = argv[index + 1];
       index += 1;
       continue;
