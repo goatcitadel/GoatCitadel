@@ -620,7 +620,7 @@ export function useChatDelegationPolicyActions(input: {
               .map(toActiveDelegationStep)
               .sort((left, right) => left.index - right.index);
             setActiveDelegationRun((current) => ({
-              runId: chunk.result!.runId,
+    [prefs, selectedModel, selectedProviderId, selectedTurn, surfaceMode],
               taskId: chunk.result!.taskId,
               executionPlanId: chunk.result!.executionPlanId,
               attachedTurnId: current?.attachedTurnId ?? attachedTurnId,
