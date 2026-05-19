@@ -289,36 +289,40 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.post("/api/v1/agentic/runs/:runId/control", async (request, reply) => {
-    await fastify.requireOperatorAuth(request, reply);
-    if (reply.sent) return reply;
-    const params = agenticRunParamsSchema.safeParse(request.params);
-    const query = agenticRunAccessQuerySchema.safeParse(request.query);
-    const body = agenticControlSchema.safeParse(request.body);
-    if (!params.success || !query.success || !body.success) {
-      return reply.code(400).send({
-        error: {
-          params: params.success ? undefined : params.error.flatten(),
-          query: query.success ? undefined : query.error.flatten(),
-          body: body.success ? undefined : body.error.flatten(),
-        },
-      });
-    }
-    try {
-      return reply.send(
-        fastify.services.tasks.invokeAgenticControl(
-          params.data.runId,
-          {
-            ...body.data,
-            actorId: request.authActorId,
+  fastify.post(
+    "/api/v1/agentic/runs/:runId/control",
+    { config: { rateLimit: { max: KANBAN_MUTATION_RATE_LIMIT_MAX } } },
+    async (request, reply) => {
+      await fastify.requireOperatorAuth(request, reply);
+      if (reply.sent) return reply;
+      const params = agenticRunParamsSchema.safeParse(request.params);
+      const query = agenticRunAccessQuerySchema.safeParse(request.query);
+      const body = agenticControlSchema.safeParse(request.body);
+      if (!params.success || !query.success || !body.success) {
+        return reply.code(400).send({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            query: query.success ? undefined : query.error.flatten(),
+            body: body.success ? undefined : body.error.flatten(),
           },
-          { workspaceId: query.data.workspaceId },
-        ),
-      );
-    } catch (error) {
-      return sendRouteError(reply, error, request.log);
-    }
-  });
+        });
+      }
+      try {
+        return reply.send(
+          fastify.services.tasks.invokeAgenticControl(
+            params.data.runId,
+            {
+              ...body.data,
+              actorId: request.authActorId,
+            },
+            { workspaceId: query.data.workspaceId },
+          ),
+        );
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
 
   fastify.post("/api/v1/tasks/:taskId/agentic/diagnostics", async (request, reply) => {
     const taskId = (request.params as { taskId: string }).taskId;
