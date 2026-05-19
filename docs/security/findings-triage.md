@@ -152,7 +152,7 @@ For any secret-scanning alert *not* in a file covered by §3 or `secret_scanning
 ## References
 
 - Implementation: [PR #22 — fix(security): explicit rate-limit configs on gateway routes + test-fixture secret-scan exclusion](https://github.com/goatcitadel/GoatCitadel/pull/22)
-- Gateway rate-limit wiring: [`apps/gateway/src/app.ts`](../../apps/gateway/src/app.ts) (search `addHook("onRoute"` and `resolveRateLimitConfig`)
+- Gateway rate-limit wiring: [`apps/gateway/src/app.ts`](../../apps/gateway/src/app.ts) (search `addHook("onRoute")` and `resolveRateLimitConfig`)
 - Helper for webhook route options: [`apps/gateway/src/routes/integration-webhooks-shared.ts`](../../apps/gateway/src/routes/integration-webhooks-shared.ts)
 - Top-level policy: [`SECURITY.md`](../../SECURITY.md)
 - Agent conventions: [`AGENTS.md`](../../AGENTS.md)
