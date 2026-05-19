@@ -73,7 +73,7 @@ Pick the constant whose value equals the bucket default for the method (mutation
 
 ### Special case: routes that use a shared options helper
 
-`integration-webhooks-shared.ts` exports `createWebhookRouteOptions()` which already sets `config.rateLimit.max: 500`. CodeQL still flags routes that consume the helper because the rate-limit value is hidden behind a function call. The fix is to spread the helper's output and re-state `rateLimit` literally at the call site:
+`integration-webhooks-shared.ts` exports `createWebhookRouteOptions()`, which provides shared route-options structure (and may include default `config.rateLimit` values). For routes that use this helper, the effective per-route limit should still be set explicitly at registration by spreading the helper output and overriding `config.rateLimit.max` literally at the call site. CodeQL relies on that literal call-site value and may flag routes when the limiter is only implied through a helper:
 
 ```ts
 const opts = createWebhookRouteOptions("genericChannelRawBody");
