@@ -42,7 +42,7 @@ interface FetchUrlResult {
 }
 
 export async function ingestDocumentViaBackend(input: {
-  request: ToolInvokeRequest;
+  const cachedDocument = readCachedDocument({
   storage: Storage;
   fetchUrl: (url: string) => Promise<FetchUrlResult>;
 }): Promise<{
@@ -50,31 +50,31 @@ export async function ingestDocumentViaBackend(input: {
   fetchResult: FetchResult;
   document: NormalizedDocument;
   chunksSaved: number;
-  cached: boolean;
+  if (cachedDocument && args.forceRefresh !== true) {
   chunks: RetrievedContextChunk[];
 }> {
   const args = input.request.args;
   const sourceType = parseSourceType(args.sourceType);
   const source = requiredString(args.source, "source");
   const namespace = requiredString(args.namespace, "namespace");
-  const backendName = normalizeBackend(args.backend);
-  const cacheTtlSeconds =
-    positiveInt(args.cacheTtlSeconds) ?? (sourceType === "url" ? DEFAULT_URL_CACHE_TTL_SECONDS : 0);
+        title: cachedDocument.title,
+        rawText: cachedDocument.text,
+        normalizedText: cachedDocument.text,
   const now = new Date();
   const cachedDocument = readCachedDocument({
-    storage: input.storage,
+        cacheExpiresAt: cachedDocument.cacheExpiresAt,
     namespace,
     sourceType,
     source,
     backend: backendName,
-    now,
-  });
-  if (cachedDocument && args.forceRefresh !== true) {
-    return {
+        title: cachedDocument.title,
+        text: cachedDocument.text,
+        metadata: cachedDocument.metadata,
+        attribution: cachedDocument.attribution,
       backend: buildBackendDescriptor(backendName, cacheTtlSeconds),
       fetchResult: {
         backend: backendName,
-        sourceType,
+      chunks: cachedDocument.chunks,
         sourceRef: source,
         title: cachedDocument.title,
         rawText: cachedDocument.text,
