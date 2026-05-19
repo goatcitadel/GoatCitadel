@@ -7729,14 +7729,6 @@ interface McpAuthStateRecord {
   lastCodePreview?: string;
 }
 
-function safeJsonParse<T>(raw: string, fallback: T): T {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
-
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
