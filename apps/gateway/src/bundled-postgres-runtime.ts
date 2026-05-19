@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { PostgresDatabaseClient } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "./config.js";
@@ -10,6 +10,49 @@ import { isBundledPostgresMode, resolveGatewayPostgresConnectionOptions } from "
 
 export const POSTGRES_IMAGE = "postgres:16-alpine";
 const READY_POLL_MS = 500;
+// SECURITY (codex finding #2): Path (relative to gateway rootDir) where the
+// generated bundled-Postgres superuser password is persisted. File is
+// written with mode 0o600. Existing data directories that were initialised
+// with trust auth before this change keep trust auth (the postgres image
+// only honours POSTGRES_HOST_AUTH_METHOD when a fresh data directory is
+// initialised) — the password file is still resolved and passed in the
+// connection string but trust auth ignores it harmlessly.
+const BUNDLED_POSTGRES_PASSWORD_FILE = "data/secrets/postgres-bundled-password";
+
+export function bundledPostgresPasswordFilePath(config: GatewayRuntimeConfig): string {
+  return path.resolve(config.rootDir, BUNDLED_POSTGRES_PASSWORD_FILE);
+}
+
+export async function readBundledPostgresPassword(config: GatewayRuntimeConfig): Promise<string | undefined> {
+  try {
+    const raw = await fs.readFile(bundledPostgresPasswordFilePath(config), "utf8");
+    const trimmed = raw.trim();
+    return trimmed.length >= 16 ? trimmed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function ensureBundledPostgresPassword(config: GatewayRuntimeConfig): Promise<string> {
+  const existing = await readBundledPostgresPassword(config);
+  if (existing) {
+    return existing;
+  }
+  const password = randomBytes(24).toString("base64url");
+  const filePath = bundledPostgresPasswordFilePath(config);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  // Write with mode 0o600 — read-only for owner, no access for group/other.
+  // On Windows the chmod is best-effort, but the file lives under
+  // `data/secrets/` which the operator should already restrict at the OS
+  // level for the gateway's runtime account.
+  await fs.writeFile(filePath, password, { encoding: "utf8", mode: 0o600 });
+  try {
+    await fs.chmod(filePath, 0o600);
+  } catch {
+    // Windows / fs without chmod support — best-effort only.
+  }
+  return password;
+}
 
 export interface BundledPostgresRuntimeHandle {
   readonly strategy: "native" | "docker";
@@ -196,12 +239,24 @@ async function tryStartDockerBundledPostgres(
   // bound `--publish ${port}:5432`, which Docker maps to all host
   // interfaces (`0.0.0.0:${port}->5432`) by default. Combined with
   // `POSTGRES_HOST_AUTH_METHOD=trust`, this exposed an unauthenticated
-  // superuser Postgres on the network. We now explicitly bind the publish
-  // to `127.0.0.1` so the bundled instance is unreachable from outside
-  // the host, matching the native bundled adapter's `-h 127.0.0.1`
-  // behaviour. The full fix would also generate a password and use
-  // scram-sha-256; that requires changes in the gateway's Postgres
-  // connection string resolution and is filed for follow-up.
+  // superuser Postgres on the network.
+  //
+  // Two layers of mitigation now apply:
+  //   1. `--publish 127.0.0.1:${port}:5432` keeps the instance off the
+  //      network entirely (matches the native adapter's `-h 127.0.0.1`).
+  //   2. A per-install random password (persisted under
+  //      `data/secrets/postgres-bundled-password`, mode 0o600) is passed
+  //      via `POSTGRES_PASSWORD` AND `POSTGRES_HOST_AUTH_METHOD=scram-sha-256`,
+  //      so any local-process compromise that reaches the port still has
+  //      to read the password file (which the gateway's runtime account
+  //      restricts) before connecting as the postgres superuser.
+  //
+  // Note: the postgres image only honours `POSTGRES_HOST_AUTH_METHOD` and
+  // `POSTGRES_PASSWORD` when initialising a FRESH data directory. Existing
+  // dataDirs that were initialised with trust auth keep trust auth — the
+  // password is harmlessly passed but ignored. Operators who want
+  // scram-sha-256 on an existing cluster must recreate the data dir.
+  const bundledPassword = await ensureBundledPostgresPassword(config);
   execFileSync(
     "docker",
     [
@@ -216,7 +271,9 @@ async function tryStartDockerBundledPostgres(
       "--env",
       "POSTGRES_USER=postgres",
       "--env",
-      "POSTGRES_HOST_AUTH_METHOD=trust",
+      "POSTGRES_HOST_AUTH_METHOD=scram-sha-256",
+      "--env",
+      `POSTGRES_PASSWORD=${bundledPassword}`,
       "--env",
       "POSTGRES_DB=postgres",
       POSTGRES_IMAGE,

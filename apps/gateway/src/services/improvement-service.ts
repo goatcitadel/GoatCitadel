@@ -100,6 +100,7 @@ import {
   clampProbability,
   extractCompletionText,
   parseLooseJsonRecord,
+  redactSensitivePayload,
   safeJsonParse,
   truncateForModelJudge,
   withTimeout,
@@ -451,9 +452,19 @@ export class ImprovementService {
         jobId: "improvement_weekly",
         name: "Self-Improvement Weekly Replay",
         action: "improvement",
-        description: existing?.description ?? "Run the weekly self-improvement replay cycle.",
+        // SECURITY (codex finding #27): The weekly improvement run samples
+        // recent chat turn traces and tool runs (args_json/result_json)
+        // and ships them to the configured LLM provider for a judge pass.
+        // Until the redaction layer below has been verified against every
+        // tool category, the first-run default must be DISABLED so a fresh
+        // install does not start emitting chat-turn telemetry without an
+        // explicit operator opt-in. Operators who want the audit run
+        // toggle it on from Mission Control settings.
+        description:
+          existing?.description ??
+          "Run the weekly self-improvement replay cycle. Disabled by default (codex #27) — enable from Mission Control settings after reviewing what is sent to the LLM provider.",
         schedule: IMPROVEMENT_WEEKLY_SCHEDULE_LABEL,
-        enabled: existing?.enabled ?? true,
+        enabled: existing?.enabled ?? false,
         endAt: existing?.endAt,
         lastRunAt: existing?.lastRunAt,
         nextRunAt: existing?.nextRunAt,
@@ -4771,10 +4782,18 @@ export class ImprovementService {
     messageCache: Map<string, Map<string, string>>,
   ): Promise<{ inputExcerpt?: string; outputExcerpt?: string }> {
     if (candidate.decisionType === "tool_run") {
+      // SECURITY (codex finding #27): redact secret-bearing patterns and
+      // env-resolved credentials BEFORE truncating + emitting into the
+      // judge prompt.
       return {
-        inputExcerpt: truncateForModelJudge(candidate.args ? JSON.stringify(candidate.args, null, 2) : "", 1800),
+        inputExcerpt: truncateForModelJudge(
+          redactSensitivePayload(candidate.args ? JSON.stringify(candidate.args, null, 2) : ""),
+          1800,
+        ),
         outputExcerpt: truncateForModelJudge(
-          candidate.error ?? (candidate.result ? JSON.stringify(candidate.result, null, 2) : ""),
+          redactSensitivePayload(
+            candidate.error ?? (candidate.result ? JSON.stringify(candidate.result, null, 2) : ""),
+          ),
           1800,
         ),
       };
@@ -4796,10 +4815,10 @@ export class ImprovementService {
     }
     return {
       inputExcerpt: candidate.userMessageId
-        ? truncateForModelJudge(sessionMessages.get(candidate.userMessageId) ?? "", 2200)
+        ? truncateForModelJudge(redactSensitivePayload(sessionMessages.get(candidate.userMessageId) ?? ""), 2200)
         : undefined,
       outputExcerpt: candidate.assistantMessageId
-        ? truncateForModelJudge(sessionMessages.get(candidate.assistantMessageId) ?? "", 2500)
+        ? truncateForModelJudge(redactSensitivePayload(sessionMessages.get(candidate.assistantMessageId) ?? ""), 2500)
         : undefined,
     };
   }

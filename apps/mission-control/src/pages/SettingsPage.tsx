@@ -770,26 +770,19 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
     }
   };
 
+  // SECURITY (codex finding #30): Do NOT auto-invoke the model preview
+  // endpoint on every base-URL field change. Previously, this hook
+  // debounced field edits by 600ms and then POSTed
+  // `/api/v1/llm/models/preview` automatically. Even though the
+  // service-side fix (llm-service.ts:previewModels) refuses to inherit
+  // stored credentials when the base-URL host differs, the auto-invoke
+  // turns the field into a side-effect surface — an attacker who can
+  // influence the field (XSS in the operator session, social engineering
+  // a paste) triggers the request without an explicit operator gesture.
+  // The operator must now click the "Test connection / Load models"
+  // button to fetch models. Any abort cleanup from a prior load still
+  // runs on unmount.
   useEffect(() => {
-    if (modelPreviewTimerRef.current) {
-      clearTimeout(modelPreviewTimerRef.current);
-      modelPreviewTimerRef.current = null;
-    }
-    modelPreviewAbortRef.current?.abort();
-    const targetProviderId = (providerId || activeProviderId).trim();
-    if (!targetProviderId || !providerBaseUrl.trim()) {
-      setLoadingModels(false);
-      return;
-    }
-    modelPreviewTimerRef.current = setTimeout(() => {
-      const controller = new AbortController();
-      modelPreviewAbortRef.current = controller;
-      void onLoadModels({ signal: controller.signal }).finally(() => {
-        if (modelPreviewAbortRef.current === controller) {
-          modelPreviewAbortRef.current = null;
-        }
-      });
-    }, 600);
     return () => {
       if (modelPreviewTimerRef.current) {
         clearTimeout(modelPreviewTimerRef.current);
@@ -797,16 +790,7 @@ export function SettingsPage({ activeTab, focusSectionId }: SettingsPageProps = 
       }
       modelPreviewAbortRef.current?.abort();
     };
-  }, [
-    activeProviderId,
-    providerApiKey,
-    providerApiKeyEnv,
-    providerApiStyle,
-    providerBaseUrl,
-    providerId,
-    providerRequestValidation.error,
-    providerRequestValidation.request,
-  ]);
+  }, []);
 
   const onTestChat = async () => {
     setError(null);

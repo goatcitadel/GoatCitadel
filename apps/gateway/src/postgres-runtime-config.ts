@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { PostgresConnectionOptions } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "./config.js";
 
@@ -15,6 +17,25 @@ export function isBundledPostgresMode(config: GatewayRuntimeConfig): boolean {
   );
 }
 
+// SECURITY (codex finding #2): When running against the bundled Postgres,
+// resolve the per-install superuser password from
+// `data/secrets/postgres-bundled-password` (kept in sync by
+// `ensureBundledPostgresPassword` in bundled-postgres-runtime.ts). This is
+// read-only sync so the function can stay synchronous; the password file
+// is tiny and only read at process startup / pool creation.
+function readBundledPostgresPasswordSync(config: GatewayRuntimeConfig): string | undefined {
+  if (!isBundledPostgresMode(config)) {
+    return undefined;
+  }
+  try {
+    const filePath = path.resolve(config.rootDir, "data/secrets/postgres-bundled-password");
+    const raw = fs.readFileSync(filePath, "utf8").trim();
+    return raw.length >= 16 ? raw : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function resolveGatewayPostgresConnectionOptions(
   config: GatewayRuntimeConfig,
   options: GatewayPostgresResolveOptions = {},
@@ -30,7 +51,8 @@ export function resolveGatewayPostgresConnectionOptions(
     host && bundledMode && !postgres.host?.trim() ? config.assistant.database.bundledPostgres.port : postgres.port;
   const database = options.databaseOverride?.trim() || postgres.database || "goatcitadel";
   const user = postgres.user?.trim() || (bundledMode && !connectionString ? "postgres" : undefined);
-  const password = postgres.password ?? readNamedEnv(postgres.passwordEnv);
+  const bundledPassword = bundledMode && !connectionString ? readBundledPostgresPasswordSync(config) : undefined;
+  const password = postgres.password ?? readNamedEnv(postgres.passwordEnv) ?? bundledPassword;
 
   return {
     connectionString: connectionString || undefined,

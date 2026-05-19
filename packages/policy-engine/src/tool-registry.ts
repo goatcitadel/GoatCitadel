@@ -1210,13 +1210,30 @@ export class ToolRegistry {
 }
 
 export interface CreateDefaultToolRegistryOptions {
+  /**
+   * Reserved for future use. The registry currently always includes Bankr
+   * tool definitions; whether they are *callable* is determined at
+   * `ToolPolicyEngine.evaluateAccessInternal` time via the runtime flag.
+   * See SECURITY note below.
+   */
   bankrBuiltinEnabled?: boolean;
 }
 
-export function createDefaultToolRegistry(options?: CreateDefaultToolRegistryOptions): ToolRegistry {
-  const bankrBuiltinEnabled = options?.bankrBuiltinEnabled ?? false;
-  const initialTools = bankrBuiltinEnabled
-    ? BUILTIN_TOOLS
-    : BUILTIN_TOOLS.filter((tool) => !tool.name.startsWith("bankr."));
-  return new ToolRegistry(initialTools);
+export function createDefaultToolRegistry(_options?: CreateDefaultToolRegistryOptions): ToolRegistry {
+  // SECURITY (codex finding #31): Always include Bankr tool definitions in
+  // the registry, regardless of the initial runtime-flag value. Whether a
+  // call is actually permitted is decided at evaluation time by
+  // `ToolPolicyEngine.evaluateAccessInternal` (which calls
+  // `isBankrBuiltinEnabled()` lazily).
+  //
+  // The previous behaviour baked the flag value into the registry at
+  // construction time. If the gateway started with the flag OFF and an
+  // operator toggled it ON via `/api/v1/settings`, the engine's
+  // feature-flag deny stopped firing — but `toolDef` for `bankr.write`
+  // remained undefined, so the risk classifier fell back to
+  // `riskLevel: "caution"` / `requiresApproval: false`, and the executor
+  // ran the write tool without approval. Including the definitions
+  // unconditionally ensures the toolDef metadata (riskLevel "nuclear",
+  // requiresApproval: true) is available the moment the flag flips.
+  return new ToolRegistry(BUILTIN_TOOLS);
 }

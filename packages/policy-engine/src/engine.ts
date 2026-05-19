@@ -114,8 +114,13 @@ export class ToolPolicyEngine {
     this.runtimeOptions = {
       isBankrBuiltinEnabled: runtimeOptions.isBankrBuiltinEnabled ?? (() => false),
     };
-    this.registry =
-      registry ?? createDefaultToolRegistry({ bankrBuiltinEnabled: this.runtimeOptions.isBankrBuiltinEnabled() });
+    // SECURITY (codex finding #31): The registry always carries Bankr tool
+    // definitions; whether they are callable is decided lazily by
+    // `evaluateAccessInternal` via `isBankrBuiltinEnabled()`. We do NOT
+    // pass the current flag value into `createDefaultToolRegistry`
+    // because that would re-introduce the construction-time bake-in
+    // that broke runtime toggle semantics.
+    this.registry = registry ?? createDefaultToolRegistry();
     this.approvals = new ApprovalGate(storage);
   }
 
