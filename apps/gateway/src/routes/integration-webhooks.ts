@@ -17,10 +17,19 @@ import {
   verifyGenericChannelInboundSignature,
 } from "../services/generic-channel-webhook.js";
 
+const GENERIC_CHANNEL_INBOUND_RATE_LIMIT_MAX = 500;
+
 export const integrationWebhookRoutes: FastifyPluginAsync = async (fastify) => {
+  const genericChannelInboundOptions = createWebhookRouteOptions("genericChannelRawBody");
   fastify.post(
     "/api/v1/integrations/connections/:connectionId/:channel/inbound",
-    createWebhookRouteOptions("genericChannelRawBody"),
+    {
+      ...genericChannelInboundOptions,
+      config: {
+        ...genericChannelInboundOptions.config,
+        rateLimit: { max: GENERIC_CHANNEL_INBOUND_RATE_LIMIT_MAX },
+      },
+    },
     async (request, reply) => {
       const contentLength = parseContentLength(request.headers["content-length"]);
       if (contentLength !== undefined && contentLength > CHANNEL_INBOUND_MAX_BYTES) {
