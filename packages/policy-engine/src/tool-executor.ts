@@ -27,14 +27,6 @@ import {
   type DocumentArtifactFormat,
   type DocumentArtifactSection,
 } from "./document-artifacts.js";
-import {
-  appendBankrActionAudit,
-  evaluateBankrActionPreview,
-  releaseBankrBudgetReservation,
-  readBankrSafetyPolicy,
-  reserveBankrBudget,
-} from "./bankr-guard.js";
-
 const execFileAsync = promisify(execFile);
 const MAX_HTTP_REDIRECTS = 5;
 const MAX_HTTP_RETRIES = 2;
@@ -60,18 +52,10 @@ function scrubSensitiveOutput(text: string): string {
   return scrubbed.slice(0, MAX_SHELL_OUTPUT_BYTES);
 }
 
-const BANKR_OPTIONAL_MIGRATION_MESSAGE =
-  "Bankr built-in is disabled. Install the optional skill pack (docs/OPTIONAL_BANKR_SKILL.md; templates/skills/bankr-optional/SKILL.md).";
-
-export interface ExecuteToolOptions {
-  bankrBuiltinEnabled?: boolean;
-}
-
 export async function executeTool(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
   storage: Storage,
-  options: ExecuteToolOptions = {},
 ): Promise<Record<string, unknown>> {
   const argLeakDetections = collectLeakDetections(request.args);
   if (argLeakDetections.length > 0 && (request.authContext?.secretRefs?.length ?? 0) === 0) {
@@ -87,21 +71,11 @@ export async function executeTool(
     });
     return finalizeToolResult(rawResult);
   }
-  if (request.toolName.startsWith("bankr.") && options.bankrBuiltinEnabled === false) {
-    throw new Error(BANKR_OPTIONAL_MIGRATION_MESSAGE);
-  }
-
   switch (request.toolName) {
     case "session.status":
       return finalizeToolResult({ sessionId: request.sessionId, status: "ok" });
     case "time.now":
       return finalizeToolResult(timeNow());
-    case "bankr.status":
-      return finalizeToolResult(await bankrStatus(storage));
-    case "bankr.read":
-      return finalizeToolResult(await bankrPrompt(request, storage, "read"));
-    case "bankr.write":
-      return finalizeToolResult(await bankrPrompt(request, storage, "write"));
     case "fs.read":
       return finalizeToolResult(await fsRead(request, config, storage));
     case "file.read_range":
@@ -225,195 +199,6 @@ function timeNow() {
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     epochMs: now.getTime(),
   };
-}
-
-async function bankrStatus(storage: Storage) {
-  const policy = readBankrSafetyPolicy(storage);
-  const cliAvailable = await hasBankrCli();
-  return {
-    cliAvailable,
-    policy,
-  };
-}
-
-async function bankrPrompt(request: ToolInvokeRequest, storage: Storage, mode: "read" | "write") {
-  const preview = evaluateBankrActionPreview(storage, {
-    ...(request.args as Record<string, unknown>),
-    sessionId: request.sessionId,
-    actorId: request.agentId,
-  });
-
-  if (mode === "read" && preview.normalized.actionType !== "read") {
-    appendBankrActionAudit(storage, {
-      sessionId: request.sessionId,
-      actorId: request.agentId,
-      actionType: preview.normalized.actionType,
-      chain: preview.normalized.chain,
-      symbol: preview.normalized.symbol,
-      usdEstimate: preview.normalized.usdEstimate,
-      status: "blocked",
-      policyReason: "bankr.read only supports read actions",
-      details: { requestedMode: mode, normalized: preview.normalized },
-    });
-    throw new Error("bankr.read only supports read actions. Use bankr.write for trade/transfer/sign/submit/deploy.");
-  }
-
-  if (mode === "write" && preview.normalized.actionType === "read") {
-    appendBankrActionAudit(storage, {
-      sessionId: request.sessionId,
-      actorId: request.agentId,
-      actionType: "read",
-      chain: preview.normalized.chain,
-      symbol: preview.normalized.symbol,
-      usdEstimate: preview.normalized.usdEstimate,
-      status: "blocked",
-      policyReason: "bankr.write received read-like request",
-      details: { requestedMode: mode, normalized: preview.normalized },
-    });
-    throw new Error("bankr.write requires a money-moving action intent.");
-  }
-
-  if (!preview.allowed) {
-    appendBankrActionAudit(storage, {
-      sessionId: request.sessionId,
-      actorId: request.agentId,
-      actionType: preview.normalized.actionType,
-      chain: preview.normalized.chain,
-      symbol: preview.normalized.symbol,
-      usdEstimate: preview.normalized.usdEstimate,
-      status: "blocked",
-      policyReason: `${preview.reasonCode}: ${preview.reason}`,
-      details: { preview },
-    });
-    throw new Error(`Bankr policy blocked action: ${preview.reason}`);
-  }
-
-  if (!(await hasBankrCli())) {
-    appendBankrActionAudit(storage, {
-      sessionId: request.sessionId,
-      actorId: request.agentId,
-      actionType: preview.normalized.actionType,
-      chain: preview.normalized.chain,
-      symbol: preview.normalized.symbol,
-      usdEstimate: preview.normalized.usdEstimate,
-      status: "failed",
-      policyReason: "bankr_cli_missing",
-    });
-    throw new Error("Bankr CLI not found. Install @bankr/cli and authenticate before invoking bankr tools.");
-  }
-
-  // Atomically reserve budget BEFORE executing the CLI call so that
-  // concurrent requests cannot both pass the cap check when their
-  // combined cost would exceed the daily cap.
-  let dailyUsageUsdAfter = preview.dailyUsageUsd;
-  let reservedUsdEstimate = 0;
-  if (mode === "write" && Number.isFinite(preview.normalized.usdEstimate)) {
-    const reservation = reserveBankrBudget(storage, Number(preview.normalized.usdEstimate), preview.policy.dailyUsdCap);
-    if (!reservation.reserved) {
-      const remaining = Math.max(0, preview.policy.dailyUsdCap - reservation.dailyTotal);
-      appendBankrActionAudit(storage, {
-        sessionId: request.sessionId,
-        actorId: request.agentId,
-        actionType: preview.normalized.actionType,
-        chain: preview.normalized.chain,
-        symbol: preview.normalized.symbol,
-        usdEstimate: preview.normalized.usdEstimate,
-        status: "blocked",
-        policyReason: `daily_cap_exceeded: Estimated USD amount exceeds remaining daily cap ($${remaining}).`,
-        details: { preview, reservationTotal: reservation.dailyTotal },
-      });
-      throw new Error(`Bankr policy blocked action: Estimated USD amount exceeds remaining daily cap ($${remaining}).`);
-    }
-    dailyUsageUsdAfter = reservation.dailyTotal;
-    reservedUsdEstimate = Number(preview.normalized.usdEstimate);
-  }
-
-  const prompt = required(request.args.prompt ?? request.args.content ?? request.args.text, "prompt");
-  const cliArgs = ["prompt"];
-  if (asBoolean(request.args.continue, false)) {
-    cliArgs.push("--continue");
-  } else {
-    const threadId = asString(request.args.threadId);
-    if (threadId) {
-      cliArgs.push("--thread", threadId);
-    }
-  }
-  cliArgs.push(prompt);
-
-  try {
-    const { stdout, stderr } = await execFileAsync("bankr", cliArgs, {
-      timeout: 120000,
-      windowsHide: true,
-      maxBuffer: 8 * 1024 * 1024,
-    });
-
-    appendBankrActionAudit(storage, {
-      sessionId: request.sessionId,
-      actorId: request.agentId,
-      actionType: preview.normalized.actionType,
-      chain: preview.normalized.chain,
-      symbol: preview.normalized.symbol,
-      usdEstimate: preview.normalized.usdEstimate,
-      status: "executed",
-      policyReason: "executed",
-      details: {
-        command: ["bankr", ...cliArgs],
-        stdout: stdout.slice(0, 12000),
-        stderr: stderr.slice(0, 4000),
-        dailyUsageUsdAfter,
-      },
-    });
-
-    return {
-      mode,
-      actionType: preview.normalized.actionType,
-      chain: preview.normalized.chain,
-      symbol: preview.normalized.symbol,
-      usdEstimate: preview.normalized.usdEstimate,
-      stdoutSnippet: stdout.slice(0, 12000),
-      stderrSnippet: stderr.slice(0, 4000),
-      dailyUsageUsdAfter,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const stdout = (error as { stdout?: string })?.stdout;
-    const stderr = (error as { stderr?: string })?.stderr;
-    const code = (error as { code?: number | string })?.code;
-    if (reservedUsdEstimate > 0) {
-      dailyUsageUsdAfter = releaseBankrBudgetReservation(storage, reservedUsdEstimate);
-    }
-    appendBankrActionAudit(storage, {
-      sessionId: request.sessionId,
-      actorId: request.agentId,
-      actionType: preview.normalized.actionType,
-      chain: preview.normalized.chain,
-      symbol: preview.normalized.symbol,
-      usdEstimate: preview.normalized.usdEstimate,
-      status: "failed",
-      policyReason: "cli_execution_failed",
-      details: {
-        command: ["bankr", ...cliArgs],
-        code,
-        stdout: (stdout ?? "").slice(0, 12000),
-        stderr: (stderr ?? message).slice(0, 4000),
-        dailyUsageUsdAfter,
-      },
-    });
-    throw new Error(`Bankr command failed: ${stderr ?? message}`, { cause: error });
-  }
-}
-
-async function hasBankrCli(): Promise<boolean> {
-  try {
-    await execFileAsync("bankr", ["--version"], {
-      timeout: 8000,
-      windowsHide: true,
-      maxBuffer: 256 * 1024,
-    });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function fsRead(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {

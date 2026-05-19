@@ -7,8 +7,6 @@ describe("SkillsRouteService", () => {
     const service = new SkillsRouteService(port);
 
     const calls: Array<[keyof SkillsRoutePort, () => unknown | Promise<unknown>, unknown[]]> = [
-      ["getBankrOptionalMigrationMessage", () => service.getBankrOptionalMigrationMessage(), []],
-      ["isBankrBuiltinEnabled", () => service.isBankrBuiltinEnabled(), []],
       ["listSkills", () => service.listSkills(), []],
       ["reloadSkills", () => service.reloadSkills(), []],
       ["listSkillSources", () => service.listSkillSources("query", 5), ["query", 5]],
@@ -58,14 +56,6 @@ describe("SkillsRouteService", () => {
         () => service.updateSkillActivationPolicy({ guardedAutoThreshold: 0.8 } as never),
         [{ guardedAutoThreshold: 0.8 }],
       ],
-      ["getBankrSafetyPolicy", () => service.getBankrSafetyPolicy(), []],
-      [
-        "updateBankrSafetyPolicy",
-        () => service.updateBankrSafetyPolicy({ enabled: true } as never),
-        [{ enabled: true }],
-      ],
-      ["previewBankrAction", () => service.previewBankrAction({ action: "preview" } as never), [{ action: "preview" }]],
-      ["listBankrActionAudit", () => service.listBankrActionAudit(8, "cursor-1"), [8, "cursor-1"]],
     ];
 
     for (const [method, invoke, args] of calls) {
@@ -80,37 +70,29 @@ describe("SkillsRouteService", () => {
 
     service.listSkillSources();
     service.listSkillImportHistory();
-    service.listBankrActionAudit();
 
     expect(port.listSkillSources).toHaveBeenCalledWith(undefined, undefined);
     expect(port.listSkillImportHistory).toHaveBeenCalledWith(undefined);
-    expect(port.listBankrActionAudit).toHaveBeenCalledWith(undefined, undefined);
   });
 });
 
 function fakePort(): SkillsRoutePort {
   const methods = [
     "bulkSetSkillState",
-    "getBankrOptionalMigrationMessage",
-    "getBankrSafetyPolicy",
     "getSkillActivationPolicy",
     "installSkillImport",
-    "isBankrBuiltinEnabled",
-    "listBankrActionAudit",
     "listSkillImportHistory",
     "listSkillEvaluationRuns",
     "listSkillSources",
     "listSkills",
     "lookupSkillSources",
     "previewSkillEvaluation",
-    "previewBankrAction",
     "runSkillEvaluation",
     "getSkillEvaluationRun",
     "createSkillEvaluationProposal",
     "reloadSkills",
     "resolveSkillActivation",
     "setSkillState",
-    "updateBankrSafetyPolicy",
     "updateSkillActivationPolicy",
     "validateSkillImport",
   ] as const;

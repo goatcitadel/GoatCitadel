@@ -114,49 +114,8 @@ const host = (...parts: string[]): string => parts.join(".");
 const EXAMPLE_HOST = host("example", "com");
 const API_EXAMPLE_HOST = host("api", "example", "com");
 const BLOCKED_EXAMPLE_HOST = host("blocked", "example");
-const API_BANKR_HOST = host("api", "bankr", "bot");
-const LLM_BANKR_HOST = host("llm", "bankr", "bot");
 
-describe("ToolPolicyEngine bankr migration gating", () => {
-  it("blocks bankr tools when built-in support is disabled", () => {
-    const storage = createStorageStub();
-    const engine = new ToolPolicyEngine(policyConfig, storage, undefined, {
-      isBankrBuiltinEnabled: () => false,
-    });
-    const evaluation = engine.evaluateAccess({
-      toolName: "bankr.write",
-      args: {},
-      agentId: "agent",
-      sessionId: "session",
-    });
-    expect(evaluation.allowed).toBe(false);
-    expect(evaluation.reasonCodes).toContain("bankr_builtin_disabled");
-    expect(storage.toolAccessDecisions.record).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "bankr.write",
-        countsTowardLimits: false,
-      }),
-    );
-  });
-
-  it("hides bankr tools from catalog when built-in support is disabled", () => {
-    const storage = createStorageStub();
-    const engine = new ToolPolicyEngine(policyConfig, storage, undefined, {
-      isBankrBuiltinEnabled: () => false,
-    });
-    const catalog = engine.listCatalog();
-    expect(catalog.some((tool) => tool.toolName.startsWith("bankr."))).toBe(false);
-  });
-
-  it("keeps bankr tools in the catalog when built-in support is enabled", () => {
-    const storage = createStorageStub();
-    const engine = new ToolPolicyEngine(policyConfig, storage, undefined, {
-      isBankrBuiltinEnabled: () => true,
-    });
-
-    expect(engine.listCatalog().some((tool) => tool.toolName.startsWith("bankr."))).toBe(true);
-  });
-
+describe("ToolPolicyEngine grants", () => {
   it("passes grant list, create, and revoke operations through to storage", () => {
     const storage = createStorageStub();
     const grant = {
@@ -400,7 +359,7 @@ describe("ToolPolicyEngine invocation coverage", () => {
         },
         sandbox: {
           ...policyConfig.sandbox,
-          networkAllowlist: ["localhost", "api.bankr.bot"],
+          networkAllowlist: ["localhost"],
         },
       },
       storage,
@@ -420,56 +379,6 @@ describe("ToolPolicyEngine invocation coverage", () => {
       outcome: "blocked",
       errorKind: "execution_error",
     });
-  });
-
-  it("records blocked approved actions when policy changes after approval", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-21T00:05:00.000Z"));
-    try {
-      const storage = createStorageStub();
-      vi.mocked(storage.pendingApprovalActions.find).mockReturnValue(
-        createPendingApprovalAction({
-          approvalId: "apr-bankr-disabled",
-          expiresAt: "2026-03-21T00:10:00.000Z",
-          request: {
-            toolName: "bankr.write",
-            args: { prompt: "transfer funds", actionType: "transfer" },
-            agentId: "agent",
-            sessionId: "session",
-          },
-        }),
-      );
-      const engine = new ToolPolicyEngine(policyConfig, storage, undefined, {
-        isBankrBuiltinEnabled: () => false,
-      });
-
-      const result = await engine.executeApprovedAction("apr-bankr-disabled");
-
-      expect(result).toMatchObject({
-        outcome: "blocked",
-        internalResult: {
-          outcome: "blocked",
-          errorKind: "policy_block",
-        },
-      });
-      expect(result?.policyReason).toContain("Bankr built-in is disabled");
-      expect(storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
-        "apr-bankr-disabled",
-        "failed",
-        expect.objectContaining({
-          reason: expect.stringContaining("Bankr built-in is disabled"),
-        }),
-      );
-      expect(storage.approvalEvents.append).toHaveBeenCalledWith(
-        expect.objectContaining({
-          approvalId: "apr-bankr-disabled",
-          eventType: "approved_action_executed",
-          payload: expect.objectContaining({ outcome: "blocked" }),
-        }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("includes target and shell command details in approval previews", async () => {
@@ -518,45 +427,6 @@ describe("ToolPolicyEngine invocation coverage", () => {
 });
 
 describe("ToolPolicyEngine approval bypass safety", () => {
-  it("keeps nuclear-risk tools approval-gated even when normal approvals are bypassed", () => {
-    const storage = createStorageStub();
-    const engine = new ToolPolicyEngine(
-      {
-        ...policyConfig,
-        tools: {
-          ...policyConfig.tools,
-          approvalMode: "bypass",
-        },
-        sandbox: {
-          ...policyConfig.sandbox,
-          networkAllowlist: ["localhost", "api.bankr.bot"],
-        },
-      },
-      storage,
-      undefined,
-      {
-        isBankrBuiltinEnabled: () => true,
-      },
-    );
-
-    const evaluation = engine.evaluateAccess({
-      toolName: "bankr.write",
-      args: {
-        prompt: "transfer funds",
-        actionType: "transfer",
-        usdEstimate: 10,
-      },
-      agentId: "agent",
-      sessionId: "session",
-    });
-
-    expect(evaluation.allowed).toBe(true);
-    expect(evaluation.riskLevel).toBe("nuclear");
-    expect(evaluation.requiresApproval).toBe(true);
-    expect(evaluation.reasonCodes).toContain("approval_bypass_mode");
-    expect(evaluation.reasonCodes).toContain("nuclear_risk_requires_approval");
-  });
-
   it("still bypasses ordinary danger approvals when policy explicitly allows bypass mode", () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(
@@ -737,29 +607,6 @@ describe("ToolPolicyEngine policy edge coverage", () => {
         sessionId: "session",
       }).reasonCodes,
     ).toContain("approval_mode_all");
-
-    const bankrEngine = new ToolPolicyEngine(
-      {
-        ...policyConfig,
-        sandbox: {
-          ...policyConfig.sandbox,
-          networkAllowlist: [API_BANKR_HOST],
-        },
-      },
-      createStorageStub(),
-      undefined,
-      {
-        isBankrBuiltinEnabled: () => true,
-      },
-    );
-    const bankrEvaluation = bankrEngine.evaluateAccess({
-      toolName: "bankr.write",
-      args: { prompt: "transfer funds", actionType: "transfer" },
-      agentId: "agent",
-      sessionId: "session",
-    });
-    expect(bankrEvaluation.allowed).toBe(true);
-    expect(bankrEvaluation.requiresApproval).toBe(true);
 
     const shellEngine = new ToolPolicyEngine(
       {
@@ -978,26 +825,15 @@ describe("ToolPolicyEngine policy edge coverage", () => {
         },
         sandbox: {
           ...policyConfig.sandbox,
-          networkAllowlist: [EXAMPLE_HOST, API_BANKR_HOST, LLM_BANKR_HOST, "127.0.0.1:3002"],
+          networkAllowlist: [EXAMPLE_HOST, "127.0.0.1:3002"],
         },
       },
       storage,
-      undefined,
-      {
-        isBankrBuiltinEnabled: () => true,
-      },
     );
 
     await engine.invoke({
       toolName: "http.get",
       args: { host: EXAMPLE_HOST },
-      agentId: "agent",
-      sessionId: "session",
-      dryRun: true,
-    });
-    await engine.invoke({
-      toolName: "bankr.read",
-      args: { prompt: "show balance", actionType: "read", useLlmGateway: true },
       agentId: "agent",
       sessionId: "session",
       dryRun: true,

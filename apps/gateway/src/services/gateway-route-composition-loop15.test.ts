@@ -235,14 +235,11 @@ function createGateway() {
     bulkSetSkillState: fn((skillIds: string[], state: string, note?: string) => [{ skillIds, state, note }]),
     createChatCompletion: fn((request: unknown) => ({ request, id: "completion-1" })),
     evaluateToolAccess: fn((input: unknown) => ({ input, allowed: true })),
-    getBankrOptionalMigrationMessage: fn(() => "optional"),
-    getBankrSafetyPolicy: fn(() => ({ mode: "preview" })),
     getSkillActivationPolicy: fn(() => ({ defaultState: "enabled" })),
     installSkillImport: fn((input: unknown) => ({ input, installed: true })),
     invokeAndUnwrap: fn((request: unknown, realtimeType?: string) => ({ request, realtimeType })),
     invokeTool: fn((input: unknown) => ({ input, tool: true })),
-    isFeatureEnabled: fn((flag: string) => flag === "bankrBuiltinEnabled"),
-    listBankrActionAudit: fn((limit?: number, cursor?: string) => [{ limit, cursor }]),
+    isFeatureEnabled: fn((flag: string) => flag === "computerUseGuardrailsV1Enabled"),
     listMcpServers: fn(() => [{ serverId: "server-1" }]),
     listMcpTemplates: fn(() => [{ templateId: "template-1" }]),
     listMcpTools: fn((serverId: string) => [{ serverId, toolName: "tool-1" }]),
@@ -252,7 +249,6 @@ function createGateway() {
     lookupSkillSources: fn((queryOrUrl: string, limit?: number) => ({ queryOrUrl, limit, items: [] })),
     patchMcpServerState: fn((serverId: string, patch: unknown) => ({ serverId, patch })),
     persistLlmConfig: fn(() => undefined),
-    previewBankrAction: fn((input: unknown) => ({ input, preview: true })),
     publishRealtime: fn((eventType: string, source: string, payload?: unknown) => ({ eventType, source, payload })),
     readMcpAuthState: fn(() => ({ "server-1": { state: "connected" } })),
     readMcpServers: fn(() => [{ serverId: "server-1" }]),
@@ -264,7 +260,6 @@ function createGateway() {
     resolveConnectedMcpTools: fn((server: unknown, existing: unknown) => ({ server, existing })),
     resolveSkillActivation: fn((input: unknown) => ({ input, resolved: true })),
     setSkillState: fn((skillId: string, state: string, note?: string) => ({ skillId, state, note })),
-    updateBankrSafetyPolicy: fn((input: unknown) => ({ input, updated: true })),
     updateSkillActivationPolicy: fn((input: unknown) => ({ input, updated: true })),
     validateSkillImport: fn((input: unknown) => ({ input, valid: true })),
     listCuratorStatus: fn(() => ({ generatedAt: "2026-05-16T00:00:00Z", cycleDays: 7, items: [] })),
@@ -338,15 +333,11 @@ describe("route composition loop 15 delegates", () => {
     expect(deps.skills.bulkSetSkillState(["skill-1"], "disabled", "test")).toEqual([
       { skillIds: ["skill-1"], state: "disabled", note: "test" },
     ]);
-    expect(deps.skills.getBankrOptionalMigrationMessage()).toBe("optional");
-    expect(deps.skills.getBankrSafetyPolicy()).toEqual({ mode: "preview" });
     expect(deps.skills.getSkillActivationPolicy()).toEqual({ defaultState: "enabled" });
     expect(deps.skills.installSkillImport({ url: "https://example.test" })).toEqual({
       input: { url: "https://example.test" },
       installed: true,
     });
-    expect(deps.skills.isBankrBuiltinEnabled()).toBe(true);
-    expect(deps.skills.listBankrActionAudit(1, "cursor")).toEqual([{ limit: 1, cursor: "cursor" }]);
     expect(deps.skills.listSkillEvaluationRuns("skill-1")).toEqual({
       items: [{ skillId: "skill-1", skills: [{ skillId: "skill-1" }] }],
     });
@@ -356,10 +347,6 @@ describe("route composition loop 15 delegates", () => {
     expect(deps.skills.lookupSkillSources("browser", 4)).toEqual({ queryOrUrl: "browser", limit: 4, items: [] });
     expect(deps.skills.previewSkillEvaluation("skill-1", { rubric: "strict" })).toEqual({
       run: { skillId: "skill-1", input: { rubric: "strict" }, preview: true },
-    });
-    expect(deps.skills.previewBankrAction({ action: "quote" })).toEqual({
-      input: { action: "quote" },
-      preview: true,
     });
     expect(deps.skills.runSkillEvaluation("skill-1", { rubric: "strict" })).toEqual({
       skillId: "skill-1",
@@ -377,10 +364,6 @@ describe("route composition loop 15 delegates", () => {
       skillId: "skill-1",
       state: "enabled",
       note: "ok",
-    });
-    expect(deps.skills.updateBankrSafetyPolicy({ mode: "strict" })).toEqual({
-      input: { mode: "strict" },
-      updated: true,
     });
     expect(deps.skills.updateSkillActivationPolicy({ defaultState: "disabled" })).toEqual({
       input: { defaultState: "disabled" },
@@ -480,6 +463,6 @@ describe("route composition loop 15 delegates", () => {
       input: { toolName: "browser.search" },
       tool: true,
     });
-    expect(deps.toolsInvoke.isFeatureEnabled("bankrBuiltinEnabled")).toBe(true);
+    expect(deps.toolsInvoke.isFeatureEnabled("computerUseGuardrailsV1Enabled")).toBe(true);
   });
 });

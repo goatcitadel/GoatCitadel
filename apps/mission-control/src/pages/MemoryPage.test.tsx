@@ -313,7 +313,6 @@ function buildSettings(features: {
       replayOverridesV1Enabled: false,
       connectorDiagnosticsV1Enabled: false,
       computerUseGuardrailsV1Enabled: false,
-      bankrBuiltinEnabled: false,
       cronReviewQueueV1Enabled: false,
       replayRegressionV1Enabled: false,
     },

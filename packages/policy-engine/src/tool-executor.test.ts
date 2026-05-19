@@ -825,22 +825,6 @@ describe("executeTool", () => {
     });
   });
 
-  it("blocks bankr tools when built-in support is disabled", async () => {
-    mocked.isBrowserToolName.mockReturnValue(false);
-    const request: ToolInvokeRequest = {
-      toolName: "bankr.status",
-      args: {},
-      agentId: "agent",
-      sessionId: "sess-7",
-    };
-
-    await expect(
-      executeTool(request, policyConfig, storageStub, {
-        bankrBuiltinEnabled: false,
-      }),
-    ).rejects.toThrow("Bankr built-in is disabled.");
-  });
-
   it("rejects risky shell command with an unverified approval id", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const riskyPolicy: ToolPolicyConfig = {
@@ -4667,7 +4651,7 @@ describe("executeTool", () => {
     });
   });
 
-  it("covers top-level time, secret rejection, and disabled optional Bankr paths", async () => {
+  it("covers top-level time and secret rejection paths", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
 
     const now = await executeTool(toolRequest("time.now", {}), policyConfig, storageStub);
@@ -4676,10 +4660,6 @@ describe("executeTool", () => {
     await expect(
       executeTool(toolRequest("session.status", { token: "sk-123456789012345678901234" }), policyConfig, storageStub),
     ).rejects.toThrow(/secret-like material/i);
-
-    await expect(
-      executeTool(toolRequest("bankr.status", {}), policyConfig, storageStub, { bankrBuiltinEnabled: false }),
-    ).rejects.toThrow(/Bankr built-in is disabled/i);
   });
 });
 

@@ -140,16 +140,6 @@ describe("tool executor tail coverage", () => {
     });
   });
 
-  it("keeps optional Bankr built-ins gated when the migration flag disables them", async () => {
-    const root = createRoot();
-    const config = createConfig(root);
-    const storage = createKnowledgeStorage();
-
-    await expect(executeTool(request("bankr.status"), config, storage, { bankrBuiltinEnabled: false })).rejects.toThrow(
-      /Bankr built-in is disabled/i,
-    );
-  });
-
   it("requires approval for risky foreground and background shell commands", async () => {
     const root = createRoot();
     const config = createConfig(root);

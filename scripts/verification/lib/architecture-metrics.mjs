@@ -751,7 +751,7 @@ const GATEWAY_METHOD_REGION_PATTERN_SOURCES = [
     region: "skills",
     methodNames: splitMethodNames(`
       listSkills reloadSkills executeCodeMode listChatPendingApprovals getSkill updateSkill setSkill bulkSetSkill
-      resolveSkill listSkill lookupSkill validateSkill installSkill getBankr updateBankr previewBankr listBankr
+      resolveSkill listSkill lookupSkill validateSkill installSkill
     `),
   },
   {

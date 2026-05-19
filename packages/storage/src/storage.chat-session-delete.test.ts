@@ -92,7 +92,6 @@ describe("Storage.deleteChatSessionData", () => {
     assert.equal(countRows(storage, "tool_invocations", "session_id = 'sess-1'"), 0);
     assert.equal(countRows(storage, "policy_blocks", "session_id = 'sess-1'"), 0);
     assert.equal(countRows(storage, "cost_ledger", "session_id = 'sess-1'"), 0);
-    assert.equal(countRows(storage, "bankr_action_audit", "session_id = 'sess-1'"), 0);
     assert.equal(countRows(storage, "voice_sessions", "session_id = 'sess-1'"), 0);
     assert.equal(countRows(storage, "mesh_session_owners", "session_id = 'sess-1'"), 0);
 
@@ -570,21 +569,6 @@ function seedChatSession(storage: Storage, sessionId: string): void {
   `,
     )
     .run({
-      sessionId,
-      createdAt: now,
-    });
-  storage.db
-    .prepare(
-      `
-    INSERT INTO bankr_action_audit (
-      action_id, session_id, actor_id, action_type, chain, symbol, usd_estimate, status, approval_id, policy_reason, details_json, created_at
-    ) VALUES (
-      @actionId, @sessionId, 'assistant', 'watch', NULL, NULL, NULL, 'completed', NULL, 'ok', '{}', @createdAt
-    )
-  `,
-    )
-    .run({
-      actionId: `bankr-${sessionId}`,
       sessionId,
       createdAt: now,
     });

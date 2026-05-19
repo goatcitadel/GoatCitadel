@@ -61,54 +61,6 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     pack: "core",
   },
   {
-    name: "bankr.status",
-    category: "ops",
-    riskLevel: "safe",
-    requiresApproval: false,
-    description: "Return Bankr runtime status and policy posture.",
-    argSchema: {},
-    pack: "core",
-  },
-  {
-    name: "bankr.read",
-    category: "ops",
-    riskLevel: "caution",
-    requiresApproval: false,
-    description: "Run Bankr read-only prompts for balances/prices/research.",
-    argSchema: {
-      type: "object",
-      properties: {
-        prompt: { type: "string" },
-        chain: { type: "string" },
-        actionType: { type: "string", enum: ["read"] },
-      },
-      required: ["prompt"],
-    },
-    pack: "core",
-  },
-  {
-    name: "bankr.write",
-    category: "ops",
-    riskLevel: "nuclear",
-    requiresApproval: true,
-    description: "Run Bankr money-moving actions with strict caps and explicit approvals.",
-    argSchema: {
-      type: "object",
-      properties: {
-        prompt: { type: "string" },
-        actionType: {
-          type: "string",
-          enum: ["trade", "transfer", "sign", "submit", "deploy"],
-        },
-        chain: { type: "string" },
-        symbol: { type: "string" },
-        usdEstimate: { type: "number" },
-      },
-      required: ["prompt", "usdEstimate"],
-    },
-    pack: "core",
-  },
-  {
     name: "fs.read",
     category: "fs",
     riskLevel: "caution",
@@ -1209,31 +1161,6 @@ export class ToolRegistry {
   }
 }
 
-export interface CreateDefaultToolRegistryOptions {
-  /**
-   * Reserved for future use. The registry currently always includes Bankr
-   * tool definitions; whether they are *callable* is determined at
-   * `ToolPolicyEngine.evaluateAccessInternal` time via the runtime flag.
-   * See SECURITY note below.
-   */
-  bankrBuiltinEnabled?: boolean;
-}
-
-export function createDefaultToolRegistry(_options?: CreateDefaultToolRegistryOptions): ToolRegistry {
-  // SECURITY (codex finding #31): Always include Bankr tool definitions in
-  // the registry, regardless of the initial runtime-flag value. Whether a
-  // call is actually permitted is decided at evaluation time by
-  // `ToolPolicyEngine.evaluateAccessInternal` (which calls
-  // `isBankrBuiltinEnabled()` lazily).
-  //
-  // The previous behaviour baked the flag value into the registry at
-  // construction time. If the gateway started with the flag OFF and an
-  // operator toggled it ON via `/api/v1/settings`, the engine's
-  // feature-flag deny stopped firing — but `toolDef` for `bankr.write`
-  // remained undefined, so the risk classifier fell back to
-  // `riskLevel: "caution"` / `requiresApproval: false`, and the executor
-  // ran the write tool without approval. Including the definitions
-  // unconditionally ensures the toolDef metadata (riskLevel "nuclear",
-  // requiresApproval: true) is available the moment the flag flips.
+export function createDefaultToolRegistry(): ToolRegistry {
   return new ToolRegistry(BUILTIN_TOOLS);
 }

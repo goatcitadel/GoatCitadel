@@ -61,19 +61,4 @@ describe("tool registry", () => {
       required: ["path", "title"],
     });
   });
-
-  it("excludes bankr tools by default", () => {
-    const catalog = createDefaultToolRegistry().toCatalog();
-    expect(catalog.some((tool) => tool.toolName.startsWith("bankr."))).toBe(false);
-  });
-
-  it("includes bankr tools when built-in support is explicitly enabled", () => {
-    const catalog = createDefaultToolRegistry({ bankrBuiltinEnabled: true }).toCatalog();
-    expect(catalog.some((tool) => tool.toolName.startsWith("bankr."))).toBe(true);
-  });
-
-  it("excludes bankr tools when built-in support is disabled", () => {
-    const catalog = createDefaultToolRegistry({ bankrBuiltinEnabled: false }).toCatalog();
-    expect(catalog.some((tool) => tool.toolName.startsWith("bankr."))).toBe(false);
-  });
 });

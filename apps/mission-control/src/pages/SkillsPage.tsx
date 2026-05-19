@@ -45,9 +45,6 @@ import { pageCopy } from "../content/copy";
 import { useRefreshSubscription } from "../hooks/useRefreshSubscription";
 import { useUiPreferences } from "../state/ui-preferences";
 import {
-  BANKR_MIGRATION_CARD_TITLE,
-  BANKR_MIGRATION_DOC_PATH,
-  BANKR_MIGRATION_TEMPLATE_PATH,
   IMPORT_PROVIDER_OPTIONS,
   STATE_OPTIONS,
   deriveSkillCategoryLabel,
@@ -58,9 +55,6 @@ import {
 } from "./skills/skills-page-helpers";
 
 export {
-  BANKR_MIGRATION_CARD_TITLE,
-  BANKR_MIGRATION_DOC_PATH,
-  BANKR_MIGRATION_TEMPLATE_PATH,
   SKILL_FAMILY_TO_CATEGORY,
   deriveSkillCategoryLabel,
   deriveSourceCategoryLabel,
@@ -1179,26 +1173,6 @@ export function SkillsPage() {
             {savingPolicy ? "Saving..." : "Save policy"}
           </button>
         </div>
-      </Panel>
-
-      <Panel
-        title={BANKR_MIGRATION_CARD_TITLE}
-        subtitle="Bankr support is optional and intentionally off by default."
-        tone="soft"
-      >
-        <p className="table-subtext">
-          Built-in Bankr support is disabled by default. If you need it, install it as an optional skill pack and keep
-          it in <code>disabled</code> or <code>sleep</code> until policy grants are reviewed.
-        </p>
-        <ul>
-          <li>
-            Install guide: <code>{BANKR_MIGRATION_DOC_PATH}</code>
-          </li>
-          <li>
-            Starter template: <code>{BANKR_MIGRATION_TEMPLATE_PATH}</code>
-          </li>
-          <li>Legacy built-in endpoints return migration guidance (`410`) while disabled.</li>
-        </ul>
       </Panel>
 
       <Panel

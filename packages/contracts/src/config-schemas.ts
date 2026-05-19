@@ -547,7 +547,6 @@ export const AssistantConfigInputSchema = z
         memoryMaintenanceV1Enabled: z.boolean().optional(),
         connectorDiagnosticsV1Enabled: z.boolean().optional(),
         computerUseGuardrailsV1Enabled: z.boolean().optional(),
-        bankrBuiltinEnabled: z.boolean().optional(),
         cronReviewQueueV1Enabled: z.boolean().optional(),
         replayRegressionV1Enabled: z.boolean().optional(),
         codeModeV1Enabled: z.boolean().optional(),

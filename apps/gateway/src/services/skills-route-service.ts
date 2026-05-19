@@ -1,8 +1,4 @@
 import type {
-  BankrActionAuditRecord,
-  BankrActionPreviewRequest,
-  BankrActionPreviewResponse,
-  BankrSafetyPolicy,
   SkillEvaluationListResponse,
   SkillEvaluationPreviewRequest,
   SkillEvaluationPreviewResponse,
@@ -32,8 +28,6 @@ export interface SkillImportInstallResult {
 
 export interface SkillsRoutePort {
   bulkSetSkillState(skillIds: string[], state: SkillRuntimeState, note?: string): SkillStateRecord[];
-  getBankrOptionalMigrationMessage(): string;
-  getBankrSafetyPolicy(): BankrSafetyPolicy;
   getSkillActivationPolicy(): SkillActivationPolicy;
   installSkillImport(input: {
     sourceRef: string;
@@ -42,22 +36,18 @@ export interface SkillsRoutePort {
     force?: boolean;
     confirmHighRisk?: boolean;
   }): Promise<SkillImportInstallResult>;
-  isBankrBuiltinEnabled(): boolean;
-  listBankrActionAudit(limit?: number, cursor?: string): BankrActionAuditRecord[];
   listSkillImportHistory(limit?: number): SkillImportHistoryRecord[];
   listSkillEvaluationRuns(skillId: string): SkillEvaluationListResponse;
   listSkillSources(query?: string, limit?: number): Promise<SkillSourceListResponse>;
   listSkills(): SkillListItem[];
   lookupSkillSources(queryOrUrl: string, limit?: number): Promise<SkillSourceLookupResponse>;
   previewSkillEvaluation(skillId: string, input: SkillEvaluationPreviewRequest): SkillEvaluationPreviewResponse;
-  previewBankrAction(input: BankrActionPreviewRequest): BankrActionPreviewResponse;
   runSkillEvaluation(skillId: string, input: SkillEvaluationRunRequest): SkillEvaluationRunResponse;
   getSkillEvaluationRun(runId: string): SkillEvaluationRunRecord;
   createSkillEvaluationProposal(runId: string): SkillEvaluationProposalResponse;
   reloadSkills(): Promise<SkillListItem[]>;
   resolveSkillActivation(input: SkillResolveInput): SkillActivationDecision;
   setSkillState(skillId: string, state: SkillRuntimeState, note?: string): SkillStateRecord;
-  updateBankrSafetyPolicy(input: Partial<BankrSafetyPolicy>): BankrSafetyPolicy;
   updateSkillActivationPolicy(input: Partial<SkillActivationPolicy>): SkillActivationPolicy;
   validateSkillImport(input: {
     sourceRef: string;
@@ -68,14 +58,6 @@ export interface SkillsRoutePort {
 
 export class SkillsRouteService {
   public constructor(private readonly skills: SkillsRoutePort) {}
-
-  public getBankrOptionalMigrationMessage() {
-    return this.skills.getBankrOptionalMigrationMessage();
-  }
-
-  public isBankrBuiltinEnabled() {
-    return this.skills.isBankrBuiltinEnabled();
-  }
 
   public listSkills() {
     return this.skills.listSkills();
@@ -143,21 +125,5 @@ export class SkillsRouteService {
 
   public updateSkillActivationPolicy(input: Partial<SkillActivationPolicy>) {
     return this.skills.updateSkillActivationPolicy(input);
-  }
-
-  public getBankrSafetyPolicy() {
-    return this.skills.getBankrSafetyPolicy();
-  }
-
-  public updateBankrSafetyPolicy(input: Partial<BankrSafetyPolicy>) {
-    return this.skills.updateBankrSafetyPolicy(input);
-  }
-
-  public previewBankrAction(input: BankrActionPreviewRequest) {
-    return this.skills.previewBankrAction(input);
-  }
-
-  public listBankrActionAudit(limit?: number, cursor?: string) {
-    return this.skills.listBankrActionAudit(limit, cursor);
   }
 }

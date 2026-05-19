@@ -34,7 +34,7 @@ const TOPIC_RULES: Array<{ topic: RefreshTopic; keywords: string[] }> = [
   { topic: "files", keywords: ["file", "artifact", "workspace"] },
   { topic: "memory", keywords: ["memory", "qmd", "context"] },
   { topic: "agents", keywords: ["agent", "goat", "herd"] },
-  { topic: "skills", keywords: ["skill", "bankr"] },
+  { topic: "skills", keywords: ["skill"] },
   { topic: "mcp", keywords: ["mcp"] },
   { topic: "tasks", keywords: ["task", "trailboard"] },
   { topic: "improvement", keywords: ["improvement", "replay", "autotune", "self_improvement"] },

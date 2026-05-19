@@ -801,7 +801,6 @@ function buildSettingsHost(): SettingsRuntimeDependencies {
     memoryMaintenanceV1Enabled: false,
     connectorDiagnosticsV1Enabled: false,
     computerUseGuardrailsV1Enabled: true,
-    bankrBuiltinEnabled: false,
     cronReviewQueueV1Enabled: false,
     replayRegressionV1Enabled: false,
     codeModeV1Enabled: false,

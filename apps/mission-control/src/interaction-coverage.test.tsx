@@ -282,7 +282,6 @@ function createRuntimeSettings() {
     },
     features: {
       computerUseGuardrailsV1Enabled: true,
-      bankrBuiltinEnabled: false,
     },
   };
 }

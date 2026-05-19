@@ -428,7 +428,6 @@ export class Storage {
         "tool_invocations",
         "policy_blocks",
         "cost_ledger",
-        "bankr_action_audit",
         "voice_sessions",
         "mesh_session_owners",
         "transcript_outbox",

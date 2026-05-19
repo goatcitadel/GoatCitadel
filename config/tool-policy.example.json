@@ -25,7 +25,6 @@
       "mcp.invoke",
       "browser.cookies.get",
       "browser.storage.get",
-      "bankr.write",
       "calendar.create",
       "calendar.update",
       "calendar.delete"

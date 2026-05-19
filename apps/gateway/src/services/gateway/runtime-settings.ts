@@ -96,7 +96,6 @@ export interface RuntimeSettings {
     memoryMaintenanceV1Enabled: boolean;
     connectorDiagnosticsV1Enabled: boolean;
     computerUseGuardrailsV1Enabled: boolean;
-    bankrBuiltinEnabled: boolean;
     cronReviewQueueV1Enabled: boolean;
     replayRegressionV1Enabled: boolean;
     codeModeV1Enabled: boolean;

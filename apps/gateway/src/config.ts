@@ -65,7 +65,6 @@ export interface FeatureFlagsConfig {
   memoryMaintenanceV1Enabled: boolean;
   connectorDiagnosticsV1Enabled: boolean;
   computerUseGuardrailsV1Enabled: boolean;
-  bankrBuiltinEnabled: boolean;
   cronReviewQueueV1Enabled: boolean;
   replayRegressionV1Enabled: boolean;
   codeModeV1Enabled: boolean;
@@ -596,7 +595,6 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["memoryMaintenanceV1Enabled", process.env.GOATCITADEL_FEATURE_MEMORY_MAINTENANCE_V1_ENABLED],
     ["connectorDiagnosticsV1Enabled", process.env.GOATCITADEL_FEATURE_CONNECTOR_DIAGNOSTICS_V1_ENABLED],
     ["computerUseGuardrailsV1Enabled", process.env.GOATCITADEL_FEATURE_COMPUTER_USE_GUARDRAILS_V1_ENABLED],
-    ["bankrBuiltinEnabled", process.env.GOATCITADEL_FEATURE_BANKR_BUILTIN_ENABLED],
     ["cronReviewQueueV1Enabled", process.env.GOATCITADEL_FEATURE_CRON_REVIEW_QUEUE_V1_ENABLED],
     ["replayRegressionV1Enabled", process.env.GOATCITADEL_FEATURE_REPLAY_REGRESSION_V1_ENABLED],
     ["codeModeV1Enabled", process.env.GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED],
@@ -1047,7 +1045,6 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       memoryMaintenanceV1Enabled: featuresInput.memoryMaintenanceV1Enabled ?? false,
       connectorDiagnosticsV1Enabled: featuresInput.connectorDiagnosticsV1Enabled ?? false,
       computerUseGuardrailsV1Enabled: featuresInput.computerUseGuardrailsV1Enabled ?? true,
-      bankrBuiltinEnabled: featuresInput.bankrBuiltinEnabled ?? false,
       cronReviewQueueV1Enabled: featuresInput.cronReviewQueueV1Enabled ?? false,
       replayRegressionV1Enabled: featuresInput.replayRegressionV1Enabled ?? false,
       codeModeV1Enabled: featuresInput.codeModeV1Enabled ?? false,

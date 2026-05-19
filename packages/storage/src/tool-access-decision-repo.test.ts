@@ -286,7 +286,6 @@ describe("ToolAccessDecisionRepository", () => {
     insertSessionMeta(db, "session-mutations", "workspace-1");
 
     const mutatingTools = [
-      ["bankr.write", "danger"],
       ["http.post", "danger"],
       ["shell.exec", "danger"],
       ["browser.screenshot", "danger"],

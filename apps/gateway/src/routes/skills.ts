@@ -5,13 +5,6 @@ import { sendRouteError } from "./_error-handler.js";
 export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
   const skills = fastify.services.skills;
 
-  const sendBankrMigrationResponse = () => ({
-    error: skills.getBankrOptionalMigrationMessage(),
-    code: "bankr_builtin_disabled",
-    docsPath: "docs/OPTIONAL_BANKR_SKILL.md",
-    templatePath: "templates/skills/bankr-optional/SKILL.md",
-  });
-
   const skillParamsSchema = z.object({
     skillId: z.string().min(1),
   });
@@ -32,34 +25,6 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
   const activationPolicyPatchSchema = z.object({
     guardedAutoThreshold: z.number().min(0).max(1).optional(),
     requireFirstUseConfirmation: z.boolean().optional(),
-  });
-
-  const bankrActionTypeSchema = z.enum(["read", "trade", "transfer", "sign", "submit", "deploy"]);
-
-  const bankrPolicyPatchSchema = z.object({
-    enabled: z.boolean().optional(),
-    mode: z.enum(["read_only", "read_write"]).optional(),
-    dailyUsdCap: z.number().positive().optional(),
-    perActionUsdCap: z.number().positive().optional(),
-    requireApprovalEveryWrite: z.boolean().optional(),
-    allowedChains: z.array(z.string().min(1)).optional(),
-    allowedActionTypes: z.array(bankrActionTypeSchema).optional(),
-    blockedSymbols: z.array(z.string().min(1)).optional(),
-  });
-
-  const bankrPreviewSchema = z.object({
-    prompt: z.string().optional(),
-    actionType: bankrActionTypeSchema.optional(),
-    chain: z.string().optional(),
-    symbol: z.string().optional(),
-    usdEstimate: z.number().positive().optional(),
-    sessionId: z.string().optional(),
-    actorId: z.string().optional(),
-  });
-
-  const bankrAuditQuerySchema = z.object({
-    limit: z.coerce.number().int().min(1).max(500).optional(),
-    cursor: z.string().optional(),
   });
 
   const sourceQuerySchema = z.object({
@@ -362,47 +327,5 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send(skills.updateSkillActivationPolicy(parsed.data));
-  });
-
-  fastify.get("/api/v1/skills/bankr/policy", async (_request, reply) => {
-    if (!skills.isBankrBuiltinEnabled()) {
-      return reply.code(410).send(sendBankrMigrationResponse());
-    }
-    return reply.send(skills.getBankrSafetyPolicy());
-  });
-
-  fastify.patch("/api/v1/skills/bankr/policy", async (request, reply) => {
-    if (!skills.isBankrBuiltinEnabled()) {
-      return reply.code(410).send(sendBankrMigrationResponse());
-    }
-    const parsed = bankrPolicyPatchSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
-    }
-    return reply.send(skills.updateBankrSafetyPolicy(parsed.data));
-  });
-
-  fastify.post("/api/v1/skills/bankr/preview", async (request, reply) => {
-    if (!skills.isBankrBuiltinEnabled()) {
-      return reply.code(410).send(sendBankrMigrationResponse());
-    }
-    const parsed = bankrPreviewSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
-    }
-    return reply.send(skills.previewBankrAction(parsed.data));
-  });
-
-  fastify.get("/api/v1/skills/bankr/audit", async (request, reply) => {
-    if (!skills.isBankrBuiltinEnabled()) {
-      return reply.code(410).send(sendBankrMigrationResponse());
-    }
-    const parsed = bankrAuditQuerySchema.safeParse(request.query);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
-    }
-    return reply.send({
-      items: skills.listBankrActionAudit(parsed.data.limit ?? 100, parsed.data.cursor),
-    });
   });
 };

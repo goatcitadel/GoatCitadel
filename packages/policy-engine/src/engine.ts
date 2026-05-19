@@ -92,44 +92,23 @@ interface GrantDecision {
   grant: ToolGrantRecord;
 }
 
-export interface ToolPolicyEngineRuntimeOptions {
-  isBankrBuiltinEnabled?: () => boolean;
-}
-
-const BANKR_OPTIONAL_MIGRATION_MESSAGE =
-  "Bankr built-in is disabled. Install the optional skill pack (docs/OPTIONAL_BANKR_SKILL.md; templates/skills/bankr-optional/SKILL.md).";
 const DEFAULT_APPROVAL_TTL_MS = 15 * 60_000;
 
 export class ToolPolicyEngine {
   private readonly approvals: ApprovalGate;
   private readonly registry: ToolRegistry;
-  private readonly runtimeOptions: Required<ToolPolicyEngineRuntimeOptions>;
 
   public constructor(
     private readonly config: ToolPolicyConfig,
     private readonly storage: Storage,
     registry?: ToolRegistry,
-    runtimeOptions: ToolPolicyEngineRuntimeOptions = {},
   ) {
-    this.runtimeOptions = {
-      isBankrBuiltinEnabled: runtimeOptions.isBankrBuiltinEnabled ?? (() => false),
-    };
-    // SECURITY (codex finding #31): The registry always carries Bankr tool
-    // definitions; whether they are callable is decided lazily by
-    // `evaluateAccessInternal` via `isBankrBuiltinEnabled()`. We do NOT
-    // pass the current flag value into `createDefaultToolRegistry`
-    // because that would re-introduce the construction-time bake-in
-    // that broke runtime toggle semantics.
     this.registry = registry ?? createDefaultToolRegistry();
     this.approvals = new ApprovalGate(storage);
   }
 
   public listCatalog() {
-    const catalog = this.registry.toCatalog();
-    if (this.runtimeOptions.isBankrBuiltinEnabled()) {
-      return catalog;
-    }
-    return catalog.filter((tool) => !isBankrToolName(tool.toolName));
+    return this.registry.toCatalog();
   }
 
   public listGrants(
@@ -604,10 +583,6 @@ export class ToolPolicyEngine {
       localOperatorOverrideId: localOperatorOverrideAuditId,
       approvalMode: policy.approvalMode,
     });
-    if (isBankrToolName(request.toolName) && !this.runtimeOptions.isBankrBuiltinEnabled()) {
-      return withPolicy(deny(riskLevel, "bankr_builtin_disabled", BANKR_OPTIONAL_MIGRATION_MESSAGE));
-    }
-
     if (matchesAnyToolPattern(policy.denySet, request.toolName)) {
       return withPolicy(deny(riskLevel, "policy_deny", "tool denied by policy"));
     }
@@ -932,13 +907,6 @@ export class ToolPolicyEngine {
         }
       }
 
-      if (request.toolName.startsWith("bankr.")) {
-        assertHostAllowedForConfig("https://api.bankr.bot", this.config);
-        if (request.args?.useLlmGateway === true) {
-          assertHostAllowedForConfig("https://llm.bankr.bot", this.config);
-        }
-      }
-
       if (request.toolName === "docs.ingest" && request.args?.sourceType === "url") {
         const source = String(request.args?.source ?? "");
         if (source) {
@@ -1158,9 +1126,7 @@ export class ToolPolicyEngine {
       };
     }
     try {
-      const result = await executeTool(request, this.config, this.storage, {
-        bankrBuiltinEnabled: this.runtimeOptions.isBankrBuiltinEnabled(),
-      });
+      const result = await executeTool(request, this.config, this.storage);
       await this.recordInvocation(auditEventId, request, "executed", policyReason, result, approvalId, evaluation);
       const completedAt = new Date().toISOString();
       return {
@@ -1453,13 +1419,6 @@ function stripUndefined<T extends Record<string, unknown>>(input: T): T {
 function extractOutboundHostCandidates(request: Pick<ToolAccessEvaluateRequest, "toolName" | "args">): string[] {
   if (request.toolName.startsWith("http.") || request.toolName === "webhook.send") {
     return stringTargets(request.args?.url, request.args?.host);
-  }
-  if (request.toolName.startsWith("bankr.")) {
-    const targets = ["https://api.bankr.bot"];
-    if (request.args?.useLlmGateway === true) {
-      targets.push("https://llm.bankr.bot");
-    }
-    return targets;
   }
   if (request.toolName === "docs.ingest" && request.args?.sourceType === "url") {
     const targets = stringTargets(request.args?.source);
@@ -1775,10 +1734,6 @@ function asToolInvokeRequest(value: Record<string, unknown>): ToolInvokeRequest 
     dryRun,
     externalRuntime,
   };
-}
-
-function isBankrToolName(toolName: string): boolean {
-  return toolName.startsWith("bankr.");
 }
 
 function toPlainRecord(value: unknown): Record<string, unknown> {

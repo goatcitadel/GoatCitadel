@@ -495,7 +495,6 @@ function createRuntimeConfig(rootDir: string, auth: GatewayRuntimeConfig["assist
         memoryLifecycleAutoForgetEnabled: true,
         connectorDiagnosticsV1Enabled: false,
         computerUseGuardrailsV1Enabled: false,
-        bankrBuiltinEnabled: false,
         cronReviewQueueV1Enabled: false,
         replayRegressionV1Enabled: false,
         codeModeV1Enabled: false,

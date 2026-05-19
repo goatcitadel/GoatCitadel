@@ -42,7 +42,6 @@ interface ToolAccessDecisionRow {
 }
 
 const CAUTION_MUTATING_TOOL_SQL_NAMES = [
-  "bankr.write",
   "fs.write",
   "fs.copy",
   "fs.move",

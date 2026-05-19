@@ -265,8 +265,10 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
   },
   {
     version: 16,
-    name: "bankr_safety_schema",
-    up: createBankrSafetySchema,
+    name: "deprecated_placeholder_v16",
+    up: () => {
+      // Migration slot reserved to keep contiguous version numbering after a feature removal.
+    },
   },
   {
     version: 17,
@@ -906,6 +908,18 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "orchestration_runs", "auth_actor_source", "TEXT");
       addColumnIfMissingIfTableExists(db, "orchestration_runs", "permission_profile_id", "TEXT");
       addColumnIfMissingIfTableExists(db, "orchestration_runs", "local_operator_override_id", "TEXT");
+    },
+  },
+  {
+    version: 92,
+    name: "drop_bankr_safety_schema",
+    up: (db) => {
+      db.exec(`
+        DROP INDEX IF EXISTS idx_bankr_action_audit_session;
+        DROP INDEX IF EXISTS idx_bankr_action_audit_created;
+        DROP TABLE IF EXISTS bankr_action_audit;
+        DROP TABLE IF EXISTS bankr_budget_usage_daily;
+      `);
     },
   },
 ];
@@ -2963,37 +2977,6 @@ function ensureCodeModeRunSandboxSchemaParity(db: DatabaseSync): void {
       ON code_mode_runs(session_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_code_mode_runs_approval
       ON code_mode_runs(approval_id, created_at DESC);
-  `);
-}
-
-function createBankrSafetySchema(db: DatabaseSync): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS bankr_action_audit (
-      action_id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      actor_id TEXT NOT NULL,
-      action_type TEXT NOT NULL,
-      chain TEXT,
-      symbol TEXT,
-      usd_estimate REAL,
-      status TEXT NOT NULL,
-      approval_id TEXT,
-      policy_reason TEXT,
-      details_json TEXT,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_bankr_action_audit_created
-      ON bankr_action_audit(created_at DESC, action_id DESC);
-
-    CREATE INDEX IF NOT EXISTS idx_bankr_action_audit_session
-      ON bankr_action_audit(session_id, created_at DESC);
-
-    CREATE TABLE IF NOT EXISTS bankr_budget_usage_daily (
-      day TEXT PRIMARY KEY,
-      usd_total REAL NOT NULL DEFAULT 0,
-      updated_at TEXT NOT NULL
-    );
   `);
 }
 

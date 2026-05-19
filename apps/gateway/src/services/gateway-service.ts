@@ -14,10 +14,7 @@ import {
   ToolPolicyEngine,
   assertNotPrivateOrReservedHost,
   assertWritePathInJail,
-  evaluateBankrActionPreview,
   fetchAllowlisted,
-  readBankrSafetyPolicy,
-  writeBankrSafetyPolicy,
 } from "@goatcitadel/policy-engine";
 import { SkillsService } from "@goatcitadel/skills";
 import {
@@ -55,10 +52,6 @@ import type {
   AddonInstallRequest,
   AddonStatusRecord,
   AddonUninstallResponse,
-  BankrActionAuditRecord,
-  BankrActionPreviewRequest,
-  BankrActionPreviewResponse,
-  BankrSafetyPolicy,
   BackupCreateResponse,
   BackupManifestFileRecord,
   BackupManifestRecord,
@@ -522,8 +515,6 @@ const DEFAULT_SKILL_ACTIVATION_POLICY: SkillActivationPolicy = {
   guardedAutoThreshold: 0.72,
   requireFirstUseConfirmation: true,
 };
-const BANKR_OPTIONAL_MIGRATION_MESSAGE =
-  "Bankr built-in is disabled. Install the optional skill pack (docs/OPTIONAL_BANKR_SKILL.md; templates/skills/bankr-optional/SKILL.md).";
 const SKILL_STATE_METADATA_SETTING_KEY = "skill_state_metadata_v1";
 const CHAT_SESSION_AUTO_ALLOW_TOOLS = ["browser.search", "browser.navigate", "browser.extract", "http.get"] as const;
 const INTERNAL_TOOL_GRANT_TTL_MS = 5 * 60 * 1000;
@@ -798,9 +789,7 @@ export class GatewayService {
       getChatAttachment: (id) => this.getChatAttachment(id),
     });
     this.eventIngestService = new EventIngestService(this.storage);
-    this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
-      isBankrBuiltinEnabled: () => this.isFeatureEnabled("bankrBuiltinEnabled"),
-    });
+    this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined);
     const secretStore = new SecretStoreService();
     this.skillsService = new SkillsService([
       { source: "extra", dir: path.join(config.rootDir, "skills", "extra") },
@@ -5468,91 +5457,6 @@ export class GatewayService {
     return next;
   }
 
-  public getBankrSafetyPolicy(): BankrSafetyPolicy {
-    this.requireBankrBuiltinEnabled();
-    return readBankrSafetyPolicy(this.storage);
-  }
-
-  public updateBankrSafetyPolicy(input: Partial<BankrSafetyPolicy>): BankrSafetyPolicy {
-    this.requireBankrBuiltinEnabled();
-    const updated = writeBankrSafetyPolicy(this.storage, input);
-    this.publishRealtime("system", "skills", {
-      type: "bankr_policy_updated",
-      policy: updated,
-    });
-    return updated;
-  }
-
-  public previewBankrAction(input: BankrActionPreviewRequest): BankrActionPreviewResponse {
-    this.requireBankrBuiltinEnabled();
-    return evaluateBankrActionPreview(this.storage, input);
-  }
-
-  public listBankrActionAudit(limit = 100, cursor?: string): BankrActionAuditRecord[] {
-    this.requireBankrBuiltinEnabled();
-    const boundedLimit = Math.max(1, Math.min(500, Math.floor(limit)));
-    const parsedCursor = parseBankrAuditCursor(cursor);
-    const rows = this.gatewaySql
-      .prepare(
-        `
-      SELECT
-        action_id AS actionId,
-        session_id AS sessionId,
-        actor_id AS actorId,
-        action_type AS actionType,
-        chain,
-        symbol,
-        usd_estimate AS usdEstimate,
-        status,
-        approval_id AS approvalId,
-        policy_reason AS policyReason,
-        details_json AS detailsJson,
-        created_at AS createdAt
-      FROM bankr_action_audit
-      WHERE (
-        @cursorCreatedAt IS NULL
-        OR created_at < @cursorCreatedAt
-        OR (created_at = @cursorCreatedAt AND action_id < @cursorActionId)
-      )
-      ORDER BY created_at DESC, action_id DESC
-      LIMIT @limit
-    `,
-      )
-      .all({
-        cursorCreatedAt: parsedCursor?.createdAt ?? null,
-        cursorActionId: parsedCursor?.actionId ?? null,
-        limit: boundedLimit,
-      }) as Array<{
-      actionId: string;
-      sessionId: string;
-      actorId: string;
-      actionType: BankrActionAuditRecord["actionType"];
-      chain?: string;
-      symbol?: string;
-      usdEstimate?: number;
-      status: BankrActionAuditRecord["status"];
-      approvalId?: string;
-      policyReason?: string;
-      detailsJson?: string;
-      createdAt: string;
-    }>;
-
-    return rows.map((row) => ({
-      actionId: row.actionId,
-      sessionId: row.sessionId,
-      actorId: row.actorId,
-      actionType: row.actionType,
-      chain: row.chain,
-      symbol: row.symbol,
-      usdEstimate: Number.isFinite(row.usdEstimate) ? row.usdEstimate : undefined,
-      status: row.status,
-      approvalId: row.approvalId,
-      policyReason: row.policyReason,
-      details: row.detailsJson ? safeJsonParse<Record<string, unknown>>(row.detailsJson, {}) : undefined,
-      createdAt: row.createdAt,
-    }));
-  }
-
   public setSkillState(skillId: string, state: SkillRuntimeState, note?: string): SkillStateRecord {
     const knownSkill = this.skillsService.list().find((skill) => skill.skillId === skillId);
     if (!knownSkill) {
@@ -6458,10 +6362,6 @@ export class GatewayService {
     );
   }
 
-  public getBankrOptionalMigrationMessage(): string {
-    return BANKR_OPTIONAL_MIGRATION_MESSAGE;
-  }
-
   private enforceDurableExecutionBaseline(): void {
     const durable = this.config.assistant.durable;
     const configuredFeatureFlag = this.config.assistant.features.durableKernelV1Enabled;
@@ -6501,12 +6401,6 @@ export class GatewayService {
     }
   }
 
-  private requireBankrBuiltinEnabled(): void {
-    if (!this.isFeatureEnabled("bankrBuiltinEnabled")) {
-      throw new Error(BANKR_OPTIONAL_MIGRATION_MESSAGE);
-    }
-  }
-
   public updateFeatureFlags(patch: Partial<RuntimeSettings["features"]>): RuntimeSettings["features"] {
     if (patch.durableKernelV1Enabled === false) {
       throw new ValidationError({
@@ -6523,7 +6417,6 @@ export class GatewayService {
       memoryMaintenanceV1Enabled: patch.memoryMaintenanceV1Enabled ?? current.memoryMaintenanceV1Enabled,
       connectorDiagnosticsV1Enabled: patch.connectorDiagnosticsV1Enabled ?? current.connectorDiagnosticsV1Enabled,
       computerUseGuardrailsV1Enabled: patch.computerUseGuardrailsV1Enabled ?? current.computerUseGuardrailsV1Enabled,
-      bankrBuiltinEnabled: patch.bankrBuiltinEnabled ?? current.bankrBuiltinEnabled,
       cronReviewQueueV1Enabled: patch.cronReviewQueueV1Enabled ?? current.cronReviewQueueV1Enabled,
       replayRegressionV1Enabled: patch.replayRegressionV1Enabled ?? current.replayRegressionV1Enabled,
       codeModeV1Enabled: patch.codeModeV1Enabled ?? current.codeModeV1Enabled,
@@ -6553,7 +6446,6 @@ export class GatewayService {
       connectorDiagnosticsV1Enabled: stored?.connectorDiagnosticsV1Enabled ?? fromConfig.connectorDiagnosticsV1Enabled,
       computerUseGuardrailsV1Enabled:
         stored?.computerUseGuardrailsV1Enabled ?? fromConfig.computerUseGuardrailsV1Enabled,
-      bankrBuiltinEnabled: stored?.bankrBuiltinEnabled ?? fromConfig.bankrBuiltinEnabled,
       cronReviewQueueV1Enabled: stored?.cronReviewQueueV1Enabled ?? fromConfig.cronReviewQueueV1Enabled,
       replayRegressionV1Enabled: stored?.replayRegressionV1Enabled ?? fromConfig.replayRegressionV1Enabled,
       codeModeV1Enabled: stored?.codeModeV1Enabled ?? fromConfig.codeModeV1Enabled,
@@ -7850,21 +7742,6 @@ function safeJsonParse<T>(raw: string, fallback: T): T {
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
-}
-
-function parseBankrAuditCursor(cursor?: string): { createdAt: string; actionId: string } | undefined {
-  if (!cursor?.trim()) {
-    return undefined;
-  }
-  const [createdAt, actionId] = cursor.split("|");
-  if (!createdAt || !actionId) {
-    return undefined;
-  }
-  const parsed = Date.parse(createdAt);
-  if (!Number.isFinite(parsed)) {
-    return undefined;
-  }
-  return { createdAt, actionId };
 }
 
 function computeSkillActivationConfidence(reasons: string[], isExplicit: boolean): number {

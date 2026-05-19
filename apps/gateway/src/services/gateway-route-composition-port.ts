@@ -128,8 +128,6 @@ export interface GatewayRouteCompositionPort {
   ensureChatSessionModelDefaults: chatSessionService.ChatSessionDependencies["ensureChatSessionModelDefaults"];
   ensureChatSessionRuntimeGrants: chatSessionService.ChatSessionDependencies["ensureChatSessionRuntimeGrants"];
   fetchWithDiagnosticsTimeout: IntegrationChannelServicePort["fetchWithDiagnosticsTimeout"];
-  getBankrOptionalMigrationMessage: RouteDependencyMethod<"skills", "getBankrOptionalMigrationMessage">;
-  getBankrSafetyPolicy: RouteDependencyMethod<"skills", "getBankrSafetyPolicy">;
   getChatSessionPrefs: RouteDependencyMethod<"chatSupport", "prefs">["getChatSessionPrefs"];
   getRun: RouteDependencyMethod<"orchestration", "getRun">;
   getSession: chatSessionService.ChatSessionDependencies["getSession"];
@@ -155,7 +153,6 @@ export interface GatewayRouteCompositionPort {
   resolveToolPolicyContext: RouteDependencyMethod<"tools", "resolveToolPolicyContext">;
   revokeLocalOperatorOverride: RouteDependencyMethod<"tools", "revokeLocalOperatorOverride">;
   updatePermissionProfile: RouteDependencyMethod<"tools", "updatePermissionProfile">;
-  listBankrActionAudit: RouteDependencyMethod<"skills", "listBankrActionAudit">;
   listChannelDeliveryRuntime: RouteDependencyMethod<"comms", "listChannelDeliveryRuntime">;
   listChatMessages: RouteDependencyMethod<"chatMessages", "listChatMessages">;
   listMcpServers: RouteDependencyMethod<"mcp", "listMcpServers">;
@@ -175,7 +172,6 @@ export interface GatewayRouteCompositionPort {
   persistBudgetsConfig: settingsAuthService.SettingsRuntimeDependencies["persistBudgetsConfig"];
   persistLlmConfig: settingsAuthService.SettingsRuntimeDependencies["persistLlmConfig"];
   persistToolPolicyConfig: settingsAuthService.SettingsRuntimeDependencies["persistToolPolicyConfig"];
-  previewBankrAction: RouteDependencyMethod<"skills", "previewBankrAction">;
   publishRealtime: RouteDependencyMethod<"devVerification", "publishRealtime">;
   readConnectionConfigValue: IntegrationChannelServicePort["readConnectionConfigValue"];
   readDiscordPairings: IntegrationChannelServicePort["readDiscordPairings"];
@@ -205,7 +201,6 @@ export interface GatewayRouteCompositionPort {
   setSkillState: RouteDependencyMethod<"skills", "setSkillState">;
   suggestChatDelegation: RouteDependencyMethod<"chatDelegate", "suggestChatDelegation">;
   syncDiscordRuntime: IntegrationChannelServicePort["syncDiscordRuntime"];
-  updateBankrSafetyPolicy: RouteDependencyMethod<"skills", "updateBankrSafetyPolicy">;
   updateChatSessionPrefs: RouteDependencyMethod<"chatSupport", "prefs">["updateChatSessionPrefs"];
   updateFeatureFlags: settingsAuthService.SettingsRuntimeDependencies["updateFeatureFlags"];
   updateSkillActivationPolicy: RouteDependencyMethod<"skills", "updateSkillActivationPolicy">;
@@ -327,8 +322,6 @@ export function createGatewayRouteCompositionPort(
     ensureChatSessionModelDefaults: gateway.ensureChatSessionModelDefaults.bind(gateway),
     ensureChatSessionRuntimeGrants: gateway.ensureChatSessionRuntimeGrants.bind(gateway),
     fetchWithDiagnosticsTimeout: gateway.fetchWithDiagnosticsTimeout.bind(gateway),
-    getBankrOptionalMigrationMessage: gateway.getBankrOptionalMigrationMessage.bind(gateway),
-    getBankrSafetyPolicy: gateway.getBankrSafetyPolicy.bind(gateway),
     getChatSessionPrefs: gateway.getChatSessionPrefs.bind(gateway),
     getRun: gateway.getRun.bind(gateway),
     getSession: gateway.getSession.bind(gateway),
@@ -354,7 +347,6 @@ export function createGatewayRouteCompositionPort(
     resolveToolPolicyContext: gateway.resolveToolPolicyContext.bind(gateway),
     revokeLocalOperatorOverride: gateway.revokeLocalOperatorOverride.bind(gateway),
     updatePermissionProfile: gateway.updatePermissionProfile.bind(gateway),
-    listBankrActionAudit: gateway.listBankrActionAudit.bind(gateway),
     listChannelDeliveryRuntime: gateway.listChannelDeliveryRuntime.bind(gateway),
     listChatMessages: gateway.listChatMessages.bind(gateway),
     listMcpServers: gateway.listMcpServers.bind(gateway),
@@ -374,7 +366,6 @@ export function createGatewayRouteCompositionPort(
     persistBudgetsConfig: gateway.persistBudgetsConfig.bind(gateway),
     persistLlmConfig: gateway.persistLlmConfig.bind(gateway),
     persistToolPolicyConfig: gateway.persistToolPolicyConfig.bind(gateway),
-    previewBankrAction: gateway.previewBankrAction.bind(gateway),
     publishRealtime: gateway.publishRealtime.bind(gateway),
     readConnectionConfigValue: gateway.readConnectionConfigValue.bind(gateway),
     readDiscordPairings: gateway.readDiscordPairings.bind(gateway),
@@ -404,7 +395,6 @@ export function createGatewayRouteCompositionPort(
     setSkillState: gateway.setSkillState.bind(gateway),
     suggestChatDelegation: gateway.suggestChatDelegation.bind(gateway),
     syncDiscordRuntime: gateway.syncDiscordRuntime.bind(gateway),
-    updateBankrSafetyPolicy: gateway.updateBankrSafetyPolicy.bind(gateway),
     updateChatSessionPrefs: gateway.updateChatSessionPrefs.bind(gateway),
     updateFeatureFlags: gateway.updateFeatureFlags.bind(gateway),
     updateSkillActivationPolicy: gateway.updateSkillActivationPolicy.bind(gateway),

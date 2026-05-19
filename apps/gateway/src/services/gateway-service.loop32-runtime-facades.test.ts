@@ -73,7 +73,6 @@ function createRuntimeConfig(rootDir: string) {
         memoryMaintenanceV1Enabled: true,
         connectorDiagnosticsV1Enabled: true,
         computerUseGuardrailsV1Enabled: true,
-        bankrBuiltinEnabled: false,
         cronReviewQueueV1Enabled: true,
         replayRegressionV1Enabled: true,
         codeModeV1Enabled: true,

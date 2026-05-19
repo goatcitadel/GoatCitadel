@@ -21,7 +21,7 @@ Codex flagged **32 findings** across the gateway, policy engine, integrations, C
 The findings cluster into **11 themes**. The dominant patterns are not isolated bugs — they are repeated failures of the same control boundary:
 
 1. **The network allowlist is not enforced consistently.** Five distinct routes/backends (Firecrawl scrape, Firecrawl ingest, integration diagnostics, integration actions, skill lookup) reach the outbound network without going through `fetchAllowlisted` or the private-IP guard. Most also leak environment secrets in the `Authorization` header to the attacker-controlled host.
-2. **Approval gating is leaky.** Six independent paths (MCP dry-run, default tool policy, symlink escape, client-controlled `approval:` prefix, Bankr read↔write confusion, Bankr runtime enable, bulk approve) all let supposedly approval-required tools execute without approval.
+2. **Approval gating is leaky.** Four independent paths (MCP dry-run, default tool policy, symlink escape, client-controlled `approval:` prefix, bulk approve) all let supposedly approval-required tools execute without approval.
 3. **Integration "set home" commands are operator-only configuration mutations exposed to non-operators.** Both Discord and Telegram runtimes accept `/sethome` from paired (non-operator) chat users and persist it into operator config.
 4. **Default credentials / unauthenticated services on first run.** Docker compose ships a known token, and the bundled Postgres path can launch a `--publish` container with `POSTGRES_HOST_AUTH_METHOD=trust` even when the operator did not select Postgres.
 
@@ -32,7 +32,7 @@ The findings cluster into **11 themes**. The dominant patterns are not isolated 
 | **P0 — ship today** | #1 Docker defaults · #2 Bundled Postgres unauth · #3 Native→Docker trust-auth fallback | Anyone running `docker compose up --build` on a LAN-reachable host gets owned with the default token, and a remote-reachable trust-auth Postgres can be launched on the same flow. Fix the default token, bind to `127.0.0.1`, and never start a `trust`-auth Postgres on `0.0.0.0`. |
 | **P0 — ship today** | #19 Loopback recovery → remote operator · #21 Bulk approve | These two are remote operator takeover primitives reachable through normal authenticated routes (and the loopback one through a misconfigured reverse proxy). |
 | **P1 — this week** | All SSRF / allowlist-bypass findings (#11–#14, #23) and secret-exfil-via-Authorization findings (#13, #15, #25–#26) | Same root cause: outbound `fetch()` without going through `fetchAllowlisted` + `assertHostAllowed` + a redirect-target check. Fix the helper and adopt it everywhere. |
-| **P1 — this week** | Approval/policy bypasses (#4, #5, #16, #17, #28, #31) | Each one undermines the approval boundary the system markets. |
+| **P1 — this week** | Approval/policy bypasses (#4, #5, #16, #17) | Each one undermines the approval boundary the system markets. |
 | **P2 — next** | Agent-abuse channels (#22, #29, #30), XSS (#9), CI signing secrets (#7, #10), weekly-audit egress (#27) | Real risk, but require either a malicious prompt, a malicious dependency, or a malicious attachment to trigger. |
 
 ---
@@ -202,7 +202,7 @@ Same pattern. The Telegram URL is `https://api.telegram.org/bot${token}/sendMess
 
 ---
 
-## 7. Approval / policy-engine bypass (High × 6)
+## 7. Approval / policy-engine bypass (High × 4)
 
 ### #4-policy — Default tool policy grants every tool
 - **Finding**: <https://chatgpt.com/codex/cloud/security/findings/4db98541c2d08191b3b8e2e3ee9b3144> · **Commit**: `e2038583`
@@ -227,20 +227,6 @@ Example policy now omits `tools.profile` and sets `tools.allow=["*"]`. A missing
 - **Paths**: `apps/gateway/src/routes/tools-invoke.ts` · `packages/policy-engine/src/engine.ts` · `packages/policy-engine/src/tool-executor.ts` · `config/tool-policy.json`
 
 `/api/v1/tools/invoke` strips a *single* leading `approval:` from the client-supplied `consentContext.reason`. Pass `"approval:approval:anything"` and it becomes `"approval:anything"`, which the policy engine treats as already approved. Approvals must be derived from trusted internal state (a pending approval record + matched path/tool), not from a substring of a client-supplied string.
-
-### #28 — Bankr read tool bypasses write approvals via `actionType`
-- **Finding**: <https://chatgpt.com/codex/cloud/security/findings/8eacd3dad89881919e61516c00a6850b> · **Commit**: `f01840c6`
-- **Paths**: `packages/policy-engine/src/tool-registry.ts` · `packages/policy-engine/src/bankr-guard.ts` · `packages/policy-engine/src/tool-executor.ts`
-
-`normalizeActionType()` accepts the raw `actionType` field if it's a valid enum value. `bankr.read` accepts `actionType: "read"` and is not approval-gated. Calling `bankr.read` with `{actionType: "read", prompt: "transfer $50 USDC to 0x..."}` passes read-only mode, daily caps, per-action caps — then the executor sends the attacker-controlled prompt to `bankr prompt`. If Bankr honors the prompt, money moves.
-
-### #31 — Runtime Bankr enable bypasses write approvals
-- **Finding**: <https://chatgpt.com/codex/cloud/security/findings/4c7c829dba808191b4795a8c74c02dc9> · **Commit**: `0b45975e`
-- **Paths**: `packages/policy-engine/src/engine.ts` · `apps/gateway/src/services/gateway-service.ts` · `packages/policy-engine/src/tool-registry.ts` · `packages/policy-engine/src/tool-executor.ts` · `packages/policy-engine/src/bankr-guard.ts`
-
-`ToolPolicyEngine`'s registry is built once at construction from the *initial* value of `isBankrBuiltinEnabled()`. If the operator later toggles `bankrBuiltinEnabled` on via `/api/v1/settings`, the registry still has no Bankr definitions — so `toolDef` is undefined, the executor falls back to `riskLevel="caution"`, `requiresApproval=false`, and runs the write tool. The whole "nuclear/approval-required" metadata is silently bypassed.
-
-**Cross-cutting fix**: Make the tool registry observe runtime feature-flag changes (rebuild on toggle, or look up `toolDef` lazily). Add an integration test that flips every feature flag at runtime and asserts approval requirements still apply.
 
 ---
 
@@ -395,10 +381,8 @@ These come up repeatedly across the 32 findings and would each eliminate multipl
 | 25b | High | Channel integrations leak secrets in URL errors | 6838e5eb | [5ef0be6f…](https://chatgpt.com/codex/cloud/security/findings/5ef0be6f77248191aa087510cc7d3b7d) |
 | 26 | High | Telegram bot token in error message | 1bff4902 | [9495baab…](https://chatgpt.com/codex/cloud/security/findings/9495baab64d4819184e367f2e81e132a) |
 | 27 | High | Weekly audit egress to external LLM | 04bafc7e | [339e43d3…](https://chatgpt.com/codex/cloud/security/findings/339e43d3a8c88191b36efcde5b1bba3b) |
-| 28 | High | Bankr read bypasses write approvals | f01840c6 | [8eacd3da…](https://chatgpt.com/codex/cloud/security/findings/8eacd3dad89881919e61516c00a6850b) |
 | 29 | High | Assistant content markup triggers unscoped tools | cf04468a | [93e3d743…](https://chatgpt.com/codex/cloud/security/findings/93e3d743390c8191a4c0fecbaa4c1d08) |
 | 30 | High | LLM preview exfil via keychain lookup | 135db054 | [41ce1d45…](https://chatgpt.com/codex/cloud/security/findings/41ce1d45efd88191bf50e75987dc0f82) |
-| 31 | High | Runtime Bankr enable bypasses approvals | 0b45975e | [4c7c829d…](https://chatgpt.com/codex/cloud/security/findings/4c7c829dba808191b4795a8c74c02dc9) |
 
 *Numbering above follows the order I addressed in the report rather than the CSV row order; each row's `finding_url` is the canonical reference.*
 

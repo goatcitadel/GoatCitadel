@@ -81,8 +81,7 @@ export function deriveToolCapabilityPolicy(
     startsWith("google-chat.") ||
     startsWith("line.") ||
     startsWith("nextcloud-talk.") ||
-    startsWith("zalo") ||
-    toolName.startsWith("bankr.");
+    startsWith("zalo");
   const executesProcess =
     toolName === "shell.exec" ||
     toolName === "shell.exec_background" ||

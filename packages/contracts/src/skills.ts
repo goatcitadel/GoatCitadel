@@ -81,66 +81,6 @@ export interface SkillResolveInput {
   explicitSkills?: string[];
 }
 
-export type BankrSafetyMode = "read_only" | "read_write";
-export type BankrActionType = "read" | "trade" | "transfer" | "sign" | "submit" | "deploy";
-
-export type BankrActionStatus = "preview_allowed" | "preview_blocked" | "executed" | "blocked" | "denied" | "failed";
-
-export interface BankrSafetyPolicy {
-  enabled: boolean;
-  mode: BankrSafetyMode;
-  dailyUsdCap: number;
-  perActionUsdCap: number;
-  requireApprovalEveryWrite: boolean;
-  allowedChains: string[];
-  allowedActionTypes: BankrActionType[];
-  blockedSymbols?: string[];
-}
-
-export interface BankrNormalizedAction {
-  actionType: BankrActionType;
-  chain?: string;
-  symbol?: string;
-  usdEstimate?: number;
-  prompt?: string;
-}
-
-export interface BankrActionPreviewRequest {
-  prompt?: string;
-  actionType?: BankrActionType;
-  chain?: string;
-  symbol?: string;
-  usdEstimate?: number;
-  sessionId?: string;
-  actorId?: string;
-}
-
-export interface BankrActionPreviewResponse {
-  allowed: boolean;
-  reason: string;
-  reasonCode: string;
-  policy: BankrSafetyPolicy;
-  normalized: BankrNormalizedAction;
-  dailyUsageUsd: number;
-  remainingDailyUsd: number;
-  remainingPerActionUsd: number;
-}
-
-export interface BankrActionAuditRecord {
-  actionId: string;
-  sessionId: string;
-  actorId: string;
-  actionType: BankrActionType;
-  chain?: string;
-  symbol?: string;
-  usdEstimate?: number;
-  status: BankrActionStatus;
-  approvalId?: string;
-  policyReason?: string;
-  details?: Record<string, unknown>;
-  createdAt: string;
-}
-
 export type SkillSourceProvider = "agentskill" | "skillsmp" | "clawhub" | "github" | "local" | "external";
 
 export type SkillImportSourceType = "local_path" | "local_zip" | "git_url" | "remote_bundle";

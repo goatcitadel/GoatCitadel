@@ -6,9 +6,6 @@ import type { SkillListItem, SkillMergedSourceResult, SkillSourceProvider } from
 import type { validateSkillImport } from "../../api/client";
 
 export const STATE_OPTIONS = ["enabled", "sleep", "disabled"] as const;
-export const BANKR_MIGRATION_CARD_TITLE = "Bankr is Optional";
-export const BANKR_MIGRATION_DOC_PATH = "docs/OPTIONAL_BANKR_SKILL.md";
-export const BANKR_MIGRATION_TEMPLATE_PATH = "templates/skills/bankr-optional/SKILL.md";
 // "external" is intentionally omitted: external sources are reference-only and not importable.
 export const IMPORT_PROVIDER_OPTIONS: SkillSourceProvider[] = ["local", "github", "clawhub", "agentskill", "skillsmp"];
 
