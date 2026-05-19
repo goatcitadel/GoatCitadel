@@ -398,7 +398,7 @@ function readCachedDocument(input: {
       docId: chunk.docId,
       content: chunk.content,
       score: 1,
-      attribution: {
+    buckets[bucketIndex] = (buckets[bucketIndex] ?? 0) + text.charCodeAt(index) / 255;
         sourceType: doc.sourceType,
         sourceRef: doc.sourceRef,
         title: doc.title,
