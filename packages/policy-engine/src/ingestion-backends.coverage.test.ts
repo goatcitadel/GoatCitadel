@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ToolInvokeRequest } from "@goatcitadel/contracts";
+import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ingestDocumentViaBackend, searchIngestedContext } from "./ingestion-backends.js";
+import { ToolPolicyEngine } from "./engine.js";
 
 const tempDirs: string[] = [];
 
@@ -822,6 +823,67 @@ describe("ingestion backend coverage", () => {
     expect(result.document.text).toBe("cached text");
   });
 
+  it("preserves untrusted ingestion source trust through cache, search, and privileged policy checks", async () => {
+    const storage = createKnowledgeStorage();
+    const fetchUrl = vi.fn(async () => ({
+      finalUrl: "https://example.com/untrusted",
+      statusCode: 200,
+      contentType: "text/plain",
+      body: "untrusted instructions",
+    }));
+
+    const ingested = await ingestDocumentViaBackend({
+      request: {
+        ...createRequest({
+          sourceType: "url",
+          source: "https://example.com/untrusted",
+          namespace: "web",
+          backend: "native",
+        }),
+        trustLevel: "untrusted_external",
+      },
+      storage,
+      fetchUrl,
+      networkAllowlist: ["example.com"],
+      sourceAllowlist: ["example.com"],
+    });
+    const cached = await ingestDocumentViaBackend({
+      request: createRequest({
+        sourceType: "url",
+        source: "https://example.com/untrusted",
+        namespace: "web",
+        backend: "native",
+      }),
+      storage,
+      fetchUrl,
+      networkAllowlist: ["example.com"],
+      sourceAllowlist: ["example.com"],
+    });
+    const search = searchIngestedContext({
+      storage,
+      namespace: "web",
+      query: "untrusted",
+    });
+    const engine = new ToolPolicyEngine(createPolicyConfig(), createPolicyStorage());
+    const evaluation = engine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "echo hello" },
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sourceAttribution: search.items[0]?.attribution ? [search.items[0].attribution] : [],
+    });
+
+    expect(ingested.document.metadata.ingestion).toMatchObject({
+      trustLevel: "untrusted_external",
+    });
+    expect(cached.cached).toBe(true);
+    expect(cached.document.attribution.trustLevel).toBe("untrusted_external");
+    expect(cached.chunks[0]?.attribution.trustLevel).toBe("untrusted_external");
+    expect(search.items[0]?.attribution.trustLevel).toBe("untrusted_external");
+    expect(evaluation.allowed).toBe(false);
+    expect(evaluation.reasonCodes).toContain("untrusted_source_privileged_tool_block");
+  });
+
   it("refetches URL cache entries without final-source proof when a source allowlist is active", async () => {
     const storage = createKnowledgeStorage([
       {
@@ -970,6 +1032,45 @@ function createKnowledgeStorage(seedDocuments: Array<Record<string, unknown>> = 
           .map((doc) => String(doc.docId));
         return matchingDocIds.flatMap((docId) => chunksByDocId.get(docId) ?? []);
       }),
+    },
+  } as unknown as Storage;
+}
+
+function createPolicyConfig() {
+  const config: ToolPolicyConfig = {
+    profiles: {
+      danger: ["*"],
+    },
+    tools: {
+      profile: "danger",
+      approvalMode: "approve_risky",
+      allow: [],
+      deny: [],
+    },
+    agents: {},
+    sandbox: {
+      writeJailRoots: ["./workspace"],
+      readOnlyRoots: [],
+      networkAllowlist: ["localhost"],
+      riskyShellPatterns: [],
+      requireApprovalForRiskyShell: true,
+    },
+  };
+  return config;
+}
+
+function createPolicyStorage(): Storage {
+  return {
+    toolGrants: {
+      list: vi.fn(() => []),
+    },
+    toolAccessDecisions: {
+      record: vi.fn(),
+      countToolCallsInLastHourInScope: vi.fn(() => 0),
+      countWritesInLastHourInScope: vi.fn(() => 0),
+    },
+    pendingApprovalActions: {
+      find: vi.fn(() => undefined),
     },
   } as unknown as Storage;
 }

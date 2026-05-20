@@ -64,7 +64,11 @@ export interface WorkflowRecipePreviewResponse {
   estimatedLimits: Required<WorkflowRecipeLimits>;
 }
 
-export type WorkflowRecipePlanCreateRequest = WorkflowRecipePreviewRequest;
+export interface WorkflowRecipePlanCreateRequest extends WorkflowRecipePreviewRequest {
+  workspaceId?: string;
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+}
 
 export interface WorkflowRecipePlanCreateResponse extends WorkflowRecipePreviewResponse {
   run: OrchestrationRun;

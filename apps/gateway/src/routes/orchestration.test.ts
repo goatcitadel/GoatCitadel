@@ -113,6 +113,8 @@ describe("orchestration routes", () => {
       worktreeBaseRef: "main",
     }));
     app = Fastify();
+    app.decorateRequest("authActorId", "operator-auth");
+    app.decorateRequest("authActorSource", "loopback");
     app.decorate("services", { orchestration: { createPlan: createOrchestrationPlan } } as never);
     app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
     await app.register(orchestrationRoutes);
@@ -122,6 +124,7 @@ describe("orchestration routes", () => {
       url: "/api/v1/orchestration/plans",
       payload: {
         planId: "plan-1",
+        workspaceId: "workspace-a",
         goal: "Ship safely",
         mode: "auto",
         maxIterations: 3,
@@ -148,6 +151,15 @@ describe("orchestration routes", () => {
     });
 
     expect(response.statusCode).toBe(201);
+    expect(createOrchestrationPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ planId: "plan-1" }),
+      expect.objectContaining({
+        operatorId: "operator-auth",
+        authActorId: "operator-auth",
+        authActorSource: "loopback",
+        workspaceId: "workspace-a",
+      }),
+    );
     expect(response.json()).toMatchObject({
       runId: "run-1",
       durableRunId: "durable-run-1",
@@ -239,6 +251,8 @@ describe("orchestration routes", () => {
       estimatedLimits: { maxIterations: 3, maxRuntimeMinutes: 30, maxCostUsd: 3 },
     }));
     app = Fastify();
+    app.decorateRequest("authActorId", "operator-auth");
+    app.decorateRequest("authActorSource", "loopback");
     app.decorate("services", { orchestration: { createPlanFromRecipe } } as never);
     app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
     await app.register(orchestrationRoutes);
@@ -254,13 +268,19 @@ describe("orchestration routes", () => {
           agents: [{ id: "analyst", role: "Analyst" }],
           steps: [{ title: "Review", agent: "analyst", prompt: "Review it." }],
         }),
+        workspaceId: "workspace-recipe",
       },
     });
 
     expect(response.statusCode).toBe(201);
     expect(createPlanFromRecipe).toHaveBeenCalledWith(
       expect.objectContaining({ source: expect.any(String) }),
-      expect.objectContaining({ operatorId: expect.stringMatching(/^ip:/) }),
+      expect.objectContaining({
+        operatorId: "operator-auth",
+        authActorId: "operator-auth",
+        authActorSource: "loopback",
+        workspaceId: "workspace-recipe",
+      }),
     );
     expect(response.json()).toMatchObject({ run: { runId: "run-1" } });
   });
@@ -295,6 +315,7 @@ describe("orchestration routes", () => {
       payload: {
         permissionProfileId: "trusted-local-power",
         localOperatorOverrideId: "override-1",
+        workspaceId: "workspace-a",
       },
     });
     expect(runResponse.statusCode).toBe(200);
@@ -306,6 +327,7 @@ describe("orchestration routes", () => {
         authActorSource: "loopback",
         permissionProfileId: "trusted-local-power",
         localOperatorOverrideId: "override-1",
+        workspaceId: "workspace-a",
       }),
     );
 

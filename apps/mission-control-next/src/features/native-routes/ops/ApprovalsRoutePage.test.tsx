@@ -445,6 +445,35 @@ describe("ApprovalsRoutePage", () => {
     });
   });
 
+  it("routes Code Mode approvals back to Code when origin surface is missing", async () => {
+    const navigate = vi.fn();
+    approvalHarness.overrides = {
+      selectedApproval: {
+        ...(approvalHarness.approval as any),
+        kind: "code_mode.run",
+        linkage: {
+          ...(approvalHarness.approval as any).linkage,
+          originSurface: undefined,
+        },
+      },
+    };
+    let renderer: ReactTestRenderer | undefined;
+
+    await act(async () => {
+      renderer = create(renderPage({ navigate }));
+    });
+
+    await act(async () => {
+      findLink(renderer!.root, "Open live session").props.onClick({ preventDefault: vi.fn() });
+    });
+    expect(navigate).toHaveBeenCalledWith({
+      area: "code",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      approvalId: "11111111-1111-4111-8111-111111111111",
+    });
+  });
+
   it("renders empty, loading, error, busy, and alternate explainer states", () => {
     approvalHarness.overrides = {
       visibleItems: [],

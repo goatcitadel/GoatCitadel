@@ -133,6 +133,7 @@ export async function ingestDocumentViaBackend(input: {
       contentType: fetched.contentType,
       statusCode: fetched.statusCode,
       finalSourceUrl,
+      trustLevel: attribution.trustLevel,
       rawContentStored: false,
     },
   };
@@ -468,6 +469,7 @@ function readCachedDocument(input: {
         title: doc.title,
         backend: optionalString(ingestion.backend) as IngestionBackend["backend"] | undefined,
         fetchedAt: optionalString(ingestion.fetchedAt),
+        trustLevel: optionalString(ingestion.trustLevel) as ToolExecutionTrustLevel | undefined,
       },
     }));
     return {
@@ -480,6 +482,7 @@ function readCachedDocument(input: {
         title: doc.title,
         backend: optionalString(ingestion.backend) as IngestionBackend["backend"] | undefined,
         fetchedAt: optionalString(ingestion.fetchedAt),
+        trustLevel: optionalString(ingestion.trustLevel) as ToolExecutionTrustLevel | undefined,
       },
       cacheExpiresAt,
       chunks,

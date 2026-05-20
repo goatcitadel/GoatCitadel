@@ -749,10 +749,16 @@ function buildLiveLaneRoute(approval: ApprovalRequest): AppRoute | null {
   if (!approval.linkage?.sessionId) {
     return null;
   }
+  const codeModeLinked =
+    approval.kind === "code_mode.run" ||
+    approval.linkage.actionType === "code_mode.run" ||
+    approval.linkage.toolName === "code_mode.run";
   const area =
     approval.linkage.originSurface === "cowork" || approval.linkage.originSurface === "code"
       ? approval.linkage.originSurface
-      : "chat";
+      : codeModeLinked
+        ? "code"
+        : "chat";
   return {
     area,
     sessionId: approval.linkage.sessionId,

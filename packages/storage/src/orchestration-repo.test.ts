@@ -194,6 +194,14 @@ describe("OrchestrationRepository", () => {
     repo.createRun(run);
     assert.equal(repo.findLatestRunByPlan("plan-1")?.runId, "run-cursor");
     assert.equal(repo.findActiveRunByPlan("plan-1")?.runId, "run-cursor");
+    repo.createRun({
+      ...run,
+      runId: "run-workspace-2",
+      workspaceId: "workspace-2",
+      startedAt: "2026-02-27T00:01:00.000Z",
+    });
+    assert.equal(repo.findActiveRunByPlan("plan-1")?.runId, "run-cursor");
+    assert.equal(repo.findActiveRunByPlan("plan-1", "workspace-2")?.runId, "run-workspace-2");
 
     repo.updateRun({
       ...run,
@@ -202,6 +210,7 @@ describe("OrchestrationRepository", () => {
       endedAt: "2026-02-27T00:11:00.000Z",
     });
     assert.equal(repo.findActiveRunByPlan("plan-1"), undefined);
+    assert.equal(repo.findActiveRunByPlan("plan-1", "workspace-2")?.runId, "run-workspace-2");
 
     const firstCheckpoint = repo.createCheckpoint({
       runId: run.runId,
@@ -248,7 +257,7 @@ describe("OrchestrationRepository", () => {
 
     assert.deepEqual(
       repo.listRuns(0).map((item) => item.runId),
-      ["run-cursor"],
+      ["run-workspace-2"],
     );
 
     const internal = repo as unknown as {

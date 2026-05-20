@@ -101,7 +101,7 @@ export interface OrchestrationLifecycleHost {
       getPlan(planId: string): OrchestrationPlan;
       createRun(run: OrchestrationRun): OrchestrationRun;
       findLatestRunByPlan(planId: string): OrchestrationRun | undefined;
-      findActiveRunByPlan(planId: string): OrchestrationRun | undefined;
+      findActiveRunByPlan(planId: string, workspaceId?: string): OrchestrationRun | undefined;
       updateRun(run: OrchestrationRun): OrchestrationRun;
       updateRunIfCurrentState(
         run: OrchestrationRun,
@@ -450,11 +450,12 @@ export async function createOrchestrationPlan(
   policyContext: OrchestrationRunPolicyContext = {},
 ): Promise<OrchestrationRun> {
   host.storage.orchestration.upsertPlan(plan);
+  const workspaceId = normalizeRouteWorkspaceId(policyContext.workspaceId);
   const created = host.orchestrationEngine.createRun(plan);
   const persisted = host.storage.orchestration.createRun({
     ...created,
     ...policyContext,
-    workspaceId: DEFAULT_WORKSPACE_ID,
+    workspaceId,
     executionState: "created",
     worktreeStatus: "uninitialized",
     worktreeBaseRef: DEFAULT_WORKTREE_BASE_REF,
@@ -477,8 +478,9 @@ export async function runOrchestrationPlan(
   policyContext: OrchestrationRunPolicyContext = {},
 ): Promise<OrchestrationRun> {
   const plan = host.storage.orchestration.getPlan(planId);
+  const workspaceId = normalizeRouteWorkspaceId(policyContext.workspaceId);
   host.orchestrationEngine.validate(plan);
-  const activeRun = host.storage.orchestration.findActiveRunByPlan(planId);
+  const activeRun = host.storage.orchestration.findActiveRunByPlan(planId, workspaceId);
   if (activeRun) {
     if (activeRun.durableRunId && activeRun.executionState === "queued") {
       host.requestDurableRunProcessing(activeRun.durableRunId);

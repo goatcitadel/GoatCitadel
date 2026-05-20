@@ -353,6 +353,50 @@ describe("orchestration-lifecycle-service", () => {
     );
   });
 
+  it("creates and recovers active runs inside the requested workspace scope", async () => {
+    const host = createHost();
+    const runtime = createRuntimeDeps();
+    const plan = buildPlan();
+
+    const created = await createOrchestrationPlan(host, runtime, plan, {
+      workspaceId: "workspace-a",
+      operatorId: "operator-1",
+    });
+
+    expect(created.workspaceId).toBe("workspace-a");
+    expect(host.storage.orchestration.createRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "workspace-a",
+        operatorId: "operator-1",
+      }),
+    );
+
+    const activeRun: OrchestrationRun = {
+      ...buildRun(),
+      runId: "run-active-workspace-a",
+      durableRunId: "durable-active-workspace-a",
+      workspaceId: "workspace-a",
+      executionState: "queued",
+    };
+    const base = createHost();
+    const scopedHost = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          findActiveRunByPlan: vi.fn((_planId: string, workspaceId?: string) =>
+            workspaceId === "workspace-a" ? activeRun : undefined,
+          ),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+
+    const recovered = await runOrchestrationPlan(scopedHost, runtime, "plan-1", { workspaceId: "workspace-a" });
+
+    expect(recovered).toBe(activeRun);
+    expect(scopedHost.storage.orchestration.findActiveRunByPlan).toHaveBeenCalledWith("plan-1", "workspace-a");
+    expect(scopedHost.storage.orchestration.createRun).not.toHaveBeenCalled();
+  });
+
   it("returns the active run for a plan instead of creating duplicate active orchestration runs", async () => {
     const activeRun: OrchestrationRun = {
       ...buildRun(),

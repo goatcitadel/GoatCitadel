@@ -15,6 +15,20 @@ const accessEvaluateSchema = z.object({
   runId: z.string().min(1).optional(),
   args: z.record(z.unknown()).optional(),
   trustLevel: z.enum(["trusted_operator", "trusted_workspace", "mixed_untrusted", "untrusted_external"]).optional(),
+  sourceAttribution: z
+    .array(
+      z.object({
+        sourceType: z.enum(["file", "url", "text", "memory", "mcp"]),
+        sourceRef: z.string().min(1),
+        title: z.string().optional(),
+        backend: z.enum(["native", "firecrawl"]).optional(),
+        fetchedAt: z.string().optional(),
+        trustLevel: z
+          .enum(["trusted_operator", "trusted_workspace", "mixed_untrusted", "untrusted_external"])
+          .optional(),
+      }),
+    )
+    .optional(),
   permissionProfileId: z.string().min(1).optional(),
   localOperatorOverrideId: z.string().min(1).optional(),
   surface: z.enum(["chat", "cowork", "code", "tools", "mcp", "all"]).optional(),

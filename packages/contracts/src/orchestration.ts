@@ -65,6 +65,7 @@ export interface OrchestrationPlan {
 }
 
 export interface OrchestrationRunPolicyContext {
+  workspaceId?: string;
   operatorId?: string;
   authActorId?: string;
   authActorSource?: ToolPolicyActorContext["authActorSource"];

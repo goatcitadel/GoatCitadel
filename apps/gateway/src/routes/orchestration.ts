@@ -19,6 +19,7 @@ const workspaceQuerySchema = z.object({
   workspaceId: z.string().trim().min(1).max(80).optional(),
 });
 const runPolicyBodySchema = z.object({
+  workspaceId: z.string().trim().min(1).max(80).optional(),
   permissionProfileId: z.string().trim().min(1).max(128).optional(),
   localOperatorOverrideId: z.string().trim().min(1).max(128).optional(),
 });
@@ -50,6 +51,7 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
     operatorId: resolveActorId(request),
     authActorId: request.authActorId,
     authActorSource: request.authActorSource,
+    workspaceId: body.workspaceId,
     permissionProfileId: body.permissionProfileId,
     localOperatorOverrideId: body.localOperatorOverrideId,
   });

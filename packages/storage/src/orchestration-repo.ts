@@ -180,7 +180,8 @@ export class OrchestrationRepository {
     );
     this.findActiveRunByPlanStmt = db.prepare(`
       SELECT * FROM orchestration_runs
-      WHERE plan_id = ?
+      WHERE plan_id = @planId
+        AND COALESCE(workspace_id, 'default') = @workspaceId
         AND status IN ('queued', 'running', 'paused')
       ORDER BY started_at DESC
       LIMIT 1
@@ -346,8 +347,8 @@ export class OrchestrationRepository {
     return mapRunRow(row);
   }
 
-  public findActiveRunByPlan(planId: string): OrchestrationRun | undefined {
-    const row = toOrchestrationRunRow(this.findActiveRunByPlanStmt.get(planId));
+  public findActiveRunByPlan(planId: string, workspaceId = "default"): OrchestrationRun | undefined {
+    const row = toOrchestrationRunRow(this.findActiveRunByPlanStmt.get({ planId, workspaceId }));
     if (!row) {
       return undefined;
     }

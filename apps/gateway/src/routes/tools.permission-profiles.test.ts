@@ -298,6 +298,79 @@ describe("tools permission profile routes", () => {
     });
   });
 
+  it("passes source attribution into access evaluation preflight", async () => {
+    const tools = {
+      listToolCatalog: vi.fn(() => []),
+      listPermissionProfiles: vi.fn(() => []),
+      listActiveLocalOperatorOverrides: vi.fn(() => []),
+      resolveToolPolicyContext: vi.fn(() => ({ profileId: "safe" })),
+      evaluateToolAccess: vi.fn((input: { sourceAttribution?: Array<{ trustLevel?: string }> }) =>
+        input.sourceAttribution?.some((source) => source.trustLevel === "untrusted_external")
+          ? {
+              allowed: false,
+              requiresApproval: false,
+              reasonCodes: ["untrusted_source_privileged_tool_block"],
+              policyReason:
+                "tool shell.exec is blocked because untrusted external content cannot escalate into privileged execution",
+            }
+          : {
+              allowed: true,
+              requiresApproval: false,
+              reasonCodes: ["allowed"],
+              policyReason: "allowed",
+            },
+      ),
+    };
+    const toolsInvoke = {
+      getDeploymentProfile: vi.fn(() => "local_dev" as const),
+      isFeatureEnabled: vi.fn(() => false),
+    };
+
+    app = Fastify();
+    app.decorateRequest("authActorId", "operator-test");
+    app.decorateRequest("authActorSource", "loopback");
+    app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
+    app.decorate("services", { tools, toolsInvoke } as never);
+    await app.register(toolsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/tools/access/evaluate",
+      payload: {
+        toolName: "shell.exec",
+        agentId: "agent-1",
+        sessionId: "session-1",
+        args: { command: "echo hello" },
+        sourceAttribution: [
+          {
+            sourceType: "url",
+            sourceRef: "https://example.com/prompt",
+            trustLevel: "untrusted_external",
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      allowed: false,
+      requiresApproval: false,
+      reasonCodes: ["untrusted_source_privileged_tool_block"],
+    });
+    expect(tools.evaluateToolAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "shell.exec",
+        sourceAttribution: [
+          {
+            sourceType: "url",
+            sourceRef: "https://example.com/prompt",
+            trustLevel: "untrusted_external",
+          },
+        ],
+      }),
+    );
+  });
+
   it("does not mirror computer-use guardrails after verification and confirmation are present", async () => {
     const evaluation = {
       decision: "allow",
