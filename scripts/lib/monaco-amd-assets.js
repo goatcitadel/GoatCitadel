@@ -7,6 +7,7 @@ exports.MONACO_PUBLIC_BASE = void 0;
 exports.monacoAmdAssetsPlugin = monacoAmdAssetsPlugin;
 const node_fs_1 = __importDefault(require("node:fs"));
 const node_path_1 = __importDefault(require("node:path"));
+const promises_1 = require("node:stream/promises");
 exports.MONACO_PUBLIC_BASE = "/vendor/monaco/vs";
 const CONTENT_TYPES = new Map([
     [".css", "text/css; charset=utf-8"],
@@ -22,6 +23,19 @@ const CONTENT_TYPES = new Map([
 ]);
 function getContentType(filePath) {
     return CONTENT_TYPES.get(node_path_1.default.extname(filePath).toLowerCase()) ?? "application/octet-stream";
+}
+function streamMonacoAsset(res, assetPath) {
+    void (0, promises_1.pipeline)(node_fs_1.default.createReadStream(assetPath), res).catch((error) => {
+        if (res.destroyed) {
+            return;
+        }
+        if (!res.headersSent) {
+            res.statusCode = 500;
+            res.end();
+            return;
+        }
+        res.destroy(error instanceof Error ? error : undefined);
+    });
 }
 function copyDirectory(sourceDir, targetDir) {
     node_fs_1.default.mkdirSync(targetDir, { recursive: true });
@@ -77,7 +91,7 @@ function monacoAmdAssetsPlugin({ packageRoot }) {
                     return;
                 }
                 res.setHeader("Content-Type", getContentType(resolvedAssetPath));
-                node_fs_1.default.createReadStream(resolvedAssetPath).pipe(res);
+                streamMonacoAsset(res, resolvedAssetPath);
             });
         },
         writeBundle() {

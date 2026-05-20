@@ -4,6 +4,7 @@ import path from "node:path";
 import { createWriteStream, existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { pipeline } from "node:stream/promises";
 import { chromium } from "playwright";
 import { Storage } from "@goatcitadel/storage";
 import { resolveUiTarget } from "../../../scripts/lib/ui-target.mjs";
@@ -259,12 +260,16 @@ async function startProcess(name, commandArgs, extraEnv) {
     shell: process.platform === "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stdout.pipe(stdout);
-  child.stderr.pipe(stderr);
+  const logPipelines = Promise.all([
+    pipeline(child.stdout, stdout),
+    pipeline(child.stderr, stderr),
+  ]).catch((error) => {
+    if (!stopping) {
+      console.error(`[screenshots] ${name} log stream failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
   let stopping = false;
   child.on("exit", (code) => {
-    stdout.end();
-    stderr.end();
     if (!stopping && code !== null && code !== 0) {
       console.error(`[screenshots] ${name} exited early with code ${code}`);
     }
@@ -276,12 +281,16 @@ async function startProcess(name, commandArgs, extraEnv) {
     markStopping() {
       stopping = true;
     },
+    async waitForLogs() {
+      await logPipelines;
+    },
   };
 }
 
 async function stopProcess(handle) {
   const { child } = handle;
   if (child.exitCode !== null) {
+    await handle.waitForLogs?.();
     return;
   }
   handle.markStopping?.();
@@ -290,6 +299,7 @@ async function stopProcess(handle) {
       stdio: "ignore",
     });
     await waitForExit(child, 8000).catch(() => undefined);
+    await handle.waitForLogs?.();
     return;
   }
   child.kill("SIGTERM");
@@ -297,6 +307,7 @@ async function stopProcess(handle) {
     child.kill("SIGKILL");
     await waitForExit(child, 4000).catch(() => undefined);
   });
+  await handle.waitForLogs?.();
 }
 
 function waitForExit(child, timeoutMs) {

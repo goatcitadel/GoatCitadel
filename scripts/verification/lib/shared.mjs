@@ -3,6 +3,8 @@ import { createWriteStream } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import {
   createVerificationRunManifest,
   validateVerificationRepairPlan,
@@ -173,18 +175,25 @@ export async function runCommand(command, args, options = {}) {
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
+    let outputPipelineError;
+    const outputPipelines = Promise.all([
+      pipeline(child.stdout, createCaptureTransform(stdoutCapture), stdoutStream),
+      pipeline(child.stderr, createCaptureTransform(stderrCapture), stderrStream),
+    ]).catch((error) => {
+      outputPipelineError = error;
+    });
 
-    child.stdout.pipe(stdoutStream);
-    child.stderr.pipe(stderrStream);
-    child.stdout.on("data", (chunk) => stdoutCapture.append(chunk));
-    child.stderr.on("data", (chunk) => stderrCapture.append(chunk));
     child.on("error", (error) => {
       stdoutStream.destroy();
       stderrStream.destroy();
       reject(error);
     });
     child.on("close", async (code) => {
-      await Promise.all([waitForWritableFinished(stdoutStream), waitForWritableFinished(stderrStream)]);
+      await outputPipelines;
+      if (outputPipelineError) {
+        reject(outputPipelineError);
+        return;
+      }
       resolve({
         code: code ?? 0,
         stdout: stdoutCapture.toString(),
@@ -229,14 +238,12 @@ function createBoundedCapture(maxBytes) {
   };
 }
 
-function waitForWritableFinished(stream) {
-  return new Promise((resolve, reject) => {
-    if (stream.writableFinished || stream.closed || stream.destroyed) {
-      resolve();
-      return;
-    }
-    stream.once("finish", resolve);
-    stream.once("error", reject);
+function createCaptureTransform(capture) {
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      capture.append(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      callback(null, chunk);
+    },
   });
 }
 

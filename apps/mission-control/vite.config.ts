@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { defineConfig, loadEnv, type Plugin, type ResolvedConfig, type ViteDevServer } from "vite";
 import react from "@vitejs/plugin-react";
@@ -24,9 +25,29 @@ const repoRoot = path.resolve(configDir, "../..");
 const packageJson = JSON.parse(fs.readFileSync(path.resolve(configDir, "./package.json"), "utf8")) as {
   version?: string;
 };
+type StreamableResponse = NodeJS.WritableStream & {
+  destroyed?: boolean;
+  headersSent?: boolean;
+  statusCode?: number;
+  destroy(error?: Error): void;
+};
 
 function getContentType(filePath: string): string {
   return CONTENT_TYPES.get(path.extname(filePath).toLowerCase()) ?? "application/octet-stream";
+}
+
+function streamMonacoAsset(res: StreamableResponse, assetPath: string): void {
+  void pipeline(fs.createReadStream(assetPath), res).catch((error) => {
+    if (res.destroyed) {
+      return;
+    }
+    if (!res.headersSent) {
+      res.statusCode = 500;
+      res.end();
+      return;
+    }
+    res.destroy(error instanceof Error ? error : undefined);
+  });
 }
 
 function copyDirectory(sourceDir: string, targetDir: string): void {
@@ -82,14 +103,18 @@ function monacoAmdAssetsPlugin(packageRoot: string): Plugin {
 
         const relativeAssetPath = sanitizeRelativeAssetPath(requestUrl.slice(MONACO_PUBLIC_BASE.length));
         const resolvedAssetPath = path.resolve(sourceDir, `.${path.sep}${relativeAssetPath}`);
-        if (!resolvedAssetPath.startsWith(sourceDir) || !fs.existsSync(resolvedAssetPath) || !fs.statSync(resolvedAssetPath).isFile()) {
+        if (
+          !resolvedAssetPath.startsWith(sourceDir) ||
+          !fs.existsSync(resolvedAssetPath) ||
+          !fs.statSync(resolvedAssetPath).isFile()
+        ) {
           res.statusCode = 404;
           res.end();
           return;
         }
 
         res.setHeader("Content-Type", getContentType(resolvedAssetPath));
-        fs.createReadStream(resolvedAssetPath).pipe(res);
+        streamMonacoAsset(res, resolvedAssetPath);
       });
     },
     writeBundle() {

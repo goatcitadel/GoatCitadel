@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
+import { pipeline } from "node:stream/promises";
 
 const host = process.env.GOATCITADEL_UI_HOST || "127.0.0.1";
 const port = Number(process.env.GOATCITADEL_UI_PORT || 5173);
@@ -51,7 +52,7 @@ const server = http.createServer((request, response) => {
     "Content-Type": contentTypes[extension] || "application/octet-stream",
     "Cache-Control": resolveCacheControl(finalPath, requestUrl),
   });
-  fs.createReadStream(finalPath).pipe(response);
+  void streamFile(response, finalPath);
 });
 
 server.listen(port, host, () => {
@@ -82,4 +83,19 @@ function sendJson(response, statusCode, payload) {
     "Cache-Control": "no-store, max-age=0, must-revalidate",
   });
   response.end(JSON.stringify(payload));
+}
+
+async function streamFile(response, finalPath) {
+  try {
+    await pipeline(fs.createReadStream(finalPath), response);
+  } catch (error) {
+    if (response.destroyed) {
+      return;
+    }
+    if (!response.headersSent) {
+      sendJson(response, 500, { error: "Static file stream failed" });
+      return;
+    }
+    response.destroy(error instanceof Error ? error : undefined);
+  }
 }
