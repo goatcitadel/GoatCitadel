@@ -14,7 +14,7 @@ const mocked = vi.hoisted(() => ({
         toolName: string,
         args: Record<string, unknown>,
         config: ToolPolicyConfig,
-        executionContext?: { sessionId?: string; signal?: AbortSignal },
+        executionContext?: { sessionId?: string; signal?: AbortSignal; matchedGrantAllowedHosts?: string[] },
       ) => Promise<Record<string, unknown>>
     >(),
 }));
@@ -121,6 +121,7 @@ describe("executeTool", () => {
     expect(mocked.executeBrowserTool).toHaveBeenCalledWith("browser.navigate", request.args, policyConfig, {
       sessionId: "sess-1",
       signal: request.signal,
+      matchedGrantAllowedHosts: undefined,
     });
     expect(result).toMatchObject({ action: "navigate", title: "Example" });
   });
@@ -224,6 +225,139 @@ describe("executeTool", () => {
       });
     } finally {
       await fs.rm(filePath, { force: true });
+    }
+  });
+
+  it("uses uncapped fallback grant listing during physical file execution", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const filePath = path.join(os.tmpdir(), `tool-executor-uncapped-grant-${randomUUID()}.ts`);
+    await fs.writeFile(filePath, ["one", "two", "three"].join("\n"), "utf8");
+    const nonMatchingGrants = Array.from({ length: 500 }, (_, index) => ({
+      grantId: `grant-other-${index}`,
+      toolPattern: "file.write",
+      decision: "allow",
+      scope: "session",
+      scopeRef: "sess-grant",
+      grantType: "persistent",
+      constraints: { allowedPaths: ["*"] },
+      createdBy: "test",
+      createdAt: new Date(Date.UTC(2026, 2, 22, 12, 0, index + 1)).toISOString(),
+    }));
+    const grants = [
+      ...nonMatchingGrants,
+      {
+        grantId: "grant-old-read",
+        toolPattern: "file.read_range",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "sess-grant",
+        grantType: "persistent",
+        constraints: { allowedPaths: ["*"] },
+        createdBy: "test",
+        createdAt: "2026-03-22T12:00:00.000Z",
+      },
+    ];
+    const list = vi.fn((scope: string, scopeRef: string, limit: number) =>
+      scope === "session" && scopeRef === "sess-grant" ? grants.slice(0, limit) : [],
+    );
+    const storageWithGrant = {
+      toolGrants: { list },
+    } as unknown as Storage;
+
+    try {
+      const result = await executeTool(
+        {
+          toolName: "file.read_range",
+          args: { path: filePath, startLine: 1, endLine: 1 },
+          agentId: "agent",
+          sessionId: "sess-grant",
+        },
+        policyConfig,
+        storageWithGrant,
+      );
+
+      expect(result).toMatchObject({ path: filePath, content: "one" });
+      expect(list).toHaveBeenCalledWith("session", "sess-grant", Number.MAX_SAFE_INTEGER);
+    } finally {
+      await fs.rm(filePath, { force: true });
+    }
+  });
+
+  it("uses the matched consumed grant path constraints during execution", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), `tool-executor-consumed-grant-${randomUUID()}-`));
+    const grantedRoot = path.join(root, "granted");
+    const sourcePath = path.join(grantedRoot, "notes.md");
+    await fs.mkdir(grantedRoot, { recursive: true });
+    await fs.writeFile(sourcePath, "# Granted\n\nOne-time grant content.", "utf8");
+    const grant = {
+      grantId: "grant-consumed-path",
+      toolPattern: "docs.ingest",
+      decision: "allow" as const,
+      scope: "session" as const,
+      scopeRef: "sess-grant",
+      grantType: "one_time" as const,
+      constraints: { allowedPaths: [grantedRoot] },
+      createdBy: "test",
+      createdAt: new Date().toISOString(),
+      usesRemaining: 0,
+    };
+    const documents: Array<Record<string, unknown>> = [];
+    const chunksByDocId = new Map<string, Array<Record<string, unknown>>>();
+    const storageWithConsumedGrant = {
+      toolGrants: {
+        get: vi.fn(() => grant),
+        list: vi.fn(() => []),
+      },
+      knowledge: {
+        listDocuments: vi.fn(() => []),
+        createDocument: vi.fn((input: Record<string, unknown>) => {
+          const doc = {
+            docId: `doc-${documents.length + 1}`,
+            namespace: input.namespace,
+            sourceType: input.sourceType,
+            sourceRef: input.sourceRef,
+            title: input.title,
+            metadata: input.metadata ?? {},
+            createdAt: new Date().toISOString(),
+          };
+          documents.unshift(doc);
+          return doc;
+        }),
+        appendChunks: vi.fn((docId: string, entries: Array<Record<string, unknown>>) => {
+          const saved = entries.map((entry, index) => ({
+            chunkId: `chunk-${index + 1}`,
+            docId,
+            seq: index,
+            content: entry.content,
+            tokenEstimate: 1,
+            createdAt: new Date().toISOString(),
+          }));
+          chunksByDocId.set(docId, saved);
+          return saved;
+        }),
+        listChunksByDocument: vi.fn((docId: string) => chunksByDocId.get(docId) ?? []),
+        listChunksByNamespace: vi.fn(() => []),
+      },
+    } as unknown as Storage;
+
+    try {
+      const result = await executeTool(
+        {
+          toolName: "docs.ingest",
+          args: { sourceType: "file", source: sourcePath, namespace: "research" },
+          agentId: "agent",
+          sessionId: "sess-grant",
+          policyContext: { matchedGrantId: "grant-consumed-path" },
+        },
+        policyConfig,
+        storageWithConsumedGrant,
+      );
+
+      expect(result.document).toMatchObject({ sourceRef: sourcePath });
+      expect(storageWithConsumedGrant.toolGrants.list).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 
@@ -376,7 +510,11 @@ describe("executeTool", () => {
         endLine: 2,
         content: "red\ngreen",
       });
-      expect(storageWithGrant.toolGrants.list).toHaveBeenCalledWith("workspace", "workspace-1", 500);
+      expect(storageWithGrant.toolGrants.list).toHaveBeenCalledWith(
+        "workspace",
+        "workspace-1",
+        Number.MAX_SAFE_INTEGER,
+      );
     } finally {
       await fs.rm(filePath, { force: true });
     }
@@ -1008,6 +1146,338 @@ describe("executeTool", () => {
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "1712345678.000100",
+    });
+  });
+
+  it("keeps matched grant host constraints enforced across webhook redirects", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://other.example/hook" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const markFailed = vi.fn();
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-webhook",
+          key: "webhook",
+          config: {
+            url: "https://allowed.example/hook",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-webhook",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed,
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool(
+      {
+        toolName: "webhook.send",
+        args: {
+          connectionId: "conn-webhook",
+          message: "Only the approved webhook host may receive this.",
+        },
+        agentId: "operator",
+        sessionId: "sess-webhook-grant",
+        policyContext: {
+          matchedGrantAllowedHosts: ["allowed.example"],
+        } as ToolInvokeRequest["policyContext"],
+      },
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["allowed.example", "other.example"],
+        },
+      },
+      commsStorage,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith("https://allowed.example/hook", expect.any(Object));
+    expect(markFailed).toHaveBeenCalledWith("delivery-webhook", expect.stringMatching(/allowlisted/i));
+    expect(result).toMatchObject({
+      status: "failed",
+      deliveryStatus: "blocked",
+    });
+  });
+
+  it("keeps matched grant host constraints enforced across channel attachment redirects", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    process.env.MATTERMOST_BOT_TOKEN = "mattermost-token";
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const href = String(url);
+      if (href === "https://mattermost.example/api/v4/users/me") {
+        return new Response(JSON.stringify({ id: "bot-user-id" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (href === "https://allowed.example/file.txt") {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://other.example/file.txt" },
+        });
+      }
+      throw new Error(`unexpected fetch ${href}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const markFailed = vi.fn();
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-mattermost",
+          key: "mattermost",
+          config: {
+            serverUrl: "https://mattermost.example",
+            botTokenEnv: "MATTERMOST_BOT_TOKEN",
+            defaultChannel: "aaaaaaaaaaaaaaaaaaaaaaaaaa",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-attachment",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed,
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool(
+      {
+        toolName: "channel.send",
+        args: {
+          connectionId: "conn-mattermost",
+          message: "Attachment is constrained by the approved grant.",
+          attachments: [{ title: "file.txt", url: "https://allowed.example/file.txt" }],
+        },
+        agentId: "operator",
+        sessionId: "sess-attachment-grant",
+        policyContext: {
+          matchedGrantAllowedHosts: ["mattermost.example", "allowed.example"],
+        } as ToolInvokeRequest["policyContext"],
+      },
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["mattermost.example", "allowed.example", "other.example"],
+        },
+      },
+      commsStorage,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).not.toHaveBeenCalledWith("https://other.example/file.txt", expect.any(Object));
+    expect(markFailed).toHaveBeenCalledWith("delivery-attachment", expect.stringMatching(/allowlisted/i));
+    expect(result).toMatchObject({
+      status: "failed",
+      deliveryStatus: "blocked",
+    });
+  });
+
+  it("blocks channel provider API calls outside the matched grant host boundary", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(async () => new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const markFailed = vi.fn();
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-line",
+          key: "line",
+          config: {
+            channelAccessToken: "line-token",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-line",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed,
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool(
+      {
+        toolName: "line.send",
+        args: {
+          connectionId: "conn-line",
+          target: "user-line-1",
+          message: "Grant does not allow the LINE provider host.",
+        },
+        agentId: "operator",
+        sessionId: "sess-line-grant",
+        policyContext: {
+          matchedGrantAllowedHosts: ["approved.example"],
+        } as ToolInvokeRequest["policyContext"],
+      },
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["api.line.me", "approved.example"],
+        },
+      },
+      commsStorage,
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(markFailed).toHaveBeenCalledWith("delivery-line", expect.stringMatching(/allowlisted/i));
+    expect(result).toMatchObject({
+      status: "failed",
+      deliveryStatus: "blocked",
+    });
+  });
+
+  it("blocks reaction provider API calls outside the matched grant host boundary", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const markFailed = vi.fn();
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-slack",
+          key: "slack",
+          config: {
+            botToken: "xoxb-test",
+            defaultChannel: "C0123456789",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-slack-react",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed,
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool(
+      {
+        toolName: "slack.react",
+        args: {
+          connectionId: "conn-slack",
+          messageId: "1712345678.000100",
+          reaction: "white_check_mark",
+        },
+        agentId: "operator",
+        sessionId: "sess-slack-react-grant",
+        policyContext: {
+          matchedGrantAllowedHosts: ["approved.example"],
+        } as ToolInvokeRequest["policyContext"],
+      },
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["slack.com", "approved.example"],
+        },
+      },
+      commsStorage,
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(markFailed).toHaveBeenCalledWith("delivery-slack-react", expect.stringMatching(/allowlisted/i));
+    expect(result).toMatchObject({
+      status: "failed",
+      deliveryStatus: "blocked",
+    });
+  });
+
+  it("blocks Gmail side-effect calls outside the matched grant host boundary", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "gmail-1" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const markFailed = vi.fn();
+    const commsStorage = {
+      integrationConnections: {
+        get: vi.fn(() => ({
+          connectionId: "conn-gmail",
+          key: "gmail",
+          config: {
+            accessToken: "gmail-token",
+          },
+        })),
+      },
+      commsDeliveries: {
+        createQueued: vi.fn((input: Record<string, unknown>) => ({
+          deliveryId: "delivery-gmail",
+          status: "queued",
+          channelKey: input.channelKey,
+          target: input.target,
+          createdAt: "2026-03-18T00:00:00.000Z",
+          updatedAt: "2026-03-18T00:00:00.000Z",
+        })),
+        markSent: vi.fn(),
+        markFailed,
+      },
+    } as unknown as Storage;
+
+    const result = await executeTool(
+      {
+        toolName: "gmail.send",
+        args: {
+          connectionId: "conn-gmail",
+          to: ["operator@example.com"],
+          subject: "Grant check",
+          bodyText: "This should not leave through Gmail.",
+        },
+        agentId: "operator",
+        sessionId: "sess-gmail-grant",
+        policyContext: {
+          matchedGrantAllowedHosts: ["approved.example"],
+        } as ToolInvokeRequest["policyContext"],
+      },
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["gmail.googleapis.com", "approved.example"],
+        },
+      },
+      commsStorage,
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(markFailed).toHaveBeenCalledWith("delivery-gmail", expect.stringMatching(/allowlisted/i));
+    expect(result).toMatchObject({
+      status: "failed",
+      deliveryStatus: "blocked",
     });
   });
 
@@ -4265,6 +4735,58 @@ describe("executeTool", () => {
     }
   });
 
+  it("does not enforce an unrelated grant host boundary when the matched grant has none", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => new Response("ok", { status: 200 })) as unknown as typeof fetch;
+    const storageWithMixedGrants = {
+      toolGrants: {
+        get: vi.fn(() => ({
+          grantId: "grant-unconstrained",
+          toolPattern: "http.get",
+          decision: "allow",
+          scope: "session",
+          scopeRef: "sess-http",
+          grantType: "persistent",
+          createdBy: "test",
+          createdAt: new Date().toISOString(),
+        })),
+        list: vi.fn(() => [
+          {
+            grantId: "grant-other-host",
+            toolPattern: "http.get",
+            decision: "allow",
+            scope: "session",
+            scopeRef: "sess-http",
+            grantType: "persistent",
+            constraints: { allowedHosts: ["other.example"] },
+            createdBy: "test",
+            createdAt: new Date().toISOString(),
+          },
+        ]),
+      },
+    } as unknown as Storage;
+
+    try {
+      const result = await executeTool(
+        {
+          toolName: "http.get",
+          args: { url: "https://example.com/data" },
+          agentId: "agent",
+          sessionId: "sess-http",
+          policyContext: { matchedGrantId: "grant-unconstrained" },
+        },
+        policyConfig,
+        storageWithMixedGrants,
+      );
+
+      expect(result).toMatchObject({ body: "ok" });
+      expect(storageWithMixedGrants.toolGrants.list).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("caches native ingested documents and searches attributed chunks", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const documents: Array<Record<string, unknown>> = [];
@@ -4400,6 +4922,7 @@ describe("executeTool", () => {
               markdown: "# Firecrawl\n\nNormalized markdown content.",
               metadata: {
                 title: "Firecrawl",
+                sourceURL: "https://example.com/firecrawl",
               },
             },
           }),
@@ -4649,6 +5172,36 @@ describe("executeTool", () => {
       stdout: "[REDACTED]",
       stderr: "boom",
     });
+  });
+
+  it("rejects non-canonical docs.ingest sourceType values before ingestion execution", async () => {
+    await expect(
+      executeTool(
+        toolRequest("docs.ingest", {
+          sourceType: " file ",
+          source: "F:/outside/docs.md",
+          namespace: "docs",
+        }),
+        policyConfig,
+        storageStub,
+      ),
+    ).rejects.toThrow(/sourceType must be one of file\|url\|text/);
+  });
+
+  it("rejects non-canonical docs.ingest backend values before ingestion execution", async () => {
+    await expect(
+      executeTool(
+        toolRequest("docs.ingest", {
+          sourceType: "url",
+          source: "https://example.com/firecrawl",
+          namespace: "docs",
+          backend: " firecrawl ",
+          firecrawlBaseUrl: "https://firecrawl.example",
+        }),
+        policyConfig,
+        storageStub,
+      ),
+    ).rejects.toThrow(/backend must be one of native\|firecrawl/);
   });
 
   it("covers top-level time and secret rejection paths", async () => {

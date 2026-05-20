@@ -188,7 +188,7 @@ describe("mission-control-next route model", () => {
     expect(getRouteLabel({ area: "cowork" })).toBe("Cowork");
     expect(getRouteDescription({ area: "cowork", section: "board" })).toContain("board exposes");
     expect(getRouteDescription({ area: "cowork" })).toContain("Delegation");
-    expect(getRouteDescription({ area: "settings", section: "budget" })).toContain("Cost-control");
+    expect(getRouteDescription({ area: "settings", section: "budget" })).toContain("Set budget mode");
 
     expect(
       buildNavigationTarget(

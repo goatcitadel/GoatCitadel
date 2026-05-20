@@ -1,5 +1,6 @@
 import type {
   ChatSendMessageRequest,
+  ChatMessageRecord,
   ChatTurnTraceRecord,
   ChatTurnBranchKind,
   DurableCheckpointRecord,
@@ -27,6 +28,7 @@ interface DurableRunStore {
     lastError?: string;
     clearLastError?: boolean;
     clearLease?: boolean;
+    metadata?: Record<string, unknown>;
   }): DurableRunRecord;
   createCheckpoint(input: {
     runId: string;
@@ -86,6 +88,7 @@ export interface ChatDurableRunFinalizeDeps {
   durableRuns: DurableRunStore;
   chatToolRuns: ChatToolRunSummaryStore;
   chatToolArtifacts: ChatToolArtifactSummaryStore;
+  chatMessages?: Pick<{ get(messageId: string): ChatMessageRecord | undefined }, "get">;
   recordDurableTimelineEvent(
     durableRunId: string,
     eventType: DurableRunTimelineEvent["eventType"],
@@ -206,12 +209,14 @@ export function finalizeDurableChatRun(
   const failed = trace.status === "failed" || completionFailed;
   const nextStatus: DurableRunStatus = failed ? "failed" : "completed";
   const checkpointKind: DurableCheckpointRecord["checkpointKind"] = failed ? "run_failed" : "run_completed";
+  const terminalOutput = getTerminalAssistantOutput(deps, prepared, trace);
   deps.durableRuns.updateRun({
     runId,
     status: nextStatus,
     updatedAt: now,
     finishedAt: now,
     clearLease: true,
+    metadata: mergeTerminalOutputMetadata(currentRun?.metadata, terminalOutput),
     ...(failed ? { lastError: trace.failure?.message ?? "Durable chat run failed." } : { clearLastError: true }),
   });
   deps.durableRuns.createCheckpoint({
@@ -246,7 +251,7 @@ function checkpointKindForTerminalDurableChatRunStatus(
 }
 
 function buildDurableCheckpointState(
-  deps: Pick<ChatDurableRunFinalizeDeps, "chatToolRuns" | "chatToolArtifacts">,
+  deps: Pick<ChatDurableRunFinalizeDeps, "chatToolRuns" | "chatToolArtifacts" | "chatMessages">,
   prepared: PreparedAgentChatTurn,
   trace: ChatTurnTraceRecord,
 ): Record<string, unknown> {
@@ -260,6 +265,7 @@ function buildDurableCheckpointState(
     storageRelPath: artifact.storageRelPath,
     snippet: artifact.snippet,
   }));
+  const terminalOutput = getTerminalAssistantOutput(deps, prepared, trace);
   return {
     objective: prepared.content,
     currentStep: trace.status,
@@ -273,5 +279,55 @@ function buildDurableCheckpointState(
     artifactPointers: artifacts,
     blocker: trace.failure?.message,
     nextAction: trace.failure?.recommendedAction,
+    ...(terminalOutput
+      ? {
+          assistantMessageId: trace.assistantMessageId ?? prepared.assistantMessageId,
+          outputText: terminalOutput.outputText,
+          outputSummary: terminalOutput.outputSummary,
+        }
+      : {}),
+  };
+}
+
+function getTerminalAssistantOutput(
+  deps: Pick<ChatDurableRunFinalizeDeps, "chatMessages">,
+  prepared: PreparedAgentChatTurn,
+  trace: ChatTurnTraceRecord,
+): { outputText: string; outputSummary: string } | undefined {
+  if (trace.status !== "completed" && trace.status !== "failed") {
+    return undefined;
+  }
+  const messageId = trace.assistantMessageId ?? prepared.assistantMessageId;
+  if (!messageId) {
+    return undefined;
+  }
+  const content = deps.chatMessages?.get(messageId)?.content.trim();
+  if (!content) {
+    return undefined;
+  }
+  return {
+    outputText: content,
+    outputSummary: summarizeAssistantOutput(content),
+  };
+}
+
+function summarizeAssistantOutput(content: string): string {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  return normalized.length > 280 ? `${normalized.slice(0, 277)}...` : normalized;
+}
+
+function mergeTerminalOutputMetadata(
+  metadata: Record<string, unknown> | undefined,
+  output: { outputText: string; outputSummary: string } | undefined,
+): Record<string, unknown> | undefined {
+  if (!output) {
+    return metadata;
+  }
+  return {
+    ...(metadata ?? {}),
+    outputText: output.outputText,
+    finalOutput: output.outputText,
+    outputSummary: output.outputSummary,
+    finalSummary: output.outputSummary,
   };
 }

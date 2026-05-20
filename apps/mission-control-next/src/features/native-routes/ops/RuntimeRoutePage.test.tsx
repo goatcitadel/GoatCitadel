@@ -262,7 +262,7 @@ describe("RuntimeRoutePage", () => {
     runtimeSnapshotOverrides.runDaemonAction.mockClear();
   });
 
-  it("renders runtime posture and daemon controls in the canonical next shell", () => {
+  it("renders runtime posture and daemon controls in the Ops route", () => {
     const markup = renderToStaticMarkup(
       <RuntimeRoutePage
         route={{ area: "ops", section: "runtime", theme: "ops" } as any}
@@ -416,7 +416,7 @@ describe("RuntimeRoutePage", () => {
     expect(renderer!.root.findAllByType("input")[0]!.props.value).toBe("Daily review");
   });
 
-  it("runs daemon controls and refreshes runtime posture from the canonical shell", async () => {
+  it("runs daemon controls and refreshes runtime posture", async () => {
     let renderer: ReactTestRenderer | null = null;
 
     await act(async () => {
@@ -554,12 +554,30 @@ describe("RuntimeRoutePage", () => {
               payload: {},
             },
             {
+              eventId: "evt-gateway-approval",
+              sequence: 4,
+              eventType: "approval.resolved",
+              eventClass: "decision",
+              source: "gateway",
+              timestamp: "2026-04-22T00:01:30.000Z",
+              payload: {},
+            },
+            {
               eventId: "evt-runtime",
               sequence: 3,
               eventType: "daemon.started",
               eventClass: "info",
               source: "runtime",
               timestamp: "2026-04-22T00:02:00.000Z",
+              payload: {},
+            },
+            {
+              eventId: "evt-runtime-source",
+              sequence: 5,
+              eventType: "heartbeat",
+              eventClass: "info",
+              source: "runtime",
+              timestamp: "2026-04-22T00:03:00.000Z",
               payload: {},
             },
           ],
@@ -603,10 +621,18 @@ describe("RuntimeRoutePage", () => {
     expect(collectText(renderer!.root)).toContain("tool.failed");
     expect(collectText(renderer!.root)).toContain("approval.created");
     expect(collectText(renderer!.root)).toContain("daemon.started");
+    expect(findExactButton(renderer!.root, "All").props).toMatchObject({
+      role: "radio",
+      "aria-checked": true,
+    });
 
     await act(async () => findExactButton(renderer!.root, "Errors").props.onClick());
     expect(collectText(renderer!.root)).toContain("tool.failed");
     expect(collectText(renderer!.root)).not.toContain("approval.created");
+    expect(findExactButton(renderer!.root, "Errors").props).toMatchObject({
+      role: "radio",
+      "aria-checked": true,
+    });
 
     await act(async () => findExactButton(renderer!.root, "Approvals").props.onClick());
     expect(collectText(renderer!.root)).toContain("approval.created");
@@ -614,6 +640,8 @@ describe("RuntimeRoutePage", () => {
 
     await act(async () => findExactButton(renderer!.root, "Runtime").props.onClick());
     expect(collectText(renderer!.root)).toContain("daemon.started");
+    expect(collectText(renderer!.root)).toContain("heartbeat");
+    expect(collectText(renderer!.root)).not.toContain("approval.resolved");
     expect(collectText(renderer!.root)).not.toContain("tool.failed");
   });
 
@@ -700,7 +728,7 @@ describe("RuntimeRoutePage", () => {
     }
   });
 
-  it("navigates with canonical next-route objects instead of legacy URL strings", async () => {
+  it("navigates with route objects instead of legacy URL strings", async () => {
     const navigate = vi.fn();
     let renderer: ReactTestRenderer | null = null;
 
@@ -762,6 +790,31 @@ describe("RuntimeRoutePage", () => {
     expect(markup).toContain("unavailable");
     expect(markup).not.toContain("<strong>0</strong>");
     expect(markup).not.toContain("<strong>0 B</strong>");
+  });
+
+  it("uses health daemon status when daemon controls are unavailable", () => {
+    runtimeSnapshotOverrides.daemon = null;
+    runtimeSnapshotOverrides.sourceStatus = {
+      daemon: { status: "error", error: "daemon route failed" },
+      health: { status: "ok" },
+    };
+
+    const markup = renderToStaticMarkup(
+      <RuntimeRoutePage
+        route={{ area: "ops", section: "runtime", theme: "ops" } as any}
+        activeWorkspaceId="default"
+        activeWorkspaceName="Default"
+        pendingApprovals={2}
+        navigate={vi.fn()}
+        setActiveWorkspaceId={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain("Daemon running");
+    expect(markup).toContain("Control status unavailable");
+    expect(markup).toContain("<strong>localhost</strong>");
+    expect(markup).toContain("<strong>42</strong>");
+    expect(markup).not.toContain("Daemon unavailable");
   });
 
   it("covers degraded runtime formatting, backups, diagnostics, notifications, and QMD variants", () => {
@@ -893,8 +946,21 @@ describe("RuntimeRoutePage", () => {
     expect(runtimeMarkup).toContain("Daemon stopped");
     expect(runtimeMarkup).toContain("No backup");
     expect(runtimeMarkup).toContain("Read only");
+    expect(runtimeMarkup).toContain("manual");
     expect(runtimeMarkup).toContain("Unknown · 2 files");
     expect(runtimeMarkup).toContain("http · general");
+    let readOnlyRenderer: ReactTestRenderer | undefined;
+    act(() => {
+      readOnlyRenderer = create(
+        <RuntimeRoutePage route={{ area: "ops", section: "runtime", theme: "ops" } as any} {...commonProps} />,
+      );
+    });
+    expect(findButton(readOnlyRenderer!.root, "Start daemon").props.disabled).toBe(true);
+    expect(findButton(readOnlyRenderer!.root, "Restart daemon").props.disabled).toBe(true);
+    expect(findButton(readOnlyRenderer!.root, "Stop daemon").props.disabled).toBe(true);
+    act(() => {
+      readOnlyRenderer!.unmount();
+    });
 
     const diagnosticsMarkup = renderToStaticMarkup(
       <RuntimeRoutePage route={{ area: "ops", section: "diagnostics", theme: "ops" } as any} {...commonProps} />,

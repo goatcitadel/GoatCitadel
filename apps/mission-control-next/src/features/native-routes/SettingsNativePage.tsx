@@ -362,7 +362,7 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
                 },
                 {
                   label: "Budget",
-                  description: "Set cost posture and review budget guidance.",
+                  description: "Set budget mode and review cost evidence.",
                   onClick: () => navigate({ area: "settings", section: "budget", theme: route.theme }),
                 },
                 {
@@ -392,7 +392,7 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
                 },
                 {
                   label: "Channels",
-                  description: "Run guided channel setup drafts, test them, and finalize.",
+                  description: "Run guided channel setup drafts, send trial messages, and finalize.",
                   onClick: () => navigate({ area: "settings", section: "channels", theme: route.theme }),
                 },
                 {
@@ -744,7 +744,7 @@ function DemoStartPanel({
             state: data?.sessions.length ? "complete" : "active",
           },
           {
-            label: "Trust proof",
+            label: "Guided context",
             description: "Adds starter prompts and a memory example so Guided mode has something concrete to explain.",
             state: data?.status === "ready" ? "complete" : "pending",
           },
@@ -801,8 +801,8 @@ function SetupCenterPanel({
       <SettingsActionList
         items={[
           {
-            label: "Provider smoke tests",
-            description: "Verify configured model providers and exact key/source status.",
+            label: "Provider connection checks",
+            description: "Check configured model providers and exact key/source status.",
             meta: setupMeta(onboarding.checklist.find((item) => item.id === "llm")?.status),
             onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }),
           },
@@ -831,46 +831,143 @@ function SetupCenterPanel({
 }
 
 function BudgetSection({ route, navigate }: SettingsSectionProps) {
-  return (
-    <SettingsGrid>
-      <SettingsPanel
-        title="Budget controls"
-        subtitle="Cost and usage controls live in Ops for this build; this route is intentionally explicit."
-        stats={[
-          { label: "Status", value: "Ops" },
-          { label: "Routing", value: "Providers" },
+  const load = useCallback(() => fetchSettings(), []);
+  const { loading, error, data, reload } = useAsyncLoad(load);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [budgetDraft, setBudgetDraft] = useState<OnboardingState["settings"]["budgetMode"]>("balanced");
+  const [savingBudgetMode, setSavingBudgetMode] = useState(false);
+  const savingBudgetModeRef = useRef(false);
+
+  useEffect(() => {
+    if (data) {
+      setBudgetDraft(normalizeBudgetMode(data.budgetMode));
+    }
+  }, [data]);
+
+  const currentBudgetMode = normalizeBudgetMode(data?.budgetMode);
+  const saveBudgetMode = async () => {
+    if (savingBudgetModeRef.current) {
+      return;
+    }
+    try {
+      savingBudgetModeRef.current = true;
+      setSavingBudgetMode(true);
+      await patchSettings({ budgetMode: budgetDraft });
+      setNotice({ tone: "success", message: "Budget mode saved." });
+      await reload();
+    } catch (saveError) {
+      setNotice({ tone: "error", message: getErrorMessage(saveError) });
+    } finally {
+      savingBudgetModeRef.current = false;
+      setSavingBudgetMode(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <SettingsSectionShell loading={loading} error={null}>
+        {null}
+      </SettingsSectionShell>
+    );
+  }
+
+  const costEvidencePanel = (
+    <SettingsPanel
+      title="Cost evidence"
+      subtitle="Inspect the runtime signals that explain spend, routing, and provider behavior."
+    >
+      <SettingsActionList
+        items={[
+          {
+            label: "Open cost telemetry",
+            description: "Review provider usage and budget-facing runtime evidence in Ops.",
+            onClick: () => navigate({ area: "ops", section: "costs", theme: route.theme }),
+          },
+          {
+            label: "Tune provider routing",
+            description: "Change active model routing where cost, latency, and fallback choices are made.",
+            onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }),
+          },
         ]}
-      >
-        <SettingsActionList
-          items={[
-            {
-              label: "Open cost telemetry",
-              description: "Review provider usage and budget-facing runtime evidence in Ops.",
-              onClick: () => navigate({ area: "ops", section: "costs", theme: route.theme }),
-            },
-            {
-              label: "Tune provider routing",
-              description: "Change active model routing where cost, latency, and fallback choices are made.",
-              onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }),
-            },
-          ]}
-        />
-      </SettingsPanel>
-      <SettingsPanel
-        title="Release boundary"
-        subtitle="This page exists so deep links do not silently land on General settings."
-      >
-        <SettingsActionList
-          items={[
-            {
-              label: "No silent fallback",
-              description: "Budget deep links must resolve to budget guidance, not unrelated General settings.",
-              actionLabel: "Handled",
-            },
-          ]}
-        />
-      </SettingsPanel>
-    </SettingsGrid>
+      />
+    </SettingsPanel>
+  );
+
+  return (
+    <>
+      {error ? (
+        <div className="mc-next-directory-alert">
+          <AlertTriangle className="h-4 w-4" />
+          <span>{error}</span>
+        </div>
+      ) : null}
+      {notice ? <SettingsNotice notice={notice} /> : null}
+      <SettingsGrid>
+        {data ? (
+          <SettingsPanel
+            title="Budget mode"
+            subtitle="Set the default cost posture used by runtime settings and first-run defaults."
+            stats={[
+              { label: "Current", value: labelForBudgetMode(currentBudgetMode) },
+              { label: "Selected", value: labelForBudgetMode(budgetDraft) },
+            ]}
+          >
+            <SettingsFieldGrid>
+              <SettingsField label="Mode">
+                <select
+                  className="mc-next-settings-input"
+                  value={budgetDraft}
+                  onChange={(event) => setBudgetDraft(normalizeBudgetMode(event.target.value))}
+                >
+                  {BUDGET_MODE_OPTIONS.map((mode) => (
+                    <option key={mode} value={mode}>
+                      {labelForBudgetMode(mode)}
+                    </option>
+                  ))}
+                </select>
+                <p className="mc-next-settings-field-note">{describeBudgetMode(budgetDraft)}</p>
+              </SettingsField>
+            </SettingsFieldGrid>
+            <SettingsButtonRow>
+              <button
+                type="button"
+                className="mc-next-button"
+                disabled={savingBudgetMode || budgetDraft === currentBudgetMode}
+                onClick={() => void saveBudgetMode()}
+              >
+                <Save size={16} />
+                {savingBudgetMode ? "Saving..." : "Save budget mode"}
+              </button>
+              <button
+                type="button"
+                className="mc-next-button-secondary"
+                disabled={savingBudgetMode}
+                onClick={() => void reload()}
+              >
+                <RefreshCw size={16} />
+                Refresh
+              </button>
+            </SettingsButtonRow>
+          </SettingsPanel>
+        ) : (
+          <SettingsPanel
+            title="Budget mode unavailable"
+            subtitle="Budget mode could not be loaded, but cost and provider evidence remain reachable."
+          >
+            <p className="mc-next-settings-field-note">
+              Refresh the route to retry the settings read before changing the runtime budget posture.
+            </p>
+            <SettingsButtonRow>
+              <button type="button" className="mc-next-button-secondary" onClick={() => void reload()}>
+                <RefreshCw size={16} />
+                Refresh
+              </button>
+            </SettingsButtonRow>
+          </SettingsPanel>
+        )}
+        {costEvidencePanel}
+      </SettingsGrid>
+    </>
   );
 }
 
@@ -879,7 +976,7 @@ function UnknownSettingsSection({ section, route, navigate }: SettingsSectionPro
     <SettingsGrid>
       <SettingsPanel
         title="Unknown settings section"
-        subtitle={`No next-native settings section is registered for "${String(section)}".`}
+        subtitle={`No settings section is registered for "${String(section)}".`}
       >
         <SettingsActionList
           items={[
@@ -2929,11 +3026,11 @@ function RuntimeSection(_props: SettingsSectionProps) {
           running: true,
           pid: 0,
           uptimeSeconds: 0,
-          host: "verification-host",
+          host: "Local daemon preview",
           state: "running" as const,
           supported: true,
           controllable: false,
-          controlMessage: "Visual regression fixture",
+          controlMessage: "Daemon controls are unavailable for this preview run.",
         },
         voiceRuntime: {
           provider: "whisper.cpp" as const,
@@ -3110,6 +3207,7 @@ function RuntimeSection(_props: SettingsSectionProps) {
                   type="button"
                   className="mc-next-button"
                   onClick={() => void runAndReload(startDaemon, "Gateway daemon start requested.")}
+                  disabled={!data.daemon?.controllable}
                 >
                   <Play size={16} />
                   Start
@@ -3118,6 +3216,7 @@ function RuntimeSection(_props: SettingsSectionProps) {
                   type="button"
                   className="mc-next-button-secondary"
                   onClick={() => void runAndReload(stopDaemon, "Gateway daemon stop requested.")}
+                  disabled={!data.daemon?.controllable}
                 >
                   <Square size={16} />
                   Stop
@@ -3126,11 +3225,15 @@ function RuntimeSection(_props: SettingsSectionProps) {
                   type="button"
                   className="mc-next-button-secondary"
                   onClick={() => void runAndReload(restartDaemon, "Gateway daemon restart requested.")}
+                  disabled={!data.daemon?.controllable}
                 >
                   <RotateCcw size={16} />
                   Restart
                 </button>
               </SettingsButtonRow>
+              {!data.daemon?.controllable && data.daemon?.controlMessage ? (
+                <p className="mc-next-settings-help">{data.daemon.controlMessage}</p>
+              ) : null}
             </SettingsPanel>
             <SettingsPanel title="llama.cpp runtime" subtitle="Configure and control the local llama.cpp runtime.">
               <SettingsFieldGrid>
@@ -4558,7 +4661,10 @@ function ChannelsSection(_props: SettingsSectionProps) {
                 maxHeight="min(34vh, 18rem)"
               />
             </SettingsPanel>
-            <SettingsPanel title="Drafts" subtitle="Saved setup drafts, validation, testing, and finalization.">
+            <SettingsPanel
+              title="Drafts"
+              subtitle="Saved setup drafts, readiness checks, trial sends, and finalization."
+            >
               <SettingsSelectableList
                 items={data.drafts.map((item) => ({
                   id: item.draftId,
@@ -4577,7 +4683,7 @@ function ChannelsSection(_props: SettingsSectionProps) {
           </SettingsStack>
           <SettingsPanel
             title={selectedDraft?.label || selectedDefinition?.catalog.label || "Channel draft"}
-            subtitle="Edit the draft payload, then validate, test, and finalize it."
+            subtitle="Edit the draft payload, then check readiness, send a trial message, and finalize it."
           >
             {selectedDraft ? (
               <>
@@ -7223,12 +7329,12 @@ export function deriveSetupCenterItems(onboarding: OnboardingState): Array<{
     },
     {
       label: "Channels and MCP",
-      description: "Optional connectors stay off until explicitly configured and smoke-tested.",
+      description: "Optional connectors stay off until explicitly configured and checked.",
       state: "pending",
     },
     {
-      label: "Installer proof",
-      description: "Unsigned builds need checksums, install smoke, screenshots, and release notes before sharing.",
+      label: "Share readiness",
+      description: "Unsigned builds need checksums, install checks, screenshots, and notes before sharing.",
       state: "pending",
     },
   ];
@@ -7450,12 +7556,22 @@ export function normalizeBudgetMode(value: string | undefined): OnboardingState[
 
 export function describeBudgetMode(value: OnboardingState["settings"]["budgetMode"]): string {
   if (value === "saver") {
-    return "Prefer lower-cost models and tighter runtime limits.";
+    return "Store a lower-cost budget preference for cost evidence and operator review.";
   }
   if (value === "power") {
-    return "Allow stronger defaults when quality matters more than cost.";
+    return "Store a quality-first budget preference for cost evidence and operator review.";
   }
-  return "Keep cost and capability balanced for everyday work.";
+  return "Store a balanced budget preference for everyday cost evidence.";
+}
+
+function labelForBudgetMode(value: OnboardingState["settings"]["budgetMode"]): string {
+  if (value === "saver") {
+    return "Saver";
+  }
+  if (value === "power") {
+    return "Power";
+  }
+  return "Balanced";
 }
 
 function formatProviderApiStyleLabel(value: ProviderEditorDraft["apiStyle"]): string {
@@ -7755,11 +7871,11 @@ export function labelForSettingsSection(section: string) {
 export function descriptionForSettingsSection(section: string) {
   switch (section) {
     case "general":
-      return "Focused next-native settings instead of placeholder summaries.";
+      return "Core runtime defaults, provider posture, and high-signal setup routes.";
     case "onboarding":
-      return "Safe demo launch, setup center, provider, runtime, channel, and release-readiness checkpoints.";
+      return "Safe demo launch, setup center, provider, runtime, channel, and sharing checkpoints.";
     case "budget":
-      return "Cost-control deep links route to explicit budget guidance instead of silent fallback.";
+      return "Set the runtime budget mode and inspect cost evidence.";
     case "providers":
       return "Choose active routing, inspect provider and model posture, and manage secrets.";
     case "personalities":
@@ -7775,7 +7891,7 @@ export function descriptionForSettingsSection(section: string) {
     case "integrations":
       return "Create and maintain external product and automation connections.";
     case "channels":
-      return "Run setup drafts for channel connections, validate them, and finalize.";
+      return "Run setup drafts for channel connections, check readiness, send trial messages, and finalize.";
     case "mcp":
       return "Manage MCP servers, templates, transport config, and tool visibility.";
     case "tools":
@@ -7783,6 +7899,6 @@ export function descriptionForSettingsSection(section: string) {
     case "addons":
       return "Install and control optional add-on runtimes and their health.";
     default:
-      return "This settings deep link is not registered in the current shell.";
+      return "This settings deep link is not registered.";
   }
 }

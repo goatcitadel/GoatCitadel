@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadGatewayConfig } from "./config.js";
 import {
   assertCodeModeSandboxAvailable,
+  prepareCodeModeSandboxLaunch,
   resolveCurrentCodeModeSandboxMetadata,
 } from "./services/code-mode-sandbox-runner.js";
 import { main, parseCliOptions } from "./code-mode-sandbox-proof.js";
@@ -16,12 +17,14 @@ vi.mock("./config.js", () => ({
 
 vi.mock("./services/code-mode-sandbox-runner.js", () => ({
   assertCodeModeSandboxAvailable: vi.fn(),
+  prepareCodeModeSandboxLaunch: vi.fn(),
   resolveCurrentCodeModeSandboxMetadata: vi.fn(),
 }));
 
 const loadGatewayConfigMock = vi.mocked(loadGatewayConfig);
 const resolveCurrentCodeModeSandboxMetadataMock = vi.mocked(resolveCurrentCodeModeSandboxMetadata);
 const assertCodeModeSandboxAvailableMock = vi.mocked(assertCodeModeSandboxAvailable);
+const prepareCodeModeSandboxLaunchMock = vi.mocked(prepareCodeModeSandboxLaunch);
 
 const originalRootDir = process.env.GOATCITADEL_ROOT_DIR;
 const tempRoots: string[] = [];
@@ -31,6 +34,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
   process.env.GOATCITADEL_ROOT_DIR = undefined;
+  prepareCodeModeSandboxLaunchMock.mockReset();
   loadGatewayConfigMock.mockResolvedValue({
     assistant: {
       features: { codeModeV1Enabled: true },
@@ -43,7 +47,9 @@ beforeEach(() => {
       },
     },
   } as Awaited<ReturnType<typeof loadGatewayConfig>>);
-  resolveCurrentCodeModeSandboxMetadataMock.mockReturnValue(metadata({ required: true, available: true }));
+  resolveCurrentCodeModeSandboxMetadataMock.mockReturnValue(
+    metadata({ platform: "win32", required: true, available: true }),
+  );
 });
 
 afterEach(async () => {

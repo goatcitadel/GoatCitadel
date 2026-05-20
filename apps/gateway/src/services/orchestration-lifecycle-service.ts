@@ -1,3 +1,4 @@
+/* eslint-disable max-lines */
 /**
  * Orchestration lifecycle service.
  *
@@ -184,6 +185,10 @@ async function releaseOrchestrationWorktreeIfAvailable(
 
 function isOrchestrationRunTerminal(run: OrchestrationRun): boolean {
   return ["completed", "failed", "stopped_by_limit", "cancelled"].includes(run.status);
+}
+
+function isDurableRunTerminal(run: DurableRunRecord): boolean {
+  return ["completed", "failed", "cancelled", "dead_lettered"].includes(run.status);
 }
 
 function isWorkflowAbort(error: unknown, context?: DurableWorkflowExecutionContext): boolean {
@@ -749,6 +754,7 @@ export async function executeDurableOrchestrationRun(
       );
     }
   };
+  let harvestedWaitingExecution: OrchestrationPhaseExecutionResult | undefined;
 
   if (run.executionState === "resume_requested") {
     if (!run.pendingApprovalPhaseId || !run.pendingApprovedBy) {
@@ -776,6 +782,68 @@ export async function executeDurableOrchestrationRun(
       waveId: run.currentWaveId,
     });
     publishRunRealtime(host, plan, run, { event: "run_resumed" });
+  } else if (run.status === "running" && run.currentPhaseId) {
+    const resumedFrom = run.executionState;
+    const waitingChildPhase = readWaitingChildPhase(durableRun, run.currentPhaseId);
+    if (resumedFrom === "paused_for_approval" && waitingChildPhase) {
+      const childRun = getDurableRunIfAvailable(host, waitingChildPhase.childRunId);
+      if (childRun && !isDurableRunTerminal(childRun)) {
+        host.updateDurableRunState({
+          runId: durableRun.runId,
+          status: "waiting",
+          metadata: durableRun.metadata,
+          clearFinishedAt: true,
+          clearLastError: true,
+        });
+        host.requestDurableRunProcessing(waitingChildPhase.childRunId);
+        host.recordDurableTimelineEvent(durableRun.runId, "run_waiting", {
+          phaseId: run.currentPhaseId,
+          waveId: run.currentWaveId,
+          childRunId: waitingChildPhase.childRunId,
+          reason: "child_durable_run_not_terminal",
+        });
+        persistRunEvent(host, run, "run.waiting_for_child", {
+          phaseId: run.currentPhaseId,
+          waveId: run.currentWaveId,
+          childRunId: waitingChildPhase.childRunId,
+          childStatus: childRun.status,
+        });
+        return {
+          outcome: "paused",
+          checkpointState: buildCheckpointDetails(plan, run, durableRun.runId, {
+            waitingPhase: waitingChildPhase.payload,
+            waitingForChildRunId: waitingChildPhase.childRunId,
+          }),
+        };
+      }
+      if (childRun) {
+        harvestedWaitingExecution = buildHarvestedWaitingExecution(waitingChildPhase.payload, childRun);
+      }
+    }
+    recordUpdate(
+      {
+        ...run,
+        executionState: "running",
+        lastError: undefined,
+      },
+      resumedFrom === "paused_for_approval" ? "run_resumed" : undefined,
+      {
+        resumedFrom,
+      },
+    );
+    if (resumedFrom === "paused_for_approval") {
+      host.recordDurableTimelineEvent(durableRun.runId, "run_resumed", {
+        phaseId: run.currentPhaseId,
+        waveId: run.currentWaveId,
+        resumedFrom: "child_phase_wait",
+      });
+      persistRunEvent(host, run, "run.resumed", {
+        phaseId: run.currentPhaseId,
+        waveId: run.currentWaveId,
+        resumedFrom: "child_phase_wait",
+      });
+      publishRunRealtime(host, plan, run, { event: "run_resumed" });
+    }
   } else {
     recordUpdate(
       {
@@ -826,14 +894,19 @@ export async function executeDurableOrchestrationRun(
 
     let execution: OrchestrationPhaseExecutionResult;
     try {
-      execution = await runtime.phaseExecutor.execute({
-        plan,
-        run,
-        phase,
-        durableRun,
-        policyContext,
-        signal: context?.signal,
-      });
+      if (harvestedWaitingExecution && harvestedWaitingExecution.phaseId === previousPhaseId) {
+        execution = harvestedWaitingExecution;
+        harvestedWaitingExecution = undefined;
+      } else {
+        execution = await runtime.phaseExecutor.execute({
+          plan,
+          run,
+          phase,
+          durableRun,
+          policyContext,
+          signal: context?.signal,
+        });
+      }
       throwIfWorkflowAborted(context);
     } catch (error) {
       if (!isWorkflowAbort(error, context)) {
@@ -859,9 +932,11 @@ export async function executeDurableOrchestrationRun(
       startedAt: execution.startedAt,
       finishedAt: execution.finishedAt,
       outputSummary: execution.outputSummary,
+      outputText: execution.outputText,
       childSessionId: execution.childSessionId,
       childTurnId: execution.childTurnId,
       childRunId: execution.childRunId,
+      approvalId: execution.approvalId,
       responseId: execution.responseId,
       model: execution.model,
       costUsd: execution.costUsd ?? 0,
@@ -883,18 +958,69 @@ export async function executeDurableOrchestrationRun(
     );
 
     if (execution.status === "waiting") {
+      const waitForEvent = execution.approvalId
+        ? {
+            eventKey: "approval.resolved",
+            correlationId: execution.approvalId,
+          }
+        : undefined;
       recordUpdate(
         {
           ...run,
-          status: "paused",
+          status: waitForEvent ? "running" : "paused",
           executionState: "paused_for_approval",
           lastError: undefined,
         },
-        undefined,
+        waitForEvent ? "run_paused_for_approval" : undefined,
+        waitForEvent
+          ? {
+              waitingPhase: executionPayload,
+              waitForEvent,
+            }
+          : {},
       );
       publishRunRealtime(host, plan, run, {
         event: "phase_waiting",
       });
+      if (waitForEvent) {
+        const metadata = {
+          ...buildDurableMetadata(plan, run),
+          waitForEvent,
+          waitingPhase: executionPayload,
+        };
+        host.updateDurableRunState({
+          runId: durableRun.runId,
+          status: "waiting",
+          metadata,
+          clearFinishedAt: true,
+          clearLastError: true,
+        });
+        host.recordDurableTimelineEvent(durableRun.runId, "run_waiting", {
+          waitForEvent,
+          phaseId: previousPhaseId,
+          childSessionId: execution.childSessionId,
+          childTurnId: execution.childTurnId,
+          childRunId: execution.childRunId,
+          approvalId: execution.approvalId,
+        });
+        persistRunEvent(host, run, "run.paused_for_approval", {
+          phaseId: run.currentPhaseId,
+          waveId: run.currentWaveId,
+          waitForEvent,
+          childSessionId: execution.childSessionId,
+          childTurnId: execution.childTurnId,
+          childRunId: execution.childRunId,
+          approvalId: execution.approvalId,
+        });
+        publishRunRealtime(host, plan, run, { event: "run_paused_for_approval" });
+        return {
+          outcome: "paused",
+          checkpointState: buildCheckpointDetails(plan, run, durableRun.runId, {
+            waitingPhase: executionPayload,
+            waitForEvent,
+          }),
+        };
+      }
       continue;
     }
 
@@ -1012,6 +1138,81 @@ export async function executeDurableOrchestrationRun(
     outcome: "completed",
     checkpointState: buildCheckpointDetails(plan, run, durableRun.runId),
   };
+}
+
+function readWaitingChildPhase(
+  durableRun: DurableRunRecord,
+  currentPhaseId: string,
+): { childRunId: string; payload: Record<string, unknown> } | undefined {
+  const metadata = asRecord(durableRun.metadata);
+  const waitingPhase = asRecord(metadata?.waitingPhase);
+  if (!waitingPhase) {
+    return undefined;
+  }
+  const phaseId = asString(waitingPhase.phaseId);
+  const childRunId = asString(waitingPhase.childRunId);
+  if (!phaseId || phaseId !== currentPhaseId || !childRunId) {
+    return undefined;
+  }
+  return { childRunId, payload: waitingPhase };
+}
+
+function getDurableRunIfAvailable(host: OrchestrationLifecycleHost, runId: string): DurableRunRecord | undefined {
+  try {
+    return host.getDurableRun(runId);
+  } catch {
+    return undefined;
+  }
+}
+
+function buildHarvestedWaitingExecution(
+  waitingPhase: Record<string, unknown>,
+  childRun: DurableRunRecord,
+): OrchestrationPhaseExecutionResult {
+  const failed = childRun.status !== "completed";
+  const childRunId = asString(waitingPhase.childRunId) ?? childRun.runId;
+  const waitingOutputText = asString(waitingPhase.outputText);
+  const childOutputText = asString(childRun.metadata?.outputText) ?? asString(childRun.metadata?.finalOutput);
+  return {
+    phaseId: asString(waitingPhase.phaseId) ?? "unknown",
+    ownerAgentId: asString(waitingPhase.ownerAgentId) ?? "unknown",
+    status: failed ? "failed" : "completed",
+    startedAt: asString(waitingPhase.startedAt) ?? childRun.startedAt ?? childRun.createdAt,
+    finishedAt: childRun.finishedAt ?? new Date().toISOString(),
+    outputSummary: failed
+      ? `Child phase durable run ${childRunId} ended as ${childRun.status}.`
+      : (asString(childRun.metadata?.outputSummary) ??
+        asString(childRun.metadata?.finalSummary) ??
+        asString(waitingPhase.outputSummary) ??
+        `Child phase durable run ${childRunId} completed after approval.`),
+    outputText: failed ? (childRun.lastError ?? waitingOutputText) : (childOutputText ?? waitingOutputText),
+    childSessionId: asString(waitingPhase.childSessionId),
+    childTurnId: asString(waitingPhase.childTurnId),
+    childRunId,
+    approvalId: asString(waitingPhase.approvalId),
+    responseId: asString(waitingPhase.responseId),
+    model: asString(waitingPhase.model),
+    costUsd: asNumber(waitingPhase.costUsd),
+    inputTokens: asNumber(waitingPhase.inputTokens),
+    outputTokens: asNumber(waitingPhase.outputTokens),
+    citations: Array.isArray(waitingPhase.citations) ? (waitingPhase.citations as unknown[]) : undefined,
+    artifacts: Array.isArray(waitingPhase.artifacts) ? (waitingPhase.artifacts as unknown[]) : undefined,
+    error: failed
+      ? (childRun.lastError ?? `Child phase durable run ${childRunId} ended as ${childRun.status}.`)
+      : undefined,
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function asNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function findPhaseInPlan(plan: OrchestrationPlan, phaseId: string) {

@@ -12,7 +12,13 @@ import type {
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { stripHtmlNoiseTags, stripHtmlTags } from "./html-noise.js";
-import { assertNotPrivateOrReservedHost, fetchAllowlisted, redactUrlForError } from "./sandbox/network-guard.js";
+import { parseIngestionBackend, parseIngestionSourceType, type IngestionBackendName } from "./ingestion-source-type.js";
+import {
+  assertHostAllowed,
+  assertNotPrivateOrReservedHost,
+  fetchAllowlisted,
+  redactUrlForError,
+} from "./sandbox/network-guard.js";
 import { normalizeFirecrawlApiKeyEnvName } from "./safe-env-name.js";
 
 // SECURITY (codex finding #12): `sourceType` is the discriminator that
@@ -20,17 +26,7 @@ import { normalizeFirecrawlApiKeyEnvName } from "./safe-env-name.js";
 // cast (`as "file" | "url" | "text"`) without a runtime check, so an
 // attacker-supplied value like `"URL"` (uppercase) passed the policy-engine
 // `sourceType === "url"` validation, then fell through to the URL-ingestion
-// branch at runtime. Validate strictly here.
-const VALID_SOURCE_TYPES = new Set<string>(["file", "url", "text"]);
-type IngestionSourceType = "file" | "url" | "text";
-
-function parseSourceType(value: unknown): IngestionSourceType {
-  const normalized = typeof value === "string" ? value.trim() : "";
-  if (!VALID_SOURCE_TYPES.has(normalized)) {
-    throw new Error(`sourceType must be one of file|url|text (got ${JSON.stringify(value)})`);
-  }
-  return normalized as IngestionSourceType;
-}
+// branch at runtime. Validate strictly here and in policy preflight.
 
 const DEFAULT_URL_CACHE_TTL_SECONDS = 3600;
 // Max characters of `source` to embed in the synthesized fallback title when
@@ -51,6 +47,8 @@ export async function ingestDocumentViaBackend(input: {
   request: ToolInvokeRequest;
   storage: Storage;
   fetchUrl: (url: string) => Promise<FetchUrlResult>;
+  networkAllowlist?: string[];
+  sourceAllowlist?: string[];
 }): Promise<{
   backend: IngestionBackend;
   fetchResult: FetchResult;
@@ -60,10 +58,10 @@ export async function ingestDocumentViaBackend(input: {
   chunks: RetrievedContextChunk[];
 }> {
   const args = input.request.args;
-  const sourceType = parseSourceType(args.sourceType);
+  const sourceType = parseIngestionSourceType(args.sourceType);
   const source = requiredString(args.source, "source");
   const namespace = requiredString(args.namespace, "namespace");
-  const backendName = normalizeBackend(args.backend);
+  const backendName = parseIngestionBackend(args.backend);
   const cacheTtlSeconds =
     positiveInt(args.cacheTtlSeconds) ?? (sourceType === "url" ? DEFAULT_URL_CACHE_TTL_SECONDS : 0);
   const now = new Date();
@@ -73,6 +71,8 @@ export async function ingestDocumentViaBackend(input: {
     sourceType,
     source,
     backend: backendName,
+    networkAllowlist: input.networkAllowlist ?? [],
+    sourceAllowlist: input.sourceAllowlist ?? [],
     now,
   });
   if (cachedDocument && args.forceRefresh !== true) {
@@ -107,11 +107,14 @@ export async function ingestDocumentViaBackend(input: {
     backend: backendName,
     request: input.request,
     fetchUrl: input.fetchUrl,
+    networkAllowlist: input.networkAllowlist ?? [],
+    sourceAllowlist: input.sourceAllowlist ?? [],
   });
   const title =
     optionalString(args.title) ??
     fetched.title ??
     `${sourceType}:${source.slice(0, DEFAULT_FALLBACK_TITLE_SOURCE_MAX_LENGTH)}`;
+  const finalSourceUrl = sourceType === "url" ? fetched.sourceRef : undefined;
   const attribution: ContextSourceAttribution = {
     sourceType,
     sourceRef: source,
@@ -129,6 +132,7 @@ export async function ingestDocumentViaBackend(input: {
       fetchedAt: fetched.fetchedAt,
       contentType: fetched.contentType,
       statusCode: fetched.statusCode,
+      finalSourceUrl,
       rawContentStored: false,
     },
   };
@@ -222,12 +226,14 @@ export function searchIngestedContext(input: { storage: Storage; namespace?: str
 }
 
 async function fetchDocument(input: {
-  backend: IngestionBackend["backend"];
+  backend: IngestionBackendName;
   request: ToolInvokeRequest;
   fetchUrl: (url: string) => Promise<FetchUrlResult>;
+  networkAllowlist: string[];
+  sourceAllowlist: string[];
 }): Promise<FetchResult> {
   const args = input.request.args;
-  const sourceType = parseSourceType(args.sourceType);
+  const sourceType = parseIngestionSourceType(args.sourceType);
   const source = requiredString(args.source, "source");
   if (sourceType === "file") {
     const rawText = await fs.readFile(path.resolve(source), "utf8");
@@ -293,11 +299,17 @@ async function fetchDocument(input: {
     // happily fetch it for us.
     assertHttpUrl(source, "source");
     assertNotPrivateOrReservedHost(source);
+    if (input.networkAllowlist.length > 0) {
+      assertHostAllowed(source, input.networkAllowlist);
+    }
+    if (input.sourceAllowlist.length > 0) {
+      assertHostAllowed(source, input.sourceAllowlist);
+    }
 
     const targetUrl = `${firecrawlBaseUrl.replace(/\/$/, "")}/v2/scrape`;
-    // For canonical localhost Firecrawl we go through plain fetch so the
-    // loopback allowance applies; otherwise we use fetchAllowlisted with a
-    // wildcard allowlist (still blocks private hosts and resolved private IPs).
+    // Canonical localhost Firecrawl still goes through the manual redirect
+    // guard. Only the bundled API origin is allowed, so provider redirects
+    // cannot escape to another host.
     const fetchOnce = async (): Promise<Response> => {
       const init: RequestInit = {
         method: "POST",
@@ -312,10 +324,14 @@ async function fetchDocument(input: {
         }),
       };
       if (isCanonicalLocalBase) {
-        return fetch(targetUrl, init);
+        return fetchAllowlisted(targetUrl, {
+          allowlist: ["127.0.0.1:3002", "localhost:3002"],
+          timeoutMs: firecrawlTimeoutMs,
+          init,
+        });
       }
       return fetchAllowlisted(targetUrl, {
-        allowlist: ["*"],
+        allowlist: input.networkAllowlist,
         timeoutMs: firecrawlTimeoutMs,
         init,
       });
@@ -329,14 +345,24 @@ async function fetchDocument(input: {
     // own redirect chain. If that final URL points to a private host, do
     // not return the response body — the redirect could have taken us to
     // a metadata endpoint via an open redirector.
-    const reportedSourceUrl = optionalString(metadata.sourceURL) ?? optionalString(data.url);
+    const reportedSourceUrl =
+      optionalString(metadata.sourceURL) ?? optionalString(metadata.sourceUrl) ?? optionalString(data.url);
+    if (!reportedSourceUrl && (input.networkAllowlist.length > 0 || input.sourceAllowlist.length > 0)) {
+      throw new Error("Firecrawl did not report a final source URL; refusing to return allowlist-constrained content.");
+    }
     if (reportedSourceUrl) {
       try {
         assertHttpUrl(reportedSourceUrl, "Firecrawl final URL");
         assertNotPrivateOrReservedHost(reportedSourceUrl);
+        if (input.networkAllowlist.length > 0) {
+          assertHostAllowed(reportedSourceUrl, input.networkAllowlist);
+        }
+        if (input.sourceAllowlist.length > 0) {
+          assertHostAllowed(reportedSourceUrl, input.sourceAllowlist);
+        }
       } catch (error) {
         throw new Error(
-          `Firecrawl returned a final URL on a private/reserved host; refusing to return content: ${redactUrlForError(reportedSourceUrl)}`,
+          `Firecrawl returned a final URL outside the allowed source boundary; refusing to return content: ${redactUrlForError(reportedSourceUrl)}`,
           { cause: error },
         );
       }
@@ -346,7 +372,7 @@ async function fetchDocument(input: {
     return {
       backend: input.backend,
       sourceType,
-      sourceRef: source,
+      sourceRef: reportedSourceUrl ?? source,
       title,
       rawText: markdown,
       normalizedText: normalizeText(markdown),
@@ -378,6 +404,8 @@ function readCachedDocument(input: {
   sourceType: "file" | "url" | "text";
   source: string;
   backend: IngestionBackend["backend"];
+  networkAllowlist: string[];
+  sourceAllowlist: string[];
   now: Date;
 }):
   | {
@@ -401,6 +429,33 @@ function readCachedDocument(input: {
     const cacheExpiresAt = optionalString(ingestion.cacheExpiresAt);
     if (cacheExpiresAt && new Date(cacheExpiresAt).getTime() <= input.now.getTime()) {
       continue;
+    }
+    if (input.sourceType === "url" && (input.networkAllowlist.length > 0 || input.sourceAllowlist.length > 0)) {
+      const finalSourceUrl = optionalString(ingestion.finalSourceUrl);
+      try {
+        assertHttpUrl(input.source, "source");
+        assertNotPrivateOrReservedHost(input.source);
+        if (input.networkAllowlist.length > 0) {
+          assertHostAllowed(input.source, input.networkAllowlist);
+        }
+        if (input.sourceAllowlist.length > 0) {
+          assertHostAllowed(input.source, input.sourceAllowlist);
+        }
+        if (!finalSourceUrl) {
+          continue;
+        }
+        assertHttpUrl(finalSourceUrl, "cached final URL");
+        assertNotPrivateOrReservedHost(finalSourceUrl);
+        if (input.networkAllowlist.length > 0) {
+          assertHostAllowed(finalSourceUrl, input.networkAllowlist);
+        }
+        if (input.sourceAllowlist.length > 0) {
+          assertHostAllowed(finalSourceUrl, input.sourceAllowlist);
+        }
+      } catch (error) {
+        void error;
+        continue;
+      }
     }
     const chunks = input.storage.knowledge.listChunksByDocument(doc.docId, 1000).map((chunk) => ({
       chunkId: chunk.chunkId,
@@ -431,10 +486,6 @@ function readCachedDocument(input: {
     };
   }
   return undefined;
-}
-
-function normalizeBackend(value: unknown): IngestionBackend["backend"] {
-  return optionalString(value) === "firecrawl" ? "firecrawl" : "native";
 }
 
 function buildBackendDescriptor(backend: IngestionBackend["backend"], cacheTtlSeconds: number): IngestionBackend {

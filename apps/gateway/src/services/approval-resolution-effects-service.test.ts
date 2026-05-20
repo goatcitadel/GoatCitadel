@@ -136,6 +136,81 @@ describe("approval-resolution-effects-service", () => {
     ]);
   });
 
+  it("enqueues Code Mode recovery effects when the pending action row is missing", () => {
+    const upsert = vi.fn((input: Record<string, unknown>) => ({
+      effectId: String(input.targetId),
+      approvalId: String(input.approvalId),
+      effectKind: input.effectKind,
+      targetKind: input.targetKind,
+      targetId: String(input.targetId),
+      idempotencyKey: "key",
+      status: "pending",
+      attemptCount: 0,
+      payload: (input.payload as Record<string, unknown>) ?? {},
+      result: {},
+      version: 1,
+      createdAt: "2026-04-11T00:00:00.000Z",
+      updatedAt: "2026-04-11T00:00:00.000Z",
+    }));
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: { upsert, claimNextPendingEffect: vi.fn(), get: vi.fn(), listByApproval: vi.fn() },
+          approvalWaitRuns: { getRunId: vi.fn(() => undefined) },
+          pendingApprovalActions: { find: vi.fn(() => undefined) },
+          approvalInbox: { findByApprovalAndToken: vi.fn(() => undefined) },
+          chatInlineApprovals: { get: vi.fn(() => undefined) },
+          chatTurnTraces: { get: vi.fn(() => undefined), listBySession: vi.fn(() => []) },
+          chatDelegationSteps: { listParentsByChildSessionIds: vi.fn(() => new Map()) },
+          orchestration: { getRun: vi.fn() },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      {
+        backgroundTasks: new Set(),
+        wakeDurableRun: vi.fn(),
+        requestRunProcessing: vi.fn(),
+        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+        executeCodeModePendingApproval: vi.fn(),
+        executeApprovedPendingAction: vi.fn(),
+        enqueueAfterHooks: vi.fn(),
+        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+      },
+    );
+
+    service.enqueueResolutionEffects(
+      {
+        approvalId: "approval-code-1",
+        kind: "code_mode.run",
+        riskLevel: "danger",
+        status: "rejected",
+        payload: { runId: "code-run-1" },
+        preview: {},
+        linkage: { runId: "code-run-1", workspaceId: "workspace-1" },
+        createdAt: "2026-04-11T00:00:00.000Z",
+        resolvedAt: "2026-04-11T00:01:00.000Z",
+        resolvedBy: "operator",
+        explanationStatus: "not_requested",
+      } satisfies ApprovalRequest,
+      {
+        decision: "reject",
+        resolvedBy: "operator",
+      },
+    );
+
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        effectKind: "pending_action_execute",
+        targetId: "approval-code-1",
+        payload: expect.objectContaining({
+          actionType: "code_mode.run",
+          pendingActionMissing: true,
+          decision: "reject",
+        }),
+      }),
+    );
+  });
+
   it("wakes the child delegated turn and parent orchestration when a child subagent approval resolves", () => {
     const upsert = vi.fn((input: Record<string, unknown>) => ({
       effectId: String(input.targetId),
@@ -186,6 +261,19 @@ describe("approval-resolution-effects-service", () => {
               ]),
           ),
         },
+        orchestration: {
+          getRun: vi.fn(() => ({
+            runId: "orchestration-run-1",
+            workspaceId: "workspace-1",
+            planId: "plan-1",
+            status: "running",
+            startedAt: "2026-04-11T00:00:00.000Z",
+            totalIterations: 0,
+            totalCostUsd: 0,
+            durableRunId: "parent-orchestration-durable-run",
+            executionState: "paused_for_approval",
+          })),
+        },
       },
       publishRealtime: vi.fn(),
     } as unknown as ServiceContext;
@@ -211,6 +299,7 @@ describe("approval-resolution-effects-service", () => {
         linkage: {
           sessionId: "child-session-1",
           turnId: "child-turn-1",
+          runId: "orchestration-run-1",
           workspaceId: "workspace-1",
         },
         createdAt: "2026-04-11T00:00:00.000Z",
@@ -243,6 +332,254 @@ describe("approval-resolution-effects-service", () => {
         }),
       }),
     ]);
+    expect(upsert.mock.calls.map(([input]) => input)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          effectKind: "orchestration_parent_wake",
+          targetKind: "durable_run",
+          targetId: "parent-orchestration-durable-run",
+          payload: expect.objectContaining({
+            orchestrationRunId: "orchestration-run-1",
+            childRunId: "child-durable-run",
+            childTurnId: "child-turn-1",
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("defers orchestration parent wakes while the linked child durable run is still live", async () => {
+    const effect = createEffect({
+      effectKind: "orchestration_parent_wake",
+      targetKind: "durable_run",
+      targetId: "parent-orchestration-durable-run",
+      payload: {
+        childRunId: "child-durable-run",
+        childTurnId: "child-turn-1",
+      },
+      status: "running",
+    });
+    const completeEffect = vi.fn();
+    const failEffect = vi.fn();
+    const skipEffect = vi.fn();
+    const renewEffectLease = vi.fn(() => ({ ...effect, version: 2 }));
+    const wakeDurableRun = vi.fn();
+    const requestRunProcessing = vi.fn();
+    const publishRealtime = vi.fn();
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: {
+            renewEffectLease,
+            completeEffect,
+            failEffect,
+            skipEffect,
+          },
+          approvalWaitRuns: { markResolved: vi.fn() },
+          durableRuns: {
+            getRun: vi.fn(() => ({
+              runId: "child-durable-run",
+              status: "running",
+            })),
+          },
+          pendingApprovalActions: { find: vi.fn(() => undefined) },
+        },
+        publishRealtime,
+      } as unknown as ServiceContext,
+      {
+        backgroundTasks: new Set(),
+        wakeDurableRun,
+        requestRunProcessing,
+        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+        executeCodeModePendingApproval: vi.fn(),
+        executeApprovedPendingAction: vi.fn(),
+        enqueueAfterHooks: vi.fn(),
+        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+      },
+    );
+
+    await (
+      service as unknown as {
+        handleWakeEffect(effect: ApprovalEffectRecord, resolveApprovalWait: boolean): Promise<void>;
+      }
+    ).handleWakeEffect(effect, false);
+
+    expect(wakeDurableRun).not.toHaveBeenCalled();
+    expect(requestRunProcessing).toHaveBeenCalledWith("child-durable-run");
+    expect(renewEffectLease).toHaveBeenCalledWith(
+      "effect-1",
+      expect.any(String),
+      1,
+      expect.any(String),
+      expect.any(String),
+    );
+    expect(completeEffect).not.toHaveBeenCalled();
+    expect(failEffect).not.toHaveBeenCalled();
+    expect(skipEffect).not.toHaveBeenCalled();
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "approval_effect_deferred",
+      "approvals",
+      expect.objectContaining({
+        approvalId: "approval-1",
+        effectKind: "orchestration_parent_wake",
+        reason: "child_durable_run_not_terminal",
+        childRunId: "child-durable-run",
+        childRunStatus: "running",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("wakes orchestration parents when the linked child durable run is terminal", async () => {
+    const effect = createEffect({
+      effectKind: "orchestration_parent_wake",
+      targetKind: "durable_run",
+      targetId: "parent-orchestration-durable-run",
+      payload: {
+        childRunId: "child-durable-run",
+        childTurnId: "child-turn-1",
+      },
+      status: "running",
+    });
+    const completeEffect = vi.fn();
+    const renewEffectLease = vi.fn();
+    const wakeDurableRun = vi.fn(() => ({
+      runId: "parent-orchestration-durable-run",
+      eventKey: "approval.resolved",
+      correlationId: "approval-1",
+      outcome: "woke",
+    }));
+    const requestRunProcessing = vi.fn();
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: {
+            renewEffectLease,
+            completeEffect,
+            failEffect: vi.fn(),
+            skipEffect: vi.fn(),
+          },
+          approvalWaitRuns: { markResolved: vi.fn() },
+          durableRuns: {
+            getRun: vi.fn(() => ({
+              runId: "child-durable-run",
+              status: "completed",
+            })),
+          },
+          pendingApprovalActions: { find: vi.fn(() => undefined) },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      {
+        backgroundTasks: new Set(),
+        wakeDurableRun,
+        requestRunProcessing,
+        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+        executeCodeModePendingApproval: vi.fn(),
+        executeApprovedPendingAction: vi.fn(),
+        enqueueAfterHooks: vi.fn(),
+        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+      },
+    );
+
+    await (
+      service as unknown as {
+        handleWakeEffect(effect: ApprovalEffectRecord, resolveApprovalWait: boolean): Promise<void>;
+      }
+    ).handleWakeEffect(effect, false);
+
+    expect(renewEffectLease).not.toHaveBeenCalled();
+    expect(wakeDurableRun).toHaveBeenCalledWith("parent-orchestration-durable-run", expect.any(Object));
+    expect(requestRunProcessing).toHaveBeenCalledWith("parent-orchestration-durable-run");
+    expect(completeEffect).toHaveBeenCalledWith(
+      "effect-1",
+      expect.any(String),
+      1,
+      expect.objectContaining({
+        result: expect.objectContaining({
+          outcome: "woke",
+          targetId: "parent-orchestration-durable-run",
+        }),
+      }),
+    );
+  });
+
+  it("does not enqueue orchestration parent wakes across approval workspace boundaries", () => {
+    const upsert = vi.fn((input: Record<string, unknown>) => ({
+      effectId: String(input.targetId),
+      approvalId: String(input.approvalId),
+      effectKind: input.effectKind,
+      targetKind: input.targetKind,
+      targetId: String(input.targetId),
+      idempotencyKey: "key",
+      status: "pending",
+      attemptCount: 0,
+      payload: (input.payload as Record<string, unknown>) ?? {},
+      result: {},
+      version: 1,
+      createdAt: "2026-04-11T00:00:00.000Z",
+      updatedAt: "2026-04-11T00:00:00.000Z",
+    }));
+    const ctx = {
+      storage: {
+        approvalEffects: { upsert, claimNextPendingEffect: vi.fn(), get: vi.fn(), listByApproval: vi.fn() },
+        approvalWaitRuns: { getRunId: vi.fn(() => undefined) },
+        pendingApprovalActions: { find: vi.fn(() => undefined) },
+        approvalInbox: { findByApprovalAndToken: vi.fn(() => undefined) },
+        chatInlineApprovals: { get: vi.fn(() => undefined) },
+        chatTurnTraces: { get: vi.fn(() => undefined), listBySession: vi.fn(() => []) },
+        chatDelegationSteps: { listParentsByChildSessionIds: vi.fn(() => new Map()) },
+        orchestration: {
+          getRun: vi.fn(() => ({
+            runId: "orchestration-run-1",
+            workspaceId: "workspace-other",
+            planId: "plan-1",
+            status: "running",
+            startedAt: "2026-04-11T00:00:00.000Z",
+            totalIterations: 0,
+            totalCostUsd: 0,
+            durableRunId: "parent-orchestration-durable-run",
+            executionState: "paused_for_approval",
+          })),
+        },
+      },
+      publishRealtime: vi.fn(),
+    } as unknown as ServiceContext;
+    const service = new ApprovalEffectsService(ctx, {
+      backgroundTasks: new Set(),
+      wakeDurableRun: vi.fn(),
+      requestRunProcessing: vi.fn(),
+      findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+      executeCodeModePendingApproval: vi.fn(),
+      executeApprovedPendingAction: vi.fn(),
+      enqueueAfterHooks: vi.fn(),
+      resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+    });
+
+    service.enqueueResolutionEffects(
+      {
+        approvalId: "approval-1",
+        kind: "shell.exec",
+        riskLevel: "danger",
+        status: "approved",
+        payload: { workspaceId: "workspace-1" },
+        preview: {},
+        linkage: {
+          runId: "orchestration-run-1",
+          workspaceId: "workspace-1",
+        },
+        createdAt: "2026-04-11T00:00:00.000Z",
+        resolvedAt: "2026-04-11T00:01:00.000Z",
+        resolvedBy: "operator",
+        explanationStatus: "not_requested",
+      } satisfies ApprovalRequest,
+      {
+        decision: "approve",
+        resolvedBy: "operator",
+      },
+    );
+
+    expect(upsert.mock.calls.map(([input]) => input.effectKind)).not.toContain("orchestration_parent_wake");
   });
 
   it("skips enqueueing all effects for expired approvals", () => {
@@ -923,6 +1260,85 @@ describe("approval-resolution-effects-service", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps pending Code Mode effects recoverable when execution is already claimed", async () => {
+    let effectState = createEffect({
+      effectKind: "pending_action_execute",
+      targetKind: "pending_action",
+      targetId: "approval-1",
+      status: "running",
+    });
+    const completeEffect = vi.fn();
+    const failEffect = vi.fn();
+    const skipEffect = vi.fn();
+    const markResolved = vi.fn();
+    const publishRealtime = vi.fn();
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: {
+            get: vi.fn(() => effectState),
+            completeEffect,
+            failEffect,
+            skipEffect,
+          },
+          pendingApprovalActions: {
+            find: vi.fn(() => ({
+              approvalId: "approval-1",
+              actionType: "code_mode.run",
+              request: {},
+              createdAt: "2026-04-11T00:00:00.000Z",
+              resolutionStatus: "pending",
+            })),
+            markResolved,
+          },
+        },
+        publishRealtime,
+      } as unknown as ServiceContext,
+      {
+        backgroundTasks: new Set(),
+        wakeDurableRun: vi.fn(),
+        requestRunProcessing: vi.fn(),
+        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+        executeCodeModePendingApproval: vi.fn(async () => undefined),
+        executeApprovedPendingAction: vi.fn(),
+        enqueueAfterHooks: vi.fn(),
+        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+      },
+    );
+    effectState = {
+      ...effectState,
+      claimedBy: (service as unknown as { workerId: string }).workerId,
+    };
+
+    await (
+      service as unknown as {
+        handlePendingActionExecute(effect: ApprovalEffectRecord): Promise<void>;
+      }
+    ).handlePendingActionExecute(
+      createEffect({
+        effectKind: "pending_action_execute",
+        targetKind: "pending_action",
+        targetId: "approval-1",
+      }),
+    );
+
+    expect(markResolved).not.toHaveBeenCalled();
+    expect(failEffect).not.toHaveBeenCalled();
+    expect(completeEffect).not.toHaveBeenCalled();
+    expect(skipEffect).not.toHaveBeenCalled();
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "approval_effect_deferred",
+      "approvals",
+      expect.objectContaining({
+        approvalId: "approval-1",
+        actionType: "code_mode.run",
+        reason: "code_mode_run_already_claimed",
+        resolutionStatus: "pending",
+      }),
+      expect.any(Object),
+    );
   });
 
   it("completes remote inbox follow-up effects when the inbox item is missing", async () => {

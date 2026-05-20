@@ -47,7 +47,10 @@ export class CodeModeRunRepository {
   private readonly getStmt;
   private readonly listStmt;
   private readonly listFilteredStmt;
+  private readonly listFilteredForFailedHydrationStmt;
   private readonly listFilteredForStatusHydrationStmt;
+  private readonly claimForExecutionStmt;
+  private readonly releaseExecutionClaimStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.upsertStmt = db.prepare(`
@@ -97,6 +100,13 @@ export class CodeModeRunRepository {
       ORDER BY created_at DESC, run_id DESC
       LIMIT @limit
     `);
+    this.listFilteredForFailedHydrationStmt = db.prepare(`
+      SELECT * FROM code_mode_runs
+      WHERE (@workspaceId IS NULL OR workspace_id = @workspaceId)
+        AND (@sessionId IS NULL OR session_id = @sessionId)
+        AND (@turnId IS NULL OR turn_id = @turnId)
+      ORDER BY created_at DESC, run_id DESC
+    `);
     this.listFilteredForStatusHydrationStmt = db.prepare(`
       SELECT * FROM code_mode_runs
       WHERE (@workspaceId IS NULL OR workspace_id = @workspaceId)
@@ -104,6 +114,34 @@ export class CodeModeRunRepository {
         AND (@turnId IS NULL OR turn_id = @turnId)
         AND (status = @status OR (@includeApprovalPending = 1 AND status = 'approval_pending'))
       ORDER BY created_at DESC, run_id DESC
+    `);
+    this.claimForExecutionStmt = db.prepare(`
+      UPDATE code_mode_runs
+      SET
+        status = 'running',
+        sandbox_json = @sandboxJson,
+        started_at = @startedAt,
+        finished_at = NULL,
+        error_text = NULL,
+        error_code = NULL,
+        error_details_json = NULL
+      WHERE run_id = @runId
+        AND approval_id = @approvalId
+        AND status = 'approval_pending'
+    `);
+    this.releaseExecutionClaimStmt = db.prepare(`
+      UPDATE code_mode_runs
+      SET
+        status = 'approval_pending',
+        started_at = NULL,
+        finished_at = NULL,
+        error_text = NULL,
+        error_code = NULL,
+        error_details_json = NULL
+      WHERE run_id = @runId
+        AND approval_id = @approvalId
+        AND status = 'running'
+        AND (@startedAt IS NULL OR started_at = @startedAt)
     `);
   }
 
@@ -154,16 +192,16 @@ export class CodeModeRunRepository {
     if (!row) {
       throw new NotFoundError({ entity: "code mode run", id: runId });
     }
-    return mapCodeModeRunRow(row);
+    return mapCodeModeRunRowForRead(row);
   }
 
   public find(runId: string): CodeModeRunRecord | undefined {
     const row = this.getStmt.get(runId) as CodeModeRunRow | undefined;
-    return row ? mapCodeModeRunRow(row) : undefined;
+    return row ? mapCodeModeRunRowForRead(row) : undefined;
   }
 
   public list(limit = 100): CodeModeRunRecord[] {
-    return (this.listStmt.all({ limit }) as unknown as CodeModeRunRow[]).map(mapCodeModeRunRow);
+    return (this.listStmt.all({ limit }) as unknown as CodeModeRunRow[]).map(mapCodeModeRunRowForRead);
   }
 
   public listFiltered(options: {
@@ -173,15 +211,29 @@ export class CodeModeRunRepository {
     turnId?: string;
     status?: CodeModeRunRecord["status"];
   }): CodeModeRunRecord[] {
-    return (
+    const limit = normalizeCodeModeRunLimit(options.limit);
+    if (options.status === "failed") {
+      return (
+        this.listFilteredForFailedHydrationStmt.all({
+          workspaceId: options.workspaceId ?? null,
+          sessionId: options.sessionId ?? null,
+          turnId: options.turnId ?? null,
+        }) as unknown as CodeModeRunRow[]
+      )
+        .map(mapCodeModeRunRowForRead)
+        .filter((row) => row.status === "failed")
+        .slice(0, limit);
+    }
+    const rows = (
       this.listFilteredStmt.all({
-        limit: normalizeCodeModeRunLimit(options.limit),
+        limit,
         workspaceId: options.workspaceId ?? null,
         sessionId: options.sessionId ?? null,
         turnId: options.turnId ?? null,
         status: options.status ?? null,
       }) as unknown as CodeModeRunRow[]
-    ).map(mapCodeModeRunRow);
+    ).map(mapCodeModeRunRowForRead);
+    return options.status ? rows.filter((row) => row.status === options.status).slice(0, limit) : rows;
   }
 
   public listFilteredForStatusHydration(options: {
@@ -199,7 +251,35 @@ export class CodeModeRunRepository {
         status: options.status,
         includeApprovalPending: includeApprovalPending ? 1 : 0,
       }) as unknown as CodeModeRunRow[]
-    ).map(mapCodeModeRunRow);
+    ).map(mapCodeModeRunRowForRead);
+  }
+
+  public claimForExecution(input: {
+    runId: string;
+    approvalId: string;
+    sandbox?: CodeModeRunRecord["sandbox"];
+    startedAt: string;
+  }): CodeModeRunRecord | undefined {
+    const result = this.claimForExecutionStmt.run({
+      runId: input.runId,
+      approvalId: input.approvalId,
+      sandboxJson: input.sandbox ? JSON.stringify(input.sandbox) : null,
+      startedAt: input.startedAt,
+    }) as { changes?: number };
+    return result.changes && result.changes > 0 ? this.get(input.runId) : undefined;
+  }
+
+  public releaseExecutionClaim(input: {
+    runId: string;
+    approvalId: string;
+    startedAt?: string;
+  }): CodeModeRunRecord | undefined {
+    const result = this.releaseExecutionClaimStmt.run({
+      runId: input.runId,
+      approvalId: input.approvalId,
+      startedAt: input.startedAt ?? null,
+    }) as { changes?: number };
+    return result.changes && result.changes > 0 ? this.get(input.runId) : undefined;
   }
 }
 
@@ -267,6 +347,64 @@ function mapCodeModeRunRow(row: CodeModeRunRow): CodeModeRunRecord {
     createdAt: row.created_at,
     startedAt: row.started_at ?? undefined,
     finishedAt: row.finished_at ?? undefined,
+  };
+}
+
+function mapCodeModeRunRowForRead(row: CodeModeRunRow): CodeModeRunRecord {
+  try {
+    return mapCodeModeRunRow(row);
+  } catch (error) {
+    return buildCorruptCodeModeRunRecord(row, error);
+  }
+}
+
+function buildCorruptCodeModeRunRecord(row: CodeModeRunRow, error: unknown): CodeModeRunRecord {
+  const detail = error instanceof Error ? error.message : String(error);
+  return {
+    runId: row.run_id,
+    status: "failed",
+    language: row.language,
+    originSurface: row.origin_surface ?? undefined,
+    workspaceId: row.workspace_id ?? undefined,
+    operatorId: row.operator_id ?? undefined,
+    permissionProfileId: row.permission_profile_id ?? undefined,
+    permissionProfileLabel: row.permission_profile_label ?? undefined,
+    localOperatorOverrideId: row.local_operator_override_id ?? undefined,
+    requestedOutputIntent: row.requested_output_intent ?? undefined,
+    saveCandidateOnSuccess: row.save_candidate_on_success === 1,
+    capabilitySnapshotId: row.capability_snapshot_id,
+    codeModeInputHash: row.code_mode_input_hash ?? "",
+    wrapperManifestHash: row.wrapper_manifest_hash,
+    policySnapshotHash: row.policy_snapshot_hash,
+    codeHash: row.code_hash,
+    approvalId: row.approval_id ?? undefined,
+    sessionId: row.session_id ?? undefined,
+    turnId: row.turn_id ?? undefined,
+    codeArtifact: unavailableArtifact(row, "code_artifact_json"),
+    wrapperManifestArtifact: unavailableArtifact(row, "wrapper_manifest_artifact_json"),
+    policySnapshotArtifact: unavailableArtifact(row, "policy_snapshot_artifact_json"),
+    stdoutTruncated: row.stdout_truncated === 1,
+    stderrTruncated: row.stderr_truncated === 1,
+    error: `Code Mode run ledger is corrupt: ${detail}`,
+    errorCode: "CORRUPT_CODE_MODE_RUN_LEDGER",
+    errorDetails: {
+      corruptLedger: true,
+      detail,
+    },
+    createdAt: row.created_at,
+    startedAt: row.started_at ?? undefined,
+    finishedAt: row.finished_at ?? row.started_at ?? row.created_at,
+  };
+}
+
+function unavailableArtifact(row: CodeModeRunRow, fieldName: string): CapabilityArtifactRecord {
+  return {
+    artifactId: `${row.run_id}-${fieldName}-unavailable`,
+    relPath: `code-mode/${row.run_id}/${fieldName}.unavailable`,
+    sha256: "unavailable",
+    bytes: 0,
+    mimeType: "application/octet-stream",
+    createdAt: row.created_at,
   };
 }
 

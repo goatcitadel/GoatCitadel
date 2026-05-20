@@ -851,7 +851,8 @@ describe("SettingsNativePage broad native sections", () => {
     await click(buttons(budget.root, "Open")[1]!);
     expect(navigate).toHaveBeenCalledWith({ area: "ops", section: "costs", theme: "ops" });
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "providers", theme: "ops" });
-    expect(collectText(budget.root)).toContain("Handled");
+    expect(collectText(budget.root)).toContain("Budget mode");
+    expect(collectText(budget.root)).toContain("Cost evidence");
 
     navigate.mockClear();
     const unknown = await mount("missing-section", { navigate });
@@ -1231,6 +1232,30 @@ describe("SettingsNativePage broad native sections", () => {
 
     await click(buttons(onboarding.root, "Refresh").at(-1)!);
     expect(collectText(onboarding.root)).toContain("Start Here");
+  });
+
+  it("disables Gateway daemon controls when the daemon status is read-only", async () => {
+    settingsMocks.fetchDaemonStatus.mockResolvedValueOnce({
+      running: false,
+      pid: 0,
+      uptimeSeconds: 0,
+      host: "localhost",
+      state: "stopped",
+      supported: true,
+      controllable: false,
+      controlMessage: "Managed outside Mission Control.",
+    });
+
+    const runtime = await mount("runtime");
+
+    expect(collectText(runtime.root)).toContain("Read-only");
+    expect(collectText(runtime.root)).toContain("Managed outside Mission Control.");
+    expect(buttons(runtime.root, "Start")[0]!.props.disabled).toBe(true);
+    expect(buttons(runtime.root, "Stop")[0]!.props.disabled).toBe(true);
+    expect(findButton(runtime.root, "Restart").props.disabled).toBe(true);
+    expect(settingsMocks.startDaemon).not.toHaveBeenCalled();
+    expect(settingsMocks.stopDaemon).not.toHaveBeenCalled();
+    expect(settingsMocks.restartDaemon).not.toHaveBeenCalled();
   });
 
   it("covers demo load, ready, and bootstrap error branches", async () => {

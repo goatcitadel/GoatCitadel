@@ -24,6 +24,7 @@ import {
   type ChatSessionWorkbenchTreeEntry,
   type ChatSessionWorkbenchTreeResponse,
   type ChatSessionWorkbenchValidationResult,
+  type CodeModeRunRecord,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { WorktreeManager } from "@goatcitadel/orchestration";
@@ -56,6 +57,7 @@ export interface ChatWorkbenchDependencies {
   readonly config: GatewayRuntimeConfig;
   readonly storage: ChatWorkbenchStorage;
   requireChatSession(sessionId: string): void;
+  listCodeModeRuns?(options: { limit?: number; sessionId?: string }): CodeModeRunRecord[];
   publishRealtime(
     channel: string,
     topic: string,
@@ -602,25 +604,29 @@ export async function getChatSessionWorkbenchOutput(
   deps.requireChatSession(sessionId);
   const state = syncWorkbenchState(deps, sessionId);
   const projectId = deps.storage.chatSessionProjects.get(sessionId)?.projectId;
-  const helperRuns = deps.storage.codeModeRuns
-    .list(200)
-    .filter((run) => run.sessionId === sessionId)
-    .slice(0, 8)
-    .map((run) => ({
-      runId: run.runId,
-      turnId: run.turnId,
-      status: run.status,
-      language: run.language,
-      requestedOutputIntent: run.requestedOutputIntent,
-      stdoutPreview: run.stdoutPreview,
-      stderrPreview: run.stderrPreview,
-      createdAt: run.createdAt,
-    }));
+  const codeModeRuns =
+    deps.listCodeModeRuns?.({ sessionId, limit: 8 }) ??
+    (typeof deps.storage.codeModeRuns.listFiltered === "function"
+      ? deps.storage.codeModeRuns.listFiltered({ sessionId, limit: 8 })
+      : deps.storage.codeModeRuns
+          .list(500)
+          .filter((run) => run.sessionId === sessionId)
+          .slice(0, 8));
+  const helperRuns = codeModeRuns.slice(0, 8).map((run) => ({
+    runId: run.runId,
+    turnId: run.turnId,
+    status: run.status,
+    language: run.language,
+    requestedOutputIntent: run.requestedOutputIntent,
+    stdoutPreview: run.stdoutPreview,
+    stderrPreview: run.stderrPreview,
+    createdAt: run.createdAt,
+  }));
   const latest = helperRuns[0];
   const validationStatus = latest
     ? latest.status === "completed"
       ? "passed"
-      : latest.status === "failed"
+      : latest.status === "failed" || latest.status === "expired" || latest.status === "rejected"
         ? "failed"
         : "pending"
     : state.validationStatus;

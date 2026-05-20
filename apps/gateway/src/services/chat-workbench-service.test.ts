@@ -466,6 +466,33 @@ describe("chat workbench helpers", () => {
     expect(output.output).toContain("stderr tail");
   });
 
+  it("uses hydrated session-scoped Code Mode runs for helper validation state", async () => {
+    const { deps } = await createWorkbenchFixture();
+    deps.storage.codeModeRuns.list = vi.fn(() => {
+      throw new Error("global Code Mode listing should not be used");
+    }) as never;
+    deps.listCodeModeRuns = vi.fn(() => [
+      {
+        runId: "run-expired",
+        sessionId: "sess-1",
+        status: "expired",
+        language: "typescript",
+        requestedOutputIntent: "validate",
+        stdoutPreview: "",
+        stderrPreview: "approval expired",
+        createdAt: "2026-04-10T00:03:00.000Z",
+      },
+    ]) as never;
+
+    const output = await getChatSessionWorkbenchOutput(deps, "sess-1");
+
+    expect(deps.listCodeModeRuns).toHaveBeenCalledWith({ sessionId: "sess-1", limit: 8 });
+    expect(output.state.validationStatus).toBe("failed");
+    expect(output.state.outputArtifactId).toBe("code-mode-run:run-expired");
+    expect(output.output).toContain("typescript helper · expired");
+    expect(output.output).toContain("approval expired");
+  });
+
   it("reports idle and stored validation output when no helper runs exist", async () => {
     const { deps } = await createWorkbenchFixture();
 

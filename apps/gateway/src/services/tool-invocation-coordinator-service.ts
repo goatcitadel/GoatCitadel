@@ -15,9 +15,10 @@ import type { HooksService } from "./hooks-service.js";
 import { parseToolCallHookPatch } from "./hook-patch-helpers.js";
 import { handleInternalMcpApprovalInboxInvoke, isInternalMcpApprovalInboxServer } from "./mcp-approval-inbox.js";
 import type { McpRuntimeInvocationResult } from "./mcp-runtime.js";
-import type { PluginToolOverrideService } from "./plugin-tool-override-service.js";
+import type { PluginToolExecutionContext, PluginToolOverrideService } from "./plugin-tool-override-service.js";
 import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
 import type { EvidenceEnvelopeCreateRequest } from "./evidence-envelope-service.js";
+import { evaluateComputerUseSafety } from "../browser-runtime-guardrails.js";
 
 type ToolCallHookPatch = Record<string, unknown> & {
   toolName?: string;
@@ -98,6 +99,47 @@ function readDryRunRequiresApproval(result: ToolInvokeResult["result"]): boolean
   return Boolean(policy && typeof policy === "object" && "requiresApproval" in policy && policy.requiresApproval);
 }
 
+function buildPluginToolExecutionContext(
+  request: ToolInvokeRequest,
+  policyResult?: ToolInvokeResult,
+  approvedExternalRuntimeReplayId?: string,
+): PluginToolExecutionContext {
+  const policyContext = mergePolicyContexts(request.policyContext, readPolicyContextFromResult(policyResult));
+  return {
+    request: policyContext ? { ...request, policyContext } : request,
+    policyContext,
+    policyResult,
+    signal: request.signal,
+    approvedExternalRuntimeReplayId,
+  };
+}
+
+function readPolicyContextFromResult(result: ToolInvokeResult | undefined): ToolInvokeRequest["policyContext"] {
+  const raw = result?.result?.policyContext;
+  return isRecord(raw) ? (raw as ToolInvokeRequest["policyContext"]) : undefined;
+}
+
+function mergePolicyContexts(
+  base: ToolInvokeRequest["policyContext"],
+  evaluated: ToolInvokeRequest["policyContext"],
+): ToolInvokeRequest["policyContext"] {
+  if (!base && !evaluated) {
+    return undefined;
+  }
+  return {
+    ...(base ?? {}),
+    ...(evaluated ?? {}),
+    matchedGrantAllowedHosts:
+      evaluated?.matchedGrantAllowedHosts && evaluated.matchedGrantAllowedHosts.length > 0
+        ? evaluated.matchedGrantAllowedHosts
+        : base?.matchedGrantAllowedHosts,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 export interface ToolInvocationCoordinatorHost {
   readonly approvalInbox: Pick<
     ApprovalInboxRepository,
@@ -136,6 +178,7 @@ export interface ToolInvocationCoordinatorHost {
   normalizeToolInvokeRequest(request: ToolInvokeRequest): ToolInvokeRequest;
   isValidToolName(name: string): boolean;
   evaluateToolDeploymentGuard(request: ToolInvokeRequest): { reason: string } | null | undefined;
+  isFeatureEnabled?(flag: "computerUseGuardrailsV1Enabled"): boolean;
   resolveToolHookWorkspaceId(request: ToolInvokeRequest): string;
   primeToolApprovalLifecycle(approvalId: string, request: ToolInvokeRequest): ApprovalRequest;
   scheduleApprovalExplanationById(approvalId: string): void;
@@ -355,13 +398,35 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         auditEventId: randomUUID(),
       };
     }
+    if (this.host.isFeatureEnabled?.("computerUseGuardrailsV1Enabled")) {
+      const safety = evaluateComputerUseSafety(hookableRequest.toolName, hookableRequest.args ?? {});
+      if (safety.requiresVerification && !safety.verified) {
+        return {
+          outcome: "blocked",
+          policyReason:
+            "blocked: Computer-use guardrail: this mutating browser action requires step verification (set args.verifyStep=true).",
+          auditEventId: randomUUID(),
+          result: { computerUseGuardrail: safety },
+        };
+      }
+      if (safety.requiresConfirmation && !safety.confirmed) {
+        return {
+          outcome: "blocked",
+          policyReason:
+            "blocked: Computer-use guardrail: confirm-before-submit required (set args.confirmBeforeSubmit=true).",
+          auditEventId: randomUUID(),
+          result: { computerUseGuardrail: safety },
+        };
+      }
+    }
 
     const overrideHandler = isCodeModeWrapperInvocation
       ? undefined
       : this.host.pluginToolOverrideService?.resolveActiveHandler(hookableRequest.toolName);
     let approvedExternalRuntimeReplayId: string | undefined;
+    let finalPolicyCheck: ToolInvokeResult | undefined;
     if (overrideHandler) {
-      const finalPolicyCheck = await this.host.policyEngine.invoke({
+      finalPolicyCheck = await this.host.policyEngine.invoke({
         ...hookableRequest,
         externalRuntime: true,
       });
@@ -390,7 +455,10 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     });
     try {
       result = overrideHandler
-        ? await overrideHandler(hookableRequest.args ?? {})
+        ? await overrideHandler(
+            hookableRequest.args ?? {},
+            buildPluginToolExecutionContext(hookableRequest, finalPolicyCheck, approvedExternalRuntimeReplayId),
+          )
         : await this.host.policyEngine.invoke(hookableRequest);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -592,7 +660,10 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         approvalReplay: true,
       },
     });
-    const result = await overrideHandler(normalizedRequest.args ?? {});
+    const result = await overrideHandler(
+      normalizedRequest.args ?? {},
+      buildPluginToolExecutionContext(normalizedRequest, undefined, undefined),
+    );
     const permissionProfileId =
       normalizedRequest.policyContext?.permissionProfileId ?? normalizedRequest.permissionProfileId;
     const localOperatorOverrideId =

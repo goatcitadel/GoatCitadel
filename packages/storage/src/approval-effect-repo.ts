@@ -99,7 +99,8 @@ export class ApprovalEffectRepository {
           WHEN 'approval_wait_wake' THEN 1
           WHEN 'proactive_run_wake' THEN 2
           WHEN 'linked_chat_turn_wake' THEN 3
-          ELSE 4
+          WHEN 'orchestration_parent_wake' THEN 4
+          ELSE 5
         END ASC,
         created_at ASC,
         effect_id ASC

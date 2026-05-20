@@ -397,6 +397,12 @@ describe("chat-durable-run-service", () => {
 
     expect(state.runs.get("run-complete")?.status).toBe("completed");
     expect(state.runs.get("run-complete")?.lastError).toBeUndefined();
+    expect(state.runs.get("run-complete")?.metadata).toMatchObject({
+      outputText: "Approved child phase completed with real output.",
+      finalOutput: "Approved child phase completed with real output.",
+      outputSummary: "Approved child phase completed with real output.",
+      finalSummary: "Approved child phase completed with real output.",
+    });
     expect(state.checkpoints).toEqual([
       expect.objectContaining({
         runId: "run-complete",
@@ -426,6 +432,9 @@ describe("chat-durable-run-service", () => {
           ],
           blocker: undefined,
           nextAction: undefined,
+          assistantMessageId: "assistant-1",
+          outputText: "Approved child phase completed with real output.",
+          outputSummary: "Approved child phase completed with real output.",
         },
       }),
     ]);
@@ -683,6 +692,20 @@ function createFinalizeState(options?: {
     chatToolArtifacts: {
       listByTurn: () => options?.artifacts ?? [],
     },
+    chatMessages: {
+      get: (messageId) =>
+        messageId === "assistant-1"
+          ? {
+              messageId,
+              sessionId: "session-1",
+              role: "assistant",
+              actorType: "agent",
+              actorId: "assistant",
+              content: "Approved child phase completed with real output.",
+              timestamp: "2026-04-10T00:00:03.000Z",
+            }
+          : undefined,
+    },
     recordDurableTimelineEvent: (runId, eventType, payload) => {
       timelineEvents.push({ runId, eventType, payload });
     },
@@ -704,6 +727,7 @@ function updateRun(
     lastError?: string;
     clearLastError?: boolean;
     clearLease?: boolean;
+    metadata?: Record<string, unknown>;
   },
 ): DurableRunRecord {
   const current = runs.get(runId);
@@ -725,6 +749,7 @@ function updateRun(
       : patch.lastError !== undefined
         ? { lastError: patch.lastError }
         : {}),
+    ...(patch.metadata !== undefined ? { metadata: patch.metadata } : {}),
     ...(patch.clearLease ? { leaseOwnerId: undefined, leaseExpiresAt: undefined, leaseHeartbeatAt: undefined } : {}),
   };
   runs.set(runId, next);

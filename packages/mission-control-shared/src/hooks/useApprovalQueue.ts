@@ -34,6 +34,32 @@ export interface ApprovalDurableStatus {
 
 export type ApprovalView = "pending" | "history" | "recovery";
 
+function formatApprovalLoadError(
+  failures: Array<{ result: PromiseRejectedResult; status: ApprovalRequest["status"] }>,
+): string | null {
+  if (failures.length === 0) {
+    return null;
+  }
+  if (failures.length === 1) {
+    return failures[0]!.result.reason instanceof Error
+      ? failures[0]!.result.reason.message
+      : String(failures[0]!.result.reason);
+  }
+  const statuses = failures.map((entry) => entry.status).join(", ");
+  const firstReason =
+    failures[0]!.result.reason instanceof Error
+      ? failures[0]!.result.reason.message
+      : String(failures[0]!.result.reason);
+  return `Some approval views failed to load (${statuses}): ${firstReason}`;
+}
+
+function approvalBelongsToRejectedLane(
+  approval: ApprovalRequest,
+  rejectedStatuses: ReadonlySet<ApprovalRequest["status"]>,
+): boolean {
+  return rejectedStatuses.has(approval.status);
+}
+
 interface UseApprovalQueueOptions {
   focusedApprovalId?: string | null;
   enabled?: boolean;
@@ -48,6 +74,7 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
   const [tracePreviewByApprovalId, setTracePreviewByApprovalId] = useState<Record<string, string[]>>({});
   const [summary, setSummary] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [failedStatusLanes, setFailedStatusLanes] = useState<ApprovalRequest["status"][]>([]);
   const [view, setView] = useState<ApprovalView>("pending");
   const [selectedApprovalId, setSelectedApprovalId] = useState<string | null>(null);
   const appliedFocusedApprovalIdRef = useRef<string | undefined>(undefined);
@@ -55,20 +82,38 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
   const bulkResolveAction = useAction();
 
   const load = useCallback(async () => {
-    try {
-      const [pending, approved, rejected, edited] = await Promise.all([
-        fetchApprovals("pending"),
-        fetchApprovals("approved"),
-        fetchApprovals("rejected"),
-        fetchApprovals("edited"),
-      ]);
-      setData({
-        items: mergeApprovals([pending.items, approved.items, rejected.items, edited.items]),
+    const statuses = ["pending", "approved", "rejected", "edited"] as const;
+    const results = await Promise.allSettled(statuses.map((status) => fetchApprovals(status)));
+    const fulfilled = results
+      .map((result, index) => ({ result, status: statuses[index] }))
+      .filter(
+        (entry): entry is { result: PromiseFulfilledResult<ApprovalsResponse>; status: (typeof statuses)[number] } =>
+          entry.result.status === "fulfilled",
+      );
+    const rejected = results
+      .map((result, index) => ({ result, status: statuses[index] }))
+      .filter(
+        (entry): entry is { result: PromiseRejectedResult; status: (typeof statuses)[number] } =>
+          entry.result.status === "rejected",
+      );
+
+    if (fulfilled.length > 0) {
+      setData((current) => {
+        const fulfilledItems = fulfilled.map((entry) => entry.result.value.items);
+        const fulfilledApprovalIds = new Set(fulfilledItems.flat().map((item) => item.approvalId));
+        const rejectedStatuses = new Set(rejected.map((entry) => entry.status));
+        const preservedRejectedLaneItems =
+          current?.items.filter(
+            (item) =>
+              approvalBelongsToRejectedLane(item, rejectedStatuses) && !fulfilledApprovalIds.has(item.approvalId),
+          ) ?? [];
+        return {
+          items: mergeApprovals([...fulfilledItems, preservedRejectedLaneItems]),
+        };
       });
-      setError(null);
-    } catch (nextError) {
-      setError((nextError as Error).message);
     }
+    setFailedStatusLanes(rejected.map((entry) => entry.status));
+    setError(formatApprovalLoadError(rejected));
   }, []);
 
   useEffect(() => {
@@ -408,7 +453,7 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
   }, [pendingItems]);
 
   return {
-    loading: data === null,
+    loading: data === null && error === null,
     allItems,
     pendingItems,
     historyItems,
@@ -426,6 +471,8 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
     tracePreviewByApprovalId,
     summary,
     error,
+    failedStatusLanes,
+    pendingLaneFailed: failedStatusLanes.includes("pending"),
     pendingRiskCounts,
     hasPendingApprovals: pendingItems.length > 0,
     replayCount: Object.keys(replayById).length,

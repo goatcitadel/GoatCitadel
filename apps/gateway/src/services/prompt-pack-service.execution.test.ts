@@ -69,6 +69,185 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     ).toThrow(/durable-owned code execution is unavailable/i);
   });
 
+  it("does not bootstrap prompt-pack session allows over an inherited active deny grant", () => {
+    const createGrant = vi.fn();
+    const listActive = vi.fn((scope?: string, scopeRef?: string) =>
+      scope === "workspace" && scopeRef === "workspace-a"
+        ? [
+            {
+              grantId: "deny-browser",
+              toolPattern: "browser.*",
+              decision: "deny",
+              scope: "workspace",
+              scopeRef: "workspace-a",
+              grantType: "persistent",
+              createdBy: "operator",
+              createdAt: "2026-05-20T00:00:00.000Z",
+            },
+          ]
+        : [],
+    );
+    const service = new PromptPackService(
+      {
+        storage: {
+          toolGrants: {
+            list: vi.fn(() => []),
+            listActive,
+            create: createGrant,
+          },
+          chatSessionMeta: {
+            get: () => ({ workspaceId: "workspace-a" }),
+          },
+        },
+        gatewaySql: {
+          prepare: () => ({
+            get: () => undefined,
+          }),
+        } as never,
+        config: {
+          rootDir: "F:/code/personal-ai",
+          assistant: {
+            workspaceDir: ".",
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => true,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime: () => undefined,
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      } as never,
+    );
+
+    (
+      service as unknown as {
+        ensurePromptPackSessionToolGrants(
+          sessionId: string,
+          profile: {
+            mode: "chat";
+            toolTier: "explicit-tools";
+            toolAutonomy: "manual";
+            webMode: "quick";
+            memoryMode: "off";
+            thinkingLevel: "standard";
+          },
+          prompt: string,
+        ): void;
+      }
+    ).ensurePromptPackSessionToolGrants(
+      "session-1",
+      {
+        mode: "chat",
+        toolTier: "explicit-tools",
+        toolAutonomy: "manual",
+        webMode: "quick",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+      },
+      "Use browser.search for current sources.",
+    );
+
+    expect(listActive).toHaveBeenCalledWith("session", "session-1");
+    expect(listActive).toHaveBeenCalledWith("global", "global");
+    expect(listActive).toHaveBeenCalledWith("agent", "assistant");
+    expect(listActive).toHaveBeenCalledWith("workspace", "workspace-a");
+    expect(createGrant).not.toHaveBeenCalled();
+  });
+
+  it("inherits default-workspace denies when prompt-pack session metadata is missing", () => {
+    const createGrant = vi.fn();
+    const listActive = vi.fn((scope?: string, scopeRef?: string) =>
+      scope === "workspace" && scopeRef === "default"
+        ? [
+            {
+              grantId: "deny-browser-default",
+              toolPattern: "browser.*",
+              decision: "deny",
+              scope: "workspace",
+              scopeRef: "default",
+              grantType: "persistent",
+              createdBy: "operator",
+              createdAt: "2026-05-20T00:00:00.000Z",
+            },
+          ]
+        : [],
+    );
+    const service = new PromptPackService(
+      {
+        storage: {
+          toolGrants: {
+            list: vi.fn(() => []),
+            listActive,
+            create: createGrant,
+          },
+          chatSessionMeta: {
+            get: () => undefined,
+          },
+        },
+        gatewaySql: {
+          prepare: () => ({
+            get: () => undefined,
+          }),
+        } as never,
+        config: {
+          rootDir: "F:/code/personal-ai",
+          assistant: {
+            workspaceDir: ".",
+          },
+        } as never,
+        normalizeWorkspaceId: () => "default",
+        isFeatureEnabled: () => true,
+        requireFeatureEnabled: () => undefined,
+        publishRealtime: () => undefined,
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      } as never,
+    );
+
+    (
+      service as unknown as {
+        ensurePromptPackSessionToolGrants(
+          sessionId: string,
+          profile: {
+            mode: "chat";
+            toolTier: "explicit-tools";
+            toolAutonomy: "manual";
+            webMode: "quick";
+            memoryMode: "off";
+            thinkingLevel: "standard";
+          },
+          prompt: string,
+        ): void;
+      }
+    ).ensurePromptPackSessionToolGrants(
+      "session-without-meta",
+      {
+        mode: "chat",
+        toolTier: "explicit-tools",
+        toolAutonomy: "manual",
+        webMode: "quick",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+      },
+      "Use browser.search for current sources.",
+    );
+
+    expect(listActive).toHaveBeenCalledWith("workspace", "default");
+    expect(createGrant).not.toHaveBeenCalled();
+  });
+
   it("blocks prompt-pack test execution before creating run rows when durable preflight fails", async () => {
     const createRun = vi.fn();
     const createChatSession = vi.fn();

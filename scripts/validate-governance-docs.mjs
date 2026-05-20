@@ -103,7 +103,11 @@ if (
 if (!/trusted-code surface/i.test(agentsGuide) || !/Do not claim hostile-code sandboxing/i.test(agentsGuide)) {
   errors.push("AGENTS.md must keep Code Mode guidance truthful and avoid hostile-code sandbox claims.");
 }
-if (!/## Source of Truth Order/.test(agentsGuide) || !/current implementation under `apps\/` and `packages\/`/.test(agentsGuide)) {
+if (
+  !/## Source of Truth Order[\s\S]*1\. current implementation under `apps\/` and `packages\/`[\s\S]*2\. `docs\/CANONICAL_RUNTIME_STATE_MODEL\.md`[\s\S]*3\. `docs\/1_0_CONTRACT\.md`[\s\S]*4\. `docs\/ENGINEERING_HANDBOOK\.md`/m.test(
+    agentsGuide,
+  )
+) {
   errors.push("AGENTS.md must preserve the implementation-first source-of-truth order.");
 }
 
@@ -118,6 +122,13 @@ if (machineSpecificRepoPathPattern.test(handbook)) {
 }
 if (/system truth/i.test(handbook)) {
   errors.push("docs/ENGINEERING_HANDBOOK.md must not claim repo-wide system truth.");
+}
+if (
+  !/When runtime ownership, lifecycle status, or operator truth matter, prefer these sources in order:[\s\S]*1\. current implementation under `apps\/` and `packages\/`[\s\S]*2\. `docs\/CANONICAL_RUNTIME_STATE_MODEL\.md`[\s\S]*3\. `docs\/1_0_CONTRACT\.md`[\s\S]*4\. this handbook for broader subsystem orientation/m.test(
+    handbook,
+  )
+) {
+  errors.push("docs/ENGINEERING_HANDBOOK.md must preserve the implementation-first source-of-truth order.");
 }
 if (!/MemoryLifecycleService/.test(handbook)) {
   errors.push("docs/ENGINEERING_HANDBOOK.md must name MemoryLifecycleService as the memory lifecycle owner.");
@@ -286,6 +297,13 @@ if (!/@goatcitadel\/extensions-sdk@1\.0\.0/.test(pluginSdkDoc)) {
 const contract = await readFile(path.join(root, "docs", "1_0_CONTRACT.md"), "utf8");
 if (!/^Last updated: 2026-05-18$/m.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must carry the current 2026-05-18 freshness header.");
+}
+if (
+  !/## Source of Truth Order[\s\S]*1\. current implementation under `apps\/` and `packages\/`[\s\S]*2\. \[docs\/CANONICAL_RUNTIME_STATE_MODEL\.md\]\(\.\/CANONICAL_RUNTIME_STATE_MODEL\.md\)[\s\S]*3\. this contract for `1\.0` promise and release-scope truth[\s\S]*4\. \[docs\/ENGINEERING_HANDBOOK\.md\]\(\.\/ENGINEERING_HANDBOOK\.md\)/m.test(
+    contract,
+  )
+) {
+  errors.push("docs/1_0_CONTRACT.md must preserve the implementation-first source-of-truth order.");
 }
 if (!/local-first AI workbench/i.test(contract)) {
   errors.push("docs/1_0_CONTRACT.md must define GoatCitadel 1.0 as a local-first AI workbench.");

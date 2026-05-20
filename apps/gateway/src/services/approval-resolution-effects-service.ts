@@ -1,3 +1,4 @@
+/* eslint-disable max-lines */
 import { randomUUID } from "node:crypto";
 import type {
   ApprovalEffectRecord,
@@ -14,6 +15,7 @@ const APPROVAL_EFFECT_LEASE_TTL_MS = 15_000;
 const APPROVAL_EFFECT_HEARTBEAT_MS = 5_000;
 const APPROVAL_EFFECT_POLL_MIN_MS = 1_000;
 const APPROVAL_EFFECT_POLL_JITTER_MS = 500;
+const APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS = 2_000;
 
 export interface ApprovalChatTurnResumeResult {
   resumed: boolean;
@@ -59,6 +61,8 @@ export interface ApprovalEffectsServiceContext {
     | "chatInlineApprovals"
     | "chatDelegationSteps"
     | "chatTurnTraces"
+    | "durableRuns"
+    | "orchestration"
   >;
   publishRealtime(
     channel: string,
@@ -141,7 +145,12 @@ export class ApprovalEffectsService {
     const enqueued: ApprovalEffectRecord[] = [];
     const wakePayload = buildWakePayload(approval, input);
     const pendingAction = this.ctx.storage.pendingApprovalActions.find(approval.approvalId);
-    if (input.decision === "approve" && pendingAction?.resolutionStatus === "pending") {
+    if (
+      (input.decision === "approve" && pendingAction?.resolutionStatus === "pending") ||
+      (approval.kind === "code_mode.run" &&
+        (input.decision === "approve" || input.decision === "reject") &&
+        !pendingAction)
+    ) {
       enqueued.push(
         this.ctx.storage.approvalEffects.upsert({
           approvalId: approval.approvalId,
@@ -149,7 +158,9 @@ export class ApprovalEffectsService {
           targetKind: "pending_action",
           targetId: approval.approvalId,
           payload: {
-            actionType: pendingAction.actionType,
+            actionType: pendingAction?.actionType ?? "code_mode.run",
+            pendingActionMissing: pendingAction ? undefined : true,
+            decision: input.decision,
           },
         }),
       );
@@ -196,6 +207,24 @@ export class ApprovalEffectsService {
         }),
       );
     }
+
+    for (const parentRun of this.resolveOrchestrationParentWakeTargets(approval)) {
+      enqueued.push(
+        this.ctx.storage.approvalEffects.upsert({
+          approvalId: approval.approvalId,
+          effectKind: "orchestration_parent_wake",
+          targetKind: "durable_run",
+          targetId: parentRun.durableRunId,
+          payload: {
+            ...wakePayload,
+            orchestrationRunId: parentRun.orchestrationRunId,
+            childRunId: linkedTurn?.runId,
+            childTurnId: linkedTurn?.turnId,
+          },
+        }),
+      );
+    }
+
     for (const parentTurn of this.resolveDelegationParentWakeTargets(approval)) {
       enqueued.push(
         this.ctx.storage.approvalEffects.upsert({
@@ -382,6 +411,9 @@ export class ApprovalEffectsService {
       case "proactive_run_wake":
         await this.handleWakeEffect(effect, false);
         return;
+      case "orchestration_parent_wake":
+        await this.handleWakeEffect(effect, false);
+        return;
       case "linked_chat_turn_wake":
         await this.handleLinkedChatTurnWake(effect);
         return;
@@ -405,6 +437,10 @@ export class ApprovalEffectsService {
   }
 
   private async handleWakeEffect(effect: ApprovalEffectRecord, resolveApprovalWait: boolean): Promise<void> {
+    if (this.deferOrchestrationParentWakeUntilChildTerminal(effect)) {
+      return;
+    }
+
     const payload = effect.payload;
     const result = this.deps.wakeDurableRun(effect.targetId, {
       eventKey: "approval.resolved",
@@ -496,6 +532,65 @@ export class ApprovalEffectsService {
     );
   }
 
+  private deferOrchestrationParentWakeUntilChildTerminal(effect: ApprovalEffectRecord): boolean {
+    if (effect.effectKind !== "orchestration_parent_wake") {
+      return false;
+    }
+    const childRunId = asOptionalString(effect.payload.childRunId);
+    if (!childRunId) {
+      return false;
+    }
+    const durableRuns = (this.ctx.storage as Partial<Pick<Storage, "durableRuns">>).durableRuns;
+    if (!durableRuns) {
+      return false;
+    }
+    let childRun: { status?: string } | undefined;
+    try {
+      childRun = durableRuns.getRun(childRunId) as { status?: string } | undefined;
+    } catch {
+      return false;
+    }
+    if (!childRun || isTerminalDurableRunStatus(childRun.status)) {
+      return false;
+    }
+
+    this.deps.requestRunProcessing(childRunId);
+    const now = new Date().toISOString();
+    const retryAt = new Date(Date.now() + APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS).toISOString();
+    const renewed = this.ctx.storage.approvalEffects.renewEffectLease(
+      effect.effectId,
+      this.workerId,
+      effect.version,
+      now,
+      retryAt,
+    );
+    if (!renewed) {
+      throw new Error(`Approval effect ${effect.effectId} lease renewal lost ownership while waiting for child run.`);
+    }
+    this.ctx.publishRealtime(
+      "approval_effect_deferred",
+      "approvals",
+      {
+        approvalId: effect.approvalId,
+        effectKind: effect.effectKind,
+        targetId: effect.targetId,
+        reason: "child_durable_run_not_terminal",
+        childRunId,
+        childRunStatus: childRun.status,
+        retryAt,
+      },
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: {
+          approvalId: effect.approvalId,
+          runId: effect.targetId,
+        },
+      },
+    );
+    return true;
+  }
+
   private async handleLinkedChatTurnWake(effect: ApprovalEffectRecord): Promise<void> {
     const payload = effect.payload;
     const runId = asOptionalString(payload.runId);
@@ -560,6 +655,24 @@ export class ApprovalEffectsService {
   private async handlePendingActionExecute(effect: ApprovalEffectRecord, signal?: AbortSignal): Promise<void> {
     const pendingAction = this.ctx.storage.pendingApprovalActions.find(effect.approvalId);
     if (!pendingAction || pendingAction.resolutionStatus === "executed") {
+      if (!pendingAction && effect.payload.actionType === "code_mode.run") {
+        const recoveredAction = await this.deps.executeCodeModePendingApproval(effect.approvalId, signal);
+        if (!this.isEffectStillClaimed(effect.effectId)) {
+          return;
+        }
+        if (recoveredAction?.outcome === "executed") {
+          this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
+            result: toolInvokeResultToRecord(recoveredAction, "code_mode.run"),
+          });
+          return;
+        }
+        const failureRecord = toolInvokeResultToRecord(recoveredAction, "code_mode.run");
+        this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+          lastError: recoveredAction?.policyReason ?? "Code Mode pending action could not be recovered.",
+          result: failureRecord,
+        });
+        return;
+      }
       this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
         result: {
           actionType: pendingAction?.actionType,
@@ -602,6 +715,33 @@ export class ApprovalEffectsService {
           ...(refreshedPendingAction.result ? { result: refreshedPendingAction.result } : {}),
         },
       });
+      return;
+    }
+
+    if (!executedAction && pendingAction.actionType === "code_mode.run") {
+      if (signal?.aborted) {
+        return;
+      }
+      this.ctx.publishRealtime(
+        "approval_effect_deferred",
+        "approvals",
+        {
+          approvalId: effect.approvalId,
+          effectKind: effect.effectKind,
+          targetId: effect.targetId,
+          actionType: pendingAction.actionType,
+          reason: "code_mode_run_already_claimed",
+          resolutionStatus: refreshedPendingAction?.resolutionStatus ?? pendingAction.resolutionStatus ?? "pending",
+        },
+        {
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: {
+            approvalId: effect.approvalId,
+            runId: effect.targetId,
+          },
+        },
+      );
       return;
     }
 
@@ -785,6 +925,34 @@ export class ApprovalEffectsService {
           delegationRunId: parent.runId,
         }))
         .filter((target) => Boolean(target.runId));
+    } catch {
+      return [];
+    }
+  }
+
+  private resolveOrchestrationParentWakeTargets(
+    approval: ApprovalRequest,
+  ): Array<{ orchestrationRunId: string; durableRunId: string }> {
+    const orchestrationRunId =
+      typeof approval.linkage?.runId === "string" && approval.linkage.runId.trim()
+        ? approval.linkage.runId.trim()
+        : undefined;
+    if (!orchestrationRunId) {
+      return [];
+    }
+    try {
+      const run = this.ctx.storage.orchestration.getRun(orchestrationRunId);
+      const approvalWorkspaceId = normalizeApprovalWorkspaceId(approval);
+      if (approvalWorkspaceId !== normalizeOrchestrationRunWorkspaceId(run.workspaceId)) {
+        return [];
+      }
+      if (!run.durableRunId?.trim()) {
+        return [];
+      }
+      if (run.executionState !== "paused_for_approval") {
+        return [];
+      }
+      return [{ orchestrationRunId, durableRunId: run.durableRunId.trim() }];
     } catch {
       return [];
     }
@@ -986,6 +1154,10 @@ function buildExplicitNonWakeResult(
   };
 }
 
+function isTerminalDurableRunStatus(status: unknown): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled" || status === "dead_lettered";
+}
+
 function toolInvokeResultToRecord(result?: ToolInvokeResult, actionType?: string): Record<string, unknown> {
   return {
     actionType,
@@ -1015,6 +1187,14 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function asOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeApprovalWorkspaceId(approval: ApprovalRequest): string {
+  return asOptionalString(approval.linkage?.workspaceId) ?? asOptionalString(approval.payload.workspaceId) ?? "default";
+}
+
+function normalizeOrchestrationRunWorkspaceId(workspaceId: unknown): string {
+  return asOptionalString(workspaceId) ?? "default";
 }
 
 function asDecision(value: unknown): ApprovalResolveInput["decision"] {

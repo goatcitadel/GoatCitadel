@@ -154,12 +154,143 @@ describe("useApprovalQueue", () => {
     const hook = await renderApprovalQueue();
 
     expect(hook.result.error).toBe("load failed");
+    expect(hook.result.loading).toBe(false);
 
     apiMocks.fetchApprovals.mockResolvedValue({ items: [] });
     await act(async () => {
       await vi.mocked(useRefreshSubscription).mock.calls[0]?.[1]();
     });
     expect(hook.result.error).toBeNull();
+  });
+
+  it("keeps pending approvals visible when a non-pending approval view fails", async () => {
+    apiMocks.fetchApprovals.mockImplementation(async (status: ApprovalRequest["status"]) => {
+      if (status === "approved") {
+        throw new Error("approved lane failed");
+      }
+      return {
+        items:
+          status === "pending"
+            ? [
+                approval({
+                  approvalId: "pending-visible",
+                  createdAt: "2026-01-01T11:00:00.000Z",
+                }),
+              ]
+            : [],
+      };
+    });
+
+    const hook = await renderApprovalQueue();
+
+    expect(hook.result.loading).toBe(false);
+    expect(hook.result.error).toBe("approved lane failed");
+    expect(hook.result.pendingItems.map((item) => item.approvalId)).toEqual(["pending-visible"]);
+    expect(hook.result.visibleItems.map((item) => item.approvalId)).toEqual(["pending-visible"]);
+  });
+
+  it("keeps previous pending approvals visible when the pending lane fails during refresh", async () => {
+    const hook = await renderApprovalQueue();
+    expect(hook.result.pendingItems.map((item) => item.approvalId)).toEqual(["pending-1"]);
+
+    apiMocks.fetchApprovals.mockImplementation(async (status: ApprovalRequest["status"]) => {
+      if (status === "pending") {
+        throw new Error("pending lane failed");
+      }
+      return {
+        items:
+          status === "approved"
+            ? [
+                approval({
+                  approvalId: "approved-refresh",
+                  status: "approved",
+                  createdAt: "2026-01-01T09:30:00.000Z",
+                }),
+              ]
+            : [],
+      };
+    });
+
+    await act(async () => {
+      await vi.mocked(useRefreshSubscription).mock.calls[0]?.[1]();
+    });
+
+    expect(hook.result.error).toBe("pending lane failed");
+    expect(hook.result.pendingLaneFailed).toBe(true);
+    expect(hook.result.failedStatusLanes).toEqual(["pending"]);
+    expect(hook.result.pendingItems.map((item) => item.approvalId)).toEqual(["pending-1"]);
+    expect(hook.result.historyItems.map((item) => item.approvalId)).toContain("approved-refresh");
+  });
+
+  it("does not let a preserved stale pending row override a fresh resolved lane row", async () => {
+    const hook = await renderApprovalQueue();
+    expect(hook.result.pendingItems.map((item) => item.approvalId)).toEqual(["pending-1"]);
+
+    apiMocks.fetchApprovals.mockImplementation(async (status: ApprovalRequest["status"]) => {
+      if (status === "pending") {
+        throw new Error("pending lane failed");
+      }
+      return {
+        items:
+          status === "approved"
+            ? [
+                approval({
+                  approvalId: "pending-1",
+                  status: "approved",
+                  createdAt: "2026-01-01T11:00:00.000Z",
+                  resolvedAt: "2026-01-01T12:05:00.000Z",
+                }),
+              ]
+            : [],
+      };
+    });
+
+    await act(async () => {
+      await vi.mocked(useRefreshSubscription).mock.calls[0]?.[1]();
+    });
+
+    expect(hook.result.error).toBe("pending lane failed");
+    expect(hook.result.pendingItems.map((item) => item.approvalId)).not.toContain("pending-1");
+    expect(hook.result.historyItems).toContainEqual(
+      expect.objectContaining({
+        approvalId: "pending-1",
+        status: "approved",
+        resolvedAt: "2026-01-01T12:05:00.000Z",
+      }),
+    );
+  });
+
+  it("keeps previous approved approvals visible when the approved lane fails during refresh", async () => {
+    const hook = await renderApprovalQueue({ focusedApprovalId: "approved-1" });
+    await act(async () => {
+      hook.result.setView("history");
+    });
+    expect(hook.result.historyItems.map((item) => item.approvalId)).toContain("approved-1");
+
+    apiMocks.fetchApprovals.mockImplementation(async (status: ApprovalRequest["status"]) => {
+      if (status === "approved") {
+        throw new Error("approved lane failed");
+      }
+      return {
+        items:
+          status === "pending"
+            ? [
+                approval({
+                  approvalId: "pending-refresh",
+                  createdAt: "2026-01-01T11:30:00.000Z",
+                }),
+              ]
+            : [],
+      };
+    });
+
+    await act(async () => {
+      await vi.mocked(useRefreshSubscription).mock.calls[0]?.[1]();
+    });
+
+    expect(hook.result.error).toBe("approved lane failed");
+    expect(hook.result.pendingItems.map((item) => item.approvalId)).toEqual(["pending-refresh"]);
+    expect(hook.result.historyItems.map((item) => item.approvalId)).toContain("approved-1");
   });
 
   it("resolves, replays, and bulk-rejects approvals", async () => {

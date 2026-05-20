@@ -6,6 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { logger } from "@goatcitadel/gateway-core";
 
 const log = logger.child("prompt-pack-service");
+const DEFAULT_WORKSPACE_ID = "default";
 import type {
   CapabilityTrendSeries,
   ChatMemoryMode,
@@ -63,6 +64,8 @@ import type {
   ReplayRegressionResult,
   ReplayRegressionRun,
   ToolGrantConstraints,
+  ToolGrantRecord,
+  ToolGrantScope,
 } from "@goatcitadel/contracts";
 import {
   DEFAULT_PROMPT_PACK_POLICY_V2,
@@ -154,6 +157,7 @@ export interface PromptPackServiceContext {
     | "promptPackScores"
     | "toolGrants"
     | "chatSessionProjects"
+    | "chatSessionMeta"
   >;
   readonly gatewaySql: Storage["gatewaySql"];
   readonly config: GatewayRuntimeConfig;
@@ -2568,26 +2572,32 @@ export class PromptPackService {
     });
     const now = new Date().toISOString();
     const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
-    const activeAllowGrants = this.ctx.storage.toolGrants
-      .list("session", sessionId, 500)
-      .filter(
-        (grant) =>
-          grant.decision === "allow" &&
-          !grant.revokedAt &&
-          (!grant.expiresAt || Date.parse(grant.expiresAt) > Date.now()),
-      );
-    const activeAllowPatterns = new Set(activeAllowGrants.map((grant) => grant.toolPattern));
+    const activeSessionGrants = listActivePromptPackToolGrants(this.ctx.storage, "session", sessionId);
+    const activeAllowGrants = activeSessionGrants.filter((grant) => grant.decision === "allow");
+    const activeDenyGrants = [
+      ...activeSessionGrants,
+      ...listActivePromptPackToolGrants(this.ctx.storage, "global", "global"),
+      ...listActivePromptPackToolGrants(this.ctx.storage, "agent", "assistant"),
+      ...listActivePromptPackWorkspaceGrants(this.ctx.storage, sessionId),
+    ].filter((grant) => grant.decision === "deny");
     for (const toolName of toolNames) {
+      const hasActiveDeny = activeDenyGrants.some((grant) =>
+        promptPackGrantPatternMatches(grant.toolPattern, toolName),
+      );
+      if (hasActiveDeny) {
+        continue;
+      }
       const constraints = isPromptPackReadTool(toolName) ? readConstraints : undefined;
       if (constraints) {
         const matchingReadGrant = activeAllowGrants.some(
           (grant) =>
-            grant.toolPattern === toolName && promptPackReadGrantConstraintsCover(grant.constraints, constraints),
+            promptPackGrantPatternMatches(grant.toolPattern, toolName) &&
+            promptPackReadGrantConstraintsCover(grant.constraints, constraints),
         );
         if (matchingReadGrant) {
           continue;
         }
-      } else if (activeAllowPatterns.has(toolName)) {
+      } else if (activeAllowGrants.some((grant) => promptPackGrantPatternMatches(grant.toolPattern, toolName))) {
         continue;
       }
       this.ctx.storage.toolGrants.create(
@@ -9151,6 +9161,50 @@ function isPromptPackBenchmarkItemRow(value: unknown): value is PromptPackBenchm
     (typeof value.failure_signal === "string" || value.failure_signal === null) &&
     typeof value.created_at === "string"
   );
+}
+
+function listActivePromptPackToolGrants(
+  storage: PromptPackServiceContext["storage"],
+  scope: ToolGrantScope,
+  scopeRef: string,
+): ToolGrantRecord[] {
+  const grantRepo = storage.toolGrants as {
+    listActive?: (scope?: ToolGrantScope, scopeRef?: string) => ToolGrantRecord[];
+    list: (scope?: ToolGrantScope, scopeRef?: string, limit?: number) => ToolGrantRecord[];
+  };
+  if (grantRepo.listActive) {
+    return grantRepo.listActive(scope, scopeRef);
+  }
+  return grantRepo.list(scope, scopeRef, Number.MAX_SAFE_INTEGER).filter(isPromptPackToolGrantActive);
+}
+
+function listActivePromptPackWorkspaceGrants(
+  storage: PromptPackServiceContext["storage"],
+  sessionId: string,
+): ToolGrantRecord[] {
+  const workspaceId = storage.chatSessionMeta?.get(sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
+  return listActivePromptPackToolGrants(storage, "workspace", workspaceId);
+}
+
+function isPromptPackToolGrantActive(grant: ToolGrantRecord): boolean {
+  if (grant.revokedAt) {
+    return false;
+  }
+  if (grant.expiresAt) {
+    const expiry = Date.parse(grant.expiresAt);
+    if (Number.isFinite(expiry) && expiry <= Date.now()) {
+      return false;
+    }
+  }
+  if (grant.grantType === "one_time") {
+    return (grant.usesRemaining ?? 0) > 0;
+  }
+  return true;
+}
+
+function promptPackGrantPatternMatches(pattern: string, toolName: string): boolean {
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`).test(toolName);
 }
 
 function promptPackReadGrantConstraintsCover(

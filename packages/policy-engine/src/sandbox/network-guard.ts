@@ -143,6 +143,7 @@ const DEFAULT_FETCH_MAX_REDIRECTS = 5;
 
 export interface FetchAllowlistedOptions {
   allowlist: string[];
+  additionalAllowlists?: string[][];
   timeoutMs?: number;
   maxRedirects?: number;
   init?: RequestInit;
@@ -178,6 +179,11 @@ export async function fetchAllowlisted(url: string, options: FetchAllowlistedOpt
 
   while (true) {
     assertHostAllowed(currentUrl, allowlist);
+    for (const additionalAllowlist of options.additionalAllowlists ?? []) {
+      if (additionalAllowlist.length > 0) {
+        assertHostAllowed(currentUrl, additionalAllowlist);
+      }
+    }
 
     const controller = new AbortController();
     const userSignal = options.init?.signal;

@@ -344,7 +344,7 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     {
       id: "ops-diagnostics",
       label: "Diagnostics",
-      description: "Durable, daemon, admin, docs, and verification families.",
+      description: "Durable, daemon, admin, docs, and readiness diagnostics.",
       area: "ops",
       section: "diagnostics",
     },
@@ -367,7 +367,7 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     {
       id: "settings-onboarding",
       label: "Start Here",
-      description: "Safe demo, first-run readiness, setup center, and release-proof checkpoints.",
+      description: "Safe demo, first-run readiness, setup center, and sharing checkpoints.",
       area: "settings",
       section: "onboarding",
     },
@@ -451,7 +451,7 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     {
       id: "settings-budget",
       label: "Budget",
-      description: "Cost-control defaults and budget-facing runtime guidance.",
+      description: "Set budget mode and review cost evidence.",
       area: "settings",
       section: "budget",
     },

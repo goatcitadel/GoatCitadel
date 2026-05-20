@@ -1,4 +1,9 @@
-import type { IntegrationPluginToolOverride, ToolInvokeResult } from "@goatcitadel/contracts";
+import type {
+  IntegrationPluginToolOverride,
+  ToolInvokeRequest,
+  ToolInvokeResult,
+  ToolPolicyActorContext,
+} from "@goatcitadel/contracts";
 import { ConflictError, ValidationError } from "@goatcitadel/contracts";
 
 export interface PluginToolOverrideClaimInput {
@@ -24,7 +29,18 @@ export interface PluginToolOverrideServiceDeps {
   getOwnerId(): string;
 }
 
-export type PluginToolHandler = (args: Record<string, unknown>) => Promise<ToolInvokeResult>;
+export interface PluginToolExecutionContext {
+  request: ToolInvokeRequest;
+  policyContext?: ToolPolicyActorContext;
+  policyResult?: ToolInvokeResult;
+  signal?: AbortSignal;
+  approvedExternalRuntimeReplayId?: string;
+}
+
+export type PluginToolHandler = (
+  args: Record<string, unknown>,
+  context: PluginToolExecutionContext,
+) => Promise<ToolInvokeResult>;
 
 export interface PluginToolHandlerRegistration {
   pluginId: string;

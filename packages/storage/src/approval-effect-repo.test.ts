@@ -261,6 +261,34 @@ describe("ApprovalEffectRepository", () => {
     assert.equal(claimed?.effectKind, "pending_action_execute");
   });
 
+  it("claims linked child chat-turn wakes before orchestration parent wakes", () => {
+    const { repo, db } = createRepoWithDb();
+    insertApproval(db, "approval-1");
+    const createdAt = "2026-03-21T10:00:00.000Z";
+
+    repo.upsert({
+      approvalId: "approval-1",
+      effectKind: "orchestration_parent_wake",
+      targetKind: "durable_run",
+      targetId: "parent-durable-run",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    const linked = repo.upsert({
+      approvalId: "approval-1",
+      effectKind: "linked_chat_turn_wake",
+      targetKind: "chat_turn",
+      targetId: "child-turn-1",
+      createdAt,
+      updatedAt: createdAt,
+    });
+
+    const claimed = repo.claimNextPendingEffect("worker-1", createdAt, "2026-03-21T10:05:00.000Z");
+
+    assert.equal(claimed?.effectId, linked.effectId);
+    assert.equal(claimed?.effectKind, "linked_chat_turn_wake");
+  });
+
   it("maps legacy wake-effect rows into current approval effect records", () => {
     const { repo } = createRepoWithDb();
     (repo as unknown as { getByIdStmt: { get: () => unknown } }).getByIdStmt = {

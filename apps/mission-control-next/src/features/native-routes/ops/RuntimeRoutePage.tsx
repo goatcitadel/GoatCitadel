@@ -125,7 +125,12 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
         return /approval|review|decision/i.test(`${item.eventType} ${item.eventClass ?? ""}`);
       }
       if (activityFilter === "runtime") {
-        return /runtime|daemon|mcp|gateway|schedule/i.test(`${item.eventType} ${item.source ?? ""}`);
+        const runtimePattern = /runtime|daemon|mcp|schedule|durable|worker|health|lifecycle/i;
+        const runtimeSourcePattern = /runtime|daemon|mcp|schedule|durable|health|lifecycle/i;
+        const runtimeEvent = runtimePattern.test(item.eventType);
+        const runtimeSourceEvent = runtimeSourcePattern.test(item.source);
+        const gatewayRuntimeEvent = item.source === "gateway" && runtimePattern.test(item.eventType);
+        return runtimeEvent || runtimeSourceEvent || gatewayRuntimeEvent;
       }
       return true;
     });
@@ -159,7 +164,7 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
             </NativeCard>
             <NativeCard
               title="Session posture"
-              subtitle="Keep session truth next to approvals and activity instead of hiding it under a legacy shell."
+              subtitle="Keep session truth next to approvals and activity in one operator view."
               density="compact"
             >
               <MetricGrid
@@ -392,7 +397,7 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
           <NativeGrid>
             <NativeCard
               title="Runtime posture"
-              subtitle="Daemon state, service-manager controls, and backup truth in the canonical shell."
+              subtitle="Daemon state, service-manager controls, and backup truth in one runtime view."
               density="compact"
               stats={[
                 { label: "Approvals", value: String(data.dashboard?.pendingApprovals ?? pendingApprovals) },
@@ -405,12 +410,10 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
                 </div>
               ) : null}
               <div className="mc-next-runtime-chip-row">
-                <StatusChip
-                  tone={sourceFailed(data, "daemon") ? "critical" : data.daemon?.running ? "success" : "warning"}
-                >
-                  {sourceFailed(data, "daemon")
+                <StatusChip tone={daemonRuntimeUnavailable ? "critical" : daemonRunning ? "success" : "warning"}>
+                  {daemonRuntimeUnavailable
                     ? "Daemon unavailable"
-                    : data.daemon?.running
+                    : daemonRunning
                       ? "Daemon running"
                       : "Daemon stopped"}
                 </StatusChip>
@@ -450,12 +453,15 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
                   },
                 ]}
               />
+              {!data.daemon?.controllable && data.daemon?.controlMessage ? (
+                <p className="mc-next-directory-empty">{data.daemon.controlMessage}</p>
+              ) : null}
               <div className="mc-next-runtime-actions">
                 <button
                   type="button"
                   className="gc-button"
                   onClick={() => void runtime.runDaemonAction("start")}
-                  disabled={runtime.daemonBusy !== null}
+                  disabled={runtime.daemonBusy !== null || !data.daemon?.controllable}
                 >
                   {runtime.daemonBusy === "start" ? "Starting..." : "Start daemon"}
                 </button>
@@ -463,7 +469,7 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
                   type="button"
                   className="gc-button"
                   onClick={() => void runtime.runDaemonAction("restart")}
-                  disabled={runtime.daemonBusy !== null}
+                  disabled={runtime.daemonBusy !== null || !data.daemon?.controllable}
                 >
                   {runtime.daemonBusy === "restart" ? "Restarting..." : "Restart daemon"}
                 </button>
@@ -471,7 +477,7 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
                   type="button"
                   className="gc-button danger"
                   onClick={() => void runtime.runDaemonAction("stop")}
-                  disabled={runtime.daemonBusy !== null}
+                  disabled={runtime.daemonBusy !== null || !data.daemon?.controllable}
                 >
                   {runtime.daemonBusy === "stop" ? "Stopping..." : "Stop daemon"}
                 </button>
@@ -562,7 +568,7 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
             </NativeCard>
             <QuickJumpCard
               title="Diagnostics routes"
-              subtitle="Keep operator movement inside canonical next routes."
+              subtitle="Jump between diagnostics and related operator routes."
               actions={[
                 { label: "Runtime", route: { area: "ops", section: "runtime", theme: route.theme } },
                 { label: "Prompt packs", route: { area: "library", section: "prompt-packs", theme: route.theme } },
@@ -642,6 +648,8 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
                   <button
                     key={item.id}
                     type="button"
+                    role="radio"
+                    aria-checked={activityFilter === item.id}
                     className={`mc-next-settings-filter${activityFilter === item.id ? " active" : ""}`}
                     onClick={() => setActivityFilter(item.id as typeof activityFilter)}
                   >
@@ -830,7 +838,9 @@ export function buildOpsHeadMetrics(
   data: NonNullable<ReturnType<typeof useOpsRuntimeSnapshot>["data"]>,
   pendingApprovals: number,
 ): NativePageMetric[] {
-  const daemonValue = data.daemon?.running === undefined ? "unknown" : data.daemon.running ? "running" : "stopped";
+  const daemonRuntimeUnavailable = sourceFailed(data, "daemon") && sourceFailed(data, "health");
+  const daemonRunning = daemonRuntimeUnavailable ? null : (data.daemon?.running ?? data.health?.daemonStatus.running);
+  const daemonValue = daemonRunning == null ? "unknown" : daemonRunning ? "running" : "stopped";
   const pendingValue = String(data.dashboard?.pendingApprovals ?? pendingApprovals);
   const subagentsValue = String(data.dashboard?.activeSubagents ?? 0);
   const daySpendValue = formatUsd(data.dashboard?.dailyCostUsd ?? 0);
@@ -893,9 +903,9 @@ export function buildOpsHeadMetrics(
 export function descriptionForOpsSection(section: NonNullable<AppRoute["section"]>) {
   switch (section) {
     case "sessions":
-      return "Recent session evidence and operator posture in the canonical next shell.";
+      return "Recent session evidence and operator posture in the canonical Ops route.";
     case "schedules":
-      return "Scheduled work and review queue pressure without the legacy wrapper stack.";
+      return "Scheduled work and review queue pressure with direct operator controls.";
     case "improvement":
       return "Replay and improvement signals that stay visible to the operator.";
     case "notifications":

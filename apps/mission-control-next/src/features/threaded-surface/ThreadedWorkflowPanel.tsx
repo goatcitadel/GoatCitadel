@@ -855,6 +855,8 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
     () => visibleRunItems.find((run) => run.runId === selectedRunId) ?? visibleRunItems[0] ?? null,
     [selectedRunId, visibleRunItems],
   );
+  const selectedRunDetail = runDetail?.runId === selectedRunSummary?.runId ? runDetail : null;
+  const selectedRunApprovalId = selectedRunDetail?.approvalId ?? selectedRunSummary?.approvalId;
   const draftConflictReason = hasDirtyDraft ? "Save or discard the file draft before running repo operations." : null;
   const worktreeBlockedReason = !readyForRepoOps ? "Create a ready worktree before running repo operations." : null;
   const applyBlockedReason =
@@ -1318,21 +1320,38 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
                   </div>
                   {runDetailLoading ? <p>Loading run detail...</p> : null}
                   {runDetailError ? <div className="mc-next-panel-banner warning">{runDetailError}</div> : null}
-                  {runDetail ? (
+                  {!selectedRunDetail && selectedRunApprovalId ? (
+                    <ul className="mc-next-context-list">
+                      <li>
+                        <strong>Approval</strong>
+                        <p>{selectedRunApprovalId}</p>
+                        {onOpenApprovals ? (
+                          <button
+                            type="button"
+                            className="mc-next-panel-button"
+                            onClick={() => onOpenApprovals(selectedRunApprovalId)}
+                          >
+                            Open approval queue
+                          </button>
+                        ) : null}
+                      </li>
+                    </ul>
+                  ) : null}
+                  {selectedRunDetail ? (
                     <>
                       <ul className="mc-next-context-list">
                         <li>
                           <strong>Status</strong>
-                          <p>{runDetail.status}</p>
+                          <p>{selectedRunDetail.status}</p>
                         </li>
                         <li>
                           <strong>Approval</strong>
-                          <p>{runDetail.approvalId ?? "not linked"}</p>
-                          {runDetail.approvalId && onOpenApprovals ? (
+                          <p>{selectedRunApprovalId ?? "not linked"}</p>
+                          {selectedRunApprovalId && onOpenApprovals ? (
                             <button
                               type="button"
                               className="mc-next-panel-button"
-                              onClick={() => onOpenApprovals(runDetail.approvalId)}
+                              onClick={() => onOpenApprovals(selectedRunApprovalId)}
                             >
                               Open approval queue
                             </button>
@@ -1340,106 +1359,108 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
                         </li>
                         <li>
                           <strong>Permission profile</strong>
-                          <p>{formatRunPermissionProfile(runDetail)}</p>
+                          <p>{formatRunPermissionProfile(selectedRunDetail)}</p>
                         </li>
                         <li>
                           <strong>Local Operator Override</strong>
-                          <p>{runDetail.localOperatorOverrideId ?? "not recorded"}</p>
+                          <p>{selectedRunDetail.localOperatorOverrideId ?? "not recorded"}</p>
                         </li>
                         <li>
                           <strong>Surface</strong>
-                          <p>{formatOriginSurface(runDetail.originSurface)}</p>
+                          <p>{formatOriginSurface(selectedRunDetail.originSurface)}</p>
                         </li>
                         <li>
                           <strong>Created</strong>
-                          <p>{formatRunTimestamp(runDetail.createdAt)}</p>
+                          <p>{formatRunTimestamp(selectedRunDetail.createdAt)}</p>
                         </li>
                         <li>
                           <strong>Started</strong>
-                          <p>{formatRunTimestamp(runDetail.startedAt)}</p>
+                          <p>{formatRunTimestamp(selectedRunDetail.startedAt)}</p>
                         </li>
                         <li>
                           <strong>Finished</strong>
-                          <p>{formatRunTimestamp(runDetail.finishedAt)}</p>
+                          <p>{formatRunTimestamp(selectedRunDetail.finishedAt)}</p>
                         </li>
                         <li>
                           <strong>Sandbox posture</strong>
-                          <p>{formatSandboxPosture(runDetail.sandbox)}</p>
+                          <p>{formatSandboxPosture(selectedRunDetail.sandbox)}</p>
                         </li>
                         <li>
                           <strong>Source hash</strong>
-                          <p>{formatShortHash(runDetail.codeHash)}</p>
+                          <p>{formatShortHash(selectedRunDetail.codeHash)}</p>
                         </li>
                         <li>
                           <strong>Input hash</strong>
-                          <p>{formatShortHash(runDetail.codeModeInputHash)}</p>
+                          <p>{formatShortHash(selectedRunDetail.codeModeInputHash)}</p>
                         </li>
                         <li>
                           <strong>Wrapper hash</strong>
-                          <p>{formatShortHash(runDetail.wrapperManifestHash)}</p>
+                          <p>{formatShortHash(selectedRunDetail.wrapperManifestHash)}</p>
                         </li>
                         <li>
                           <strong>Policy hash</strong>
-                          <p>{formatShortHash(runDetail.policySnapshotHash)}</p>
+                          <p>{formatShortHash(selectedRunDetail.policySnapshotHash)}</p>
                         </li>
                         <li>
                           <strong>Source artifact</strong>
-                          <p>{formatArtifactPath(runDetail.codeArtifact)}</p>
+                          <p>{formatArtifactPath(selectedRunDetail.codeArtifact)}</p>
                         </li>
                         <li>
                           <strong>Wrapper artifact</strong>
-                          <p>{formatArtifactPath(runDetail.wrapperManifestArtifact)}</p>
+                          <p>{formatArtifactPath(selectedRunDetail.wrapperManifestArtifact)}</p>
                         </li>
                         <li>
                           <strong>Policy artifact</strong>
-                          <p>{formatArtifactPath(runDetail.policySnapshotArtifact)}</p>
+                          <p>{formatArtifactPath(selectedRunDetail.policySnapshotArtifact)}</p>
                         </li>
                         <li>
                           <strong>Stdout artifact</strong>
-                          <p>{formatArtifactPath(runDetail.stdoutArtifact)}</p>
+                          <p>{formatArtifactPath(selectedRunDetail.stdoutArtifact)}</p>
                         </li>
                         <li>
                           <strong>Stderr artifact</strong>
-                          <p>{formatArtifactPath(runDetail.stderrArtifact)}</p>
+                          <p>{formatArtifactPath(selectedRunDetail.stderrArtifact)}</p>
                         </li>
                       </ul>
-                      {runDetail.stdoutPreview ? (
+                      {selectedRunDetail.stdoutPreview ? (
                         <div className="mc-next-workbench-output-preview">
-                          <strong>Stdout preview{runDetail.stdoutTruncated ? " (truncated)" : ""}</strong>
+                          <strong>Stdout preview{selectedRunDetail.stdoutTruncated ? " (truncated)" : ""}</strong>
                           <WorkbenchMonacoEditor
-                            value={runDetail.stdoutPreview}
+                            value={selectedRunDetail.stdoutPreview}
                             language="text"
                             readOnly
                             height={120}
                           />
                         </div>
                       ) : null}
-                      {runDetail.stderrPreview ? (
+                      {selectedRunDetail.stderrPreview ? (
                         <div className="mc-next-workbench-output-preview">
-                          <strong>Stderr preview{runDetail.stderrTruncated ? " (truncated)" : ""}</strong>
+                          <strong>Stderr preview{selectedRunDetail.stderrTruncated ? " (truncated)" : ""}</strong>
                           <WorkbenchMonacoEditor
-                            value={runDetail.stderrPreview}
+                            value={selectedRunDetail.stderrPreview}
                             language="text"
                             readOnly
                             height={120}
                           />
                         </div>
                       ) : null}
-                      {runDetail.result ? (
+                      {selectedRunDetail.result ? (
                         <WorkbenchMonacoEditor
-                          value={JSON.stringify(runDetail.result, null, 2)}
+                          value={JSON.stringify(selectedRunDetail.result, null, 2)}
                           language="json"
                           readOnly
                           height={180}
                         />
                       ) : null}
-                      {runDetail.errorCode ? (
+                      {selectedRunDetail.errorCode ? (
                         <div className="mc-next-panel-banner warning">
-                          {runDetail.errorCode}
-                          {runDetail.errorDetails ? ` · ${JSON.stringify(runDetail.errorDetails)}` : ""}
+                          {selectedRunDetail.errorCode}
+                          {selectedRunDetail.errorDetails ? ` · ${JSON.stringify(selectedRunDetail.errorDetails)}` : ""}
                         </div>
                       ) : null}
-                      {runDetail.error ? <div className="mc-next-panel-banner warning">{runDetail.error}</div> : null}
+                      {selectedRunDetail.error ? (
+                        <div className="mc-next-panel-banner warning">{selectedRunDetail.error}</div>
+                      ) : null}
                     </>
                   ) : null}
                 </section>

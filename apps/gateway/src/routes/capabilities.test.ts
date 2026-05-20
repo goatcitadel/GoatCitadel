@@ -59,13 +59,18 @@ describe("capabilities routes", () => {
         ...payload,
       })),
       listCapabilityProposals: vi.fn((limit: number) => [{ proposalId: `proposal-${limit}` }]),
-      listCodeModeRuns: vi.fn((limit: number) => [{ runId: `code-run-${limit}` }]),
+      listCodeModeRuns: vi.fn((input: number | { limit?: number; workspaceId?: string }) => [
+        {
+          runId: `code-run-${typeof input === "number" ? input : input.limit}`,
+          workspaceId: typeof input === "number" ? undefined : input.workspaceId,
+        },
+      ]),
       getCodeModeRun: vi.fn((runId: string) => ({
         runId,
         status: "completed",
         sessionId: "session-1",
         turnId: "turn-1",
-        workspaceId: "workspace-1",
+        workspaceId: "default",
       })),
       createCodeModeRun: vi.fn(async (payload: Record<string, unknown>) => ({
         runId: "code-run-created",
@@ -412,13 +417,13 @@ describe("capabilities routes", () => {
     expect(runsResponse.statusCode).toBe(200);
     expect(service.listCapabilityCatalog).toHaveBeenCalledWith("inspectable");
     expect(service.listCapabilityProposals).toHaveBeenCalledWith(2);
-    expect(service.listCodeModeRuns).toHaveBeenCalledWith(3);
+    expect(service.listCodeModeRuns).toHaveBeenCalledWith({ limit: 3, workspaceId: "default" });
     expect(catalogResponse.json()).toMatchObject({
       scope: "inspectable",
       items: [{ capabilityId: "cap-inspectable" }],
     });
     expect(proposalsResponse.json()).toEqual({ items: [{ proposalId: "proposal-2" }] });
-    expect(runsResponse.json()).toEqual({ items: [{ runId: "code-run-3" }] });
+    expect(runsResponse.json()).toEqual({ items: [{ runId: "code-run-3", workspaceId: "default" }] });
   });
 
   it("forwards Code Mode run filters when listing runs", async () => {
@@ -467,7 +472,15 @@ describe("capabilities routes", () => {
   });
 
   it("scopes Code Mode run details by session, turn, and workspace query", async () => {
-    const service = await registerCapabilitiesService();
+    const service = await registerCapabilitiesService({
+      getCodeModeRun: vi.fn((runId: string) => ({
+        runId,
+        status: "completed",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        workspaceId: "workspace-1",
+      })),
+    });
 
     const okResponse = await app!.inject({
       method: "GET",
@@ -481,6 +494,30 @@ describe("capabilities routes", () => {
     expect(okResponse.statusCode).toBe(200);
     expect(wrongTurnResponse.statusCode).toBe(404);
     expect(service.getCodeModeRun).toHaveBeenCalledWith("code-run-1");
+  });
+
+  it("defaults Code Mode run detail reads to the default workspace", async () => {
+    await registerCapabilitiesService({
+      getCodeModeRun: vi.fn((runId: string) => ({
+        runId,
+        status: "completed",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        workspaceId: "workspace-2",
+      })),
+    });
+
+    const defaultResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/code-mode/runs/code-run-1",
+    });
+    const scopedResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/code-mode/runs/code-run-1?workspaceId=workspace-2",
+    });
+
+    expect(defaultResponse.statusCode).toBe(404);
+    expect(scopedResponse.statusCode).toBe(200);
   });
 
   it("maps missing read details to 404 responses", async () => {

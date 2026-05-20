@@ -31,6 +31,9 @@ export function ChatPendingApprovalPanel(props: {
   if (!pendingApproval) {
     return null;
   }
+  const codeModeApproval =
+    pendingApproval.kind === "code_mode.run" ||
+    Boolean(pendingApproval.codeHash || pendingApproval.wrapperManifestHash || pendingApproval.capabilitySnapshotId);
 
   function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.key !== "Escape") {
@@ -66,6 +69,7 @@ export function ChatPendingApprovalPanel(props: {
           approvalsHref ?? `?space=operate&page=approvals&approvalId=${encodeURIComponent(pendingApproval.approvalId)}`
         }
         workspaceAllowAvailable={Boolean(workspaceId?.trim())}
+        persistentAllowAvailable={!codeModeApproval}
         onApproveOnce={() => onApprove("once")}
         onApproveInSession={() => onApprove("session")}
         onApproveInWorkspace={() => onApprove("workspace")}

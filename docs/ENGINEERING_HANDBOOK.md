@@ -10,8 +10,8 @@ This handbook is a reference architecture guide for the current repo shape. It i
 
 When runtime ownership, lifecycle status, or operator truth matter, prefer these sources in order:
 
-1. `docs/CANONICAL_RUNTIME_STATE_MODEL.md`
-2. current implementation under `apps/` and `packages/`
+1. current implementation under `apps/` and `packages/`
+2. `docs/CANONICAL_RUNTIME_STATE_MODEL.md`
 3. `docs/1_0_CONTRACT.md` for public `1.0` scope, support truth, and release gates
 4. this handbook for broader subsystem orientation
 
@@ -96,8 +96,8 @@ Primary implementation goals:
 │  └─ audit\*.jsonl            # Append-only policy/tool/approval audit logs
 ├─ skills
 │  └─ bundled\*\SKILL.md       # Built-in skill definitions
-└─ docs
-   └─ screenshots              # Mission Control captures
+└─ scripts
+   └─ verification\baselines\visual # Checked-in Mission Control visual baselines
 ```
 
 ## 3. Runtime Topology

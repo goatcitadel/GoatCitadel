@@ -725,6 +725,7 @@ describe("orchestration-lifecycle-service", () => {
           childSessionId: "sess_phase",
           childTurnId: "turn_phase",
           childRunId: "durable-child-1",
+          approvalId: "approval-phase-1",
         })),
       },
     });
@@ -733,11 +734,23 @@ describe("orchestration-lifecycle-service", () => {
 
     expect(result.outcome).toBe("paused");
     expect(host.orchestrationEngine.advancePhase).not.toHaveBeenCalled();
-    expect(host.pauseDurableRun).toHaveBeenCalledWith("durable-run-1", "orchestration");
+    expect(host.pauseDurableRun).not.toHaveBeenCalled();
     expect(host.storage.orchestration.updateRun).toHaveBeenCalledWith(
       expect.objectContaining({
-        status: "paused",
+        status: "running",
         executionState: "paused_for_approval",
+      }),
+    );
+    expect(host.updateDurableRunState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "durable-run-1",
+        status: "waiting",
+        metadata: expect.objectContaining({
+          waitForEvent: {
+            eventKey: "approval.resolved",
+            correlationId: "approval-phase-1",
+          },
+        }),
       }),
     );
     expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
@@ -745,8 +758,208 @@ describe("orchestration-lifecycle-service", () => {
       "phase.waiting",
       expect.objectContaining({
         childRunId: "durable-child-1",
+        approvalId: "approval-phase-1",
       }),
     );
+  });
+
+  it("harvests the completed child phase instead of re-running it after approval wake", async () => {
+    const autoPlan: OrchestrationPlan = {
+      ...buildPlan(),
+      waves: [
+        {
+          ...buildPlan().waves[0]!,
+          phases: [{ ...buildPlan().waves[0]!.phases[0]!, requiresApproval: false }],
+        },
+      ],
+    };
+    let run: OrchestrationRun = {
+      ...buildRun(),
+      durableRunId: "durable-run-1",
+      executionState: "queued",
+      worktreeStatus: "ready",
+      worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+    };
+    let childDurableRun: DurableRunRecord = {
+      runId: "durable-child-1",
+      workflowKey: "chat.turn.execute",
+      status: "waiting",
+      attemptCount: 0,
+      maxAttempts: 3,
+      version: 1,
+      payload: {},
+      metadata: {},
+      createdAt: "2026-04-12T00:00:01.000Z",
+      updatedAt: "2026-04-12T00:00:02.000Z",
+    };
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getPlan: vi.fn(() => autoPlan),
+          getRun: vi.fn(() => run),
+          updateRun: vi.fn((value: OrchestrationRun) => {
+            run = value;
+            return value;
+          }),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+      orchestrationEngine: {
+        ...base.orchestrationEngine,
+        advancePhase: vi.fn(
+          (_currentPlan, currentRun) =>
+            ({
+              ...currentRun,
+              status: "completed",
+              currentWaveId: undefined,
+              currentPhaseId: undefined,
+              totalIterations: currentRun.totalIterations + 1,
+            }) as OrchestrationRun,
+        ),
+      },
+    });
+    const getParentDurableRun = host.getDurableRun;
+    (host as unknown as { getDurableRun: OrchestrationLifecycleHost["getDurableRun"] }).getDurableRun = vi.fn(
+      (runId: string) => (runId === "durable-child-1" ? childDurableRun : getParentDurableRun(runId)),
+    );
+    const execute = vi.fn().mockResolvedValueOnce({
+      phaseId: "phase-1",
+      ownerAgentId: "agent-1",
+      status: "waiting" as const,
+      startedAt: "2026-04-12T00:00:01.000Z",
+      finishedAt: "2026-04-12T00:00:02.000Z",
+      outputSummary: "Waiting for operator approval.",
+      outputText: "Waiting with preserved child context.",
+      childSessionId: "sess_phase",
+      childTurnId: "turn_phase",
+      childRunId: "durable-child-1",
+      approvalId: "approval-phase-1",
+    });
+    const runtime = createRuntimeDeps({ phaseExecutor: { execute } });
+
+    const first = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+    expect(first.outcome).toBe("paused");
+    expect(host.getDurableRun("durable-run-1").status).toBe("waiting");
+    expect(host.getDurableRun("durable-run-1").metadata?.waitingPhase).toMatchObject({
+      outputText: "Waiting with preserved child context.",
+    });
+
+    host.updateDurableRunState({
+      runId: "durable-run-1",
+      status: "queued",
+      metadata: host.getDurableRun("durable-run-1").metadata,
+      clearFinishedAt: true,
+      clearLastError: true,
+    });
+    childDurableRun = {
+      ...childDurableRun,
+      status: "completed",
+      metadata: {
+        outputSummary: "Approved child summary",
+        outputText: "Approved child final text",
+      },
+      finishedAt: "2026-04-12T00:01:02.000Z",
+      updatedAt: "2026-04-12T00:01:02.000Z",
+    };
+    const second = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+
+    expect(second.outcome).toBe("completed");
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(host.orchestrationEngine.startRun).toHaveBeenCalledTimes(1);
+    expect(host.orchestrationEngine.advancePhase).toHaveBeenCalledWith(
+      autoPlan,
+      expect.objectContaining({ executionState: "running", currentPhaseId: "phase-1" }),
+      "phase-1",
+      expect.any(Object),
+    );
+    expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "phase.executed",
+      expect.objectContaining({
+        outputSummary: "Approved child summary",
+        outputText: "Approved child final text",
+      }),
+    );
+  });
+
+  it("does not re-run a parent phase while the original child durable run is still live", async () => {
+    const autoPlan: OrchestrationPlan = {
+      ...buildPlan(),
+      waves: [
+        {
+          ...buildPlan().waves[0]!,
+          phases: [{ ...buildPlan().waves[0]!.phases[0]!, requiresApproval: false }],
+        },
+      ],
+    };
+    let run: OrchestrationRun = {
+      ...buildRun(),
+      durableRunId: "durable-run-1",
+      executionState: "queued",
+      worktreeStatus: "ready",
+      worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+    };
+    const childDurableRun: DurableRunRecord = {
+      runId: "durable-child-1",
+      workflowKey: "chat.turn.execute",
+      status: "running",
+      attemptCount: 1,
+      maxAttempts: 3,
+      version: 2,
+      payload: {},
+      metadata: {},
+      createdAt: "2026-04-12T00:00:01.000Z",
+      updatedAt: "2026-04-12T00:00:02.000Z",
+    };
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getPlan: vi.fn(() => autoPlan),
+          getRun: vi.fn(() => run),
+          updateRun: vi.fn((value: OrchestrationRun) => {
+            run = value;
+            return value;
+          }),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+    const getParentDurableRun = host.getDurableRun;
+    (host as unknown as { getDurableRun: OrchestrationLifecycleHost["getDurableRun"] }).getDurableRun = vi.fn(
+      (runId: string) => (runId === "durable-child-1" ? childDurableRun : getParentDurableRun(runId)),
+    );
+    const execute = vi.fn().mockResolvedValueOnce({
+      phaseId: "phase-1",
+      ownerAgentId: "agent-1",
+      status: "waiting" as const,
+      startedAt: "2026-04-12T00:00:01.000Z",
+      finishedAt: "2026-04-12T00:00:02.000Z",
+      outputSummary: "Waiting for operator approval.",
+      childSessionId: "sess_phase",
+      childTurnId: "turn_phase",
+      childRunId: "durable-child-1",
+      approvalId: "approval-phase-1",
+    });
+    const runtime = createRuntimeDeps({ phaseExecutor: { execute } });
+
+    const first = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+    expect(first.outcome).toBe("paused");
+
+    host.updateDurableRunState({
+      runId: "durable-run-1",
+      status: "queued",
+      metadata: host.getDurableRun("durable-run-1").metadata,
+      clearFinishedAt: true,
+      clearLastError: true,
+    });
+    const second = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+
+    expect(second.outcome).toBe("paused");
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(host.requestDurableRunProcessing).toHaveBeenCalledWith("durable-child-1");
+    expect(host.orchestrationEngine.advancePhase).not.toHaveBeenCalled();
   });
 
   it("cancels orchestration runs with durable, checkpoint, realtime, and worktree cleanup truth", async () => {

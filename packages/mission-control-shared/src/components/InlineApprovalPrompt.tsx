@@ -26,6 +26,7 @@ export function InlineApprovalPrompt({
   pending,
   approvalsHref,
   workspaceAllowAvailable,
+  persistentAllowAvailable = true,
   onApproveOnce,
   onApproveInSession,
   onApproveInWorkspace,
@@ -49,6 +50,7 @@ export function InlineApprovalPrompt({
   pending?: boolean;
   approvalsHref?: string;
   workspaceAllowAvailable?: boolean;
+  persistentAllowAvailable?: boolean;
   onApproveOnce: () => void;
   onApproveInSession: () => void;
   onApproveInWorkspace: () => void;
@@ -94,17 +96,20 @@ export function InlineApprovalPrompt({
   const remainingMs = expiresAt ? Date.parse(expiresAt) - now : Infinity;
   const isLowTime = remainingMs > 0 && remainingMs < 120_000;
 
-  useEffect(() => {
-    if (actionsDisabled || !workspaceAllowAvailable) {
-      setConfirmWorkspaceAllow(false);
-    }
-  }, [actionsDisabled, workspaceAllowAvailable]);
-
   const riskSummary = buildRiskSummary(riskLevel);
   const decisionSummary = buildDecisionSummary({ toolName, kind, riskLevel });
   const resourceSummary = buildResourceSummary(affectedResources);
+  const codeModeApproval = kind === "code_mode.run" || Boolean(codeHash || wrapperManifestHash || capabilitySnapshotId);
+  useEffect(() => {
+    if (actionsDisabled || !workspaceAllowAvailable || !persistentAllowAvailable || codeModeApproval) {
+      setConfirmWorkspaceAllow(false);
+    }
+  }, [actionsDisabled, codeModeApproval, persistentAllowAvailable, workspaceAllowAvailable]);
+
   const scopeSummary =
-    "Allow once resumes just this request. Session allow keeps the same tool available in this chat session. Workspace allow creates a narrow reusable grant inside the current workspace.";
+    persistentAllowAvailable && !codeModeApproval
+      ? "Allow once resumes just this request. Session allow keeps the same tool available in this chat session. Workspace allow creates a narrow reusable grant inside the current workspace."
+      : "Allow once resumes only this approval. Persistent grants are not available for governed Code Mode runs.";
 
   return (
     <div
@@ -141,27 +146,31 @@ export function InlineApprovalPrompt({
         >
           Allow once
         </button>
-        <button
-          type="button"
-          className="gc-button chat-approval-allow"
-          disabled={actionsDisabled}
-          onClick={onApproveInSession}
-        >
-          Allow in session
-        </button>
-        <button
-          type="button"
-          className="gc-button chat-approval-allow"
-          disabled={actionsDisabled || !workspaceAllowAvailable}
-          onClick={() => setConfirmWorkspaceAllow(true)}
-          title={
-            workspaceAllowAvailable
-              ? "Allow this exact tool for the current workspace."
-              : "Workspace context is required."
-          }
-        >
-          Allow in workspace
-        </button>
+        {persistentAllowAvailable && !codeModeApproval ? (
+          <>
+            <button
+              type="button"
+              className="gc-button chat-approval-allow"
+              disabled={actionsDisabled}
+              onClick={onApproveInSession}
+            >
+              Allow in session
+            </button>
+            <button
+              type="button"
+              className="gc-button chat-approval-allow"
+              disabled={actionsDisabled || !workspaceAllowAvailable}
+              onClick={() => setConfirmWorkspaceAllow(true)}
+              title={
+                workspaceAllowAvailable
+                  ? "Allow this exact tool for the current workspace."
+                  : "Workspace context is required."
+              }
+            >
+              Allow in workspace
+            </button>
+          </>
+        ) : null}
         <button type="button" className="gc-button chat-approval-deny" disabled={actionsDisabled} onClick={onDeny}>
           Deny
         </button>

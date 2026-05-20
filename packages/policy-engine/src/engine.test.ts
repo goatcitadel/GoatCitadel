@@ -142,6 +142,150 @@ describe("ToolPolicyEngine grants", () => {
     expect(storage.toolGrants.create).toHaveBeenCalledWith(grant);
     expect(storage.toolGrants.revoke).toHaveBeenCalledWith("grant-1", undefined, "operator-test");
   });
+
+  it("uses active grant decision listing so older active denies still win", () => {
+    const storage = createStorageStub();
+    const newerAllows = Array.from({ length: 500 }, (_, index) => ({
+      grantId: `grant-allow-${index}`,
+      toolPattern: "shell.exec",
+      decision: "allow",
+      scope: "session",
+      scopeRef: "session",
+      grantType: "persistent",
+      createdBy: "test",
+      createdAt: new Date(Date.UTC(2026, 2, 22, 12, 0, index + 1)).toISOString(),
+    }));
+    Object.assign(storage.toolGrants, {
+      listActive: vi.fn(() => [
+        ...newerAllows,
+        {
+          grantId: "grant-old-deny",
+          toolPattern: "shell.exec",
+          decision: "deny",
+          scope: "session",
+          scopeRef: "session",
+          grantType: "persistent",
+          createdBy: "test",
+          createdAt: "2026-03-22T12:00:00.000Z",
+        },
+      ]),
+    });
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "echo hello" },
+      agentId: "agent",
+      sessionId: "session",
+    });
+
+    expect(evaluation.allowed).toBe(false);
+    expect(evaluation.reasonCodes).toEqual(["grant_deny"]);
+    expect(evaluation.matchedGrantId).toBe("grant-old-deny");
+  });
+
+  it("uses uncapped fallback grant decision listing so older active denies still win", () => {
+    const storage = createStorageStub();
+    const newerAllows = Array.from({ length: 500 }, (_, index) => ({
+      grantId: `grant-allow-${index}`,
+      toolPattern: "shell.exec",
+      decision: "allow",
+      scope: "session",
+      scopeRef: "session",
+      grantType: "persistent",
+      createdBy: "test",
+      createdAt: new Date(Date.UTC(2026, 2, 22, 12, 0, index + 1)).toISOString(),
+    }));
+    const grants = [
+      ...newerAllows,
+      {
+        grantId: "grant-old-deny",
+        toolPattern: "shell.exec",
+        decision: "deny",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        createdBy: "test",
+        createdAt: "2026-03-22T12:00:00.000Z",
+      },
+    ];
+    Object.assign(storage.toolGrants, {
+      list: vi.fn((scope: string, scopeRef: string, limit: number) =>
+        scope === "session" && scopeRef === "session" ? grants.slice(0, limit) : [],
+      ),
+    });
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "echo hello" },
+      agentId: "agent",
+      sessionId: "session",
+    });
+
+    expect(evaluation.allowed).toBe(false);
+    expect(evaluation.reasonCodes).toEqual(["grant_deny"]);
+    expect(evaluation.matchedGrantId).toBe("grant-old-deny");
+    expect(storage.toolGrants.list).toHaveBeenCalledWith("session", "session", Number.MAX_SAFE_INTEGER);
+  });
+
+  it("selects the first allow grant whose constraints match the request", () => {
+    const storage = createStorageStub();
+    Object.assign(storage.toolGrants, {
+      listActive: vi.fn(() => [
+        {
+          grantId: "grant-newer-other-host",
+          toolPattern: "browser.navigate",
+          decision: "allow",
+          scope: "session",
+          scopeRef: "session",
+          grantType: "persistent",
+          constraints: { allowedHosts: ["blocked.example"] },
+          createdBy: "test",
+          createdAt: "2026-03-22T12:01:00.000Z",
+        },
+        {
+          grantId: "grant-older-matching-host",
+          toolPattern: "browser.navigate",
+          decision: "allow",
+          scope: "session",
+          scopeRef: "session",
+          grantType: "persistent",
+          constraints: { allowedHosts: [EXAMPLE_HOST] },
+          createdBy: "test",
+          createdAt: "2026-03-22T12:00:00.000Z",
+        },
+      ]),
+    });
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        profiles: {
+          minimal: [],
+        },
+        tools: {
+          ...policyConfig.tools,
+          profile: "minimal",
+          approvalMode: "bypass",
+        },
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: [EXAMPLE_HOST],
+        },
+      },
+      storage,
+    );
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "browser.navigate",
+      args: { url: "https://example.com/docs" },
+      agentId: "agent",
+      sessionId: "session",
+    });
+
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.matchedGrantId).toBe("grant-older-matching-host");
+  });
 });
 
 describe("ToolPolicyEngine invocation coverage", () => {
@@ -765,6 +909,18 @@ describe("ToolPolicyEngine policy edge coverage", () => {
         sessionId: "session",
       }).reasonCodes,
     ).toEqual(["structural_safety_block"]);
+    expect(
+      docsEngine.evaluateAccess({
+        toolName: "browser.interact",
+        args: {
+          url: "http://localhost/app",
+          outputPath: "F:/outside/project/interact.json",
+          steps: [{ action: "click", selector: "button" }],
+        },
+        agentId: "agent",
+        sessionId: "session",
+      }).reasonCodes,
+    ).toEqual(["structural_safety_block"]);
 
     const storage = createStorageStub();
     vi.mocked(storage.toolGrants.list).mockReturnValue([
@@ -1055,6 +1211,40 @@ describe("ToolPolicyEngine policy edge coverage", () => {
         sessionId: "session",
       }).allowed,
     ).toBe(true);
+
+    vi.mocked(hostStorage.toolGrants.list).mockReturnValue([
+      {
+        ...hostGrant,
+        grantId: "grant-browser-storage-host",
+        toolPattern: "browser.storage.set",
+        constraints: { allowedHosts: ["allowed.example"] },
+      },
+    ]);
+    expect(
+      hostEngine.evaluateAccess({
+        toolName: "browser.storage.set",
+        args: { origin: "https://blocked.example" },
+        agentId: "agent",
+        sessionId: "session",
+      }).reasonCodes,
+    ).toEqual(["grant_constraints_block"]);
+
+    vi.mocked(hostStorage.toolGrants.list).mockReturnValue([
+      {
+        ...hostGrant,
+        grantId: "grant-browser-cookie-host",
+        toolPattern: "browser.cookies.set",
+        constraints: { allowedHosts: ["allowed.example"] },
+      },
+    ]);
+    expect(
+      hostEngine.evaluateAccess({
+        toolName: "browser.cookies.set",
+        args: { cookies: [{ name: "sid", value: "1", domain: ".blocked.example" }] },
+        agentId: "agent",
+        sessionId: "session",
+      }).reasonCodes,
+    ).toEqual(["grant_constraints_block"]);
 
     vi.mocked(hostStorage.toolGrants.list).mockReturnValue([
       {
@@ -1687,6 +1877,86 @@ describe("ToolPolicyEngine outside-root read access", () => {
     expect(searchResult.policyReason).toContain("firecrawl.example");
     expect(navigateResult.outcome).toBe("blocked");
     expect(navigateResult.policyReason).toContain("firecrawl.example");
+  });
+
+  it("requires at least one native browser.search host when native fallback can run", async () => {
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: [EXAMPLE_HOST, "firecrawl.example"],
+        },
+      },
+      createStorageStub(),
+    );
+
+    const nativeResult = await engine.invoke({
+      toolName: "browser.search",
+      args: {
+        query: "coverage",
+      },
+      agentId: "agent",
+      sessionId: "session",
+      dryRun: true,
+    });
+    const firecrawlFallbackResult = await engine.invoke({
+      toolName: "browser.search",
+      args: {
+        query: "coverage",
+        backend: "firecrawl",
+        firecrawlBaseUrl: "https://firecrawl.example",
+      },
+      agentId: "agent",
+      sessionId: "session",
+      dryRun: true,
+    });
+    const firecrawlOnlyResult = await engine.invoke({
+      toolName: "browser.search",
+      args: {
+        query: "coverage",
+        backend: "firecrawl",
+        firecrawlBaseUrl: "https://firecrawl.example",
+        firecrawlFallbackToNative: false,
+      },
+      agentId: "agent",
+      sessionId: "session",
+      dryRun: true,
+    });
+
+    expect(nativeResult.outcome).toBe("blocked");
+    expect(nativeResult.policyReason).toContain("browser.search requires at least one native search host");
+    expect(firecrawlFallbackResult.outcome).toBe("blocked");
+    expect(firecrawlFallbackResult.policyReason).toContain("browser.search requires at least one native search host");
+    expect(firecrawlOnlyResult.outcome).toBe("approval_required");
+    expect(firecrawlOnlyResult.policyReason).not.toContain("browser.search requires at least one native search host");
+  });
+
+  it("allows browser.search when one fallback native search host is allowlisted", async () => {
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["www.bing.com"],
+        },
+      },
+      createStorageStub(),
+    );
+
+    const result = await engine.invoke({
+      toolName: "browser.search",
+      args: {
+        query: "coverage",
+        engine: "google",
+      },
+      agentId: "agent",
+      sessionId: "session",
+      dryRun: true,
+    });
+
+    expect(result.outcome).toBe("approval_required");
+    expect(result.policyReason).not.toContain("browser.search requires at least one native search host");
   });
 
   it("does not audit public-host bypasses because bypass mode preserves the network allowlist", async () => {
@@ -3021,6 +3291,297 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
     expect(evaluation.allowed).toBe(false);
     expect(evaluation.reasonCodes).toEqual(["grant_constraints_block"]);
     expect(evaluation.matchedGrantId).toBe("grant-safe-read");
+  });
+
+  it("applies docs.ingest grant constraints to URL and file sources", () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: {
+          ...policyConfig.tools,
+          approvalMode: "bypass",
+        },
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["allowed.example", "blocked.example"],
+        },
+      },
+      storage,
+    );
+
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-doc-url",
+        toolPattern: "docs.ingest",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session-1",
+        grantType: "persistent",
+        constraints: { allowedHosts: ["allowed.example"] },
+        createdBy: "test",
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    expect(
+      engine.evaluateAccess({
+        toolName: "docs.ingest",
+        args: { sourceType: "url", source: "https://blocked.example/docs.md", namespace: "research" },
+        agentId: "agent",
+        sessionId: "session-1",
+      }).reasonCodes,
+    ).toEqual(["grant_constraints_block"]);
+
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-doc-file",
+        toolPattern: "docs.ingest",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session-1",
+        grantType: "persistent",
+        constraints: { allowedPaths: ["./workspace/allowed"] },
+        createdBy: "test",
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    expect(
+      engine.evaluateAccess({
+        toolName: "docs.ingest",
+        args: { sourceType: "file", source: "./workspace/blocked/docs.md", namespace: "research" },
+        agentId: "agent",
+        sessionId: "session-1",
+      }).reasonCodes,
+    ).toEqual(["grant_constraints_block"]);
+  });
+
+  it("applies scoped grant path constraints to browser output paths", () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: {
+          ...policyConfig.tools,
+          approvalMode: "bypass",
+        },
+      },
+      storage,
+    );
+
+    for (const [toolName, args] of [
+      ["browser.screenshot", { url: "http://localhost/app", outputPath: "./workspace/blocked/shot.png" }],
+      [
+        "browser.interact",
+        {
+          url: "http://localhost/app",
+          outputPath: "./workspace/blocked/interact.json",
+          steps: [{ action: "click", selector: "button" }],
+        },
+      ],
+    ] as const) {
+      vi.mocked(storage.toolGrants.list).mockReturnValue([
+        {
+          grantId: `grant-${toolName}`,
+          toolPattern: toolName,
+          decision: "allow",
+          scope: "session",
+          scopeRef: "session-1",
+          grantType: "persistent",
+          constraints: { allowedPaths: ["./workspace/allowed"] },
+          createdBy: "test",
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+
+      const evaluation = engine.evaluateAccess({
+        toolName,
+        args,
+        agentId: "agent",
+        sessionId: "session-1",
+      });
+
+      expect(evaluation.allowed).toBe(false);
+      expect(evaluation.reasonCodes).toEqual(["grant_constraints_block"]);
+    }
+  });
+
+  it("requires explicit browser screenshot output paths for path-scoped grants", () => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-browser-shot",
+        toolPattern: "browser.screenshot",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session-1",
+        grantType: "persistent",
+        constraints: { allowedPaths: ["./workspace/allowed"] },
+        createdBy: "test",
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: {
+          ...policyConfig.tools,
+          approvalMode: "bypass",
+        },
+      },
+      storage,
+    );
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "browser.screenshot",
+      args: { url: "http://localhost/app" },
+      agentId: "agent",
+      sessionId: "session-1",
+    });
+
+    expect(evaluation.allowed).toBe(false);
+    expect(evaluation.reasonCodes).toEqual(["grant_constraints_block"]);
+  });
+
+  it("keeps scoped grant host constraints enforced across HTTP redirects", async () => {
+    const originalFetch = globalThis.fetch;
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-http-source",
+        toolPattern: "http.get",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session-1",
+        grantType: "persistent",
+        constraints: { allowedHosts: ["allowed.example"] },
+        createdBy: "test",
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://allowed.example/start") {
+        return new Response("", { status: 302, headers: { location: "https://other.example/final" } });
+      }
+      return new Response("other", { status: 200 });
+    }) as unknown as typeof fetch;
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: { ...policyConfig.tools, approvalMode: "bypass" },
+        sandbox: { ...policyConfig.sandbox, networkAllowlist: ["allowed.example", "other.example"] },
+      },
+      storage,
+    );
+
+    try {
+      const result = await engine.invoke({
+        toolName: "http.get",
+        args: { url: "https://allowed.example/start" },
+        agentId: "agent",
+        sessionId: "session-1",
+      });
+
+      expect(result.outcome).toBe("blocked");
+      expect(result.policyReason).toContain("Host is not yet allowlisted: https://other.example");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("rejects non-canonical docs.ingest sourceType values before source safety checks can be skipped", async () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: {
+          ...policyConfig.tools,
+          approvalMode: "bypass",
+        },
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["allowed.example", "blocked.example"],
+        },
+      },
+      storage,
+    );
+
+    const urlResult = await engine.invoke({
+      toolName: "docs.ingest",
+      args: { sourceType: " url ", source: "https://blocked.example/docs.md", namespace: "research" },
+      agentId: "agent",
+      sessionId: "session-1",
+      dryRun: true,
+    });
+    expect(urlResult.outcome).toBe("blocked");
+    expect(urlResult.policyReason).toContain("sourceType must be one of file|url|text");
+    expect(urlResult.audit?.reasonCodes).toEqual(["structural_safety_block"]);
+
+    const fileResult = await engine.invoke({
+      toolName: "docs.ingest",
+      args: { sourceType: " file ", source: "F:/outside/docs.md", namespace: "research" },
+      agentId: "agent",
+      sessionId: "session-1",
+      dryRun: true,
+    });
+    expect(fileResult.outcome).toBe("blocked");
+    expect(fileResult.policyReason).toContain("sourceType must be one of file|url|text");
+    expect(fileResult.audit?.reasonCodes).toEqual(["structural_safety_block"]);
+  });
+
+  it("rejects non-canonical docs.ingest backend values before Firecrawl policy can be skipped", async () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: {
+          ...policyConfig.tools,
+          approvalMode: "bypass",
+        },
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["example.com", "firecrawl.example"],
+        },
+      },
+      storage,
+    );
+
+    const result = await engine.invoke({
+      toolName: "docs.ingest",
+      args: {
+        sourceType: "url",
+        source: "https://example.com/docs.md",
+        namespace: "research",
+        backend: " firecrawl ",
+        firecrawlBaseUrl: "https://firecrawl.example",
+      },
+      agentId: "agent",
+      sessionId: "session-1",
+      dryRun: true,
+    });
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.policyReason).toContain("backend must be one of native|firecrawl");
+    expect(result.audit?.reasonCodes).toEqual(["structural_safety_block"]);
+
+    for (const sourceType of ["file", "text"] as const) {
+      const nonUrlResult = await engine.invoke({
+        toolName: "docs.ingest",
+        args: {
+          sourceType,
+          source: sourceType === "file" ? "./workspace/docs.md" : "inline docs",
+          namespace: "research",
+          backend: " firecrawl ",
+        },
+        agentId: "agent",
+        sessionId: "session-1",
+        dryRun: true,
+      });
+
+      expect(nonUrlResult.outcome).toBe("blocked");
+      expect(nonUrlResult.policyReason).toContain("backend must be one of native|firecrawl");
+      expect(nonUrlResult.audit?.reasonCodes).toEqual(["structural_safety_block"]);
+    }
   });
 
   it("returns internal tool envelopes for executed requests", async () => {

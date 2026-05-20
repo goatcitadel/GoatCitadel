@@ -1920,7 +1920,7 @@ describe("SettingsNativePage providers", () => {
     expect(text).toContain("Apply first-run defaults");
     expect(text).toContain("Tool profile");
     expect(text).toContain("Balanced default for normal local work");
-    expect(text).toContain("Keep cost and capability balanced");
+    expect(text).toContain("Store a balanced budget preference");
     expect(text).not.toContain("Terminal onboarding");
     expect(text).not.toContain("Mission Control posture");
 
@@ -1945,20 +1945,125 @@ describe("SettingsNativePage providers", () => {
     await act(async () => {
       renderer = renderPage("budget");
     });
+    await flushAsyncUpdates();
     text = collectText(renderer!.root);
-    expect(text).toContain("Budget controls");
-    expect(text).toContain("No silent fallback");
+    expect(text).toContain("Budget mode");
+    expect(text).toContain("Cost evidence");
+    expect(text).toContain("Store a balanced budget preference");
     expect(text).not.toContain("Mission Control posture");
+
+    const budgetSelect = renderer!.root.findAll(
+      (node) => node.type === "select" && node.props.className === "mc-next-settings-input",
+    )[0];
+    await act(async () => {
+      budgetSelect!.props.onChange({ target: { value: "power" } });
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Save budget mode").props.onClick();
+    });
+    await flushAsyncUpdates();
+    expect(mocks.patchSettings).toHaveBeenCalledWith({ budgetMode: "power" });
 
     await act(async () => {
       renderer = renderPage("not-real");
     });
     text = collectText(renderer!.root);
     expect(text).toContain("Unknown");
-    expect(text).toContain("not registered in the current shell");
+    expect(text).toContain("not registered.");
     expect(text).toContain("Unknown settings section");
     expect(text).toContain("Open General");
     expect(text).not.toContain("Mission Control posture");
+  });
+
+  it("keeps budget evidence navigation and retry visible when budget settings fail to load", async () => {
+    const navigate = vi.fn();
+    mocks.fetchSettings.mockRejectedValueOnce(new Error("settings down"));
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <SettingsNativePage
+          route={{ area: "settings", section: "budget", theme: "ops" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          navigate={navigate}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+    });
+    await flushAsyncUpdates();
+
+    let text = collectText(renderer!.root);
+    expect(text).toContain("settings down");
+    expect(text).toContain("Budget mode unavailable");
+    expect(text).toContain("Cost evidence");
+    expect(text).toContain("Open cost telemetry");
+    expect(text).toContain("Tune provider routing");
+
+    const actionRows = renderer!.root.findAll(
+      (node) => typeof node.props.className === "string" && node.props.className === "mc-next-settings-action-row",
+    );
+    const costTelemetryRow = actionRows.find((row) => collectText(row).includes("Open cost telemetry"));
+    const providerRoutingRow = actionRows.find((row) => collectText(row).includes("Tune provider routing"));
+    expect(costTelemetryRow).toBeDefined();
+    expect(providerRoutingRow).toBeDefined();
+
+    await act(async () => {
+      costTelemetryRow!.findByType("button").props.onClick();
+    });
+    expect(navigate).toHaveBeenCalledWith({ area: "ops", section: "costs", theme: "ops" });
+
+    await act(async () => {
+      providerRoutingRow!.findByType("button").props.onClick();
+    });
+    expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "providers", theme: "ops" });
+
+    await act(async () => {
+      findButton(renderer!.root, "Refresh").props.onClick();
+    });
+    await flushAsyncUpdates();
+    text = collectText(renderer!.root);
+    expect(text).toContain("Budget mode");
+  });
+
+  it("disables duplicate budget saves while the update is in flight", async () => {
+    let resolvePatch: ((value: unknown) => void) | undefined;
+    mocks.patchSettings.mockImplementationOnce(
+      () =>
+        new Promise<unknown>((resolve) => {
+          resolvePatch = resolve;
+        }),
+    );
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderPage("budget");
+    });
+    await flushAsyncUpdates();
+
+    const budgetSelect = renderer!.root.findAll(
+      (node) => node.type === "select" && node.props.className === "mc-next-settings-input",
+    )[0];
+    await act(async () => {
+      budgetSelect!.props.onChange({ target: { value: "power" } });
+    });
+
+    const save = findButton(renderer!.root, "Save budget mode");
+    await act(async () => {
+      save.props.onClick();
+    });
+    expect(mocks.patchSettings).toHaveBeenCalledTimes(1);
+    expect(findButton(renderer!.root, "Saving...").props.disabled).toBe(true);
+
+    await act(async () => {
+      findButton(renderer!.root, "Saving...").props.onClick();
+    });
+    expect(mocks.patchSettings).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolvePatch?.({});
+    });
+    await flushAsyncUpdates();
   });
 
   it("keeps prompt-skipping first-run defaults unavailable in Remote Hardened mode", async () => {

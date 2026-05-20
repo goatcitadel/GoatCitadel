@@ -243,7 +243,7 @@ describe("MemoryRoutePage", () => {
     expect(readMemoryWriteDecision({ metadata: null, signatureStatus: "unsigned" } as any)).toBe("unsigned");
   });
 
-  it("renders lifecycle-aware memory operator truth in the next shell", () => {
+  it("renders lifecycle-aware memory operator truth", () => {
     const markup = renderToStaticMarkup(
       <MemoryRoutePage
         route={{ area: "library", section: "memory", theme: "library" } as any}
@@ -262,7 +262,7 @@ describe("MemoryRoutePage", () => {
     expect(markup).toContain("Memory files");
   });
 
-  it("keeps quick-jump navigation on canonical next routes", async () => {
+  it("keeps quick-jump navigation on route objects", async () => {
     const navigate = vi.fn();
     let renderer: ReactTestRenderer | null = null;
 

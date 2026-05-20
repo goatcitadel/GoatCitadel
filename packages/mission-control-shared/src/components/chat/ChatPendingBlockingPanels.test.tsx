@@ -267,4 +267,37 @@ describe("chat pending blocking panels", () => {
     });
     expect(onApprove).toHaveBeenCalledWith("workspace");
   });
+
+  it("limits Code Mode approvals to one-time approval controls", async () => {
+    const onApprove = vi.fn();
+    const onDeny = vi.fn();
+
+    await act(async () => {
+      root?.render(
+        <ChatPendingApprovalPanel
+          pending={false}
+          workspaceId="default"
+          pendingApproval={{
+            approvalId: "approval-code-mode",
+            kind: "code_mode.run",
+            codeHash: "code-hash",
+            wrapperManifestHash: "wrapper-hash",
+            capabilitySnapshotId: "capability-snapshot",
+          }}
+          onApprove={onApprove}
+          onDeny={onDeny}
+        />,
+      );
+    });
+
+    const buttons = [...(container?.querySelectorAll("button") ?? [])];
+    expect(buttons.some((item) => item.textContent === "Allow once")).toBe(true);
+    expect(buttons.some((item) => item.textContent === "Allow in session")).toBe(false);
+    expect(buttons.some((item) => item.textContent === "Allow in workspace")).toBe(false);
+
+    await act(async () => {
+      buttons.find((item) => item.textContent === "Allow once")?.click();
+    });
+    expect(onApprove).toHaveBeenCalledWith("once");
+  });
 });

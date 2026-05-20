@@ -1487,6 +1487,129 @@ describe("ThreadedWorkflowPanel", () => {
     expect(rendered).not.toContain("Wrong Turn Profile");
   });
 
+  it("keeps the Code Mode approval shortcut when detail loading fails but the run summary has an approval", async () => {
+    const onOpenApprovals = vi.fn();
+    mockedFetchCodeModeRuns.mockResolvedValueOnce({
+      items: [
+        {
+          runId: "current-turn-run",
+          status: "approval_pending",
+          language: "typescript",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          approvalId: "approval-current",
+          createdAt: "2026-05-05T12:01:00.000Z",
+        },
+      ] as any,
+    });
+    mockedFetchCodeModeRun.mockRejectedValueOnce(new Error("detail unavailable"));
+
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(<ThreadedWorkflowPanel panel={buildCodePanel({ onOpenApprovals })} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Run log"))
+        ?.props.onClick();
+      await Promise.resolve();
+    });
+
+    const rendered = JSON.stringify(renderer!.toJSON());
+    expect(rendered).toContain("detail unavailable");
+    expect(rendered).toContain("approval-current");
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Open approval queue"))
+        ?.props.onClick();
+    });
+    expect(onOpenApprovals).toHaveBeenCalledWith("approval-current");
+  });
+
+  it("does not reuse stale Code Mode detail approval after selecting a different run", async () => {
+    const onOpenApprovals = vi.fn();
+    mockedFetchCodeModeRuns.mockResolvedValueOnce({
+      items: [
+        {
+          runId: "current-turn-run",
+          status: "approval_pending",
+          language: "typescript",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          approvalId: "approval-current",
+          createdAt: "2026-05-05T12:02:00.000Z",
+        },
+        {
+          runId: "previous-turn-run",
+          status: "completed",
+          language: "typescript",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          approvalId: "approval-previous-summary",
+          createdAt: "2026-05-05T12:01:00.000Z",
+        },
+      ] as any,
+    });
+    mockedFetchCodeModeRun
+      .mockResolvedValueOnce({
+        runId: "current-turn-run",
+        status: "approval_pending",
+        language: "typescript",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        approvalId: "approval-current",
+        createdAt: "2026-05-05T12:02:00.000Z",
+      } as any)
+      .mockResolvedValueOnce({
+        runId: "current-turn-run",
+        status: "approval_pending",
+        language: "typescript",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        approvalId: "approval-current",
+        createdAt: "2026-05-05T12:02:00.000Z",
+      } as any);
+
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(<ThreadedWorkflowPanel panel={buildCodePanel({ onOpenApprovals })} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Run log"))
+        ?.props.onClick();
+      await Promise.resolve();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("approval-current");
+
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .filter((button) => button.children.includes("Inspect run"))[1]
+        ?.props.onClick();
+      await Promise.resolve();
+    });
+
+    const rendered = JSON.stringify(renderer!.toJSON());
+    expect(rendered).toContain("previo...-run");
+    expect(rendered).toContain("approval-previous-summary");
+    expect(rendered).not.toContain("approval-current");
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Open approval queue"))
+        ?.props.onClick();
+    });
+    expect(onOpenApprovals).toHaveBeenLastCalledWith("approval-previous-summary");
+  });
+
   it("keeps legacy Code Mode helper runs visible when turn lineage is missing", async () => {
     mockedFetchCodeModeRuns.mockResolvedValueOnce({
       items: [

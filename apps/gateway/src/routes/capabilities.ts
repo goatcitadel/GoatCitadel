@@ -1,6 +1,8 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
+const DEFAULT_WORKSPACE_ID = "default";
+
 export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
   const catalogQuerySchema = z.object({
     scope: z.enum(["inspectable", "callable"]).optional(),
@@ -202,9 +204,12 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    const filters = parsed.data.workspaceId || parsed.data.sessionId || parsed.data.turnId || parsed.data.status;
     return reply.send({
-      items: fastify.services.capabilities.listCodeModeRuns(filters ? parsed.data : (parsed.data.limit ?? 100)),
+      items: fastify.services.capabilities.listCodeModeRuns({
+        ...parsed.data,
+        limit: parsed.data.limit ?? 100,
+        workspaceId: parsed.data.workspaceId ?? DEFAULT_WORKSPACE_ID,
+      }),
     });
   });
 
@@ -221,10 +226,11 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       const run = fastify.services.capabilities.getCodeModeRun(parsed.data.runId);
+      const workspaceId = query.data.workspaceId ?? DEFAULT_WORKSPACE_ID;
       if (
         (query.data.sessionId && run.sessionId !== query.data.sessionId) ||
         (query.data.turnId && run.turnId !== query.data.turnId) ||
-        (query.data.workspaceId && run.workspaceId !== query.data.workspaceId)
+        run.workspaceId !== workspaceId
       ) {
         return reply.code(404).send({ error: `Code Mode run ${parsed.data.runId} not found in requested scope` });
       }

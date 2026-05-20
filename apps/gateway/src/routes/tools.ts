@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
-import type { LocalOperatorOverrideRecord, PermissionProfileRecord } from "@goatcitadel/contracts";
+import type { DeploymentProfile, LocalOperatorOverrideRecord, PermissionProfileRecord } from "@goatcitadel/contracts";
 import { z } from "zod";
+import { evaluateComputerUseSafety, evaluateDeploymentProfileToolAccess } from "../browser-runtime-guardrails.js";
 
 const RATE_LIMIT_GENERAL_MAX = 500;
 const RATE_LIMIT_MUTATION_MAX = 180;
@@ -60,6 +61,14 @@ const createGrantSchema = z
   })
   .superRefine((value, ctx) => {
     const grantType = value.grantType ?? "persistent";
+    if (value.decision === "deny" && grantType === "one_time") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["grantType"],
+        message: "one_time grants can only be allow grants.",
+      });
+      return;
+    }
     if (grantType === "ttl") {
       if (!value.expiresAt) {
         ctx.addIssue({
@@ -201,12 +210,52 @@ export const toolsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: (error as Error).message });
     }
 
-    return reply.send(
-      fastify.services.tools.evaluateToolAccess({
-        ...parsed.data,
-        policyContext,
-      }),
-    );
+    const evaluation = fastify.services.tools.evaluateToolAccess({
+      ...parsed.data,
+      policyContext,
+    });
+    const toolsInvoke = (
+      fastify.services as {
+        toolsInvoke?: {
+          getDeploymentProfile?: () => DeploymentProfile;
+          isFeatureEnabled?: (flag: string) => boolean;
+        };
+      }
+    ).toolsInvoke;
+    const deploymentProfile = toolsInvoke?.getDeploymentProfile?.();
+    const deploymentGuard = deploymentProfile
+      ? evaluateDeploymentProfileToolAccess(deploymentProfile, parsed.data.toolName, parsed.data.args ?? {})
+      : undefined;
+    if (deploymentGuard) {
+      return reply.send({
+        ...evaluation,
+        allowed: false,
+        requiresApproval: false,
+        reasonCodes: [...evaluation.reasonCodes, "deployment_profile_block"],
+        policyReason: deploymentGuard.reason,
+      });
+    }
+
+    if (toolsInvoke?.isFeatureEnabled?.("computerUseGuardrailsV1Enabled")) {
+      const safety = evaluateComputerUseSafety(parsed.data.toolName, parsed.data.args ?? {});
+      const computerUseReason =
+        safety.requiresVerification && !safety.verified
+          ? "Computer-use guardrail: this mutating browser action requires step verification (set args.verifyStep=true)."
+          : safety.requiresConfirmation && !safety.confirmed
+            ? "Computer-use guardrail: confirm-before-submit required (set args.confirmBeforeSubmit=true)."
+            : undefined;
+      if (computerUseReason) {
+        return reply.send({
+          ...evaluation,
+          allowed: false,
+          requiresApproval: false,
+          reasonCodes: [...evaluation.reasonCodes, "computer_use_guardrail_block"],
+          policyReason: computerUseReason,
+        });
+      }
+    }
+
+    return reply.send(evaluation);
   });
 
   fastify.get("/api/v1/tools/permission-profiles", async (request, reply) => {

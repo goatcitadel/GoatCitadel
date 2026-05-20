@@ -134,6 +134,8 @@ function buildQueue() {
     resolvePending: false,
     replayCount: 1,
     pendingRiskCounts: { safe: 1, caution: 1, danger: 1, nuclear: 1 },
+    failedStatusLanes: [],
+    pendingLaneFailed: false,
     hasPendingApprovals: true,
     bulkResolvePending: false,
     onResolve: approvalHarness.onResolve,
@@ -142,7 +144,7 @@ function buildQueue() {
     loadDurableStatus: approvalHarness.loadDurableStatus,
     resumeFromCheckpoint: approvalHarness.resumeFromCheckpoint,
     onRejectAllPending: approvalHarness.onRejectAllPending,
-    summary: "Approvals stay in the canonical next shell now.",
+    summary: "Approvals stay in one operator view now.",
     ...approvalHarness.overrides,
   };
 }
@@ -255,7 +257,73 @@ describe("ApprovalsRoutePage", () => {
     expect(text).toContain("Runtime linkage");
     expect(text).toContain("Approval effects");
     expect(text).toContain("Replay trail and pending action");
-    expect(text).toContain("Approvals stay in the canonical next shell now.");
+    expect(text).toContain("Approvals stay in one operator view now.");
+  });
+
+  it("uses shell pending counts only while the approval queue is loading or errored", () => {
+    approvalHarness.overrides = {
+      pendingItems: [],
+      visibleItems: [],
+      selectedApproval: null,
+      hasPendingApprovals: false,
+      loading: false,
+      error: null,
+    };
+    const settledText = renderText(renderPage({ pendingApprovals: 3 }));
+
+    approvalHarness.overrides = {
+      pendingItems: [],
+      visibleItems: [],
+      selectedApproval: null,
+      hasPendingApprovals: false,
+      loading: false,
+      error: "approval queue failed",
+    };
+    const errorText = renderText(renderPage({ pendingApprovals: 3 }));
+
+    expect(settledText).toContain("Pending (0)");
+    expect(settledText).not.toContain("Pending 3");
+    expect(errorText).toContain("approval queue failed");
+    expect(errorText).toContain("Approval queue");
+    expect(errorText).toContain("Pending (3)");
+    expect(errorText).toContain("Pending approvals exist, but the queue details could not be loaded.");
+    expect(errorText).not.toContain("Loading current route data");
+  });
+
+  it("keeps the approval queue visible when an error arrives with a stale loading flag", () => {
+    approvalHarness.overrides = {
+      pendingItems: [],
+      visibleItems: [],
+      selectedApproval: null,
+      hasPendingApprovals: false,
+      loading: true,
+      error: "approval queue failed",
+    };
+
+    const text = renderText(renderPage({ pendingApprovals: 3 }));
+
+    expect(text).toContain("approval queue failed");
+    expect(text).toContain("Approval queue");
+    expect(text).toContain("Pending (3)");
+    expect(text).not.toContain("Loading current route data");
+  });
+
+  it("uses the shell pending count as a floor when the pending lane failed with preserved rows", () => {
+    const staleApproval = approvalHarness.approval as any;
+    approvalHarness.overrides = {
+      pendingItems: [staleApproval],
+      visibleItems: [staleApproval],
+      selectedApproval: staleApproval,
+      pendingLaneFailed: true,
+      failedStatusLanes: ["pending"],
+      loading: false,
+      error: "pending lane failed",
+    };
+
+    const text = renderText(renderPage({ pendingApprovals: 3 }));
+
+    expect(text).toContain("Pending (3)");
+    expect(text).not.toContain("Pending (1)");
   });
 
   it("drives view switching, queue selection, decisions, recovery, trace, live lane, and bulk rejection", async () => {

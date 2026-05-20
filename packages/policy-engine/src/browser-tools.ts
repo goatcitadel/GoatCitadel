@@ -26,6 +26,7 @@ type BrowserToolName =
 export interface BrowserExecutionContext {
   sessionId?: string;
   signal?: AbortSignal;
+  matchedGrantAllowedHosts?: string[];
 }
 
 interface BrowserStepInput {
@@ -41,9 +42,41 @@ function shouldEnforceNetworkAllowlist(config: ToolPolicyConfig): boolean {
   return true;
 }
 
-function assertHostAllowedForConfig(hostOrUrl: string, config: ToolPolicyConfig): void {
+function assertHostAllowedForConfig(
+  hostOrUrl: string,
+  config: ToolPolicyConfig,
+  executionContext?: BrowserExecutionContext,
+): void {
   void shouldEnforceNetworkAllowlist(config);
   assertHostAllowed(hostOrUrl, config.sandbox.networkAllowlist);
+  const grantAllowlist = executionContext?.matchedGrantAllowedHosts?.map((entry) => entry.trim()).filter(Boolean);
+  if (grantAllowlist && grantAllowlist.length > 0) {
+    assertHostAllowed(hostOrUrl, grantAllowlist);
+  }
+}
+
+function getGrantHostAllowlist(executionContext?: BrowserExecutionContext): string[] {
+  return executionContext?.matchedGrantAllowedHosts?.map((entry) => entry.trim()).filter(Boolean) ?? [];
+}
+
+function hasGrantHostConstraints(executionContext?: BrowserExecutionContext): boolean {
+  return getGrantHostAllowlist(executionContext).length > 0;
+}
+
+function assertHostAllowedForGrant(hostOrUrl: string, executionContext?: BrowserExecutionContext): void {
+  const grantAllowlist = getGrantHostAllowlist(executionContext);
+  if (grantAllowlist.length > 0) {
+    assertHostAllowed(hostOrUrl, grantAllowlist);
+  }
+}
+
+function isHostAllowedForGrant(hostOrUrl: string, executionContext?: BrowserExecutionContext): boolean {
+  try {
+    assertHostAllowedForGrant(hostOrUrl, executionContext);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 type BrowserCookieRecord = {
@@ -154,7 +187,7 @@ async function executeBrowserSearch(
   const limit = clampInt(args.limit ?? args.maxResults, 5, 1, 25);
   if (requestedReadBackend === "firecrawl") {
     try {
-      const firecrawl = await executeBrowserSearchViaFirecrawl(query, limit, args, config, executionContext?.signal);
+      const firecrawl = await executeBrowserSearchViaFirecrawl(query, limit, args, config, executionContext);
       return {
         ...firecrawl,
         action: "search",
@@ -218,8 +251,9 @@ async function executeBrowserSearchNative(
   for (const engine of resolveSearchEngineCandidates(requestedEngine)) {
     attemptedEngines.push(engine);
     const searchUrl = buildSearchUrl(engine, query);
+    const searchBackendContext = browserSearchBackendExecutionContext(executionContext);
     try {
-      const snapshot = await withBrowserPage(searchUrl, args, config, executionContext, async (page) => {
+      const snapshot = await withBrowserPage(searchUrl, args, config, searchBackendContext, async (page) => {
         await page.waitForLoadState("domcontentloaded");
         await page.waitForTimeout(400);
         const rawResults = await page.evaluate(
@@ -286,7 +320,7 @@ async function executeBrowserSearchNative(
         );
         const finalUrl = page.url();
         const filteredResults = filterLikelySearchResultCandidates(rawResults, finalUrl);
-        const results = normalizeBrowserSearchResults(filteredResults, finalUrl, limit);
+        const results = normalizeBrowserSearchResults(filteredResults, finalUrl, Math.max(limit * 20, 80));
 
         return {
           requestedEngine,
@@ -301,7 +335,12 @@ async function executeBrowserSearchNative(
         engine,
         query,
         finalUrl: String(snapshot.finalUrl ?? searchUrl),
-        results: snapshot.results as Array<{ title: string; url: string; snippet: string }>,
+        results: filterBrowserSearchResultsForPolicy(
+          snapshot.results as Array<{ title: string; url: string; snippet: string }>,
+          config,
+          executionContext,
+          limit,
+        ),
       };
 
       if (normalizedSnapshot.results.length) {
@@ -325,15 +364,23 @@ async function executeBrowserSearchNative(
     }
 
     try {
-      const fallback = await executeBrowserSearchFallback(query, limit, config, engine, executionContext?.signal);
-      if (fallback.results.length > 0) {
+      const fallback = await executeBrowserSearchFallback(
+        query,
+        Math.max(limit * 20, 80),
+        config,
+        engine,
+        searchBackendContext,
+        executionContext?.signal,
+      );
+      const fallbackResults = filterBrowserSearchResultsForPolicy(fallback.results, config, executionContext, limit);
+      if (fallbackResults.length > 0) {
         const withBackend = await applySearchBackend(
           {
             requestedEngine,
             engine,
             query,
             finalUrl: fallback.finalUrl,
-            results: fallback.results,
+            results: fallbackResults,
           },
           {
             args,
@@ -362,6 +409,18 @@ async function executeBrowserSearchNative(
   throw new Error(`browser.search failed: ${failures.join(" | ")}`);
 }
 
+function browserSearchBackendExecutionContext(
+  executionContext?: BrowserExecutionContext,
+): BrowserExecutionContext | undefined {
+  if (!executionContext) {
+    return undefined;
+  }
+  return {
+    sessionId: executionContext.sessionId,
+    signal: executionContext.signal,
+  };
+}
+
 async function executeBrowserNavigate(
   args: Record<string, unknown>,
   config: ToolPolicyConfig,
@@ -372,7 +431,14 @@ async function executeBrowserNavigate(
   const backend = normalizeBrowserReadBackend(asString(args.backend));
   if (backend === "firecrawl") {
     try {
-      const firecrawl = await executeBrowserNavigateViaFirecrawl(url, maxChars, args, config, executionContext?.signal);
+      const firecrawl = await executeBrowserNavigateViaFirecrawl(
+        url,
+        maxChars,
+        args,
+        config,
+        executionContext,
+        executionContext?.signal,
+      );
       return {
         ...firecrawl,
         action: "navigate",
@@ -434,7 +500,13 @@ async function executeBrowserNavigateNative(
       };
     });
   } catch (playwrightError) {
-    const fallback = await executeBrowserNavigateFallback(url, maxChars, config, executionContext?.signal);
+    const fallback = await executeBrowserNavigateFallback(
+      url,
+      maxChars,
+      config,
+      executionContext,
+      executionContext?.signal,
+    );
     return {
       ...fallback,
       action: "navigate",
@@ -461,6 +533,7 @@ async function executeBrowserExtract(
         maxChars,
         args,
         config,
+        executionContext,
         executionContext?.signal,
       );
       return {
@@ -525,7 +598,14 @@ async function executeBrowserExtractNative(
       };
     });
   } catch (playwrightError) {
-    const fallback = await executeBrowserExtractFallback(url, selector, maxChars, config, executionContext?.signal);
+    const fallback = await executeBrowserExtractFallback(
+      url,
+      selector,
+      maxChars,
+      config,
+      executionContext,
+      executionContext?.signal,
+    );
     return {
       ...fallback,
       action: "extract",
@@ -652,7 +732,10 @@ async function executeBrowserCookiesGet(
   const browserSessionId = requireBrowserSessionId(args, executionContext, "browser.cookies.get");
   const state = cloneBrowserSessionState(getBrowserSessionState(browserSessionId));
   const filter = buildBrowserCookieFilter(args);
-  const cookies = state.cookies.filter((cookie) => browserCookieMatchesFilter(cookie, filter));
+  assertBrowserCookieFilterAllowedForGrant(filter, executionContext);
+  const cookies = state.cookies.filter(
+    (cookie) => browserCookieMatchesFilter(cookie, filter) && browserCookieAllowedByGrant(cookie, executionContext),
+  );
   return {
     action: "cookies.get",
     browserSessionId,
@@ -674,7 +757,7 @@ async function executeBrowserCookiesSet(
 
   const state = cloneBrowserSessionState(getBrowserSessionState(browserSessionId));
   const normalizedCookies = rawCookies.map((cookie, index) =>
-    normalizeBrowserCookieRecord(cookie, config, `cookies[${index}]`),
+    normalizeBrowserCookieRecord(cookie, config, `cookies[${index}]`, executionContext),
   );
 
   for (const cookie of normalizedCookies) {
@@ -699,10 +782,14 @@ async function executeBrowserCookiesClear(
   const browserSessionId = requireBrowserSessionId(args, executionContext, "browser.cookies.clear");
   const state = cloneBrowserSessionState(getBrowserSessionState(browserSessionId));
   const filter = buildBrowserCookieFilter(args);
+  assertBrowserCookieFilterAllowedForGrant(filter, executionContext);
   const originalCount = state.cookies.length;
-  state.cookies = hasBrowserCookieFilter(filter)
-    ? state.cookies.filter((cookie) => !browserCookieMatchesFilter(cookie, filter))
-    : [];
+  state.cookies = state.cookies.filter((cookie) => {
+    if (hasBrowserCookieFilter(filter) && !browserCookieMatchesFilter(cookie, filter)) {
+      return true;
+    }
+    return !browserCookieAllowedByGrant(cookie, executionContext);
+  });
   storeBrowserSessionState(browserSessionId, state);
   return {
     action: "cookies.clear",
@@ -723,6 +810,7 @@ async function executeBrowserStorageGet(
 
   if (origin) {
     const normalizedOrigin = normalizeBrowserOrigin(origin);
+    assertHostAllowedForGrant(normalizedOrigin, executionContext);
     return {
       action: "storage.get",
       browserSessionId,
@@ -737,8 +825,9 @@ async function executeBrowserStorageGet(
     action: "storage.get",
     browserSessionId,
     storage,
-    localStorage: storage === "session" ? {} : cloneBrowserStorageBucket(state.localStorage),
-    sessionStorage: storage === "local" ? {} : cloneBrowserStorageBucket(state.sessionStorage),
+    localStorage: storage === "session" ? {} : filterBrowserStorageBucketByGrant(state.localStorage, executionContext),
+    sessionStorage:
+      storage === "local" ? {} : filterBrowserStorageBucketByGrant(state.sessionStorage, executionContext),
   };
 }
 
@@ -749,7 +838,7 @@ async function executeBrowserStorageSet(
 ): Promise<Record<string, unknown>> {
   const browserSessionId = requireBrowserSessionId(args, executionContext, "browser.storage.set");
   const storage = parseBrowserStorageKind(args.storage, "local");
-  const origin = normalizeBrowserOriginForConfig(asNonEmptyString(args.origin, "origin"), config);
+  const origin = normalizeBrowserOriginForConfig(asNonEmptyString(args.origin, "origin"), config, executionContext);
   const entries = normalizeBrowserStorageEntries(args);
   const state = cloneBrowserSessionState(getBrowserSessionState(browserSessionId));
   const bucket = storage === "session" ? state.sessionStorage : state.localStorage;
@@ -783,6 +872,9 @@ async function executeBrowserStorageClear(
 
   const state = cloneBrowserSessionState(getBrowserSessionState(browserSessionId));
   const normalizedOrigin = origin ? normalizeBrowserOrigin(origin) : undefined;
+  if (normalizedOrigin) {
+    assertHostAllowedForGrant(normalizedOrigin, executionContext);
+  }
   let removed = 0;
 
   for (const bucket of selectBrowserStorageBuckets(state, storage)) {
@@ -792,6 +884,9 @@ async function executeBrowserStorageClear(
     }
 
     for (const bucketOrigin of Object.keys(bucket)) {
+      if (!isHostAllowedForGrant(bucketOrigin, executionContext)) {
+        continue;
+      }
       removed += clearBrowserStorageBucket(bucket, bucketOrigin, key);
     }
   }
@@ -991,10 +1086,44 @@ function browserCookieMatchesFilter(
   return true;
 }
 
+function assertBrowserCookieFilterAllowedForGrant(
+  filter: { name?: string; domain?: string; path?: string; url?: string },
+  executionContext?: BrowserExecutionContext,
+): void {
+  if (!hasGrantHostConstraints(executionContext)) {
+    return;
+  }
+  if (filter.url) {
+    assertHostAllowedForGrant(filter.url, executionContext);
+  }
+  if (filter.domain) {
+    const normalizedDomain = normalizeBrowserCookieDomain(filter.domain);
+    if (normalizedDomain) {
+      assertHostAllowedForGrant(`https://${normalizedDomain}`, executionContext);
+    }
+  }
+}
+
+function browserCookieAllowedByGrant(cookie: BrowserCookieRecord, executionContext?: BrowserExecutionContext): boolean {
+  if (!hasGrantHostConstraints(executionContext)) {
+    return true;
+  }
+  const candidates: string[] = [];
+  if (cookie.url) {
+    candidates.push(cookie.url);
+  }
+  const domain = normalizeBrowserCookieDomain(cookie.domain);
+  if (domain) {
+    candidates.push(`https://${domain}`);
+  }
+  return candidates.length > 0 && candidates.every((candidate) => isHostAllowedForGrant(candidate, executionContext));
+}
+
 function normalizeBrowserCookieRecord(
   value: unknown,
   config: ToolPolicyConfig,
   fieldPrefix: string,
+  executionContext?: BrowserExecutionContext,
 ): BrowserCookieRecord {
   if (!value || typeof value !== "object") {
     throw new Error(`${fieldPrefix} must be an object`);
@@ -1014,12 +1143,12 @@ function normalizeBrowserCookieRecord(
   const domain = asString(record.domain);
   if (url) {
     assertAllowedHttpUrl(url);
-    assertHostAllowedForConfig(url, config);
+    assertHostAllowedForConfig(url, config, executionContext);
     normalized.url = url;
   }
   if (domain) {
     const normalizedDomain = normalizeBrowserCookieDomain(domain);
-    assertHostAllowedForConfig(`https://${normalizedDomain}`, config);
+    assertHostAllowedForConfig(`https://${normalizedDomain}`, config, executionContext);
     normalized.domain = domain.startsWith(".") ? `.${normalizedDomain}` : normalizedDomain;
   }
   if (!normalized.url && !normalized.domain) {
@@ -1084,10 +1213,30 @@ function normalizeBrowserOrigin(input: string): string {
   return new URL(input).origin;
 }
 
-function normalizeBrowserOriginForConfig(input: string, config: ToolPolicyConfig): string {
+function normalizeBrowserOriginForConfig(
+  input: string,
+  config: ToolPolicyConfig,
+  executionContext?: BrowserExecutionContext,
+): string {
   const origin = normalizeBrowserOrigin(input);
-  assertHostAllowedForConfig(origin, config);
+  assertHostAllowedForConfig(origin, config, executionContext);
   return origin;
+}
+
+function filterBrowserStorageBucketByGrant(
+  bucket: BrowserStorageBucket,
+  executionContext?: BrowserExecutionContext,
+): BrowserStorageBucket {
+  if (!hasGrantHostConstraints(executionContext)) {
+    return cloneBrowserStorageBucket(bucket);
+  }
+  const filtered: BrowserStorageBucket = {};
+  for (const [origin, entries] of Object.entries(bucket)) {
+    if (isHostAllowedForGrant(origin, executionContext)) {
+      filtered[origin] = { ...entries };
+    }
+  }
+  return filtered;
 }
 
 function normalizeBrowserStorageEntries(args: Record<string, unknown>): Record<string, string> {
@@ -1285,7 +1434,7 @@ async function withBrowserPage(
 ): Promise<Record<string, unknown>> {
   throwIfBrowserExecutionAborted(executionContext?.signal);
   assertAllowedHttpUrl(url);
-  assertHostAllowedForConfig(url, config);
+  assertHostAllowedForConfig(url, config, executionContext);
 
   const playwright = await loadPlaywright();
   const headless = asBoolean(args.headless, true);
@@ -1331,7 +1480,7 @@ async function withBrowserPage(
         try {
           const requestUrl = route.request().url();
           assertAllowedHttpUrl(requestUrl);
-          assertHostAllowedForConfig(requestUrl, config);
+          assertHostAllowedForConfig(requestUrl, config, executionContext);
         } catch (error) {
           navigationGuardError = error instanceof Error ? error : new Error(String(error));
           await route.abort("blockedbyclient").catch(() => undefined);
@@ -1357,7 +1506,7 @@ async function withBrowserPage(
 
     const finalUrl = page.url();
     assertAllowedHttpUrl(finalUrl);
-    assertHostAllowedForConfig(finalUrl, config);
+    assertHostAllowedForConfig(finalUrl, config, executionContext);
 
     const result = await run(page, response?.status(), finalUrl);
     if (browserSessionId) {
@@ -1854,16 +2003,22 @@ async function executeBrowserSearchFallback(
   limit: number,
   config: ToolPolicyConfig,
   engine: string,
+  executionContext?: BrowserExecutionContext,
   signal?: AbortSignal,
 ): Promise<{
   finalUrl: string;
   results: Array<{ title: string; url: string; snippet: string }>;
 }> {
   const url = buildSearchUrl(engine, query);
-  const page = await fetchTextAllowlisted(url, config, signal);
+  const page = await fetchTextAllowlisted(url, config, executionContext, signal);
   return {
     finalUrl: page.finalUrl,
-    results: parseSearchResults(page.html, limit, page.finalUrl),
+    results: filterBrowserSearchResultsForPolicy(
+      parseSearchResults(page.html, Math.max(limit * 20, 80), page.finalUrl),
+      config,
+      executionContext,
+      limit,
+    ),
   };
 }
 
@@ -2024,7 +2179,11 @@ async function fetchFirecrawlEndpoint(
 ): Promise<Response> {
   const targetUrl = `${firecrawl.baseUrl}${path}`;
   if (isCanonicalLocalFirecrawlBaseUrl(firecrawl.baseUrl)) {
-    return fetch(targetUrl, init);
+    return fetchAllowlisted(targetUrl, {
+      allowlist: ["127.0.0.1:3002", "localhost:3002"],
+      timeoutMs: firecrawl.timeoutMs,
+      init,
+    });
   }
   return fetchAllowlisted(targetUrl, {
     allowlist: config.sandbox.networkAllowlist,
@@ -2046,13 +2205,13 @@ async function executeBrowserSearchViaFirecrawl(
   limit: number,
   args: Record<string, unknown>,
   config: ToolPolicyConfig,
-  signal?: AbortSignal,
+  executionContext?: BrowserExecutionContext,
 ): Promise<Record<string, unknown>> {
   const firecrawl = resolveFirecrawlRuntimeConfig(args);
   assertFirecrawlBaseUrlAllowed(firecrawl.baseUrl, config);
   const response = await fetchFirecrawlEndpoint(firecrawl, "/v2/search", config, {
     method: "POST",
-    signal: signal ?? AbortSignal.timeout(firecrawl.timeoutMs),
+    signal: executionContext?.signal ?? AbortSignal.timeout(firecrawl.timeoutMs),
     headers: {
       "Content-Type": "application/json",
       ...(firecrawl.apiKey ? { Authorization: `Bearer ${firecrawl.apiKey}` } : {}),
@@ -2075,6 +2234,7 @@ async function executeBrowserSearchViaFirecrawl(
   const results = data
     .map((item) => normalizeFirecrawlSearchResult(item))
     .filter((item): item is { title: string; url: string; snippet: string } => Boolean(item))
+    .filter((item) => isBrowserSearchResultAllowed(item.url, config, executionContext))
     .slice(0, limit);
   return {
     query,
@@ -2098,14 +2258,50 @@ function normalizeFirecrawlSearchResult(value: unknown): { title: string; url: s
   };
 }
 
+function isBrowserSearchResultAllowed(
+  url: string,
+  config: ToolPolicyConfig,
+  executionContext?: BrowserExecutionContext,
+): boolean {
+  try {
+    void config;
+    assertAllowedHttpUrl(url);
+    assertHostAllowedForGrant(url, executionContext);
+    assertNotPrivateOrReservedHost(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function filterBrowserSearchResultsForPolicy(
+  results: Array<{ title: string; url: string; snippet: string }>,
+  config: ToolPolicyConfig,
+  executionContext: BrowserExecutionContext | undefined,
+  limit: number,
+): Array<{ title: string; url: string; snippet: string }> {
+  const filtered: Array<{ title: string; url: string; snippet: string }> = [];
+  for (const result of results) {
+    if (!isBrowserSearchResultAllowed(result.url, config, executionContext)) {
+      continue;
+    }
+    filtered.push(result);
+    if (filtered.length >= limit) {
+      break;
+    }
+  }
+  return filtered;
+}
+
 async function executeBrowserNavigateViaFirecrawl(
   url: string,
   maxChars: number,
   args: Record<string, unknown>,
   config: ToolPolicyConfig,
+  executionContext?: BrowserExecutionContext,
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
-  const scrape = await executeFirecrawlScrape(url, ["markdown", "html"], args, config, signal);
+  const scrape = await executeFirecrawlScrape(url, ["markdown", "html"], args, config, executionContext, signal);
   return {
     url,
     finalUrl: scrape.finalUrl,
@@ -2122,9 +2318,10 @@ async function executeBrowserExtractViaFirecrawl(
   maxChars: number,
   args: Record<string, unknown>,
   config: ToolPolicyConfig,
+  executionContext?: BrowserExecutionContext,
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
-  const scrape = await executeFirecrawlScrape(url, ["html", "markdown"], args, config, signal);
+  const scrape = await executeFirecrawlScrape(url, ["html", "markdown"], args, config, executionContext, signal);
   const extracted = await extractHtmlSelectorText(scrape.html, selector, maxChars, signal);
   return {
     url,
@@ -2142,6 +2339,7 @@ async function executeFirecrawlScrape(
   formats: string[],
   args: Record<string, unknown>,
   config: ToolPolicyConfig,
+  executionContext?: BrowserExecutionContext,
   signal?: AbortSignal,
 ): Promise<{
   finalUrl: string;
@@ -2153,7 +2351,7 @@ async function executeFirecrawlScrape(
   const firecrawl = resolveFirecrawlRuntimeConfig(args);
   assertFirecrawlBaseUrlAllowed(firecrawl.baseUrl, config);
   assertAllowedHttpUrl(url);
-  assertHostAllowedForConfig(url, config);
+  assertHostAllowedForConfig(url, config, executionContext);
   assertNotPrivateOrReservedHost(url);
   const response = await fetchFirecrawlEndpoint(firecrawl, "/v2/scrape", config, {
     method: "POST",
@@ -2175,9 +2373,14 @@ async function executeFirecrawlScrape(
   const metadata = asRecord(data.metadata);
   const html = asString(data.html) ?? "";
   const markdown = asString(data.markdown) ?? asString(data.content) ?? "";
-  const finalUrl = asString(metadata.sourceURL) ?? asString(metadata.sourceUrl) ?? asString(data.url) ?? url;
+  const reportedFinalUrl = asString(metadata.sourceURL) ?? asString(metadata.sourceUrl) ?? asString(data.url);
+  const grantAllowlist = getGrantHostAllowlist(executionContext);
+  if (!reportedFinalUrl && (config.sandbox.networkAllowlist.length > 0 || grantAllowlist.length > 0)) {
+    throw new Error("Firecrawl did not report a final source URL; refusing to return allowlist-constrained content.");
+  }
+  const finalUrl = reportedFinalUrl ?? url;
   assertAllowedHttpUrl(finalUrl);
-  assertHostAllowedForConfig(finalUrl, config);
+  assertHostAllowedForConfig(finalUrl, config, executionContext);
   assertNotPrivateOrReservedHost(finalUrl);
   return {
     finalUrl,
@@ -2232,9 +2435,10 @@ async function executeBrowserNavigateFallback(
   url: string,
   maxChars: number,
   config: ToolPolicyConfig,
+  executionContext?: BrowserExecutionContext,
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
-  const page = await fetchTextAllowlisted(url, config, signal);
+  const page = await fetchTextAllowlisted(url, config, executionContext, signal);
   const title = extractHtmlTitle(page.html) ?? page.finalUrl;
   const textSnippet = extractHtmlText(page.html, maxChars);
   return {
@@ -2252,9 +2456,10 @@ async function executeBrowserExtractFallback(
   selector: string,
   maxChars: number,
   config: ToolPolicyConfig,
+  executionContext?: BrowserExecutionContext,
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
-  const page = await fetchTextAllowlisted(url, config, signal);
+  const page = await fetchTextAllowlisted(url, config, executionContext, signal);
   const title = extractHtmlTitle(page.html) ?? page.finalUrl;
   const text = extractHtmlText(page.html, maxChars);
   return {
@@ -2271,13 +2476,16 @@ async function executeBrowserExtractFallback(
 async function fetchTextAllowlisted(
   url: string,
   config: ToolPolicyConfig,
+  executionContext?: BrowserExecutionContext,
   signal?: AbortSignal,
 ): Promise<{ html: string; finalUrl: string }> {
   assertAllowedHttpUrl(url);
-  assertHostAllowedForConfig(url, config);
+  assertHostAllowedForConfig(url, config, executionContext);
+  const grantAllowlist = getGrantHostAllowlist(executionContext);
 
   const response = await fetchAllowlisted(url, {
     allowlist: config.sandbox.networkAllowlist,
+    additionalAllowlists: grantAllowlist.length > 0 ? [grantAllowlist] : undefined,
     timeoutMs: 20_000,
     init: {
       method: "GET",
@@ -2291,7 +2499,7 @@ async function fetchTextAllowlisted(
 
   const finalUrl = response.url || url;
   assertAllowedHttpUrl(finalUrl);
-  assertHostAllowedForConfig(finalUrl, config);
+  assertHostAllowedForConfig(finalUrl, config, executionContext);
 
   if (!response.ok) {
     throw new Error(`Search fetch failed (${response.status})`);

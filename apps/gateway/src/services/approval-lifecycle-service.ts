@@ -51,6 +51,19 @@ import { parseApprovalCreateHookPatch } from "./hook-patch-helpers.js";
 import type { ToolPolicyEngine } from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
 
+export class ApprovalCreateLateFailureError extends Error {
+  public readonly approvalId: string;
+  public override readonly cause: unknown;
+
+  public constructor(approvalId: string, cause: unknown) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    super(message);
+    this.name = "ApprovalCreateLateFailureError";
+    this.approvalId = approvalId;
+    this.cause = cause;
+  }
+}
+
 /**
  * Narrow interface describing exactly what the approval lifecycle functions
  * need from their host. GatewayService satisfies this interface, but the
@@ -497,62 +510,74 @@ export async function createApproval(
     ? { ...hookableInput, riskLevel: policyOutcome.elevatedRiskLevel }
     : hookableInput;
 
-  let approval = host.storage.approvals.create(createInput);
-  if (policyOutcome.explanations.length > 0) {
-    host.storage.approvals.setShellExplanations(approval.approvalId, policyOutcome.explanations);
-    approval = host.storage.approvals.get(approval.approvalId);
-  }
-  approval = host.approvalWaitRunService.primeApprovalLifecycle(
-    approval.approvalId,
-    host.approvalWaitRunService.buildApprovalLinkage(hookableInput.linkage),
-  );
+  let approval!: ApprovalRequest;
+  let approvalCommitted = false;
+  try {
+    host.storage.runImmediateTransaction(() => {
+      approval = host.storage.approvals.create(createInput);
+      if (policyOutcome.explanations.length > 0) {
+        host.storage.approvals.setShellExplanations(approval.approvalId, policyOutcome.explanations);
+        approval = host.storage.approvals.get(approval.approvalId);
+      }
+      host.storage.approvalEvents.append({
+        approvalId: approval.approvalId,
+        eventType: "created",
+        actorId: "system",
+        payload: {
+          kind: approval.kind,
+          riskLevel: approval.riskLevel,
+          status: approval.status,
+        },
+      });
+    });
+    approvalCommitted = true;
 
-  host.storage.approvalEvents.append({
-    approvalId: approval.approvalId,
-    eventType: "created",
-    actorId: "system",
-    payload: {
-      kind: approval.kind,
-      riskLevel: approval.riskLevel,
-      status: approval.status,
-    },
-  });
+    approval = host.approvalWaitRunService.primeApprovalLifecycle(
+      approval.approvalId,
+      host.approvalWaitRunService.buildApprovalLinkage(hookableInput.linkage),
+    );
 
-  await host.storage.audit.append("approvals", {
-    event: "approval.create",
-    approvalId: approval.approvalId,
-    kind: approval.kind,
-    riskLevel: approval.riskLevel,
-    status: approval.status,
-  });
-
-  host.publishRealtime(
-    "approval_created",
-    "approvals",
-    {
+    await host.storage.audit.append("approvals", {
+      event: "approval.create",
       approvalId: approval.approvalId,
       kind: approval.kind,
       riskLevel: approval.riskLevel,
       status: approval.status,
-    },
-    {
-      eventClass: "domain_fact",
-      eventAuthority: "retained_stream",
-      links: host.approvalWaitRunService.buildApprovalRealtimeLinks(approval),
-      correlationId: approval.approvalId,
-    },
-  );
-
-  if (policyOutcome.autoReject) {
-    const resolution = await resolveApproval(host, approval.approvalId, {
-      decision: "reject",
-      resolvedBy: "system",
-      resolutionNote: policyOutcome.autoRejectReason ?? "Auto-rejected by shell danger policy.",
     });
-    return resolution.approval;
-  }
 
-  host.scheduleApprovalExplanation(approval);
+    host.publishRealtime(
+      "approval_created",
+      "approvals",
+      {
+        approvalId: approval.approvalId,
+        kind: approval.kind,
+        riskLevel: approval.riskLevel,
+        status: approval.status,
+      },
+      {
+        eventClass: "domain_fact",
+        eventAuthority: "retained_stream",
+        links: host.approvalWaitRunService.buildApprovalRealtimeLinks(approval),
+        correlationId: approval.approvalId,
+      },
+    );
+
+    if (policyOutcome.autoReject) {
+      const resolution = await resolveApproval(host, approval.approvalId, {
+        decision: "reject",
+        resolvedBy: "system",
+        resolutionNote: policyOutcome.autoRejectReason ?? "Auto-rejected by shell danger policy.",
+      });
+      return resolution.approval;
+    }
+
+    host.scheduleApprovalExplanation(approval);
+  } catch (error) {
+    if (approvalCommitted && approval?.approvalId) {
+      throw new ApprovalCreateLateFailureError(approval.approvalId, error);
+    }
+    throw error;
+  }
 
   return approval;
 }
@@ -566,7 +591,7 @@ export async function resolveApproval(
   const pendingAction = host.storage.pendingApprovalActions.find(approvalId);
   const expiresAt = current.expiresAt ? Date.parse(current.expiresAt) : Number.NaN;
   if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
-    markCodeModeRunTerminalForPendingApproval(host, pendingAction, "expired", {
+    markCodeModeRunTerminalForPendingApproval(host, current, pendingAction, "expired", {
       reason: `Approval ${approvalId} has expired and can no longer be resolved.`,
     });
     throw new ValidationError({
@@ -595,12 +620,22 @@ export async function resolveApproval(
     markChatInlineApprovalResolved(host, approval, input);
 
     if (input.decision !== "approve" && pendingAction && pendingAction.resolutionStatus === "pending") {
+      const terminalizedCodeModeRun = markCodeModeRunTerminalForPendingApproval(
+        host,
+        approval,
+        pendingAction,
+        "rejected",
+        {
+          decision: input.decision,
+          reason: `Approval ${approvalId} resolved with ${input.decision}.`,
+        },
+      );
       host.storage.pendingApprovalActions.markResolved(approvalId, "rejected", {
         decision: input.decision,
-      });
-      markCodeModeRunTerminalForPendingApproval(host, pendingAction, "rejected", {
-        decision: input.decision,
-        reason: `Approval ${approvalId} resolved with ${input.decision}.`,
+        ...(terminalizedCodeModeRun?.runId ? { runId: terminalizedCodeModeRun.runId } : {}),
+        ...(terminalizedCodeModeRun?.pendingRunId !== undefined
+          ? { pendingRunId: terminalizedCodeModeRun.pendingRunId }
+          : {}),
       });
     }
 
@@ -634,26 +669,38 @@ export async function resolveApproval(
 
 function markCodeModeRunTerminalForPendingApproval(
   host: ApprovalLifecycleHost,
+  approval: ApprovalRequest,
   pendingAction: ReturnType<ApprovalLifecycleHost["storage"]["pendingApprovalActions"]["find"]>,
   status: "rejected" | "expired",
   details: Record<string, unknown>,
-): void {
+): { runId: string; pendingRunId?: string | null } | undefined {
   if (!pendingAction || pendingAction.actionType !== "code_mode.run" || pendingAction.resolutionStatus !== "pending") {
-    return;
+    return undefined;
   }
-  const runId = typeof pendingAction.request.runId === "string" ? pendingAction.request.runId : undefined;
+  const pendingRunId = readStringValue(pendingAction.request.runId);
+  const approvalRunId = resolveCodeModeApprovalRunId(approval);
+  const runId = approvalRunId ?? pendingRunId;
   if (!runId) {
-    return;
+    return undefined;
   }
   const existing = host.storage.codeModeRuns.find(runId);
   if (!existing || existing.status !== "approval_pending") {
-    return;
+    return undefined;
+  }
+  if (existing.approvalId !== approval.approvalId) {
+    return undefined;
   }
   const finishedAt = new Date().toISOString();
+  const pendingRunIdDetail = pendingRunId === runId ? undefined : { pendingRunId: pendingRunId ?? null };
   host.storage.codeModeRuns.upsert({
     ...existing,
     status,
     error: typeof details.reason === "string" ? details.reason : undefined,
+    errorDetails: {
+      phase: "approval_resolution",
+      ...details,
+      ...(pendingRunIdDetail ?? {}),
+    },
     finishedAt,
   });
   if (status === "expired") {
@@ -661,8 +708,25 @@ function markCodeModeRunTerminalForPendingApproval(
       ...details,
       status,
       runId,
+      ...(pendingRunIdDetail ?? {}),
     });
   }
+  return {
+    runId,
+    ...(pendingRunIdDetail ? { pendingRunId: pendingRunId ?? null } : {}),
+  };
+}
+
+function resolveCodeModeApprovalRunId(approval: ApprovalRequest): string | undefined {
+  return (
+    readStringValue(approval.linkage?.runId) ??
+    readStringValue((approval.linkage as Record<string, unknown> | undefined)?.codeModeRunId) ??
+    readStringValue(approval.payload.runId)
+  );
+}
+
+function readStringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function withApprovalFollowUp(approval: ApprovalRequest, effects: ApprovalEffectRecord[]): ApprovalRequest {
@@ -741,6 +805,17 @@ function readFollowUpReason(result: Record<string, unknown>): string | undefined
   return typeof reason === "string" && reason.trim() ? reason.trim() : undefined;
 }
 
+function isCodeModeApproval(approval: ApprovalRequest): boolean {
+  if (approval.kind === "code_mode.run") {
+    return true;
+  }
+  return (
+    typeof approval.payload.codeHash === "string" ||
+    typeof approval.payload.wrapperManifestHash === "string" ||
+    typeof approval.payload.capabilitySnapshotId === "string"
+  );
+}
+
 export async function resolveChatToolApproval(
   host: ApprovalLifecycleHost,
   sessionId: string,
@@ -785,7 +860,8 @@ export async function resolveChatToolApproval(
       message: `Approval ${approvalId} has expired and can no longer be resolved.`,
     });
   }
-  const allowScope = decision === "approve" ? (options?.allowScope ?? "once") : "once";
+  const requestedAllowScope = decision === "approve" ? (options?.allowScope ?? "once") : "once";
+  const allowScope = decision === "approve" && isCodeModeApproval(approval) ? "once" : requestedAllowScope;
   const resolvedBy = options?.resolvedBy?.trim() || "operator";
   const toolPattern = turn?.toolName ?? existingInlineApproval?.toolName ?? approval.kind;
   let grant: ToolGrantRecord | undefined;

@@ -35,6 +35,7 @@ export interface OrchestrationPhaseExecutionResult {
   childSessionId?: string;
   childTurnId?: string;
   childRunId?: string;
+  approvalId?: string;
   responseId?: string;
   model?: string;
   costUsd?: number;

@@ -9,6 +9,7 @@ import type {
   ToolApprovalMode,
   ToolGrantCreateInput,
   ToolGrantRecord,
+  ToolGrantScope,
   ToolInvokeRequest,
   ToolInvokeResult,
   ToolPolicyConfig,
@@ -19,6 +20,12 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { ApprovalGate } from "./approval-gate.js";
 import { getVerifiedApprovalBypassId, hasVerifiedApprovalBypass } from "./approval-bypass.js";
+import {
+  parseIngestionBackend,
+  parseIngestionSourceType,
+  type IngestionBackendName,
+  type IngestionSourceType,
+} from "./ingestion-source-type.js";
 import { resolveEffectivePolicy } from "./policy-resolver.js";
 import { createDefaultToolRegistry, type ToolDefinition, type ToolRegistry } from "./tool-registry.js";
 import { matchesAnyToolPattern, matchesToolPattern } from "./tool-patterns.js";
@@ -51,6 +58,7 @@ interface AccessEvaluation {
   permissionProfileId?: string;
   localOperatorOverrideId?: string;
   approvalMode?: ToolApprovalMode;
+  matchedGrantAllowedHosts?: string[];
 }
 
 function assertHostAllowedForConfig(hostOrUrl: string, config: ToolPolicyConfig): void {
@@ -87,10 +95,59 @@ function readFirecrawlBaseUrl(args: Record<string, unknown> | undefined): string
   return String(args?.firecrawlBaseUrl ?? process.env.FIRECRAWL_BASE_URL ?? "http://127.0.0.1:3002");
 }
 
+const BROWSER_SEARCH_ENGINE_URLS = {
+  duckduckgo: "https://lite.duckduckgo.com/lite/",
+  bing: "https://www.bing.com/search",
+  google: "https://www.google.com/search",
+} as const;
+
+type BrowserSearchEngine = keyof typeof BROWSER_SEARCH_ENGINE_URLS;
+
+function resolveBrowserSearchEngineCandidates(engineValue: unknown): BrowserSearchEngine[] {
+  const engine = typeof engineValue === "string" ? engineValue.toLowerCase() : "auto";
+  if (engine === "google") {
+    return ["google", "bing", "duckduckgo"];
+  }
+  if (engine === "bing") {
+    return ["bing", "duckduckgo", "google"];
+  }
+  if (engine === "duckduckgo") {
+    return ["duckduckgo", "bing", "google"];
+  }
+  return ["duckduckgo", "bing", "google"];
+}
+
+function validateBrowserSearchHosts(request: ToolAccessEvaluateRequest, config: ToolPolicyConfig): void {
+  const backend = typeof request.args?.backend === "string" ? request.args.backend.toLowerCase() : undefined;
+  if (backend === "firecrawl" && request.args?.firecrawlFallbackToNative === false) {
+    return;
+  }
+  const candidates = resolveBrowserSearchEngineCandidates(request.args?.engine);
+  const errors: string[] = [];
+  for (const candidate of candidates) {
+    try {
+      assertHostAllowedForConfig(BROWSER_SEARCH_ENGINE_URLS[candidate], config);
+      return;
+    } catch (error) {
+      errors.push((error as Error).message);
+    }
+  }
+  throw new Error(
+    `browser.search requires at least one native search host in the network allowlist (${candidates.join(", ")}): ${
+      errors[0] ?? "no hosts checked"
+    }`,
+  );
+}
+
 interface GrantDecision {
   decision: "allow" | "deny";
   grant: ToolGrantRecord;
+  constraintsError?: string;
 }
+
+type ActiveToolGrantRepository = Storage["toolGrants"] & {
+  listActive?: (scope?: ToolGrantScope, scopeRef?: string) => ToolGrantRecord[];
+};
 
 const DEFAULT_APPROVAL_TTL_MS = 15 * 60_000;
 
@@ -380,9 +437,10 @@ export class ToolPolicyEngine {
       };
     }
 
+    const executionRequest = withExecutionGrantContext(request, evaluation);
     if (request.externalRuntime) {
       return this.executeAllowedRequest(
-        request,
+        executionRequest,
         auditEventId,
         `${evaluation.policyReason}; external runtime`,
         evaluation.grantToConsume,
@@ -395,7 +453,7 @@ export class ToolPolicyEngine {
     }
 
     return this.executeAllowedRequest(
-      request,
+      executionRequest,
       auditEventId,
       evaluation.policyReason,
       evaluation.grantToConsume,
@@ -591,7 +649,7 @@ export class ToolPolicyEngine {
       return withPolicy(deny(riskLevel, "unknown_tool", `unknown tool ${request.toolName}`));
     }
 
-    const grantDecision = this.resolveGrantDecision(request);
+    const grantDecision = this.resolveGrantDecision(request, toolDef);
     if (grantDecision?.decision === "deny") {
       return {
         allowed: false,
@@ -623,21 +681,18 @@ export class ToolPolicyEngine {
       );
     }
 
-    if (grantDecision?.decision === "allow") {
-      const constraintsError = this.applyGrantConstraints(request, grantDecision.grant, toolDef);
-      if (constraintsError) {
-        return {
-          allowed: false,
-          reasonCodes: ["grant_constraints_block"],
-          requiresApproval: false,
-          matchedGrantId: grantDecision.grant.grantId,
-          riskLevel,
-          policyReason: constraintsError,
-          permissionProfileId: policy.permissionProfileId,
-          localOperatorOverrideId: localOperatorOverrideAuditId,
-          approvalMode: policy.approvalMode,
-        };
-      }
+    if (grantDecision?.decision === "allow" && grantDecision.constraintsError) {
+      return {
+        allowed: false,
+        reasonCodes: ["grant_constraints_block"],
+        requiresApproval: false,
+        matchedGrantId: grantDecision.grant.grantId,
+        riskLevel,
+        policyReason: grantDecision.constraintsError,
+        permissionProfileId: policy.permissionProfileId,
+        localOperatorOverrideId: localOperatorOverrideAuditId,
+        approvalMode: policy.approvalMode,
+      };
     }
 
     const inProfile = matchesAnyToolPattern(policy.effectiveTools, request.toolName);
@@ -727,6 +782,8 @@ export class ToolPolicyEngine {
       reasonCodes,
       requiresApproval,
       matchedGrantId: grantDecision?.grant.grantId,
+      matchedGrantAllowedHosts:
+        grantDecision?.decision === "allow" ? getAllowedGrantHosts(grantDecision.grant.constraints) : undefined,
       riskLevel,
       policyReason,
       grantToConsume: grantDecision?.grant.grantId,
@@ -754,14 +811,26 @@ export class ToolPolicyEngine {
     };
   }
 
-  private resolveGrantDecision(request: ToolAccessEvaluateRequest): GrantDecision | undefined {
+  private resolveGrantDecision(
+    request: ToolAccessEvaluateRequest,
+    toolDef?: ToolDefinition,
+  ): GrantDecision | undefined {
     const scoped = buildScopeCandidates(request);
     const matchingGrants: ToolGrantRecord[] = [];
     for (const candidate of scoped) {
-      const grants = this.storage.toolGrants
-        .list(candidate.scope, candidate.scopeRef, 500)
-        .filter((grant) => isGrantActive(grant))
-        .filter((grant) => matchesToolPattern(grant.toolPattern, request.toolName));
+      const grantRepo = this.storage.toolGrants as ActiveToolGrantRepository;
+      const grants = (
+        grantRepo.listActive
+          ? grantRepo.listActive(candidate.scope, candidate.scopeRef)
+          : grantRepo
+              .list(candidate.scope, candidate.scopeRef, Number.MAX_SAFE_INTEGER)
+              .filter((grant) => isGrantActive(grant))
+      ).filter(
+        (grant) =>
+          grant.scope === candidate.scope &&
+          grant.scopeRef === candidate.scopeRef &&
+          matchesToolPattern(grant.toolPattern, request.toolName),
+      );
 
       if (grants.length === 0) {
         continue;
@@ -774,9 +843,29 @@ export class ToolPolicyEngine {
       return { decision: "deny", grant: denyGrant };
     }
 
-    const allowGrant = matchingGrants.find((grant) => grant.decision === "allow");
-    if (allowGrant) {
-      return { decision: "allow", grant: allowGrant };
+    let firstConstrainedAllow:
+      | {
+          grant: ToolGrantRecord;
+          constraintsError: string;
+        }
+      | undefined;
+    for (const grant of matchingGrants) {
+      if (grant.decision !== "allow") {
+        continue;
+      }
+      const constraintsError = this.applyGrantConstraints(request, grant, toolDef);
+      if (!constraintsError) {
+        return { decision: "allow", grant };
+      }
+      firstConstrainedAllow ??= { grant, constraintsError };
+    }
+
+    if (firstConstrainedAllow) {
+      return {
+        decision: "allow",
+        grant: firstConstrainedAllow.grant,
+        constraintsError: firstConstrainedAllow.constraintsError,
+      };
     }
 
     return undefined;
@@ -824,7 +913,7 @@ export class ToolPolicyEngine {
     }
 
     if (constraints.allowedHosts && constraints.allowedHosts.length > 0) {
-      const candidates = extractHostCandidates(request.args);
+      const candidates = extractGrantHostCandidates(request);
       if (candidates.length > 0) {
         const blocked = candidates.some((host) => !matchesHostAllowlist(host, constraints.allowedHosts as string[]));
         if (blocked) {
@@ -834,9 +923,12 @@ export class ToolPolicyEngine {
     }
 
     if (constraints.allowedPaths && constraints.allowedPaths.length > 0) {
-      const candidates = extractPathCandidates(request.args).map((candidate) =>
+      const candidates = extractGrantPathCandidates(request).map((candidate) =>
         this.resolvePathForGrantConstraint(candidate),
       );
+      if (candidates.length === 0 && requiresExplicitPathForGrantConstraints(request.toolName)) {
+        return "grant path constraints require an explicit output path";
+      }
       if (candidates.length > 0) {
         const blocked = candidates.some(
           (candidate) => !isPathWithinAnyRoot(candidate, constraints.allowedPaths as string[]),
@@ -849,9 +941,12 @@ export class ToolPolicyEngine {
 
     const referenceRoots = getReferenceRootPaths(constraints);
     if (referenceRoots.length > 0) {
-      const candidates = extractPathCandidates(request.args).map((candidate) =>
+      const candidates = extractGrantPathCandidates(request).map((candidate) =>
         this.resolvePathForGrantConstraint(candidate),
       );
+      if (candidates.length === 0 && requiresExplicitPathForGrantConstraints(request.toolName)) {
+        return "grant path constraints require an explicit output path";
+      }
       if (isMutationTool(toolDef) && candidates.some((candidate) => isPathWithinAnyRoot(candidate, referenceRoots))) {
         return "reference roots are read-only";
       }
@@ -907,12 +1002,14 @@ export class ToolPolicyEngine {
         }
       }
 
-      if (request.toolName === "docs.ingest" && request.args?.sourceType === "url") {
+      const docsIngestSourceType = readDocsIngestSourceType(request);
+      const docsIngestBackend = docsIngestSourceType ? readDocsIngestBackend(request) : undefined;
+      if (docsIngestSourceType === "url") {
         const source = String(request.args?.source ?? "");
         if (source) {
           assertHostAllowedForConfig(source, this.config);
         }
-        if (request.args?.backend === "firecrawl") {
+        if (docsIngestBackend === "firecrawl") {
           const firecrawlBaseUrl = String(
             request.args?.firecrawlBaseUrl ?? process.env.FIRECRAWL_BASE_URL ?? "http://127.0.0.1:3002",
           );
@@ -927,6 +1024,9 @@ export class ToolPolicyEngine {
         }
         if (request.args?.backend === "firecrawl") {
           assertFirecrawlBaseUrlAllowedForConfig(readFirecrawlBaseUrl(request.args), this.config);
+        }
+        if (request.toolName === "browser.search") {
+          validateBrowserSearchHosts(request, this.config);
         }
       }
     } catch (error) {
@@ -1052,6 +1152,7 @@ export class ToolPolicyEngine {
     evaluation?: AccessEvaluation,
     internalCall?: ReturnType<typeof buildInternalToolCall>,
   ): Promise<ToolInvokeResult> {
+    const executionRequest = withExecutionGrantContext(request, evaluation);
     if (grantIdToConsume && !this.storage.toolGrants.consumeOne(grantIdToConsume)) {
       const reason = "blocked: one-time tool grant is no longer available";
       await this.recordBlocked(auditEventId, request, reason, {
@@ -1094,6 +1195,7 @@ export class ToolPolicyEngine {
       const result = {
         externalRuntime: true,
         toolName: request.toolName,
+        policyContext: executionRequest.policyContext,
       };
       await this.recordInvocation(auditEventId, request, "executed", policyReason, result, approvalId, evaluation);
       const completedAt = new Date().toISOString();
@@ -1126,7 +1228,7 @@ export class ToolPolicyEngine {
       };
     }
     try {
-      const result = await executeTool(request, this.config, this.storage);
+      const result = await executeTool(executionRequest, this.config, this.storage);
       await this.recordInvocation(auditEventId, request, "executed", policyReason, result, approvalId, evaluation);
       const completedAt = new Date().toISOString();
       return {
@@ -1416,13 +1518,29 @@ function stripUndefined<T extends Record<string, unknown>>(input: T): T {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) as T;
 }
 
+function withExecutionGrantContext(request: ToolInvokeRequest, evaluation?: AccessEvaluation): ToolInvokeRequest {
+  const allowedHosts = evaluation?.matchedGrantAllowedHosts?.filter((entry) => entry.trim().length > 0);
+  if (!evaluation?.matchedGrantId && (!allowedHosts || allowedHosts.length === 0)) {
+    return request;
+  }
+  return {
+    ...request,
+    policyContext: {
+      ...(request.policyContext ?? {}),
+      matchedGrantId: evaluation?.matchedGrantId ?? request.policyContext?.matchedGrantId,
+      matchedGrantAllowedHosts:
+        allowedHosts && allowedHosts.length > 0 ? allowedHosts : request.policyContext?.matchedGrantAllowedHosts,
+    },
+  };
+}
+
 function extractOutboundHostCandidates(request: Pick<ToolAccessEvaluateRequest, "toolName" | "args">): string[] {
   if (request.toolName.startsWith("http.") || request.toolName === "webhook.send") {
     return stringTargets(request.args?.url, request.args?.host);
   }
-  if (request.toolName === "docs.ingest" && request.args?.sourceType === "url") {
+  if (readDocsIngestSourceTypeIfValid(request) === "url") {
     const targets = stringTargets(request.args?.source);
-    if (request.args?.backend === "firecrawl") {
+    if (readDocsIngestBackendIfValid(request) === "firecrawl") {
       targets.push(String(request.args?.firecrawlBaseUrl ?? process.env.FIRECRAWL_BASE_URL ?? "http://127.0.0.1:3002"));
     }
     return targets;
@@ -1455,6 +1573,11 @@ function isGrantActive(grant: ToolGrantRecord): boolean {
     return false;
   }
   return true;
+}
+
+function getAllowedGrantHosts(constraints: ToolGrantConstraints | undefined): string[] | undefined {
+  const allowedHosts = constraints?.allowedHosts?.map((host) => host.trim()).filter(Boolean);
+  return allowedHosts && allowedHosts.length > 0 ? allowedHosts : undefined;
 }
 
 function isMutationTool(toolDef?: ToolDefinition): boolean {
@@ -1499,6 +1622,8 @@ function extractHostCandidates(args?: Record<string, unknown>): string[] {
   pushIfString(args.url);
   pushIfString(args.host);
   pushIfString(args.target);
+  pushIfString(args.origin);
+  pushIfString(args.domain);
 
   // SECURITY (codex finding #22): Matrix/Mattermost (and other channel)
   // delivery paths accept attachments whose `url` is fetched gateway-side
@@ -1507,7 +1632,7 @@ function extractHostCandidates(args?: Record<string, unknown>): string[] {
   // grant becomes a hidden network-read primitive that exfiltrates internal
   // response bodies via the chat upload. We also visit `files[].url` for the
   // same reason.
-  for (const collectionKey of ["attachments", "files"] as const) {
+  for (const collectionKey of ["attachments", "files", "cookies"] as const) {
     const collection = args[collectionKey];
     if (Array.isArray(collection)) {
       for (const item of collection) {
@@ -1516,6 +1641,9 @@ function extractHostCandidates(args?: Record<string, unknown>): string[] {
           pushIfString(record.url);
           pushIfString(record.href);
           pushIfString(record.downloadUrl);
+          pushIfString(record.origin);
+          pushIfString(record.domain);
+          pushIfString(record.host);
         }
       }
     }
@@ -1526,7 +1654,7 @@ function extractHostCandidates(args?: Record<string, unknown>): string[] {
     try {
       hosts.add(new URL(value).hostname.toLowerCase());
     } catch {
-      hosts.add(value.toLowerCase());
+      hosts.add(value.replace(/^\./u, "").toLowerCase());
     }
   }
   return [...hosts];
@@ -1536,13 +1664,31 @@ function extractHostCandidates(args?: Record<string, unknown>): string[] {
 // attachment-walking behaviour without standing up an engine instance.
 export const extractHostCandidatesForTests = extractHostCandidates;
 
+function extractGrantHostCandidates(request: Pick<ToolAccessEvaluateRequest, "toolName" | "args">): string[] {
+  const candidates = extractHostCandidates(request.args);
+  const args = request.args;
+  if (readDocsIngestSourceTypeIfValid(request) === "url" && typeof args?.source === "string") {
+    candidates.push(...extractHostCandidates({ url: args.source }));
+  }
+  return [...new Set(candidates)];
+}
+
 function extractPathCandidates(args?: Record<string, unknown>): string[] {
   if (!args) {
     return [];
   }
-  return [args.path, args.from, args.to, args.relativePath]
+  return [args.path, args.from, args.to, args.relativePath, args.outputPath]
     .map((value) => (typeof value === "string" ? value.trim() : ""))
     .filter(Boolean);
+}
+
+function extractGrantPathCandidates(request: Pick<ToolAccessEvaluateRequest, "toolName" | "args">): string[] {
+  const candidates = extractPathCandidates(request.args);
+  const args = request.args;
+  if (readDocsIngestSourceTypeIfValid(request) === "file" && typeof args?.source === "string" && args.source.trim()) {
+    candidates.push(args.source.trim());
+  }
+  return [...new Set(candidates)];
 }
 
 function extractReadPathCandidates(request: ToolAccessEvaluateRequest): string[] {
@@ -1564,10 +1710,46 @@ function extractReadPathCandidates(request: ToolAccessEvaluateRequest): string[]
   if (request.toolName === "fs.copy") {
     return typeof args.from === "string" ? [args.from] : [];
   }
-  if (request.toolName === "docs.ingest" && args.sourceType === "file") {
+  if (readDocsIngestSourceType(request) === "file") {
     return typeof args.source === "string" ? [args.source] : [];
   }
   return [];
+}
+
+function readDocsIngestSourceType(
+  request: Pick<ToolAccessEvaluateRequest, "toolName" | "args">,
+): IngestionSourceType | undefined {
+  if (request.toolName !== "docs.ingest") {
+    return undefined;
+  }
+  return parseIngestionSourceType(request.args?.sourceType);
+}
+
+function readDocsIngestSourceTypeIfValid(
+  request: Pick<ToolAccessEvaluateRequest, "toolName" | "args">,
+): IngestionSourceType | undefined {
+  try {
+    return readDocsIngestSourceType(request);
+  } catch {
+    return undefined;
+  }
+}
+
+function readDocsIngestBackend(request: Pick<ToolAccessEvaluateRequest, "toolName" | "args">): IngestionBackendName {
+  if (request.toolName !== "docs.ingest") {
+    return "native";
+  }
+  return parseIngestionBackend(request.args?.backend);
+}
+
+function readDocsIngestBackendIfValid(
+  request: Pick<ToolAccessEvaluateRequest, "toolName" | "args">,
+): IngestionBackendName | undefined {
+  try {
+    return readDocsIngestBackend(request);
+  } catch {
+    return undefined;
+  }
 }
 
 function extractWritePathCandidates(request: ToolAccessEvaluateRequest): string[] {
@@ -1590,6 +1772,7 @@ function extractWritePathCandidates(request: ToolAccessEvaluateRequest): string[
     case "fs.move":
       return [readString(args.from), readString(args.to)].filter((value): value is string => Boolean(value));
     case "browser.screenshot":
+    case "browser.interact":
       return [readString(args.outputPath), readString(args.path)].filter((value): value is string => Boolean(value));
     default:
       return [];
@@ -1598,6 +1781,10 @@ function extractWritePathCandidates(request: ToolAccessEvaluateRequest): string[
 
 function requiresExplicitWritePath(toolName: string): boolean {
   return toolName === "fs.delete";
+}
+
+function requiresExplicitPathForGrantConstraints(toolName: string): boolean {
+  return toolName === "browser.screenshot";
 }
 
 function matchesHostAllowlist(host: string, patterns: string[]): boolean {

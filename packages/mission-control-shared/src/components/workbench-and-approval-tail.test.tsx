@@ -257,9 +257,6 @@ describe("workbench tree, inspector drawer, and approval prompt tails", () => {
         reason="Needs browser access"
         riskLevel="nuclear"
         expiresAt="2026-01-01T00:01:30.000Z"
-        codeHash="code"
-        wrapperManifestHash="wrapper"
-        capabilitySnapshotId="cap"
         inspectPath="memory/path"
         requestedOutputIntent="Open page"
         saveCandidateOnSuccess

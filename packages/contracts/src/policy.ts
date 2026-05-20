@@ -131,6 +131,8 @@ export interface ToolPolicyActorContext {
   taskId?: string;
   runId?: string;
   approvedCodeModeRunId?: string;
+  matchedGrantId?: string;
+  matchedGrantAllowedHosts?: string[];
 }
 
 export type ToolLoopDetectorKind = "repeated_same_call" | "no_progress_polling" | "ping_pong";

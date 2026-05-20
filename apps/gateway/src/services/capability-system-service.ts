@@ -25,6 +25,7 @@ import type {
   CodeModeRunRequest,
   CodeModeRunListOptions,
   LoadedSkill,
+  PendingApprovalAction,
   SkillLifecycleRecord,
   SkillListItem,
   SkillRuntimeState,
@@ -53,6 +54,13 @@ const CODE_MODE_OUTPUT_CAPTURE_LIMIT_BYTES = 64 * 1024;
 const CODE_MODE_IPC_MAX_BYTES = 128 * 1024;
 const CODE_MODE_HEAP_MB = 64;
 const CODE_MODE_ENV_PASSTHROUGH_KEYS = ["SystemRoot", "SYSTEMROOT", "ComSpec", "WINDIR", "TEMP", "TMP"];
+
+type LateCodeModeApprovalCleanupResult = {
+  approvalId: string;
+  attempted: true;
+  status: "completed" | "failed";
+  errors: string[];
+};
 
 export interface CapabilitySystemServiceOptions {
   rootDir: string;
@@ -561,6 +569,7 @@ export class CapabilitySystemService {
       errorCode: "approval_create_failed" | "approval_registration_failed",
       phase: "approval_create" | "approval_registration",
       approvalId?: string,
+      cleanup?: LateCodeModeApprovalCleanupResult,
     ): CodeModeRunRecord => {
       const normalized = normalizeCodeModeIpcError(error);
       const failedAt = new Date().toISOString();
@@ -595,6 +604,7 @@ export class CapabilitySystemService {
         errorDetails: {
           phase,
           ...(approvalId ? { approvalId } : {}),
+          ...(cleanup ? { lateApprovalCleanup: cleanup } : {}),
           ...(normalized.code ? { causeCode: normalized.code } : {}),
           ...(normalized.details ? { causeDetails: normalized.details } : {}),
         },
@@ -613,6 +623,7 @@ export class CapabilitySystemService {
         localOperatorOverrideId: record.localOperatorOverrideId,
         errorCode: record.errorCode,
         error: record.error,
+        errorDetails: record.errorDetails,
       });
     };
 
@@ -627,7 +638,11 @@ export class CapabilitySystemService {
         expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
       });
     } catch (error) {
-      publishCreationFailure(buildFailedRunRecord(error, "approval_create_failed", "approval_create"));
+      const lateApprovalId = approvalIdFromApprovalCreateFailure(error);
+      const cleanup = lateApprovalId ? this.terminalizeLateFailedCodeModeApproval(lateApprovalId, error) : undefined;
+      publishCreationFailure(
+        buildFailedRunRecord(error, "approval_create_failed", "approval_create", lateApprovalId, cleanup),
+      );
       throw error;
     }
 
@@ -659,9 +674,10 @@ export class CapabilitySystemService {
       stderrTruncated: false,
       createdAt,
     };
-    const stored = this.options.storage.codeModeRuns.upsert(runRecord);
 
+    let stored: CodeModeRunRecord | undefined;
     try {
+      stored = this.options.storage.codeModeRuns.upsert(runRecord);
       this.options.storage.pendingApprovalActions.upsertPending({
         approvalId: approval.approvalId,
         actionType: "code_mode.run",
@@ -743,6 +759,9 @@ export class CapabilitySystemService {
       }
       throw error;
     }
+    if (!stored) {
+      throw new Error(`Code Mode run ${runId} registration failed before storage returned a row.`);
+    }
 
     this.options.publishRealtime("code_mode_run_created", "capabilities", {
       runId: stored.runId,
@@ -764,18 +783,109 @@ export class CapabilitySystemService {
   ): Promise<ToolInvokeResult | undefined> {
     const pending = this.options.storage.pendingApprovalActions.find(approvalId);
     if (!pending || pending.resolutionStatus !== "pending" || pending.actionType !== "code_mode.run") {
-      return undefined;
+      return this.terminalizeCodeModeRunForMissingPendingAction(approvalId);
     }
+    const approval = this.options.storage.approvals.get(approvalId);
+    const approvalRunId = approval.kind === "code_mode.run" ? resolveCodeModeApprovalRunId(approval) : undefined;
     const runId = asOptionalString(pending.request.runId);
     if (!runId) {
+      const reason = "missing code mode run id";
+      const terminalized = this.terminalizeCodeModeRunForCorruptPendingAction(approval, pending, {
+        reason,
+        errorCode: "RUN_ID_MISSING",
+        terminalReason: "Code Mode pending action is missing its run id; approved run cannot execute safely.",
+        terminalErrorCode: "pending_action_corrupt",
+      });
+      if (terminalized) {
+        return terminalized;
+      }
       this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", {
-        reason: "missing code mode run id",
+        reason,
+      });
+      this.options.storage.approvalEvents.append({
+        approvalId,
+        eventType: "pending_action_refused",
+        actorId: "system",
+        payload: {
+          actionType: "code_mode.run",
+          error: reason,
+          errorCode: "RUN_ID_MISSING",
+        },
+      });
+      this.options.publishRealtime("code_mode_run_refused", "capabilities", {
+        approvalId,
+        error: reason,
+        errorCode: "RUN_ID_MISSING",
       });
       throw new NotFoundError({ entity: "code mode run", id: "missing" });
     }
+    if (approvalRunId && approvalRunId !== runId) {
+      const reason = `Code Mode pending action points at ${runId}, but approval ${approvalId} belongs to ${approvalRunId}.`;
+      const terminalized = this.terminalizeCodeModeRunForCorruptPendingAction(approval, pending, {
+        reason,
+        errorCode: "RUN_ID_MISMATCH",
+        terminalReason: "Code Mode pending action targets a different run; approved run cannot execute safely.",
+        terminalErrorCode: "pending_action_corrupt",
+      });
+      if (terminalized) {
+        return terminalized;
+      }
+    }
 
-    const existing = this.options.storage.codeModeRuns.get(runId);
-    const approval = this.options.storage.approvals.get(approvalId);
+    let existing = this.options.storage.codeModeRuns.find(runId);
+    if (!existing) {
+      const terminalized = this.terminalizeCodeModeRunForCorruptPendingAction(approval, pending, {
+        reason: `Code Mode run ${runId} is missing; approved pending action cannot execute.`,
+        errorCode: "RUN_NOT_FOUND",
+        terminalReason: "Code Mode pending action points at a missing run; approved run cannot execute safely.",
+        terminalErrorCode: "pending_action_corrupt",
+      });
+      if (terminalized) {
+        return terminalized;
+      }
+      const reason = `Code Mode run ${runId} is missing; approved pending action cannot execute.`;
+      this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", { runId, reason });
+      this.options.storage.approvalEvents.append({
+        approvalId,
+        eventType: "pending_action_refused",
+        actorId: "system",
+        payload: {
+          actionType: "code_mode.run",
+          runId,
+          error: reason,
+          errorCode: "RUN_NOT_FOUND",
+        },
+      });
+      this.options.publishRealtime("code_mode_run_refused", "capabilities", {
+        runId,
+        approvalId,
+        error: reason,
+        errorCode: "RUN_NOT_FOUND",
+      });
+      throw new NotFoundError({ entity: "code mode run", id: runId });
+    }
+    if (existing.status === "running") {
+      const recovered = recoverStaleCodeModeExecutionClaim(this.options.storage.codeModeRuns, existing, approvalId);
+      if (recovered) {
+        existing = recovered;
+        this.options.publishRealtime("code_mode_run_claim_recovered", "capabilities", {
+          runId: existing.runId,
+          approvalId,
+          status: existing.status,
+          sandbox: existing.sandbox,
+        });
+      } else {
+        this.options.publishRealtime("code_mode_run_refused", "capabilities", {
+          runId: existing.runId,
+          approvalId,
+          status: existing.status,
+          error: `Code Mode run ${runId} is already running.`,
+          errorCode: "RUN_ALREADY_CLAIMED",
+          sandbox: existing.sandbox,
+        });
+        return undefined;
+      }
+    }
     if (existing.status !== "approval_pending") {
       const reason = `Code Mode run ${runId} is ${existing.status}; only approval_pending runs can execute.`;
       this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", { runId, reason });
@@ -869,6 +979,7 @@ export class CapabilitySystemService {
     }
     let sandbox = this.resolveCurrentSandboxMetadata();
     let finalRun = existing;
+    let claimStartedAt: string | undefined;
 
     try {
       assertApprovedSandboxPostureStillCurrent(existing.sandbox, sandbox);
@@ -877,40 +988,7 @@ export class CapabilitySystemService {
           message: `Code Mode approval ${approvalId} is not linked to run ${runId}.`,
         });
       }
-      const source = await this.readVerifiedManagedArtifactText(existing.codeArtifact, {
-        label: "Code Mode source artifact",
-        expectedSha256: existing.codeHash,
-      });
-      const wrapperManifestRaw = await this.readVerifiedManagedArtifactText(existing.wrapperManifestArtifact, {
-        label: "Code Mode wrapper manifest artifact",
-      });
-      const policySnapshotRaw = await this.readVerifiedManagedArtifactText(existing.policySnapshotArtifact, {
-        label: "Code Mode policy snapshot artifact",
-      });
-      const wrapperManifest = JSON.parse(wrapperManifestRaw) as CodeModeWrapperManifest;
-      const policySnapshot = JSON.parse(policySnapshotRaw) as Record<string, unknown>;
-      assertJsonValueHash(wrapperManifest, existing.wrapperManifestHash, "Code Mode wrapper manifest artifact");
-      assertJsonValueHash(policySnapshot, existing.policySnapshotHash, "Code Mode policy snapshot artifact");
-      const runPolicyContext = buildCodeModeRunPolicyContext({
-        run: existing,
-        pendingRequest: pending.request,
-        policySnapshot,
-      });
-      assertCodeModeRunPolicyContextMatchesStoredRun(existing, runPolicyContext);
-      const livePolicyContext = this.options.resolvePolicyContext?.({
-        operatorId: existing.operatorId,
-        workspaceId: existing.workspaceId,
-        sessionId: existing.sessionId,
-        runId: existing.runId,
-        surface: normalizeCodeModeOriginSurface(existing.originSurface),
-        permissionProfileId: existing.permissionProfileId,
-        localOperatorOverrideId: existing.localOperatorOverrideId,
-      });
-      assertLiveCodeModePolicyContextMatchesStoredRun(existing, livePolicyContext);
-      const runInput = readFrozenCodeModeInput(policySnapshot, pending.request.input, existing.codeModeInputHash);
-      const wrapperPolicyContext = buildCodeModeWrapperPolicyContext(runPolicyContext, existing);
-      const compiledSource = transpileGuestSource(existing.language, source);
-      throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution started.`);
+      throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution claim.`);
       if (!sandbox.available) {
         this.options.publishRealtime("code_mode_sandbox_unavailable", "capabilities", {
           runId,
@@ -920,30 +998,77 @@ export class CapabilitySystemService {
         });
       }
       assertCodeModeSandboxAvailable(sandbox);
-      const startedAt = new Date().toISOString();
-      finalRun = this.options.storage.codeModeRuns.upsert({
-        ...existing,
-        status: "running",
-        startedAt,
+      claimStartedAt = new Date().toISOString();
+      const claimedRun = this.options.storage.codeModeRuns.claimForExecution({
+        runId,
+        approvalId,
         sandbox,
+        startedAt: claimStartedAt,
       });
+      if (!claimedRun) {
+        const currentRun = this.options.storage.codeModeRuns.find(runId);
+        this.options.publishRealtime("code_mode_run_refused", "capabilities", {
+          runId,
+          approvalId,
+          status: currentRun?.status ?? "missing",
+          error: `Code Mode run ${runId} was already claimed or is no longer approval_pending.`,
+          sandbox: currentRun?.sandbox ?? existing.sandbox,
+        });
+        return undefined;
+      }
+      finalRun = claimedRun;
       this.options.publishRealtime("code_mode_run_started", "capabilities", {
         runId,
         approvalId,
-        startedAt,
+        startedAt: claimStartedAt,
         sandbox,
       });
+      throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted after execution claim.`);
+      const source = await this.readVerifiedManagedArtifactText(finalRun.codeArtifact, {
+        label: "Code Mode source artifact",
+        expectedSha256: finalRun.codeHash,
+      });
+      const wrapperManifestRaw = await this.readVerifiedManagedArtifactText(finalRun.wrapperManifestArtifact, {
+        label: "Code Mode wrapper manifest artifact",
+      });
+      const policySnapshotRaw = await this.readVerifiedManagedArtifactText(finalRun.policySnapshotArtifact, {
+        label: "Code Mode policy snapshot artifact",
+      });
+      const wrapperManifest = JSON.parse(wrapperManifestRaw) as CodeModeWrapperManifest;
+      const policySnapshot = JSON.parse(policySnapshotRaw) as Record<string, unknown>;
+      assertJsonValueHash(wrapperManifest, finalRun.wrapperManifestHash, "Code Mode wrapper manifest artifact");
+      assertJsonValueHash(policySnapshot, finalRun.policySnapshotHash, "Code Mode policy snapshot artifact");
+      const runPolicyContext = buildCodeModeRunPolicyContext({
+        run: finalRun,
+        pendingRequest: pending.request,
+        policySnapshot,
+      });
+      assertCodeModeRunPolicyContextMatchesStoredRun(finalRun, runPolicyContext);
+      const livePolicyContext = this.options.resolvePolicyContext?.({
+        operatorId: finalRun.operatorId,
+        workspaceId: finalRun.workspaceId,
+        sessionId: finalRun.sessionId,
+        runId: finalRun.runId,
+        surface: normalizeCodeModeOriginSurface(finalRun.originSurface),
+        permissionProfileId: finalRun.permissionProfileId,
+        localOperatorOverrideId: finalRun.localOperatorOverrideId,
+      });
+      assertLiveCodeModePolicyContextMatchesStoredRun(finalRun, livePolicyContext);
+      const runInput = readFrozenCodeModeInput(policySnapshot, pending.request.input, finalRun.codeModeInputHash);
+      const wrapperPolicyContext = buildCodeModeWrapperPolicyContext(runPolicyContext, finalRun);
+      const compiledSource = transpileGuestSource(finalRun.language, source);
+      throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution started.`);
       await this.ensureHarnessFile();
       const execution = await this.executeChildHarness({
         runId,
         sandbox,
         source: compiledSource,
         input: runInput,
-        requestedOutputIntent: existing.requestedOutputIntent,
+        requestedOutputIntent: finalRun.requestedOutputIntent,
         wrapperManifest,
         policyContext: wrapperPolicyContext,
-        workspaceId: existing.workspaceId,
-        parentSessionId: existing.sessionId,
+        workspaceId: finalRun.workspaceId,
+        parentSessionId: finalRun.sessionId,
         signal,
       });
       throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted after execution started.`);
@@ -983,7 +1108,7 @@ export class CapabilitySystemService {
         error: execution.error,
         errorCode: execution.errorCode,
         errorDetails: execution.errorDetails,
-        startedAt,
+        startedAt: claimStartedAt,
         finishedAt: new Date().toISOString(),
       });
 
@@ -1046,6 +1171,24 @@ export class CapabilitySystemService {
         },
       };
     } catch (error) {
+      if (isCodeModeExecutionInterrupted(error, signal)) {
+        if (claimStartedAt) {
+          finalRun =
+            this.options.storage.codeModeRuns.releaseExecutionClaim({
+              runId,
+              approvalId,
+              startedAt: claimStartedAt,
+            }) ?? finalRun;
+        }
+        this.options.publishRealtime("code_mode_run_interrupted", "capabilities", {
+          runId,
+          approvalId,
+          status: finalRun.status,
+          error: error instanceof Error ? error.message : String(error),
+          sandbox,
+        });
+        return undefined;
+      }
       if (error instanceof CodeModeSandboxLaunchFailure) {
         sandbox = error.sandbox;
       }
@@ -1103,8 +1246,264 @@ export class CapabilitySystemService {
     }
   }
 
+  private terminalizeLateFailedCodeModeApproval(approvalId: string, error: unknown): LateCodeModeApprovalCleanupResult {
+    const normalized = normalizeCodeModeIpcError(error);
+    const cleanupErrors: string[] = [];
+    try {
+      this.options.storage.approvals.resolve(approvalId, {
+        decision: "reject",
+        resolvedBy: "system",
+        resolutionNote: `Code Mode approval creation failed after the approval row was created: ${normalized.message}`,
+      });
+    } catch (resolveError) {
+      cleanupErrors.push(
+        `approval_reject_failed: ${resolveError instanceof Error ? resolveError.message : String(resolveError)}`,
+      );
+    }
+    try {
+      this.options.storage.approvalEvents.append({
+        approvalId,
+        eventType: "pending_action_refused",
+        actorId: "system",
+        payload: {
+          actionType: "code_mode.run",
+          phase: "approval_create",
+          error: normalized.message,
+          errorCode: "approval_create_failed",
+        },
+      });
+    } catch (eventError) {
+      cleanupErrors.push(
+        `approval_event_append_failed: ${eventError instanceof Error ? eventError.message : String(eventError)}`,
+      );
+    }
+    return {
+      approvalId,
+      attempted: true,
+      status: cleanupErrors.length > 0 ? "failed" : "completed",
+      errors: cleanupErrors,
+    };
+  }
+
   private hydrateCodeModeRunForRead(run: CodeModeRunRecord): CodeModeRunRecord {
-    return this.hydrateCodeModeRunLinkage(this.terminalizeExpiredCodeModeRun(run));
+    return this.hydrateCodeModeRunLinkage(
+      this.terminalizeExpiredCodeModeRun(this.terminalizeResolvedCodeModeRunWithMissingPendingAction(run)),
+    );
+  }
+
+  private terminalizeCodeModeRunForMissingPendingAction(approvalId: string): ToolInvokeResult | undefined {
+    let approval: ApprovalRequest;
+    try {
+      approval = this.options.storage.approvals.get(approvalId);
+    } catch {
+      return undefined;
+    }
+    const runId = resolveCodeModeApprovalRunId(approval);
+    if (approval.kind !== "code_mode.run" || !runId || !isResolvedCodeModeApprovalStatus(approval.status)) {
+      return undefined;
+    }
+    const run = this.options.storage.codeModeRuns.find(runId);
+    if (!run) {
+      this.appendCodeModeMissingPendingActionEvent(approval, undefined, {
+        status: "missing",
+        error: `Code Mode run ${runId} is missing while recovering a resolved approval without a pending action.`,
+        errorCode: "RUN_NOT_FOUND",
+      });
+      return {
+        outcome: "blocked",
+        policyReason: "code_mode_run:pending_action_missing",
+        auditEventId: `code-mode-${runId}`,
+        result: {
+          runId,
+          status: "missing",
+          errorCode: "RUN_NOT_FOUND",
+        },
+      };
+    }
+    const terminal = this.terminalizeResolvedCodeModeRunWithMissingPendingAction(run, approval);
+    return {
+      outcome: "executed",
+      policyReason: `code_mode_run:${terminal.status}`,
+      auditEventId: `code-mode-${terminal.runId}`,
+      result: {
+        runId: terminal.runId,
+        status: terminal.status,
+        ...(terminal.error ? { error: terminal.error } : {}),
+        ...(terminal.errorCode ? { errorCode: terminal.errorCode } : {}),
+        ...(terminal.errorDetails ? { errorDetails: terminal.errorDetails } : {}),
+        sandbox: terminal.sandbox,
+      },
+    };
+  }
+
+  private terminalizeCodeModeRunForCorruptPendingAction(
+    approval: ApprovalRequest,
+    pending: PendingApprovalAction,
+    input: {
+      reason: string;
+      errorCode: string;
+      terminalReason: string;
+      terminalErrorCode: string;
+    },
+  ): ToolInvokeResult | undefined {
+    const runId = resolveCodeModeApprovalRunId(approval);
+    if (approval.kind !== "code_mode.run" || !runId || !isResolvedCodeModeApprovalStatus(approval.status)) {
+      return undefined;
+    }
+    const run = this.options.storage.codeModeRuns.find(runId);
+    if (!run) {
+      const pendingRunId = pending.request.runId === undefined ? null : asOptionalString(pending.request.runId);
+      this.options.storage.pendingApprovalActions.markResolved(approval.approvalId, "failed", {
+        runId,
+        pendingRunId,
+        reason: input.reason,
+        errorCode: input.errorCode,
+      });
+      this.appendCodeModeMissingPendingActionEvent(approval, undefined, {
+        status: "missing",
+        pendingRunId,
+        error: input.reason,
+        errorCode: input.errorCode,
+      });
+      this.options.publishRealtime("code_mode_run_refused", "capabilities", {
+        runId,
+        approvalId: approval.approvalId,
+        pendingRunId,
+        error: input.reason,
+        errorCode: input.errorCode,
+      });
+      return {
+        outcome: "blocked",
+        policyReason: "code_mode_run:pending_action_corrupt",
+        auditEventId: `code-mode-${runId}`,
+        result: {
+          runId,
+          status: "missing",
+          errorCode: input.errorCode,
+        },
+      };
+    }
+    const pendingRunId = pending.request.runId === undefined ? null : asOptionalString(pending.request.runId);
+    this.options.storage.pendingApprovalActions.markResolved(approval.approvalId, "failed", {
+      runId: run.runId,
+      pendingRunId,
+      reason: input.reason,
+      errorCode: input.errorCode,
+    });
+    const terminal = this.terminalizeResolvedCodeModeRunWithMissingPendingAction(run, approval, {
+      force: true,
+      reason: input.terminalReason,
+      errorCode: input.terminalErrorCode,
+      errorDetailsReason: "pending_action_corrupt",
+      pendingRunId,
+    });
+    return {
+      outcome: "executed",
+      policyReason: `code_mode_run:${terminal.status}`,
+      auditEventId: `code-mode-${terminal.runId}`,
+      result: {
+        runId: terminal.runId,
+        status: terminal.status,
+        ...(terminal.error ? { error: terminal.error } : {}),
+        ...(terminal.errorCode ? { errorCode: terminal.errorCode } : {}),
+        ...(terminal.errorDetails ? { errorDetails: terminal.errorDetails } : {}),
+        sandbox: terminal.sandbox,
+      },
+    };
+  }
+
+  private terminalizeResolvedCodeModeRunWithMissingPendingAction(
+    run: CodeModeRunRecord,
+    approvalInput?: ApprovalRequest,
+    options?: {
+      force?: boolean;
+      reason?: string;
+      errorCode?: string;
+      errorDetailsReason?: string;
+      pendingRunId?: string | null;
+    },
+  ): CodeModeRunRecord {
+    if (run.status !== "approval_pending" || !run.approvalId) {
+      return run;
+    }
+    const pending = this.options.storage.pendingApprovalActions.find(run.approvalId);
+    if (!options?.force && pending?.resolutionStatus === "pending") {
+      return run;
+    }
+    const approval =
+      approvalInput ??
+      (() => {
+        try {
+          return this.options.storage.approvals.get(run.approvalId);
+        } catch {
+          return undefined;
+        }
+      })();
+    if (!approval || approval.kind !== "code_mode.run" || !isResolvedCodeModeApprovalStatus(approval.status)) {
+      return run;
+    }
+    const expectedRunId = resolveCodeModeApprovalRunId(approval);
+    if (expectedRunId && expectedRunId !== run.runId) {
+      return run;
+    }
+    const rejected = approval.status === "rejected";
+    const reason =
+      options?.reason ??
+      (rejected
+        ? "Code Mode approval was rejected before the pending action could be recovered."
+        : "Code Mode pending action is missing; approved run cannot execute safely.");
+    const errorCode =
+      options?.errorCode ?? (rejected ? "approval_rejected_pending_action_missing" : "pending_action_missing");
+    const terminal = this.options.storage.codeModeRuns.upsert({
+      ...run,
+      status: rejected ? "rejected" : "failed",
+      error: reason,
+      errorCode,
+      errorDetails: {
+        phase: "approval_resolution",
+        reason: options?.errorDetailsReason ?? "pending_action_missing",
+        approvalStatus: approval.status,
+        approvalResolvedAt: approval.resolvedAt,
+        ...(options?.pendingRunId !== undefined ? { pendingRunId: options.pendingRunId } : {}),
+      },
+      sandbox: run.sandbox ?? this.resolveCurrentSandboxMetadata(),
+      finishedAt: run.finishedAt ?? new Date().toISOString(),
+    });
+    this.appendCodeModeMissingPendingActionEvent(approval, terminal, {
+      status: terminal.status,
+      error: reason,
+      errorCode,
+      ...(options?.pendingRunId !== undefined ? { pendingRunId: options.pendingRunId } : {}),
+    });
+    this.options.publishRealtime(rejected ? "code_mode_run_refused" : "code_mode_run_failed", "capabilities", {
+      runId: terminal.runId,
+      approvalId: approval.approvalId,
+      status: terminal.status,
+      error: reason,
+      errorCode,
+      errorDetails: terminal.errorDetails,
+      sandbox: terminal.sandbox,
+    });
+    return terminal;
+  }
+
+  private appendCodeModeMissingPendingActionEvent(
+    approval: ApprovalRequest,
+    run: CodeModeRunRecord | undefined,
+    payload: Record<string, unknown>,
+  ): void {
+    this.options.storage.approvalEvents.append({
+      approvalId: approval.approvalId,
+      eventType: "pending_action_refused",
+      actorId: "system",
+      payload: {
+        actionType: "code_mode.run",
+        runId: run?.runId ?? resolveCodeModeApprovalRunId(approval),
+        approvalStatus: approval.status,
+        errorCode: "pending_action_missing",
+        ...payload,
+      },
+    });
   }
 
   private terminalizeExpiredCodeModeRun(run: CodeModeRunRecord): CodeModeRunRecord {
@@ -1129,7 +1528,16 @@ export class CapabilitySystemService {
       sandbox: run.sandbox ?? this.resolveCurrentSandboxMetadata(),
       finishedAt: run.finishedAt ?? new Date().toISOString(),
     });
-    this.options.storage.pendingApprovalActions.markResolved(run.approvalId, "failed", { runId: run.runId, reason });
+    try {
+      this.options.storage.pendingApprovalActions.markResolved(run.approvalId, "failed", {
+        runId: run.runId,
+        reason,
+      });
+    } catch (error) {
+      void error;
+      // Missing/corrupt pending-action rows should not hide the Code Mode run
+      // terminalization truth from list/detail reads.
+    }
     this.options.storage.approvalEvents.append({
       approvalId: run.approvalId,
       eventType: "pending_action_refused",
@@ -2147,6 +2555,18 @@ function isCodeModeApprovalExpiredForRead(
   return !Number.isFinite(resolvedAtMs) || resolvedAtMs > pendingExpiresAtMs;
 }
 
+function isResolvedCodeModeApprovalStatus(status: ApprovalRequest["status"]): boolean {
+  return status === "approved" || status === "rejected";
+}
+
+function resolveCodeModeApprovalRunId(approval: ApprovalRequest): string | undefined {
+  return (
+    asOptionalString(approval.linkage?.runId) ??
+    asOptionalString((approval.linkage as Record<string, unknown> | undefined)?.codeModeRunId) ??
+    asOptionalString(approval.payload.runId)
+  );
+}
+
 function assertCodeModeRunPolicyContextMatchesStoredRun(
   run: CodeModeRunRecord,
   context: ToolPolicyActorContext | undefined,
@@ -2565,6 +2985,14 @@ function normalizeCodeModeIpcError(error: unknown): {
   return { message: typeof error === "string" && error.trim() ? error.trim() : "Unknown Code Mode IPC error." };
 }
 
+function approvalIdFromApprovalCreateFailure(error: unknown): string | undefined {
+  if (!error || typeof error !== "object" || !("approvalId" in error)) {
+    return undefined;
+  }
+  const value = (error as { approvalId?: unknown }).approvalId;
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 function buildCodeModeSandboxLaunchFailureMetadata(
   sandbox: CodeModeSandboxMetadata,
   error: unknown,
@@ -2674,6 +3102,49 @@ function throwIfCapabilitySystemAborted(signal: AbortSignal | undefined, fallbac
   }
   const reason = signal.reason;
   throw reason instanceof Error ? reason : new Error(typeof reason === "string" ? reason : fallbackMessage);
+}
+
+function isCodeModeExecutionInterrupted(error: unknown, signal: AbortSignal | undefined): boolean {
+  if (signal?.aborted) {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    (error instanceof Error && error.name === "AbortError") ||
+    /aborted|lease ownership moved|worker stopped|worker lease/i.test(message)
+  );
+}
+
+function recoverStaleCodeModeExecutionClaim(
+  repository: {
+    releaseExecutionClaim(input: {
+      runId: string;
+      approvalId: string;
+      startedAt?: string;
+    }): CodeModeRunRecord | undefined;
+  },
+  run: CodeModeRunRecord,
+  approvalId: string,
+): CodeModeRunRecord | undefined {
+  if (!isStaleCodeModeExecutionClaim(run.startedAt)) {
+    return undefined;
+  }
+  return repository.releaseExecutionClaim({
+    runId: run.runId,
+    approvalId,
+    startedAt: run.startedAt,
+  });
+}
+
+function isStaleCodeModeExecutionClaim(startedAt?: string): boolean {
+  if (!startedAt) {
+    return true;
+  }
+  const startedAtMs = Date.parse(startedAt);
+  if (!Number.isFinite(startedAtMs)) {
+    return true;
+  }
+  return Date.now() - startedAtMs > CODE_MODE_RUN_TIMEOUT_MS + CODE_MODE_WRAPPER_SETTLE_TIMEOUT_MS;
 }
 
 function asOptionalString(value: unknown): string | undefined {

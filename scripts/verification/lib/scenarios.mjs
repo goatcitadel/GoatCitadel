@@ -195,7 +195,7 @@ export async function runCodeModeSandboxRequiredLane(context) {
     {
       id: "code-mode.sandbox.required",
       lane: "code-mode-sandbox",
-      title: "Code Mode sandbox-required host proof",
+      title: "Code Mode sandbox metadata/fail-closed proof",
       subsystem: "gateway",
     },
     async () => {
@@ -564,7 +564,9 @@ export async function runDeepCoreLane(context, options = {}) {
             await waitForVerificationRouteReady(page, chatRoute, verificationPackageName);
             await setBrowserCorrelation(page, correlationId, seedResponse.body.sessionId);
             await page.waitForSelector(".mc-next-thread-turn-surface", { timeout: 15000 });
-            const detailButton = page.locator(".mc-next-thread-inline-button", { hasText: /Details|Run details/i }).first();
+            const detailButton = page
+              .locator(".mc-next-thread-inline-button", { hasText: /Details|Run details/i })
+              .first();
             if (await detailButton.isVisible().catch(() => false)) {
               await detailButton.click();
               await page.waitForTimeout(500);
@@ -2686,6 +2688,8 @@ export async function runBackupRoundtripLane(context, options = {}) {
 export async function runVisualRegressionLane(context, options = {}) {
   const verificationTarget = resolveVerificationTargetContext();
   const updateBaselines = maybeParseBool(options.updateBaselines, false);
+  const scenarioLane = updateBaselines ? "visual-rebaseline" : "visual-regression";
+  const scenarioTitleSuffix = updateBaselines ? "baseline refresh" : "baseline renders";
   if (!updateBaselines) {
     await assertVisualBaselineCoverage(context, { packageName: verificationTarget.packageName });
   }
@@ -2728,9 +2732,9 @@ export async function runVisualRegressionLane(context, options = {}) {
             const scenarioRecord = await runScenario(
               context,
               {
-                id: `visual-regression.${route.slug}.${variant.slug}`,
-                lane: "visual-regression",
-                title: `${route.slug} ${variant.slug} baseline renders`,
+                id: `${scenarioLane}.${route.slug}.${variant.slug}`,
+                lane: scenarioLane,
+                title: `${route.slug} ${variant.slug} ${scenarioTitleSuffix}`,
                 subsystem: "mission-control",
               },
               async ({ correlationId }) => {
@@ -2757,7 +2761,8 @@ export async function runVisualRegressionLane(context, options = {}) {
                 });
                 await page.waitForTimeout(1000);
                 await stabilizeVisualRegressionSnapshot(page);
-                const artifactSlug = `visual-regression-${route.slug}-${variant.slug}`;
+                const baselineSlug = `visual-regression-${route.slug}-${variant.slug}`;
+                const artifactSlug = `${scenarioLane}-${route.slug}-${variant.slug}`;
                 const artifacts = await captureBrowserArtifacts(context, {
                   slug: artifactSlug,
                   page,
@@ -2766,7 +2771,8 @@ export async function runVisualRegressionLane(context, options = {}) {
                   correlationId,
                   logCursor: browserLogCursor,
                 });
-                const comparison = await compareVisualBaseline(context, artifactSlug, {
+                const comparison = await compareVisualBaseline(context, baselineSlug, {
+                  artifactSlug,
                   updateBaselines,
                   packageName: verificationTarget.packageName,
                 });
@@ -3376,7 +3382,11 @@ export async function runAuthMatrixLane(context, options = {}) {
           deviceToken: deviceAndCompanion.deviceToken,
           companionToken: deviceAndCompanion.companionToken,
         });
-        const approvalIngressResults = await assertApprovalIngressMatrix(stack.gatewayUrl, approvalCreateToken, operatorHeaders);
+        const approvalIngressResults = await assertApprovalIngressMatrix(
+          stack.gatewayUrl,
+          approvalCreateToken,
+          operatorHeaders,
+        );
 
         const outPath = path.join(context.artifactRoot, "diagnostics", "auth-matrix-route-access.json");
         await writeJson(outPath, {
@@ -5626,11 +5636,12 @@ async function writeMissionControlNextManualProofChecklist(context, entries) {
 }
 
 async function compareVisualBaseline(context, slug, options = {}) {
-  const screenshotPath = path.join(context.artifactRoot, "screenshots", `${slug}.png`);
+  const artifactSlug = options.artifactSlug ?? slug;
+  const screenshotPath = path.join(context.artifactRoot, "screenshots", `${artifactSlug}.png`);
   const baselinePath = path.join(resolveVisualBaselineDir(options.packageName ?? DEFAULT_UI_PACKAGE), `${slug}.png`);
-  const diagnosticsPath = path.join(context.artifactRoot, "diagnostics", `${slug}-visual-compare.json`);
-  const diffPath = path.join(context.artifactRoot, "screenshots", `${slug}-diff.png`);
-  const baselineArtifactPath = path.join(context.artifactRoot, "screenshots", `${slug}-baseline.png`);
+  const diagnosticsPath = path.join(context.artifactRoot, "diagnostics", `${artifactSlug}-visual-compare.json`);
+  const diffPath = path.join(context.artifactRoot, "screenshots", `${artifactSlug}-diff.png`);
+  const baselineArtifactPath = path.join(context.artifactRoot, "screenshots", `${artifactSlug}-baseline.png`);
   const updateBaselines = maybeParseBool(options.updateBaselines, false);
 
   await fs.mkdir(path.dirname(baselinePath), { recursive: true });
@@ -5648,6 +5659,7 @@ async function compareVisualBaseline(context, slug, options = {}) {
   if (!baselineExists) {
     await writeJson(diagnosticsPath, {
       slug,
+      artifactSlug,
       status: "missing_baseline",
       baselinePath,
       screenshotPath,
@@ -5714,6 +5726,7 @@ async function compareVisualBaseline(context, slug, options = {}) {
 
   await writeJson(diagnosticsPath, {
     slug,
+    artifactSlug,
     screenshotPath,
     baselinePath,
     updateBaselines,

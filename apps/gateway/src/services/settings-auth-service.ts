@@ -333,15 +333,7 @@ export function updateSettings(deps: SettingsRuntimeDependencies, input: UpdateS
     persistAssistant = true;
   }
 
-  if (input.toolApprovalMode) {
-    deps.config.toolPolicy.tools.approvalMode = input.toolApprovalMode;
-    deps.config.assistant.toolApprovalMode = input.toolApprovalMode;
-    deps.llmService.updateNetworkAllowlist(deps.config.toolPolicy.sandbox.networkAllowlist, {
-      enforce: true,
-    });
-    persistAssistant = true;
-    persistToolPolicy = true;
-  } else if (input.defaultToolProfile) {
+  if (input.defaultToolProfile) {
     const legacyProfiles = deps.config.toolPolicy.profiles ?? {};
     const knownLegacyProfiles =
       Object.keys(legacyProfiles).length === 0 ||
@@ -352,6 +344,16 @@ export function updateSettings(deps: SettingsRuntimeDependencies, input: UpdateS
     deps.config.toolPolicy.tools.profile = input.defaultToolProfile as typeof deps.config.toolPolicy.tools.profile;
     deps.config.toolPolicy.tools.approvalMode = legacyProfileToApprovalMode(input.defaultToolProfile);
     deps.config.assistant.defaultToolProfile = input.defaultToolProfile;
+    deps.llmService.updateNetworkAllowlist(deps.config.toolPolicy.sandbox.networkAllowlist, {
+      enforce: true,
+    });
+    persistAssistant = true;
+    persistToolPolicy = true;
+  }
+
+  if (input.toolApprovalMode) {
+    deps.config.toolPolicy.tools.approvalMode = input.toolApprovalMode;
+    deps.config.assistant.toolApprovalMode = input.toolApprovalMode;
     deps.llmService.updateNetworkAllowlist(deps.config.toolPolicy.sandbox.networkAllowlist, {
       enforce: true,
     });

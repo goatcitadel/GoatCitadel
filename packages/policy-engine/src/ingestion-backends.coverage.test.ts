@@ -199,7 +199,7 @@ describe("ingestion backend coverage", () => {
           JSON.stringify({
             data: {
               content: "## Firecrawl content",
-              metadata: {},
+              metadata: { sourceURL: "https://example.com/firecrawl" },
             },
           }),
           {
@@ -220,6 +220,7 @@ describe("ingestion backend coverage", () => {
           title: "Provided Title",
         }),
         storage,
+        networkAllowlist: ["firecrawl.example", "example.com"],
         fetchUrl: vi.fn(),
       });
 
@@ -251,6 +252,56 @@ describe("ingestion backend coverage", () => {
     }
   });
 
+  it("accepts lowercase Firecrawl sourceUrl metadata as the final source proof", async () => {
+    const priorBaseUrl = process.env.FIRECRAWL_BASE_URL;
+    const priorFetch = globalThis.fetch;
+    process.env.FIRECRAWL_BASE_URL = "https://firecrawl.example/";
+    const storage = createKnowledgeStorage();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              markdown: "## Lowercase source proof",
+              metadata: { sourceUrl: "https://example.com/lowercase-final" },
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      const result = await ingestDocumentViaBackend({
+        request: createRequest({
+          sourceType: "url",
+          source: "https://example.com/lowercase-start",
+          namespace: "web",
+          backend: "firecrawl",
+        }),
+        storage,
+        networkAllowlist: ["firecrawl.example", "example.com"],
+        sourceAllowlist: ["example.com"],
+        fetchUrl: vi.fn(),
+      });
+
+      expect(result.fetchResult).toMatchObject({
+        sourceRef: "https://example.com/lowercase-final",
+        rawText: "## Lowercase source proof",
+      });
+    } finally {
+      if (priorBaseUrl === undefined) {
+        delete process.env.FIRECRAWL_BASE_URL;
+      } else {
+        process.env.FIRECRAWL_BASE_URL = priorBaseUrl;
+      }
+      globalThis.fetch = priorFetch;
+    }
+  });
+
   it("does not read Firecrawl API keys from non-Firecrawl env-name input", async () => {
     const priorBaseUrl = process.env.FIRECRAWL_BASE_URL;
     const priorFirecrawlKey = process.env.FIRECRAWL_API_KEY;
@@ -267,7 +318,7 @@ describe("ingestion backend coverage", () => {
         JSON.stringify({
           data: {
             markdown: "safe firecrawl response",
-            metadata: {},
+            metadata: { sourceURL: "https://example.com/firecrawl" },
           },
         }),
         {
@@ -288,6 +339,7 @@ describe("ingestion backend coverage", () => {
           firecrawlApiKeyEnv: "OPENAI_API_KEY",
         }),
         storage,
+        networkAllowlist: ["firecrawl.example", "example.com"],
         fetchUrl: vi.fn(),
       });
 
@@ -365,6 +417,55 @@ describe("ingestion backend coverage", () => {
     }
   });
 
+  it("rejects non-canonical Firecrawl backend labels and non-allowlisted Firecrawl bases", async () => {
+    const priorFetch = globalThis.fetch;
+    const storage = createKnowledgeStorage();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ data: { markdown: "must not fetch" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      await expect(
+        ingestDocumentViaBackend({
+          request: createRequest({
+            sourceType: "url",
+            source: "https://example.com/firecrawl",
+            namespace: "web",
+            backend: " firecrawl ",
+            firecrawlBaseUrl: "https://firecrawl.example",
+          }),
+          storage,
+          networkAllowlist: ["firecrawl.example"],
+          fetchUrl: vi.fn(),
+        }),
+      ).rejects.toThrow(/backend must be one of native\|firecrawl/);
+
+      await expect(
+        ingestDocumentViaBackend({
+          request: createRequest({
+            sourceType: "url",
+            source: "https://example.com/firecrawl",
+            namespace: "web",
+            backend: "firecrawl",
+            firecrawlBaseUrl: "https://firecrawl.example",
+          }),
+          storage,
+          networkAllowlist: ["api.openai.com"],
+          fetchUrl: vi.fn(),
+        }),
+      ).rejects.toThrow(/Host is not yet allowlisted/i);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = priorFetch;
+    }
+  });
+
   it("covers firecrawl request defaults and html-only response fallback", async () => {
     const priorBaseUrl = process.env.FIRECRAWL_BASE_URL;
     const priorApiKey = process.env.FIRECRAWL_API_KEY;
@@ -405,6 +506,7 @@ describe("ingestion backend coverage", () => {
       expect(fetchMock).toHaveBeenCalledWith(
         "http://127.0.0.1:3002/v2/scrape",
         expect.objectContaining({
+          redirect: "manual",
           signal: expect.any(AbortSignal),
         }),
       );
@@ -433,7 +535,7 @@ describe("ingestion backend coverage", () => {
     const storage = createKnowledgeStorage();
     const fetchMock = vi.fn(
       async () =>
-        new Response(JSON.stringify({ data: {} }), {
+        new Response(JSON.stringify({ data: { metadata: { sourceURL: "https://example.com/firecrawl-empty" } } }), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),
@@ -451,6 +553,7 @@ describe("ingestion backend coverage", () => {
           firecrawlTimeoutMs: 0,
         }),
         storage,
+        networkAllowlist: ["firecrawl-empty.example", "example.com"],
         fetchUrl: vi.fn(),
       });
 
@@ -512,6 +615,157 @@ describe("ingestion backend coverage", () => {
     }
   });
 
+  it("rejects Firecrawl final URLs outside the granted source host boundary", async () => {
+    const storage = createKnowledgeStorage();
+    const priorFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              markdown: "must not be returned",
+              metadata: { sourceURL: "https://redirect.example/final" },
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    ) as unknown as typeof fetch;
+
+    try {
+      await expect(
+        ingestDocumentViaBackend({
+          request: createRequest({
+            sourceType: "url",
+            source: "https://example.com/firecrawl-redirect",
+            namespace: "web",
+            backend: "firecrawl",
+          }),
+          storage,
+          networkAllowlist: ["example.com"],
+          sourceAllowlist: ["example.com"],
+          fetchUrl: vi.fn(),
+        }),
+      ).rejects.toThrow(/outside the allowed source boundary/i);
+    } finally {
+      globalThis.fetch = priorFetch;
+    }
+  });
+
+  it("rejects Firecrawl final URLs outside the runtime network allowlist", async () => {
+    const storage = createKnowledgeStorage();
+    const priorFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              markdown: "must not be returned",
+              metadata: { sourceURL: "https://redirect.example/final" },
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    ) as unknown as typeof fetch;
+
+    try {
+      await expect(
+        ingestDocumentViaBackend({
+          request: createRequest({
+            sourceType: "url",
+            source: "https://example.com/firecrawl-redirect",
+            namespace: "web",
+            backend: "firecrawl",
+          }),
+          storage,
+          networkAllowlist: ["example.com"],
+          fetchUrl: vi.fn(),
+        }),
+      ).rejects.toThrow(/outside the allowed source boundary/i);
+    } finally {
+      globalThis.fetch = priorFetch;
+    }
+  });
+
+  it("rejects original Firecrawl sources outside runtime or grant boundaries before fetch", async () => {
+    const storage = createKnowledgeStorage();
+    const priorFetch = globalThis.fetch;
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      await expect(
+        ingestDocumentViaBackend({
+          request: createRequest({
+            sourceType: "url",
+            source: "https://blocked.example/firecrawl-source",
+            namespace: "web",
+            backend: "firecrawl",
+            firecrawlBaseUrl: "https://firecrawl.example",
+          }),
+          storage,
+          networkAllowlist: ["firecrawl.example", "allowed.example"],
+          fetchUrl: vi.fn(),
+        }),
+      ).rejects.toThrow(/Host is not yet allowlisted/i);
+
+      await expect(
+        ingestDocumentViaBackend({
+          request: createRequest({
+            sourceType: "url",
+            source: "https://allowed.example/firecrawl-source",
+            namespace: "web",
+            backend: "firecrawl",
+            firecrawlBaseUrl: "https://firecrawl.example",
+          }),
+          storage,
+          networkAllowlist: ["firecrawl.example", "allowed.example"],
+          sourceAllowlist: ["other.example"],
+          fetchUrl: vi.fn(),
+        }),
+      ).rejects.toThrow(/Host is not yet allowlisted/i);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = priorFetch;
+    }
+  });
+
+  it("rejects Firecrawl content without final source proof when allowlists are active", async () => {
+    const storage = createKnowledgeStorage();
+    const priorFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              markdown: "must not be returned",
+              metadata: {},
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    ) as unknown as typeof fetch;
+
+    try {
+      await expect(
+        ingestDocumentViaBackend({
+          request: createRequest({
+            sourceType: "url",
+            source: "https://example.com/firecrawl-missing-final",
+            namespace: "web",
+            backend: "firecrawl",
+          }),
+          storage,
+          networkAllowlist: ["firecrawl.example", "example.com"],
+          sourceAllowlist: ["example.com"],
+          fetchUrl: vi.fn(),
+        }),
+      ).rejects.toThrow(/did not report a final source URL/i);
+    } finally {
+      globalThis.fetch = priorFetch;
+    }
+  });
+
   it("scores cached native documents with missing ingestion metadata and sparse embeddings", () => {
     const storage = createKnowledgeStorage([
       {
@@ -566,6 +820,96 @@ describe("ingestion backend coverage", () => {
 
     expect(result.cached).toBe(true);
     expect(result.document.text).toBe("cached text");
+  });
+
+  it("refetches URL cache entries without final-source proof when a source allowlist is active", async () => {
+    const storage = createKnowledgeStorage([
+      {
+        docId: "doc-native-unproven",
+        namespace: "web",
+        sourceType: "url",
+        sourceRef: "https://example.com/cached",
+        title: "Cached Without Final URL",
+        metadata: {
+          ingestion: {
+            backend: "native",
+            fetchedAt: "2026-03-22T12:00:00.000Z",
+            cacheExpiresAt: "2099-01-01T00:00:00.000Z",
+          },
+        },
+      },
+    ]);
+    storage.knowledge.appendChunks("doc-native-unproven", [{ content: "cached must not be returned" }]);
+    const fetchUrl = vi.fn(async () => ({
+      finalUrl: "https://example.com/fresh",
+      statusCode: 200,
+      contentType: "text/plain",
+      body: "fresh allowed content",
+    }));
+
+    const result = await ingestDocumentViaBackend({
+      request: createRequest({
+        sourceType: "url",
+        source: "https://example.com/cached",
+        namespace: "web",
+        backend: "native",
+      }),
+      storage,
+      fetchUrl,
+      sourceAllowlist: ["example.com"],
+    });
+
+    expect(fetchUrl).toHaveBeenCalledWith("https://example.com/cached");
+    expect(result.cached).toBe(false);
+    expect(result.document.text).toBe("fresh allowed content");
+    expect(result.document.metadata).toMatchObject({
+      ingestion: {
+        finalSourceUrl: "https://example.com/fresh",
+      },
+    });
+  });
+
+  it("refetches URL cache entries whose final-source proof is outside the runtime network allowlist", async () => {
+    const storage = createKnowledgeStorage([
+      {
+        docId: "doc-native-network-drift",
+        namespace: "web",
+        sourceType: "url",
+        sourceRef: "https://example.com/cached",
+        title: "Cached Redirected URL",
+        metadata: {
+          ingestion: {
+            backend: "native",
+            fetchedAt: "2026-03-22T12:00:00.000Z",
+            cacheExpiresAt: "2099-01-01T00:00:00.000Z",
+            finalSourceUrl: "https://redirect.example/final",
+          },
+        },
+      },
+    ]);
+    storage.knowledge.appendChunks("doc-native-network-drift", [{ content: "cached must not be returned" }]);
+    const fetchUrl = vi.fn(async () => ({
+      finalUrl: "https://example.com/fresh",
+      statusCode: 200,
+      contentType: "text/plain",
+      body: "fresh allowed content",
+    }));
+
+    const result = await ingestDocumentViaBackend({
+      request: createRequest({
+        sourceType: "url",
+        source: "https://example.com/cached",
+        namespace: "web",
+        backend: "native",
+      }),
+      storage,
+      fetchUrl,
+      networkAllowlist: ["example.com"],
+    });
+
+    expect(fetchUrl).toHaveBeenCalledWith("https://example.com/cached");
+    expect(result.cached).toBe(false);
+    expect(result.document.text).toBe("fresh allowed content");
   });
 });
 

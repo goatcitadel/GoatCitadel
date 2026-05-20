@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ApprovalEffectRecord, ApprovalRequest, CodeModeRunRecord } from "@goatcitadel/contracts";
 import {
+  ApprovalCreateLateFailureError,
   createApproval,
   resolveApproval,
   resolveApprovalsBulk,
@@ -132,6 +133,44 @@ describe("approval lifecycle service", () => {
     expect(seenTriggers).toEqual(["approval.request.before", "approval.create.before"]);
     expect(host.storage.approvals.create).toHaveBeenCalledTimes(1);
     expect(approval.approvalId).toBe("approval-1");
+  });
+
+  it("wraps late create side-effect failures with the created approval id", async () => {
+    const host = createApprovalHarness();
+    const transactionSpy = vi.spyOn(host.storage, "runImmediateTransaction");
+    host.storage.audit.append = vi.fn(async () => {
+      throw new Error("audit store unavailable");
+    });
+
+    await expect(
+      createApproval(host, {
+        kind: "shell.exec",
+        riskLevel: "danger",
+        payload: {
+          sessionId: "session-1",
+        },
+        preview: {
+          label: "Run shell command",
+        },
+        linkage: {
+          sessionId: "session-1",
+          workspaceId: "workspace-1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: "ApprovalCreateLateFailureError",
+      approvalId: "approval-1",
+      message: "audit store unavailable",
+    } satisfies Partial<ApprovalCreateLateFailureError>);
+
+    expect(transactionSpy).toHaveBeenCalledTimes(1);
+    expect(host.storage.approvalEvents.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "approval-1",
+        eventType: "created",
+      }),
+    );
+    expect(host.publishRealtime).not.toHaveBeenCalled();
   });
 
   it("auto-rejects dangerous shell approvals with durable resolution evidence", async () => {
@@ -347,6 +386,167 @@ describe("approval lifecycle service", () => {
       expect.objectContaining({
         status: "expired",
         runId: "code-run-1",
+      }),
+    );
+  });
+
+  it("uses approval linkage when rejecting Code Mode approvals with corrupt pending run ids", async () => {
+    const linkedRun = createCodeModeRunRecord({ runId: "code-run-linked", approvalId: "approval-1" });
+    const unrelatedRun = createCodeModeRunRecord({ runId: "code-run-other", approvalId: "approval-other" });
+    const host = createApprovalHarness({
+      approvalKind: "code_mode.run",
+      pendingAction: {
+        approvalId: "approval-1",
+        actionType: "code_mode.run",
+        request: { runId: "code-run-other" },
+        createdAt: "2026-04-11T00:00:00.000Z",
+        resolutionStatus: "pending",
+      },
+      codeModeRuns: [linkedRun, unrelatedRun],
+    });
+
+    await resolveApproval(host, "approval-1", {
+      decision: "reject",
+      resolvedBy: "operator",
+    });
+
+    expect(host.storage.codeModeRuns.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "code-run-linked",
+        status: "rejected",
+        errorDetails: expect.objectContaining({
+          pendingRunId: "code-run-other",
+        }),
+      }),
+    );
+    expect(host.storage.codeModeRuns.upsert).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "code-run-other",
+      }),
+    );
+    expect(host.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "rejected",
+      expect.objectContaining({
+        runId: "code-run-linked",
+        pendingRunId: "code-run-other",
+      }),
+    );
+  });
+
+  it("uses approval linkage when rejecting Code Mode approvals with missing pending run ids", async () => {
+    const host = createApprovalHarness({
+      approvalKind: "code_mode.run",
+      pendingAction: {
+        approvalId: "approval-1",
+        actionType: "code_mode.run",
+        request: {},
+        createdAt: "2026-04-11T00:00:00.000Z",
+        resolutionStatus: "pending",
+      },
+      codeModeRun: createCodeModeRunRecord({ runId: "code-run-linked" }),
+    });
+
+    await resolveApproval(host, "approval-1", {
+      decision: "reject",
+      resolvedBy: "operator",
+    });
+
+    expect(host.storage.codeModeRuns.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "code-run-linked",
+        status: "rejected",
+        errorDetails: expect.objectContaining({
+          pendingRunId: null,
+        }),
+      }),
+    );
+    expect(host.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "rejected",
+      expect.objectContaining({
+        runId: "code-run-linked",
+        pendingRunId: null,
+      }),
+    );
+  });
+
+  it("uses approval linkage when expiring Code Mode approvals with missing pending run ids", async () => {
+    const host = createApprovalHarness({
+      approvalKind: "code_mode.run",
+      expiresAt: "2020-04-11T00:00:00.000Z",
+      pendingAction: {
+        approvalId: "approval-1",
+        actionType: "code_mode.run",
+        request: {},
+        createdAt: "2026-04-11T00:00:00.000Z",
+        resolutionStatus: "pending",
+      },
+      codeModeRun: createCodeModeRunRecord({ runId: "code-run-linked" }),
+    });
+
+    await expect(
+      resolveApproval(host, "approval-1", {
+        decision: "approve",
+        resolvedBy: "operator",
+      }),
+    ).rejects.toThrow(/has expired and can no longer be resolved/i);
+
+    expect(host.storage.codeModeRuns.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "code-run-linked",
+        status: "expired",
+        errorDetails: expect.objectContaining({
+          pendingRunId: null,
+        }),
+      }),
+    );
+    expect(host.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({
+        status: "expired",
+        runId: "code-run-linked",
+        pendingRunId: null,
+      }),
+    );
+  });
+
+  it("uses approval linkage when expiring Code Mode approvals with corrupt pending run ids", async () => {
+    const linkedRun = createCodeModeRunRecord({ runId: "code-run-linked", approvalId: "approval-1" });
+    const unrelatedRun = createCodeModeRunRecord({ runId: "code-run-other", approvalId: "approval-other" });
+    const host = createApprovalHarness({
+      approvalKind: "code_mode.run",
+      expiresAt: "2020-04-11T00:00:00.000Z",
+      pendingAction: {
+        approvalId: "approval-1",
+        actionType: "code_mode.run",
+        request: { runId: "code-run-other" },
+        createdAt: "2026-04-11T00:00:00.000Z",
+        resolutionStatus: "pending",
+      },
+      codeModeRuns: [linkedRun, unrelatedRun],
+    });
+
+    await expect(
+      resolveApproval(host, "approval-1", {
+        decision: "approve",
+        resolvedBy: "operator",
+      }),
+    ).rejects.toThrow(/has expired and can no longer be resolved/i);
+
+    expect(host.storage.codeModeRuns.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "code-run-linked",
+        status: "expired",
+        errorDetails: expect.objectContaining({
+          pendingRunId: "code-run-other",
+        }),
+      }),
+    );
+    expect(host.storage.codeModeRuns.upsert).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "code-run-other",
       }),
     );
   });
@@ -766,6 +966,91 @@ describe("approval lifecycle service", () => {
     });
   });
 
+  it("coerces Code Mode chat approval scopes to once without creating persistent grants", async () => {
+    const approval = {
+      approvalId: "approval-code",
+      kind: "code_mode.run",
+      riskLevel: "caution",
+      status: "pending",
+      payload: {
+        sessionId: "session-1",
+        codeHash: "code-hash",
+        wrapperManifestHash: "wrapper-hash",
+        capabilitySnapshotId: "capability-snapshot",
+      },
+      preview: {},
+      createdAt: new Date("2026-04-09T12:00:00.000Z").toISOString(),
+      explanationStatus: "not_requested",
+    };
+    const resolvedApproval = {
+      ...approval,
+      status: "approved" as const,
+      resolvedBy: "operator-test",
+      resolvedAt: new Date("2026-04-09T12:00:02.000Z").toISOString(),
+    };
+    const createGrant = vi.fn();
+    const host = {
+      storage: {
+        approvals: {
+          get: vi.fn(() => approval),
+        },
+        chatInlineApprovals: {
+          get: vi.fn(() => ({
+            approvalId: "approval-code",
+            sessionId: "session-1",
+            turnId: "turn-1",
+            kind: "code_mode.run",
+            toolName: "code_mode.run",
+            status: "pending",
+            reason: "Needs approval",
+            createdAt: new Date("2026-04-09T12:00:00.000Z").toISOString(),
+            details: {},
+          })),
+          upsert: vi.fn(),
+        },
+        chatToolRuns: {
+          listBySession: vi.fn(() => []),
+        },
+        chatSessionMeta: {
+          get: vi.fn(() => ({ workspaceId: "workspace-1" })),
+        },
+      },
+      policyEngine: {
+        listGrants: vi.fn(() => []),
+        createGrant,
+      },
+      resolveApproval: vi.fn(async () => ({
+        approval: resolvedApproval,
+        effects: [],
+        replay: {
+          approval: resolvedApproval,
+          events: [],
+          pendingAction: undefined,
+          effects: [],
+        },
+        resolutionEffects: {
+          proactiveRunIds: [],
+          chatTurnResume: { resumed: false },
+        },
+      })),
+    } as unknown as ApprovalLifecycleHost;
+
+    const result = await resolveChatToolApproval(host, "session-1", "approval-code", "approve", {
+      allowScope: "workspace",
+      resolvedBy: "operator-test",
+    });
+
+    expect(result.allowScope).toBe("once");
+    expect(createGrant).not.toHaveBeenCalled();
+    expect(host.resolveApproval).toHaveBeenCalledWith(
+      "approval-code",
+      expect.objectContaining({
+        decision: "approve",
+        resolutionNote: "Approved from chat inline control.",
+      }),
+    );
+  });
+
   it("rejects expired chat tool approvals before creating persistent grants", async () => {
     const approval = {
       approvalId: "approval-1",
@@ -1038,9 +1323,14 @@ function createApprovalHarness(input?: {
   expiresAt?: string;
   approvalKind?: string;
   codeModeRun?: CodeModeRunRecord;
+  codeModeRuns?: CodeModeRunRecord[];
   shellExplainerPolicy?: ApprovalLifecycleHost["shellExplainerPolicy"];
 }) {
   const pendingAction = input?.pendingAction;
+  const codeModeRuns = input?.codeModeRuns ?? (input?.codeModeRun ? [input.codeModeRun] : []);
+  const linkedCodeModeRunId =
+    codeModeRuns.find((run) => run.approvalId === "approval-1")?.runId ??
+    (typeof pendingAction?.request.runId === "string" ? pendingAction.request.runId : undefined);
   let approval: ApprovalRequest = {
     approvalId: "approval-1",
     kind: input?.approvalKind ?? "shell.exec",
@@ -1048,11 +1338,13 @@ function createApprovalHarness(input?: {
     status: "pending" as const,
     payload: {
       sessionId: "session-1",
+      ...(linkedCodeModeRunId ? { runId: linkedCodeModeRunId } : {}),
     },
     preview: {},
     linkage: {
       sessionId: "session-1",
       workspaceId: "workspace-1",
+      ...(linkedCodeModeRunId ? { runId: linkedCodeModeRunId } : {}),
     },
     createdAt: "2026-04-11T00:00:00.000Z",
     expiresAt: input?.expiresAt,
@@ -1146,7 +1438,7 @@ function createApprovalHarness(input?: {
         listBySession: vi.fn(() => []),
       },
       codeModeRuns: {
-        find: vi.fn(() => input?.codeModeRun),
+        find: vi.fn((runId: string) => codeModeRuns.find((run) => run.runId === runId)),
         upsert: vi.fn((record: CodeModeRunRecord) => record),
       },
       runImmediateTransaction: <T>(callback: () => T) => callback(),

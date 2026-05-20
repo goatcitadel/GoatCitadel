@@ -58,7 +58,10 @@ export class OrchestrationPhaseExecutionService {
       planningMode: "off",
       memoryMode: "auto",
       toolAutonomy: "safe_auto",
+      proactiveMode: "off",
+      reflectionMode: "off",
       orchestrationEnabled: false,
+      subagentPolicy: "off",
     });
 
     const prompt = [
@@ -85,12 +88,16 @@ export class OrchestrationPhaseExecutionService {
           content: prompt,
           mode: "cowork",
           memoryMode: "auto",
+          subagentPolicy: "off",
           prefsOverride: {
             mode: "cowork",
             planningMode: "off",
             memoryMode: "auto",
             toolAutonomy: "safe_auto",
+            proactiveMode: "off",
+            reflectionMode: "off",
             orchestrationEnabled: false,
+            subagentPolicy: "off",
           },
           operatorId: input.policyContext?.operatorId,
           authActorId: input.policyContext?.authActorId,
@@ -112,6 +119,10 @@ export class OrchestrationPhaseExecutionService {
       const traceStatus = response.trace?.status;
       const failure = response.trace?.failure?.message ?? response.trace?.failure?.failureClass;
       const waiting = traceStatus === "waiting_for_approval" || traceStatus === "waiting_for_user_input";
+      const approvalId =
+        response.trace?.pendingApprovalSummary?.approvalId ??
+        response.trace?.toolRuns?.find((toolRun) => toolRun.status === "approval_required" && toolRun.approvalId)
+          ?.approvalId;
       return {
         phaseId: input.phase.phaseId,
         ownerAgentId: input.phase.ownerAgentId,
@@ -123,6 +134,7 @@ export class OrchestrationPhaseExecutionService {
         childSessionId: response.sessionId,
         childTurnId: response.turnId,
         childRunId: response.trace?.durable?.runId,
+        approvalId,
         model: response.model ?? response.trace?.model,
         costUsd,
         inputTokens,

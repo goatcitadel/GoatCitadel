@@ -384,6 +384,24 @@ describe("settings-auth-service durable settings", () => {
     expect(host.persistAssistantConfig).toHaveBeenCalled();
   });
 
+  it("persists first-run tool profile and explicit approval mode together", () => {
+    const host = buildHost();
+
+    const settings = updateSettings(host, {
+      defaultToolProfile: "minimal",
+      toolApprovalMode: "approve_all",
+    });
+
+    expect(settings.defaultToolProfile).toBe("minimal");
+    expect(settings.toolApprovalMode).toBe("approve_all");
+    expect(host.config.toolPolicy.tools.profile).toBe("minimal");
+    expect(host.config.toolPolicy.tools.approvalMode).toBe("approve_all");
+    expect(host.config.assistant.defaultToolProfile).toBe("minimal");
+    expect(host.config.assistant.toolApprovalMode).toBe("approve_all");
+    expect(host.persistToolPolicyConfig).toHaveBeenCalled();
+    expect(host.persistAssistantConfig).toHaveBeenCalled();
+  });
+
   it("rejects unknown legacy tool profile names when profiles are explicit", () => {
     const host = buildHost();
 

@@ -309,6 +309,30 @@ describe("browser tools coverage sweep", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("blocks native HTML fetch redirects outside matched grant hosts before following them", async () => {
+    const config = createConfig(tempRoot);
+    config.sandbox.networkAllowlist = [EXAMPLE_HOST, "other.example"];
+    mocked.launch.mockRejectedValueOnce(new Error("missing browser runtime"));
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === "https://example.com/start") {
+        return new Response("", {
+          status: 302,
+          headers: { location: "https://other.example/final" },
+        });
+      }
+      throw new Error(`Unexpected grant-bypassing follow ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(
+      executeBrowserTool("browser.navigate", { url: "https://example.com/start" }, config, {
+        matchedGrantAllowedHosts: [EXAMPLE_HOST],
+      }),
+    ).rejects.toThrow(/not yet allowlisted/i);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("executes search/navigate/extract/screenshot/interact flows", async () => {
     const config = createConfig(tempRoot);
 
@@ -957,6 +981,82 @@ describe("browser tools coverage sweep", () => {
     ).rejects.toThrow(/Private, metadata, or reserved host is blocked/);
   });
 
+  it("rejects Firecrawl final URLs outside matched grant host constraints", async () => {
+    const config = createConfig(tempRoot);
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              markdown: "grant-blocked content must not be returned",
+              metadata: {
+                title: "Other host",
+                sourceURL: "https://other.example/final",
+                statusCode: 200,
+              },
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      executeBrowserTool(
+        "browser.navigate",
+        {
+          url: "https://example.com/firecrawl-page",
+          backend: "firecrawl",
+          firecrawlBaseUrl: "http://127.0.0.1:3002",
+          firecrawlFallbackToNative: false,
+        },
+        {
+          ...config,
+          sandbox: { ...config.sandbox, networkAllowlist: [...config.sandbox.networkAllowlist, "other.example"] },
+        },
+        { matchedGrantAllowedHosts: ["example.com"] },
+      ),
+    ).rejects.toThrow(/not yet allowlisted/i);
+  });
+
+  it("rejects Firecrawl content without final source proof under matched grant host constraints", async () => {
+    const config = createConfig(tempRoot);
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              markdown: "unproved content must not be returned",
+              metadata: {
+                title: "Missing source",
+                statusCode: 200,
+              },
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      executeBrowserTool(
+        "browser.navigate",
+        {
+          url: "https://example.com/firecrawl-page",
+          backend: "firecrawl",
+          firecrawlBaseUrl: "http://127.0.0.1:3002",
+          firecrawlFallbackToNative: false,
+        },
+        config,
+        { matchedGrantAllowedHosts: ["example.com"] },
+      ),
+    ).rejects.toThrow(/did not report a final source URL/i);
+  });
+
   it("rejects unsafe Firecrawl scrape targets before delegating to Firecrawl", async () => {
     const config = createConfig(tempRoot);
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: {} }), { status: 200 }));
@@ -1205,6 +1305,65 @@ describe("browser tools coverage sweep", () => {
       backend: "firecrawl",
       results: [],
     });
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://127.0.0.1:3002/v2/search",
+      expect.objectContaining({ redirect: "manual" }),
+    );
+  });
+
+  it("filters Firecrawl search results through runtime and grant host boundaries", async () => {
+    const config = createConfig(tempRoot);
+    config.sandbox.networkAllowlist.push("allowed.example");
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              { title: "Allowed", url: "https://allowed.example/docs", description: "Allowed result" },
+              { title: "Blocked", url: "https://other.example/docs", description: "Blocked result" },
+              { title: "Private", url: "http://169.254.169.254/latest", description: "Private result" },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    ) as unknown as typeof fetch;
+
+    const result = await executeBrowserTool(
+      "browser.search",
+      { query: "coverage", backend: "firecrawl", firecrawlBaseUrl: "http://127.0.0.1:3002", limit: 5 },
+      config,
+      { matchedGrantAllowedHosts: ["allowed.example"] },
+    );
+
+    expect(result.results).toEqual([
+      { title: "Allowed", url: "https://allowed.example/docs", snippet: "Allowed result" },
+    ]);
+  });
+
+  it("filters native search results through grant host and private-host boundaries", async () => {
+    const config = createConfig(tempRoot);
+    config.sandbox.networkAllowlist.push("allowed.example", "other.example");
+    mocked.launch.mockResolvedValueOnce(
+      createSearchPlaywrightStub(() => [
+        { title: "Blocked first", href: "https://other.example/docs", snippet: "Blocked result" },
+        { title: "Allowed", href: "https://allowed.example/docs", snippet: "Allowed result" },
+        { title: "Private", href: "http://169.254.169.254/latest", snippet: "Private result" },
+      ]) as never,
+    );
+
+    const result = await executeBrowserTool(
+      "browser.search",
+      { query: "coverage", engine: "duckduckgo", limit: 5 },
+      config,
+      { matchedGrantAllowedHosts: ["allowed.example"] },
+    );
+
+    expect(result.results).toEqual([
+      { title: "Allowed", url: "https://allowed.example/docs", snippet: "Allowed result" },
+    ]);
   });
 
   it("falls back to native browser reads when Firecrawl fails and fallback is enabled", async () => {
@@ -1500,6 +1659,89 @@ describe("browser tools coverage sweep", () => {
 
     const clearedCookies = await executeBrowserTool("browser.cookies.clear", { name: "sid" }, config, executionContext);
     expect(clearedCookies.removed).toBe(1);
+  });
+
+  it("enforces matched grant host allowlists for browser cookies and storage state", async () => {
+    const config = createConfig(tempRoot);
+    config.sandbox.networkAllowlist = [...config.sandbox.networkAllowlist, "allowed.example", "blocked.example"];
+    const seedContext = { sessionId: "sess-browser-grant-state" };
+    const grantContext = {
+      ...seedContext,
+      matchedGrantAllowedHosts: ["allowed.example"],
+    };
+
+    await executeBrowserTool(
+      "browser.storage.set",
+      { origin: "https://allowed.example", storage: "local", key: "mode", value: "allowed" },
+      config,
+      seedContext,
+    );
+    await executeBrowserTool(
+      "browser.storage.set",
+      { origin: "https://blocked.example", storage: "local", key: "mode", value: "blocked" },
+      config,
+      seedContext,
+    );
+    await executeBrowserTool(
+      "browser.cookies.set",
+      {
+        cookies: [
+          { name: "allowed", value: "1", domain: "allowed.example" },
+          { name: "blocked", value: "1", domain: "blocked.example" },
+        ],
+      },
+      config,
+      seedContext,
+    );
+
+    const grantStorage = await executeBrowserTool("browser.storage.get", { storage: "local" }, config, grantContext);
+    expect(grantStorage.localStorage).toEqual({
+      "https://allowed.example": { mode: "allowed" },
+    });
+    const grantCookies = await executeBrowserTool("browser.cookies.get", {}, config, grantContext);
+    expect(grantCookies.cookies).toEqual([expect.objectContaining({ name: "allowed", domain: "allowed.example" })]);
+
+    await expect(
+      executeBrowserTool(
+        "browser.storage.set",
+        { origin: "https://blocked.example", storage: "local", key: "mode", value: "denied" },
+        config,
+        grantContext,
+      ),
+    ).rejects.toThrow(/allowlisted/i);
+    await expect(
+      executeBrowserTool(
+        "browser.cookies.set",
+        { name: "denied", value: "1", domain: "blocked.example" },
+        config,
+        grantContext,
+      ),
+    ).rejects.toThrow(/allowlisted/i);
+    await expect(
+      executeBrowserTool("browser.storage.get", { origin: "https://blocked.example" }, config, grantContext),
+    ).rejects.toThrow(/allowlisted/i);
+    await expect(
+      executeBrowserTool("browser.cookies.get", { domain: "blocked.example" }, config, grantContext),
+    ).rejects.toThrow(/allowlisted/i);
+
+    const storageClear = await executeBrowserTool("browser.storage.clear", { storage: "local" }, config, grantContext);
+    expect(storageClear.removed).toBe(1);
+    const storageAfterClear = await executeBrowserTool(
+      "browser.storage.get",
+      { storage: "local" },
+      config,
+      seedContext,
+    );
+    expect(storageAfterClear.localStorage).toEqual({
+      "https://blocked.example": { mode: "blocked" },
+    });
+
+    const cookiesClear = await executeBrowserTool("browser.cookies.clear", {}, config, grantContext);
+    expect(cookiesClear.removed).toBe(1);
+    const cookiesAfterClear = await executeBrowserTool("browser.cookies.get", {}, config, seedContext);
+    expect(cookiesAfterClear.cookies).toEqual([
+      expect.objectContaining({ name: "blocked", domain: "blocked.example" }),
+    ]);
   });
 
   it("ignores caller-supplied browser session ids and uses active session context", async () => {

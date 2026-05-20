@@ -80,6 +80,7 @@ export function composeChatRouteDependencies(
     config: gateway.config,
     storage: gateway.storage,
     requireChatSession: (sessionId) => gateway.requireChatSession(sessionId),
+    listCodeModeRuns: (options) => gateway.capabilitySystemService.listCodeModeRuns(options),
     publishRealtime: (channel, topic, payload, options) => gateway.publishRealtime(channel, topic, payload, options),
   };
   const chatMessageRouteRuntimeHost = gateway.chatMessageRouteRuntimeHost;

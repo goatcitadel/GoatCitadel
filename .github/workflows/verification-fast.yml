@@ -63,8 +63,13 @@ jobs:
       - name: Enforce production coverage gate
         run: pnpm coverage:collect && pnpm coverage:gate:production
 
-      - name: Upload verification artifacts
+      - name: Verify artifact redaction
+        id: artifact-redaction
         if: always()
+        run: pnpm verify:artifacts:redaction
+
+      - name: Upload verification artifacts
+        if: always() && steps.artifact-redaction.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: verification-fast-artifacts

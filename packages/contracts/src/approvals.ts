@@ -105,6 +105,7 @@ export interface ApprovalCreateInput {
 export type ApprovalEffectKind =
   | "approval_wait_wake"
   | "proactive_run_wake"
+  | "orchestration_parent_wake"
   | "linked_chat_turn_wake"
   | "pending_action_execute"
   | "approval_inbox_follow_up"

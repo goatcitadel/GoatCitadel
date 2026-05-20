@@ -101,7 +101,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
       area="library"
       kicker="Library · Memory"
       title="Memory"
-      description="Lifecycle-aware memory items, maintenance truth, provenance, and QMD posture in the canonical next shell."
+      description="Lifecycle-aware memory items, maintenance truth, provenance, and QMD posture."
       loading={memory.loading}
       error={memory.error}
       metrics={[
@@ -691,7 +691,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
         </NativeCard>
         <QuickJumpCard
           title="Related routes"
-          subtitle="Stay inside canonical next routes while moving between memory, approvals, and runtime."
+          subtitle="Move between memory, approvals, and runtime without losing context."
           actions={[
             { label: "Approvals", route: { area: "ops", section: "approvals", theme: route.theme } },
             { label: "Runtime", route: { area: "ops", section: "runtime", theme: route.theme } },

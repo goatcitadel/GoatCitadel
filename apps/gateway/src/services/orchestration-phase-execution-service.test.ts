@@ -144,10 +144,22 @@ describe("OrchestrationPhaseExecutionService", () => {
     expect(createChatSession).toHaveBeenCalledWith(expect.objectContaining({ mode: "cowork", origin: "system" }));
     expect(updateChatSessionPrefs).toHaveBeenCalledWith(
       "child-session-1",
-      expect.objectContaining({ mode: "cowork", orchestrationEnabled: false }),
+      expect.objectContaining({
+        mode: "cowork",
+        orchestrationEnabled: false,
+        proactiveMode: "off",
+        reflectionMode: "off",
+        subagentPolicy: "off",
+      }),
     );
     expect(agentSendChatMessage.mock.calls[0]?.[1].content).toContain("Validate the release blocker.");
     expect(agentSendChatMessage.mock.calls[0]?.[1]).toMatchObject({
+      subagentPolicy: "off",
+      prefsOverride: expect.objectContaining({
+        proactiveMode: "off",
+        reflectionMode: "off",
+        subagentPolicy: "off",
+      }),
       operatorId: "operator-1",
       authActorId: "auth-operator-1",
       authActorSource: "loopback",
@@ -214,6 +226,9 @@ describe("OrchestrationPhaseExecutionService", () => {
               status: "waiting_for_approval",
               waitStatus: "waiting_for_approval",
               durable: { runId: "child-run-approval" },
+              pendingApprovalSummary: {
+                approvalId: "approval-phase-1",
+              },
               failure: {
                 failureClass: "approval_required",
                 message: "Tool approval required.",
@@ -237,6 +252,7 @@ describe("OrchestrationPhaseExecutionService", () => {
       childSessionId: "child-session-1",
       childTurnId: "turn-approval",
       childRunId: "child-run-approval",
+      approvalId: "approval-phase-1",
       outputSummary: "Tool approval required.",
     });
   });

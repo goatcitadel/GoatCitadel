@@ -26,11 +26,12 @@ export class LinuxFirejailSandboxAdapter implements CodeModeHostSandboxAdapter {
     if (firejailPath) {
       checks.checksPassed.push(
         "linux_firejail_present",
-        "linux_namespaces_enforced",
-        "linux_seccomp_enforced",
-        "network_isolation_enforced",
-        "temp_workspace_enforced",
-        "privilege_reduction_enforced",
+        "linux_firejail_profile_intent_present",
+        "linux_namespace_flags_intended",
+        "linux_seccomp_flag_intended",
+        "network_isolation_flag_intended",
+        "temp_workspace_private_home_intended",
+        "privilege_reduction_flags_intended",
       );
     } else {
       checks.checksFailed.push("linux_firejail_missing");
@@ -106,18 +107,17 @@ function buildFirejailProfile(runTempRoot: string): string {
   // escape to Node APIs and `fs.readFileSync('/etc/passwd', '...')` to
   // exfiltrate host configuration, workspace data, or secrets.
   //
-  // We now use `private` + `whitelist ${runTempRoot}` so the guest gets
-  // a fresh empty $HOME and only the run workspace is visible. Combined
-  // with `private-dev`, `private-tmp`, `net none`, `seccomp`,
-  // `caps.drop all`, and `nonewprivs`, this dramatically narrows the
-  // host-read surface. Code Mode is still a governed trusted-code
-  // surface, not hostile-code sandboxing; `vm` is not a security
-  // boundary, and a future bubblewrap-based adapter can offer stronger
-  // host-isolation guarantees.
+  // Launch uses `--private=${runTempRoot}` so Firejail backs the private
+  // home with the generated run directory. The profile must not also emit
+  // a bare `private` directive, because Firejail treats those as distinct
+  // private modes. The remaining directives keep the launched process on a
+  // no-network, reduced-privilege profile with the run root explicitly
+  // writable. Code Mode remains a governed trusted-code surface, not
+  // hostile-code sandboxing; `vm` is not a security boundary, and this is
+  // not a claim that every system path is invisible to the guest.
   return [
     "# GoatCitadel Code Mode host sandbox profile.",
     "quiet",
-    "private",
     "private-dev",
     "private-tmp",
     "net none",

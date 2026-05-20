@@ -138,7 +138,7 @@ describe("code-mode-sandbox-runner", () => {
     ).rejects.toThrow("Code Mode sandbox posture changed before launch at runnerVersion");
   });
 
-  it("selects the Linux firejail adapter and reports all enforced checks when available", async () => {
+  it("selects the Linux firejail adapter and reports profile intent checks when available", async () => {
     const root = await createTempRoot();
     const options: HostSandboxAdapterSelectionOptions = {
       platform: "linux",
@@ -162,11 +162,12 @@ describe("code-mode-sandbox-runner", () => {
     expect(metadata.checksPassed).toEqual(
       expect.arrayContaining([
         "linux_firejail_present",
-        "linux_namespaces_enforced",
-        "linux_seccomp_enforced",
-        "network_isolation_enforced",
-        "temp_workspace_enforced",
-        "privilege_reduction_enforced",
+        "linux_firejail_profile_intent_present",
+        "linux_namespace_flags_intended",
+        "linux_seccomp_flag_intended",
+        "network_isolation_flag_intended",
+        "temp_workspace_private_home_intended",
+        "privilege_reduction_flags_intended",
       ]),
     );
     expect(prepared.launch.executable).toBe("/usr/bin/firejail");

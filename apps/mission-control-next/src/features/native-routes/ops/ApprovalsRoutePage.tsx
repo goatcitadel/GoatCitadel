@@ -34,6 +34,15 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
     }),
     [approvals.historyItems.length, approvals.pendingItems.length, approvals.recoveryItems.length],
   );
+  const displayedPendingCount = approvals.pendingLaneFailed
+    ? Math.max(queueCounts.pending, pendingApprovals)
+    : (approvals.loading || approvals.error) && queueCounts.pending === 0
+      ? pendingApprovals
+      : queueCounts.pending;
+  const emptyApprovalsLabel =
+    approvals.view === "pending" && displayedPendingCount > 0 && approvals.error
+      ? "Pending approvals exist, but the queue details could not be loaded."
+      : "No approvals in this view.";
 
   return (
     <>
@@ -41,11 +50,11 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
         area="ops"
         kicker="Ops · Approvals"
         title="Approvals"
-        description="Pending decisions, history, replay, and durable recovery in the canonical next shell."
-        loading={approvals.loading}
+        description="Pending decisions, history, replay, and durable recovery in one operator view."
+        loading={approvals.loading && !approvals.error}
         error={approvals.error}
         metrics={[
-          { label: "Pending", value: String(queueCounts.pending || pendingApprovals) },
+          { label: "Pending", value: String(displayedPendingCount) },
           { label: "History", value: String(queueCounts.history) },
           { label: "Recovery", value: String(queueCounts.recovery) },
           { label: "Replay trails", value: String(approvals.replayCount) },
@@ -68,7 +77,7 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
             title="Approval queue"
             subtitle="Work the pending queue, audit history, or jump straight to recovery-linked approvals."
             stats={[
-              { label: "Pending", value: String(queueCounts.pending || pendingApprovals) },
+              { label: "Pending", value: String(displayedPendingCount) },
               { label: "Workspace", value: activeWorkspaceName },
               { label: "Replay trails", value: String(approvals.replayCount) },
             ]}
@@ -77,7 +86,7 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
               <div className="mc-next-approvals-view-switch" role="tablist" aria-label="Approval views">
                 <ApprovalViewButton
                   active={approvals.view === "pending"}
-                  label={`Pending (${queueCounts.pending})`}
+                  label={`Pending (${displayedPendingCount})`}
                   onClick={() => approvals.setView("pending")}
                 />
                 <ApprovalViewButton
@@ -118,7 +127,7 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
             </div>
             <div className="mc-next-approvals-list">
               {approvals.visibleItems.length === 0 ? (
-                <p className="mc-next-directory-empty">No approvals in this view.</p>
+                <p className="mc-next-directory-empty">{emptyApprovalsLabel}</p>
               ) : (
                 approvals.visibleItems.map((approval) => {
                   const expired = isExpiredApproval(approval);
@@ -178,7 +187,7 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
             title={selectedApproval ? selectedApproval.kind || selectedApproval.approvalId : "Approval detail"}
             subtitle={
               selectedApproval
-                ? "Replay trail, durable recovery, and runtime linkage without dropping back to legacy routes."
+                ? "Replay trail, durable recovery, and runtime linkage in one operator view."
                 : "Select a queue item to inspect evidence, replay, and failure context."
             }
             stats={
@@ -530,7 +539,7 @@ function ApprovalInspectorCard(props: {
           <div className="mc-next-directory-card-head">
             <div>
               <h2>Runtime linkage</h2>
-              <p>Canonical and inferred runtime relationships surfaced directly in the next shell.</p>
+              <p>Canonical and inferred runtime relationships surfaced directly in one operator view.</p>
             </div>
           </div>
           <ul className="mc-next-approvals-compact-list">

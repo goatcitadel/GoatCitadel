@@ -207,9 +207,9 @@ Findings are sequentially numbered F-001…F-NNN across the whole review. Severi
 
 ### F-016 — `coverage:gate` and `coverage:gate:production` are never invoked by any verification lane or CI workflow
 - **Status update 2026-05-18:** Superseded for the current verification workflow shape. `verification-fast.yml`
-  runs `pnpm coverage:collect && pnpm coverage:gate:production`, and the release-proof workflow includes
-  `verify:fast` as an umbrella lane. Release certificates still require the direct `verification-fast.yml`
-  workflow for the production coverage and Postgres gates; this item remains historical branch context.
+  runs `pnpm coverage:collect && pnpm coverage:gate:production` as workflow steps after `pnpm verify:fast`.
+  Release certificates require the direct `verification-fast.yml` workflow for fast-lane, production coverage,
+  and Postgres proof; `verify:fast` itself is not the release-proof umbrella lane.
 - **Source:** R7-C3
 - **Severity:** Closed historical finding
 - **Category:** Testing
@@ -1382,7 +1382,7 @@ Reproducing R5's comprehension scorecard (1-5 scale; lower = worse):
 The owner said "major fixes done." Last 50 commits sketch:
 
 - **Architecture-metrics helpers (commits `9470a3e3` through `0459f6c7`, 8 commits):** Hardening the verification-lane parser. The metrics they produce are a **counter**, not a **constraint** - R7-H2 / **F-016 family**. The fixes are real (more robust parsing, edge-case handling, TS-parser usage), but the underlying lane cannot forbid X-from-Y imports. The work is solid; the lane it serves is too soft. Held.
-- **Verification-lane stabilization (`ac68d0d0`, `8871c7f0`, `0d6e0b86`, `4827de2c`, `40caf39f`):** Multiple "fix verification" / "fix coverage review regressions" commits. R7 confirms `verify:durable:recovery` is genuinely meaningful (real process restart + dead-letter recovery). Current verification now wires `coverage:gate` through `verify:fast` (**F-016 closed**) and the storage package now uses recursive test discovery (**F-017 closed**); `coverage-exercise.ts` precision (**F-015**) remains separate historical debt. Partial.
+- **Verification-lane stabilization (`ac68d0d0`, `8871c7f0`, `0d6e0b86`, `4827de2c`, `40caf39f`):** Multiple "fix verification" / "fix coverage review regressions" commits. R7 confirms `verify:durable:recovery` is genuinely meaningful (real process restart + dead-letter recovery). Current `verification-fast.yml` runs `verify:fast`, coverage collection/gating, and Postgres proof as distinct workflow steps (**F-016 closed**), and the storage package now uses recursive test discovery (**F-017 closed**); `coverage-exercise.ts` precision (**F-015**) remains separate historical debt. Partial.
 - **GitHub security/quality alert sweeps (`9128e8ed`, `ad209b79`, `58404894`, `e322a5fa`, `955e06e9`):** Multi-commit cleanup of GitHub Code Scanning findings. R2 found new HIGH security issues (MCP env passthrough **F-018**, Firecrawl env-name injection **F-019**, approval bypass **F-020**) that are not surfaced by GitHub's analyzers - these require domain-aware review. The auto-scan fixes are useful but address a different category of risk. Held narrowly.
 - **Storage coverage expansion (~20 commits, `e1c78ab1` -> `64e3f88d`, `0205057a`, `3719ed48` etc.):** Substantial real work. Per-repository tests added. R7-C1 still fires though: the Postgres path uses `FakePool` - the exact mock the owner explicitly forbade in auto-memory. Storage coverage expansion is real for SQLite; for Postgres it's adversarial mocking. Mixed.
 
@@ -1440,7 +1440,8 @@ HIGH findings + compounding mediums, grouped by area.
 - **F-031** - Add startup warning when `allowLoopbackBypass=true` and `GATEWAY_HOST != 127.0.0.1`.
 
 **Testing.**
-- **F-016** - Closed: `verify:fast` now runs `coverage:collect` and `coverage:gate:production`.
+- **F-016** - Closed: `verification-fast.yml` now runs `pnpm verify:fast`,
+  `coverage:collect`, and `coverage:gate:production` as distinct proof steps.
 - **F-017** - Closed: the storage package test lane now uses a recursive `src/**/*.test.ts` glob; keep server-encoding coverage proved through the package test lane.
 
 **Performance.**
@@ -1521,7 +1522,9 @@ After fixing each CRITICAL, confirm in this order before claiming completion:
 - [ ] **F-013** - Manually fail a run via `failWorkflowRun`. Re-trigger durable resume. Confirm engine throws on attempted `startRun`; confirm the run does not revert to phase 1.
 - [ ] **F-014** - Run `pnpm --filter @goatcitadel/storage test` against a real Postgres (testcontainers or compose). Confirm migrator tests, client tests, and sync-worker tests execute against the live DB.
 - [ ] **F-015** - Replace one `notEqual(500)` in `coverage-exercise.ts` with a precise assertion that fails today. Confirm the failure surfaces in `pnpm coverage:gate:production`.
-- [x] **F-016** - `verify:fast` runs `coverage:gate:production`, and release proof includes `verify:fast`.
+- [x] **F-016** - `verification-fast.yml` runs `pnpm verify:fast`, `coverage:collect`, and
+  `coverage:gate:production` as distinct direct workflow proof; release proof does not treat `verify:fast`
+  as the umbrella lane.
 - [x] **F-017** - Storage package tests now use recursive discovery; rerun `pnpm --filter @goatcitadel/storage test` for current server-encoding proof instead of relying on the historical empty grep.
 
 Once all 17 boxes are checked, re-run the convergence map in Section 5 - at least 5 convergent issues should be resolved.

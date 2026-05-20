@@ -13,6 +13,7 @@ import type { TaskWorkspaceAccessOptions } from "../services/task-lifecycle-serv
 import { sendRouteError } from "./_error-handler.js";
 
 const KANBAN_MUTATION_RATE_LIMIT_MAX = 180;
+const DEFAULT_WORKSPACE_ID = "default";
 
 const resolveActorId = (request: { authActorId?: string; ip?: string }) =>
   request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
@@ -94,6 +95,7 @@ const agenticSubagentMetadataSchema = z
     profileId: z.string().min(1).optional(),
     contextMode: z.enum(["isolated", "fork"]).optional(),
     index: z.number().int().nonnegative().optional(),
+    depth: z.number().int().nonnegative().optional(),
     dependsOnStepIds: z.array(z.string().min(1)).optional(),
     heartbeatAt: z.string().datetime().optional(),
     timeoutAt: z.string().datetime().optional(),
@@ -261,7 +263,12 @@ export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send(fastify.services.tasks.listAgenticRuns(parsed.data));
+      return reply.send(
+        fastify.services.tasks.listAgenticRuns({
+          ...parsed.data,
+          workspaceId: parsed.data.workspaceId ?? DEFAULT_WORKSPACE_ID,
+        }),
+      );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

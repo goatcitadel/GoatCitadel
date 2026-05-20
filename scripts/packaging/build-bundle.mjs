@@ -56,7 +56,7 @@ async function main() {
   removeDirectory(bundleRoot);
   fs.mkdirSync(appRoot, { recursive: true });
 
-  runPnpm(["--dir", repoRoot, "--filter", "@goatcitadel/gateway", "deploy", "--legacy", "--prod", gatewayDeployDir]);
+  runPnpm(["--dir", repoRoot, "--filter", "@goatcitadel/gateway", "deploy", "--prod", "--legacy", gatewayDeployDir]);
   pruneGatewayDeploy(gatewayDeployDir);
 
   copyFile(path.join(repoRoot, "bin", "goatcitadel.mjs"), path.join(appRoot, "bin", "goatcitadel.mjs"));

@@ -147,6 +147,62 @@ describe("tasks routes", () => {
     expect(registerTaskSubagent).not.toHaveBeenCalled();
   });
 
+  it("accepts contract-valid subagent depth metadata on create and update", async () => {
+    const registerTaskSubagent = vi.fn((_taskId: string, input: Record<string, unknown>) => ({
+      agentSessionId: input.agentSessionId,
+      metadata: input.metadata,
+    }));
+    const updateTaskSubagent = vi.fn((_agentSessionId: string, input: Record<string, unknown>) => ({
+      agentSessionId: "agent-session-1",
+      ...input,
+    }));
+
+    app = buildApp({ registerTaskSubagent, updateTaskSubagent });
+    await app.register(tasksRoutes);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/tasks/task-1/subagents",
+      payload: {
+        agentSessionId: "agent-session-1",
+        metadata: {
+          runId: "run-child",
+          parentRunId: "run-parent",
+          index: 1,
+          depth: 2,
+          contextMode: "fork",
+        },
+      },
+    });
+    const updated = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/subagents/agent-session-1",
+      payload: {
+        metadata: {
+          depth: 3,
+          contextMode: "isolated",
+        },
+      },
+    });
+
+    expect(created.statusCode).toBe(201);
+    expect(updated.statusCode).toBe(200);
+    expect(registerTaskSubagent).toHaveBeenCalledWith(
+      "task-1",
+      expect.objectContaining({
+        metadata: expect.objectContaining({ depth: 2 }),
+      }),
+      { workspaceId: undefined },
+    );
+    expect(updateTaskSubagent).toHaveBeenCalledWith(
+      "agent-session-1",
+      expect.objectContaining({
+        metadata: expect.objectContaining({ depth: 3 }),
+      }),
+      { workspaceId: undefined },
+    );
+  });
+
   it("creates, updates, soft-deletes, restores, and hard-deletes tasks through the service contract", async () => {
     const createTask = vi.fn((input: Record<string, unknown>) => ({ taskId: "task-1", ...input }));
     const updateTask = vi.fn((taskId: string, input: Record<string, unknown>) => ({ taskId, ...input }));
@@ -362,6 +418,18 @@ describe("tasks routes", () => {
       error: "workspaceId contains unsupported characters",
       code: "FIELD_INVALID",
     });
+  });
+
+  it("defaults agentic run list requests to the default workspace", async () => {
+    const listAgenticRuns = vi.fn(() => ({ items: [] }));
+
+    app = buildApp({ listAgenticRuns });
+    await app.register(tasksRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/agentic/runs?surface=cowork" });
+
+    expect(response.statusCode).toBe(200);
+    expect(listAgenticRuns).toHaveBeenCalledWith({ workspaceId: "default", surface: "cowork", limit: 100 });
   });
 
   it("emits a distress signal through the task route service", async () => {

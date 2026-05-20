@@ -438,6 +438,25 @@ describe("GatewayService loop 27 large service coverage", () => {
       expect.objectContaining({ type: "internal_tool_grant_blocked", reason: "deny-wins" }),
     );
 
+    gateway.listToolGrants = vi.fn((scope: string) =>
+      scope === "workspace"
+        ? [
+            {
+              decision: "deny",
+              expiresAt: "2099-05-15T00:05:00.000Z",
+              grantType: "persistent",
+              toolPattern: "*",
+            },
+          ]
+        : [],
+    );
+    createdGrant.mockClear();
+    GatewayService.prototype.ensureChatSessionRuntimeGrants.call(gateway, "session-1");
+    expect(createdGrant).not.toHaveBeenCalled();
+    expect(() =>
+      GatewayService.prototype.ensureSessionInternalToolGrant.call(gateway, "session-1", "browser.search", "runtime"),
+    ).toThrow("deny policy");
+
     await expect(
       GatewayService.prototype.invokeAndUnwrap.call(
         gateway,

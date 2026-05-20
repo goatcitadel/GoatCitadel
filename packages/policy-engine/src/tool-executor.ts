@@ -18,6 +18,7 @@ import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "./sa
 import { executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
 import { collectLeakDetections, sanitizeForModel } from "./tool-security.js";
 import { ingestDocumentViaBackend, searchIngestedContext } from "./ingestion-backends.js";
+import { parseIngestionSourceType } from "./ingestion-source-type.js";
 import { matchesToolPattern } from "./tool-patterns.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import { createPresentationPptx, type PresentationSlide } from "./presentation-pptx.js";
@@ -68,6 +69,7 @@ export async function executeTool(
     const rawResult = await executeBrowserTool(request.toolName, request.args, config, {
       sessionId: request.sessionId,
       signal: request.signal,
+      matchedGrantAllowedHosts: resolveExecutionGrantAllowedHosts(request, storage),
     });
     return finalizeToolResult(rawResult);
   }
@@ -99,9 +101,9 @@ export async function executeTool(
     case "fs.delete":
       return finalizeToolResult(await fsDelete(request.args, config));
     case "http.get":
-      return finalizeToolResult(await httpGet(request.args, config, request.signal));
+      return finalizeToolResult(await httpGet(request, config, storage));
     case "http.post":
-      return finalizeToolResult(await httpPost(request.args, config, request.signal));
+      return finalizeToolResult(await httpPost(request, config, storage));
     case "shell.exec":
       return finalizeToolResult(await shellExec(request, config, storage));
     case "shell.exec_background":
@@ -185,7 +187,7 @@ export async function executeTool(
     case "whatsapp.react":
     case "zalo.send":
     case "zalouser.send":
-      return finalizeToolResult(await commsInvoke(request.toolName, request.args, config, storage));
+      return finalizeToolResult(await commsInvoke(request, config, storage));
     default:
       throw new Error(`Unsupported tool executor: ${request.toolName}`);
   }
@@ -380,9 +382,16 @@ async function fsDelete(args: Record<string, unknown>, config: ToolPolicyConfig)
   return { path: path.resolve(p), deleted: true };
 }
 
-async function httpGet(args: Record<string, unknown>, config: ToolPolicyConfig, signal?: AbortSignal) {
+async function httpGet(request: ToolInvokeRequest, config: ToolPolicyConfig, storage?: Storage) {
+  const args = request.args;
   const url = required(args.url, "url");
-  const res = await fetchAllowlisted(url, { method: "GET" }, config.sandbox.networkAllowlist, signal);
+  const res = await fetchAllowlisted(
+    url,
+    { method: "GET" },
+    config.sandbox.networkAllowlist,
+    request.signal,
+    resolveExecutionGrantAllowedHosts(request, storage),
+  );
   const text = await res.response.text();
   return {
     url: res.finalUrl,
@@ -394,14 +403,16 @@ async function httpGet(args: Record<string, unknown>, config: ToolPolicyConfig, 
   };
 }
 
-async function httpPost(args: Record<string, unknown>, config: ToolPolicyConfig, signal?: AbortSignal) {
+async function httpPost(request: ToolInvokeRequest, config: ToolPolicyConfig, storage?: Storage) {
+  const args = request.args;
   const url = required(args.url, "url");
   const body = JSON.stringify(args.body ?? {});
   const res = await fetchAllowlisted(
     url,
     { method: "POST", headers: { "Content-Type": "application/json" }, body },
     config.sandbox.networkAllowlist,
-    signal,
+    request.signal,
+    resolveExecutionGrantAllowedHosts(request, storage),
   );
   const text = await res.response.text();
   return {
@@ -797,14 +808,23 @@ function citationsBuild(args: Record<string, unknown>) {
 }
 
 async function docsIngest(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {
-  if (request.args.sourceType === "file") {
+  const sourceType = parseIngestionSourceType(request.args.sourceType);
+  if (sourceType === "file") {
     assertReadPathAllowedForRequest(String(request.args.source ?? ""), request, config, storage);
   }
   const ingested = await ingestDocumentViaBackend({
     request,
     storage,
+    networkAllowlist: config.sandbox.networkAllowlist,
+    sourceAllowlist: resolveExecutionGrantAllowedHosts(request, storage),
     fetchUrl: async (url) => {
-      const res = await fetchAllowlisted(url, { method: "GET" }, config.sandbox.networkAllowlist, request.signal);
+      const res = await fetchAllowlisted(
+        url,
+        { method: "GET" },
+        config.sandbox.networkAllowlist,
+        request.signal,
+        resolveExecutionGrantAllowedHosts(request, storage),
+      );
       const body = await res.response.text();
       return {
         finalUrl: res.finalUrl,
@@ -1095,12 +1115,10 @@ function finalizeToolResult(result: Record<string, unknown>): Record<string, unk
   };
 }
 
-async function commsInvoke(
-  toolName: string,
-  args: Record<string, unknown>,
-  config: ToolPolicyConfig,
-  storage: Storage,
-) {
+async function commsInvoke(request: ToolInvokeRequest, config: ToolPolicyConfig, storage: Storage) {
+  const toolName = request.toolName;
+  const args = request.args;
+  const grantAllowlist = resolveExecutionGrantAllowedHosts(request, storage);
   const connectionId = required(args.connectionId, "connectionId");
   const connection = storage.integrationConnections.get(connectionId);
   const target =
@@ -1114,12 +1132,12 @@ async function commsInvoke(
   });
   try {
     if (toolName === "gmail.read") {
-      const records = await gmailRead(connection.config, args, config.sandbox.networkAllowlist);
+      const records = await gmailRead(connection.config, args, config.sandbox.networkAllowlist, grantAllowlist);
       storage.commsDeliveries.markSent(queued.deliveryId, "gmail-read");
       return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId: "gmail-read", records };
     }
     if (toolName === "calendar.list") {
-      const records = await calendarList(connection.config, args, config.sandbox.networkAllowlist);
+      const records = await calendarList(connection.config, args, config.sandbox.networkAllowlist, grantAllowlist);
       storage.commsDeliveries.markSent(queued.deliveryId, "calendar-list");
       return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId: "calendar-list", records };
     }
@@ -1129,6 +1147,7 @@ async function commsInvoke(
       connection.config,
       args,
       config.sandbox.networkAllowlist,
+      grantAllowlist,
       target,
       message,
     );
@@ -1182,51 +1201,52 @@ async function executeCommsTool(
   connectionConfig: Record<string, unknown>,
   args: Record<string, unknown>,
   allowlist: string[],
+  grantAllowlist: string[] | undefined,
   target: string,
   message: string,
 ): Promise<string> {
   if (toolName === "gmail.send") {
-    return gmailSend(connectionConfig, args, allowlist);
+    return gmailSend(connectionConfig, args, allowlist, grantAllowlist);
   }
   if (toolName === "calendar.create_event") {
-    return calendarCreate(connectionConfig, args, allowlist);
+    return calendarCreate(connectionConfig, args, allowlist, grantAllowlist);
   }
   if (toolName.endsWith(".react") || toolName === "channel.react") {
-    return commsReact(toolName, connectionKey, connectionConfig, args, allowlist, target);
+    return commsReact(toolName, connectionKey, connectionConfig, args, allowlist, target, grantAllowlist);
   }
   if (toolName.endsWith(".unsend") || toolName === "channel.unsend") {
-    return commsUnsend(toolName, connectionKey, connectionConfig, args, allowlist, target);
+    return commsUnsend(toolName, connectionKey, connectionConfig, args, allowlist, target, grantAllowlist);
   }
   const channelKey = toolName === "channel.send" ? connectionKey : toolName.slice(0, -".send".length);
   const attachments = normalizeChannelAttachments(args.attachments);
   const renderedMessage = renderChannelMessage(message, attachments);
   switch (channelKey) {
     case "slack":
-      return slackSend(connectionConfig, args, allowlist, target, message, attachments);
+      return slackSend(connectionConfig, args, allowlist, target, message, attachments, grantAllowlist);
     case "discord":
-      return discordSend(connectionConfig, args, allowlist, target, message, attachments);
+      return discordSend(connectionConfig, args, allowlist, target, message, attachments, grantAllowlist);
     case "line":
-      return lineSend(connectionConfig, args, allowlist, target, renderedMessage);
+      return lineSend(connectionConfig, args, allowlist, target, renderedMessage, grantAllowlist);
     case "mattermost":
-      return mattermostSend(connectionConfig, args, allowlist, target, message, attachments);
+      return mattermostSend(connectionConfig, args, allowlist, target, message, attachments, grantAllowlist);
     case "nextcloud-talk":
-      return nextcloudTalkSend(connectionConfig, args, allowlist, target, message, attachments);
+      return nextcloudTalkSend(connectionConfig, args, allowlist, target, message, attachments, grantAllowlist);
     case "imessage":
-      return imessageSend(connectionConfig, args, allowlist, target, message, attachments);
+      return imessageSend(connectionConfig, args, allowlist, target, message, attachments, grantAllowlist);
     case "signal":
-      return signalSend(connectionConfig, args, allowlist, target, renderedMessage);
+      return signalSend(connectionConfig, args, allowlist, target, renderedMessage, grantAllowlist);
     case "telegram":
-      return telegramSend(connectionConfig, args, allowlist, target, message, attachments);
+      return telegramSend(connectionConfig, args, allowlist, target, message, attachments, grantAllowlist);
     case "teams":
-      return teamsSend(connectionConfig, args, allowlist, message, attachments);
+      return teamsSend(connectionConfig, args, allowlist, message, attachments, grantAllowlist);
     case "google-chat":
-      return googleChatSend(connectionConfig, args, allowlist, target, message, attachments);
+      return googleChatSend(connectionConfig, args, allowlist, target, message, attachments, grantAllowlist);
     case "whatsapp":
-      return whatsappSend(connectionConfig, args, allowlist, target, message, attachments);
+      return whatsappSend(connectionConfig, args, allowlist, target, message, attachments, grantAllowlist);
     case "zalo":
-      return zaloSend(connectionConfig, args, allowlist, target, renderedMessage);
+      return zaloSend(connectionConfig, args, allowlist, target, renderedMessage, grantAllowlist);
     case "zalouser":
-      return zalouserSend(connectionConfig, args, allowlist, target, message, attachments);
+      return zalouserSend(connectionConfig, args, allowlist, target, message, attachments, grantAllowlist);
     default:
       break;
   }
@@ -1242,6 +1262,8 @@ async function executeCommsTool(
     webhookUrl,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   if (!res.response.ok) {
     throw new Error(`${toolName} failed (${res.response.status})`);
@@ -1256,23 +1278,24 @@ async function commsReact(
   args: Record<string, unknown>,
   allowlist: string[],
   target: string,
+  grantAllowlist?: string[],
 ): Promise<string> {
   const channelKey = toolName === "channel.react" ? connectionKey : toolName.slice(0, -".react".length);
   switch (channelKey) {
     case "slack":
-      return slackReact(connectionConfig, args, allowlist, target);
+      return slackReact(connectionConfig, args, allowlist, target, grantAllowlist);
     case "discord":
-      return discordReact(connectionConfig, args, allowlist, target);
+      return discordReact(connectionConfig, args, allowlist, target, grantAllowlist);
     case "mattermost":
-      return mattermostReact(connectionConfig, args, allowlist, target);
+      return mattermostReact(connectionConfig, args, allowlist, target, grantAllowlist);
     case "nextcloud-talk":
-      return nextcloudTalkReact(connectionConfig, args, allowlist, target);
+      return nextcloudTalkReact(connectionConfig, args, allowlist, target, grantAllowlist);
     case "telegram":
-      return telegramReact(connectionConfig, args, allowlist, target);
+      return telegramReact(connectionConfig, args, allowlist, target, grantAllowlist);
     case "whatsapp":
-      return whatsappReact(connectionConfig, args, allowlist, target);
+      return whatsappReact(connectionConfig, args, allowlist, target, grantAllowlist);
     case "imessage":
-      return imessageReact(connectionConfig, args, allowlist, target);
+      return imessageReact(connectionConfig, args, allowlist, target, grantAllowlist);
     default:
       throw new Error(`${toolName} is not supported for ${channelKey}`);
   }
@@ -1285,19 +1308,20 @@ async function commsUnsend(
   args: Record<string, unknown>,
   allowlist: string[],
   target: string,
+  grantAllowlist?: string[],
 ): Promise<string> {
   const channelKey = toolName === "channel.unsend" ? connectionKey : toolName.slice(0, -".unsend".length);
   switch (channelKey) {
     case "slack":
-      return slackUnsend(connectionConfig, args, allowlist, target);
+      return slackUnsend(connectionConfig, args, allowlist, target, grantAllowlist);
     case "discord":
-      return discordUnsend(connectionConfig, args, allowlist, target);
+      return discordUnsend(connectionConfig, args, allowlist, target, grantAllowlist);
     case "telegram":
-      return telegramUnsend(connectionConfig, args, allowlist, target);
+      return telegramUnsend(connectionConfig, args, allowlist, target, grantAllowlist);
     case "mattermost":
-      return mattermostUnsend(connectionConfig, args, allowlist, target);
+      return mattermostUnsend(connectionConfig, args, allowlist, target, grantAllowlist);
     case "imessage":
-      return imessageUnsend(connectionConfig, args, allowlist, target);
+      return imessageUnsend(connectionConfig, args, allowlist, target, grantAllowlist);
     default:
       throw new Error(`${toolName} is not supported for ${channelKey}`);
   }
@@ -1382,6 +1406,7 @@ async function slackSend(
   target: string,
   message: string,
   attachments: ChannelAttachment[] = [],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const resolvedTarget = normalizeChannelTarget(target, "slack");
   const urlAttachments = attachments.filter((attachment) => Boolean(attachment.url));
@@ -1406,6 +1431,8 @@ async function slackSend(
         }),
       },
       allowlist,
+      undefined,
+      grantAllowlist,
     );
     if (!res.response.ok) {
       throw new Error(`slack.send failed (${res.response.status})`);
@@ -1445,6 +1472,8 @@ async function slackSend(
         }),
       },
       allowlist,
+      undefined,
+      grantAllowlist,
     );
     const bodyText = await res.response.text();
     const body = parseJsonRecord(bodyText);
@@ -1468,6 +1497,7 @@ async function slackSend(
       attachment,
       index,
       allowlist,
+      grantAllowlist,
       threadTs ?? parentTs,
     );
   }
@@ -1480,6 +1510,7 @@ async function slackReact(
   args: Record<string, unknown>,
   allowlist: string[],
   target: string,
+  grantAllowlist?: string[],
 ): Promise<string> {
   const token = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const channel = asString(args.target) ?? normalizeChannelTarget(target, "slack") ?? asString(config.defaultChannel);
@@ -1506,6 +1537,8 @@ async function slackReact(
       }),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   const body = parseJsonRecord(bodyText);
@@ -1520,6 +1553,7 @@ async function slackUnsend(
   args: Record<string, unknown>,
   allowlist: string[],
   target: string,
+  grantAllowlist?: string[],
 ): Promise<string> {
   const token = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const channel = asString(args.target) ?? normalizeChannelTarget(target, "slack") ?? asString(config.defaultChannel);
@@ -1544,6 +1578,8 @@ async function slackUnsend(
       }),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   const body = parseJsonRecord(bodyText);
@@ -1560,10 +1596,11 @@ async function discordSend(
   target: string,
   message: string,
   attachments: ChannelAttachment[] = [],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const resolvedTarget = normalizeChannelTarget(target, "discord");
   const webhookUrl = secretFrom(config, "webhookUrl", "webhookUrlEnv");
-  const discordRequest = await buildDiscordMessageRequest(message, attachments, allowlist);
+  const discordRequest = await buildDiscordMessageRequest(message, attachments, allowlist, grantAllowlist);
   if (webhookUrl) {
     const res = await fetchAllowlisted(
       appendDiscordWebhookQuery(webhookUrl, "wait", "true"),
@@ -1573,6 +1610,8 @@ async function discordSend(
         body: discordRequest.body,
       },
       allowlist,
+      undefined,
+      grantAllowlist,
     );
     if (!res.response.ok) {
       throw new Error(`discord.send failed (${res.response.status})`);
@@ -1600,6 +1639,8 @@ async function discordSend(
       body: discordRequest.body,
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   if (!res.response.ok) {
@@ -1614,6 +1655,7 @@ async function discordReact(
   args: Record<string, unknown>,
   allowlist: string[],
   target: string,
+  grantAllowlist?: string[],
 ): Promise<string> {
   const token = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const channelId =
@@ -1635,6 +1677,8 @@ async function discordReact(
       },
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   if (!res.response.ok) {
     const bodyText = await res.response.text();
@@ -1648,6 +1692,7 @@ async function discordUnsend(
   args: Record<string, unknown>,
   allowlist: string[],
   target: string,
+  grantAllowlist?: string[],
 ): Promise<string> {
   const messageId = required(args.messageId, "Discord messageId");
   const token = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
@@ -1667,6 +1712,8 @@ async function discordUnsend(
         },
       },
       allowlist,
+      undefined,
+      grantAllowlist,
     );
     if (!res.response.ok) {
       const bodyText = await res.response.text();
@@ -1678,7 +1725,7 @@ async function discordUnsend(
     throw new Error("Missing Discord bot token or webhook URL");
   }
   const deleteUrl = `${appendDiscordWebhookQuery(webhookUrl.replace(/\/+$/, ""), "wait", "true").replace(/\?wait=true$/, "")}/messages/${encodeURIComponent(messageId)}`;
-  const res = await fetchAllowlisted(deleteUrl, { method: "DELETE" }, allowlist);
+  const res = await fetchAllowlisted(deleteUrl, { method: "DELETE" }, allowlist, undefined, grantAllowlist);
   if (!res.response.ok) {
     const bodyText = await res.response.text();
     throw new Error(`discord.unsend failed (${res.response.status})${bodyText ? `: ${bodyText}` : ""}`);
@@ -1690,6 +1737,7 @@ async function buildDiscordMessageRequest(
   message: string,
   attachments: ChannelAttachment[],
   allowlist: string[],
+  grantAllowlist?: string[],
 ): Promise<{ headers?: Record<string, string>; body: BodyInit }> {
   const embeds = buildDiscordEmbeds(attachments);
   const uploadableAttachments = attachments.filter((attachment) => Boolean(attachment.dataBase64));
@@ -1710,7 +1758,7 @@ async function buildDiscordMessageRequest(
   const formData = new FormData();
   formData.append("payload_json", JSON.stringify(payload));
   for (const [index, attachment] of uploadableAttachments.entries()) {
-    const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "Discord");
+    const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "Discord", grantAllowlist);
     const fileName = resolveChannelAttachmentName(attachment, index);
     const blobBytes = new Uint8Array(attachmentData.bytes.length);
     blobBytes.set(attachmentData.bytes);
@@ -1908,6 +1956,7 @@ async function lineSend(
   allowlist: string[],
   target: string,
   message: string,
+  grantAllowlist?: string[],
 ): Promise<string> {
   const resolvedTarget = normalizeLineTarget(
     asString(args.target) ?? normalizeChannelTarget(target, "line") ?? resolveDefaultChannelTarget("line", config),
@@ -1945,6 +1994,8 @@ async function lineSend(
         }),
       },
       allowlist,
+      undefined,
+      grantAllowlist,
     );
     if (!res.response.ok) {
       throw new Error(`line.send failed (${res.response.status})`);
@@ -1962,6 +2013,7 @@ async function telegramSend(
   target: string,
   message: string,
   attachments: ChannelAttachment[] = [],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const resolvedTarget = normalizeChannelTarget(target, "telegram");
   const token = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
@@ -1976,13 +2028,22 @@ async function telegramSend(
   }
 
   if (attachments.length === 0) {
-    return telegramSendText(config, allowlist, token, chatId, message, replyToMessageId, replyMarkup);
+    return telegramSendText(config, allowlist, token, chatId, message, replyToMessageId, replyMarkup, grantAllowlist);
   }
 
   let lastMessageId: string | undefined;
   let caption = message.trim() || undefined;
   if (caption && caption.length > 1024) {
-    lastMessageId = await telegramSendText(config, allowlist, token, chatId, message, replyToMessageId);
+    lastMessageId = await telegramSendText(
+      config,
+      allowlist,
+      token,
+      chatId,
+      message,
+      replyToMessageId,
+      undefined,
+      grantAllowlist,
+    );
     caption = undefined;
   }
   for (const [index, attachment] of attachments.entries()) {
@@ -1995,6 +2056,7 @@ async function telegramSend(
       index,
       caption,
       index === 0 ? replyToMessageId : undefined,
+      grantAllowlist,
     );
     caption = undefined;
   }
@@ -2006,6 +2068,7 @@ async function telegramUnsend(
   args: Record<string, unknown>,
   allowlist: string[],
   target: string,
+  grantAllowlist?: string[],
 ): Promise<string> {
   const token = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const chatId = asString(args.target) ?? normalizeChannelTarget(target, "telegram") ?? asString(config.defaultChatId);
@@ -2027,6 +2090,8 @@ async function telegramUnsend(
       }),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   const body = parseJsonRecord(bodyText);
@@ -2043,6 +2108,7 @@ async function telegramReact(
   args: Record<string, unknown>,
   allowlist: string[],
   target: string,
+  grantAllowlist?: string[],
 ): Promise<string> {
   const token = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const chatId = asString(args.target) ?? normalizeChannelTarget(target, "telegram") ?? asString(config.defaultChatId);
@@ -2067,6 +2133,8 @@ async function telegramReact(
       }),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   const body = parseJsonRecord(bodyText);
@@ -2108,6 +2176,7 @@ async function telegramSendText(
   message: string,
   replyToMessageId?: number,
   replyMarkup?: Record<string, unknown>,
+  grantAllowlist?: string[],
 ): Promise<string> {
   const res = await fetchAllowlisted(
     `https://api.telegram.org/bot${token}/sendMessage`,
@@ -2123,6 +2192,8 @@ async function telegramSendText(
       }),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   const body = parseJsonRecord(bodyText);
@@ -2142,6 +2213,7 @@ async function telegramSendAttachment(
   index: number,
   caption: string | undefined,
   replyToMessageId?: number,
+  grantAllowlist?: string[],
 ): Promise<string> {
   const parseMode = asString(config.parseMode) ?? undefined;
   const isImage = isImageChannelAttachment(attachment);
@@ -2151,7 +2223,7 @@ async function telegramSendAttachment(
   let headers: Record<string, string> | undefined;
 
   if (attachment.dataBase64) {
-    const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "Telegram");
+    const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "Telegram", grantAllowlist);
     const fileName = resolveChannelAttachmentName(attachment, index);
     const blobBytes = new Uint8Array(attachmentData.bytes.length);
     blobBytes.set(attachmentData.bytes);
@@ -2191,6 +2263,8 @@ async function telegramSendAttachment(
       body,
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   const payload = parseJsonRecord(bodyText);
@@ -2220,6 +2294,7 @@ async function teamsSend(
   allowlist: string[],
   message: string,
   attachments: ChannelAttachment[] = [],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const webhookUrl =
     asString(args.url) ?? secretFrom(config, "webhookUrl", "webhookUrlEnv") ?? secretFrom(config, "url", "urlEnv");
@@ -2236,6 +2311,8 @@ async function teamsSend(
       body: JSON.stringify(payload),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   if (!res.response.ok) {
     throw new Error(`teams.send failed (${res.response.status})`);
@@ -2250,6 +2327,7 @@ async function googleChatSend(
   target: string,
   message: string,
   attachments: ChannelAttachment[] = [],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const resolvedTarget = normalizeChannelTarget(target, "google-chat");
   const webhookUrl =
@@ -2270,6 +2348,8 @@ async function googleChatSend(
       body: JSON.stringify(buildGoogleChatWebhookPayload(message, attachments)),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   if (!res.response.ok) {
@@ -2286,6 +2366,7 @@ async function whatsappSend(
   target: string,
   message: string,
   attachments: ChannelAttachment[] = [],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const accessToken = secretFrom(config, "accessToken", "accessTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const phoneNumberId = asString(config.phoneNumberId) ?? asString(config.senderId);
@@ -2327,6 +2408,7 @@ async function whatsappSend(
         text: { body: outboundMessage },
       },
       allowlist,
+      grantAllowlist,
     );
   }
 
@@ -2340,6 +2422,7 @@ async function whatsappSend(
       attachment,
       index,
       allowlist,
+      grantAllowlist,
     );
   }
 
@@ -2354,6 +2437,7 @@ async function whatsappReact(
   args: Record<string, unknown>,
   allowlist: string[],
   target: string,
+  grantAllowlist?: string[],
 ): Promise<string> {
   const accessToken = secretFrom(config, "accessToken", "accessTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const phoneNumberId = asString(config.phoneNumberId) ?? asString(config.senderId);
@@ -2393,6 +2477,7 @@ async function whatsappReact(
       },
     },
     allowlist,
+    grantAllowlist,
   );
 }
 
@@ -2403,6 +2488,7 @@ async function mattermostSend(
   target: string,
   message: string,
   attachments: ChannelAttachment[] = [],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const serverUrl = asString(config.serverUrl) ?? asString(config.baseUrl);
   const botToken = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
@@ -2421,7 +2507,14 @@ async function mattermostSend(
   }
 
   const parsedTarget = parseMattermostTarget(resolvedTarget);
-  const botUser = await mattermostApiRequest<Record<string, unknown>>(serverUrl, botToken, "/users/me", allowlist);
+  const botUser = await mattermostApiRequest<Record<string, unknown>>(
+    serverUrl,
+    botToken,
+    "/users/me",
+    allowlist,
+    undefined,
+    grantAllowlist,
+  );
   const botUserId = required(botUser.id, "Mattermost bot user id");
   const channelId = await resolveMattermostChannelId(
     serverUrl,
@@ -2430,25 +2523,41 @@ async function mattermostSend(
     botUserId,
     asString(args.team) ?? asString(config.defaultTeam),
     allowlist,
+    grantAllowlist,
   );
 
   let fileIds: string[] | undefined;
   if (attachments.length > 0) {
     fileIds = [];
     for (const [index, attachment] of attachments.entries()) {
-      const fileId = await mattermostUploadAttachment(serverUrl, botToken, channelId, attachment, index, allowlist);
+      const fileId = await mattermostUploadAttachment(
+        serverUrl,
+        botToken,
+        channelId,
+        attachment,
+        index,
+        allowlist,
+        grantAllowlist,
+      );
       fileIds.push(fileId);
     }
   }
 
-  const post = await mattermostApiRequest<Record<string, unknown>>(serverUrl, botToken, "/posts", allowlist, {
-    method: "POST",
-    body: JSON.stringify({
-      channel_id: channelId,
-      message,
-      ...(fileIds && fileIds.length > 0 ? { file_ids: fileIds } : {}),
-    }),
-  });
+  const post = await mattermostApiRequest<Record<string, unknown>>(
+    serverUrl,
+    botToken,
+    "/posts",
+    allowlist,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        channel_id: channelId,
+        message,
+        ...(fileIds && fileIds.length > 0 ? { file_ids: fileIds } : {}),
+      }),
+    },
+    grantAllowlist,
+  );
   return asString(post.id) ?? `mattermost-${Date.now()}`;
 }
 
@@ -2457,6 +2566,7 @@ async function mattermostReact(
   args: Record<string, unknown>,
   allowlist: string[],
   _target: string,
+  grantAllowlist?: string[],
 ): Promise<string> {
   const serverUrl = asString(config.serverUrl) ?? asString(config.baseUrl);
   const botToken = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
@@ -2468,16 +2578,30 @@ async function mattermostReact(
   if (!botToken) {
     throw new Error("Missing Mattermost bot token");
   }
-  const botUser = await mattermostApiRequest<Record<string, unknown>>(serverUrl, botToken, "/users/me", allowlist);
+  const botUser = await mattermostApiRequest<Record<string, unknown>>(
+    serverUrl,
+    botToken,
+    "/users/me",
+    allowlist,
+    undefined,
+    grantAllowlist,
+  );
   const botUserId = required(botUser.id, "Mattermost bot user id");
-  await mattermostApiRequest<Record<string, unknown>>(serverUrl, botToken, "/reactions", allowlist, {
-    method: "POST",
-    body: JSON.stringify({
-      user_id: botUserId,
-      post_id: postId,
-      emoji_name: reaction,
-    }),
-  });
+  await mattermostApiRequest<Record<string, unknown>>(
+    serverUrl,
+    botToken,
+    "/reactions",
+    allowlist,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        user_id: botUserId,
+        post_id: postId,
+        emoji_name: reaction,
+      }),
+    },
+    grantAllowlist,
+  );
   return postId;
 }
 
@@ -2486,6 +2610,7 @@ async function mattermostUnsend(
   args: Record<string, unknown>,
   allowlist: string[],
   _target: string,
+  grantAllowlist?: string[],
 ): Promise<string> {
   const serverUrl = asString(config.serverUrl) ?? asString(config.baseUrl);
   const botToken = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
@@ -2496,9 +2621,16 @@ async function mattermostUnsend(
   if (!botToken) {
     throw new Error("Missing Mattermost bot token");
   }
-  await mattermostApiRequest<void>(serverUrl, botToken, `/posts/${encodeURIComponent(postId)}`, allowlist, {
-    method: "DELETE",
-  });
+  await mattermostApiRequest<void>(
+    serverUrl,
+    botToken,
+    `/posts/${encodeURIComponent(postId)}`,
+    allowlist,
+    {
+      method: "DELETE",
+    },
+    grantAllowlist,
+  );
   return postId;
 }
 
@@ -2508,6 +2640,7 @@ async function signalSend(
   allowlist: string[],
   target: string,
   message: string,
+  grantAllowlist?: string[],
 ): Promise<string> {
   const baseUrl = normalizeSignalBaseUrl(asString(config.baseUrl) ?? asString(config.bridgeUrl));
   const account =
@@ -2531,7 +2664,13 @@ async function signalSend(
     params.account = account;
   }
 
-  const result = await signalRpcRequest<Record<string, unknown> | undefined>(baseUrl, "send", params, allowlist);
+  const result = await signalRpcRequest<Record<string, unknown> | undefined>(
+    baseUrl,
+    "send",
+    params,
+    allowlist,
+    grantAllowlist,
+  );
   return result?.timestamp != null ? String(result.timestamp) : `signal-${Date.now()}`;
 }
 
@@ -2542,6 +2681,7 @@ async function imessageSend(
   target: string,
   message: string,
   attachments: ChannelAttachment[] = [],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const baseUrl = normalizeBlueBubblesBaseUrl(
     asString(config.bridgeUrl) ?? asString(config.baseUrl) ?? asString(config.serverUrl),
@@ -2565,12 +2705,12 @@ async function imessageSend(
   const richAttachments = attachments.filter((attachment) => Boolean(attachment.url || attachment.dataBase64));
   const inlineOnlyAttachments = attachments.filter((attachment) => !attachment.url);
   const inlineMessage = renderChannelMessage(message, inlineOnlyAttachments);
-  let chatGuid = await resolveBlueBubblesChatGuid(baseUrl, password, parsedTarget, allowlist);
+  let chatGuid = await resolveBlueBubblesChatGuid(baseUrl, password, parsedTarget, allowlist, grantAllowlist);
   if (!chatGuid) {
     if (parsedTarget.kind === "handle") {
       if (richAttachments.length > 0) {
-        await blueBubblesCreateChat(baseUrl, password, parsedTarget.address, undefined, allowlist);
-        chatGuid = await resolveBlueBubblesChatGuid(baseUrl, password, parsedTarget, allowlist);
+        await blueBubblesCreateChat(baseUrl, password, parsedTarget.address, undefined, allowlist, grantAllowlist);
+        chatGuid = await resolveBlueBubblesChatGuid(baseUrl, password, parsedTarget, allowlist, grantAllowlist);
         if (!chatGuid) {
           throw new Error("BlueBubbles send failed: created chat could not be resolved for attachment send");
         }
@@ -2581,6 +2721,7 @@ async function imessageSend(
           parsedTarget.address,
           required(inlineMessage, "iMessage message"),
           allowlist,
+          grantAllowlist,
         );
       }
     }
@@ -2607,13 +2748,16 @@ async function imessageSend(
         effectId,
       },
       allowlist,
+      grantAllowlist,
     );
   }
 
   const uploadedAttachments: BlueBubblesMultipartAttachmentPart[] = [];
   for (let index = 0; index < richAttachments.length; index += 1) {
     const attachment = richAttachments[index] as ChannelAttachment;
-    uploadedAttachments.push(await blueBubblesUploadAttachment(baseUrl, password, attachment, allowlist, index));
+    uploadedAttachments.push(
+      await blueBubblesUploadAttachment(baseUrl, password, attachment, allowlist, index, grantAllowlist),
+    );
   }
 
   return blueBubblesSendMultipart(
@@ -2629,6 +2773,7 @@ async function imessageSend(
       subject,
     },
     allowlist,
+    grantAllowlist,
   );
 }
 
@@ -2637,10 +2782,17 @@ async function imessageReact(
   args: Record<string, unknown>,
   allowlist: string[],
   target: string,
+  grantAllowlist?: string[],
 ): Promise<string> {
   const context = resolveBlueBubblesContext(config, args, target, "Missing iMessage target");
   const parsedTarget = parseBlueBubblesTarget(context.resolvedTarget);
-  const chatGuid = await resolveBlueBubblesChatGuid(context.baseUrl, context.password, parsedTarget, allowlist);
+  const chatGuid = await resolveBlueBubblesChatGuid(
+    context.baseUrl,
+    context.password,
+    parsedTarget,
+    allowlist,
+    grantAllowlist,
+  );
   if (!chatGuid) {
     throw new Error("BlueBubbles react failed: chatGuid not found for target");
   }
@@ -2658,6 +2810,7 @@ async function imessageReact(
       messageText: asString(args.messageText) ?? asString(args.selectedMessageText),
     },
     allowlist,
+    grantAllowlist,
   );
 }
 
@@ -2666,6 +2819,7 @@ async function imessageUnsend(
   args: Record<string, unknown>,
   allowlist: string[],
   target: string,
+  grantAllowlist?: string[],
 ): Promise<string> {
   const context = resolveBlueBubblesContext(config, args, target, "");
   return blueBubblesUnsendMessage(
@@ -2676,6 +2830,7 @@ async function imessageUnsend(
       partIndex: parseIntegerLike(args.partIndex),
     },
     allowlist,
+    grantAllowlist,
   );
 }
 
@@ -2686,6 +2841,7 @@ async function nextcloudTalkSend(
   target: string,
   message: string,
   attachments: ChannelAttachment[] = [],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const baseUrl = asString(config.baseUrl);
   const secret =
@@ -2733,6 +2889,8 @@ async function nextcloudTalkSend(
       body: JSON.stringify(payload),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   if (!res.response.ok) {
@@ -2749,6 +2907,7 @@ async function nextcloudTalkReact(
   args: Record<string, unknown>,
   allowlist: string[],
   target: string,
+  grantAllowlist?: string[],
 ): Promise<string> {
   const baseUrl = asString(config.baseUrl);
   const secret =
@@ -2791,6 +2950,8 @@ async function nextcloudTalkReact(
       body: bodyText,
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const responseText = await res.response.text();
   if (!res.response.ok) {
@@ -2805,6 +2966,7 @@ async function zaloSend(
   allowlist: string[],
   target: string,
   message: string,
+  grantAllowlist?: string[],
 ): Promise<string> {
   const accessToken = secretFrom(config, "accessToken", "accessTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
   const chatId = normalizeZaloTarget(
@@ -2832,6 +2994,8 @@ async function zaloSend(
         }),
       },
       allowlist,
+      undefined,
+      grantAllowlist,
     );
     const bodyText = await res.response.text();
     const body = parseJsonRecord(bodyText);
@@ -2853,6 +3017,7 @@ async function zalouserSend(
   target: string,
   message: string,
   attachments: ChannelAttachment[] = [],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const baseUrl = normalizeZcaBaseUrl(
     asString(config.baseUrl) ?? asString(config.bridgeUrl) ?? asString(config.serverUrl),
@@ -2883,7 +3048,7 @@ async function zalouserSend(
   const inlineMessage = renderChannelMessage(outboundMessage, inlineOnlyAttachments);
 
   if (richAttachments.length === 0) {
-    return zcaSendText(baseUrl, profilePrefix, headers, parsedTarget, inlineMessage, allowlist);
+    return zcaSendText(baseUrl, profilePrefix, headers, parsedTarget, inlineMessage, allowlist, grantAllowlist);
   }
 
   let lastMessageId: string | undefined;
@@ -2897,6 +3062,7 @@ async function zalouserSend(
       attachment,
       caption,
       allowlist,
+      grantAllowlist,
     );
     caption = undefined;
   }
@@ -3249,6 +3415,7 @@ async function zcaSendText(
   target: ZalouserTarget,
   message: string,
   allowlist: string[],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const res = await fetchAllowlisted(
     `${baseUrl}${profilePrefix}/messages/text`,
@@ -3262,6 +3429,8 @@ async function zcaSendText(
       }),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   const body = parseJsonRecord(bodyText);
@@ -3280,6 +3449,7 @@ async function zcaSendAttachment(
   attachment: ChannelAttachment,
   caption: string | undefined,
   allowlist: string[],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const url = required(attachment.url, "Zalo User attachment URL");
   const endpoint = classifyZcaAttachmentEndpoint(attachment);
@@ -3297,6 +3467,8 @@ async function zcaSendAttachment(
       }),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   const body = parseJsonRecord(bodyText);
@@ -3517,6 +3689,7 @@ async function queryBlueBubblesChats(
   offset: number,
   limit: number,
   allowlist: string[],
+  grantAllowlist?: string[],
 ): Promise<Record<string, unknown>[]> {
   const res = await fetchAllowlisted(
     buildBlueBubblesApiUrl(baseUrl, "/api/v1/chat/query", password),
@@ -3530,6 +3703,8 @@ async function queryBlueBubblesChats(
       }),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   if (!res.response.ok) {
     return [];
@@ -3545,6 +3720,7 @@ async function resolveBlueBubblesChatGuid(
   password: string,
   target: BlueBubblesTarget,
   allowlist: string[],
+  grantAllowlist?: string[],
 ): Promise<string | null> {
   if (target.kind === "chat_guid") {
     return target.chatGuid;
@@ -3553,7 +3729,7 @@ async function resolveBlueBubblesChatGuid(
   const normalizedHandle = target.kind === "handle" ? normalizeBlueBubblesHandle(target.address) : "";
   let participantMatch: string | null = null;
   for (let offset = 0; offset < 5000; offset += 500) {
-    const chats = await queryBlueBubblesChats(baseUrl, password, offset, 500, allowlist);
+    const chats = await queryBlueBubblesChats(baseUrl, password, offset, 500, allowlist, grantAllowlist);
     if (chats.length === 0) {
       break;
     }
@@ -3675,6 +3851,7 @@ async function blueBubblesCreateChat(
   address: string,
   message: string | undefined,
   allowlist: string[],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const requestBody: Record<string, unknown> = {
     addresses: [address],
@@ -3692,6 +3869,8 @@ async function blueBubblesCreateChat(
       body: JSON.stringify(requestBody),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   if (!res.response.ok) {
@@ -3712,6 +3891,7 @@ async function blueBubblesSendText(
     effectId?: string;
   },
   allowlist: string[],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const requestBody: Record<string, unknown> = {
     chatGuid: payload.chatGuid,
@@ -3737,6 +3917,8 @@ async function blueBubblesSendText(
       body: JSON.stringify(requestBody),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   if (!res.response.ok) {
@@ -3757,6 +3939,7 @@ async function blueBubblesSendReaction(
     messageText?: string;
   },
   allowlist: string[],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const requestBody: Record<string, unknown> = {
     chatGuid: payload.chatGuid,
@@ -3777,6 +3960,8 @@ async function blueBubblesSendReaction(
       body: JSON.stringify(requestBody),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   if (!res.response.ok) {
@@ -3795,6 +3980,7 @@ async function blueBubblesUnsendMessage(
     partIndex?: number;
   },
   allowlist: string[],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const requestBody: Record<string, unknown> = {};
   if (payload.partIndex != null) {
@@ -3812,6 +3998,8 @@ async function blueBubblesUnsendMessage(
       body: JSON.stringify(requestBody),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   if (!res.response.ok) {
@@ -3833,8 +4021,9 @@ async function blueBubblesUploadAttachment(
   attachment: ChannelAttachment,
   allowlist: string[],
   index: number,
+  grantAllowlist?: string[],
 ): Promise<BlueBubblesMultipartAttachmentPart> {
-  const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "BlueBubbles");
+  const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "BlueBubbles", grantAllowlist);
   const fileName = resolveChannelAttachmentName(attachment, index);
   const blobBytes = new Uint8Array(attachmentData.bytes.length);
   blobBytes.set(attachmentData.bytes);
@@ -3852,6 +4041,8 @@ async function blueBubblesUploadAttachment(
       body: formData,
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await uploadRes.response.text();
   if (!uploadRes.response.ok) {
@@ -3871,6 +4062,7 @@ async function resolveChannelAttachmentBytes(
   attachment: ChannelAttachment,
   allowlist: string[],
   providerLabel: string,
+  grantAllowlist?: string[],
 ): Promise<{
   bytes: Buffer;
   contentType?: string;
@@ -3882,7 +4074,7 @@ async function resolveChannelAttachmentBytes(
     };
   }
   const sourceUrl = required(attachment.url, `${providerLabel} attachment URL`);
-  const attachmentRes = await fetchAllowlisted(sourceUrl, { method: "GET" }, allowlist);
+  const attachmentRes = await fetchAllowlisted(sourceUrl, { method: "GET" }, allowlist, undefined, grantAllowlist);
   if (!attachmentRes.response.ok) {
     throw new Error(`${providerLabel} attachment fetch failed (${attachmentRes.response.status})`);
   }
@@ -3905,6 +4097,7 @@ async function blueBubblesSendMultipart(
     subject?: string;
   },
   allowlist: string[],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const parts: Array<Record<string, unknown>> = [];
   let partIndex = 0;
@@ -3943,6 +4136,8 @@ async function blueBubblesSendMultipart(
       body: JSON.stringify(requestBody),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   if (!res.response.ok) {
@@ -4059,12 +4254,14 @@ async function resolveMattermostChannelId(
   botUserId: string,
   defaultTeam: string | undefined,
   allowlist: string[],
+  grantAllowlist?: string[],
 ): Promise<string> {
   if (target.kind === "channel") {
     return target.id;
   }
   if (target.kind === "user") {
-    const userId = target.id || (await resolveMattermostUserId(serverUrl, botToken, target.username, allowlist));
+    const userId =
+      target.id || (await resolveMattermostUserId(serverUrl, botToken, target.username, allowlist, grantAllowlist));
     const channel = await mattermostApiRequest<Record<string, unknown>>(
       serverUrl,
       botToken,
@@ -4074,13 +4271,14 @@ async function resolveMattermostChannelId(
         method: "POST",
         body: JSON.stringify([botUserId, userId]),
       },
+      grantAllowlist,
     );
     return required(channel.id, "Mattermost DM channel id");
   }
 
   const teamIds = defaultTeam
-    ? [await resolveMattermostTeamId(serverUrl, botToken, defaultTeam, allowlist)]
-    : await resolveMattermostTeamIds(serverUrl, botToken, botUserId, allowlist);
+    ? [await resolveMattermostTeamId(serverUrl, botToken, defaultTeam, allowlist, grantAllowlist)]
+    : await resolveMattermostTeamIds(serverUrl, botToken, botUserId, allowlist, grantAllowlist);
 
   for (const teamId of teamIds) {
     try {
@@ -4089,6 +4287,8 @@ async function resolveMattermostChannelId(
         botToken,
         `/teams/${encodeURIComponent(teamId)}/channels/name/${encodeURIComponent(target.name)}`,
         allowlist,
+        undefined,
+        grantAllowlist,
       );
       return required(channel.id, "Mattermost channel id");
     } catch (error) {
@@ -4111,12 +4311,15 @@ async function resolveMattermostUserId(
   botToken: string,
   username: string | undefined,
   allowlist: string[],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const user = await mattermostApiRequest<Record<string, unknown>>(
     serverUrl,
     botToken,
     `/users/username/${encodeURIComponent(required(username, "Mattermost username"))}`,
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   return required(user.id, "Mattermost user id");
 }
@@ -4126,12 +4329,15 @@ async function resolveMattermostTeamId(
   botToken: string,
   teamName: string,
   allowlist: string[],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const team = await mattermostApiRequest<Record<string, unknown>>(
     serverUrl,
     botToken,
     `/teams/name/${encodeURIComponent(teamName)}`,
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   return required(team.id, "Mattermost team id");
 }
@@ -4141,12 +4347,15 @@ async function resolveMattermostTeamIds(
   botToken: string,
   botUserId: string,
   allowlist: string[],
+  grantAllowlist?: string[],
 ): Promise<string[]> {
   const teams = await mattermostApiRequest<Array<Record<string, unknown>>>(
     serverUrl,
     botToken,
     `/users/${encodeURIComponent(botUserId)}/teams`,
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   return teams.map((team) => asString(team.id)).filter((teamId): teamId is string => Boolean(teamId));
 }
@@ -4157,6 +4366,7 @@ async function mattermostApiRequest<T>(
   apiPath: string,
   allowlist: string[],
   init: RequestInit = {},
+  grantAllowlist?: string[],
 ): Promise<T> {
   const url = `${serverUrl.replace(/\/+$/, "")}/api/v4${apiPath}`;
   const headers = new Headers(init.headers);
@@ -4171,6 +4381,8 @@ async function mattermostApiRequest<T>(
       headers,
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   if (!res.response.ok) {
@@ -4190,8 +4402,9 @@ async function mattermostUploadAttachment(
   attachment: ChannelAttachment,
   index: number,
   allowlist: string[],
+  grantAllowlist?: string[],
 ): Promise<string> {
-  const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "Mattermost");
+  const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "Mattermost", grantAllowlist);
   const fileName = resolveChannelAttachmentName(attachment, index);
   const blobBytes = new Uint8Array(attachmentData.bytes.length);
   blobBytes.set(attachmentData.bytes);
@@ -4212,6 +4425,8 @@ async function mattermostUploadAttachment(
       body: formData,
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   if (!res.response.ok) {
@@ -4231,9 +4446,10 @@ async function slackUploadAttachment(
   attachment: ChannelAttachment,
   index: number,
   allowlist: string[],
+  grantAllowlist?: string[],
   threadTs?: string,
 ): Promise<string> {
-  const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "Slack");
+  const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "Slack", grantAllowlist);
   const fileName = resolveChannelAttachmentName(attachment, index);
   const metadataRes = await fetchAllowlisted(
     "https://slack.com/api/files.getUploadURLExternal",
@@ -4249,6 +4465,8 @@ async function slackUploadAttachment(
       }),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const metadataBodyText = await metadataRes.response.text();
   const metadataBody = parseJsonRecord(metadataBodyText);
@@ -4268,6 +4486,8 @@ async function slackUploadAttachment(
       body: new Uint8Array(attachmentData.bytes),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const uploadBodyText = await uploadRes.response.text();
   if (!uploadRes.response.ok) {
@@ -4294,6 +4514,8 @@ async function slackUploadAttachment(
       }),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const completeBodyText = await completeRes.response.text();
   const completeBody = parseJsonRecord(completeBodyText);
@@ -4311,6 +4533,7 @@ async function whatsappSendPayload(
   accessToken: string,
   payload: Record<string, unknown>,
   allowlist: string[],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const res = await fetchAllowlisted(
     `${baseUrl}/${encodeURIComponent(phoneNumberId)}/messages`,
@@ -4323,6 +4546,8 @@ async function whatsappSendPayload(
       body: JSON.stringify(payload),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   const body = parseJsonRecord(bodyText);
@@ -4345,6 +4570,7 @@ async function whatsappSendAttachment(
   attachment: ChannelAttachment,
   index: number,
   allowlist: string[],
+  grantAllowlist?: string[],
 ): Promise<string> {
   const type = resolveWhatsAppAttachmentType(attachment);
   const attachmentField: Record<string, unknown> = {};
@@ -4356,6 +4582,7 @@ async function whatsappSendAttachment(
       attachment,
       index,
       allowlist,
+      grantAllowlist,
     );
   } else {
     attachmentField.link = required(attachment.url, "WhatsApp attachment URL");
@@ -4375,6 +4602,7 @@ async function whatsappSendAttachment(
       [type]: attachmentField,
     },
     allowlist,
+    grantAllowlist,
   );
 }
 
@@ -4385,8 +4613,9 @@ async function whatsappUploadAttachment(
   attachment: ChannelAttachment,
   index: number,
   allowlist: string[],
+  grantAllowlist?: string[],
 ): Promise<string> {
-  const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "WhatsApp");
+  const attachmentData = await resolveChannelAttachmentBytes(attachment, allowlist, "WhatsApp", grantAllowlist);
   const fileName = resolveChannelAttachmentName(attachment, index);
   const blobBytes = new Uint8Array(attachmentData.bytes.length);
   blobBytes.set(attachmentData.bytes);
@@ -4410,6 +4639,8 @@ async function whatsappUploadAttachment(
       body: formData,
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const bodyText = await res.response.text();
   const body = parseJsonRecord(bodyText);
@@ -4426,6 +4657,7 @@ async function signalRpcRequest<T>(
   method: string,
   params: Record<string, unknown>,
   allowlist: string[],
+  grantAllowlist?: string[],
 ): Promise<T> {
   const res = await fetchAllowlisted(
     `${baseUrl}/api/v1/rpc`,
@@ -4440,6 +4672,8 @@ async function signalRpcRequest<T>(
       }),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   if (res.response.status === 201) {
     return undefined as T;
@@ -4472,7 +4706,12 @@ async function signalRpcRequest<T>(
   return body.result as T;
 }
 
-async function gmailRead(config: Record<string, unknown>, args: Record<string, unknown>, allowlist: string[]) {
+async function gmailRead(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  grantAllowlist?: string[],
+) {
   const token = secretFrom(config, "accessToken", "accessTokenEnv");
   if (!token) {
     throw new Error("Missing Gmail access token");
@@ -4486,6 +4725,8 @@ async function gmailRead(config: Record<string, unknown>, args: Record<string, u
     url.toString(),
     { method: "GET", headers: { Authorization: `Bearer ${token}` } },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const body = await res.response.text();
   if (!res.response.ok) {
@@ -4494,7 +4735,12 @@ async function gmailRead(config: Record<string, unknown>, args: Record<string, u
   return (JSON.parse(body) as { messages?: unknown[] }).messages ?? [];
 }
 
-async function gmailSend(config: Record<string, unknown>, args: Record<string, unknown>, allowlist: string[]) {
+async function gmailSend(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  grantAllowlist?: string[],
+) {
   const token = secretFrom(config, "accessToken", "accessTokenEnv");
   if (!token) {
     throw new Error("Missing Gmail access token");
@@ -4521,6 +4767,8 @@ async function gmailSend(config: Record<string, unknown>, args: Record<string, u
       body: JSON.stringify({ raw }),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const body = await res.response.text();
   if (!res.response.ok) {
@@ -4529,7 +4777,12 @@ async function gmailSend(config: Record<string, unknown>, args: Record<string, u
   return (JSON.parse(body) as { id?: string }).id ?? `gmail-${Date.now()}`;
 }
 
-async function calendarList(config: Record<string, unknown>, args: Record<string, unknown>, allowlist: string[]) {
+async function calendarList(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  grantAllowlist?: string[],
+) {
   const token = secretFrom(config, "accessToken", "accessTokenEnv");
   if (!token) {
     throw new Error("Missing Calendar access token");
@@ -4545,6 +4798,8 @@ async function calendarList(config: Record<string, unknown>, args: Record<string
     url.toString(),
     { method: "GET", headers: { Authorization: `Bearer ${token}` } },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const body = await res.response.text();
   if (!res.response.ok) {
@@ -4553,7 +4808,12 @@ async function calendarList(config: Record<string, unknown>, args: Record<string
   return (JSON.parse(body) as { items?: unknown[] }).items ?? [];
 }
 
-async function calendarCreate(config: Record<string, unknown>, args: Record<string, unknown>, allowlist: string[]) {
+async function calendarCreate(
+  config: Record<string, unknown>,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  grantAllowlist?: string[],
+) {
   const token = secretFrom(config, "accessToken", "accessTokenEnv");
   if (!token) {
     throw new Error("Missing Calendar access token");
@@ -4574,6 +4834,8 @@ async function calendarCreate(config: Record<string, unknown>, args: Record<stri
       body: JSON.stringify(payload),
     },
     allowlist,
+    undefined,
+    grantAllowlist,
   );
   const body = await res.response.text();
   if (!res.response.ok) {
@@ -4587,10 +4849,14 @@ async function fetchAllowlisted(
   init: RequestInit,
   allowlist: string[],
   signal?: AbortSignal,
+  grantAllowlist?: string[],
 ): Promise<{ response: Response; finalUrl: string }> {
   let current = url;
   for (let hop = 0; hop <= MAX_HTTP_REDIRECTS; hop += 1) {
     assertHostAllowed(current, allowlist);
+    if (grantAllowlist && grantAllowlist.length > 0) {
+      assertHostAllowed(current, grantAllowlist);
+    }
     let response: Response;
     for (let attempt = 0; ; attempt += 1) {
       response = await fetchAllowlistedOnce(current, {
@@ -4916,6 +5182,16 @@ function canBypassReadPath(
     config.sandbox.readAccessMode,
     request.policyContext?.permissionProfile?.readAccessMode,
   );
+  const matchedExecutionGrant = resolveMatchedExecutionAllowGrant(request, storage);
+  const matchedAllowedPaths = matchedExecutionGrant ? getAllowedGrantReadPaths(matchedExecutionGrant) : [];
+  if (matchedAllowedPaths.length > 0) {
+    const resolvedPath = resolveReadPathAccess(
+      targetPath,
+      config.sandbox.writeJailRoots,
+      config.sandbox.readOnlyRoots,
+    ).resolvedPath;
+    return isPathWithinAnyGrantRoot(resolvedPath, matchedAllowedPaths);
+  }
   const grants = resolveMatchingAllowGrants(request, storage);
   const grantsWithPathConstraints = grants
     .map((grant) => ({
@@ -4956,6 +5232,47 @@ function getAllowedGrantReadPaths(grant: ToolGrantRecord): string[] {
   ];
 }
 
+function resolveExecutionGrantAllowedHosts(request: ToolInvokeRequest, storage?: Storage): string[] | undefined {
+  const contextHosts = request.policyContext?.matchedGrantAllowedHosts
+    ?.map((host) => host.trim())
+    .filter((host) => host.length > 0);
+  if (contextHosts && contextHosts.length > 0) {
+    return contextHosts;
+  }
+  if (request.policyContext?.matchedGrantId) {
+    const matchedGrant = resolveMatchedExecutionAllowGrant(request, storage);
+    const grantHosts = matchedGrant?.constraints?.allowedHosts?.map((host) => host.trim()).filter(Boolean);
+    return grantHosts && grantHosts.length > 0 ? grantHosts : undefined;
+  }
+  const matchingGrant = resolveMatchingAllowGrants(request, storage).find(
+    (grant) => (grant.constraints?.allowedHosts?.length ?? 0) > 0,
+  );
+  const grantHosts = matchingGrant?.constraints?.allowedHosts?.map((host) => host.trim()).filter(Boolean);
+  return grantHosts && grantHosts.length > 0 ? grantHosts : undefined;
+}
+
+function resolveMatchedExecutionAllowGrant(request: ToolInvokeRequest, storage?: Storage): ToolGrantRecord | undefined {
+  const grantId = request.policyContext?.matchedGrantId?.trim();
+  const grantRepo = storage?.toolGrants as
+    | (Storage["toolGrants"] & { get?: (grantId: string) => ToolGrantRecord })
+    | undefined;
+  if (!grantId || !grantRepo?.get) {
+    return undefined;
+  }
+  try {
+    const grant = grantRepo.get(grantId);
+    if (grant.decision !== "allow" || !matchesGrantToolPattern(grant.toolPattern, request.toolName)) {
+      return undefined;
+    }
+    if (grant.revokedAt || (grant.expiresAt && Date.parse(grant.expiresAt) <= Date.now())) {
+      return undefined;
+    }
+    return grant;
+  } catch {
+    return undefined;
+  }
+}
+
 function getStrictestReadAccessMode(
   configMode?: ToolPolicyConfig["sandbox"]["readAccessMode"],
   profileMode?: ToolPolicyConfig["sandbox"]["readAccessMode"],
@@ -4975,9 +5292,14 @@ function resolveMatchingAllowGrants(request: ToolInvokeRequest, storage?: Storag
   }
   const grants: ToolGrantRecord[] = [];
   for (const candidate of buildGrantScopeCandidates(request)) {
-    const scoped = grantRepo
-      .list(candidate.scope, candidate.scopeRef, 500)
-      .filter((grant) => isGrantActive(grant))
+    const activeGrantRepo = grantRepo as typeof grantRepo & { listActive?: typeof grantRepo.list };
+    const scoped = (
+      activeGrantRepo.listActive
+        ? activeGrantRepo.listActive(candidate.scope, candidate.scopeRef)
+        : grantRepo
+            .list(candidate.scope, candidate.scopeRef, Number.MAX_SAFE_INTEGER)
+            .filter((grant) => isGrantActive(grant))
+    )
       .filter((grant) => grant.decision === "allow")
       .filter((grant) => matchesGrantToolPattern(grant.toolPattern, request.toolName));
     grants.push(...scoped);

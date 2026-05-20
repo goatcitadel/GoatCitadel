@@ -56,6 +56,13 @@ export class ToolGrantRepository {
     const grantId = randomUUID();
     const scopeRef = normalizeScopeRef(input.scope, input.scopeRef);
     const grantType = input.grantType ?? "persistent";
+    if (input.decision === "deny" && grantType === "one_time") {
+      throw new ValidationError({
+        code: "FIELD_INVALID",
+        field: "grantType",
+        message: "one_time grants can only be allow grants.",
+      });
+    }
     const lifetime = normalizeGrantLifetime(input, grantType, now);
     this.createStmt.run({
       grantId,
@@ -101,6 +108,34 @@ export class ToolGrantRepository {
       ${whereClause}
       ORDER BY created_at DESC
       LIMIT @limit
+    `,
+      )
+      .all(params);
+    assertToolGrantRows(rows);
+    return rows.map(mapRow);
+  }
+
+  public listActive(scope?: ToolGrantScope, scopeRef?: string, now = new Date().toISOString()): ToolGrantRecord[] {
+    const params: Record<string, unknown> = { now };
+    const clauses: string[] = [
+      "revoked_at IS NULL",
+      "(expires_at IS NULL OR expires_at > @now)",
+      "(uses_remaining IS NULL OR uses_remaining > 0)",
+    ];
+    if (scope) {
+      params.scope = scope;
+      clauses.push("scope = @scope");
+    }
+    if (scopeRef) {
+      params.scopeRef = scopeRef;
+      clauses.push("scope_ref = @scopeRef");
+    }
+    const rows = this.db
+      .prepare(
+        `
+      SELECT * FROM tool_grants
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY created_at DESC
     `,
       )
       .all(params);

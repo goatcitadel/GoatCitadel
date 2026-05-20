@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - "package.json"
+      - "pnpm-workspace.yaml"
       - "pnpm-lock.yaml"
       - ".github/workflows/typescript-7-beta-pilot.yml"
       - "docs/dependency-policy.md"

@@ -174,6 +174,176 @@ describe("tools permission profile routes", () => {
     ]);
   });
 
+  it("rejects one-time deny grants before creating durable grant state", async () => {
+    const tools = {
+      listToolCatalog: vi.fn(() => []),
+      listPermissionProfiles: vi.fn(() => []),
+      listActiveLocalOperatorOverrides: vi.fn(() => []),
+      createToolGrant: vi.fn(),
+    };
+
+    app = Fastify();
+    app.decorateRequest("authActorId", "operator-test");
+    app.decorateRequest("authActorSource", "loopback");
+    app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
+    app.decorate("services", { tools } as never);
+    await app.register(toolsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/tools/grants",
+      payload: {
+        toolPattern: "shell.exec",
+        decision: "deny",
+        scope: "global",
+        grantType: "one_time",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.stringify(response.json())).toContain("one_time grants can only be allow grants");
+    expect(tools.createToolGrant).not.toHaveBeenCalled();
+  });
+
+  it("mirrors deployment profile restrictions in access evaluation", async () => {
+    const tools = {
+      listToolCatalog: vi.fn(() => []),
+      listPermissionProfiles: vi.fn(() => []),
+      listActiveLocalOperatorOverrides: vi.fn(() => []),
+      resolveToolPolicyContext: vi.fn(() => ({ profileId: "safe" })),
+      evaluateToolAccess: vi.fn(() => ({
+        decision: "allow",
+        allowed: true,
+        requiresApproval: false,
+        reasonCodes: [],
+        policyReason: "allowed by policy",
+      })),
+    };
+    const toolsInvoke = {
+      getDeploymentProfile: vi.fn(() => "remote_hardened" as const),
+      isFeatureEnabled: vi.fn(() => false),
+    };
+
+    app = Fastify();
+    app.decorateRequest("authActorId", "operator-test");
+    app.decorateRequest("authActorSource", "loopback");
+    app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
+    app.decorate("services", { tools, toolsInvoke } as never);
+    await app.register(toolsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/tools/access/evaluate",
+      payload: {
+        toolName: "browser.cookies.get",
+        agentId: "agent-1",
+        sessionId: "session-1",
+        args: {},
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      allowed: false,
+      requiresApproval: false,
+      reasonCodes: ["deployment_profile_block"],
+      policyReason: "Browser cookies and storage tools are restricted to the trusted_local deployment profile.",
+    });
+  });
+
+  it("mirrors computer-use confirmation guardrails in access evaluation", async () => {
+    const tools = {
+      listToolCatalog: vi.fn(() => []),
+      listPermissionProfiles: vi.fn(() => []),
+      listActiveLocalOperatorOverrides: vi.fn(() => []),
+      resolveToolPolicyContext: vi.fn(() => ({ profileId: "safe" })),
+      evaluateToolAccess: vi.fn(() => ({
+        decision: "allow",
+        allowed: true,
+        requiresApproval: false,
+        reasonCodes: [],
+        policyReason: "allowed by policy",
+      })),
+    };
+    const toolsInvoke = {
+      getDeploymentProfile: vi.fn(() => "local_dev" as const),
+      isFeatureEnabled: vi.fn((flag: string) => flag === "computerUseGuardrailsV1Enabled"),
+    };
+
+    app = Fastify();
+    app.decorateRequest("authActorId", "operator-test");
+    app.decorateRequest("authActorSource", "loopback");
+    app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
+    app.decorate("services", { tools, toolsInvoke } as never);
+    await app.register(toolsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/tools/access/evaluate",
+      payload: {
+        toolName: "browser.interact",
+        agentId: "agent-1",
+        sessionId: "session-1",
+        args: { steps: [{ action: "click", selector: "button[type=submit]" }] },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      allowed: false,
+      requiresApproval: false,
+      reasonCodes: ["computer_use_guardrail_block"],
+      policyReason:
+        "Computer-use guardrail: this mutating browser action requires step verification (set args.verifyStep=true).",
+    });
+  });
+
+  it("does not mirror computer-use guardrails after verification and confirmation are present", async () => {
+    const evaluation = {
+      decision: "allow",
+      allowed: true,
+      requiresApproval: false,
+      reasonCodes: ["allowed"],
+      policyReason: "allowed by policy",
+    };
+    const tools = {
+      listToolCatalog: vi.fn(() => []),
+      listPermissionProfiles: vi.fn(() => []),
+      listActiveLocalOperatorOverrides: vi.fn(() => []),
+      resolveToolPolicyContext: vi.fn(() => ({ profileId: "safe" })),
+      evaluateToolAccess: vi.fn(() => evaluation),
+    };
+    const toolsInvoke = {
+      getDeploymentProfile: vi.fn(() => "local_dev" as const),
+      isFeatureEnabled: vi.fn((flag: string) => flag === "computerUseGuardrailsV1Enabled"),
+    };
+
+    app = Fastify();
+    app.decorateRequest("authActorId", "operator-test");
+    app.decorateRequest("authActorSource", "loopback");
+    app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
+    app.decorate("services", { tools, toolsInvoke } as never);
+    await app.register(toolsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/tools/access/evaluate",
+      payload: {
+        toolName: "browser.interact",
+        agentId: "agent-1",
+        sessionId: "session-1",
+        args: {
+          verifyStep: true,
+          confirmBeforeSubmit: true,
+          steps: [{ action: "click", selector: "button[type=submit]" }],
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject(evaluation);
+  });
+
   it("returns 404 when activating a missing permission profile", async () => {
     const tools = {
       listToolCatalog: vi.fn(() => []),

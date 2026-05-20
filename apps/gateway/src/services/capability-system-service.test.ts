@@ -184,6 +184,102 @@ describe("CapabilitySystemService", () => {
     );
   });
 
+  it("rejects late-created Code Mode approvals when approval creation throws with an approval id", async () => {
+    const harness = await createHarness();
+    harness.createApproval.mockRejectedValueOnce(
+      Object.assign(new Error("approval audit unavailable"), {
+        approvalId: "approval-1",
+      }),
+    );
+
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true };",
+        originSurface: "code",
+      }),
+    ).rejects.toThrow("approval audit unavailable");
+
+    const [failedRun] = harness.storage.codeModeRuns.list();
+    expect(failedRun).toMatchObject({
+      status: "failed",
+      approvalId: "approval-1",
+      errorCode: "approval_create_failed",
+      errorDetails: expect.objectContaining({
+        phase: "approval_create",
+        approvalId: "approval-1",
+      }),
+    });
+    expect(harness.storage.approvals.resolve).toHaveBeenCalledWith(
+      "approval-1",
+      expect.objectContaining({
+        decision: "reject",
+        resolvedBy: "system",
+        resolutionNote: expect.stringContaining("approval audit unavailable"),
+      }),
+    );
+    expect(harness.storage.approvalEvents.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "approval-1",
+        eventType: "pending_action_refused",
+        payload: expect.objectContaining({
+          actionType: "code_mode.run",
+          phase: "approval_create",
+          errorCode: "approval_create_failed",
+        }),
+      }),
+    );
+  });
+
+  it("records late Code Mode approval cleanup failures on the failed run and realtime event", async () => {
+    const harness = await createHarness();
+    harness.createApproval.mockRejectedValueOnce(
+      Object.assign(new Error("approval audit unavailable"), {
+        approvalId: "approval-1",
+      }),
+    );
+    harness.storage.approvals.resolve.mockImplementationOnce(() => {
+      throw new Error("approval row locked");
+    });
+    harness.storage.approvalEvents.append.mockImplementationOnce(() => {
+      throw new Error("event store locked");
+    });
+
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true };",
+        originSurface: "code",
+      }),
+    ).rejects.toThrow("approval audit unavailable");
+
+    const [failedRun] = harness.storage.codeModeRuns.list();
+    expect(failedRun.errorDetails).toMatchObject({
+      phase: "approval_create",
+      approvalId: "approval-1",
+      lateApprovalCleanup: {
+        approvalId: "approval-1",
+        attempted: true,
+        status: "failed",
+        errors: expect.arrayContaining([
+          expect.stringContaining("approval row locked"),
+          expect.stringContaining("event store locked"),
+        ]),
+      },
+    });
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "code_mode_run_failed",
+      "capabilities",
+      expect.objectContaining({
+        runId: failedRun.runId,
+        approvalId: "approval-1",
+        errorDetails: expect.objectContaining({
+          lateApprovalCleanup: expect.objectContaining({ status: "failed" }),
+        }),
+      }),
+    );
+  });
+
   it("fails pending Code Mode actions when registration fails after pending-action creation", async () => {
     const harness = await createHarness();
     harness.storage.approvalEvents.append.mockImplementationOnce(() => {
@@ -253,6 +349,53 @@ describe("CapabilitySystemService", () => {
     expect(harness.storage.approvals.get("approval-1")).toMatchObject({ status: "rejected" });
   });
 
+  it("rejects Code Mode approvals when run-row registration fails after approval creation", async () => {
+    const harness = await createHarness();
+    vi.spyOn(harness.storage.codeModeRuns, "upsert").mockImplementationOnce(() => {
+      throw new Error("code mode run store unavailable");
+    });
+
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true };",
+        originSurface: "code",
+      }),
+    ).rejects.toThrow("code mode run store unavailable");
+
+    const [failedRun] = harness.storage.codeModeRuns.list();
+    expect(failedRun).toMatchObject({
+      status: "failed",
+      approvalId: "approval-1",
+      errorCode: "approval_registration_failed",
+    });
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({
+        errorCode: "approval_registration_failed",
+      }),
+    );
+    expect(harness.storage.approvals.resolve).toHaveBeenCalledWith(
+      "approval-1",
+      expect.objectContaining({
+        decision: "reject",
+        resolvedBy: "system",
+      }),
+    );
+    expect(harness.storage.approvalEvents.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "approval-1",
+        eventType: "pending_action_refused",
+        payload: expect.objectContaining({
+          actionType: "code_mode.run",
+          errorCode: "approval_registration_failed",
+        }),
+      }),
+    );
+    expect(harness.storage.approvals.get("approval-1")).toMatchObject({ status: "rejected" });
+  });
+
   it("executes Code Mode runs approved before expiry even if the worker starts after the approval TTL", async () => {
     const harness = await createHarness({
       sandboxConfig: {
@@ -291,6 +434,314 @@ describe("CapabilitySystemService", () => {
     expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
       status: "completed",
     });
+  });
+
+  it("does not terminalize Code Mode runs when approval execution is interrupted before launch", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+    });
+    const approval = harness.approvals.get("approval-1");
+    harness.approvals.set("approval-1", {
+      ...approval!,
+      status: "approved",
+      resolvedAt: "2026-04-10T00:00:00.000Z",
+    });
+    const controller = new AbortController();
+    controller.abort(new Error("approval effect lease ownership moved"));
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1", controller.signal);
+
+    expect(result).toBeUndefined();
+    const storedRun = harness.storage.codeModeRuns.get(run.runId);
+    expect(storedRun).toMatchObject({ status: "approval_pending" });
+    expect(storedRun.startedAt).toBeUndefined();
+    expect(storedRun).not.toHaveProperty("finishedAt");
+    expect(harness.storage.pendingApprovalActions.markResolved).not.toHaveBeenCalledWith(
+      "approval-1",
+      expect.any(String),
+      expect.anything(),
+    );
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "code_mode_run_interrupted",
+      "capabilities",
+      expect.objectContaining({
+        runId: run.runId,
+        approvalId: "approval-1",
+        status: "approval_pending",
+      }),
+    );
+  });
+
+  it("releases Code Mode execution claims when interrupted after child execution starts", async () => {
+    const controller = new AbortController();
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+      invokeTool: vi.fn(async () => {
+        controller.abort(new Error("approval effect lease ownership moved after child start"));
+        return {
+          outcome: "executed",
+          policyReason: "executed",
+          auditEventId: "audit-1",
+          result: { ok: true },
+        };
+      }),
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return await capabilities.tool.safe_read();",
+    });
+    const approval = harness.approvals.get("approval-1");
+    harness.approvals.set("approval-1", {
+      ...approval!,
+      status: "approved",
+      resolvedAt: "2026-04-10T00:00:00.000Z",
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1", controller.signal);
+
+    expect(result).toBeUndefined();
+    const storedRun = harness.storage.codeModeRuns.get(run.runId);
+    expect(storedRun).toMatchObject({ status: "approval_pending" });
+    expect(storedRun.startedAt).toBeUndefined();
+    expect(harness.storage.pendingApprovalActions.markResolved).not.toHaveBeenCalledWith(
+      "approval-1",
+      expect.any(String),
+      expect.anything(),
+    );
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "code_mode_run_interrupted",
+      "capabilities",
+      expect.objectContaining({
+        runId: run.runId,
+        approvalId: "approval-1",
+        status: "approval_pending",
+      }),
+    );
+  });
+
+  it("does not resolve pending actions when another worker already claimed execution", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+    });
+    const approval = harness.approvals.get("approval-1");
+    harness.approvals.set("approval-1", {
+      ...approval!,
+      status: "approved",
+      resolvedAt: "2026-04-10T00:00:00.000Z",
+    });
+    harness.storage.codeModeRuns.claimForExecution({
+      runId: run.runId,
+      approvalId: "approval-1",
+      sandbox: run.sandbox,
+      startedAt: new Date().toISOString(),
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result).toBeUndefined();
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "running",
+    });
+    expect(harness.storage.pendingApprovalActions.markResolved).not.toHaveBeenCalledWith(
+      "approval-1",
+      expect.any(String),
+      expect.anything(),
+    );
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "code_mode_run_refused",
+      "capabilities",
+      expect.objectContaining({
+        runId: run.runId,
+        status: "running",
+        errorCode: "RUN_ALREADY_CLAIMED",
+      }),
+    );
+  });
+
+  it("terminalizes the linked Code Mode run when a pending action points at a missing row", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+    });
+    const pending = harness.storage.pendingApprovalActions.find("approval-1");
+    expect(pending).toBeDefined();
+    if (pending) {
+      pending.request.runId = "missing-run";
+    }
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result).toMatchObject({
+      outcome: "executed",
+      policyReason: "code_mode_run:failed",
+      result: {
+        runId: run.runId,
+        status: "failed",
+        errorCode: "pending_action_corrupt",
+      },
+    });
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "failed",
+      errorCode: "pending_action_corrupt",
+      errorDetails: expect.objectContaining({
+        reason: "pending_action_corrupt",
+        pendingRunId: "missing-run",
+      }),
+    });
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({
+        runId: run.runId,
+        pendingRunId: "missing-run",
+        reason: expect.stringContaining("missing-run"),
+        errorCode: "RUN_ID_MISMATCH",
+      }),
+    );
+    expect(harness.storage.approvalEvents.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "approval-1",
+        eventType: "pending_action_refused",
+        payload: expect.objectContaining({
+          actionType: "code_mode.run",
+          runId: run.runId,
+          pendingRunId: "missing-run",
+          errorCode: "pending_action_corrupt",
+        }),
+      }),
+    );
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "code_mode_run_failed",
+      "capabilities",
+      expect.objectContaining({
+        runId: run.runId,
+        approvalId: "approval-1",
+        errorCode: "pending_action_corrupt",
+      }),
+    );
+  });
+
+  it("terminalizes the linked Code Mode run when a pending action omits its run id", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+    });
+    const pending = harness.storage.pendingApprovalActions.find("approval-1");
+    expect(pending).toBeDefined();
+    if (pending) {
+      delete pending.request.runId;
+    }
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result).toMatchObject({
+      outcome: "executed",
+      result: {
+        runId: run.runId,
+        status: "failed",
+        errorCode: "pending_action_corrupt",
+      },
+    });
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "failed",
+      errorCode: "pending_action_corrupt",
+      errorDetails: expect.objectContaining({
+        reason: "pending_action_corrupt",
+        pendingRunId: null,
+      }),
+    });
+    expect(harness.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "failed",
+      expect.objectContaining({
+        runId: run.runId,
+        pendingRunId: null,
+        reason: "missing code mode run id",
+        errorCode: "RUN_ID_MISSING",
+      }),
+    );
+    expect(harness.storage.approvalEvents.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "approval-1",
+        eventType: "pending_action_refused",
+        payload: expect.objectContaining({
+          actionType: "code_mode.run",
+          runId: run.runId,
+          pendingRunId: null,
+          errorCode: "pending_action_corrupt",
+        }),
+      }),
+    );
+  });
+
+  it("recovers stale Code Mode execution claims before retrying approved actions", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+    });
+    const approval = harness.approvals.get("approval-1");
+    harness.approvals.set("approval-1", {
+      ...approval!,
+      status: "approved",
+      resolvedAt: "2026-04-10T00:00:00.000Z",
+    });
+    harness.storage.codeModeRuns.claimForExecution({
+      runId: run.runId,
+      approvalId: "approval-1",
+      sandbox: run.sandbox,
+      startedAt: "2026-04-10T00:00:01.000Z",
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result).toMatchObject({
+      outcome: "executed",
+      result: expect.objectContaining({
+        runId: run.runId,
+        status: "completed",
+      }),
+    });
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({ status: "completed" });
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "code_mode_run_claim_recovered",
+      "capabilities",
+      expect.objectContaining({ runId: run.runId, status: "approval_pending" }),
+    );
   });
 
   it("stages the Code Mode harness inside the per-run temp root before launch", async () => {
@@ -661,6 +1112,112 @@ describe("CapabilitySystemService", () => {
         approvalId: "approval-1",
         status: "expired",
         error: "Code Mode approval expired before execution",
+      }),
+    );
+  });
+
+  it("fails approved Code Mode runs when the pending action row is missing", async () => {
+    const harness = await createHarness();
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      requestedOutputIntent: "Return a JSON object.",
+      saveCandidateOnSuccess: false,
+      sessionId: "session-code",
+    });
+    vi.spyOn(harness.storage.pendingApprovalActions, "find").mockReturnValue(undefined);
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result).toMatchObject({
+      outcome: "executed",
+      policyReason: "code_mode_run:failed",
+      result: {
+        runId: run.runId,
+        status: "failed",
+        errorCode: "pending_action_missing",
+      },
+    });
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "failed",
+      error: "Code Mode pending action is missing; approved run cannot execute safely.",
+      errorCode: "pending_action_missing",
+      errorDetails: expect.objectContaining({
+        phase: "approval_resolution",
+        reason: "pending_action_missing",
+        approvalStatus: "approved",
+      }),
+    });
+    expect(harness.storage.approvalEvents.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "approval-1",
+        eventType: "pending_action_refused",
+        payload: expect.objectContaining({
+          actionType: "code_mode.run",
+          runId: run.runId,
+          status: "failed",
+          errorCode: "pending_action_missing",
+        }),
+      }),
+    );
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "code_mode_run_failed",
+      "capabilities",
+      expect.objectContaining({
+        runId: run.runId,
+        approvalId: "approval-1",
+        status: "failed",
+        errorCode: "pending_action_missing",
+      }),
+    );
+  });
+
+  it("rejects resolved Code Mode runs on read when the pending action row is missing", async () => {
+    const harness = await createHarness();
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      requestedOutputIntent: "Return a JSON object.",
+      saveCandidateOnSuccess: false,
+      sessionId: "session-code",
+    });
+    const approval = harness.approvals.get("approval-1");
+    if (!approval) {
+      throw new Error("missing approval-1");
+    }
+    harness.approvals.set("approval-1", {
+      ...approval,
+      status: "rejected",
+      resolvedAt: "2026-04-10T00:01:00.000Z",
+      resolvedBy: "operator",
+    });
+    vi.spyOn(harness.storage.pendingApprovalActions, "find").mockReturnValue(undefined);
+
+    expect(harness.service.getCodeModeRun(run.runId)).toMatchObject({
+      status: "rejected",
+      error: "Code Mode approval was rejected before the pending action could be recovered.",
+      errorCode: "approval_rejected_pending_action_missing",
+    });
+    expect(harness.storage.approvalEvents.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "approval-1",
+        eventType: "pending_action_refused",
+        payload: expect.objectContaining({
+          actionType: "code_mode.run",
+          runId: run.runId,
+          status: "rejected",
+          errorCode: "approval_rejected_pending_action_missing",
+        }),
+      }),
+    );
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "code_mode_run_refused",
+      "capabilities",
+      expect.objectContaining({
+        runId: run.runId,
+        approvalId: "approval-1",
+        status: "rejected",
+        errorCode: "approval_rejected_pending_action_missing",
       }),
     );
   });
@@ -2350,6 +2907,51 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
       },
       list(limit = 100) {
         return [...codeModeRuns.values()].slice(0, limit);
+      },
+      claimForExecution(input: {
+        runId: string;
+        approvalId: string;
+        sandbox?: CodeModeRunRecord["sandbox"];
+        startedAt: string;
+      }) {
+        const run = codeModeRuns.get(input.runId);
+        if (!run || run.approvalId !== input.approvalId || run.status !== "approval_pending") {
+          return undefined;
+        }
+        const next = {
+          ...run,
+          status: "running",
+          sandbox: input.sandbox,
+          startedAt: input.startedAt,
+          finishedAt: undefined,
+          error: undefined,
+          errorCode: undefined,
+          errorDetails: undefined,
+        } satisfies CodeModeRunRecord;
+        codeModeRuns.set(input.runId, next);
+        return next;
+      },
+      releaseExecutionClaim(input: { runId: string; approvalId: string; startedAt?: string }) {
+        const run = codeModeRuns.get(input.runId);
+        if (
+          !run ||
+          run.approvalId !== input.approvalId ||
+          run.status !== "running" ||
+          (input.startedAt && run.startedAt !== input.startedAt)
+        ) {
+          return undefined;
+        }
+        const next = {
+          ...run,
+          status: "approval_pending",
+          startedAt: undefined,
+          finishedAt: undefined,
+          error: undefined,
+          errorCode: undefined,
+          errorDetails: undefined,
+        } satisfies CodeModeRunRecord;
+        codeModeRuns.set(input.runId, next);
+        return next;
       },
     },
     candidateSkillVersions: {

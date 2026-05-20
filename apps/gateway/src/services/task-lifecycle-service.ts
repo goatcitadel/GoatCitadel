@@ -296,13 +296,14 @@ export class TaskLifecycleService {
     } = {},
   ): { items: AgenticRunListItem[]; nextCursor?: string } {
     const limit = clampLimit(input.limit, 200);
+    const workspaceId = this.normalizeWorkspaceId(input.workspaceId);
     const matched: TaskRecord[] = [];
     let cursor = input.cursor;
     let exhausted = false;
     const pageLimit = Math.max(limit + 1, Math.min(500, limit * 2));
     while (matched.length <= limit && !exhausted) {
       const tasks = this.deps.storage.tasks.list({
-        workspaceId: input.workspaceId ? this.normalizeWorkspaceId(input.workspaceId) : undefined,
+        workspaceId,
         limit: pageLimit,
         cursor,
         view: "active",
@@ -331,7 +332,8 @@ export class TaskLifecycleService {
 
   public getAgenticRunTree(runId: string, options?: TaskWorkspaceAccessOptions): AgenticRunTreeResponse {
     const normalizedRunId = sanitizeRequired(runId, "runId");
-    const tasks = this.listTasksInAgenticRun(normalizedRunId, options);
+    const workspaceOptions = this.normalizeWorkspaceAccessOptions(options);
+    const tasks = this.listTasksInAgenticRun(normalizedRunId, workspaceOptions);
     if (tasks.length === 0) {
       throw new ValidationError({ message: `Agentic run not found: ${normalizedRunId}` });
     }
@@ -393,6 +395,9 @@ export class TaskLifecycleService {
           taskId: task.taskId,
           agentSessionId: subagent.agentSessionId,
           metadata: compactRecord({
+            index: subagent.metadata?.index,
+            depth: subagent.metadata?.depth,
+            dependsOnStepIds: subagent.metadata?.dependsOnStepIds,
             profileId: subagent.metadata?.profileId,
             contextMode: subagent.metadata?.contextMode,
             heartbeatAt: subagent.metadata?.heartbeatAt,
@@ -555,7 +560,7 @@ export class TaskLifecycleService {
     input: AgenticControlRequest,
     options?: TaskWorkspaceAccessOptions,
   ): AgenticControlResponse {
-    const task = this.findRootTaskForRun(runId, options);
+    const task = this.findRootTaskForRun(runId, this.normalizeWorkspaceAccessOptions(options));
     const now = new Date().toISOString();
     const controlId = input.controlId?.trim();
     if (controlId) {
@@ -564,11 +569,17 @@ export class TaskLifecycleService {
         controlId,
       );
       if (existing) {
-        const existingAction = typeof existing.metadata?.action === "string" ? existing.metadata.action : undefined;
-        if (existingAction && existingAction !== input.action) {
+        const mismatch = findAgenticControlReplayMismatch(input, existing);
+        if (mismatch === "action") {
           throw new ValidationError({
             field: "controlId",
             message: "controlId has already been used for a different agentic control action.",
+          });
+        }
+        if (mismatch) {
+          throw new ValidationError({
+            field: "controlId",
+            message: "controlId has already been used for a different agentic control payload.",
           });
         }
         return buildIdempotentControlReplay(task, input, existing);
@@ -635,7 +646,11 @@ export class TaskLifecycleService {
         throw new ValidationError({ field: "agentSessionId", message: "agentSessionId is required for kill_child." });
       }
       const subagent = this.deps.storage.taskSubagents.findByAgentSessionId(input.agentSessionId);
-      if (!subagent || subagent.taskId !== task.taskId) {
+      const runTasks = this.listTasksInAgenticRun(runId, this.normalizeWorkspaceAccessOptions(options), {
+        includeParentRunLinks: false,
+      });
+      const allowedTaskIds = new Set(runTasks.map((candidate) => candidate.taskId));
+      if (!subagent || !allowedTaskIds.has(subagent.taskId)) {
         throw new NotFoundError({ entity: "Sub-agent session", id: input.agentSessionId });
       }
       this.deps.storage.taskSubagents.updateByAgentSessionId(input.agentSessionId, {
@@ -666,6 +681,8 @@ export class TaskLifecycleService {
         controlId,
         agentSessionId: input.agentSessionId,
         approvalId: input.approvalId,
+        reason: input.reason?.trim() || undefined,
+        instruction: input.instruction?.trim() || undefined,
         resultStatus: responseStatus,
         runtimeEffect,
         recordedAt: now,
@@ -741,9 +758,15 @@ export class TaskLifecycleService {
     return task;
   }
 
-  private listTasksInAgenticRun(runId: string, options?: TaskWorkspaceAccessOptions): TaskRecord[] {
+  private listTasksInAgenticRun(
+    runId: string,
+    options?: TaskWorkspaceAccessOptions,
+    control?: { includeParentRunLinks?: boolean },
+  ): TaskRecord[] {
+    const includeParentRunLinks = control?.includeParentRunLinks ?? true;
     return this.scanActiveTasks(
-      (task) => isTaskInAgenticRun(task, runId) && this.isTaskAllowedForWorkspace(task, options),
+      (task) =>
+        isTaskInAgenticRun(task, runId, { includeParentRunLinks }) && this.isTaskAllowedForWorkspace(task, options),
     );
   }
 
@@ -880,6 +903,10 @@ export class TaskLifecycleService {
     return (task.workspaceId ?? DEFAULT_WORKSPACE_ID) === this.normalizeWorkspaceId(options.workspaceId);
   }
 
+  private normalizeWorkspaceAccessOptions(options?: TaskWorkspaceAccessOptions): TaskWorkspaceAccessOptions {
+    return { workspaceId: this.normalizeWorkspaceId(options?.workspaceId) };
+  }
+
   private normalizeWorkspaceId(workspaceId?: string): string {
     if (!workspaceId?.trim()) {
       return DEFAULT_WORKSPACE_ID;
@@ -916,11 +943,12 @@ export function buildTaskRealtimeLinks(
   };
 }
 
-function isTaskInAgenticRun(task: TaskRecord, runId: string): boolean {
+function isTaskInAgenticRun(task: TaskRecord, runId: string, control?: { includeParentRunLinks?: boolean }): boolean {
+  const includeParentRunLinks = control?.includeParentRunLinks ?? true;
   return (
     task.agenticContext?.runId === runId ||
     task.agenticContext?.parentRunId === runId ||
-    Boolean(task.agenticContext?.childRunIds?.includes(runId))
+    (includeParentRunLinks && Boolean(task.agenticContext?.childRunIds?.includes(runId)))
   );
 }
 
@@ -1122,6 +1150,34 @@ function findControlActivityById(activities: TaskActivityRecord[], controlId: st
   return activities.find(
     (activity) => activity.activityType === "control" && activity.metadata?.controlId === controlId,
   );
+}
+
+function findAgenticControlReplayMismatch(
+  input: AgenticControlRequest,
+  existing: TaskActivityRecord,
+): "action" | "agentSessionId" | "approvalId" | "reason" | "instruction" | undefined {
+  const existingAction = readActivityMetadataString(existing, "action");
+  if (existingAction && existingAction !== input.action) {
+    return "action";
+  }
+  for (const field of ["agentSessionId", "approvalId", "reason", "instruction"] as const) {
+    const existingValue = readActivityMetadataString(existing, field);
+    const inputValue = normalizeControlPayloadString(input[field]);
+    if (existingValue !== inputValue) {
+      return field;
+    }
+  }
+  return undefined;
+}
+
+function readActivityMetadataString(activity: TaskActivityRecord, field: string): string | undefined {
+  const value = activity.metadata?.[field];
+  return typeof value === "string" ? value : undefined;
+}
+
+function normalizeControlPayloadString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
 }
 
 function buildIdempotentControlReplay(

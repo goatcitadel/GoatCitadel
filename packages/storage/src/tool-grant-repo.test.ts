@@ -49,6 +49,42 @@ describe("ToolGrantRepository", () => {
     assert.equal(repo.list("session", "sess-1").length, 1);
   });
 
+  it("lists all active scoped grants for policy decisions without the UI list cap", () => {
+    const repo = createRepo();
+
+    const deny = repo.create(
+      {
+        toolPattern: "shell.exec",
+        decision: "deny",
+        scope: "session",
+        scopeRef: "sess-1",
+        createdBy: "operator",
+      },
+      "2026-03-05T10:00:00.000Z",
+    );
+    for (let index = 0; index < 501; index += 1) {
+      repo.create(
+        {
+          toolPattern: "shell.exec",
+          decision: "allow",
+          scope: "session",
+          scopeRef: "sess-1",
+          createdBy: "operator",
+        },
+        new Date(Date.UTC(2026, 2, 5, 10, 0, index + 1)).toISOString(),
+      );
+    }
+
+    assert.equal(
+      repo.list("session", "sess-1", 500).some((grant) => grant.grantId === deny.grantId),
+      false,
+    );
+    assert.equal(
+      repo.listActive("session", "sess-1").some((grant) => grant.grantId === deny.grantId),
+      true,
+    );
+  });
+
   it("supports one-time grants and revocation", () => {
     const repo = createRepo();
 
@@ -126,6 +162,17 @@ describe("ToolGrantRepository", () => {
           createdBy: "operator",
         }),
       /exactly one/,
+    );
+    assert.throws(
+      () =>
+        repo.create({
+          toolPattern: "shell.exec",
+          decision: "deny",
+          scope: "global",
+          grantType: "one_time",
+          createdBy: "operator",
+        }),
+      /one_time grants can only be allow grants/,
     );
     assert.throws(
       () =>

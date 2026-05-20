@@ -215,12 +215,64 @@ describe("CodeModeRunRepository", () => {
     );
   });
 
-  it("throws for malformed stored JSON payloads instead of hiding ledger corruption", () => {
+  it("claims pending runs atomically before execution", () => {
+    const { repo } = createStore();
+    repo.upsert(
+      run({
+        status: "approval_pending",
+        startedAt: undefined,
+        finishedAt: undefined,
+        error: undefined,
+        errorCode: undefined,
+        errorDetails: undefined,
+      }),
+    );
+
+    const claimed = repo.claimForExecution({
+      runId: "run-a",
+      approvalId: "approval-a",
+      sandbox: run().sandbox,
+      startedAt: "2026-03-26T00:05:00.000Z",
+    });
+    assert.equal(claimed?.status, "running");
+    assert.equal(claimed?.startedAt, "2026-03-26T00:05:00.000Z");
+    assert.equal(
+      repo.claimForExecution({
+        runId: "run-a",
+        approvalId: "approval-a",
+        startedAt: "2026-03-26T00:06:00.000Z",
+      }),
+      undefined,
+    );
+    assert.equal(
+      repo.releaseExecutionClaim({
+        runId: "run-a",
+        approvalId: "approval-a",
+        startedAt: "2026-03-26T00:04:00.000Z",
+      }),
+      undefined,
+    );
+
+    const released = repo.releaseExecutionClaim({
+      runId: "run-a",
+      approvalId: "approval-a",
+      startedAt: "2026-03-26T00:05:00.000Z",
+    });
+    assert.equal(released?.status, "approval_pending");
+    assert.equal(released?.startedAt, undefined);
+  });
+
+  it("surfaces malformed stored JSON payloads as failed ledger records", () => {
     const { db, repo } = createStore();
     const corrupt = (runId: string, field: string, expected: RegExp) => {
       repo.upsert(run({ runId }));
       setRawField(db, runId, field, "{bad json");
-      assert.throws(() => repo.get(runId), expected);
+      const stored = repo.get(runId);
+      assert.equal(stored.status, "failed");
+      assert.equal(stored.errorCode, "CORRUPT_CODE_MODE_RUN_LEDGER");
+      assert.match(stored.error ?? "", expected);
+      assert.equal(stored.codeArtifact.bytes, 0);
+      assert.equal(stored.finishedAt, "2026-03-26T00:00:02.000Z");
     };
 
     corrupt("run-sandbox", "sandbox_json", /corrupt sandbox_json metadata/);
@@ -231,5 +283,60 @@ describe("CodeModeRunRepository", () => {
     corrupt("run-stderr", "stderr_artifact_json", /corrupt stderr_artifact_json metadata/);
     corrupt("run-result", "result_json", /corrupt result_json metadata/);
     corrupt("run-error-details", "error_details_json", /corrupt error_details_json metadata/);
+    repo.upsert(run({ runId: "run-healthy", createdAt: "2026-03-26T00:10:00.000Z" }));
+    const listedRunIds = repo.listFiltered({ workspaceId: "workspace-a", limit: 20 }).map((item) => item.runId);
+    assert.equal(listedRunIds.length, 9);
+    assert.equal(listedRunIds[0], "run-healthy");
+    assert.equal(new Set(listedRunIds).has("run-code"), true);
+    assert.equal(new Set(listedRunIds).has("run-error-details"), true);
+
+    const failedRunIds = repo
+      .listFiltered({ workspaceId: "workspace-a", status: "failed", limit: 20 })
+      .map((item) => item.runId);
+    assert.equal(new Set(failedRunIds).has("run-result"), true);
+    assert.equal(new Set(failedRunIds).has("run-error-details"), true);
+    assert.equal(new Set(failedRunIds).has("run-healthy"), false);
+  });
+
+  it("hydrates failed filters before applying the list limit", () => {
+    const { db, repo } = createStore();
+    repo.upsert(
+      run({
+        runId: "run-old-failed",
+        status: "failed",
+        createdAt: "2026-03-25T00:00:00.000Z",
+        error: "old failure",
+      }),
+    );
+    repo.upsert(
+      run({
+        runId: "run-old-corrupt",
+        status: "running",
+        createdAt: "2026-03-24T00:00:00.000Z",
+      }),
+    );
+    setRawField(db, "run-old-corrupt", "result_json", "{bad json");
+
+    for (let index = 0; index < 501; index += 1) {
+      repo.upsert(
+        run({
+          runId: `run-new-completed-${index}`,
+          status: "completed",
+          result: { ok: true, index },
+          createdAt: new Date(Date.UTC(2026, 2, 26, 0, 0, index)).toISOString(),
+        }),
+      );
+    }
+
+    const failedRunIds = repo
+      .listFiltered({ workspaceId: "workspace-a", status: "failed", limit: 20 })
+      .map((item) => item.runId);
+
+    assert.equal(new Set(failedRunIds).has("run-old-failed"), true);
+    assert.equal(new Set(failedRunIds).has("run-old-corrupt"), true);
+    assert.equal(
+      failedRunIds.some((runId) => runId.startsWith("run-new-completed-")),
+      false,
+    );
   });
 });

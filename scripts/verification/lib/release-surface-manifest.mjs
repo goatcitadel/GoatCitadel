@@ -315,7 +315,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = [
   {
     slug: "settings-budget",
     href: "/settings/budget",
-    readyText: "Budget",
+    readyText: "Budget mode",
     expectedArea: "settings",
     expectedSection: "budget",
     interaction: "open-inspector",

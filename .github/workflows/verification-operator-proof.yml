@@ -8,17 +8,31 @@ on:
     paths:
       - "apps/**"
       - "packages/**"
+      - "docs/1_0_CONTRACT.md"
+      - "docs/1_0_RELEASE_EVIDENCE.md"
+      - "docs/CANONICAL_RUNTIME_STATE_MODEL.md"
+      - "docs/ENGINEERING_HANDBOOK.md"
       - "scripts/verification/**"
+      - "scripts/verify-artifact-redaction.mjs"
+      - "scripts/verify-artifact-redaction.test.mjs"
       - ".github/workflows/verification-operator-proof.yml"
       - "package.json"
+      - "pnpm-workspace.yaml"
       - "pnpm-lock.yaml"
   pull_request:
     paths:
       - "apps/**"
       - "packages/**"
+      - "docs/1_0_CONTRACT.md"
+      - "docs/1_0_RELEASE_EVIDENCE.md"
+      - "docs/CANONICAL_RUNTIME_STATE_MODEL.md"
+      - "docs/ENGINEERING_HANDBOOK.md"
       - "scripts/verification/**"
+      - "scripts/verify-artifact-redaction.mjs"
+      - "scripts/verify-artifact-redaction.test.mjs"
       - ".github/workflows/verification-operator-proof.yml"
       - "package.json"
+      - "pnpm-workspace.yaml"
       - "pnpm-lock.yaml"
 
 permissions:
@@ -65,8 +79,13 @@ jobs:
         if: always()
         run: pnpm verify:review
 
-      - name: Upload verification artifacts
+      - name: Verify artifact redaction
+        id: artifact-redaction
         if: always()
+        run: pnpm verify:artifacts:redaction
+
+      - name: Upload verification artifacts
+        if: always() && steps.artifact-redaction.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: verification-operator-proof-artifacts

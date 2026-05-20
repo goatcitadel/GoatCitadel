@@ -60,6 +60,9 @@ describe("TaskLifecycleService agentic runtime", () => {
       metadata: {
         runId: "run-1:researcher",
         parentRunId: "run-1",
+        index: 2,
+        depth: 1,
+        dependsOnStepIds: ["plan-step"],
         profileId: "researcher",
         contextMode: "isolated",
         heartbeatAt: "2020-01-01T12:00:00.000Z",
@@ -93,7 +96,15 @@ describe("TaskLifecycleService agentic runtime", () => {
       expect.arrayContaining([
         expect.objectContaining({ id: "run:run-1", kind: "run" }),
         expect.objectContaining({ id: `task:${task.taskId}`, kind: "task" }),
-        expect.objectContaining({ id: "subagent:child-session-1", kind: "subagent" }),
+        expect.objectContaining({
+          id: "subagent:child-session-1",
+          kind: "subagent",
+          metadata: expect.objectContaining({
+            index: 2,
+            depth: 1,
+            dependsOnStepIds: ["plan-step"],
+          }),
+        }),
         expect.objectContaining({ kind: "artifact", label: "Research handoff" }),
         expect.objectContaining({ kind: "diagnostic", label: "Final delivery retry queued" }),
       ]),
@@ -376,6 +387,35 @@ describe("TaskLifecycleService agentic runtime", () => {
     expect(secondPage.nextCursor).toBeUndefined();
   });
 
+  it("defaults agentic run listings to the default workspace", () => {
+    const { service } = createService();
+    service.createTask({
+      workspaceId: "default",
+      title: "Default workspace run",
+      status: "in_progress",
+      agenticContext: {
+        runId: "run-default",
+        surface: "cowork",
+        status: "running",
+      },
+    });
+    service.createTask({
+      workspaceId: "workspace-a",
+      title: "Other workspace run",
+      status: "in_progress",
+      agenticContext: {
+        runId: "run-workspace-a",
+        surface: "cowork",
+        status: "running",
+      },
+    });
+
+    expect(service.listAgenticRuns({ surface: "cowork" }).items.map((item) => item.runId)).toEqual(["run-default"]);
+    expect(
+      service.listAgenticRuns({ workspaceId: "workspace-a", surface: "cowork" }).items.map((item) => item.runId),
+    ).toEqual(["run-workspace-a"]);
+  });
+
   it("builds run trees for agentic runs beyond the first active task page", () => {
     const { service, storage } = createService();
     const olderRun = storage.tasks.create(
@@ -413,6 +453,90 @@ describe("TaskLifecycleService agentic runtime", () => {
       status: "recorded",
     });
   }, 20_000);
+
+  it("does not let child-run controls kill parent-owned subagents", () => {
+    const { service, storage } = createService();
+    const parent = service.createTask({
+      workspaceId: "default",
+      title: "Parent run",
+      status: "in_progress",
+      agenticContext: {
+        runId: "run-parent",
+        childRunIds: ["run-child"],
+        surface: "cowork",
+        status: "running",
+      },
+    });
+    const child = service.createTask({
+      workspaceId: "default",
+      title: "Child run",
+      status: "in_progress",
+      agenticContext: {
+        runId: "run-child",
+        parentRunId: "run-parent",
+        surface: "cowork",
+        status: "running",
+      },
+    });
+    service.registerTaskSubagent(parent.taskId, {
+      agentSessionId: "parent-subagent",
+      agentName: "parent-worker",
+    });
+    service.registerTaskSubagent(child.taskId, {
+      agentSessionId: "child-subagent",
+      agentName: "child-worker",
+    });
+
+    expect(() =>
+      service.invokeAgenticControl("run-child", {
+        action: "kill_child",
+        agentSessionId: "parent-subagent",
+      }),
+    ).toThrow(/Sub-agent session .* not found/);
+
+    expect(
+      service.invokeAgenticControl("run-child", {
+        action: "kill_child",
+        agentSessionId: "child-subagent",
+      }),
+    ).toMatchObject({ status: "recorded" });
+    expect(storage.taskSubagents.findByAgentSessionId("child-subagent")?.status).toBe("killed");
+    expect(storage.taskSubagents.findByAgentSessionId("parent-subagent")?.status).not.toBe("killed");
+  });
+
+  it("rejects idempotent control replays when the payload changes", () => {
+    const { service } = createService();
+    service.createTask({
+      workspaceId: "default",
+      title: "Controlled run",
+      status: "in_progress",
+      agenticContext: {
+        runId: "run-control",
+        surface: "cowork",
+        status: "running",
+      },
+    });
+
+    service.invokeAgenticControl("run-control", {
+      action: "pause",
+      controlId: "control-1",
+      reason: "pause for operator review",
+    });
+    expect(
+      service.invokeAgenticControl("run-control", {
+        action: "pause",
+        controlId: "control-1",
+        reason: "pause for operator review",
+      }),
+    ).toMatchObject({ idempotentReplay: true });
+    expect(() =>
+      service.invokeAgenticControl("run-control", {
+        action: "pause",
+        controlId: "control-1",
+        reason: "pause a different target",
+      }),
+    ).toThrow(/different agentic control payload/);
+  });
 });
 
 describe("TaskLifecycleService — distress signals", () => {
@@ -721,6 +845,16 @@ describe("TaskLifecycleService workspace access", () => {
 
   it("scopes agentic run tree and control endpoints to the requested workspace", () => {
     const { service } = createService();
+    service.createTask({
+      workspaceId: "default",
+      title: "Default run",
+      status: "in_progress",
+      agenticContext: {
+        runId: "run-default",
+        status: "running",
+        surface: "cowork",
+      },
+    });
     const task = service.createTask({
       workspaceId: "workspace-a",
       title: "Scoped run",
@@ -735,6 +869,14 @@ describe("TaskLifecycleService workspace access", () => {
     expect(() => service.getAgenticRunTree("run-workspace-a", { workspaceId: "workspace-b" })).toThrow(
       /Agentic run not found/,
     );
+    expect(() => service.getAgenticRunTree("run-workspace-a")).toThrow(/Agentic run not found/);
+    expect(() =>
+      service.invokeAgenticControl("run-workspace-a", {
+        action: "pause",
+        actorId: "operator",
+      }),
+    ).toThrow(/Agentic run not found/);
+    expect(service.getAgenticRunTree("run-default")).toMatchObject({ runId: "run-default" });
     expect(() =>
       service.invokeAgenticControl(
         "run-workspace-a",
@@ -791,16 +933,64 @@ describe("TaskLifecycleService workspace access", () => {
     });
 
     expect(() =>
-      service.invokeAgenticControl("run-a", {
-        action: "kill_child",
-        controlId: "wrong-run-child",
-        agentSessionId: "run-b-child",
-        actorId: "operator",
-      }),
+      service.invokeAgenticControl(
+        "run-a",
+        {
+          action: "kill_child",
+          controlId: "wrong-run-child",
+          agentSessionId: "run-b-child",
+          actorId: "operator",
+        },
+        { workspaceId: "workspace-a" },
+      ),
     ).toThrow(/Sub-agent session run-b-child not found/);
     expect(storage.taskSubagents.getByAgentSessionId("run-b-child").status).toBe("active");
     expect(
       storage.taskActivities.listByTask(runA.taskId).filter((activity) => activity.activityType === "control"),
     ).toHaveLength(0);
+  });
+
+  it("allows kill_child controls for subagents attached to child tasks in the selected run tree", () => {
+    const { service, storage } = createService();
+    service.createTask({
+      workspaceId: "workspace-a",
+      title: "Root run",
+      status: "in_progress",
+      agenticContext: {
+        runId: "run-root",
+        status: "running",
+        surface: "cowork",
+        childRunIds: ["run-child"],
+      },
+    });
+    const child = service.createTask({
+      workspaceId: "workspace-a",
+      title: "Child run",
+      status: "in_progress",
+      agenticContext: {
+        runId: "run-child",
+        parentRunId: "run-root",
+        status: "running",
+        surface: "cowork",
+      },
+    });
+    service.registerTaskSubagent(child.taskId, {
+      agentSessionId: "nested-child-agent",
+      agentName: "analyst",
+    });
+
+    expect(
+      service.invokeAgenticControl(
+        "run-root",
+        {
+          action: "kill_child",
+          controlId: "kill-nested-child",
+          agentSessionId: "nested-child-agent",
+          actorId: "operator",
+        },
+        { workspaceId: "workspace-a" },
+      ),
+    ).toMatchObject({ action: "kill_child", status: "recorded" });
+    expect(storage.taskSubagents.getByAgentSessionId("nested-child-agent").status).toBe("killed");
   });
 });

@@ -263,6 +263,7 @@ import type {
   ToolCatalogEntry,
   ToolGrantCreateInput,
   ToolGrantRecord,
+  ToolGrantScope,
   TaskUpdateInput,
   GmailReadQuery,
   GmailSendInput,
@@ -1158,6 +1159,7 @@ export class GatewayService {
       isValidToolName: (name) => isValidToolName(name),
       evaluateToolDeploymentGuard: (request) =>
         evaluateDeploymentProfileToolAccess(this.config.assistant.deploymentProfile, request.toolName, request.args),
+      isFeatureEnabled: (flag) => this.isFeatureEnabled(flag),
       resolveToolHookWorkspaceId: (request) => this.resolveToolHookWorkspaceId(request),
       primeToolApprovalLifecycle: (approvalId, request) =>
         this.primeApprovalLifecycle(
@@ -3286,12 +3288,13 @@ export class GatewayService {
   }
 
   public ensureChatSessionRuntimeGrants(sessionId: string): void {
-    const existing = this.listToolGrants("session", sessionId, 1000);
-    const active = existing.filter((grant) => isActiveToolGrant(grant));
+    const active = this.listActiveToolGrants("session", sessionId);
+    const workspaceId = this.storage.chatSessionMeta.get(sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
     const inheritedDeny = [
-      ...this.listToolGrants("global", "global", 1000),
-      ...this.listToolGrants("agent", "assistant", 1000),
-    ].filter((grant) => isActiveToolGrant(grant) && grant.decision === "deny");
+      ...this.listActiveToolGrants("global", "global"),
+      ...this.listActiveToolGrants("agent", "assistant"),
+      ...this.listActiveToolGrants("workspace", workspaceId),
+    ].filter((grant) => grant.decision === "deny");
     for (const toolName of CHAT_SESSION_AUTO_ALLOW_TOOLS) {
       const deniedByInheritedScope = inheritedDeny.some((grant) => grantPatternMatches(grant.toolPattern, toolName));
       if (deniedByInheritedScope) {
@@ -3324,8 +3327,8 @@ export class GatewayService {
     const inheritedGrants = buildDelegatedSessionToolGrantCopies({
       parentSessionId,
       childSessionId,
-      parentGrants: this.listToolGrants("session", parentSessionId, 1000),
-      childGrants: this.listToolGrants("session", childSessionId, 1000),
+      parentGrants: this.listActiveToolGrants("session", parentSessionId),
+      childGrants: this.listActiveToolGrants("session", childSessionId),
     });
 
     for (const grantInput of inheritedGrants) {
@@ -4503,6 +4506,7 @@ export class GatewayService {
         durableRuns: this.storage.durableRuns,
         chatToolRuns: this.storage.chatToolRuns,
         chatToolArtifacts: this.storage.chatToolArtifacts,
+        chatMessages: this.storage.chatMessages,
         recordDurableTimelineEvent: (durableRunId, eventType, payload) =>
           this.recordDurableTimelineEvent(durableRunId, eventType, payload),
         patchDurableTraceIfPresent: (turnId, patch) => this.patchDurableTraceIfPresent(turnId, patch),
@@ -4728,7 +4732,7 @@ export class GatewayService {
       return policyResult;
     }
 
-    const request = toToolInvokeRequest(pending.request, signal);
+    const request = withExternalRuntimePolicyContext(toToolInvokeRequest(pending.request, signal), policyResult);
     let runtimeResult: ToolInvokeResult;
     if (request.toolName === "mcp.invoke") {
       const mcpResult = await this.toolInvocationCoordinator.invokeApprovedMcpRuntime(
@@ -4852,7 +4856,8 @@ export class GatewayService {
     }
 
     if (request.toolName === "docs.ingest" && args.sourceType === "url") {
-      if (!explicitBackend && firecrawl.enabled && firecrawl.defaultReadBackend === "firecrawl") {
+      const hasExplicitDocsBackend = args.backend !== undefined && args.backend !== null;
+      if (!hasExplicitDocsBackend && firecrawl.enabled && firecrawl.defaultReadBackend === "firecrawl") {
         args.backend = "firecrawl";
       }
       if (args.backend === "firecrawl") {
@@ -5137,6 +5142,19 @@ export class GatewayService {
     limit = 200,
   ): ToolGrantRecord[] {
     return this.approvalRuntime.listToolGrants(scope, scopeRef, limit);
+  }
+
+  private listActiveToolGrants(scope?: ToolGrantScope, scopeRef?: string): ToolGrantRecord[] {
+    const grantRepo = this.storage.toolGrants as
+      | {
+          listActive?: (scope?: ToolGrantScope, scopeRef?: string) => ToolGrantRecord[];
+        }
+      | undefined;
+    if (grantRepo?.listActive) {
+      return grantRepo.listActive(scope, scopeRef);
+    }
+    const grants = this.listToolGrants(scope, scopeRef, Number.MAX_SAFE_INTEGER);
+    return Array.isArray(grants) ? grants.filter(isActiveToolGrant) : [];
   }
 
   public createToolGrant(input: ToolGrantCreateInput): ToolGrantRecord {
@@ -6910,12 +6928,14 @@ export class GatewayService {
   }
 
   /** @internal */ public ensureSessionInternalToolGrant(sessionId: string, toolName: string, createdBy: string): void {
-    const sessionGrants = this.listToolGrants("session", sessionId, 1000);
+    const sessionGrants = this.listActiveToolGrants("session", sessionId);
+    const workspaceId = this.storage.chatSessionMeta.get(sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID;
     const inheritedGrants = [
-      ...this.listToolGrants("global", "global", 1000),
-      ...this.listToolGrants("agent", "assistant", 1000),
+      ...this.listActiveToolGrants("global", "global"),
+      ...this.listActiveToolGrants("agent", "assistant"),
+      ...this.listActiveToolGrants("workspace", workspaceId),
     ];
-    const activeGrants = [...sessionGrants, ...inheritedGrants].filter(isActiveToolGrant);
+    const activeGrants = [...sessionGrants, ...inheritedGrants];
     const hasActiveDeny = activeGrants.some(
       (grant) => grant.decision === "deny" && grantPatternMatches(grant.toolPattern, toolName),
     );
@@ -6930,8 +6950,7 @@ export class GatewayService {
       throw new Error(`Internal tool grant for ${toolName} is blocked by an active deny policy.`);
     }
     const hasActiveAllow = sessionGrants.some(
-      (grant) =>
-        isActiveToolGrant(grant) && grant.decision === "allow" && grantPatternMatches(grant.toolPattern, toolName),
+      (grant) => grant.decision === "allow" && grantPatternMatches(grant.toolPattern, toolName),
     );
     if (hasActiveAllow) {
       return;
@@ -8269,6 +8288,28 @@ function toToolInvokeRequest(record: Record<string, unknown>, signal?: AbortSign
         }
       : undefined,
     externalRuntime: record.externalRuntime === true ? true : undefined,
+  };
+}
+
+function withExternalRuntimePolicyContext(
+  request: ToolInvokeRequest,
+  policyResult: ToolInvokeResult,
+): ToolInvokeRequest {
+  const rawPolicyContext = policyResult.result?.policyContext;
+  if (!isRecord(rawPolicyContext)) {
+    return request;
+  }
+  const evaluated = rawPolicyContext as ToolPolicyActorContext;
+  return {
+    ...request,
+    policyContext: {
+      ...(request.policyContext ?? {}),
+      ...evaluated,
+      matchedGrantAllowedHosts:
+        evaluated.matchedGrantAllowedHosts && evaluated.matchedGrantAllowedHosts.length > 0
+          ? evaluated.matchedGrantAllowedHosts
+          : request.policyContext?.matchedGrantAllowedHosts,
+    },
   };
 }
 

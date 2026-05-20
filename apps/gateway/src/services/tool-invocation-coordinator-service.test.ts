@@ -338,6 +338,57 @@ describe("ToolInvocationCoordinatorService", () => {
     });
   });
 
+  it("enforces computer-use guardrails at the coordinator boundary", async () => {
+    const policyInvoke = vi.fn(
+      async (): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-should-not-run",
+      }),
+    );
+    const coordinator = new ToolInvocationCoordinatorService(
+      createHost({
+        isFeatureEnabled: vi.fn(() => true),
+        policyEngine: {
+          invoke: policyInvoke,
+          evaluateAccess: vi.fn(() => ({
+            allowed: true,
+            requiresApproval: false,
+            reasonCodes: [],
+          })),
+        },
+      }),
+    );
+
+    const blocked = await coordinator.invokeTool(
+      createToolRequest({
+        toolName: "browser.interact",
+        args: {
+          url: "https://example.com/form",
+          steps: [{ action: "type", selector: "#email", text: "operator@example.com" }],
+        },
+      }),
+    );
+    const allowed = await coordinator.invokeTool(
+      createToolRequest({
+        toolName: "browser.interact",
+        args: {
+          url: "https://example.com/form",
+          steps: [{ action: "click", selector: "button" }],
+          verifyStep: true,
+          confirmBeforeSubmit: true,
+        },
+      }),
+    );
+
+    expect(blocked).toMatchObject({
+      outcome: "blocked",
+      policyReason: expect.stringContaining("Computer-use guardrail"),
+    });
+    expect(allowed.outcome).toBe("executed");
+    expect(policyInvoke).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks tool execution when intercept-mode before-hook returns a block decision", async () => {
     const policyInvoke = vi.fn(
       async (): Promise<ToolInvokeResult> => ({
@@ -1232,6 +1283,10 @@ describe("ToolInvocationCoordinatorService", () => {
         result: {
           externalRuntime: true,
           toolName: "web_search",
+          policyContext: {
+            matchedGrantId: "grant-1",
+            matchedGrantAllowedHosts: ["approved.example"],
+          },
         },
       }),
     );
@@ -1249,7 +1304,12 @@ describe("ToolInvocationCoordinatorService", () => {
 
     expect(result.outcome).toBe("executed");
     expect(result.result).toEqual({ source: "plugin", echoed: { q: "foo" } });
-    expect(pluginHandler).toHaveBeenCalledWith({ q: "foo" });
+    expect(pluginHandler).toHaveBeenCalledWith(
+      { q: "foo" },
+      expect.objectContaining({
+        policyContext: expect.objectContaining({ matchedGrantAllowedHosts: ["approved.example"] }),
+      }),
+    );
     expect(policyInvoke).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "web_search",
@@ -1323,7 +1383,7 @@ describe("ToolInvocationCoordinatorService", () => {
     );
 
     expect(result.outcome).toBe("executed");
-    expect(pluginHandler).toHaveBeenCalledWith({ q: "approved" });
+    expect(pluginHandler).toHaveBeenCalledWith({ q: "approved" }, expect.any(Object));
     expect(recordApprovedExternalRuntimeToolResult).toHaveBeenCalledWith({
       approvalId: "approval-runtime-1",
       request: expect.objectContaining({
@@ -1386,7 +1446,7 @@ describe("ToolInvocationCoordinatorService", () => {
     );
 
     expect(result.outcome).toBe("executed");
-    expect(pluginHandler).toHaveBeenCalledWith({ q: "stale" });
+    expect(pluginHandler).toHaveBeenCalledWith({ q: "stale" }, expect.any(Object));
     expect(recordApprovedExternalRuntimeToolResult).not.toHaveBeenCalled();
   });
 
@@ -1425,7 +1485,7 @@ describe("ToolInvocationCoordinatorService", () => {
 
     expect(result.outcome).toBe("executed");
     expect(result.result).toEqual({ source: "plugin", echoed: { q: "approved" } });
-    expect(pluginHandler).toHaveBeenCalledWith({ q: "approved" });
+    expect(pluginHandler).toHaveBeenCalledWith({ q: "approved" }, expect.any(Object));
     expect(policyInvoke).not.toHaveBeenCalled();
   });
 
