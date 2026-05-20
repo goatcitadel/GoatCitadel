@@ -617,7 +617,7 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
                 >
                   {BUDGET_MODE_OPTIONS.map((mode) => (
                     <option key={mode} value={mode}>
-                      {mode}
+                      {labelForBudgetMode(mode)}
                     </option>
                   ))}
                 </select>

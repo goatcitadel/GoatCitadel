@@ -566,6 +566,31 @@ describe("DurableRunService", () => {
     );
   });
 
+  it("rejects pause and cancel attempts for dead-lettered durable runs", () => {
+    const run = {
+      ...createRun("run-dead-lettered-control", "dead_lettered"),
+      finishedAt: "2026-03-14T00:00:05.000Z",
+      lastError: "retry_exhausted: connector timed out",
+    };
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const publishRealtime = vi.fn();
+    const service = new DurableRunService(
+      createContext(runs, checkpoints, timeline, { publishRealtime }) as unknown as ServiceContext,
+    );
+
+    expect(() => service.pauseDurableRun(run.runId, "operator-2")).toThrow(
+      "Durable run run-dead-lettered-control is already terminal (dead_lettered)",
+    );
+    expect(() => service.cancelDurableRun(run.runId, "operator-2")).toThrow(
+      "Durable run run-dead-lettered-control is already terminal (dead_lettered)",
+    );
+    expect(runs.get(run.runId)?.status).toBe("dead_lettered");
+    expect(timeline).toEqual([]);
+    expect(publishRealtime).not.toHaveBeenCalled();
+  });
+
   it("records checkpoint continuation gates and continues workflow execution", async () => {
     const run = createRun("run-checkpoint", "queued", "connector.delivery");
     const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);

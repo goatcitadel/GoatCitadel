@@ -230,6 +230,51 @@ describe("resolveToolRequestPaths", () => {
     expect(resolvedStat.args.path).toBe(projectRoot);
   });
 
+  it("normalizes docs.ingest file sources before policy evaluation while leaving url and text sources untouched", async () => {
+    const { projectRoot, workspaceRoot } = await createWorkspaceFixture();
+    await fs.mkdir(path.join(projectRoot, "docs"), { recursive: true });
+    await fs.writeFile(path.join(projectRoot, "docs", "source.md"), "# Source\n", "utf8");
+
+    const fileRequest: ToolInvokeRequest = {
+      toolName: "docs.ingest",
+      args: { sourceType: "file", source: "docs/source.md", namespace: "research" },
+      agentId: "agent",
+      sessionId: "session",
+    };
+    const urlRequest: ToolInvokeRequest = {
+      toolName: "docs.ingest",
+      args: { sourceType: "url", source: "https://example.com/docs.md", namespace: "research" },
+      agentId: "agent",
+      sessionId: "session",
+    };
+    const textRequest: ToolInvokeRequest = {
+      toolName: "docs.ingest",
+      args: { sourceType: "text", source: "inline docs", namespace: "research" },
+      agentId: "agent",
+      sessionId: "session",
+    };
+
+    const resolvedFile = resolveToolRequestPaths(fileRequest, {
+      workspaceRoot,
+      projectRoot,
+      projectWorkspacePath: "fixtures/prompt-pack-workspace",
+    });
+    const resolvedUrl = resolveToolRequestPaths(urlRequest, {
+      workspaceRoot,
+      projectRoot,
+      projectWorkspacePath: "fixtures/prompt-pack-workspace",
+    });
+    const resolvedText = resolveToolRequestPaths(textRequest, {
+      workspaceRoot,
+      projectRoot,
+      projectWorkspacePath: "fixtures/prompt-pack-workspace",
+    });
+
+    expect(resolvedFile.args.source).toBe(path.join(projectRoot, "docs", "source.md"));
+    expect(resolvedUrl).toBe(urlRequest);
+    expect(resolvedText).toBe(textRequest);
+  });
+
   it("preserves absolute outside-workspace read paths for policy evaluation", async () => {
     const { projectRoot, workspaceRoot, outsideRoot } = await createWorkspaceFixture();
     const outsideFile = path.join(outsideRoot, "escape.txt");

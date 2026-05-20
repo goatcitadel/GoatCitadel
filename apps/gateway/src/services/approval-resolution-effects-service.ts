@@ -722,6 +722,10 @@ export class ApprovalEffectsService {
       if (signal?.aborted) {
         return;
       }
+      const codeModeRunId =
+        typeof pendingAction.request?.runId === "string" && pendingAction.request.runId.trim()
+          ? pendingAction.request.runId.trim()
+          : undefined;
       this.ctx.publishRealtime(
         "approval_effect_deferred",
         "approvals",
@@ -738,7 +742,7 @@ export class ApprovalEffectsService {
           eventAuthority: "retained_stream",
           links: {
             approvalId: effect.approvalId,
-            runId: effect.targetId,
+            ...(codeModeRunId ? { runId: codeModeRunId } : {}),
           },
         },
       );

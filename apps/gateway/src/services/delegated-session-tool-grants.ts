@@ -60,11 +60,13 @@ function toolPatternsOverlap(denyPattern: string, allowPattern: string): boolean
   if (allowHasWildcard && !denyHasWildcard) {
     return matchesToolPattern(allowPattern, denyPattern);
   }
-  if (denyHasWildcard) {
-    return patternPrefix(allowPattern).startsWith(patternPrefix(denyPattern));
-  }
-  if (allowHasWildcard) {
-    return patternPrefix(denyPattern).startsWith(patternPrefix(allowPattern));
+  if (denyHasWildcard && allowHasWildcard) {
+    const denyPrefix = patternPrefix(denyPattern);
+    const allowPrefix = patternPrefix(allowPattern);
+    if (!denyPrefix || !allowPrefix) {
+      return true;
+    }
+    return allowPrefix.startsWith(denyPrefix) || denyPrefix.startsWith(allowPrefix);
   }
   return false;
 }

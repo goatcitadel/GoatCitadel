@@ -205,6 +205,7 @@ function buildMetadataRecord(input) {
   const workflowRef =
     process.env.GITHUB_WORKFLOW_REF ??
     `${process.env.GITHUB_REPOSITORY ?? "local"}/.github/workflows/release-installers.yml@${process.env.GITHUB_SHA ?? "local"}`;
+  const lockedInputs = buildLockedInputRecords();
   return {
     version: input.version,
     tag: input.tagName,
@@ -224,13 +225,8 @@ function buildMetadataRecord(input) {
       pnpmVersion: readCommandVersion("pnpm", ["--version"]),
       zipVersion: readCommandVersion("zip", ["-v"]),
     },
-    lockedInputs: [
-      "package.json",
-      "pnpm-lock.yaml",
-      "pnpm-workspace.yaml",
-      "Dockerfile",
-      ".github/workflows/release-installers.yml",
-    ],
+    lockedInputs: lockedInputs.map((item) => item.path),
+    lockedInputDigests: lockedInputs,
     buildCommands: [
       "pnpm install --frozen-lockfile",
       "pnpm package:desktop --target <target>",
@@ -239,7 +235,8 @@ function buildMetadataRecord(input) {
       "pnpm dlx @cyclonedx/cyclonedx-npm --output-format json --output-file <sbom>",
       "node scripts/release/sign-release-artifacts.mjs --artifacts-dir <dir>",
       "node scripts/release/assemble-release-package.mjs --version <version> --artifacts-dir <dir> --sbom-file <sbom>",
-      "node scripts/release/write-release-certificate.mjs --version <version> --artifacts-dir <dir> --proof-zip <zip>",
+      "node scripts/release/wait-for-release-proof.mjs --repository <owner/repo> --commit <commit-sha> --timeout-ms 14400000",
+      "node scripts/release/write-release-certificate.mjs --version <version> --tag <tag> --artifacts-dir <dir> --proof-zip <zip> --out-file <certificate> --require-success",
     ],
     artifacts: input.artifacts,
     sbom: input.sbomPath,
@@ -248,6 +245,7 @@ function buildMetadataRecord(input) {
 }
 
 function buildSlsaAttestation(input) {
+  const lockedInputs = buildLockedInputRecords();
   return {
     _type: "https://in-toto.io/Statement/v1",
     predicateType: "https://slsa.dev/provenance/v1",
@@ -277,10 +275,10 @@ function buildSlsaAttestation(input) {
               sha1: process.env.GITHUB_SHA ?? "local",
             },
           },
-          ...["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "Dockerfile"].map((filePath) => ({
-            uri: `file://${filePath}`,
+          ...lockedInputs.map((lockedInput) => ({
+            uri: `file://${lockedInput.path}`,
             digest: {
-              sha256: sha256File(path.join(repoRoot, filePath)),
+              sha256: lockedInput.sha256,
             },
           })),
         ],
@@ -300,6 +298,48 @@ function buildSlsaAttestation(input) {
     },
     note: "This provenance statement is generated from the GitHub Actions release context and shipped inside the release package for offline inspection.",
   };
+}
+
+function buildLockedInputRecords() {
+  return listReleaseLockedInputs().map((filePath) => ({
+    path: filePath,
+    sha256: sha256File(path.join(repoRoot, filePath)),
+  }));
+}
+
+function listReleaseLockedInputs() {
+  const fixedInputs = [
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "Dockerfile",
+    ".github/workflows/release-installers.yml",
+  ];
+  return [
+    ...fixedInputs,
+    ...listRelativeFiles(path.join(repoRoot, "scripts", "packaging"), "scripts/packaging"),
+    ...listRelativeFiles(path.join(repoRoot, "scripts", "release"), "scripts/release"),
+  ].sort((left, right) => left.localeCompare(right));
+}
+
+function listRelativeFiles(rootDir, relativeRoot) {
+  const files = [];
+  const queue = [rootDir];
+  while (queue.length > 0) {
+    const current = queue.pop();
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const absolutePath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(absolutePath);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      files.push(path.join(relativeRoot, path.relative(rootDir, absolutePath)).replace(/\\/g, "/"));
+    }
+  }
+  return files;
 }
 
 function renderHandoff(input) {

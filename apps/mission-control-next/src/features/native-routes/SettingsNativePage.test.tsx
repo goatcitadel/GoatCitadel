@@ -1923,6 +1923,14 @@ describe("SettingsNativePage providers", () => {
     expect(text).toContain("Store a balanced budget preference");
     expect(text).not.toContain("Terminal onboarding");
     expect(text).not.toContain("Mission Control posture");
+    const onboardingBudgetSelect = renderer!.root.findAll(
+      (node) => node.type === "select" && node.props.className === "mc-next-settings-input",
+    )[2];
+    expect(onboardingBudgetSelect!.findAllByType("option").map((option) => collectText(option))).toEqual([
+      "Saver",
+      "Balanced",
+      "Power",
+    ]);
 
     await act(async () => {
       findButton(renderer!.root, "Apply defaults").props.onClick();

@@ -1089,7 +1089,12 @@ function buildAgenticControls(task: TaskRecord): AgenticRunTreeResponse["control
     {
       action: "cancel",
       label: task.agenticContext?.durableRunId ? "Cancel durable run" : "Record cancel intent",
-      enabled: status !== "completed" && status !== "done" && status !== "cancelled" && status !== "stopped_by_limit",
+      enabled:
+        status !== "completed" &&
+        status !== "done" &&
+        status !== "failed" &&
+        status !== "cancelled" &&
+        status !== "stopped_by_limit",
       runtimeEffect: task.agenticContext?.durableRunId ? "runtime_cancel" : "state_only",
       reason: task.agenticContext?.durableRunId
         ? "Calls the attached durable run cancel path and mirrors the result into Cowork state."
@@ -1288,6 +1293,7 @@ function validateAgenticControlTransition(
     input.action === "cancel" &&
     (currentStatus === "completed" ||
       currentStatus === "done" ||
+      currentStatus === "failed" ||
       currentStatus === "cancelled" ||
       currentStatus === "stopped_by_limit")
   ) {

@@ -416,7 +416,7 @@ Expected health response:
 1. Run doctor.
 2. Complete onboarding.
 3. Set your active provider and model in Settings.
-4. Confirm Dashboard, Chat, Sessions, and Tool Access load cleanly.
+4. Confirm Chat, Cowork, Code, Projects, Library, Ops, and Settings load cleanly.
 5. Test approvals with one intentionally risky action.
 6. If you plan to use Discord or Slack, configure those after local validation is clean.
 
@@ -453,7 +453,7 @@ Use this matrix when handing the repo to external manual testers:
 | --- | --- | --- |
 | Desktop host | Windows installer or `pnpm desktop:dev` from source | native window loads Mission Control, close-to-tray keeps runtime warm, Open in Browser and logs actions work |
 | Installer bootstrap | Installed launcher smoke (`goatcitadel status --json`, `goatcitadel launch --no-open --json --wait`, `goatcitadel stop --json`) or source `pnpm verify:install` | packaged launcher starts/stops the local runtime; source lane proves isolated gateway/UI bootstrap and provider bootstrap behavior |
-| Onboarding + dashboard | `goatcitadel up`, then complete onboarding | Dashboard, Chat, Sessions, and Settings load without auth/origin errors |
+| Onboarding + shell routes | `goatcitadel up`, then complete onboarding | Chat, Cowork, Code, Projects, Library, Ops, and Settings load without auth/origin errors |
 | Chat command flow | any started stack, one session | `/help` or another local command path returns a stable thread/update result without requiring cloud provider access |
 | Approval lifecycle | one intentionally risky action or synthetic approval | pending approval appears, resolves cleanly, replay remains inspectable |
 | Code Mode v1 | `GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED=true` | run is approval-gated, sandbox metadata is visible, stdout/stderr artifacts stay bounded, candidate-save path only runs after approval |

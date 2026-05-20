@@ -168,4 +168,69 @@ describe("buildDelegatedSessionToolGrantCopies", () => {
       }),
     ]);
   });
+
+  it("does not inherit broad wildcard allows that overlap narrower wildcard denies", () => {
+    const copies = buildDelegatedSessionToolGrantCopies({
+      parentSessionId: "parent-session",
+      childSessionId: "child-session",
+      parentGrants: [
+        createGrant({
+          grantId: "allow-browser",
+          toolPattern: "browser.*",
+          decision: "allow",
+        }),
+        createGrant({
+          grantId: "allow-shell",
+          toolPattern: "shell.*",
+          decision: "allow",
+        }),
+        createGrant({
+          grantId: "deny-browser-search",
+          toolPattern: "browser.search*",
+          decision: "deny",
+        }),
+      ],
+    });
+
+    expect(copies).toEqual([
+      expect.objectContaining({
+        toolPattern: "shell.*",
+        decision: "allow",
+      }),
+      expect.objectContaining({
+        toolPattern: "browser.search*",
+        decision: "deny",
+      }),
+    ]);
+  });
+
+  it("keeps disjoint wildcard allows when inherited denies do not overlap", () => {
+    const copies = buildDelegatedSessionToolGrantCopies({
+      parentSessionId: "parent-session",
+      childSessionId: "child-session",
+      parentGrants: [
+        createGrant({
+          grantId: "allow-browser",
+          toolPattern: "browser.*",
+          decision: "allow",
+        }),
+        createGrant({
+          grantId: "deny-shell",
+          toolPattern: "shell.*",
+          decision: "deny",
+        }),
+      ],
+    });
+
+    expect(copies).toEqual([
+      expect.objectContaining({
+        toolPattern: "browser.*",
+        decision: "allow",
+      }),
+      expect.objectContaining({
+        toolPattern: "shell.*",
+        decision: "deny",
+      }),
+    ]);
+  });
 });

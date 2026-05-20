@@ -379,6 +379,84 @@ describe("TaskLifecycleService agentic runtime", () => {
     ).toThrow(/different agentic control payload/);
   });
 
+  it("records stale dead-lettered durable control failures as rejected controls", () => {
+    const pauseDurableRun = vi.fn(() => {
+      throw new Error("Durable run is already terminal (dead_lettered)");
+    });
+    const cancelDurableRun = vi.fn(() => {
+      throw new Error("Durable run is already terminal (dead_lettered)");
+    });
+    const { service, storage } = createService({ pauseDurableRun, cancelDurableRun });
+    const task = service.createTask({
+      workspaceId: "default",
+      title: "Stale dead-lettered durable Cowork run",
+      status: "in_progress",
+      priority: "normal",
+      agenticContext: {
+        runId: "agentic-run-dead-lettered",
+        durableRunId: "durable-run-dead-lettered",
+        surface: "cowork",
+        status: "running",
+      },
+    });
+
+    const pause = service.invokeAgenticControl("agentic-run-dead-lettered", {
+      action: "pause",
+      controlId: "pause-dead-lettered",
+      actorId: "operator",
+    });
+    const cancel = service.invokeAgenticControl("agentic-run-dead-lettered", {
+      action: "cancel",
+      controlId: "cancel-dead-lettered",
+      actorId: "operator",
+    });
+
+    expect(pause).toMatchObject({ status: "rejected", runtimeEffect: "state_only" });
+    expect(cancel).toMatchObject({ status: "rejected", runtimeEffect: "state_only" });
+    expect(pauseDurableRun).toHaveBeenCalledWith("durable-run-dead-lettered", "operator");
+    expect(cancelDurableRun).toHaveBeenCalledWith("durable-run-dead-lettered", "operator");
+    const updated = storage.tasks.get(task.taskId);
+    expect(updated.status).toBe("in_progress");
+    expect(updated.agenticContext?.status).toBe("running");
+    expect(updated.agenticContext?.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          evidenceRef: "durable-run-dead-lettered",
+          title: "Durable run control rejected",
+        }),
+      ]),
+    );
+  });
+
+  it("rejects state-only cancel for failed agentic runs without erasing failure truth", () => {
+    const { service, storage } = createService();
+    const task = service.createTask({
+      workspaceId: "default",
+      title: "Failed agentic run",
+      status: "blocked",
+      priority: "normal",
+      agenticContext: {
+        runId: "agentic-run-failed",
+        surface: "cowork",
+        status: "failed",
+      },
+    });
+
+    const tree = service.getAgenticRunTree("agentic-run-failed");
+    expect(tree.controls.find((control) => control.action === "cancel")?.enabled).toBe(false);
+
+    const result = service.invokeAgenticControl("agentic-run-failed", {
+      action: "cancel",
+      controlId: "cancel-failed-run",
+      actorId: "operator",
+    });
+
+    expect(result).toMatchObject({ status: "rejected", runtimeEffect: "state_only" });
+    const updated = storage.tasks.get(task.taskId);
+    expect(updated.status).toBe("blocked");
+    expect(updated.agenticContext?.status).toBe("failed");
+  });
+
   it("bridges explicit diagnostics to the improvement ledger without blocking task truth", () => {
     const bridge = vi.fn();
     const { service } = createService({ recordAgenticDiagnosticSignal: bridge });

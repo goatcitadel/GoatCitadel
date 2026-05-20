@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("node:sqlite", () => ({
@@ -336,6 +337,48 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
     const unrelated = { toolName: "shell.exec", args: { command: "pwd" } };
     expect((GatewayService.prototype as any).applyRuntimeBrowserBackendDefaults.call(gateway, unrelated)).toBe(
       unrelated,
+    );
+  });
+
+  it("normalizes docs ingest file sources through the gateway invoke path before policy evaluation", () => {
+    const gateway = createGatewayHarness({
+      config: {
+        rootDir: "F:/code/personal-ai",
+        assistant: {
+          workspaceDir: "workspace",
+          web: {
+            firecrawl: {
+              enabled: false,
+              baseUrl: "http://127.0.0.1:3002",
+              apiKeyEnv: "FIRECRAWL_API_KEY",
+              timeoutMs: 15_000,
+              defaultReadBackend: "native",
+              fallbackToNative: true,
+            },
+          },
+        },
+      },
+      storage: {
+        chatSessionProjects: {
+          get: vi.fn(() => ({ projectId: "project-1" })),
+        },
+        chatProjects: {
+          get: vi.fn(() => ({ workspacePath: "projects/app" })),
+        },
+      },
+    });
+
+    const request = {
+      toolName: "docs.ingest",
+      args: { sourceType: "file", source: "docs/source.md", namespace: "research" },
+      agentId: "agent",
+      sessionId: "session-1",
+    };
+
+    const resolved = (GatewayService.prototype as any).resolveToolInvokeRequestPaths.call(gateway, request);
+
+    expect(resolved.args.source).toBe(
+      path.resolve("F:/code/personal-ai", "workspace", "projects/app", "docs/source.md"),
     );
   });
 

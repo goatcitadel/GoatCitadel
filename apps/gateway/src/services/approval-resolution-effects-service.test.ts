@@ -1365,7 +1365,7 @@ describe("approval-resolution-effects-service", () => {
             find: vi.fn(() => ({
               approvalId: "approval-1",
               actionType: "code_mode.run",
-              request: {},
+              request: { runId: "code-run-1" },
               createdAt: "2026-04-11T00:00:00.000Z",
               resolutionStatus: "pending",
             })),
@@ -1415,7 +1415,12 @@ describe("approval-resolution-effects-service", () => {
         reason: "code_mode_run_already_claimed",
         resolutionStatus: "pending",
       }),
-      expect.any(Object),
+      expect.objectContaining({
+        links: {
+          approvalId: "approval-1",
+          runId: "code-run-1",
+        },
+      }),
     );
   });
 

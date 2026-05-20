@@ -119,3 +119,12 @@ test("release certificate treats verify:fast as direct-only proof", () => {
     /\{ name: "verify:fast", workflowFile: "verification-fast\.yml", required: true \}/,
   );
 });
+
+test("release package metadata locks release and packaging scripts with fail-closed commands", () => {
+  const assembler = fs.readFileSync(new URL("./assemble-release-package.mjs", import.meta.url), "utf8");
+  assert.match(assembler, /lockedInputDigests/);
+  assert.match(assembler, /scripts\/packaging/);
+  assert.match(assembler, /scripts\/release/);
+  assert.match(assembler, /wait-for-release-proof\.mjs --repository <owner\/repo> --commit <commit-sha>/);
+  assert.match(assembler, /write-release-certificate\.mjs --version <version> --tag <tag>[\s\S]*--require-success/);
+});

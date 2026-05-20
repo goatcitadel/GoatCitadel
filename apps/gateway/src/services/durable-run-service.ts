@@ -396,7 +396,12 @@ export class DurableRunService {
   pauseDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     const current = this.ctx.storage.durableRuns.getRun(runId);
-    if (current.status === "completed" || current.status === "failed" || current.status === "cancelled") {
+    if (
+      current.status === "completed" ||
+      current.status === "failed" ||
+      current.status === "cancelled" ||
+      current.status === "dead_lettered"
+    ) {
       throw new Error(`Durable run ${runId} is already terminal (${current.status})`);
     }
     let next!: DurableRunRecord;
@@ -477,7 +482,7 @@ export class DurableRunService {
     if (current.status === "cancelled") {
       return current;
     }
-    if (current.status === "completed" || current.status === "failed") {
+    if (current.status === "completed" || current.status === "failed" || current.status === "dead_lettered") {
       throw new Error(`Durable run ${runId} is already terminal (${current.status})`);
     }
     const now = new Date().toISOString();
@@ -1304,7 +1309,7 @@ export class DurableRunService {
   }
 
   private isTerminalRunStatus(status: DurableRunRecord["status"]): boolean {
-    return status === "completed" || status === "failed" || status === "cancelled";
+    return status === "completed" || status === "failed" || status === "cancelled" || status === "dead_lettered";
   }
 
   private retryDurableRunUpdate(

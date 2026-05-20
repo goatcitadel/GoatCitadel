@@ -16,6 +16,7 @@ interface ToolPathSpec {
   key: string;
   kind: PathResolutionKind;
   injectDefault?: boolean;
+  when?: (request: ToolInvokeRequest) => boolean;
 }
 
 const TOOL_PATH_SPECS: Record<string, ToolPathSpec[]> = {
@@ -41,6 +42,7 @@ const TOOL_PATH_SPECS: Record<string, ToolPathSpec[]> = {
   "tests.run": [{ key: "cwd", kind: "cwd", injectDefault: true }],
   "lint.run": [{ key: "cwd", kind: "cwd", injectDefault: true }],
   "build.run": [{ key: "cwd", kind: "cwd", injectDefault: true }],
+  "docs.ingest": [{ key: "source", kind: "read", when: (request) => request.args.sourceType === "file" }],
   "git.worktree.create": [{ key: "path", kind: "write" }],
   "git.worktree.remove": [{ key: "path", kind: "write" }],
 };
@@ -56,6 +58,9 @@ export function resolveToolRequestPaths(
 
   let nextArgs: Record<string, unknown> | undefined;
   for (const spec of specs) {
+    if (spec.when && !spec.when(request)) {
+      continue;
+    }
     const rawValue = request.args[spec.key];
     if (typeof rawValue !== "string") {
       if (rawValue === undefined && spec.injectDefault) {
