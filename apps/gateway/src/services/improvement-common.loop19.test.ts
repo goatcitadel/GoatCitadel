@@ -6,6 +6,7 @@ import {
   extractCompletionText,
   isRecord,
   parseLooseJsonRecord,
+  redactForModelJudge,
   safeJsonParse,
   truncateForModelJudge,
   withTimeout,
@@ -39,6 +40,26 @@ describe("improvement common helpers", () => {
     expect(parseLooseJsonRecord("{not-json}")).toBeUndefined();
     expect(isRecord({ ok: true })).toBe(true);
     expect(isRecord(["not", "record"])).toBe(false);
+  });
+
+  it("redacts secret-like judge input before excerpts can leave the gateway", () => {
+    const raw = [
+      '{"apiKey":"sk-tool-arg-456","nested":{"session_token":"tok_abc123"}}',
+      "TOOL_RESULT_SECRET=sk-tool-result-123",
+      "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+      "account acct_789012 should not be exported",
+      "keychain:service/account",
+    ].join("\n");
+
+    const redacted = redactForModelJudge(raw);
+
+    expect(redacted).not.toContain("sk-tool-arg-456");
+    expect(redacted).not.toContain("tok_abc123");
+    expect(redacted).not.toContain("sk-tool-result-123");
+    expect(redacted).not.toContain("abcdefghijklmnopqrstuvwxyz");
+    expect(redacted).not.toContain("acct_789012");
+    expect(redacted).not.toContain("keychain:service/account");
+    expect(redacted).toContain("[REDACTED]");
   });
 
   it("truncates judge input and clears timeout handles after either race winner", async () => {

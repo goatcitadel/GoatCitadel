@@ -100,6 +100,7 @@ import {
   extractCompletionText,
   parseLooseJsonRecord,
   safeJsonParse,
+  redactForModelJudge,
   truncateForModelJudge,
   withTimeout,
 } from "./improvement-common.js";
@@ -452,7 +453,7 @@ export class ImprovementService {
         action: "improvement",
         description: existing?.description ?? "Run the weekly self-improvement replay cycle.",
         schedule: IMPROVEMENT_WEEKLY_SCHEDULE_LABEL,
-        enabled: existing?.enabled ?? true,
+        enabled: existing?.enabled ?? false,
         endAt: existing?.endAt,
         lastRunAt: existing?.lastRunAt,
         nextRunAt: existing?.nextRunAt,
@@ -4771,9 +4772,12 @@ export class ImprovementService {
   ): Promise<{ inputExcerpt?: string; outputExcerpt?: string }> {
     if (candidate.decisionType === "tool_run") {
       return {
-        inputExcerpt: truncateForModelJudge(candidate.args ? JSON.stringify(candidate.args, null, 2) : "", 1800),
+        inputExcerpt: truncateForModelJudge(
+          redactForModelJudge(candidate.args ? JSON.stringify(candidate.args, null, 2) : ""),
+          1800,
+        ),
         outputExcerpt: truncateForModelJudge(
-          candidate.error ?? (candidate.result ? JSON.stringify(candidate.result, null, 2) : ""),
+          redactForModelJudge(candidate.error ?? (candidate.result ? JSON.stringify(candidate.result, null, 2) : "")),
           1800,
         ),
       };
@@ -4795,10 +4799,10 @@ export class ImprovementService {
     }
     return {
       inputExcerpt: candidate.userMessageId
-        ? truncateForModelJudge(sessionMessages.get(candidate.userMessageId) ?? "", 2200)
+        ? truncateForModelJudge(redactForModelJudge(sessionMessages.get(candidate.userMessageId) ?? ""), 2200)
         : undefined,
       outputExcerpt: candidate.assistantMessageId
-        ? truncateForModelJudge(sessionMessages.get(candidate.assistantMessageId) ?? "", 2500)
+        ? truncateForModelJudge(redactForModelJudge(sessionMessages.get(candidate.assistantMessageId) ?? ""), 2500)
         : undefined,
     };
   }
@@ -4810,6 +4814,8 @@ export class ImprovementService {
   ): Promise<DecisionReplayItemModelScores | undefined> {
     const defaults = this.callbacks.getPromptRunnerModelDefaults();
     if (!defaults.providerId || !defaults.model) return undefined;
+    const safeInputExcerpt = redactForModelJudge(excerpts.inputExcerpt ?? "(none)");
+    const safeOutputExcerpt = redactForModelJudge(excerpts.outputExcerpt ?? "(none)");
     const prompt = [
       "You are grading one agent decision replay item.",
       "Return JSON only with keys: correctnessLikelihood, missedToolProbability, betterResponsePotential, rationale.",
@@ -4820,10 +4826,10 @@ export class ImprovementService {
       `Rule score snapshot: ${JSON.stringify(ruleScores)}`,
       "",
       "Input excerpt:",
-      excerpts.inputExcerpt ?? "(none)",
+      safeInputExcerpt,
       "",
       "Output excerpt:",
-      excerpts.outputExcerpt ?? "(none)",
+      safeOutputExcerpt,
     ].join("\n");
     try {
       const completion = await withTimeout(
@@ -4836,6 +4842,7 @@ export class ImprovementService {
           ],
           temperature: 0,
           max_tokens: 220,
+          memory: { enabled: false, mode: "off" },
         }),
         IMPROVEMENT_JUDGE_TIMEOUT_MS,
         `Decision replay judge timed out after ${IMPROVEMENT_JUDGE_TIMEOUT_MS}ms`,

@@ -176,7 +176,7 @@ describe("ImprovementService runtime coverage", () => {
     harness.service.stopScheduler();
     harness.service.ensureWeeklyImprovementCronJob();
     expect(harness.storage.cronJobs.get("improvement_weekly")).toMatchObject({
-      enabled: true,
+      enabled: false,
       schedule: "0 2 * * 0 America/Los_Angeles",
     });
 

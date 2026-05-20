@@ -2,18 +2,21 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChatCompletionRequest } from "@goatcitadel/contracts";
 import { Storage } from "@goatcitadel/storage";
 import {
   ImprovementService,
   type ImprovementServiceCallbacks,
   type ImprovementServiceContext,
 } from "./improvement-service.js";
+import type { DecisionReplayCandidate } from "./improvement-replay.js";
 
 interface Harness {
   rootDir: string;
   storage: Storage;
   service: ImprovementService;
   published: Array<{ channel: string; topic: string; payload: Record<string, unknown> }>;
+  callbacks: ImprovementServiceCallbacks;
 }
 
 const harnesses: Harness[] = [];
@@ -37,15 +40,7 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
 
     harness.service.ensureWeeklyImprovementCronJob();
     const enabledJob = harness.storage.cronJobs.get("improvement_weekly");
-    expect(enabledJob).toBeDefined();
-    harness.storage.cronJobs.upsert(
-      {
-        ...enabledJob!,
-        enabled: false,
-      },
-      new Date().toISOString(),
-    );
-
+    expect(enabledJob).toMatchObject({ enabled: false });
     await harness.service.runWeeklyImprovementSchedulerIfDue({ force: true });
     expect(harness.service.listDecisionReplayRuns(5)).toEqual([]);
 
@@ -66,6 +61,14 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
     vi.useFakeTimers({ now: new Date("2026-05-17T09:30:00.000Z") });
     const harness = createHarness();
     harness.service.ensureWeeklyImprovementCronJob();
+    const existingJob = harness.storage.cronJobs.get("improvement_weekly");
+    harness.storage.cronJobs.upsert(
+      {
+        ...existingJob!,
+        enabled: true,
+      },
+      new Date().toISOString(),
+    );
 
     await harness.service.runWeeklyImprovementSchedulerIfDue({ force: true });
 
@@ -114,6 +117,86 @@ describe("ImprovementService loop43 weekly scheduler behavior", () => {
       queuedRecommendations: 0,
     });
   });
+
+  it("redacts replay excerpts and disables memory on model judge calls", async () => {
+    const harness = createHarness();
+    vi.mocked(harness.callbacks.readTranscriptOrEmpty).mockResolvedValue([
+      {
+        type: "message.user",
+        eventId: "user-1",
+        payload: { message: { content: "Please inspect USER_CHAT_SECRET=acct_789012" } },
+      },
+      {
+        type: "message.assistant",
+        eventId: "assistant-1",
+        payload: { message: { content: "I found ASSISTANT_SECRET=tok_abc123" } },
+      },
+    ]);
+    vi.mocked(harness.callbacks.createChatCompletion).mockResolvedValue({
+      choices: [
+        {
+          index: 0,
+          message: {
+            content:
+              '{"correctnessLikelihood":0.8,"missedToolProbability":0.1,"betterResponsePotential":0.2,"rationale":"ok"}',
+          },
+          finish_reason: "stop",
+        },
+      ],
+    });
+
+    const serviceInternals = harness.service as unknown as {
+      buildDecisionReplayExcerpts: (
+        candidate: DecisionReplayCandidate,
+        messageCache: Map<string, Map<string, string>>,
+      ) => Promise<{ inputExcerpt?: string; outputExcerpt?: string }>;
+      judgeDecisionReplayCandidate: (
+        candidate: DecisionReplayCandidate,
+        excerpts: { inputExcerpt?: string; outputExcerpt?: string },
+        ruleScores: Record<string, number>,
+      ) => Promise<unknown>;
+    };
+    const chatCandidate: DecisionReplayCandidate = {
+      decisionType: "chat_turn",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      status: "completed",
+      occurredAt: new Date().toISOString(),
+      userMessageId: "user-1",
+      assistantMessageId: "assistant-1",
+    };
+
+    const chatExcerpts = await serviceInternals.buildDecisionReplayExcerpts(chatCandidate, new Map());
+    expect(chatExcerpts.inputExcerpt).not.toContain("acct_789012");
+    expect(chatExcerpts.outputExcerpt).not.toContain("tok_abc123");
+
+    await serviceInternals.judgeDecisionReplayCandidate(chatCandidate, chatExcerpts, { routingRisk: 0.2 });
+    const judgeRequest = vi.mocked(harness.callbacks.createChatCompletion).mock.calls[0]?.[0] as
+      | ChatCompletionRequest
+      | undefined;
+    expect(judgeRequest?.memory).toEqual({ enabled: false, mode: "off" });
+    const judgePrompt = judgeRequest?.messages.map((message) => message.content).join("\n") ?? "";
+    expect(judgePrompt).not.toContain("acct_789012");
+    expect(judgePrompt).not.toContain("tok_abc123");
+    expect(judgePrompt).toContain("[REDACTED]");
+
+    const toolExcerpts = await serviceInternals.buildDecisionReplayExcerpts(
+      {
+        decisionType: "tool_run",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        toolRunId: "tool-1",
+        toolName: "shell.exec",
+        status: "failed",
+        occurredAt: new Date().toISOString(),
+        args: { apiKey: "sk-tool-arg-456" },
+        result: { output: "TOOL_RESULT_SECRET=sk-tool-result-123" },
+      },
+      new Map(),
+    );
+    expect(toolExcerpts.inputExcerpt).not.toContain("sk-tool-arg-456");
+    expect(toolExcerpts.outputExcerpt).not.toContain("sk-tool-result-123");
+  });
 });
 
 function createHarness(): Harness {
@@ -158,6 +241,7 @@ function createHarness(): Harness {
     storage,
     service: new ImprovementService(ctx, callbacks),
     published,
+    callbacks,
   };
   harnesses.push(harness);
   return harness;

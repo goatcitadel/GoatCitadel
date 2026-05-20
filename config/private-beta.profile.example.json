@@ -20,7 +20,7 @@
         "jobId": "self_improvement_weekly_replay",
         "name": "Self-Improvement Weekly Replay",
         "schedule": "0 2 * * 0 America/Los_Angeles",
-        "enabled": true
+        "enabled": false
       },
       {
         "jobId": "private_beta_backup_daily",
