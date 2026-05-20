@@ -564,10 +564,7 @@ export class TaskLifecycleService {
     const now = new Date().toISOString();
     const controlId = input.controlId?.trim();
     if (controlId) {
-      const existing = findControlActivityById(
-        this.deps.storage.taskActivities.listByTask(task.taskId, 200),
-        controlId,
-      );
+      const existing = findControlActivityForReplay(this.deps.storage.taskActivities, task.taskId, controlId);
       if (existing) {
         const mismatch = findAgenticControlReplayMismatch(input, existing);
         if (mismatch === "action") {
@@ -1144,6 +1141,19 @@ function deriveAgenticDiagnostics(input: {
         (existing) => existing.code === candidate.code && existing.signalId === candidate.signalId,
       ),
   );
+}
+
+function findControlActivityForReplay(
+  taskActivities: TaskStorage["taskActivities"],
+  taskId: string,
+  controlId: string,
+): TaskActivityRecord | undefined {
+  const repository = taskActivities as TaskStorage["taskActivities"] & {
+    findControlByTaskAndControlId?: (taskId: string, controlId: string) => TaskActivityRecord | undefined;
+  };
+  return repository.findControlByTaskAndControlId
+    ? repository.findControlByTaskAndControlId(taskId, controlId)
+    : findControlActivityById(repository.listByTask(taskId, Number.MAX_SAFE_INTEGER), controlId);
 }
 
 function findControlActivityById(activities: TaskActivityRecord[], controlId: string): TaskActivityRecord | undefined {

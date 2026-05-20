@@ -49,7 +49,7 @@
     "coverage:gate:line100": "node scripts/coverage-gate.mjs --profile=line100",
     "coverage:gate:strict100": "node scripts/coverage-gate.mjs --profile=strict100",
     "docs:check": "node scripts/validate-governance-docs.mjs && node scripts/check-button-types.mjs && node scripts/check-no-inline-sql.mjs && node scripts/check-memory-ownership.mjs && node scripts/check-no-empty-catch.mjs && node scripts/check-launcher-ui-target.mjs && node scripts/check-docker-secret-docs.mjs && pnpm check:docker-secrets",
-    "verify:repo:hygiene": "node --test scripts/verify-repo-hygiene.test.mjs scripts/release/release-certificate-proof.test.mjs && node scripts/verify-repo-hygiene.mjs",
+    "verify:repo:hygiene": "node --test scripts/verify-repo-hygiene.test.mjs scripts/release/release-certificate-proof.test.mjs scripts/verification/lib/scenarios.test.mjs && node scripts/verify-repo-hygiene.mjs",
     "verify:artifacts:redaction": "node --test scripts/verify-artifact-redaction.test.mjs && node scripts/verify-artifact-redaction.mjs",
     "verify:storage:migration-parity": "node --test scripts/verify-storage-migration-parity.test.mjs && node scripts/verify-storage-migration-parity.mjs",
     "check:buttons": "node scripts/check-button-types.mjs",

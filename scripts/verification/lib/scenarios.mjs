@@ -1,6 +1,7 @@
 import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright";
 import sharp from "sharp";
@@ -83,6 +84,7 @@ const VISUAL_DIFF_RATIO_THRESHOLD = 0.04;
 const VISUAL_DIFF_NORMALIZE_BLUR = 6;
 const VISUAL_DIFF_NORMALIZE_SCALE = 0.25;
 const VISUAL_ROUTE_READY_TIMEOUT_MS = 60000;
+const FAST_LANE_TEMP_MIN_FREE_BYTES = 1024 * 1024 * 1024;
 // The file upload fixture would otherwise render "now" in the file list baseline.
 const MISSION_CONTROL_NEXT_FILE_FIXTURE_MTIME = new Date("2026-05-17T21:51:00.000Z");
 
@@ -95,7 +97,11 @@ export const FAST_LANE_COMMANDS = Object.freeze([
     args: ["--filter", "@goatcitadel/extensions-sdk", "build"],
   },
   { id: "fast.typecheck", title: "Root typecheck", args: ["typecheck"] },
-  { id: "fast.test", title: "Root tests", args: ["test"] },
+  {
+    id: "fast.test",
+    title: "Root tests",
+    args: ["-r", "--workspace-concurrency=1", "test"],
+  },
   { id: "fast.smoke", title: "Gateway smoke", args: ["smoke"] },
   { id: "fast.build", title: "Root build", args: ["build"] },
   { id: "fast.docs", title: "Docs checks", args: ["docs:check"] },
@@ -177,16 +183,54 @@ export async function runFastLane(context) {
 }
 
 async function resolveFastLaneCommandEnv(context, command) {
+  const tempBaseRoot = await resolveFastLaneTempBaseRoot(context);
+  const commandTempRoot = path.join(tempBaseRoot, sanitizeFilePart(command.id));
+  const npmCacheRoot = path.join(commandTempRoot, "npm-cache");
+  await fs.mkdir(commandTempRoot, { recursive: true });
+  await fs.mkdir(npmCacheRoot, { recursive: true });
+  const tempEnv = {
+    NPM_CONFIG_CACHE: npmCacheRoot,
+    TEMP: commandTempRoot,
+    TMP: commandTempRoot,
+    TMPDIR: commandTempRoot,
+    npm_config_cache: npmCacheRoot,
+  };
   if (command.id !== "fast.smoke") {
-    return command.env;
+    return {
+      ...tempEnv,
+      ...(command.env ?? {}),
+    };
   }
   const runtimeRoot = await prepareVerificationRuntime(`${context.runId}-fast-smoke`);
   return {
+    ...tempEnv,
     ...(command.env ?? {}),
     GOATCITADEL_ROOT_DIR: runtimeRoot,
     GOATCITADEL_DATABASE_DRIVER: "sqlite",
     GOATCITADEL_DISABLE_SECRET_STORE: "true",
   };
+}
+
+async function resolveFastLaneTempBaseRoot(context) {
+  const configuredTempRoot = process.env.GOATCITADEL_VERIFY_TEMP_ROOT?.trim();
+  if (configuredTempRoot) {
+    return path.join(configuredTempRoot, context.runId);
+  }
+  const systemTempRoot = os.tmpdir();
+  if (await hasMinimumFreeSpace(systemTempRoot, FAST_LANE_TEMP_MIN_FREE_BYTES)) {
+    return path.join(systemTempRoot, "goatcitadel-verify", context.runId);
+  }
+  return path.join(context.artifactRoot, "tmp");
+}
+
+async function hasMinimumFreeSpace(candidatePath, minFreeBytes) {
+  try {
+    await fs.mkdir(candidatePath, { recursive: true });
+    const stats = await fs.statfs(candidatePath);
+    return Number(stats.bavail) * Number(stats.bsize) >= minFreeBytes;
+  } catch {
+    return false;
+  }
 }
 
 export async function runCodeModeSandboxRequiredLane(context) {

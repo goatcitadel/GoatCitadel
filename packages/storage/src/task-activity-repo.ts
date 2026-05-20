@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
-import type {
-  TaskActivityCreateInput,
-  TaskActivityRecord,
-} from "@goatcitadel/contracts";
+import type { TaskActivityCreateInput, TaskActivityRecord } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
 interface TaskActivityRow {
@@ -19,6 +16,7 @@ interface TaskActivityRow {
 export class TaskActivityRepository {
   private readonly insertStmt;
   private readonly listByTaskStmt;
+  private readonly listControlsByTaskStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
@@ -35,9 +33,19 @@ export class TaskActivityRepository {
       ORDER BY created_at DESC
       LIMIT ?
     `);
+    this.listControlsByTaskStmt = db.prepare(`
+      SELECT * FROM task_activities
+      WHERE task_id = ?
+        AND activity_type = 'control'
+      ORDER BY created_at DESC
+    `);
   }
 
-  public append(taskId: string, input: TaskActivityCreateInput, createdAt = new Date().toISOString()): TaskActivityRecord {
+  public append(
+    taskId: string,
+    input: TaskActivityCreateInput,
+    createdAt = new Date().toISOString(),
+  ): TaskActivityRecord {
     const activityId = randomUUID();
     this.insertStmt.run({
       activityId,
@@ -62,16 +70,25 @@ export class TaskActivityRepository {
 
   public listByTask(taskId: string, limit = 200): TaskActivityRecord[] {
     const rows = toTaskActivityRows(this.listByTaskStmt.all(taskId, limit));
-    return rows.map((row) => ({
-      activityId: row.activity_id,
-      taskId: row.task_id,
-      agentId: row.agent_id ?? undefined,
-      activityType: row.activity_type,
-      message: row.message,
-      metadata: row.metadata_json ? safeJsonParse<Record<string, unknown>>(row.metadata_json, {}) : undefined,
-      createdAt: row.created_at,
-    }));
+    return rows.map(mapTaskActivityRow);
   }
+
+  public findControlByTaskAndControlId(taskId: string, controlId: string): TaskActivityRecord | undefined {
+    const rows = toTaskActivityRows(this.listControlsByTaskStmt.all(taskId));
+    return rows.map(mapTaskActivityRow).find((activity) => activity.metadata?.controlId === controlId);
+  }
+}
+
+function mapTaskActivityRow(row: TaskActivityRow): TaskActivityRecord {
+  return {
+    activityId: row.activity_id,
+    taskId: row.task_id,
+    agentId: row.agent_id ?? undefined,
+    activityType: row.activity_type,
+    message: row.message,
+    metadata: row.metadata_json ? safeJsonParse<Record<string, unknown>>(row.metadata_json, {}) : undefined,
+    createdAt: row.created_at,
+  };
 }
 
 function toTaskActivityRows(value: unknown): TaskActivityRow[] {
@@ -79,18 +96,18 @@ function toTaskActivityRows(value: unknown): TaskActivityRow[] {
 }
 
 function isTaskActivityRow(value: unknown): value is TaskActivityRow {
-  return isRecord(value)
-    && typeof value.activity_id === "string"
-    && typeof value.task_id === "string"
-    && (typeof value.agent_id === "string" || value.agent_id === null)
-    && typeof value.activity_type === "string"
-    && typeof value.message === "string"
-    && (typeof value.metadata_json === "string" || value.metadata_json === null)
-    && typeof value.created_at === "string";
+  return (
+    isRecord(value) &&
+    typeof value.activity_id === "string" &&
+    typeof value.task_id === "string" &&
+    (typeof value.agent_id === "string" || value.agent_id === null) &&
+    typeof value.activity_type === "string" &&
+    typeof value.message === "string" &&
+    (typeof value.metadata_json === "string" || value.metadata_json === null) &&
+    typeof value.created_at === "string"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-

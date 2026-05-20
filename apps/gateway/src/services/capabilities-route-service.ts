@@ -8,6 +8,7 @@ export type CapabilitiesRoutePort = Pick<
   | "getCandidateDetail"
   | "getCatalogSnapshot"
   | "getCodeModeRun"
+  | "getCodeModeRunInScope"
   | "getProposalDetail"
   | "listCatalog"
   | "listCodeModeRuns"
@@ -62,6 +63,10 @@ export class CapabilitiesRouteService {
 
   public getCodeModeRun(runId: string) {
     return this.capabilities.getCodeModeRun(runId);
+  }
+
+  public getCodeModeRunInScope(runId: string, scope: Parameters<CapabilitiesRoutePort["getCodeModeRunInScope"]>[1]) {
+    return this.capabilities.getCodeModeRunInScope(runId, scope);
   }
 
   public createCodeModeRun(input: Parameters<CapabilitiesRoutePort["createCodeModeRun"]>[0]) {

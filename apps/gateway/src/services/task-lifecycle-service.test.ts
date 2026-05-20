@@ -537,6 +537,53 @@ describe("TaskLifecycleService agentic runtime", () => {
       }),
     ).toThrow(/different agentic control payload/);
   });
+
+  it("rejects old idempotent control replays after newer task activity churn", () => {
+    const { service, storage } = createService();
+    const task = service.createTask({
+      workspaceId: "default",
+      title: "Long-running controlled run",
+      status: "in_progress",
+      agenticContext: {
+        runId: "run-control-churn",
+        surface: "cowork",
+        status: "running",
+      },
+    });
+    storage.taskActivities.append(
+      task.taskId,
+      {
+        activityType: "control",
+        message: "pause control recorded: first target",
+        metadata: {
+          action: "pause",
+          controlId: "control-old",
+          reason: "first target",
+          resultStatus: "recorded",
+          runtimeEffect: "state_only",
+        },
+      },
+      "2026-05-20T00:00:00.000Z",
+    );
+    for (let index = 0; index < 201; index += 1) {
+      storage.taskActivities.append(
+        task.taskId,
+        {
+          activityType: "comment",
+          message: `newer activity ${index}`,
+        },
+        new Date(Date.UTC(2026, 4, 20, 0, 0, index + 1)).toISOString(),
+      );
+    }
+
+    expect(() =>
+      service.invokeAgenticControl("run-control-churn", {
+        action: "pause",
+        controlId: "control-old",
+        reason: "different target",
+      }),
+    ).toThrow(/different agentic control payload/);
+  });
 });
 
 describe("TaskLifecycleService — distress signals", () => {

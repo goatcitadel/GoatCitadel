@@ -2027,10 +2027,10 @@ describe("SettingsNativePage providers", () => {
   });
 
   it("disables duplicate budget saves while the update is in flight", async () => {
-    let resolvePatch: ((value: unknown) => void) | undefined;
+    let resolvePatch: ((value: Record<string, never>) => void) | undefined;
     mocks.patchSettings.mockImplementationOnce(
       () =>
-        new Promise<unknown>((resolve) => {
+        new Promise<Record<string, never>>((resolve) => {
           resolvePatch = resolve;
         }),
     );

@@ -54,6 +54,7 @@ const CODE_MODE_OUTPUT_CAPTURE_LIMIT_BYTES = 64 * 1024;
 const CODE_MODE_IPC_MAX_BYTES = 128 * 1024;
 const CODE_MODE_HEAP_MB = 64;
 const CODE_MODE_ENV_PASSTHROUGH_KEYS = ["SystemRoot", "SYSTEMROOT", "ComSpec", "WINDIR", "TEMP", "TMP"];
+const DEFAULT_WORKSPACE_ID = "default";
 
 type LateCodeModeApprovalCleanupResult = {
   approvalId: string;
@@ -373,6 +374,21 @@ export class CapabilitySystemService {
 
   public getCodeModeRun(runId: string): CodeModeRunRecord {
     return this.hydrateCodeModeRunForRead(this.options.storage.codeModeRuns.get(runId));
+  }
+
+  public getCodeModeRunInScope(
+    runId: string,
+    scope: Pick<CodeModeRunListOptions, "sessionId" | "turnId" | "workspaceId">,
+  ): CodeModeRunRecord {
+    const run = this.options.storage.codeModeRuns.get(runId);
+    if (
+      (scope.sessionId && run.sessionId !== scope.sessionId) ||
+      (scope.turnId && run.turnId !== scope.turnId) ||
+      (scope.workspaceId && run.workspaceId !== scope.workspaceId)
+    ) {
+      throw new NotFoundError({ entity: "code mode run", id: runId });
+    }
+    return this.hydrateCodeModeRunForRead(run);
   }
 
   private listStoredCodeModeRuns(filters: Required<Pick<CodeModeRunListOptions, "limit">> & CodeModeRunListOptions) {
@@ -2424,7 +2440,7 @@ function resolveCodeModeWorkspaceId(input: {
   sessionWorkspaceId?: string;
 }): string | undefined {
   if (!input.sessionId) {
-    return input.requestWorkspaceId;
+    return input.requestWorkspaceId ?? DEFAULT_WORKSPACE_ID;
   }
   const sessionWorkspaceId = input.sessionWorkspaceId?.trim();
   const requestWorkspaceId = input.requestWorkspaceId?.trim();
@@ -2436,7 +2452,7 @@ function resolveCodeModeWorkspaceId(input: {
     }
     return sessionWorkspaceId;
   }
-  return requestWorkspaceId;
+  return requestWorkspaceId ?? DEFAULT_WORKSPACE_ID;
 }
 
 function serializePolicyContext(context: ToolPolicyActorContext | undefined): Record<string, unknown> | undefined {

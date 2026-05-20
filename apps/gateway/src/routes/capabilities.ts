@@ -225,15 +225,12 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
     try {
-      const run = fastify.services.capabilities.getCodeModeRun(parsed.data.runId);
       const workspaceId = query.data.workspaceId ?? DEFAULT_WORKSPACE_ID;
-      if (
-        (query.data.sessionId && run.sessionId !== query.data.sessionId) ||
-        (query.data.turnId && run.turnId !== query.data.turnId) ||
-        run.workspaceId !== workspaceId
-      ) {
-        return reply.code(404).send({ error: `Code Mode run ${parsed.data.runId} not found in requested scope` });
-      }
+      const run = fastify.services.capabilities.getCodeModeRunInScope(parsed.data.runId, {
+        workspaceId,
+        ...(query.data.sessionId ? { sessionId: query.data.sessionId } : {}),
+        ...(query.data.turnId ? { turnId: query.data.turnId } : {}),
+      });
       return reply.send(run);
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });

@@ -111,6 +111,7 @@ describe("route service facades", () => {
       "getCandidateDetail",
       "getCatalogSnapshot",
       "getCodeModeRun",
+      "getCodeModeRunInScope",
       "getProposalDetail",
       "listCatalog",
       "listCodeModeRuns",
@@ -154,6 +155,10 @@ describe("route service facades", () => {
     });
     expect(service.listCodeModeRuns()).toEqual({ method: "listCodeModeRuns", args: [100] });
     expect(service.getCodeModeRun("run-1")).toEqual({ method: "getCodeModeRun", args: ["run-1"] });
+    expect(service.getCodeModeRunInScope("run-1", { workspaceId: "default" })).toEqual({
+      method: "getCodeModeRunInScope",
+      args: ["run-1", { workspaceId: "default" }],
+    });
     expect(service.createCodeModeRun({ workspaceId: "workspace-1" } as never)).toEqual({
       method: "createCodeModeRun",
       args: [{ workspaceId: "workspace-1" }],

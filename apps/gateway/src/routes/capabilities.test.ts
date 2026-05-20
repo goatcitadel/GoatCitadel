@@ -72,6 +72,25 @@ describe("capabilities routes", () => {
         turnId: "turn-1",
         workspaceId: "default",
       })),
+      getCodeModeRunInScope: vi.fn(
+        (runId: string, scope: { workspaceId?: string; sessionId?: string; turnId?: string }) => {
+          const run = {
+            runId,
+            status: "completed",
+            sessionId: "session-1",
+            turnId: "turn-1",
+            workspaceId: "default",
+          };
+          if (
+            (scope.workspaceId && run.workspaceId !== scope.workspaceId) ||
+            (scope.sessionId && run.sessionId !== scope.sessionId) ||
+            (scope.turnId && run.turnId !== scope.turnId)
+          ) {
+            throw new Error(`Code Mode run ${runId} not found in requested scope`);
+          }
+          return run;
+        },
+      ),
       createCodeModeRun: vi.fn(async (payload: Record<string, unknown>) => ({
         runId: "code-run-created",
         status: "completed",
@@ -465,7 +484,7 @@ describe("capabilities routes", () => {
     expect(runResponse.statusCode).toBe(200);
     expect(service.getCapabilityCatalogSnapshot).toHaveBeenCalledWith("snapshot-1");
     expect(service.getCapabilityProposalDetail).toHaveBeenCalledWith("proposal-1");
-    expect(service.getCodeModeRun).toHaveBeenCalledWith("code-run-1");
+    expect(service.getCodeModeRunInScope).toHaveBeenCalledWith("code-run-1", { workspaceId: "default" });
     expect(snapshotResponse.json()).toEqual({ snapshotId: "snapshot-1", items: [] });
     expect(proposalResponse.json()).toMatchObject({ proposalId: "proposal-1" });
     expect(runResponse.json()).toMatchObject({ runId: "code-run-1" });
@@ -473,13 +492,25 @@ describe("capabilities routes", () => {
 
   it("scopes Code Mode run details by session, turn, and workspace query", async () => {
     const service = await registerCapabilitiesService({
-      getCodeModeRun: vi.fn((runId: string) => ({
-        runId,
-        status: "completed",
-        sessionId: "session-1",
-        turnId: "turn-1",
-        workspaceId: "workspace-1",
-      })),
+      getCodeModeRunInScope: vi.fn(
+        (runId: string, scope: { workspaceId?: string; sessionId?: string; turnId?: string }) => {
+          const run = {
+            runId,
+            status: "completed",
+            sessionId: "session-1",
+            turnId: "turn-1",
+            workspaceId: "workspace-1",
+          };
+          if (
+            (scope.workspaceId && run.workspaceId !== scope.workspaceId) ||
+            (scope.sessionId && run.sessionId !== scope.sessionId) ||
+            (scope.turnId && run.turnId !== scope.turnId)
+          ) {
+            throw new Error(`Code Mode run ${runId} not found in requested scope`);
+          }
+          return run;
+        },
+      ),
     });
 
     const okResponse = await app!.inject({
@@ -493,18 +524,28 @@ describe("capabilities routes", () => {
 
     expect(okResponse.statusCode).toBe(200);
     expect(wrongTurnResponse.statusCode).toBe(404);
-    expect(service.getCodeModeRun).toHaveBeenCalledWith("code-run-1");
+    expect(service.getCodeModeRunInScope).toHaveBeenCalledWith("code-run-1", {
+      sessionId: "session-1",
+      turnId: "turn-1",
+      workspaceId: "workspace-1",
+    });
   });
 
   it("defaults Code Mode run detail reads to the default workspace", async () => {
     await registerCapabilitiesService({
-      getCodeModeRun: vi.fn((runId: string) => ({
-        runId,
-        status: "completed",
-        sessionId: "session-1",
-        turnId: "turn-1",
-        workspaceId: "workspace-2",
-      })),
+      getCodeModeRunInScope: vi.fn((runId: string, scope: { workspaceId?: string }) => {
+        const run = {
+          runId,
+          status: "completed",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          workspaceId: "workspace-2",
+        };
+        if (scope.workspaceId && run.workspaceId !== scope.workspaceId) {
+          throw new Error(`Code Mode run ${runId} not found in requested scope`);
+        }
+        return run;
+      }),
     });
 
     const defaultResponse = await app!.inject({
@@ -528,7 +569,7 @@ describe("capabilities routes", () => {
       getCapabilityProposalDetail: vi.fn(() => {
         throw new Error("proposal missing");
       }),
-      getCodeModeRun: vi.fn(() => {
+      getCodeModeRunInScope: vi.fn(() => {
         throw new Error("run missing");
       }),
     });

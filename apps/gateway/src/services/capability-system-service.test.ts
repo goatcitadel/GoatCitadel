@@ -1276,6 +1276,38 @@ describe("CapabilitySystemService", () => {
     );
   });
 
+  it("checks Code Mode run scope before hydrating read-side terminal state", async () => {
+    const harness = await createHarness();
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      workspaceId: "workspace-2",
+    });
+    const approval = harness.approvals.get("approval-1");
+    if (!approval) {
+      throw new Error("missing approval-1");
+    }
+    harness.approvals.set("approval-1", {
+      ...approval,
+      status: "pending",
+      expiresAt: "2020-01-01T00:00:00.000Z",
+    });
+    const pending = harness.storage.pendingApprovalActions.find("approval-1");
+    if (pending) {
+      pending.expiresAt = "2020-01-01T00:00:00.000Z";
+    }
+
+    expect(() => harness.service.getCodeModeRunInScope(run.runId, { workspaceId: "default" })).toThrow(
+      /code mode run/i,
+    );
+
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "approval_pending",
+      workspaceId: "workspace-2",
+    });
+    expect(harness.storage.pendingApprovalActions.markResolved).not.toHaveBeenCalled();
+  });
+
   it("scans pending Code Mode approvals when status filters need read-time hydration", async () => {
     const harness = await createHarness();
     for (let index = 0; index < 501; index += 1) {

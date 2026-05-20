@@ -10,7 +10,7 @@ test("fast verification lane keeps required fast commands", () => {
     "verify:storage:migration-parity",
     "--filter @goatcitadel/extensions-sdk build",
     "typecheck",
-    "test",
+    "-r --workspace-concurrency=1 test",
     "smoke",
     "build",
     "docs:check",

@@ -13,7 +13,9 @@ const uiBuildKeys = new Set();
 const WINDOWS_CMD_PATH = "C:\\Windows\\System32\\cmd.exe";
 
 export async function prepareVerificationRuntime(runId) {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), `goatcitadel-verify-${sanitizeFilePart(runId)}-`));
+  const tempParent = process.env.GOATCITADEL_VERIFY_TEMP_ROOT?.trim() || os.tmpdir();
+  await fs.mkdir(tempParent, { recursive: true });
+  const tempRoot = await fs.mkdtemp(path.join(tempParent, `goatcitadel-verify-${sanitizeFilePart(runId)}-`));
   await fs.mkdir(path.join(tempRoot, "data"), { recursive: true });
   await fs.cp(path.join(repoRoot, "config"), path.join(tempRoot, "config"), { recursive: true });
   if (existsSync(path.join(repoRoot, "skills"))) {

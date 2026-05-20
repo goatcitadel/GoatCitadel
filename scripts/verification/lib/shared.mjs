@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createWriteStream } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -11,6 +12,7 @@ import {
 export const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 export const artifactsRoot = path.join(repoRoot, "artifacts", "verification");
 const WINDOWS_CMD_PATH = "C:\\Windows\\System32\\cmd.exe";
+const COMMAND_SUMMARY_CAPTURE_BYTES = 256 * 1024;
 
 export function createRunId(lane) {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -159,8 +161,10 @@ export async function runCommand(command, args, options = {}) {
   await fs.mkdir(path.dirname(stderrPath), { recursive: true });
 
   return await new Promise((resolve, reject) => {
-    const stdoutChunks = [];
-    const stderrChunks = [];
+    const stdoutCapture = createBoundedCapture(COMMAND_SUMMARY_CAPTURE_BYTES);
+    const stderrCapture = createBoundedCapture(COMMAND_SUMMARY_CAPTURE_BYTES);
+    const stdoutStream = createWriteStream(stdoutPath);
+    const stderrStream = createWriteStream(stderrPath);
     const child = spawnVerificationProcess(command, args, {
       cwd: options.cwd ?? repoRoot,
       env: {
@@ -169,23 +173,70 @@ export async function runCommand(command, args, options = {}) {
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
-    child.stdout.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
-    child.stderr.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
-    child.on("error", reject);
+
+    child.stdout.pipe(stdoutStream);
+    child.stderr.pipe(stderrStream);
+    child.stdout.on("data", (chunk) => stdoutCapture.append(chunk));
+    child.stderr.on("data", (chunk) => stderrCapture.append(chunk));
+    child.on("error", (error) => {
+      stdoutStream.destroy();
+      stderrStream.destroy();
+      reject(error);
+    });
     child.on("close", async (code) => {
-      const stdout = Buffer.concat(stdoutChunks).toString("utf8");
-      const stderr = Buffer.concat(stderrChunks).toString("utf8");
-      await writeText(stdoutPath, stdout);
-      await writeText(stderrPath, stderr);
+      await Promise.all([waitForWritableFinished(stdoutStream), waitForWritableFinished(stderrStream)]);
       resolve({
         code: code ?? 0,
-        stdout,
-        stderr,
+        stdout: stdoutCapture.toString(),
+        stderr: stderrCapture.toString(),
         durationMs: Date.now() - startedAt,
         stdoutPath,
         stderrPath,
       });
     });
+  });
+}
+
+function createBoundedCapture(maxBytes) {
+  const chunks = [];
+  let totalBytes = 0;
+  return {
+    append(value) {
+      const chunk = Buffer.from(value);
+      if (chunk.byteLength >= maxBytes) {
+        chunks.length = 0;
+        chunks.push(chunk.subarray(chunk.byteLength - maxBytes));
+        totalBytes = maxBytes;
+        return;
+      }
+      chunks.push(chunk);
+      totalBytes += chunk.byteLength;
+      while (totalBytes > maxBytes && chunks.length > 0) {
+        const first = chunks[0];
+        const overage = totalBytes - maxBytes;
+        if (first.byteLength <= overage) {
+          chunks.shift();
+          totalBytes -= first.byteLength;
+        } else {
+          chunks[0] = first.subarray(overage);
+          totalBytes -= overage;
+        }
+      }
+    },
+    toString() {
+      return Buffer.concat(chunks).toString("utf8");
+    },
+  };
+}
+
+function waitForWritableFinished(stream) {
+  return new Promise((resolve, reject) => {
+    if (stream.writableFinished || stream.closed || stream.destroyed) {
+      resolve();
+      return;
+    }
+    stream.once("finish", resolve);
+    stream.once("error", reject);
   });
 }
 
