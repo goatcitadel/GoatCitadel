@@ -781,6 +781,70 @@ describe("CapabilitySystemService", () => {
     );
   });
 
+  it("does not let a lost Code Mode execution claim overwrite a recovered run", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+    });
+    const approval = harness.approvals.get("approval-1");
+    harness.approvals.set("approval-1", {
+      ...approval!,
+      status: "approved",
+      resolvedAt: "2026-04-10T00:00:00.000Z",
+    });
+    const reclaimedStartedAt = "2026-04-10T00:09:00.000Z";
+    vi.spyOn(harness.storage.codeModeRuns, "finishExecutionClaim").mockImplementationOnce((input) => {
+      harness.storage.codeModeRuns.releaseExecutionClaim({
+        runId: input.runId,
+        approvalId: input.approvalId,
+        startedAt: input.startedAt,
+      });
+      harness.storage.codeModeRuns.claimForExecution({
+        runId: input.runId,
+        approvalId: input.approvalId,
+        sandbox: input.sandbox,
+        startedAt: reclaimedStartedAt,
+      });
+      return undefined;
+    });
+
+    const result = await harness.service.executeApprovedCodeModeRun("approval-1");
+
+    expect(result).toBeUndefined();
+    expect(harness.storage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "running",
+      startedAt: reclaimedStartedAt,
+    });
+    expect(harness.storage.codeModeRuns.get(run.runId).result).toBeUndefined();
+    expect(harness.storage.pendingApprovalActions.markResolved).not.toHaveBeenCalledWith(
+      "approval-1",
+      expect.any(String),
+      expect.anything(),
+    );
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "code_mode_run_claim_lost",
+      "capabilities",
+      expect.objectContaining({
+        runId: run.runId,
+        approvalId: "approval-1",
+        status: "running",
+        currentStartedAt: reclaimedStartedAt,
+      }),
+    );
+    expect(harness.storage.approvalEvents.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "approval-1",
+        eventType: "code_mode_execution_claim_lost",
+      }),
+    );
+  });
+
   it("stages the Code Mode harness inside the per-run temp root before launch", async () => {
     const harness = await createHarness({
       sandboxConfig: {
@@ -3069,6 +3133,42 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
           error: undefined,
           errorCode: undefined,
           errorDetails: undefined,
+        } satisfies CodeModeRunRecord;
+        codeModeRuns.set(input.runId, next);
+        return next;
+      },
+      finishExecutionClaim(
+        input: CodeModeRunRecord & {
+          approvalId: string;
+          status: "completed" | "failed";
+          startedAt: string;
+          finishedAt: string;
+        },
+      ) {
+        const run = codeModeRuns.get(input.runId);
+        if (
+          !run ||
+          run.approvalId !== input.approvalId ||
+          run.status !== "running" ||
+          run.startedAt !== input.startedAt
+        ) {
+          return undefined;
+        }
+        const next = {
+          ...run,
+          status: input.status,
+          sandbox: input.sandbox,
+          stdoutArtifact: input.stdoutArtifact,
+          stderrArtifact: input.stderrArtifact,
+          stdoutPreview: input.stdoutPreview,
+          stderrPreview: input.stderrPreview,
+          stdoutTruncated: input.stdoutTruncated,
+          stderrTruncated: input.stderrTruncated,
+          result: input.result,
+          error: input.error,
+          errorCode: input.errorCode,
+          errorDetails: input.errorDetails,
+          finishedAt: input.finishedAt,
         } satisfies CodeModeRunRecord;
         codeModeRuns.set(input.runId, next);
         return next;

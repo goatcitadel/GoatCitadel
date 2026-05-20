@@ -340,11 +340,35 @@ describe("ApprovalsRoutePage", () => {
       findButton(renderer!.root, "Recovery").props.onClick();
       findButton(renderer!.root, "tool.invoke").props.onClick();
       findButton(renderer!.root, "Approve now").props.onClick();
-      findExactButton(renderer!.root, "Reject").props.onClick();
       findButton(renderer!.root, "Load replay trail").props.onClick();
       findButton(renderer!.root, "Load durable status").props.onClick();
-      findButton(renderer!.root, "Resume paused run").props.onClick();
       findButton(renderer!.root, "Refresh trace detail").props.onClick();
+    });
+    expect(approvalHarness.onResolve).not.toHaveBeenCalled();
+    let modal = renderer!.root.findByType(ConfirmModal);
+    expect(modal.props.open).toBe(true);
+    expect(modal.props.title).toBe("Approve this request?");
+    await act(async () => {
+      await modal.props.onConfirm();
+    });
+
+    await act(async () => {
+      findExactButton(renderer!.root, "Reject").props.onClick();
+    });
+    modal = renderer!.root.findByType(ConfirmModal);
+    expect(modal.props.title).toBe("Reject this request?");
+    await act(async () => {
+      await modal.props.onConfirm();
+    });
+
+    expect(approvalHarness.resumeFromCheckpoint).not.toHaveBeenCalled();
+    await act(async () => {
+      findButton(renderer!.root, "Resume paused run").props.onClick();
+    });
+    modal = renderer!.root.findByType(ConfirmModal);
+    expect(modal.props.title).toBe("Resume paused run?");
+    await act(async () => {
+      await modal.props.onConfirm();
     });
 
     expect(approvalHarness.setView).toHaveBeenCalledWith("pending");
@@ -372,7 +396,7 @@ describe("ApprovalsRoutePage", () => {
     await act(async () => {
       findButton(renderer!.root, "Reject all pending").props.onClick();
     });
-    const modal = renderer!.root.findByType(ConfirmModal);
+    modal = renderer!.root.findByType(ConfirmModal);
     expect(modal.props.open).toBe(true);
     await act(async () => {
       modal.props.onCancel();

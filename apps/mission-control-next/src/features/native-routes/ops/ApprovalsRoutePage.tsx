@@ -18,8 +18,13 @@ import type { NativeRoutePagesProps } from "../types";
 import { ShellExplanationList } from "./ShellExplanationList";
 import "../native-routes.css";
 
+type ApprovalConfirmation =
+  | { kind: "bulk-reject" }
+  | { kind: "decision"; approvalId: string; decision: "approve" | "reject" }
+  | { kind: "resume"; approvalId: string };
+
 export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApprovals, navigate }: NativeRoutePagesProps) {
-  const [bulkRejectOpen, setBulkRejectOpen] = useState(false);
+  const [pendingConfirmation, setPendingConfirmation] = useState<ApprovalConfirmation | null>(null);
   const approvals = useApprovalQueue({
     focusedApprovalId: route.approvalId ?? null,
   });
@@ -43,6 +48,30 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
     approvals.view === "pending" && displayedPendingCount > 0 && approvals.error
       ? "Pending approvals exist, but the queue details could not be loaded."
       : "No approvals in this view.";
+  const confirmationCopy = pendingConfirmation ? buildApprovalConfirmationCopy(pendingConfirmation) : null;
+  const confirmationPending =
+    pendingConfirmation?.kind === "bulk-reject"
+      ? approvals.bulkResolvePending
+      : pendingConfirmation?.kind === "decision"
+        ? approvals.resolvePending
+        : pendingConfirmation?.kind === "resume"
+          ? Boolean(approvals.durableBusyByApprovalId[pendingConfirmation.approvalId])
+          : false;
+  const confirmPendingAction = () => {
+    const confirmation = pendingConfirmation;
+    if (!confirmation) {
+      return;
+    }
+    const action =
+      confirmation.kind === "bulk-reject"
+        ? approvals.onRejectAllPending()
+        : confirmation.kind === "decision"
+          ? approvals.onResolve(confirmation.approvalId, confirmation.decision)
+          : approvals.resumeFromCheckpoint(confirmation.approvalId);
+    void Promise.resolve(action).finally(() => {
+      setPendingConfirmation(null);
+    });
+  };
 
   return (
     <>
@@ -65,7 +94,7 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
               type="button"
               className="gc-button danger"
               disabled={!approvals.hasPendingApprovals || approvals.bulkResolvePending}
-              onClick={() => setBulkRejectOpen(true)}
+              onClick={() => setPendingConfirmation({ kind: "bulk-reject" })}
             >
               {approvals.bulkResolvePending ? "Rejecting..." : "Reject all pending"}
             </button>
@@ -105,7 +134,7 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
                   type="button"
                   className="gc-button danger"
                   disabled={!approvals.hasPendingApprovals || approvals.bulkResolvePending}
-                  onClick={() => setBulkRejectOpen(true)}
+                  onClick={() => setPendingConfirmation({ kind: "bulk-reject" })}
                 >
                   {approvals.bulkResolvePending ? "Rejecting..." : "Reject all pending"}
                 </button>
@@ -211,14 +240,28 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
                 durableBusy={Boolean(approvals.durableBusyByApprovalId[selectedApproval.approvalId])}
                 tracePreview={approvals.tracePreviewByApprovalId[selectedApproval.approvalId]}
                 resolvePending={approvals.resolvePending}
-                onApprove={() => void approvals.onResolve(selectedApproval.approvalId, "approve")}
-                onReject={() => void approvals.onResolve(selectedApproval.approvalId, "reject")}
+                onApprove={() =>
+                  setPendingConfirmation({
+                    kind: "decision",
+                    approvalId: selectedApproval.approvalId,
+                    decision: "approve",
+                  })
+                }
+                onReject={() =>
+                  setPendingConfirmation({
+                    kind: "decision",
+                    approvalId: selectedApproval.approvalId,
+                    decision: "reject",
+                  })
+                }
                 onReplay={() => void approvals.onReplay(selectedApproval.approvalId)}
                 onLoadTracePreview={(correlationId) =>
                   void approvals.loadTracePreview(selectedApproval.approvalId, correlationId)
                 }
                 onLoadDurableStatus={() => void approvals.loadDurableStatus(selectedApproval.approvalId)}
-                onResumeCheckpoint={() => void approvals.resumeFromCheckpoint(selectedApproval.approvalId)}
+                onResumeCheckpoint={() =>
+                  setPendingConfirmation({ kind: "resume", approvalId: selectedApproval.approvalId })
+                }
                 onOpenLiveLane={
                   liveLaneRoute
                     ? (event) => {
@@ -239,20 +282,58 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
         </NativeGrid>
       </NativePageFrame>
       <ConfirmModal
-        open={bulkRejectOpen}
-        title="Reject all pending approvals?"
-        message="This keeps GoatCitadel paused at every pending checkpoint in the current queue."
-        confirmLabel={approvals.bulkResolvePending ? "Rejecting..." : "Reject all pending"}
-        pending={approvals.bulkResolvePending}
-        onCancel={() => setBulkRejectOpen(false)}
-        onConfirm={() => {
-          void approvals.onRejectAllPending().finally(() => {
-            setBulkRejectOpen(false);
-          });
-        }}
+        open={Boolean(pendingConfirmation)}
+        title={confirmationCopy?.title ?? "Confirm approval action"}
+        message={confirmationCopy?.message ?? "Confirm the selected approval action before continuing."}
+        confirmLabel={
+          confirmationPending
+            ? (confirmationCopy?.pendingLabel ?? "Working...")
+            : (confirmationCopy?.confirmLabel ?? "Confirm")
+        }
+        pending={confirmationPending}
+        onCancel={() => setPendingConfirmation(null)}
+        onConfirm={confirmPendingAction}
       />
     </>
   );
+}
+
+function buildApprovalConfirmationCopy(confirmation: ApprovalConfirmation): {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  pendingLabel: string;
+} {
+  if (confirmation.kind === "bulk-reject") {
+    return {
+      title: "Reject all pending approvals?",
+      message: "This keeps GoatCitadel paused at every pending checkpoint in the current queue.",
+      confirmLabel: "Reject all pending",
+      pendingLabel: "Rejecting...",
+    };
+  }
+  if (confirmation.kind === "resume") {
+    return {
+      title: "Resume paused run?",
+      message: "This resumes the durable run linked to the selected approval from its current paused checkpoint.",
+      confirmLabel: "Resume run",
+      pendingLabel: "Resuming...",
+    };
+  }
+  if (confirmation.decision === "approve") {
+    return {
+      title: "Approve this request?",
+      message: "This resolves the selected approval and lets the linked action or follow-up continue.",
+      confirmLabel: "Approve",
+      pendingLabel: "Approving...",
+    };
+  }
+  return {
+    title: "Reject this request?",
+    message: "This rejects the selected approval and keeps the linked action stopped.",
+    confirmLabel: "Reject",
+    pendingLabel: "Rejecting...",
+  };
 }
 
 function ApprovalViewButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {

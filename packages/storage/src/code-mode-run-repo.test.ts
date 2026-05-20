@@ -262,6 +262,69 @@ describe("CodeModeRunRepository", () => {
     assert.equal(released?.startedAt, undefined);
   });
 
+  it("finishes only the active Code Mode execution claim", () => {
+    const { repo } = createStore();
+    repo.upsert(
+      run({
+        status: "approval_pending",
+        startedAt: undefined,
+        finishedAt: undefined,
+        result: undefined,
+        stdoutArtifact: undefined,
+        stderrArtifact: undefined,
+        stdoutPreview: undefined,
+        stderrPreview: undefined,
+      }),
+    );
+    const firstClaimStartedAt = "2026-03-26T00:05:00.000Z";
+    const secondClaimStartedAt = "2026-03-26T00:06:00.000Z";
+    const firstClaim = repo.claimForExecution({
+      runId: "run-a",
+      approvalId: "approval-a",
+      sandbox: run().sandbox,
+      startedAt: firstClaimStartedAt,
+    });
+    assert.equal(firstClaim?.status, "running");
+    repo.releaseExecutionClaim({
+      runId: "run-a",
+      approvalId: "approval-a",
+      startedAt: firstClaimStartedAt,
+    });
+    const secondSandbox = { ...run().sandbox!, runnerId: "runner-b" };
+    const secondClaim = repo.claimForExecution({
+      runId: "run-a",
+      approvalId: "approval-a",
+      sandbox: secondSandbox,
+      startedAt: secondClaimStartedAt,
+    });
+    assert.equal(secondClaim?.status, "running");
+
+    const staleFinish = repo.finishExecutionClaim({
+      ...firstClaim!,
+      status: "completed",
+      approvalId: "approval-a",
+      startedAt: firstClaimStartedAt,
+      finishedAt: "2026-03-26T00:07:00.000Z",
+      result: { stale: true },
+    });
+
+    assert.equal(staleFinish, undefined);
+    assert.deepEqual(repo.get("run-a").result, undefined);
+
+    const currentFinish = repo.finishExecutionClaim({
+      ...secondClaim!,
+      status: "completed",
+      approvalId: "approval-a",
+      startedAt: secondClaimStartedAt,
+      finishedAt: "2026-03-26T00:08:00.000Z",
+      result: { ok: true },
+    });
+
+    assert.equal(currentFinish?.status, "completed");
+    assert.deepEqual(currentFinish?.result, { ok: true });
+    assert.equal(currentFinish?.sandbox?.runnerId, "runner-b");
+  });
+
   it("surfaces malformed stored JSON payloads as failed ledger records", () => {
     const { db, repo } = createStore();
     const corrupt = (runId: string, field: string, expected: RegExp) => {

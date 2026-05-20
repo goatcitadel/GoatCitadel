@@ -37,7 +37,7 @@ import {
   redactUrlForError,
 } from "./sandbox/network-guard.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
-import { executeTool } from "./tool-executor.js";
+import { executeTool, resolveFixedOutboundHostsForTool } from "./tool-executor.js";
 import {
   buildInternalToolCall,
   buildInternalToolResult,
@@ -924,7 +924,7 @@ export class ToolPolicyEngine {
     }
 
     if (constraints.allowedHosts && constraints.allowedHosts.length > 0) {
-      const candidates = extractGrantHostCandidates(request);
+      const candidates = extractGrantHostCandidates(request, this.storage);
       if (candidates.length > 0) {
         const blocked = candidates.some((host) => !matchesHostAllowlist(host, constraints.allowedHosts as string[]));
         if (blocked) {
@@ -1679,13 +1679,34 @@ function extractHostCandidates(args?: Record<string, unknown>): string[] {
 // attachment-walking behaviour without standing up an engine instance.
 export const extractHostCandidatesForTests = extractHostCandidates;
 
-function extractGrantHostCandidates(request: Pick<ToolAccessEvaluateRequest, "toolName" | "args">): string[] {
+function extractGrantHostCandidates(
+  request: Pick<ToolAccessEvaluateRequest, "toolName" | "args">,
+  storage?: Storage,
+): string[] {
   const candidates = extractHostCandidates(request.args);
   const args = request.args;
   if (readDocsIngestSourceTypeIfValid(request) === "url" && typeof args?.source === "string") {
     candidates.push(...extractHostCandidates({ url: args.source }));
   }
+  candidates.push(
+    ...resolveFixedOutboundHostsForTool(request.toolName, resolveIntegrationConnectionKey(request, storage)),
+  );
   return [...new Set(candidates)];
+}
+
+function resolveIntegrationConnectionKey(
+  request: Pick<ToolAccessEvaluateRequest, "args">,
+  storage?: Storage,
+): string | undefined {
+  const connectionId = request.args?.connectionId;
+  if (typeof connectionId !== "string" || !connectionId.trim()) {
+    return undefined;
+  }
+  try {
+    return storage?.integrationConnections?.get(connectionId.trim())?.key;
+  } catch {
+    return undefined;
+  }
 }
 
 function extractPathCandidates(args?: Record<string, unknown>): string[] {

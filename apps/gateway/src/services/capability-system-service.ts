@@ -1131,7 +1131,8 @@ export class CapabilitySystemService {
         );
       }
 
-      finalRun = this.options.storage.codeModeRuns.upsert({
+      const finishedAt = new Date().toISOString();
+      const terminalRun = this.options.storage.codeModeRuns.finishExecutionClaim({
         ...finalRun,
         status: execution.failed ? "failed" : "completed",
         sandbox,
@@ -1145,9 +1146,19 @@ export class CapabilitySystemService {
         error: execution.error,
         errorCode: execution.errorCode,
         errorDetails: execution.errorDetails,
+        approvalId,
         startedAt: claimStartedAt,
-        finishedAt: new Date().toISOString(),
+        finishedAt,
       });
+      if (!terminalRun) {
+        return this.handleLostCodeModeExecutionClaim({
+          runId,
+          approvalId,
+          claimStartedAt,
+          sandbox,
+        });
+      }
+      finalRun = terminalRun;
 
       if (!execution.failed && finalRun.saveCandidateOnSuccess) {
         try {
@@ -1230,16 +1241,40 @@ export class CapabilitySystemService {
         sandbox = error.sandbox;
       }
       const normalizedError = normalizeCodeModeIpcError(error);
-      finalRun = this.options.storage.codeModeRuns.upsert({
-        ...finalRun,
-        status: "failed",
-        sandbox,
-        error: normalizedError.message,
-        errorCode: normalizedError.code,
-        errorDetails: normalizedError.details,
-        startedAt: finalRun.startedAt,
-        finishedAt: new Date().toISOString(),
-      });
+      const failedAt = new Date().toISOString();
+      if (claimStartedAt) {
+        const terminalRun = this.options.storage.codeModeRuns.finishExecutionClaim({
+          ...finalRun,
+          status: "failed",
+          approvalId,
+          sandbox,
+          error: normalizedError.message,
+          errorCode: normalizedError.code,
+          errorDetails: normalizedError.details,
+          startedAt: claimStartedAt,
+          finishedAt: failedAt,
+        });
+        if (!terminalRun) {
+          return this.handleLostCodeModeExecutionClaim({
+            runId,
+            approvalId,
+            claimStartedAt,
+            sandbox,
+          });
+        }
+        finalRun = terminalRun;
+      } else {
+        finalRun = this.options.storage.codeModeRuns.upsert({
+          ...finalRun,
+          status: "failed",
+          sandbox,
+          error: normalizedError.message,
+          errorCode: normalizedError.code,
+          errorDetails: normalizedError.details,
+          startedAt: finalRun.startedAt,
+          finishedAt: failedAt,
+        });
+      }
       this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", {
         runId: finalRun.runId,
         error: finalRun.error,
@@ -1281,6 +1316,39 @@ export class CapabilitySystemService {
         },
       };
     }
+  }
+
+  private handleLostCodeModeExecutionClaim(input: {
+    runId: string;
+    approvalId: string;
+    claimStartedAt: string;
+    sandbox: CodeModeSandboxMetadata;
+  }): undefined {
+    const currentRun = this.options.storage.codeModeRuns.find(input.runId);
+    const reason = `Code Mode run ${input.runId} execution claim moved before terminal update.`;
+    this.options.storage.approvalEvents.append({
+      approvalId: input.approvalId,
+      eventType: "code_mode_execution_claim_lost",
+      actorId: "system",
+      payload: {
+        actionType: "code_mode.run",
+        runId: input.runId,
+        status: currentRun?.status ?? "missing",
+        startedAt: input.claimStartedAt,
+        currentStartedAt: currentRun?.startedAt,
+        error: reason,
+      },
+    });
+    this.options.publishRealtime("code_mode_run_claim_lost", "capabilities", {
+      runId: input.runId,
+      approvalId: input.approvalId,
+      status: currentRun?.status ?? "missing",
+      startedAt: input.claimStartedAt,
+      currentStartedAt: currentRun?.startedAt,
+      error: reason,
+      sandbox: currentRun?.sandbox ?? input.sandbox,
+    });
+    return undefined;
   }
 
   private terminalizeLateFailedCodeModeApproval(approvalId: string, error: unknown): LateCodeModeApprovalCleanupResult {

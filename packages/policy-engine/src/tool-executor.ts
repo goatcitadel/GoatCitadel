@@ -44,6 +44,34 @@ const SENSITIVE_PATTERNS: readonly RegExp[] = [
   /\/home\/[^/]+\/\.[^\s]+/g,
   /C:\\Users\\[^\\]+\\AppData\S*/gi,
 ];
+const FIXED_OUTBOUND_HOSTS_BY_TOOL = new Map<string, string[]>([
+  ["calendar.create_event", ["www.googleapis.com"]],
+  ["calendar.list", ["www.googleapis.com"]],
+  ["discord.react", ["discord.com"]],
+  ["discord.send", ["discord.com"]],
+  ["discord.unsend", ["discord.com"]],
+  ["gmail.read", ["gmail.googleapis.com"]],
+  ["gmail.send", ["gmail.googleapis.com"]],
+  ["line.send", ["api.line.me"]],
+  ["slack.react", ["slack.com"]],
+  ["slack.send", ["slack.com"]],
+  ["slack.unsend", ["slack.com"]],
+  ["telegram.react", ["api.telegram.org"]],
+  ["telegram.send", ["api.telegram.org"]],
+  ["telegram.unsend", ["api.telegram.org"]],
+  ["whatsapp.send", ["graph.facebook.com"]],
+  ["zalo.send", ["bot-api.zaloplatforms.com"]],
+]);
+const FIXED_OUTBOUND_HOSTS_BY_CHANNEL_KEY = new Map<string, string[]>([
+  ["discord", ["discord.com"]],
+  ["gmail", ["gmail.googleapis.com"]],
+  ["google-calendar", ["www.googleapis.com"]],
+  ["line", ["api.line.me"]],
+  ["slack", ["slack.com"]],
+  ["telegram", ["api.telegram.org"]],
+  ["whatsapp", ["graph.facebook.com"]],
+  ["zalo", ["bot-api.zaloplatforms.com"]],
+]);
 
 function scrubSensitiveOutput(text: string): string {
   let scrubbed = text;
@@ -51,6 +79,16 @@ function scrubSensitiveOutput(text: string): string {
     scrubbed = scrubbed.replace(new RegExp(pattern.source, pattern.flags), "[REDACTED]");
   }
   return scrubbed.slice(0, MAX_SHELL_OUTPUT_BYTES);
+}
+
+export function resolveFixedOutboundHostsForTool(toolName: string, connectionKey?: string): string[] {
+  const hosts = new Set(FIXED_OUTBOUND_HOSTS_BY_TOOL.get(toolName) ?? []);
+  if (connectionKey && (toolName === "channel.send" || toolName === "channel.react" || toolName === "channel.unsend")) {
+    for (const host of FIXED_OUTBOUND_HOSTS_BY_CHANNEL_KEY.get(connectionKey) ?? []) {
+      hosts.add(host);
+    }
+  }
+  return [...hosts];
 }
 
 export async function executeTool(

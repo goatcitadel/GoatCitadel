@@ -176,6 +176,7 @@ export interface ApprovalReplayEvent {
     | "pending_action_registered"
     | "pending_action_refused"
     | "approved_action_executed"
+    | "code_mode_execution_claim_lost"
     | "replayed"
     | "explanation_requested"
     | "explanation_generated"

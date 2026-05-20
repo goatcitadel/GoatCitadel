@@ -1249,6 +1249,40 @@ describe("ToolPolicyEngine policy edge coverage", () => {
     vi.mocked(hostStorage.toolGrants.list).mockReturnValue([
       {
         ...hostGrant,
+        grantId: "grant-gmail-fixed-host",
+        toolPattern: "gmail.read",
+        constraints: { allowedHosts: ["other.example"] },
+      },
+    ]);
+    expect(
+      hostEngine.evaluateAccess({
+        toolName: "gmail.read",
+        args: { connectionId: "gmail-connection" },
+        agentId: "agent",
+        sessionId: "session",
+      }).reasonCodes,
+    ).toEqual(["grant_constraints_block"]);
+
+    vi.mocked(hostStorage.toolGrants.list).mockReturnValue([
+      {
+        ...hostGrant,
+        grantId: "grant-calendar-fixed-host",
+        toolPattern: "calendar.list",
+        constraints: { allowedHosts: ["www.googleapis.com"] },
+      },
+    ]);
+    expect(
+      hostEngine.evaluateAccess({
+        toolName: "calendar.list",
+        args: { connectionId: "calendar-connection" },
+        agentId: "agent",
+        sessionId: "session",
+      }).allowed,
+    ).toBe(true);
+
+    vi.mocked(hostStorage.toolGrants.list).mockReturnValue([
+      {
+        ...hostGrant,
         constraints: {
           allowedPaths: [null as unknown as string],
         },

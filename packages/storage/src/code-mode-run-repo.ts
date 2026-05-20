@@ -51,6 +51,7 @@ export class CodeModeRunRepository {
   private readonly listFilteredForStatusHydrationStmt;
   private readonly claimForExecutionStmt;
   private readonly releaseExecutionClaimStmt;
+  private readonly finishExecutionClaimStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.upsertStmt = db.prepare(`
@@ -142,6 +143,27 @@ export class CodeModeRunRepository {
         AND approval_id = @approvalId
         AND status = 'running'
         AND (@startedAt IS NULL OR started_at = @startedAt)
+    `);
+    this.finishExecutionClaimStmt = db.prepare(`
+      UPDATE code_mode_runs
+      SET
+        status = @status,
+        sandbox_json = @sandboxJson,
+        stdout_artifact_json = @stdoutArtifactJson,
+        stderr_artifact_json = @stderrArtifactJson,
+        stdout_preview = @stdoutPreview,
+        stderr_preview = @stderrPreview,
+        stdout_truncated = @stdoutTruncated,
+        stderr_truncated = @stderrTruncated,
+        result_json = @resultJson,
+        error_text = @errorText,
+        error_code = @errorCode,
+        error_details_json = @errorDetailsJson,
+        finished_at = @finishedAt
+      WHERE run_id = @runId
+        AND approval_id = @approvalId
+        AND status = 'running'
+        AND started_at = @startedAt
     `);
   }
 
@@ -278,6 +300,35 @@ export class CodeModeRunRepository {
       runId: input.runId,
       approvalId: input.approvalId,
       startedAt: input.startedAt ?? null,
+    }) as { changes?: number };
+    return result.changes && result.changes > 0 ? this.get(input.runId) : undefined;
+  }
+
+  public finishExecutionClaim(
+    input: CodeModeRunRecord & {
+      approvalId: string;
+      status: "completed" | "failed";
+      startedAt: string;
+      finishedAt: string;
+    },
+  ): CodeModeRunRecord | undefined {
+    const result = this.finishExecutionClaimStmt.run({
+      runId: input.runId,
+      approvalId: input.approvalId,
+      status: input.status,
+      sandboxJson: input.sandbox ? JSON.stringify(input.sandbox) : null,
+      stdoutArtifactJson: input.stdoutArtifact ? JSON.stringify(input.stdoutArtifact) : null,
+      stderrArtifactJson: input.stderrArtifact ? JSON.stringify(input.stderrArtifact) : null,
+      stdoutPreview: input.stdoutPreview ?? null,
+      stderrPreview: input.stderrPreview ?? null,
+      stdoutTruncated: input.stdoutTruncated ? 1 : 0,
+      stderrTruncated: input.stderrTruncated ? 1 : 0,
+      resultJson: input.result ? JSON.stringify(input.result) : null,
+      errorText: input.error ?? null,
+      errorCode: input.errorCode ?? null,
+      errorDetailsJson: input.errorDetails ? JSON.stringify(input.errorDetails) : null,
+      startedAt: input.startedAt,
+      finishedAt: input.finishedAt,
     }) as { changes?: number };
     return result.changes && result.changes > 0 ? this.get(input.runId) : undefined;
   }

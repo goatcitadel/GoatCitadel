@@ -34,9 +34,14 @@ const server = http.createServer((request, response) => {
     return sendJson(response, 200, { status: "ok" });
   }
 
+  const decodedPathname = decodeRequestPathname(requestUrl.pathname);
+  if (!decodedPathname) {
+    return sendJson(response, 400, { error: "Bad request" });
+  }
+
   const requestedPath = requestUrl.pathname === "/"
     ? path.join(distDir, "index.html")
-    : path.resolve(distDir, `.${decodeURIComponent(requestUrl.pathname)}`);
+    : path.resolve(distDir, `.${decodedPathname}`);
 
   const safeRoot = `${distDir}${path.sep}`;
   if (!requestedPath.startsWith(safeRoot) && requestedPath !== path.join(distDir, "index.html")) {
@@ -83,6 +88,17 @@ function sendJson(response, statusCode, payload) {
     "Cache-Control": "no-store, max-age=0, must-revalidate",
   });
   response.end(JSON.stringify(payload));
+}
+
+function decodeRequestPathname(pathname) {
+  try {
+    return decodeURIComponent(pathname);
+  } catch (error) {
+    if (error instanceof URIError) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 async function streamFile(response, finalPath) {
