@@ -11,6 +11,7 @@ interface Harness {
   rootDir: string;
   storage: Storage;
   service: ImprovementService;
+  callbacks: ImprovementServiceCallbacks;
   routingPolicies: Record<string, unknown>;
   repairPolicies: Record<string, unknown>;
   published: Array<{ eventType: string; source: string; payload: Record<string, unknown> }>;
@@ -452,8 +453,10 @@ function createHarness(): Harness {
     isFeatureEnabled: () => true,
     normalizeWorkspaceId: (workspaceId?: string) => workspaceId?.trim() || "default",
   };
+  const createApprovalMock = vi.fn();
+  createApprovalMock.mockImplementation((input) => storage.approvals.create(input));
   const callbacks: ImprovementServiceCallbacks = {
-    createApproval: vi.fn((input) => storage.approvals.create(input)),
+    createApproval: createApprovalMock,
     captureRepairPolicySnapshot: vi.fn((targetKey) =>
       createPolicySnapshot("repair_policy_snapshot", targetKey, repairPolicies),
     ),
@@ -472,7 +475,25 @@ function createHarness(): Harness {
     restoreRoutingPolicySnapshot: vi.fn((snapshotRef) => {
       restorePolicySnapshot(snapshotRef, routingPolicies);
     }),
-    createChatCompletion: vi.fn(),
+    // Provide a benign default chat-completion response so any test path that
+    // accidentally hits this mock without overriding it fails loudly via
+    // assertion mismatch instead of crashing on `undefined.choices`. Tests
+    // that rely on specific completion content should call
+    // `(harness.callbacks.createChatCompletion as Mock).mockImplementationOnce(...)`.
+    createChatCompletion: vi.fn(async () => ({
+      id: "mock-chatcmpl-1",
+      object: "chat.completion",
+      created: 0,
+      model: "mock-model",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: "" },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    })),
     getPromptRunnerModelDefaults: () => ({ providerId: "mock", model: "mock-model" }),
     readTranscriptOrEmpty: vi.fn(async () => []),
     retryChatTurn: vi.fn(),
@@ -481,7 +502,7 @@ function createHarness(): Harness {
   } as unknown as ImprovementServiceCallbacks;
 
   const service = new ImprovementService(ctx, callbacks);
-  const harness = { rootDir, storage, service, routingPolicies, repairPolicies, published };
+  const harness = { rootDir, storage, service, callbacks, routingPolicies, repairPolicies, published };
   harnesses.push(harness);
   return harness;
 }

@@ -83,6 +83,8 @@ const VISUAL_DIFF_RATIO_THRESHOLD = 0.04;
 const VISUAL_DIFF_NORMALIZE_BLUR = 6;
 const VISUAL_DIFF_NORMALIZE_SCALE = 0.25;
 const VISUAL_ROUTE_READY_TIMEOUT_MS = 60000;
+// The file upload fixture would otherwise render "now" in the file list baseline.
+const MISSION_CONTROL_NEXT_FILE_FIXTURE_MTIME = new Date("2026-05-17T21:51:00.000Z");
 
 export const FAST_LANE_COMMANDS = Object.freeze([
   { id: "fast.repo-hygiene", title: "Repo hygiene", args: ["verify:repo:hygiene"] },
@@ -1942,7 +1944,9 @@ export async function runSurfaceRegressionLane(context, options = {}) {
   });
   try {
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-surface-regression");
-    const fixture = verificationTarget.isNext ? await seedMissionControlNextFixture(stack.gatewayUrl) : null;
+    const fixture = verificationTarget.isNext
+      ? await seedMissionControlNextFixture(stack.gatewayUrl, { runtimeRoot: stack.runtimeRoot })
+      : null;
     const browser = await chromium.launch({ headless: true });
     try {
       const browserContext = await browser.newContext({
@@ -2702,7 +2706,9 @@ export async function runVisualRegressionLane(context, options = {}) {
   try {
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-visual-regression");
     await pinVisualRegressionProvider(stack.gatewayUrl);
-    const fixture = verificationTarget.isNext ? await seedMissionControlNextFixture(stack.gatewayUrl) : null;
+    const fixture = verificationTarget.isNext
+      ? await seedMissionControlNextFixture(stack.gatewayUrl, { runtimeRoot: stack.runtimeRoot })
+      : null;
     const manualProofArtifacts = [];
     const browser = await chromium.launch({ headless: true });
     try {
@@ -2710,6 +2716,7 @@ export async function runVisualRegressionLane(context, options = {}) {
         const browserContext = await browser.newContext({
           viewport: variant.viewport,
           colorScheme: variant.colorScheme,
+          timezoneId: "UTC",
         });
         if (fixture && verificationTarget.isNext) {
           await installMissionControlNextBrowserState(browserContext, fixture.workspaceId);
@@ -4757,7 +4764,7 @@ async function captureBrowserArtifacts(context, input) {
   };
 }
 
-async function seedMissionControlNextFixture(gatewayUrl) {
+async function seedMissionControlNextFixture(gatewayUrl, options = {}) {
   const seedResponse = await requestJson(gatewayUrl, "/api/v1/dev/verification/seed", {
     method: "POST",
     body: {
@@ -4937,16 +4944,15 @@ async function seedMissionControlNextFixture(gatewayUrl) {
     "seed mission-control-next memory item",
   );
 
-  assertOk(
-    await requestJson(gatewayUrl, "/api/v1/files/upload", {
-      method: "POST",
-      body: {
-        relativePath: "workspace/verification/mission-control-next-proof.md",
-        content: "# Mission Control Next\n\n- Seeded for visual proof.\n- Safe to overwrite.\n",
-      },
-    }),
-    "upload mission-control-next file fixture",
-  );
+  const uploadResponse = await requestJson(gatewayUrl, "/api/v1/files/upload", {
+    method: "POST",
+    body: {
+      relativePath: "workspace/verification/mission-control-next-proof.md",
+      content: "# Mission Control Next\n\n- Seeded for visual proof.\n- Safe to overwrite.\n",
+    },
+  });
+  assertOk(uploadResponse, "upload mission-control-next file fixture");
+  await stabilizeMissionControlNextFileFixtureMtime(options.runtimeRoot, uploadResponse.body?.fullPath);
 
   assertOk(
     await requestJson(gatewayUrl, "/api/v1/prompt-packs/import", {
@@ -4973,6 +4979,19 @@ async function seedMissionControlNextFixture(gatewayUrl) {
     agentIds: createdAgents.map((agent) => agent?.agentId).filter(Boolean),
     taskIds: tasks.map((task) => task?.taskId).filter(Boolean),
   };
+}
+
+async function stabilizeMissionControlNextFileFixtureMtime(runtimeRoot, serializedPath) {
+  if (!runtimeRoot || typeof serializedPath !== "string" || !serializedPath.startsWith("./")) {
+    return;
+  }
+  const relativePath = serializedPath.slice(2);
+  const fullPath = path.resolve(runtimeRoot, relativePath);
+  const relativeToRuntime = path.relative(runtimeRoot, fullPath);
+  if (relativeToRuntime.startsWith("..") || path.isAbsolute(relativeToRuntime)) {
+    return;
+  }
+  await fs.utimes(fullPath, MISSION_CONTROL_NEXT_FILE_FIXTURE_MTIME, MISSION_CONTROL_NEXT_FILE_FIXTURE_MTIME);
 }
 
 async function installMissionControlNextBrowserState(browserContext, workspaceId) {

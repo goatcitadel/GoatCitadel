@@ -33,6 +33,12 @@ function parseSourceType(value: unknown): IngestionSourceType {
 }
 
 const DEFAULT_URL_CACHE_TTL_SECONDS = 3600;
+// Max characters of `source` to embed in the synthesized fallback title when
+// the caller did not provide one and the backend did not return a title.
+const DEFAULT_FALLBACK_TITLE_SOURCE_MAX_LENGTH = 80;
+// Max characters of chunk content returned by `searchIngestedContext` — keeps
+// retrieval results small enough to fit comfortably into a downstream prompt.
+const MAX_SEARCH_RESULT_CONTENT_CHARS = 640;
 
 interface FetchUrlResult {
   finalUrl: string;
@@ -102,7 +108,10 @@ export async function ingestDocumentViaBackend(input: {
     request: input.request,
     fetchUrl: input.fetchUrl,
   });
-  const title = optionalString(args.title) ?? fetched.title ?? `${sourceType}:${source.slice(0, 80)}`;
+  const title =
+    optionalString(args.title) ??
+    fetched.title ??
+    `${sourceType}:${source.slice(0, DEFAULT_FALLBACK_TITLE_SOURCE_MAX_LENGTH)}`;
   const attribution: ContextSourceAttribution = {
     sourceType,
     sourceRef: source,
@@ -192,7 +201,7 @@ export function searchIngestedContext(input: { storage: Storage; namespace?: str
     items.push({
       chunkId: chunk.chunkId,
       docId: chunk.docId,
-      content: chunk.content.slice(0, 640),
+      content: chunk.content.slice(0, MAX_SEARCH_RESULT_CONTENT_CHARS),
       score,
       attribution: {
         sourceType: doc.sourceType,

@@ -101,41 +101,41 @@ function parseArgs(argv) {
     skipBuild: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
-    const value = argv[index];
-    if (value === "--target") {
+    const arg = argv[index];
+    if (arg === "--target") {
       parsed.target = argv[index + 1];
       index += 1;
       continue;
     }
-    if (value === "--out-dir") {
+    if (arg === "--out-dir") {
       parsed.outDir = argv[index + 1];
       index += 1;
       continue;
     }
-    if (value === "--version") {
+    if (arg === "--version") {
       parsed.version = argv[index + 1];
       index += 1;
       continue;
     }
-    if (value === "--node-version") {
+    if (arg === "--node-version") {
       parsed.nodeVersion = argv[index + 1];
       index += 1;
       continue;
     }
-    if (value === "--node-sha256") {
+    if (arg === "--node-sha256") {
       parsed.nodeSha256 = argv[index + 1];
       index += 1;
       continue;
     }
-    if (value === "--skip-build") {
+    if (arg === "--skip-build") {
       parsed.skipBuild = true;
       continue;
     }
-    if (value === "--skip-desktop") {
+    if (arg === "--skip-desktop") {
       parsed.skipDesktop = true;
       continue;
     }
-    throw new Error(`Unknown argument: ${value}`);
+    throw new Error(`Unknown argument: ${arg}`);
   }
   return parsed;
 }
@@ -376,19 +376,34 @@ function writeUiTargetManifest(packagedAppRoot) {
 function listFiles(rootDir) {
   const results = [];
   const queue = [rootDir];
-  while (queue.length > 0) {
-    const current = queue.pop();
+  // Track resolved real paths so a circular symlink (a → b → a) cannot trap
+  // the traversal in an infinite loop.
+  const visitedDirectories = new Set();
+  visitedDirectories.add(fs.realpathSync(rootDir));
+  // Iterate via an index pointer rather than `queue.pop()` so the order in
+  // which we descend is stable (FIFO) and so the array doesn't get resized
+  // on every step.
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const current = queue[cursor];
     for (const entryName of fs.readdirSync(current)) {
       const absolutePath = path.join(current, entryName);
       const stats = fs.lstatSync(absolutePath);
       if (stats.isDirectory()) {
-        queue.push(absolutePath);
+        const directoryRealPath = fs.realpathSync(absolutePath);
+        if (!visitedDirectories.has(directoryRealPath)) {
+          visitedDirectories.add(directoryRealPath);
+          queue.push(absolutePath);
+        }
         continue;
       }
       if (stats.isSymbolicLink()) {
         const targetStats = fs.statSync(absolutePath);
         if (targetStats.isDirectory()) {
-          queue.push(absolutePath);
+          const directoryRealPath = fs.realpathSync(absolutePath);
+          if (!visitedDirectories.has(directoryRealPath)) {
+            visitedDirectories.add(directoryRealPath);
+            queue.push(absolutePath);
+          }
           continue;
         }
       }

@@ -225,16 +225,24 @@ function mergeDelegationStep(
   currentSteps: ActiveChatDelegationStep[],
   nextStep: ActiveChatDelegationStep,
 ): ActiveChatDelegationStep[] {
+  // Assumes `currentSteps` is already sorted by `.index`. Callers seed via
+  // `createSeedDelegationSteps` which sorts, and every other code path that
+  // builds a fresh list also sorts before assigning. By inserting in-order
+  // instead of `.sort()`-ing after every merge, we drop O(n log n) work
+  // from every streaming update.
   const matchingIndex = currentSteps.findIndex(
     (step) =>
       step.stepId === nextStep.stepId ||
       (!step.runId && step.index === nextStep.index && step.role.toLowerCase() === nextStep.role.toLowerCase()),
   );
-  const nextSteps =
-    matchingIndex >= 0
-      ? currentSteps.map((step, index) => (index === matchingIndex ? { ...step, ...nextStep } : step))
-      : [...currentSteps, nextStep];
-  return nextSteps.sort((left, right) => left.index - right.index);
+  const mergedStep = matchingIndex >= 0 ? { ...currentSteps[matchingIndex], ...nextStep } : nextStep;
+  const remainingSteps =
+    matchingIndex >= 0 ? currentSteps.filter((_, position) => position !== matchingIndex) : currentSteps;
+  const insertionIndex = remainingSteps.findIndex((step) => step.index > mergedStep.index);
+  if (insertionIndex < 0) {
+    return [...remainingSteps, mergedStep];
+  }
+  return [...remainingSteps.slice(0, insertionIndex), mergedStep, ...remainingSteps.slice(insertionIndex)];
 }
 
 export function applyDelegationStatusChunk(
@@ -669,8 +677,7 @@ export function useChatDelegationPolicyActions(input: {
       activeDelegationRun?.runId,
       activeWorkflowTurn?.trace.orchestration?.runId,
       activeWorkflowTurn?.turnId,
-      prefs?.model,
-      prefs?.providerId,
+      prefs,
       selectedModel,
       selectedProviderId,
       selectedTurn,
