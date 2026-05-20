@@ -4,6 +4,7 @@ export * from "./approval-gate.js";
 export * from "./engine.js";
 export * from "./tool-executor.js";
 export * from "./tool-security.js";
+export * from "./tool-patterns.js";
 export * from "./safe-env-name.js";
 export * from "./ingestion-backends.js";
 export * from "./ingestion-source-type.js";

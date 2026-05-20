@@ -2101,6 +2101,53 @@ describe("ToolPolicyEngine outside-root read access", () => {
     expect(evaluation.requiresApproval).toBe(false);
   });
 
+  it("allows outside-root file reads when a later scoped grant covers the path", () => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-broad-read",
+        toolPattern: "file.read_range",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        createdBy: "test",
+        createdAt: new Date().toISOString(),
+      },
+      {
+        grantId: "grant-path-read",
+        toolPattern: "file.read_range",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session",
+        grantType: "persistent",
+        constraints: {
+          allowedPaths: ["F:/outside/project"],
+        },
+        createdBy: "test",
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        sandbox: {
+          ...policyConfig.sandbox,
+          readAccessMode: "roots_only",
+        },
+      },
+      storage,
+    );
+    const evaluation = engine.evaluateAccess({
+      toolName: "file.read_range",
+      args: { path: "F:/outside/project/file.ts", startLine: 1, endLine: 5 },
+      agentId: "agent",
+      sessionId: "session",
+    });
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.reasonCodes).toEqual(["allowed"]);
+  });
+
   it("does not allow a scoped read grant to escape through a symlinked child path", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), `goat-policy-grant-realpath-${randomUUID()}-`));
     tempRoots.push(root);
@@ -3353,6 +3400,58 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
         sessionId: "session-1",
       }).reasonCodes,
     ).toEqual(["grant_constraints_block"]);
+  });
+
+  it("allows docs.ingest file sources when a later scoped grant covers the source path", () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: {
+          ...policyConfig.tools,
+          approvalMode: "bypass",
+        },
+        sandbox: {
+          ...policyConfig.sandbox,
+          readAccessMode: "roots_only",
+        },
+      },
+      storage,
+    );
+
+    vi.mocked(storage.toolGrants.list).mockReturnValue([
+      {
+        grantId: "grant-doc-broad",
+        toolPattern: "docs.ingest",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session-1",
+        grantType: "persistent",
+        createdBy: "test",
+        createdAt: new Date().toISOString(),
+      },
+      {
+        grantId: "grant-doc-file",
+        toolPattern: "docs.ingest",
+        decision: "allow",
+        scope: "session",
+        scopeRef: "session-1",
+        grantType: "persistent",
+        constraints: { allowedPaths: ["F:/outside/docs"] },
+        createdBy: "test",
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "docs.ingest",
+      args: { sourceType: "file", source: "F:/outside/docs/brief.md", namespace: "research" },
+      agentId: "agent",
+      sessionId: "session-1",
+    });
+
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.reasonCodes).toContain("approval_bypass_mode");
   });
 
   it("applies scoped grant path constraints to browser output paths", () => {

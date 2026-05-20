@@ -179,6 +179,7 @@ describe("TaskLifecycleService agentic runtime", () => {
     const response = service.invokeAgenticControl("run-terminal", {
       action: "pause",
       controlId: "pause-terminal",
+      reason: "terminal runs cannot pause",
       actorId: "operator",
     });
 
@@ -199,9 +200,18 @@ describe("TaskLifecycleService agentic runtime", () => {
     const replay = service.invokeAgenticControl("run-terminal", {
       action: "pause",
       controlId: "pause-terminal",
+      reason: "terminal runs cannot pause",
       actorId: "operator",
     });
     expect(replay).toMatchObject({ status: "rejected", idempotentReplay: true });
+    expect(() =>
+      service.invokeAgenticControl("run-terminal", {
+        action: "pause",
+        controlId: "pause-terminal",
+        reason: "different terminal reason",
+        actorId: "operator",
+      }),
+    ).toThrow(/different agentic control payload/);
   });
 
   it("applies pause through the attached durable run when one is available", () => {
@@ -252,6 +262,121 @@ describe("TaskLifecycleService agentic runtime", () => {
       idempotentReplay: true,
     });
     expect(storage.tasks.get(task.taskId).agenticContext?.status).toBe("paused");
+  });
+
+  it("applies cancel through the attached durable run when one is available", () => {
+    const cancelDurableRun = vi.fn(() => ({ status: "cancelled" }));
+    const { service, storage } = createService({ cancelDurableRun });
+    const task = service.createTask({
+      workspaceId: "default",
+      title: "Durable Cowork run",
+      description: "A cancellable run with an attached durable executor.",
+      status: "in_progress",
+      priority: "normal",
+      agenticContext: {
+        runId: "agentic-run-cancel",
+        durableRunId: "durable-run-cancel",
+        surface: "cowork",
+        status: "running",
+      },
+    });
+
+    const tree = service.getAgenticRunTree("agentic-run-cancel");
+    expect(tree.controls.find((control) => control.action === "cancel")).toMatchObject({
+      label: "Cancel durable run",
+      runtimeEffect: "runtime_cancel",
+    });
+
+    const result = service.invokeAgenticControl("agentic-run-cancel", {
+      action: "cancel",
+      controlId: "cancel-durable-once",
+      actorId: "operator",
+    });
+    expect(cancelDurableRun).toHaveBeenCalledWith("durable-run-cancel", "operator");
+    expect(result).toMatchObject({
+      taskId: task.taskId,
+      controlId: "cancel-durable-once",
+      status: "applied",
+      runtimeEffect: "runtime_cancel",
+    });
+    const replay = service.invokeAgenticControl("agentic-run-cancel", {
+      action: "cancel",
+      controlId: "cancel-durable-once",
+      actorId: "operator",
+    });
+    expect(cancelDurableRun).toHaveBeenCalledTimes(1);
+    expect(replay).toMatchObject({
+      controlId: "cancel-durable-once",
+      status: "applied",
+      runtimeEffect: "runtime_cancel",
+      idempotentReplay: true,
+    });
+    const updated = storage.tasks.get(task.taskId);
+    expect(updated.status).toBe("blocked");
+    expect(updated.agenticContext?.status).toBe("cancelled");
+  });
+
+  it("records stale durable pause failures as rejected controls", () => {
+    const pauseDurableRun = vi.fn(() => {
+      throw new Error("Durable run is already completed.");
+    });
+    const { service, storage } = createService({ pauseDurableRun });
+    const task = service.createTask({
+      workspaceId: "default",
+      title: "Stale durable Cowork run",
+      status: "in_progress",
+      priority: "normal",
+      agenticContext: {
+        runId: "agentic-run-stale-pause",
+        durableRunId: "durable-run-stale-pause",
+        surface: "cowork",
+        status: "running",
+      },
+    });
+
+    const result = service.invokeAgenticControl("agentic-run-stale-pause", {
+      action: "pause",
+      controlId: "pause-stale-durable",
+      reason: "operator paused from stale UI",
+      actorId: "operator",
+    });
+
+    expect(pauseDurableRun).toHaveBeenCalledWith("durable-run-stale-pause", "operator");
+    expect(result).toMatchObject({
+      taskId: task.taskId,
+      controlId: "pause-stale-durable",
+      status: "rejected",
+      runtimeEffect: "state_only",
+    });
+    expect(result.message).toContain("Could not pause attached durable run");
+    const updated = storage.tasks.get(task.taskId);
+    expect(updated.status).toBe("in_progress");
+    expect(updated.agenticContext?.status).toBe("running");
+    expect(updated.agenticContext?.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "unsafe_status_transition",
+          evidenceRef: "durable-run-stale-pause",
+          title: "Durable run control rejected",
+        }),
+      ]),
+    );
+    const replay = service.invokeAgenticControl("agentic-run-stale-pause", {
+      action: "pause",
+      controlId: "pause-stale-durable",
+      reason: "operator paused from stale UI",
+      actorId: "operator",
+    });
+    expect(pauseDurableRun).toHaveBeenCalledTimes(1);
+    expect(replay).toMatchObject({ status: "rejected", idempotentReplay: true });
+    expect(() =>
+      service.invokeAgenticControl("agentic-run-stale-pause", {
+        action: "pause",
+        controlId: "pause-stale-durable",
+        reason: "changed stale UI reason",
+        actorId: "operator",
+      }),
+    ).toThrow(/different agentic control payload/);
   });
 
   it("bridges explicit diagnostics to the improvement ledger without blocking task truth", () => {

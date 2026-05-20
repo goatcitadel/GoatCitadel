@@ -818,6 +818,7 @@ export class GatewayService {
       storage: this.storage,
       publishRealtime: (event, source, payload, options) => this.publishRealtime(event, source, payload, options),
       pauseDurableRun: (runId, actorId) => this.pauseDurableRun(runId, actorId),
+      cancelDurableRun: (runId, actorId) => this.cancelDurableRun(runId, actorId),
       recordAgenticDiagnosticSignal: (input) => this.improvementService.recordAgenticDiagnosticSignal(input),
       probers: createDefaultArtifactProbers({
         networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,

@@ -142,6 +142,7 @@ function validateBrowserSearchHosts(request: ToolAccessEvaluateRequest, config: 
 interface GrantDecision {
   decision: "allow" | "deny";
   grant: ToolGrantRecord;
+  allowGrants?: ToolGrantRecord[];
   constraintsError?: string;
 }
 
@@ -664,9 +665,10 @@ export class ToolPolicyEngine {
       };
     }
 
-    const allowGrant = grantDecision?.decision === "allow" ? grantDecision.grant : undefined;
+    const allowGrants =
+      grantDecision?.decision === "allow" ? (grantDecision.allowGrants ?? [grantDecision.grant]) : undefined;
 
-    const structuralError = this.validateStructuralSafety(request, policy, allowGrant);
+    const structuralError = this.validateStructuralSafety(request, policy, allowGrants);
     if (structuralError) {
       return withPolicy(deny(riskLevel, "structural_safety_block", structuralError));
     }
@@ -702,7 +704,7 @@ export class ToolPolicyEngine {
     }
 
     let requiresApproval = policy.approvalMode === "approve_all" || Boolean(toolDef?.requiresApproval);
-    const outsideRootsReadRequiresApproval = this.requiresApprovalForOutsideRootsRead(request, policy, allowGrant);
+    const outsideRootsReadRequiresApproval = this.requiresApprovalForOutsideRootsRead(request, policy, allowGrants);
 
     if (
       riskLevel === "danger" &&
@@ -843,6 +845,7 @@ export class ToolPolicyEngine {
       return { decision: "deny", grant: denyGrant };
     }
 
+    const allowedGrants: ToolGrantRecord[] = [];
     let firstConstrainedAllow:
       | {
           grant: ToolGrantRecord;
@@ -855,9 +858,17 @@ export class ToolPolicyEngine {
       }
       const constraintsError = this.applyGrantConstraints(request, grant, toolDef);
       if (!constraintsError) {
-        return { decision: "allow", grant };
+        allowedGrants.push(grant);
+        continue;
       }
       firstConstrainedAllow ??= { grant, constraintsError };
+    }
+
+    if (allowedGrants.length > 0) {
+      const firstAllowedGrant = allowedGrants[0];
+      if (firstAllowedGrant) {
+        return { decision: "allow", grant: firstAllowedGrant, allowGrants: allowedGrants };
+      }
     }
 
     if (firstConstrainedAllow) {
@@ -971,13 +982,13 @@ export class ToolPolicyEngine {
   private validateStructuralSafety(
     request: ToolAccessEvaluateRequest,
     policy?: EffectiveToolPolicy,
-    allowGrant?: ToolGrantRecord,
+    allowGrants?: ToolGrantRecord[],
   ): string | undefined {
     try {
       const readPathError = this.validateReadPaths(
         request,
         policy ?? resolveEffectivePolicy(this.config, request.agentId),
-        allowGrant,
+        allowGrants,
       );
       if (readPathError) {
         return readPathError;
@@ -988,7 +999,7 @@ export class ToolPolicyEngine {
         return `${request.toolName} requires a target path.`;
       }
       for (const pathValue of writePathCandidates) {
-        const referenceRoots = getReferenceRootPaths(allowGrant?.constraints);
+        const referenceRoots = getReferenceRootPaths(allowGrants?.[0]?.constraints);
         const targetsReferenceRoot = referenceRoots.length > 0 && isPathWithinAnyRoot(pathValue, referenceRoots);
         if (!targetsReferenceRoot) {
           assertWritePathInJail(pathValue, this.config.sandbox.writeJailRoots);
@@ -1039,7 +1050,7 @@ export class ToolPolicyEngine {
   private validateReadPaths(
     request: ToolAccessEvaluateRequest,
     policy: EffectiveToolPolicy,
-    allowGrant?: ToolGrantRecord,
+    allowGrants?: ToolGrantRecord[],
   ): string | undefined {
     const readAccessMode = this.getReadAccessMode(policy);
     for (const target of extractReadPathCandidates(request)) {
@@ -1057,7 +1068,7 @@ export class ToolPolicyEngine {
       if (readAccessMode === "approval_required" && this.hasApprovalBypass(request)) {
         continue;
       }
-      if (this.grantAllowsReadPath(allowGrant, access.resolvedPath)) {
+      if (this.anyGrantAllowsReadPath(allowGrants, access.resolvedPath)) {
         continue;
       }
       if (readAccessMode === "approval_required") {
@@ -1071,7 +1082,7 @@ export class ToolPolicyEngine {
   private requiresApprovalForOutsideRootsRead(
     request: ToolAccessEvaluateRequest,
     policy: EffectiveToolPolicy,
-    allowGrant?: ToolGrantRecord,
+    allowGrants?: ToolGrantRecord[],
   ): boolean {
     if (this.getReadAccessMode(policy) !== "approval_required") {
       return false;
@@ -1085,7 +1096,7 @@ export class ToolPolicyEngine {
         this.config.sandbox.writeJailRoots,
         this.config.sandbox.readOnlyRoots,
       );
-      if (!access.withinRoots && !this.grantAllowsReadPath(allowGrant, access.resolvedPath)) {
+      if (!access.withinRoots && !this.anyGrantAllowsReadPath(allowGrants, access.resolvedPath)) {
         return true;
       }
     }
@@ -1102,6 +1113,10 @@ export class ToolPolicyEngine {
       return false;
     }
     return isPathWithinAnyRoot(resolvedPath, allowedPaths);
+  }
+
+  private anyGrantAllowsReadPath(grants: ToolGrantRecord[] | undefined, resolvedPath: string): boolean {
+    return grants?.some((grant) => this.grantAllowsReadPath(grant, resolvedPath)) ?? false;
   }
 
   private resolvePathForGrantConstraint(pathValue: string): string {

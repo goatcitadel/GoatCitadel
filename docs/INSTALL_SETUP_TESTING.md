@@ -425,11 +425,22 @@ Expected health response:
 Run these before public testing or wider sharing:
 
 ```bash
+pnpm verify:fast
+pnpm coverage:collect
+pnpm coverage:gate:production
+pnpm --filter @goatcitadel/storage test:postgres
+```
+
+For a quicker local smoke subset while iterating, use:
+
+```bash
+pnpm verify:repo:hygiene
+pnpm verify:storage:migration-parity
+pnpm --filter @goatcitadel/extensions-sdk build
 pnpm typecheck
 pnpm test
 pnpm smoke
 pnpm build
-pnpm docs:check
 pnpm coverage:collect
 pnpm coverage:gate
 ```

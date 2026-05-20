@@ -353,6 +353,32 @@ describe("approval lifecycle service", () => {
     );
   });
 
+  it("rejects edit decisions for immutable Code Mode approvals", async () => {
+    const host = createApprovalHarness({
+      approvalKind: "code_mode.run",
+      pendingAction: {
+        approvalId: "approval-1",
+        actionType: "code_mode.run",
+        request: { runId: "code-run-1" },
+        createdAt: "2026-04-11T00:00:00.000Z",
+        resolutionStatus: "pending",
+      },
+      codeModeRun: createCodeModeRunRecord(),
+    });
+
+    await expect(
+      resolveApproval(host, "approval-1", {
+        decision: "edit",
+        resolvedBy: "operator",
+        editedPayload: { source: "return { edited: true };" },
+      }),
+    ).rejects.toThrow(/Code Mode approvals are immutable/);
+
+    expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
+    expect(host.storage.codeModeRuns.upsert).not.toHaveBeenCalled();
+    expect(host.storage.chatInlineApprovals.upsert).not.toHaveBeenCalled();
+  });
+
   it("marks linked Code Mode runs expired when approval expires", async () => {
     const host = createApprovalHarness({
       approvalKind: "code_mode.run",

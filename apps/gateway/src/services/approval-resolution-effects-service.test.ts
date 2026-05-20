@@ -136,6 +136,84 @@ describe("approval-resolution-effects-service", () => {
     ]);
   });
 
+  it("does not wake a linked turn when the turn trace belongs to another session", () => {
+    const upsert = vi.fn((input: Record<string, unknown>) => ({
+      effectId: String(input.targetId),
+      approvalId: String(input.approvalId),
+      effectKind: input.effectKind,
+      targetKind: input.targetKind,
+      targetId: String(input.targetId),
+      idempotencyKey: "key",
+      status: "pending",
+      attemptCount: 0,
+      payload: (input.payload as Record<string, unknown>) ?? {},
+      result: {},
+      version: 1,
+      createdAt: "2026-04-11T00:00:00.000Z",
+      updatedAt: "2026-04-11T00:00:00.000Z",
+    }));
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: { upsert, claimNextPendingEffect: vi.fn(), get: vi.fn(), listByApproval: vi.fn() },
+          approvalWaitRuns: { getRunId: vi.fn(() => undefined) },
+          pendingApprovalActions: { find: vi.fn(() => undefined) },
+          approvalInbox: { findByApprovalAndToken: vi.fn(() => undefined) },
+          chatInlineApprovals: { get: vi.fn(() => undefined) },
+          chatTurnTraces: {
+            get: vi.fn(() => ({
+              turnId: "turn-b",
+              sessionId: "session-b",
+              durable: { runId: "durable-turn-b" },
+            })),
+          },
+          chatDelegationSteps: { listParentsByChildSessionIds: vi.fn(() => new Map()) },
+          orchestration: { getRun: vi.fn() },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      {
+        backgroundTasks: new Set(),
+        wakeDurableRun: vi.fn(),
+        requestRunProcessing: vi.fn(),
+        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+        executeCodeModePendingApproval: vi.fn(),
+        executeApprovedPendingAction: vi.fn(),
+        enqueueAfterHooks: vi.fn(),
+        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+      },
+    );
+
+    service.enqueueResolutionEffects(
+      {
+        approvalId: "approval-1",
+        kind: "code_mode.run",
+        riskLevel: "caution",
+        status: "approved",
+        payload: {},
+        preview: {},
+        linkage: {
+          sessionId: "session-a",
+          turnId: "turn-b",
+          workspaceId: "workspace-1",
+        },
+        createdAt: "2026-04-11T00:00:00.000Z",
+        resolvedAt: "2026-04-11T00:01:00.000Z",
+        resolvedBy: "operator",
+        explanationStatus: "not_requested",
+      } satisfies ApprovalRequest,
+      {
+        decision: "approve",
+        resolvedBy: "operator",
+      },
+    );
+
+    expect(upsert.mock.calls.map(([input]) => input.effectKind)).toEqual([
+      "pending_action_execute",
+      "approval_after_hooks",
+    ]);
+  });
+
   it("enqueues Code Mode recovery effects when the pending action row is missing", () => {
     const upsert = vi.fn((input: Record<string, unknown>) => ({
       effectId: String(input.targetId),
@@ -235,7 +313,7 @@ describe("approval-resolution-effects-service", () => {
         approvalInbox: { findByApprovalAndToken: vi.fn(() => undefined) },
         chatInlineApprovals: { get: vi.fn(() => undefined) },
         chatTurnTraces: {
-          get: vi.fn(() => ({ durable: { runId: "child-durable-run" } })),
+          get: vi.fn(() => ({ sessionId: "child-session-1", durable: { runId: "child-durable-run" } })),
           listBySession: vi.fn(() => [
             {
               turnId: "parent-turn-1",

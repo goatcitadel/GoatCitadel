@@ -144,6 +144,43 @@ describe("CapabilitySystemService", () => {
     );
   });
 
+  it("rejects Code Mode runs for missing sessions or mismatched turn traces", async () => {
+    const harness = await createHarness();
+    vi.mocked(harness.storage.chatSessionMeta.get).mockReturnValueOnce(undefined);
+
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true };",
+        sessionId: "missing-session",
+      }),
+    ).rejects.toThrow(/session missing-session was not found/);
+
+    harness.storage.chatSessionMeta.patch("session-a", { workspaceId: "workspace-a" });
+    harness.storage.chatTurnTraces.create({
+      turnId: "turn-b",
+      sessionId: "session-b",
+      durable: { runId: "durable-b" },
+    });
+
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true };",
+        sessionId: "session-a",
+        turnId: "turn-b",
+      }),
+    ).rejects.toThrow(/turn turn-b does not belong to session session-a/);
+
+    await expect(
+      harness.service.createCodeModeRun({
+        language: "typescript",
+        source: "return { ok: true };",
+        turnId: "turn-b",
+      }),
+    ).rejects.toThrow(/turnId requires a sessionId/);
+  });
+
   it("keeps artifact evidence visible when Code Mode approval creation fails", async () => {
     const harness = await createHarness();
     harness.createApproval.mockRejectedValueOnce(new Error("approval store unavailable"));
@@ -1218,6 +1255,56 @@ describe("CapabilitySystemService", () => {
         approvalId: "approval-1",
         status: "rejected",
         errorCode: "approval_rejected_pending_action_missing",
+      }),
+    );
+  });
+
+  it("rejects edited Code Mode runs on read when the pending action row is missing", async () => {
+    const harness = await createHarness();
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      requestedOutputIntent: "Return a JSON object.",
+      saveCandidateOnSuccess: false,
+      sessionId: "session-code",
+    });
+    const approval = harness.approvals.get("approval-1");
+    if (!approval) {
+      throw new Error("missing approval-1");
+    }
+    harness.approvals.set("approval-1", {
+      ...approval,
+      status: "edited",
+      resolvedAt: "2026-04-10T00:01:00.000Z",
+      resolvedBy: "operator",
+    });
+    vi.spyOn(harness.storage.pendingApprovalActions, "find").mockReturnValue(undefined);
+
+    expect(harness.service.getCodeModeRun(run.runId)).toMatchObject({
+      status: "rejected",
+      error: "Code Mode approval was edited, but Code Mode runs are immutable and cannot execute safely.",
+      errorCode: "approval_edited_pending_action_missing",
+    });
+    expect(harness.storage.approvalEvents.append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "approval-1",
+        eventType: "pending_action_refused",
+        payload: expect.objectContaining({
+          actionType: "code_mode.run",
+          runId: run.runId,
+          status: "rejected",
+          errorCode: "approval_edited_pending_action_missing",
+        }),
+      }),
+    );
+    expect(harness.publishRealtime).toHaveBeenCalledWith(
+      "code_mode_run_refused",
+      "capabilities",
+      expect.objectContaining({
+        runId: run.runId,
+        approvalId: "approval-1",
+        status: "rejected",
+        errorCode: "approval_edited_pending_action_missing",
       }),
     );
   });
@@ -2852,6 +2939,7 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
   const candidateVersions = new Map<string, CandidateSkillVersionRecord>();
   const pendingActions = new Map<string, PendingApprovalAction>();
   const sessionMeta = new Map<string, { sessionId: string; workspaceId?: string }>();
+  const turnTraces = new Map<string, { turnId: string; sessionId: string; durable?: { runId?: string } }>();
 
   return {
     capabilityCatalogSnapshots: {
@@ -3045,9 +3133,7 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
       listBySession: vi.fn(() => []),
     },
     chatSessionMeta: {
-      get(sessionId: string) {
-        return sessionMeta.get(sessionId);
-      },
+      get: vi.fn((sessionId: string) => sessionMeta.get(sessionId) ?? { sessionId }),
       patch(sessionId: string, input: { workspaceId?: string }) {
         const record = {
           sessionId,
@@ -3055,6 +3141,19 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
         };
         sessionMeta.set(sessionId, record);
         return record;
+      },
+    },
+    chatTurnTraces: {
+      create(input: { turnId: string; sessionId: string; durable?: { runId?: string } }) {
+        turnTraces.set(input.turnId, input);
+        return input;
+      },
+      get(turnId: string) {
+        const trace = turnTraces.get(turnId);
+        if (!trace) {
+          throw new Error(`Missing turn trace ${turnId}`);
+        }
+        return trace;
       },
     },
     runImmediateTransaction<T>(callback: () => T): T {

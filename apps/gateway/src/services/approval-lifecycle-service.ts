@@ -601,6 +601,11 @@ export async function resolveApproval(
   if (current.kind === DEVICE_ACCESS_APPROVAL_KIND) {
     return host.resolveDeviceAccessApproval(current, input);
   }
+  if (current.kind === "code_mode.run" && input.decision === "edit") {
+    throw new ValidationError({
+      message: "Code Mode approvals are immutable; reject this run and create a new one with edited input.",
+    });
+  }
 
   let approval!: ApprovalRequest;
   host.storage.runImmediateTransaction(() => {

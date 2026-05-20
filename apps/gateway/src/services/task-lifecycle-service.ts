@@ -54,6 +54,7 @@ export interface TaskLifecycleServiceDependencies {
     options?: TaskRealtimeOptions,
   ): void;
   pauseDurableRun?(runId: string, actorId?: string): { status: string };
+  cancelDurableRun?(runId: string, actorId?: string): { status: string };
   recordAgenticDiagnosticSignal?(input: { task: TaskRecord; diagnostic: AgenticDiagnosticSignal }): void;
   storage: TaskStorage;
   probers?: ArtifactProbers;
@@ -592,47 +593,55 @@ export class TaskLifecycleService {
     const rejectionReason = validateAgenticControlTransition(currentStatus, input);
 
     if (rejectionReason) {
-      const diagnostic = this.appendTaskDiagnostic(task.taskId, {
-        signalId: `unsafe-control-${input.action}-${controlId ?? randomUUID()}`,
-        code: "unsafe_status_transition",
-        severity: "warning",
-        title: "Unsafe run control rejected",
-        summary: rejectionReason,
-        createdAt: now,
-      });
-      this.appendTaskActivity(task.taskId, {
-        activityType: "control",
-        message: `${input.action} control rejected: ${rejectionReason}`,
-        agentId: input.actorId,
-        metadata: compactRecord({
-          action: input.action,
-          controlId,
-          resultStatus: "rejected",
-          runtimeEffect,
-          diagnosticSignalId: diagnostic.signalId,
-          recordedAt: now,
-        }),
-      });
-      return {
-        action: input.action,
-        taskId: task.taskId,
-        runId: task.agenticContext?.runId,
-        status: "rejected",
-        runtimeEffect,
+      return this.recordRejectedAgenticControl(task, input, {
         controlId,
         message: rejectionReason,
-      };
+        now,
+        runtimeEffect,
+        signalPrefix: "unsafe-control",
+        title: "Unsafe run control rejected",
+      });
     }
 
     if (input.action === "pause") {
       const durableRunId = task.agenticContext?.durableRunId?.trim();
       if (durableRunId && this.deps.pauseDurableRun) {
-        this.deps.pauseDurableRun(durableRunId, input.actorId ?? "operator");
+        try {
+          this.deps.pauseDurableRun(durableRunId, input.actorId ?? "operator");
+        } catch (error) {
+          return this.recordRejectedAgenticControl(task, input, {
+            controlId,
+            evidenceRef: durableRunId,
+            message: `Could not pause attached durable run: ${formatErrorMessage(error)}`,
+            now,
+            runtimeEffect: "state_only",
+            signalPrefix: "durable-control",
+            title: "Durable run control rejected",
+          });
+        }
         runtimeEffect = "runtime_pause";
         responseStatus = "applied";
       }
       nextAgenticStatus = "paused";
     } else if (input.action === "cancel") {
+      const durableRunId = task.agenticContext?.durableRunId?.trim();
+      if (durableRunId && this.deps.cancelDurableRun) {
+        try {
+          this.deps.cancelDurableRun(durableRunId, input.actorId ?? "operator");
+        } catch (error) {
+          return this.recordRejectedAgenticControl(task, input, {
+            controlId,
+            evidenceRef: durableRunId,
+            message: `Could not cancel attached durable run: ${formatErrorMessage(error)}`,
+            now,
+            runtimeEffect: "state_only",
+            signalPrefix: "durable-control",
+            title: "Durable run control rejected",
+          });
+        }
+        runtimeEffect = "runtime_cancel";
+        responseStatus = "applied";
+      }
       nextStatus = "blocked";
       nextAgenticStatus = "cancelled";
     } else if (input.action === "retry") {
@@ -673,13 +682,8 @@ export class TaskLifecycleService {
       activityType: "control",
       message: `${input.action} control recorded: ${reason}`,
       agentId: input.actorId,
-      metadata: compactRecord({
-        action: input.action,
+      metadata: buildAgenticControlActivityMetadata(input, {
         controlId,
-        agentSessionId: input.agentSessionId,
-        approvalId: input.approvalId,
-        reason: input.reason?.trim() || undefined,
-        instruction: input.instruction?.trim() || undefined,
         resultStatus: responseStatus,
         runtimeEffect,
         recordedAt: now,
@@ -698,7 +702,54 @@ export class TaskLifecycleService {
           ? "Control was recorded in the durable board. Live runtime effects are only applied where an executor is attached."
           : runtimeEffect === "runtime_pause"
             ? "Durable run pause was applied and mirrored into the Cowork board."
-            : "Control was recorded with an operator-visible runtime effect.",
+            : runtimeEffect === "runtime_cancel"
+              ? "Durable run cancellation was applied and mirrored into the Cowork board."
+              : "Control was recorded with an operator-visible runtime effect.",
+    };
+  }
+
+  private recordRejectedAgenticControl(
+    task: TaskRecord,
+    input: AgenticControlRequest,
+    options: {
+      controlId: string | undefined;
+      evidenceRef?: string;
+      message: string;
+      now: string;
+      runtimeEffect: AgenticControlResponse["runtimeEffect"];
+      signalPrefix: string;
+      title: string;
+    },
+  ): AgenticControlResponse {
+    const diagnostic = this.appendTaskDiagnostic(task.taskId, {
+      signalId: `${options.signalPrefix}-${input.action}-${options.controlId ?? randomUUID()}`,
+      code: "unsafe_status_transition",
+      severity: "warning",
+      title: options.title,
+      summary: options.message,
+      evidenceRef: options.evidenceRef,
+      createdAt: options.now,
+    });
+    this.appendTaskActivity(task.taskId, {
+      activityType: "control",
+      message: `${input.action} control rejected: ${options.message}`,
+      agentId: input.actorId,
+      metadata: buildAgenticControlActivityMetadata(input, {
+        controlId: options.controlId,
+        diagnosticSignalId: diagnostic.signalId,
+        recordedAt: options.now,
+        resultStatus: "rejected",
+        runtimeEffect: options.runtimeEffect,
+      }),
+    });
+    return {
+      action: input.action,
+      taskId: task.taskId,
+      runId: task.agenticContext?.runId,
+      status: "rejected",
+      runtimeEffect: options.runtimeEffect,
+      controlId: options.controlId,
+      message: options.message,
     };
   }
 
@@ -1037,11 +1088,12 @@ function buildAgenticControls(task: TaskRecord): AgenticRunTreeResponse["control
     },
     {
       action: "cancel",
-      label: "Record cancel intent",
+      label: task.agenticContext?.durableRunId ? "Cancel durable run" : "Record cancel intent",
       enabled: status !== "completed" && status !== "done" && status !== "cancelled" && status !== "stopped_by_limit",
-      runtimeEffect: "state_only",
-      reason:
-        "Records cancellation in Cowork board state; live runtime cancellation is only applied where an executor is attached.",
+      runtimeEffect: task.agenticContext?.durableRunId ? "runtime_cancel" : "state_only",
+      reason: task.agenticContext?.durableRunId
+        ? "Calls the attached durable run cancel path and mirrors the result into Cowork state."
+        : "Records cancellation in Cowork board state because no attached durable run is available.",
     },
     {
       action: "retry",
@@ -1292,4 +1344,32 @@ function mapDiagnosticToFailureClass(code: AgenticDiagnosticSignal["code"]): Age
 
 function compactRecord(input: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined && value !== null));
+}
+
+function buildAgenticControlActivityMetadata(
+  input: AgenticControlRequest,
+  extra: {
+    controlId: string | undefined;
+    diagnosticSignalId?: string;
+    recordedAt: string;
+    resultStatus: AgenticControlResponse["status"];
+    runtimeEffect: AgenticControlResponse["runtimeEffect"];
+  },
+): Record<string, unknown> {
+  return compactRecord({
+    action: input.action,
+    controlId: extra.controlId,
+    agentSessionId: input.agentSessionId,
+    approvalId: input.approvalId,
+    reason: input.reason?.trim() || undefined,
+    instruction: input.instruction?.trim() || undefined,
+    resultStatus: extra.resultStatus,
+    runtimeEffect: extra.runtimeEffect,
+    diagnosticSignalId: extra.diagnosticSignalId,
+    recordedAt: extra.recordedAt,
+  });
+}
+
+function formatErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

@@ -19,6 +19,7 @@ import type {
   CapabilityProposalDetailRecord,
   CapabilityProposalKind,
   CapabilityProposalRecord,
+  ChatTurnTraceRecord,
   CodeModeLanguage,
   CodeModeSandboxMetadata,
   CodeModeRunRecord,
@@ -495,18 +496,38 @@ export class CapabilitySystemService {
     const runInputHash = sha256Text(JSON.stringify(runInput));
     const sandbox = this.resolveCurrentSandboxMetadata();
     const originSurface = normalizeCodeModeOriginSurface(request.originSurface);
-    const sessionWorkspaceId = request.sessionId
-      ? this.options.storage.chatSessionMeta.get(request.sessionId)?.workspaceId
-      : undefined;
+    const sessionId = request.sessionId?.trim() || undefined;
+    const turnId = request.turnId?.trim() || undefined;
+    const chatSessionMeta = sessionId ? this.options.storage.chatSessionMeta.get(sessionId) : undefined;
+    if (sessionId && !chatSessionMeta) {
+      throw new ValidationError({ message: `Code Mode session ${sessionId} was not found.` });
+    }
+    if (turnId) {
+      if (!sessionId) {
+        throw new ValidationError({ message: "Code Mode turnId requires a sessionId." });
+      }
+      let turnTrace: ChatTurnTraceRecord;
+      try {
+        turnTrace = this.options.storage.chatTurnTraces.get(turnId);
+      } catch {
+        throw new ValidationError({ message: `Code Mode turn ${turnId} was not found.` });
+      }
+      if (turnTrace.sessionId !== sessionId) {
+        throw new ValidationError({
+          message: `Code Mode turn ${turnId} does not belong to session ${sessionId}.`,
+        });
+      }
+    }
+    const sessionWorkspaceId = chatSessionMeta?.workspaceId;
     const workspaceId = resolveCodeModeWorkspaceId({
-      sessionId: request.sessionId,
+      sessionId,
       requestWorkspaceId: request.workspaceId,
       sessionWorkspaceId,
     });
     const policyContext = this.options.resolvePolicyContext?.({
       operatorId: request.operatorId,
       workspaceId,
-      sessionId: request.sessionId,
+      sessionId,
       runId,
       surface: originSurface,
       permissionProfileId: request.permissionProfileId,
@@ -562,8 +583,8 @@ export class CapabilitySystemService {
       inspectPath: codeArtifact.relPath,
       codePreview: buildCodePreview(source),
       affectedResources: wrapperManifest.wrappers.map((wrapper) => wrapper.name),
-      sessionId: request.sessionId,
-      turnId: request.turnId,
+      sessionId,
+      turnId,
       originSurface,
       sandbox,
       permissionProfileId: policyContext?.permissionProfileId,
@@ -573,8 +594,8 @@ export class CapabilitySystemService {
     const approvalLinkage = buildCodeModeApprovalLinkage({
       workspaceId,
       runId,
-      sessionId: request.sessionId,
-      turnId: request.turnId,
+      sessionId,
+      turnId,
       originSurface,
       permissionProfileId: policyContext?.permissionProfileId,
       localOperatorOverrideId: policyContext?.localOperatorOverrideId,
@@ -607,8 +628,8 @@ export class CapabilitySystemService {
         policySnapshotHash,
         codeHash,
         approvalId,
-        sessionId: request.sessionId,
-        turnId: request.turnId,
+        sessionId,
+        turnId,
         sandbox,
         codeArtifact,
         wrapperManifestArtifact,
@@ -680,8 +701,8 @@ export class CapabilitySystemService {
       policySnapshotHash,
       codeHash,
       approvalId: approval.approvalId,
-      sessionId: request.sessionId,
-      turnId: request.turnId,
+      sessionId,
+      turnId,
       sandbox,
       codeArtifact,
       wrapperManifestArtifact,
@@ -721,11 +742,11 @@ export class CapabilitySystemService {
         },
       });
 
-      if (request.sessionId) {
+      if (sessionId) {
         this.options.storage.chatInlineApprovals.upsert({
           approvalId: approval.approvalId,
-          sessionId: request.sessionId,
-          turnId: request.turnId ?? `code-mode-${stored.runId}`,
+          sessionId,
+          turnId: turnId ?? `code-mode-${stored.runId}`,
           kind: "code_mode.run",
           toolName: "Code Mode v1",
           status: "pending",
@@ -1462,17 +1483,24 @@ export class CapabilitySystemService {
     if (expectedRunId && expectedRunId !== run.runId) {
       return run;
     }
-    const rejected = approval.status === "rejected";
+    const nonExecutingApproval = approval.status !== "approved";
     const reason =
       options?.reason ??
-      (rejected
+      (approval.status === "rejected"
         ? "Code Mode approval was rejected before the pending action could be recovered."
-        : "Code Mode pending action is missing; approved run cannot execute safely.");
+        : approval.status === "edited"
+          ? "Code Mode approval was edited, but Code Mode runs are immutable and cannot execute safely."
+          : "Code Mode pending action is missing; approved run cannot execute safely.");
     const errorCode =
-      options?.errorCode ?? (rejected ? "approval_rejected_pending_action_missing" : "pending_action_missing");
+      options?.errorCode ??
+      (approval.status === "rejected"
+        ? "approval_rejected_pending_action_missing"
+        : approval.status === "edited"
+          ? "approval_edited_pending_action_missing"
+          : "pending_action_missing");
     const terminal = this.options.storage.codeModeRuns.upsert({
       ...run,
-      status: rejected ? "rejected" : "failed",
+      status: nonExecutingApproval ? "rejected" : "failed",
       error: reason,
       errorCode,
       errorDetails: {
@@ -1491,15 +1519,19 @@ export class CapabilitySystemService {
       errorCode,
       ...(options?.pendingRunId !== undefined ? { pendingRunId: options.pendingRunId } : {}),
     });
-    this.options.publishRealtime(rejected ? "code_mode_run_refused" : "code_mode_run_failed", "capabilities", {
-      runId: terminal.runId,
-      approvalId: approval.approvalId,
-      status: terminal.status,
-      error: reason,
-      errorCode,
-      errorDetails: terminal.errorDetails,
-      sandbox: terminal.sandbox,
-    });
+    this.options.publishRealtime(
+      nonExecutingApproval ? "code_mode_run_refused" : "code_mode_run_failed",
+      "capabilities",
+      {
+        runId: terminal.runId,
+        approvalId: approval.approvalId,
+        status: terminal.status,
+        error: reason,
+        errorCode,
+        errorDetails: terminal.errorDetails,
+        sandbox: terminal.sandbox,
+      },
+    );
     return terminal;
   }
 
@@ -2572,7 +2604,7 @@ function isCodeModeApprovalExpiredForRead(
 }
 
 function isResolvedCodeModeApprovalStatus(status: ApprovalRequest["status"]): boolean {
-  return status === "approved" || status === "rejected";
+  return status === "approved" || status === "rejected" || status === "edited";
 }
 
 function resolveCodeModeApprovalRunId(approval: ApprovalRequest): string | undefined {

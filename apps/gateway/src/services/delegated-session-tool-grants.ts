@@ -1,8 +1,4 @@
-import type {
-  ToolGrantConstraints,
-  ToolGrantCreateInput,
-  ToolGrantRecord,
-} from "@goatcitadel/contracts";
+import type { ToolGrantConstraints, ToolGrantCreateInput, ToolGrantRecord } from "@goatcitadel/contracts";
 
 export function buildDelegatedSessionToolGrantCopies(input: {
   parentSessionId: string;
@@ -26,38 +22,48 @@ export function buildDelegatedSessionToolGrantCopies(input: {
       .map(buildGrantSignature),
   );
 
-  return input.parentGrants
-    .filter((grant) => grant.scope === "session" && grant.scopeRef === input.parentSessionId)
-    .filter(isActiveToolGrant)
-    // One-time approvals should stay bound to the original session.
-    .filter((grant) => grant.grantType !== "one_time")
-    .filter(
-      (grant) =>
-        grant.decision !== "allow" ||
-        !activeDenies.some((deny) => toolPatternsOverlap(deny.toolPattern, grant.toolPattern)),
-    )
-    .filter((grant) => !childKeys.has(buildGrantSignature(grant)))
-    .map((grant) => ({
-      toolPattern: grant.toolPattern,
-      decision: grant.decision,
-      scope: "session",
-      scopeRef: input.childSessionId,
-      grantType: grant.grantType,
-      constraints: cloneToolGrantConstraints(grant.constraints),
-      createdBy: "system-delegated-session-inherit",
-      expiresAt: grant.expiresAt,
-      usesRemaining: grant.usesRemaining,
-    }));
+  return (
+    input.parentGrants
+      .filter((grant) => grant.scope === "session" && grant.scopeRef === input.parentSessionId)
+      .filter(isActiveToolGrant)
+      // One-time approvals should stay bound to the original session.
+      .filter((grant) => grant.grantType !== "one_time")
+      .filter(
+        (grant) =>
+          grant.decision !== "allow" ||
+          !activeDenies.some((deny) => toolPatternsOverlap(deny.toolPattern, grant.toolPattern)),
+      )
+      .filter((grant) => !childKeys.has(buildGrantSignature(grant)))
+      .map((grant) => ({
+        toolPattern: grant.toolPattern,
+        decision: grant.decision,
+        scope: "session",
+        scopeRef: input.childSessionId,
+        grantType: grant.grantType,
+        constraints: cloneToolGrantConstraints(grant.constraints),
+        createdBy: "system-delegated-session-inherit",
+        expiresAt: grant.expiresAt,
+        usesRemaining: grant.usesRemaining,
+      }))
+  );
 }
 
 function toolPatternsOverlap(denyPattern: string, allowPattern: string): boolean {
   if (denyPattern === allowPattern) {
     return true;
   }
-  if (denyPattern.includes("*")) {
+  const denyHasWildcard = denyPattern.includes("*");
+  const allowHasWildcard = allowPattern.includes("*");
+  if (denyHasWildcard && !allowHasWildcard) {
+    return matchesToolPattern(denyPattern, allowPattern);
+  }
+  if (allowHasWildcard && !denyHasWildcard) {
+    return matchesToolPattern(allowPattern, denyPattern);
+  }
+  if (denyHasWildcard) {
     return patternPrefix(allowPattern).startsWith(patternPrefix(denyPattern));
   }
-  if (allowPattern.includes("*")) {
+  if (allowHasWildcard) {
     return patternPrefix(denyPattern).startsWith(patternPrefix(allowPattern));
   }
   return false;
@@ -68,6 +74,21 @@ function patternPrefix(pattern: string): string {
   return wildcardIndex >= 0 ? pattern.slice(0, wildcardIndex) : pattern;
 }
 
+function matchesToolPattern(pattern: string, toolName: string): boolean {
+  const trimmed = pattern.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed === "*") {
+    return true;
+  }
+  if (!trimmed.includes("*")) {
+    return trimmed === toolName;
+  }
+  const escaped = trimmed.replace(/[|\\{}()[\]^$+?.]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`).test(toolName);
+}
+
 function cloneToolGrantConstraints(constraints?: ToolGrantConstraints): ToolGrantConstraints | undefined {
   if (!constraints) {
     return undefined;
@@ -76,16 +97,16 @@ function cloneToolGrantConstraints(constraints?: ToolGrantConstraints): ToolGran
     ...constraints,
     allowedHosts: constraints.allowedHosts ? [...constraints.allowedHosts] : undefined,
     allowedPaths: constraints.allowedPaths ? [...constraints.allowedPaths] : undefined,
-    referenceRoots: constraints.referenceRoots
-      ? constraints.referenceRoots.map((item) => ({ ...item }))
-      : undefined,
+    referenceRoots: constraints.referenceRoots ? constraints.referenceRoots.map((item) => ({ ...item })) : undefined,
   };
 }
 
-function buildGrantSignature(grant: Pick<
-  ToolGrantRecord,
-  "toolPattern" | "decision" | "grantType" | "constraints" | "expiresAt" | "usesRemaining"
->): string {
+function buildGrantSignature(
+  grant: Pick<
+    ToolGrantRecord,
+    "toolPattern" | "decision" | "grantType" | "constraints" | "expiresAt" | "usesRemaining"
+  >,
+): string {
   return JSON.stringify({
     toolPattern: grant.toolPattern,
     decision: grant.decision,

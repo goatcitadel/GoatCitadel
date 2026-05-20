@@ -879,13 +879,22 @@ export class ApprovalEffectsService {
       typeof approval.linkage?.turnId === "string" && approval.linkage.turnId.trim()
         ? approval.linkage.turnId.trim()
         : undefined;
-    const inlineTurnId = this.ctx.storage.chatInlineApprovals.get(approval.approvalId)?.turnId;
+    const inlineApproval = this.ctx.storage.chatInlineApprovals.get(approval.approvalId);
+    const inlineTurnId = inlineApproval?.turnId;
     const turnId = linkageTurnId ?? inlineTurnId;
     if (!turnId) {
       return undefined;
     }
+    const linkageSessionId =
+      typeof approval.linkage?.sessionId === "string" && approval.linkage.sessionId.trim()
+        ? approval.linkage.sessionId.trim()
+        : undefined;
+    const expectedSessionId = linkageSessionId ?? inlineApproval?.sessionId;
     try {
       const trace = this.ctx.storage.chatTurnTraces.get(turnId);
+      if (expectedSessionId && trace.sessionId !== expectedSessionId) {
+        return undefined;
+      }
       const runId = trace.durable?.runId?.trim();
       if (!runId) {
         return undefined;

@@ -133,4 +133,39 @@ describe("buildDelegatedSessionToolGrantCopies", () => {
       },
     ]);
   });
+
+  it("keeps unrelated exact allows when a leading-wildcard deny is inherited", () => {
+    const copies = buildDelegatedSessionToolGrantCopies({
+      parentSessionId: "parent-session",
+      childSessionId: "child-session",
+      parentGrants: [
+        createGrant({
+          grantId: "allow-browser-navigate",
+          toolPattern: "browser.navigate",
+          decision: "allow",
+        }),
+        createGrant({
+          grantId: "allow-webhook-send",
+          toolPattern: "webhook.send",
+          decision: "allow",
+        }),
+        createGrant({
+          grantId: "deny-send",
+          toolPattern: "*.send",
+          decision: "deny",
+        }),
+      ],
+    });
+
+    expect(copies).toEqual([
+      expect.objectContaining({
+        toolPattern: "browser.navigate",
+        decision: "allow",
+      }),
+      expect.objectContaining({
+        toolPattern: "*.send",
+        decision: "deny",
+      }),
+    ]);
+  });
 });
