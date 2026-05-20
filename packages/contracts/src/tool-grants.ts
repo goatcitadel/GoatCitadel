@@ -1,3 +1,4 @@
+import type { ContextSourceAttribution } from "./ingestion.js";
 import type { ToolExecutionTrustLevel } from "./internal-tooling.js";
 import type { ToolPolicyActorContext } from "./policy.js";
 import type { ToolRiskLevel } from "./tools.js";
@@ -66,6 +67,7 @@ export interface ToolAccessEvaluateRequest {
   runId?: string;
   args?: Record<string, unknown>;
   trustLevel?: ToolExecutionTrustLevel;
+  sourceAttribution?: ContextSourceAttribution[];
   permissionProfileId?: string;
   localOperatorOverrideId?: string;
   surface?: ToolPolicyActorContext["surface"];

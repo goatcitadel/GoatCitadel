@@ -921,6 +921,52 @@ export async function* createChatCompletionStream(
     throw lastError ?? new Error("chat completion stream failed");
   }
 
+  // Buffered: assembled content exposed to mutate hooks (synthetic chunks returned). Passthrough: veto-only.
+  let transformedChunks: Array<Record<string, unknown>>;
+  try {
+    transformedChunks = await applyStreamingTransformLlmOutput({
+      hooksService: host.hooksService,
+      workspaceId: chatHookWorkspaceId,
+      entityId: chatHookEntityId,
+      providerId: routing.effectiveProviderId ?? primaryProviderId,
+      model: routing.effectiveModel ?? primaryModel,
+      bufferedChunks,
+      shouldBufferForTransform,
+    });
+  } catch (error) {
+    const transformError = error instanceof Error ? error : new Error(String(error));
+    host.recordDevDiagnostic({
+      level: "error",
+      category: "chat",
+      event: shouldBufferForTransform ? "chat.completion_stream.failed" : "chat.completion_stream.failed_after_emit",
+      message: shouldBufferForTransform
+        ? "Chat completion stream transform failed before emitting output"
+        : "Chat completion stream transform failed after emitting output",
+      sessionId: memoryInput?.sessionId,
+      taskId: memoryInput?.taskId,
+      providerId: routing.effectiveProviderId ?? primaryProviderId,
+      modelId: routing.effectiveModel ?? primaryModel,
+      durationMs: Date.now() - completionStartedAt,
+      runtimeKind: "model.call",
+      runtimeStatus: "failed",
+      runtimeError: {
+        name: transformError.name,
+        message: transformError.message,
+        retryable: false,
+      },
+      context: {
+        fallbackUsed: routing.fallbackUsed,
+        emittedOutput: !shouldBufferForTransform,
+        trigger: "transform_llm_output",
+      },
+    });
+    throw transformError;
+  }
+
+  for (const chunk of transformedChunks) {
+    yield chunk;
+  }
+
   host.recordDevDiagnostic({
     level: "info",
     category: "chat",
@@ -937,19 +983,6 @@ export async function* createChatCompletionStream(
       fallbackUsed: routing.fallbackUsed,
     },
   });
-
-  // Buffered: assembled content exposed to mutate hooks (synthetic chunks returned). Passthrough: veto-only.
-  for (const chunk of await applyStreamingTransformLlmOutput({
-    hooksService: host.hooksService,
-    workspaceId: chatHookWorkspaceId,
-    entityId: chatHookEntityId,
-    providerId: routing.effectiveProviderId ?? primaryProviderId,
-    model: routing.effectiveModel ?? primaryModel,
-    bufferedChunks,
-    shouldBufferForTransform,
-  })) {
-    yield chunk;
-  }
 
   host.publishRealtime("system", "llm", {
     type: "chat_completion_stream",

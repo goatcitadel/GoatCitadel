@@ -659,6 +659,54 @@ describe("ThreadedWorkflowPanel", () => {
     expect(onRevertAll).toHaveBeenCalledTimes(1);
   });
 
+  it("requires confirmation before reverting the selected worktree file", async () => {
+    const onRevertFile = vi.fn();
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(
+        <ThreadedWorkflowPanel
+          panel={buildCodePanel({
+            onRevertFile,
+            selectedFile: {
+              path: "src/app.ts",
+              name: "app.ts",
+              language: "typescript",
+              content: "console.log('current');",
+              changed: true,
+            } as any,
+          })}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    const revertButton = renderer!.root
+      .findAllByType("button")
+      .find((button) => button.children.includes("Revert file"));
+    expect(revertButton?.props.disabled).toBe(false);
+    act(() => {
+      revertButton?.props.onClick();
+    });
+    expect(onRevertFile).not.toHaveBeenCalled();
+    const openConfirm = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
+    expect(openConfirm).toBeTruthy();
+    expect(openConfirm?.props.title).toBe("Revert this file?");
+    expect(openConfirm?.props.danger).toBe(true);
+    act(() => {
+      openConfirm?.props.onCancel();
+    });
+    expect(onRevertFile).not.toHaveBeenCalled();
+
+    act(() => {
+      revertButton?.props.onClick();
+    });
+    const reopenedConfirm = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
+    act(() => {
+      reopenedConfirm?.props.onConfirm();
+    });
+    expect(onRevertFile).toHaveBeenCalledWith("src/app.ts");
+  });
+
   it("binds existing projects and imports code sources from the unbound workbench state", async () => {
     const onBindExistingProject = vi.fn(async () => undefined);
     const onImportProjectSource = vi.fn(async () => undefined);
@@ -1299,6 +1347,10 @@ describe("ThreadedWorkflowPanel", () => {
         .findAllByType("button")
         .find((button) => button.children.includes("Revert file"))
         ?.props.onClick();
+    });
+    const revertConfirm = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
+    await act(async () => {
+      revertConfirm?.props.onConfirm();
     });
     expect(onRevertFile).toHaveBeenCalledWith("src/app.ts");
 

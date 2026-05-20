@@ -19,8 +19,25 @@ const SECRET_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
   { label: "keychain_ref", pattern: /\bkeychain:[^\s"']+\b/g },
 ];
 
-export function resolveToolTrustLevel(request: Pick<ToolInvokeRequest, "trustLevel">): ToolExecutionTrustLevel {
-  return request.trustLevel ?? "trusted_operator";
+const TRUST_RESTRICTIVENESS: Record<ToolExecutionTrustLevel, number> = {
+  trusted_operator: 0,
+  trusted_workspace: 1,
+  mixed_untrusted: 2,
+  untrusted_external: 3,
+};
+
+export function resolveToolTrustLevel(request: {
+  trustLevel?: ToolExecutionTrustLevel;
+  sourceAttribution?: ReadonlyArray<{ trustLevel?: ToolExecutionTrustLevel }>;
+}): ToolExecutionTrustLevel {
+  let effectiveTrust = normalizeToolTrustLevel(request.trustLevel) ?? "trusted_operator";
+  for (const source of request.sourceAttribution ?? []) {
+    const sourceTrust = normalizeToolTrustLevel(source.trustLevel);
+    if (sourceTrust && TRUST_RESTRICTIVENESS[sourceTrust] > TRUST_RESTRICTIVENESS[effectiveTrust]) {
+      effectiveTrust = sourceTrust;
+    }
+  }
+  return effectiveTrust;
 }
 
 export function deriveToolCapabilityPolicy(
@@ -201,6 +218,7 @@ export function buildInternalToolCall(
       sourceRef: item.sourceRef,
       title: item.title,
       backend: item.backend,
+      ...(item.trustLevel ? { trustLevel: item.trustLevel } : {}),
     })),
     createdAt,
   };
@@ -271,6 +289,15 @@ function sanitizeString(value: string): string {
     scrubbed = scrubbed.replace(pattern, "[REDACTED]");
   }
   return scrubbed;
+}
+
+function normalizeToolTrustLevel(value: unknown): ToolExecutionTrustLevel | undefined {
+  return value === "trusted_operator" ||
+    value === "trusted_workspace" ||
+    value === "mixed_untrusted" ||
+    value === "untrusted_external"
+    ? value
+    : undefined;
 }
 
 function stringifyUnknown(value: unknown): string {

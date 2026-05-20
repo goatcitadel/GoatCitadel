@@ -925,14 +925,19 @@ export async function executeDurableOrchestrationRun(
         checkpointState: buildCheckpointDetails(plan, cancelled, durableRun.runId),
       };
     }
+    const unsupportedWaitError =
+      execution.status === "waiting" && !execution.approvalId
+        ? "Phase child turn entered a wait state without an approval id; durable orchestration only supports approval-correlated child waits."
+        : undefined;
+    const executionStatus = unsupportedWaitError ? "failed" : execution.status;
     const executionPayload = {
       phaseId: execution.phaseId,
       ownerAgentId: execution.ownerAgentId,
-      status: execution.status,
+      status: executionStatus,
       startedAt: execution.startedAt,
       finishedAt: execution.finishedAt,
-      outputSummary: execution.outputSummary,
-      outputText: execution.outputText,
+      outputSummary: execution.outputSummary ?? unsupportedWaitError,
+      outputText: execution.outputText ?? unsupportedWaitError,
       childSessionId: execution.childSessionId,
       childTurnId: execution.childTurnId,
       childRunId: execution.childRunId,
@@ -944,20 +949,20 @@ export async function executeDurableOrchestrationRun(
       outputTokens: execution.outputTokens,
       citations: execution.citations,
       artifacts: execution.artifacts,
-      error: execution.error,
+      error: unsupportedWaitError ?? execution.error,
     };
     persistRunEvent(
       host,
       run,
-      execution.status === "failed"
+      executionStatus === "failed"
         ? "phase.failed"
-        : execution.status === "waiting"
+        : executionStatus === "waiting"
           ? "phase.waiting"
           : "phase.executed",
       executionPayload,
     );
 
-    if (execution.status === "waiting") {
+    if (executionStatus === "waiting") {
       const waitForEvent = execution.approvalId
         ? {
             eventKey: "approval.resolved",
@@ -1024,14 +1029,15 @@ export async function executeDurableOrchestrationRun(
       continue;
     }
 
-    if (execution.status === "failed") {
+    if (executionStatus === "failed") {
+      const phaseError = unsupportedWaitError ?? execution.error ?? `Phase ${previousPhaseId} failed.`;
       recordUpdate(
         {
           ...run,
           status: "failed",
           executionState: "failed",
           endedAt: execution.finishedAt,
-          lastError: execution.error ?? `Phase ${previousPhaseId} failed.`,
+          lastError: phaseError,
         },
         "run_failed",
         {
@@ -1040,11 +1046,11 @@ export async function executeDurableOrchestrationRun(
       );
       host.recordDurableTimelineEvent(durableRun.runId, "run_failed", {
         phaseId: previousPhaseId,
-        error: execution.error ?? `Phase ${previousPhaseId} failed.`,
+        error: phaseError,
       });
       publishRunRealtime(host, plan, run, {
         event: "run_failed",
-        error: execution.error ?? `Phase ${previousPhaseId} failed.`,
+        error: phaseError,
       });
       await releaseOrchestrationWorktreeIfAvailable(runtime, host, run, "failed");
       return {

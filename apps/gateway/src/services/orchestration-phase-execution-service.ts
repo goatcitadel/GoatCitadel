@@ -118,19 +118,27 @@ export class OrchestrationPhaseExecutionService {
       const outputTokens = response.assistantMessage?.tokenOutput;
       const traceStatus = response.trace?.status;
       const failure = response.trace?.failure?.message ?? response.trace?.failure?.failureClass;
-      const waiting = traceStatus === "waiting_for_approval" || traceStatus === "waiting_for_user_input";
       const approvalId =
         response.trace?.pendingApprovalSummary?.approvalId ??
         response.trace?.toolRuns?.find((toolRun) => toolRun.status === "approval_required" && toolRun.approvalId)
           ?.approvalId;
+      const waitingForApproval = traceStatus === "waiting_for_approval";
+      const waitingForUserInput = traceStatus === "waiting_for_user_input";
+      const unsupportedUserInputWait =
+        "Phase child turn is waiting for user input, but durable orchestration can only pause and resume child approval waits.";
+      const effectiveFailure = waitingForUserInput ? unsupportedUserInputWait : failure;
       return {
         phaseId: input.phase.phaseId,
         ownerAgentId: input.phase.ownerAgentId,
-        status: waiting ? "waiting" : traceStatus === "failed" || !assistantText ? "failed" : "completed",
+        status: waitingForApproval
+          ? "waiting"
+          : traceStatus === "failed" || waitingForUserInput || !assistantText
+            ? "failed"
+            : "completed",
         startedAt,
         finishedAt,
-        outputSummary: summarizePhaseOutput(assistantText || failure),
-        outputText: assistantText || failure,
+        outputSummary: summarizePhaseOutput(assistantText || effectiveFailure),
+        outputText: assistantText || effectiveFailure,
         childSessionId: response.sessionId,
         childTurnId: response.turnId,
         childRunId: response.trace?.durable?.runId,
@@ -140,7 +148,12 @@ export class OrchestrationPhaseExecutionService {
         inputTokens,
         outputTokens,
         citations: response.citations,
-        error: traceStatus === "failed" ? (failure ?? "Phase chat turn failed.") : undefined,
+        error:
+          traceStatus === "failed"
+            ? (failure ?? "Phase chat turn failed.")
+            : waitingForUserInput
+              ? unsupportedUserInputWait
+              : undefined,
       };
     } catch (error) {
       if (isPhaseAbortError(error, input.signal)) {

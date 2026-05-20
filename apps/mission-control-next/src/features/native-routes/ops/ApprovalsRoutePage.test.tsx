@@ -348,6 +348,7 @@ describe("ApprovalsRoutePage", () => {
     let modal = renderer!.root.findByType(ConfirmModal);
     expect(modal.props.open).toBe(true);
     expect(modal.props.title).toBe("Approve this request?");
+    expect(modal.props.danger).toBe(false);
     await act(async () => {
       await modal.props.onConfirm();
     });
@@ -357,6 +358,7 @@ describe("ApprovalsRoutePage", () => {
     });
     modal = renderer!.root.findByType(ConfirmModal);
     expect(modal.props.title).toBe("Reject this request?");
+    expect(modal.props.danger).toBe(true);
     await act(async () => {
       await modal.props.onConfirm();
     });
@@ -367,6 +369,7 @@ describe("ApprovalsRoutePage", () => {
     });
     modal = renderer!.root.findByType(ConfirmModal);
     expect(modal.props.title).toBe("Resume paused run?");
+    expect(modal.props.danger).toBe(false);
     await act(async () => {
       await modal.props.onConfirm();
     });
@@ -398,6 +401,7 @@ describe("ApprovalsRoutePage", () => {
     });
     modal = renderer!.root.findByType(ConfirmModal);
     expect(modal.props.open).toBe(true);
+    expect(modal.props.danger).toBe(true);
     await act(async () => {
       modal.props.onCancel();
     });

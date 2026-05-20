@@ -57,6 +57,9 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
         : pendingConfirmation?.kind === "resume"
           ? Boolean(approvals.durableBusyByApprovalId[pendingConfirmation.approvalId])
           : false;
+  const confirmationDanger =
+    pendingConfirmation?.kind === "bulk-reject" ||
+    (pendingConfirmation?.kind === "decision" && pendingConfirmation.decision === "reject");
   const confirmPendingAction = () => {
     const confirmation = pendingConfirmation;
     if (!confirmation) {
@@ -291,6 +294,7 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
             : (confirmationCopy?.confirmLabel ?? "Confirm")
         }
         pending={confirmationPending}
+        danger={confirmationDanger}
         onCancel={() => setPendingConfirmation(null)}
         onConfirm={confirmPendingAction}
       />

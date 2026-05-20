@@ -44,6 +44,7 @@ import {
   buildToolAuditRecord,
   deriveToolCapabilityPolicy,
   isUntrustedToolEscalation,
+  resolveToolTrustLevel,
   sanitizeForModel,
 } from "./tool-security.js";
 
@@ -673,7 +674,7 @@ export class ToolPolicyEngine {
       return withPolicy(deny(riskLevel, "structural_safety_block", structuralError));
     }
 
-    if (isUntrustedToolEscalation(request.trustLevel ?? "trusted_operator", capabilityPolicy)) {
+    if (isUntrustedToolEscalation(resolveToolTrustLevel(request), capabilityPolicy)) {
       return withPolicy(
         deny(
           riskLevel,

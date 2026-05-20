@@ -8,7 +8,13 @@ import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { stripHtmlNoiseTags, stripHtmlTags } from "./html-noise.js";
 import { assertExistingPathRealpathAllowed, assertWritePathInJail } from "./sandbox/path-jail.js";
 import { matchesToolPattern } from "./tool-patterns.js";
-import { buildInternalToolCall, collectLeakDetections, deriveToolCapabilityPolicy } from "./tool-security.js";
+import {
+  buildInternalToolCall,
+  buildToolAuditRecord,
+  collectLeakDetections,
+  deriveToolCapabilityPolicy,
+  resolveToolTrustLevel,
+} from "./tool-security.js";
 
 const tempDirs: string[] = [];
 
@@ -51,6 +57,26 @@ describe("approval bypass support", () => {
           alpha: "first",
         },
       },
+    });
+
+    expect(hasVerifiedApprovalBypass(request, storage)).toBe(true);
+  });
+
+  it("matches pending approvals by effective trust across source attribution and top-level trust", () => {
+    const sourceAttribution = [
+      {
+        sourceType: "url",
+        sourceRef: "https://example.com/prompt",
+        trustLevel: "untrusted_external",
+      },
+    ] satisfies ToolInvokeRequest["sourceAttribution"];
+    const storedRequest = createToolInvokeRequest({ sourceAttribution });
+    const request = createToolInvokeRequest({
+      trustLevel: "untrusted_external",
+      sourceAttribution,
+    });
+    const storage = createStorageWithPendingApproval({
+      request: storedRequest as unknown as Record<string, unknown>,
     });
 
     expect(hasVerifiedApprovalBypass(request, storage)).toBe(true);
@@ -239,6 +265,44 @@ describe("tool security support", () => {
       boundary: "provider_boundary",
       secretRefs: ["secret-1"],
     });
+  });
+
+  it("resolves effective trust from source attribution for internal calls and audit records", () => {
+    const request = createToolInvokeRequest({
+      trustLevel: "trusted_operator",
+      sourceAttribution: [
+        {
+          sourceType: "url",
+          sourceRef: "https://example.com/prompt",
+          title: "External prompt",
+          backend: "native",
+          trustLevel: "untrusted_external",
+        },
+      ],
+    });
+    const capabilityPolicy = deriveToolCapabilityPolicy(request.toolName);
+    const call = buildInternalToolCall(request, capabilityPolicy, "2026-03-22T12:00:00.000Z");
+    const audit = buildToolAuditRecord({
+      auditEventId: "audit-1",
+      request,
+      outcome: "blocked",
+      policyReason: "blocked",
+      startedAt: "2026-03-22T12:00:00.000Z",
+      completedAt: "2026-03-22T12:00:01.000Z",
+    });
+
+    expect(resolveToolTrustLevel(request)).toBe("untrusted_external");
+    expect(call.trustLevel).toBe("untrusted_external");
+    expect(call.sourceAttribution).toEqual([
+      {
+        sourceType: "url",
+        sourceRef: "https://example.com/prompt",
+        title: "External prompt",
+        backend: "native",
+        trustLevel: "untrusted_external",
+      },
+    ]);
+    expect(audit.trustLevel).toBe("untrusted_external");
   });
 
   it("collects leak detections from strings and handles non-serializable inputs", () => {

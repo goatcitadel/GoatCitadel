@@ -257,6 +257,56 @@ describe("OrchestrationPhaseExecutionService", () => {
     });
   });
 
+  it("maps child user-input waits to failed phase results until parent wake support exists", async () => {
+    const worktreePath = await makeTempDir();
+    const service = new OrchestrationPhaseExecutionService({
+      rootDir: worktreePath,
+      createChatSession: vi.fn(
+        () =>
+          ({
+            sessionId: "child-session-1",
+          }) as ChatSessionRecord,
+      ),
+      updateChatSessionPrefs: vi.fn(),
+      agentSendChatMessage: vi.fn(
+        async () =>
+          ({
+            sessionId: "child-session-1",
+            userMessage: {} as never,
+            assistantMessage: {
+              content: "Need operator input.",
+            } as never,
+            transport: "llm",
+            model: "gpt-test",
+            turnId: "turn-user-input",
+            trace: {
+              status: "waiting_for_user_input",
+              waitStatus: "waiting_for_user_input",
+              durable: { runId: "child-run-user-input" },
+            } as never,
+          }) as ChatSendMessageResponse,
+      ),
+      normalizeWorkspaceId: (workspaceId) => workspaceId,
+    });
+
+    const result = await service.execute({
+      plan: buildPlan(),
+      run: buildRun(worktreePath),
+      phase: buildPhase(),
+      durableRun: buildDurableRun(),
+    });
+
+    expect(result).toMatchObject({
+      phaseId: "phase-1",
+      status: "failed",
+      childSessionId: "child-session-1",
+      childTurnId: "turn-user-input",
+      childRunId: "child-run-user-input",
+      error:
+        "Phase child turn is waiting for user input, but durable orchestration can only pause and resume child approval waits.",
+    });
+  });
+
   it("does not treat provider messages containing cancelled as operator phase aborts", async () => {
     const worktreePath = await makeTempDir();
     const service = new OrchestrationPhaseExecutionService({

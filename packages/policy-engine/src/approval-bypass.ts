@@ -1,5 +1,6 @@
 import type { ToolAccessEvaluateRequest, ToolInvokeRequest } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
+import { resolveToolTrustLevel } from "./tool-security.js";
 
 const DEFAULT_APPROVAL_TTL_MS = 15 * 60_000;
 const APPROVAL_REASON_RE = /^approval:([A-Za-z0-9_-]+)$/;
@@ -58,7 +59,7 @@ function requestMatchesPendingApproval(
     (storedRequest.workspaceId ?? undefined) === (request.workspaceId ?? undefined) &&
     (storedRequest.taskId ?? undefined) === (request.taskId ?? undefined) &&
     (storedRequest.runId ?? undefined) === (request.runId ?? undefined) &&
-    (storedRequest.trustLevel ?? undefined) === (request.trustLevel ?? undefined) &&
+    resolveToolTrustLevel(storedRequest) === resolveToolTrustLevel(request) &&
     governanceField(storedRequest, "permissionProfileId") === governanceField(request, "permissionProfileId") &&
     governanceField(storedRequest, "localOperatorOverrideId") === governanceField(request, "localOperatorOverrideId") &&
     governanceField(storedRequest, "surface") === governanceField(request, "surface") &&

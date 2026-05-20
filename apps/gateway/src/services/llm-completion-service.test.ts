@@ -391,6 +391,47 @@ describe("createChatCompletionStream", () => {
     expect(deltas.join("")).toBe("raw stream");
   });
 
+  it("records passthrough transform vetoes as failed after emitted stream output", async () => {
+    const host = createHost(async function* () {
+      yield { choices: [{ delta: { content: "raw " } }] };
+      yield { choices: [{ delta: { content: "stream" } }] };
+    });
+    host.hooksService.hasMutateHook = vi.fn(() => false) as never;
+    host.hooksService.runInlineHooks = vi.fn(async (options: { trigger: string }) =>
+      options.trigger === "transform_llm_output"
+        ? { runs: [], blockedBy: { type: "block", reason: "policy: passthrough-veto" } }
+        : { runs: [] },
+    ) as never;
+
+    const result = await collectStream(createChatCompletionStream(host, createRequest()));
+
+    expect(result.error?.message).toMatch(/passthrough-veto/);
+    const deltas = result.chunks
+      .map((chunk) => {
+        const choices = (chunk as { choices?: Array<{ delta?: { content?: unknown } }> }).choices;
+        const delta = choices?.[0]?.delta?.content;
+        return typeof delta === "string" ? delta : undefined;
+      })
+      .filter((value): value is string => Boolean(value));
+    expect(deltas.join("")).toBe("raw stream");
+    expect(host.recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "chat.completion_stream.failed_after_emit",
+        runtimeStatus: "failed",
+        context: expect.objectContaining({
+          emittedOutput: true,
+          trigger: "transform_llm_output",
+        }),
+      }),
+    );
+    expect(host.recordDevDiagnostic).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "chat.completion_stream.complete",
+      }),
+    );
+    expect(host.publishRealtime).not.toHaveBeenCalled();
+  });
+
   it("buffered mode still allows intercept veto", async () => {
     const host = createHost(async function* () {
       yield { choices: [{ delta: { content: "x" } }] };

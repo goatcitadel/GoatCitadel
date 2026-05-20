@@ -74,6 +74,7 @@ export interface InternalToolCallV1 {
     sourceRef: string;
     title?: string;
     backend?: string;
+    trustLevel?: ToolExecutionTrustLevel;
   }>;
   createdAt: string;
 }

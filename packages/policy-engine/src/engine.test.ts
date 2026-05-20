@@ -3166,6 +3166,43 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
     expect(evaluation.reasonCodes).toContain("untrusted_source_privileged_tool_block");
   });
 
+  it("blocks privileged execution when source attribution is untrusted even without a top-level trust level", () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+
+    const shellEvaluation = engine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "echo hello" },
+      agentId: "agent",
+      sessionId: "session-1",
+      sourceAttribution: [
+        {
+          sourceType: "url",
+          sourceRef: "https://example.com/prompt",
+          trustLevel: "untrusted_external",
+        },
+      ],
+    });
+    const writeEvaluation = engine.evaluateAccess({
+      toolName: "fs.write",
+      args: { path: "./workspace/out.txt", content: "hello" },
+      agentId: "agent",
+      sessionId: "session-1",
+      sourceAttribution: [
+        {
+          sourceType: "text",
+          sourceRef: "mixed-context",
+          trustLevel: "mixed_untrusted",
+        },
+      ],
+    });
+
+    expect(shellEvaluation.allowed).toBe(false);
+    expect(shellEvaluation.reasonCodes).toContain("untrusted_source_privileged_tool_block");
+    expect(writeEvaluation.allowed).toBe(false);
+    expect(writeEvaluation.reasonCodes).toContain("untrusted_source_privileged_tool_block");
+  });
+
   it("blocks writes into read-only reference roots even when granted", () => {
     const storage = createStorageStub();
     vi.mocked(storage.toolGrants.list).mockReturnValue([

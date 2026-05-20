@@ -132,6 +132,10 @@ async function main() {
     return;
   }
   if (command === "up") {
+    if (isPackagedInstall()) {
+      await launchGoatCitadel(rest);
+      return;
+    }
     ensureWorkspaceRuntimeBuilds();
     runPnpm(["--dir", appDir, "dev", ...rest], { env: runtimeProcessEnv });
     return;

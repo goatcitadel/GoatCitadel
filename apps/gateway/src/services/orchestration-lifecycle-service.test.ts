@@ -763,6 +763,66 @@ describe("orchestration-lifecycle-service", () => {
     );
   });
 
+  it("fails child wait results that cannot be resumed by approval correlation", async () => {
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...createHost().storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            durableRunId: "durable-run-1",
+            executionState: "queued",
+            worktreeStatus: "ready",
+            worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+    const runtime = createRuntimeDeps({
+      phaseExecutor: {
+        execute: vi.fn(async () => ({
+          phaseId: "phase-1",
+          ownerAgentId: "agent-1",
+          status: "waiting" as const,
+          startedAt: "2026-04-12T00:00:01.000Z",
+          finishedAt: "2026-04-12T00:00:02.000Z",
+          outputSummary: "Waiting for user input.",
+          childSessionId: "sess_phase",
+          childTurnId: "turn_phase",
+          childRunId: "durable-child-1",
+        })),
+      },
+    });
+
+    const result = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+
+    expect(result.outcome).toBe("failed");
+    expect(host.orchestrationEngine.advancePhase).not.toHaveBeenCalled();
+    expect(host.updateDurableRunState).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "durable-run-1",
+        status: "waiting",
+      }),
+    );
+    expect(host.storage.orchestration.updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        executionState: "failed",
+        lastError:
+          "Phase child turn entered a wait state without an approval id; durable orchestration only supports approval-correlated child waits.",
+      }),
+    );
+    expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "phase.failed",
+      expect.objectContaining({
+        childRunId: "durable-child-1",
+        error:
+          "Phase child turn entered a wait state without an approval id; durable orchestration only supports approval-correlated child waits.",
+      }),
+    );
+  });
+
   it("harvests the completed child phase instead of re-running it after approval wake", async () => {
     const autoPlan: OrchestrationPlan = {
       ...buildPlan(),

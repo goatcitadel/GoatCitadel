@@ -813,6 +813,7 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
   const [activeBlockIndex, setActiveBlockIndex] = useState(0);
   const [validationCommand, setValidationCommand] = useState("pnpm test");
   const [pendingFilePath, setPendingFilePath] = useState<string | null>(null);
+  const [confirmRevertFilePath, setConfirmRevertFilePath] = useState<string | null>(null);
   const [confirmRevertAllOpen, setConfirmRevertAllOpen] = useState(false);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [runList, setRunList] = useState<CodeModeRunRecord[]>([]);
@@ -1146,7 +1147,11 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
         <button
           type="button"
           className="mc-next-panel-button"
-          onClick={() => onRevertFile?.(selectedFile?.path)}
+          onClick={() => {
+            if (selectedFile?.path) {
+              setConfirmRevertFilePath(selectedFile.path);
+            }
+          }}
           disabled={busy || Boolean(selectedRevertBlockedReason) || !onRevertFile}
           title={selectedRevertBlockedReason ?? (!onRevertFile ? "File revert backend is unavailable." : undefined)}
         >
@@ -1607,6 +1612,25 @@ function NextCodeWorkbenchPanel({ panel }: { panel: Extract<MissionThreadedWorkf
           onRevertAll?.();
           setActivePane("output");
           setConfirmRevertAllOpen(false);
+        }}
+      />
+      <ConfirmModal
+        open={Boolean(confirmRevertFilePath)}
+        title="Revert this file?"
+        message="This will discard the selected file changes in this session. Review the file diff before confirming."
+        confirmLabel="Revert file"
+        danger
+        pending={busy}
+        cancelDisabled={busy}
+        disableDismiss={busy}
+        onCancel={() => setConfirmRevertFilePath(null)}
+        onConfirm={() => {
+          if (!confirmRevertFilePath) {
+            return;
+          }
+          onRevertFile?.(confirmRevertFilePath);
+          setActivePane("output");
+          setConfirmRevertFilePath(null);
         }}
       />
     </section>
