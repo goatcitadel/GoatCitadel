@@ -305,6 +305,7 @@ function ApprovalInspectorCard(props: {
   } = props;
   const expired = isExpiredApproval(approval);
   const effectiveStatus = expired ? "expired" : approval.status;
+  const decisionCopy = buildApprovalDecisionCopy(approval, effectiveStatus);
   const evidence = buildApprovalEvidenceModel(approval.preview, replay?.pendingAction?.request);
   const traceMetadata =
     approval.linkage?.correlationId || approval.linkage?.traceId
@@ -366,10 +367,8 @@ function ApprovalInspectorCard(props: {
 
       <div className="mc-next-approvals-decision-shell">
         <div className="mc-next-approvals-copy">
-          <p className="mc-next-approvals-kicker">Human decision required</p>
-          <h3>
-            {approval.explanation?.summary ?? `Review the ${approval.kind} request before GoatCitadel continues.`}
-          </h3>
+          <p className="mc-next-approvals-kicker">{decisionCopy.kicker}</p>
+          <h3>{decisionCopy.title}</h3>
           {approval.explanation?.riskExplanation ? <p>{approval.explanation.riskExplanation}</p> : null}
         </div>
         <div className="mc-next-approvals-actions">
@@ -472,7 +471,7 @@ function ApprovalInspectorCard(props: {
             <button
               type="button"
               className="gc-button subtle"
-              disabled={durableBusy || (durable != null && durable.status !== "paused")}
+              disabled={durableBusy || durable?.status !== "paused"}
               onClick={onResumeCheckpoint}
             >
               <Play className="h-4 w-4" />
@@ -627,6 +626,38 @@ function ApprovalInspectorCard(props: {
       </details>
     </div>
   );
+}
+
+function buildApprovalDecisionCopy(
+  approval: ApprovalRequest,
+  effectiveStatus: string,
+): { kicker: string; title: string } {
+  if (effectiveStatus === "pending") {
+    return {
+      kicker: "Human decision required",
+      title: approval.explanation?.summary ?? `Review the ${approval.kind} request before GoatCitadel continues.`,
+    };
+  }
+  if (effectiveStatus === "expired") {
+    return {
+      kicker: "Approval expired",
+      title: approval.explanation?.summary ?? `The ${approval.kind} request expired before a decision was recorded.`,
+    };
+  }
+  if (effectiveStatus === "approved" || effectiveStatus === "rejected") {
+    return {
+      kicker: "Decision recorded",
+      title: approval.explanation?.summary ?? `${capitalizeApprovalStatus(effectiveStatus)} ${approval.kind} request.`,
+    };
+  }
+  return {
+    kicker: "Approval state recorded",
+    title: approval.explanation?.summary ?? `The ${approval.kind} request is ${effectiveStatus}.`,
+  };
+}
+
+function capitalizeApprovalStatus(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function buildLiveLaneRoute(approval: ApprovalRequest): AppRoute | null {

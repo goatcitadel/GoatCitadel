@@ -482,6 +482,21 @@ describe("ApprovalsRoutePage", () => {
     expect(text).toContain("Loading...");
   });
 
+  it("requires durable status inspection before resuming a paused approval run", async () => {
+    approvalHarness.overrides = {
+      durableByApprovalId: {},
+      durableBusyByApprovalId: {},
+    };
+
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(renderPage());
+    });
+
+    const resumeButton = findButton(renderer!.root, "Resume paused run");
+    expect(resumeButton.props.disabled).toBe(true);
+  });
+
   it("renders alternate approval states, metadata fallbacks, and optional inspector sections", async () => {
     const navigate = vi.fn();
     const base = approvalHarness.approval as any;
@@ -556,6 +571,8 @@ describe("ApprovalsRoutePage", () => {
     expect(text).toContain("rejected");
     expect(text).toContain("safe");
     expect(text).toContain("caution");
+    expect(text).toContain("Decision recorded");
+    expect(text).not.toContain("Human decision required");
     expect(text).toContain("Approval summary unavailable");
     expect(text).toContain("optional plain-English summary");
     expect(text).toContain("Worker wake running");
@@ -649,6 +666,7 @@ describe("ApprovalsRoutePage", () => {
     };
     text = renderText();
     expect(text).toContain("expired");
+    expect(text).toContain("Approval expired");
     expect(text).not.toContain("No follow-up");
   });
 });

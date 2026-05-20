@@ -493,6 +493,8 @@ goatcitadel admin backup verify --file <backup-file>
 goatcitadel admin backup restore --file <backup-file> --confirm
 ```
 
+Restore is an offline-only operation: stop any GoatCitadel gateway process serving the same runtime root before running the restore command, then restart the gateway after the command completes.
+
 ## Browser Automation Prerequisite
 
 Installer-based installs provision Playwright Chromium automatically.

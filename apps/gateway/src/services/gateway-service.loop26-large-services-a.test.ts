@@ -413,6 +413,59 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
     );
   });
 
+  it("normalizes docs ingest file sources through access evaluation before policy checks", () => {
+    const evaluateAccess = vi.fn((input: Record<string, unknown>) => ({ allowed: true, input }));
+    const gateway = createGatewayHarness({
+      config: {
+        rootDir: "F:/code/personal-ai",
+        assistant: {
+          workspaceDir: "workspace",
+          deploymentProfile: "local",
+          web: {
+            firecrawl: {
+              enabled: false,
+              baseUrl: "http://127.0.0.1:3002",
+              apiKeyEnv: "FIRECRAWL_API_KEY",
+              timeoutMs: 15_000,
+              defaultReadBackend: "native",
+              fallbackToNative: true,
+            },
+          },
+        },
+      },
+      policyEngine: { evaluateAccess },
+      storage: {
+        chatSessionMeta: {
+          get: vi.fn(() => ({ workspaceId: "workspace-1" })),
+        },
+        chatSessionProjects: {
+          get: vi.fn(() => ({ projectId: "project-1" })),
+        },
+        chatProjects: {
+          get: vi.fn(() => ({ workspacePath: "projects/app" })),
+        },
+        permissionProfiles: {
+          resolveContext: vi.fn(() => ({ permissionProfile: { profileId: "safe" } })),
+        },
+      },
+    });
+
+    GatewayService.prototype.evaluateToolAccess.call(gateway, {
+      sessionId: "session-1",
+      agentId: "agent",
+      toolName: "docs.ingest",
+      args: { sourceType: "file", source: "docs/source.md", namespace: "research" },
+    } as never);
+
+    expect(evaluateAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.objectContaining({
+          source: path.resolve("F:/code/personal-ai", "workspace", "projects/app", "docs/source.md"),
+        }),
+      }),
+    );
+  });
+
   it("applies runtime browser defaults before tool access evaluation", () => {
     const evaluateAccess = vi.fn((input: Record<string, unknown>) => ({ allowed: true, input }));
     const gateway = createGatewayHarness({

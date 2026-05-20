@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { ValidationError, type ToolInvokeRequest } from "@goatcitadel/contracts";
+import { ValidationError, type ToolAccessEvaluateRequest, type ToolInvokeRequest } from "@goatcitadel/contracts";
 
 export interface ToolPathResolutionContext {
   workspaceRoot: string;
@@ -16,8 +16,10 @@ interface ToolPathSpec {
   key: string;
   kind: PathResolutionKind;
   injectDefault?: boolean;
-  when?: (request: ToolInvokeRequest) => boolean;
+  when?: (request: ToolPathRequest) => boolean;
 }
+
+type ToolPathRequest = ToolInvokeRequest | ToolAccessEvaluateRequest;
 
 const TOOL_PATH_SPECS: Record<string, ToolPathSpec[]> = {
   "fs.read": [{ key: "path", kind: "read" }],
@@ -42,29 +44,30 @@ const TOOL_PATH_SPECS: Record<string, ToolPathSpec[]> = {
   "tests.run": [{ key: "cwd", kind: "cwd", injectDefault: true }],
   "lint.run": [{ key: "cwd", kind: "cwd", injectDefault: true }],
   "build.run": [{ key: "cwd", kind: "cwd", injectDefault: true }],
-  "docs.ingest": [{ key: "source", kind: "read", when: (request) => request.args.sourceType === "file" }],
+  "docs.ingest": [{ key: "source", kind: "read", when: (request) => request.args?.sourceType === "file" }],
   "git.worktree.create": [{ key: "path", kind: "write" }],
   "git.worktree.remove": [{ key: "path", kind: "write" }],
 };
 
-export function resolveToolRequestPaths(
-  request: ToolInvokeRequest,
+export function resolveToolRequestPaths<TRequest extends ToolPathRequest>(
+  request: TRequest,
   context: ToolPathResolutionContext,
-): ToolInvokeRequest {
+): TRequest {
   const specs = TOOL_PATH_SPECS[request.toolName];
   if (!specs || specs.length === 0) {
     return request;
   }
 
+  const args = request.args ?? {};
   let nextArgs: Record<string, unknown> | undefined;
   for (const spec of specs) {
     if (spec.when && !spec.when(request)) {
       continue;
     }
-    const rawValue = request.args[spec.key];
+    const rawValue = args[spec.key];
     if (typeof rawValue !== "string") {
       if (rawValue === undefined && spec.injectDefault) {
-        nextArgs ??= { ...request.args };
+        nextArgs ??= { ...args };
         nextArgs[spec.key] = defaultToolCwd(context);
       }
       continue;
@@ -73,7 +76,7 @@ export function resolveToolRequestPaths(
     if (resolvedValue === rawValue) {
       continue;
     }
-    nextArgs ??= { ...request.args };
+    nextArgs ??= { ...args };
     nextArgs[spec.key] = resolvedValue;
   }
 

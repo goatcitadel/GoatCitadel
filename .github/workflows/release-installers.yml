@@ -11,7 +11,7 @@ on:
         required: true
         type: string
       allow_unsigned:
-        description: "Allow unsigned development artifacts. Must stay false for public releases."
+        description: "Allow unsigned smoke artifacts. Not public-trust proof; only manual, clearly labeled convenience assets."
         required: false
         default: "false"
         type: choice

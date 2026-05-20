@@ -407,7 +407,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
       <NativeGrid className="mc-next-native-board-grid">
         <NativeCard
           title="Agent board"
-          subtitle="Live operator posture without the old board shell."
+          subtitle="Live operator posture with current board controls."
           density="compact"
           scrollBody
           bodyMaxHeight="min(62vh, 34rem)"
@@ -465,7 +465,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
       <NativeGrid className="mc-next-cowork-task-grid">
         <QuickJumpCard
           title="Cowork routes"
-          subtitle="Keep orchestration surfaces connected without loading the old board pages."
+          subtitle="Keep orchestration surfaces connected from one Cowork route."
           actions={[
             { label: "Open board", route: { area: "cowork", section: "board", theme: route.theme } },
             { label: "Open approvals", route: { area: "ops", section: "approvals", theme: route.theme } },
@@ -725,7 +725,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
       description={
         section === "board"
           ? `Operator posture and task distribution for ${activeWorkspaceName}.`
-          : `Task flow for ${activeWorkspaceName} without the old Cowork page stack.`
+          : `Task flow for ${activeWorkspaceName} with board, detail, and recovery controls in one route.`
       }
       loading={state.loading}
       error={state.error}
@@ -1153,7 +1153,7 @@ function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps) {
       <div className="mc-next-settings-grid">
         <NativeCard
           title="Installed skills"
-          subtitle="Reusable behavior you can inspect and change without falling back to the old hub."
+          subtitle="Reusable behavior you can inspect and change from the native library."
           stats={[
             { label: "Installed", value: String(data?.skills.length ?? 0) },
             { label: "Callable", value: String(data?.skills.filter((item) => item.callable).length ?? 0) },
@@ -2874,7 +2874,7 @@ function descriptionForLibrarySection(section: NonNullable<AppRoute["section"]>,
     case "files":
       return `Workspace files available outside the active Code surface.`;
     case "artifacts":
-      return `Generated outputs that should be easy to reopen without old page chrome.`;
+      return `Generated outputs that should be easy to reopen from the native library.`;
     default:
       return `Reusable agent profiles and routing posture for ${workspaceName}.`;
   }

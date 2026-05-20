@@ -417,7 +417,10 @@ import {
   ChatTurnWriteConflictError,
 } from "./chat-turn-execution-registry.js";
 import { buildDelegatedSessionToolGrantCopies } from "./delegated-session-tool-grants.js";
-import { resolveProjectRootForToolContext, resolveToolRequestPaths } from "./tool-path-resolution.js";
+import {
+  resolveProjectRootForToolContext,
+  resolveToolRequestPaths as resolveToolRequestPathsForContext,
+} from "./tool-path-resolution.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import type {
   ApprovalReplayResult,
@@ -4811,15 +4814,33 @@ export class GatewayService {
   }
 
   private resolveToolInvokeRequestPaths(request: ToolInvokeRequest): ToolInvokeRequest {
-    const workspaceRoot = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir);
-    const projectId = this.storage.chatSessionProjects.get(request.sessionId)?.projectId;
-    const project = projectId ? this.storage.chatProjects.get(projectId) : undefined;
+    return this.resolveToolRequestPathsForSession(request);
+  }
+
+  private resolveToolRequestPathsForSession<TRequest extends ToolInvokeRequest | ToolAccessEvaluateRequest>(
+    request: TRequest,
+  ): TRequest {
+    const rootDir =
+      typeof this.config.rootDir === "string" && this.config.rootDir.trim() ? this.config.rootDir : process.cwd();
+    const workspaceDir =
+      typeof this.config.assistant.workspaceDir === "string" && this.config.assistant.workspaceDir.trim()
+        ? this.config.assistant.workspaceDir
+        : "workspace";
+    const workspaceRoot = path.resolve(rootDir, workspaceDir);
+    const chatSessionProjects = this.storage.chatSessionProjects as
+      | { get?: (sessionId: string) => { projectId?: string } | undefined }
+      | undefined;
+    const chatProjects = this.storage.chatProjects as
+      | { get?: (projectId: string) => { workspacePath?: string } | undefined }
+      | undefined;
+    const projectId = chatSessionProjects?.get?.(request.sessionId)?.projectId;
+    const project = projectId ? chatProjects?.get?.(projectId) : undefined;
     const projectRoot = resolveProjectRootForToolContext({
       workspaceRoot,
-      repoRoot: this.config.rootDir,
+      repoRoot: rootDir,
       projectWorkspacePath: project?.workspacePath,
     });
-    return resolveToolRequestPaths(request, {
+    return resolveToolRequestPathsForContext(request, {
       workspaceRoot,
       projectRoot,
       projectWorkspacePath: project?.workspacePath,
@@ -4879,11 +4900,15 @@ export class GatewayService {
   public evaluateToolAccess(input: ToolAccessEvaluateRequest): ToolAccessEvaluateResponse {
     return this.policyEngine.evaluateAccess(
       this.enrichToolPolicyContext(
-        this.applyRuntimeBrowserBackendDefaults({
-          ...input,
-          workspaceId:
-            input.workspaceId ?? this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ?? DEFAULT_WORKSPACE_ID,
-        }),
+        this.applyRuntimeBrowserBackendDefaults(
+          this.resolveToolRequestPathsForSession({
+            ...input,
+            workspaceId:
+              input.workspaceId ??
+              this.storage.chatSessionMeta.get(input.sessionId)?.workspaceId ??
+              DEFAULT_WORKSPACE_ID,
+          }),
+        ),
       ),
     );
   }

@@ -438,6 +438,44 @@ describe("DurableRunService", () => {
     );
   });
 
+  it.each(["completed", "running", "queued", "waiting", "paused", "cancelled", "dead_lettered"] as const)(
+    "refuses to retry %s durable runs without changing lifecycle truth",
+    (status) => {
+      const run = {
+        ...createRun("run-retry-blocked", status, "connector.delivery"),
+        ...(status === "completed" || status === "cancelled" || status === "dead_lettered"
+          ? { finishedAt: "2026-03-14T00:00:05.000Z" }
+          : {}),
+      };
+      const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+      const retries = new Map<string, DurableRetryRecord[]>();
+      const timeline: Array<{ runId: string; eventType: string }> = [];
+      const publishRealtime = vi.fn();
+      const isWorkflowRecoverable = vi.fn(() => ({ recoverable: true }));
+      const service = new DurableRunService(
+        createContext(runs, [], timeline, { retries, publishRealtime }) as unknown as ServiceContext,
+        {
+          backgroundTasks: new Set<Promise<void>>(),
+          workflowRegistry: {
+            executeWorkflow: vi.fn(),
+            isWorkflowRecoverable,
+            markWorkflowUnrecoverable: vi.fn(),
+          },
+        },
+      );
+
+      expect(() => service.retryDurableRun(run.runId, "manual_retry", "operator-1")).toThrow(
+        `Durable run ${run.runId} cannot be retried from ${status}`,
+      );
+      expect(isWorkflowRecoverable).not.toHaveBeenCalled();
+      expect(runs.get(run.runId)?.status).toBe(status);
+      expect(runs.get(run.runId)?.attemptCount).toBe(run.attemptCount);
+      expect(retries.get(run.runId)).toBeUndefined();
+      expect(timeline).toEqual([]);
+      expect(publishRealtime).not.toHaveBeenCalled();
+    },
+  );
+
   it("blocks pause continuation gates before workflow execution", async () => {
     const run = createRun("run-gated", "queued", "connector.delivery");
     const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
@@ -547,6 +585,24 @@ describe("DurableRunService", () => {
     const secondCancel = service.cancelDurableRun(run.runId, "operator-2");
 
     expect(secondCancel).toBe(run);
+    expect(runs.get(run.runId)?.version).toBe(run.version);
+    expect(timeline).toEqual([]);
+    expect(publishRealtime).not.toHaveBeenCalled();
+  });
+
+  it("treats repeated operator pause of an already-paused durable run as idempotent", () => {
+    const run = createRun("run-already-paused", "paused");
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const publishRealtime = vi.fn();
+    const service = new DurableRunService(
+      createContext(runs, checkpoints, timeline, { publishRealtime }) as unknown as ServiceContext,
+    );
+
+    const secondPause = service.pauseDurableRun(run.runId, "operator-2");
+
+    expect(secondPause).toBe(run);
     expect(runs.get(run.runId)?.version).toBe(run.version);
     expect(timeline).toEqual([]);
     expect(publishRealtime).not.toHaveBeenCalled();

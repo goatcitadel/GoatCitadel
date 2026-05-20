@@ -95,6 +95,8 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
     const daemonUptime = daemonRuntimeUnavailable
       ? "unavailable"
       : formatDuration(data.daemon?.uptimeSeconds ?? data.health?.daemonStatus.uptimeSeconds ?? 0);
+    const latestBackup = data.health?.backups.latest;
+    const latestBackupVerified = latestBackup?.verified === true && latestBackup?.contractVerified === true;
     const memoryUsed = healthSourceUnavailable
       ? "unavailable"
       : formatBytes(data.health?.systemVitals.memoryUsedBytes ?? 0);
@@ -418,13 +420,23 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
                       : "Daemon stopped"}
                 </StatusChip>
                 <StatusChip
-                  tone={sourceFailed(data, "health") ? "critical" : data.health?.backups.latest ? "success" : "warning"}
+                  tone={
+                    sourceFailed(data, "health")
+                      ? "critical"
+                      : latestBackupVerified
+                        ? "success"
+                        : latestBackup
+                          ? "muted"
+                          : "warning"
+                  }
                 >
                   {sourceFailed(data, "health")
                     ? "Backup status unavailable"
-                    : data.health?.backups.latest
-                      ? "Backup ready"
-                      : "No backup"}
+                    : latestBackupVerified
+                      ? "Backup verified"
+                      : latestBackup
+                        ? "Backup present"
+                        : "No backup"}
                 </StatusChip>
                 <StatusChip tone={data.daemon?.controllable ? "default" : "muted"}>
                   {sourceFailed(data, "daemon")
@@ -532,7 +544,7 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
           <NativeGrid>
             <NativeCard
               title="Diagnostics directory"
-              subtitle="System vitals, daemon logs, and MCP runtime posture without old admin sprawl."
+              subtitle="System vitals, daemon logs, and MCP runtime posture in one diagnostics view."
               stats={[
                 { label: "CPU", value: String(data.health?.systemVitals.cpuCount ?? 0) },
                 { label: "Load", value: formatLoadAverage(data.health?.systemVitals.loadAverage ?? []) },

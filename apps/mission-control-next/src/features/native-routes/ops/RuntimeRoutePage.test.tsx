@@ -1062,7 +1062,8 @@ describe("RuntimeRoutePage", () => {
       />,
     );
 
-    expect(markup).toContain("Backup ready");
+    expect(markup).toContain("Backup present");
+    expect(markup).not.toContain("Backup ready");
     expect(markup).not.toContain("Daemon restarted.");
   });
 });

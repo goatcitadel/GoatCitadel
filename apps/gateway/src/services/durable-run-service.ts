@@ -396,6 +396,9 @@ export class DurableRunService {
   pauseDurableRun(runId: string, actorId = "operator"): DurableRunRecord {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     const current = this.ctx.storage.durableRuns.getRun(runId);
+    if (current.status === "paused") {
+      return current;
+    }
     if (
       current.status === "completed" ||
       current.status === "failed" ||
@@ -519,6 +522,9 @@ export class DurableRunService {
   retryDurableRun(runId: string, reason = "manual_retry", actorId = "operator"): DurableRunRecord {
     this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     const current = this.ctx.storage.durableRuns.getRun(runId);
+    if (current.status !== "failed") {
+      throw new Error(`Durable run ${runId} cannot be retried from ${current.status}`);
+    }
     const recoverability = this.deps?.workflowRegistry.isWorkflowRecoverable(current);
     if (recoverability && !recoverability.recoverable) {
       throw new Error(recoverability.reason ?? `Durable run ${runId} cannot be safely retried.`);

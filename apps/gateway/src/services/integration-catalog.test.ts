@@ -164,6 +164,29 @@ describe("integration-catalog", () => {
     }
   });
 
+  it("does not advertise operator-action capabilities without matching shipped actions", () => {
+    const actionCapabilities = new Set(["read", "write", "search", "capture"]);
+
+    for (const entry of INTEGRATION_CATALOG) {
+      if (entry.kind === "channel") {
+        continue;
+      }
+      const advertisedActionCapabilities = entry.capabilities.filter((capability) =>
+        actionCapabilities.has(capability),
+      );
+      if (advertisedActionCapabilities.length === 0) {
+        continue;
+      }
+      const shippedActionCapabilities = new Set((entry.operatorActions ?? []).map((action) => action.capability));
+      for (const capability of advertisedActionCapabilities) {
+        expect(
+          shippedActionCapabilities.has(capability),
+          `${entry.catalogId} advertises ${capability} without a matching operator action`,
+        ).toBe(true);
+      }
+    }
+  });
+
   it("keeps built-in channel runtimes truthful while still marking them runnable", () => {
     const betaBuiltInChannels = [
       "channel.signal",

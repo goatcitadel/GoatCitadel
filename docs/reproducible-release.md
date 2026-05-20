@@ -9,7 +9,7 @@ This process covers the signed installer artifacts published by `.github/workflo
 - `windows-x64`
 - `windows-arm64`
 
-macOS and Linux package scripts are not current release proof. They stay development-only until the release workflow emits signed artifacts and smoke evidence for those targets. Manual unsigned Windows workflow-dispatch runs are also development packaging smoke only: they may prove x64/arm64 build and install/uninstall behavior, but they are workflow artifacts and do not publish a GitHub release.
+macOS and Linux package scripts are not current release proof. They stay development-only until the release workflow emits signed artifacts and smoke evidence for those targets. Manual unsigned Windows workflow-dispatch runs are also development packaging smoke only: they may prove x64/arm64 build and install/uninstall behavior, but they are workflow artifacts, are not automatically published as a GitHub release, and never count as public-trust signed release proof. They may be manually attached only as clearly labeled unsigned convenience assets.
 
 ## Locked Inputs
 
@@ -52,7 +52,7 @@ node scripts/release/write-release-certificate.mjs --version <version> --tag <ta
 ## Environment Notes
 
 - Installer builds run on GitHub-hosted Windows runners.
-- Public tag builds fail if Authenticode signing secrets are missing. Unsigned output is reserved for explicit manual/dev workflow runs and is not published as a GitHub release.
+- Public tag builds fail if Authenticode signing secrets are missing. Unsigned output is reserved for explicit manual/dev workflow runs, is not automatically published as a GitHub release, and may only be attached manually as clearly labeled unsigned convenience assets that do not count as public-trust signed release proof.
 - The embedded Node archive is verified against a pinned `--node-sha256` value or the upstream Node `SHASUMS256.txt` entry before it is copied into the bundle.
 - The final release package is assembled on Ubuntu after the per-platform artifacts are downloaded.
 - GitHub Actions context values are copied into `provenance/build-metadata.json`, `provenance/slsa-attestation.json`, and the separate `release-certificate.json`.
