@@ -72,6 +72,28 @@ export function createToolCatalog(toolNames: string[] = ["browser.search"]): Too
         preferredForIntents: ["memory_lookup", "project_context"],
       };
     }
+    if (toolName === "docs.search") {
+      return {
+        toolName: "docs.search",
+        category: "knowledge",
+        riskLevel: "safe",
+        requiresApproval: false,
+        description: "Search ingested documents",
+        argSchema: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+            namespace: { type: "string" },
+            limit: { type: "integer" },
+          },
+          required: ["query"],
+        },
+        examples: [],
+        pack: "knowledge",
+        recommendedContexts: ["chat", "cowork", "code"],
+        preferredForIntents: ["project_context", "memory_lookup"],
+      };
+    }
     if (toolName === "memory.write" || toolName === "memory.upsert") {
       return {
         toolName,

@@ -47,6 +47,7 @@ import {
   deriveApprovalResolutionEffectsResult,
   type ApprovalResolutionEffectsResult,
 } from "./approval-resolution-effects-service.js";
+import { markCodeModeRunTerminalForPendingApproval } from "./approval-code-mode-terminal.js";
 import { parseApprovalCreateHookPatch } from "./hook-patch-helpers.js";
 import type { ToolPolicyEngine } from "@goatcitadel/policy-engine";
 import type { Storage } from "@goatcitadel/storage";
@@ -589,6 +590,11 @@ export async function resolveApproval(
 ): Promise<ApprovalResolveResult> {
   const current = host.storage.approvals.get(approvalId);
   const pendingAction = host.storage.pendingApprovalActions.find(approvalId);
+  if (current.status !== "pending") {
+    throw new ConflictError({
+      message: `Approval ${approvalId} is already resolved`,
+    });
+  }
   const expiresAt = current.expiresAt ? Date.parse(current.expiresAt) : Number.NaN;
   if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
     markCodeModeRunTerminalForPendingApproval(host, current, pendingAction, "expired", {
@@ -670,68 +676,6 @@ export async function resolveApproval(
     durableRunId: wakeRunId,
     resolutionEffects,
   };
-}
-
-function markCodeModeRunTerminalForPendingApproval(
-  host: ApprovalLifecycleHost,
-  approval: ApprovalRequest,
-  pendingAction: ReturnType<ApprovalLifecycleHost["storage"]["pendingApprovalActions"]["find"]>,
-  status: "rejected" | "expired",
-  details: Record<string, unknown>,
-): { runId: string; pendingRunId?: string | null } | undefined {
-  if (!pendingAction || pendingAction.actionType !== "code_mode.run" || pendingAction.resolutionStatus !== "pending") {
-    return undefined;
-  }
-  const pendingRunId = readStringValue(pendingAction.request.runId);
-  const approvalRunId = resolveCodeModeApprovalRunId(approval);
-  const runId = approvalRunId ?? pendingRunId;
-  if (!runId) {
-    return undefined;
-  }
-  const existing = host.storage.codeModeRuns.find(runId);
-  if (!existing || existing.status !== "approval_pending") {
-    return undefined;
-  }
-  if (existing.approvalId !== approval.approvalId) {
-    return undefined;
-  }
-  const finishedAt = new Date().toISOString();
-  const pendingRunIdDetail = pendingRunId === runId ? undefined : { pendingRunId: pendingRunId ?? null };
-  host.storage.codeModeRuns.upsert({
-    ...existing,
-    status,
-    error: typeof details.reason === "string" ? details.reason : undefined,
-    errorDetails: {
-      phase: "approval_resolution",
-      ...details,
-      ...(pendingRunIdDetail ?? {}),
-    },
-    finishedAt,
-  });
-  if (status === "expired") {
-    host.storage.pendingApprovalActions.markResolved(pendingAction.approvalId, "failed", {
-      ...details,
-      status,
-      runId,
-      ...(pendingRunIdDetail ?? {}),
-    });
-  }
-  return {
-    runId,
-    ...(pendingRunIdDetail ? { pendingRunId: pendingRunId ?? null } : {}),
-  };
-}
-
-function resolveCodeModeApprovalRunId(approval: ApprovalRequest): string | undefined {
-  return (
-    readStringValue(approval.linkage?.runId) ??
-    readStringValue((approval.linkage as Record<string, unknown> | undefined)?.codeModeRunId) ??
-    readStringValue(approval.payload.runId)
-  );
-}
-
-function readStringValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function withApprovalFollowUp(approval: ApprovalRequest, effects: ApprovalEffectRecord[]): ApprovalRequest {
@@ -861,6 +805,10 @@ export async function resolveChatToolApproval(
   }
   const expiresAt = approval.expiresAt ? Date.parse(approval.expiresAt) : Number.NaN;
   if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+    const pendingAction = host.storage.pendingApprovalActions?.find(approvalId);
+    markCodeModeRunTerminalForPendingApproval(host, approval, pendingAction, "expired", {
+      reason: `Approval ${approvalId} has expired and can no longer be resolved.`,
+    });
     throw new ValidationError({
       message: `Approval ${approvalId} has expired and can no longer be resolved.`,
     });

@@ -6,6 +6,9 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import type {
   ChannelDeliveryStatus,
+  ContextSourceAttribution,
+  IngestionBackend,
+  ToolExecutionTrustLevel,
   ToolGrantRecord,
   ToolInvokeRequest,
   ToolPolicyConfig,
@@ -17,7 +20,7 @@ import { assertReadPathAllowed, assertWritePathInJail, resolveReadPathAccess } f
 import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "./sandbox/network-guard.js";
 import { executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
 import { collectLeakDetections, sanitizeForModel } from "./tool-security.js";
-import { ingestDocumentViaBackend, searchIngestedContext } from "./ingestion-backends.js";
+import { ingestDocumentViaBackend, resolveIngestionTrustLevel, searchIngestedContext } from "./ingestion-backends.js";
 import { parseIngestionSourceType } from "./ingestion-source-type.js";
 import { matchesToolPattern } from "./tool-patterns.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
@@ -34,6 +37,12 @@ const MAX_HTTP_RETRIES = 2;
 const MAX_HTTP_RETRY_DELAY_MS = 50;
 const RETRYABLE_HTTP_STATUSES = new Set([408, 429, 502, 503, 504]);
 const MAX_SHELL_OUTPUT_BYTES = 4096;
+const TRUST_RESTRICTIVENESS: Record<ToolExecutionTrustLevel, number> = {
+  trusted_operator: 0,
+  trusted_workspace: 1,
+  mixed_untrusted: 2,
+  untrusted_external: 3,
+};
 
 const SENSITIVE_PATTERNS: readonly RegExp[] = [
   /sk-[a-zA-Z0-9]{20,}/g,
@@ -171,9 +180,9 @@ export async function executeTool(
     case "memory.read":
       return finalizeToolResult(await memoryRead(request.args, storage));
     case "memory.write":
-      return finalizeToolResult(await memoryWrite(request.args, storage, false));
+      return finalizeToolResult(await memoryWrite(request, storage, false));
     case "memory.upsert":
-      return finalizeToolResult(await memoryWrite(request.args, storage, true));
+      return finalizeToolResult(await memoryWrite(request, storage, true));
     case "memory.search":
       return finalizeToolResult(await memorySearch(request.args, storage));
     case "citations.build":
@@ -706,10 +715,18 @@ function quoteForCmd(value: string): string {
   return escaped;
 }
 
-async function memoryWrite(args: Record<string, unknown>, storage: Storage, upsert: boolean) {
+async function memoryWrite(request: ToolInvokeRequest, storage: Storage, upsert: boolean) {
+  const args = request.args;
   const namespace = required(args.namespace, "namespace");
   const title = required(args.title, "title");
   const content = required(args.content, "content");
+  const inputMetadata = record(args.metadata);
+  const sourceAttribution = normalizeSourceAttributionForStorage(request.sourceAttribution);
+  const carriedTrustLevel = resolveMostRestrictiveSourceTrustLevel(sourceAttribution);
+  const ingestionMetadata = {
+    ...record(inputMetadata.ingestion),
+    ...(carriedTrustLevel ? { trustLevel: carriedTrustLevel } : {}),
+  };
   const doc = storage.knowledge.createDocument({
     namespace,
     sourceType: "memory",
@@ -717,7 +734,9 @@ async function memoryWrite(args: Record<string, unknown>, storage: Storage, upse
     title,
     metadata: {
       tags: stringArray(args.tags),
-      ...record(args.metadata),
+      ...inputMetadata,
+      ...(sourceAttribution.length > 0 ? { sourceAttribution } : {}),
+      ...(Object.keys(ingestionMetadata).length > 0 ? { ingestion: ingestionMetadata } : {}),
     },
   });
   const chunks = chunkText(content, 1200, 180, 400);
@@ -728,9 +747,15 @@ async function memoryWrite(args: Record<string, unknown>, storage: Storage, upse
       embedding: pseudoEmbedding(chunk),
     })),
   );
+  const attribution = knowledgeDocumentAttribution(doc);
   return {
     mode: upsert ? "upsert" : "write",
-    document: doc,
+    document: {
+      ...doc,
+      attribution,
+    },
+    attribution,
+    ...(sourceAttribution.length > 0 ? { sourceAttribution } : {}),
     chunksSaved: chunks.length,
   };
 }
@@ -761,6 +786,7 @@ async function memoryRead(args: Record<string, unknown>, storage: Storage) {
           title: doc.title,
           sourceRef: doc.sourceRef,
           metadata: doc.metadata,
+          attribution: knowledgeDocumentAttribution(doc),
           snippet: chunks[0]?.content.slice(0, 320) ?? "",
         };
       }),
@@ -784,6 +810,7 @@ async function memoryRead(args: Record<string, unknown>, storage: Storage) {
             title: doc.title,
             sourceRef: doc.sourceRef,
             metadata: doc.metadata,
+            attribution: knowledgeDocumentAttribution(doc),
             score,
             snippet: bestChunk?.chunk.content.slice(0, 320) ?? "",
           }
@@ -805,17 +832,67 @@ async function memorySearch(args: Record<string, unknown>, storage: Storage) {
   const namespace = asString(args.namespace);
   const limit = clampInt(args.limit, 12, 1, 100);
   const chunks = storage.knowledge.listChunksByNamespace(namespace, 2000);
+  const docById = new Map(storage.knowledge.listDocuments(namespace, 500).map((doc) => [doc.docId, doc] as const));
   const items = chunks
-    .map((chunk) => ({
-      chunkId: chunk.chunkId,
-      docId: chunk.docId,
-      score: scoreLexical(query, chunk.content.toLowerCase()),
-      snippet: chunk.content.slice(0, 320),
-    }))
+    .map((chunk) => {
+      const doc = docById.get(chunk.docId);
+      if (!doc) {
+        return undefined;
+      }
+      return {
+        chunkId: chunk.chunkId,
+        docId: chunk.docId,
+        score: scoreLexical(query, chunk.content.toLowerCase()),
+        snippet: chunk.content.slice(0, 320),
+        attribution: knowledgeDocumentAttribution(doc),
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== undefined)
     .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
   return { namespace: namespace ?? "all", query, items };
+}
+
+function knowledgeDocumentAttribution(
+  doc: ReturnType<Storage["knowledge"]["listDocuments"]>[number],
+): ContextSourceAttribution {
+  const ingestion = record(doc.metadata.ingestion);
+  const backend = asString(ingestion.backend);
+  return {
+    sourceType: doc.sourceType,
+    sourceRef: doc.sourceRef,
+    title: doc.title,
+    ...(backend === "native" || backend === "firecrawl" ? { backend: backend as IngestionBackend["backend"] } : {}),
+    ...(asString(ingestion.fetchedAt) ? { fetchedAt: asString(ingestion.fetchedAt) } : {}),
+    trustLevel: resolveIngestionTrustLevel(doc.sourceType, ingestion.trustLevel),
+  };
+}
+
+function normalizeSourceAttributionForStorage(
+  sourceAttribution: ToolInvokeRequest["sourceAttribution"],
+): ContextSourceAttribution[] {
+  return (sourceAttribution ?? []).map((source) => ({
+    sourceType: source.sourceType,
+    sourceRef: source.sourceRef,
+    ...(source.title ? { title: source.title } : {}),
+    ...(source.backend ? { backend: source.backend } : {}),
+    ...(source.fetchedAt ? { fetchedAt: source.fetchedAt } : {}),
+    trustLevel: resolveIngestionTrustLevel(source.sourceType, source.trustLevel),
+  }));
+}
+
+function resolveMostRestrictiveSourceTrustLevel(
+  sourceAttribution: readonly ContextSourceAttribution[],
+): ToolExecutionTrustLevel | undefined {
+  let effectiveTrust: ToolExecutionTrustLevel | undefined;
+  for (const source of sourceAttribution) {
+    const sourceTrust = resolveIngestionTrustLevel(source.sourceType, source.trustLevel);
+    if (!effectiveTrust || TRUST_RESTRICTIVENESS[sourceTrust] > TRUST_RESTRICTIVENESS[effectiveTrust]) {
+      effectiveTrust = sourceTrust;
+    }
+  }
+  return effectiveTrust;
 }
 
 function citationsBuild(args: Record<string, unknown>) {
@@ -917,13 +994,22 @@ async function embeddingsQuery(args: Record<string, unknown>, storage: Storage) 
   const limit = clampInt(args.limit, 10, 1, 100);
   const q = pseudoEmbedding(query);
   const chunks = storage.knowledge.listChunksByNamespace(namespace, 2000);
+  const docById = new Map(storage.knowledge.listDocuments(namespace, 500).map((doc) => [doc.docId, doc] as const));
   const items = chunks
-    .map((chunk) => ({
-      chunkId: chunk.chunkId,
-      docId: chunk.docId,
-      score: cosine(q, chunk.embedding ?? pseudoEmbedding(chunk.content)),
-      snippet: chunk.content.slice(0, 320),
-    }))
+    .map((chunk) => {
+      const doc = docById.get(chunk.docId);
+      if (!doc) {
+        return undefined;
+      }
+      return {
+        chunkId: chunk.chunkId,
+        docId: chunk.docId,
+        score: cosine(q, chunk.embedding ?? pseudoEmbedding(chunk.content)),
+        snippet: chunk.content.slice(0, 320),
+        attribution: knowledgeDocumentAttribution(doc),
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== undefined)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
   return { namespace: namespace ?? "all", query, items, method: "pseudo-embedding" };

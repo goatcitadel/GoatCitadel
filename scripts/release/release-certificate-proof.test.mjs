@@ -128,3 +128,29 @@ test("release package metadata locks release and packaging scripts with fail-clo
   assert.match(assembler, /wait-for-release-proof\.mjs --repository <owner\/repo> --commit <commit-sha>/);
   assert.match(assembler, /write-release-certificate\.mjs --version <version> --tag <tag>[\s\S]*--require-success/);
 });
+
+test("release package carries security triage docs with package-relative links", () => {
+  const assembler = fs.readFileSync(new URL("./assemble-release-package.mjs", import.meta.url), "utf8");
+  assert.match(assembler, /AGENTS\.md/);
+  assert.match(assembler, /docs["']?,\s*["']security["']?,\s*["']findings-triage\.md/);
+  assert.match(assembler, /security\/findings-triage\.md/);
+  assert.match(assembler, /docs\/security\/findings-triage\.md/);
+  assert.match(assembler, /\.\.\/SECURITY\.md/);
+  assert.match(assembler, /\.\.\/AGENTS\.md/);
+  assert.match(assembler, /github\.com\/goatcitadel\/GoatCitadel\/blob/);
+});
+
+test("verification workflows fail closed when proof artifacts are missing", () => {
+  const workflowsDir = new URL("../../.github/workflows/", import.meta.url);
+  const workflowFiles = fs
+    .readdirSync(workflowsDir)
+    .filter((entry) => /^verification-.*\.yml$/u.test(entry))
+    .map((entry) => [entry, fs.readFileSync(new URL(entry, workflowsDir), "utf8")])
+    .filter(([, content]) => /path:\s*artifacts\/verification/.test(content));
+
+  assert.ok(workflowFiles.length > 0, "verification artifact workflows should be present");
+  for (const [workflowFile, content] of workflowFiles) {
+    assert.doesNotMatch(content, /if-no-files-found:\s*ignore/, workflowFile);
+    assert.match(content, /if-no-files-found:\s*error/, workflowFile);
+  }
+});

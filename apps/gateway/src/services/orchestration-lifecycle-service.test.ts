@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
-import type { DurableRunRecord, OrchestrationPlan, OrchestrationRun } from "@goatcitadel/contracts";
+import {
+  NotFoundError,
+  type DurableRunRecord,
+  type OrchestrationPlan,
+  type OrchestrationRun,
+} from "@goatcitadel/contracts";
 import {
   approvePhase,
   createOrchestrationPlan,
@@ -269,7 +274,7 @@ describe("orchestration-lifecycle-service", () => {
       permissionProfileId: "trusted-local-power",
       localOperatorOverrideId: "override-1",
     });
-    expect(host.storage.orchestration.upsertPlan).toHaveBeenCalledWith(plan);
+    expect(host.storage.orchestration.upsertPlan).toHaveBeenCalledWith(plan, "default");
     expect(host.storage.orchestration.createRun).toHaveBeenCalledWith(
       expect.objectContaining({
         operatorId: "operator-1",
@@ -364,6 +369,7 @@ describe("orchestration-lifecycle-service", () => {
     });
 
     expect(created.workspaceId).toBe("workspace-a");
+    expect(host.storage.orchestration.upsertPlan).toHaveBeenCalledWith(plan, "workspace-a");
     expect(host.storage.orchestration.createRun).toHaveBeenCalledWith(
       expect.objectContaining({
         workspaceId: "workspace-a",
@@ -393,6 +399,7 @@ describe("orchestration-lifecycle-service", () => {
     const recovered = await runOrchestrationPlan(scopedHost, runtime, "plan-1", { workspaceId: "workspace-a" });
 
     expect(recovered).toBe(activeRun);
+    expect(scopedHost.storage.orchestration.getPlan).toHaveBeenCalledWith("plan-1", "workspace-a");
     expect(scopedHost.storage.orchestration.findActiveRunByPlan).toHaveBeenCalledWith("plan-1", "workspace-a");
     expect(scopedHost.storage.orchestration.createRun).not.toHaveBeenCalled();
   });
@@ -742,6 +749,222 @@ describe("orchestration-lifecycle-service", () => {
     expect(host.recordDurableTimelineEvent).toHaveBeenCalledWith("durable-run-1", "run_started", expect.any(Object));
   });
 
+  it("rejects durable orchestration payloads that point at a different workspace than the run", async () => {
+    const base = createHost();
+    const getPlan = vi.fn(() => buildPlan());
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getPlan,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            durableRunId: "durable-run-1",
+            workspaceId: "workspace-a",
+            worktreeStatus: "ready",
+            worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+    const runtime = createRuntimeDeps();
+
+    const result = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+
+    expect(result).toMatchObject({
+      outcome: "failed",
+      checkpointState: {
+        error: "Durable orchestration payload workspace default does not match run run-1 workspace workspace-a.",
+        payloadWorkspaceId: "default",
+        runWorkspaceId: "workspace-a",
+        reason: "workspace_mismatch",
+      },
+    });
+    expect(getPlan).not.toHaveBeenCalled();
+    expect(host.storage.orchestration.updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        status: "failed",
+        executionState: "failed",
+        lastError: "Durable orchestration payload workspace default does not match run run-1 workspace workspace-a.",
+      }),
+    );
+    expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "run.workspace_mismatch",
+      expect.objectContaining({
+        durableRunId: "durable-run-1",
+        payloadWorkspaceId: "default",
+        runWorkspaceId: "workspace-a",
+      }),
+    );
+    expect(runtime.worktrees.release).toHaveBeenCalledWith({
+      run: expect.objectContaining({
+        runId: "run-1",
+        status: "failed",
+        worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+      }),
+      reason: "failed",
+    });
+  });
+
+  it("checks durable run ownership before failing workspace mismatch cleanup", async () => {
+    const base = createHost();
+    const getPlan = vi.fn(() => buildPlan());
+    const updateRun = vi.fn((value: OrchestrationRun) => value);
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getPlan,
+          updateRun,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            durableRunId: "different-durable-run",
+            workspaceId: "workspace-a",
+            worktreeStatus: "ready",
+            worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+    const runtime = createRuntimeDeps();
+
+    await expect(executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"))).rejects.toThrow(
+      "Orchestration run run-1 is not linked to durable run durable-run-1.",
+    );
+
+    expect(getPlan).not.toHaveBeenCalled();
+    expect(updateRun).not.toHaveBeenCalled();
+    expect(runtime.worktrees.release).not.toHaveBeenCalled();
+  });
+
+  it("records and cleans up malformed durable orchestration payload workspace ids", async () => {
+    const base = createHost();
+    const getPlan = vi.fn(() => buildPlan());
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getPlan,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            durableRunId: "durable-run-1",
+            worktreeStatus: "ready",
+            worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+    const runtime = createRuntimeDeps();
+    const durableRun = {
+      ...host.getDurableRun("durable-run-1"),
+      payload: {
+        ...(host.getDurableRun("durable-run-1").payload ?? {}),
+        workspaceId: "../bad workspace",
+      },
+    } as DurableRunRecord;
+
+    const result = await executeDurableOrchestrationRun(host, runtime, durableRun);
+
+    expect(result).toMatchObject({
+      outcome: "failed",
+      checkpointState: {
+        payloadWorkspaceId: "../bad workspace",
+        runWorkspaceId: "default",
+        reason: "workspace_mismatch",
+      },
+    });
+    expect(String(result.checkpointState.error)).toContain("workspaceId contains unsupported characters");
+    expect(getPlan).not.toHaveBeenCalled();
+    expect(host.storage.orchestration.updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        executionState: "failed",
+        lastError: expect.stringContaining("workspaceId contains unsupported characters"),
+      }),
+    );
+    expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "run.workspace_mismatch",
+      expect.objectContaining({
+        payloadWorkspaceId: "../bad workspace",
+        runWorkspaceId: "default",
+      }),
+    );
+    expect(runtime.worktrees.release).toHaveBeenCalledWith({
+      run: expect.objectContaining({
+        runId: "run-1",
+        status: "failed",
+        worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+      }),
+      reason: "failed",
+    });
+  });
+
+  it("records and cleans up non-string durable orchestration payload workspace ids", async () => {
+    const base = createHost();
+    const getPlan = vi.fn(() => buildPlan());
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getPlan,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            durableRunId: "durable-run-1",
+            worktreeStatus: "ready",
+            worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+    const runtime = createRuntimeDeps();
+    const durableRun = {
+      ...host.getDurableRun("durable-run-1"),
+      payload: {
+        ...(host.getDurableRun("durable-run-1").payload ?? {}),
+        workspaceId: 42,
+      },
+    } as DurableRunRecord;
+
+    const result = await executeDurableOrchestrationRun(host, runtime, durableRun);
+
+    expect(result).toMatchObject({
+      outcome: "failed",
+      checkpointState: {
+        payloadWorkspaceId: "42",
+        runWorkspaceId: "default",
+        reason: "workspace_mismatch",
+      },
+    });
+    expect(String(result.checkpointState.error)).toContain("workspaceId must be a string");
+    expect(getPlan).not.toHaveBeenCalled();
+    expect(host.storage.orchestration.updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        executionState: "failed",
+        lastError: expect.stringContaining("workspaceId must be a string"),
+      }),
+    );
+    expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "run.workspace_mismatch",
+      expect.objectContaining({
+        payloadWorkspaceId: "42",
+        runWorkspaceId: "default",
+      }),
+    );
+    expect(runtime.worktrees.release).toHaveBeenCalledWith({
+      run: expect.objectContaining({
+        runId: "run-1",
+        status: "failed",
+        worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+      }),
+      reason: "failed",
+    });
+  });
+
   it("pauses orchestration when a child phase turn is waiting instead of failing the phase", async () => {
     const host = createHost({
       storage: {
@@ -865,6 +1088,69 @@ describe("orchestration-lifecycle-service", () => {
           "Phase child turn entered a wait state without an approval id; durable orchestration only supports approval-correlated child waits.",
       }),
     );
+  });
+
+  it("fails approval-correlated child waits that do not include a child durable run id", async () => {
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...createHost().storage.orchestration,
+          getRun: vi.fn(() => ({
+            ...buildRun(),
+            durableRunId: "durable-run-1",
+            executionState: "queued",
+            worktreeStatus: "ready",
+            worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+          })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+    const runtime = createRuntimeDeps({
+      phaseExecutor: {
+        execute: vi.fn(async () => ({
+          phaseId: "phase-1",
+          ownerAgentId: "agent-1",
+          status: "waiting" as const,
+          startedAt: "2026-04-12T00:00:01.000Z",
+          finishedAt: "2026-04-12T00:00:02.000Z",
+          outputSummary: "Waiting for operator approval.",
+          childSessionId: "sess_phase",
+          childTurnId: "turn_phase",
+          approvalId: "approval-phase-1",
+        })),
+      },
+    });
+
+    const result = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+
+    expect(result.outcome).toBe("failed");
+    expect(host.updateDurableRunState).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "durable-run-1",
+        status: "waiting",
+      }),
+    );
+    expect(host.storage.orchestration.updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        executionState: "failed",
+        lastError:
+          "Phase child turn entered a wait state without a child durable run id; durable orchestration cannot resume an unlinked child wait.",
+      }),
+    );
+    expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "phase.failed",
+      expect.objectContaining({
+        approvalId: "approval-phase-1",
+        error:
+          "Phase child turn entered a wait state without a child durable run id; durable orchestration cannot resume an unlinked child wait.",
+      }),
+    );
+    expect(runtime.worktrees.release).toHaveBeenCalledWith({
+      run: expect.objectContaining({ status: "failed" }),
+      reason: "failed",
+    });
   });
 
   it("harvests the completed child phase instead of re-running it after approval wake", async () => {
@@ -1064,6 +1350,184 @@ describe("orchestration-lifecycle-service", () => {
     expect(execute).toHaveBeenCalledTimes(1);
     expect(host.requestDurableRunProcessing).toHaveBeenCalledWith("durable-child-1");
     expect(host.orchestrationEngine.advancePhase).not.toHaveBeenCalled();
+  });
+
+  it("fails instead of duplicating a parent phase when the waiting child durable run is missing", async () => {
+    const autoPlan: OrchestrationPlan = {
+      ...buildPlan(),
+      waves: [
+        {
+          ...buildPlan().waves[0]!,
+          phases: [{ ...buildPlan().waves[0]!.phases[0]!, requiresApproval: false }],
+        },
+      ],
+    };
+    let run: OrchestrationRun = {
+      ...buildRun(),
+      durableRunId: "durable-run-1",
+      executionState: "queued",
+      worktreeStatus: "ready",
+      worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+    };
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getPlan: vi.fn(() => autoPlan),
+          getRun: vi.fn(() => run),
+          updateRun: vi.fn((value: OrchestrationRun) => {
+            run = value;
+            return value;
+          }),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+    const getParentDurableRun = host.getDurableRun;
+    (host as unknown as { getDurableRun: OrchestrationLifecycleHost["getDurableRun"] }).getDurableRun = vi.fn(
+      (runId: string) => {
+        if (runId === "durable-child-1") {
+          throw new NotFoundError({ entity: "Durable run", id: runId });
+        }
+        return getParentDurableRun(runId);
+      },
+    );
+    const execute = vi.fn().mockResolvedValueOnce({
+      phaseId: "phase-1",
+      ownerAgentId: "agent-1",
+      status: "waiting" as const,
+      startedAt: "2026-04-12T00:00:01.000Z",
+      finishedAt: "2026-04-12T00:00:02.000Z",
+      outputSummary: "Waiting for operator approval.",
+      childSessionId: "sess_phase",
+      childTurnId: "turn_phase",
+      childRunId: "durable-child-1",
+      approvalId: "approval-phase-1",
+    });
+    const runtime = createRuntimeDeps({ phaseExecutor: { execute } });
+
+    const first = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+    expect(first.outcome).toBe("paused");
+
+    host.updateDurableRunState({
+      runId: "durable-run-1",
+      status: "queued",
+      metadata: host.getDurableRun("durable-run-1").metadata,
+      clearFinishedAt: true,
+      clearLastError: true,
+    });
+    const second = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+
+    expect(second.outcome).toBe("failed");
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(host.storage.orchestration.updateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        executionState: "failed",
+        lastError: expect.stringContaining("Child durable run durable-child-1 is missing"),
+      }),
+    );
+    expect(host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "run.child_durable_missing",
+      expect.objectContaining({
+        childRunId: "durable-child-1",
+      }),
+    );
+    expect(host.updateDurableRunState).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "durable-run-1",
+        status: "failed",
+      }),
+    );
+    expect(runtime.worktrees.release).toHaveBeenCalledWith(
+      expect.objectContaining({
+        run: expect.objectContaining({
+          runId: "run-1",
+          status: "failed",
+        }),
+        reason: "failed",
+      }),
+    );
+  });
+
+  it("does not convert non-missing child durable store errors into terminal child-missing failures", async () => {
+    const autoPlan: OrchestrationPlan = {
+      ...buildPlan(),
+      waves: [
+        {
+          ...buildPlan().waves[0]!,
+          phases: [{ ...buildPlan().waves[0]!.phases[0]!, requiresApproval: false }],
+        },
+      ],
+    };
+    let run: OrchestrationRun = {
+      ...buildRun(),
+      durableRunId: "durable-run-1",
+      executionState: "queued",
+      worktreeStatus: "ready",
+      worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+    };
+    const base = createHost();
+    const host = createHost({
+      storage: {
+        orchestration: {
+          ...base.storage.orchestration,
+          getPlan: vi.fn(() => autoPlan),
+          getRun: vi.fn(() => run),
+          updateRun: vi.fn((value: OrchestrationRun) => {
+            run = value;
+            return value;
+          }),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+    });
+    const getParentDurableRun = host.getDurableRun;
+    (host as unknown as { getDurableRun: OrchestrationLifecycleHost["getDurableRun"] }).getDurableRun = vi.fn(
+      (runId: string) => {
+        if (runId === "durable-child-1") {
+          throw new Error("durable store unavailable");
+        }
+        return getParentDurableRun(runId);
+      },
+    );
+    const execute = vi.fn().mockResolvedValueOnce({
+      phaseId: "phase-1",
+      ownerAgentId: "agent-1",
+      status: "waiting" as const,
+      startedAt: "2026-04-12T00:00:01.000Z",
+      finishedAt: "2026-04-12T00:00:02.000Z",
+      outputSummary: "Waiting for operator approval.",
+      childSessionId: "sess_phase",
+      childTurnId: "turn_phase",
+      childRunId: "durable-child-1",
+      approvalId: "approval-phase-1",
+    });
+    const runtime = createRuntimeDeps({ phaseExecutor: { execute } });
+
+    const first = await executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"));
+    expect(first.outcome).toBe("paused");
+
+    host.updateDurableRunState({
+      runId: "durable-run-1",
+      status: "queued",
+      metadata: host.getDurableRun("durable-run-1").metadata,
+      clearFinishedAt: true,
+      clearLastError: true,
+    });
+    vi.mocked(host.storage.orchestration.updateRun).mockClear();
+
+    await expect(executeDurableOrchestrationRun(host, runtime, host.getDurableRun("durable-run-1"))).rejects.toThrow(
+      "durable store unavailable",
+    );
+    expect(host.storage.orchestration.updateRun).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        executionState: "failed",
+        lastError: expect.stringContaining("Child durable run durable-child-1 is missing"),
+      }),
+    );
+    expect(runtime.worktrees.release).not.toHaveBeenCalledWith(expect.objectContaining({ reason: "failed" }));
   });
 
   it("cancels orchestration runs with durable, checkpoint, realtime, and worktree cleanup truth", async () => {

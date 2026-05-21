@@ -34,10 +34,13 @@ workspace/chat/
 .playwright-mcp/
 .codex-tmp/
 .codex-smoke/
+.build-logs/
+.claude/
 .worktrees/*
 !.worktrees/.gitkeep
 .claude/settings.local.json
 docs/review/r*-*.md
+cowork-pptx-e2e-initial.md
 apps/gateway/backups/
 backups/
 data/postgres/

@@ -82,4 +82,4 @@ jobs:
         with:
           name: verification-catalog-parity-artifacts
           path: artifacts/verification
-          if-no-files-found: ignore
+          if-no-files-found: error

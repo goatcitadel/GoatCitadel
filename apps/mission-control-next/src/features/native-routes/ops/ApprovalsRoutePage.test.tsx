@@ -386,6 +386,9 @@ describe("ApprovalsRoutePage", () => {
     expect(approvalHarness.loadTracePreview).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111", "corr-1");
 
     const liveLink = findLink(renderer!.root, "Open live session");
+    expect(liveLink.props.href).toBe(
+      "/cowork?sessionId=session-1&turnId=turn-1&approvalId=11111111-1111-4111-8111-111111111111",
+    );
     await act(async () => {
       liveLink.props.onClick({ preventDefault: vi.fn() });
     });
@@ -395,6 +398,18 @@ describe("ApprovalsRoutePage", () => {
       turnId: "turn-1",
       approvalId: "11111111-1111-4111-8111-111111111111",
     });
+    navigate.mockClear();
+    const preventModifiedClickDefault = vi.fn();
+    await act(async () => {
+      liveLink.props.onClick({
+        preventDefault: preventModifiedClickDefault,
+        ctrlKey: true,
+        button: 0,
+        currentTarget: { target: "" },
+      });
+    });
+    expect(preventModifiedClickDefault).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
 
     await act(async () => {
       findButton(renderer!.root, "Reject all pending").props.onClick();
@@ -637,6 +652,7 @@ describe("ApprovalsRoutePage", () => {
     expect(text).not.toContain("Approve now");
 
     const liveLink = findLink(renderer!.root, "Open live session");
+    expect(liveLink.props.href).toBe("/chat?sessionId=session-chat&turnId=turn-chat&approvalId=approval-approved");
     await act(async () => {
       liveLink.props.onClick({ preventDefault: vi.fn() });
     });

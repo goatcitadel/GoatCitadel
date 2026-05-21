@@ -1323,6 +1323,78 @@ describe("CapabilitySystemService", () => {
     );
   });
 
+  it("includes approved Code Mode runs that hydrate to failed in failed status listings", async () => {
+    const harness = await createHarness();
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      requestedOutputIntent: "Return a JSON object.",
+      saveCandidateOnSuccess: false,
+      sessionId: "session-code",
+    });
+    const approval = harness.approvals.get("approval-1");
+    if (!approval) {
+      throw new Error("missing approval-1");
+    }
+    harness.approvals.set("approval-1", {
+      ...approval,
+      status: "approved",
+      resolvedAt: "2026-04-10T00:01:00.000Z",
+      resolvedBy: "operator",
+    });
+    vi.spyOn(harness.storage.pendingApprovalActions, "find").mockReturnValue(undefined);
+
+    expect(
+      harness.service.listCodeModeRuns({
+        sessionId: "session-code",
+        status: "failed",
+        limit: 5,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        runId: run.runId,
+        status: "failed",
+        errorCode: "pending_action_missing",
+      }),
+    ]);
+  });
+
+  it("includes rejected Code Mode runs that hydrate to rejected in rejected status listings", async () => {
+    const harness = await createHarness();
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      requestedOutputIntent: "Return a JSON object.",
+      saveCandidateOnSuccess: false,
+      sessionId: "session-code",
+    });
+    const approval = harness.approvals.get("approval-1");
+    if (!approval) {
+      throw new Error("missing approval-1");
+    }
+    harness.approvals.set("approval-1", {
+      ...approval,
+      status: "rejected",
+      resolvedAt: "2026-04-10T00:01:00.000Z",
+      resolvedBy: "operator",
+    });
+    vi.spyOn(harness.storage.pendingApprovalActions, "find").mockReturnValue(undefined);
+
+    expect(
+      harness.service.listCodeModeRuns({
+        sessionId: "session-code",
+        status: "rejected",
+        limit: 5,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        runId: run.runId,
+        status: "rejected",
+        errorCode: "approval_rejected_pending_action_missing",
+      }),
+    ]);
+  });
+
   it("rejects edited Code Mode runs on read when the pending action row is missing", async () => {
     const harness = await createHarness();
     const run = await harness.service.createCodeModeRun({

@@ -59,6 +59,16 @@ async function flushAsync() {
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
 async function renderApprovalQueue(options?: Parameters<typeof useApprovalQueue>[0]) {
   let latest!: ApprovalQueueResult;
   const Harness = () => {
@@ -138,6 +148,116 @@ describe("useApprovalQueue", () => {
     expect(hook.result.selectedApproval?.approvalId).toBe("approved-1");
     expect(hook.result.selectedApprovalId).toBe("approved-1");
     expect(hook.result.visibleItems.map((item) => item.approvalId)).toEqual(["expired-1", "approved-1"]);
+  });
+
+  it("does not keep focused approvals selected after the operator switches to a view where they are absent", async () => {
+    const hook = await renderApprovalQueue({ focusedApprovalId: "pending-1" });
+    expect(hook.result.selectedApproval?.approvalId).toBe("pending-1");
+
+    await act(async () => {
+      hook.result.setView("history");
+    });
+    await flushAsync();
+
+    expect(hook.result.visibleItems.map((item) => item.approvalId)).toEqual(["expired-1", "approved-1"]);
+    expect(hook.result.selectedApproval?.approvalId).toBe("expired-1");
+  });
+
+  it("refocuses the route when a focused pending approval resolves after refresh", async () => {
+    const hook = await renderApprovalQueue({ focusedApprovalId: "pending-1" });
+    expect(hook.result.view).toBe("pending");
+    expect(hook.result.selectedApproval?.approvalId).toBe("pending-1");
+
+    apiMocks.fetchApprovals.mockImplementation(async (status: ApprovalRequest["status"]) => ({
+      items:
+        status === "pending"
+          ? [
+              approval({
+                approvalId: "pending-other",
+                createdAt: "2026-01-01T11:30:00.000Z",
+              }),
+            ]
+          : status === "approved"
+            ? [
+                approval({
+                  approvalId: "pending-1",
+                  status: "approved",
+                  createdAt: "2026-01-01T11:00:00.000Z",
+                  resolvedAt: "2026-01-01T12:05:00.000Z",
+                  linkage: { durableRunId: "durable-1", correlationId: "corr-1" },
+                }),
+              ]
+            : [],
+    }));
+
+    await act(async () => {
+      await vi.mocked(useRefreshSubscription).mock.calls[0]?.[1]();
+    });
+
+    expect(hook.result.view).toBe("history");
+    expect(hook.result.selectedApproval?.approvalId).toBe("pending-1");
+    expect(hook.result.visibleItems.map((item) => item.approvalId)).toEqual(["pending-1"]);
+  });
+
+  it("ignores stale approval loads that settle after a newer refresh", async () => {
+    const firstLoad = {
+      pending: deferred<{ items: ApprovalRequest[] }>(),
+      approved: deferred<{ items: ApprovalRequest[] }>(),
+      rejected: deferred<{ items: ApprovalRequest[] }>(),
+      edited: deferred<{ items: ApprovalRequest[] }>(),
+    };
+    let callCount = 0;
+    apiMocks.fetchApprovals.mockImplementation(async (status: ApprovalRequest["status"]) => {
+      callCount += 1;
+      if (callCount <= 4) {
+        return firstLoad[status as keyof typeof firstLoad].promise;
+      }
+      return {
+        items:
+          status === "approved"
+            ? [
+                approval({
+                  approvalId: "pending-1",
+                  status: "approved",
+                  createdAt: "2026-01-01T11:00:00.000Z",
+                  resolvedAt: "2026-01-01T12:05:00.000Z",
+                  linkage: { durableRunId: "durable-1", correlationId: "corr-1" },
+                }),
+              ]
+            : [],
+      };
+    });
+
+    const hook = await renderApprovalQueue({ focusedApprovalId: "pending-1" });
+    expect(hook.result.loading).toBe(true);
+
+    await act(async () => {
+      await vi.mocked(useRefreshSubscription).mock.calls[0]?.[1]();
+    });
+    expect(hook.result.view).toBe("history");
+    expect(hook.result.selectedApproval?.approvalId).toBe("pending-1");
+
+    await act(async () => {
+      firstLoad.pending.resolve({
+        items: [
+          approval({
+            approvalId: "pending-1",
+            createdAt: "2026-01-01T11:00:00.000Z",
+            linkage: { durableRunId: "run-1", correlationId: "corr-1" },
+          }),
+        ],
+      });
+      firstLoad.approved.resolve({ items: [] });
+      firstLoad.rejected.resolve({ items: [] });
+      firstLoad.edited.resolve({ items: [] });
+      await Promise.all(Object.values(firstLoad).map((entry) => entry.promise));
+    });
+    await flushAsync();
+
+    expect(hook.result.view).toBe("history");
+    expect(hook.result.pendingItems.map((item) => item.approvalId)).toEqual([]);
+    expect(hook.result.historyItems.map((item) => item.approvalId)).toEqual(["pending-1"]);
+    expect(hook.result.selectedApproval?.status).toBe("approved");
   });
 
   it("can be disabled without loading approvals", async () => {
@@ -326,10 +446,7 @@ describe("useApprovalQueue", () => {
     expect(hook.result.summary).toBe("Approval pending-1 resolved and action completed: operator approved");
     expect(hook.result.replayById["pending-1"]).toEqual({ snapshots: [{ step: "after" }] });
     expect(hook.result.lifecycleByApprovalId["pending-1"]?.canonical?.runId).toBe("run-1");
-    expect(hook.result.durableByApprovalId["pending-1"]).toMatchObject({
-      runId: "run-1",
-      status: "approved",
-    });
+    expect(hook.result.durableByApprovalId["pending-1"]).toBeUndefined();
 
     await act(async () => {
       await hook.result.onReplay("pending-1");

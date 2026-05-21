@@ -78,12 +78,18 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
   const [view, setView] = useState<ApprovalView>("pending");
   const [selectedApprovalId, setSelectedApprovalId] = useState<string | null>(null);
   const appliedFocusedApprovalIdRef = useRef<string | undefined>(undefined);
+  const loadSequenceRef = useRef(0);
   const resolveAction = useAction();
   const bulkResolveAction = useAction();
 
   const load = useCallback(async () => {
+    const loadId = loadSequenceRef.current + 1;
+    loadSequenceRef.current = loadId;
     const statuses = ["pending", "approved", "rejected", "edited"] as const;
     const results = await Promise.allSettled(statuses.map((status) => fetchApprovals(status)));
+    if (loadSequenceRef.current !== loadId) {
+      return;
+    }
     const fulfilled = results
       .map((result, index) => ({ result, status: statuses[index] }))
       .filter(
@@ -151,19 +157,6 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
             items: [result.approval],
           },
     );
-    setDurableByApprovalId((current) => {
-      if (!result.durableRunId) {
-        return current;
-      }
-      return {
-        ...current,
-        [result.approval.approvalId]: {
-          runId: result.durableRunId,
-          status: result.approval.status,
-          updatedAt: result.approval.resolvedAt ?? result.approval.createdAt,
-        },
-      };
-    });
     setLifecycleByApprovalId((current) => ({
       ...current,
       [result.approval.approvalId]: {
@@ -397,30 +390,45 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
     () => allItems.find((approval) => approval.approvalId === options.focusedApprovalId) ?? null,
     [allItems, options.focusedApprovalId],
   );
+  const focusedApprovalKey = useMemo(() => {
+    if (!focusedApproval || !options.focusedApprovalId) {
+      return undefined;
+    }
+    return [
+      options.focusedApprovalId,
+      focusedApproval.status,
+      isExpiredApproval(focusedApproval) ? "expired" : "active",
+      hasRecoveryLinkage(focusedApproval) ? "recovery" : "standard",
+    ].join(":");
+  }, [focusedApproval, options.focusedApprovalId]);
 
   useEffect(() => {
     if (!options.focusedApprovalId) {
       appliedFocusedApprovalIdRef.current = undefined;
       return;
     }
-    if (!focusedApproval || appliedFocusedApprovalIdRef.current === options.focusedApprovalId) {
+    if (!focusedApproval || !focusedApprovalKey || appliedFocusedApprovalIdRef.current === focusedApprovalKey) {
       return;
     }
-    appliedFocusedApprovalIdRef.current = options.focusedApprovalId;
+    appliedFocusedApprovalIdRef.current = focusedApprovalKey;
     const focusedView: ApprovalView =
       focusedApproval.status === "pending" && !isExpiredApproval(focusedApproval)
         ? "pending"
-        : hasRecoveryLinkage(focusedApproval)
-          ? "recovery"
-          : "history";
+        : focusedApproval.status === "approved" ||
+            focusedApproval.status === "rejected" ||
+            focusedApproval.status === "edited" ||
+            isExpiredApproval(focusedApproval)
+          ? "history"
+          : hasRecoveryLinkage(focusedApproval)
+            ? "recovery"
+            : "history";
     if (view !== focusedView) {
       setView(focusedView);
     }
-  }, [focusedApproval, options.focusedApprovalId, view]);
+  }, [focusedApproval, focusedApprovalKey, options.focusedApprovalId, view]);
 
   const selectedApproval =
     visibleItems.find((approval) => approval.approvalId === selectedApprovalId) ??
-    focusedApproval ??
     visibleItems.find((approval) => approval.approvalId === options.focusedApprovalId) ??
     visibleItems[0] ??
     null;

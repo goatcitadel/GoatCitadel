@@ -87,14 +87,19 @@ export class OrchestrationRepository {
   public constructor(private readonly db: DatabaseClient) {
     this.upsertPlanStmt = db.prepare(`
       INSERT INTO orchestration_plans (
-        plan_id, plan_json, created_at, updated_at
-      ) VALUES (@planId, @planJson, @createdAt, @updatedAt)
-      ON CONFLICT(plan_id) DO UPDATE SET
+        plan_id, workspace_id, plan_json, created_at, updated_at
+      ) VALUES (@planId, @workspaceId, @planJson, @createdAt, @updatedAt)
+      ON CONFLICT(plan_id, workspace_id) DO UPDATE SET
         plan_json = excluded.plan_json,
         updated_at = excluded.updated_at
     `);
 
-    this.getPlanStmt = db.prepare("SELECT plan_json FROM orchestration_plans WHERE plan_id = ?");
+    this.getPlanStmt = db.prepare(`
+      SELECT plan_json
+      FROM orchestration_plans
+      WHERE plan_id = @planId
+        AND workspace_id = @workspaceId
+    `);
 
     this.createRunStmt = db.prepare(`
       INSERT INTO orchestration_runs (
@@ -211,18 +216,21 @@ export class OrchestrationRepository {
     `);
   }
 
-  public upsertPlan(plan: OrchestrationPlan): void {
+  public upsertPlan(plan: OrchestrationPlan, workspaceId = "default"): void {
     const now = new Date().toISOString();
     this.upsertPlanStmt.run({
       planId: plan.planId,
+      workspaceId: normalizeWorkspaceId(workspaceId),
       planJson: JSON.stringify(plan),
       createdAt: now,
       updatedAt: now,
     });
   }
 
-  public getPlan(planId: string): OrchestrationPlan {
-    const row = this.getPlanStmt.get(planId) as { plan_json: string } | undefined;
+  public getPlan(planId: string, workspaceId = "default"): OrchestrationPlan {
+    const row = this.getPlanStmt.get({ planId, workspaceId: normalizeWorkspaceId(workspaceId) }) as
+      | { plan_json: string }
+      | undefined;
     if (!row) {
       throw new NotFoundError({ entity: "Orchestration plan", id: planId });
     }
@@ -507,4 +515,9 @@ function isOrchestrationCheckpointRow(value: unknown): value is OrchestrationChe
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function normalizeWorkspaceId(value?: string): string {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : "default";
 }

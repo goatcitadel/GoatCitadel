@@ -92,7 +92,7 @@ When changing this repo:
 6. Do not introduce new dependencies without clear need.
 7. Validate proportionally to risk.
 8. Report what changed, what was tested, and what remains uncertain.
-9. Before acting on a GitHub Security finding (code scanning, secret scanning, dependabot), read [`docs/security/findings-triage.md`](docs/security/findings-triage.md). It captures the recurring CodeQL `js/missing-rate-limiting` false-positive pattern, the narrow `secret_scanning.yml` allowlist convention, and the rules around the synthetic token fixtures in the redaction tests. Do not re-derive these decisions from scratch.
+9. Before acting on a GitHub Security finding (code scanning, secret scanning, Dependabot), read [`docs/security/findings-triage.md`](docs/security/findings-triage.md). It captures recurring CodeQL patterns such as `js/missing-rate-limiting` and `js/unhandled-error-in-stream-pipeline`, Dependabot triage, the narrow `secret_scanning.yml` allowlist convention, and the rules around the synthetic token fixtures in the redaction tests. Do not re-derive these decisions from scratch.
 
 ## Source of Truth Order
 

@@ -23,6 +23,7 @@ const requiredFiles = [
   "docs/CANONICAL_RUNTIME_STATE_MODEL.md",
   "docs/DURABLE_RUNS_REPLAY_FOUNDATION.md",
   "docs/ENGINEERING_HANDBOOK.md",
+  "docs/security/findings-triage.md",
 ];
 
 const requiredHeadings = {
@@ -43,6 +44,11 @@ const requiredHeadings = {
     "## Recovery Truth",
     "## Backup Contract Evidence",
     "## Visible Surface Evidence",
+  ],
+  "docs/security/findings-triage.md": [
+    "# GitHub Security Findings",
+    "## 5. Dependabot Triage",
+    "## 6. CodeQL `js/unhandled-error-in-stream-pipeline`",
   ],
 };
 
@@ -94,6 +100,8 @@ for (const relPath of requiredFiles) {
 }
 
 const agentsGuide = await readFile(path.join(root, "AGENTS.md"), "utf8");
+const securityGuide = await readFile(path.join(root, "SECURITY.md"), "utf8");
+const securityTriageGuide = await readFile(path.join(root, "docs", "security", "findings-triage.md"), "utf8");
 if (
   !/apps\/mission-control-next` is the canonical `1\.0` Mission Control shell/i.test(agentsGuide) ||
   !/apps\/mission-control` is compatibility-only/i.test(agentsGuide)
@@ -103,6 +111,22 @@ if (
 if (!/trusted-code surface/i.test(agentsGuide) || !/Do not claim hostile-code sandboxing/i.test(agentsGuide)) {
   errors.push("AGENTS.md must keep Code Mode guidance truthful and avoid hostile-code sandbox claims.");
 }
+if (!/js\/unhandled-error-in-stream-pipeline/.test(agentsGuide) || !/Dependabot/.test(agentsGuide)) {
+  errors.push("AGENTS.md must keep GitHub Security triage guidance current for Dependabot and stream-pipeline CodeQL findings.");
+}
+if (
+  !/\[.*?docs\/security\/findings-triage\.md.*?\]\(docs\/security\/findings-triage\.md\)/s.test(securityGuide) ||
+  !/js\/unhandled-error-in-stream-pipeline/.test(securityGuide) ||
+  !/js\/missing-rate-limiting/.test(securityGuide) ||
+  !/Dependabot/.test(securityGuide)
+) {
+  errors.push(
+    "SECURITY.md must link the GitHub Security findings triage guide and name the recurring CodeQL and Dependabot triage surfaces.",
+  );
+}
+await validateRelativeMarkdownLinks("AGENTS.md", agentsGuide);
+await validateRelativeMarkdownLinks("SECURITY.md", securityGuide);
+await validateRelativeMarkdownLinks("docs/security/findings-triage.md", securityTriageGuide);
 if (
   !/## Source of Truth Order[\s\S]*1\. current implementation under `apps\/` and `packages\/`[\s\S]*2\. `docs\/CANONICAL_RUNTIME_STATE_MODEL\.md`[\s\S]*3\. `docs\/1_0_CONTRACT\.md`[\s\S]*4\. `docs\/ENGINEERING_HANDBOOK\.md`/m.test(
     agentsGuide,
@@ -384,14 +408,7 @@ for (const [index, line] of releaseEvidence.split(/\r?\n/).entries()) {
     );
   }
 }
-for (const linkTarget of extractRelativeMarkdownLinks(releaseEvidence)) {
-  const resolvedTarget = path.resolve(path.dirname(releaseEvidencePath), linkTarget);
-  try {
-    await access(resolvedTarget, constants.F_OK | constants.R_OK);
-  } catch {
-    errors.push(`docs/1_0_RELEASE_EVIDENCE.md points to a missing proof anchor: ${linkTarget}`);
-  }
-}
+await validateRelativeMarkdownLinks("docs/1_0_RELEASE_EVIDENCE.md", releaseEvidence, "proof anchor");
 
 const adminRouteSource = await readFile(path.join(root, "apps", "gateway", "src", "routes", "admin.ts"), "utf8");
 if (!/buildOfflineRestoreRequiredResponse/.test(adminRouteSource)) {
@@ -515,6 +532,22 @@ function extractRelativeMarkdownLinks(content) {
     links.push(target);
   }
   return links;
+}
+
+async function validateRelativeMarkdownLinks(relPath, content, label = "relative link") {
+  const sourceDir = path.dirname(path.join(root, relPath));
+  for (const linkTarget of extractRelativeMarkdownLinks(content)) {
+    const targetPath = linkTarget.split("#")[0];
+    if (!targetPath) {
+      continue;
+    }
+    const resolvedTarget = path.resolve(sourceDir, targetPath);
+    try {
+      await access(resolvedTarget, constants.F_OK | constants.R_OK);
+    } catch {
+      errors.push(`${relPath} points to a missing ${label}: ${linkTarget}`);
+    }
+  }
 }
 
 function deriveMissionControlNextReleaseRoutes(source) {

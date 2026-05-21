@@ -12,6 +12,7 @@ const repoRoot = path.resolve(scriptDir, "../..");
 const args = parseArgs(process.argv.slice(2));
 const version = normalizeVersion(args.version);
 const tagName = args.tag ?? process.env.GITHUB_REF_NAME ?? `v${version}`;
+const releaseSourceRef = process.env.GITHUB_SHA ?? "main";
 const artifactsDir = path.resolve(args.artifactsDir ?? path.join(repoRoot, "release-artifacts"));
 const sbomFile = path.resolve(
   args.sbomFile ?? path.join(repoRoot, "artifacts", "release", `goatcitadel-${tagName}.cyclonedx.json`),
@@ -171,26 +172,45 @@ function copyArtifactWithProofs(artifactPath, destinationDir) {
 
 function copyDocs(destinationDir) {
   const docSources = [
-    path.join(repoRoot, "CHANGELOG.md"),
-    path.join(repoRoot, "SECURITY.md"),
-    path.join(repoRoot, "docs", "reproducible-release.md"),
-    path.join(repoRoot, "docs", "supported-platforms.md"),
-    path.join(repoRoot, "docs", "smoke-tests.md"),
-    path.join(repoRoot, "docs", "dependency-policy.md"),
+    { source: path.join(repoRoot, "CHANGELOG.md"), target: "CHANGELOG.md" },
+    { source: path.join(repoRoot, "AGENTS.md"), target: "AGENTS.md" },
+    {
+      source: path.join(repoRoot, "SECURITY.md"),
+      target: "SECURITY.md",
+      rewrite: (content) =>
+        content.replaceAll(
+          "(docs/security/findings-triage.md)",
+          "(security/findings-triage.md)",
+        ),
+    },
+    { source: path.join(repoRoot, "docs", "reproducible-release.md"), target: "reproducible-release.md" },
+    { source: path.join(repoRoot, "docs", "supported-platforms.md"), target: "supported-platforms.md" },
+    { source: path.join(repoRoot, "docs", "smoke-tests.md"), target: "smoke-tests.md" },
+    { source: path.join(repoRoot, "docs", "dependency-policy.md"), target: "dependency-policy.md" },
+    {
+      source: path.join(repoRoot, "docs", "security", "findings-triage.md"),
+      target: "security/findings-triage.md",
+      rewrite: rewriteReleaseTriageLinks,
+    },
   ];
   const codeownersPath = fs.existsSync(path.join(repoRoot, "CODEOWNERS"))
     ? path.join(repoRoot, "CODEOWNERS")
     : path.join(repoRoot, ".github", "CODEOWNERS");
-  docSources.push(codeownersPath);
+  docSources.push({ source: codeownersPath, target: path.basename(codeownersPath) });
 
   const optionalSources = [path.join(repoRoot, "LICENSE"), path.join(repoRoot, "docs", "PACKAGING.md")];
 
-  for (const sourcePath of docSources) {
+  for (const { source: sourcePath, target, rewrite } of docSources) {
     if (!fs.existsSync(sourcePath)) {
       throw new Error(`Missing required release doc: ${sourcePath}`);
     }
-    const targetName = path.basename(sourcePath);
-    fs.copyFileSync(sourcePath, path.join(destinationDir, targetName));
+    const targetPath = path.join(destinationDir, target);
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    if (rewrite) {
+      fs.writeFileSync(targetPath, rewrite(fs.readFileSync(sourcePath, "utf8")), "utf8");
+      continue;
+    }
+    fs.copyFileSync(sourcePath, targetPath);
   }
 
   for (const sourcePath of optionalSources) {
@@ -199,6 +219,15 @@ function copyDocs(destinationDir) {
     }
     fs.copyFileSync(sourcePath, path.join(destinationDir, path.basename(sourcePath)));
   }
+}
+
+function rewriteReleaseTriageLinks(content) {
+  return content
+    .replaceAll("(../../SECURITY.md)", "(../SECURITY.md)")
+    .replaceAll("(../../AGENTS.md)", "(../AGENTS.md)")
+    .replace(/\]\(\.\.\/\.\.\/([^)\s#]+)(#[^)]+)?\)/g, (_match, target, anchor = "") => {
+      return `](https://github.com/goatcitadel/GoatCitadel/blob/${releaseSourceRef}/${target}${anchor})`;
+    });
 }
 
 function buildMetadataRecord(input) {

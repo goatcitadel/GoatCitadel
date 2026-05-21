@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- The next shell coordinates top-level routing, realtime state, and inspector chrome while route extraction continues. */
-import { Suspense, startTransition, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Suspense, startTransition, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Activity,
   Bell,
@@ -95,7 +95,8 @@ type ShellStatusState = {
   dashboard: DashboardStateResponse | null;
   health: HealthSummaryResponse | null;
   lastLoadedAt: number | null;
-  error: string | null;
+  dashboardError: string | null;
+  healthError: string | null;
 };
 
 type RailSection = {
@@ -146,8 +147,10 @@ export function MissionControlNextApp() {
     dashboard: null,
     health: null,
     lastLoadedAt: null,
-    error: null,
+    dashboardError: null,
+    healthError: null,
   });
+  const shellStatusRefreshIdRef = useRef(0);
 
   const navigate = useCallback((nextRoute: AppRoute, options?: { replace?: boolean }) => {
     const normalized = normalizeAppRoute(nextRoute);
@@ -296,7 +299,20 @@ export function MissionControlNextApp() {
   ]);
   const inspectorEntry = detailEntry ?? passiveInspectorEntry;
   const pendingApprovals = status.dashboard?.pendingApprovals ?? 0;
-  const operatorNotificationCount = (status.health?.daemonStatus?.running ? 0 : 1) + (notifications.length > 0 ? 1 : 0);
+  const shellStatusError = status.dashboardError ?? status.healthError;
+  const daemonStatusUnavailable = Boolean(status.healthError);
+  const daemonHealthKnown =
+    !daemonStatusUnavailable && status.health?.daemonStatus !== undefined && status.health?.daemonStatus !== null;
+  const daemonNeedsIntervention = daemonHealthKnown && status.health?.daemonStatus?.running === false;
+  const daemonStatusValue = daemonStatusUnavailable
+    ? "Unavailable"
+    : status.health?.daemonStatus?.running
+      ? "Serving"
+      : daemonHealthKnown
+        ? "Needs intervention"
+        : "Checking";
+  const operatorNotificationCount =
+    (daemonStatusUnavailable || daemonNeedsIntervention ? 1 : 0) + (notifications.length > 0 ? 1 : 0);
   const railSignalTitle = route.area === "settings" ? "Configuration posture" : "Operator posture";
   const railSignalLines =
     route.area === "settings"
@@ -312,20 +328,53 @@ export function MissionControlNextApp() {
   }, []);
 
   const syncShellStatus = useCallback(async () => {
-    try {
-      const [dashboard, health] = await Promise.all([fetchDashboardState(), fetchHealthSummary()]);
-      setStatus({
-        dashboard,
-        health,
-        lastLoadedAt: Date.now(),
-        error: null,
+    const refreshId = shellStatusRefreshIdRef.current + 1;
+    shellStatusRefreshIdRef.current = refreshId;
+    const isCurrentRefresh = () => shellStatusRefreshIdRef.current === refreshId;
+    void fetchDashboardState()
+      .then((dashboard) => {
+        if (!isCurrentRefresh()) {
+          return;
+        }
+        setStatus((current) => ({
+          ...current,
+          dashboard,
+          lastLoadedAt: Date.now(),
+          dashboardError: null,
+        }));
+      })
+      .catch((error) => {
+        if (!isCurrentRefresh()) {
+          return;
+        }
+        setStatus((current) => ({
+          ...current,
+          lastLoadedAt: Date.now(),
+          dashboardError: error instanceof Error ? error.message : "Unable to refresh dashboard status.",
+        }));
       });
-    } catch (error) {
-      setStatus((current) => ({
-        ...current,
-        error: error instanceof Error ? error.message : "Unable to refresh shell status.",
-      }));
-    }
+    void fetchHealthSummary()
+      .then((health) => {
+        if (!isCurrentRefresh()) {
+          return;
+        }
+        setStatus((current) => ({
+          ...current,
+          health,
+          lastLoadedAt: Date.now(),
+          healthError: null,
+        }));
+      })
+      .catch((error) => {
+        if (!isCurrentRefresh()) {
+          return;
+        }
+        setStatus((current) => ({
+          ...current,
+          lastLoadedAt: Date.now(),
+          healthError: error instanceof Error ? error.message : "Unable to refresh daemon health.",
+        }));
+      });
   }, []);
 
   const loadWorkspaceOptions = useCallback(async () => {
@@ -432,12 +481,14 @@ export function MissionControlNextApp() {
 
   useEffect(() => {
     if (gatewayAccess.status !== "ready") {
+      shellStatusRefreshIdRef.current += 1;
       setWorkspaceOptions([]);
       setStatus({
         dashboard: null,
         health: null,
         lastLoadedAt: null,
-        error: null,
+        dashboardError: null,
+        healthError: null,
       });
       return;
     }
@@ -738,7 +789,7 @@ export function MissionControlNextApp() {
                     <span className={`mc-next-stage-chip${realtimeStatusCopy.degraded ? " warning" : ""}`}>
                       {realtimeStatusCopy.stage}
                     </span>
-                    {status.error ? (
+                    {shellStatusError ? (
                       <span className="mc-next-stage-chip warning">Shell status needs refresh</span>
                     ) : null}
                   </div>
@@ -808,11 +859,7 @@ export function MissionControlNextApp() {
               label="Spend"
               value={formatUsd(status.dashboard?.dailyCostUsd ?? 0)}
             />
-            <StatusPill
-              icon={<Bot size={15} />}
-              label="Daemon"
-              value={status.health?.daemonStatus?.running ? "Serving" : "Needs intervention"}
-            />
+            <StatusPill icon={<Bot size={15} />} label="Daemon" value={daemonStatusValue} />
           </footer>
         </div>
 

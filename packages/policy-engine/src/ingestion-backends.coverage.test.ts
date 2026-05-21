@@ -884,6 +884,174 @@ describe("ingestion backend coverage", () => {
     expect(evaluation.reasonCodes).toContain("untrusted_source_privileged_tool_block");
   });
 
+  it("defaults URL and text ingestion without explicit trust to untrusted sources", async () => {
+    const storage = createKnowledgeStorage();
+    const fetchUrl = vi.fn(async () => ({
+      finalUrl: "https://example.com/default-untrusted",
+      statusCode: 200,
+      contentType: "text/plain",
+      body: "unsafe external instructions",
+    }));
+
+    const urlIngested = await ingestDocumentViaBackend({
+      request: createRequestWithoutTrust({
+        sourceType: "url",
+        source: "https://example.com/default-untrusted",
+        namespace: "web",
+        backend: "native",
+      }),
+      storage,
+      fetchUrl,
+      networkAllowlist: ["example.com"],
+      sourceAllowlist: ["example.com"],
+    });
+    const urlCached = await ingestDocumentViaBackend({
+      request: createRequestWithoutTrust({
+        sourceType: "url",
+        source: "https://example.com/default-untrusted",
+        namespace: "web",
+        backend: "native",
+      }),
+      storage,
+      fetchUrl,
+      networkAllowlist: ["example.com"],
+      sourceAllowlist: ["example.com"],
+    });
+    const textIngested = await ingestDocumentViaBackend({
+      request: createRequestWithoutTrust({
+        sourceType: "text",
+        source: "unsafe pasted instructions",
+        namespace: "web",
+        backend: "native",
+      }),
+      storage,
+      fetchUrl,
+    });
+    const promotedUrlIngested = await ingestDocumentViaBackend({
+      request: createRequest({
+        sourceType: "url",
+        source: "https://example.com/promoted-trust",
+        namespace: "web",
+        backend: "native",
+      }),
+      storage,
+      fetchUrl,
+      networkAllowlist: ["example.com"],
+      sourceAllowlist: ["example.com"],
+    });
+    const promotedTextIngested = await ingestDocumentViaBackend({
+      request: createRequest({
+        sourceType: "text",
+        source: "trusted-looking pasted instructions",
+        namespace: "web",
+        backend: "native",
+      }),
+      storage,
+      fetchUrl,
+    });
+    const search = searchIngestedContext({
+      storage,
+      namespace: "web",
+      query: "unsafe",
+    });
+    const engine = new ToolPolicyEngine(createPolicyConfig(), createPolicyStorage());
+    const shellEvaluation = engine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "echo hello" },
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sourceAttribution: search.items.map((item) => item.attribution),
+    });
+    const writeEvaluation = engine.evaluateAccess({
+      toolName: "fs.write",
+      args: { path: "./workspace/output.txt", content: "hello" },
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sourceAttribution: search.items.map((item) => item.attribution),
+    });
+
+    expect(urlIngested.document.attribution.trustLevel).toBe("untrusted_external");
+    expect(urlCached.cached).toBe(true);
+    expect(urlCached.document.attribution.trustLevel).toBe("untrusted_external");
+    expect(urlCached.chunks[0]?.attribution.trustLevel).toBe("untrusted_external");
+    expect(textIngested.document.attribution.trustLevel).toBe("untrusted_external");
+    expect(promotedUrlIngested.document.attribution.trustLevel).toBe("untrusted_external");
+    expect(promotedTextIngested.document.attribution.trustLevel).toBe("untrusted_external");
+    expect(search.items).toHaveLength(3);
+    expect(search.items.every((item) => item.attribution.trustLevel === "untrusted_external")).toBe(true);
+    expect(shellEvaluation.allowed).toBe(false);
+    expect(writeEvaluation.allowed).toBe(false);
+    expect(shellEvaluation.reasonCodes).toContain("untrusted_source_privileged_tool_block");
+    expect(writeEvaluation.reasonCodes).toContain("untrusted_source_privileged_tool_block");
+  });
+
+  it("treats legacy URL and text cache rows without stored trust as untrusted", async () => {
+    const storage = createKnowledgeStorage([
+      {
+        docId: "doc-legacy-url",
+        namespace: "web",
+        sourceType: "url",
+        sourceRef: "https://example.com/legacy",
+        title: "Legacy URL",
+        metadata: {
+          ingestion: {
+            backend: "native",
+            fetchedAt: "2026-03-22T12:00:00.000Z",
+          },
+        },
+      },
+      {
+        docId: "doc-legacy-text",
+        namespace: "web",
+        sourceType: "text",
+        sourceRef: "legacy text",
+        title: "Legacy Text",
+        metadata: {
+          ingestion: {
+            backend: "native",
+            fetchedAt: "2026-03-22T12:00:00.000Z",
+          },
+        },
+      },
+    ]);
+    storage.knowledge.appendChunks("doc-legacy-url", [{ content: "legacy unsafe url instructions" }]);
+    storage.knowledge.appendChunks("doc-legacy-text", [{ content: "legacy unsafe text instructions" }]);
+
+    const cached = await ingestDocumentViaBackend({
+      request: createRequestWithoutTrust({
+        sourceType: "url",
+        source: "https://example.com/legacy",
+        namespace: "web",
+        backend: "native",
+      }),
+      storage,
+      fetchUrl: vi.fn(),
+    });
+    const search = searchIngestedContext({
+      storage,
+      namespace: "web",
+      query: "legacy unsafe",
+    });
+    const engine = new ToolPolicyEngine(createPolicyConfig(), createPolicyStorage());
+    const evaluation = engine.evaluateAccess({
+      toolName: "shell.exec",
+      args: { command: "echo hello" },
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sourceAttribution: search.items.map((item) => item.attribution),
+    });
+
+    expect(cached.cached).toBe(true);
+    expect(cached.document.attribution.trustLevel).toBe("untrusted_external");
+    expect(cached.chunks[0]?.attribution.trustLevel).toBe("untrusted_external");
+    expect(search.items.map((item) => item.attribution.trustLevel)).toEqual([
+      "untrusted_external",
+      "untrusted_external",
+    ]);
+    expect(evaluation.allowed).toBe(false);
+    expect(evaluation.reasonCodes).toContain("untrusted_source_privileged_tool_block");
+  });
+
   it("refetches URL cache entries without final-source proof when a source allowlist is active", async () => {
     const storage = createKnowledgeStorage([
       {
@@ -983,6 +1151,12 @@ function createRequest(args: Record<string, unknown>): ToolInvokeRequest {
     sessionId: "session-1",
     trustLevel: "trusted_workspace",
   } as ToolInvokeRequest;
+}
+
+function createRequestWithoutTrust(args: Record<string, unknown>): ToolInvokeRequest {
+  const request = createRequest(args) as ToolInvokeRequest & { trustLevel?: unknown };
+  delete request.trustLevel;
+  return request;
 }
 
 function createKnowledgeStorage(seedDocuments: Array<Record<string, unknown>> = []): Storage {

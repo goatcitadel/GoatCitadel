@@ -60,4 +60,4 @@ jobs:
         with:
           name: verification-nightly-core-artifacts
           path: artifacts/verification
-          if-no-files-found: ignore
+          if-no-files-found: error

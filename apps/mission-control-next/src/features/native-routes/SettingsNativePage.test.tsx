@@ -1410,11 +1410,30 @@ describe("SettingsNativePage permissions", () => {
       }),
     );
 
-    await act(async () => {
-      findButton(renderer!.root, "Archive profile").props.onClick();
+    const previousWindow = globalThis.window;
+    const confirmSpy = vi.fn(() => false);
+    Object.assign(globalThis, {
+      window: {
+        confirm: confirmSpy,
+      },
     });
-    await flushAsyncUpdates();
-    expect(mocks.archivePermissionProfile).toHaveBeenCalledWith("profile-review");
+    try {
+      await act(async () => {
+        findButton(renderer!.root, "Archive profile").props.onClick();
+      });
+      await flushAsyncUpdates();
+      expect(confirmSpy).toHaveBeenCalledWith("Archive permission profile Review profile?");
+      expect(mocks.archivePermissionProfile).not.toHaveBeenCalled();
+
+      confirmSpy.mockReturnValue(true);
+      await act(async () => {
+        findButton(renderer!.root, "Archive profile").props.onClick();
+      });
+      await flushAsyncUpdates();
+      expect(mocks.archivePermissionProfile).toHaveBeenCalledWith("profile-review");
+    } finally {
+      Object.assign(globalThis, { window: previousWindow });
+    }
   });
 
   it("keeps skip-routine custom profiles unavailable in Remote Hardened mode", async () => {

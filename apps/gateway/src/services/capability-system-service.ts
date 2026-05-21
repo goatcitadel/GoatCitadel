@@ -410,7 +410,12 @@ export class CapabilitySystemService {
   private listStoredCodeModeRunsForRead(
     filters: Required<Pick<CodeModeRunListOptions, "limit">> & CodeModeRunListOptions,
   ): CodeModeRunRecord[] {
-    if (filters.status === "expired" || filters.status === "approval_pending") {
+    if (
+      filters.status === "expired" ||
+      filters.status === "approval_pending" ||
+      filters.status === "failed" ||
+      filters.status === "rejected"
+    ) {
       const repository = this.options.storage.codeModeRuns as typeof this.options.storage.codeModeRuns & {
         listFilteredForStatusHydration?: (
           options: CodeModeRunListOptions & { status: CodeModeRunRecord["status"] },

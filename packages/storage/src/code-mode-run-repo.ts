@@ -264,7 +264,11 @@ export class CodeModeRunRepository {
     turnId?: string;
     status: CodeModeRunRecord["status"];
   }): CodeModeRunRecord[] {
-    const includeApprovalPending = options.status === "expired" || options.status === "approval_pending";
+    const includeApprovalPending =
+      options.status === "expired" ||
+      options.status === "approval_pending" ||
+      options.status === "failed" ||
+      options.status === "rejected";
     return (
       this.listFilteredForStatusHydrationStmt.all({
         workspaceId: options.workspaceId ?? null,

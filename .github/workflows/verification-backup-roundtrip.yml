@@ -80,4 +80,4 @@ jobs:
         with:
           name: verification-backup-roundtrip-artifacts
           path: artifacts/verification
-          if-no-files-found: ignore
+          if-no-files-found: error

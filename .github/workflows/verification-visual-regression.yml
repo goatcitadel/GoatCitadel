@@ -83,4 +83,4 @@ jobs:
         with:
           name: verification-visual-regression-artifacts
           path: artifacts/verification
-          if-no-files-found: ignore
+          if-no-files-found: error

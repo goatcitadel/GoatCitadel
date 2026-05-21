@@ -12,7 +12,7 @@ import {
   isExpiredApproval,
 } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 import { useApprovalQueue } from "@goatcitadel/mission-control-shared/hooks/useApprovalQueue";
-import type { AppRoute } from "@next/app/route-model";
+import { buildAppHref, type AppRoute } from "@next/app/route-model";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
 import { ShellExplanationList } from "./ShellExplanationList";
@@ -268,6 +268,9 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
                 onOpenLiveLane={
                   liveLaneRoute
                     ? (event) => {
+                        if (!shouldHandleClientNavigation(event)) {
+                          return;
+                        }
                         event.preventDefault();
                         navigate(liveLaneRoute);
                       }
@@ -340,6 +343,19 @@ function buildApprovalConfirmationCopy(confirmation: ApprovalConfirmation): {
   };
 }
 
+function shouldHandleClientNavigation(event: MouseEvent<HTMLAnchorElement>): boolean {
+  const isPrimaryClick = event.button === undefined || event.button === 0;
+  const target = event.currentTarget?.target;
+  return (
+    isPrimaryClick &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey &&
+    (!target || target === "_self")
+  );
+}
+
 function ApprovalViewButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
   return (
     <button
@@ -406,6 +422,7 @@ function ApprovalInspectorCard(props: {
         : (findTraceMetadata(replay?.pendingAction?.request) ??
           findTraceMetadata(approval.payload) ??
           findTraceMetadata(approval.preview));
+  const liveLaneHref = liveLaneRoute ? buildAppHref(liveLaneRoute) : null;
 
   return (
     <div className="mc-next-approvals-inspector">
@@ -473,8 +490,8 @@ function ApprovalInspectorCard(props: {
           <button type="button" className="gc-button subtle" onClick={onReplay}>
             Load replay trail
           </button>
-          {liveLaneRoute && onOpenLiveLane ? (
-            <a href="#" className="mc-next-approvals-link-button" onClick={onOpenLiveLane}>
+          {liveLaneHref && onOpenLiveLane ? (
+            <a href={liveLaneHref} className="mc-next-approvals-link-button" onClick={onOpenLiveLane}>
               Open live session
             </a>
           ) : null}

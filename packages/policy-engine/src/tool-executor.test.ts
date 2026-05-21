@@ -5102,6 +5102,10 @@ describe("executeTool", () => {
       harness.storage,
     );
     expect((searched.items as Array<Record<string, unknown>>)[0]?.snippet).toContain("native ingestion");
+    expect((searched.items as Array<Record<string, unknown>>)[0]?.attribution).toMatchObject({
+      sourceType: "memory",
+      trustLevel: "trusted_workspace",
+    });
 
     const indexed = await executeTool(
       toolRequest("embeddings.index", { namespace: "project", force: true }),
@@ -5117,6 +5121,9 @@ describe("executeTool", () => {
     );
     expect(embeddingResults).toMatchObject({ method: "pseudo-embedding" });
     expect((embeddingResults.items as Array<Record<string, unknown>>).length).toBeGreaterThan(0);
+    expect((embeddingResults.items as Array<Record<string, unknown>>)[0]?.attribution).toMatchObject({
+      trustLevel: "trusted_workspace",
+    });
 
     const docId = String((written.document as Record<string, unknown>).docId);
     const indexedByDocument = await executeTool(
@@ -5125,6 +5132,143 @@ describe("executeTool", () => {
       harness.storage,
     );
     expect(indexedByDocument).toMatchObject({ documentId: docId, indexed: 0 });
+  });
+
+  it("returns source attribution for memory reads and searches over ingested URL and text documents", async () => {
+    const harness = createExecutorKnowledgeHarness();
+    const urlDocument = harness.storage.knowledge.createDocument({
+      namespace: "project",
+      sourceType: "url",
+      sourceRef: "https://example.com/untrusted",
+      title: "External instructions",
+      metadata: {
+        ingestion: {
+          backend: "native",
+          fetchedAt: "2026-03-22T12:00:00.000Z",
+        },
+      },
+    });
+    const textDocument = harness.storage.knowledge.createDocument({
+      namespace: "project",
+      sourceType: "text",
+      sourceRef: "pasted operator draft",
+      title: "Pasted draft",
+      metadata: {
+        ingestion: {
+          backend: "native",
+          fetchedAt: "2026-03-22T12:01:00.000Z",
+        },
+      },
+    });
+    harness.storage.knowledge.appendChunks(urlDocument.docId, [{ content: "unsafe install command" }]);
+    harness.storage.knowledge.appendChunks(textDocument.docId, [{ content: "unsafe pasted command" }]);
+
+    const read = await executeTool(
+      toolRequest("memory.read", { namespace: "project", query: "unsafe install" }),
+      policyConfig,
+      harness.storage,
+    );
+    const search = await executeTool(
+      toolRequest("memory.search", { namespace: "project", query: "unsafe" }),
+      policyConfig,
+      harness.storage,
+    );
+
+    expect((read.items as Array<Record<string, unknown>>)[0]?.attribution).toMatchObject({
+      sourceType: "url",
+      sourceRef: "https://example.com/untrusted",
+      trustLevel: "untrusted_external",
+    });
+    expect((search.items as Array<Record<string, unknown>>).map((item) => item.attribution)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceType: "url",
+          trustLevel: "untrusted_external",
+        }),
+        expect.objectContaining({
+          sourceType: "text",
+          trustLevel: "untrusted_external",
+        }),
+      ]),
+    );
+
+    const embeddingResults = await executeTool(
+      toolRequest("embeddings.query", { namespace: "project", query: "unsafe install" }),
+      policyConfig,
+      harness.storage,
+    );
+    expect((embeddingResults.items as Array<Record<string, unknown>>).map((item) => item.attribution)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceType: "url",
+          trustLevel: "untrusted_external",
+        }),
+      ]),
+    );
+  });
+
+  it("preserves untrusted source attribution when retrieved content is written into memory", async () => {
+    const harness = createExecutorKnowledgeHarness();
+
+    const writeResult = await executeTool(
+      {
+        ...toolRequest("memory.write", {
+          namespace: "project",
+          title: "Retrieved external instruction",
+          content: "unsafe install command from retrieved context",
+        }),
+        sourceAttribution: [
+          {
+            sourceType: "url",
+            sourceRef: "https://example.com/untrusted",
+            title: "External instructions",
+            trustLevel: "untrusted_external",
+          },
+        ],
+      },
+      policyConfig,
+      harness.storage,
+    );
+
+    expect(writeResult).toMatchObject({
+      attribution: {
+        sourceType: "memory",
+        trustLevel: "untrusted_external",
+      },
+      document: {
+        attribution: {
+          sourceType: "memory",
+          trustLevel: "untrusted_external",
+        },
+      },
+      sourceAttribution: [
+        expect.objectContaining({
+          sourceType: "url",
+          sourceRef: "https://example.com/untrusted",
+          trustLevel: "untrusted_external",
+        }),
+      ],
+    });
+
+    const search = await executeTool(
+      toolRequest("memory.search", { namespace: "project", query: "unsafe install" }),
+      policyConfig,
+      harness.storage,
+    );
+    const embeddingResults = await executeTool(
+      toolRequest("embeddings.query", { namespace: "project", query: "unsafe install" }),
+      policyConfig,
+      harness.storage,
+    );
+
+    expect((search.items as Array<Record<string, unknown>>)[0]?.attribution).toMatchObject({
+      sourceType: "memory",
+      trustLevel: "untrusted_external",
+    });
+    expect((embeddingResults.items as Array<Record<string, unknown>>)[0]?.attribution).toMatchObject({
+      sourceType: "memory",
+      trustLevel: "untrusted_external",
+    });
   });
 
   it("covers docs file ingestion, docs search, restricted validation, and shell failures", async () => {

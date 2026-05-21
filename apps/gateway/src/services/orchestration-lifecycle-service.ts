@@ -97,8 +97,8 @@ export interface OrchestrationLifecycleHost {
   };
   readonly storage: {
     orchestration: {
-      upsertPlan(plan: OrchestrationPlan): void;
-      getPlan(planId: string): OrchestrationPlan;
+      upsertPlan(plan: OrchestrationPlan, workspaceId?: string): void;
+      getPlan(planId: string, workspaceId?: string): OrchestrationPlan;
       createRun(run: OrchestrationRun): OrchestrationRun;
       findLatestRunByPlan(planId: string): OrchestrationRun | undefined;
       findActiveRunByPlan(planId: string, workspaceId?: string): OrchestrationRun | undefined;
@@ -449,8 +449,8 @@ export async function createOrchestrationPlan(
   plan: OrchestrationPlan,
   policyContext: OrchestrationRunPolicyContext = {},
 ): Promise<OrchestrationRun> {
-  host.storage.orchestration.upsertPlan(plan);
   const workspaceId = normalizeRouteWorkspaceId(policyContext.workspaceId);
+  host.storage.orchestration.upsertPlan(plan, workspaceId);
   const created = host.orchestrationEngine.createRun(plan);
   const persisted = host.storage.orchestration.createRun({
     ...created,
@@ -477,8 +477,8 @@ export async function runOrchestrationPlan(
   planId: string,
   policyContext: OrchestrationRunPolicyContext = {},
 ): Promise<OrchestrationRun> {
-  const plan = host.storage.orchestration.getPlan(planId);
   const workspaceId = normalizeRouteWorkspaceId(policyContext.workspaceId);
+  const plan = host.storage.orchestration.getPlan(planId, workspaceId);
   host.orchestrationEngine.validate(plan);
   const activeRun = host.storage.orchestration.findActiveRunByPlan(planId, workspaceId);
   if (activeRun) {
@@ -535,7 +535,7 @@ async function queueOrchestrationRun(
       ...(runBeforeHook.patch.maxCostUsd !== undefined ? { maxCostUsd: runBeforeHook.patch.maxCostUsd } : {}),
     };
     host.orchestrationEngine.validate(plan);
-    host.storage.orchestration.upsertPlan(plan);
+    host.storage.orchestration.upsertPlan(plan, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
   }
 
   const queued = host.storage.orchestration.updateRun({
@@ -576,7 +576,7 @@ export async function approvePhase(
   workspaceId?: string,
 ): Promise<{ run: OrchestrationRun; checkpoints: OrchestrationCheckpoint[] }> {
   const run = assertRunWorkspaceAccess(host.storage.orchestration.getRun(runId), workspaceId);
-  let plan = host.storage.orchestration.getPlan(run.planId);
+  let plan = host.storage.orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
   host.orchestrationEngine.validate(plan);
   const currentPhase = findPhaseInPlan(plan, phaseId);
 
@@ -619,7 +619,7 @@ export async function approvePhase(
     if (plan.mode !== "hitl" && !patchedPhase.requiresApproval) {
       throw new Error(`Phase ${phaseId} is not approval-gated for run ${runId}`);
     }
-    host.storage.orchestration.upsertPlan(plan);
+    host.storage.orchestration.upsertPlan(plan, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
   }
 
   const nextRun: OrchestrationRun = {
@@ -702,7 +702,7 @@ export async function cancelOrchestrationRun(
   workspaceId?: string,
 ): Promise<{ run: OrchestrationRun; checkpoints: OrchestrationCheckpoint[] }> {
   const run = assertRunWorkspaceAccess(host.storage.orchestration.getRun(runId), workspaceId);
-  const plan = host.storage.orchestration.getPlan(run.planId);
+  const plan = host.storage.orchestration.getPlan(run.planId, run.workspaceId ?? DEFAULT_WORKSPACE_ID);
   host.orchestrationEngine.validate(plan);
   const cancelled = await markOrchestrationRunCancelled(host, runtime, plan, run, actorId, `cancelled by ${actorId}`);
   return {
@@ -720,14 +720,65 @@ export async function executeDurableOrchestrationRun(
   throwIfWorkflowAborted(context);
   const payload = parseOrchestrationWorkflowPayload(durableRun);
   if (!payload) {
+    const malformedWorkspacePayload = readMalformedWorkspacePayload(durableRun);
+    if (malformedWorkspacePayload) {
+      const run = host.storage.orchestration.getRun(malformedWorkspacePayload.orchestrationRunId);
+      if (run.durableRunId !== durableRun.runId) {
+        throw new Error(`Orchestration run ${run.runId} is not linked to durable run ${durableRun.runId}.`);
+      }
+      const runWorkspaceId = normalizeRouteWorkspaceId(run.workspaceId);
+      const mismatchError = `Durable orchestration payload workspace ${malformedWorkspacePayload.payloadWorkspaceId} is invalid for run ${run.runId}: workspaceId must be a string.`;
+      return failDurableOrchestrationWorkspaceMismatch({
+        host,
+        runtime,
+        durableRun,
+        run,
+        planId: malformedWorkspacePayload.planId,
+        payloadWorkspaceId: malformedWorkspacePayload.payloadWorkspaceId,
+        runWorkspaceId,
+        error: mismatchError,
+      });
+    }
     throw new Error("Durable orchestration payload is invalid or incomplete.");
   }
-  const plan = host.storage.orchestration.getPlan(payload.planId);
-  host.orchestrationEngine.validate(plan);
   let run = host.storage.orchestration.getRun(payload.orchestrationRunId);
   if (run.durableRunId !== durableRun.runId) {
     throw new Error(`Orchestration run ${run.runId} is not linked to durable run ${durableRun.runId}.`);
   }
+  const runWorkspaceId = normalizeRouteWorkspaceId(run.workspaceId);
+  let payloadWorkspaceId: string;
+  try {
+    payloadWorkspaceId = normalizeRouteWorkspaceId(payload.workspaceId);
+  } catch (error) {
+    const mismatchError = `Durable orchestration payload workspace ${payload.workspaceId} is invalid for run ${run.runId}: ${
+      error instanceof Error ? error.message : String(error)
+    }.`;
+    return failDurableOrchestrationWorkspaceMismatch({
+      host,
+      runtime,
+      durableRun,
+      run,
+      planId: payload.planId,
+      payloadWorkspaceId: payload.workspaceId,
+      runWorkspaceId,
+      error: mismatchError,
+    });
+  }
+  if (payloadWorkspaceId !== runWorkspaceId) {
+    const mismatchError = `Durable orchestration payload workspace ${payloadWorkspaceId} does not match run ${run.runId} workspace ${runWorkspaceId}.`;
+    return failDurableOrchestrationWorkspaceMismatch({
+      host,
+      runtime,
+      durableRun,
+      run,
+      planId: payload.planId,
+      payloadWorkspaceId,
+      runWorkspaceId,
+      error: mismatchError,
+    });
+  }
+  const plan = host.storage.orchestration.getPlan(payload.planId, runWorkspaceId);
+  host.orchestrationEngine.validate(plan);
   const policyContext: OrchestrationRunPolicyContext = {
     operatorId: payload.operatorId ?? run.operatorId,
     authActorId: payload.authActorId ?? run.authActorId,
@@ -789,6 +840,53 @@ export async function executeDurableOrchestrationRun(
     const waitingChildPhase = readWaitingChildPhase(durableRun, run.currentPhaseId);
     if (resumedFrom === "paused_for_approval" && waitingChildPhase) {
       const childRun = getDurableRunIfAvailable(host, waitingChildPhase.childRunId);
+      if (!childRun) {
+        const missingChildError = `Child durable run ${waitingChildPhase.childRunId} is missing; refusing to duplicate orchestration phase ${run.currentPhaseId}.`;
+        const failedPhase = {
+          ...waitingChildPhase.payload,
+          phaseId: run.currentPhaseId,
+          status: "failed",
+          childRunId: waitingChildPhase.childRunId,
+          error: missingChildError,
+        };
+        recordUpdate(
+          {
+            ...run,
+            status: "failed",
+            executionState: "failed",
+            endedAt: new Date().toISOString(),
+            lastError: missingChildError,
+          },
+          "run_failed",
+          {
+            failedPhase,
+          },
+        );
+        host.recordDurableTimelineEvent(durableRun.runId, "run_failed", {
+          phaseId: run.currentPhaseId,
+          waveId: run.currentWaveId,
+          childRunId: waitingChildPhase.childRunId,
+          reason: "child_durable_run_missing",
+          error: missingChildError,
+        });
+        persistRunEvent(host, run, "run.child_durable_missing", {
+          phaseId: run.currentPhaseId,
+          waveId: run.currentWaveId,
+          childRunId: waitingChildPhase.childRunId,
+          error: missingChildError,
+        });
+        publishRunRealtime(host, plan, run, {
+          event: "run_failed",
+          error: missingChildError,
+        });
+        await releaseOrchestrationWorktreeIfAvailable(runtime, host, run, "failed");
+        return {
+          outcome: "failed",
+          checkpointState: buildCheckpointDetails(plan, run, durableRun.runId, {
+            failedPhase,
+          }),
+        };
+      }
       if (childRun && !isDurableRunTerminal(childRun)) {
         host.updateDurableRunState({
           runId: durableRun.runId,
@@ -930,7 +1028,9 @@ export async function executeDurableOrchestrationRun(
     const unsupportedWaitError =
       execution.status === "waiting" && !execution.approvalId
         ? "Phase child turn entered a wait state without an approval id; durable orchestration only supports approval-correlated child waits."
-        : undefined;
+        : execution.status === "waiting" && !execution.childRunId
+          ? "Phase child turn entered a wait state without a child durable run id; durable orchestration cannot resume an unlinked child wait."
+          : undefined;
     const executionStatus = unsupportedWaitError ? "failed" : execution.status;
     const executionPayload = {
       phaseId: execution.phaseId,
@@ -1165,12 +1265,97 @@ function readWaitingChildPhase(
   return { childRunId, payload: waitingPhase };
 }
 
+function readMalformedWorkspacePayload(
+  durableRun: DurableRunRecord,
+): { orchestrationRunId: string; planId: string; payloadWorkspaceId: string } | undefined {
+  const payload = asRecord(durableRun.payload);
+  if (!payload || payload.version !== "orchestration.plan.execute.v1") {
+    return undefined;
+  }
+  if (
+    typeof payload.orchestrationRunId !== "string" ||
+    typeof payload.planId !== "string" ||
+    typeof payload.requestedAt !== "string" ||
+    typeof payload.workspaceId === "string"
+  ) {
+    return undefined;
+  }
+  return {
+    orchestrationRunId: payload.orchestrationRunId,
+    planId: payload.planId,
+    payloadWorkspaceId: describeMalformedWorkspaceId(payload.workspaceId),
+  };
+}
+
+function describeMalformedWorkspaceId(value: unknown): string {
+  if (value === undefined) {
+    return "<missing>";
+  }
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
 function getDurableRunIfAvailable(host: OrchestrationLifecycleHost, runId: string): DurableRunRecord | undefined {
   try {
     return host.getDurableRun(runId);
-  } catch {
+  } catch (error) {
+    if (!(error instanceof NotFoundError)) {
+      throw error;
+    }
     return undefined;
   }
+}
+
+async function failDurableOrchestrationWorkspaceMismatch(input: {
+  host: OrchestrationLifecycleHost;
+  runtime: OrchestrationLifecycleRuntimeDeps;
+  durableRun: DurableRunRecord;
+  run: OrchestrationRun;
+  planId: string;
+  payloadWorkspaceId: string;
+  runWorkspaceId: string;
+  error: string;
+}): Promise<OrchestrationExecutionResult> {
+  const failed = input.host.storage.orchestration.updateRun({
+    ...input.run,
+    status: "failed",
+    executionState: "failed",
+    endedAt: new Date().toISOString(),
+    lastError: input.error,
+  });
+  persistRunEvent(input.host, failed, "run.workspace_mismatch", {
+    durableRunId: input.durableRun.runId,
+    payloadWorkspaceId: input.payloadWorkspaceId,
+    runWorkspaceId: input.runWorkspaceId,
+    error: input.error,
+  });
+  await releaseOrchestrationWorktreeIfAvailable(input.runtime, input.host, failed, "failed");
+  return {
+    outcome: "failed",
+    checkpointState: {
+      durableRunId: input.durableRun.runId,
+      workflowKey: input.durableRun.workflowKey,
+      planId: input.planId,
+      runId: failed.runId,
+      status: failed.status,
+      executionState: failed.executionState,
+      worktreePath: failed.worktreePath,
+      worktreeStatus: failed.worktreeStatus,
+      payloadWorkspaceId: input.payloadWorkspaceId,
+      runWorkspaceId: input.runWorkspaceId,
+      error: input.error,
+      reason: "workspace_mismatch",
+    },
+  };
 }
 
 function buildHarvestedWaitingExecution(

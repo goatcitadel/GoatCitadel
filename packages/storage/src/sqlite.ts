@@ -922,6 +922,11 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       `);
     },
   },
+  {
+    version: 93,
+    name: "orchestration_plan_workspace_scope",
+    up: migrateOrchestrationPlanWorkspaceScope,
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -1328,11 +1333,16 @@ function createBaseSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_orchestration_runs_durable_run_id ON orchestration_runs(durable_run_id);
 
     CREATE TABLE IF NOT EXISTS orchestration_plans (
-      plan_id TEXT PRIMARY KEY,
+      plan_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL DEFAULT 'default',
       plan_json TEXT NOT NULL,
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (plan_id, workspace_id)
     );
+
+    CREATE INDEX IF NOT EXISTS idx_orchestration_plans_workspace
+      ON orchestration_plans(workspace_id, updated_at DESC);
 
     CREATE TABLE IF NOT EXISTS orchestration_checkpoints (
       checkpoint_id TEXT PRIMARY KEY,
@@ -5272,6 +5282,90 @@ function createSkillEvaluationRunsSchema(db: DatabaseSync): void {
       ON skill_evaluation_runs(skill_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_skill_evaluation_runs_status_updated
       ON skill_evaluation_runs(status, updated_at DESC);
+  `);
+}
+
+function migrateOrchestrationPlanWorkspaceScope(db: DatabaseSync): void {
+  if (!tableExists(db, "orchestration_plans")) {
+    return;
+  }
+  const columns = db.prepare("PRAGMA table_info(orchestration_plans)").all() as Array<{ name: string; pk: number }>;
+  const primaryKeyColumns = columns
+    .filter((column) => column.pk > 0)
+    .sort((left, right) => left.pk - right.pk)
+    .map((column) => column.name);
+  if (primaryKeyColumns.join("|") === "plan_id|workspace_id") {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_orchestration_plans_workspace
+        ON orchestration_plans(workspace_id, updated_at DESC);
+    `);
+    return;
+  }
+
+  const hasWorkspaceId = columns.some((column) => column.name === "workspace_id");
+  const workspaceSelect = hasWorkspaceId ? "COALESCE(NULLIF(TRIM(workspace_id), ''), 'default')" : "'default'";
+  const planWorkspaceSelect = hasWorkspaceId ? "COALESCE(NULLIF(TRIM(plan.workspace_id), ''), 'default')" : "'default'";
+  const runColumns = tableExists(db, "orchestration_runs")
+    ? (db.prepare("PRAGMA table_info(orchestration_runs)").all() as Array<{ name: string }>)
+    : [];
+  const canBackfillRunWorkspaces = runColumns.some((column) => column.name === "workspace_id");
+  const runWorkspaceBackfillSql = canBackfillRunWorkspaces
+    ? `
+    INSERT OR IGNORE INTO orchestration_plans_next (
+      plan_id,
+      workspace_id,
+      plan_json,
+      created_at,
+      updated_at
+    )
+    SELECT
+      plan.plan_id,
+      run_workspace.workspace_id,
+      plan.plan_json,
+      plan.created_at,
+      plan.updated_at
+    FROM orchestration_plans plan
+    INNER JOIN (
+      SELECT DISTINCT
+        plan_id,
+        COALESCE(NULLIF(TRIM(workspace_id), ''), 'default') AS workspace_id
+      FROM orchestration_runs
+      WHERE plan_id IS NOT NULL
+        AND COALESCE(NULLIF(TRIM(workspace_id), ''), 'default') <> 'default'
+    ) run_workspace
+      ON run_workspace.plan_id = plan.plan_id
+    WHERE ${planWorkspaceSelect} = 'default';
+    `
+    : "";
+  db.exec(`
+    DROP TABLE IF EXISTS orchestration_plans_next;
+    CREATE TABLE orchestration_plans_next (
+      plan_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL DEFAULT 'default',
+      plan_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (plan_id, workspace_id)
+    );
+    INSERT OR REPLACE INTO orchestration_plans_next (
+      plan_id,
+      workspace_id,
+      plan_json,
+      created_at,
+      updated_at
+    )
+    SELECT
+      plan_id,
+      ${workspaceSelect},
+      plan_json,
+      created_at,
+      updated_at
+    FROM orchestration_plans;
+    ${runWorkspaceBackfillSql}
+    DROP TABLE orchestration_plans;
+    ALTER TABLE orchestration_plans_next RENAME TO orchestration_plans;
+    CREATE INDEX IF NOT EXISTS idx_orchestration_plans_workspace
+      ON orchestration_plans(workspace_id, updated_at DESC);
   `);
 }
 

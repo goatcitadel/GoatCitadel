@@ -98,7 +98,7 @@ jobs:
         with:
           name: verification-release-proof-${{ matrix.artifactSlug }}-artifacts
           path: artifacts/verification
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   security:
     runs-on: ubuntu-latest

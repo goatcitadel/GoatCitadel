@@ -149,7 +149,7 @@ Approval creation should attach explicit linkage before the approval is surfaced
 
 - preserve inbound linkage from the caller when present
 - attach request attribution (`correlationId`, `traceId`) when available
-- attach `durableRunId` once approval-wait lifecycle plumbing exists
+- attach `durableRunId` from approval-wait lifecycle linkage when a durable wait/run owns the resolution path
 
 ## Read Precedence
 

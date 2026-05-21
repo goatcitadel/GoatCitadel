@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { createDatabase } from "./sqlite.js";
 import { OrchestrationRepository } from "./orchestration-repo.js";
 import type { OrchestrationPlan, OrchestrationRun } from "@goatcitadel/contracts";
@@ -127,6 +128,105 @@ describe("OrchestrationRepository", () => {
     assert.equal(checkpoints[0]?.checkpointKind, "run_created");
   });
 
+  it("scopes plan payloads by workspace", () => {
+    const repo = createRepo();
+
+    repo.upsertPlan({ ...plan, goal: "workspace a" }, "workspace-a");
+    repo.upsertPlan({ ...plan, goal: "workspace b" }, "workspace-b");
+
+    assert.equal(repo.getPlan("plan-1", "workspace-a").goal, "workspace a");
+    assert.equal(repo.getPlan("plan-1", "workspace-b").goal, "workspace b");
+    assert.throws(() => repo.getPlan("plan-1"), /Orchestration plan plan-1 not found/);
+  });
+
+  it("backfills legacy global plans into non-default run workspaces during migration", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-orch-legacy-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`
+      CREATE TABLE schema_migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      );
+      CREATE TABLE orchestration_plans (
+        plan_id TEXT PRIMARY KEY,
+        plan_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE orchestration_runs (
+        run_id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        current_wave_id TEXT,
+        current_phase_id TEXT,
+        total_cost_usd REAL NOT NULL DEFAULT 0,
+        total_iterations INTEGER NOT NULL DEFAULT 0,
+        workspace_id TEXT,
+        durable_run_id TEXT,
+        operator_id TEXT,
+        auth_actor_id TEXT,
+        auth_actor_source TEXT,
+        permission_profile_id TEXT,
+        local_operator_override_id TEXT,
+        execution_state TEXT,
+        worktree_path TEXT,
+        worktree_status TEXT,
+        worktree_base_ref TEXT,
+        pending_approval_phase_id TEXT,
+        pending_approved_by TEXT,
+        pending_cost_increment_usd REAL,
+        last_error TEXT
+      );
+      CREATE TABLE orchestration_checkpoints (
+        checkpoint_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        plan_id TEXT NOT NULL,
+        wave_id TEXT,
+        phase_id TEXT,
+        checkpoint_kind TEXT NOT NULL,
+        git_ref TEXT,
+        details_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE orchestration_events (
+        event_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `);
+    const markApplied = legacy.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)");
+    for (let version = 1; version < 93; version += 1) {
+      markApplied.run(version, `legacy-${version}`, "2026-02-27T00:00:00.000Z");
+    }
+    legacy
+      .prepare("INSERT INTO orchestration_plans (plan_id, plan_json, created_at, updated_at) VALUES (?, ?, ?, ?)")
+      .run(
+        "plan-legacy",
+        JSON.stringify({ ...plan, planId: "plan-legacy", goal: "legacy" }),
+        "2026-02-27",
+        "2026-02-27",
+      );
+    legacy
+      .prepare(
+        "INSERT INTO orchestration_runs (run_id, plan_id, status, started_at, workspace_id, durable_run_id) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run("run-legacy", "plan-legacy", "paused", "2026-02-27T00:00:00.000Z", "workspace-a", "durable-run");
+    legacy.close();
+
+    const db = createDatabase({ dbPath });
+    const repo = new OrchestrationRepository(db);
+
+    assert.equal(repo.getPlan("plan-legacy", "default").goal, "legacy");
+    assert.equal(repo.getPlan("plan-legacy", "workspace-a").goal, "legacy");
+    db.close();
+  });
+
   it("updates runs only when the current status and execution state still match", () => {
     const repo = createRepo();
     repo.upsertPlan(plan);
@@ -175,7 +275,11 @@ describe("OrchestrationRepository", () => {
     assert.equal(repo.findActiveRunByPlan("missing-plan"), undefined);
 
     repo.upsertPlan(plan);
-    db.prepare("UPDATE orchestration_plans SET plan_json = ? WHERE plan_id = ?").run("{bad", plan.planId);
+    db.prepare("UPDATE orchestration_plans SET plan_json = ? WHERE plan_id = ? AND workspace_id = ?").run(
+      "{bad",
+      plan.planId,
+      "default",
+    );
     assert.equal(repo.getPlan(plan.planId).goal, "[corrupted orchestration plan payload]");
 
     const run: OrchestrationRun = {

@@ -3411,7 +3411,7 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
     expect(evaluation.matchedGrantId).toBe("grant-safe-read");
   });
 
-  it("applies docs.ingest grant constraints to URL and file sources", () => {
+  it("applies docs.ingest grant constraints to URL and file sources", async () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(
       {
@@ -3449,6 +3449,17 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
         sessionId: "session-1",
       }).reasonCodes,
     ).toEqual(["grant_constraints_block"]);
+    expect(
+      (
+        await engine.invoke({
+          toolName: "docs.ingest",
+          args: { sourceType: "text", source: "inline notes", namespace: "research" },
+          agentId: "agent",
+          sessionId: "session-1",
+          dryRun: true,
+        })
+      ).policyReason,
+    ).toBe("blocked: grant host constraints require a URL docs.ingest source");
 
     vi.mocked(storage.toolGrants.list).mockReturnValue([
       {
@@ -3471,6 +3482,28 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
         sessionId: "session-1",
       }).reasonCodes,
     ).toEqual(["grant_constraints_block"]);
+    expect(
+      (
+        await engine.invoke({
+          toolName: "docs.ingest",
+          args: { sourceType: "url", source: "https://allowed.example/docs.md", namespace: "research" },
+          agentId: "agent",
+          sessionId: "session-1",
+          dryRun: true,
+        })
+      ).policyReason,
+    ).toBe("blocked: grant path constraints require a file docs.ingest source");
+    expect(
+      (
+        await engine.invoke({
+          toolName: "docs.ingest",
+          args: { sourceType: "text", source: "inline notes", namespace: "research" },
+          agentId: "agent",
+          sessionId: "session-1",
+          dryRun: true,
+        })
+      ).policyReason,
+    ).toBe("blocked: grant path constraints require a file docs.ingest source");
   });
 
   it("allows docs.ingest file sources when a later scoped grant covers the source path", () => {
@@ -3522,6 +3555,7 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
     });
 
     expect(evaluation.allowed).toBe(true);
+    expect(evaluation.matchedGrantId).toBe("grant-doc-file");
     expect(evaluation.reasonCodes).toContain("approval_bypass_mode");
   });
 

@@ -78,4 +78,4 @@ jobs:
         with:
           name: verification-durable-recovery-artifacts
           path: artifacts/verification
-          if-no-files-found: ignore
+          if-no-files-found: error

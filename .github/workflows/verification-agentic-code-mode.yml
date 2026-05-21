@@ -115,4 +115,4 @@ jobs:
         with:
           name: verification-${{ matrix.artifactSlug }}-artifacts
           path: artifacts/verification
-          if-no-files-found: ignore
+          if-no-files-found: error

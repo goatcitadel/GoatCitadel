@@ -1,6 +1,6 @@
 # Security Policy
 
-Last updated: 2026-04-11
+Last updated: 2026-05-20
 
 ## Supported Versions
 
@@ -57,4 +57,4 @@ Do not publish exploit details before coordinated remediation.
 
 ## Triaging GitHub Security Findings
 
-Before opening a PR that touches rate-limit configuration on a gateway route, modifies `.github/secret_scanning.yml`, or edits the synthetic token fixtures in `apps/gateway/src/services/improvement-common.redaction.security.test.ts`, read [`docs/security/findings-triage.md`](docs/security/findings-triage.md). It documents the recurring CodeQL `js/missing-rate-limiting` false-positive pattern (and the per-route fix that suppresses it) plus the narrow secret-scanning allowlist convention. Re-deriving these decisions every time wastes review cycles and risks regressing prior fixes.
+Before opening a PR that touches gateway rate-limit configuration, stream pipeline error handling, Dependabot/version-security alerts, `.github/secret_scanning.yml`, or the synthetic token fixtures in `apps/gateway/src/services/improvement-common.redaction.security.test.ts`, read [`docs/security/findings-triage.md`](docs/security/findings-triage.md). It documents the recurring CodeQL `js/missing-rate-limiting` and `js/unhandled-error-in-stream-pipeline` patterns, the narrow secret-scanning allowlist convention, and the evidence-backed rules for Dependabot updates or dismissals. Re-deriving these decisions every time wastes review cycles and risks regressing prior fixes.

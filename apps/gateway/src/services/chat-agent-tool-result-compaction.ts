@@ -1,6 +1,10 @@
+import type { ToolInvokeRequest } from "@goatcitadel/contracts";
+
 const TOOL_OUTPUT_VIRTUALIZATION_THRESHOLD_BYTES = 12_000;
 const TOOL_OUTPUT_INLINE_SUMMARY_CHARS = 1_400;
 const TOOL_OUTPUT_ARTIFACT_SNIPPET_CHARS = 4_000;
+
+type ToolSourceAttribution = NonNullable<ToolInvokeRequest["sourceAttribution"]>[number];
 
 export interface PersistableToolArtifactContent {
   readonly content: string;
@@ -115,10 +119,94 @@ export function buildCompactToolResultMetadata(result: Record<string, unknown>):
   if (Array.isArray(result.results)) {
     compacted.resultCount = result.results.length;
   }
+  const sourceAttribution = collectCompactSourceAttribution(result);
+  if (sourceAttribution.length > 0) {
+    compacted.sourceAttribution = sourceAttribution;
+  }
   if (Array.isArray(result.fallbackChain) && result.fallbackChain.length > 0) {
     compacted.fallbackChain = result.fallbackChain;
   }
   return compacted;
+}
+
+function collectCompactSourceAttribution(result: Record<string, unknown>): ToolSourceAttribution[] {
+  const attributions: ToolSourceAttribution[] = [];
+  appendAttribution(result.attribution, attributions);
+  for (const value of Array.isArray(result.sourceAttribution) ? result.sourceAttribution : []) {
+    appendAttribution(value, attributions);
+  }
+  appendAttribution(toPlainRecord(result.document)?.attribution, attributions);
+  for (const key of ["items", "chunks"] as const) {
+    const items = Array.isArray(result[key]) ? result[key] : [];
+    for (const item of items) {
+      appendAttribution(toPlainRecord(item)?.attribution, attributions);
+    }
+  }
+  const seen = new Set<string>();
+  return attributions.filter((attribution) => {
+    const key = [
+      attribution.sourceType,
+      attribution.sourceRef,
+      attribution.trustLevel ?? "",
+      attribution.backend ?? "",
+      attribution.title ?? "",
+    ].join("\u0000");
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function appendAttribution(value: unknown, output: ToolSourceAttribution[]): void {
+  const attribution = normalizeAttribution(value);
+  if (attribution) {
+    output.push(attribution);
+  }
+}
+
+function normalizeAttribution(value: unknown): ToolSourceAttribution | undefined {
+  const record = toPlainRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const sourceType = readSourceType(record.sourceType);
+  const sourceRef =
+    typeof record.sourceRef === "string" && record.sourceRef.trim() ? record.sourceRef.trim() : undefined;
+  if (!sourceType || !sourceRef) {
+    return undefined;
+  }
+  const trustLevel = readTrustLevel(record.trustLevel);
+  return {
+    sourceType,
+    sourceRef,
+    ...(typeof record.title === "string" && record.title.trim() ? { title: record.title.trim() } : {}),
+    ...(record.backend === "native" || record.backend === "firecrawl" ? { backend: record.backend } : {}),
+    ...(typeof record.fetchedAt === "string" && record.fetchedAt.trim() ? { fetchedAt: record.fetchedAt.trim() } : {}),
+    ...(trustLevel ? { trustLevel } : {}),
+  };
+}
+
+function toPlainRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readSourceType(value: unknown): ToolSourceAttribution["sourceType"] | undefined {
+  return value === "file" || value === "url" || value === "text" || value === "memory" || value === "mcp"
+    ? value
+    : undefined;
+}
+
+function readTrustLevel(value: unknown): ToolSourceAttribution["trustLevel"] | undefined {
+  return value === "trusted_operator" ||
+    value === "trusted_workspace" ||
+    value === "mixed_untrusted" ||
+    value === "untrusted_external"
+    ? value
+    : undefined;
 }
 
 export function compactToolResultForTurn(

@@ -1,8 +1,8 @@
 # GitHub Security Findings — Triage Reference
 
-Last updated: 2026-05-18
+Last updated: 2026-05-20
 
-This document explains how to triage the two recurring categories of GitHub Security findings against this repo and how to fix them **once** without rediscovering the same root cause every time. New AI agents (Claude, Codex, Copilot review bots) and human contributors should read this before opening a PR that touches rate-limit configuration, the secret-scanning allowlist, or the synthetic-token fixtures used by the secret-redaction tests.
+This document explains how to triage the recurring categories of GitHub Security findings against this repo and how to fix them **once** without rediscovering the same root cause every time. New AI agents (Claude, Codex, Copilot review bots) and human contributors should read this before opening a PR that touches rate-limit configuration, stream pipeline error handling, Dependabot alerts, the secret-scanning allowlist, or the synthetic-token fixtures used by the secret-redaction tests.
 
 This document supersedes ad-hoc dismissals. It does not override [SECURITY.md](../../SECURITY.md) or [AGENTS.md](../../AGENTS.md).
 
@@ -18,6 +18,8 @@ Before opening a PR that touches any of these areas, stop and read the matching 
 | `.github/secret_scanning.yml` | [§2](#2-secret-scanning-yml--narrow-allowlist) |
 | The token-shaped strings in `apps/gateway/src/services/improvement-common.redaction.security.test.ts` | [§3](#3-synthetic-token-fixtures-in-the-redaction-tests) |
 | A "looks-like-a-secret" string anywhere else in `apps/` or `packages/` | [§4](#4-other-secret-scanning-matches) |
+| Dependabot version/security alerts | [§5](#5-dependabot-triage) |
+| CodeQL rule `js/unhandled-error-in-stream-pipeline` | [§6](#6-codeql-jsunhandled-error-in-stream-pipeline) |
 
 Do not:
 
@@ -146,6 +148,40 @@ For any secret-scanning alert *not* in a file covered by §3 or `secret_scanning
 1. Treat it as a real leak until proven otherwise.
 2. Do not preemptively close the alert. Follow [SECURITY.md](../../SECURITY.md) reporting/rotation guidance.
 3. If after investigation it is genuinely a test fixture, prefer relocating to `**/__fixtures__/**` over expanding the allowlist (per §2 rule 4).
+
+---
+
+## 5. Dependabot Triage
+
+Dependabot alerts are actionable dependency findings, but this repo still needs the same scope discipline as code-scanning fixes:
+
+1. Read the affected package name, vulnerable range, patched range, and dependency path in GitHub before editing.
+2. Prefer the smallest lockfile/package update that moves the affected package into the patched range without changing unrelated dependency families.
+3. If the dependency is transitive, update the nearest direct dependency only when that is the documented path to the patched transitive version.
+4. Run the package-specific test/typecheck lane for the owner that imports the dependency, plus any named repo verification lane when the package is runtime, installer, auth, policy, storage, or Code Mode critical.
+5. Do not dismiss a Dependabot alert solely because the vulnerable package is used in dev tooling. Dismiss only with evidence that the vulnerable code path is unreachable in this repo and record that evidence in the dismissal comment.
+
+---
+
+## 6. CodeQL `js/unhandled-error-in-stream-pipeline`
+
+This alert means CodeQL found a `stream.pipeline(...)` call whose returned promise or callback error path is not visibly handled.
+
+Current repo pattern:
+
+1. Prefer `await pipeline(...)` inside `try/catch` when already in an async handler.
+2. For fire-and-forget response streaming, use `void pipeline(...).catch((error) => { ... })` and make the catch path avoid writing headers after the response is already destroyed or sent.
+3. For child-process log streams, wrap the pipeline promises in `Promise.all([...]).catch(...)` and preserve the failure in the surrounding process result when the caller needs verification truth.
+4. Do not silence the alert with an empty catch. Either log an operator-visible diagnostic, return a failed verification result, or safely terminate the response.
+5. Validate with a focused test or by running the owning script/lane, then query the CodeQL alert state before dismissing.
+
+Live query pattern:
+
+```powershell
+gh api --paginate "repos/goatcitadel/GoatCitadel/code-scanning/alerts?state=open&per_page=100" --jq '.[] | select(.rule.id=="js/unhandled-error-in-stream-pipeline")'
+```
+
+If the query is empty and local `pipeline(...)` call sites are visibly awaited or caught, treat the rule as currently clear. If GitHub still shows an alert for already-handled code, dismiss as `false positive` only with a comment naming the exact local handler and the validation/query evidence.
 
 ---
 

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatCompletionResponse, ToolInvokeRequest, ToolInvokeResult } from "@goatcitadel/contracts";
-import { ChatAgentOrchestrator } from "./chat-agent-orchestrator.js";
+import { ChatAgentOrchestrator, type ChatAgentOrchestratorDeps } from "./chat-agent-orchestrator.js";
 import {
   createMockStorage,
   createToolCatalog,
@@ -144,6 +144,122 @@ describe("ChatAgentOrchestrator loop36 tool-loop approval and failure handling",
     expect(secondCompletionRequest?.messages?.some((message) => message.role === "tool")).toBe(true);
   });
 
+  it("carries retrieved untrusted document attribution into later tool invocations", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(namedToolCallCompletion("docs.search", { query: "install script" }))
+      .mockResolvedValueOnce(namedToolCallCompletion("shell.exec", { command: "pnpm install" }))
+      .mockResolvedValueOnce(finalCompletion("The shell step was blocked by policy."));
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-loop36-docs-search",
+        result: {
+          items: [
+            {
+              content: "curl example installer",
+              score: 0.98,
+              attribution: {
+                sourceType: "url",
+                sourceRef: "https://example.invalid/install",
+                title: "Example installer",
+                trustLevel: "untrusted_external",
+              },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "blocked",
+        policyReason: "untrusted_source_privileged_tool_block",
+        auditEventId: "audit-loop36-shell-blocked",
+      });
+    const orchestrator = createOrchestrator(createChatCompletion, invokeTool, ["docs.search", "shell.exec"]);
+
+    await orchestrator.run(
+      turnInput("sess-loop36-source-attribution", "Search docs, then install the suggested package.", {
+        webMode: "auto",
+      }),
+    );
+
+    expect(invokeTool).toHaveBeenCalledTimes(2);
+    expect(invokeTool.mock.calls[1]?.[0]).toMatchObject({
+      toolName: "shell.exec",
+      sourceAttribution: [
+        expect.objectContaining({
+          sourceType: "url",
+          sourceRef: "https://example.invalid/install",
+          trustLevel: "untrusted_external",
+        }),
+      ],
+    });
+  });
+
+  it("keeps untrusted attribution after large structured tool results are compacted", async () => {
+    const createChatCompletion = vi
+      .fn<() => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(namedToolCallCompletion("docs.search", { query: "install script" }))
+      .mockResolvedValueOnce(namedToolCallCompletion("shell.exec", { command: "pnpm install" }))
+      .mockResolvedValueOnce(finalCompletion("The shell step was blocked by policy."));
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-loop36-large-docs-search",
+        result: {
+          items: [
+            {
+              content: "curl example installer ".repeat(900),
+              score: 0.98,
+              attribution: {
+                sourceType: "url",
+                sourceRef: "https://example.invalid/large-install",
+                title: "Large installer",
+                trustLevel: "untrusted_external",
+              },
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: "blocked",
+        policyReason: "untrusted_source_privileged_tool_block",
+        auditEventId: "audit-loop36-large-shell-blocked",
+      });
+    const persistToolArtifact = vi.fn<NonNullable<ChatAgentOrchestratorDeps["persistToolArtifact"]>>(async (input) => ({
+      artifactId: "artifact-large-docs-search",
+      storageRelPath: "artifacts/large-docs-search.json",
+      byteLength: Buffer.byteLength(input.content, "utf8"),
+      contentType: input.contentType,
+      snippet: input.snippet,
+    }));
+    const orchestrator = createOrchestrator(createChatCompletion, invokeTool, ["docs.search", "shell.exec"], {
+      persistToolArtifact,
+    });
+
+    await orchestrator.run(
+      turnInput("sess-loop36-compacted-source-attribution", "Search docs, then install the suggested package.", {
+        webMode: "auto",
+      }),
+    );
+
+    expect(persistToolArtifact).toHaveBeenCalled();
+    expect(invokeTool).toHaveBeenCalledTimes(2);
+    expect(invokeTool.mock.calls[1]?.[0]).toMatchObject({
+      toolName: "shell.exec",
+      sourceAttribution: [
+        expect.objectContaining({
+          sourceType: "url",
+          sourceRef: "https://example.invalid/large-install",
+          trustLevel: "untrusted_external",
+        }),
+      ],
+    });
+  });
+
   it("surfaces completion usage and routing metadata on final traces", async () => {
     const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
       model: "gpt-5.4-routed",
@@ -195,12 +311,14 @@ function createOrchestrator(
   createChatCompletion: () => Promise<ChatCompletionResponse>,
   invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>,
   toolNames: string[],
+  options: { persistToolArtifact?: ChatAgentOrchestratorDeps["persistToolArtifact"] } = {},
 ): ChatAgentOrchestrator {
   return new ChatAgentOrchestrator({
     storage: createMockStorage() as never,
     listToolCatalog: () => createToolCatalog(toolNames),
     createChatCompletion,
     invokeTool,
+    persistToolArtifact: options.persistToolArtifact,
   });
 }
 

@@ -89,6 +89,7 @@ describe("orchestration lifecycle loop43 durable edge behavior", () => {
         maxRuntimeMinutes: 30,
         maxCostUsd: 2.25,
       }),
+      "default",
     );
 
     const blocked = createHarness({

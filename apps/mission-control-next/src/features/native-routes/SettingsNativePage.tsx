@@ -5397,6 +5397,9 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
       setNotice({ tone: "warning", message: "Select a custom permission profile to archive." });
       return;
     }
+    if (!window.confirm(`Archive permission profile ${selectedProfile.label}?`)) {
+      return;
+    }
     try {
       await archivePermissionProfile(selectedProfile.profileId);
       setSelectedProfileId("safe");

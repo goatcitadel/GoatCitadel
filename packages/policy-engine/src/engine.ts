@@ -711,7 +711,10 @@ export class ToolPolicyEngine {
       riskLevel === "danger" &&
       grantDecision?.decision === "allow" &&
       isMutationTool(toolDef) &&
-      this.isFirstMutationInScope(request, grantDecision.grant)
+      this.isFirstMutationInScope(
+        request,
+        this.resolveEffectiveAllowGrant(request, policy, grantDecision.grant, allowGrants) ?? grantDecision.grant,
+      )
     ) {
       requiresApproval = true;
     }
@@ -779,17 +782,20 @@ export class ToolPolicyEngine {
       reasonCodes.push("outside_roots_read_requires_approval");
       policyReason = "file access outside trusted roots requires approval";
     }
+    const effectiveAllowGrant =
+      grantDecision?.decision === "allow"
+        ? (this.resolveEffectiveAllowGrant(request, policy, grantDecision.grant, allowGrants) ?? grantDecision.grant)
+        : undefined;
 
     return {
       allowed: true,
       reasonCodes,
       requiresApproval,
-      matchedGrantId: grantDecision?.grant.grantId,
-      matchedGrantAllowedHosts:
-        grantDecision?.decision === "allow" ? getAllowedGrantHosts(grantDecision.grant.constraints) : undefined,
+      matchedGrantId: effectiveAllowGrant?.grantId,
+      matchedGrantAllowedHosts: effectiveAllowGrant ? getAllowedGrantHosts(effectiveAllowGrant.constraints) : undefined,
       riskLevel,
       policyReason,
-      grantToConsume: grantDecision?.grant.grantId,
+      grantToConsume: effectiveAllowGrant?.grantId,
       permissionProfileId: policy.permissionProfileId,
       localOperatorOverrideId: localOperatorOverrideAuditId,
       approvalMode: policy.approvalMode,
@@ -924,8 +930,17 @@ export class ToolPolicyEngine {
       }
     }
 
+    const docsIngestSourceType =
+      request.toolName === "docs.ingest" ? readDocsIngestSourceTypeIfValid(request) : undefined;
+
     if (constraints.allowedHosts && constraints.allowedHosts.length > 0) {
+      if (request.toolName === "docs.ingest" && docsIngestSourceType !== "url") {
+        return "grant host constraints require a URL docs.ingest source";
+      }
       const candidates = extractGrantHostCandidates(request, this.storage);
+      if (candidates.length === 0 && request.toolName === "docs.ingest") {
+        return "grant host constraints require a URL docs.ingest source";
+      }
       if (candidates.length > 0) {
         const blocked = candidates.some((host) => !matchesHostAllowlist(host, constraints.allowedHosts as string[]));
         if (blocked) {
@@ -935,10 +950,16 @@ export class ToolPolicyEngine {
     }
 
     if (constraints.allowedPaths && constraints.allowedPaths.length > 0) {
+      if (request.toolName === "docs.ingest" && docsIngestSourceType !== "file") {
+        return "grant path constraints require a file docs.ingest source";
+      }
       const candidates = extractGrantPathCandidates(request).map((candidate) =>
         this.resolvePathForGrantConstraint(candidate),
       );
-      if (candidates.length === 0 && requiresExplicitPathForGrantConstraints(request.toolName)) {
+      if (
+        candidates.length === 0 &&
+        (requiresExplicitPathForGrantConstraints(request.toolName) || request.toolName === "docs.ingest")
+      ) {
         return "grant path constraints require an explicit output path";
       }
       if (candidates.length > 0) {
@@ -1118,6 +1139,43 @@ export class ToolPolicyEngine {
 
   private anyGrantAllowsReadPath(grants: ToolGrantRecord[] | undefined, resolvedPath: string): boolean {
     return grants?.some((grant) => this.grantAllowsReadPath(grant, resolvedPath)) ?? false;
+  }
+
+  private resolveEffectiveAllowGrant(
+    request: ToolAccessEvaluateRequest,
+    policy: EffectiveToolPolicy,
+    fallback: ToolGrantRecord | undefined,
+    allowGrants?: ToolGrantRecord[],
+  ): ToolGrantRecord | undefined {
+    return this.resolveGrantForOutsideRootsRead(request, policy, allowGrants) ?? fallback;
+  }
+
+  private resolveGrantForOutsideRootsRead(
+    request: ToolAccessEvaluateRequest,
+    policy: EffectiveToolPolicy,
+    allowGrants?: ToolGrantRecord[],
+  ): ToolGrantRecord | undefined {
+    if (!allowGrants?.length || this.getReadAccessMode(policy) === "full_disk") {
+      return undefined;
+    }
+    if (this.getReadAccessMode(policy) === "approval_required" && this.hasApprovalBypass(request)) {
+      return undefined;
+    }
+    for (const target of extractReadPathCandidates(request)) {
+      const access = resolveReadPathAccess(
+        target,
+        this.config.sandbox.writeJailRoots,
+        this.config.sandbox.readOnlyRoots,
+      );
+      if (access.withinRoots) {
+        continue;
+      }
+      const matchingGrant = allowGrants.find((grant) => this.grantAllowsReadPath(grant, access.resolvedPath));
+      if (matchingGrant) {
+        return matchingGrant;
+      }
+    }
+    return undefined;
   }
 
   private resolvePathForGrantConstraint(pathValue: string): string {

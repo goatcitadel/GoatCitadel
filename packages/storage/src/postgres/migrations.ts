@@ -1197,4 +1197,96 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS local_operator_override_id TEXT;
     `,
   },
+  {
+    version: 46,
+    name: "orchestration_plan_workspace_scope",
+    sql: `
+      ALTER TABLE IF EXISTS orchestration_plans
+        ADD COLUMN IF NOT EXISTS workspace_id TEXT NOT NULL DEFAULT 'default';
+
+      DO $$
+      DECLARE
+        current_pk TEXT[];
+        current_pk_name TEXT;
+      BEGIN
+        IF to_regclass('orchestration_plans') IS NULL THEN
+          RETURN;
+        END IF;
+
+        SELECT constraint_name
+        INTO current_pk_name
+        FROM information_schema.table_constraints
+        WHERE table_schema = current_schema()
+          AND table_name = 'orchestration_plans'
+          AND constraint_type = 'PRIMARY KEY'
+        LIMIT 1;
+
+        SELECT array_agg(kcu.column_name::TEXT ORDER BY kcu.ordinal_position)
+        INTO current_pk
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+          ON tc.constraint_name = kcu.constraint_name
+         AND tc.table_schema = kcu.table_schema
+        WHERE tc.table_schema = current_schema()
+          AND tc.table_name = 'orchestration_plans'
+          AND tc.constraint_type = 'PRIMARY KEY';
+
+        UPDATE orchestration_plans
+        SET workspace_id = 'default'
+        WHERE workspace_id IS NULL
+          OR BTRIM(workspace_id) = '';
+
+        ALTER TABLE orchestration_plans
+          ALTER COLUMN workspace_id SET DEFAULT 'default',
+          ALTER COLUMN workspace_id SET NOT NULL;
+
+        IF current_pk IS DISTINCT FROM ARRAY['plan_id', 'workspace_id']::TEXT[] THEN
+          IF current_pk_name IS NOT NULL THEN
+            EXECUTE format('ALTER TABLE orchestration_plans DROP CONSTRAINT %I', current_pk_name);
+          END IF;
+        END IF;
+
+        IF to_regclass('orchestration_runs') IS NOT NULL THEN
+          INSERT INTO orchestration_plans (
+            plan_id,
+            workspace_id,
+            plan_json,
+            created_at,
+            updated_at
+          )
+          SELECT
+            plan.plan_id,
+            run_workspace.workspace_id,
+            plan.plan_json,
+            plan.created_at,
+            plan.updated_at
+          FROM orchestration_plans plan
+          INNER JOIN (
+            SELECT DISTINCT
+              plan_id,
+              COALESCE(NULLIF(BTRIM(workspace_id), ''), 'default') AS workspace_id
+            FROM orchestration_runs
+            WHERE plan_id IS NOT NULL
+              AND COALESCE(NULLIF(BTRIM(workspace_id), ''), 'default') <> 'default'
+          ) run_workspace
+            ON run_workspace.plan_id = plan.plan_id
+          WHERE COALESCE(NULLIF(BTRIM(plan.workspace_id), ''), 'default') = 'default'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM orchestration_plans existing
+              WHERE existing.plan_id = plan.plan_id
+                AND COALESCE(NULLIF(BTRIM(existing.workspace_id), ''), 'default') = run_workspace.workspace_id
+            );
+        END IF;
+
+        IF current_pk IS DISTINCT FROM ARRAY['plan_id', 'workspace_id']::TEXT[] THEN
+          ALTER TABLE orchestration_plans
+            ADD PRIMARY KEY (plan_id, workspace_id);
+        END IF;
+      END $$;
+
+      CREATE INDEX IF NOT EXISTS idx_orchestration_plans_workspace
+        ON orchestration_plans(workspace_id, updated_at DESC);
+    `,
+  },
 ];

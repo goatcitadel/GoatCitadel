@@ -1037,7 +1037,16 @@ function isExpiredApprovalRequest(approval: ApprovalRequest): boolean {
     return false;
   }
   const expiresAt = Date.parse(approval.expiresAt);
-  return Number.isFinite(expiresAt) && expiresAt <= Date.now();
+  if (!Number.isFinite(expiresAt)) {
+    return false;
+  }
+  if (approval.resolvedAt) {
+    const resolvedAt = Date.parse(approval.resolvedAt);
+    if (Number.isFinite(resolvedAt)) {
+      return resolvedAt > expiresAt;
+    }
+  }
+  return expiresAt <= Date.now();
 }
 
 export function deriveApprovalResolutionEffectsResult(

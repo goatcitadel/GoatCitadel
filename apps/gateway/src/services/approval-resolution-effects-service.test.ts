@@ -710,6 +710,90 @@ describe("approval-resolution-effects-service", () => {
     expect(upsert).not.toHaveBeenCalled();
   });
 
+  it("enqueues Code Mode execution when approval resolved before expiry even if effects run later", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-11T00:06:00.000Z"));
+    try {
+      const upsert = vi.fn((input: Record<string, unknown>) => ({
+        effectId: String(input.targetId),
+        approvalId: String(input.approvalId),
+        effectKind: input.effectKind,
+        targetKind: input.targetKind,
+        targetId: String(input.targetId),
+        idempotencyKey: "key",
+        status: "pending",
+        attemptCount: 0,
+        payload: (input.payload as Record<string, unknown>) ?? {},
+        result: {},
+        version: 1,
+        createdAt: "2026-04-11T00:06:00.000Z",
+        updatedAt: "2026-04-11T00:06:00.000Z",
+      }));
+      const service = new ApprovalEffectsService(
+        {
+          storage: {
+            approvalEffects: { upsert, claimNextPendingEffect: vi.fn(), get: vi.fn(), listByApproval: vi.fn() },
+            approvalWaitRuns: { getRunId: vi.fn(() => undefined) },
+            pendingApprovalActions: {
+              find: vi.fn(() => ({
+                approvalId: "approval-1",
+                actionType: "code_mode.run",
+                request: {},
+                createdAt: "2026-04-11T00:00:00.000Z",
+                resolutionStatus: "pending",
+              })),
+            },
+            approvalInbox: { findByApprovalAndToken: vi.fn(() => undefined) },
+            chatInlineApprovals: { get: vi.fn(() => undefined) },
+            chatTurnTraces: { get: vi.fn(() => undefined) },
+          },
+          publishRealtime: vi.fn(),
+        } as unknown as ServiceContext,
+        {
+          backgroundTasks: new Set(),
+          wakeDurableRun: vi.fn(),
+          requestRunProcessing: vi.fn(),
+          findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+          executeCodeModePendingApproval: vi.fn(),
+          executeApprovedPendingAction: vi.fn(),
+          enqueueAfterHooks: vi.fn(),
+          resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+        },
+      );
+
+      const result = service.enqueueResolutionEffects(
+        {
+          approvalId: "approval-1",
+          kind: "code_mode.run",
+          riskLevel: "danger",
+          status: "approved",
+          payload: {},
+          preview: {},
+          createdAt: "2026-04-11T00:00:00.000Z",
+          resolvedAt: "2026-04-11T00:04:59.000Z",
+          resolvedBy: "operator",
+          expiresAt: "2026-04-11T00:05:00.000Z",
+          explanationStatus: "not_requested",
+        } satisfies ApprovalRequest,
+        {
+          decision: "approve",
+          resolvedBy: "operator",
+        },
+      );
+
+      expect(result.map((effect) => effect.effectKind)).toContain("pending_action_execute");
+      expect(upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          approvalId: "approval-1",
+          effectKind: "pending_action_execute",
+          targetKind: "pending_action",
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails the effect when durable wake returns a failed outcome", async () => {
     const failEffect = vi.fn();
     const skipEffect = vi.fn();

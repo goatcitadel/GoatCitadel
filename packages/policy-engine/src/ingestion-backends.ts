@@ -35,6 +35,12 @@ const DEFAULT_FALLBACK_TITLE_SOURCE_MAX_LENGTH = 80;
 // Max characters of chunk content returned by `searchIngestedContext` — keeps
 // retrieval results small enough to fit comfortably into a downstream prompt.
 const MAX_SEARCH_RESULT_CONTENT_CHARS = 640;
+const TOOL_EXECUTION_TRUST_LEVELS = new Set<ToolExecutionTrustLevel>([
+  "trusted_operator",
+  "trusted_workspace",
+  "mixed_untrusted",
+  "untrusted_external",
+]);
 
 interface FetchUrlResult {
   finalUrl: string;
@@ -121,7 +127,7 @@ export async function ingestDocumentViaBackend(input: {
     title,
     backend: backendName,
     fetchedAt: fetched.fetchedAt,
-    trustLevel: input.request.trustLevel ?? "trusted_workspace",
+    trustLevel: resolveIngestionTrustLevel(sourceType, input.request.trustLevel),
   };
   const metadata = {
     ...record(args.metadata),
@@ -203,6 +209,7 @@ export function searchIngestedContext(input: { storage: Storage; namespace?: str
       continue;
     }
     const ingestion = record(doc.metadata.ingestion);
+    const trustLevel = resolveIngestionTrustLevel(doc.sourceType, ingestion.trustLevel);
     items.push({
       chunkId: chunk.chunkId,
       docId: chunk.docId,
@@ -214,7 +221,7 @@ export function searchIngestedContext(input: { storage: Storage; namespace?: str
         title: doc.title,
         backend: optionalString(ingestion.backend) as IngestionBackend["backend"] | undefined,
         fetchedAt: optionalString(ingestion.fetchedAt),
-        trustLevel: optionalString(ingestion.trustLevel) as ToolExecutionTrustLevel | undefined,
+        trustLevel,
       },
     });
   }
@@ -472,6 +479,7 @@ function readCachedDocument(input: {
         trustLevel: optionalString(ingestion.trustLevel) as ToolExecutionTrustLevel | undefined,
       },
     }));
+    const trustLevel = resolveIngestionTrustLevel(doc.sourceType, ingestion.trustLevel);
     return {
       title: doc.title,
       text: chunks.map((chunk) => chunk.content).join("\n\n"),
@@ -482,13 +490,33 @@ function readCachedDocument(input: {
         title: doc.title,
         backend: optionalString(ingestion.backend) as IngestionBackend["backend"] | undefined,
         fetchedAt: optionalString(ingestion.fetchedAt),
-        trustLevel: optionalString(ingestion.trustLevel) as ToolExecutionTrustLevel | undefined,
+        trustLevel,
       },
       cacheExpiresAt,
-      chunks,
+      chunks: chunks.map((chunk) => ({
+        ...chunk,
+        attribution: {
+          ...chunk.attribution,
+          trustLevel,
+        },
+      })),
     };
   }
   return undefined;
+}
+
+export function resolveIngestionTrustLevel(
+  sourceType: ContextSourceAttribution["sourceType"],
+  value: unknown,
+): ToolExecutionTrustLevel {
+  const explicit = optionalString(value);
+  if (sourceType === "url" || sourceType === "text") {
+    return explicit === "mixed_untrusted" ? "mixed_untrusted" : "untrusted_external";
+  }
+  if (explicit && TOOL_EXECUTION_TRUST_LEVELS.has(explicit as ToolExecutionTrustLevel)) {
+    return explicit as ToolExecutionTrustLevel;
+  }
+  return "trusted_workspace";
 }
 
 function buildBackendDescriptor(backend: IngestionBackend["backend"], cacheTtlSeconds: number): IngestionBackend {

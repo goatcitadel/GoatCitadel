@@ -349,7 +349,7 @@ describe("MissionControlNextApp", () => {
       .mockRejectedValueOnce(new Error("gateway offline"))
       .mockResolvedValueOnce({ status: "needs-auth", message: "Auth required", healthDetail: "token" });
 
-    const renderer = await renderApp("http://localhost:5173/settings/providers");
+    const renderer = await renderApp();
     expect(renderer.root.findByProps({ className: "mock-gateway-access" }).props["data-status"]).toBe("unreachable");
 
     await act(async () => {
@@ -503,6 +503,97 @@ describe("MissionControlNextApp", () => {
       popstateHandler?.();
     });
     expect(JSON.stringify(renderer.toJSON())).toContain("Threaded chat");
+  });
+
+  it("does not treat unknown daemon health as an intervention", async () => {
+    appMocks.fetchHealthSummary.mockImplementationOnce(() => new Promise(() => undefined));
+
+    const renderer = await renderApp();
+    const rendered = JSON.stringify(renderer.toJSON());
+
+    expect(rendered).toContain("Checking");
+    expect(rendered).toContain("2 visible");
+    expect(rendered).not.toContain("Needs intervention");
+  });
+
+  it("marks daemon health unavailable when status refresh fails", async () => {
+    appMocks.fetchHealthSummary.mockRejectedValueOnce(new Error("health offline"));
+
+    const renderer = await renderApp();
+    const rendered = JSON.stringify(renderer.toJSON());
+
+    expect(rendered).toContain("Unavailable");
+    expect(rendered).not.toContain("Needs intervention");
+  });
+
+  it("does not report daemon unavailable when only dashboard refresh fails", async () => {
+    appMocks.fetchDashboardState.mockRejectedValueOnce(new Error("dashboard offline"));
+    appMocks.fetchHealthSummary.mockResolvedValueOnce({
+      daemonStatus: { running: true },
+    });
+
+    const renderer = await renderApp("http://localhost:5173/settings/providers");
+    const rendered = JSON.stringify(renderer.toJSON());
+
+    expect(rendered).toContain("Serving");
+    expect(rendered).not.toContain("Unavailable");
+  });
+
+  it("does not keep stale serving daemon health after a later refresh failure", async () => {
+    appMocks.fetchHealthSummary
+      .mockResolvedValueOnce({
+        daemonStatus: { running: true },
+      })
+      .mockRejectedValueOnce(new Error("health offline"));
+
+    const renderer = await renderApp();
+    expect(JSON.stringify(renderer.toJSON())).toContain("Serving");
+
+    const intervalCallback = (window.setInterval as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+      | (() => void)
+      | undefined;
+    await act(async () => {
+      intervalCallback?.();
+      await Promise.resolve();
+    });
+    await flush();
+
+    const rendered = JSON.stringify(renderer.toJSON());
+    expect(rendered).toContain("Unavailable");
+    expect(rendered).not.toContain("Serving");
+  });
+
+  it("ignores older daemon health responses that settle after a newer failed refresh", async () => {
+    let resolveInitialHealth!: (value: { daemonStatus: { running: boolean } }) => void;
+    const initialHealth = new Promise<{ daemonStatus: { running: boolean } }>((resolve) => {
+      resolveInitialHealth = resolve;
+    });
+    appMocks.fetchHealthSummary
+      .mockImplementationOnce(() => initialHealth)
+      .mockRejectedValueOnce(new Error("health offline"));
+
+    const renderer = await renderApp();
+    expect(JSON.stringify(renderer.toJSON())).toContain("Checking");
+
+    const intervalCallback = (window.setInterval as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+      | (() => void)
+      | undefined;
+    await act(async () => {
+      intervalCallback?.();
+      await Promise.resolve();
+    });
+    await flush();
+    expect(JSON.stringify(renderer.toJSON())).toContain("Unavailable");
+
+    await act(async () => {
+      resolveInitialHealth({ daemonStatus: { running: true } });
+      await initialHealth;
+    });
+    await flush();
+
+    const rendered = JSON.stringify(renderer.toJSON());
+    expect(rendered).toContain("Unavailable");
+    expect(rendered).not.toContain("Serving");
   });
 
   it("passes a focused Code approval id through threaded-surface approval navigation", async () => {
