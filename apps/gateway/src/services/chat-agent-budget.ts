@@ -9,6 +9,9 @@ import {
 
 const MAX_TOOL_LOOPS = 6;
 const MAX_TOOL_RUNS_PER_TURN = 12;
+const COWORK_RESEARCH_LIST_MAX_TOOL_LOOPS = 6;
+const COWORK_RESEARCH_LIST_MAX_TOOL_RUNS_PER_TURN = 16;
+const COWORK_RESEARCH_LIST_SEARCH_MAX_RESULTS = 8;
 const PROMPT_LAB_MAX_TOOL_LOOPS = 8;
 const PROMPT_LAB_EXPLICIT_MAX_TOOL_RUNS_PER_TURN = 20;
 const PROMPT_LAB_IMPLICIT_MAX_TOOL_RUNS_PER_TURN = {
@@ -43,6 +46,7 @@ export interface ResolveChatExecutionBudgetInput {
   readonly webMode: ChatWebMode;
   readonly thinkingLevel: ChatThinkingLevel;
   readonly liveDataIntent?: boolean;
+  readonly researchListIntent?: boolean;
   readonly promptLabExplicitTools?: boolean;
   readonly promptLabHarness?: boolean;
   readonly providerId?: string;
@@ -77,7 +81,21 @@ export function defaultThinkingTokens(level: ChatThinkingLevel): number | undefi
 export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInput): ChatExecutionBudget {
   const defaultMaxTokens = defaultThinkingTokens(input.thinkingLevel);
   let budget: ChatExecutionBudget;
-  if (input.webMode === "deep") {
+  if (shouldUseCoworkResearchListBudget(input)) {
+    budget = applyPromptLabExplicitToolBudget(
+      {
+        turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
+        completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
+        maxToolLoops: COWORK_RESEARCH_LIST_MAX_TOOL_LOOPS,
+        maxToolRunsPerTurn: COWORK_RESEARCH_LIST_MAX_TOOL_RUNS_PER_TURN,
+        searchMaxResults: COWORK_RESEARCH_LIST_SEARCH_MAX_RESULTS,
+        maxTokens: Math.max(defaultMaxTokens ?? 900, 1600),
+        minSynthesisReserveMs: 15000,
+        expensiveToolMinimumRemainingMs: 30000,
+      },
+      input.promptLabExplicitTools,
+    );
+  } else if (input.webMode === "deep") {
     budget = applyPromptLabExplicitToolBudget(
       {
         turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
@@ -163,6 +181,10 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
     maxTokens: Math.max(budget.maxTokens ?? 900, 1400),
     minSynthesisReserveMs: Math.max(budget.minSynthesisReserveMs, 12000),
   };
+}
+
+function shouldUseCoworkResearchListBudget(input: ResolveChatExecutionBudgetInput): boolean {
+  return input.mode === "cowork" && input.webMode === "auto" && Boolean(input.researchListIntent);
 }
 
 export function applyPromptLabHarnessBudget(

@@ -82,6 +82,34 @@ describe("chat-agent-budget", () => {
 
     expect(
       resolveChatExecutionBudget({
+        mode: "cowork",
+        webMode: "auto",
+        thinkingLevel: "standard",
+        liveDataIntent: true,
+        researchListIntent: true,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        maxToolLoops: 6,
+        maxToolRunsPerTurn: 16,
+        searchMaxResults: 8,
+        maxTokens: 1600,
+        minSynthesisReserveMs: 15000,
+      }),
+    );
+
+    expect(
+      resolveChatExecutionBudget({
+        mode: "chat",
+        webMode: "auto",
+        thinkingLevel: "standard",
+        liveDataIntent: true,
+        researchListIntent: true,
+      }),
+    ).toEqual(expect.objectContaining({ maxToolRunsPerTurn: 8, searchMaxResults: 6 }));
+
+    expect(
+      resolveChatExecutionBudget({
         mode: "code",
         webMode: "auto",
         thinkingLevel: "standard",

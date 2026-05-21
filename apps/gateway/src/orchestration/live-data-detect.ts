@@ -11,6 +11,18 @@ const RECENCY_EVENT_REGEX =
 const PRICE_LOOKUP_REGEX =
   /\b(price of|stock price|share price|market price|crypto price|bitcoin price|btc price|eth price|gas price|oil price|latest price|current price)\b/i;
 
+const LOCAL_RESEARCH_LOCATION_REGEX =
+  /\b(?:near\s+me|nearby|within\s+\d+(?:\.\d+)?\s*(?:mi|mile|miles|km|kilometers?)|around\s+(?:zip\s+)?\d{5}(?:-\d{4})?|(?:zip|postal)\s+code\s+\d{5}(?:-\d{4})?|\b\d{5}(?:-\d{4})?\b)\b/i;
+
+const LOCAL_RESEARCH_ENTITY_REGEX =
+  /\b(?:stores?|shops?|retailers?|restaurants?|cafes?|coffee\s+shops?|bars?|venues?|locations?|business(?:es)?|clinics?|offices?|dealers?|tabletop|board\s*games?|game\s+stores?)\b/i;
+
+const LOCAL_RESEARCH_DETAIL_REGEX =
+  /\b(?:addresses?|hours?|open\s+hours?|email(?:\s+addresses?)?|phone(?:\s+numbers?)?|websites?|official\s+sites?|contact(?:\s+info(?:rmation)?)?)\b/i;
+
+const LOCAL_RESEARCH_LIST_REGEX =
+  /\b(?:find|list|directory|put\s+(?:a\s+)?list\s+together|near|nearby|within|around|closest|local)\b/i;
+
 // Temporal phrases like "this week" only indicate live-data intent when
 // paired with event/schedule context — "events this weekend" should match,
 // but "I was busy this week" should not.
@@ -39,6 +51,7 @@ const EXPLICIT_WEB_PHRASES = [
 export { EXPLICIT_WEB_PHRASES };
 
 export function hasLiveDataKeywords(objective: string): boolean {
+  const normalized = objective.toLowerCase();
   return (
     LIVE_DATA_KEYWORD_REGEX.test(objective) ||
     RIGHT_NOW_EVENT_REGEX.test(objective) ||
@@ -46,9 +59,43 @@ export function hasLiveDataKeywords(objective: string): boolean {
     PRICE_LOOKUP_REGEX.test(objective) ||
     CURRENT_EVENT_REGEX.test(objective) ||
     TEMPORAL_EVENT_REGEX.test(objective) ||
-    EXPLICIT_WEB_PHRASES.some((phrase) => objective.includes(phrase)) ||
-    objective.includes("what's going on with") ||
-    objective.includes("whats going on with")
+    hasResearchListIntent(objective) ||
+    EXPLICIT_WEB_PHRASES.some((phrase) => normalized.includes(phrase)) ||
+    normalized.includes("what's going on with") ||
+    normalized.includes("whats going on with")
+  );
+}
+
+export function hasResearchListIntent(objective: string): boolean {
+  const normalized = objective.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return false;
+  }
+  const hasLocation = LOCAL_RESEARCH_LOCATION_REGEX.test(normalized);
+  const hasEntity = LOCAL_RESEARCH_ENTITY_REGEX.test(normalized);
+  const hasDetailFields = LOCAL_RESEARCH_DETAIL_REGEX.test(normalized);
+  const hasListShape = LOCAL_RESEARCH_LIST_REGEX.test(normalized);
+  return hasLocation && hasEntity && (hasDetailFields || hasListShape);
+}
+
+export function extractDelegatedLiveDataText(objective: string): string {
+  const normalized = objective.trim();
+  if (!/^\s*Delegated role:/i.test(normalized)) {
+    return normalized;
+  }
+  const pieces = ["Parent objective", "Current step objective", "Success criteria", "Expected output"]
+    .map((label) => {
+      const match = normalized.match(new RegExp(`(?:^|\\n)${label}:\\s*([^\\n]+)`, "i"));
+      return match?.[1]?.trim();
+    })
+    .filter((value): value is string => Boolean(value));
+  return pieces.length > 0 ? pieces.join(" ") : normalized;
+}
+
+export function hasLiveDataIntent(objective: string): boolean {
+  const delegatedText = extractDelegatedLiveDataText(objective);
+  return (
+    hasLiveDataKeywords(delegatedText) || (delegatedText !== objective.trim() ? hasLiveDataKeywords(objective) : false)
   );
 }
 
@@ -59,5 +106,5 @@ export function shouldPreferToolBackedChatPath(
   if (prefs.webMode === "off") {
     return false;
   }
-  return hasLiveDataKeywords(objective);
+  return hasLiveDataIntent(objective);
 }

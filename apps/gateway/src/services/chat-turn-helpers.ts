@@ -1,4 +1,10 @@
-import { GoatError, type ChatCitationRecord, type ChatMode, type ChatTurnFailureRecord } from "@goatcitadel/contracts";
+import {
+  GoatError,
+  type ChatCitationRecord,
+  type ChatMode,
+  type ChatTurnFailureClass,
+  type ChatTurnFailureRecord,
+} from "@goatcitadel/contracts";
 import type { OrchestrationStepExecutionResult } from "../orchestration/types.js";
 import type { PreparedChatExecutionPlanResolution } from "./chat-turn-types.js";
 
@@ -178,6 +184,12 @@ export function mergeExecutionPlanStepStatuses(
 
 export function buildDelegationFailureGuidance(error: string, role: string): string {
   const normalized = error.toLowerCase();
+  if (/\btool(?:-|\s*)run budget\b|\btool budget\b|tool_run_budget_exceeded/.test(normalized)) {
+    return `${toTitleCase(role)} hit the tool-run budget. Continue from the strongest gathered leads and ask only for the missing fields.`;
+  }
+  if (/\bnot yet allowlisted\b|\bnot allowlisted\b|\ballowlist(?:ed)? host\b/.test(normalized)) {
+    return `${toTitleCase(role)} reached a host that is not allowlisted. Request allowlist approval for that host or continue from search-result evidence with unverified fields called out.`;
+  }
   if (/\bauth|login|token|credential|permission\b/.test(normalized)) {
     return `${toTitleCase(role)} hit an auth or permission barrier. Reconnect the required account or switch to another source.`;
   }
@@ -194,6 +206,36 @@ export function buildDelegationFailureGuidance(error: string, role: string): str
     return `${toTitleCase(role)} could not find the expected input. Retry with a more explicit file, path, or source reference.`;
   }
   return `Retry the ${role} delegate with a narrower brief or a different tool/source strategy.`;
+}
+
+const INCOMPLETE_DELEGATED_FAILURE_CLASSES = new Set<ChatTurnFailureClass>([
+  "tool_run_budget_exceeded",
+  "turn_budget_exceeded",
+  "budget_exceeded",
+  "tool_blocked",
+  "tool_failed",
+  "tool_loop_guard",
+  "global_circuit_breaker",
+  "provider_timeout",
+  "network_interrupted",
+]);
+
+export function isIncompleteDelegatedTraceFailure(failure?: ChatTurnFailureRecord): boolean {
+  return failure ? INCOMPLETE_DELEGATED_FAILURE_CLASSES.has(failure.failureClass) : false;
+}
+
+export function buildIncompleteDelegatedTraceFailureGuidance(
+  failure: ChatTurnFailureRecord | undefined,
+  output: string,
+  role: string,
+): string {
+  if (failure?.failureClass === "tool_run_budget_exceeded") {
+    return `${toTitleCase(role)} hit the tool-run budget. Continue from gathered leads, avoid repeating completed lookups, and focus only on missing fields.`;
+  }
+  if (failure?.failureClass === "tool_blocked") {
+    return `${toTitleCase(role)} hit a blocked source. Continue from alternate sources, or request approval/allowlisting before retrying the same host.`;
+  }
+  return buildDelegationFailureGuidance(failure?.message ?? output, role);
 }
 
 export function dedupeChatCitations(citations: ChatCitationRecord[]): ChatCitationRecord[] {

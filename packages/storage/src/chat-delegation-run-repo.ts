@@ -38,6 +38,7 @@ export class ChatDelegationRunRepository {
   private readonly insertStmt;
   private readonly patchStmt;
   private readonly listBySessionStmt;
+  private readonly activeStepCountStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_delegation_runs WHERE run_id = ?");
@@ -72,6 +73,11 @@ export class ChatDelegationRunRepository {
       WHERE session_id = @sessionId
       ORDER BY started_at DESC
       LIMIT @limit
+    `);
+    this.activeStepCountStmt = db.prepare(`
+      SELECT COUNT(*) AS active_count
+      FROM chat_delegation_steps
+      WHERE run_id = ? AND status IN ('running', 'pending')
     `);
   }
 
@@ -182,6 +188,63 @@ export class ChatDelegationRunRepository {
     });
     return rows.map(mapRow);
   }
+
+  public reconcileSupersededRunningRunsForSession(
+    sessionId: string,
+    input: { now?: string; maxAgeMs?: number; limit?: number } = {},
+  ): ChatDelegationRunRecord[] {
+    const nowMs = Date.parse(input.now ?? new Date().toISOString());
+    const maxAgeMs = input.maxAgeMs ?? 24 * 60 * 60 * 1000;
+    if (!Number.isFinite(nowMs) || maxAgeMs <= 0) {
+      return [];
+    }
+    const runs = this.listBySession(sessionId, input.limit ?? 1000);
+    const newestTerminalByObjective = new Map<string, ChatDelegationRunRecord>();
+    const patched: ChatDelegationRunRecord[] = [];
+    for (const run of runs) {
+      const objectiveKey = normalizeObjectiveKey(run.objective);
+      if (!objectiveKey) {
+        continue;
+      }
+      if (run.status !== "running") {
+        if (!newestTerminalByObjective.has(objectiveKey) && isTerminalRunStatus(run.status)) {
+          newestTerminalByObjective.set(objectiveKey, run);
+        }
+        continue;
+      }
+      const newerTerminal = newestTerminalByObjective.get(objectiveKey);
+      const startedMs = Date.parse(run.startedAt);
+      if (!newerTerminal || !Number.isFinite(startedMs) || nowMs - startedMs < maxAgeMs) {
+        continue;
+      }
+      if (this.countActiveSteps(run.runId) > 0) {
+        continue;
+      }
+      patched.push(
+        this.patch(run.runId, {
+          status: "partial",
+          finalSummary: "Superseded by a later terminal delegation run; stale running state reconciled.",
+          stitchedOutput:
+            run.stitchedOutput ??
+            `STALE: Superseded by later delegation run ${newerTerminal.runId}; no active child step remained.`,
+          finishedAt: input.now ?? new Date(nowMs).toISOString(),
+        }),
+      );
+    }
+    return patched;
+  }
+
+  private countActiveSteps(runId: string): number {
+    const raw = this.activeStepCountStmt.get(runId);
+    if (!isRecord(raw)) {
+      return 0;
+    }
+    const count = raw.active_count ?? raw.count;
+    if (typeof count === "number" && Number.isFinite(count)) {
+      return count;
+    }
+    return typeof count === "bigint" ? Number(count) : 0;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -221,6 +284,14 @@ function isDelegationMode(value: unknown): value is ChatDelegationMode {
 
 function isDelegationStatus(value: unknown): value is ChatDelegationRunStatus {
   return value === "running" || value === "completed" || value === "failed" || value === "partial";
+}
+
+function isTerminalRunStatus(value: ChatDelegationRunStatus): boolean {
+  return value === "completed" || value === "failed" || value === "partial";
+}
+
+function normalizeObjectiveKey(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 function isVisibility(value: unknown): value is ChatOrchestrationVisibility {

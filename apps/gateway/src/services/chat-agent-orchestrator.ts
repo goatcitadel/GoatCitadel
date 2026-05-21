@@ -31,7 +31,7 @@ import { getChatTurnRecoveryAction, NotFoundError, type ChatTurnRecoveryAction }
 import { logger } from "@goatcitadel/gateway-core";
 import { estimateTokensFromText } from "@goatcitadel/memory-core";
 import type { Storage } from "@goatcitadel/storage";
-import { hasLiveDataKeywords, EXPLICIT_WEB_PHRASES } from "../orchestration/live-data-detect.js";
+import { EXPLICIT_WEB_PHRASES, hasLiveDataIntent, hasResearchListIntent } from "../orchestration/live-data-detect.js";
 import type { McpBrowserFallbackTarget } from "./mcp-runtime.js";
 import {
   looksLikePromptLabPromptPackMarkdownImportPrompt,
@@ -439,10 +439,22 @@ export class ChatAgentOrchestrator {
   public async *runStream(input: ChatAgentTurnInput): AsyncGenerator<ChatStreamChunkDraft> {
     throwIfChatTurnCancelled(input);
     const now = new Date().toISOString();
+    const promptLabContract = parsePromptLabRunContract(input.content);
+    const intentDetectionContent =
+      promptLabContract.userTask?.trim() || extractPrimaryUserTaskContent(input.content) || input.content;
     const presentationArtifactIntent = detectPresentationArtifactIntent(input.content);
     const intents = {
-      liveData: detectLiveDataIntent(input.content),
-      webLookup: detectWebLookupIntent(input.content, input.historyMessages),
+      liveData:
+        detectLiveDataIntent(intentDetectionContent) ||
+        (intentDetectionContent !== input.content ? detectLiveDataIntent(input.content) : false),
+      webLookup:
+        detectWebLookupIntent(intentDetectionContent, input.historyMessages) ||
+        (intentDetectionContent !== input.content
+          ? detectWebLookupIntent(input.content, input.historyMessages)
+          : false),
+      researchList:
+        hasResearchListIntent(intentDetectionContent) ||
+        (intentDetectionContent !== input.content ? hasResearchListIntent(input.content) : false),
       time: detectTimeIntent(input.content),
       localFile: detectLocalFileIntent(input.content),
       presentationArtifact: presentationArtifactIntent,
@@ -481,7 +493,6 @@ export class ChatAgentOrchestrator {
     };
 
     const conversationMessages: ChatCompletionRequest["messages"] = [...input.historyMessages];
-    const promptLabContract = parsePromptLabRunContract(input.content);
     const normalizationProfile = input.normalizationProfile ?? "live";
     const parsedPromptLabTask = promptLabContract.userTask?.trim();
     const promptLabTaskForInspection =
@@ -591,6 +602,7 @@ export class ChatAgentOrchestrator {
       webMode: input.webMode,
       thinkingLevel: input.thinkingLevel,
       liveDataIntent: intents.webLookup,
+      researchListIntent: intents.researchList,
       promptLabExplicitTools: promptLabContract.explicitTools,
       promptLabHarness: normalizationProfile === "prompt_pack_harness" || isPromptLabHarnessContent(input.content),
       providerId: input.providerId,
@@ -2050,7 +2062,16 @@ export class ChatAgentOrchestrator {
                 `Tool run budget exceeded for this turn after ${executionBudget.maxToolRunsPerTurn} tool calls.`,
                 "retry_narrower",
               );
-              assistantContent = buildUserSafeFailureMessage(finalFailure);
+              assistantContent = buildTurnBudgetExceededFallbackMessage({
+                turnInput: input,
+                toolRuns,
+                turnBudgetMs: effectiveTurnBudgetMs,
+                fallbackBuilders: {
+                  buildFetchedContentBudgetFallback,
+                  buildSearchResultBudgetFallback,
+                  buildDeterministicToolSynthesisFallback,
+                },
+              });
               finalStatus = "completed";
               shortCircuitedOnBudget = true;
               break;
@@ -4810,6 +4831,11 @@ function buildToolFailureGuidance(input: {
     typeof input.result?.browserFailureClass === "string" ? input.result.browserFailureClass : undefined;
 
   if (input.toolName.startsWith("browser.") || input.toolName.startsWith("http.")) {
+    if (/\bnot yet allowlisted\b|\bnot allowlisted\b|\ballowlisted\b/.test(normalizedError)) {
+      return host
+        ? `Host ${host} is not allowlisted. Request allowlist approval for that host, or continue from search-result evidence and mark any unverified fields.`
+        : "The target host is not allowlisted. Request allowlist approval, or continue from search-result evidence and mark any unverified fields.";
+    }
     if (browserFailureClass === "rate_limited" || /\b429\b|rate.?limit/i.test(normalizedError)) {
       return "Search API is rate-limited. Try a different search engine or use the browser directly to scrape results.";
     }
@@ -5465,7 +5491,7 @@ function looksLikeMissingDocumentArtifactContent(content: string): boolean {
 }
 
 function detectLiveDataIntent(content: string): boolean {
-  return hasLiveDataKeywords(content.toLowerCase()) || Boolean(derivePromptSpecificWebQuery(content));
+  return hasLiveDataIntent(content) || Boolean(derivePromptSpecificWebQuery(content));
 }
 
 function detectExplicitWebLookupIntent(content: string): boolean {

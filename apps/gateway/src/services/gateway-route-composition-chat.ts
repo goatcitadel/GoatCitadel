@@ -152,6 +152,7 @@ export function composeChatRouteDependencies(
   const chatDelegate: GatewayRouteServiceDependencies["chatDelegate"] = {
     acceptChatDelegation: (sessionId, input) => gateway.acceptChatDelegation(sessionId, input),
     getChatDelegationRun: (sessionId, runId) => {
+      gateway.storage.chatDelegationRuns.reconcileSupersededRunningRunsForSession?.(sessionId);
       const run = gateway.storage.chatDelegationRuns.get(runId);
       if (run.sessionId !== sessionId) {
         throw new NotFoundError(`Delegation run ${runId} not found for session ${sessionId}`);

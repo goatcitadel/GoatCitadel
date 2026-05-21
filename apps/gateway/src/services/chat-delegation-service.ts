@@ -29,8 +29,10 @@ import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
 import type { ChildTimeoutLateSettleEvent } from "./subagent-budget-enforcer.js";
 import {
   buildDelegationFailureGuidance,
+  buildIncompleteDelegatedTraceFailureGuidance,
   DEFAULT_DELEGATION_ROLES,
   detectDelegationRoles,
+  isIncompleteDelegatedTraceFailure,
   toTitleCase,
   truncateSummaryLine,
 } from "./chat-turn-helpers.js";
@@ -485,7 +487,9 @@ export class ChatDelegationService {
         const waitingForUserInput = traceStatus === "waiting_for_user_input";
         const stillActive = traceStatus === "waiting_for_tool";
         const waiting = waitingForApproval || waitingForUserInput || stillActive;
-        const failed = traceStatus === "failed";
+        const traceFailure = response.trace?.failure;
+        const degradedFailure = !waiting && isIncompleteDelegatedTraceFailure(traceFailure);
+        const failed = traceStatus === "failed" || degradedFailure;
         const cancelled = traceStatus === "cancelled";
         const incomplete = failed || cancelled;
         const stepStatus: ChatDelegationStepRecord["status"] = waiting
@@ -514,7 +518,9 @@ export class ChatDelegationService {
           summary: truncateSummaryLine(output, 180),
           output,
           error: incomplete ? (response.trace?.failure?.message ?? output) : undefined,
-          failureGuidance: incomplete ? buildDelegationFailureGuidance(output, step.role) : undefined,
+          failureGuidance: incomplete
+            ? buildIncompleteDelegatedTraceFailureGuidance(traceFailure, output, step.role)
+            : undefined,
           durableRunId: response.trace?.durable?.runId,
           childSessionId: agentSessionId,
           childTurnId: response.turnId,
@@ -549,7 +555,13 @@ export class ChatDelegationService {
           metadata: {
             ...childMetadataBase,
             heartbeatAt: observedAt,
-            failureClass: incomplete ? "missing_handoff" : undefined,
+            failureClass: incomplete
+              ? traceFailure?.failureClass === "tool_run_budget_exceeded" ||
+                traceFailure?.failureClass === "tool_loop_guard" ||
+                traceFailure?.failureClass === "global_circuit_breaker"
+                ? "repeated_tool_loop"
+                : "missing_handoff"
+              : undefined,
             handoffEvidence,
           },
         });
@@ -762,11 +774,21 @@ export class ChatDelegationService {
               ? `CANCELLED: ${step.error ?? step.output ?? "Delegate was cancelled."}`
               : step.status === "skipped"
                 ? `SKIPPED: ${step.error ?? "Dependency did not complete."}`
-                : `FAILED: ${step.error ?? step.output ?? "Delegate failed without an error message."}`;
+                : [
+                    `FAILED: ${step.error ?? "Delegate failed without an error message."}`,
+                    step.output?.trim() && step.output.trim() !== step.error?.trim()
+                      ? `Partial output:\n${step.output.trim()}`
+                      : undefined,
+                  ]
+                    .filter(Boolean)
+                    .join("\n\n");
       return `### ${toTitleCase(step.role)}\n${body}`;
     });
     const stitchedOutput = stitchedSections.join("\n\n").trim();
     const completedSteps = persistedSteps.filter((step) => step.status === "completed").length;
+    const failedStepsWithPartialOutput = persistedSteps.filter(
+      (step) => step.status === "failed" && Boolean(step.output?.trim()),
+    ).length;
     const activeSteps = persistedSteps.filter((step) => step.status === "running" || step.status === "pending").length;
     const terminalSteps = persistedSteps.filter(
       (step) =>
@@ -780,7 +802,7 @@ export class ChatDelegationService {
         ? "running"
         : terminalSteps === persistedSteps.length && completedSteps === persistedSteps.length
           ? "completed"
-          : completedSteps > 0
+          : completedSteps > 0 || failedStepsWithPartialOutput > 0
             ? "partial"
             : "failed";
     deps.storage.chatDelegationRuns.patch(runId, {

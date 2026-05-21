@@ -128,6 +128,67 @@ describe("deriveCoworkRunViewModel", () => {
     expect(viewModel.stateGaps).not.toContain("Canonical run not loaded");
   });
 
+  it("surfaces partial budgeted delegation runs as continuation work", () => {
+    const orchestration = {
+      runId: "delegation-run-budget",
+      status: "partial",
+      workflowTemplate: "cowork.research.synthesize",
+      routeDecision: {
+        selectedRoles: ["researcher", "synthesizer"],
+      },
+      finalSummary: undefined,
+    };
+    const viewModel = deriveCoworkRunViewModel({
+      items: [],
+      orchestration: orchestration as never,
+      activeTurn: {
+        turnId: "turn-1",
+        userMessage: { content: "Find stores near 91303." },
+        trace: {
+          status: "completed",
+          orchestration,
+          toolRuns: [],
+          startedAt: "2026-05-04T00:00:00.000Z",
+        },
+      } as never,
+      delegationRun: {
+        runId: "delegation-run-budget",
+        label: "Store research",
+        objective: "Find stores near 91303.",
+        mode: "cowork",
+        status: "partial",
+        stitchedOutput: "Partial output",
+        steps: [
+          {
+            stepId: "delegate-1",
+            role: "Researcher",
+            label: "Research",
+            status: "failed",
+            childSessionId: "child-1",
+            output: "Strong leads gathered.",
+            error: "Tool run budget exceeded for this turn after 7 tool calls.",
+            failureGuidance: "Continue from gathered leads.",
+          },
+        ],
+      },
+    });
+
+    expect(viewModel.blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "delegation-continuation-needed",
+          title: "Continuation needed",
+        }),
+      ]),
+    );
+    expect(viewModel.nextAction).toMatchObject({
+      kind: "retry_turn",
+      label: "Continue from gathered leads",
+    });
+    expect(viewModel.continuationGate.reasonCodes).toContain("delegation_partial");
+    expect(viewModel.stateGaps).toContain("Delegation continuation needed");
+  });
+
   it("summarizes optional agentic run-tree diagnostics and controls", () => {
     const viewModel = deriveCoworkRunViewModel({
       items: [],

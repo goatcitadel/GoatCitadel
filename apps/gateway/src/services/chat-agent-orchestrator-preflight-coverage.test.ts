@@ -126,6 +126,42 @@ describe("ChatAgentOrchestrator tool preflight coverage", () => {
     expect(invokeTool).not.toHaveBeenCalled();
   });
 
+  it("records blocked browser navigate hosts without weakening allowlist policy", async () => {
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "blocked",
+      policyReason: "browser.navigate host is not yet allowlisted",
+      auditEventId: "audit-browser-navigate-blocked-1",
+      result: {
+        browserFailureClass: "policy_blocked",
+      },
+    });
+    const executeToolCall = createExecuteToolCall({ invokeTool });
+
+    const result = await executeToolCall({
+      input: turnInput({
+        content: "Open https://blocked.example/store-hours and collect official hours.",
+        webMode: "auto",
+      }),
+      turnId: "turn-navigate-allowlist-blocked",
+      toolName: "browser.navigate",
+      rawArgs: { url: "https://blocked.example/store-hours" },
+    });
+
+    expect(invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "browser.navigate",
+        args: expect.objectContaining({ url: "https://blocked.example/store-hours" }),
+      }),
+    );
+    expect(result.record).toMatchObject({
+      toolName: "browser.navigate",
+      status: "blocked",
+      error: "browser.navigate host is not yet allowlisted",
+    });
+    expect(result.record.failureGuidance).toContain("Host blocked.example is not allowlisted");
+    expect(result.record.failureGuidance).toContain("continue from search-result evidence");
+  });
+
   it("resolves approval expiry from storage when the tool result omits expiresAt", async () => {
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
       outcome: "approval_required",
@@ -157,7 +193,7 @@ describe("ChatAgentOrchestrator tool preflight coverage", () => {
 function createExecuteToolCall(input: { invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult> }) {
   return createExecuteToolCallForTest({
     invokeTool: input.invokeTool,
-    toolNames: ["browser.search", "http.get", "memory.search", "memory.write"],
+    toolNames: ["browser.search", "browser.navigate", "http.get", "memory.search", "memory.write"],
   });
 }
 

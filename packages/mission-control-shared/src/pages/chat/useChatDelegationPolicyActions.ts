@@ -81,6 +81,7 @@ export interface ActiveChatDelegationStep {
   summary?: string;
   output?: string;
   error?: string;
+  failureGuidance?: string;
   durableRunId?: string;
   childSessionId?: string;
   childTurnId?: string;
@@ -113,6 +114,7 @@ function toActiveDelegationStep(step: ChatDelegationStepRecord): ActiveChatDeleg
     summary: step.summary,
     output: step.output,
     error: step.error,
+    failureGuidance: step.failureGuidance,
     durableRunId: step.durableRunId,
     childSessionId: step.childSessionId,
     childTurnId: step.childTurnId,
@@ -511,6 +513,7 @@ export function useChatDelegationPolicyActions(input: {
               summary: chunk.step.summary,
               output: chunk.step.output,
               error: chunk.step.error,
+              failureGuidance: chunk.step.failureGuidance,
             };
             setActiveDelegationRun((current) => {
               if (!current) {

@@ -599,6 +599,23 @@ describe("prepareAgentChatTurn personality overlay", () => {
     ).toBe("failed");
     expect(
       buildChatOrchestrationSummary({
+        runId: "run-partial-child",
+        objective: "Do work",
+        modePolicy: "cowork",
+        routeDecision,
+        stepResults: [
+          createStepResult({
+            stepId: "failed-with-output",
+            status: "failed",
+            error: "Tool run budget exceeded.",
+            output: "Strong leads gathered.",
+          }),
+        ],
+        finalized: true,
+      }).status,
+    ).toBe("partial");
+    expect(
+      buildChatOrchestrationSummary({
         runId: "run-completed",
         objective: "Do work",
         modePolicy: "cowork",
@@ -689,6 +706,7 @@ function createStepResult(overrides: {
   stepId: string;
   status: "completed" | "failed";
   summary?: string;
+  output?: string;
   error?: string;
 }) {
   return {
@@ -703,6 +721,7 @@ function createStepResult(overrides: {
     finishedAt: "2026-05-04T00:00:01.000Z",
     durationMs: 1000,
     summary: overrides.summary,
+    output: overrides.output,
     error: overrides.error,
   };
 }

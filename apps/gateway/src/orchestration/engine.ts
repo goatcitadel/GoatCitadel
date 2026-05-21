@@ -487,6 +487,13 @@ function getPreferredFinalRoles(mode: ChatMode, workflowTemplate: string): Orche
   }
 }
 
+function truncateText(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length <= maxLength
+    ? normalized
+    : `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
 function buildFinalOutput(
   mode: ChatMode,
   steps: OrchestrationStepExecutionResult[],
@@ -509,7 +516,13 @@ function buildFinalOutput(
   }
   const failureLines = steps
     .filter((step) => step.status === "failed")
-    .map((step) => `- ${toTitleCase(step.role)}: ${step.error ?? "unknown failure"}`);
+    .map((step) => {
+      const partialOutput =
+        step.output?.trim() && step.output.trim() !== step.error?.trim()
+          ? ` Partial output: ${truncateText(step.output.trim(), 320)}`
+          : "";
+      return `- ${toTitleCase(step.role)}: ${step.error ?? "unknown failure"}${partialOutput}`;
+    });
   return [
     mode === "code"
       ? "I could not complete the multi-agent code workflow."
@@ -519,6 +532,26 @@ function buildFinalOutput(
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function collectChildFailureIntegritySignals(steps: OrchestrationStepExecutionResult[]): string[] {
+  const signals = new Set<string>();
+  for (const step of steps) {
+    if (step.status !== "failed" || (!step.childSessionId && !step.childTurnId)) {
+      continue;
+    }
+    const text = `${step.error ?? ""} ${step.failureGuidance ?? ""}`.toLowerCase();
+    signals.add("orchestration_child_failure");
+    if (/\btool(?:-|\s*)run budget\b|tool_run_budget_exceeded|\btool budget\b/.test(text)) {
+      signals.add("orchestration_child_tool_budget");
+      signals.add("orchestration_partial_needs_continuation");
+    }
+    if (/\bnot yet allowlisted\b|\bnot allowlisted\b|\ballowlist\b|\bblocked source\b|\btool_blocked\b/.test(text)) {
+      signals.add("orchestration_child_tool_blocked");
+      signals.add("orchestration_partial_needs_continuation");
+    }
+  }
+  return [...signals];
 }
 
 async function repairFinalOutputIfNeeded(input: {
@@ -533,11 +566,12 @@ async function repairFinalOutputIfNeeded(input: {
   finalStep?: OrchestrationStepExecutionResult;
   integritySignals?: string[];
 }> {
+  const childFailureSignals = collectChildFailureIntegritySignals(input.steps);
   if (input.steps.some((step) => step.status === "running")) {
     return {
       output: input.initialOutput,
       finalStep: input.finalStep,
-      integritySignals: ["orchestration_waiting_on_child"],
+      integritySignals: [...childFailureSignals, "orchestration_waiting_on_child"],
     };
   }
   const requiredLabels = getRequiredWorkstreamLabels(input.plan);
@@ -545,10 +579,15 @@ async function repairFinalOutputIfNeeded(input: {
   const synthesisExpected = input.plan.steps.some((step) => step.role === "synthesizer");
   const missingFinalSynthesis = synthesisExpected && input.finalStep?.role !== "synthesizer";
   if (!missingRequiredLabels && !missingFinalSynthesis) {
-    return { output: input.initialOutput, finalStep: input.finalStep };
+    return {
+      output: input.initialOutput,
+      finalStep: input.finalStep,
+      integritySignals: childFailureSignals.length > 0 ? childFailureSignals : undefined,
+    };
   }
 
   const integritySignals = [
+    ...childFailureSignals,
     missingRequiredLabels ? "orchestration_final_synthesis_missing_required_sections" : undefined,
     missingFinalSynthesis ? "orchestration_final_synthesis_missing" : undefined,
     missingFinalSynthesis && input.finalStep ? "orchestration_final_synthesis_role_drift" : undefined,

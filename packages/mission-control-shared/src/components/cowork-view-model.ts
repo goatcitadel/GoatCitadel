@@ -325,6 +325,16 @@ function buildDelegationCompletenessLabel(status?: ActiveChatDelegationRun["stat
   }
 }
 
+function isDelegationContinuationFailure(step?: ActiveChatDelegationRun["steps"][number]): boolean {
+  if (!step || step.status !== "failed") {
+    return false;
+  }
+  const text = `${step.error ?? ""} ${step.failureGuidance ?? ""}`.toLowerCase();
+  return /\btool(?:-|\s*)run budget\b|tool_run_budget_exceeded|\bnot yet allowlisted\b|\bnot allowlisted\b|\ballowlist\b|\bblocked source\b|\bcurrent tool-run budget\b/.test(
+    text,
+  );
+}
+
 function readContinuationGateFromCheckpoint(
   checkpoints: OrchestrationCheckpointRecord[],
 ): ContinuationGateDecision | undefined {
@@ -380,6 +390,7 @@ function buildDerivedContinuationGate(input: {
   evidenceGapCount: number;
   orchestrationError?: string | null;
   runFailure?: boolean;
+  delegationContinuationNeeded?: boolean;
 }): ContinuationGateDecision {
   const metrics = {
     stepsSinceCheckpoint: countStepsSinceCheckpoint(input.checkpoints),
@@ -417,6 +428,16 @@ function buildDerivedContinuationGate(input: {
       summary: "Continuation paused because failures need inspection.",
       metrics,
       recommendedAction: "Inspect the failed step before retrying.",
+      createdAt: new Date().toISOString(),
+    };
+  }
+  if (input.delegationContinuationNeeded) {
+    return {
+      decision: "pause",
+      reasonCodes: ["delegation_partial"],
+      summary: "Continuation paused because delegated research needs a focused follow-up.",
+      metrics,
+      recommendedAction: "Continue from the gathered leads and fill only the missing fields.",
       createdAt: new Date().toISOString(),
     };
   }
@@ -551,6 +572,9 @@ export function deriveCoworkRunViewModel(input: {
   const errorSummary = formatCoworkFriendlyError(orchestrationError);
   const runFailureSummary = formatCoworkFriendlyError(orchestrationRun?.lastError ?? currentTrace?.failure?.message);
   const delegationFailure = delegationSteps.find((step) => step.error);
+  const delegationContinuationFailure = delegationSteps.find(isDelegationContinuationFailure);
+  const delegationContinuationNeeded =
+    delegationRunLoaded && delegationRun?.status === "partial" && Boolean(delegationContinuationFailure);
   const delegationFailureSummary = formatCoworkFriendlyError(delegationFailure?.error);
   const durableRecoveryState = currentTrace?.durable?.recoveryState;
   const durableRecoverySummary = currentTrace?.durable?.recoverySummary;
@@ -597,10 +621,12 @@ export function deriveCoworkRunViewModel(input: {
       : null,
     delegationFailureSummary
       ? {
-          id: "delegation-failed",
-          title: `${delegationFailure?.role ?? "Delegated step"} failed`,
+          id: delegationContinuationFailure ? "delegation-continuation-needed" : "delegation-failed",
+          title: delegationContinuationFailure
+            ? "Continuation needed"
+            : `${delegationFailure?.role ?? "Delegated step"} failed`,
           summary: delegationFailureSummary.summary,
-          raw: delegationFailureSummary.raw,
+          raw: delegationFailure?.failureGuidance ?? delegationFailureSummary.raw,
         }
       : null,
   ].filter((value): value is CoworkBlocker => Boolean(value));
@@ -640,17 +666,23 @@ export function deriveCoworkRunViewModel(input: {
               label: "Retry run step",
               note: "Retry the active turn once the route and settings still look right.",
             }
-          : items.length > 0
+          : delegationContinuationNeeded
             ? {
-                kind: "open_tasks",
-                label: "Open tasks",
-                note: "Review the queued operator actions and related follow-up work beside this run.",
+                kind: "retry_turn",
+                label: "Continue from gathered leads",
+                note: "Continue the partial Cowork run without repeating completed lookups; focus on the missing fields.",
               }
-            : {
-                kind: "review_run_details",
-                label: "Open run details",
-                note: "Inspect routing, tools, and raw state without displacing the active run board.",
-              };
+            : items.length > 0
+              ? {
+                  kind: "open_tasks",
+                  label: "Open tasks",
+                  note: "Review the queued operator actions and related follow-up work beside this run.",
+                }
+              : {
+                  kind: "review_run_details",
+                  label: "Open run details",
+                  note: "Inspect routing, tools, and raw state without displacing the active run board.",
+                };
 
   const nowTitle = empty
     ? "No Cowork run is active yet"
@@ -658,11 +690,13 @@ export function deriveCoworkRunViewModel(input: {
       ? "Cowork is waiting for your answer"
       : waitingForApproval
         ? "Cowork is waiting on approval"
-        : orchestrationRun
-          ? `${humanizeStatus(planState)} run`
-          : orchestration
-            ? "Cowork is working from routed trace state"
-            : "Cowork is holding workflow context";
+        : delegationContinuationNeeded
+          ? "Cowork needs a continuation pass"
+          : orchestrationRun
+            ? `${humanizeStatus(planState)} run`
+            : orchestration
+              ? "Cowork is working from routed trace state"
+              : "Cowork is holding workflow context";
 
   const phaseLabel = humanizePhaseLabel(orchestrationRun?.currentPhaseId);
   const waveLabel = humanizePhaseLabel(orchestrationRun?.currentWaveId, "Wave");
@@ -672,13 +706,15 @@ export function deriveCoworkRunViewModel(input: {
     ? "Describe the objective, constraints, and desired output. Cowork will attach a visible plan, checkpoints, and blockers here."
     : orchestration?.finalSummary
       ? orchestration.finalSummary
-      : runProgressSummary
-        ? `${runProgressSummary} · ${executionState}.`
-        : orchestrationRun
-          ? `Execution is ${executionState} and the board is showing live Cowork run state.`
-          : currentTrace?.status
-            ? `The active turn is ${humanizeStatus(currentTrace.status)} while Cowork keeps the workflow context visible.`
-            : "Cowork has the current workflow context, even though no canonical run data is loaded yet.";
+      : delegationContinuationNeeded
+        ? "Delegated research stopped after a budget or policy boundary. Continue from the gathered leads and fill only the missing fields."
+        : runProgressSummary
+          ? `${runProgressSummary} · ${executionState}.`
+          : orchestrationRun
+            ? `Execution is ${executionState} and the board is showing live Cowork run state.`
+            : currentTrace?.status
+              ? `The active turn is ${humanizeStatus(currentTrace.status)} while Cowork keeps the workflow context visible.`
+              : "Cowork has the current workflow context, even though no canonical run data is loaded yet.";
 
   const facts = [
     orchestration?.workflowTemplate ? { label: "Workflow", value: orchestration.workflowTemplate } : null,
@@ -812,6 +848,7 @@ export function deriveCoworkRunViewModel(input: {
     orchestration?.runId && !orchestrationRun && !delegationRunLoaded ? "Canonical run not loaded" : null,
     waitingForApproval ? "Approval unresolved" : null,
     waitingForUserInput ? "Operator answer required" : null,
+    delegationContinuationNeeded ? "Delegation continuation needed" : null,
     durableRecoveryState && durableRecoveryState !== "none"
       ? `Durable worker recovery: ${humanizeStatus(durableRecoveryState)}`
       : null,
@@ -833,6 +870,7 @@ export function deriveCoworkRunViewModel(input: {
       evidenceGapCount,
       orchestrationError,
       runFailure: Boolean(runFailureSummary),
+      delegationContinuationNeeded,
     });
   const checkpointItems = [...orchestrationCheckpoints]
     .reverse()

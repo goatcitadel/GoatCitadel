@@ -598,6 +598,59 @@ describe("ChatDelegationService loop 20 coverage", () => {
     expect(deps.scheduleChatMemoryContextPrewarm).not.toHaveBeenCalled();
   });
 
+  it("treats child tool budget failures as partial delegation truth with continuation guidance", async () => {
+    const { deps, service } = createHarness();
+    deps.agentSendChatMessage = vi.fn(async (childSessionId: string) => {
+      const response = createChatResponse(childSessionId, {
+        assistantMessage: {
+          ...createChatResponse(childSessionId).assistantMessage!,
+          content: "Strong leads so far: Store A, Store B. Hours and emails still need verification.",
+        },
+      });
+      return {
+        ...response,
+        trace: {
+          ...response.trace!,
+          status: "completed",
+          failure: {
+            failureClass: "tool_run_budget_exceeded",
+            message: "Tool run budget exceeded for this turn after 7 tool calls.",
+            retryable: true,
+            recommendedAction: "retry_narrower",
+          },
+        },
+      } as ChatSendMessageResponse;
+    }) as never;
+
+    const result = await service.runChatDelegation("sess-1", {
+      objective: "Find boardgame stores within 10 miles of 91303 with address, hours, and email.",
+      roles: ["researcher"],
+    });
+
+    expect(result.status).toBe("partial");
+    expect(result.steps[0]).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        error: "Tool run budget exceeded for this turn after 7 tool calls.",
+        output: expect.stringContaining("Strong leads so far"),
+        failureGuidance: expect.stringContaining("Continue from gathered leads"),
+      }),
+    );
+    expect(result.stitchedOutput).toContain("FAILED: Tool run budget exceeded");
+    expect(result.stitchedOutput).toContain("Strong leads so far");
+    expect(deps.taskLifecycleService.updateTaskSubagent).toHaveBeenCalledWith(
+      "delegate-session-1",
+      expect.objectContaining({
+        status: "failed",
+        metadata: expect.objectContaining({ failureClass: "repeated_tool_loop" }),
+      }),
+    );
+    expect(deps.storage.chatDelegationRuns.patch).toHaveBeenLastCalledWith(
+      result.runId,
+      expect.objectContaining({ status: "partial" }),
+    );
+  });
+
   it("records thrown delegate failures as crashed subagents and blocked runs", async () => {
     const { deps, service } = createHarness();
     deps.agentSendChatMessage = vi.fn(async () => {

@@ -494,6 +494,55 @@ describe("orchestration engine", () => {
     expect(result.integritySignals).toContain("orchestration_final_synthesis_fallback");
     expect(result.finalOutput).toContain("Synthesis Incomplete");
   });
+
+  it("marks failed child budget steps as partial continuation integrity", async () => {
+    const plan: OrchestrationPlan = {
+      ...createPlan(),
+      workflowTemplate: "cowork.research",
+      summary: "Delegated research.",
+      steps: [
+        {
+          stepId: "step-child",
+          index: 0,
+          role: "researcher",
+          stage: 1,
+          objective: "Find local stores and verify contact fields.",
+          parallelizable: false,
+          delegatedRole: "researcher",
+        },
+      ],
+    };
+
+    const result = await executeOrchestrationPlan({
+      task: createTask(),
+      plan,
+      callbacks: {
+        createChatCompletion: vi.fn(),
+        executeDelegatedStep: vi.fn(async () => ({
+          stepId: "step-child",
+          role: "researcher",
+          index: 0,
+          startedAt: NOW,
+          finishedAt: NOW,
+          status: "failed",
+          output: "Strong leads so far: Store A and Store B.",
+          summary: "Research hit budget.",
+          error: "Tool run budget exceeded for this turn after 7 tool calls.",
+          failureGuidance: "Continue from gathered leads.",
+          childSessionId: "child-1",
+          childTurnId: "turn-child-1",
+          citations: [],
+        })),
+      },
+    });
+
+    expect(result.finalOutput).toContain("Strong leads so far");
+    expect(result.integritySignals).toEqual([
+      "orchestration_child_failure",
+      "orchestration_child_tool_budget",
+      "orchestration_partial_needs_continuation",
+    ]);
+  });
 });
 
 function createWorkstreamPlan(): OrchestrationPlan {

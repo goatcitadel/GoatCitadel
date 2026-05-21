@@ -1203,6 +1203,7 @@ export interface ChatDelegationStreamChunk {
     summary?: string;
     output?: string;
     error?: string;
+    failureGuidance?: string;
   };
   result?: ChatDelegateResponse;
   error?: string;

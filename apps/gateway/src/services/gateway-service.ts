@@ -1218,7 +1218,10 @@ export class GatewayService {
       getTurnTrace: (turnId) => this.storage.chatTurnTraces.get(turnId),
       listHydratedChatTurnTraces: (sessionId, limit) => this.listHydratedChatTurnTraces(sessionId, limit),
       listChatExecutionPlans: (sessionId, limit) => this.storage.chatExecutionPlans.listBySession(sessionId, limit),
-      listChatDelegationRuns: (sessionId, limit) => this.storage.chatDelegationRuns.listBySession(sessionId, limit),
+      listChatDelegationRuns: (sessionId, limit) => {
+        this.storage.chatDelegationRuns.reconcileSupersededRunningRunsForSession(sessionId);
+        return this.storage.chatDelegationRuns.listBySession(sessionId, limit);
+      },
       listChatDelegationSteps: (runId) => this.storage.chatDelegationSteps.listByRun(runId),
       getSession: (sessionId) => this.getSession(sessionId),
       getSessionSummary: (sessionId) => this.getSessionSummary(sessionId),

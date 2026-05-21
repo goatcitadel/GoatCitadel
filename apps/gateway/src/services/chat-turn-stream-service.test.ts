@@ -6,8 +6,14 @@ import type { ChatTurnStreamHost } from "./chat-turn-stream-service.js";
 vi.mock("./chat-turn-helpers.js", () => ({
   buildDelegationFailureGuidance: () => "fallback guidance",
   buildEmptyAssistantTurnFallbackText: () => "Recovered empty assistant output.",
+  buildIncompleteDelegatedTraceFailureGuidance: (failure: { failureClass?: string } | undefined) =>
+    failure?.failureClass === "tool_run_budget_exceeded"
+      ? "continue from gathered leads guidance"
+      : "fallback guidance",
   ChatTurnCancelledError: class ChatTurnCancelledError extends Error {},
   dedupeChatCitations: (items: unknown[]) => items,
+  isIncompleteDelegatedTraceFailure: (failure: { failureClass?: string } | undefined) =>
+    failure?.failureClass === "tool_run_budget_exceeded",
   isChatTurnCancelledError: () => false,
   mergeExecutionPlanStepStatuses: (_steps: unknown, next: unknown) => next,
   renderExecutionPlanAsMarkdown: () => "execution plan",
@@ -234,6 +240,51 @@ describe("streamPreparedAgentChatTurn", () => {
         error: "delegate tool failed",
         failureGuidance: "fallback guidance",
         childTurnId: "delegate-turn-failed",
+      }),
+    );
+  });
+
+  it("does not treat child tool-budget traces as clean completed delegated steps", async () => {
+    const host = createHost();
+    host.agentSendChatMessage = vi.fn(async () => ({
+      sessionId: "delegate-session",
+      userMessage: { messageId: "delegate-user" },
+      assistantMessage: {
+        messageId: "delegate-assistant",
+        content: "Strong leads gathered; hours and email still need verification.",
+      },
+      turnId: "delegate-turn-budget",
+      trace: {
+        turnId: "delegate-turn-budget",
+        sessionId: "delegate-session",
+        status: "completed",
+        model: "delegate-model",
+        failure: {
+          failureClass: "tool_run_budget_exceeded",
+          message: "Tool run budget exceeded for this turn after 7 tool calls.",
+          retryable: true,
+        },
+      },
+      citations: [],
+      routing: { effectiveProviderId: "delegate-provider" },
+    })) as never;
+
+    const result = await executeDelegatedPlanStep(host, createPreparedTurn({ mode: "cowork" }), {
+      ...createDelegatedStepInput(),
+      step: {
+        ...createDelegatedStepInput().step,
+        role: "researcher",
+        delegatedRole: "researcher",
+      },
+    } as never);
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        output: "Strong leads gathered; hours and email still need verification.",
+        error: "Tool run budget exceeded for this turn after 7 tool calls.",
+        failureGuidance: "continue from gathered leads guidance",
+        childTurnId: "delegate-turn-budget",
       }),
     );
   });

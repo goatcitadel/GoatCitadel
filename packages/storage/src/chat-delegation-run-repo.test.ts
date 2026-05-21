@@ -177,4 +177,59 @@ describe("ChatDelegationRunRepository", () => {
     internal.listBySessionStmt = { all: () => [null] };
     assert.throws(() => repo.listBySession("session-a"), /Delegation run list row 0 for session session-a is corrupt/);
   });
+
+  it("reconciles stale running runs only when superseded and no active child steps remain", () => {
+    const { db, repo } = createStore();
+    repo.create({
+      runId: "run-stale",
+      sessionId: "session-a",
+      taskId: "task-stale",
+      objective: "Find stores near 91303",
+      roles: ["Researcher"],
+      mode: "sequential",
+      status: "running",
+      startedAt: "2026-05-18T00:00:00.000Z",
+    });
+    repo.create({
+      runId: "run-active-wait",
+      sessionId: "session-a",
+      taskId: "task-active",
+      objective: "Find stores near 91303",
+      roles: ["Researcher"],
+      mode: "sequential",
+      status: "running",
+      startedAt: "2026-05-18T00:10:00.000Z",
+    });
+    repo.create({
+      runId: "run-new",
+      sessionId: "session-a",
+      taskId: "task-new",
+      objective: "Find stores near 91303",
+      roles: ["Researcher"],
+      mode: "sequential",
+      status: "completed",
+      startedAt: "2026-05-20T00:00:00.000Z",
+      finishedAt: "2026-05-20T00:10:00.000Z",
+    });
+    db.prepare(
+      `
+        INSERT INTO chat_delegation_steps (
+          step_id, run_id, role, step_index, status, started_at, citations_json
+        ) VALUES (?, ?, 'Researcher', 0, 'running', ?, '[]')
+      `,
+    ).run("step-active", "run-active-wait", "2026-05-18T00:10:00.000Z");
+
+    const reconciled = repo.reconcileSupersededRunningRunsForSession("session-a", {
+      now: "2026-05-20T02:00:00.000Z",
+      maxAgeMs: 24 * 60 * 60 * 1000,
+    });
+
+    assert.deepEqual(
+      reconciled.map((run) => run.runId),
+      ["run-stale"],
+    );
+    assert.equal(repo.get("run-stale").status, "partial");
+    assert.match(repo.get("run-stale").stitchedOutput ?? "", /Superseded by later delegation run run-new/);
+    assert.equal(repo.get("run-active-wait").status, "running");
+  });
 });

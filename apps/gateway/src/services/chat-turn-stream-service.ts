@@ -39,8 +39,10 @@ import { buildDelegatedChatSendRequest } from "./delegated-chat-request.js";
 import {
   buildDelegationFailureGuidance,
   buildEmptyAssistantTurnFallbackText,
+  buildIncompleteDelegatedTraceFailureGuidance,
   ChatTurnCancelledError,
   dedupeChatCitations,
+  isIncompleteDelegatedTraceFailure,
   isChatTurnCancelledError,
   mergeExecutionPlanStepStatuses,
   renderExecutionPlanAsMarkdown,
@@ -731,11 +733,12 @@ export async function executeDelegatedPlanStep(
             ? "Delegate is still waiting on a tool result."
             : "(delegate returned no output)");
     const finishedAt = waiting ? undefined : new Date().toISOString();
-    const failed = traceStatus === "failed" || traceStatus === "cancelled";
-    const failureGuidance =
-      failed && response.trace?.failure?.message
-        ? buildDelegationFailureGuidance(response.trace.failure.message, delegatedRole)
-        : undefined;
+    const traceFailure = response.trace?.failure;
+    const degradedFailure = !waiting && isIncompleteDelegatedTraceFailure(traceFailure);
+    const failed = traceStatus === "failed" || traceStatus === "cancelled" || degradedFailure;
+    const failureGuidance = failed
+      ? buildIncompleteDelegatedTraceFailureGuidance(traceFailure, output, delegatedRole)
+      : undefined;
 
     return {
       stepId: input.step.stepId,
@@ -754,11 +757,11 @@ export async function executeDelegatedPlanStep(
             durationMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
           }
         : {}),
-      status: waiting ? "running" : failed ? "failed" : "completed",
+      status: waiting ? "running" : traceStatus === "cancelled" ? "cancelled" : failed ? "failed" : "completed",
       waitStatus,
       output,
       summary: truncateSummaryLine(output, 180),
-      error: failed ? (response.trace?.failure?.message ?? output) : undefined,
+      error: failed ? (traceFailure?.message ?? output) : undefined,
       failureGuidance,
       citations: response.citations ?? [],
       routing: response.routing,

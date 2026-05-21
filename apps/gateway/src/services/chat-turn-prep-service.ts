@@ -585,6 +585,9 @@ export function buildChatOrchestrationSummary(input: {
 }): NonNullable<ChatTurnTraceRecord["orchestration"]> {
   const completedCount = input.stepResults.filter((step) => step.status === "completed").length;
   const failedCount = input.stepResults.filter((step) => step.status === "failed").length;
+  const partialFailedCount = input.stepResults.filter(
+    (step) => step.status === "failed" && Boolean(step.output?.trim()) && step.output?.trim() !== step.error?.trim(),
+  ).length;
   const runningCount = input.stepResults.filter((step) => step.status === "running").length;
   const status: ChatDelegationRunRecord["status"] = !input.finalized
     ? "running"
@@ -592,7 +595,7 @@ export function buildChatOrchestrationSummary(input: {
       ? "completed"
       : runningCount > 0
         ? "running"
-        : completedCount === 0
+        : completedCount === 0 && partialFailedCount === 0
           ? "failed"
           : failedCount > 0
             ? "partial"

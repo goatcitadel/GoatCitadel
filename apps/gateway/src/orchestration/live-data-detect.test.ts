@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasLiveDataKeywords } from "./live-data-detect.js";
+import { hasLiveDataIntent, hasLiveDataKeywords, hasResearchListIntent } from "./live-data-detect.js";
 
 describe("live data detection", () => {
   it("treats explicit browser tool instructions as web lookup intent", () => {
@@ -36,5 +36,24 @@ describe("live data detection", () => {
         "Without assuming tool access, explain what to do when two docs appear to conflict and you cannot verify which one is authoritative right now.",
       ),
     ).toBe(false);
+  });
+
+  it("detects local multi-entity lookup requests as live research", () => {
+    const request =
+      "Find boardgame and tabletop game stores within 10 miles of 91303 and list store, address, hours, and email address.";
+    expect(hasResearchListIntent(request)).toBe(true);
+    expect(hasLiveDataKeywords(request)).toBe(true);
+  });
+
+  it("detects delegated Cowork prompts from parent and current-step objectives", () => {
+    expect(
+      hasLiveDataIntent(
+        [
+          "Delegated role: Reviewer",
+          "Parent objective: Find boardgame stores within 10 miles of 91303 with address, hours, and email.",
+          "Current step objective: Verify missing hours and official contact details.",
+        ].join("\n"),
+      ),
+    ).toBe(true);
   });
 });
