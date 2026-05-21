@@ -49,6 +49,7 @@ const gatewayPort = Number(process.env.GATEWAY_PORT ?? 8787);
 const gatewayHealthTimeoutMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_HEALTH_TIMEOUT_MS, 120_000);
 const warnUnauthNonLoopback = resolveWarnUnauthNonLoopback();
 const pollMs = Number(process.env.GOATCITADEL_GATEWAY_WATCH_POLL_MS ?? 1200);
+const watchDebounceMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_WATCH_DEBOUNCE_MS, 750);
 const restartWindowMs = Number(process.env.GOATCITADEL_GATEWAY_RESTART_WINDOW_MS ?? 60_000);
 const restartMaxFailures = Number(process.env.GOATCITADEL_GATEWAY_RESTART_MAX_FAILURES ?? 5);
 const restartBaseBackoffMs = Number(process.env.GOATCITADEL_GATEWAY_RESTART_BASE_BACKOFF_MS ?? 1000);
@@ -80,6 +81,7 @@ let restarting = false;
 let polling = false;
 let lastSignature = "";
 let restartTimer: NodeJS.Timeout | null = null;
+let sourceChangeRestartTimer: NodeJS.Timeout | null = null;
 let circuitOpenUntil = 0;
 const failureTimestamps: number[] = [];
 
@@ -91,6 +93,7 @@ async function main(): Promise<void> {
       runtimeRoot,
       watchRoots,
       pollMs,
+      watchDebounceMs,
       gatewayHealthTimeoutMs,
     });
   } else {
@@ -138,11 +141,24 @@ async function pollForChanges(): Promise<void> {
     const next = await computeSignature();
     if (next !== lastSignature) {
       lastSignature = next;
-      await restartGateway("source/config change");
+      scheduleSourceChangeRestart();
     }
   } finally {
     polling = false;
   }
+}
+
+function scheduleSourceChangeRestart(): void {
+  if (shuttingDown) {
+    return;
+  }
+  if (sourceChangeRestartTimer) {
+    clearTimeout(sourceChangeRestartTimer);
+  }
+  sourceChangeRestartTimer = setTimeout(() => {
+    sourceChangeRestartTimer = null;
+    void restartGateway("source/config change");
+  }, watchDebounceMs);
 }
 
 async function restartGateway(reason: string): Promise<void> {
@@ -430,6 +446,7 @@ async function shutdown(signal: string): Promise<void> {
   }
   shuttingDown = true;
   clearRestartTimer();
+  clearSourceChangeRestartTimer();
   log.info("shutdown signal", { signal });
   await stopChild(signal);
   process.exitCode = 0;
@@ -477,6 +494,14 @@ function clearRestartTimer(): void {
   }
   clearTimeout(restartTimer);
   restartTimer = null;
+}
+
+function clearSourceChangeRestartTimer(): void {
+  if (!sourceChangeRestartTimer) {
+    return;
+  }
+  clearTimeout(sourceChangeRestartTimer);
+  sourceChangeRestartTimer = null;
 }
 
 function pruneFailures(now = Date.now()): void {

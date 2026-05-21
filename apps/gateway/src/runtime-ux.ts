@@ -38,7 +38,11 @@ const compactMetaKeys = new Set([
   "responseTime",
   "route",
   "signal",
+  "status",
   "statusCode",
+  "stderr",
+  "stdout",
+  "timeoutMs",
   "url",
 ]);
 

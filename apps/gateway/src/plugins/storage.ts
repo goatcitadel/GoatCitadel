@@ -9,7 +9,7 @@ import {
   type GatewayRuntimePort,
 } from "../services/gateway-runtime-factory.js";
 import type { GatewayRuntimeConfig } from "../config.js";
-import { shouldStopBundledPostgresOnClose } from "./storage-runtime.js";
+import { shouldStartDeferredInitInBackground, shouldStopBundledPostgresOnClose } from "./storage-runtime.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -33,6 +33,15 @@ export const gatewayPlugin = fp(async (fastify) => {
 
   // codeql[js/missing-rate-limiting] Startup initialization is not an HTTP route handler.
   fastify.addHook("onReady", async () => {
+    if (shouldStartDeferredInitInBackground()) {
+      setImmediate(() => {
+        void gateway.startDeferredInit().catch((error: unknown) => {
+          fastify.log.error(error, "gateway deferred startup failed");
+        });
+      });
+      fastify.log.debug("gateway deferred startup scheduled in background");
+      return;
+    }
     await gateway.startDeferredInit();
   });
 
