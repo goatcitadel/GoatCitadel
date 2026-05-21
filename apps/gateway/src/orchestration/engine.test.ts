@@ -536,11 +536,64 @@ describe("orchestration engine", () => {
       },
     });
 
+    expect(result.finalOutput).toContain("Synthesis Incomplete");
     expect(result.finalOutput).toContain("Strong leads so far");
     expect(result.integritySignals).toEqual([
       "orchestration_child_failure",
       "orchestration_child_tool_budget",
       "orchestration_partial_needs_continuation",
+      "orchestration_final_synthesis_fallback",
+    ]);
+  });
+
+  it("marks failed child allowlist steps as incomplete continuation work", async () => {
+    const plan: OrchestrationPlan = {
+      ...createPlan(),
+      workflowTemplate: "cowork.research",
+      summary: "Delegated research.",
+      steps: [
+        {
+          stepId: "step-child",
+          index: 0,
+          role: "researcher",
+          stage: 1,
+          objective: "Find local stores and verify contact fields.",
+          parallelizable: false,
+          delegatedRole: "researcher",
+        },
+      ],
+    };
+
+    const result = await executeOrchestrationPlan({
+      task: createTask(),
+      plan,
+      callbacks: {
+        createChatCompletion: vi.fn(),
+        executeDelegatedStep: vi.fn(async () => ({
+          stepId: "step-child",
+          role: "researcher",
+          index: 0,
+          startedAt: NOW,
+          finishedAt: NOW,
+          status: "failed",
+          output: "Strong leads so far: Store A and Store B.",
+          summary: "Research hit a blocked host.",
+          error: "Repeated tool failure for browser.navigate (2 attempts): blocked: Host is not yet allowlisted.",
+          failureGuidance: "Continue from gathered leads and use alternate current sources.",
+          childSessionId: "child-1",
+          childTurnId: "turn-child-1",
+          citations: [],
+        })),
+      },
+    });
+
+    expect(result.finalOutput).toContain("Synthesis Incomplete");
+    expect(result.finalOutput).toContain("Host is not yet allowlisted");
+    expect(result.integritySignals).toEqual([
+      "orchestration_child_failure",
+      "orchestration_child_tool_blocked",
+      "orchestration_partial_needs_continuation",
+      "orchestration_final_synthesis_fallback",
     ]);
   });
 });

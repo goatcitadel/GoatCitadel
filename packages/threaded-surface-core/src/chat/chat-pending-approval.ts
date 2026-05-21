@@ -2,6 +2,7 @@ import type { ChatThreadResponse } from "@goatcitadel/contracts";
 
 export interface PendingApprovalRecord {
   approvalId: string;
+  sessionId?: string;
   kind?: string;
   toolName?: string;
   reason?: string;
@@ -37,6 +38,7 @@ export function deriveThreadPendingApproval(thread: ChatThreadResponse | null): 
   }
   return {
     approvalId: approvalToolRun.approvalId,
+    ...(thread.sessionId ? { sessionId: thread.sessionId } : {}),
     kind: "tool.invoke",
     toolName: approvalToolRun.toolName,
     reason: approvalToolRun.failureGuidance ?? selectedTurn.trace.failure?.message,
@@ -61,6 +63,7 @@ export function mergePendingApproval(
   }
   return {
     approvalId: current.approvalId,
+    sessionId: next.sessionId ?? current.sessionId,
     kind: next.kind ?? current.kind,
     toolName: next.toolName ?? current.toolName,
     reason: next.reason ?? current.reason,

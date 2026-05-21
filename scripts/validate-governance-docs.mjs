@@ -184,6 +184,22 @@ if (!/offline_restore_required/i.test(handbook) || !/offline-only/i.test(handboo
 if (!/verify:catalog:parity` must execute the runtime-backed operator action classes declared in its parity scenario/i.test(handbook)) {
   errors.push("docs/ENGINEERING_HANDBOOK.md must describe catalog-parity as scenario-backed runtime action proof, not blanket catalog coverage.");
 }
+if (
+  !/Orchestration runs are durable-run backed and worktree-owned/i.test(handbook) ||
+  !/release or reap orchestration worktrees/i.test(handbook)
+) {
+  errors.push("docs/ENGINEERING_HANDBOOK.md must describe orchestration as durable-run backed, worktree-owned, and covered by allocation/release/orphan cleanup truth.");
+}
+if (!/not hostile-code sandboxing or virtualization/i.test(handbook)) {
+  errors.push("docs/ENGINEERING_HANDBOOK.md must avoid claiming worktree-backed orchestration is hostile-code sandboxing or virtualization.");
+}
+if (
+  !/Multi-user RBAC is not shipped/i.test(handbook) ||
+  !/auth remains gateway-level/i.test(handbook) ||
+  !/Permission profiles/i.test(handbook)
+) {
+  errors.push("docs/ENGINEERING_HANDBOOK.md must say multi-user RBAC is not shipped while preserving permission-profile and tool-policy governance truth.");
+}
 if (!/verify:api:compat` must snapshot REST route\/status compatibility and realtime event envelopes/i.test(handbook)) {
   errors.push("docs/ENGINEERING_HANDBOOK.md must describe the REST/SSE additive-compatibility lane without claiming full response-schema diffs.");
 }
@@ -256,6 +272,25 @@ if (!/offline_restore_required/i.test(readme) || !/offline-only/i.test(readme)) 
 }
 if (!/verify:catalog:parity` now executes the runtime-backed operator action classes declared in its parity scenario/i.test(readme)) {
   errors.push("README.md must describe verify:catalog:parity as runtime action proof.");
+}
+if (!/Proof-type shorthand/i.test(readme) || !/Architecture debt guard/i.test(readme)) {
+  errors.push("README.md must label verification lanes by proof type, including the architecture debt guard.");
+}
+if (
+  !/verify:catalog:parity` now executes the runtime-backed operator action classes declared in its parity scenario[\s\S]*it is a parity sample, not proof every future visible catalog entry has a live action/i.test(
+    readme,
+  )
+) {
+  errors.push("README.md must describe verify:catalog:parity as a parity sample, not complete product-wide proof.");
+}
+if (
+  !/verify:agentic:proof` is targeted contract\/behavior proof/i.test(readme) ||
+  !/not live end-to-end product proof/i.test(readme)
+) {
+  errors.push("README.md must describe verify:agentic:proof as targeted proof, not complete product-wide or live E2E proof.");
+}
+if (!/multi-user RBAC is not shipped/i.test(readme) || !/gateway auth is deployment-level/i.test(readme)) {
+  errors.push("README.md must keep auth posture clear that multi-user RBAC is not shipped for 1.0.");
 }
 if (!/verify:api:compat` snapshots REST route\/status compatibility and realtime event envelopes/i.test(readme)) {
   errors.push("README.md must describe the REST/SSE compatibility lane.");
@@ -386,6 +421,9 @@ const releaseEvidencePath = path.join(root, "docs", "1_0_RELEASE_EVIDENCE.md");
 const releaseEvidence = await readFile(releaseEvidencePath, "utf8");
 if (!/^Last updated: 2026-05-18$/m.test(releaseEvidence)) {
   errors.push("docs/1_0_RELEASE_EVIDENCE.md must carry the current 2026-05-18 freshness header.");
+}
+if (!/large-service debt/i.test(releaseEvidence) || !/not proof that broad GatewayService decomposition is complete/i.test(releaseEvidence)) {
+  errors.push("docs/1_0_RELEASE_EVIDENCE.md must keep architecture metrics framed as a large-service debt guard, not decomposition proof.");
 }
 if (!/Permission Profiles and Override Evidence/i.test(releaseEvidence)) {
   errors.push("docs/1_0_RELEASE_EVIDENCE.md must map Permission Profiles and Local Operator Override evidence.");

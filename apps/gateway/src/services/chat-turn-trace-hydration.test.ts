@@ -148,6 +148,17 @@ describe("chat turn trace hydration", () => {
     );
   });
 
+  it("ignores malformed self-parent and missing-parent child edges", () => {
+    const traces = [
+      createTrace({ turnId: "root", parentTurnId: undefined }),
+      createTrace({ turnId: "self-parent", parentTurnId: "self-parent" }),
+      createTrace({ turnId: "missing-parent", parentTurnId: "missing" }),
+      createTrace({ turnId: "child", parentTurnId: "root" }),
+    ];
+
+    expect(buildChatTurnChildrenMap(traces)).toEqual(new Map([["root", ["child"]]]));
+  });
+
   it("returns undefined when there are no traces to hydrate into an active leaf", () => {
     const storage = createStorage();
 

@@ -24,6 +24,7 @@ const delegateBodySchema = z.object({
   localOperatorOverrideId: z.string().trim().min(1).optional(),
   policyRunId: z.string().trim().min(1).optional(),
   policyTaskId: z.string().trim().min(1).optional(),
+  fullWebAccess: z.boolean().optional(),
 });
 
 const delegationRunParamsSchema = z.object({
@@ -50,6 +51,7 @@ const delegateAcceptSchema = z.object({
   localOperatorOverrideId: z.string().trim().min(1).optional(),
   policyRunId: z.string().trim().min(1).optional(),
   policyTaskId: z.string().trim().min(1).optional(),
+  fullWebAccess: z.boolean().optional(),
 });
 
 function stampDelegateOperatorContext<TInput extends Partial<ChatDelegateRequest>>(

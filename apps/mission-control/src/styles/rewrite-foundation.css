@@ -297,6 +297,47 @@
   color: var(--text-secondary);
 }
 
+.mc-assistant-renderer-running .mc-assistant-markdown {
+  color: color-mix(in srgb, var(--text-primary) 92%, var(--accent-primary));
+}
+
+.mc-assistant-streaming-markdown {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.mc-assistant-streaming-markdown > :first-child {
+  margin-top: 0;
+}
+
+.mc-assistant-streaming-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.mc-assistant-streaming-cursor {
+  display: inline-block;
+  width: 0.55ch;
+  height: 1.05em;
+  margin-left: 0.12rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-primary) 78%, white 22%);
+  vertical-align: -0.12em;
+  animation: gcStreamingCursorBlink 1s steps(2, start) infinite;
+}
+
+@keyframes gcStreamingCursorBlink {
+  50% {
+    opacity: 0.2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-assistant-streaming-cursor {
+    animation: none;
+    opacity: 0.65;
+  }
+}
+
 .mc-assistant-copy-button {
   position: absolute;
   top: -0.2rem;

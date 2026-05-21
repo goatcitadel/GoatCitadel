@@ -449,6 +449,8 @@ function buildFallbackSuccessCriteria(role: OrchestrationRole, expectedOutput: s
 function buildFallbackSuggestedTools(role: OrchestrationRole, workflowTemplate: string, objective = ""): string[] {
   const needsPresentation = detectPresentationArtifactIntent(objective);
   const needsDocument = !needsPresentation && detectDocumentArtifactIntent(objective);
+  const needsLiveResearch = workflowTemplate !== "code.plan.code.review.qa" && hasLiveDataKeywords(objective);
+  const liveResearchTools = ["browser.search", "browser.navigate", "browser.extract", "http.get"];
   const withArtifactTools = (tools: string[]) => {
     if (role !== "synthesizer" && role !== "worker") {
       return tools;
@@ -463,15 +465,21 @@ function buildFallbackSuggestedTools(role: OrchestrationRole, workflowTemplate: 
   };
   switch (role) {
     case "researcher":
-      return workflowTemplate.includes("research")
+      return workflowTemplate.includes("research") || needsLiveResearch
         ? ["browser.search", "browser.navigate", "browser.extract", "http.get"]
         : ["memory.search", "browser.search"];
     case "coder":
       return ["code.search_files", "code.search", "file.read_range", "shell.exec"];
     case "reviewer":
     case "qa-validator":
+      if (needsLiveResearch) {
+        return liveResearchTools;
+      }
       return ["code.search", "file.read_range", "tests.run", "lint.run"];
     case "worker":
+      if (needsLiveResearch) {
+        return withArtifactTools(liveResearchTools);
+      }
       return withArtifactTools(["memory.search", "code.search", "file.find"]);
     case "synthesizer":
       return withArtifactTools([]);

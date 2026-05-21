@@ -64,6 +64,8 @@ type LateCodeModeApprovalCleanupResult = {
   errors: string[];
 };
 
+type ChatInlineApprovalRecord = ReturnType<Storage["chatInlineApprovals"]["listBySession"]>[number];
+
 export interface CapabilitySystemServiceOptions {
   rootDir: string;
   runtimeConfig: CapabilityRuntimeConfig;
@@ -105,6 +107,7 @@ interface CodeModeWrapperManifest {
 
 export interface CodeModeApprovalQueueItem {
   approvalId: string;
+  sessionId: string;
   kind?: string;
   toolName?: string;
   reason?: string;
@@ -440,7 +443,7 @@ export class CapabilitySystemService {
   }
 
   public listChatPendingApprovals(sessionId: string): CodeModeApprovalQueueItem[] {
-    const approvals = this.options.storage.chatInlineApprovals.listBySession(sessionId);
+    const approvals = this.listChatInlineApprovalsForSessionTree(sessionId);
     return approvals
       .map((item) => {
         let approval: ApprovalRequest | undefined;
@@ -460,6 +463,7 @@ export class CapabilitySystemService {
                 : undefined;
         return {
           approvalId: item.approvalId,
+          sessionId: item.sessionId,
           kind: item.kind ?? approval?.kind,
           toolName:
             item.toolName ??
@@ -480,6 +484,74 @@ export class CapabilitySystemService {
         } satisfies CodeModeApprovalQueueItem;
       })
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  }
+
+  private listChatInlineApprovalsForSessionTree(sessionId: string): ChatInlineApprovalRecord[] {
+    const approvalsById = new Map<string, ChatInlineApprovalRecord>();
+    const addApprovals = (items: ChatInlineApprovalRecord[]) => {
+      for (const item of items) {
+        if (!approvalsById.has(item.approvalId)) {
+          approvalsById.set(item.approvalId, item);
+        }
+      }
+    };
+    addApprovals(this.options.storage.chatInlineApprovals.listBySession(sessionId));
+    for (const childSessionId of this.resolveWaitingDelegatedApprovalSessionIds(sessionId)) {
+      addApprovals(this.options.storage.chatInlineApprovals.listBySession(childSessionId));
+    }
+    return [...approvalsById.values()];
+  }
+
+  private resolveWaitingDelegatedApprovalSessionIds(sessionId: string): string[] {
+    const childSessionIds = new Set<string>();
+    const addChildSessionId = (value: unknown) => {
+      const childSessionId = asOptionalString(value);
+      if (childSessionId) {
+        childSessionIds.add(childSessionId);
+      }
+    };
+    try {
+      const plans = this.options.storage.chatExecutionPlans.listBySession(sessionId, 10);
+      const activePlan =
+        plans.find((plan) => plan.status === "running") ??
+        plans.find((plan) => plan.status === "ready") ??
+        plans.find((plan) => plan.status === "drafted");
+      if (activePlan?.status === "running") {
+        for (const step of activePlan.steps) {
+          if (step.status === "running") {
+            addChildSessionId(step.childSessionId);
+          }
+        }
+      }
+    } catch {
+      // Older test/storage harnesses may not expose execution plans.
+    }
+    let traces: ChatTurnTraceRecord[];
+    try {
+      traces = this.options.storage.chatTurnTraces.listBySession(sessionId, 25);
+    } catch {
+      return [...childSessionIds];
+    }
+    for (const trace of traces) {
+      const waitingOnApproval =
+        trace.status === "waiting_for_approval" ||
+        trace.orchestration?.steps.some((step) => step.waitStatus === "waiting_for_approval") ||
+        trace.executionPlan?.steps.some((step) => step.status === "running" && step.childSessionId);
+      if (!waitingOnApproval) {
+        continue;
+      }
+      for (const step of trace.orchestration?.steps ?? []) {
+        if (step.waitStatus === "waiting_for_approval" || step.status === "running") {
+          addChildSessionId((step as { childSessionId?: unknown }).childSessionId);
+        }
+      }
+      for (const step of trace.executionPlan?.steps ?? []) {
+        if (step.status === "running") {
+          addChildSessionId(step.childSessionId);
+        }
+      }
+    }
+    return [...childSessionIds];
   }
 
   public async createCodeModeRun(request: CodeModeRunRequest): Promise<CodeModeRunRecord> {

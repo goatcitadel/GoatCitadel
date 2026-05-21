@@ -271,6 +271,61 @@ describe("prepareAgentChatTurn personality overlay", () => {
     );
   });
 
+  it("honors an explicit undefined parent when durable execution re-prepares a root turn", async () => {
+    const harness = createHost("chat");
+    const existingUserMessage = {
+      messageId: "user-root",
+      sessionId: "session-1",
+      role: "user",
+      actorType: "user",
+      actorId: "operator",
+      content: "Root prompt",
+      timestamp: "2026-05-04T00:00:00.000Z",
+    } as ChatMessageRecord;
+    vi.mocked(harness.host.loadChatTurnSessionState).mockResolvedValue({
+      activeLeafTurnId: "turn-root",
+      traces: [],
+      tracesById: new Map([
+        [
+          "turn-root",
+          {
+            turnId: "turn-root",
+            sessionId: "session-1",
+            userMessageId: "user-root",
+          },
+        ],
+      ]),
+      messages: [],
+      messagesById: new Map([["user-root", existingUserMessage]]),
+      childrenByTurnId: new Map(),
+      turnLineageById: new Map([["turn-root", { turnId: "turn-root" }]]),
+    } as never);
+
+    const prepared = await prepareAgentChatTurn(
+      harness.host,
+      "session-1",
+      { content: "Root prompt" },
+      {
+        branchKind: "append",
+        parentTurnId: undefined,
+        existingUserMessage,
+        ingestUserMessage: false,
+        turnId: "turn-root",
+        assistantMessageId: "assistant-root",
+      },
+    );
+
+    expect(prepared.parentTurnId).toBeUndefined();
+    expect(prepared.conversationMessages).toEqual([existingUserMessage]);
+    expect(harness.host.buildLlmMessagesFromBranchPath).toHaveBeenCalledWith(
+      "session-1",
+      [],
+      existingUserMessage,
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
   it("skips missing branch traces while preparing retry context", async () => {
     const harness = createHost("chat");
     vi.mocked(harness.host.loadChatTurnSessionState).mockResolvedValue({
@@ -624,6 +679,23 @@ describe("prepareAgentChatTurn personality overlay", () => {
         finalized: true,
       }).status,
     ).toBe("completed");
+    expect(
+      buildChatOrchestrationSummary({
+        runId: "run-incomplete-completed-children",
+        objective: "Find local stores.",
+        modePolicy: "cowork",
+        routeDecision,
+        stepResults: [
+          createStepResult({ stepId: "planner", role: "planner", status: "completed" }),
+          createStepResult({ stepId: "worker", role: "worker", status: "completed" }),
+          createStepResult({ stepId: "reviewer", role: "reviewer", status: "completed" }),
+          createStepResult({ stepId: "synth", role: "synthesizer", status: "completed" }),
+        ],
+        finalSummary: "## Synthesis Incomplete The required fields need continuation.",
+        integritySignals: ["orchestration_partial_needs_continuation"],
+        finalized: true,
+      }).status,
+    ).toBe("partial");
     const partial = buildChatOrchestrationSummary({
       runId: "run-partial",
       objective: "Do work",

@@ -121,7 +121,7 @@ describe("AssistantMessageRenderer runtime path", () => {
     };
     expect(runtimeInput.isRunning).toBe(true);
     expect(runtimeInput.messages[0]).toMatchObject({
-      id: "assistant-13-running",
+      id: expect.any(String),
       role: "assistant",
       content: [{ type: "text", text: "Runtime World" }],
       status: { type: "running" },
@@ -135,6 +135,27 @@ describe("AssistantMessageRenderer runtime path", () => {
     });
     expect(JSON.stringify(renderer.toJSON())).toContain("custom-runtime");
     expect(JSON.stringify(renderer.toJSON())).toContain("mock markdown text");
+  });
+
+  it("removes raw HTML noise before passing assistant text to the runtime and copy control", async () => {
+    const renderer = create(
+      <AssistantMessageRenderer
+        role="assistant"
+        content={'<!-- noise --><table><tr><td>Store</td><td>Hours</td></tr></table><svg><path d="x" /></svg>'}
+      />,
+    );
+
+    const runtimeInput = assistantUiMocks.runtimeCalls.at(-1) as {
+      messages: Array<{ content: Array<{ text: string }> }>;
+    };
+    expect(runtimeInput.messages[0]?.content[0]?.text).toBe("Store\n\nHours");
+
+    await act(async () => {
+      renderer.root.findByType("button").props.onClick();
+      await Promise.resolve();
+    });
+
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("Store\n\nHours");
   });
 
   it("normalizes complete user messages without assistant copy controls", async () => {
@@ -154,7 +175,7 @@ describe("AssistantMessageRenderer runtime path", () => {
     };
     expect(runtimeInput.isRunning).toBe(false);
     expect(runtimeInput.messages[0]).toMatchObject({
-      id: "user-12",
+      id: expect.any(String),
       role: "user",
       content: [{ type: "text", text: "User request" }],
       attachments: [],
@@ -168,8 +189,9 @@ describe("AssistantMessageRenderer runtime path", () => {
   it("uses complete assistant status, ignores blank copy attempts, and clears pending copy timers", async () => {
     const renderer = create(<AssistantMessageRenderer role="assistant" content="" running={false} />);
     const firstRuntimeInput = assistantUiMocks.runtimeCalls.at(-1) as {
-      messages: Array<{ content: Array<{ text: string }>; status: { type: string; reason?: string } }>;
+      messages: Array<{ id: string; content: Array<{ text: string }>; status: { type: string; reason?: string } }>;
     };
+    const firstMessageId = firstRuntimeInput.messages[0]!.id;
     expect(firstRuntimeInput.messages[0]).toMatchObject({
       content: [{ text: " " }],
       status: { type: "complete", reason: "stop" },
@@ -181,6 +203,10 @@ describe("AssistantMessageRenderer runtime path", () => {
     expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
 
     renderer.update(<AssistantMessageRenderer role="assistant" content="Copy me" running={false} />);
+    const secondRuntimeInput = assistantUiMocks.runtimeCalls.at(-1) as {
+      messages: Array<{ id: string; content: Array<{ text: string }> }>;
+    };
+    expect(secondRuntimeInput.messages[0]!.id).toBe(firstMessageId);
     await act(async () => {
       renderer.root.findByType("button").props.onClick();
       await Promise.resolve();

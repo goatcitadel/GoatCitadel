@@ -478,6 +478,7 @@ export class ChatDelegationService {
                 localOperatorOverrideId: inheritedPolicyContext?.localOperatorOverrideId,
                 policyRunId: runId,
                 policyTaskId: task.taskId,
+                fullWebAccess: input.fullWebAccess,
               }),
               { abortSignal: composeChatDelegationAbortSignal(signal, options.abortSignal) },
             ),
@@ -1031,6 +1032,7 @@ export class ChatDelegationService {
           localOperatorOverrideId: input.localOperatorOverrideId,
           policyRunId: input.policyRunId,
           policyTaskId: input.policyTaskId,
+          fullWebAccess: input.fullWebAccess,
         });
       }
     }
@@ -1049,6 +1051,7 @@ export class ChatDelegationService {
       localOperatorOverrideId: input.localOperatorOverrideId,
       policyRunId: input.policyRunId,
       policyTaskId: input.policyTaskId,
+      fullWebAccess: input.fullWebAccess,
     });
   }
 

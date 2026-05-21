@@ -475,6 +475,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         <div className="mc-next-composer-chip-row">
           <span className="mc-next-composer-chip">{sessionStateLabel}</span>
           {webModeLabel ? <span className="mc-next-composer-chip subtle">{webModeLabel}</span> : null}
+          {props.fullWebAccess ? <span className="mc-next-composer-chip emphasis">Full web</span> : null}
           <span className="mc-next-composer-chip subtle">{thinkingLabel}</span>
           <span className="mc-next-composer-chip subtle">{speedLabel}</span>
           <span className="mc-next-composer-chip subtle">{routeLabel}</span>
@@ -681,6 +682,15 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
             onChange={(event) => props.onAudioFileSelected?.(event.target.files)}
           />
           <div className="mc-next-composer-multimodal-row">
+            <label className="mc-next-composer-toggle" title="Allow public-web search and page reads for this run">
+              <input
+                type="checkbox"
+                checked={props.fullWebAccess}
+                disabled={props.sending}
+                onChange={(event) => props.onFullWebAccessChange(event.target.checked)}
+              />
+              <span>Full web</span>
+            </label>
             <select
               className="mc-next-composer-inline-select"
               value={props.currentThinkingLevel}

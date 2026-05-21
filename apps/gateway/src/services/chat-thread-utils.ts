@@ -15,6 +15,7 @@ interface ThreadTurnInput {
 
 interface ThreadNode extends ThreadTurnInput {
   turnId: string;
+  parentTurnId?: string;
   startedAtMs: number;
 }
 
@@ -47,6 +48,9 @@ export function buildChatThreadResponse(input: {
   }
 
   const byId = new Map(nodes.map((node) => [node.turnId, node]));
+  for (const node of nodes) {
+    node.parentTurnId = resolveValidParentTurnId(node.trace.parentTurnId, node.turnId, byId);
+  }
   const validActiveLeafTurnId =
     input.activeLeafTurnId && byId.has(input.activeLeafTurnId) ? input.activeLeafTurnId : nodes.at(-1)?.turnId;
   if (!validActiveLeafTurnId) {
@@ -61,14 +65,14 @@ export function buildChatThreadResponse(input: {
   const siblingIdsByParent = new Map<string, string[]>();
   const childrenByTurnId = new Map<string, string[]>();
   for (const node of nodes) {
-    const parentKey = toParentKey(node.trace.parentTurnId);
+    const parentKey = toParentKey(node.parentTurnId);
     const siblings = siblingIdsByParent.get(parentKey) ?? [];
     siblings.push(node.turnId);
     siblingIdsByParent.set(parentKey, siblings);
-    if (node.trace.parentTurnId) {
-      const children = childrenByTurnId.get(node.trace.parentTurnId) ?? [];
+    if (node.parentTurnId) {
+      const children = childrenByTurnId.get(node.parentTurnId) ?? [];
       children.push(node.turnId);
-      childrenByTurnId.set(node.trace.parentTurnId, children);
+      childrenByTurnId.set(node.parentTurnId, children);
     }
   }
 
@@ -78,7 +82,7 @@ export function buildChatThreadResponse(input: {
         node.turnId,
         {
           turnId: node.turnId,
-          parentTurnId: node.trace.parentTurnId,
+          parentTurnId: node.parentTurnId,
         },
       ]),
     ),
@@ -89,11 +93,11 @@ export function buildChatThreadResponse(input: {
     .map((turnId) => byId.get(turnId))
     .filter((item): item is ThreadNode => Boolean(item))
     .map((node): ChatThreadTurnRecord => {
-      const siblingTurnIds = [...(siblingIdsByParent.get(toParentKey(node.trace.parentTurnId)) ?? [node.turnId])];
+      const siblingTurnIds = [...(siblingIdsByParent.get(toParentKey(node.parentTurnId)) ?? [node.turnId])];
       const newestLeafTurnId = resolveNewestLeafTurnId(node.turnId, byId, childrenByTurnId, newestLeafCache);
       return {
         turnId: node.turnId,
-        parentTurnId: node.trace.parentTurnId,
+        parentTurnId: node.parentTurnId,
         branchKind: node.trace.branchKind,
         sourceTurnId: node.trace.sourceTurnId,
         userMessage: node.userMessage!,
@@ -143,14 +147,23 @@ export function resolveNewestLeafTurnId(
   turnsById: Map<string, Pick<ThreadNode, "turnId" | "startedAtMs">>,
   childrenByTurnId: Map<string, string[]>,
   cache = new Map<string, string>(),
+  visiting = new Set<string>(),
 ): string {
   const cached = cache.get(rootTurnId);
   if (cached) {
     return cached;
   }
 
-  const children = childrenByTurnId.get(rootTurnId) ?? [];
+  if (visiting.has(rootTurnId)) {
+    return rootTurnId;
+  }
+
+  visiting.add(rootTurnId);
+  const children = (childrenByTurnId.get(rootTurnId) ?? []).filter(
+    (childTurnId) => childTurnId !== rootTurnId && turnsById.has(childTurnId),
+  );
   if (children.length === 0) {
+    visiting.delete(rootTurnId);
     cache.set(rootTurnId, rootTurnId);
     return rootTurnId;
   }
@@ -158,7 +171,10 @@ export function resolveNewestLeafTurnId(
   let bestTurnId = rootTurnId;
   let bestStartedAtMs = turnsById.get(rootTurnId)?.startedAtMs ?? 0;
   for (const childTurnId of children) {
-    const candidateTurnId = resolveNewestLeafTurnId(childTurnId, turnsById, childrenByTurnId, cache);
+    if (visiting.has(childTurnId)) {
+      continue;
+    }
+    const candidateTurnId = resolveNewestLeafTurnId(childTurnId, turnsById, childrenByTurnId, cache, visiting);
     const candidateStartedAtMs = turnsById.get(candidateTurnId)?.startedAtMs ?? 0;
     if (
       candidateStartedAtMs > bestStartedAtMs ||
@@ -169,8 +185,20 @@ export function resolveNewestLeafTurnId(
     }
   }
 
+  visiting.delete(rootTurnId);
   cache.set(rootTurnId, bestTurnId);
   return bestTurnId;
+}
+
+function resolveValidParentTurnId(
+  parentTurnId: string | undefined,
+  turnId: string,
+  turnsById: Map<string, Pick<ThreadNode, "turnId">>,
+): string | undefined {
+  if (!parentTurnId || parentTurnId === turnId || !turnsById.has(parentTurnId)) {
+    return undefined;
+  }
+  return parentTurnId;
 }
 
 function toParentKey(parentTurnId: string | undefined): string {

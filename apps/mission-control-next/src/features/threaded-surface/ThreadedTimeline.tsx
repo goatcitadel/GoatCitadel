@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import {
   getChatTurnRecoveryActionLabel,
   isChatTurnActiveStatus,
@@ -22,6 +30,25 @@ import {
 import { AssistantMessageRenderer } from "@goatcitadel/mission-control-shared/components/chat/AssistantMessageRenderer";
 import { ChatAttachmentPreviewStack } from "@goatcitadel/mission-control-shared/components/chat/ChatAttachmentPreviewStack";
 import { SurfaceReconnectBanner } from "@goatcitadel/mission-control-shared/components/chat/SurfaceReconnectBanner";
+
+function normalizeTimelineCitationText(content: string | undefined | null): string | undefined {
+  if (!content) {
+    return undefined;
+  }
+  const normalized = content
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<(script|style|svg|math|canvas)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, " ")
+    .replace(/<\s*br\s*\/?>/gi, "\n")
+    .replace(/<\/?[A-Za-z][^>\n]{0,1000}>/g, "")
+    .replace(/<[A-Za-z][^<\n]{0,1000}$/gm, "")
+    .replace(/[ \t\f\v]+/g, " ")
+    .trim();
+  return normalized || undefined;
+}
 
 function formatActorTimestamp(timestamp: string): string {
   return new Date(timestamp).toLocaleTimeString();
@@ -144,7 +171,8 @@ function ThreadCitationList({ citations }: { citations: ChatCitationRecord[] }) 
   return (
     <div className="mc-next-thread-citations" aria-label="Citations for this answer">
       {citations.slice(0, 6).map((citation, index) => {
-        const label = citation.title?.trim() || citation.url;
+        const label = normalizeTimelineCitationText(citation.title) || citation.url;
+        const snippet = normalizeTimelineCitationText(citation.snippet);
         const source = formatCitationSource(citation);
         const safeHref = isSafeCitationHref(citation.url);
         return (
@@ -161,7 +189,7 @@ function ThreadCitationList({ citations }: { citations: ChatCitationRecord[] }) 
             </div>
             <p>
               {source}
-              {citation.snippet ? ` · ${citation.snippet}` : ""}
+              {snippet ? ` · ${snippet}` : ""}
             </p>
           </article>
         );
@@ -204,10 +232,11 @@ function ThreadBranchSwitcher({ turn, onSwitch }: { turn: ChatThreadTurnRecord; 
   );
 }
 
-function ThreadTurnCard({
+const ThreadTurnCard = memo(function ThreadTurnCard({
   mode,
   turn,
   selected,
+  streamingPreview,
   onSelect,
   onSwitchBranch,
   onRetryTurn,
@@ -219,6 +248,7 @@ function ThreadTurnCard({
   mode: ChatMode;
   turn: ChatThreadTurnRecord;
   selected: boolean;
+  streamingPreview?: MissionThreadedActiveSessionSurfaceProps["streamingPreview"];
   onSelect: (turnId: string) => void;
   onSwitchBranch: (turnId: string) => void;
   onRetryTurn: (turnId: string) => void;
@@ -229,6 +259,21 @@ function ThreadTurnCard({
 }) {
   const suggestionSummary = renderSuggestionSummary(turn);
   const hasGeneratedArtifact = (turn.generatedArtifacts?.length ?? 0) > 0;
+  const isStreamingTurn = Boolean(streamingPreview?.isRunning && streamingPreview.turnId === turn.turnId);
+  const assistantContent = isStreamingTurn
+    ? (streamingPreview?.visibleText ?? "")
+    : (turn.assistantMessage?.content ?? "");
+  const hasAssistantOutput = assistantContent.trim().length > 0;
+  const assistantTimestamp = turn.assistantMessage
+    ? formatActorTimestamp(turn.assistantMessage.timestamp)
+    : isStreamingTurn
+      ? "Streaming"
+      : "Running";
+  const assistantPendingLabel = isStreamingTurn
+    ? "Receiving response..."
+    : isChatTurnActiveStatus(turn.trace.status) || turn.trace.status === "cancelled" || turn.trace.status === "failed"
+      ? getTurnPendingLabel(turn.trace)
+      : "No assistant output yet.";
 
   function handleSurfaceKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.target !== event.currentTarget) {
@@ -257,10 +302,12 @@ function ThreadTurnCard({
           <AssistantMessageRenderer role="user" content={turn.userMessage.content} />
           <ChatAttachmentPreviewStack attachments={turn.userMessage.attachments} />
         </div>
-        <div className="mc-next-thread-bubble assistant">
+        <div
+          className={`mc-next-thread-bubble assistant${isStreamingTurn ? " streaming" : ""}`}
+          aria-busy={isStreamingTurn}
+        >
           <p className="mc-next-thread-meta">
-            <strong>GoatCitadel</strong> ·{" "}
-            {turn.assistantMessage ? formatActorTimestamp(turn.assistantMessage.timestamp) : "Running"}
+            <strong>GoatCitadel</strong> · {assistantTimestamp}
             {turnHasRepairedAssistantOutput(turn) ? (
               <>
                 {" "}
@@ -270,16 +317,10 @@ function ThreadTurnCard({
               </>
             ) : null}
           </p>
-          {turn.assistantMessage ? (
-            <AssistantMessageRenderer role="assistant" content={turn.assistantMessage.content} />
+          {hasAssistantOutput ? (
+            <AssistantMessageRenderer role="assistant" content={assistantContent} running={isStreamingTurn} />
           ) : (
-            <p>
-              {isChatTurnActiveStatus(turn.trace.status) ||
-              turn.trace.status === "cancelled" ||
-              turn.trace.status === "failed"
-                ? getTurnPendingLabel(turn.trace)
-                : "No assistant output yet."}
-            </p>
+            <p>{assistantPendingLabel}</p>
           )}
           <ThreadCitationList citations={turn.citations} />
         </div>
@@ -329,6 +370,10 @@ function ThreadTurnCard({
       </div>
     </article>
   );
+});
+
+function isThreadScrollNearBottom(element: HTMLElement): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= 80;
 }
 
 function ThreadNotices({ notices }: { notices: MissionThreadedActiveSessionSurfaceProps["notices"] }) {
@@ -516,6 +561,7 @@ function describeDelegationStitchedOutput(status?: string): string {
 
 export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
   const shellRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
   const scrollFrameRef = useRef<number | null>(null);
   const pendingApproval = props.pendingApproval as ChatPendingApprovalState | null;
@@ -530,7 +576,21 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
           ? `${toTitleCase(props.mode)} stream connecting.`
           : "");
 
-  useEffect(() => {
+  const handleThreadScroll = useCallback(() => {
+    const scrollElement = scrollRef.current;
+    if (!scrollElement) {
+      props.onBottomStateChange(true);
+      return;
+    }
+    props.onBottomStateChange(isThreadScrollNearBottom(scrollElement));
+  }, [props.onBottomStateChange]);
+
+  const jumpToLatest = useCallback(() => {
+    threadEndRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
+    props.onBottomStateChange(true);
+  }, [props.onBottomStateChange]);
+
+  useLayoutEffect(() => {
     if (!props.followOutput) {
       return;
     }
@@ -541,7 +601,7 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
       scrollFrameRef.current = null;
       threadEndRef.current?.scrollIntoView({
         block: "end",
-        behavior: props.streamStatus === "streaming" ? "smooth" : "auto",
+        behavior: "auto",
       });
     });
     return () => {
@@ -557,12 +617,17 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
     props.selectedTurnId,
     props.streamError,
     props.streamStatus,
+    props.streamingPreview?.updatedAt,
     props.thread,
   ]);
 
-  useEffect(() => {
-    props.onBottomStateChange(true);
-  }, [props]);
+  useLayoutEffect(() => {
+    const scrollElement = scrollRef.current;
+    if (!scrollElement) {
+      return;
+    }
+    props.onBottomStateChange(isThreadScrollNearBottom(scrollElement));
+  }, [props.onBottomStateChange, props.notices.length, props.queuedCount, props.streamStatus, props.thread]);
 
   useEffect(() => {
     const threadCard = shellRef.current?.closest(".mc-next-threaded-thread-card");
@@ -620,7 +685,7 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
       <div className="mc-next-thread-status-lane">
         <SurfaceReconnectBanner mode={props.mode} status={props.eventStreamStatus} onRefresh={props.onRefreshThread} />
       </div>
-      <div className="mc-next-thread-scroll">
+      <div ref={scrollRef} className="mc-next-thread-scroll" onScroll={handleThreadScroll}>
         {props.loading ? (
           <div className="mc-next-thread-empty">Loading thread…</div>
         ) : !props.thread || props.thread.turns.length === 0 ? (
@@ -654,7 +719,8 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
                   mode={props.mode}
                   turn={turn}
                   selected={props.selectedTurnId === turn.turnId}
-                  onSelect={(turnId) => props.onSelectTurn(turnId)}
+                  streamingPreview={props.streamingPreview?.turnId === turn.turnId ? props.streamingPreview : null}
+                  onSelect={props.onSelectTurn}
                   onSwitchBranch={props.onSwitchBranch}
                   onRetryTurn={props.onRetryTurn}
                   onOpenRunDetails={props.onOpenRunDetails}
@@ -670,6 +736,11 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
           </div>
         )}
       </div>
+      {!props.followOutput && props.streamStatus === "streaming" ? (
+        <button type="button" className="mc-next-thread-jump-latest" onClick={jumpToLatest}>
+          Jump to latest
+        </button>
+      ) : null}
       {props.loading || !props.thread || props.thread.turns.length === 0 ? blockingPrompt : null}
     </div>
   );

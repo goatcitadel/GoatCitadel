@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessageRecord, ChatTurnTraceRecord } from "@goatcitadel/contracts";
-import {
-  buildChatThreadResponse,
-  buildSelectedPathTurnIds,
-  resolveNewestLeafTurnId,
-} from "./chat-thread-utils.js";
+import { buildChatThreadResponse, buildSelectedPathTurnIds, resolveNewestLeafTurnId } from "./chat-thread-utils.js";
 
 function makeMessage(messageId: string, role: "user" | "assistant", content: string): ChatMessageRecord {
   return {
@@ -18,10 +14,7 @@ function makeMessage(messageId: string, role: "user" | "assistant", content: str
   };
 }
 
-function makeTrace(
-  turnId: string,
-  overrides: Partial<ChatTurnTraceRecord> = {},
-): ChatTurnTraceRecord {
+function makeTrace(turnId: string, overrides: Partial<ChatTurnTraceRecord> = {}): ChatTurnTraceRecord {
   return {
     turnId,
     sessionId: "sess-1",
@@ -118,5 +111,42 @@ describe("chat thread utils", () => {
     );
 
     expect(newestLeaf).toBe("turn-3b");
+  });
+
+  it("keeps malformed self-parented turns from recursing while hydrating a thread", () => {
+    const thread = buildChatThreadResponse({
+      sessionId: "sess-1",
+      activeLeafTurnId: "turn-1",
+      turns: [
+        {
+          trace: makeTrace("turn-1", {
+            parentTurnId: "turn-1",
+          }),
+          userMessage: makeMessage("user-turn-1", "user", "Start"),
+          assistantMessage: makeMessage("assistant-turn-1", "assistant", "Done"),
+        },
+      ],
+    });
+
+    expect(thread.turns).toHaveLength(1);
+    expect(thread.turns[0]?.parentTurnId).toBeUndefined();
+    expect(thread.turns[0]?.branch.newestLeafTurnId).toBe("turn-1");
+    expect(thread.turns[0]?.trace.parentTurnId).toBe("turn-1");
+  });
+
+  it("resolves newest leaves defensively when stored child edges contain a cycle", () => {
+    const newestLeaf = resolveNewestLeafTurnId(
+      "turn-a",
+      new Map([
+        ["turn-a", { turnId: "turn-a", startedAtMs: 1 }],
+        ["turn-b", { turnId: "turn-b", startedAtMs: 2 }],
+      ]),
+      new Map([
+        ["turn-a", ["turn-b"]],
+        ["turn-b", ["turn-a"]],
+      ]),
+    );
+
+    expect(newestLeaf).toBe("turn-b");
   });
 });

@@ -94,6 +94,8 @@ function buildProps(overrides: Partial<any> = {}): any {
     notices: [],
     followOutput: false,
     streamStatus: "streaming",
+    streamingPreview: null,
+    activeStreamingTurnId: null,
     queuedCount: 0,
     streamError: null,
     eventStreamStatus: "connected",
@@ -165,9 +167,9 @@ describe("ThreadedTimeline", () => {
     props.thread.turns[0].citations = [
       {
         citationId: "cite-1",
-        title: "Launch notes",
+        title: "<span>Launch notes</span>",
         url: "https://example.test/launch-notes",
-        snippet: "Operator-visible evidence.",
+        snippet: '<!-- search-result -->Operator-visible <b>evidence</b>.<svg><path d="M0" /></svg><path d="M6',
         sourceType: "web",
       },
       {
@@ -183,6 +185,9 @@ describe("ThreadedTimeline", () => {
 
     expect(text).toContain("Launch notes");
     expect(text).toContain("web · Operator-visible evidence.");
+    expect(text).not.toContain("<span>");
+    expect(text).not.toContain("search-result");
+    expect(text).not.toContain("<svg>");
     expect(text).toContain("Local report");
     expect(text).toContain("Cowork response streaming with 2 queued.");
     expect(renderer.root.findByProps({ "aria-label": "Citations for this answer" })).toBeTruthy();
@@ -190,6 +195,29 @@ describe("ThreadedTimeline", () => {
     expect(renderer.root.findAllByType("a").map((link) => link.props.href)).toEqual([
       "https://example.test/launch-notes",
     ]);
+  });
+
+  it("renders the active streaming preview without leaking it to inactive turns", () => {
+    const props = buildProps();
+    delete props.thread.turns[0].assistantMessage;
+    props.thread.turns[0].trace.status = "running";
+    props.streamingPreview = {
+      sessionId: "session-1",
+      turnId: "turn-1",
+      messageId: "assistant-1",
+      text: "Visible preview tail",
+      visibleText: "Visible preview tail",
+      isRunning: true,
+      updatedAt: 1234,
+    };
+    props.activeStreamingTurnId = "turn-1";
+
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+    const text = renderedText(renderer);
+
+    expect(text).toContain("Visible preview tail");
+    expect(text).toContain("Streaming");
+    expect(renderer.root.findByProps({ className: "mc-next-thread-bubble assistant streaming" })).toBeTruthy();
   });
 
   it("renders pending approval as an inline blocker near the thread bottom", () => {
@@ -532,9 +560,12 @@ describe("ThreadedTimeline", () => {
       return 1;
     });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
-    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />, {
-      createNodeMock: (element) =>
-        element.type === "div" && (element.props as any)["aria-hidden"] === "true" ? { scrollIntoView } : null,
+    let renderer!: TestRenderer.ReactTestRenderer;
+    TestRenderer.act(() => {
+      renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />, {
+        createNodeMock: (element) =>
+          element.type === "div" && (element.props as any)["aria-hidden"] === "true" ? { scrollIntoView } : null,
+      });
     });
 
     expect(renderedText(renderer)).toContain("Delegation run");
@@ -543,8 +574,7 @@ describe("ThreadedTimeline", () => {
     expect(renderedText(renderer)).toContain("Could not validate source freshness.");
     expect(renderedText(renderer)).toContain("Final synthesis");
     expect(renderedText(renderer)).toContain("Tool queue is backed up.");
-    expect(onBottomStateChange).toHaveBeenCalledWith(true);
-    expect(scrollIntoView).toHaveBeenCalledWith({ block: "end", behavior: "auto" });
+    expect(onBottomStateChange).not.toHaveBeenCalledWith(false);
     vi.unstubAllGlobals();
   });
 

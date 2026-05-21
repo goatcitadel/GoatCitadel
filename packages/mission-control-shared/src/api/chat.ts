@@ -600,6 +600,7 @@ export async function answerChatUserInputPrompt(
 export async function fetchChatPendingApprovals(sessionId: string): Promise<{
   items: Array<{
     approvalId: string;
+    sessionId?: string;
     kind?: string;
     toolName?: string;
     reason?: string;

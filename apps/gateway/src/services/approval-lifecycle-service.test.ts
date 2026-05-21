@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ApprovalEffectRecord, ApprovalRequest, CodeModeRunRecord } from "@goatcitadel/contracts";
+import type {
+  ApprovalEffectRecord,
+  ApprovalRequest,
+  CodeModeRunRecord,
+  ToolGrantCreateInput,
+} from "@goatcitadel/contracts";
 import {
   ApprovalCreateLateFailureError,
   createApproval,
+  listApprovals,
   resolveApproval,
   resolveApprovalsBulk,
   resolveApprovalWithConsumedRemoteToken,
@@ -15,6 +21,30 @@ import {
 } from "./approval-resolution-effects-service.js";
 
 describe("approval lifecycle service", () => {
+  it("omits expired approvals from pending lists", () => {
+    const host = createApprovalHarness();
+    const activeApproval: ApprovalRequest = {
+      approvalId: "approval-active",
+      kind: "browser.search",
+      riskLevel: "caution",
+      status: "pending",
+      payload: {},
+      preview: {},
+      createdAt: "2026-04-11T00:00:00.000Z",
+      expiresAt: "2099-04-11T00:00:00.000Z",
+      explanationStatus: "not_requested",
+    };
+    const expiredApproval: ApprovalRequest = {
+      ...activeApproval,
+      approvalId: "approval-expired",
+      expiresAt: "2020-04-11T00:00:00.000Z",
+    };
+    host.storage.approvals.list = vi.fn(() => [expiredApproval, activeApproval]);
+
+    expect(listApprovals(host, "pending").map((approval) => approval.approvalId)).toEqual(["approval-active"]);
+    expect(host.storage.approvals.list).toHaveBeenCalledWith("pending", 100);
+  });
+
   it("creates approvals with explicit wait-run linkage and retained-stream metadata", async () => {
     const host = createApprovalHarness();
 
@@ -1141,6 +1171,7 @@ describe("approval lifecycle service", () => {
         listGrants: vi.fn(() => []),
         createGrant,
       },
+      publishRealtime: vi.fn(),
       resolveApproval: vi.fn(async () => ({
         approval: resolvedApproval,
         effects: [],
@@ -1169,6 +1200,115 @@ describe("approval lifecycle service", () => {
       expect.objectContaining({
         decision: "approve",
         resolutionNote: "Approved from chat inline control.",
+      }),
+    );
+  });
+
+  it("adds parent session grants when delegated child approvals are allowed for the session", async () => {
+    const approval: ApprovalRequest = {
+      approvalId: "approval-child",
+      kind: "browser.search",
+      riskLevel: "caution",
+      status: "pending",
+      payload: {
+        sessionId: "child-session",
+      },
+      preview: {},
+      linkage: {
+        sessionId: "child-session",
+        workspaceId: "workspace-1",
+      },
+      createdAt: "2026-04-09T12:00:00.000Z",
+      explanationStatus: "not_requested",
+    };
+    const createGrant = vi.fn((input: ToolGrantCreateInput) => ({
+      grantId: `grant-${input.scopeRef}`,
+      ...input,
+      grantType: input.grantType ?? "persistent",
+      createdAt: "2026-04-09T12:00:01.000Z",
+    }));
+    const host = {
+      storage: {
+        approvals: {
+          get: vi.fn(() => approval),
+        },
+        chatInlineApprovals: {
+          get: vi.fn(() => ({
+            approvalId: "approval-child",
+            sessionId: "child-session",
+            turnId: "child-turn",
+            toolName: "browser.search",
+            status: "pending",
+            reason: "Needs approval",
+            createdAt: "2026-04-09T12:00:00.000Z",
+            details: {},
+          })),
+          upsert: vi.fn(),
+        },
+        chatDelegationSteps: {
+          listParentsByChildSessionIds: vi.fn(
+            () =>
+              new Map([
+                [
+                  "child-session",
+                  {
+                    parentSessionId: "parent-session",
+                    runId: "delegation-run",
+                    stepId: "worker",
+                    role: "worker",
+                    index: 1,
+                  },
+                ],
+              ]),
+          ),
+        },
+        chatToolRuns: {
+          listBySession: vi.fn(() => []),
+        },
+      },
+      policyEngine: {
+        listGrants: vi.fn(() => []),
+        createGrant,
+      },
+      publishRealtime: vi.fn(),
+      resolveApproval: vi.fn(async () => ({
+        approval: { ...approval, status: "approved" as const },
+        effects: [],
+        replay: {
+          approval: { ...approval, status: "approved" as const },
+          events: [],
+          pendingAction: undefined,
+          effects: [],
+        },
+        resolutionEffects: {
+          proactiveRunIds: [],
+          chatTurnResume: { resumed: false },
+        },
+      })),
+    } as unknown as ApprovalLifecycleHost;
+
+    const result = await resolveChatToolApproval(host, "child-session", "approval-child", "approve", {
+      allowScope: "session",
+      resolvedBy: "operator-test",
+    });
+
+    expect(result.allowScope).toBe("session");
+    expect(createGrant.mock.calls.map(([input]) => [input.scope, input.scopeRef, input.toolPattern])).toEqual([
+      ["session", "child-session", "browser.search"],
+      ["session", "parent-session", "browser.search"],
+    ]);
+    expect(host.storage.chatDelegationSteps.listParentsByChildSessionIds).toHaveBeenCalledWith(
+      ["child-session"],
+      "workspace-1",
+    );
+    expect(host.storage.chatInlineApprovals.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "approval-child",
+        sessionId: "child-session",
+        details: expect.objectContaining({
+          allowScope: "session",
+          grantScopeRef: "child-session",
+        }),
       }),
     );
   });

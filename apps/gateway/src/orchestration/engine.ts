@@ -574,6 +574,20 @@ async function repairFinalOutputIfNeeded(input: {
       integritySignals: [...childFailureSignals, "orchestration_waiting_on_child"],
     };
   }
+  const childFailureNeedsContinuation = childFailureSignals.includes("orchestration_partial_needs_continuation");
+  const hasCompletedFinalSynthesis = input.finalStep?.role === "synthesizer" && input.finalStep.status === "completed";
+  if (childFailureNeedsContinuation && !hasCompletedFinalSynthesis) {
+    return {
+      output: buildGenericIncompleteSynthesisFallback({
+        mode: input.task.mode,
+        objective: input.task.objective,
+        steps: input.steps,
+        initialOutput: input.initialOutput,
+      }),
+      finalStep: input.finalStep,
+      integritySignals: [...childFailureSignals, "orchestration_final_synthesis_fallback"],
+    };
+  }
   const requiredLabels = getRequiredWorkstreamLabels(input.plan);
   const missingRequiredLabels = requiredLabels.length > 0 && !hasRequiredLabels(input.initialOutput, requiredLabels);
   const synthesisExpected = input.plan.steps.some((step) => step.role === "synthesizer");

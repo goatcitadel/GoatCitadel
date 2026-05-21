@@ -286,6 +286,82 @@ describe("ToolPolicyEngine grants", () => {
     expect(evaluation.allowed).toBe(true);
     expect(evaluation.matchedGrantId).toBe("grant-older-matching-host");
   });
+
+  it("uses explicit allow grants to suppress repeat approval prompts for the granted tool", () => {
+    const storage = createStorageStub();
+    vi.mocked(storage.toolGrants.list).mockImplementation((scope, scopeRef) => {
+      if (scope === "session" && scopeRef === "session") {
+        return [
+          {
+            grantId: "grant-browser-search-session",
+            toolPattern: "browser.search",
+            decision: "allow",
+            scope,
+            scopeRef,
+            grantType: "persistent",
+            createdBy: "operator",
+            createdAt: "2026-03-22T12:00:00.000Z",
+          },
+        ];
+      }
+      return [];
+    });
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        profiles: {
+          minimal: [],
+        },
+        tools: {
+          ...policyConfig.tools,
+          profile: "minimal",
+          approvalMode: "approve_all",
+        },
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["www.bing.com"],
+        },
+      },
+      storage,
+    );
+
+    const evaluation = engine.evaluateAccess({
+      toolName: "browser.search",
+      args: { query: "board game stores near 91303", engine: "google" },
+      agentId: "agent",
+      sessionId: "session",
+    });
+
+    expect(evaluation.allowed).toBe(true);
+    expect(evaluation.requiresApproval).toBe(false);
+    expect(evaluation.matchedGrantId).toBe("grant-browser-search-session");
+    expect(evaluation.reasonCodes).not.toContain("approval_mode_all");
+  });
+
+  it("allows operator-enabled full public web access without opening private hosts", () => {
+    const engine = new ToolPolicyEngine(policyConfig, createStorageStub());
+
+    expect(
+      engine.evaluateAccess({
+        toolName: "browser.navigate",
+        args: { url: "https://example.com/docs" },
+        agentId: "agent",
+        sessionId: "session",
+        policyContext: { fullWebAccess: true },
+      }).allowed,
+    ).toBe(true);
+
+    const privateEvaluation = engine.evaluateAccess({
+      toolName: "browser.navigate",
+      args: { url: "http://127.0.0.1:3000" },
+      agentId: "agent",
+      sessionId: "session",
+      policyContext: { fullWebAccess: true },
+    });
+
+    expect(privateEvaluation.allowed).toBe(false);
+    expect(privateEvaluation.reasonCodes).toContain("structural_safety_block");
+  });
 });
 
 describe("ToolPolicyEngine invocation coverage", () => {

@@ -133,6 +133,7 @@ export interface ToolPolicyActorContext {
   approvedCodeModeRunId?: string;
   matchedGrantId?: string;
   matchedGrantAllowedHosts?: string[];
+  fullWebAccess?: boolean;
 }
 
 export type ToolLoopDetectorKind = "repeated_same_call" | "no_progress_polling" | "ping_pong";

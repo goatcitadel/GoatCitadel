@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { act, create } from "react-test-renderer";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatThreadResponse } from "@goatcitadel/contracts";
 import {
   resolveOutboundExecutionPrefs,
@@ -57,6 +57,8 @@ type HarnessState = {
     pendingApproval: any;
     pendingUserInput: any;
     streamStatus: string;
+    streamingPreview: unknown;
+    activeStreamingTurnId: string | null;
     sending: boolean;
     thread: ChatThreadResponse | null;
     mutationVersion: number;
@@ -123,6 +125,7 @@ function Harness(props: {
   selectedSessionId?: string | null;
   streamEnabled?: boolean;
   surfaceMode?: "chat" | "cowork" | "code";
+  fullWebAccess?: boolean;
 }) {
   const [thread, setThread] = useState<ChatThreadResponse | null>(
     props.initialThread === undefined ? makeThread() : props.initialThread,
@@ -212,6 +215,7 @@ function Harness(props: {
             thinkingLevel: "standard",
           } as any)
         : props.prefs,
+    fullWebAccess: props.fullWebAccess,
     thread,
     messages: messages as any,
     setThread,
@@ -256,6 +260,8 @@ function Harness(props: {
       pendingApproval: outbound.pendingApproval,
       pendingUserInput: outbound.pendingUserInput,
       streamStatus: outbound.streamStatus,
+      streamingPreview: outbound.streamingPreview,
+      activeStreamingTurnId: outbound.activeStreamingTurnId,
       sending,
       thread,
       mutationVersion: messageMutationVersionRef.current,
@@ -373,6 +379,10 @@ describe("useChatOutboundExecution", () => {
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("resolves outbound execution preference defaults", () => {
     expect(resolveOutboundExecutionPrefs(null)).toEqual({
       useMemory: true,
@@ -402,7 +412,7 @@ describe("useChatOutboundExecution", () => {
 
   it("sends the locked Cowork surface mode even when session prefs still say Chat", async () => {
     await act(async () => {
-      create(<Harness surfaceMode="cowork" />);
+      create(<Harness surfaceMode="cowork" fullWebAccess />);
     });
 
     await act(async () => {
@@ -420,6 +430,7 @@ describe("useChatOutboundExecution", () => {
       expect.objectContaining({
         content: "Coordinate beta outreach",
         mode: "cowork",
+        fullWebAccess: true,
       }),
       { originSurface: "cowork" },
     );
@@ -793,6 +804,55 @@ describe("useChatOutboundExecution", () => {
     expect(latest?.getSnapshot().error).toBe("input failed");
   });
 
+  it("resolves delegated approval prompts against the approval owner session", async () => {
+    const loadSessionCoreState = vi.fn(async () => undefined);
+    await act(async () => {
+      create(<Harness loadSessionCoreState={loadSessionCoreState} />);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      latest?.setPendingApproval({
+        approvalId: "approval-child",
+        sessionId: "child-session",
+        kind: "tool",
+        toolName: "browser.search",
+        reason: "Search",
+      });
+      await Promise.resolve();
+    });
+
+    approveChatToolMock.mockResolvedValueOnce({ resumed: false });
+    await act(async () => {
+      await latest?.approve("once");
+    });
+
+    expect(approveChatToolMock).toHaveBeenCalledWith("child-session", "approval-child", { allowScope: "once" });
+    expect(fetchChatPendingApprovalsMock).toHaveBeenCalledWith("child-session");
+    expect(loadSessionCoreState).toHaveBeenCalledWith("session-1", {
+      background: true,
+      includeThread: true,
+    });
+
+    await act(async () => {
+      latest?.setPendingApproval({
+        approvalId: "approval-child-deny",
+        sessionId: "child-session",
+        kind: "tool",
+        toolName: "browser.search",
+        reason: "Search",
+      });
+      await Promise.resolve();
+    });
+
+    denyChatToolMock.mockResolvedValueOnce(undefined);
+    await act(async () => {
+      await latest?.deny();
+    });
+
+    expect(denyChatToolMock).toHaveBeenCalledWith("child-session", "approval-child-deny");
+  });
+
   it("handles branch selection, fetched-thread reconciliation, and stream status guards", async () => {
     const nextThread = {
       ...makeThread(),
@@ -908,6 +968,126 @@ describe("useChatOutboundExecution", () => {
       });
     });
     expect(latest?.getSnapshot().error).toBe("The selected branch turn is no longer available.");
+  });
+
+  it("buffers stream deltas into preview state until message_done promotes final content", async () => {
+    vi.useFakeTimers();
+    const streamDeferred = createDeferred<void>();
+    let capturedOnChunk: ((chunk: any) => void) | null = null;
+    streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+      capturedOnChunk = onChunk;
+      onChunk({
+        type: "message_start",
+        eventId: "evt-0",
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        branchKind: "append",
+        parentTurnId: "turn-1",
+      });
+      onChunk({
+        type: "delta",
+        eventId: "evt-1",
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        delta: "Streaming preview text",
+      });
+      await streamDeferred.promise;
+    });
+
+    await act(async () => {
+      create(<Harness streamEnabled />);
+    });
+    let executePromise: Promise<void> | undefined;
+    await act(async () => {
+      executePromise = latest?.execute({
+        id: "queue-stream-preview",
+        action: "send",
+        content: "Stream this",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(260);
+      await Promise.resolve();
+    });
+
+    const midStreamSnapshot = latest!.getSnapshot();
+    const streamedTurn = midStreamSnapshot.thread!.turns.find((turn) => turn.turnId === "turn-2")!;
+    expect(streamedTurn.assistantMessage?.content ?? "").toBe("");
+    expect(midStreamSnapshot.activeStreamingTurnId).toBe("turn-2");
+    expect(midStreamSnapshot.streamingPreview).toEqual(
+      expect.objectContaining({
+        turnId: "turn-2",
+        text: "Streaming preview text",
+        visibleText: "Streaming preview text",
+      }),
+    );
+
+    await act(async () => {
+      capturedOnChunk?.({
+        type: "message_done",
+        eventId: "evt-2",
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        content: "Final server text",
+      });
+      streamDeferred.resolve();
+      await executePromise;
+    });
+
+    const finalSnapshot = latest!.getSnapshot();
+    expect(finalSnapshot.streamingPreview).toBeNull();
+    expect(finalSnapshot.activeStreamingTurnId).toBeNull();
+    expect(finalSnapshot.thread!.turns.find((turn) => turn.turnId === "turn-2")!.assistantMessage?.content).toBe(
+      "Final server text",
+    );
+  });
+
+  it("promotes visible preview text when a stream aborts before message_done", async () => {
+    streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+      onChunk({
+        type: "message_start",
+        eventId: "evt-0",
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        branchKind: "append",
+        parentTurnId: "turn-1",
+      });
+      onChunk({
+        type: "delta",
+        eventId: "evt-1",
+        sessionId: "session-1",
+        turnId: "turn-2",
+        messageId: "assistant-2",
+        delta: "Partial answer before abort",
+      });
+      throw { name: "AbortError" };
+    });
+
+    await act(async () => {
+      create(<Harness streamEnabled />);
+    });
+    await act(async () => {
+      await latest?.execute({
+        id: "queue-stream-preview-abort",
+        action: "send",
+        content: "Stream then abort",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+    });
+
+    const abortedSnapshot = latest!.getSnapshot();
+    expect(abortedSnapshot.streamingPreview).toBeNull();
+    expect(abortedSnapshot.thread!.turns.find((turn) => turn.turnId === "turn-2")!.assistantMessage?.content).toBe(
+      "Partial answer before abort",
+    );
   });
 
   it("streams edit retry and rich send chunks through the realtime path", async () => {
@@ -1480,6 +1660,12 @@ describe("useChatOutboundExecution", () => {
       vi.advanceTimersByTime(0);
       await Promise.resolve();
     });
+    if (loadSessionCoreState.mock.calls.length === 0) {
+      await act(async () => {
+        vi.advanceTimersByTime(400);
+        await Promise.resolve();
+      });
+    }
     expect(loadSessionCoreState).toHaveBeenCalledWith("session-1", {
       background: true,
       includeThread: true,

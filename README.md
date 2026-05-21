@@ -185,6 +185,13 @@ pnpm verify:api:compat
 pnpm verify:desktop
 ```
 
+Proof-type shorthand:
+
+- Live end-to-end proof: `verify:runtime:truth`, `verify:durable:recovery`, `verify:operator:proof`, `verify:surface:regression`, `verify:visual:regression`, `verify:backup:roundtrip`, and `verify:desktop` exercise real runtime, UI, recovery, backup, or packaging paths.
+- Targeted contract/behavior proof: `verify:auth:matrix`, `verify:code-mode:sandbox`, `verify:agentic:governance`, `verify:agentic:proof`, `verify:memory:truth`, `verify:realtime:truth`, and `verify:api:compat` prove named security, contract, retained-evidence, and event-envelope behaviors.
+- Parity sample: `verify:catalog:parity` executes the runtime-backed operator action classes declared in its parity scenario; it is not complete product-wide catalog proof.
+- Architecture debt guard: `verify:architecture:metrics` fails on coupling regressions and reports large-service debt; it is not proof broad `GatewayService` decomposition is complete.
+
 Installed launcher basics:
 
 ```bash
@@ -248,8 +255,12 @@ Safe public claims today:
 - Postgres backups support create and verify; restore remains an operator-run `pg_restore` workflow
 - Docker adds a useful runtime boundary when paired with auth and policy configuration
 - `@goatcitadel/extensions-sdk` is the published author boundary for add-ons and integration plugins
+- multi-user RBAC is not shipped for `1.0`; gateway auth is deployment-level while permission profiles, tool grants, route access classes, Local Operator Override, and deny-wins policy govern actions inside the authenticated runtime
+- provider secrets prefer OS secure-store persistence and may fall back to local env/config storage when secure-store persistence is unavailable or disabled
 - `verify:backup:roundtrip` now restores and verifies the full minimum operator backup set: SQLite state, transcripts, audit logs, and every runtime `config/*.json` file
-- `verify:catalog:parity` now executes the runtime-backed operator action classes declared in its parity scenario instead of stopping at metadata checks
+- `verify:catalog:parity` now executes the runtime-backed operator action classes declared in its parity scenario instead of stopping at metadata checks; it is a parity sample, not proof every future visible catalog entry has a live action
+- `verify:agentic:proof` is targeted contract/behavior proof for retained agentic evidence, orchestration lineage anchors, and governance/harness proof families; it is not live end-to-end product proof
+- `verify:architecture:metrics` reports large-service debt and fails on coupling regressions; it is not proof broad `GatewayService` decomposition is complete
 - `verify:api:compat` snapshots REST route/status compatibility and realtime event envelopes; it is not a full response-schema diff
 
 Do not claim without fresh proof:

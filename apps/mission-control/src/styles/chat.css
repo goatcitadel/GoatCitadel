@@ -662,8 +662,29 @@
   gap: 12px;
 }
 
+.chat-v11-thread-jump-latest {
+  position: sticky;
+  z-index: 6;
+  bottom: 0.75rem;
+  justify-self: center;
+  min-height: 2rem;
+  padding: 0 0.8rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 42%, var(--border-default));
+  background: color-mix(in srgb, var(--surface-elevated) 94%, transparent);
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  font-weight: 750;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+}
+
 .chat-v11-turn-card {
   overflow: hidden;
+}
+
+.chat-v11-turn-bubble.assistant.streaming {
+  border-color: color-mix(in srgb, var(--accent-primary) 24%, transparent);
+  background: color-mix(in srgb, var(--accent-primary) 5%, var(--surface-elevated));
 }
 
 .chat-v11-turn-cluster {

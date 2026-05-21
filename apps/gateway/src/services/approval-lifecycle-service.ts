@@ -82,6 +82,7 @@ export interface ApprovalLifecycleHost {
     | "approvalWaitRuns"
     | "approvalEffects"
     | "approvalInbox"
+    | "chatDelegationSteps"
     | "chatInlineApprovals"
     | "chatSessionMeta"
     | "chatTurnTraces"
@@ -183,9 +184,18 @@ export function listApprovals(
 ): ApprovalRequest[] {
   return host.storage.approvals
     .list(status, limit)
+    .filter((approval) => status !== "pending" || !isApprovalExpired(approval))
     .map((approval) =>
       withApprovalFollowUp(approval, host.storage.approvalEffects.listByApproval(approval.approvalId)),
     );
+}
+
+function isApprovalExpired(approval: ApprovalRequest): boolean {
+  if (!approval.expiresAt) {
+    return false;
+  }
+  const expiresAt = Date.parse(approval.expiresAt);
+  return Number.isFinite(expiresAt) && expiresAt <= Date.now();
 }
 
 export function getApprovalReplay(
@@ -823,18 +833,23 @@ export async function resolveChatToolApproval(
       throw new Error(`Approval ${approvalId} does not expose a tool pattern for persistent allow.`);
     }
     const scope = allowScope === "workspace" ? "workspace" : "session";
-    const scopeRef =
-      allowScope === "workspace" ? resolveChatApprovalWorkspaceScopeRef(host, approval, sessionId) : sessionId;
-    grant =
-      findExistingGrant(host, scope, scopeRef, toolPattern) ??
-      createToolGrant(host, {
-        toolPattern,
-        decision: "allow",
-        scope,
-        scopeRef,
-        grantType: "persistent",
-        createdBy: resolvedBy,
-      });
+    const scopeRefs =
+      allowScope === "workspace"
+        ? [resolveChatApprovalWorkspaceScopeRef(host, approval, sessionId)]
+        : resolveChatApprovalSessionGrantScopeRefs(host, approval, sessionId);
+    for (const scopeRef of scopeRefs) {
+      const nextGrant =
+        findExistingGrant(host, scope, scopeRef, toolPattern) ??
+        createToolGrant(host, {
+          toolPattern,
+          decision: "allow",
+          scope,
+          scopeRef,
+          grantType: "persistent",
+          createdBy: resolvedBy,
+        });
+      grant ??= nextGrant;
+    }
   }
   const resolution = await host.resolveApproval(approvalId, {
     decision,
@@ -881,6 +896,29 @@ function buildChatApprovalResolutionNote(
     return "Approved from chat inline control and allowed for this workspace.";
   }
   return "Approved from chat inline control.";
+}
+
+function resolveChatApprovalSessionGrantScopeRefs(
+  host: ApprovalLifecycleHost,
+  approval: ApprovalRequest,
+  sessionId: string,
+): string[] {
+  const scopeRefs = new Set<string>([sessionId]);
+  const workspaceId =
+    typeof approval.linkage?.workspaceId === "string" && approval.linkage.workspaceId.trim()
+      ? approval.linkage.workspaceId.trim()
+      : undefined;
+  try {
+    const parent = host.storage.chatDelegationSteps
+      ?.listParentsByChildSessionIds([sessionId], workspaceId)
+      .get(sessionId);
+    if (parent?.parentSessionId?.trim()) {
+      scopeRefs.add(parent.parentSessionId.trim());
+    }
+  } catch {
+    // Delegation lineage is best-effort for grant widening; the child-session grant remains authoritative.
+  }
+  return [...scopeRefs];
 }
 
 function resolveChatApprovalWorkspaceScopeRef(

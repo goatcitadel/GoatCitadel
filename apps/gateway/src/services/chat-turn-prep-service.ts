@@ -301,7 +301,8 @@ export async function prepareAgentChatTurn(
   );
 
   const sessionState = await host.loadChatTurnSessionState(sessionId);
-  const parentTurnId = options?.parentTurnId ?? sessionState.activeLeafTurnId;
+  const hasExplicitParentTurnId = Object.prototype.hasOwnProperty.call(options ?? {}, "parentTurnId");
+  const parentTurnId = hasExplicitParentTurnId ? options?.parentTurnId : sessionState.activeLeafTurnId;
   const pathTurnIds = parentTurnId ? buildSelectedPathTurnIds(sessionState.turnLineageById, parentTurnId) : [];
   const conversationMessages = pathTurnIds.flatMap((turnId) => {
     const trace = sessionState.tracesById.get(turnId);
@@ -589,6 +590,11 @@ export function buildChatOrchestrationSummary(input: {
     (step) => step.status === "failed" && Boolean(step.output?.trim()) && step.output?.trim() !== step.error?.trim(),
   ).length;
   const runningCount = input.stepResults.filter((step) => step.status === "running").length;
+  const continuationNeeded = (input.integritySignals ?? []).some(
+    (signal) =>
+      signal === "orchestration_partial_needs_continuation" || signal === "orchestration_final_synthesis_fallback",
+  );
+  const incompleteFinalSummary = Boolean(input.finalSummary && /\bSynthesis Incomplete\b/i.test(input.finalSummary));
   const status: ChatDelegationRunRecord["status"] = !input.finalized
     ? "running"
     : input.advisoryOnly
@@ -597,7 +603,7 @@ export function buildChatOrchestrationSummary(input: {
         ? "running"
         : completedCount === 0 && partialFailedCount === 0
           ? "failed"
-          : failedCount > 0
+          : failedCount > 0 || continuationNeeded || incompleteFinalSummary
             ? "partial"
             : "completed";
   return {

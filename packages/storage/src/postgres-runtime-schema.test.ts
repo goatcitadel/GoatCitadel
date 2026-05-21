@@ -72,6 +72,16 @@ describe("Postgres runtime schema generation", () => {
     assert.match(repairMigration?.sql ?? "", /idx_code_mode_runs_approval/);
   });
 
+  it("repairs state validation quarantine history drift for older Postgres runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 47);
+
+    assert.equal(repairMigration?.name, "state_validation_quarantine_history_repair");
+    assert.match(repairMigration?.sql ?? "", /CREATE TABLE IF NOT EXISTS state_validation_quarantine \(/);
+    assert.match(repairMigration?.sql ?? "", /idx_state_validation_quarantine_store_observed/);
+    assert.match(repairMigration?.sql ?? "", /WHERE version = 32/);
+    assert.match(repairMigration?.sql ?? "", /WHERE version = 33/);
+  });
+
   it("repairs benchmark lease columns for older Postgres prompt-pack runtime tables", () => {
     const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 8);
 

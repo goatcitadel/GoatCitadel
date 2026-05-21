@@ -18,6 +18,7 @@ import type { ChatStreamStatus } from "@goatcitadel/mission-control-shared/compo
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadView";
 import type { ActiveChatDelegationRun } from "./useChatDelegationPolicyActions";
 import type { PendingUserInputState } from "./useChatOutboundExecution";
+import type { ChatStreamingPreview } from "./chat-streaming-preview";
 import type { WorkTrustDescriptor } from "./work-trust";
 import type { ChatErrorSource } from "./chat-error-copy";
 import type { MidTurnDisposition } from "./chat-page-pure-helpers";
@@ -47,6 +48,8 @@ export interface MissionControlActiveSessionSurfaceProps {
   notices: ChatThreadNotice[];
   followOutput: boolean;
   streamStatus: ChatStreamStatus;
+  streamingPreview: ChatStreamingPreview | null;
+  activeStreamingTurnId: string | null;
   queuedCount: number;
   streamError: string | null;
   streamErrorSource?: ChatErrorSource | null;
@@ -102,6 +105,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   selectedTurn: ChatThreadResponse["turns"][number] | null;
   selectedSessionId: string | null;
   currentWebMode: "auto" | "off" | "quick" | "deep";
+  fullWebAccess: boolean;
   currentThinkingLevel: "off" | "minimal" | "standard" | "extended" | "deep";
   currentSpeedMode: "standard" | "fast";
   currentSubagentPolicy: "off" | "ask_when_useful" | "auto_when_useful";
@@ -128,6 +132,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   onAcknowledgeRouteBoundary: () => void;
   onTogglePlanningMode: () => void;
   onSetDeepMode: () => void;
+  onFullWebAccessChange: (value: boolean) => void;
   onSetThinkingLevel: (level: "off" | "minimal" | "standard" | "extended" | "deep") => void;
   onSetSpeedMode: (mode: "standard" | "fast") => void;
   onSetSubagentPolicy: (policy: "off" | "ask_when_useful" | "auto_when_useful") => void;

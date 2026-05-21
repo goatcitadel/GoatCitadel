@@ -307,6 +307,60 @@ describe("ChatAgentOrchestrator loop 24 coverage", () => {
     });
   });
 
+  it("allows delegated local-business research review search even when prior handoffs mention project tools", async () => {
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      result: {
+        results: [
+          {
+            title: "BGE's Tabletop - board game store",
+            url: "https://example.com/bges-tabletop",
+            snippet: "Board game store with address, hours, and contact details.",
+          },
+        ],
+      },
+    });
+    const executeToolCall = createExecuteToolCall({ invokeTool });
+    const prompt = [
+      "Delegated role: Reviewer",
+      "",
+      "Parent objective: can you find boardgame and tabletop game stores within 10 miles of 91303 and put a list together, of the store, address, hours, and email address",
+      "",
+      "Current step objective: Review the current work for correctness risks, regressions, and missing support.",
+      "",
+      "Suggested tools: code.search, file.read_range, tests.run, lint.run",
+      "",
+      "Prior handoffs:",
+      "Worker: relevant store sites were blocked; verify address, hours, and email before final synthesis.",
+    ].join("\n");
+
+    const result = await executeToolCall({
+      input: turnInput({
+        content: prompt,
+        mode: "cowork",
+        webMode: "auto",
+        historyMessages: [{ role: "user", content: prompt }],
+      }),
+      turnId: "turn-delegated-live-review-search",
+      toolName: "browser.search",
+      rawArgs: { query: "boardgame tabletop stores within 10 miles of 91303 hours email" },
+      localFileIntent: true,
+    });
+
+    expect(invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "browser.search",
+        args: expect.objectContaining({
+          query: expect.stringContaining("91303"),
+        }),
+      }),
+    );
+    expect(result.record).toMatchObject({
+      toolName: "browser.search",
+      status: "executed",
+    });
+  });
+
   it("leaves approval expiry undefined when both result and approval storage lookup are unavailable", async () => {
     const storage = createMockStorage() as {
       approvals: { get: (approvalId: string) => unknown };

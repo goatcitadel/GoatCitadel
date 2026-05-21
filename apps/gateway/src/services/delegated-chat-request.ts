@@ -32,6 +32,7 @@ interface BuildDelegatedChatSendRequestInput {
   localOperatorOverrideId?: string;
   policyRunId?: string;
   policyTaskId?: string;
+  fullWebAccess?: boolean;
 }
 
 export function buildDelegatedChatSendRequest(input: BuildDelegatedChatSendRequestInput): ChatSendMessageRequest {
@@ -69,5 +70,6 @@ export function buildDelegatedChatSendRequest(input: BuildDelegatedChatSendReque
     localOperatorOverrideId: input.localOperatorOverrideId,
     policyRunId: input.policyRunId,
     policyTaskId: input.policyTaskId,
+    fullWebAccess: input.fullWebAccess,
   };
 }

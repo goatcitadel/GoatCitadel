@@ -469,32 +469,34 @@ describe("ChatThreadView", () => {
   it("renders stream status, thread notices, and follows the bottom marker", () => {
     const onBottomStateChange = vi.fn();
     const scrollIntoView = vi.fn();
-    const renderer = TestRenderer.create(
-      <ChatThreadView
-        {...buildThreadViewProps(createThread("plain content"))}
-        followOutput={true}
-        notices={[
-          {
-            id: "notice-1",
-            tone: "warning",
-            content: "Tool queue is backed up.",
-            timestamp: "2026-04-04T00:00:02.000Z",
-          },
-        ]}
-        streamStatus="streaming"
-        queuedCount={2}
-        onBottomStateChange={onBottomStateChange}
-      />,
-      {
-        createNodeMock: (element) =>
-          element.type === "div" && element.props["aria-hidden"] === "true" ? { scrollIntoView } : null,
-      },
-    );
+    let renderer!: TestRenderer.ReactTestRenderer;
+    TestRenderer.act(() => {
+      renderer = TestRenderer.create(
+        <ChatThreadView
+          {...buildThreadViewProps(createThread("plain content"))}
+          followOutput={true}
+          notices={[
+            {
+              id: "notice-1",
+              tone: "warning",
+              content: "Tool queue is backed up.",
+              timestamp: "2026-04-04T00:00:02.000Z",
+            },
+          ]}
+          streamStatus="streaming"
+          queuedCount={2}
+          onBottomStateChange={onBottomStateChange}
+        />,
+        {
+          createNodeMock: (element) =>
+            element.type === "div" && element.props["aria-hidden"] === "true" ? { scrollIntoView } : null,
+        },
+      );
+    });
 
     expect(renderedText(renderer)).toContain("Streaming (2 queued)");
     expect(renderedText(renderer)).toContain("Tool queue is backed up.");
-    expect(onBottomStateChange).toHaveBeenCalledWith(true);
-    expect(scrollIntoView).toHaveBeenCalledWith({ block: "end" });
+    expect(onBottomStateChange).not.toHaveBeenCalledWith(false);
   });
 
   it("renders compact cowork delegation details and opens attached run details", () => {

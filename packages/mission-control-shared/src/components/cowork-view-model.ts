@@ -325,6 +325,14 @@ function buildDelegationCompletenessLabel(status?: ActiveChatDelegationRun["stat
   }
 }
 
+function isTerminalDelegationStatus(status?: ActiveChatDelegationRun["status"]): boolean {
+  return status === "completed" || status === "partial" || status === "failed";
+}
+
+function coerceTerminalDelegationStatus(status?: string | null): ActiveChatDelegationRun["status"] | undefined {
+  return status === "completed" || status === "partial" || status === "failed" ? status : undefined;
+}
+
 function isDelegationContinuationFailure(step?: ActiveChatDelegationRun["steps"][number]): boolean {
   if (!step || step.status !== "failed") {
     return false;
@@ -552,19 +560,32 @@ export function deriveCoworkRunViewModel(input: {
   const roleSteps = orchestration?.steps ?? [];
   const delegationSteps = delegationRun?.steps ?? [];
   const currentTrace = activeTurn?.trace;
-  const waitingForApproval =
-    orchestrationRun?.executionState === "paused_for_approval" || currentTrace?.status === "waiting_for_approval";
-  const waitingForUserInput = currentTrace?.status === "waiting_for_user_input";
   const worktreeState = orchestrationRun?.worktreeStatus ?? workbenchState?.worktreeStatus ?? "off";
   const toolRuns = currentTrace?.toolRuns.length ?? 0;
   const failedToolRunCount = currentTrace?.toolRuns.filter((run) => run.status === "failed").length ?? 0;
-  const planState = orchestrationRun?.status ?? orchestration?.status ?? currentTrace?.status ?? "idle";
+  const orchestrationRunId = orchestrationRun?.runId ?? orchestration?.runId;
   const delegationRunLoaded = Boolean(
-    delegationRun && (!orchestration?.runId || delegationRun.runId === orchestration.runId),
+    delegationRun && (!orchestrationRunId || delegationRun.runId === orchestrationRunId),
   );
+  const linkedTraceOrchestration = currentTrace?.orchestration;
+  const linkedTraceTerminalStatus =
+    delegationRunLoaded && linkedTraceOrchestration && linkedTraceOrchestration.runId === delegationRun?.runId
+      ? coerceTerminalDelegationStatus(linkedTraceOrchestration.status)
+      : undefined;
+  const effectiveDelegationStatus = linkedTraceTerminalStatus ?? delegationRun?.status;
+  const terminalDelegationRunLoaded = delegationRunLoaded && isTerminalDelegationStatus(effectiveDelegationStatus);
+  const waitingForApproval =
+    !terminalDelegationRunLoaded &&
+    (orchestrationRun?.executionState === "paused_for_approval" || currentTrace?.status === "waiting_for_approval");
+  const waitingForUserInput = !terminalDelegationRunLoaded && currentTrace?.status === "waiting_for_user_input";
+  const planState =
+    terminalDelegationRunLoaded && effectiveDelegationStatus
+      ? effectiveDelegationStatus
+      : (orchestrationRun?.status ?? orchestration?.status ?? currentTrace?.status ?? "idle");
   const executionState = formatExecutionState(
-    orchestrationRun?.executionState ??
-      (delegationRunLoaded ? delegationRun?.status : undefined) ??
+    (terminalDelegationRunLoaded ? effectiveDelegationStatus : undefined) ??
+      orchestrationRun?.executionState ??
+      (delegationRunLoaded ? effectiveDelegationStatus : undefined) ??
       currentTrace?.durable?.status ??
       currentTrace?.status,
   );
@@ -574,7 +595,7 @@ export function deriveCoworkRunViewModel(input: {
   const delegationFailure = delegationSteps.find((step) => step.error);
   const delegationContinuationFailure = delegationSteps.find(isDelegationContinuationFailure);
   const delegationContinuationNeeded =
-    delegationRunLoaded && delegationRun?.status === "partial" && Boolean(delegationContinuationFailure);
+    delegationRunLoaded && effectiveDelegationStatus === "partial" && Boolean(delegationContinuationFailure);
   const delegationFailureSummary = formatCoworkFriendlyError(delegationFailure?.error);
   const durableRecoveryState = currentTrace?.durable?.recoveryState;
   const durableRecoverySummary = currentTrace?.durable?.recoverySummary;
@@ -749,11 +770,13 @@ export function deriveCoworkRunViewModel(input: {
     ? "Completeness: partial"
     : empty
       ? "Completeness: pre-run"
-      : orchestrationRun
-        ? "Completeness: full"
-        : delegationRunLoaded
-          ? buildDelegationCompletenessLabel(delegationRun?.status)
-          : "Completeness: trace-backed";
+      : terminalDelegationRunLoaded
+        ? buildDelegationCompletenessLabel(effectiveDelegationStatus)
+        : orchestrationRun
+          ? "Completeness: full"
+          : delegationRunLoaded
+            ? buildDelegationCompletenessLabel(effectiveDelegationStatus)
+            : "Completeness: trace-backed";
 
   const operatorActionItems = limitItems(
     items.map((item) => ({
@@ -826,8 +849,8 @@ export function deriveCoworkRunViewModel(input: {
         ? [
             {
               id: "stitched-output",
-              title: buildDelegationOutputTitle(delegationRun.status),
-              note: buildDelegationOutputNote(delegationRun.status),
+              title: buildDelegationOutputTitle(effectiveDelegationStatus),
+              note: buildDelegationOutputNote(effectiveDelegationStatus),
             },
           ]
         : []),

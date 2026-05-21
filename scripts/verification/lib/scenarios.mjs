@@ -4158,7 +4158,7 @@ export async function runArchitectureMetricsLane(context) {
     {
       id: "architecture.metrics.snapshot",
       lane: "architecture-metrics",
-      title: "Gateway coupling and route-service metrics snapshot",
+      title: "Gateway coupling, route-service metrics, and large-service debt snapshot",
       subsystem: "architecture",
     },
     async () => {
@@ -4173,10 +4173,11 @@ export async function runArchitectureMetricsLane(context) {
       await writeJson(comparePath, comparison);
       return {
         status: comparison.status,
-        notes: [...comparison.improvements, ...comparison.regressions],
+        notes: [...comparison.debtNotes, ...comparison.improvements, ...comparison.regressions],
         error: comparison.regressions.length > 0 ? comparison.regressions.join("; ") : undefined,
         metrics: {
           gatewayLineCount: metrics.gatewayLineCount,
+          largeServiceDebt: comparison.largeServiceDebt,
           gatewayPublicMethodCount: metrics.gatewayPublicMethodCount,
           gatewayServiceImportConsumerCount: metrics.gatewayServiceImportConsumerCount,
           fastifyGatewayCallSites: metrics.fastifyGatewayCallSites,

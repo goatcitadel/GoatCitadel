@@ -1151,6 +1151,138 @@ describe("CapabilitySystemService", () => {
     ]);
   });
 
+  it("includes active delegated child approvals when the parent Cowork turn is waiting", async () => {
+    const harness = await createHarness();
+    const childApproval: ApprovalRequest = {
+      approvalId: "approval-child",
+      kind: "browser.search",
+      riskLevel: "caution",
+      status: "pending",
+      payload: {},
+      preview: {
+        toolName: "browser.search",
+        description: "Search for store candidates.",
+        reason: "Approval required by policy.",
+      },
+      linkage: { sessionId: "child-session", toolName: "browser.search" },
+      createdAt: "2026-04-10T00:00:01.000Z",
+      expiresAt: "2999-01-01T00:00:00.000Z",
+      explanationStatus: "not_requested",
+    };
+    vi.mocked(harness.storage.approvals.get).mockImplementation((approvalId: string) => {
+      if (approvalId === childApproval.approvalId) {
+        return childApproval;
+      }
+      throw new Error(`Missing approval ${approvalId}`);
+    });
+    vi.mocked(harness.storage.chatInlineApprovals.listBySession).mockImplementation((sessionId: string) => {
+      if (sessionId === "child-session") {
+        return [
+          {
+            approvalId: "approval-child",
+            sessionId: "child-session",
+            turnId: "child-turn",
+            status: "pending",
+            createdAt: "2026-04-10T00:00:01.000Z",
+            details: {},
+          },
+        ] as never;
+      }
+      if (sessionId === "old-child-session") {
+        return [
+          {
+            approvalId: "approval-old-child",
+            sessionId: "old-child-session",
+            turnId: "old-child-turn",
+            status: "pending",
+            createdAt: "2026-04-09T00:00:01.000Z",
+            details: {},
+          },
+        ] as never;
+      }
+      return [];
+    });
+    vi.mocked(harness.storage.chatExecutionPlans.listBySession).mockReturnValue([
+      {
+        planId: "plan-parent",
+        sessionId: "parent-session",
+        turnId: "parent-turn",
+        mode: "cowork",
+        planningMode: "off",
+        status: "running",
+        source: "planner_with_template_fallback",
+        advisoryOnly: false,
+        objective: "Find store candidates.",
+        summary: "Research stores.",
+        steps: [
+          {
+            stepId: "worker",
+            index: 1,
+            objective: "Search.",
+            parallelizable: false,
+            status: "running",
+            childSessionId: "child-session",
+          },
+        ],
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:00:01.000Z",
+      },
+      {
+        planId: "plan-old",
+        sessionId: "parent-session",
+        turnId: "old-parent-turn",
+        mode: "cowork",
+        planningMode: "off",
+        status: "running",
+        source: "planner_with_template_fallback",
+        advisoryOnly: false,
+        objective: "Old run.",
+        summary: "Old research stores.",
+        steps: [
+          {
+            stepId: "old-worker",
+            index: 1,
+            objective: "Old search.",
+            parallelizable: false,
+            status: "running",
+            childSessionId: "old-child-session",
+          },
+        ],
+        createdAt: "2026-04-09T00:00:00.000Z",
+        updatedAt: "2026-04-09T00:00:01.000Z",
+      },
+    ] as never);
+    vi.mocked(harness.storage.chatTurnTraces.listBySession).mockReturnValue([
+      {
+        turnId: "parent-turn",
+        sessionId: "parent-session",
+        status: "waiting_for_approval",
+        orchestration: {
+          steps: [
+            {
+              stepId: "worker",
+              status: "running",
+              waitStatus: "waiting_for_approval",
+            },
+          ],
+        },
+      },
+    ] as never);
+
+    expect(harness.service.listChatPendingApprovals("parent-session")).toEqual([
+      expect.objectContaining({
+        approvalId: "approval-child",
+        sessionId: "child-session",
+        toolName: "browser.search",
+        stale: false,
+      }),
+    ]);
+    expect(harness.storage.chatExecutionPlans.listBySession).toHaveBeenCalledWith("parent-session", 10);
+    expect(harness.storage.chatInlineApprovals.listBySession).toHaveBeenCalledWith("parent-session");
+    expect(harness.storage.chatInlineApprovals.listBySession).toHaveBeenCalledWith("child-session");
+    expect(harness.storage.chatInlineApprovals.listBySession).not.toHaveBeenCalledWith("old-child-session");
+  });
+
   it("marks expired Code Mode approvals terminal when listing and reading run evidence", async () => {
     const harness = await createHarness();
     const run = await harness.service.createCodeModeRun({
@@ -3300,6 +3432,9 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
     approvalEvents: {
       append: vi.fn(),
     },
+    chatExecutionPlans: {
+      listBySession: vi.fn(() => []),
+    },
     chatInlineApprovals: {
       upsert: vi.fn(),
       listBySession: vi.fn(() => []),
@@ -3327,6 +3462,9 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
         }
         return trace;
       },
+      listBySession: vi.fn((sessionId: string) =>
+        [...turnTraces.values()].filter((trace) => trace.sessionId === sessionId),
+      ),
     },
     runImmediateTransaction<T>(callback: () => T): T {
       return callback();

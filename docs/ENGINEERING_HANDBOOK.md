@@ -31,6 +31,8 @@ Implementation process guidance lives in `docs/GOATCITADEL_AGENTIC_CODING_WORKFL
 - Surface-regression and visual-regression derive from the same canonical Mission Control Next release-surface manifest, covering the current `Chat / Cowork / Code / Projects / Library / Ops / Settings` operator navigation while legacy `Work / Observe / Tune` remains release taxonomy only.
 - Postgres backups participate in shipped create/verify coverage, but restore remains an operator-driven `pg_restore` workflow rather than the SQLite file-copy restore path.
 - `GatewayService` has been substantially decomposed, but `apps/gateway/src/services/gateway-service.ts` remains the facade many routes call through. Treat facade extraction as active architecture work, not finished clean-architecture proof.
+- Multi-user RBAC is not shipped for `1.0`: gateway auth remains a deployment-level control, while permission profiles, Local Operator Override, tool grants, route access classes, and policy evidence govern operator actions inside an authenticated runtime.
+- Provider secrets prefer OS secure-store persistence when available, and may fall back to local environment/config storage when secure-store persistence is unavailable or disabled.
 
 ## 0. OpenClaw-Informed Hardening Deltas (Current Cycle)
 
@@ -311,7 +313,8 @@ Behavior:
 Current scope:
 
 - State machine and checkpoints are implemented.
-- Worktree manager class exists, but full wave execution against isolated worktrees is not yet wired into runtime execution loops.
+- Orchestration runs are durable-run backed and worktree-owned: runtime loops allocate a run worktree, execute phases from that worktree context, and release or reap orchestration worktrees during terminal cleanup.
+- Worktree ownership is not hostile-code sandboxing or virtualization; host filesystem controls, policy, approvals, and Code Mode sandbox requirements remain separate safety boundaries.
 
 ## 5. Persistence Model
 
@@ -797,10 +800,10 @@ Current automated tests include:
 
 These are implementation realities to include in architectural/code review:
 
-- Worktree manager exists, but full orchestration-to-worktree execution is partial.
+- Worktree-backed orchestration has durable ownership, phase execution, allocation/release, and orphan cleanup, but does not provide hostile-code sandboxing, micro-virtualization, or full OS-level isolation for wave execution.
 - File writes in mission control files tab are direct content writes; no diff editor yet.
-- No multi-user authorization model; auth is gateway-level only.
-- No built-in secrets manager; provider keys can be runtime-persisted if provided inline.
+- Multi-user RBAC is not shipped; auth remains gateway-level. Permission profiles, Local Operator Override, tool grants, route access classes, and policy evidence are action-governance controls inside the authenticated runtime, not separate Admin/Operator/Auditor accounts.
+- Provider secrets use OS secure-store when available and may fall back to local env/config storage when secure-store persistence is unavailable or disabled.
 - Route-class rate limiting exists; public-hosting reviews should still verify deployment-specific quotas and abuse controls.
 - Replay/import utilities for rebuilding SQLite from logs are not yet shipped.
 - Mobile companion runtime remains a placeholder track (docs-first, no production mobile control plane yet).

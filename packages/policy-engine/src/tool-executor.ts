@@ -117,6 +117,7 @@ export async function executeTool(
       sessionId: request.sessionId,
       signal: request.signal,
       matchedGrantAllowedHosts: resolveExecutionGrantAllowedHosts(request, storage),
+      fullWebAccess: hasFullWebAccess(request),
     });
     return finalizeToolResult(rawResult);
   }
@@ -238,6 +239,25 @@ export async function executeTool(
     default:
       throw new Error(`Unsupported tool executor: ${request.toolName}`);
   }
+}
+
+function isFullWebAccessEligibleTool(toolName: string): boolean {
+  return (
+    toolName === "browser.search" ||
+    toolName === "browser.navigate" ||
+    toolName === "browser.extract" ||
+    toolName === "browser.screenshot" ||
+    toolName === "http.get" ||
+    toolName === "docs.ingest"
+  );
+}
+
+function hasFullWebAccess(request: ToolInvokeRequest): boolean {
+  return request.policyContext?.fullWebAccess === true && isFullWebAccessEligibleTool(request.toolName);
+}
+
+function resolveNetworkAllowlist(request: ToolInvokeRequest, config: ToolPolicyConfig): string[] {
+  return hasFullWebAccess(request) ? ["*"] : config.sandbox.networkAllowlist;
 }
 
 function timeNow() {
@@ -435,7 +455,7 @@ async function httpGet(request: ToolInvokeRequest, config: ToolPolicyConfig, sto
   const res = await fetchAllowlisted(
     url,
     { method: "GET" },
-    config.sandbox.networkAllowlist,
+    resolveNetworkAllowlist(request, config),
     request.signal,
     resolveExecutionGrantAllowedHosts(request, storage),
   );
@@ -930,13 +950,13 @@ async function docsIngest(request: ToolInvokeRequest, config: ToolPolicyConfig, 
   const ingested = await ingestDocumentViaBackend({
     request,
     storage,
-    networkAllowlist: config.sandbox.networkAllowlist,
+    networkAllowlist: resolveNetworkAllowlist(request, config),
     sourceAllowlist: resolveExecutionGrantAllowedHosts(request, storage),
     fetchUrl: async (url) => {
       const res = await fetchAllowlisted(
         url,
         { method: "GET" },
-        config.sandbox.networkAllowlist,
+        resolveNetworkAllowlist(request, config),
         request.signal,
         resolveExecutionGrantAllowedHosts(request, storage),
       );

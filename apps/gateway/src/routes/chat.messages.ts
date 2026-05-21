@@ -77,6 +77,7 @@ const sendMessageSchema = z.object({
   localOperatorOverrideId: z.string().min(1).optional(),
   policyRunId: z.string().min(1).optional(),
   policyTaskId: z.string().min(1).optional(),
+  fullWebAccess: z.boolean().optional(),
   webMode: z.enum(["auto", "off", "quick", "deep"]).optional(),
   memoryMode: z.enum(["auto", "on", "off"]).optional(),
   thinkingLevel: z.enum(["off", "minimal", "standard", "extended", "deep"]).optional(),

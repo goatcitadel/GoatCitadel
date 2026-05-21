@@ -1859,7 +1859,10 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       const next = await saveProviderSecret(selectedProviderId, secretValue.trim());
       setSecretState({ loading: false, error: null, data: next });
       setSecretValue("");
-      setNotice({ tone: "success", message: "Provider secret saved." });
+      setNotice({
+        tone: "success",
+        message: `Provider secret saved. ${formatSecretStorageNotice(next.source, next.hasSecret)}`,
+      });
       await reload();
     } catch (saveError) {
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
@@ -1876,7 +1879,10 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     try {
       const next = await deleteProviderSecret(selectedProviderId);
       setSecretState({ loading: false, error: null, data: next });
-      setNotice({ tone: "success", message: "Provider secret removed." });
+      setNotice({
+        tone: "success",
+        message: `Provider secret removed. ${formatSecretStorageNotice(next.source, next.hasSecret)}`,
+      });
       await reload();
     } catch (deleteError) {
       setNotice({ tone: "error", message: getErrorMessage(deleteError) });
@@ -2551,7 +2557,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                       notice={{
                         tone: "info",
                         message:
-                          "Key on file status comes from the gateway only. Secrets are saved through secure endpoints and are never sent back to the browser after save; this field only accepts a replacement key.",
+                          "Key on file status comes from the gateway only. Saved key values do not roundtrip back to the browser; status only reports whether a key exists and whether it is stored in OS keychain, local .env fallback, inline config, or none. This field only accepts a replacement key.",
                       }}
                     />
                     {secretState.error ? (
@@ -7618,15 +7624,31 @@ function formatSecretStatusMeta(source: string | undefined, hasSecret: boolean):
     return "No key on file";
   }
   if (source === "keychain") {
-    return "Key on file in OS secure storage";
+    return "Key on file in OS keychain";
   }
   if (source === "env") {
-    return "Key on file via environment variable";
+    return "Key on file in local .env fallback";
   }
   if (source === "inline") {
-    return "Key on file in runtime config";
+    return "Key on file in inline config";
   }
   return "Key on file; value is never returned";
+}
+
+function formatSecretStorageNotice(source: string | undefined, hasSecret: boolean): string {
+  if (!hasSecret) {
+    return "No key remains on file.";
+  }
+  if (source === "keychain") {
+    return "Stored in OS keychain.";
+  }
+  if (source === "env") {
+    return "Stored in local .env fallback.";
+  }
+  if (source === "inline") {
+    return "Stored in inline config.";
+  }
+  return "Stored by gateway secret backend.";
 }
 
 export function applyIntegrationDefaults(

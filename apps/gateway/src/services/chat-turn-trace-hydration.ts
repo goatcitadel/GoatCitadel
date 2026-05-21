@@ -62,8 +62,9 @@ export function listHydratedChatTurnTraces(
 
 export function buildChatTurnChildrenMap(traces: ChatTurnTraceRecord[]): Map<string, string[]> {
   const childrenByTurnId = new Map<string, string[]>();
+  const turnIds = new Set(traces.map((trace) => trace.turnId));
   for (const trace of traces) {
-    if (!trace.parentTurnId) {
+    if (!trace.parentTurnId || trace.parentTurnId === trace.turnId || !turnIds.has(trace.parentTurnId)) {
       continue;
     }
     const children = childrenByTurnId.get(trace.parentTurnId) ?? [];

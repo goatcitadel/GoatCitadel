@@ -8,6 +8,7 @@ import {
 import { ChatToolArtifactInspector } from "./chat/ChatToolArtifactInspector";
 import { getChatToolRunDiagnostics, getTraceFallbackAttemptCount } from "./chat/chat-tool-diagnostics";
 import { ChatExecutionPlanSummary } from "./chat/ChatExecutionPlanSummary";
+import { normalizeCitationDisplayText } from "./chat/assistant-display-text";
 
 function isExternalCitationUrl(url: string | undefined): boolean {
   if (!url) {
@@ -268,25 +269,29 @@ export function ChatTraceCard({
             <div className="chat-trace-section">
               <strong>Citations</strong>
               <ul className="chat-citation-list">
-                {trace.citations.map((citation) => (
-                  <li key={citation.citationId}>
-                    {isExternalCitationUrl(citation.url) ? (
-                      <a href={citation.url} target="_blank" rel="noreferrer">
-                        {citation.title || citation.url}
-                      </a>
-                    ) : (
-                      <span>{citation.title ?? "source"}</span>
-                    )}
-                    {citation.knowledge ? (
-                      <p className="chat-trace-meta">
-                        {citation.knowledge.sourceRef}
-                        {citation.knowledge.sectionLabel ? ` · ${citation.knowledge.sectionLabel}` : ""}
-                        {citation.knowledge.retrievalMode === "full_text" ? " · full text" : " · retrieval"}
-                      </p>
-                    ) : null}
-                    {citation.snippet ? <p>{citation.snippet}</p> : null}
-                  </li>
-                ))}
+                {trace.citations.map((citation) => {
+                  const title = normalizeCitationDisplayText(citation.title);
+                  const snippet = normalizeCitationDisplayText(citation.snippet);
+                  return (
+                    <li key={citation.citationId}>
+                      {isExternalCitationUrl(citation.url) ? (
+                        <a href={citation.url} target="_blank" rel="noreferrer">
+                          {title || citation.url}
+                        </a>
+                      ) : (
+                        <span>{title ?? "source"}</span>
+                      )}
+                      {citation.knowledge ? (
+                        <p className="chat-trace-meta">
+                          {citation.knowledge.sourceRef}
+                          {citation.knowledge.sectionLabel ? ` · ${citation.knowledge.sectionLabel}` : ""}
+                          {citation.knowledge.retrievalMode === "full_text" ? " · full text" : " · retrieval"}
+                        </p>
+                      ) : null}
+                      {snippet ? <p>{snippet}</p> : null}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           ) : null}

@@ -296,6 +296,84 @@ export function formatRuntimeSummary(preflight: RoutingPreflightResult | null): 
   }
 }
 
+function formatDelegationRunState(
+  status: NonNullable<MissionControlActiveSessionSurfaceProps["delegationRun"]>["status"],
+) {
+  switch (status) {
+    case "completed":
+      return "delegation complete";
+    case "partial":
+      return "delegation partial";
+    case "failed":
+      return "delegation failed";
+    case "running":
+      return "delegation running";
+    default:
+      return `delegation ${String(status).replaceAll("_", " ")}`;
+  }
+}
+
+function isTerminalDelegationRunStatus(
+  status: NonNullable<MissionControlActiveSessionSurfaceProps["delegationRun"]>["status"],
+): boolean {
+  return status === "completed" || status === "partial" || status === "failed";
+}
+
+function coerceTerminalDelegationRunStatus(
+  status?: string | null,
+): NonNullable<MissionControlActiveSessionSurfaceProps["delegationRun"]>["status"] | undefined {
+  return status === "completed" || status === "partial" || status === "failed" ? status : undefined;
+}
+
+function resolveEffectiveDelegationRunStatus(
+  activeWorkflowTurn: ChatThreadResponse["turns"][number] | null | undefined,
+  delegationRun: MissionControlActiveSessionSurfaceProps["delegationRun"] | null | undefined,
+): NonNullable<MissionControlActiveSessionSurfaceProps["delegationRun"]>["status"] | undefined {
+  if (!delegationRun) {
+    return undefined;
+  }
+  const linkedOrchestration = activeWorkflowTurn?.trace.orchestration;
+  const linkedTraceStatus =
+    linkedOrchestration?.runId && linkedOrchestration.runId === delegationRun.runId
+      ? coerceTerminalDelegationRunStatus(linkedOrchestration.status)
+      : undefined;
+  return linkedTraceStatus ?? delegationRun.status;
+}
+
+function shouldPreferActiveWorkflowStatus(status: ChatThreadResponse["turns"][number]["trace"]["status"]): boolean {
+  return status === "waiting_for_approval" || status === "waiting_for_user_input";
+}
+
+export function formatThreadedRunStateLabel(
+  activeWorkflowTurn: ChatThreadResponse["turns"][number] | null | undefined,
+  delegationRun: MissionControlActiveSessionSurfaceProps["delegationRun"] | null | undefined,
+): string | undefined {
+  const effectiveDelegationStatus = resolveEffectiveDelegationRunStatus(activeWorkflowTurn, delegationRun);
+  if (
+    delegationRun &&
+    (!activeWorkflowTurn ||
+      (effectiveDelegationStatus ? isTerminalDelegationRunStatus(effectiveDelegationStatus) : false) ||
+      !isChatTurnActiveStatus(activeWorkflowTurn.trace.status))
+  ) {
+    if (activeWorkflowTurn && shouldPreferActiveWorkflowStatus(activeWorkflowTurn.trace.status)) {
+      return activeWorkflowTurn.trace.status;
+    }
+    return effectiveDelegationStatus ? formatDelegationRunState(effectiveDelegationStatus) : undefined;
+  }
+  if (activeWorkflowTurn) {
+    return activeWorkflowTurn.trace.status;
+  }
+  return effectiveDelegationStatus ? formatDelegationRunState(effectiveDelegationStatus) : undefined;
+}
+
+export function formatThreadedRunStateSummary(
+  activeWorkflowTurn: ChatThreadResponse["turns"][number] | null | undefined,
+  delegationRun: MissionControlActiveSessionSurfaceProps["delegationRun"] | null | undefined,
+): string | undefined {
+  const label = formatThreadedRunStateLabel(activeWorkflowTurn, delegationRun);
+  return label ? `Run: ${label}` : undefined;
+}
+
 export function requiresBoundaryAcknowledgment(preflight: RoutingPreflightResult | null): boolean {
   return preflight?.fallbackResult === "local_to_cloud" || preflight?.fallbackResult === "cloud_to_local";
 }
@@ -436,6 +514,7 @@ export function MissionThreadedControllerHost({
   const [pinnedGoal, setPinnedGoal] = useState<string | undefined>(undefined);
   const [search, setSearch] = useState("");
   const [sending, setSending] = useState(false);
+  const [fullWebAccess, setFullWebAccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorSource, setErrorSource] = useState<ChatErrorSource | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachmentRecord[]>([]);
@@ -976,6 +1055,7 @@ export function MissionThreadedControllerHost({
     selectedProviderId,
     selectedModel,
     surfaceMode: executionSurfaceMode,
+    fullWebAccess,
     sending,
     streamEnabled,
     codeModeNeedsProjectBinding: Boolean(
@@ -1038,6 +1118,7 @@ export function MissionThreadedControllerHost({
     queuedOutbound,
     activeStreamRef,
     prefs,
+    fullWebAccess,
     selectedProviderId,
     selectedModel,
     thread,
@@ -1074,6 +1155,8 @@ export function MissionThreadedControllerHost({
     handleSubmitUserInput,
     handleSelectBranchTurn,
     streamStatus,
+    streamingPreview,
+    activeStreamingTurnId,
     prefsRef,
   } = outbound;
 
@@ -1428,6 +1511,8 @@ export function MissionThreadedControllerHost({
     activeDelegationRun.attachedTurnId !== activeWorkflowTurn.turnId
       ? null
       : activeDelegationRun;
+  const visibleRunStateLabel = formatThreadedRunStateLabel(activeWorkflowTurn, visibleDelegationRun);
+  const visibleRunStateSummary = formatThreadedRunStateSummary(activeWorkflowTurn, visibleDelegationRun);
   const coworkViewModel = useMemo(
     () =>
       deriveCoworkRunViewModel({
@@ -1465,7 +1550,7 @@ export function MissionThreadedControllerHost({
         gatewayTone: "muted",
         gatewayLabel: "Gateway state unavailable",
         approvalsSummary: approvalsCount > 0 ? `${approvalsCount} decisions` : "Decisions clear",
-        runStateSummary: activeWorkflowTurn ? `Run: ${activeWorkflowTurn.trace.status}` : undefined,
+        runStateSummary: visibleRunStateSummary,
         activeModeLabel: activeModePreset.label,
         providerModelSummary: effectiveProviderModelSummary,
         requestedProviderModelSummary,
@@ -1478,7 +1563,6 @@ export function MissionThreadedControllerHost({
       },
     [
       activeModePreset.label,
-      activeWorkflowTurn,
       approvalsCount,
       currentRoutePreflight,
       effectiveProviderModelSummary,
@@ -1490,6 +1574,7 @@ export function MissionThreadedControllerHost({
       runtimeSummary,
       runtimeTone,
       selectionSourceSummary,
+      visibleRunStateSummary,
       workTrust,
       workspaceName,
     ],
@@ -2411,6 +2496,8 @@ export function MissionThreadedControllerHost({
         notices: localNotices,
         followOutput: followThreadOutput,
         streamStatus: streamStatus as ChatStreamStatus,
+        streamingPreview,
+        activeStreamingTurnId,
         queuedCount: queuedOutbound.length,
         streamError: error,
         streamErrorSource: errorSource,
@@ -2480,6 +2567,7 @@ export function MissionThreadedControllerHost({
         selectedTurn,
         selectedSessionId,
         currentWebMode: prefs?.webMode ?? "auto",
+        fullWebAccess,
         currentThinkingLevel: prefs?.thinkingLevel ?? "standard",
         currentSpeedMode: prefs?.speedMode ?? "standard",
         currentSubagentPolicy: prefs?.subagentPolicy ?? "ask_when_useful",
@@ -2506,6 +2594,7 @@ export function MissionThreadedControllerHost({
         onAcknowledgeRouteBoundary: acknowledgeCurrentRouteBoundary,
         onTogglePlanningMode: handleTogglePlanningMode,
         onSetDeepMode: () => handleSetDeepMode(),
+        onFullWebAccessChange: setFullWebAccess,
         onSetThinkingLevel: (level) => void handlePrefPatch({ thinkingLevel: level }),
         onSetSpeedMode: (mode) => void handlePrefPatch({ speedMode: mode }),
         onSetSubagentPolicy: (policy) => void handlePrefPatch({ subagentPolicy: policy }),
@@ -2838,8 +2927,8 @@ export function MissionThreadedControllerHost({
                   {selectedSession.scope === "external" ? "External writeback (non-resumable)" : "Mission session"}
                 </StatusChip>
               ) : null}
-              {!isCodeSurface && selectedTurn ? (
-                <StatusChip tone="muted">{selectedTurn.trace.status}</StatusChip>
+              {!isCodeSurface && visibleRunStateLabel ? (
+                <StatusChip tone="muted">{visibleRunStateLabel}</StatusChip>
               ) : null}
             </div>
           }

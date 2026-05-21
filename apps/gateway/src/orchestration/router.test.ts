@@ -355,6 +355,27 @@ describe("orchestration router", () => {
     expect(plan.steps.map((step) => step.role)).toEqual(["planner", "worker", "reviewer", "synthesizer"]);
   });
 
+  it("suggests web research tools for Cowork local-business list review work", () => {
+    const input = createInput({
+      mode: "cowork",
+      objective:
+        "can you find boardgame and tabletop game stores within 10 miles of 91303 and put a list together, of the store, address, hours, and email address",
+      prefs: createPrefs({
+        mode: "cowork",
+        orchestrationVisibility: "explicit",
+      }),
+    });
+    input.policy = resolveModePolicy("cowork");
+
+    const plan = buildOrchestrationPlan(input);
+    const workerStep = plan.steps.find((step) => step.role === "worker");
+    const reviewerStep = plan.steps.find((step) => step.role === "reviewer");
+
+    expect(plan.workflowTemplate).toBe("cowork.plan.work.synthesize");
+    expect(workerStep?.suggestedTools).toEqual(["browser.search", "browser.navigate", "browser.extract", "http.get"]);
+    expect(reviewerStep?.suggestedTools).toEqual(["browser.search", "browser.navigate", "browser.extract", "http.get"]);
+  });
+
   it("pins the requested provider and code workflow when code mode is selected", () => {
     const input = createInput({
       mode: "code",

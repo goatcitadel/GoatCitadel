@@ -189,6 +189,93 @@ describe("deriveCoworkRunViewModel", () => {
     expect(viewModel.stateGaps).toContain("Delegation continuation needed");
   });
 
+  it("uses terminal delegation truth over stale canonical running state", () => {
+    const viewModel = deriveCoworkRunViewModel({
+      items: [],
+      orchestrationRun: {
+        runId: "delegation-run-stale",
+        status: "running",
+        executionState: "running",
+        currentPhaseId: "phase-2",
+      } as never,
+      activeTurn: makeTurn({
+        status: "running",
+        durable: {
+          status: "running",
+        },
+      }),
+      delegationRun: {
+        runId: "delegation-run-stale",
+        label: "Store research",
+        objective: "Find stores near 91303.",
+        mode: "cowork",
+        status: "partial",
+        stitchedOutput: "Partial output",
+        steps: [
+          {
+            stepId: "delegate-1",
+            role: "Researcher",
+            status: "failed",
+            error: "Repeated tool failure for browser.navigate: Host is not yet allowlisted.",
+            failureGuidance: "Continue from gathered leads and use alternate sources.",
+          },
+        ],
+      },
+    });
+
+    expect(viewModel.completenessLabel).toBe("Completeness: delegation partial");
+    expect(viewModel.stageCards.find((item) => item.label === "Workflow")?.value).toBe("partial");
+    expect(viewModel.stageCards.find((item) => item.label === "Execution")?.value).toBe("partial");
+    expect(viewModel.now.title).toBe("Cowork needs a continuation pass");
+    expect(viewModel.continuationGate.reasonCodes).toContain("delegation_partial");
+  });
+
+  it("uses linked trace orchestration terminal truth over stale delegation cache", () => {
+    const viewModel = deriveCoworkRunViewModel({
+      items: [],
+      orchestrationRun: {
+        runId: "delegation-run-stale-cache",
+        status: "running",
+        executionState: "running",
+        currentPhaseId: "phase-2",
+      } as never,
+      activeTurn: makeTurn({
+        status: "partial",
+        orchestration: {
+          runId: "delegation-run-stale-cache",
+          status: "partial",
+        },
+        durable: {
+          status: "completed",
+        },
+      }),
+      delegationRun: {
+        runId: "delegation-run-stale-cache",
+        label: "Store research",
+        objective: "Find stores near 91303.",
+        mode: "cowork",
+        status: "running",
+        stitchedOutput: "Synthesis incomplete",
+        steps: [
+          {
+            stepId: "delegate-1",
+            role: "Researcher",
+            status: "failed",
+            error: "web navigation to the local game-store finder was blocked by the runtime allowlist.",
+            failureGuidance: "Continue from gathered leads and use alternate sources.",
+          },
+        ],
+      },
+    });
+
+    expect(viewModel.completenessLabel).toBe("Completeness: delegation partial");
+    expect(viewModel.stageCards.find((item) => item.label === "Workflow")?.value).toBe("partial");
+    expect(viewModel.stageCards.find((item) => item.label === "Execution")?.value).toBe("partial");
+    expect(viewModel.outputItems.items[0]).toMatchObject({
+      title: "Partial stitched result available",
+    });
+  });
+
   it("summarizes optional agentic run-tree diagnostics and controls", () => {
     const viewModel = deriveCoworkRunViewModel({
       items: [],

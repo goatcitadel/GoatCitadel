@@ -7,6 +7,8 @@ import {
   formatFallbackSummary,
   formatRoutingTargetSummary,
   formatRuntimeSummary,
+  formatThreadedRunStateLabel,
+  formatThreadedRunStateSummary,
   reconcilePendingAttachmentModes,
   requiresBoundaryAcknowledgment,
   resolveExecutionRoutePrefs,
@@ -825,6 +827,83 @@ describe("MissionThreadedControllerHost", () => {
       summary: "Provider degraded",
       tone: "warning",
     });
+    expect(formatThreadedRunStateLabel(selectedTurn as any, null)).toBe("completed");
+    expect(
+      formatThreadedRunStateLabel(selectedTurn as any, {
+        attachedTurnId: "turn-1",
+        label: "Delegation",
+        objective: "Fresh run",
+        mode: "parallel",
+        status: "running",
+        steps: [],
+      }),
+    ).toBe("delegation running");
+    expect(
+      formatThreadedRunStateSummary(
+        {
+          ...selectedTurn,
+          trace: { ...selectedTurn.trace, status: "running" },
+        } as any,
+        {
+          attachedTurnId: "turn-1",
+          label: "Delegation",
+          objective: "Fresh run",
+          mode: "parallel",
+          status: "partial",
+          steps: [],
+        },
+      ),
+    ).toBe("Run: delegation partial");
+    expect(
+      formatThreadedRunStateSummary(
+        {
+          ...selectedTurn,
+          trace: {
+            ...selectedTurn.trace,
+            status: "partial",
+            orchestration: {
+              runId: "delegation-run-1",
+              status: "partial",
+            },
+          },
+        } as any,
+        {
+          runId: "delegation-run-1",
+          attachedTurnId: "turn-1",
+          label: "Delegation",
+          objective: "Fresh run",
+          mode: "parallel",
+          status: "running",
+          steps: [],
+        },
+      ),
+    ).toBe("Run: delegation partial");
+    expect(
+      formatThreadedRunStateSummary(
+        {
+          ...selectedTurn,
+          trace: { ...selectedTurn.trace, status: "waiting_for_approval" },
+        } as any,
+        {
+          attachedTurnId: "turn-1",
+          label: "Delegation",
+          objective: "Fresh run",
+          mode: "parallel",
+          status: "failed",
+          steps: [],
+        },
+      ),
+    ).toBe("Run: waiting_for_approval");
+    expect(
+      formatThreadedRunStateSummary(null, {
+        attachedTurnId: "turn-1",
+        label: "Delegation",
+        objective: "Fresh run",
+        mode: "parallel",
+        status: "failed",
+        steps: [],
+      }),
+    ).toBe("Run: delegation failed");
 
     expect(requiresBoundaryAcknowledgment(null)).toBe(false);
     expect(requiresBoundaryAcknowledgment({ fallbackResult: "local_to_cloud" } as any)).toBe(true);
@@ -1116,6 +1195,7 @@ describe("MissionThreadedControllerHost", () => {
     });
 
     expect(latestSurfaceInput?.workflowPanel?.kind).toBe("cowork");
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.trust.runStateSummary).toBe("Run: delegation running");
     const props = latestSurfaceInput?.workflowPanel?.kind === "cowork" ? latestSurfaceInput.workflowPanel.props : null;
     await act(async () => {
       props?.onAgenticControl?.({ action: "pause", enabled: false, label: "Pause" } as any);

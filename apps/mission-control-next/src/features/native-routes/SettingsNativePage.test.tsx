@@ -2315,8 +2315,9 @@ describe("SettingsNativePage providers", () => {
       expect(initialText).toContain("Configured API");
       expect(initialText).toContain("Execution API");
       expect(initialText).toContain("Matches configured API");
-      expect(initialText).toContain("Key on file in OS secure storage");
-      expect(initialText).toContain("never sent back to the browser");
+      expect(initialText).toContain("Key on file in OS keychain");
+      expect(initialText).toContain("Saved key values do not roundtrip back to the browser");
+      expect(initialText).toContain("local .env fallback");
       expect(initialText).toContain("Provider models");
       expect(initialText).toContain("Live verified");
 
@@ -2332,11 +2333,17 @@ describe("SettingsNativePage providers", () => {
         });
       });
 
+      mocks.saveProviderSecret.mockResolvedValueOnce({
+        providerId: "openai",
+        hasSecret: true,
+        source: "env",
+      });
       await act(async () => {
         findButton(renderer!.root, "Save secret").props.onClick();
       });
 
       expect(mocks.saveProviderSecret).toHaveBeenCalledWith("openai", "sk-test-secret");
+      expect(collectText(renderer!.root)).toContain("Provider secret saved. Stored in local .env fallback.");
 
       await act(async () => {
         findButton(renderer!.root, "Delete secret").props.onClick();
@@ -2344,6 +2351,7 @@ describe("SettingsNativePage providers", () => {
 
       expect(confirmSpy).toHaveBeenCalled();
       expect(mocks.deleteProviderSecret).toHaveBeenCalledWith("openai");
+      expect(collectText(renderer!.root)).toContain("Provider secret removed. No key remains on file.");
     } finally {
       Object.assign(globalThis, { window: previousWindow });
     }

@@ -190,6 +190,32 @@ describe("ChatTraceCard", () => {
     ).toBe(true);
   });
 
+  it("cleans raw HTML from citation titles and snippets", async () => {
+    const trace = {
+      ...makeTrace(),
+      citations: [
+        {
+          citationId: "cite-1",
+          title: "<span>Store page</span>",
+          url: "https://example.test/store",
+          snippet: '<!-- raw --><p>Hours <strong>verified</strong></p><svg><path d="M0" /></svg>',
+        },
+      ],
+    } as ChatTurnTraceRecord;
+
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChatTraceCard trace={trace} workspaceId="default" defaultCollapsed={false} />);
+    });
+    const text = collectText(renderer.toJSON()).replace(/\s+/g, " ").trim();
+
+    expect(text).toContain("Store page");
+    expect(text).toContain("Hours verified");
+    expect(text).not.toContain("<span>");
+    expect(text).not.toContain("<svg>");
+    expect(text).not.toContain("<!-- raw -->");
+  });
+
   it("surfaces requested versus effective routing in the collapsed header", async () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {

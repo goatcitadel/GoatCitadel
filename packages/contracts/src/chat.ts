@@ -1200,6 +1200,7 @@ export interface ChatDelegateRequest {
   localOperatorOverrideId?: string;
   policyRunId?: string;
   policyTaskId?: string;
+  fullWebAccess?: boolean;
   /**
    * Depth of the parent run in the subagent tree. Children are spawned at
    * `parentSubagentDepth + 1` and are subject to the configured maxDepth
@@ -1360,6 +1361,7 @@ export interface ChatDelegateAcceptRequest {
   localOperatorOverrideId?: string;
   policyRunId?: string;
   policyTaskId?: string;
+  fullWebAccess?: boolean;
 }
 
 export interface ChatSendMessageRequest {
@@ -1387,6 +1389,7 @@ export interface ChatSendMessageRequest {
   localOperatorOverrideId?: string;
   policyRunId?: string;
   policyTaskId?: string;
+  fullWebAccess?: boolean;
   /**
    * When set, the constructed user message will carry parentDelegationStepId so the
    * child transcript links back to the parent's delegation step record. Used by

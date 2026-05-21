@@ -65,6 +65,7 @@ function buildProps(overrides: Partial<any> = {}) {
       runtimeSummary: "Runtime ready",
     },
     currentWebMode: "auto",
+    fullWebAccess: false,
     routePreflight: null,
     routePreflightLoading: false,
     routePreflightError: null,
@@ -85,6 +86,7 @@ function buildProps(overrides: Partial<any> = {}) {
     onAcknowledgeRouteBoundary: vi.fn(),
     onRetryTurn: vi.fn(),
     onSetDeepMode: vi.fn(),
+    onFullWebAccessChange: vi.fn(),
     onReviewRunDetails: vi.fn(),
     onDraftChange: vi.fn(),
     onComposerKeyDown: vi.fn(),
@@ -387,6 +389,7 @@ describe("ThreadedComposer", () => {
     expect(buildMarkup({ editingTurnId: "turn-chat-edit" })).toContain("Edit and resend");
     expect(buildMarkup({ currentWebMode: "deep" })).toContain("Deep web");
     expect(buildMarkup({ currentWebMode: "quick" })).toContain("Quick web");
+    expect(buildMarkup({ fullWebAccess: true })).toContain("Full web");
     expect(
       buildMarkup({
         routePreflight: {
@@ -438,6 +441,18 @@ describe("ThreadedComposer", () => {
     });
     await click(findButton(renderer.root, "Set Deep mode"));
     expect(onSetDeepMode).toHaveBeenCalledTimes(1);
+
+    const onFullWebAccessChange = vi.fn();
+    renderer = await renderComposer({ onFullWebAccessChange });
+    await act(async () => {
+      renderer.root
+        .findByProps({ title: "Allow public-web search and page reads for this run" })
+        .findByType("input")
+        .props.onChange({
+          target: { checked: true },
+        });
+    });
+    expect(onFullWebAccessChange).toHaveBeenCalledWith(true);
   });
 
   it("wires queue, draft, suggestion, recovery, editing, and attachment actions", async () => {

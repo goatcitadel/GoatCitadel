@@ -396,6 +396,7 @@ export async function executePreparedModeOrchestration(
           authActorSource: input.authActorSource,
           permissionProfileId: input.permissionProfileId,
           localOperatorOverrideId: input.localOperatorOverrideId,
+          fullWebAccess: input.fullWebAccess,
         }),
       onStepResult: async (step, allSteps) => {
         currentSteps = [...allSteps];
@@ -580,6 +581,7 @@ export async function executeDelegatedPlanStep(
     authActorSource?: ChatSendMessageRequest["authActorSource"];
     permissionProfileId?: string;
     localOperatorOverrideId?: string;
+    fullWebAccess?: boolean;
   },
 ): Promise<OrchestrationStepExecutionResult> {
   const startedAt = new Date().toISOString();
@@ -705,6 +707,7 @@ export async function executeDelegatedPlanStep(
         localOperatorOverrideId: inheritedPolicyContext?.localOperatorOverrideId,
         policyRunId: input.runId,
         policyTaskId: orchestrationTaskId,
+        fullWebAccess: input.fullWebAccess,
         parentDelegationStepId: `${input.runId}:${input.step.stepId}`,
       }),
       input.signal ? { abortSignal: input.signal } : undefined,
@@ -1329,6 +1332,7 @@ export async function* streamPreparedAgentChatTurn(
       localOperatorOverrideId: input.localOperatorOverrideId,
       policyRunId: input.policyRunId,
       policyTaskId: input.policyTaskId,
+      fullWebAccess: input.fullWebAccess,
       historyMessages: historyWithSteers,
       signal: controller.signal,
     })) {

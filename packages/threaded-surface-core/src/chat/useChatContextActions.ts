@@ -29,6 +29,7 @@ export function useChatContextActions(input: {
   selectedProviderId?: string;
   selectedModel?: string;
   surfaceMode: ChatMode;
+  fullWebAccess?: boolean;
   sending: boolean;
   streamEnabled: boolean;
   codeModeNeedsProjectBinding: boolean;

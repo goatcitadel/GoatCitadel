@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { memo, useCallback, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { getChatTurnRecoveryActionLabel, isChatTurnActiveStatus } from "@goatcitadel/contracts";
 import type {
   ChatCapabilityUpgradeSuggestion,
@@ -19,6 +19,16 @@ export interface ChatThreadNotice {
   tone: "neutral" | "warning" | "critical" | "success";
   content: string;
   timestamp: string;
+}
+
+export interface ChatStreamingPreview {
+  sessionId: string;
+  turnId: string;
+  messageId?: string;
+  text: string;
+  visibleText: string;
+  isRunning: boolean;
+  updatedAt: number;
 }
 
 function formatTone(tone: ChatThreadNotice["tone"]): "neutral" | "warning" | "critical" | "success" {
@@ -274,10 +284,11 @@ function ChatTurnActions({
   );
 }
 
-function ChatTurnCard({
+const ChatTurnCard = memo(function ChatTurnCard({
   mode,
   turn,
   selected,
+  streamingPreview,
   onSelect,
   onSwitchBranch,
   onRetryTurn,
@@ -290,6 +301,7 @@ function ChatTurnCard({
   mode: ChatMode;
   turn: ChatThreadTurnRecord;
   selected: boolean;
+  streamingPreview?: ChatStreamingPreview | null;
   onSelect: (turnId: string) => void;
   onSwitchBranch: (turnId: string) => void;
   onRetryTurn: (turnId: string) => void;
@@ -299,6 +311,25 @@ function ChatTurnCard({
   onCreateGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifactVersion: (turnId: string) => void;
 }) {
+  const isStreamingTurn = Boolean(streamingPreview?.isRunning && streamingPreview.turnId === turn.turnId);
+  const assistantContent = isStreamingTurn
+    ? (streamingPreview?.visibleText ?? "")
+    : (turn.assistantMessage?.content ?? "");
+  const hasAssistantOutput = assistantContent.trim().length > 0;
+  const assistantTimestamp = turn.assistantMessage
+    ? formatActorTimestamp(turn.assistantMessage.timestamp)
+    : isStreamingTurn
+      ? "Streaming"
+      : "Running";
+  const assistantPendingLabel = isStreamingTurn
+    ? "Receiving response..."
+    : isChatTurnActiveStatus(turn.trace.status) ||
+        turn.trace.status === "cancelled" ||
+        turn.trace.status === "failed" ||
+        turn.trace.status === "partial"
+      ? getTurnPendingLabel(turn.trace)
+      : "No assistant output yet.";
+
   function handleSurfaceKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.target !== event.currentTarget) {
       return;
@@ -327,10 +358,12 @@ function ChatTurnCard({
           <AssistantMessageRenderer role="user" content={turn.userMessage.content} />
           <ChatAttachmentPreviewStack attachments={turn.userMessage.attachments} />
         </div>
-        <div className="chat-v11-turn-bubble assistant">
+        <div
+          className={`chat-v11-turn-bubble assistant${isStreamingTurn ? " streaming" : ""}`}
+          aria-busy={isStreamingTurn}
+        >
           <p className="chat-v11-message-meta">
-            <strong>GoatCitadel</strong> ·{" "}
-            {turn.assistantMessage ? formatActorTimestamp(turn.assistantMessage.timestamp) : "Running"}
+            <strong>GoatCitadel</strong> · {assistantTimestamp}
             {turnHasRepairedAssistantOutput(turn) ? (
               <>
                 {" "}
@@ -344,17 +377,10 @@ function ChatTurnCard({
               </>
             ) : null}
           </p>
-          {turn.assistantMessage ? (
-            <AssistantMessageRenderer role="assistant" content={turn.assistantMessage.content} />
+          {hasAssistantOutput ? (
+            <AssistantMessageRenderer role="assistant" content={assistantContent} running={isStreamingTurn} />
           ) : (
-            <p>
-              {isChatTurnActiveStatus(turn.trace.status) ||
-              turn.trace.status === "cancelled" ||
-              turn.trace.status === "failed" ||
-              turn.trace.status === "partial"
-                ? getTurnPendingLabel(turn.trace)
-                : "No assistant output yet."}
-            </p>
+            <p>{assistantPendingLabel}</p>
           )}
         </div>
       </div>
@@ -382,6 +408,10 @@ function ChatTurnCard({
       />
     </article>
   );
+});
+
+function isThreadScrollNearBottom(element: HTMLElement): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= 80;
 }
 
 function ChatThreadNotices({ notices }: { notices: ChatThreadNotice[] }) {
@@ -567,6 +597,8 @@ export function ChatThreadView({
   notices,
   followOutput,
   streamStatus = "idle",
+  streamingPreview = null,
+  activeStreamingTurnId = null,
   queuedCount = 0,
   streamError = null,
   onBottomStateChange,
@@ -587,6 +619,8 @@ export function ChatThreadView({
   notices: ChatThreadNotice[];
   followOutput: boolean;
   streamStatus?: ChatStreamStatus;
+  streamingPreview?: ChatStreamingPreview | null;
+  activeStreamingTurnId?: string | null;
   queuedCount?: number;
   streamError?: string | null;
   onBottomStateChange: (atBottom: boolean) => void;
@@ -599,17 +633,45 @@ export function ChatThreadView({
   onCreateGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifactVersion: (turnId: string) => void;
 }) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
+  const handleThreadScroll = useCallback(() => {
+    const scrollElement = scrollRef.current;
+    if (!scrollElement) {
+      onBottomStateChange(true);
+      return;
+    }
+    onBottomStateChange(isThreadScrollNearBottom(scrollElement));
+  }, [onBottomStateChange]);
+
+  const jumpToLatest = useCallback(() => {
+    threadEndRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
+    onBottomStateChange(true);
+  }, [onBottomStateChange]);
+
+  useLayoutEffect(() => {
     if (!followOutput) {
       return;
     }
-    threadEndRef.current?.scrollIntoView({ block: "end" });
-  }, [followOutput, notices.length, queuedCount, selectedTurnId, streamError, streamStatus, thread]);
+    threadEndRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
+  }, [
+    followOutput,
+    notices.length,
+    queuedCount,
+    selectedTurnId,
+    streamError,
+    streamStatus,
+    streamingPreview?.updatedAt,
+    thread,
+  ]);
 
-  useEffect(() => {
-    onBottomStateChange(true);
+  useLayoutEffect(() => {
+    const scrollElement = scrollRef.current;
+    if (!scrollElement) {
+      return;
+    }
+    onBottomStateChange(isThreadScrollNearBottom(scrollElement));
   }, [onBottomStateChange, notices.length, queuedCount, streamStatus, thread]);
 
   if (loading) {
@@ -634,7 +696,7 @@ export function ChatThreadView({
   return (
     <div className="chat-v11-thread-view">
       <ChatStreamStatusBar mode={mode} status={streamStatus} queuedCount={queuedCount} error={streamError} />
-      <div className="chat-v11-thread-list chat-v11-thread-virtuoso">
+      <div ref={scrollRef} className="chat-v11-thread-list chat-v11-thread-virtuoso" onScroll={handleThreadScroll}>
         <ChatDelegationRunSummary
           delegationRun={delegationRun ?? null}
           mode={mode}
@@ -646,6 +708,7 @@ export function ChatThreadView({
             mode={mode}
             turn={turn}
             selected={selectedTurnId === turn.turnId}
+            streamingPreview={activeStreamingTurnId === turn.turnId ? streamingPreview : null}
             onSelect={onSelectTurn}
             onSwitchBranch={onSwitchBranch}
             onRetryTurn={onRetryTurn}
@@ -659,6 +722,11 @@ export function ChatThreadView({
         <ChatThreadNotices notices={notices} />
         <div ref={threadEndRef} aria-hidden="true" />
       </div>
+      {!followOutput && streamStatus === "streaming" ? (
+        <button type="button" className="chat-v11-thread-jump-latest" onClick={jumpToLatest}>
+          Jump to latest
+        </button>
+      ) : null}
     </div>
   );
 }

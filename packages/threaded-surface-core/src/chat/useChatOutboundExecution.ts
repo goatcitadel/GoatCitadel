@@ -31,6 +31,7 @@ import {
   type PendingStreamTurnSeed,
   updateThreadFromStreamChunk,
 } from "@goatcitadel/mission-control-shared/components/chat/chat-thread-reducer";
+import { ChatStreamingPreviewBuffer, type ChatStreamingPreview } from "./chat-streaming-preview";
 import type { ChatStreamStatus } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
 import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import { createChatExecutionCorrelationId, recordChatApprovalPhase, recordChatOutboundPhase } from "./chat-causality";
@@ -91,6 +92,7 @@ export function useChatOutboundExecution(input: {
   queuedOutbound: OutboundQueueItem[];
   activeStreamRef: MutableRefObject<ActiveChatStreamState | null>;
   prefs: ChatSessionPrefsRecord | null;
+  fullWebAccess?: boolean;
   selectedProviderId?: string;
   selectedModel?: string;
   thread: ChatThreadResponse | null;
@@ -180,9 +182,11 @@ export function useChatOutboundExecution(input: {
   const [approvalPending, setApprovalPending] = useState(false);
   const [pendingUserInput, setPendingUserInput] = useState<PendingUserInputState | null>(null);
   const [userInputPending, setUserInputPending] = useState(false);
+  const [streamingPreview, setStreamingPreview] = useState<ChatStreamingPreview | null>(null);
   const selectedSessionIdRef = useRef<string | null>(selectedSessionId);
   const latestMessagesRef = useRef<ChatMessageRecord[]>(messages);
   const finalizedStreamMessageRef = useRef<FinalizedStreamMessageState | null>(null);
+  const streamingPreviewBufferRef = useRef<ChatStreamingPreviewBuffer | null>(null);
   const streamReconcileTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sendingRef = useRef(false);
   const prefsRef = useRef<ChatSessionPrefsRecord | null>(prefs);
@@ -220,6 +224,7 @@ export function useChatOutboundExecution(input: {
       }
       const nextApproval = {
         approvalId: active.approvalId,
+        sessionId: active.sessionId ?? sessionId,
         kind: active.kind,
         toolName: active.toolName,
         reason: active.reason,
@@ -247,6 +252,7 @@ export function useChatOutboundExecution(input: {
         const changed =
           !current ||
           current.approvalId !== nextApproval.approvalId ||
+          current.sessionId !== nextApproval.sessionId ||
           current.toolName !== nextApproval.toolName ||
           current.reason !== nextApproval.reason ||
           current.riskLevel !== nextApproval.riskLevel ||
@@ -308,6 +314,64 @@ export function useChatOutboundExecution(input: {
     },
     [messageMutationVersionRef, setThread],
   );
+
+  const getStreamingPreviewBuffer = useCallback(() => {
+    if (!streamingPreviewBufferRef.current) {
+      streamingPreviewBufferRef.current = new ChatStreamingPreviewBuffer({
+        onFlush: setStreamingPreview,
+      });
+    }
+    return streamingPreviewBufferRef.current;
+  }, []);
+
+  const clearStreamingPreview = useCallback(() => {
+    streamingPreviewBufferRef.current?.clear();
+    setStreamingPreview(null);
+  }, []);
+
+  const promoteStreamingPreviewToThread = useCallback(
+    (sessionId: string, reason: "abort" | "error") => {
+      const snapshot =
+        streamingPreviewBufferRef.current?.getSnapshot({ forceVisible: true }) ??
+        (streamingPreview?.sessionId === sessionId ? streamingPreview : null);
+      if (!snapshot || snapshot.sessionId !== sessionId || snapshot.text.trim().length === 0) {
+        clearStreamingPreview();
+        return;
+      }
+      const partialChunk: ChatStreamChunk = {
+        type: "message_done",
+        sessionId: snapshot.sessionId,
+        eventId: `local-preview-${reason}-${Date.now()}`,
+        sequence: -1,
+        turnId: snapshot.turnId,
+        messageId: snapshot.messageId ?? `local-assistant-${snapshot.turnId}`,
+        content: snapshot.text,
+      };
+      commitThreadUpdate((current) =>
+        updateThreadFromStreamChunk(current, partialChunk, null, snapshot.sessionId, prefsRef.current),
+      );
+      recordClientDiagnostic({
+        level: "warn",
+        category: "chat",
+        event: "stream.preview_promoted_partial",
+        message: "Promoted visible streaming preview after the live stream ended before message_done.",
+        sessionId: snapshot.sessionId,
+        turnId: snapshot.turnId,
+        context: {
+          reason,
+          characterCount: snapshot.text.length,
+        },
+      });
+      clearStreamingPreview();
+    },
+    [clearStreamingPreview, commitThreadUpdate, streamingPreview],
+  );
+
+  useEffect(() => {
+    if (streamingPreview && streamingPreview.sessionId !== selectedSessionId) {
+      clearStreamingPreview();
+    }
+  }, [clearStreamingPreview, selectedSessionId, streamingPreview]);
 
   const applyFetchedThread = useCallback(
     (nextThread: ChatThreadResponse, requestVersion: number | null) => {
@@ -453,6 +517,7 @@ export function useChatOutboundExecution(input: {
           merged &&
           (!current ||
             current.approvalId !== merged.approvalId ||
+            current.sessionId !== merged.sessionId ||
             current.toolName !== merged.toolName ||
             current.reason !== merged.reason)
         ) {
@@ -693,13 +758,19 @@ export function useChatOutboundExecution(input: {
             }
             if (chunk.type === "message_start") {
               liveStream.turnId = chunk.turnId;
+              getStreamingPreviewBuffer().start({
+                sessionId: chunk.sessionId,
+                turnId: chunk.turnId,
+                messageId: chunk.messageId,
+              });
             }
             if (chunk.type === "trace_update" && chunk.trace.durable?.runId) {
               liveStream.runId = chunk.trace.durable.runId;
             }
             if (chunk.type === "message_done") {
+              streamingPreviewBufferRef.current?.finish({ clear: true, forceVisible: true });
               finalizedStreamMessageRef.current = {
-                sessionId: session!.sessionId,
+                sessionId: chunk.sessionId,
                 placeholderId: chunk.messageId,
                 messageId: chunk.messageId,
                 content: chunk.content,
@@ -718,6 +789,7 @@ export function useChatOutboundExecution(input: {
               setPendingUserInput(null);
               const approval = {
                 approvalId: chunk.approval.approvalId,
+                sessionId: chunk.sessionId,
                 kind: chunk.approval.kind,
                 toolName: chunk.approval.toolName,
                 reason: chunk.approval.reason,
@@ -736,7 +808,7 @@ export function useChatOutboundExecution(input: {
               recordChatApprovalPhase({
                 phase: "prompt_arrived",
                 correlationId: executionCorrelationId,
-                sessionId: session!.sessionId,
+                sessionId: approval.sessionId ?? session!.sessionId,
                 turnId: chunk.turnId,
                 approval: {
                   approvalId: approval.approvalId,
@@ -758,6 +830,7 @@ export function useChatOutboundExecution(input: {
             }
             if (chunk.type === "error") {
               setError(chunk.error || "Streaming request failed.", getOutboundErrorSource(item.action));
+              promoteStreamingPreviewToThread(chunk.sessionId, "error");
               recordClientDiagnostic({
                 level: "error",
                 category: "chat",
@@ -766,6 +839,26 @@ export function useChatOutboundExecution(input: {
                 sessionId: session!.sessionId,
                 turnId: chunk.turnId,
               });
+            }
+            if (chunk.type === "delta") {
+              getStreamingPreviewBuffer().append({
+                sessionId: chunk.sessionId,
+                turnId: chunk.turnId,
+                messageId: chunk.messageId,
+                delta: chunk.delta,
+              });
+              recordClientDiagnostic({
+                level: "debug",
+                category: "chat",
+                event: "thread.preview_path",
+                message: "Buffered delta chunk for streaming preview",
+                sessionId: session!.sessionId,
+                turnId: chunk.turnId,
+                context: {
+                  characterCount: chunk.delta.length,
+                },
+              });
+              return;
             }
             if (!isThreadMutatingStreamChunk(chunk)) {
               return;
@@ -827,6 +920,7 @@ export function useChatOutboundExecution(input: {
                     thinkingLevel: currentPrefs?.thinkingLevel,
                     speedMode: currentPrefs?.speedMode,
                     subagentPolicy: currentPrefs?.subagentPolicy,
+                    ...(input.fullWebAccess ? { fullWebAccess: true } : {}),
                   },
                   onChunk,
                   { signal: controller.signal, originSurface: effectiveMode },
@@ -843,6 +937,7 @@ export function useChatOutboundExecution(input: {
                     providerId: routeExecutionProviderId,
                     model: routeExecutionModel,
                     routeDecision: routeExecutionDecision,
+                    ...(input.fullWebAccess ? { fullWebAccess: true } : {}),
                   },
                   onChunk,
                   { signal: controller.signal, originSurface: effectiveMode },
@@ -858,6 +953,7 @@ export function useChatOutboundExecution(input: {
                     providerId: routeExecutionProviderId,
                     model: routeExecutionModel,
                     routeDecision: routeExecutionDecision,
+                    ...(input.fullWebAccess ? { fullWebAccess: true } : {}),
                   },
                   onChunk,
                   { signal: controller.signal, originSurface: effectiveMode },
@@ -904,6 +1000,7 @@ export function useChatOutboundExecution(input: {
                     thinkingLevel: currentPrefs?.thinkingLevel,
                     speedMode: currentPrefs?.speedMode,
                     subagentPolicy: currentPrefs?.subagentPolicy,
+                    ...(input.fullWebAccess ? { fullWebAccess: true } : {}),
                   },
                   { originSurface: effectiveMode },
                 )
@@ -919,6 +1016,7 @@ export function useChatOutboundExecution(input: {
                       providerId: routeExecutionProviderId,
                       model: routeExecutionModel,
                       routeDecision: routeExecutionDecision,
+                      ...(input.fullWebAccess ? { fullWebAccess: true } : {}),
                     },
                     { originSurface: effectiveMode },
                   )
@@ -932,6 +1030,7 @@ export function useChatOutboundExecution(input: {
                       providerId: routeExecutionProviderId,
                       model: routeExecutionModel,
                       routeDecision: routeExecutionDecision,
+                      ...(input.fullWebAccess ? { fullWebAccess: true } : {}),
                     },
                     { originSurface: effectiveMode },
                   );
@@ -970,6 +1069,9 @@ export function useChatOutboundExecution(input: {
         });
       } catch (err) {
         if (isAbortError(err)) {
+          if (session) {
+            promoteStreamingPreviewToThread(session.sessionId, "abort");
+          }
           recordChatOutboundPhase({
             phase: "aborted",
             action: item.action,
@@ -982,6 +1084,7 @@ export function useChatOutboundExecution(input: {
           return;
         }
         if (session) {
+          promoteStreamingPreviewToThread(session.sessionId, "error");
           void loadSessionCoreState(session.sessionId, {
             background: true,
             includeThread: true,
@@ -1012,18 +1115,25 @@ export function useChatOutboundExecution(input: {
         if (session && activeStream?.sessionId === session.sessionId) {
           activeStreamRef.current = null;
         }
+        if (!session || activeStream?.sessionId === session.sessionId) {
+          clearStreamingPreview();
+        }
         finishOutboundExecution();
       }
     },
     [
+      clearStreamingPreview,
       commitThreadUpdate,
       ensureSession,
       ensureFreshRoutePreflight,
       finishOutboundExecution,
+      getStreamingPreviewBuffer,
       handleCommandExecution,
+      input.fullWebAccess,
       isRoutePreflightAcknowledged,
       loadSessionCoreState,
       loadSidebar,
+      promoteStreamingPreviewToThread,
       scheduleStreamMessageReconciliation,
       selectedModel,
       selectedProviderId,
@@ -1068,11 +1178,12 @@ export function useChatOutboundExecution(input: {
   const handleApprovePending = useCallback(
     async (allowScope: "once" | "session" | "workspace" = "once") => {
       if (!selectedSession || !pendingApproval) return;
+      const approvalSessionId = pendingApproval.sessionId?.trim() || selectedSession.sessionId;
       setApprovalPending(true);
       try {
         recordChatApprovalPhase({
           phase: "resolve_started",
-          sessionId: selectedSession.sessionId,
+          sessionId: approvalSessionId,
           approval: {
             approvalId: pendingApproval.approvalId,
             toolName: pendingApproval.toolName,
@@ -1085,10 +1196,16 @@ export function useChatOutboundExecution(input: {
             expiresAt: pendingApproval.expiresAt,
           },
           source: "operator",
-          context: { allowScope },
+          context: { allowScope, selectedSessionId: selectedSession.sessionId },
         });
-        const result = await approveChatTool(selectedSession.sessionId, pendingApproval.approvalId, { allowScope });
-        await refreshPendingApprovalQueue(selectedSession.sessionId);
+        const result = await approveChatTool(approvalSessionId, pendingApproval.approvalId, { allowScope });
+        await refreshPendingApprovalQueue(approvalSessionId);
+        if (approvalSessionId !== selectedSession.sessionId) {
+          await refreshPendingApprovalQueue(selectedSession.sessionId).catch(() => undefined);
+          await loadSessionCoreState(selectedSession.sessionId, { background: true, includeThread: true }).catch(
+            () => undefined,
+          );
+        }
         const scopeLabel =
           allowScope === "session"
             ? "Session allow created."
@@ -1105,7 +1222,7 @@ export function useChatOutboundExecution(input: {
         );
         recordChatApprovalPhase({
           phase: "resolved",
-          sessionId: selectedSession.sessionId,
+          sessionId: approvalSessionId,
           approval: {
             approvalId: pendingApproval.approvalId,
             toolName: pendingApproval.toolName,
@@ -1123,6 +1240,7 @@ export function useChatOutboundExecution(input: {
             resumed: result.resumed,
             resumedRunId: result.resumedRunId,
             resumedTurnId: result.resumedTurnId,
+            selectedSessionId: selectedSession.sessionId,
           },
         });
       } catch (err) {
@@ -1131,16 +1249,17 @@ export function useChatOutboundExecution(input: {
         setApprovalPending(false);
       }
     },
-    [pendingApproval, pushLocalNotice, refreshPendingApprovalQueue, selectedSession, setError],
+    [loadSessionCoreState, pendingApproval, pushLocalNotice, refreshPendingApprovalQueue, selectedSession, setError],
   );
 
   const handleDenyPending = useCallback(async () => {
     if (!selectedSession || !pendingApproval) return;
+    const approvalSessionId = pendingApproval.sessionId?.trim() || selectedSession.sessionId;
     setApprovalPending(true);
     try {
       recordChatApprovalPhase({
         phase: "resolve_started",
-        sessionId: selectedSession.sessionId,
+        sessionId: approvalSessionId,
         approval: {
           approvalId: pendingApproval.approvalId,
           toolName: pendingApproval.toolName,
@@ -1153,13 +1272,20 @@ export function useChatOutboundExecution(input: {
           expiresAt: pendingApproval.expiresAt,
         },
         source: "operator",
+        context: { selectedSessionId: selectedSession.sessionId },
       });
-      await denyChatTool(selectedSession.sessionId, pendingApproval.approvalId);
-      await refreshPendingApprovalQueue(selectedSession.sessionId);
+      await denyChatTool(approvalSessionId, pendingApproval.approvalId);
+      await refreshPendingApprovalQueue(approvalSessionId);
+      if (approvalSessionId !== selectedSession.sessionId) {
+        await refreshPendingApprovalQueue(selectedSession.sessionId).catch(() => undefined);
+        await loadSessionCoreState(selectedSession.sessionId, { background: true, includeThread: true }).catch(
+          () => undefined,
+        );
+      }
       pushLocalNotice(`Denied request ${pendingApproval.approvalId}. No action was taken.`, "warning");
       recordChatApprovalPhase({
         phase: "dismissed",
-        sessionId: selectedSession.sessionId,
+        sessionId: approvalSessionId,
         approval: {
           approvalId: pendingApproval.approvalId,
           toolName: pendingApproval.toolName,
@@ -1172,13 +1298,14 @@ export function useChatOutboundExecution(input: {
           expiresAt: pendingApproval.expiresAt,
         },
         source: "operator",
+        context: { selectedSessionId: selectedSession.sessionId },
       });
     } catch (err) {
       setError((err as Error).message, "approval");
     } finally {
       setApprovalPending(false);
     }
-  }, [pendingApproval, pushLocalNotice, refreshPendingApprovalQueue, selectedSession, setError]);
+  }, [loadSessionCoreState, pendingApproval, pushLocalNotice, refreshPendingApprovalQueue, selectedSession, setError]);
 
   const handleSubmitUserInput = useCallback(
     async (response: ChatUserInputPromptResponse) => {
@@ -1229,6 +1356,9 @@ export function useChatOutboundExecution(input: {
         clearTimeout(streamReconcileTimeoutRef.current);
         streamReconcileTimeoutRef.current = null;
       }
+      streamingPreviewBufferRef.current?.dispose();
+      streamingPreviewBufferRef.current = null;
+      setStreamingPreview(null);
     },
     [],
   );
@@ -1246,6 +1376,8 @@ export function useChatOutboundExecution(input: {
     handleSubmitUserInput,
     handleSelectBranchTurn,
     streamStatus,
+    streamingPreview,
+    activeStreamingTurnId: streamingPreview?.turnId ?? null,
     prefsRef,
     threadRef,
   };

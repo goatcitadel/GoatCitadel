@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   AssistantRuntimeProvider,
   MessagePrimitive,
@@ -12,6 +12,7 @@ import { Check, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "../../lib/utils";
+import { normalizeAssistantDisplayText } from "./assistant-display-text";
 
 function buildAssistantStatus(running: boolean): MessageStatus {
   if (running) {
@@ -23,16 +24,18 @@ function buildAssistantStatus(running: boolean): MessageStatus {
 
 function createThreadMessage({
   role,
+  id,
   content,
   running,
 }: {
   role: "user" | "assistant";
+  id: string;
   content: string;
   running: boolean;
 }): ThreadMessage {
   if (role === "assistant") {
     return {
-      id: `${role}-${content.length}-${running ? "running" : "complete"}`,
+      id,
       role,
       createdAt: new Date(0),
       content: [{ type: "text", text: content || " " }],
@@ -48,7 +51,7 @@ function createThreadMessage({
   }
 
   return {
-    id: `${role}-${content.length}`,
+    id,
     role,
     createdAt: new Date(0),
     content: [{ type: "text", text: content }],
@@ -70,7 +73,8 @@ export function AssistantMessageRenderer({
   running?: boolean;
   className?: string;
 }) {
-  const displayContent = role === "assistant" ? decodeJsonUnicodeEscapes(content) : content;
+  const stableMessageId = useId();
+  const displayContent = role === "assistant" ? normalizeAssistantDisplayText(content) : content;
   const assistantUiRuntimeEnabled =
     (globalThis as { __GOATCITADEL_ENABLE_ASSISTANT_UI_RENDERER?: boolean })
       .__GOATCITADEL_ENABLE_ASSISTANT_UI_RENDERER === true;
@@ -84,15 +88,25 @@ export function AssistantMessageRenderer({
 
   if (shouldUseFallback) {
     return (
-      <div className={cn("mc-assistant-renderer mc-assistant-renderer-fallback", className)}>
-        <AssistantMessageContainer role={role} content={displayContent}>
+      <div
+        className={cn(
+          "mc-assistant-renderer mc-assistant-renderer-fallback",
+          running ? "mc-assistant-renderer-running" : "",
+          className,
+        )}
+      >
+        <AssistantMessageContainer role={role} content={displayContent} running={running}>
           <div
             className={cn(
               "mc-assistant-markdown",
               role === "user" ? "mc-assistant-markdown-user" : "mc-assistant-markdown-assistant",
             )}
           >
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{displayContent}</ReactMarkdown>
+            {role === "assistant" && running ? (
+              <StreamingMarkdown content={displayContent} />
+            ) : (
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{displayContent}</ReactMarkdown>
+            )}
           </div>
         </AssistantMessageContainer>
       </div>
@@ -100,24 +114,32 @@ export function AssistantMessageRenderer({
   }
 
   return (
-    <AssistantMessageRuntimeRenderer role={role} content={displayContent} running={running} className={className} />
+    <AssistantMessageRuntimeRenderer
+      role={role}
+      messageId={stableMessageId}
+      content={displayContent}
+      running={running}
+      className={className}
+    />
   );
 }
 
 function AssistantMessageRuntimeRenderer({
   role,
+  messageId,
   content,
   running,
   className,
 }: {
   role: "user" | "assistant";
+  messageId: string;
   content: string;
   running: boolean;
   className?: string;
 }) {
   const messages = useMemo<readonly ThreadMessage[]>(
-    () => [createThreadMessage({ role, content, running })],
-    [content, role, running],
+    () => [createThreadMessage({ role, id: messageId, content, running })],
+    [content, messageId, role, running],
   );
 
   const runtime = useExternalStoreRuntime({
@@ -129,7 +151,9 @@ function AssistantMessageRuntimeRenderer({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <ThreadPrimitive.Root className={cn("mc-assistant-renderer", className)}>
+      <ThreadPrimitive.Root
+        className={cn("mc-assistant-renderer", running ? "mc-assistant-renderer-running" : "", className)}
+      >
         <ThreadPrimitive.Viewport
           autoScroll={false}
           scrollToBottomOnInitialize={false}
@@ -138,7 +162,7 @@ function AssistantMessageRuntimeRenderer({
           <ThreadPrimitive.Messages>
             {() => (
               <MessagePrimitive.Root className="mc-assistant-renderer-message">
-                <AssistantMessageContainer role={role} content={content}>
+                <AssistantMessageContainer role={role} content={content} running={running}>
                   <MessagePrimitive.Parts
                     components={{
                       Text: () => (
@@ -164,10 +188,12 @@ function AssistantMessageRuntimeRenderer({
 function AssistantMessageContainer({
   role,
   content,
+  running,
   children,
 }: {
   role: "user" | "assistant";
   content: string;
+  running?: boolean;
   children: React.ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
@@ -200,7 +226,7 @@ function AssistantMessageContainer({
   }
 
   return (
-    <div className="mc-assistant-renderer-shell">
+    <div className="mc-assistant-renderer-shell" aria-busy={role === "assistant" && running ? true : undefined}>
       <div className="mc-assistant-renderer-body">{children}</div>
       {role === "assistant" ? (
         <button
@@ -215,6 +241,30 @@ function AssistantMessageContainer({
       ) : null}
     </div>
   );
+}
+
+function StreamingMarkdown({ content }: { content: string }) {
+  const { stable, tail } = useMemo(() => splitStreamingMarkdown(content), [content]);
+  return (
+    <div className="mc-assistant-streaming-markdown">
+      {stable ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{stable}</ReactMarkdown> : null}
+      {tail ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{tail}</ReactMarkdown> : null}
+      <span className="mc-assistant-streaming-cursor" aria-hidden="true" />
+    </div>
+  );
+}
+
+function splitStreamingMarkdown(content: string): { stable: string; tail: string } {
+  const fencedBlockIndex = content.lastIndexOf("\n```");
+  const paragraphIndex = content.lastIndexOf("\n\n");
+  const splitIndex = Math.max(fencedBlockIndex, paragraphIndex);
+  if (splitIndex <= 0) {
+    return { stable: "", tail: content };
+  }
+  return {
+    stable: content.slice(0, splitIndex + 1),
+    tail: content.slice(splitIndex + 1),
+  };
 }
 
 async function copyTextToClipboard(content: string): Promise<void> {
@@ -235,13 +285,4 @@ async function copyTextToClipboard(content: string): Promise<void> {
   textArea.select();
   document.execCommand("copy");
   document.body.removeChild(textArea);
-}
-
-function decodeJsonUnicodeEscapes(content: string): string {
-  if (!/\\u[0-9a-fA-F]{4}/.test(content)) {
-    return content;
-  }
-  return content.replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) =>
-    String.fromCharCode(Number.parseInt(hex, 16)),
-  );
 }

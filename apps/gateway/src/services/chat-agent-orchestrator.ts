@@ -338,6 +338,7 @@ export interface ChatAgentTurnInput {
   localOperatorOverrideId?: string;
   policyRunId?: string;
   policyTaskId?: string;
+  fullWebAccess?: boolean;
   historyMessages: ChatCompletionRequest["messages"];
   outputMessageId?: string;
   signal?: AbortSignal;
@@ -2258,6 +2259,16 @@ export class ChatAgentOrchestrator {
               tool_call_id: toolCall.id,
               content: JSON.stringify(toolResultPayload),
             } as ChatCompletionMessage);
+            const researchListSourceFailureInstruction = buildResearchListSourceFailureInstruction({
+              researchListIntent: intents.researchList,
+              toolRun: executed.record,
+            });
+            if (researchListSourceFailureInstruction) {
+              conversationMessages.push({
+                role: "system",
+                content: researchListSourceFailureInstruction,
+              } as ChatCompletionMessage);
+            }
             if (softFailApprovalRequiredTool) {
               conversationMessages.push({
                 role: "system",
@@ -3104,6 +3115,7 @@ export class ChatAgentOrchestrator {
           surface: input.input.mode,
           permissionProfileId: input.input.permissionProfileId,
           localOperatorOverrideId: input.input.localOperatorOverrideId,
+          fullWebAccess: input.input.fullWebAccess,
         },
       });
       const persistedToolResult = await this.persistToolArtifactsIfNeeded({
@@ -3659,7 +3671,7 @@ export class ChatAgentOrchestrator {
       input.turnInput.content,
       [...priorToolRuns, syntheticCurrentFailure],
       3,
-      3,
+      1,
     ).filter((url) => url !== input.args.url);
 
     for (const url of alternateUrls) {
@@ -3699,6 +3711,7 @@ export class ChatAgentOrchestrator {
             surface: input.turnInput.mode,
             permissionProfileId: input.turnInput.permissionProfileId,
             localOperatorOverrideId: input.turnInput.localOperatorOverrideId,
+            fullWebAccess: input.turnInput.fullWebAccess,
           },
         });
         if (result.outcome !== "executed") {
@@ -3831,6 +3844,7 @@ export class ChatAgentOrchestrator {
             surface: input.turnInput.mode,
             permissionProfileId: input.turnInput.permissionProfileId,
             localOperatorOverrideId: input.turnInput.localOperatorOverrideId,
+            fullWebAccess: input.turnInput.fullWebAccess,
           },
         });
         if (result.outcome !== "executed") {
@@ -4000,6 +4014,20 @@ export class ChatAgentOrchestrator {
       if (promotedUrl && promotedUrl !== args.url) {
         args.url = promotedUrl;
       }
+      const redirectedBlockedUrl = redirectPoisonedBrowserNavigateUrl(
+        String(args.url),
+        input.userContent,
+        input.priorToolRuns,
+      );
+      if (redirectedBlockedUrl?.url) {
+        args.url = redirectedBlockedUrl.url;
+      } else if (redirectedBlockedUrl?.blockedReason) {
+        return {
+          toolName: effectiveToolName,
+          args,
+          blockedReason: redirectedBlockedUrl.blockedReason,
+        };
+      }
     }
     if (isBrowserSearch) {
       const promotedUrl = inferBrowserNavigateUrlFromRepeatedSearches(input.userContent, input.priorToolRuns);
@@ -4032,7 +4060,7 @@ export class ChatAgentOrchestrator {
     if (
       isBrowserSearch &&
       (input.localFileIntent ?? false) &&
-      !detectExplicitWebLookupIntent(input.userContent) &&
+      !detectWebLookupIntent(input.userContent, input.historyMessages) &&
       !promptLabCoworkPromptSpecificWebSearch
     ) {
       return {
@@ -4872,6 +4900,41 @@ function buildToolFailureGuidance(input: {
     return `Retry ${formatToolLabel(input.toolName)} with a narrower, more explicit input.`;
   }
   return undefined;
+}
+
+function buildResearchListSourceFailureInstruction(input: {
+  researchListIntent: boolean;
+  toolRun: ChatToolRunRecord;
+}): string | undefined {
+  if (!input.researchListIntent) {
+    return undefined;
+  }
+  if (input.toolRun.status !== "blocked" && input.toolRun.status !== "failed") {
+    return undefined;
+  }
+  const normalizedTool = normalizeToolNameForComparison(input.toolRun.toolName);
+  if (
+    normalizedTool !== "browser.navigate" &&
+    normalizedTool !== "browser.extract" &&
+    normalizedTool !== "browser.search" &&
+    normalizedTool !== "http.get"
+  ) {
+    return undefined;
+  }
+  const host =
+    input.toolRun.result && typeof input.toolRun.result === "object"
+      ? readBlockedSourceHost(input.toolRun.result as Record<string, unknown>, input.toolRun.args)
+      : readUrlHost(typeof input.toolRun.args?.url === "string" ? input.toolRun.args.url : undefined);
+  return [
+    "Local research list integrity rule:",
+    host
+      ? `- The source host ${host} did not complete. Do not retry that same host unless the operator approves or allowlists it.`
+      : "- A web source did not complete. Do not repeat the same failed tool call.",
+    "- Continue with alternate relevant live sources or search results if available.",
+    "- Do not present a complete store/address/hours/email table unless the fields are supported by completed tool evidence.",
+    "- For any email address that completed evidence does not verify, write exactly `No public email found`.",
+    "- If the required fields cannot be verified through available sources, stop with `Synthesis Incomplete` or a clear continuation/approval path instead of filling guesses.",
+  ].join("\n");
 }
 
 function normalizeToolParameters(tool: ToolCatalogEntry): Record<string, unknown> {
@@ -6229,6 +6292,109 @@ function redirectSearchPortalNavigateUrl(
   return alternatives.find((candidate) => candidate !== requestedUrl);
 }
 
+function redirectPoisonedBrowserNavigateUrl(
+  requestedUrl: string,
+  userContent: string,
+  toolRuns: ChatToolRunRecord[] | undefined,
+): { url?: string; blockedReason?: string } | undefined {
+  if (!toolRuns || toolRuns.length === 0) {
+    return undefined;
+  }
+  const requestedHost = readUrlHost(requestedUrl);
+  if (!requestedHost) {
+    return undefined;
+  }
+  const poisonedHosts = collectPoisonedBrowserHosts(toolRuns);
+  if (!isPoisonedBrowserHost(requestedHost, poisonedHosts)) {
+    return undefined;
+  }
+  if (hasTriedBrowserFallbackAlternateForHost(requestedHost, toolRuns)) {
+    return {
+      blockedReason: `execution skipped: browser.navigate target host ${requestedHost} was already blocked earlier in this turn after an alternate source was tried. Request allowlist approval for that host, or use browser.search to find alternate current sources before answering.`,
+    };
+  }
+  if (hasTriedRedirectedAlternateForPoisonedHost(requestedHost, toolRuns)) {
+    return {
+      blockedReason: `execution skipped: browser.navigate target host ${requestedHost} was already blocked earlier in this turn after a redirected alternate source was tried. Request allowlist approval for that host, or use browser.search to find alternate current sources before answering.`,
+    };
+  }
+  const alternatives = selectRecentBrowserResultUrls(userContent, toolRuns, 1, 8).filter((candidate) => {
+    const candidateHost = readUrlHost(candidate);
+    if (!candidateHost) {
+      return false;
+    }
+    return candidate !== requestedUrl && !isPoisonedBrowserHost(candidateHost, poisonedHosts);
+  });
+  const alternateUrl = alternatives[0];
+  if (alternateUrl) {
+    return { url: alternateUrl };
+  }
+  return {
+    blockedReason: `execution skipped: browser.navigate target host ${requestedHost} was already blocked earlier in this turn. Request allowlist approval for that host, or use browser.search to find alternate current sources before answering.`,
+  };
+}
+
+function hasTriedRedirectedAlternateForPoisonedHost(requestedHost: string, toolRuns: ChatToolRunRecord[]): boolean {
+  return toolRuns.some((run) => {
+    if (!run || !isBrowserUrlFetchTool(run.toolName) || !run.result || typeof run.result !== "object") {
+      return false;
+    }
+    if (run.status !== "failed" && run.status !== "blocked") {
+      return false;
+    }
+    const argHost = readUrlHost(typeof run.args?.url === "string" ? run.args.url : undefined);
+    if (!argHost || hostsMatchOrNest(argHost, requestedHost)) {
+      return false;
+    }
+    return collectBrowserRunHosts(run, run.result as Record<string, unknown>).some((host) =>
+      hostsMatchOrNest(host, requestedHost),
+    );
+  });
+}
+
+function hasTriedBrowserFallbackAlternateForHost(requestedHost: string, toolRuns: ChatToolRunRecord[]): boolean {
+  return toolRuns.some((run) => {
+    if (!run || !isBrowserUrlFetchTool(run.toolName)) {
+      return false;
+    }
+    if (!run.result || typeof run.result !== "object") {
+      return false;
+    }
+    const result = run.result as Record<string, unknown>;
+    const fallbackChain = Array.isArray(result.fallbackChain) ? (result.fallbackChain as unknown[]) : [];
+    return (
+      fallbackChain.length > 1 &&
+      collectBrowserRunHosts(run, result).some((host) => hostsMatchOrNest(host, requestedHost))
+    );
+  });
+}
+
+function collectBrowserRunHosts(run: ChatToolRunRecord, result: Record<string, unknown>): string[] {
+  const hosts = new Set<string>();
+  const addUrl = (url: unknown): void => {
+    if (typeof url !== "string") {
+      return;
+    }
+    const host = readUrlHost(url);
+    if (host) {
+      hosts.add(host);
+    }
+  };
+  addUrl(run.args?.url);
+  addUrl(extractBrowserToolUrl(result));
+  addUrl(readFirstString(result.finalUrl, result.url));
+  const fallbackChain = Array.isArray(result.fallbackChain) ? result.fallbackChain : [];
+  for (const entry of fallbackChain) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const value = entry as Record<string, unknown>;
+    addUrl(value.url);
+    addUrl(value.finalUrl);
+  }
+  return [...hosts];
+}
+
 function selectBestRecentBrowserResultUrl(
   userContent: string,
   toolRuns: ChatToolRunRecord[],
@@ -6265,7 +6431,7 @@ function collectRecentBrowserSearchCandidates(
       try {
         const parsed = new URL(value.url);
         const hostname = parsed.hostname.toLowerCase();
-        if (poisonedHosts.has(hostname)) {
+        if (isPoisonedBrowserHost(hostname, poisonedHosts)) {
           continue;
         }
         candidates.push({
@@ -6321,6 +6487,19 @@ function selectRecentBrowserResultUrls(
 function collectPoisonedBrowserHosts(toolRuns: ChatToolRunRecord[]): Set<string> {
   const poisoned = new Set<string>();
 
+  function addPoisonedHost(hostname: string | undefined): void {
+    if (!hostname) {
+      return;
+    }
+    const normalized = hostname.toLowerCase();
+    poisoned.add(normalized);
+    if (normalized.startsWith("www.")) {
+      poisoned.add(normalized.slice(4));
+    } else {
+      poisoned.add(`www.${normalized}`);
+    }
+  }
+
   function addPoisonedFromResult(result: Record<string, unknown>, fallbackUrl?: string): void {
     const failureClass = typeof result.browserFailureClass === "string" ? result.browserFailureClass : undefined;
     if (!failureClass || failureClass === "no_results") {
@@ -6331,18 +6510,26 @@ function collectPoisonedBrowserHosts(toolRuns: ChatToolRunRecord[]): Set<string>
       return;
     }
     try {
-      poisoned.add(new URL(url).hostname.toLowerCase());
+      addPoisonedHost(new URL(url).hostname);
     } catch {
       // ignore malformed URLs
     }
   }
 
   for (const run of toolRuns) {
-    if (!run || !run.result || typeof run.result !== "object") {
+    if (!run) {
+      continue;
+    }
+    const fallbackUrl = typeof run.args?.url === "string" ? run.args.url : undefined;
+
+    if (shouldPoisonBrowserRunHost(run)) {
+      addPoisonedHost(readUrlHost(fallbackUrl));
+    }
+
+    if (!run.result || typeof run.result !== "object") {
       continue;
     }
     const result = run.result as Record<string, unknown>;
-    const fallbackUrl = typeof run.args?.url === "string" ? run.args.url : undefined;
 
     if (run.status === "failed" || run.status === "blocked") {
       // Check top-level result for failed/blocked runs.
@@ -6361,6 +6548,62 @@ function collectPoisonedBrowserHosts(toolRuns: ChatToolRunRecord[]): Set<string>
     }
   }
   return poisoned;
+}
+
+function shouldPoisonBrowserRunHost(run: ChatToolRunRecord): boolean {
+  if (!isBrowserUrlFetchTool(run.toolName)) {
+    return false;
+  }
+  if (typeof run.args?.url !== "string" || !run.args.url.trim()) {
+    return false;
+  }
+  if (run.status === "blocked") {
+    return true;
+  }
+  if (run.status !== "failed") {
+    return false;
+  }
+  const normalizedError = (run.error ?? "").toLowerCase();
+  return /\bnot yet allowlisted\b|\bnot allowlisted\b|\ballowlist\b|\bblocked\b|\bdenied\b|\bforbidden\b|\b403\b|\b401\b|\bcloudflare\b|\bcaptcha\b|\bpolicy\b/.test(
+    normalizedError,
+  );
+}
+
+function isBrowserUrlFetchTool(toolName: string): boolean {
+  const normalizedTool = normalizeToolNameForComparison(toolName);
+  return normalizedTool === "browser.navigate" || normalizedTool === "browser.extract" || normalizedTool === "http.get";
+}
+
+function isPoisonedBrowserHost(hostname: string, poisonedHosts: Set<string>): boolean {
+  const normalized = hostname.toLowerCase();
+  if (poisonedHosts.has(normalized)) {
+    return true;
+  }
+  const withoutWww = normalized.startsWith("www.") ? normalized.slice(4) : normalized;
+  if (poisonedHosts.has(withoutWww) || poisonedHosts.has(`www.${withoutWww}`)) {
+    return true;
+  }
+  return [...poisonedHosts].some((poisonedHost) => {
+    const normalizedPoisoned = poisonedHost.startsWith("www.") ? poisonedHost.slice(4) : poisonedHost;
+    return Boolean(normalizedPoisoned) && withoutWww.endsWith(`.${normalizedPoisoned}`);
+  });
+}
+
+function hostsMatchOrNest(leftHost: string, rightHost: string): boolean {
+  const left = leftHost.toLowerCase().replace(/^www\./, "");
+  const right = rightHost.toLowerCase().replace(/^www\./, "");
+  return left === right || left.endsWith(`.${right}`) || right.endsWith(`.${left}`);
+}
+
+function readUrlHost(url: string | undefined): string | undefined {
+  if (!url) {
+    return undefined;
+  }
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
 }
 
 function inferQueryFromPrompt(userContent: string): string | undefined {

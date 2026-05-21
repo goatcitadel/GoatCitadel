@@ -1010,8 +1010,24 @@
 .mc-next-thread-scroll {
   max-height: min(58dvh, 44rem);
   overflow: auto;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
   overflow-anchor: none;
+}
+
+.mc-next-thread-jump-latest {
+  position: sticky;
+  z-index: 6;
+  bottom: 0.75rem;
+  justify-self: center;
+  min-height: 2rem;
+  padding: 0 0.8rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 40%, var(--border));
+  background: color-mix(in oklab, var(--mc-surface-2) 94%, var(--background));
+  color: var(--foreground);
+  font-size: 0.78rem;
+  font-weight: 750;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
 }
 
 .mc-next-thread-view,
@@ -1306,6 +1322,11 @@
   background: color-mix(in oklab, var(--mc-surface-1) 70%, transparent);
 }
 
+.mc-next-thread-bubble.assistant.streaming {
+  border-color: color-mix(in oklab, var(--mc-area-color) 22%, transparent);
+  background: color-mix(in oklab, var(--mc-area-color) 5%, var(--mc-surface-1));
+}
+
 .mc-next-threaded-surface.unified .mc-next-thread-bubble.user,
 .mc-next-threaded-surface.unified .mc-next-thread-bubble.assistant {
   border-radius: 0.5rem;
@@ -1344,6 +1365,43 @@
 .mc-assistant-markdown pre {
   max-width: 100%;
   overflow: auto;
+}
+
+.mc-assistant-streaming-markdown {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.mc-assistant-streaming-markdown > :first-child {
+  margin-top: 0;
+}
+
+.mc-assistant-streaming-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.mc-assistant-streaming-cursor {
+  display: inline-block;
+  width: 0.55ch;
+  height: 1.05em;
+  margin-left: 0.12rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--mc-area-color) 78%, var(--foreground));
+  vertical-align: -0.12em;
+  animation: mcStreamingCursorBlink 1s steps(2, start) infinite;
+}
+
+@keyframes mcStreamingCursorBlink {
+  50% {
+    opacity: 0.2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-assistant-streaming-cursor {
+    animation: none;
+    opacity: 0.65;
+  }
 }
 
 .mc-assistant-copy-button {
@@ -1570,6 +1628,7 @@
 .mc-next-panel-tab,
 .mc-next-command-item,
 .mc-next-composer-inline-select,
+.mc-next-composer-toggle,
 .mc-next-composer-inline-button,
 .mc-next-composer-icon-button,
 .mc-next-composer-primary {
@@ -1595,6 +1654,16 @@
 .mc-next-composer-inline-select {
   max-width: 12rem;
   background: var(--card);
+}
+
+.mc-next-composer-toggle {
+  gap: 0.3rem;
+  background: var(--card);
+  font-size: 0.78rem;
+}
+
+.mc-next-composer-toggle input {
+  margin: 0;
 }
 
 .mc-next-threaded-surface.unified .mc-next-thread-inline-button,

@@ -27,6 +27,7 @@ export interface BrowserExecutionContext {
   sessionId?: string;
   signal?: AbortSignal;
   matchedGrantAllowedHosts?: string[];
+  fullWebAccess?: boolean;
 }
 
 interface BrowserStepInput {
@@ -48,11 +49,15 @@ function assertHostAllowedForConfig(
   executionContext?: BrowserExecutionContext,
 ): void {
   void shouldEnforceNetworkAllowlist(config);
-  assertHostAllowed(hostOrUrl, config.sandbox.networkAllowlist);
+  assertHostAllowed(hostOrUrl, resolveNetworkAllowlist(config, executionContext));
   const grantAllowlist = executionContext?.matchedGrantAllowedHosts?.map((entry) => entry.trim()).filter(Boolean);
   if (grantAllowlist && grantAllowlist.length > 0) {
     assertHostAllowed(hostOrUrl, grantAllowlist);
   }
+}
+
+function resolveNetworkAllowlist(config: ToolPolicyConfig, executionContext?: BrowserExecutionContext): string[] {
+  return executionContext?.fullWebAccess === true ? ["*"] : config.sandbox.networkAllowlist;
 }
 
 function getGrantHostAllowlist(executionContext?: BrowserExecutionContext): string[] {
@@ -418,6 +423,7 @@ function browserSearchBackendExecutionContext(
   return {
     sessionId: executionContext.sessionId,
     signal: executionContext.signal,
+    fullWebAccess: executionContext.fullWebAccess,
   };
 }
 
@@ -2484,7 +2490,7 @@ async function fetchTextAllowlisted(
   const grantAllowlist = getGrantHostAllowlist(executionContext);
 
   const response = await fetchAllowlisted(url, {
-    allowlist: config.sandbox.networkAllowlist,
+    allowlist: resolveNetworkAllowlist(config, executionContext),
     additionalAllowlists: grantAllowlist.length > 0 ? [grantAllowlist] : undefined,
     timeoutMs: 20_000,
     init: {

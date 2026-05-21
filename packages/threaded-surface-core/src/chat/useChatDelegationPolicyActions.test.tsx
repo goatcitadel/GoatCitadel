@@ -16,6 +16,7 @@ import {
   resolveDelegationMode,
   resolveDelegationRoute,
   resolveSelectedTurn,
+  shouldHydrateTraceDelegationRun,
   useChatDelegationPolicyActions,
 } from "./useChatDelegationPolicyActions";
 
@@ -271,6 +272,7 @@ function Harness(props: {
   messages?: ChatMessageRecord[];
   prefs?: ChatSessionPrefsRecord | null;
   surfaceMode?: "chat" | "cowork" | "code";
+  fullWebAccess?: boolean;
   streamEnabled?: boolean;
   sendingInitial?: boolean;
   selectedSession?: ChatSessionRecord | null;
@@ -308,6 +310,7 @@ function Harness(props: {
     selectedProviderId: "anthropic",
     selectedModel: "claude-4",
     surfaceMode: props.surfaceMode ?? "chat",
+    fullWebAccess: props.fullWebAccess,
     sending,
     streamEnabled: Boolean(props.streamEnabled),
     codeModeNeedsProjectBinding: Boolean(props.codeModeNeedsProjectBinding),
@@ -420,6 +423,34 @@ describe("useChatDelegationPolicyActions", () => {
     expect(
       resolveDelegationRoute(makePrefs({ providerId: "openai", model: "gpt-5.5" }), "anthropic", "claude-4"),
     ).toEqual({ providerId: "openai", model: "gpt-5.5" });
+    const activeRun = {
+      label: "Delegation",
+      objective: "Test helpers",
+      mode: "parallel",
+      status: "running",
+      steps: [{ stepId: "step-1", role: "Architect", status: "pending", index: 0 }],
+    } as any;
+    expect(shouldHydrateTraceDelegationRun(null, "run-existing", "turn-1")).toBe(true);
+    expect(shouldHydrateTraceDelegationRun({ ...activeRun, attachedTurnId: "turn-2" }, "run-existing", "turn-1")).toBe(
+      true,
+    );
+    expect(shouldHydrateTraceDelegationRun({ ...activeRun, attachedTurnId: "turn-1" }, "run-existing", "turn-1")).toBe(
+      false,
+    );
+    expect(
+      shouldHydrateTraceDelegationRun(
+        { ...activeRun, runId: "run-newer", attachedTurnId: "turn-1" },
+        "run-existing",
+        "turn-1",
+      ),
+    ).toBe(false);
+    expect(
+      shouldHydrateTraceDelegationRun(
+        { ...activeRun, runId: "run-existing", attachedTurnId: "turn-1" },
+        "run-existing",
+        "turn-1",
+      ),
+    ).toBe(true);
     expect(
       createSeedDelegationSteps({
         objective: "Seed defaults",
@@ -431,13 +462,6 @@ describe("useChatDelegationPolicyActions", () => {
       { stepId: "delegation-step-1", role: "Coder", status: "pending", index: 0 },
     ]);
 
-    const activeRun = {
-      label: "Delegation",
-      objective: "Test helpers",
-      mode: "parallel",
-      status: "running",
-      steps: [{ stepId: "step-1", role: "Architect", status: "pending", index: 0 }],
-    } as any;
     expect(applyDelegationStatusChunk(null, { runId: "ignored" })).toBeNull();
     expect(applyDelegationStatusChunk(activeRun, { runId: "run-1", taskId: "task-1" })).toMatchObject({
       runId: "run-1",
@@ -556,6 +580,46 @@ describe("useChatDelegationPolicyActions", () => {
       expect.objectContaining({
         policyRunId: "run-existing",
         policyTaskId: "task-existing",
+      }),
+    );
+  });
+
+  it("does not replace a newer manual delegation with stale trace hydration", async () => {
+    await act(async () => {
+      create(<Harness thread={makeThread(true)} prefs={makePrefs({ subagentPolicy: "off" })} />);
+      await flushEffects();
+    });
+    expect(latestHarness?.result.activeDelegationRun?.runId).toBe("run-existing");
+    fetchChatDelegationRunMock.mockClear();
+
+    runChatDelegationMock.mockResolvedValueOnce({
+      runId: "run-newer",
+      taskId: "task-newer",
+      executionPlanId: "plan-newer",
+      steps: [{ stepId: "delegation-step-1", runId: "run-newer", role: "Architect", status: "completed", index: 0 }],
+      stitchedOutput: "Fresh manual delegation result.",
+    });
+
+    await act(async () => {
+      latestHarness?.result.setDelegationSuggestion({
+        objective: "Run a fresh delegation",
+        mode: "sequential",
+        roles: ["Architect"],
+        rationale: "Operator approved a new subagent pass.",
+      } as any);
+      await flushEffects();
+    });
+    await act(async () => {
+      await latestHarness?.result.handleAcceptDelegation();
+      await flushEffects();
+    });
+
+    expect(fetchChatDelegationRunMock).not.toHaveBeenCalled();
+    expect(latestHarness?.result.activeDelegationRun).toEqual(
+      expect.objectContaining({
+        runId: "run-newer",
+        taskId: "task-newer",
+        status: "completed",
       }),
     );
   });
@@ -785,7 +849,13 @@ describe("useChatDelegationPolicyActions", () => {
       stitchedOutput: "Delegation failed.",
     });
     await act(async () => {
-      create(<Harness thread={makeThreadWithoutDelegatedSteps()} prefs={makePrefs({ subagentPolicy: "off" })} />);
+      create(
+        <Harness
+          thread={makeThreadWithoutDelegatedSteps()}
+          prefs={makePrefs({ subagentPolicy: "off" })}
+          fullWebAccess
+        />,
+      );
       await flushEffects();
     });
     await act(async () => {
@@ -805,6 +875,7 @@ describe("useChatDelegationPolicyActions", () => {
       expect.objectContaining({
         objective: "Review the migration",
         roles: ["Architect"],
+        fullWebAccess: true,
       }),
     );
     expect(runChatDelegationMock.mock.calls.at(-1)?.[1]).not.toHaveProperty("steps");
@@ -1116,6 +1187,43 @@ describe("useChatDelegationPolicyActions", () => {
         <Harness
           draft=""
           sendingInitial
+          prefs={makePrefs({ subagentPolicy: "ask_when_useful" })}
+          messages={makeMessages("Please implement, refactor, test, and review this end-to-end.")}
+        />,
+      );
+      await flushEffects();
+    });
+    expect(suggestChatDelegationMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      create(
+        <Harness
+          draft=""
+          surfaceMode="cowork"
+          thread={
+            {
+              sessionId: "session-1",
+              selectedTurnId: "turn-1",
+              activeLeafTurnId: "turn-1",
+              turns: [
+                {
+                  turnId: "turn-1",
+                  userMessage: makeMessages("Please implement, refactor, test, and review this end-to-end.")[0],
+                  trace: {
+                    status: "partial",
+                    routing: {},
+                    toolRuns: [],
+                    capabilityUpgradeSuggestions: [],
+                    specialistCandidateSuggestions: [],
+                    orchestration: {
+                      runId: "run-existing-partial",
+                      status: "partial",
+                    },
+                  },
+                },
+              ],
+            } as ChatThreadResponse
+          }
           prefs={makePrefs({ subagentPolicy: "ask_when_useful" })}
           messages={makeMessages("Please implement, refactor, test, and review this end-to-end.")}
         />,

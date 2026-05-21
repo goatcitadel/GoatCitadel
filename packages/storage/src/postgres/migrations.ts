@@ -1289,4 +1289,31 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON orchestration_plans(workspace_id, updated_at DESC);
     `,
   },
+  {
+    version: 47,
+    name: "state_validation_quarantine_history_repair",
+    sql: `
+      CREATE TABLE IF NOT EXISTS state_validation_quarantine (
+        quarantine_id TEXT PRIMARY KEY,
+        store TEXT NOT NULL,
+        row_id TEXT NOT NULL,
+        raw_value TEXT,
+        schema_error TEXT NOT NULL,
+        observed_at TIMESTAMPTZ NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_state_validation_quarantine_store_observed
+        ON state_validation_quarantine(store, observed_at DESC);
+
+      UPDATE schema_migrations
+      SET name = 'state_validation_quarantine'
+      WHERE version = 32
+        AND name = 'cron_jobs_workdir_and_context_from';
+
+      UPDATE schema_migrations
+      SET name = 'cron_jobs_workdir_context_from_run_output_run_id'
+      WHERE version = 33
+        AND name = 'cron_jobs_last_run_output_and_run_id';
+    `,
+  },
 ];

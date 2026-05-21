@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
+  ChatToolRunRecord,
   ChatWebMode,
   McpInvokeRequest,
   McpInvokeResponse,
@@ -2255,6 +2256,123 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
     expect(preflight.args).toMatchObject({
       url: "https://www.imdb.com/calendar/",
     });
+  });
+
+  it("poisons policy-blocked navigate hosts even when policy returns no result payload", async () => {
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "browser.navigate"]),
+      createChatCompletion: vi.fn(),
+      invokeTool: vi.fn(),
+    });
+
+    const preflight = (
+      orchestrator as unknown as {
+        preflightToolInvocation(input: {
+          toolName: string;
+          rawArgs: Record<string, unknown>;
+          userContent: string;
+          priorToolRuns?: ChatToolRunRecord[];
+        }): {
+          toolName: string;
+          args: Record<string, unknown>;
+          blockedReason?: string;
+        };
+      }
+    ).preflightToolInvocation({
+      toolName: "browser.navigate",
+      rawArgs: { url: "https://www.lgsfinder.org/stores/canoga-park" },
+      userContent:
+        "Find boardgame and tabletop game stores within 10 miles of 91303 with address, hours, and email address.",
+      priorToolRuns: [
+        {
+          toolRunId: "tool-search-stores-1",
+          turnId: "turn-stores-1",
+          sessionId: "sess-stores-1",
+          toolName: "browser.search",
+          status: "executed",
+          args: { query: "boardgame tabletop stores 91303 hours email" },
+          result: {
+            results: [
+              {
+                title: "LGS Finder - Canoga Park game stores",
+                url: "https://www.lgsfinder.org/stores/canoga-park",
+                snippet: "Local game store directory for tabletop games.",
+              },
+              {
+                title: "Fire and Dice Games - Canoga Park board game store contact",
+                url: "https://www.fireanddicegames.com/contact",
+                snippet: "Board game store near Canoga Park with hours, address, contact, and email details.",
+              },
+            ],
+          },
+          startedAt: "2026-05-21T01:00:00.000Z",
+          finishedAt: "2026-05-21T01:00:01.000Z",
+        },
+        {
+          toolRunId: "tool-nav-stores-1",
+          turnId: "turn-stores-1",
+          sessionId: "sess-stores-1",
+          toolName: "browser.navigate",
+          status: "blocked",
+          args: { url: "https://www.lgsfinder.org/stores/canoga-park" },
+          error: "browser.navigate host is not yet allowlisted",
+          startedAt: "2026-05-21T01:00:02.000Z",
+          finishedAt: "2026-05-21T01:00:03.000Z",
+        },
+      ],
+    });
+
+    expect(preflight.toolName).toBe("browser.navigate");
+    expect(preflight.args).toMatchObject({
+      url: "https://www.fireanddicegames.com/contact",
+    });
+    expect(preflight.blockedReason).toBeUndefined();
+  });
+
+  it("pauses repeated policy-blocked navigate hosts when no alternate search result exists", async () => {
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "browser.navigate"]),
+      createChatCompletion: vi.fn(),
+      invokeTool: vi.fn(),
+    });
+
+    const preflight = (
+      orchestrator as unknown as {
+        preflightToolInvocation(input: {
+          toolName: string;
+          rawArgs: Record<string, unknown>;
+          userContent: string;
+          priorToolRuns?: ChatToolRunRecord[];
+        }): {
+          toolName: string;
+          args: Record<string, unknown>;
+          blockedReason?: string;
+        };
+      }
+    ).preflightToolInvocation({
+      toolName: "browser.navigate",
+      rawArgs: { url: "https://www.lgsfinder.org/stores/canoga-park" },
+      userContent:
+        "Find boardgame and tabletop game stores within 10 miles of 91303 with address, hours, and email address.",
+      priorToolRuns: [
+        {
+          toolRunId: "tool-nav-stores-2",
+          turnId: "turn-stores-2",
+          sessionId: "sess-stores-2",
+          toolName: "browser.navigate",
+          status: "blocked",
+          args: { url: "https://www.lgsfinder.org/stores/canoga-park" },
+          error: "browser.navigate host is not yet allowlisted",
+          startedAt: "2026-05-21T01:00:02.000Z",
+          finishedAt: "2026-05-21T01:00:03.000Z",
+        },
+      ],
+    });
+
+    expect(preflight.blockedReason).toContain("already blocked earlier in this turn");
+    expect(preflight.blockedReason).toContain("Request allowlist approval");
   });
 
   it("surfaces blocked-source fallback copy instead of generic retry wording", async () => {

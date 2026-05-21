@@ -152,6 +152,7 @@ export async function collectArchitectureMetrics(rootDir = repoRoot) {
     /\bgatewayRuntime\.storage\b/g,
   );
   const gatewayLineCount = countLines(gatewayServiceSource);
+  const largeServiceDebt = await collectLargeServiceDebt(serviceFiles, rootDir);
   const gatewayPublicMethodCount = countMatches(
     gatewayServiceSource,
     new RegExp(GATEWAY_PUBLIC_METHOD_PATTERN_SOURCE, "gm"),
@@ -230,6 +231,7 @@ export async function collectArchitectureMetrics(rootDir = repoRoot) {
   return {
     generatedAt: new Date().toISOString(),
     gatewayLineCount,
+    largeServiceDebt,
     gatewayPublicMethodCount,
     gatewayPublicMethodsByRegion,
     gatewayServiceImportConsumerCount: gatewayServiceImportConsumers.length,
@@ -282,6 +284,13 @@ export async function readArchitectureMetricsBaseline(rootDir = repoRoot) {
 export function compareArchitectureMetrics(metrics, baseline) {
   const regressions = [];
   const improvements = [];
+  const largeServiceDebt = Array.isArray(metrics.largeServiceDebt) ? metrics.largeServiceDebt : [];
+  const debtNotes = [
+    "Architecture metrics are an architecture debt guard, not proof that broad GatewayService decomposition is complete.",
+    ...largeServiceDebt
+      .slice(0, 5)
+      .map((item) => `Large-service debt: ${item.path} (${item.lineCount} lines, ${item.bytes} bytes)`),
+  ];
   const deltas = {
     gatewayLineCount: metrics.gatewayLineCount - baseline.gatewayLineCount,
     gatewayPublicMethodCount: metrics.gatewayPublicMethodCount - baseline.gatewayPublicMethodCount,
@@ -560,6 +569,8 @@ export function compareArchitectureMetrics(metrics, baseline) {
   return {
     baselinePath: ARCHITECTURE_BASELINE_PATH,
     deltas,
+    largeServiceDebt,
+    debtNotes,
     regressions,
     improvements,
     status: regressions.length > 0 ? "failed" : "passed",
@@ -609,6 +620,28 @@ async function countPatternByFile(filePaths, pattern, rootDir) {
     }
   }
   return counts;
+}
+
+async function collectLargeServiceDebt(filePaths, rootDir) {
+  const entries = await Promise.all(
+    filePaths.map(async (filePath) => {
+      const content = await fs.readFile(filePath, "utf8");
+      const stats = await fs.stat(filePath);
+      return {
+        path: path.relative(rootDir, filePath).replaceAll("\\", "/"),
+        lineCount: countLines(content),
+        bytes: stats.size,
+      };
+    }),
+  );
+  return entries
+    .sort(
+      (left, right) =>
+        right.lineCount - left.lineCount ||
+        right.bytes - left.bytes ||
+        left.path.localeCompare(right.path),
+    )
+    .slice(0, 10);
 }
 
 function countGatewayPublicMethodsByRegion(source) {

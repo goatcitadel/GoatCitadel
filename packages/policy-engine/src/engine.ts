@@ -66,6 +66,33 @@ function assertHostAllowedForConfig(hostOrUrl: string, config: ToolPolicyConfig)
   assertHostAllowed(hostOrUrl, config.sandbox.networkAllowlist);
 }
 
+function isFullWebAccessEligibleTool(toolName: string): boolean {
+  return (
+    toolName === "browser.search" ||
+    toolName === "browser.navigate" ||
+    toolName === "browser.extract" ||
+    toolName === "browser.screenshot" ||
+    toolName === "http.get" ||
+    toolName === "docs.ingest"
+  );
+}
+
+function hasFullWebAccess(request: ToolAccessEvaluateRequest): boolean {
+  return request.policyContext?.fullWebAccess === true && isFullWebAccessEligibleTool(request.toolName);
+}
+
+function assertHostAllowedForRequest(
+  hostOrUrl: string,
+  request: ToolAccessEvaluateRequest,
+  config: ToolPolicyConfig,
+): void {
+  if (hasFullWebAccess(request)) {
+    assertHostAllowed(hostOrUrl, ["*"]);
+    return;
+  }
+  assertHostAllowedForConfig(hostOrUrl, config);
+}
+
 function assertFirecrawlBaseUrlAllowedForConfig(hostOrUrl: string, config: ToolPolicyConfig): void {
   const parsed = parseHttpUrlForPolicy(hostOrUrl, "firecrawlBaseUrl");
   if (isCanonicalLocalFirecrawlBaseUrl(parsed)) {
@@ -119,6 +146,9 @@ function resolveBrowserSearchEngineCandidates(engineValue: unknown): BrowserSear
 }
 
 function validateBrowserSearchHosts(request: ToolAccessEvaluateRequest, config: ToolPolicyConfig): void {
+  if (hasFullWebAccess(request)) {
+    return;
+  }
   const backend = typeof request.args?.backend === "string" ? request.args.backend.toLowerCase() : undefined;
   if (backend === "firecrawl" && request.args?.firecrawlFallbackToNative === false) {
     return;
@@ -704,7 +734,8 @@ export class ToolPolicyEngine {
       return withPolicy(deny(riskLevel, "policy_disallow", "tool not available in resolved policy"));
     }
 
-    let requiresApproval = policy.approvalMode === "approve_all" || Boolean(toolDef?.requiresApproval);
+    let requiresApproval =
+      !hasAllowGrant && (policy.approvalMode === "approve_all" || Boolean(toolDef?.requiresApproval));
     const outsideRootsReadRequiresApproval = this.requiresApprovalForOutsideRootsRead(request, policy, allowGrants);
 
     if (
@@ -728,7 +759,7 @@ export class ToolPolicyEngine {
     if (outsideRootsReadRequiresApproval) {
       requiresApproval = true;
     }
-    if (policy.approvalMode === "approve_risky" && riskLevel !== "safe") {
+    if (policy.approvalMode === "approve_risky" && riskLevel !== "safe" && !hasAllowGrant) {
       requiresApproval = true;
     }
     const codeModeRunPreapproved = Boolean(request.policyContext?.approvedCodeModeRunId);
@@ -759,9 +790,9 @@ export class ToolPolicyEngine {
       if (riskLevel === "nuclear") {
         reasonCodes.push("nuclear_risk_requires_approval");
       }
-    } else if (policy.approvalMode === "approve_all") {
+    } else if (policy.approvalMode === "approve_all" && !hasAllowGrant) {
       reasonCodes.push("approval_mode_all");
-    } else if (riskLevel !== "safe") {
+    } else if (riskLevel !== "safe" && !hasAllowGrant) {
       reasonCodes.push("approval_mode_risky");
     }
     let policyReason = "allowed";
@@ -1031,7 +1062,7 @@ export class ToolPolicyEngine {
       if (request.toolName.startsWith("http.") || request.toolName === "webhook.send") {
         const target = String(request.args?.url ?? request.args?.host ?? "");
         if (target) {
-          assertHostAllowedForConfig(target, this.config);
+          assertHostAllowedForRequest(target, request, this.config);
         }
       }
 
@@ -1040,7 +1071,7 @@ export class ToolPolicyEngine {
       if (docsIngestSourceType === "url") {
         const source = String(request.args?.source ?? "");
         if (source) {
-          assertHostAllowedForConfig(source, this.config);
+          assertHostAllowedForRequest(source, request, this.config);
         }
         if (docsIngestBackend === "firecrawl") {
           const firecrawlBaseUrl = String(
@@ -1053,7 +1084,7 @@ export class ToolPolicyEngine {
       if (request.toolName.startsWith("browser.")) {
         const target = String(request.args?.url ?? "");
         if (target) {
-          assertHostAllowedForConfig(target, this.config);
+          assertHostAllowedForRequest(target, request, this.config);
         }
         if (request.args?.backend === "firecrawl") {
           assertFirecrawlBaseUrlAllowedForConfig(readFirecrawlBaseUrl(request.args), this.config);

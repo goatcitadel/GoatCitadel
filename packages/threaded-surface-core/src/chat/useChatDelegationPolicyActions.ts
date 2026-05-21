@@ -298,6 +298,17 @@ export function resolveSelectedTurn(
   return thread.turns.find((turn) => turn.turnId === selectedTurnId) ?? thread.turns.at(-1) ?? null;
 }
 
+export function shouldHydrateTraceDelegationRun(
+  current: ActiveChatDelegationRun | null,
+  runId: string,
+  turnId: string,
+): boolean {
+  if (!current || current.attachedTurnId !== turnId) {
+    return true;
+  }
+  return current.runId === runId;
+}
+
 function buildDelegationGraph(
   selectedTurn: ChatThreadTurnRecord | null,
   fallbackRoles: string[],
@@ -333,6 +344,7 @@ export function useChatDelegationPolicyActions(input: {
   selectedProviderId?: string;
   selectedModel?: string;
   surfaceMode: ChatMode;
+  fullWebAccess?: boolean;
   sending: boolean;
   streamEnabled: boolean;
   codeModeNeedsProjectBinding: boolean;
@@ -354,6 +366,7 @@ export function useChatDelegationPolicyActions(input: {
     selectedProviderId,
     selectedModel,
     surfaceMode,
+    fullWebAccess,
     sending,
     streamEnabled,
     codeModeNeedsProjectBinding,
@@ -388,23 +401,34 @@ export function useChatDelegationPolicyActions(input: {
     if (!runId || !turnId || !sessionId || input.thread?.sessionId !== sessionId) {
       return;
     }
+    if (!shouldHydrateTraceDelegationRun(activeDelegationRun, runId, turnId)) {
+      return;
+    }
     let cancelled = false;
     void fetchChatDelegationRun(sessionId, runId)
       .then(({ run, steps }) => {
         if (cancelled) {
           return;
         }
-        setActiveDelegationRun({
-          runId: run.runId,
-          taskId: run.taskId,
-          executionPlanId: run.executionPlanId,
-          attachedTurnId: turnId,
-          label: "Delegation",
-          objective: run.objective,
-          mode: run.mode,
-          status: run.status,
-          steps: steps.map(toActiveDelegationStep).sort((left, right) => left.index - right.index),
-          stitchedOutput: run.stitchedOutput,
+        setActiveDelegationRun((current) => {
+          if (!shouldHydrateTraceDelegationRun(current, runId, turnId)) {
+            return current;
+          }
+          if (current?.runId === runId && current.attachedTurnId === turnId && current.status === "running") {
+            return current;
+          }
+          return {
+            runId: run.runId,
+            taskId: run.taskId,
+            executionPlanId: run.executionPlanId,
+            attachedTurnId: turnId,
+            label: "Delegation",
+            objective: run.objective,
+            mode: run.mode,
+            status: run.status,
+            steps: steps.map(toActiveDelegationStep).sort((left, right) => left.index - right.index),
+            stitchedOutput: run.stitchedOutput,
+          };
         });
       })
       .catch(() => {
@@ -667,6 +691,7 @@ export function useChatDelegationPolicyActions(input: {
         surfaceMode,
         providerId: route.providerId,
         model: route.model,
+        ...(fullWebAccess ? { fullWebAccess: true } : {}),
         ...(policyRunId ? { policyRunId } : {}),
         ...(policyTaskId ? { policyTaskId } : {}),
         ...(graph.steps?.length ? { steps: graph.steps } : {}),
@@ -677,6 +702,7 @@ export function useChatDelegationPolicyActions(input: {
       activeDelegationRun?.runId,
       activeWorkflowTurn?.trace.orchestration?.runId,
       activeWorkflowTurn?.turnId,
+      fullWebAccess,
       prefs,
       selectedModel,
       selectedProviderId,
@@ -771,10 +797,12 @@ export function useChatDelegationPolicyActions(input: {
 
   useEffect(() => {
     const subagentPolicy = prefs?.subagentPolicy ?? "ask_when_useful";
+    const activeWorkflowHasDelegation = Boolean(activeWorkflowTurn?.trace.orchestration?.runId);
     if (
       subagentPolicy === "off" ||
       !selectedSession ||
       sending ||
+      activeWorkflowHasDelegation ||
       activeDelegationRun?.status === "running" ||
       delegationSuggestion
     ) {
@@ -834,6 +862,7 @@ export function useChatDelegationPolicyActions(input: {
     };
   }, [
     activeDelegationRun?.status,
+    activeWorkflowTurn?.trace.orchestration?.runId,
     buildDelegationRequest,
     delegationSuggestion,
     draft,

@@ -37,6 +37,7 @@ export interface TurnRuntimeRequest {
   localOperatorOverrideId?: string;
   policyRunId?: string;
   policyTaskId?: string;
+  fullWebAccess?: boolean;
   historyMessages: ChatCompletionRequest["messages"];
   outputMessageId?: string;
   signal?: AbortSignal;
