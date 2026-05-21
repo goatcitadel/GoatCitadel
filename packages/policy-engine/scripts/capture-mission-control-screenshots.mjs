@@ -8,6 +8,7 @@ import { pipeline } from "node:stream/promises";
 import { chromium } from "playwright";
 import { Storage } from "@goatcitadel/storage";
 import { resolveUiTarget } from "../../../scripts/lib/ui-target.mjs";
+import { NEXT_RELEASE_SURFACE_MANIFEST } from "../../../scripts/verification/lib/release-surface-manifest.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 const tmpDir = path.join(repoRoot, ".tmp", "public-share-screenshots");
@@ -19,132 +20,63 @@ const uiPort = 15173;
 const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
 const uiUrl = `http://127.0.0.1:${uiPort}`;
 
-const screenshotTargets = [
+const publicScreenshotTargets = [
   {
-    query: { space: "configure", page: "settings", tab: "onboarding" },
-    file: "settings-onboarding.png",
-    title: "Settings / Onboarding",
+    slug: "chat",
+    file: "chat.png",
+    title: "Chat",
+    description: "Fast conversation with runtime context, citations, attachments, and tool visibility close at hand.",
   },
   {
-    query: { space: "operate", page: "surface", surface: "chat" },
-    file: "operate-chat.png",
-    title: "Operate / Chat",
+    slug: "cowork",
+    file: "cowork.png",
+    title: "Cowork",
+    description: "Supervised agentic work with approvals, checkpoints, delegation lineage, and synthesis status.",
   },
   {
-    query: { space: "operate", page: "surface", surface: "cowork" },
-    file: "operate-cowork.png",
-    title: "Operate / Cowork",
+    slug: "code",
+    file: "code.png",
+    title: "Code",
+    description: "Focused implementation, review, debugging, and governed Code Mode execution.",
   },
   {
-    query: { space: "operate", page: "surface", surface: "code" },
-    file: "operate-code.png",
-    title: "Operate / Code",
+    slug: "projects",
+    file: "projects.png",
+    title: "Projects",
+    description: "Workspace and project containers that group Chat, Cowork, and Code threads.",
   },
   {
-    query: { space: "operate", page: "tasks" },
-    file: "operate-tasks.png",
-    title: "Operate / Tasks",
+    slug: "library-capabilities",
+    file: "library-capabilities.png",
+    title: "Library / Capabilities",
+    description: "Inspectable capability, skill, tool, provider, MCP, and channel evidence.",
   },
   {
-    query: { space: "operate", page: "approvals" },
-    file: "operate-approvals.png",
-    title: "Operate / Approvals",
+    slug: "ops-runtime",
+    file: "ops-runtime.png",
+    title: "Ops / Runtime",
+    description: "Operational health, runtime posture, diagnostics, and source-status truth.",
   },
   {
-    query: { space: "observe", page: "activity", tab: "activity" },
-    file: "observe-activity-live-feed.png",
-    title: "Observe / Activity / Live feed",
-  },
-  {
-    query: { space: "observe", page: "activity", tab: "scheduler" },
-    file: "observe-activity-scheduler.png",
-    title: "Observe / Activity / Scheduler",
-  },
-  {
-    query: { space: "observe", page: "activity", tab: "improvement" },
-    file: "observe-activity-improvement.png",
-    title: "Observe / Activity / Improvement",
-  },
-  {
-    query: { space: "observe", page: "sessions" },
-    file: "observe-sessions.png",
-    title: "Observe / Sessions",
-  },
-  {
-    query: { space: "observe", page: "artifacts", tab: "memory" },
-    file: "observe-artifacts-memory.png",
-    title: "Observe / Artifacts / Memory",
-  },
-  {
-    query: { space: "observe", page: "artifacts", tab: "files" },
-    file: "observe-artifacts-files.png",
-    title: "Observe / Artifacts / Files",
-  },
-  {
-    query: { space: "observe", page: "costs" },
-    file: "observe-costs.png",
-    title: "Observe / Costs",
-  },
-  {
-    query: { space: "observe", page: "system" },
-    file: "observe-system.png",
-    title: "Observe / System",
-  },
-  {
-    query: { space: "observe", page: "quality" },
-    file: "observe-quality.png",
-    title: "Observe / Quality",
-  },
-  {
-    query: { space: "configure", page: "settings", tab: "general" },
-    file: "configure-settings-general.png",
-    title: "Configure / Settings / General",
-  },
-  {
-    query: { space: "configure", page: "settings", tab: "workspaces" },
-    file: "configure-settings-workspaces.png",
-    title: "Configure / Settings / Workspaces",
-  },
-  {
-    query: { space: "configure", page: "tools" },
-    file: "configure-tools.png",
-    title: "Configure / Tools",
-    scrollY: 860,
-  },
-  {
-    query: { space: "configure", page: "integrations", tab: "overview" },
-    file: "configure-integrations-overview.png",
-    title: "Configure / Integrations / Overview",
-  },
-  {
-    query: { space: "configure", page: "integrations", tab: "mcp" },
-    file: "configure-integrations-mcp.png",
-    title: "Configure / Integrations / MCP",
-  },
-  {
-    query: { space: "configure", page: "agents", tab: "overview" },
-    file: "configure-agents-overview.png",
-    title: "Configure / Agents / Overview",
-  },
-  {
-    query: { space: "configure", page: "agents", tab: "herd-live" },
-    file: "configure-agents-herd-live.png",
-    title: "Configure / Agents / Herd Live",
-    waitForSelector: ".office-webgl-stage-v5 canvas",
-    screenshotSelector: ".office-stage-panel",
-    settleMs: 6500,
-  },
-  {
-    query: { space: "configure", page: "agents", tab: "herd-lab" },
-    file: "configure-agents-herd-lab.png",
-    title: "Configure / Agents / Herd Lab",
-  },
-  {
-    query: { space: "configure", page: "agents", tab: "skills" },
-    file: "configure-agents-skills.png",
-    title: "Configure / Agents / Skills",
+    slug: "settings-providers",
+    file: "settings-providers.png",
+    title: "Settings / Providers",
+    description: "Provider and model setup with key-on-file truth and safe local defaults.",
   },
 ];
+
+const screenshotTargets = publicScreenshotTargets.map((target) => {
+  const route = NEXT_RELEASE_SURFACE_MANIFEST.find((candidate) => candidate.slug === target.slug);
+  if (!route) {
+    throw new Error(`Missing Mission Control Next route manifest entry for screenshot target ${target.slug}.`);
+  }
+  return {
+    ...target,
+    href: route.href,
+    readySelector: route.readySelector,
+    readyText: route.readyText,
+  };
+});
 
 async function main() {
   await prepareRuntimeRoot();
@@ -154,6 +86,10 @@ async function main() {
     GATEWAY_HOST: "127.0.0.1",
     GATEWAY_PORT: String(gatewayPort),
     GOATCITADEL_AUTH_MODE: "none",
+    GOATCITADEL_ALLOWED_ORIGINS: `${uiUrl},http://localhost:${uiPort}`,
+    GOATCITADEL_DATABASE_DRIVER: "sqlite",
+    GOATCITADEL_BUNDLED_POSTGRES_ENABLED: "false",
+    GOATCITADEL_BUNDLED_POSTGRES_AUTOSTART: "false",
   });
   const ui = await startProcess(
     "ui",
@@ -387,12 +323,14 @@ async function seedDemoData() {
     priority: "high",
     status: "review",
   }).then(async (task) => {
-    await postJson(`/api/v1/tasks/${encodeURIComponent(task.taskId)}/activities`, {
+    await postJson(`/api/v1/tasks/${encodeURIComponent(task.taskId)}/activities?workspaceId=${encodeURIComponent(workspace.workspaceId)}`, {
+      workspaceId: workspace.workspaceId,
       activityType: "comment",
       message: "Checklist trimmed to the highest-signal release flows.",
       agentId: "operator",
     });
-    await postJson(`/api/v1/tasks/${encodeURIComponent(task.taskId)}/deliverables`, {
+    await postJson(`/api/v1/tasks/${encodeURIComponent(task.taskId)}/deliverables?workspaceId=${encodeURIComponent(workspace.workspaceId)}`, {
+      workspaceId: workspace.workspaceId,
       deliverableType: "artifact",
       title: "Readiness checklist",
       path: "workspace/demo/release-checklist.md",
@@ -401,7 +339,7 @@ async function seedDemoData() {
   });
 
   await postJson("/api/v1/cron/jobs", {
-    jobId: "release_readiness_digest",
+    jobId: `release_readiness_digest_${workspaceSlug}`,
     name: "1.0 readiness digest",
     schedule: "0 6 * * * UTC",
     enabled: true,
@@ -578,8 +516,7 @@ async function captureScreenshots(activeWorkspaceId) {
 
     const page = await context.newPage();
     for (const target of screenshotTargets) {
-      const params = new URLSearchParams(target.query);
-      const targetUrl = `${uiUrl}/?${params.toString()}`;
+      const targetUrl = new URL(target.href, uiUrl).toString();
       await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
       await page.waitForTimeout(target.settleMs ?? 1800);
       if (target.waitForSelector) {
@@ -588,6 +525,13 @@ async function captureScreenshots(activeWorkspaceId) {
           timeout: 20_000,
         });
         await page.waitForTimeout(750);
+      }
+      if (target.readyText) {
+        await page.waitForFunction(
+          (text) => document.body?.innerText.toLowerCase().includes(text.toLowerCase()),
+          target.readyText,
+          { timeout: 20_000 },
+        );
       }
       if (target.scrollY) {
         await page.evaluate((scrollY) => window.scrollTo(0, scrollY), target.scrollY);
@@ -613,13 +557,20 @@ async function captureScreenshots(activeWorkspaceId) {
 
 async function writeGalleryIndex() {
   const cards = screenshotTargets.map((target) => (
-    `        <section class="card"><h2>${escapeHtml(target.title)}</h2><img src="./${target.file}" alt="${escapeHtml(target.title)} screenshot" /></section>`
+    [
+      `        <section class="card">`,
+      `          <h2>${escapeHtml(target.title)}</h2>`,
+      `          <p>${escapeHtml(target.description)}</p>`,
+      `          <img src="./${target.file}" alt="${escapeHtml(target.title)} screenshot" />`,
+      `        </section>`,
+    ].join("\n")
   )).join("\n");
   const html = `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
     <title>GoatCitadel Mission Control Screenshots</title>
     <style>
       :root {
@@ -628,20 +579,20 @@ async function writeGalleryIndex() {
       body {
         margin: 0;
         font-family: "Segoe UI", Arial, sans-serif;
-        background: #120905;
-        color: #f3d8c2;
+        background: #071113;
+        color: #d7f8ff;
       }
       .wrap {
         max-width: 1320px;
         margin: 0 auto;
-        padding: 20px;
+        padding: 24px;
       }
       h1 {
-        margin: 0 0 12px;
-        color: #ff9d4d;
+        margin: 0 0 10px;
+        color: #7de7f7;
       }
       p {
-        color: #f0d4ba;
+        color: #9fcbd4;
       }
       .grid {
         display: grid;
@@ -649,22 +600,28 @@ async function writeGalleryIndex() {
         grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
       }
       .card {
-        border: 1px solid #5f3218;
-        border-radius: 14px;
-        background: #2a170d;
+        border: 1px solid #1c5260;
+        border-radius: 8px;
+        background: #0c1c22;
         padding: 12px;
       }
       .card h2 {
-        margin: 0 0 10px;
+        margin: 0 0 6px;
         font-size: 17px;
-        color: #ffb67a;
+        color: #b7f8ff;
+      }
+      .card p {
+        min-height: 44px;
+        margin: 0 0 10px;
+        font-size: 14px;
+        line-height: 1.45;
       }
       img {
         width: 100%;
         height: auto;
         display: block;
-        border-radius: 10px;
-        border: 1px solid #5f3218;
+        border-radius: 6px;
+        border: 1px solid #1c5260;
       }
       code {
         background: rgba(255, 255, 255, 0.06);
@@ -676,7 +633,7 @@ async function writeGalleryIndex() {
   <body>
     <main class="wrap">
       <h1>GoatCitadel ${escapeHtml(uiTarget.displayName)} Screenshots</h1>
-      <p>Regenerated from a sanitized 1.0 release demo runtime. Folder: <code>docs/screenshots/${escapeHtml(uiTarget.screenshotDirName)}</code></p>
+      <p>Regenerated from a sanitized 1.0 demo runtime. Folder: <code>docs/screenshots/${escapeHtml(uiTarget.screenshotDirName)}</code></p>
       <div class="grid">
 ${cards}
       </div>
