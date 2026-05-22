@@ -231,8 +231,17 @@ async function tryStartNativeBundledPostgres(
     };
   }
 
-  setBootCheckpoint("native-pg:pg_ctl-start-running (SYNC)");
+  setBootCheckpoint("native-pg:pg_ctl-start-running");
   try {
+    // `-W` (--no-wait): pg_ctl returns immediately after spawning postgres
+    // instead of waiting for postgres to become reachable. We've observed
+    // pg_ctl's default `-w` wait hanging for the full 120s gateway-health
+    // window on Windows even after postgres has bound the port and logged
+    // "database system is ready to accept connections". The subsequent
+    // `waitForBundledPostgres` poll loop is what actually validates
+    // readiness via TCP and a `SHOW data_directory` query, so we don't lose
+    // any reliability by skipping pg_ctl's own ping — and we cut tens of
+    // seconds off cold-start dev boots.
     execFileSync(
       commands.pgCtl,
       [
@@ -241,6 +250,7 @@ async function tryStartNativeBundledPostgres(
         "-l",
         logFile,
         "start",
+        "-W",
         "-o",
         `-h 127.0.0.1 -p ${config.assistant.database.bundledPostgres.port}`,
       ],
