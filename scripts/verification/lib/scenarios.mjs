@@ -4394,6 +4394,47 @@ async function waitForVerificationRouteReady(page, route, packageName = DEFAULT_
         undefined,
         { timeout: timeoutMs },
       );
+      if (route.expectedArea === "code") {
+        // The threaded-surface shell mounts before the gateway run-context
+        // stream delivers the payload that resolves the provider route, policy
+        // summary, and model-probe. Visual baselines capture the post-
+        // resolution state, so screenshotting earlier produces diffs that
+        // straddle the threshold non-deterministically. Wait for every
+        // hydration placeholder to clear before letting the snapshot proceed.
+        await page.waitForFunction(
+          () => {
+            const header = document.querySelector(".mc-next-threaded-header");
+            if (!header) {
+              return false;
+            }
+            const headerText = header.textContent ?? "";
+            if (
+              headerText.includes("Provider routing pending") ||
+              headerText.includes("Policy loading") ||
+              headerText.includes("Route checking")
+            ) {
+              return false;
+            }
+            const catalogEntry = Array.from(
+              document.querySelectorAll(".chat-model-picker-metadata > div"),
+            ).find((entry) => entry.querySelector("dt")?.textContent?.trim() === "Catalog");
+            if (catalogEntry?.querySelector("dd")?.textContent?.trim() === "not_checked") {
+              return false;
+            }
+            const routeLoadingBanner = Array.from(
+              document.querySelectorAll(".mc-next-composer-banner.info"),
+            ).some((banner) =>
+              banner.textContent?.includes("Checking the selected provider/model route"),
+            );
+            if (routeLoadingBanner) {
+              return false;
+            }
+            return true;
+          },
+          undefined,
+          { timeout: timeoutMs },
+        );
+      }
     }
   }
   if (route.readyText) {
