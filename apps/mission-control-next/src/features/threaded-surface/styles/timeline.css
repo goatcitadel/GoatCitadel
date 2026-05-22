@@ -1,0 +1,424 @@
+.mc-next-thread-status-lane,
+.mc-next-thread-scroll {
+  min-width: 0;
+}
+
+.mc-next-thread-scroll {
+  max-height: min(58dvh, 44rem);
+  overflow: auto;
+  scroll-behavior: auto;
+  overflow-anchor: none;
+}
+
+.mc-next-thread-jump-latest {
+  position: sticky;
+  z-index: 6;
+  bottom: 0.75rem;
+  justify-self: center;
+  min-height: 2rem;
+  padding: 0 0.8rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 40%, var(--border));
+  background: color-mix(in oklab, var(--mc-surface-2) 94%, var(--background));
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  font-weight: 750;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+}
+
+.mc-next-thread-view,
+.mc-next-context-section-stack {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.mc-next-thread-list {
+  display: grid;
+  gap: 0.56rem;
+}
+
+.mc-next-thread-blocking-prompt {
+  scroll-margin-block: 1rem;
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-card {
+  display: grid;
+  gap: 0.72rem;
+  padding: 0.95rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 36%, var(--border));
+  background: color-mix(in oklab, var(--gc-risk-caution) 8%, var(--card));
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--gc-risk-caution) 12%, transparent);
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-header,
+.mc-next-thread-blocking-prompt .chat-approval-actions,
+.mc-next-thread-blocking-prompt .chat-user-input-option-row {
+  display: flex;
+  align-items: center;
+  gap: 0.34rem;
+  flex-wrap: wrap;
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-header {
+  justify-content: space-between;
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-title,
+.mc-next-thread-blocking-prompt .chat-approval-reason,
+.mc-next-thread-blocking-prompt .chat-approval-tool,
+.mc-next-thread-blocking-prompt .chat-approval-id,
+.mc-next-thread-blocking-prompt .chat-user-input-option-description {
+  margin: 0;
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-title,
+.mc-next-thread-blocking-prompt .chat-approval-tool {
+  color: var(--foreground);
+  font-weight: 750;
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-countdown {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 1.75rem;
+  padding: 0 0.55rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--gc-risk-caution) 14%, transparent);
+  color: color-mix(in oklab, var(--gc-risk-caution) 72%, var(--foreground));
+  font-size: var(--text-xs);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-countdown.is-expired,
+.mc-next-thread-blocking-prompt .chat-approval-countdown.is-low-time {
+  background: color-mix(in oklab, var(--gc-risk-danger) 14%, transparent);
+  color: color-mix(in oklab, var(--gc-risk-danger) 76%, var(--foreground));
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-reason,
+.mc-next-thread-blocking-prompt .chat-approval-id,
+.mc-next-thread-blocking-prompt .chat-user-input-option-description {
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  line-height: 1.45;
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-actions {
+  align-items: stretch;
+}
+
+.mc-next-thread-blocking-prompt .chat-approval-confirm,
+.mc-next-thread-blocking-prompt .chat-user-input-card,
+.mc-next-thread-blocking-prompt .chat-user-input-options,
+.mc-next-thread-blocking-prompt .chat-user-input-option-copy {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.mc-next-thread-blocking-prompt .chat-user-input-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: start;
+}
+
+.mc-next-thread-blocking-prompt .chat-user-input-input,
+.mc-next-thread-blocking-prompt .chat-user-input-textarea {
+  width: 100%;
+  min-height: 2.7rem;
+  padding: 0.72rem 0.8rem;
+  border-radius: 0.9rem;
+  border: 1px solid color-mix(in oklab, var(--border) 86%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-1) 95%, var(--background));
+  color: var(--foreground);
+}
+
+.mc-next-thread-blocking-prompt .chat-user-input-textarea {
+  resize: vertical;
+}
+
+.mc-next-thread-turn {
+  position: relative;
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.15rem 0 0.7rem;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+}
+
+.mc-next-thread-turn.selected::before {
+  content: "";
+  position: absolute;
+  left: -0.7rem;
+  top: 0.35rem;
+  bottom: 0.9rem;
+  width: 2px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--mc-area-color) 62%, var(--foreground));
+  opacity: 0.72;
+}
+
+.mc-next-thread-turn.delegation.compact {
+  padding: 0.7rem;
+}
+
+.mc-next-thread-turn.delegation.compact > details {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.mc-next-thread-turn.delegation.compact > details > summary {
+  display: block;
+  cursor: pointer;
+  list-style: none;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 20%, var(--mc-border-subtle));
+  border-radius: 0.65rem;
+  background: color-mix(in oklab, var(--mc-surface-2) 90%, var(--background));
+  color: var(--foreground);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.mc-next-thread-turn.delegation.compact > details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mc-next-thread-turn.delegation.compact > details > summary::marker {
+  content: "";
+}
+
+.mc-next-thread-turn.delegation.compact > details > summary:hover,
+.mc-next-thread-turn.delegation.compact > details[open] > summary {
+  border-color: color-mix(in oklab, var(--mc-area-color) 38%, var(--mc-border-subtle));
+  background: color-mix(in oklab, var(--mc-area-color) 12%, var(--mc-surface-2));
+}
+
+.mc-next-thread-turn.delegation.compact > details > summary:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--mc-area-color) 72%, var(--foreground));
+  outline-offset: 2px;
+}
+
+.mc-next-thread-turn.delegation.compact > details > summary .mc-next-thread-strip {
+  align-items: center;
+  padding: 0;
+  border-top: 0;
+  background: transparent;
+}
+
+.mc-next-thread-turn.delegation.compact > details > summary .mc-next-thread-strip > span:not([class]) {
+  color: color-mix(in oklab, var(--foreground) 78%, var(--text-muted));
+}
+
+.mc-next-thread-turn.delegation.compact > details > summary .mc-next-thread-inline-button {
+  border-color: color-mix(in oklab, var(--mc-area-color) 28%, var(--mc-border-subtle));
+  background: color-mix(in oklab, var(--mc-area-color) 9%, transparent);
+}
+
+.mc-next-thread-step-output-details {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.mc-next-thread-step-output-details > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  cursor: pointer;
+  list-style: none;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  border-radius: 0.65rem;
+  background: color-mix(in oklab, var(--mc-surface-2) 88%, var(--background));
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.mc-next-thread-step-output-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mc-next-thread-step-output-details > summary::after {
+  content: "▼";
+  color: color-mix(in oklab, var(--mc-area-color) 68%, var(--foreground));
+  font-size: var(--text-xs);
+}
+
+.mc-next-thread-step-output-details[open] > summary::after {
+  content: "▲";
+}
+
+.mc-next-thread-step-output-details > summary:hover,
+.mc-next-thread-step-output-details[open] > summary {
+  border-color: color-mix(in oklab, var(--mc-area-color) 42%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 13%, var(--mc-surface-2));
+}
+
+.mc-next-thread-step-output-details > summary:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--mc-area-color) 70%, var(--foreground));
+  outline-offset: 2px;
+}
+
+.mc-next-thread-step-output {
+  width: 100%;
+  padding: 0.85rem;
+  border-radius: 0.9rem;
+  border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+  background: color-mix(in oklab, var(--background) 72%, var(--mc-surface-1));
+  color: var(--foreground);
+}
+
+.mc-next-thread-step-output .mc-assistant-renderer-viewport,
+.mc-next-thread-step-output .mc-assistant-renderer-message,
+.mc-next-thread-step-output .mc-assistant-renderer-shell,
+.mc-next-thread-step-output .mc-assistant-renderer-body,
+.mc-next-thread-step-output .mc-assistant-markdown {
+  background: transparent;
+  color: inherit;
+}
+
+.mc-next-thread-turn-surface,
+.mc-next-thread-bubble,
+.mc-next-context-card,
+.mc-next-panel-list,
+.mc-next-cowork-mission-brief,
+.mc-next-cowork-action-callout,
+.mc-next-cowork-now {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.mc-next-thread-turn-surface {
+  cursor: pointer;
+  outline: none;
+}
+
+.mc-next-thread-bubble {
+  padding: 0.74rem 0.8rem;
+  border-radius: 0.48rem;
+  border: 1px solid transparent;
+  background: transparent;
+}
+
+.mc-next-thread-bubble.user {
+  border-color: color-mix(in oklab, var(--mc-area-color) 18%, var(--mc-border-subtle));
+  background: color-mix(in oklab, var(--mc-area-color) 7%, var(--mc-surface-1));
+}
+
+.mc-next-thread-bubble.assistant {
+  background: color-mix(in oklab, var(--mc-surface-1) 70%, transparent);
+}
+
+.mc-next-thread-bubble.assistant.streaming {
+  border-color: color-mix(in oklab, var(--mc-area-color) 22%, transparent);
+  background: color-mix(in oklab, var(--mc-area-color) 5%, var(--mc-surface-1));
+}
+
+.mc-next-threaded-surface.unified .mc-next-thread-bubble.user,
+.mc-next-threaded-surface.unified .mc-next-thread-bubble.assistant {
+  border-radius: 0.5rem;
+}
+
+.mc-assistant-renderer-shell,
+.mc-assistant-renderer-body,
+.mc-assistant-markdown {
+  min-width: 0;
+}
+
+.mc-assistant-renderer-shell {
+  display: grid;
+  gap: 0.34rem;
+  justify-items: stretch;
+}
+
+.mc-assistant-renderer-body {
+  width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.mc-assistant-markdown > :first-child {
+  margin-top: 0;
+}
+
+.mc-assistant-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.mc-assistant-markdown p,
+.mc-assistant-markdown li {
+  line-height: 1.52;
+}
+
+.mc-assistant-markdown pre {
+  max-width: 100%;
+  overflow: auto;
+}
+
+.mc-assistant-streaming-markdown {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.mc-assistant-streaming-markdown > :first-child {
+  margin-top: 0;
+}
+
+.mc-assistant-streaming-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.mc-assistant-streaming-cursor {
+  display: inline-block;
+  width: 0.55ch;
+  height: 1.05em;
+  margin-left: 0.12rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--mc-area-color) 78%, var(--foreground));
+  vertical-align: -0.12em;
+  animation: mcStreamingCursorBlink 1s steps(2, start) infinite;
+}
+
+@keyframes mcStreamingCursorBlink {
+  50% {
+    opacity: 0.2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-assistant-streaming-cursor {
+    animation: none;
+    opacity: 0.65;
+  }
+}
+
+.mc-assistant-copy-button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: end;
+  gap: 0;
+  width: 1.55rem;
+  max-width: 1.55rem;
+  min-height: 1.55rem;
+  padding: 0;
+  border-radius: 0.34rem;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  font-weight: 650;
+  line-height: 1.15;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}

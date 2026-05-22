@@ -1,0 +1,281 @@
+@media (max-width: 1360px) {
+  .mc-next-threaded-surface {
+    grid-template-columns: 18.75rem minmax(0, 1fr);
+  }
+
+  .mc-next-threaded-stage.has-workbench.has-context {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-threaded-stage.has-workbench,
+  .mc-next-threaded-stage.mode-chat,
+  .mc-next-threaded-stage.has-cowork-panel,
+  .mc-next-threaded-stage.has-code-panel,
+  .mc-next-threaded-stage.has-context {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-threaded-side-panel.cowork,
+  .mc-next-threaded-side-panel.code {
+    height: auto;
+    border-left: 0;
+    border-top: 1px solid var(--mc-border-subtle);
+  }
+}
+
+@media (max-width: 1023px) {
+  .mc-next-threaded-surface {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: auto;
+  }
+
+  .mc-next-threaded-mobile-bar {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.6rem;
+  }
+
+  .mc-next-threaded-rail {
+    position: fixed;
+    top: 5.2rem;
+    left: 0.9rem;
+    bottom: 0.9rem;
+    z-index: 72;
+    width: min(22rem, calc(100vw - 1.8rem));
+    max-height: none;
+    transform: translateX(-108%);
+    transition: transform 180ms ease;
+    /*
+     * When closed (no .open class), the rail is transformed off-screen but
+     * still in the layout. Block pointer events so taps don't hit invisible
+     * controls; the inert attribute on the <aside> handles focus order.
+     */
+    pointer-events: none;
+  }
+
+  .mc-next-threaded-rail.open {
+    transform: translateX(0);
+    pointer-events: auto;
+  }
+
+  .mc-next-threaded-scrim.open {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 68;
+    border: 0;
+    background: rgba(15, 23, 42, 0.32);
+  }
+
+  .mc-next-threaded-stage,
+  .mc-next-threaded-stage.has-workbench,
+  .mc-next-threaded-stage.mode-chat,
+  .mc-next-threaded-stage.has-cowork-panel,
+  .mc-next-threaded-stage.has-code-panel,
+  .mc-next-threaded-stage.has-context,
+  .mc-next-threaded-stage.has-workbench.has-context {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-threaded-side-panel,
+  .mc-next-threaded-context-panel {
+    position: static;
+    max-height: none;
+  }
+
+  .mc-next-threaded-stage.mode-chat .mc-next-threaded-context-panel {
+    height: auto;
+    border-left: 0;
+    border-top: 1px solid var(--mc-border-subtle);
+  }
+
+  .mc-next-threaded-side-panel.cowork,
+  .mc-next-threaded-side-panel.code {
+    height: auto;
+  }
+
+  .mc-next-threaded-menu-button span {
+    display: inline;
+  }
+
+  .mc-next-workbench-body {
+    grid-template-columns: 1fr;
+  }
+
+  .mc-next-composer-head {
+    flex-direction: column;
+  }
+
+  .mc-next-threaded-model-picker .chat-model-picker {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 767px) {
+  .mc-next-threaded-surface.unified {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage {
+    padding-inline: 0.42rem;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-header {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.45rem;
+    padding: 0.55rem 0 0.65rem;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-header-copy h1 {
+    font-size: var(--text-lg);
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-header-copy span {
+    max-width: none;
+    font-size: var(--text-xs);
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-header-meta,
+  .mc-next-threaded-surface.unified .mc-next-threaded-header-actions {
+    grid-column: 1;
+    grid-row: auto;
+    width: 100%;
+    justify-items: stretch;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-model-picker .chat-model-picker {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-action-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-chip-row {
+    gap: 0.22rem;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-composer-controls {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-composer-controls-start {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    align-items: start;
+    gap: 0.42rem;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-composer-multimodal-row {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-composer-inline-select,
+  .mc-next-threaded-surface.unified .mc-next-composer-inline-button {
+    width: 100%;
+    max-width: none;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-composer-helper {
+    display: none;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-composer-controls-end {
+    grid-column: 1;
+    grid-row: auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-composer-primary {
+    width: 100%;
+  }
+
+  .mc-next-threaded-header,
+  .mc-next-threaded-thread-card,
+  .mc-next-threaded-composer-card,
+  .mc-next-threaded-side-panel,
+  .mc-next-threaded-context-panel,
+  .mc-next-threaded-empty {
+    padding: 0.85rem;
+  }
+
+  .mc-next-threaded-rail {
+    left: 0.6rem;
+    right: 0.6rem;
+    width: auto;
+  }
+
+  .mc-next-composer-knowledge-url-row,
+  .mc-next-composer-preset-row {
+    grid-template-columns: 1fr;
+  }
+
+  .mc-next-composer-banner,
+  .mc-next-composer-head,
+  .mc-next-panel-list-head,
+  .mc-next-thread-blocking-prompt .chat-approval-header {
+    align-items: stretch;
+  }
+
+  .mc-next-composer-banner {
+    flex-direction: column;
+  }
+
+  .mc-next-composer-chip-row,
+  .mc-next-composer-action-row,
+  .mc-next-composer-controls,
+  .mc-next-composer-controls-start,
+  .mc-next-composer-controls-end {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .mc-next-composer-chip-row > span,
+  .mc-next-thread-blocking-prompt .chat-approval-countdown,
+  .mc-next-thread-inline-button,
+  .mc-next-panel-button,
+  .mc-next-composer-inline-button,
+  .mc-next-composer-primary {
+    width: 100%;
+    justify-content: center;
+    white-space: normal;
+    overflow-wrap: normal;
+    word-break: normal;
+    hyphens: none;
+  }
+
+  .mc-next-composer-controls-start {
+    grid-template-columns: repeat(3, minmax(0, auto));
+    justify-content: start;
+  }
+
+  .mc-next-composer-controls-end {
+    grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  }
+
+  .mc-next-composer-attachment {
+    flex-direction: column;
+  }
+
+  .mc-next-composer-attachment-actions {
+    justify-content: flex-start;
+  }
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-banner {
+  border-radius: 0.5rem;
+  background: var(--mc-surface-3);
+}

@@ -1,0 +1,31 @@
+/*
+ * Visual-regression baselines hide blocking prompts and warning banners by
+ * default so existing route snapshots stay stable. Routes that explicitly want
+ * to capture blocked states opt in with the URL flag `?vr-blocked=1`, which
+ * sets `data-visual-regression-show-blocked="true"` on the root element. See
+ * apps/mission-control-next/src/main.tsx and the `chat-pending-approval` /
+ * `chat-pending-user-input` manifest entries in
+ * scripts/verification/lib/release-surface-manifest.mjs.
+ */
+:root[data-visual-regression="true"]:not([data-visual-regression-show-blocked="true"]) .mc-next-thread-blocking-prompt {
+  display: none;
+}
+
+:root[data-visual-regression="true"]:not([data-visual-regression-show-blocked="true"])
+  .mc-next-composer-banner.warning {
+  display: none;
+}
+
+:root[data-visual-regression="true"]:not([data-visual-regression-show-blocked="true"])
+  .mc-next-threaded-thread-card:has(.mc-next-thread-blocking-prompt)
+  + .mc-next-threaded-composer-card {
+  opacity: 1;
+  filter: none;
+}
+
+:root[data-visual-regression="true"]:not([data-visual-regression-show-blocked="true"])
+  .mc-next-threaded-thread-card:has(.mc-next-thread-blocking-prompt)
+  + .mc-next-threaded-composer-card::after {
+  content: none;
+  display: none;
+}

@@ -1,0 +1,999 @@
+.mc-assistant-copy-button svg {
+  flex: 0 0 auto;
+}
+
+.mc-assistant-copy-button.copied {
+  border-color: color-mix(in oklab, var(--gc-risk-safe) 34%, var(--border));
+  color: color-mix(in oklab, var(--gc-risk-safe) 72%, var(--foreground));
+}
+
+.mc-next-thread-bubble > div:has(> article) {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.mc-next-thread-bubble article {
+  display: grid;
+  gap: 0.28rem;
+  padding: 0.42rem 0.5rem;
+  border-radius: 0.48rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-thread-bubble article > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.34rem;
+  flex-wrap: wrap;
+}
+
+.mc-next-thread-bubble article > div:first-child strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-thread-bubble article > div:first-child span,
+.mc-next-thread-bubble article > p:first-of-type,
+.mc-next-thread-bubble article > p:last-child,
+.mc-next-thread-bubble article [aria-live],
+.mc-next-composer-attachment-action-status {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.mc-next-thread-bubble article > p {
+  margin: 0;
+}
+
+.mc-next-thread-bubble article > p:nth-of-type(2) {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mc-next-thread-bubble article > p:last-child {
+  line-height: 1.55;
+}
+
+.mc-next-thread-bubble article > div:has(> button),
+.mc-next-composer-attachment-actions {
+  display: flex;
+  gap: 0.28rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.mc-next-thread-citations {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.mc-next-thread-citations article {
+  display: grid;
+  gap: 0.22rem;
+  padding: 0.42rem 0.5rem;
+  border-radius: 0.45rem;
+  border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-2) 90%, transparent);
+}
+
+.mc-next-thread-citations article > div {
+  display: flex;
+  min-width: 0;
+  gap: 0.38rem;
+  align-items: baseline;
+}
+
+.mc-next-thread-citations a,
+.mc-next-thread-citations span {
+  min-width: 0;
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-thread-citations p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.mc-next-thread-bubble article > div > button {
+  appearance: none;
+  min-height: 1.5rem;
+  padding: 0.18rem 0.46rem;
+  border-radius: 0.34rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--card) 94%, transparent);
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.mc-next-thread-meta,
+.mc-next-thread-note,
+.mc-next-thread-notices p,
+.mc-next-panel-kicker,
+.mc-next-context-field span,
+.mc-next-panel-list li p,
+.mc-next-workbench-empty,
+.mc-next-composer-helper,
+.mc-next-composer-attachment p,
+.mc-next-composer-knowledge-chip p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.38;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.mc-next-panel-kicker {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--mc-area-color) 58%, var(--foreground));
+}
+
+.mc-next-thread-strip,
+.mc-next-thread-actions,
+.mc-next-thread-action-row,
+.mc-next-thread-branch-switcher,
+.mc-next-context-chip-row,
+.mc-next-context-actions,
+.mc-next-panel-tab-row,
+.mc-next-workbench-action-row,
+.mc-next-cowork-toolbar,
+.mc-next-composer-chip-row,
+.mc-next-composer-action-row,
+.mc-next-composer-attachment-actions,
+.mc-next-composer-controls,
+.mc-next-composer-controls-start,
+.mc-next-composer-controls-end,
+.mc-next-composer-multimodal-row,
+.chat-plus-menu {
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  align-items: center;
+  min-width: 0;
+}
+
+.mc-next-workbench-action-cluster {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.mc-next-workbench-action-divider {
+  width: 1px;
+  align-self: stretch;
+  min-height: 1.5rem;
+  background: color-mix(in oklab, var(--border) 78%, transparent);
+  margin-inline: 0.15rem;
+}
+
+.mc-next-workbench-action-cluster[data-cluster="destructive"] {
+  position: relative;
+}
+
+.mc-next-workbench-more-popover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.32rem;
+  padding: 0.42rem;
+  min-width: 10rem;
+  border-radius: 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  background: var(--card, var(--background));
+  box-shadow: 0 12px 32px color-mix(in oklab, var(--gc-shadow, rgba(0, 0, 0, 0.4)) 60%, transparent);
+  z-index: 60;
+}
+
+.mc-next-workbench-more-popover .mc-next-panel-button {
+  width: 100%;
+  text-align: left;
+}
+
+.mc-next-workbench-new-artifact-callout {
+  align-self: flex-start;
+  margin-top: 0.45rem;
+  padding: 0.32rem 0.72rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--gc-accent, var(--primary)) 60%, var(--border));
+  background: color-mix(in oklab, var(--gc-accent, var(--primary)) 12%, transparent);
+  color: inherit;
+  font-size: var(--text-xs, 0.75rem);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.mc-next-workbench-new-artifact-callout:hover,
+.mc-next-workbench-new-artifact-callout:focus-visible {
+  background: color-mix(in oklab, var(--gc-accent, var(--primary)) 22%, transparent);
+}
+
+.mc-next-thread-strip {
+  align-items: flex-start;
+  gap: 0.45rem;
+  padding: 0.2rem 0;
+  border-top: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+}
+
+.mc-next-thread-turn:first-of-type .mc-next-thread-strip {
+  border-top-color: transparent;
+}
+
+.mc-next-thread-strip > span,
+.mc-next-thread-actions > span,
+.mc-next-context-chip-row > span,
+.mc-next-composer-chip-row > span {
+  min-width: 0;
+  max-width: 100%;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.mc-next-thread-strip > span {
+  font-family: var(--mc-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-xs);
+  letter-spacing: 0.01em;
+}
+
+.mc-next-thread-inline-button,
+.mc-next-panel-button,
+.mc-next-panel-tab,
+.mc-next-command-item,
+.mc-next-composer-inline-select,
+.mc-next-composer-toggle,
+.mc-next-composer-inline-button,
+.mc-next-composer-icon-button,
+.mc-next-composer-primary {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--mc-border-subtle);
+  background: transparent;
+  color: var(--foreground);
+  border-radius: 0.3rem;
+  min-height: 1.5rem;
+  padding: 0.18rem 0.42rem;
+  line-height: 1.18;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.mc-next-composer-inline-select {
+  max-width: 12rem;
+  background: var(--card);
+}
+
+.mc-next-composer-toggle {
+  gap: 0.3rem;
+  background: var(--card);
+  font-size: var(--text-xs);
+}
+
+.mc-next-composer-toggle input {
+  margin: 0;
+}
+
+.mc-next-threaded-surface.unified .mc-next-thread-inline-button,
+.mc-next-threaded-surface.unified .mc-next-panel-button {
+  min-height: 1.75rem;
+  padding: 0.2rem 0.46rem;
+  border-radius: 0.34rem;
+  font-size: var(--text-xs);
+}
+
+.mc-next-panel-button.primary,
+.mc-next-composer-inline-button.primary,
+.mc-next-composer-primary,
+.mc-next-panel-tab.active,
+.mc-next-command-item.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.mc-next-composer-inline-button {
+  min-height: 1.5rem;
+}
+
+.mc-next-composer-icon-button,
+.chat-plus-trigger {
+  width: 1.75rem;
+  min-width: 1.75rem;
+  min-height: 1.75rem;
+  padding-inline: 0;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.26rem 0.34rem;
+  align-items: end;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-controls-start {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  min-width: 0;
+  gap: 0.28rem;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-multimodal-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.28rem;
+  overflow: hidden;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-controls-end {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-helper {
+  grid-column: 1 / -1;
+  justify-self: end;
+  max-width: 100%;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  text-align: right;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-primary {
+  min-width: 3.25rem;
+  min-height: 2rem;
+  border-radius: 0.4rem;
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-inline-select,
+.mc-next-threaded-surface.unified .mc-next-composer-inline-button {
+  min-height: 1.75rem;
+  padding: 0.18rem 0.42rem;
+  border-radius: 0.34rem;
+  font-size: var(--text-xs);
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-inline-select {
+  width: auto;
+  max-width: 8.5rem;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-icon-button,
+.mc-next-threaded-surface.unified .chat-plus-trigger {
+  width: 1.75rem;
+  min-width: 1.75rem;
+  min-height: 1.75rem;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-chip {
+  min-height: 0.95rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--mc-font-mono);
+  font-size: var(--text-xs);
+}
+
+.chat-plus-popover {
+  z-index: 80;
+  display: grid;
+  gap: 0.28rem;
+  width: min(280px, calc(100vw - 1rem));
+  padding: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: color-mix(in oklab, var(--card) 98%, var(--background));
+  box-shadow:
+    0 20px 45px rgba(15, 23, 42, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.chat-plus-action {
+  justify-content: flex-start;
+  min-height: 1.65rem;
+  width: 100%;
+  font-size: var(--text-xs);
+}
+
+.chat-plus-action.active {
+  border-color: color-mix(in oklab, var(--mc-area-color) 36%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 13%, var(--card));
+}
+
+.chat-plus-custom,
+.mc-next-composer-plus-section {
+  display: grid;
+  gap: 0.32rem;
+}
+
+.mc-next-composer-plus-section {
+  padding-top: 0.35rem;
+  border-top: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+}
+
+.mc-next-composer-plus-section label {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.mc-next-panel-button.danger {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 28%, var(--border));
+  color: color-mix(in oklab, var(--gc-risk-danger) 72%, var(--foreground));
+}
+
+.mc-next-thread-notices,
+.mc-next-context-list,
+.mc-next-workbench-helper-list,
+.mc-next-thread-step-list,
+.mc-next-panel-list ul {
+  display: grid;
+  gap: 0.42rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-thread-notices li,
+.mc-next-context-list li,
+.mc-next-workbench-helper-list li,
+.mc-next-panel-list li,
+.mc-next-cowork-blocker {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.54rem;
+  border-radius: 0.48rem;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+}
+
+.mc-next-workbench-run-detail {
+  display: grid;
+  gap: 0.62rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+}
+
+.mc-next-workbench-output-preview {
+  display: grid;
+  gap: 0.38rem;
+}
+
+.mc-next-workbench-output-preview > strong {
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+}
+
+.mc-next-thread-notices li.tone-warning,
+.mc-next-panel-banner.warning {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 28%, var(--border));
+}
+
+.mc-next-thread-notices li.tone-critical,
+.mc-next-composer-banner.error {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 28%, var(--border));
+}
+
+.mc-next-composer-banner {
+  display: flex;
+  gap: 0.7rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.8rem 0.9rem;
+  border-radius: 0.95rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+}
+
+.mc-next-composer-banner.warning,
+.mc-next-composer-banner.planning {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 22%, var(--border));
+}
+
+.mc-next-composer-delegation-approval {
+  display: grid;
+  gap: 0.48rem;
+  padding: 0.72rem 0.78rem;
+  border-radius: 0.48rem;
+  border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 36%, var(--border));
+  background: color-mix(in oklab, var(--gc-risk-caution) 8%, var(--mc-surface-1));
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--gc-risk-caution) 10%, transparent);
+}
+
+.mc-next-composer-delegation-head,
+.mc-next-composer-delegation-roles,
+.mc-next-composer-delegation-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.mc-next-composer-delegation-head {
+  justify-content: space-between;
+}
+
+.mc-next-composer-delegation-head > strong {
+  margin-right: auto;
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  line-height: 1.25;
+}
+
+.mc-next-composer-delegation-head > span:not(.status-chip) {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.mc-next-composer-delegation-approval p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.42;
+}
+
+.mc-next-composer-delegation-objective {
+  color: var(--foreground) !important;
+  font-weight: 650;
+}
+
+.mc-next-composer-delegation-reason {
+  padding-top: 0.1rem;
+}
+
+.mc-next-composer-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.85rem;
+  align-items: flex-start;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-head {
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-kicker {
+  margin: 0;
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.mc-next-context-card h4,
+.mc-next-cowork-head h4,
+.mc-next-workbench-head h4 {
+  margin: 0.18rem 0 0;
+  font-size: var(--text-lg);
+  line-height: 1.2;
+}
+
+.mc-next-composer-input-shell textarea,
+.mc-next-context-field input,
+.mc-next-context-field select,
+.mc-next-composer-knowledge-url-row input,
+.mc-next-composer-knowledge-url-row select,
+.mc-next-composer-preset-row select {
+  width: 100%;
+  min-height: 2rem;
+  border-radius: 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--border) 86%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-1) 95%, var(--background));
+  color: var(--foreground);
+  padding: 0.42rem 0.5rem;
+  font-size: var(--text-xs);
+}
+
+.mc-next-composer-input-shell textarea {
+  min-height: 5.5rem;
+  resize: vertical;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-input-shell textarea {
+  /*
+   * The composer textarea grows with content via useAutoGrowTextarea. CSS owns
+   * the min-height floor (~5 lines) and the max-height ceiling (~14 lines past
+   * which an internal scrollbar engages); the hook owns the height between
+   * those bounds. Keep resize:none so the operator cannot drag past the cap.
+   */
+  min-height: 7.5rem;
+  max-height: 18rem;
+  padding: 0.25rem 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  resize: none;
+  outline: none;
+  box-shadow: none;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-input-shell textarea:focus,
+.mc-next-threaded-surface.unified .mc-next-composer-input-shell textarea:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer:focus-within {
+  border-color: color-mix(in oklab, var(--mc-area-color) 34%, var(--mc-border-subtle));
+  box-shadow:
+    0 18px 50px rgba(0, 0, 0, 0.2),
+    inset 0 0 0 1px color-mix(in oklab, var(--mc-area-color) 18%, transparent);
+}
+
+.mc-next-command-popover,
+.mc-next-composer-attachments,
+.mc-next-composer-knowledge-strip,
+.mc-next-cowork-grid,
+.mc-next-workbench-body {
+  display: grid;
+  gap: 0.52rem;
+}
+
+.mc-next-command-item {
+  display: grid;
+  justify-items: start;
+  gap: 0.2rem;
+  padding: 0.75rem 0.9rem;
+  text-align: left;
+}
+
+.mc-next-command-item span {
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+}
+
+.mc-next-composer-attachment,
+.mc-next-composer-knowledge-chip {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 0.8rem;
+  border-radius: 0.95rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+}
+
+.mc-next-composer-attachment-actions {
+  justify-content: flex-end;
+}
+
+.mc-next-composer-attachment-body {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.mc-next-composer-image-shell {
+  display: grid;
+  place-items: center;
+  min-height: 160px;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+  border-radius: 0.95rem;
+  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+}
+
+.mc-next-composer-image-shell.loading {
+  padding: 1rem;
+}
+
+.mc-next-composer-image-shell p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  text-align: center;
+}
+
+.mc-next-composer-image-preview {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+}
+
+.mc-next-composer-knowledge-url-row,
+.mc-next-composer-preset-row {
+  display: grid;
+  gap: 0.32rem;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.mc-next-hidden-file {
+  display: none;
+}
+
+.mc-next-context-card,
+.mc-next-panel-list,
+.mc-next-cowork-mission-brief,
+.mc-next-cowork-action-callout,
+.mc-next-cowork-now,
+.mc-next-cowork-blockers,
+.mc-next-cowork-run-map,
+.mc-next-workbench-pane {
+  padding: 0.5rem;
+  border-radius: 0.42rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+}
+
+.mc-next-context-field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.mc-next-context-list li strong,
+.mc-next-panel-list li strong,
+.mc-next-cowork-blocker strong,
+.mc-next-thread-step-head strong,
+.mc-next-panel-list-head strong {
+  color: var(--foreground);
+}
+
+.mc-next-panel-list-head,
+.mc-next-thread-step-head,
+.mc-next-cowork-blocker-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.48rem;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.mc-next-panel-list-head > * {
+  min-width: 0;
+}
+
+.mc-next-panel-list-head strong {
+  overflow-wrap: anywhere;
+}
+
+.mc-next-panel-list-head span,
+.mc-next-panel-list-head button {
+  flex: 0 1 auto;
+}
+
+.mc-next-cowork-stage-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 0.38rem;
+}
+
+.mc-next-cowork-stage-card {
+  display: grid;
+  gap: 0.16rem;
+  padding: 0.42rem 0.48rem;
+  border-radius: 0.44rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+}
+
+.mc-next-cowork-stage-card span,
+.mc-next-cowork-mission-brief dt,
+.mc-next-cowork-facts dt {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.mc-next-cowork-mission-brief {
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  align-items: start;
+}
+
+.mc-next-cowork-mission-brief h5,
+.mc-next-cowork-mission-brief p {
+  margin: 0;
+}
+
+.mc-next-cowork-mission-brief dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.35rem 0.5rem;
+  margin: 0;
+}
+
+.mc-next-cowork-mission-brief dd {
+  margin: 0.1rem 0 0;
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.mc-next-cowork-facts {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  margin: 0;
+}
+
+.mc-next-cowork-facts dd {
+  margin: 0.12rem 0 0;
+}
+
+.mc-next-cowork-run-map {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.mc-next-cowork-run-map-head,
+.mc-next-cowork-run-map-footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.mc-next-cowork-run-map-head h5,
+.mc-next-cowork-run-map-head p,
+.mc-next-cowork-run-map-footer p,
+.mc-next-cowork-run-map-footer span {
+  margin: 0;
+}
+
+.mc-next-cowork-run-map-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.65rem;
+}
+
+.mc-next-cowork-run-map-grid section,
+.mc-next-cowork-run-map-footer section {
+  display: grid;
+  gap: 0.22rem;
+  min-width: 0;
+}
+
+.mc-next-cowork-run-map-grid span,
+.mc-next-cowork-run-map-footer span,
+.mc-next-cowork-run-map-node p {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.mc-next-cowork-run-map-graph {
+  display: flex;
+  gap: 0.45rem;
+  overflow-x: auto;
+  padding: 0.15rem 0.05rem 0.35rem;
+}
+
+.mc-next-cowork-run-map-node-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex: 0 0 auto;
+}
+
+.mc-next-cowork-run-map-node {
+  display: grid;
+  gap: 0.22rem;
+  width: 8.4rem;
+  min-height: 4rem;
+  padding: 0.46rem;
+  border-radius: 0.46rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+}
+
+.mc-next-cowork-run-map-node span {
+  color: var(--accent);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+}
+
+.mc-next-cowork-run-map-node strong {
+  line-height: 1.25;
+}
+
+.mc-next-cowork-run-map-link {
+  width: 2rem;
+  height: 1px;
+  background: color-mix(in oklab, var(--accent) 70%, var(--border));
+}
+
+.mc-next-workbench-body {
+  grid-template-columns: minmax(14rem, 0.7fr) minmax(0, 1.2fr);
+}
+
+.mc-next-threaded-side-panel.code .mc-next-workbench-panel,
+.mc-next-threaded-side-panel.code .mc-next-workbench-body,
+.mc-next-threaded-side-panel.code .mc-next-workbench-main,
+.mc-next-threaded-side-panel.code .mc-next-workbench-pane {
+  min-height: 0;
+}
+
+.mc-next-threaded-side-panel.code .mc-next-workbench-panel {
+  height: 100%;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.mc-next-threaded-side-panel.code .mc-next-workbench-body {
+  grid-template-columns: minmax(10rem, 0.5fr) minmax(0, 1.5fr);
+  overflow: hidden;
+}
+
+.mc-next-threaded-side-panel.code .mc-next-workbench-sidebar,
+.mc-next-threaded-side-panel.code .mc-next-workbench-main,
+.mc-next-threaded-side-panel.code .mc-next-workbench-pane {
+  overflow: auto;
+}
+
+.mc-next-threaded-side-panel.code .mc-next-workbench-sidebar:last-child {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
+  align-items: start;
+  max-height: 11rem;
+  overflow: auto;
+}
+
+.mc-next-threaded-side-panel.cowork .mc-next-cowork-panel {
+  align-content: start;
+}
+
+.mc-next-workbench-sidebar,
+.mc-next-workbench-main {
+  display: grid;
+  gap: 0.52rem;
+}
+
+.mc-next-workbench-empty {
+  padding: 0.58rem;
+  border-radius: 0.48rem;
+  border: 1px dashed color-mix(in oklab, var(--border) 78%, transparent);
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+}
+
+.mc-next-threaded-empty {
+  display: grid;
+  gap: 0.85rem;
+  place-items: start;
+  padding: 1.35rem;
+}
+
+.mc-next-threaded-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 1rem;
+  background: color-mix(in oklab, var(--mc-area-color) 12%, transparent);
+  color: color-mix(in oklab, var(--mc-area-color) 72%, var(--foreground));
+}

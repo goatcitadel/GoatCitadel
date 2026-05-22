@@ -1,0 +1,107 @@
+.mc-next-threaded-side-panel,
+.mc-next-threaded-context-panel {
+  align-self: start;
+  position: sticky;
+  top: 0;
+  max-height: calc(100dvh - 58px);
+  overflow: auto;
+}
+
+.mc-next-threaded-stage.mode-chat .mc-next-threaded-context-panel {
+  height: calc(100dvh - 58px);
+  padding: 0.65rem;
+  border-left: 1px solid var(--mc-border-subtle);
+  background: color-mix(in oklab, var(--mc-surface-2) 90%, var(--background));
+}
+
+.mc-next-threaded-stage.mode-chat .mc-next-context-drawer {
+  gap: 0.55rem;
+}
+
+.mc-next-threaded-stage.mode-chat .mc-next-context-card {
+  padding: 0.72rem;
+  border-radius: 0.48rem;
+}
+
+.mc-next-threaded-side-panel.cowork,
+.mc-next-threaded-side-panel.code {
+  height: calc(100dvh - 58px);
+  padding: 0.7rem;
+  border-left: 1px solid var(--mc-border-subtle);
+  background: color-mix(in oklab, var(--mc-surface-2) 92%, var(--background));
+}
+
+.mc-next-threaded-side-panel.cowork {
+  --mc-area-color: var(--mc-mode-cowork);
+}
+
+.mc-next-threaded-side-panel.code {
+  --mc-area-color: var(--mc-mode-code);
+}
+
+.mc-next-threaded-panel-fallback {
+  min-height: 18rem;
+  border-radius: 1rem;
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-thread-shell,
+.mc-next-composer,
+.mc-next-cowork-panel,
+.mc-next-workbench-panel,
+.mc-next-context-drawer {
+  display: grid;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer {
+  gap: 0.34rem;
+  padding: 0.38rem;
+  border: 1px solid var(--mc-border-subtle);
+  border-radius: 0.46rem;
+  background: var(--mc-surface-1);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.2);
+}
+
+.mc-next-code-source-picker,
+.mc-next-code-source-form {
+  display: grid;
+  gap: 0.52rem;
+}
+
+.mc-next-code-source-picker {
+  padding: 0.1rem 0;
+}
+
+.mc-next-code-source-picker .mc-next-panel-list-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.1rem;
+}
+
+.mc-next-code-source-picker .mc-next-panel-list-head span {
+  text-align: left;
+}
+
+.mc-next-code-source-field {
+  display: grid;
+  gap: 0.38rem;
+}
+
+.mc-next-code-source-field span {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 650;
+}
+
+.mc-next-code-source-field input,
+.mc-next-code-source-field select {
+  width: 100%;
+  min-height: 2rem;
+  padding: 0 0.52rem;
+  border-radius: 0.46rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  color: var(--foreground);
+}

@@ -1,0 +1,69 @@
+.mc-next-threaded-thread-card,
+.mc-next-threaded-composer-card,
+.mc-next-threaded-side-panel,
+.mc-next-threaded-context-panel {
+  position: relative;
+  min-width: 0;
+  padding: 0.9rem;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-header,
+.mc-next-threaded-surface.unified .mc-next-threaded-thread-card,
+.mc-next-threaded-surface.unified .mc-next-threaded-composer-card,
+.mc-next-threaded-surface.unified .mc-next-threaded-side-panel,
+.mc-next-threaded-surface.unified .mc-next-threaded-context-panel,
+.mc-next-threaded-surface.unified .mc-next-threaded-empty {
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-thread-card {
+  min-height: 15rem;
+  padding: 14px 0;
+  border: 0;
+}
+
+.mc-next-thread-live-region {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.mc-next-threaded-surface.unified .mc-next-threaded-composer-card {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  padding: 10px 0;
+  border: 0;
+  background: linear-gradient(to top, var(--background) 72%, transparent);
+}
+
+.mc-next-threaded-thread-card:has(.mc-next-thread-blocking-prompt) + .mc-next-threaded-composer-card {
+  opacity: 0.58;
+  filter: saturate(0.72);
+}
+
+.mc-next-threaded-thread-card:has(.mc-next-thread-blocking-prompt) + .mc-next-threaded-composer-card::after {
+  content: "Resolve the inline blocker above to continue.";
+  position: absolute;
+  inset: 0.55rem;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  border-radius: 1rem;
+  border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 32%, var(--border));
+  background: color-mix(in oklab, var(--card) 76%, transparent);
+  color: var(--foreground);
+  font-size: var(--text-md);
+  font-weight: 700;
+  text-align: center;
+  backdrop-filter: blur(7px);
+}

@@ -23,7 +23,14 @@ import { ThreadedComposer } from "./ThreadedComposer";
 import { ThreadedContextDrawer } from "./ThreadedContextDrawer";
 import { ThreadedTimeline } from "./ThreadedTimeline";
 import { ThreadedWorkflowPanel } from "./ThreadedWorkflowPanel";
-import "./threaded-surface.css";
+import "./styles/rail.css";
+import "./styles/header.css";
+import "./styles/timeline-frame.css";
+import "./styles/visual-regression.css";
+import "./styles/side-panels.css";
+import "./styles/timeline.css";
+import "./styles/composer.css";
+import "./styles/mobile.css";
 
 const MODE_META: Record<ChatMode, { label: string; icon: typeof MessageSquareText; helper: string }> = {
   chat: {
