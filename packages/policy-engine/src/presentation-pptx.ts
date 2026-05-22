@@ -1,3 +1,6 @@
+import sharp from "sharp";
+import { createArtifactDesignPlan, type ArtifactDesignPlan } from "./artifact-design.js";
+
 export interface PresentationSlide {
   title: string;
   bullets: string[];
@@ -9,6 +12,7 @@ export interface PresentationPptxInput {
   subtitle?: string;
   slides: PresentationSlide[];
   createdAt?: Date;
+  design?: ArtifactDesignPlan;
 }
 
 export interface ZipEntry {
@@ -21,7 +25,99 @@ const DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships";
 
-export function createPresentationPptx(input: PresentationPptxInput): Buffer {
+const SLIDE_W = 13.333;
+const SLIDE_H = 7.5;
+
+type PptxOutput = string | ArrayBuffer | Blob | Uint8Array;
+
+interface PptxSlideLike {
+  background?: { color: string };
+  color?: string;
+  addShape(shapeName: string, options?: Record<string, unknown>): PptxSlideLike;
+  addImage(options: Record<string, unknown>): PptxSlideLike;
+  addText(text: string, options?: Record<string, unknown>): PptxSlideLike;
+  addNotes(notes: string): PptxSlideLike;
+}
+
+interface PptxPresentationLike {
+  layout: string;
+  author: string;
+  company: string;
+  subject: string;
+  title: string;
+  theme: { headFontFace?: string; bodyFontFace?: string };
+  ShapeType: Record<string, string>;
+  addSlide(): PptxSlideLike;
+  write(options: { outputType: "nodebuffer"; compression: boolean }): Promise<PptxOutput>;
+}
+
+type PptxGenConstructor = new () => PptxPresentationLike;
+
+export async function createPresentationPptx(input: PresentationPptxInput): Promise<Buffer> {
+  try {
+    return await createPptxGenPresentation(input);
+  } catch {
+    return createFallbackPresentationPptx(input);
+  }
+}
+
+async function createPptxGenPresentation(input: PresentationPptxInput): Promise<Buffer> {
+  const PptxGen = await loadPptxGen();
+  const design =
+    input.design ??
+    createArtifactDesignPlan({
+      kind: "presentation",
+      title: input.title,
+      body: input.subtitle,
+      slides: input.slides,
+      format: "pptx",
+    });
+  const contentSlides = input.slides.length > 0 ? input.slides : [{ title: input.title, bullets: [] }];
+  const slides: PresentationSlide[] = [
+    {
+      title: input.title,
+      bullets: input.subtitle ? [input.subtitle] : [],
+      speakerNotes: `Design preset: ${design.preset}`,
+    },
+    ...contentSlides,
+  ];
+  const pptx = new PptxGen();
+  pptx.layout = "LAYOUT_WIDE";
+  pptx.author = "GoatCitadel";
+  pptx.company = "GoatCitadel";
+  pptx.subject = input.title;
+  pptx.title = input.title;
+  pptx.theme = {
+    headFontFace: design.typography.headingFont,
+    bodyFontFace: design.typography.bodyFont,
+  };
+
+  const visualData = await buildAbstractVisualDataUri(input.title, design);
+  slides.forEach((slide, index) => {
+    const pptSlide = pptx.addSlide();
+    pptSlide.background = { color: design.tokens.background };
+    pptSlide.color = design.tokens.text;
+    drawSlideFrame(pptx, pptSlide, design, index);
+    if (index === 0) {
+      drawHeroSlide(pptx, pptSlide, slide, design, visualData);
+    } else {
+      drawContentSlide(pptx, pptSlide, slide, design, visualData, index);
+    }
+    const notes = [
+      slide.speakerNotes,
+      `GoatCitadel design provenance: preset=${design.preset}; visualLevel=${design.visualLevel}; assetPolicy=${design.assetPolicy}.`,
+      `Assets: ${design.assetPlan.map((asset) => `${asset.id}:${asset.status}`).join(", ")}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    pptSlide.addNotes(notes);
+  });
+
+  const output = await pptx.write({ outputType: "nodebuffer", compression: true });
+  return toBuffer(output);
+}
+
+export function createFallbackPresentationPptx(input: PresentationPptxInput): Buffer {
   const contentSlides = input.slides.length > 0 ? input.slides : [{ title: input.title, bullets: [] }];
   const slides: PresentationSlide[] = [
     {
@@ -49,6 +145,357 @@ export function createPresentationPptx(input: PresentationPptxInput): Buffer {
     entries.push(xmlEntry(`ppt/slides/_rels/slide${index + 1}.xml.rels`, buildSlideRelationships()));
   });
   return createStoredZip(entries);
+}
+
+function drawSlideFrame(
+  pptx: PptxPresentationLike,
+  slide: PptxSlideLike,
+  design: ArtifactDesignPlan,
+  index: number,
+): void {
+  slide.addShape(shape(pptx, "rect"), {
+    x: 0,
+    y: 0,
+    w: SLIDE_W,
+    h: SLIDE_H,
+    fill: { color: design.tokens.background },
+    line: { color: design.tokens.background, transparency: 100 },
+  });
+  slide.addShape(shape(pptx, "rect"), {
+    x: 0,
+    y: 0,
+    w: 0.13,
+    h: SLIDE_H,
+    fill: { color: design.tokens.accent },
+    line: { color: design.tokens.accent, transparency: 100 },
+  });
+  slide.addShape(shape(pptx, "rect"), {
+    x: 0.52,
+    y: 6.95,
+    w: 12.1,
+    h: 0.02,
+    fill: { color: design.tokens.border, transparency: 40 },
+    line: { color: design.tokens.border, transparency: 100 },
+  });
+  slide.addText(`GoatCitadel design brief - ${design.preset}`, {
+    x: 0.54,
+    y: 7.03,
+    w: 6,
+    h: 0.18,
+    fontFace: design.typography.bodyFont,
+    fontSize: 6.5,
+    color: design.tokens.mutedText,
+    margin: 0,
+  });
+  slide.addText(String(index + 1).padStart(2, "0"), {
+    x: 12.0,
+    y: 6.96,
+    w: 0.55,
+    h: 0.3,
+    fontFace: design.typography.headingFont,
+    fontSize: 10,
+    bold: true,
+    color: design.tokens.accent,
+    align: "right",
+    margin: 0,
+  });
+}
+
+function drawHeroSlide(
+  pptx: PptxPresentationLike,
+  slide: PptxSlideLike,
+  content: PresentationSlide,
+  design: ArtifactDesignPlan,
+  visualData: string,
+): void {
+  slide.addShape(shape(pptx, "roundRect"), {
+    x: 0.66,
+    y: 0.64,
+    w: 7.0,
+    h: 6.0,
+    rectRadius: 0.08,
+    fill: { color: design.tokens.surface, transparency: design.preset === "cyberpunk-ops" ? 10 : 0 },
+    line: { color: design.tokens.border, transparency: 15 },
+    shadow: { type: "outer", color: "000000", opacity: 0.12, blur: 2, angle: 45, offset: 1 },
+  });
+  slide.addText(content.title, {
+    x: 1.0,
+    y: 1.1,
+    w: 6.25,
+    h: 1.45,
+    fontFace: design.typography.headingFont,
+    fontSize: 32,
+    bold: true,
+    fit: "shrink",
+    color: design.tokens.text,
+    breakLine: false,
+    margin: 0.02,
+  });
+  if (content.bullets[0]) {
+    slide.addText(content.bullets[0], {
+      x: 1.04,
+      y: 2.85,
+      w: 5.85,
+      h: 0.75,
+      fontFace: design.typography.bodyFont,
+      fontSize: 17,
+      fit: "shrink",
+      color: design.tokens.mutedText,
+      margin: 0,
+    });
+  }
+  slide.addShape(shape(pptx, "rect"), {
+    x: 1.04,
+    y: 4.0,
+    w: 1.25,
+    h: 0.08,
+    fill: { color: design.tokens.accent },
+    line: { color: design.tokens.accent, transparency: 100 },
+  });
+  slide.addText("Designed artifact", {
+    x: 1.04,
+    y: 4.35,
+    w: 2.2,
+    h: 0.26,
+    fontFace: design.typography.bodyFont,
+    fontSize: 9,
+    bold: true,
+    color: design.tokens.accent,
+    margin: 0,
+  });
+  slide.addImage({
+    data: visualData,
+    x: 8.05,
+    y: 0.72,
+    w: 4.6,
+    h: 5.7,
+    altText: `Generated abstract visual for ${content.title}`,
+    objectName: "GoatCitadel generated visual",
+  });
+}
+
+function drawContentSlide(
+  pptx: PptxPresentationLike,
+  slide: PptxSlideLike,
+  content: PresentationSlide,
+  design: ArtifactDesignPlan,
+  visualData: string,
+  index: number,
+): void {
+  const layout = design.layouts[index % design.layouts.length]?.name ?? "title-body";
+  slide.addText(content.title, {
+    x: 0.76,
+    y: 0.48,
+    w: 10.9,
+    h: 0.68,
+    fontFace: design.typography.headingFont,
+    fontSize: 24,
+    bold: true,
+    fit: "shrink",
+    color: design.tokens.text,
+    margin: 0,
+  });
+  if (layout === "two-column" || content.bullets.length > 4) {
+    drawTwoColumnSlide(pptx, slide, content, design, visualData);
+    return;
+  }
+  if (layout === "stat-callout" && content.bullets.length > 0) {
+    drawCalloutSlide(pptx, slide, content, design, visualData);
+    return;
+  }
+  drawImageTextSlide(pptx, slide, content, design, visualData);
+}
+
+function drawImageTextSlide(
+  pptx: PptxPresentationLike,
+  slide: PptxSlideLike,
+  content: PresentationSlide,
+  design: ArtifactDesignPlan,
+  visualData: string,
+): void {
+  slide.addShape(shape(pptx, "roundRect"), {
+    x: 0.76,
+    y: 1.45,
+    w: 7.05,
+    h: 4.85,
+    rectRadius: 0.05,
+    fill: { color: design.tokens.surface },
+    line: { color: design.tokens.border, transparency: 15 },
+  });
+  addBulletText(slide, content.bullets, design, 1.08, 1.78, 6.32, 4.2);
+  slide.addImage({
+    data: visualData,
+    x: 8.35,
+    y: 1.55,
+    w: 3.9,
+    h: 4.65,
+    altText: `Generated supporting visual for ${content.title}`,
+    objectName: "GoatCitadel supporting visual",
+  });
+}
+
+function drawTwoColumnSlide(
+  pptx: PptxPresentationLike,
+  slide: PptxSlideLike,
+  content: PresentationSlide,
+  design: ArtifactDesignPlan,
+  visualData: string,
+): void {
+  const left = content.bullets.slice(0, Math.ceil(content.bullets.length / 2));
+  const right = content.bullets.slice(left.length);
+  [0.76, 6.42].forEach((x, columnIndex) => {
+    slide.addShape(shape(pptx, "roundRect"), {
+      x,
+      y: 1.44,
+      w: 5.15,
+      h: 4.82,
+      rectRadius: 0.05,
+      fill: {
+        color: columnIndex === 0 ? design.tokens.surface : design.tokens.background,
+        transparency: columnIndex === 0 ? 0 : 8,
+      },
+      line: { color: columnIndex === 0 ? design.tokens.border : design.tokens.accent2, transparency: 18 },
+    });
+  });
+  addBulletText(slide, left, design, 1.08, 1.82, 4.45, 3.95);
+  addBulletText(slide, right, design, 6.74, 1.82, 4.45, 3.95);
+  slide.addImage({
+    data: visualData,
+    x: 10.95,
+    y: 5.25,
+    w: 1.25,
+    h: 0.75,
+    transparency: 12,
+    altText: `Small generated accent visual for ${content.title}`,
+    objectName: "GoatCitadel accent visual",
+  });
+}
+
+function drawCalloutSlide(
+  pptx: PptxPresentationLike,
+  slide: PptxSlideLike,
+  content: PresentationSlide,
+  design: ArtifactDesignPlan,
+  visualData: string,
+): void {
+  const [first, ...rest] = content.bullets;
+  slide.addImage({
+    data: visualData,
+    x: 0.76,
+    y: 1.36,
+    w: 4.0,
+    h: 4.95,
+    altText: `Generated visual callout for ${content.title}`,
+    objectName: "GoatCitadel callout visual",
+  });
+  slide.addShape(shape(pptx, "roundRect"), {
+    x: 5.15,
+    y: 1.65,
+    w: 6.85,
+    h: 1.45,
+    rectRadius: 0.07,
+    fill: { color: design.tokens.accent, transparency: 4 },
+    line: { color: design.tokens.accent, transparency: 100 },
+  });
+  slide.addText(first ?? "Key takeaway", {
+    x: 5.55,
+    y: 1.94,
+    w: 6.0,
+    h: 0.7,
+    fontFace: design.typography.headingFont,
+    fontSize: 22,
+    bold: true,
+    fit: "shrink",
+    color: "FFFFFF",
+    margin: 0,
+  });
+  addBulletText(slide, rest, design, 5.35, 3.55, 6.4, 2.5);
+}
+
+function addBulletText(
+  slide: PptxSlideLike,
+  bullets: string[],
+  design: ArtifactDesignPlan,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): void {
+  const text = bullets.length > 0 ? bullets.map((bullet) => `- ${bullet}`).join("\n") : "No details provided.";
+  slide.addText(text, {
+    x,
+    y,
+    w,
+    h,
+    fontFace: design.typography.bodyFont,
+    fontSize: 15,
+    fit: "shrink",
+    color: design.tokens.text,
+    breakLine: false,
+    valign: "top",
+    margin: 0.03,
+    breakLineOnHyphen: false,
+  });
+}
+
+async function buildAbstractVisualDataUri(title: string, design: ArtifactDesignPlan): Promise<string> {
+  const svg = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1500" viewBox="0 0 1200 1500">`,
+    `<rect width="1200" height="1500" rx="48" fill="#${design.tokens.surface}"/>`,
+    `<circle cx="920" cy="190" r="260" fill="#${design.tokens.accent}" opacity="0.18"/>`,
+    `<circle cx="240" cy="1200" r="330" fill="#${design.tokens.accent2}" opacity="0.16"/>`,
+    `<path d="M120 345 C360 180 520 550 760 390 S1040 275 1110 520" fill="none" stroke="#${design.tokens.accent}" stroke-width="34" stroke-linecap="round" opacity="0.82"/>`,
+    `<path d="M155 720 H1030" stroke="#${design.tokens.border}" stroke-width="8" opacity="0.75"/>`,
+    `<rect x="155" y="810" width="300" height="300" rx="32" fill="#${design.tokens.accent}" opacity="0.9"/>`,
+    `<rect x="505" y="810" width="300" height="300" rx="32" fill="#${design.tokens.accent2}" opacity="0.9"/>`,
+    `<rect x="855" y="810" width="190" height="300" rx="32" fill="#${design.tokens.accent3}" opacity="0.9"/>`,
+    `<text x="155" y="1260" fill="#${design.tokens.mutedText}" font-family="Arial, sans-serif" font-size="54" font-weight="700">${escapeSvgText(title).slice(0, 34)}</text>`,
+    `</svg>`,
+  ].join("");
+  const buffer = await sharp(Buffer.from(svg, "utf8")).png().toBuffer();
+  return `data:image/png;base64,${buffer.toString("base64")}`;
+}
+
+async function loadPptxGen(): Promise<PptxGenConstructor> {
+  const module = (await import("pptxgenjs")) as unknown as { default?: PptxGenConstructor } & PptxGenConstructor;
+  return module.default ?? module;
+}
+
+function shape(pptx: PptxPresentationLike, name: string): string {
+  return pptx.ShapeType[name] ?? name;
+}
+
+function toBuffer(value: PptxOutput): Buffer {
+  if (Buffer.isBuffer(value)) {
+    return value;
+  }
+  if (value instanceof ArrayBuffer) {
+    return Buffer.from(value);
+  }
+  if (typeof value === "string") {
+    return Buffer.from(value, "binary");
+  }
+  if (typeof Blob !== "undefined" && value instanceof Blob) {
+    throw new Error("Unexpected browser Blob output from pptxgenjs nodebuffer writer");
+  }
+  return Buffer.from(value as Uint8Array);
+}
+
+function escapeSvgText(value: string): string {
+  return value.replace(/[<>&"']/g, (char) => {
+    switch (char) {
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case "&":
+        return "&amp;";
+      case '"':
+        return "&quot;";
+      default:
+        return "&apos;";
+    }
+  });
 }
 
 function xmlEntry(name: string, xml: string): ZipEntry {

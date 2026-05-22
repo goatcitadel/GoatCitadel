@@ -18,6 +18,44 @@ export interface ToolDefinition {
   codeModeAllowed?: boolean;
 }
 
+const ARTIFACT_DESIGN_ARG_SCHEMA = {
+  type: "object",
+  properties: {
+    mode: { type: "string", enum: ["auto", "polished", "minimal", "plain"] },
+    preset: {
+      type: "string",
+      enum: ["auto", "clean-professional", "education", "wellness", "pitch", "technical-report", "cyberpunk-ops"],
+    },
+    visualLevel: { type: "string", enum: ["minimal", "polished", "rich"] },
+    assetPolicy: { type: "string", enum: ["auto", "generated-first", "web-first", "built-in-only", "none"] },
+    audience: { type: "string" },
+    brand: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        colors: { type: "array", items: { type: "string" } },
+        fonts: { type: "array", items: { type: "string" } },
+        logoPath: { type: "string" },
+      },
+    },
+  },
+} as const;
+
+const ARTIFACT_DESTINATION_ARG_SCHEMA = {
+  oneOf: [
+    { type: "string", enum: ["local", "google", "google-drive", "google-docs", "google-slides"] },
+    {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["local", "google", "google-drive", "google-docs", "google-slides"] },
+        folderId: { type: "string" },
+        title: { type: "string" },
+        convert: { type: "boolean" },
+      },
+    },
+  ],
+} as const;
+
 const BUILTIN_TOOLS: ToolDefinition[] = [
   {
     name: "session.status",
@@ -772,6 +810,8 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
           },
         },
         rows: { type: "array" },
+        design: ARTIFACT_DESIGN_ARG_SCHEMA,
+        destination: ARTIFACT_DESTINATION_ARG_SCHEMA,
       },
       required: ["path", "title"],
     },
@@ -797,6 +837,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     usageHints: [
       "Use when the user asks for a real document file such as DOCX, PDF, HTML, Markdown, text, JSON, or CSV.",
       "Do not satisfy a requested document artifact with text-only prose when this tool is available.",
+      "Use design.mode minimal or plain for raw data, logs, JSON, CSV, code, or explicitly plain outputs.",
     ],
   },
   {
@@ -831,6 +872,8 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
           },
         },
         theme: { type: "string" },
+        design: ARTIFACT_DESIGN_ARG_SCHEMA,
+        destination: ARTIFACT_DESTINATION_ARG_SCHEMA,
       },
       required: ["path", "title", "slides"],
     },
@@ -855,6 +898,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     usageHints: [
       "Use when the user asks for PowerPoint, PPTX, slides, a slide deck, or a presentation file.",
       "Do not satisfy a requested PowerPoint by returning markdown-only slide text unless this tool is unavailable or blocked.",
+      "Use design.mode polished or design.preset when the user asks for a visually appealing deck.",
     ],
   },
   {

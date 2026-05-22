@@ -20,6 +20,7 @@ import { assertReadPathAllowed, assertWritePathInJail, resolveReadPathAccess } f
 import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "./sandbox/network-guard.js";
 import { executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
 import { collectLeakDetections, sanitizeForModel } from "./tool-security.js";
+import { buildArtifactDesignReport, createArtifactDesignPlan } from "./artifact-design.js";
 import { ingestDocumentViaBackend, resolveIngestionTrustLevel, searchIngestedContext } from "./ingestion-backends.js";
 import { parseIngestionSourceType } from "./ingestion-source-type.js";
 import { matchesToolPattern } from "./tool-patterns.js";
@@ -1064,11 +1065,23 @@ async function documentsCreate(args: Record<string, unknown>, config: ToolPolicy
   const full = path.resolve(p);
   const title = truncateText(asString(args.title) ?? inferTitleFromPath(full) ?? "Document", 120);
   const body = truncateText(asString(args.body) ?? asString(args.content) ?? "", 12000);
-  const artifact = createDocumentArtifact(format, {
+  const sections = normalizeDocumentSections(args.sections, body);
+  const rows = normalizeDocumentRows(args.rows);
+  const design = createArtifactDesignPlan({
+    kind: documentDesignKind(format),
     title,
     body,
-    sections: normalizeDocumentSections(args.sections, body),
-    rows: normalizeDocumentRows(args.rows),
+    sections,
+    format,
+    design: args.design,
+    destination: args.destination,
+  });
+  const artifact = await createDocumentArtifact(format, {
+    title,
+    body,
+    sections,
+    rows,
+    design,
   });
   await fs.mkdir(path.dirname(full), { recursive: true });
   if (artifact.binary) {
@@ -1082,7 +1095,8 @@ async function documentsCreate(args: Record<string, unknown>, config: ToolPolicy
     format,
     mimeType: artifact.mimeType,
     title,
-    sectionCount: normalizeDocumentSections(args.sections, body).length,
+    sectionCount: sections.length,
+    designReport: buildArtifactDesignReport(design, { localPath: full }),
   };
 }
 
@@ -1093,10 +1107,20 @@ async function presentationsCreate(args: Record<string, unknown>, config: ToolPo
   const title = truncateText(asString(args.title) ?? "Presentation", 120);
   const subtitle = truncateText(asString(args.subtitle) ?? "", 180);
   const slides = normalizePresentationSlides(args.slides, title, asString(args.body));
-  const pptx = createPresentationPptx({
+  const design = createArtifactDesignPlan({
+    kind: "presentation",
+    title,
+    body: subtitle,
+    slides,
+    format: "pptx",
+    design: normalizePresentationDesignInput(args),
+    destination: args.destination,
+  });
+  const pptx = await createPresentationPptx({
     title,
     subtitle: subtitle || undefined,
     slides,
+    design,
   });
   const full = path.resolve(p);
   await fs.mkdir(path.dirname(full), { recursive: true });
@@ -1107,7 +1131,31 @@ async function presentationsCreate(args: Record<string, unknown>, config: ToolPo
     format: "pptx",
     title,
     slideCount: slides.length + 1,
+    designReport: buildArtifactDesignReport(design, { localPath: full }),
   };
+}
+
+function documentDesignKind(format: DocumentArtifactFormat): "document" | "html" | "pdf" | "data" {
+  switch (format) {
+    case "html":
+      return "html";
+    case "pdf":
+      return "pdf";
+    case "json":
+    case "csv":
+    case "txt":
+      return "data";
+    default:
+      return "document";
+  }
+}
+
+function normalizePresentationDesignInput(args: Record<string, unknown>): unknown {
+  if (args.design !== undefined) {
+    return args.design;
+  }
+  const theme = asString(args.theme);
+  return theme ? { preset: theme } : undefined;
 }
 
 function resolveDocumentFormat(rawFormat: string | undefined, requestedPath: string): DocumentArtifactFormat {

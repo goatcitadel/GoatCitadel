@@ -281,6 +281,42 @@ describe("orchestration router", () => {
     ).not.toContain("documents.create");
   });
 
+  it("suggests document creation for designed proposal and Google Doc deliverables", () => {
+    const input = createInput({
+      mode: "cowork",
+      objective: "Write a polished proposal brochure and deliver it as a Google Doc file.",
+      prefs: createPrefs({
+        mode: "cowork",
+        orchestrationVisibility: "explicit",
+      }),
+    });
+    input.policy = resolveModePolicy("cowork");
+
+    const plan = buildOrchestrationPlan(input);
+    const synthesisStep = plan.steps.find((step) => step.role === "synthesizer");
+
+    expect(synthesisStep?.suggestedTools).toContain("documents.create");
+    expect(synthesisStep?.suggestedTools).not.toContain("presentations.create");
+  });
+
+  it("does not select artifact tools for plain chat output", () => {
+    const input = createInput({
+      mode: "cowork",
+      objective: "Return plain JSON in the chat only; do not create or save a file.",
+      prefs: createPrefs({
+        mode: "cowork",
+        orchestrationVisibility: "explicit",
+      }),
+    });
+    input.policy = resolveModePolicy("cowork");
+
+    const plan = buildOrchestrationPlan(input);
+    const suggestedTools = plan.steps.flatMap((step) => step.suggestedTools ?? []);
+
+    expect(suggestedTools).not.toContain("documents.create");
+    expect(suggestedTools).not.toContain("presentations.create");
+  });
+
   it("preserves explicit Cowork workstreams for final synthesis", () => {
     const input = createInput({
       mode: "cowork",

@@ -47,33 +47,6 @@ function request(toolName: string, args: Record<string, unknown> = {}): ToolInvo
   };
 }
 
-function readStoredZipEntry(zip: Buffer, targetName: string): string {
-  let offset = 0;
-  while (offset < zip.length && zip.readUInt32LE(offset) === 0x04034b50) {
-    const compressedSize = zip.readUInt32LE(offset + 18);
-    const fileNameLength = zip.readUInt16LE(offset + 26);
-    const extraLength = zip.readUInt16LE(offset + 28);
-    const nameStart = offset + 30;
-    const nameEnd = nameStart + fileNameLength;
-    const entryName = zip.subarray(nameStart, nameEnd).toString("utf8");
-    const dataStart = nameEnd + extraLength;
-    const dataEnd = dataStart + compressedSize;
-    if (entryName === targetName) {
-      return zip.subarray(dataStart, dataEnd).toString("utf8");
-    }
-    offset = dataEnd;
-  }
-  throw new Error(`Missing stored zip entry: ${targetName}`);
-}
-
-function extractThemeList(themeXml: string, listName: string): string {
-  const match = new RegExp(`<a:${listName}>[\\s\\S]*?</a:${listName}>`).exec(themeXml);
-  if (!match) {
-    throw new Error(`Missing theme list: ${listName}`);
-  }
-  return match[0];
-}
-
 function createKnowledgeStorage(): Storage {
   const documents = [
     {
@@ -266,20 +239,18 @@ describe("tool executor tail coverage", () => {
       path: path.resolve(deckPath),
       format: "pptx",
       slideCount: 2,
+      designReport: {
+        mode: "polished",
+        preset: "wellness",
+        google: { requested: false, status: "not_requested" },
+      },
     });
     expect(deck.subarray(0, 2).toString("utf8")).toBe("PK");
     expect(deck.includes("ppt/presentation.xml")).toBe(true);
     expect(deck.includes("ppt/slides/slide1.xml")).toBe(true);
-    expect(readStoredZipEntry(deck, "ppt/slideLayouts/_rels/slideLayout1.xml.rels")).toContain(
-      'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"',
-    );
-
-    const theme = readStoredZipEntry(deck, "ppt/theme/theme1.xml");
-    expect(extractThemeList(theme, "fillStyleLst").match(/<a:solidFill\b/g)).toHaveLength(3);
-    expect(extractThemeList(theme, "lnStyleLst").match(/<a:ln\b/g)).toHaveLength(3);
-    expect(extractThemeList(theme, "effectStyleLst").match(/<a:effectStyle\b/g)).toHaveLength(3);
-    expect(extractThemeList(theme, "bgFillStyleLst").match(/<a:solidFill\b/g)).toHaveLength(3);
-    expect(theme).toContain('<a:majorFont><a:latin typeface="Aptos Display"/><a:ea typeface=""/><a:cs typeface=""/>');
+    expect(deck.includes("ppt/media/")).toBe(true);
+    expect(deck.includes("ppt/notesSlides/")).toBe(true);
+    expect(JSON.stringify(created)).toContain("renderer-generated-visual");
   });
 
   it("creates real document artifacts inside the write jail", async () => {
@@ -318,12 +289,59 @@ describe("tool executor tail coverage", () => {
 
     const docxBytes = fs.readFileSync(docxPath);
     const pdfBytes = fs.readFileSync(pdfPath);
-    expect(docx).toMatchObject({ path: path.resolve(docxPath), format: "docx" });
-    expect(pdf).toMatchObject({ path: path.resolve(pdfPath), format: "pdf", mimeType: "application/pdf" });
+    expect(docx).toMatchObject({
+      path: path.resolve(docxPath),
+      format: "docx",
+      designReport: {
+        mode: "polished",
+        assetPolicy: "generated-first",
+      },
+    });
+    expect(pdf).toMatchObject({
+      path: path.resolve(pdfPath),
+      format: "pdf",
+      mimeType: "application/pdf",
+      designReport: {
+        mode: "polished",
+      },
+    });
     expect(docxBytes.subarray(0, 2).toString("utf8")).toBe("PK");
     expect(docxBytes.includes("word/document.xml")).toBe(true);
+    expect(docxBytes.includes("word/media/")).toBe(true);
     expect(pdfBytes.subarray(0, 5).toString("utf8")).toBe("%PDF-");
     expect(pdfBytes.includes("/Type /Catalog")).toBe(true);
+  });
+
+  it("reports Google destination fallback while preserving local artifacts", async () => {
+    const root = createRoot();
+    const config = createConfig(root);
+    const storage = createKnowledgeStorage();
+    const docxPath = path.join(root, "google-ready-report.docx");
+
+    const created = await executeTool(
+      request("documents.create", {
+        path: docxPath,
+        format: "docx",
+        title: "Google Ready Report",
+        destination: "google-docs",
+        sections: [{ heading: "Summary", bullets: ["Local artifact should still be produced."] }],
+      }),
+      config,
+      storage,
+    );
+
+    expect(fs.existsSync(docxPath)).toBe(true);
+    expect(created).toMatchObject({
+      path: path.resolve(docxPath),
+      designReport: {
+        localPath: path.resolve(docxPath),
+        google: {
+          requested: true,
+          status: "not_configured",
+          mode: "convert",
+        },
+      },
+    });
   });
 
   it("builds citations from partial source rows and sanitizes secret-like fields", async () => {

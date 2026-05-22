@@ -1,3 +1,19 @@
+import {
+  AlignmentType,
+  Document,
+  HeadingLevel,
+  ImageRun,
+  Packer,
+  Paragraph,
+  ShadingType,
+  Table,
+  TableCell,
+  TableRow,
+  TextRun,
+  WidthType,
+} from "docx";
+import sharp from "sharp";
+import { createArtifactDesignPlan, cssColor, type ArtifactDesignPlan } from "./artifact-design.js";
 import { createStoredZip, type ZipEntry } from "./presentation-pptx.js";
 
 export type DocumentArtifactFormat = "markdown" | "txt" | "html" | "json" | "csv" | "docx" | "pdf";
@@ -14,6 +30,7 @@ export interface DocumentArtifactInput {
   sections: DocumentArtifactSection[];
   rows?: Array<Record<string, unknown> | unknown[]>;
   createdAt?: Date;
+  design?: ArtifactDesignPlan;
 }
 
 export interface DocumentArtifactOutput {
@@ -44,10 +61,10 @@ const FORMAT_OUTPUTS: Record<
   pdf: { extension: ".pdf", mimeType: "application/pdf", binary: true },
 };
 
-export function createDocumentArtifact(
+export async function createDocumentArtifact(
   format: DocumentArtifactFormat,
   input: DocumentArtifactInput,
-): DocumentArtifactOutput {
+): Promise<DocumentArtifactOutput> {
   const output = FORMAT_OUTPUTS[format];
   switch (format) {
     case "markdown":
@@ -61,7 +78,7 @@ export function createDocumentArtifact(
     case "csv":
       return { ...output, data: buildCsv(input) };
     case "docx":
-      return { ...output, data: buildDocx(input) };
+      return { ...output, data: await buildDocx(input) };
     case "pdf":
       return { ...output, data: buildPdf(input) };
   }
@@ -98,9 +115,11 @@ function buildPlainText(input: DocumentArtifactInput): string {
 
 function buildHtml(input: DocumentArtifactInput): string {
   const sections = normalizedSections(input);
+  const design = resolveDocumentDesign(input, "html");
   const body = [
-    `<h1>${escapeHtml(input.title)}</h1>`,
-    input.body?.trim() ? `<p>${escapeHtml(input.body.trim())}</p>` : "",
+    `<header class="cover"><span class="eyebrow">${escapeHtml(design.preset)}</span><h1>${escapeHtml(input.title)}</h1>${
+      input.body?.trim() ? `<p>${escapeHtml(input.body.trim())}</p>` : ""
+    }</header>`,
     ...sections.map((section) => {
       const bullets =
         section.bullets.length > 0
@@ -117,7 +136,7 @@ function buildHtml(input: DocumentArtifactInput): string {
     "<head>",
     '<meta charset="utf-8">',
     `<title>${escapeHtml(input.title)}</title>`,
-    "<style>body{font-family:Arial,sans-serif;line-height:1.5;max-width:840px;margin:48px auto;padding:0 24px;color:#111827}h1,h2{color:#0f172a}</style>",
+    `<style>${buildHtmlCss(design)}</style>`,
     "</head>",
     `<body>${body}</body>`,
     "</html>",
@@ -152,7 +171,139 @@ function buildCsv(input: DocumentArtifactInput): string {
   return `${lines.join("\n")}\n`;
 }
 
-function buildDocx(input: DocumentArtifactInput): Buffer {
+async function buildDocx(input: DocumentArtifactInput): Promise<Buffer> {
+  try {
+    return await buildStyledDocx(input);
+  } catch {
+    return buildFallbackDocx(input);
+  }
+}
+
+async function buildStyledDocx(input: DocumentArtifactInput): Promise<Buffer> {
+  const design = resolveDocumentDesign(input, "docx");
+  const heroImage = await buildDocxVisualBuffer(input.title, design);
+  const children: Array<Paragraph | Table> = [
+    new Paragraph({
+      heading: HeadingLevel.TITLE,
+      spacing: { after: 220 },
+      children: [
+        new TextRun({
+          text: input.title,
+          bold: true,
+          size: 44,
+          color: design.tokens.text,
+          font: design.typography.headingFont,
+        }),
+      ],
+    }),
+    new Paragraph({
+      spacing: { after: 180 },
+      children: [
+        new TextRun({
+          text: `Design preset: ${design.preset}`,
+          bold: true,
+          color: design.tokens.accent,
+          size: 18,
+          font: design.typography.bodyFont,
+        }),
+      ],
+    }),
+  ];
+  if (design.mode !== "plain" && design.mode !== "minimal") {
+    children.push(
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { after: 260 },
+        children: [
+          new ImageRun({
+            type: "png",
+            data: heroImage,
+            transformation: { width: 520, height: 180 },
+            altText: {
+              name: `Generated visual for ${input.title}`,
+              title: `Generated visual for ${input.title}`,
+              description: `Abstract generated visual supporting ${input.title}.`,
+            },
+          }),
+        ],
+      }),
+    );
+  }
+  if (input.body?.trim()) {
+    children.push(bodyParagraph(input.body.trim(), design));
+  }
+  const sections = normalizedSections(input);
+  sections.forEach((section, index) => {
+    children.push(
+      new Paragraph({
+        heading: HeadingLevel.HEADING_1,
+        spacing: { before: 260, after: 120 },
+        children: [
+          new TextRun({
+            text: section.heading,
+            bold: true,
+            size: 30,
+            color: design.tokens.text,
+            font: design.typography.headingFont,
+          }),
+        ],
+      }),
+    );
+    if (section.body) {
+      children.push(bodyParagraph(section.body, design));
+    }
+    for (const bullet of section.bullets) {
+      children.push(
+        new Paragraph({
+          spacing: { after: 80 },
+          indent: { left: 360 },
+          children: [
+            new TextRun({
+              text: `- ${bullet}`,
+              size: 22,
+              color: design.tokens.text,
+              font: design.typography.bodyFont,
+            }),
+          ],
+        }),
+      );
+    }
+    if (index === 0 && section.bullets[0] && design.mode !== "plain" && design.mode !== "minimal") {
+      children.push(calloutTable(section.bullets[0], design));
+    }
+  });
+  children.push(
+    new Paragraph({
+      spacing: { before: 240 },
+      children: [
+        new TextRun({
+          text: "Asset provenance: renderer-generated visual and built-in document styling; external web assets require source/license metadata.",
+          color: design.tokens.mutedText,
+          size: 16,
+          font: design.typography.bodyFont,
+        }),
+      ],
+    }),
+  );
+  const doc = new Document({
+    title: input.title,
+    creator: "GoatCitadel",
+    description: `Generated artifact using ${design.preset} design brief.`,
+    sections: [
+      {
+        properties: {
+          page: {
+            margin: { top: 720, right: 720, bottom: 720, left: 720 },
+          },
+        },
+        children,
+      },
+    ],
+  });
+  return Packer.toBuffer(doc);
+}
+
+function buildFallbackDocx(input: DocumentArtifactInput): Buffer {
   const createdAt = input.createdAt ?? new Date();
   const entries: ZipEntry[] = [
     xmlEntry("[Content_Types].xml", buildDocxContentTypes()),
@@ -162,6 +313,108 @@ function buildDocx(input: DocumentArtifactInput): Buffer {
     xmlEntry("word/document.xml", buildDocumentXml(input)),
   ];
   return createStoredZip(entries);
+}
+
+function resolveDocumentDesign(input: DocumentArtifactInput, format: "docx" | "html"): ArtifactDesignPlan {
+  return (
+    input.design ??
+    createArtifactDesignPlan({
+      kind: format === "html" ? "html" : "document",
+      title: input.title,
+      body: input.body,
+      sections: input.sections,
+      format,
+    })
+  );
+}
+
+function buildHtmlCss(design: ArtifactDesignPlan): string {
+  if (design.mode === "plain" || design.mode === "minimal") {
+    return "body{font-family:Arial,sans-serif;line-height:1.5;max-width:840px;margin:48px auto;padding:0 24px;color:#111827}h1,h2{color:#0f172a}";
+  }
+  return [
+    `:root{--bg:${cssColor(design.tokens.background)};--surface:${cssColor(design.tokens.surface)};--text:${cssColor(design.tokens.text)};--muted:${cssColor(design.tokens.mutedText)};--accent:${cssColor(design.tokens.accent)};--accent2:${cssColor(design.tokens.accent2)};--border:${cssColor(design.tokens.border)}}`,
+    `body{font-family:${cssFont(design.typography.bodyFont)},Arial,sans-serif;line-height:1.55;max-width:960px;margin:0 auto;padding:40px 24px 64px;background:var(--bg);color:var(--text)}`,
+    `.cover{background:var(--surface);border:1px solid var(--border);border-left:8px solid var(--accent);padding:36px 40px;margin-bottom:28px;box-shadow:0 18px 40px rgba(15,23,42,.08)}`,
+    `.eyebrow{display:block;color:var(--accent);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px}`,
+    `h1{font-family:${cssFont(design.typography.headingFont)},Arial,sans-serif;font-size:44px;line-height:1.05;margin:0 0 16px;color:var(--text)}`,
+    `h2{font-family:${cssFont(design.typography.headingFont)},Arial,sans-serif;font-size:24px;margin:0 0 10px;color:var(--text)}`,
+    `p{color:var(--muted);font-size:16px;margin:0 0 14px}`,
+    `section{background:var(--surface);border:1px solid var(--border);padding:24px 28px;margin:18px 0}`,
+    `ul{margin:12px 0 0;padding-left:22px;color:var(--text)}`,
+    `li{margin:8px 0}`,
+  ].join("");
+}
+
+function bodyParagraph(text: string, design: ArtifactDesignPlan): Paragraph {
+  return new Paragraph({
+    spacing: { after: 140 },
+    children: [
+      new TextRun({
+        text,
+        size: 22,
+        color: design.tokens.mutedText,
+        font: design.typography.bodyFont,
+      }),
+    ],
+  });
+}
+
+function calloutTable(text: string, design: ArtifactDesignPlan): Table {
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: {
+      top: { style: "single", size: 8, color: design.tokens.accent },
+      bottom: { style: "single", size: 8, color: design.tokens.accent },
+      left: { style: "single", size: 8, color: design.tokens.accent },
+      right: { style: "single", size: 8, color: design.tokens.accent },
+      insideHorizontal: { style: "single", size: 0, color: design.tokens.surface },
+      insideVertical: { style: "single", size: 0, color: design.tokens.surface },
+    },
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            shading: { type: ShadingType.CLEAR, fill: design.tokens.surface },
+            margins: { top: 220, bottom: 220, left: 260, right: 260 },
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: text.length > 180 ? `${text.slice(0, 177)}...` : text,
+                    bold: true,
+                    color: design.tokens.text,
+                    size: 22,
+                    font: design.typography.bodyFont,
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+    ],
+  });
+}
+
+async function buildDocxVisualBuffer(title: string, design: ArtifactDesignPlan): Promise<Buffer> {
+  const svg = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420">`,
+    `<rect width="1200" height="420" rx="40" fill="#${design.tokens.surface}"/>`,
+    `<circle cx="1020" cy="86" r="170" fill="#${design.tokens.accent}" opacity="0.18"/>`,
+    `<circle cx="190" cy="345" r="210" fill="#${design.tokens.accent2}" opacity="0.16"/>`,
+    `<path d="M94 225 C300 80 455 310 650 180 S950 110 1090 250" fill="none" stroke="#${design.tokens.accent}" stroke-width="26" stroke-linecap="round" opacity="0.82"/>`,
+    `<rect x="88" y="285" width="175" height="64" rx="16" fill="#${design.tokens.accent}" opacity="0.9"/>`,
+    `<rect x="292" y="285" width="175" height="64" rx="16" fill="#${design.tokens.accent2}" opacity="0.9"/>`,
+    `<rect x="496" y="285" width="175" height="64" rx="16" fill="#${design.tokens.accent3}" opacity="0.9"/>`,
+    `<text x="88" y="115" fill="#${design.tokens.mutedText}" font-family="Arial, sans-serif" font-size="38" font-weight="700">${escapeSvgText(title).slice(0, 46)}</text>`,
+    `</svg>`,
+  ].join("");
+  return sharp(Buffer.from(svg, "utf8")).png().toBuffer();
+}
+
+function cssFont(font: string): string {
+  return font.includes(" ") ? `"${font.replace(/"/g, "")}"` : font;
 }
 
 function buildDocxContentTypes(): string {
@@ -356,6 +609,10 @@ function escapeXml(value: string): string {
 }
 
 function escapeHtml(value: string): string {
+  return escapeXml(value);
+}
+
+function escapeSvgText(value: string): string {
   return escapeXml(value);
 }
 

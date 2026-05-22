@@ -1,0 +1,73 @@
+import { describe, expect, it } from "vitest";
+import { createArtifactDesignPlan } from "./artifact-design.js";
+
+describe("artifact design brief selection", () => {
+  it("defaults designed presentation requests to polished content-specific styling", () => {
+    const plan = createArtifactDesignPlan({
+      kind: "presentation",
+      format: "pptx",
+      title: "Benefits of Daily Walking",
+      slides: [
+        {
+          title: "Mental Well-Being",
+          bullets: ["Can reduce stress", "May improve mood and focus"],
+        },
+      ],
+    });
+
+    expect(plan.mode).toBe("polished");
+    expect(plan.preset).toBe("wellness");
+    expect(plan.visualLevel).toBe("polished");
+    expect(plan.assetPolicy).toBe("generated-first");
+    expect(plan.layouts.map((layout) => layout.name)).toContain("hero");
+    expect(plan.assetPlan.some((asset) => asset.type === "generated" && asset.status === "planned")).toBe(true);
+  });
+
+  it("keeps raw data artifacts minimal", () => {
+    const plan = createArtifactDesignPlan({
+      kind: "data",
+      format: "json",
+      title: "Raw API Logs",
+      body: "Return plain JSON logs.",
+    });
+
+    expect(plan.mode).toBe("minimal");
+    expect(plan.assetPolicy).toBe("none");
+    expect(plan.layouts).toEqual([
+      { name: "plain-data", purpose: "Preserve machine-readable output without decoration." },
+    ]);
+  });
+
+  it("honors explicit design overrides", () => {
+    const plan = createArtifactDesignPlan({
+      kind: "document",
+      format: "docx",
+      title: "Gateway Runtime Brief",
+      design: {
+        mode: "polished",
+        preset: "cyberpunk-ops",
+        visualLevel: "rich",
+        assetPolicy: "built-in-only",
+        brand: { colors: ["#22D3EE", "#F472B6"], fonts: ["Aptos Display", "Aptos"] },
+      },
+    });
+
+    expect(plan.preset).toBe("cyberpunk-ops");
+    expect(plan.visualLevel).toBe("rich");
+    expect(plan.assetPolicy).toBe("built-in-only");
+    expect(plan.tokens.accent).toBe("22D3EE");
+    expect(plan.tokens.accent2).toBe("F472B6");
+  });
+
+  it("maps Google presentation destinations to hybrid conversion status", () => {
+    const plan = createArtifactDesignPlan({
+      kind: "presentation",
+      format: "pptx",
+      title: "Quarterly Pitch",
+      destination: "google",
+    });
+
+    expect(plan.destination).toMatchObject({ kind: "google-slides", convert: true });
+    expect(plan.validationChecks.map((check) => check.id)).toContain("google-import");
+  });
+});

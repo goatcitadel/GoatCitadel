@@ -490,6 +490,9 @@ function buildFallbackSuggestedTools(role: OrchestrationRole, workflowTemplate: 
 
 function detectPresentationArtifactIntent(content: string): boolean {
   const normalized = content.toLowerCase();
+  if (hasArtifactNegation(normalized)) {
+    return false;
+  }
   return (
     /\b(power\s?point|pptx?|(?:slide|pitch|investor|presentation)\s+deck|slides?|presentation)\b/.test(normalized) &&
     /\b(create|make|build|generate|put|turn|export|save|write|produce|deliver|format|file)\b/.test(normalized)
@@ -498,10 +501,19 @@ function detectPresentationArtifactIntent(content: string): boolean {
 
 function detectDocumentArtifactIntent(content: string): boolean {
   const normalized = content.toLowerCase();
+  if (hasArtifactNegation(normalized)) {
+    return false;
+  }
   return (
-    /\b(docx?|word\s+doc(?:ument)?|pdf|markdown|md|html|csv|json|text\s+file|txt|report|brief|memo|handout|worksheet|document)\b/.test(
+    /\b(docx?|word\s+doc(?:ument)?|google\s+docs?|google\s+file|pdf|markdown|md|html|csv|json|text\s+file|txt|report|brief|memo|proposal|guide|handout|worksheet|brochure|document)\b/.test(
       normalized,
     ) && /\b(create|make|build|generate|put|turn|export|save|write|produce|deliver|format|file)\b/.test(normalized)
+  );
+}
+
+function hasArtifactNegation(normalized: string): boolean {
+  return /\b(?:do\s+not|don't|dont|no|without)\s+(?:create|make|build|generate|save|write|produce|deliver|export|file|artifact)\b/.test(
+    normalized,
   );
 }
 
