@@ -26,20 +26,20 @@ const rawArgs = process.argv.slice(2);
 const { verbose, bootstrapMode, passthrough } = extractLauncherOptions(rawArgs);
 const bootstrapPlan = resolveBootstrapPlan(repoRoot, bootstrapPackages, bootstrapMode);
 
+const useTs7 = isTruthyEnv(process.env.GOATCITADEL_DEV_TS7);
+
 if (bootstrapPlan.shouldBuild) {
   console.log(`[dev] syncing runtime workspace packages: ${bootstrapPlan.packages.join(", ")}`);
   if (bootstrapPlan.reason) {
     console.log(`[dev] bootstrap reason: ${bootstrapPlan.reason}`);
   }
-  const bootstrapArgs = bootstrapPlan.packages.flatMap((pkg) => ["--filter", pkg]);
-  const bootstrapResult =
-    process.platform === "win32"
-      ? spawnSync(
-          process.env.ComSpec || "cmd.exe",
-          ["/d", "/s", "/c", buildWindowsCommand(["pnpm", ...bootstrapArgs, "build"])],
-          { stdio: "inherit", cwd: repoRoot },
-        )
-      : spawnSync("pnpm", [...bootstrapArgs, "build"], { stdio: "inherit", cwd: repoRoot });
+  const bootstrapResult = useTs7
+    ? spawnSync(
+        process.execPath,
+        [path.join(repoRoot, "scripts", "typescript", "run-ts7-workspace.mjs"), "--mode", "build", "--group", "gateway"],
+        { stdio: "inherit", cwd: repoRoot },
+      )
+    : runPnpmBootstrap(bootstrapPlan.packages);
 
   if (bootstrapResult.error) {
     throw bootstrapResult.error;
@@ -48,13 +48,26 @@ if (bootstrapPlan.shouldBuild) {
     console.error("[dev] workspace bootstrap build failed");
     process.exit(1);
   }
+  if (useTs7) {
+    console.log("[dev] bootstrap completed via TS7 (tsgo)");
+  }
 } else {
   console.log(`[dev] runtime workspace packages already fresh; skipped bootstrap (${bootstrapPlan.reason})`);
 }
 
-const devEnv = process.env.GOATCITADEL_UI_PACKAGE?.trim()
+const devEnvBase = process.env.GOATCITADEL_UI_PACKAGE?.trim()
   ? process.env
   : { ...process.env, GOATCITADEL_UI_PACKAGE: DEFAULT_DEV_UI_PACKAGE };
+// When the bootstrap step confirms all runtime packages are already fresh, the
+// supervisor's tsc -b reference build is guaranteed to be a no-op too. Forward
+// a "skip" hint so the supervisor doesn't repeat the same freshness check via
+// a much slower tsc invocation. Users can still force it by passing
+// GOATCITADEL_GATEWAY_REFERENCE_BUILD=always.
+const shouldForwardReferenceSkip =
+  !bootstrapPlan.shouldBuild && !process.env.GOATCITADEL_GATEWAY_REFERENCE_BUILD?.trim();
+const devEnv = shouldForwardReferenceSkip
+  ? { ...devEnvBase, GOATCITADEL_GATEWAY_REFERENCE_BUILD: "skip" }
+  : devEnvBase;
 const uiTarget = resolveUiTarget(process.cwd(), devEnv);
 
 setTerminalTitle("Dev");
@@ -119,6 +132,22 @@ function extractLauncherOptions(argv) {
     passthrough.push(value);
   }
   return { verbose, bootstrapMode, passthrough };
+}
+
+function isTruthyEnv(value) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function runPnpmBootstrap(packages) {
+  const bootstrapArgs = packages.flatMap((pkg) => ["--filter", pkg]);
+  return process.platform === "win32"
+    ? spawnSync(
+        process.env.ComSpec || "cmd.exe",
+        ["/d", "/s", "/c", buildWindowsCommand(["pnpm", ...bootstrapArgs, "build"])],
+        { stdio: "inherit", cwd: repoRoot },
+      )
+    : spawnSync("pnpm", [...bootstrapArgs, "build"], { stdio: "inherit", cwd: repoRoot });
 }
 
 function buildWindowsCommand(parts) {

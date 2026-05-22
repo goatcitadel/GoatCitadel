@@ -1,5 +1,24 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The supervisor persists its last-successful reference-build signature in
+// node_modules/.cache so warm restarts can skip tsc -b. Each test in this file
+// reimports the supervisor in a fresh vm, so we have to wipe that cache up front
+// or the second test's reference-build assertion (`toHaveLength(1)`) collapses
+// to zero because the persisted signature lets shouldBuildGatewayProjectReferences
+// decide that nothing needs rebuilding.
+const supervisorTestDir = path.dirname(fileURLToPath(import.meta.url));
+const supervisorRefSignatureCacheFile = path.join(
+  supervisorTestDir,
+  "..",
+  "node_modules",
+  ".cache",
+  "goatcitadel-dev",
+  "ref-signature.json",
+);
 
 const spawnMock = vi.fn();
 const spawnSyncMock = vi.fn();
@@ -56,6 +75,7 @@ describe("dev supervisor coverage", () => {
     createConnectionMock.mockReset();
     statMock.mockReset();
     readdirMock.mockReset();
+    fs.rmSync(supervisorRefSignatureCacheFile, { force: true });
 
     process.env.GOATCITADEL_GATEWAY_WATCH_POLL_MS = "999999";
     delete process.env.GOATCITADEL_GATEWAY_HEALTH_TIMEOUT_MS;
@@ -138,12 +158,21 @@ describe("dev supervisor coverage", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(console, "log").mockImplementation(() => {});
-    let fetchCalls = 0;
+    // The supervisor probes /livez (process-up signal) and /health (full readiness)
+    // separately. This test exercises a health timeout + restart, so only the
+    // /health-path matters for the assertion. Force /livez to always fail so it
+    // never confuses the fetchCalls accounting; force /health to fail once,
+    // then succeed.
+    let healthFetchCalls = 0;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => {
-        fetchCalls += 1;
-        if (fetchCalls === 1) {
+      vi.fn(async (input: unknown) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (url.endsWith("/livez")) {
+          throw new Error("livez ignored in this test");
+        }
+        healthFetchCalls += 1;
+        if (healthFetchCalls === 1) {
           throw new Error("not ready");
         }
         return new Response("ok", { status: 200 });
@@ -155,9 +184,14 @@ describe("dev supervisor coverage", () => {
     process.emit("SIGINT");
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    const referenceBuildCalls = spawnSyncMock.mock.calls.filter((call) =>
-      String(call[1]).includes("pnpm exec tsc -b tsconfig.json --pretty false"),
-    );
+    // The reference build invocation may be either the legacy `pnpm exec tsc -b ...` form
+    // or the faster direct `node + typescript/bin/tsc -b ...` form; both include the
+    // `-b tsconfig.json` flag in argv.
+    const referenceBuildCalls = spawnSyncMock.mock.calls.filter((call) => {
+      const args = Array.isArray(call[1]) ? call[1] : [];
+      const joined = args.map(String).join(" ");
+      return joined.includes("-b") && joined.includes("tsconfig.json");
+    });
     expect(spawnMock).toHaveBeenCalledTimes(2);
     expect(referenceBuildCalls).toHaveLength(1);
     expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("[gateway-supervisor] fatal"));

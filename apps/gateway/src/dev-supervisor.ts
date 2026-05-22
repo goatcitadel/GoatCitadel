@@ -17,11 +17,14 @@ import {
   isWatchableSourceFile,
   pruneFailureTimestamps,
   readPositiveInt,
+  readReferenceSignatureCache,
   resolveReferenceBuildMode,
+  resolveReferenceBuildSpawn,
   resolveGatewayHealthHost,
-  sanitizeSpawnOutput,
   shouldBuildGatewayProjectReferences,
   shouldIgnoreWatchedEntryName,
+  shouldUseTs7,
+  writeReferenceSignatureCache,
 } from "./dev-supervisor-helpers.js";
 import {
   INSECURE_LOCAL_ONLY_OVERRIDE_ENV,
@@ -58,10 +61,19 @@ const restartBaseBackoffMs = Number(process.env.GOATCITADEL_GATEWAY_RESTART_BASE
 const restartMaxBackoffMs = Number(process.env.GOATCITADEL_GATEWAY_RESTART_MAX_BACKOFF_MS ?? 30_000);
 const restartCircuitOpenMs = Number(process.env.GOATCITADEL_GATEWAY_RESTART_CIRCUIT_MS ?? 60_000);
 const referenceBuildMode = resolveReferenceBuildMode(process.env.GOATCITADEL_GATEWAY_REFERENCE_BUILD);
+const useTs7 = shouldUseTs7();
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const configuredRoot = process.env.GOATCITADEL_ROOT_DIR?.trim();
 const runtimeRoot = configuredRoot ? path.resolve(configuredRoot) : repoRoot;
 const gatewayDir = path.join(repoRoot, "apps", "gateway");
+const referenceSignatureCacheFile = path.join(
+  gatewayDir,
+  "node_modules",
+  ".cache",
+  "goatcitadel-dev",
+  "ref-signature.json",
+);
+const healthHeartbeatMs = readPositiveInt(process.env.GOATCITADEL_GATEWAY_HEALTH_HEARTBEAT_MS, 5_000);
 const log = createTerminalReporter({
   scope: "gateway-dev",
   verbose: verboseRequested,
@@ -83,7 +95,8 @@ let shuttingDown = false;
 let restarting = false;
 let polling = false;
 let lastSignature = "";
-let lastSuccessfulReferenceBuildSignature: string | undefined;
+let lastSuccessfulReferenceBuildSignature: string | undefined =
+  readReferenceSignatureCache(referenceSignatureCacheFile);
 let restartTimer: NodeJS.Timeout | null = null;
 let sourceChangeRestartTimer: NodeJS.Timeout | null = null;
 let circuitOpenUntil = 0;
@@ -254,7 +267,14 @@ async function startChild(): Promise<void> {
   });
 
   const healthStartedAt = Date.now();
-  const healthy = await waitForGatewayHealth(gatewayHealthTimeoutMs);
+  const healthy = await waitForGatewayHealth(gatewayHealthTimeoutMs, {
+    onLive: (liveElapsedMs) => {
+      log.info(`gateway HTTP responding (/livez) after ${liveElapsedMs}ms — waiting for /health`, {
+        pid: currentPid,
+        liveElapsedMs,
+      });
+    },
+  });
   const healthElapsedMs = Date.now() - healthStartedAt;
   if (healthy) {
     resetFailureBudget();
@@ -295,32 +315,32 @@ function ensureGatewayProjectReferencesBuilt(currentSignature: string): boolean 
   }
 
   const startedAt = Date.now();
-  log.info("building gateway project references", { reason: decision.reason });
+  const spawnPlan = resolveReferenceBuildSpawn({
+    gatewayDir,
+    repoRoot,
+    useTs7,
+    comspec: process.env.ComSpec,
+    platform: process.platform,
+  });
+  log.info(`building gateway project references via ${spawnPlan.description}`, {
+    reason: decision.reason,
+  });
   const env = {
     ...process.env,
     NODE_NO_WARNINGS: "1",
   };
-  const result =
-    process.platform === "win32"
-      ? spawnSync(
-          process.env.ComSpec || "cmd.exe",
-          ["/d", "/s", "/c", "pnpm exec tsc -b tsconfig.json --pretty false"],
-          {
-            cwd: gatewayDir,
-            env,
-            stdio: "pipe",
-            encoding: "utf8",
-          },
-        )
-      : spawnSync("pnpm", ["exec", "tsc", "-b", "tsconfig.json", "--pretty", "false"], {
-          cwd: gatewayDir,
-          env,
-          stdio: "pipe",
-          encoding: "utf8",
-        });
+  // stdio: inherit so the user sees tsc/tsgo progress directly. Previously
+  // the supervisor swallowed output via "pipe", which produced a long silent
+  // gap during the project reference build and made boot feel hung.
+  const result = spawnSync(spawnPlan.command, spawnPlan.args, {
+    cwd: spawnPlan.cwd,
+    env,
+    stdio: "inherit",
+  });
 
   if ((result.status ?? 1) === 0) {
     lastSuccessfulReferenceBuildSignature = currentSignature;
+    writeReferenceSignatureCache(referenceSignatureCacheFile, currentSignature);
     log.info(`gateway project references built in ${Date.now() - startedAt}ms`, {
       durationMs: Date.now() - startedAt,
       reason: decision.reason,
@@ -332,8 +352,7 @@ function ensureGatewayProjectReferencesBuilt(currentSignature: string): boolean 
     durationMs: Date.now() - startedAt,
     status: result.status ?? "null",
     signal: result.signal ?? "null",
-    stderr: sanitizeSpawnOutput(result.stderr),
-    stdout: sanitizeSpawnOutput(result.stdout),
+    description: spawnPlan.description,
   });
   const delay = registerFailureAndGetDelay("reference_build_failed");
   if (delay !== null) {
@@ -387,11 +406,34 @@ async function stopChild(reason: string): Promise<void> {
   }
 }
 
-async function waitForGatewayHealth(timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
+async function waitForGatewayHealth(
+  timeoutMs: number,
+  options: { onLive?: (liveElapsedMs: number) => void } = {},
+): Promise<boolean> {
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+  let nextHeartbeatAt = startedAt + healthHeartbeatMs;
+  let liveSeen = false;
   while (Date.now() < deadline) {
+    if (!liveSeen && (await isGatewayLive())) {
+      liveSeen = true;
+      options.onLive?.(Date.now() - startedAt);
+    }
     if (await isGatewayHealthy()) {
       return true;
+    }
+    const now = Date.now();
+    if (now >= nextHeartbeatAt) {
+      const elapsedSec = Math.round((now - startedAt) / 1000);
+      const remainingSec = Math.max(0, Math.round((deadline - now) / 1000));
+      log.info(
+        `still waiting for /health (${elapsedSec}s elapsed, ${remainingSec}s before timeout, livez=${liveSeen ? "ok" : "pending"})`,
+        {
+          host: gatewayHealthHost,
+          port: gatewayPort,
+        },
+      );
+      nextHeartbeatAt = now + healthHeartbeatMs;
     }
     await sleep(300);
   }
@@ -411,8 +453,16 @@ async function waitForPortClosed(timeoutMs: number): Promise<boolean> {
 }
 
 async function isGatewayHealthy(): Promise<boolean> {
+  return await fetchOk("/health");
+}
+
+async function isGatewayLive(): Promise<boolean> {
+  return await fetchOk("/livez");
+}
+
+async function fetchOk(probePath: string): Promise<boolean> {
   try {
-    const response = await fetch(`http://${gatewayHealthHost}:${gatewayPort}/health`, {
+    const response = await fetch(`http://${gatewayHealthHost}:${gatewayPort}${probePath}`, {
       signal: AbortSignal.timeout(1_500),
     });
     return response.ok;

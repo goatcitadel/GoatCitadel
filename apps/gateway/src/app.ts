@@ -9,6 +9,7 @@ import { routeServicesPlugin } from "./plugins/route-services.js";
 import { authPlugin } from "./plugins/auth.js";
 import { idempotencyHeaderPlugin } from "./plugins/idempotency.js";
 import { healthRoute } from "./routes/health.js";
+import { livezRoute } from "./routes/livez.js";
 import { gatewayEventsRoute } from "./routes/gateway-events.js";
 import { sessionsListRoute } from "./routes/sessions-list.js";
 import { toolsInvokeRoute } from "./routes/tools-invoke.js";
@@ -27,6 +28,7 @@ import { llamaCppRoutes } from "./routes/llamacpp.js";
 import { integrationsRoutes } from "./routes/integrations.js";
 import { integrationWebhookRoutes } from "./routes/integration-webhooks.js";
 import { meshRoutes } from "./routes/mesh.js";
+import { mobileRoutes } from "./routes/mobile.js";
 import { onboardingRoutes } from "./routes/onboarding.js";
 import { demoRoutes } from "./routes/demo.js";
 import { memoryRoutes } from "./routes/memory.js";
@@ -313,6 +315,7 @@ export async function buildApp() {
   });
 
   await app.register(healthRoute);
+  await app.register(livezRoute);
   await app.register(authRoutes);
   await app.register(secretsRoutes);
   await app.register(gatewayEventsRoute);
@@ -334,6 +337,7 @@ export async function buildApp() {
   await app.register(integrationsRoutes);
   await app.register(integrationWebhookRoutes);
   await app.register(meshRoutes);
+  await app.register(mobileRoutes);
   await app.register(onboardingRoutes);
   await app.register(demoRoutes);
   await app.register(memoryRoutes);
