@@ -19,6 +19,39 @@ export function readPositiveInt(value: string | undefined, fallback: number): nu
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+export type ReferenceBuildMode = "auto" | "always" | "skip";
+
+export function resolveReferenceBuildMode(value: string | undefined): ReferenceBuildMode {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized || normalized === "auto") {
+    return "auto";
+  }
+  if (normalized === "always" || normalized === "force" || normalized === "1" || normalized === "true") {
+    return "always";
+  }
+  if (normalized === "skip" || normalized === "never" || normalized === "0" || normalized === "false") {
+    return "skip";
+  }
+  return "auto";
+}
+
+export function shouldBuildGatewayProjectReferences(input: {
+  mode: ReferenceBuildMode;
+  currentSignature: string;
+  lastSuccessfulSignature?: string;
+}): { build: boolean; reason: string } {
+  if (input.mode === "always") {
+    return { build: true, reason: "forced by reference build mode" };
+  }
+  if (input.mode === "skip") {
+    return { build: false, reason: "forced by reference build mode" };
+  }
+  if (input.lastSuccessfulSignature !== undefined && input.lastSuccessfulSignature === input.currentSignature) {
+    return { build: false, reason: "source signature unchanged since last successful reference build" };
+  }
+  return { build: true, reason: "source signature changed or not built yet" };
+}
+
 export function resolveGatewayHealthHost(host: string): string {
   const normalized = host.trim().toLowerCase();
   if (normalized === "0.0.0.0" || normalized === "::" || normalized === "[::]") {

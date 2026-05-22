@@ -17,8 +17,10 @@ import {
   isWatchableSourceFile,
   pruneFailureTimestamps,
   readPositiveInt,
+  resolveReferenceBuildMode,
   resolveGatewayHealthHost,
   sanitizeSpawnOutput,
+  shouldBuildGatewayProjectReferences,
   shouldIgnoreWatchedEntryName,
 } from "./dev-supervisor-helpers.js";
 import {
@@ -55,6 +57,7 @@ const restartMaxFailures = Number(process.env.GOATCITADEL_GATEWAY_RESTART_MAX_FA
 const restartBaseBackoffMs = Number(process.env.GOATCITADEL_GATEWAY_RESTART_BASE_BACKOFF_MS ?? 1000);
 const restartMaxBackoffMs = Number(process.env.GOATCITADEL_GATEWAY_RESTART_MAX_BACKOFF_MS ?? 30_000);
 const restartCircuitOpenMs = Number(process.env.GOATCITADEL_GATEWAY_RESTART_CIRCUIT_MS ?? 60_000);
+const referenceBuildMode = resolveReferenceBuildMode(process.env.GOATCITADEL_GATEWAY_REFERENCE_BUILD);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const configuredRoot = process.env.GOATCITADEL_ROOT_DIR?.trim();
 const runtimeRoot = configuredRoot ? path.resolve(configuredRoot) : repoRoot;
@@ -80,6 +83,7 @@ let shuttingDown = false;
 let restarting = false;
 let polling = false;
 let lastSignature = "";
+let lastSuccessfulReferenceBuildSignature: string | undefined;
 let restartTimer: NodeJS.Timeout | null = null;
 let sourceChangeRestartTimer: NodeJS.Timeout | null = null;
 let circuitOpenUntil = 0;
@@ -95,6 +99,7 @@ async function main(): Promise<void> {
       pollMs,
       watchDebounceMs,
       gatewayHealthTimeoutMs,
+      referenceBuildMode,
     });
   } else {
     log.info(formatVerboseFlagHint());
@@ -184,6 +189,7 @@ async function restartGateway(reason: string): Promise<void> {
 }
 
 async function startChild(): Promise<void> {
+  const startupStartedAt = Date.now();
   if (await isPortOpen()) {
     log.error("gateway port already in use before spawn", {
       host: gatewayHealthHost,
@@ -197,11 +203,12 @@ async function startChild(): Promise<void> {
     return;
   }
 
-  if (!ensureGatewayProjectReferencesBuilt()) {
+  if (!ensureGatewayProjectReferencesBuilt(lastSignature)) {
     return;
   }
 
   const { command, args } = buildGatewayStartCommand();
+  const spawnStartedAt = Date.now();
 
   child = spawn(command, args, {
     cwd: gatewayDir,
@@ -222,6 +229,11 @@ async function startChild(): Promise<void> {
   if (!currentPid) {
     throw new Error("failed to start gateway child process");
   }
+  log.info(`gateway child spawned in ${Date.now() - spawnStartedAt}ms`, {
+    pid: currentPid,
+    spawnElapsedMs: Date.now() - spawnStartedAt,
+    startupElapsedMs: Date.now() - startupStartedAt,
+  });
 
   child.on("exit", (code, signal) => {
     if (child?.pid === currentPid) {
@@ -241,22 +253,49 @@ async function startChild(): Promise<void> {
     }
   });
 
+  const healthStartedAt = Date.now();
   const healthy = await waitForGatewayHealth(gatewayHealthTimeoutMs);
+  const healthElapsedMs = Date.now() - healthStartedAt;
   if (healthy) {
     resetFailureBudget();
-    log.success("gateway online", { pid: currentPid });
+    log.success(`gateway online in ${Date.now() - startupStartedAt}ms`, {
+      pid: currentPid,
+      healthElapsedMs,
+      startupElapsedMs: Date.now() - startupStartedAt,
+    });
     return;
   }
 
-  log.warn("gateway did not become healthy in time", { timeoutMs: gatewayHealthTimeoutMs });
+  log.warn("gateway did not become healthy in time", {
+    pid: currentPid,
+    timeoutMs: gatewayHealthTimeoutMs,
+    healthElapsedMs,
+    startupElapsedMs: Date.now() - startupStartedAt,
+    reason: "health_timeout",
+  });
   const delay = registerFailureAndGetDelay("health_timeout");
   if (delay !== null) {
     scheduleRestartAfter(delay, "health timeout");
   }
 }
 
-function ensureGatewayProjectReferencesBuilt(): boolean {
-  log.info("building gateway project references");
+function ensureGatewayProjectReferencesBuilt(currentSignature: string): boolean {
+  const decision = shouldBuildGatewayProjectReferences({
+    mode: referenceBuildMode,
+    currentSignature,
+    lastSuccessfulSignature: lastSuccessfulReferenceBuildSignature,
+  });
+  if (!decision.build) {
+    const message =
+      referenceBuildMode === "skip"
+        ? "skipping gateway project reference build"
+        : "gateway project references already built for current source signature";
+    log.info(message, { reason: decision.reason });
+    return true;
+  }
+
+  const startedAt = Date.now();
+  log.info("building gateway project references", { reason: decision.reason });
   const env = {
     ...process.env,
     NODE_NO_WARNINGS: "1",
@@ -281,10 +320,16 @@ function ensureGatewayProjectReferencesBuilt(): boolean {
         });
 
   if ((result.status ?? 1) === 0) {
+    lastSuccessfulReferenceBuildSignature = currentSignature;
+    log.info(`gateway project references built in ${Date.now() - startedAt}ms`, {
+      durationMs: Date.now() - startedAt,
+      reason: decision.reason,
+    });
     return true;
   }
 
   log.error("gateway project reference build failed", {
+    durationMs: Date.now() - startedAt,
     status: result.status ?? "null",
     signal: result.signal ?? "null",
     stderr: sanitizeSpawnOutput(result.stderr),

@@ -58,6 +58,9 @@ describe("dev supervisor coverage", () => {
     readdirMock.mockReset();
 
     process.env.GOATCITADEL_GATEWAY_WATCH_POLL_MS = "999999";
+    delete process.env.GOATCITADEL_GATEWAY_HEALTH_TIMEOUT_MS;
+    delete process.env.GOATCITADEL_GATEWAY_REFERENCE_BUILD;
+    delete process.env.GOATCITADEL_GATEWAY_RESTART_BASE_BACKOFF_MS;
     process.env.GATEWAY_HOST = "127.0.0.1";
     process.env.GATEWAY_PORT = "8787";
     delete process.env.GOATCITADEL_AUTH_MODE;
@@ -89,6 +92,9 @@ describe("dev supervisor coverage", () => {
 
   afterEach(() => {
     delete process.env.GOATCITADEL_GATEWAY_WATCH_POLL_MS;
+    delete process.env.GOATCITADEL_GATEWAY_HEALTH_TIMEOUT_MS;
+    delete process.env.GOATCITADEL_GATEWAY_REFERENCE_BUILD;
+    delete process.env.GOATCITADEL_GATEWAY_RESTART_BASE_BACKOFF_MS;
     delete process.env.GATEWAY_HOST;
     delete process.env.GATEWAY_PORT;
     delete process.env.GOATCITADEL_AUTH_MODE;
@@ -100,6 +106,7 @@ describe("dev supervisor coverage", () => {
 
   it("starts and handles shutdown signal without throwing", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
     await import("./dev-supervisor.js");
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -107,6 +114,8 @@ describe("dev supervisor coverage", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(spawnMock).toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("gateway child spawned in"));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("gateway online in"));
     expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("[gateway-supervisor] fatal"));
   });
 
@@ -118,8 +127,39 @@ describe("dev supervisor coverage", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(spawnMock).not.toHaveBeenCalled();
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(
-      "Unsafe gateway bind blocked for local dev: GATEWAY_HOST=0.0.0.0",
-    ));
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Unsafe gateway bind blocked for local dev: GATEWAY_HOST=0.0.0.0"),
+    );
+  });
+
+  it("does not repeat the reference build for an unchanged health-timeout restart", async () => {
+    process.env.GOATCITADEL_GATEWAY_HEALTH_TIMEOUT_MS = "1";
+    process.env.GOATCITADEL_GATEWAY_RESTART_BASE_BACKOFF_MS = "1";
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    let fetchCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        fetchCalls += 1;
+        if (fetchCalls === 1) {
+          throw new Error("not ready");
+        }
+        return new Response("ok", { status: 200 });
+      }),
+    );
+
+    await import("./dev-supervisor.js");
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    process.emit("SIGINT");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const referenceBuildCalls = spawnSyncMock.mock.calls.filter((call) =>
+      String(call[1]).includes("pnpm exec tsc -b tsconfig.json --pretty false"),
+    );
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(referenceBuildCalls).toHaveLength(1);
+    expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("[gateway-supervisor] fatal"));
   });
 });

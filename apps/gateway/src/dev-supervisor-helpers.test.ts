@@ -5,8 +5,10 @@ import {
   isWatchableSourceFile,
   pruneFailureTimestamps,
   readPositiveInt,
+  resolveReferenceBuildMode,
   resolveGatewayHealthHost,
   sanitizeSpawnOutput,
+  shouldBuildGatewayProjectReferences,
   shouldIgnoreWatchedEntryName,
 } from "./dev-supervisor-helpers.js";
 
@@ -79,6 +81,43 @@ describe("dev supervisor helper decisions", () => {
     expect(buildGatewayStartCommandForPlatform("linux", undefined)).toEqual({
       command: "pnpm",
       args: ["exec", "tsx", "src/main.ts"],
+    });
+  });
+
+  it("normalizes reference-build modes and skips duplicate builds for unchanged source signatures", () => {
+    expect(resolveReferenceBuildMode(undefined)).toBe("auto");
+    expect(resolveReferenceBuildMode("force")).toBe("always");
+    expect(resolveReferenceBuildMode("false")).toBe("skip");
+    expect(resolveReferenceBuildMode("surprise")).toBe("auto");
+
+    expect(
+      shouldBuildGatewayProjectReferences({
+        mode: "auto",
+        currentSignature: "same",
+        lastSuccessfulSignature: "same",
+      }),
+    ).toEqual({
+      build: false,
+      reason: "source signature unchanged since last successful reference build",
+    });
+    expect(
+      shouldBuildGatewayProjectReferences({
+        mode: "auto",
+        currentSignature: "next",
+        lastSuccessfulSignature: "previous",
+      }),
+    ).toEqual({
+      build: true,
+      reason: "source signature changed or not built yet",
+    });
+    expect(
+      shouldBuildGatewayProjectReferences({
+        mode: "skip",
+        currentSignature: "next",
+      }),
+    ).toEqual({
+      build: false,
+      reason: "forced by reference build mode",
     });
   });
 });
