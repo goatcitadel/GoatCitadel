@@ -678,7 +678,9 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
             <p>
               {props.mode === "cowork"
                 ? "Describe the objective, constraints, and desired output. Cowork will create a visible run plan here."
-                : "Start with a plain request, or type /help to see commands."}
+                : props.mode === "code"
+                  ? "Describe a focused implementation or review task. The workbench will show diffs, validation results, and Code Mode runs as evidence appears."
+                  : "Start with a plain request, or type /help to see commands."}
             </p>
           </div>
         ) : (

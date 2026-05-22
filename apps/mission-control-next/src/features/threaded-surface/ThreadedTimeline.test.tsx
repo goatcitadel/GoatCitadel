@@ -336,6 +336,13 @@ describe("ThreadedTimeline", () => {
         />,
       ),
     ).toContain("Start with a plain request");
+    expect(
+      renderToStaticMarkup(
+        <ThreadedTimeline
+          props={buildProps({ mode: "code", thread: { sessionId: "session-empty", turns: [] } }) as any}
+        />,
+      ),
+    ).toContain("Describe a focused implementation or review task");
 
     const cases = [
       ["queued", "Queued"],

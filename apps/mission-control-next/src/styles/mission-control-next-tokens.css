@@ -34,6 +34,17 @@
   --r-md: 0.9rem;
   --r-lg: 1.25rem;
   --r-pill: 999px;
+
+  /*
+   * Text-size scale. --text-xs is the floor for operator-facing UI text per
+   * docs/ENGINEERING_HANDBOOK.md - do not introduce smaller hardcodes in new
+   * code. The scale stays in rem so it tracks user font-size preferences.
+   */
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-md: 0.875rem;
+  --text-lg: 1rem;
+  --text-xl: 1.125rem;
 }
 
 .mc-next-shell.theme-signal-noir {

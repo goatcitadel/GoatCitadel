@@ -1913,6 +1913,11 @@ describe("ThreadedWorkflowPanel", () => {
         findButton(renderer!, "Stop run")?.props.onClick();
         findButton(renderer!, item.label)?.props.onClick();
       });
+      const stopConfirm = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
+      expect(stopConfirm?.props.title).toBe("Stop the active Cowork run?");
+      await act(async () => {
+        stopConfirm?.props.onConfirm();
+      });
       expect(onStopTurn).toHaveBeenCalledTimes(1);
       expect(callback).toHaveBeenCalledTimes(1);
     }

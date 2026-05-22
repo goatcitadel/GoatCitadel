@@ -3,6 +3,7 @@ import { createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
   ThreadedSurfacePage,
   formatRelativeTime,
@@ -398,8 +399,11 @@ describe("ThreadedSurfacePage", () => {
       />,
     );
 
-    expect(markup).toContain('aria-label="Composer policy state"');
-    expect(markup).toContain("Policy: Trusted Local Power");
+    // The composer-policy chip was deduplicated against the header chip; the
+    // permission state now renders exactly once near the surface header.
+    expect(markup).not.toContain('aria-label="Composer policy state"');
+    const policyChipMatches = markup.match(/Policy: Trusted Local Power/g) ?? [];
+    expect(policyChipMatches.length).toBe(1);
     expect(markup).toContain("skips normal prompts");
   });
 
@@ -445,8 +449,6 @@ describe("ThreadedSurfacePage", () => {
     input.sessionRail.archiveWorkspaceCount = 3;
     input.sessionRail.archiveWorkspacePending = false;
     input.sessionRail.onConfirmArchiveWorkspace = vi.fn();
-    const confirm = vi.fn(() => true);
-    vi.stubGlobal("window", { confirm });
 
     let renderer: ReactTestRenderer | null = null;
     await act(async () => {
@@ -470,6 +472,13 @@ describe("ThreadedSurfacePage", () => {
       findButton(renderer!.root, "release").props.onClick();
       findButton(renderer!.root, "Create project").props.onClick();
       findButton(renderer!.root, "Archive workspace chats").props.onClick();
+    });
+
+    const archiveConfirm = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
+    expect(archiveConfirm?.props.title).toBe("Archive workspace chats?");
+    expect(archiveConfirm?.props.message).toContain("Archive 3 active mission chats");
+    await act(async () => {
+      archiveConfirm?.props.onConfirm();
     });
 
     const inputs = renderer!.root.findAllByType("input");
@@ -512,7 +521,6 @@ describe("ThreadedSurfacePage", () => {
     expect(input.sessionRail.onSelectFolderId).toHaveBeenCalledWith("folder-1");
     expect(input.sessionRail.onSelectTag).toHaveBeenCalledWith(null);
     expect(input.dropTargetProps.onUploadFiles).toHaveBeenCalledWith(["artifact"]);
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Archive 3 active mission chats"));
     expect(input.sessionRail.onConfirmArchiveWorkspace).toHaveBeenCalledTimes(1);
   });
 
@@ -521,8 +529,6 @@ describe("ThreadedSurfacePage", () => {
     declined.sessionRail.archiveWorkspaceEnabled = true;
     declined.sessionRail.archiveWorkspaceCount = 0;
     declined.sessionRail.onConfirmArchiveWorkspace = vi.fn();
-    const confirm = vi.fn(() => false);
-    vi.stubGlobal("window", { confirm });
 
     let renderer: ReactTestRenderer | null = null;
     await act(async () => {
@@ -530,6 +536,11 @@ describe("ThreadedSurfacePage", () => {
     });
     await act(async () => {
       findButton(renderer!.root, "Archive workspace chats").props.onClick();
+    });
+    const declinedConfirm = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
+    expect(declinedConfirm?.props.title).toBe("Archive workspace chats?");
+    await act(async () => {
+      declinedConfirm?.props.onCancel();
     });
     expect(declined.sessionRail.onConfirmArchiveWorkspace).not.toHaveBeenCalled();
 
@@ -543,6 +554,11 @@ describe("ThreadedSurfacePage", () => {
     await act(async () => {
       findButton(renderer!.root, "Archiving...").props.onClick();
     });
+    // While pending, the button click is a no-op (handleArchiveWorkspace bails
+    // before opening the modal), so no ConfirmModal becomes open and the
+    // archive callback never fires.
+    const unavailableConfirm = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
+    expect(unavailableConfirm).toBeUndefined();
     expect(unavailable.sessionRail.onConfirmArchiveWorkspace).not.toHaveBeenCalled();
   });
 

@@ -1,5 +1,6 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { ThreadedContextDrawer } from "./ThreadedContextDrawer";
 
 function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
@@ -472,5 +473,110 @@ describe("ThreadedContextDrawer", () => {
     expect(props.onExportSnapshot).toHaveBeenCalledTimes(1);
     expect(props.onDeleteSession).toHaveBeenCalledTimes(1);
     expect(props.onSaveExternalBinding).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders run-shape controls on the assist tab and routes changes through onPrefPatch", async () => {
+    const onPrefPatch = vi.fn();
+    let renderer: ReactTestRenderer | null = null;
+    const props = baseProps({
+      selectedSessionId: "session-with-acked-auto",
+      prefs: {
+        sessionId: "session-with-acked-auto",
+        thinkingLevel: "standard",
+        speedMode: "standard",
+        subagentPolicy: "ask_when_useful",
+        planningMode: "off",
+      },
+      onPrefPatch,
+    });
+
+    await act(async () => {
+      renderer = create(<ThreadedContextDrawer surface="cowork" props={props} />);
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Assist").props.onClick();
+    });
+
+    const selects = renderer!.root.findAllByType("select");
+    const thinkingSelect = selects.find((node) => node.props["aria-label"] === "Thinking level")!;
+    const speedSelect = selects.find((node) => node.props["aria-label"] === "Speed mode")!;
+    const subagentSelect = selects.find((node) => node.props["aria-label"] === "Subagent policy")!;
+
+    await act(async () => {
+      thinkingSelect.props.onChange({ target: { value: "deep" } });
+      speedSelect.props.onChange({ target: { value: "fast" } });
+      // Pick a non-auto subagent policy first to confirm it passes through immediately.
+      subagentSelect.props.onChange({ target: { value: "off" } });
+    });
+
+    expect(onPrefPatch).toHaveBeenCalledWith({ thinkingLevel: "deep" });
+    expect(onPrefPatch).toHaveBeenCalledWith({ speedMode: "fast" });
+    expect(onPrefPatch).toHaveBeenCalledWith({ subagentPolicy: "off" });
+  });
+
+  it("gates the first auto-subagent selection behind a consent confirmation", async () => {
+    const onPrefPatch = vi.fn();
+    // Stub a minimal localStorage on globalThis.window so the hook can read
+    // and write the per-session acknowledgement without depending on jsdom or
+    // happy-dom (those environments cause Radix to portal-mount into a fake
+    // DOM that react-test-renderer cannot adopt).
+    const store = new Map<string, string>();
+    const fakeWindow = {
+      localStorage: {
+        getItem: (key: string) => store.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          store.set(key, value);
+        },
+        removeItem: (key: string) => {
+          store.delete(key);
+        },
+      },
+    };
+    vi.stubGlobal("window", fakeWindow);
+
+    try {
+      let renderer: ReactTestRenderer | null = null;
+      const props = baseProps({
+        selectedSessionId: "session-needs-consent",
+        prefs: {
+          sessionId: "session-needs-consent",
+          thinkingLevel: "standard",
+          speedMode: "standard",
+          subagentPolicy: "ask_when_useful",
+          planningMode: "off",
+        },
+        onPrefPatch,
+      });
+
+      await act(async () => {
+        renderer = create(<ThreadedContextDrawer surface="cowork" props={props} />);
+      });
+      await act(async () => {
+        findButton(renderer!.root, "Assist").props.onClick();
+      });
+
+      const subagentSelect = renderer!.root
+        .findAllByType("select")
+        .find((node) => node.props["aria-label"] === "Subagent policy")!;
+
+      await act(async () => {
+        subagentSelect.props.onChange({ target: { value: "auto_when_useful" } });
+      });
+
+      // The change should NOT propagate yet — the confirm modal is in the way.
+      expect(onPrefPatch).not.toHaveBeenCalled();
+
+      const consentModal = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
+      expect(consentModal?.props.title).toBe("Allow Cowork to auto-delegate to subagents?");
+
+      await act(async () => {
+        consentModal?.props.onConfirm();
+      });
+
+      expect(onPrefPatch).toHaveBeenCalledWith({ subagentPolicy: "auto_when_useful" });
+      expect(store.get("mc-next:subagent-auto-ack:session-needs-consent")).toBe("1");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

@@ -764,6 +764,18 @@ pnpm -r test
 pnpm -r build
 ```
 
+#### UI typography floor
+
+Operator-facing UI text must not declare a `font-size` below `var(--text-xs)` (12px). The scale lives in `apps/mission-control-next/src/styles/mission-control-next-tokens.css`:
+
+- `--text-xs: 0.75rem` (~12px) — chips, helpers, labels, metadata
+- `--text-sm: 0.8125rem` (~13px) — session row titles, secondary content
+- `--text-md: 0.875rem` (~14px) — default UI text
+- `--text-lg: 1rem` — section heads
+- `--text-xl: 1.125rem` — larger emphasis
+
+Reach for the tokens before introducing new hardcoded sizes; visual-regression baselines will catch unintentional drift, but the floor exists so readability and AGENTS.md's "Cyberpunk, But Legible" principle stay aligned.
+
 ### 12.3 Backup and Recovery
 
 Minimum backup set:

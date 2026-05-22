@@ -33,6 +33,39 @@ export const RELEASE_SURFACE_VARIANTS = [
     colorScheme: "light",
     themeQuery: "theme=light",
   },
+  /*
+   * Laptop captures the typical 13-14" panel where the threaded surface still
+   * runs the full three-column stage but at noticeably tighter widths.
+   */
+  {
+    slug: "laptop-dark",
+    viewport: { width: 1280, height: 800 },
+    colorScheme: "dark",
+    themeQuery: "",
+  },
+  {
+    slug: "laptop-light",
+    viewport: { width: 1280, height: 800 },
+    colorScheme: "light",
+    themeQuery: "theme=light",
+  },
+  /*
+   * Desktop-narrow sits just below the 1180px useMediaQuery boundary in
+   * ThreadedSurfacePage and the 1360px stage-collapse breakpoint in
+   * threaded-surface.css; this is where the compact-layout class kicks in.
+   */
+  {
+    slug: "desktop-narrow-dark",
+    viewport: { width: 1180, height: 900 },
+    colorScheme: "dark",
+    themeQuery: "",
+  },
+  {
+    slug: "desktop-narrow-light",
+    viewport: { width: 1180, height: 900 },
+    colorScheme: "light",
+    themeQuery: "theme=light",
+  },
   {
     slug: "mobile-dark",
     viewport: { width: 390, height: 844 },

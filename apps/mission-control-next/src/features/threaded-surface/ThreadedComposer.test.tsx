@@ -172,10 +172,6 @@ function findButtons(root: ReactTestInstance, label: string): ReactTestInstance[
   return root.findAll((node) => node.type === "button" && collectText(node).includes(label));
 }
 
-function findSelect(root: ReactTestInstance, ariaLabel: string): ReactTestInstance {
-  return root.findByProps({ "aria-label": ariaLabel });
-}
-
 async function click(node: ReactTestInstance): Promise<void> {
   await act(async () => {
     node.props.onClick({
@@ -251,16 +247,19 @@ describe("ThreadedComposer", () => {
     expect(markup).toContain("No active provider configured.");
   });
 
-  it("shows a default planning toggle when planning mode is off", () => {
+  it("renders the composer with the default chat affordances when planning mode is off", () => {
     const markup = buildMarkup({
       planningMode: "off",
     });
 
-    expect(markup).toContain("Shift+Tab");
-    expect(markup).toContain("Plan");
+    // The Plan toggle, thinking-level/speed-mode/subagent-policy selectors moved
+    // to the Context Drawer's Assist tab; the composer no longer hosts them.
+    expect(markup).not.toContain("Shift+Tab");
+    expect(markup).not.toContain(">Plan<");
+    expect(markup).not.toContain("Subagent policy");
+    expect(markup).not.toContain("Thinking level");
     expect(markup).toContain("OpenAI / gpt-test");
     expect(markup).toContain("0 tokens / $0.00");
-    expect(markup).toContain('aria-pressed="false"');
     expect(markup).toContain("Attach files");
     expect(markup).toContain("Send");
     expect(markup).not.toContain(">Delegate<");
@@ -323,10 +322,10 @@ describe("ThreadedComposer", () => {
       planningMode: "advisory",
     });
 
+    // The advisory-mode banner stays in the composer so the operator notices
+    // the posture even while the underlying toggle now lives in the drawer.
     expect(markup).toContain("Planning mode is on");
     expect(markup).toContain("Turn planning off");
-    expect(markup).toContain("Plan on");
-    expect(markup).toContain('aria-pressed="true"');
   });
 
   it("uses the compact suggestion popover for dollar skill mentions", () => {
@@ -621,7 +620,6 @@ describe("ThreadedComposer", () => {
     await click(renderer.root.findByProps({ "aria-label": "Attach files" }));
     await click(findButton(renderer.root, "Apply"));
     await click(findButton(renderer.root, "Attach source"));
-    await click(findButton(renderer.root, "Plan"));
 
     const presetSelect = renderer.root.findByProps({ id: "threaded-composer-preset" });
     const knowledgeInput = renderer.root.findByProps({ id: "threaded-composer-knowledge-url" });
@@ -632,9 +630,6 @@ describe("ThreadedComposer", () => {
       knowledgeInput.props.onChange({ target: { value: "https://example.test/next" } });
       knowledgeModeSelect.props.onChange({ target: { value: "full_text" } });
       audioInput.props.onChange({ target: { files: ["audio-file"] } });
-      findSelect(renderer.root, "Thinking level").props.onChange({ target: { value: "deep" } });
-      findSelect(renderer.root, "Speed mode").props.onChange({ target: { value: "fast" } });
-      findSelect(renderer.root, "Subagent policy").props.onChange({ target: { value: "auto_when_useful" } });
     });
 
     expect(callbacks.onDismissPresetWarning).toHaveBeenCalledTimes(1);
@@ -652,10 +647,9 @@ describe("ThreadedComposer", () => {
     expect(callbacks.onKnowledgeUrlModeChange).toHaveBeenCalledWith("full_text");
     expect(callbacks.onAttachKnowledgeUrl).toHaveBeenCalledTimes(1);
     expect(callbacks.onAudioFileSelected).toHaveBeenCalledWith(["audio-file"]);
-    expect(callbacks.onSetThinkingLevel).toHaveBeenCalledWith("deep");
-    expect(callbacks.onSetSpeedMode).toHaveBeenCalledWith("fast");
-    expect(callbacks.onSetSubagentPolicy).toHaveBeenCalledWith("auto_when_useful");
-    expect(callbacks.onTogglePlanningMode).toHaveBeenCalledTimes(1);
+    // Thinking level, speed mode, subagent policy, and the planning toggle are
+    // exercised in ThreadedContextDrawer.test.tsx now that they live in the
+    // Assist tab.
   });
 
   it("uses blocker, sending, and stream-stop labels for primary actions", async () => {

@@ -236,6 +236,7 @@ function NextCoworkPanel({ panel }: { panel: Extract<MissionThreadedWorkflowPane
     agenticControlStatus,
   } = panel.props;
   const [activeTab, setActiveTab] = useState<"plan" | "run-map" | "timeline" | "actions">("plan");
+  const [stopRunConfirmOpen, setStopRunConfirmOpen] = useState(false);
   const activeTrace = viewModel.raw.selectedTurn?.trace ?? viewModel.raw.activeTurn?.trace ?? null;
   const pendingApproval = activeTrace?.pendingApprovalSummary;
   const requestedModel =
@@ -260,12 +261,25 @@ function NextCoworkPanel({ panel }: { panel: Extract<MissionThreadedWorkflowPane
             </button>
           ) : null}
           {onStopTurn ? (
-            <button type="button" className="mc-next-panel-button" onClick={onStopTurn}>
+            <button type="button" className="mc-next-panel-button" onClick={() => setStopRunConfirmOpen(true)}>
               Stop run
             </button>
           ) : null}
         </div>
       </header>
+
+      <ConfirmModal
+        open={stopRunConfirmOpen}
+        title="Stop the active Cowork run?"
+        message="In-flight steps will be cancelled. Durable execution retains completed evidence, so you can review what landed before deciding whether to retry or pivot."
+        confirmLabel="Stop run"
+        danger
+        onCancel={() => setStopRunConfirmOpen(false)}
+        onConfirm={() => {
+          setStopRunConfirmOpen(false);
+          onStopTurn?.();
+        }}
+      />
 
       <div className="mc-next-cowork-stage-strip">
         {viewModel.stageCards.map((item) => (

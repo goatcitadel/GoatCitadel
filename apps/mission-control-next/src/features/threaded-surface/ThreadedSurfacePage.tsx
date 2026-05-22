@@ -9,6 +9,7 @@ import type {
 import { groupDelegatedSessionsForRail } from "@goatcitadel/threaded-surface-core";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
 import { ChatModelPicker } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
 import {
   Sheet,
@@ -110,6 +111,7 @@ export function ThreadedSurfacePage({
   const modeMeta = MODE_META[activeMode];
   const [codeWorkbenchOpen, setCodeWorkbenchOpen] = useState(true);
   const [postureFilter, setPostureFilter] = useState<ChatMode | "all">("all");
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const workflowPanelOpen = Boolean(workflowPanel && (workflowPanel.kind !== "code" || codeWorkbenchOpen));
   const filterSessionsByPosture = useMemo(
     () => (items: Array<ChatSessionRecord & { projectName?: string | null }>) =>
@@ -135,6 +137,11 @@ export function ThreadedSurfacePage({
   ]
     .filter(Boolean)
     .join(" ");
+  const archiveWorkspaceCount = input.sessionRail.archiveWorkspaceCount ?? 0;
+  const archiveWorkspaceMessage =
+    archiveWorkspaceCount > 0
+      ? `Archive ${archiveWorkspaceCount} active mission chats in this workspace? Archived chats leave the default history rail but stay recoverable from Archived view.`
+      : "Archive active mission chats in this workspace?";
   const handleArchiveWorkspace = () => {
     if (
       !input.sessionRail.archiveWorkspaceEnabled ||
@@ -143,15 +150,11 @@ export function ThreadedSurfacePage({
     ) {
       return;
     }
-    const count = input.sessionRail.archiveWorkspaceCount ?? 0;
-    const message =
-      count > 0
-        ? `Archive ${count} active mission chats in this workspace? Archived chats leave the default history rail but stay recoverable from Archived view.`
-        : "Archive active mission chats in this workspace?";
-    if (typeof window !== "undefined" && !window.confirm(message)) {
-      return;
-    }
-    input.sessionRail.onConfirmArchiveWorkspace();
+    setArchiveConfirmOpen(true);
+  };
+  const handleArchiveWorkspaceConfirmed = () => {
+    setArchiveConfirmOpen(false);
+    input.sessionRail.onConfirmArchiveWorkspace?.();
   };
 
   return (
@@ -413,6 +416,19 @@ export function ThreadedSurfacePage({
           </aside>
         ) : null}
       </section>
+
+      <ConfirmModal
+        open={archiveConfirmOpen}
+        title="Archive workspace chats?"
+        message={archiveWorkspaceMessage}
+        confirmLabel="Archive workspace chats"
+        danger
+        pending={input.sessionRail.archiveWorkspacePending}
+        cancelDisabled={input.sessionRail.archiveWorkspacePending}
+        disableDismiss={input.sessionRail.archiveWorkspacePending}
+        onCancel={() => setArchiveConfirmOpen(false)}
+        onConfirm={handleArchiveWorkspaceConfirmed}
+      />
     </div>
   );
 }
@@ -543,11 +559,6 @@ function ThreadConversationSurface({
           <ThreadedTimeline props={props} />
         </div>
         <div className="mc-next-threaded-composer-card">
-          <div className="mc-next-threaded-composer-policy" aria-label="Composer policy state">
-            <StatusChip tone={permissionState?.localOperatorOverrideId ? "warning" : "muted"}>
-              {formatThreadedPermissionSummary(permissionState)}
-            </StatusChip>
-          </div>
           <ThreadedComposer props={props} />
         </div>
       </section>

@@ -1,10 +1,45 @@
 import { useMemo, useState } from "react";
 import type { MissionThreadedContextDockProps } from "@goatcitadel/threaded-surface-core";
-import type { ChatMode } from "@goatcitadel/contracts";
+import type {
+  ChatMode,
+  ChatPlanningMode,
+  ChatSpeedMode,
+  ChatSubagentPolicy,
+  ChatThinkingLevel,
+} from "@goatcitadel/contracts";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
 
 type DrawerTab = "context" | "trace" | "assist" | "session";
+
+const SUBAGENT_AUTO_ACK_STORAGE_PREFIX = "mc-next:subagent-auto-ack:";
+
+function readSubagentAutoAckFromStorage(sessionId: string | null): boolean {
+  if (!sessionId || typeof window === "undefined") {
+    return false;
+  }
+  try {
+    return window.localStorage.getItem(`${SUBAGENT_AUTO_ACK_STORAGE_PREFIX}${sessionId}`) === "1";
+  } catch {
+    // localStorage access can throw in privacy modes; treat as unacknowledged
+    // and ignore the failure - the consent modal will simply ask again.
+    return false;
+  }
+}
+
+function writeSubagentAutoAckToStorage(sessionId: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(`${SUBAGENT_AUTO_ACK_STORAGE_PREFIX}${sessionId}`, "1");
+  } catch {
+    // localStorage write may fail (privacy mode, quota); intentionally ignore
+    // and accept that the consent modal re-appears next time. This is a
+    // best-effort, non-fatal UI acknowledgement, not a runtime invariant.
+  }
+}
 
 function formatSelectionSource(value?: string | null): string {
   return value ? `Selection: ${value}` : "Selection pending";
@@ -28,6 +63,19 @@ export function ThreadedContextDrawer({
 }) {
   const [activeTab, setActiveTab] = useState<DrawerTab>("context");
   const projectOptions = useMemo(() => props.projectOptions ?? [], [props.projectOptions]);
+  const [pendingSubagentAuto, setPendingSubagentAuto] = useState<ChatSubagentPolicy | null>(null);
+  const thinkingLevel: ChatThinkingLevel = props.prefs?.thinkingLevel ?? "standard";
+  const speedMode: ChatSpeedMode = props.prefs?.speedMode ?? "standard";
+  const subagentPolicy: ChatSubagentPolicy = props.prefs?.subagentPolicy ?? "ask_when_useful";
+  const planningMode: ChatPlanningMode = props.prefs?.planningMode ?? props.planningMode ?? "off";
+  const planningEnabled = planningMode === "advisory";
+  const handleSubagentPolicyChange = (next: ChatSubagentPolicy) => {
+    if (next === "auto_when_useful" && !readSubagentAutoAckFromStorage(props.selectedSessionId)) {
+      setPendingSubagentAuto(next);
+      return;
+    }
+    void props.onPrefPatch({ subagentPolicy: next });
+  };
 
   return (
     <div className="mc-next-context-drawer" data-mode={surface}>
@@ -176,6 +224,57 @@ export function ThreadedContextDrawer({
 
       {activeTab === "assist" ? (
         <div className="mc-next-context-section-stack">
+          <section className="mc-next-context-card">
+            <p className="mc-next-panel-kicker">Run shape</p>
+            <label className="mc-next-context-field">
+              <span>Thinking</span>
+              <select
+                value={thinkingLevel}
+                onChange={(event) => void props.onPrefPatch({ thinkingLevel: event.target.value as ChatThinkingLevel })}
+                aria-label="Thinking level"
+              >
+                <option value="off">No thinking</option>
+                <option value="minimal">Minimal</option>
+                <option value="standard">Standard</option>
+                <option value="extended">Extended</option>
+                <option value="deep">Deep</option>
+              </select>
+            </label>
+            <label className="mc-next-context-field">
+              <span>Speed</span>
+              <select
+                value={speedMode}
+                onChange={(event) => void props.onPrefPatch({ speedMode: event.target.value as ChatSpeedMode })}
+                aria-label="Speed mode"
+              >
+                <option value="standard">Standard</option>
+                <option value="fast">Fast</option>
+              </select>
+            </label>
+            <label className="mc-next-context-field">
+              <span>Subagents</span>
+              <select
+                value={subagentPolicy}
+                onChange={(event) => handleSubagentPolicyChange(event.target.value as ChatSubagentPolicy)}
+                aria-label="Subagent policy"
+              >
+                <option value="off">No subagents</option>
+                <option value="ask_when_useful">Ask before delegating</option>
+                <option value="auto_when_useful">Auto-delegate to subagents</option>
+              </select>
+            </label>
+            <div className="mc-next-context-actions">
+              <button
+                type="button"
+                className={`mc-next-panel-button${planningEnabled ? " active" : ""}`}
+                aria-pressed={planningEnabled}
+                onClick={() => void props.onPrefPatch({ planningMode: planningEnabled ? "off" : "advisory" })}
+              >
+                {planningEnabled ? "Planning on" : "Turn planning on"}
+              </button>
+            </div>
+          </section>
+
           <section className="mc-next-context-card">
             <p className="mc-next-panel-kicker">Assist posture</p>
             <div className="mc-next-context-chip-row">
@@ -396,6 +495,23 @@ export function ThreadedContextDrawer({
           </section>
         </div>
       ) : null}
+
+      <ConfirmModal
+        open={pendingSubagentAuto !== null}
+        title="Allow Cowork to auto-delegate to subagents?"
+        message="Auto-delegation lets Cowork split runs across multiple subagents without asking each time. You will still see the run plan and can stop it. This persists for this session."
+        confirmLabel="Allow auto-delegation"
+        cancelLabel="Keep asking"
+        danger
+        onCancel={() => setPendingSubagentAuto(null)}
+        onConfirm={() => {
+          if (pendingSubagentAuto && props.selectedSessionId) {
+            writeSubagentAutoAckToStorage(props.selectedSessionId);
+            void props.onPrefPatch({ subagentPolicy: pendingSubagentAuto });
+          }
+          setPendingSubagentAuto(null);
+        }}
+      />
     </div>
   );
 }

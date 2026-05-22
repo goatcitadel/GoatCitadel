@@ -330,7 +330,6 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       : props.mode === "cowork"
         ? "Queue follow-up work while a run streams so Cowork can keep momentum without losing context."
         : "Drag files here, paste screenshots, and queue the next prompt while a turn is still streaming.";
-  const planningEnabled = props.planningMode === "advisory";
   const routeLabel =
     props.routePreflightLoading && !currentRouteLabel
       ? "Route checking"
@@ -343,6 +342,9 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const composerV2Enabled = useComposerV2Enabled();
   useAutoGrowTextarea(props.composerRef, props.draft);
   const contextStripMode = toContextStripMode(props.mode);
+  // planningEnabled was used by the inline Plan toggle, which moved to the
+  // Context Drawer's Assist tab. The composer keeps the "Planning mode is on"
+  // banner above the textarea via props.planningMode directly.
   const contextStripModel = currentRouteLabel ?? props.trust?.providerModelSummary ?? "Routing pending";
   const memoryLabel = formatHistoricalMemoryLabel(props.thread);
   const plusActions = [
@@ -683,52 +685,6 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
             className="mc-next-hidden-file"
             onChange={(event) => props.onAudioFileSelected?.(event.target.files)}
           />
-          <div className="mc-next-composer-multimodal-row">
-            <select
-              className="mc-next-composer-inline-select"
-              value={props.currentThinkingLevel}
-              onChange={(event) =>
-                props.onSetThinkingLevel(event.target.value as "off" | "minimal" | "standard" | "extended" | "deep")
-              }
-              aria-label="Thinking level"
-            >
-              <option value="off">No thinking</option>
-              <option value="minimal">Minimal</option>
-              <option value="standard">Standard</option>
-              <option value="extended">Extended</option>
-              <option value="deep">Deep</option>
-            </select>
-            <select
-              className="mc-next-composer-inline-select"
-              value={props.currentSpeedMode}
-              onChange={(event) => props.onSetSpeedMode(event.target.value as "standard" | "fast")}
-              aria-label="Speed mode"
-            >
-              <option value="standard">Standard</option>
-              <option value="fast">Fast</option>
-            </select>
-            <select
-              className="mc-next-composer-inline-select"
-              value={props.currentSubagentPolicy}
-              onChange={(event) =>
-                props.onSetSubagentPolicy(event.target.value as "off" | "ask_when_useful" | "auto_when_useful")
-              }
-              aria-label="Subagent policy"
-            >
-              <option value="off">No subagents</option>
-              <option value="ask_when_useful">Ask for subagents</option>
-              <option value="auto_when_useful">Auto subagents</option>
-            </select>
-            <button
-              type="button"
-              className={`mc-next-composer-inline-button${planningEnabled ? " active" : ""}`}
-              aria-pressed={planningEnabled}
-              title="Shift+Tab"
-              onClick={props.onTogglePlanningMode}
-            >
-              {planningEnabled ? "Plan on" : "Plan"}
-            </button>
-          </div>
         </div>
         <p className="mc-next-composer-helper">{helperCopy}</p>
         <div className="mc-next-composer-controls-end">
