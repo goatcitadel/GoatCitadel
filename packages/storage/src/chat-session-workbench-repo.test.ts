@@ -95,6 +95,29 @@ describe("ChatSessionWorkbenchRepository", () => {
     assert.equal(normalized?.validationStatus, "idle");
   });
 
+  it("persists and normalizes packageManager", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-chat-session-workbench-pm-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const repo = new ChatSessionWorkbenchRepository(db);
+
+    const initial = repo.ensure("sess-pm", "2026-05-01T00:00:00.000Z");
+    assert.equal(initial.packageManager, undefined);
+
+    const stored = repo.patch("sess-pm", { packageManager: "pnpm" }, "2026-05-01T00:01:00.000Z");
+    assert.equal(stored.packageManager, "pnpm");
+
+    const reloaded = repo.get("sess-pm");
+    assert.equal(reloaded?.packageManager, "pnpm");
+
+    const untouched = repo.patch("sess-pm", { validationStatus: "passed" }, "2026-05-01T00:02:00.000Z");
+    assert.equal(untouched.packageManager, "pnpm");
+
+    db.prepare("UPDATE chat_session_workbench SET package_manager = ? WHERE session_id = ?").run("rush", "sess-pm");
+    const normalized = repo.get("sess-pm");
+    assert.equal(normalized?.packageManager, undefined);
+  });
+
   it("validates relative workbench paths and fails clearly on missing readback", () => {
     assert.equal(sanitizeWorkbenchRelativePath(" src\\index.ts "), "src/index.ts");
     for (const value of ["", ".", "..", "../secret", "src/../secret", "src/.."]) {

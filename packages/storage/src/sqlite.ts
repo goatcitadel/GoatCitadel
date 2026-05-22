@@ -937,6 +937,13 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "structured_memory_decision_journal_schema",
     up: createStructuredMemoryDecisionJournalSchema,
   },
+  {
+    version: 96,
+    name: "chat_session_workbench_package_manager",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "chat_session_workbench", "package_manager", "TEXT");
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {

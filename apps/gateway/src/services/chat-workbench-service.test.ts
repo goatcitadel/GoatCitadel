@@ -586,6 +586,21 @@ describe("chat workbench package manager hydration", () => {
 
     expect(state.packageManager).toBeUndefined();
   });
+
+  it("keeps the cached packageManager when the lockfile changes mid-session", async () => {
+    const { deps, rootDir } = await createGitWorkbenchFixture();
+    const lockfilePath = path.join(rootDir, "workspace", "demo", "package-lock.json");
+    await fs.writeFile(lockfilePath, "{}", "utf8");
+
+    const initial = await getChatSessionWorkbench(deps, "sess-1");
+    expect(initial.packageManager).toBe("npm");
+
+    await fs.rm(lockfilePath, { force: true });
+    await fs.writeFile(path.join(rootDir, "workspace", "demo", "yarn.lock"), "# yarn lockfile\n", "utf8");
+
+    const afterChange = await getChatSessionWorkbench(deps, "sess-1");
+    expect(afterChange.packageManager).toBe("npm");
+  });
 });
 
 async function createWorkbenchFixture(

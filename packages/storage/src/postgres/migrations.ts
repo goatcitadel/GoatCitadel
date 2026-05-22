@@ -1435,4 +1435,12 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ON memory_structured_change_history(record_kind, record_id, created_at DESC);
     `,
   },
+  {
+    version: 50,
+    name: "chat_session_workbench_package_manager",
+    sql: `
+      ALTER TABLE chat_session_workbench
+        ADD COLUMN IF NOT EXISTS package_manager TEXT;
+    `,
+  },
 ];

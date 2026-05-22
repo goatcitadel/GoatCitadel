@@ -1,6 +1,7 @@
 import type { DatabaseClient } from "./db.js";
 import {
   ValidationError,
+  type ChatSessionWorkbenchPackageManager,
   type ChatSessionWorkbenchRecord,
   type ChatSessionWorkbenchValidationStatus,
   type ChatSessionWorkbenchWorktreeStatus,
@@ -16,6 +17,7 @@ interface ChatSessionWorkbenchRow {
   diff_artifact_id: string | null;
   output_artifact_id: string | null;
   validation_status: string;
+  package_manager: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -29,6 +31,7 @@ export interface ChatSessionWorkbenchPatchInput {
   diffArtifactId?: string;
   outputArtifactId?: string;
   validationStatus?: ChatSessionWorkbenchValidationStatus;
+  packageManager?: ChatSessionWorkbenchPackageManager | null;
 }
 
 export class ChatSessionWorkbenchRepository {
@@ -40,10 +43,10 @@ export class ChatSessionWorkbenchRepository {
     this.upsertStmt = db.prepare(`
       INSERT INTO chat_session_workbench (
         session_id, project_id, base_ref, worktree_path, worktree_status, active_file_path, diff_artifact_id,
-        output_artifact_id, validation_status, created_at, updated_at
+        output_artifact_id, validation_status, package_manager, created_at, updated_at
       ) VALUES (
         @sessionId, @projectId, @baseRef, @worktreePath, @worktreeStatus, @activeFilePath, @diffArtifactId,
-        @outputArtifactId, @validationStatus, @createdAt, @updatedAt
+        @outputArtifactId, @validationStatus, @packageManager, @createdAt, @updatedAt
       )
       ON CONFLICT(session_id) DO UPDATE SET
         project_id = excluded.project_id,
@@ -54,6 +57,7 @@ export class ChatSessionWorkbenchRepository {
         diff_artifact_id = excluded.diff_artifact_id,
         output_artifact_id = excluded.output_artifact_id,
         validation_status = excluded.validation_status,
+        package_manager = excluded.package_manager,
         updated_at = excluded.updated_at
     `);
   }
@@ -78,6 +82,7 @@ export class ChatSessionWorkbenchRepository {
       diffArtifactId: null,
       outputArtifactId: null,
       validationStatus: "idle",
+      packageManager: null,
       createdAt: now,
       updatedAt: now,
     });
@@ -110,6 +115,7 @@ export class ChatSessionWorkbenchRepository {
           ? sanitizeOptional(input.outputArtifactId)
           : (current.outputArtifactId ?? null),
       validationStatus: input.validationStatus ?? current.validationStatus,
+      packageManager: input.packageManager !== undefined ? input.packageManager : (current.packageManager ?? null),
       createdAt: current.createdAt,
       updatedAt: now,
     });
@@ -132,6 +138,7 @@ function mapRow(row: ChatSessionWorkbenchRow): ChatSessionWorkbenchRecord {
     diffArtifactId: row.diff_artifact_id ?? undefined,
     outputArtifactId: row.output_artifact_id ?? undefined,
     validationStatus: normalizeValidationStatus(row.validation_status),
+    packageManager: normalizePackageManager(row.package_manager),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -161,6 +168,18 @@ function normalizeValidationStatus(value: string): ChatSessionWorkbenchValidatio
   }
 }
 
+function normalizePackageManager(value: string | null): ChatSessionWorkbenchPackageManager | undefined {
+  switch (value) {
+    case "pnpm":
+    case "npm":
+    case "yarn":
+    case "bun":
+      return value;
+    default:
+      return undefined;
+  }
+}
+
 function sanitizeOptional(value: string): string | null {
   const trimmed = value.trim();
   return trimmed || null;
@@ -184,6 +203,7 @@ function isChatSessionWorkbenchRow(value: unknown): value is ChatSessionWorkbenc
     (typeof value.diff_artifact_id === "string" || value.diff_artifact_id === null) &&
     (typeof value.output_artifact_id === "string" || value.output_artifact_id === null) &&
     typeof value.validation_status === "string" &&
+    (typeof value.package_manager === "string" || value.package_manager === null) &&
     typeof value.created_at === "string" &&
     typeof value.updated_at === "string"
   );

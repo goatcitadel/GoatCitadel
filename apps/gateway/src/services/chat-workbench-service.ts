@@ -660,9 +660,12 @@ function syncWorkbenchState(deps: ChatWorkbenchDependencies, sessionId: string):
   const projectId = deps.storage.chatSessionProjects.get(sessionId)?.projectId;
   const current = deps.storage.chatSessionWorkbench.ensure(sessionId);
   const nextStatus = resolveWorkbenchPathStatus(current.worktreePath);
+  const detectedPackageManager =
+    current.packageManager === undefined ? detectProjectPackageManager(deps, projectId) : undefined;
   const patched = deps.storage.chatSessionWorkbench.patch(sessionId, {
     projectId,
     worktreeStatus: nextStatus,
+    packageManager: detectedPackageManager,
   });
   return hydrateWorkbenchRecord(deps, patched, projectId);
 }
@@ -754,7 +757,6 @@ function hydrateWorkbenchRecord(
   return {
     ...input,
     projectId: effectiveProjectId,
-    packageManager: input.packageManager ?? detectProjectPackageManager(deps, effectiveProjectId),
     worktreePath: input.worktreePath ? serializeWorkbenchPath(deps, input.worktreePath) : undefined,
   };
 }

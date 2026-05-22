@@ -481,6 +481,7 @@ function resetWorkbenchForProjectChange(deps: ChatSessionDependencies, sessionId
     diffArtifactId: "",
     outputArtifactId: "",
     validationStatus: "idle",
+    packageManager: null,
   });
 }
 
