@@ -315,6 +315,22 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       },
       startedAt: now,
     });
+    // The chat thread response hydrates `trace.toolRuns` from this table, and
+    // the client's `deriveThreadPendingApproval` requires a toolRun with
+    // status: "approval_required" before it will surface the prompt. Without
+    // this row the thread-driven effect in useChatOutboundExecution.ts clobbers
+    // the queue-derived pendingApproval back to null, causing the visual lane's
+    // chat-pending-approval scenario to flake.
+    storage.chatToolRuns.create({
+      toolRunId: randomUUID(),
+      turnId,
+      sessionId: parsed.data.sessionId,
+      toolName: "shell.exec",
+      status: "approval_required",
+      approvalId: approval.approvalId,
+      args: { command: "pnpm test" },
+      startedAt: now,
+    });
     storage.chatInlineApprovals.upsert({
       approvalId: approval.approvalId,
       sessionId: parsed.data.sessionId,

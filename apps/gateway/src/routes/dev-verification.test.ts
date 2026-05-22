@@ -193,6 +193,7 @@ describe("dev verification routes", () => {
     const chatMessageUpsert = vi.fn();
     const branchSetActiveLeaf = vi.fn();
     const approvalWaitGetRunId = vi.fn(() => "approval-wait-1");
+    const chatToolRunCreate = vi.fn((input: { toolRunId: string }) => ({ toolRunId: input.toolRunId }));
 
     app = Fastify();
     app.decorate("routeAccessManifest", []);
@@ -211,6 +212,9 @@ describe("dev verification routes", () => {
         },
         chatTurnTraces: {
           create: storageTurnCreate,
+        },
+        chatToolRuns: {
+          create: chatToolRunCreate,
         },
         chatInlineApprovals: {
           upsert: inlineUpsert,
@@ -268,6 +272,19 @@ describe("dev verification routes", () => {
         sessionId: "session-1",
         status: "waiting_for_approval",
         durable: expect.objectContaining({ runId: "durable-turn-1" }),
+      }),
+    );
+    // The client's `deriveThreadPendingApproval` requires a toolRun with
+    // status: "approval_required" linked to this approval. Without it the
+    // thread-driven effect clobbers the queue-derived prompt to null and the
+    // visual lane's chat-pending-approval scenario flakes.
+    expect(chatToolRunCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        turnId: expect.any(String),
+        toolName: "shell.exec",
+        status: "approval_required",
+        approvalId: "approval-1",
       }),
     );
     expect(inlineUpsert).toHaveBeenCalledWith(

@@ -2799,12 +2799,25 @@ export async function runVisualRegressionLane(context, options = {}) {
                 await page.goto(buildVerificationUiUrl(stack.uiUrl, resolveVisualRouteHref(route, variant, fixture)), {
                   waitUntil: "domcontentloaded",
                 });
-                await waitForVerificationRouteReady(
-                  page,
-                  route,
-                  verificationTarget.packageName,
-                  VISUAL_ROUTE_READY_TIMEOUT_MS,
-                );
+                try {
+                  await waitForVerificationRouteReady(
+                    page,
+                    route,
+                    verificationTarget.packageName,
+                    VISUAL_ROUTE_READY_TIMEOUT_MS,
+                  );
+                } catch (readyError) {
+                  return await captureRouteReadyFailure(context, {
+                    page,
+                    browserLog,
+                    browserLogCursor,
+                    route,
+                    variant,
+                    scenarioLane,
+                    timeoutMs: VISUAL_ROUTE_READY_TIMEOUT_MS,
+                    readyError,
+                  });
+                }
                 const correlationSessionId =
                   (route?.fixtureSessionKey && fixture?.sessions?.[route.fixtureSessionKey]) || fixture?.sessionId;
                 await setBrowserCorrelation(page, correlationId, correlationSessionId);
@@ -4837,6 +4850,112 @@ function resolveVisualRouteHref(route, variant, fixture) {
     }
   }
   return href;
+}
+
+async function captureRouteReadyFailure(context, input) {
+  const { page, browserLog, browserLogCursor, route, variant, scenarioLane, timeoutMs, readyError } = input;
+  const baseSlug = `${scenarioLane}-${route.slug}-${variant.slug}-route-ready-failure`;
+  const diagnosticPath = path.join(context.artifactRoot, "diagnostics", `${baseSlug}.json`);
+  const screenshotPath = path.join(context.artifactRoot, "screenshots", `${baseSlug}.png`);
+  const consoleLogPath = path.join(context.artifactRoot, "playwright", `${baseSlug}-console.json`);
+
+  // Pull the gateway-side state for the seeded session and the client-derived
+  // pendingApproval/thread shape at the moment of the timeout. This is the
+  // evidence needed to tell whether the prompt never rendered, rendered then
+  // got clobbered, or the gateway never returned the approval.
+  const evidence = await page
+    .evaluate(async () => {
+      try {
+        const params = new URLSearchParams(globalThis.location?.search ?? "");
+        const sessionId = params.get("sessionId");
+        if (!sessionId) {
+          return { error: "sessionId query param missing" };
+        }
+        const [threadRes, queueRes] = await Promise.all([
+          fetch(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/thread`),
+          fetch(`/api/v1/chat/tools/approvals?sessionId=${encodeURIComponent(sessionId)}`),
+        ]);
+        const thread = await threadRes.json();
+        const queue = await queueRes.json();
+        const selectedTurn =
+          thread?.turns?.find?.(
+            (turn) => turn.turnId === (thread.selectedTurnId ?? thread.activeLeafTurnId),
+          ) ?? thread?.turns?.at?.(-1);
+        return {
+          sessionId,
+          thread: {
+            selectedTurnId: thread?.selectedTurnId ?? null,
+            activeLeafTurnId: thread?.activeLeafTurnId ?? null,
+            turnCount: Array.isArray(thread?.turns) ? thread.turns.length : 0,
+            selectedTurnStatus: selectedTurn?.trace?.status ?? null,
+            selectedTurnToolRunsCount: selectedTurn?.trace?.toolRuns?.length ?? 0,
+            selectedTurnToolRuns:
+              selectedTurn?.trace?.toolRuns?.map((toolRun) => ({
+                toolRunId: toolRun?.toolRunId,
+                status: toolRun?.status,
+                approvalId: toolRun?.approvalId,
+                toolName: toolRun?.toolName,
+              })) ?? [],
+          },
+          queue: {
+            activeApprovalId: queue?.activeApprovalId ?? null,
+            itemsCount: Array.isArray(queue?.items) ? queue.items.length : 0,
+            items:
+              queue?.items?.map?.((item) => ({
+                approvalId: item?.approvalId,
+                stale: item?.stale,
+                staleReason: item?.staleReason,
+                riskLevel: item?.riskLevel,
+              })) ?? [],
+          },
+          dom: {
+            blockingApprovalPromptVisible: Boolean(
+              document.querySelector('.mc-next-thread-blocking-prompt[data-blocker-kind="approval"]'),
+            ),
+            blockingUserInputPromptVisible: Boolean(
+              document.querySelector('.mc-next-thread-blocking-prompt[data-blocker-kind="user-input"]'),
+            ),
+            shellArea: document.querySelector(".mc-next-shell")?.getAttribute("data-area") ?? null,
+            shellSection: document.querySelector(".mc-next-shell")?.getAttribute("data-section") ?? null,
+            visualRegressionShowBlocked:
+              document.documentElement.getAttribute("data-visual-regression-show-blocked") ?? null,
+          },
+        };
+      } catch (evidenceError) {
+        return {
+          error: evidenceError instanceof Error ? evidenceError.message : String(evidenceError),
+        };
+      }
+    })
+    .catch((error) => ({ error: error instanceof Error ? error.message : String(error) }));
+
+  await writeJson(diagnosticPath, {
+    capturedAt: new Date().toISOString(),
+    routeSlug: route.slug,
+    variantSlug: variant.slug,
+    timeoutMs,
+    readyError: readyError instanceof Error ? readyError.message : String(readyError),
+    evidence,
+  });
+  await page.screenshot({ path: screenshotPath, fullPage: false }).catch(() => undefined);
+  await writeJson(consoleLogPath, browserLog.getSnapshot(browserLogCursor));
+  return {
+    status: "failed",
+    error: `route ready wait timed out after ${timeoutMs}ms: ${
+      readyError instanceof Error ? readyError.message : String(readyError)
+    }`,
+    metrics: {
+      route: route.href,
+      variant: variant.slug,
+      timeoutMs,
+    },
+    artifacts: emptyArtifacts({
+      diagnostics: [relativeToRun(context, diagnosticPath)],
+      screenshots: [relativeToRun(context, screenshotPath)],
+      logs: [relativeToRun(context, consoleLogPath)],
+      playwright: [relativeToRun(context, consoleLogPath)],
+    }),
+  };
 }
 
 async function captureBrowserArtifacts(context, input) {
