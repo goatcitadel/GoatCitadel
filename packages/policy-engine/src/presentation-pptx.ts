@@ -1,10 +1,24 @@
 import sharp from "sharp";
 import { createArtifactDesignPlan, type ArtifactDesignPlan } from "./artifact-design.js";
+import {
+  resolveContentSlideRenderer,
+  resolvePresentationDeckLayoutPlan,
+  type PresentationSlideLayoutDecision,
+} from "./presentation-layout.js";
 
 export interface PresentationSlide {
   title: string;
   bullets: string[];
   speakerNotes?: string;
+}
+
+export interface PresentationVisualAsset {
+  bytesBase64: string;
+  mimeType?: string;
+  altText?: string;
+  source?: string;
+  sourceModel?: string;
+  revisedPrompt?: string;
 }
 
 export interface PresentationPptxInput {
@@ -13,6 +27,7 @@ export interface PresentationPptxInput {
   slides: PresentationSlide[];
   createdAt?: Date;
   design?: ArtifactDesignPlan;
+  visualAsset?: PresentationVisualAsset;
 }
 
 export interface ZipEntry {
@@ -92,7 +107,14 @@ async function createPptxGenPresentation(input: PresentationPptxInput): Promise<
     bodyFontFace: design.typography.bodyFont,
   };
 
-  const visualData = await buildAbstractVisualDataUri(input.title, design);
+  const visualAsset = normalizePresentationVisualAsset(input.visualAsset);
+  const visualData = visualAsset
+    ? visualAssetToDataUri(visualAsset)
+    : await buildAbstractVisualDataUri(input.title, design);
+  const visualSource = visualAsset
+    ? `${visualAsset.source ?? "generated-image"}${visualAsset.sourceModel ? `:${visualAsset.sourceModel}` : ""}`
+    : "local-renderer";
+  const layoutPlan = resolvePresentationDeckLayoutPlan(design, slides);
   slides.forEach((slide, index) => {
     const pptSlide = pptx.addSlide();
     pptSlide.background = { color: design.tokens.background };
@@ -101,11 +123,14 @@ async function createPptxGenPresentation(input: PresentationPptxInput): Promise<
     if (index === 0) {
       drawHeroSlide(pptx, pptSlide, slide, design, visualData);
     } else {
-      drawContentSlide(pptx, pptSlide, slide, design, visualData, index);
+      drawContentSlide(pptx, pptSlide, slide, design, visualData, index, layoutPlan[index]);
     }
     const notes = [
       slide.speakerNotes,
+      `Layout: ${layoutPlan[index]?.renderer ?? "unknown"}; density=${layoutPlan[index]?.density ?? "unknown"}; reason=${layoutPlan[index]?.reason ?? "n/a"}.`,
       `GoatCitadel design provenance: preset=${design.preset}; visualLevel=${design.visualLevel}; assetPolicy=${design.assetPolicy}.`,
+      `Visual source: ${visualSource}.`,
+      visualAsset?.revisedPrompt ? `Visual revised prompt: ${visualAsset.revisedPrompt}` : undefined,
       `Assets: ${design.assetPlan.map((asset) => `${asset.id}:${asset.status}`).join(", ")}`,
     ]
       .filter(Boolean)
@@ -281,8 +306,8 @@ function drawContentSlide(
   design: ArtifactDesignPlan,
   visualData: string,
   index: number,
+  layoutDecision?: PresentationSlideLayoutDecision,
 ): void {
-  const layout = design.layouts[index % design.layouts.length]?.name ?? "title-body";
   slide.addText(content.title, {
     x: 0.76,
     y: 0.48,
@@ -295,11 +320,13 @@ function drawContentSlide(
     color: design.tokens.text,
     margin: 0,
   });
-  if (layout === "two-column" || content.bullets.length > 4) {
+  const renderer = layoutDecision?.renderer === "hero" ? "image-text" : layoutDecision?.renderer;
+  const resolvedRenderer = renderer ?? resolveContentSlideRenderer(design, index, content);
+  if (resolvedRenderer === "two-column") {
     drawTwoColumnSlide(pptx, slide, content, design, visualData);
     return;
   }
-  if (layout === "stat-callout" && content.bullets.length > 0) {
+  if (resolvedRenderer === "stat-callout") {
     drawCalloutSlide(pptx, slide, content, design, visualData);
     return;
   }
@@ -322,7 +349,8 @@ function drawImageTextSlide(
     fill: { color: design.tokens.surface },
     line: { color: design.tokens.border, transparency: 15 },
   });
-  addBulletText(slide, content.bullets, design, 1.08, 1.78, 6.32, 4.2);
+  drawRhythmBand(pptx, slide, content, design, 1.08, 1.78, 1.72);
+  addBulletRows(pptx, slide, content.bullets, design, 1.08, 2.12, 6.32, 3.62);
   slide.addImage({
     data: visualData,
     x: 8.35,
@@ -332,6 +360,7 @@ function drawImageTextSlide(
     altText: `Generated supporting visual for ${content.title}`,
     objectName: "GoatCitadel supporting visual",
   });
+  drawRhythmBand(pptx, slide, content, design, 1.08, 5.98, 2.65);
 }
 
 function drawTwoColumnSlide(
@@ -357,8 +386,11 @@ function drawTwoColumnSlide(
       line: { color: columnIndex === 0 ? design.tokens.border : design.tokens.accent2, transparency: 18 },
     });
   });
-  addBulletText(slide, left, design, 1.08, 1.82, 4.45, 3.95);
-  addBulletText(slide, right, design, 6.74, 1.82, 4.45, 3.95);
+  addBulletRows(pptx, slide, left, design, 1.08, 1.82, 4.45, 3.95, { compact: true });
+  addBulletRows(pptx, slide, right, design, 6.74, 1.82, 4.45, 3.95, {
+    compact: true,
+    startIndex: left.length + 1,
+  });
   slide.addImage({
     data: visualData,
     x: 10.95,
@@ -409,10 +441,15 @@ function drawCalloutSlide(
     color: "FFFFFF",
     margin: 0,
   });
-  addBulletText(slide, rest, design, 5.35, 3.55, 6.4, 2.5);
+  if (rest.length > 0) {
+    addBulletRows(pptx, slide, rest, design, 5.35, 3.55, 6.4, 2.5, { compact: true });
+  } else {
+    drawRhythmBand(pptx, slide, content, design, 5.55, 3.62, 2.4);
+  }
 }
 
-function addBulletText(
+function addBulletRows(
+  pptx: PptxPresentationLike,
   slide: PptxSlideLike,
   bullets: string[],
   design: ArtifactDesignPlan,
@@ -420,22 +457,119 @@ function addBulletText(
   y: number,
   w: number,
   h: number,
+  options: { compact?: boolean; startIndex?: number } = {},
 ): void {
-  const text = bullets.length > 0 ? bullets.map((bullet) => `- ${bullet}`).join("\n") : "No details provided.";
-  slide.addText(text, {
-    x,
-    y,
-    w,
-    h,
-    fontFace: design.typography.bodyFont,
-    fontSize: 15,
-    fit: "shrink",
-    color: design.tokens.text,
-    breakLine: false,
-    valign: "top",
-    margin: 0.03,
-    breakLineOnHyphen: false,
+  if (bullets.length === 0) {
+    slide.addText("No details provided.", {
+      x,
+      y,
+      w,
+      h: 0.45,
+      fontFace: design.typography.bodyFont,
+      fontSize: options.compact ? 11 : 13,
+      color: design.tokens.mutedText,
+      margin: 0,
+    });
+    return;
+  }
+  const rowGap = options.compact ? 0.12 : 0.18;
+  const maxRowHeight = options.compact ? 0.76 : 0.92;
+  const rowHeight = Math.max(
+    options.compact ? 0.42 : 0.5,
+    Math.min(maxRowHeight, (h - rowGap * Math.max(0, bullets.length - 1)) / bullets.length),
+  );
+  const fontSize = options.compact ? (bullets.length > 3 ? 10.8 : 12) : bullets.length > 3 ? 12.5 : 14;
+  const startIndex = options.startIndex ?? 1;
+  bullets.forEach((bullet, index) => {
+    const rowY = y + index * (rowHeight + rowGap);
+    slide.addShape(shape(pptx, "rect"), {
+      x,
+      y: rowY + 0.06,
+      w: 0.05,
+      h: Math.max(0.22, rowHeight - 0.14),
+      fill: { color: index % 2 === 0 ? design.tokens.accent : design.tokens.accent2 },
+      line: { color: design.tokens.border, transparency: 100 },
+    });
+    slide.addText(String(startIndex + index).padStart(2, "0"), {
+      x: x + 0.14,
+      y: rowY + 0.05,
+      w: 0.32,
+      h: 0.24,
+      fontFace: design.typography.headingFont,
+      fontSize: options.compact ? 6.6 : 7.4,
+      bold: true,
+      color: design.tokens.accent,
+      margin: 0,
+    });
+    slide.addText(bullet, {
+      x: x + 0.52,
+      y: rowY,
+      w: w - 0.58,
+      h: rowHeight,
+      fontFace: design.typography.bodyFont,
+      fontSize,
+      fit: "shrink",
+      color: design.tokens.text,
+      breakLine: false,
+      valign: "top",
+      margin: 0.02,
+      breakLineOnHyphen: false,
+    });
   });
+}
+
+function drawRhythmBand(
+  pptx: PptxPresentationLike,
+  slide: PptxSlideLike,
+  content: PresentationSlide,
+  design: ArtifactDesignPlan,
+  x: number,
+  y: number,
+  w: number,
+): void {
+  const colors = [design.tokens.accent, design.tokens.accent2, design.tokens.accent3];
+  const segmentCount = Math.max(1, Math.min(3, content.bullets.length || 1));
+  const segmentGap = 0.08;
+  const segmentWidth = (w - segmentGap * (segmentCount - 1)) / segmentCount;
+  for (let index = 0; index < segmentCount; index += 1) {
+    slide.addShape(shape(pptx, "rect"), {
+      x: x + index * (segmentWidth + segmentGap),
+      y,
+      w: segmentWidth,
+      h: 0.06,
+      fill: { color: colors[index % colors.length] },
+      line: { color: colors[index % colors.length], transparency: 100 },
+    });
+  }
+}
+
+function normalizePresentationVisualAsset(
+  asset: PresentationVisualAsset | undefined,
+): PresentationVisualAsset | undefined {
+  if (!asset) {
+    return undefined;
+  }
+  const bytesBase64 = asset.bytesBase64.trim();
+  if (!bytesBase64) {
+    return undefined;
+  }
+  const mimeType = asset.mimeType?.trim() || "image/png";
+  if (!mimeType.toLowerCase().startsWith("image/")) {
+    return undefined;
+  }
+  return {
+    ...asset,
+    bytesBase64,
+    mimeType,
+    altText: asset.altText?.trim() || undefined,
+    source: asset.source?.trim() || undefined,
+    sourceModel: asset.sourceModel?.trim() || undefined,
+    revisedPrompt: asset.revisedPrompt?.trim() || undefined,
+  };
+}
+
+function visualAssetToDataUri(asset: PresentationVisualAsset): string {
+  return `data:${asset.mimeType ?? "image/png"};base64,${asset.bytesBase64}`;
 }
 
 async function buildAbstractVisualDataUri(title: string, design: ArtifactDesignPlan): Promise<string> {

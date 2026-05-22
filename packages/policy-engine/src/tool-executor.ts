@@ -20,12 +20,17 @@ import { assertReadPathAllowed, assertWritePathInJail, resolveReadPathAccess } f
 import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "./sandbox/network-guard.js";
 import { executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
 import { collectLeakDetections, sanitizeForModel } from "./tool-security.js";
-import { buildArtifactDesignReport, createArtifactDesignPlan } from "./artifact-design.js";
+import {
+  buildArtifactDesignReport,
+  createArtifactDesignPlan,
+  type ArtifactValidationCheck,
+} from "./artifact-design.js";
 import { ingestDocumentViaBackend, resolveIngestionTrustLevel, searchIngestedContext } from "./ingestion-backends.js";
 import { parseIngestionSourceType } from "./ingestion-source-type.js";
 import { matchesToolPattern } from "./tool-patterns.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
-import { createPresentationPptx, type PresentationSlide } from "./presentation-pptx.js";
+import { analyzePresentationDeckQuality, type PresentationDeckQualitySummary } from "./presentation-layout.js";
+import { createPresentationPptx, type PresentationSlide, type PresentationVisualAsset } from "./presentation-pptx.js";
 import {
   createDocumentArtifact,
   documentArtifactExtension,
@@ -1119,11 +1124,21 @@ async function presentationsCreate(args: Record<string, unknown>, config: ToolPo
     design: normalizePresentationDesignInput(args),
     destination: args.destination,
   });
+  const deckSlides: PresentationSlide[] = [
+    {
+      title,
+      bullets: subtitle ? [subtitle] : [],
+    },
+    ...slides,
+  ];
+  const deckQuality = analyzePresentationDeckQuality(design, deckSlides);
+  const visualAsset = normalizePresentationVisualAsset(args.visualAsset);
   const pptx = await createPresentationPptx({
     title,
     subtitle: subtitle || undefined,
     slides,
     design,
+    visualAsset,
   });
   const full = path.resolve(p);
   await fs.mkdir(path.dirname(full), { recursive: true });
@@ -1134,10 +1149,43 @@ async function presentationsCreate(args: Record<string, unknown>, config: ToolPo
     format: "pptx",
     title,
     slideCount: slides.length + 1,
+    visualAsset: visualAsset
+      ? {
+          source: visualAsset.source,
+          sourceModel: visualAsset.sourceModel,
+          mimeType: visualAsset.mimeType,
+        }
+      : undefined,
     designReport: buildArtifactDesignReport(design, {
       localPath: full,
       usedAssetIds: ["renderer-generated-visual", "built-in-shapes-icons"],
+      validationResults: presentationValidationResults(deckQuality),
     }),
+  };
+}
+
+function presentationValidationResults(
+  quality: PresentationDeckQualitySummary,
+): Record<string, Partial<Pick<ArtifactValidationCheck, "status" | "detail">>> {
+  const contentDensityStatus = quality.warnings.length > 0 ? "warning" : "passed";
+  const rendererSummary = Object.entries(quality.rendererCounts)
+    .filter(([, count]) => count > 0)
+    .map(([renderer, count]) => `${renderer}:${count}`)
+    .join(", ");
+  return {
+    "presentation-template": {
+      status: "passed",
+      detail: `Resolved ${quality.contentSlideCount} content slide(s) through content-aware templates${
+        rendererSummary ? ` (${rendererSummary})` : ""
+      }.`,
+    },
+    "content-density": {
+      status: contentDensityStatus,
+      detail:
+        contentDensityStatus === "passed"
+          ? `Checked ${quality.contentSlideCount} content slide(s); sparse slides avoid forced columns and dense slides use column layouts.`
+          : quality.warnings.join(" "),
+    },
   };
 }
 
@@ -1301,6 +1349,26 @@ function normalizePresentationBullets(value: unknown): string[] {
     .map((item) => truncateText(asString(item) ?? "", 180))
     .filter((item) => item.length > 0)
     .slice(0, 8);
+}
+
+function normalizePresentationVisualAsset(value: unknown): PresentationVisualAsset | undefined {
+  const asset = record(value);
+  const bytesBase64 = asString(asset.bytesBase64) ?? asString(asset.b64Json) ?? asString(asset.dataBase64);
+  if (!bytesBase64) {
+    return undefined;
+  }
+  const mimeType = asString(asset.mimeType) ?? "image/png";
+  if (!mimeType.toLowerCase().startsWith("image/")) {
+    return undefined;
+  }
+  return {
+    bytesBase64,
+    mimeType,
+    altText: truncateText(asString(asset.altText) ?? "", 220) || undefined,
+    source: truncateText(asString(asset.source) ?? "", 80) || undefined,
+    sourceModel: truncateText(asString(asset.sourceModel) ?? asString(asset.model) ?? "", 80) || undefined,
+    revisedPrompt: truncateText(asString(asset.revisedPrompt) ?? "", 600) || undefined,
+  };
 }
 
 function truncateText(value: string, maxLength: number): string {

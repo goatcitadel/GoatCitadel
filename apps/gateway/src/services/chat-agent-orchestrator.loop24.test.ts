@@ -179,6 +179,68 @@ describe("ChatAgentOrchestrator loop 24 coverage", () => {
     expect(result.assistantContent).toContain(".pptx");
   });
 
+  it("attaches a gpt-image-2 visual asset to synthetic presentation fallbacks when image generation is available", async () => {
+    const createChatCompletion = vi.fn(async (): Promise<ChatCompletionResponse> => {
+      return completion("Here is an outline, but I did not create a deck.");
+    });
+    const generateImage = vi.fn(async () => ({
+      providerId: "openai",
+      model: "gpt-image-2",
+      operation: "generate" as const,
+      data: [{ b64Json: "generated-image-base64", revisedPrompt: "A polished presentation visual." }],
+    }));
+    const invokeTool = vi.fn(
+      async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => ({
+        outcome: "executed",
+        result: {
+          path: "F:\\code\\personal-ai\\workspace\\goatcitadel_out\\daily-walking.pptx",
+          bytesWritten: 12345,
+          format: "pptx",
+          title: request.args.title,
+          slideCount: 5,
+        },
+      }),
+    );
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["presentations.create"]),
+      createChatCompletion,
+      generateImage,
+      invokeTool,
+    });
+
+    await orchestrator.run(
+      turnInput({
+        mode: "cowork",
+        content: "Create a real PowerPoint .pptx presentation about daily walking.",
+        historyMessages: [
+          { role: "user", content: "Create a real PowerPoint .pptx presentation about daily walking." },
+        ],
+      }),
+    );
+
+    expect(generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: "openai",
+        model: "gpt-image-2",
+        outputFormat: "png",
+        responseFormat: "b64_json",
+      }),
+    );
+    expect(invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "presentations.create",
+        args: expect.objectContaining({
+          visualAsset: expect.objectContaining({
+            bytesBase64: "generated-image-base64",
+            source: "openai",
+            sourceModel: "gpt-image-2",
+          }),
+        }),
+      }),
+    );
+  });
+
   it("uses the configured workspace artifact directory for write-jail fallbacks", async () => {
     const safeWriteFallbackDir = "F:\\code\\personal-ai\\workspace\\goatcitadel_out";
     const invokeTool = vi

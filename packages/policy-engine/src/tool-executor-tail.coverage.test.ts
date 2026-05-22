@@ -229,6 +229,13 @@ describe("tool executor tail coverage", () => {
             bullets: ["Visit a local park", "Take a low-pressure walk"],
           },
         ],
+        visualAsset: {
+          bytesBase64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+          mimeType: "image/png",
+          source: "openai",
+          sourceModel: "gpt-image-2",
+          revisedPrompt: "A clean wellness deck visual.",
+        },
       }),
       config,
       storage,
@@ -239,6 +246,11 @@ describe("tool executor tail coverage", () => {
       path: path.resolve(deckPath),
       format: "pptx",
       slideCount: 2,
+      visualAsset: {
+        source: "openai",
+        sourceModel: "gpt-image-2",
+        mimeType: "image/png",
+      },
       designReport: {
         mode: "polished",
         preset: "wellness",
@@ -251,6 +263,8 @@ describe("tool executor tail coverage", () => {
     };
     expect(designReport.assetSources?.find((asset) => asset.id === "renderer-generated-visual")?.status).toBe("used");
     expect(designReport.validation?.find((check) => check.id === "pptx-package")?.status).toBe("passed");
+    expect(designReport.validation?.find((check) => check.id === "presentation-template")?.status).toBe("passed");
+    expect(designReport.validation?.find((check) => check.id === "content-density")?.status).toBe("passed");
     expect(deck.subarray(0, 2).toString("utf8")).toBe("PK");
     expect(deck.includes("ppt/presentation.xml")).toBe(true);
     expect(deck.includes("ppt/slides/slide1.xml")).toBe(true);

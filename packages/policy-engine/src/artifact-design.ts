@@ -331,11 +331,17 @@ export function buildArtifactDesignReport(
     google?: Partial<ArtifactGoogleImportStatus>;
     residualRisks?: string[];
     usedAssetIds?: string[];
+    validationResults?: Record<string, Partial<Pick<ArtifactValidationCheck, "status" | "detail">>>;
   } = {},
 ): ArtifactDesignReport {
   const google = resolveGoogleImportStatus(plan.destination, output.google);
   const assetPlan = finalizeAssetPlan(plan.assetPlan, output.usedAssetIds ?? []);
-  const validation = finalizeValidationChecks(plan.validationChecks, Boolean(output.localPath), google);
+  const validation = finalizeValidationChecks(
+    plan.validationChecks,
+    Boolean(output.localPath),
+    google,
+    output.validationResults,
+  );
   return {
     mode: plan.mode,
     preset: plan.preset,
@@ -447,9 +453,9 @@ function buildAssetPlan(
       type: "generated",
       role: "hero",
       status: "planned",
-      description: `Renderer-generated abstract visual system for ${input.title}.`,
+      description: `Generated or renderer-produced visual system for ${input.title}.`,
       altText: `Abstract visual supporting ${input.title}.`,
-      source: "local renderer",
+      source: "configured image provider or local renderer",
       license: "Generated locally by GoatCitadel",
     },
     {
@@ -520,6 +526,18 @@ function buildValidationChecks(
       status: "planned",
       detail: "Deck output should include valid relationships, theme parts, slide content, and visual media.",
     });
+    checks.push({
+      id: "presentation-template",
+      label: "Presentation template discipline",
+      status: mode === "minimal" || mode === "plain" ? "skipped" : "planned",
+      detail: "Content slides should resolve through a bounded layout plan instead of ad hoc slide bodies.",
+    });
+    checks.push({
+      id: "content-density",
+      label: "Slide content density",
+      status: mode === "minimal" || mode === "plain" ? "skipped" : "planned",
+      detail: "Slides should avoid sparse oversized columns and dense overflowing text blocks.",
+    });
   }
   if (kind === "document" || kind === "html" || kind === "pdf") {
     checks.push({
@@ -567,6 +585,7 @@ function finalizeValidationChecks(
   checks: ArtifactValidationCheck[],
   hasLocalOutput: boolean,
   google: ArtifactGoogleImportStatus,
+  validationResults: Record<string, Partial<Pick<ArtifactValidationCheck, "status" | "detail">>> = {},
 ): ArtifactValidationCheck[] {
   return checks.map((check) => {
     if (check.id === "google-import") {
@@ -580,6 +599,14 @@ function finalizeValidationChecks(
         ...check,
         status: google.status === "import_ready" ? "passed" : "warning",
         detail: google.reason ?? "Local artifact was produced, but Google import did not complete.",
+      };
+    }
+    const validationResult = validationResults[check.id];
+    if (validationResult) {
+      return {
+        ...check,
+        status: validationResult.status ?? check.status,
+        detail: validationResult.detail ?? check.detail,
       };
     }
     if (hasLocalOutput && check.status === "planned") {

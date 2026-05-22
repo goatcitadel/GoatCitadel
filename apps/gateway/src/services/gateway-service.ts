@@ -931,6 +931,7 @@ export class GatewayService {
       listToolCatalog: () => this.listToolCatalog(),
       createChatCompletion: (request) => this.createChatCompletion(request),
       createChatCompletionStream: (request) => this.createChatCompletionStream(request),
+      generateImage: (request) => this.llmService.generateImage(request),
       invokeTool: (request) => this.invokeTool(request),
       persistToolArtifact: (input) => chatToolArtifactService.persistChatToolArtifact(this, input),
       evaluateToolAccess: (request) => this.evaluateToolAccess(request),

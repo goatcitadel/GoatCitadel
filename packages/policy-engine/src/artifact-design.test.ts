@@ -74,6 +74,8 @@ describe("artifact design brief selection", () => {
 
     expect(plan.destination).toMatchObject({ kind: "google-slides", convert: true });
     expect(plan.validationChecks.map((check) => check.id)).toContain("google-import");
+    expect(plan.validationChecks.map((check) => check.id)).toContain("presentation-template");
+    expect(plan.validationChecks.map((check) => check.id)).toContain("content-density");
   });
 
   it("marks renderer-used assets and completed local checks in reports", () => {
@@ -91,5 +93,30 @@ describe("artifact design brief selection", () => {
     expect(report.assetSources.find((asset) => asset.id === "renderer-generated-visual")?.status).toBe("used");
     expect(report.validation.filter((check) => check.status === "planned")).toHaveLength(0);
     expect(report.validation.find((check) => check.id === "pptx-package")?.status).toBe("passed");
+    expect(report.validation.find((check) => check.id === "presentation-template")?.status).toBe("passed");
+  });
+
+  it("allows renderer-specific validation details in design reports", () => {
+    const plan = createArtifactDesignPlan({
+      kind: "presentation",
+      format: "pptx",
+      title: "Quarterly Pitch",
+    });
+
+    const report = buildArtifactDesignReport(plan, {
+      localPath: "deck.pptx",
+      validationResults: {
+        "content-density": {
+          status: "warning",
+          detail: "One content slide had no supporting bullets.",
+        },
+      },
+    });
+
+    expect(report.validation.find((check) => check.id === "content-density")).toMatchObject({
+      status: "warning",
+      detail: "One content slide had no supporting bullets.",
+    });
+    expect(report.validation.find((check) => check.id === "presentation-template")?.status).toBe("passed");
   });
 });

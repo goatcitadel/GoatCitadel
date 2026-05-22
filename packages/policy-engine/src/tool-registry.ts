@@ -873,6 +873,21 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
         },
         theme: { type: "string" },
         design: ARTIFACT_DESIGN_ARG_SCHEMA,
+        visualAsset: {
+          type: "object",
+          description:
+            "Optional generated supporting image for the deck. Prefer gateway-generated image assets with source/model provenance.",
+          properties: {
+            bytesBase64: { type: "string" },
+            b64Json: { type: "string" },
+            dataBase64: { type: "string" },
+            mimeType: { type: "string" },
+            altText: { type: "string" },
+            source: { type: "string" },
+            sourceModel: { type: "string" },
+            revisedPrompt: { type: "string" },
+          },
+        },
         destination: ARTIFACT_DESTINATION_ARG_SCHEMA,
       },
       required: ["path", "title", "slides"],
