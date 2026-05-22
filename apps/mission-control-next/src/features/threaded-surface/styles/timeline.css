@@ -304,7 +304,7 @@
 
 .mc-next-thread-bubble {
   padding: 0.74rem 0.8rem;
-  border-radius: 0.48rem;
+  border-radius: 0.5rem;
   border: 1px solid transparent;
   background: transparent;
 }
@@ -321,11 +321,6 @@
 .mc-next-thread-bubble.assistant.streaming {
   border-color: color-mix(in oklab, var(--mc-area-color) 22%, transparent);
   background: color-mix(in oklab, var(--mc-area-color) 5%, var(--mc-surface-1));
-}
-
-.mc-next-threaded-surface.unified .mc-next-thread-bubble.user,
-.mc-next-threaded-surface.unified .mc-next-thread-bubble.assistant {
-  border-radius: 0.5rem;
 }
 
 .mc-assistant-renderer-shell,

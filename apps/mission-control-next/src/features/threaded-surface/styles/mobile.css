@@ -1,17 +1,10 @@
 @media (max-width: 1360px) {
-  .mc-next-threaded-surface {
-    grid-template-columns: 18.75rem minmax(0, 1fr);
-  }
-
-  .mc-next-threaded-stage.has-workbench.has-context {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .mc-next-threaded-stage.has-workbench,
-  .mc-next-threaded-stage.mode-chat,
-  .mc-next-threaded-stage.has-cowork-panel,
-  .mc-next-threaded-stage.has-code-panel,
-  .mc-next-threaded-stage.has-context {
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench.has-context,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.mode-chat,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-code-panel,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-context {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -24,18 +17,13 @@
 }
 
 @media (max-width: 1023px) {
-  .mc-next-threaded-surface {
-    grid-template-columns: minmax(0, 1fr);
-    min-height: auto;
-  }
-
   .mc-next-threaded-mobile-bar {
     display: flex;
     justify-content: space-between;
     gap: 0.6rem;
   }
 
-  .mc-next-threaded-rail {
+  .mc-next-threaded-surface.unified .mc-next-threaded-rail {
     position: fixed;
     top: 5.2rem;
     left: 0.9rem;
@@ -53,7 +41,7 @@
     pointer-events: none;
   }
 
-  .mc-next-threaded-rail.open {
+  .mc-next-threaded-surface.unified .mc-next-threaded-rail.open {
     transform: translateX(0);
     pointer-events: auto;
   }
@@ -67,13 +55,13 @@
     background: rgba(15, 23, 42, 0.32);
   }
 
-  .mc-next-threaded-stage,
-  .mc-next-threaded-stage.has-workbench,
-  .mc-next-threaded-stage.mode-chat,
-  .mc-next-threaded-stage.has-cowork-panel,
-  .mc-next-threaded-stage.has-code-panel,
-  .mc-next-threaded-stage.has-context,
-  .mc-next-threaded-stage.has-workbench.has-context {
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.mode-chat,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-code-panel,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-context,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench.has-context {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -211,7 +199,7 @@
     padding: 0.85rem;
   }
 
-  .mc-next-threaded-rail {
+  .mc-next-threaded-surface.unified .mc-next-threaded-rail {
     left: 0.6rem;
     right: 0.6rem;
     width: auto;
@@ -260,10 +248,6 @@
   .mc-next-composer-controls-start {
     grid-template-columns: repeat(3, minmax(0, auto));
     justify-content: start;
-  }
-
-  .mc-next-composer-controls-end {
-    grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
   }
 
   .mc-next-composer-attachment {

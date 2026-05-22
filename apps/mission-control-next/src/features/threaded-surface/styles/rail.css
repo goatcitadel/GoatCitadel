@@ -1,14 +1,8 @@
-.mc-next-threaded-surface {
-  display: grid;
-  grid-template-columns: 20.5rem minmax(0, 1fr);
-  gap: 1rem;
-  min-height: calc(100dvh - 8.5rem);
-}
-
 .mc-next-threaded-surface.unified {
   --mc-mode-chat: var(--gc-area-chat, oklch(0.72 0.12 240));
   --mc-mode-cowork: var(--gc-area-cowork, oklch(0.73 0.13 315));
   --mc-mode-code: var(--gc-area-code, oklch(0.74 0.12 175));
+  display: grid;
   grid-template-columns: 196px minmax(0, 1fr);
   gap: 0;
   min-height: calc(100dvh - 58px);
@@ -65,21 +59,15 @@
   backdrop-filter: blur(8px);
 }
 
-.mc-next-threaded-rail {
+.mc-next-threaded-surface.unified .mc-next-threaded-rail {
   position: sticky;
   top: 0;
   align-self: start;
   display: grid;
-  gap: 0.85rem;
-  padding: 1rem;
-  max-height: calc(100dvh - 8.75rem);
-  overflow: auto;
-}
-
-.mc-next-threaded-surface.unified .mc-next-threaded-rail {
   gap: 0.42rem;
-  max-height: calc(100dvh - 58px);
   padding: 8px 6px;
+  max-height: calc(100dvh - 58px);
+  overflow: auto;
   border-radius: 0;
   border-width: 0 1px 0 0;
   border-color: var(--mc-border-subtle);
@@ -127,7 +115,6 @@
 }
 
 .mc-next-threaded-rail-head h2,
-.mc-next-threaded-header-copy h1,
 .mc-next-threaded-empty h2 {
   margin: 0.18rem 0 0;
   font-size: clamp(1.2rem, 1.8vw, 1.55rem);
@@ -136,13 +123,13 @@
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-header-copy h1 {
+  margin: 0.18rem 0 0;
   font-size: var(--text-lg);
   line-height: 1.05;
   letter-spacing: -0.02em;
 }
 
 .mc-next-threaded-rail-head span,
-.mc-next-threaded-header-copy span,
 .mc-next-threaded-empty p,
 .mc-next-threaded-empty-copy {
   color: var(--text-secondary);
@@ -154,6 +141,7 @@
   display: block;
   max-width: 36rem;
   font-size: var(--text-xs);
+  line-height: 1.55;
   color: var(--text-secondary);
 }
 

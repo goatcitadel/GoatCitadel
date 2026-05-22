@@ -573,14 +573,9 @@
   padding-top: 0.1rem;
 }
 
-.mc-next-composer-head {
+.mc-next-threaded-surface.unified .mc-next-composer-head {
   display: flex;
   justify-content: space-between;
-  gap: 0.85rem;
-  align-items: flex-start;
-}
-
-.mc-next-threaded-surface.unified .mc-next-composer-head {
   align-items: center;
   gap: 0.45rem;
 }

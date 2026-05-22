@@ -1,58 +1,52 @@
-.mc-next-threaded-stage {
+.mc-next-threaded-surface.unified .mc-next-threaded-stage {
   min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
-}
-
-.mc-next-threaded-surface.unified .mc-next-threaded-stage {
   padding: 0;
   background: var(--background);
 }
 
-.mc-next-threaded-stage.has-workbench {
+.mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench {
   grid-template-columns: minmax(0, 1.35fr) minmax(22rem, 0.95fr);
 }
 
-.mc-next-threaded-stage.has-cowork-panel {
+.mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel {
   grid-template-columns: minmax(34rem, 1fr) minmax(21rem, 0.48fr);
 }
 
-.mc-next-threaded-stage.has-code-panel {
+.mc-next-threaded-surface.unified .mc-next-threaded-stage.has-code-panel {
   grid-template-columns: minmax(32rem, 0.92fr) minmax(28rem, 0.72fr);
 }
 
-.mc-next-threaded-stage.has-context {
+.mc-next-threaded-surface.unified .mc-next-threaded-stage.has-context {
   grid-template-columns: minmax(0, 1fr) minmax(22rem, 0.88fr);
 }
 
-.mc-next-threaded-stage.mode-chat {
+.mc-next-threaded-surface.unified .mc-next-threaded-stage.mode-chat {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.mc-next-threaded-stage.mode-chat.has-context {
+.mc-next-threaded-surface.unified .mc-next-threaded-stage.mode-chat.has-context {
   grid-template-columns: minmax(34rem, 1fr) minmax(18rem, 0.34fr);
 }
 
-.mc-next-threaded-stage.has-workbench.has-context {
+.mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench.has-context {
   grid-template-columns: minmax(0, 1.3fr) minmax(20rem, 0.9fr) minmax(18rem, 0.72fr);
 }
 
-.mc-next-threaded-stage.has-cowork-panel.has-context {
+.mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel.has-context {
   grid-template-columns: minmax(34rem, 1fr) minmax(20rem, 0.44fr) minmax(15rem, 0.32fr);
 }
 
-.mc-next-threaded-stage.has-code-panel.has-context {
+.mc-next-threaded-surface.unified .mc-next-threaded-stage.has-code-panel.has-context {
   grid-template-columns: minmax(29rem, 0.92fr) minmax(24rem, 0.7fr) minmax(13rem, 0.3fr);
 }
 
-.mc-next-threaded-primary-column {
+.mc-next-threaded-surface.unified .mc-next-threaded-primary-column {
   min-width: 0;
   display: grid;
   gap: 0.9rem;
-}
-
-.mc-next-threaded-surface.unified .mc-next-threaded-primary-column {
   max-width: min(100%, 980px);
   width: 100%;
   margin-inline: auto;
@@ -90,13 +84,8 @@
   display: none;
 }
 
-.mc-next-threaded-header {
-  display: grid;
-  gap: 0.9rem;
-  padding: 1rem 1.1rem;
-}
-
 .mc-next-threaded-surface.unified .mc-next-threaded-header {
+  display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
   gap: 0.55rem;
@@ -112,8 +101,10 @@
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-header-actions {
+  display: grid;
   grid-column: 2;
   grid-row: 1 / span 2;
+  gap: 0.45rem;
   justify-items: end;
 }
 
@@ -126,12 +117,6 @@
   display: flex;
   flex-wrap: wrap;
   gap: 0.28rem;
-}
-
-.mc-next-threaded-header-actions {
-  display: grid;
-  gap: 0.45rem;
-  justify-items: start;
 }
 
 .mc-next-threaded-model-picker .chat-model-picker {
