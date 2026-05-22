@@ -107,6 +107,7 @@ export class CodeModeRunRepository {
         AND (@sessionId IS NULL OR session_id = @sessionId)
         AND (@turnId IS NULL OR turn_id = @turnId)
       ORDER BY created_at DESC, run_id DESC
+      LIMIT @scanLimit
     `);
     this.listFilteredForStatusHydrationStmt = db.prepare(`
       SELECT * FROM code_mode_runs
@@ -115,6 +116,7 @@ export class CodeModeRunRepository {
         AND (@turnId IS NULL OR turn_id = @turnId)
         AND (status = @status OR (@includeApprovalPending = 1 AND status = 'approval_pending'))
       ORDER BY created_at DESC, run_id DESC
+      LIMIT @scanLimit
     `);
     this.claimForExecutionStmt = db.prepare(`
       UPDATE code_mode_runs
@@ -235,14 +237,25 @@ export class CodeModeRunRepository {
   }): CodeModeRunRecord[] {
     const limit = normalizeCodeModeRunLimit(options.limit);
     if (options.status === "failed") {
-      return (
+      const scanLimit = normalizeCodeModeRunHydrationScanLimit(limit);
+      const statusRows = (
+        this.listFilteredStmt.all({
+          limit,
+          workspaceId: options.workspaceId ?? null,
+          sessionId: options.sessionId ?? null,
+          turnId: options.turnId ?? null,
+          status: "failed",
+        }) as unknown as CodeModeRunRow[]
+      ).map(mapCodeModeRunRowForRead);
+      const hydratedRows = (
         this.listFilteredForFailedHydrationStmt.all({
           workspaceId: options.workspaceId ?? null,
           sessionId: options.sessionId ?? null,
           turnId: options.turnId ?? null,
+          scanLimit,
         }) as unknown as CodeModeRunRow[]
-      )
-        .map(mapCodeModeRunRowForRead)
+      ).map(mapCodeModeRunRowForRead);
+      return uniqueCodeModeRunsByRunId([...statusRows, ...hydratedRows])
         .filter((row) => row.status === "failed")
         .slice(0, limit);
     }
@@ -263,12 +276,32 @@ export class CodeModeRunRepository {
     sessionId?: string;
     turnId?: string;
     status: CodeModeRunRecord["status"];
+    limit?: number;
   }): CodeModeRunRecord[] {
+    const limit = normalizeCodeModeRunLimit(options.limit);
+    const scanLimit = normalizeCodeModeRunHydrationScanLimit(limit);
+    if (options.status === "failed") {
+      const statusRows = (
+        this.listFilteredStmt.all({
+          limit: scanLimit,
+          workspaceId: options.workspaceId ?? null,
+          sessionId: options.sessionId ?? null,
+          turnId: options.turnId ?? null,
+          status: "failed",
+        }) as unknown as CodeModeRunRow[]
+      ).map(mapCodeModeRunRowForRead);
+      const hydratedRows = (
+        this.listFilteredForFailedHydrationStmt.all({
+          workspaceId: options.workspaceId ?? null,
+          sessionId: options.sessionId ?? null,
+          turnId: options.turnId ?? null,
+          scanLimit,
+        }) as unknown as CodeModeRunRow[]
+      ).map(mapCodeModeRunRowForRead);
+      return uniqueCodeModeRunsByRunId([...statusRows, ...hydratedRows]);
+    }
     const includeApprovalPending =
-      options.status === "expired" ||
-      options.status === "approval_pending" ||
-      options.status === "failed" ||
-      options.status === "rejected";
+      options.status === "expired" || options.status === "approval_pending" || options.status === "rejected";
     return (
       this.listFilteredForStatusHydrationStmt.all({
         workspaceId: options.workspaceId ?? null,
@@ -276,6 +309,7 @@ export class CodeModeRunRepository {
         turnId: options.turnId ?? null,
         status: options.status,
         includeApprovalPending: includeApprovalPending ? 1 : 0,
+        scanLimit,
       }) as unknown as CodeModeRunRow[]
     ).map(mapCodeModeRunRowForRead);
   }
@@ -340,6 +374,23 @@ export class CodeModeRunRepository {
 
 function normalizeCodeModeRunLimit(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(1, Math.min(500, Math.floor(value))) : 100;
+}
+
+function normalizeCodeModeRunHydrationScanLimit(limit: number): number {
+  return Math.min(Math.max(limit * 4, limit), 1000);
+}
+
+function uniqueCodeModeRunsByRunId(runs: CodeModeRunRecord[]): CodeModeRunRecord[] {
+  const seen = new Set<string>();
+  const out: CodeModeRunRecord[] = [];
+  for (const run of runs) {
+    if (seen.has(run.runId)) {
+      continue;
+    }
+    seen.add(run.runId);
+    out.push(run);
+  }
+  return out;
 }
 
 function mapCodeModeRunRow(row: CodeModeRunRow): CodeModeRunRecord {

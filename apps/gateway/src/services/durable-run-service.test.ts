@@ -167,6 +167,117 @@ describe("DurableRunService", () => {
     expect(timeline.map((item) => item.eventType)).toContain("run_started");
   });
 
+  it("lets a worker-owned running workflow schedule a retry without using manual retry", async () => {
+    const run = createRun("run-hook-retry", "queued", "hook.delivery");
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const retries = new Map<string, DurableRetryRecord[]>();
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const serviceRef: { current?: DurableRunService } = {};
+    const executeWorkflow = vi.fn(async (claimed: DurableRunRecord) => {
+      const retry = serviceRef.current!.scheduleRunningWorkflowRetry(claimed.runId, "temporary hook outage", "hooks");
+      expect(retry.status).toBe("queued");
+    });
+    const service = new DurableRunService(
+      createContext(runs, checkpoints, timeline, { retries }) as unknown as ServiceContext,
+      {
+        backgroundTasks,
+        workflowRegistry: {
+          executeWorkflow,
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+      },
+    );
+    serviceRef.current = service;
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+
+    const stored = runs.get(run.runId);
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+    expect(stored).toMatchObject({
+      status: "queued",
+      attemptCount: 1,
+      leaseOwnerId: undefined,
+      leaseHeartbeatAt: undefined,
+      leaseExpiresAt: undefined,
+      lastError: undefined,
+      finishedAt: undefined,
+    });
+    expect(retries.get(run.runId)).toEqual([
+      expect.objectContaining({
+        attemptNo: 1,
+        reason: "temporary hook outage",
+        nextRetryAt: expect.any(String),
+      }),
+    ]);
+    expect(timeline.map((item) => item.eventType)).toEqual(
+      expect.arrayContaining(["run_started", "run_retry_scheduled"]),
+    );
+  });
+
+  it("dead-letters a worker-owned running workflow when retry attempts are exhausted", async () => {
+    const run = {
+      ...createRun("run-hook-dead", "queued", "hook.delivery"),
+      attemptCount: 1,
+      maxAttempts: 1,
+    };
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const deadLetters = new Map<
+      string,
+      {
+        dead_letter_id: string;
+        run_id: string;
+        reason: string;
+      }
+    >();
+    const checkpoints: Array<{ runId: string; checkpointKind: string }> = [];
+    const timeline: Array<{ runId: string; eventType: string }> = [];
+    const backgroundTasks = new Set<Promise<void>>();
+    const serviceRef: { current?: DurableRunService } = {};
+    const executeWorkflow = vi.fn(async (claimed: DurableRunRecord) => {
+      const retry = serviceRef.current!.scheduleRunningWorkflowRetry(claimed.runId, "terminal hook failure", "hooks");
+      expect(retry.status).toBe("dead_lettered");
+    });
+    const service = new DurableRunService(
+      createContext(runs, checkpoints, timeline, { deadLetters }) as unknown as ServiceContext,
+      {
+        backgroundTasks,
+        workflowRegistry: {
+          executeWorkflow,
+          isWorkflowRecoverable: () => ({ recoverable: true }),
+          markWorkflowUnrecoverable: vi.fn(),
+        },
+      },
+    );
+    serviceRef.current = service;
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+
+    const stored = runs.get(run.runId);
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+    expect(stored).toMatchObject({
+      status: "dead_lettered",
+      attemptCount: 2,
+      leaseOwnerId: undefined,
+      leaseHeartbeatAt: undefined,
+      leaseExpiresAt: undefined,
+      lastError: "retry_exhausted:terminal hook failure",
+    });
+    expect([...deadLetters.values()]).toEqual([
+      expect.objectContaining({
+        run_id: run.runId,
+        reason: "retry_exhausted:terminal hook failure",
+      }),
+    ]);
+    expect(timeline.map((item) => item.eventType)).toEqual(
+      expect.arrayContaining(["run_started", "run_dead_lettered", "run_retry_budget_exhausted"]),
+    );
+  });
+
   it("ignores the durable foundation env override once runtime config is normalized on", async () => {
     const previous = process.env.GOATCITADEL_DURABLE_FOUNDATION_ENABLED;
     process.env.GOATCITADEL_DURABLE_FOUNDATION_ENABLED = "false";
@@ -1098,7 +1209,16 @@ function createContext(
       durableRuns: {
         statusCounts: () => ({}),
         countRuns: () => runs.size,
-        listDeadLetters: () => [],
+        listDeadLetters: () =>
+          [...deadLetters.values()].map((row) => ({
+            deadLetterId: row.dead_letter_id,
+            runId: row.run_id,
+            reason: row.reason,
+            payload: {},
+            createdAt: "2026-03-14T00:00:00.000Z",
+            resolvedAt: row.resolved_at,
+            resolutionNote: row.resolution_note,
+          })),
         listRuns: () => [...runs.values()],
         listRunIdsByStatus: (status: DurableRunRecord["status"]) =>
           [...runs.values()].filter((run) => run.status === status).map((run) => run.runId),
@@ -1108,6 +1228,22 @@ function createContext(
           const current = retries.get(input.runId) ?? [];
           retries.set(input.runId, [...current.filter((item) => item.attemptNo !== input.attemptNo), input]);
           return input;
+        },
+        upsertDeadLetter: (input: { runId: string; reason: string; payload?: Record<string, unknown> }) => {
+          const deadLetterId = `dead-${deadLetters.size + 1}`;
+          const row = {
+            dead_letter_id: deadLetterId,
+            run_id: input.runId,
+            reason: input.reason,
+          };
+          deadLetters.set(deadLetterId, row);
+          return {
+            deadLetterId,
+            runId: input.runId,
+            reason: input.reason,
+            payload: input.payload ?? {},
+            createdAt: "2026-03-14T00:00:00.000Z",
+          };
         },
         getRun: (runId: string) => {
           const run = runs.get(runId);
@@ -1157,6 +1293,7 @@ function createContext(
           finishedAt?: string;
           clearFinishedAt?: boolean;
           updatedAt?: string;
+          attemptCount?: number;
           lastError?: string;
           clearLastError?: boolean;
           clearLease?: boolean;
@@ -1324,6 +1461,7 @@ function updateRun(
     finishedAt?: string;
     clearFinishedAt?: boolean;
     updatedAt?: string;
+    attemptCount?: number;
     lastError?: string;
     clearLastError?: boolean;
     leaseOwnerId?: string;
@@ -1348,6 +1486,7 @@ function updateRun(
         ? { finishedAt: patch.finishedAt }
         : {}),
     ...(patch.updatedAt !== undefined ? { updatedAt: patch.updatedAt } : {}),
+    ...(patch.attemptCount !== undefined ? { attemptCount: patch.attemptCount } : {}),
     ...(patch.clearLastError
       ? { lastError: undefined }
       : patch.lastError !== undefined

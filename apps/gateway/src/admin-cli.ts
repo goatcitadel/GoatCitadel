@@ -4,12 +4,10 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import type { LlmRuntimeConfig } from "@goatcitadel/contracts";
 import type { BundledPostgresRuntimeHandle } from "./bundled-postgres-runtime.js";
-import { ensureBundledPostgresRuntime } from "./bundled-postgres-runtime.js";
 import { repoHasConfigMarker } from "./config-files.js";
 import { runOfflineBackupCommand } from "./admin-backup-cli.js";
 import { loadLocalEnvFile } from "./env-file.js";
-import { loadGatewayConfig } from "./config.js";
-import { createGatewayAdminRuntime, type GatewayAdminPort } from "./services/gateway-runtime-factory.js";
+import type { GatewayAdminPort } from "./services/gateway-runtime-factory.js";
 
 loadLocalEnvFile();
 
@@ -31,9 +29,14 @@ export async function main(): Promise<void> {
     await runOfflineBackupCommand(action, rest);
     return;
   }
+  const [{ loadGatewayConfig }, { createGatewayAdminRuntime }] = await Promise.all([
+    import("./config.js"),
+    import("./services/gateway-runtime-factory.js"),
+  ]);
   const config = await loadGatewayConfig(resolveRootDir());
   let bundledPostgres: BundledPostgresRuntimeHandle | undefined;
   if (config.assistant.database.driver === "postgres") {
+    const { ensureBundledPostgresRuntime } = await import("./bundled-postgres-runtime.js");
     bundledPostgres = await ensureBundledPostgresRuntime(config);
   }
   const gateway = createGatewayAdminRuntime(config);

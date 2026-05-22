@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { __resolveBrowserSessionIdForTests } from "./browser-tools.js";
+import { __browserPageStateModeForTests, __resolveBrowserSessionIdForTests } from "./browser-tools.js";
 
 // Regression coverage for CODEX_FINDING #24: `resolveBrowserSessionId`
 // previously trusted caller-supplied `args.browserSessionId` /
@@ -35,5 +35,16 @@ describe("resolveBrowserSessionId (codex #24)", () => {
 
   it("returns undefined when no execution-context session id is present", () => {
     expect(__resolveBrowserSessionIdForTests({ browserSessionId: "would-be-overridden" }, {})).toBeUndefined();
+  });
+
+  it("keeps browser read tools stateless by default", () => {
+    expect(__browserPageStateModeForTests("browser.search")).toBe("stateless");
+    expect(__browserPageStateModeForTests("browser.navigate")).toBe("stateless");
+    expect(__browserPageStateModeForTests("browser.extract")).toBe("stateless");
+    expect(__browserPageStateModeForTests("browser.screenshot")).toBe("stateless");
+  });
+
+  it("keeps persisted page state only for approved interaction", () => {
+    expect(__browserPageStateModeForTests("browser.interact")).toBe("session");
   });
 });

@@ -125,7 +125,7 @@ export class OrchestrationPhaseExecutionService {
       const waitingForApproval = traceStatus === "waiting_for_approval";
       const waitingForUserInput = traceStatus === "waiting_for_user_input";
       const unsupportedUserInputWait =
-        "Phase child turn is waiting for user input, but durable orchestration can only pause and resume child approval waits.";
+        "Phase child turn is waiting for user input, but durable orchestration can only pause and resume child approval waits. Refactor this phase to use approval-based waits, then resume the run after approval.";
       const effectiveFailure = waitingForUserInput ? unsupportedUserInputWait : failure;
       return {
         phaseId: input.phase.phaseId,

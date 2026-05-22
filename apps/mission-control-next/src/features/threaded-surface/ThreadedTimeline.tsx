@@ -30,25 +30,7 @@ import {
 import { AssistantMessageRenderer } from "@goatcitadel/mission-control-shared/components/chat/AssistantMessageRenderer";
 import { ChatAttachmentPreviewStack } from "@goatcitadel/mission-control-shared/components/chat/ChatAttachmentPreviewStack";
 import { SurfaceReconnectBanner } from "@goatcitadel/mission-control-shared/components/chat/SurfaceReconnectBanner";
-
-function normalizeTimelineCitationText(content: string | undefined | null): string | undefined {
-  if (!content) {
-    return undefined;
-  }
-  const normalized = content
-    .replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&")
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/<(script|style|svg|math|canvas)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, " ")
-    .replace(/<\s*br\s*\/?>/gi, "\n")
-    .replace(/<\/?[A-Za-z][^>\n]{0,1000}>/g, "")
-    .replace(/<[A-Za-z][^<\n]{0,1000}$/gm, "")
-    .replace(/[ \t\f\v]+/g, " ")
-    .trim();
-  return normalized || undefined;
-}
+import { normalizeCitationDisplayText } from "@goatcitadel/mission-control-shared/components/chat/assistant-display-text";
 
 function formatActorTimestamp(timestamp: string): string {
   return new Date(timestamp).toLocaleTimeString();
@@ -171,8 +153,8 @@ function ThreadCitationList({ citations }: { citations: ChatCitationRecord[] }) 
   return (
     <div className="mc-next-thread-citations" aria-label="Citations for this answer">
       {citations.slice(0, 6).map((citation, index) => {
-        const label = normalizeTimelineCitationText(citation.title) || citation.url;
-        const snippet = normalizeTimelineCitationText(citation.snippet);
+        const label = normalizeCitationDisplayText(citation.title) || citation.url;
+        const snippet = normalizeCitationDisplayText(citation.snippet);
         const source = formatCitationSource(citation);
         const safeHref = isSafeCitationHref(citation.url);
         return (

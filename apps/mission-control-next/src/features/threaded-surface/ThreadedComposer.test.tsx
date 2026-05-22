@@ -442,17 +442,10 @@ describe("ThreadedComposer", () => {
     await click(findButton(renderer.root, "Set Deep mode"));
     expect(onSetDeepMode).toHaveBeenCalledTimes(1);
 
-    const onFullWebAccessChange = vi.fn();
-    renderer = await renderComposer({ onFullWebAccessChange });
-    await act(async () => {
-      renderer.root
-        .findByProps({ title: "Allow public-web search and page reads for this run" })
-        .findByType("input")
-        .props.onChange({
-          target: { checked: true },
-        });
-    });
-    expect(onFullWebAccessChange).toHaveBeenCalledWith(true);
+    renderer = await renderComposer({ fullWebAccess: true });
+    expect(renderer.root.findAllByProps({ title: "Allow public-web search and page reads for this run" })).toHaveLength(
+      0,
+    );
   });
 
   it("wires queue, draft, suggestion, recovery, editing, and attachment actions", async () => {

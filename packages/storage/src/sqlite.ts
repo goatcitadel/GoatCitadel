@@ -927,6 +927,11 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "orchestration_plan_workspace_scope",
     up: migrateOrchestrationPlanWorkspaceScope,
   },
+  {
+    version: 94,
+    name: "code_mode_run_status_listing_indexes",
+    up: ensureCodeModeRunStatusListingIndexes,
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -2875,11 +2880,13 @@ function createCapabilitySystemV1Schema(db: DatabaseSync): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_code_mode_runs_status_created
-      ON code_mode_runs(status, created_at DESC);
+      ON code_mode_runs(status, created_at DESC, run_id DESC);
     CREATE INDEX IF NOT EXISTS idx_code_mode_runs_session_created
       ON code_mode_runs(session_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_code_mode_runs_approval
       ON code_mode_runs(approval_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_code_mode_runs_session_status_created
+      ON code_mode_runs(session_id, status, created_at DESC, run_id DESC);
   `);
 
   addColumnIfMissingIfTableExists(db, "chat_inline_approvals", "kind", "TEXT");
@@ -2982,11 +2989,29 @@ function ensureCodeModeRunSandboxSchemaParity(db: DatabaseSync): void {
   addColumnIfMissingIfTableExists(db, "code_mode_runs", "error_details_json", "TEXT");
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_code_mode_runs_status_created
-      ON code_mode_runs(status, created_at DESC);
+      ON code_mode_runs(status, created_at DESC, run_id DESC);
     CREATE INDEX IF NOT EXISTS idx_code_mode_runs_session_created
       ON code_mode_runs(session_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_code_mode_runs_approval
       ON code_mode_runs(approval_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_code_mode_runs_workspace_status_created
+      ON code_mode_runs(workspace_id, status, created_at DESC, run_id DESC);
+    CREATE INDEX IF NOT EXISTS idx_code_mode_runs_session_status_created
+      ON code_mode_runs(session_id, status, created_at DESC, run_id DESC);
+  `);
+}
+
+function ensureCodeModeRunStatusListingIndexes(db: DatabaseSync): void {
+  if (!tableExists(db, "code_mode_runs")) {
+    return;
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_code_mode_runs_status_created
+      ON code_mode_runs(status, created_at DESC, run_id DESC);
+    CREATE INDEX IF NOT EXISTS idx_code_mode_runs_workspace_status_created
+      ON code_mode_runs(workspace_id, status, created_at DESC, run_id DESC);
+    CREATE INDEX IF NOT EXISTS idx_code_mode_runs_session_status_created
+      ON code_mode_runs(session_id, status, created_at DESC, run_id DESC);
   `);
 }
 

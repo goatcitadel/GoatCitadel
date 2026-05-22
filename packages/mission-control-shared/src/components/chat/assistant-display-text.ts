@@ -1,11 +1,11 @@
 const FENCED_CODE_BLOCK_RE = /(```[\s\S]*?```)/g;
-const RAW_HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
 const RAW_HTML_BLOCK_RE = /<(script|style|svg|math|canvas)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
 const RAW_HTML_TAG_RE = /<\/?[A-Za-z][^>\n]{0,1000}>/g;
 const RAW_HTML_DANGLING_TAG_RE = /<[A-Za-z][^<\n]{0,1000}$/gm;
 const HTML_LINE_BREAK_RE = /<\s*br\s*\/?>/gi;
 const HTML_BLOCK_BREAK_RE =
   /<\/?(?:address|article|aside|blockquote|div|dl|dt|dd|figcaption|figure|footer|form|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|table|tbody|td|tfoot|th|thead|tr|ul)\b[^>]*>/gi;
+const HTML_COMMENT_STRIP_MAX_PASSES = 20;
 
 const HTML_ENTITIES: Record<string, string> = {
   amp: "&",
@@ -52,8 +52,7 @@ function stripHtmlNoiseOutsideCode(content: string): string {
 }
 
 function stripHtmlNoise(content: string): string {
-  return decodeBasicHtmlEntities(content)
-    .replace(RAW_HTML_COMMENT_RE, "")
+  return stripRawHtmlComments(decodeBasicHtmlEntities(content))
     .replace(RAW_HTML_BLOCK_RE, " ")
     .replace(HTML_LINE_BREAK_RE, "\n")
     .replace(HTML_BLOCK_BREAK_RE, "\n")
@@ -63,6 +62,42 @@ function stripHtmlNoise(content: string): string {
     .map((line) => line.replace(/[ \t\f\v]+/g, " ").trimEnd())
     .join("\n")
     .replace(/[ \t\f\v]{2,}/g, " ");
+}
+
+function stripRawHtmlComments(content: string): string {
+  let output = content;
+  for (let pass = 0; pass < HTML_COMMENT_STRIP_MAX_PASSES; pass += 1) {
+    const next = stripRawHtmlCommentsOnce(output);
+    if (next === output) {
+      return next;
+    }
+    output = next;
+  }
+  return output;
+}
+
+function stripRawHtmlCommentsOnce(content: string): string {
+  let output = "";
+  let cursor = 0;
+  while (cursor < content.length) {
+    const start = content.indexOf("<!--", cursor);
+    if (start === -1) {
+      output += content.slice(cursor);
+      break;
+    }
+    output += content.slice(cursor, start);
+    const end = content.indexOf("-->", start + 4);
+    if (end === -1) {
+      const residualClose = content.indexOf(">", start + 4);
+      if (residualClose !== -1 && residualClose - start <= 8) {
+        cursor = residualClose + 1;
+        continue;
+      }
+      break;
+    }
+    cursor = end + 3;
+  }
+  return output;
 }
 
 function decodeBasicHtmlEntities(content: string): string {
@@ -95,5 +130,5 @@ function decodeCodePoint(value: number): string | undefined {
 }
 
 function looksLikeHtml(content: string): boolean {
-  return /<!--[\s\S]*?-->/.test(content) || /<\/?[A-Za-z][^>\n]{0,1000}>/.test(content);
+  return (content.includes("<!--") && content.includes("-->")) || /<\/?[A-Za-z][^>\n]{0,1000}>/.test(content);
 }

@@ -430,10 +430,12 @@ export class CapabilitySystemService {
           sessionId: filters.sessionId,
           turnId: filters.turnId,
           status: filters.status,
+          limit: filters.limit,
         });
       }
+      const scanLimit = Math.min(Math.max(filters.limit * 4, filters.limit), 1000);
       return repository
-        .list(Number.MAX_SAFE_INTEGER)
+        .list(scanLimit)
         .filter((run) => (filters.workspaceId ? run.workspaceId === filters.workspaceId : true))
         .filter((run) => (filters.sessionId ? run.sessionId === filters.sessionId : true))
         .filter((run) => (filters.turnId ? run.turnId === filters.turnId : true))
@@ -523,8 +525,9 @@ export class CapabilitySystemService {
           }
         }
       }
-    } catch {
-      // Older test/storage harnesses may not expose execution plans.
+    } catch (error) {
+      void error;
+      // Fallback for older test/storage harnesses that may not expose execution plans.
     }
     let traces: ChatTurnTraceRecord[];
     try {

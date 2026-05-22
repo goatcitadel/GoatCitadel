@@ -2218,7 +2218,7 @@ describe("browser tools coverage sweep", () => {
     ]);
   });
 
-  it("applies stored browser session state to playwright contexts", async () => {
+  it("applies stored browser session state to approved interaction contexts", async () => {
     const config = createConfig(tempRoot);
     const executionContext = { sessionId: "sess-browser-context" };
     const seenContextOptions: Array<Record<string, unknown> | undefined> = [];
@@ -2261,8 +2261,8 @@ describe("browser tools coverage sweep", () => {
     );
 
     await executeBrowserTool(
-      "browser.navigate",
-      { url: "https://example.com/dashboard", maxChars: 300 },
+      "browser.interact",
+      { url: "https://example.com/dashboard", maxChars: 300, steps: [{ action: "wait", timeoutMs: 100 }] },
       config,
       executionContext,
     );
@@ -2284,7 +2284,62 @@ describe("browser tools coverage sweep", () => {
     });
   });
 
-  it("stores mapped browser storage state and copied credentials after navigation", async () => {
+  it("does not apply stored browser session state to read-only navigation", async () => {
+    const config = createConfig(tempRoot);
+    const executionContext = { sessionId: "sess-browser-stateless-read" };
+    const seenContextOptions: Array<Record<string, unknown> | undefined> = [];
+    mocked.launch.mockResolvedValueOnce({
+      ...createPlaywrightStub(),
+      newContext: async (options?: Record<string, unknown>) => {
+        seenContextOptions.push(options);
+        return (createPlaywrightStub() as unknown as { newContext: () => Promise<unknown> }).newContext();
+      },
+    } as never);
+
+    await executeBrowserTool(
+      "browser.context.configure",
+      {
+        locale: "en-US",
+        timezoneId: "America/Los_Angeles",
+      },
+      config,
+      executionContext,
+    );
+    await executeBrowserTool(
+      "browser.storage.set",
+      {
+        origin: "https://example.com",
+        storage: "local",
+        entries: { theme: "signal-noir" },
+      },
+      config,
+      executionContext,
+    );
+    await executeBrowserTool(
+      "browser.cookies.set",
+      {
+        cookies: [{ name: "sid", value: "abc123", url: "https://example.com" }],
+      },
+      config,
+      executionContext,
+    );
+
+    const result = await executeBrowserTool(
+      "browser.navigate",
+      { url: "https://example.com/dashboard", maxChars: 300 },
+      config,
+      executionContext,
+    );
+
+    expect(result.browserSessionId).toBeUndefined();
+    expect(seenContextOptions[0]).toMatchObject({
+      locale: undefined,
+      timezoneId: undefined,
+      storageState: undefined,
+    });
+  });
+
+  it("stores mapped browser storage state and copied credentials after approved interaction", async () => {
     const config = createConfig(tempRoot);
     const executionContext = { sessionId: "sess-browser-mapped-state" };
     mocked.launch.mockResolvedValueOnce({
@@ -2325,7 +2380,12 @@ describe("browser tools coverage sweep", () => {
       config,
       executionContext,
     );
-    await executeBrowserTool("browser.navigate", { url: "https://example.com/mapped" }, config, executionContext);
+    await executeBrowserTool(
+      "browser.interact",
+      { url: "https://example.com/mapped", steps: [{ action: "wait", timeoutMs: 100 }] },
+      config,
+      executionContext,
+    );
 
     const storage = await executeBrowserTool(
       "browser.storage.get",
@@ -2467,7 +2527,7 @@ describe("browser tools coverage sweep", () => {
     expect(jsonLike.weather).toMatchObject({ temperature: "18°", condition: "Clear" });
   });
 
-  it("applies session storage, signal hooks, and empty storage state to browser contexts", async () => {
+  it("applies session storage, signal hooks, and empty storage state to approved interaction contexts", async () => {
     const config = createConfig(tempRoot);
     const executionContext = { sessionId: "sess-browser-session-storage", signal: new AbortController().signal };
     const seenContextOptions: Array<Record<string, unknown> | undefined> = [];
@@ -2530,8 +2590,8 @@ describe("browser tools coverage sweep", () => {
 
     try {
       const result = await executeBrowserTool(
-        "browser.navigate",
-        { url: "https://example.com/session", maxChars: 300 },
+        "browser.interact",
+        { url: "https://example.com/session", maxChars: 300, steps: [{ action: "wait", timeoutMs: 100 }] },
         config,
         executionContext,
       );
@@ -2597,8 +2657,8 @@ describe("browser tools coverage sweep", () => {
 
     try {
       await executeBrowserTool(
-        "browser.navigate",
-        { url: "https://example.com/storage", waitUntil: "networkidle" },
+        "browser.interact",
+        { url: "https://example.com/storage", waitUntil: "networkidle", steps: [{ action: "wait", timeoutMs: 100 }] },
         config,
         executionContext,
       );

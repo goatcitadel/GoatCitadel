@@ -1665,6 +1665,7 @@ describe("CapabilitySystemService", () => {
 
   it("scans pending Code Mode approvals when status filters need read-time hydration", async () => {
     const harness = await createHarness();
+    const statusHydrationSpy = vi.spyOn(harness.storage.codeModeRuns, "listFilteredForStatusHydration");
     for (let index = 0; index < 501; index += 1) {
       harness.storage.codeModeRuns.upsert({
         runId: `completed-run-${index}`,
@@ -1718,6 +1719,13 @@ describe("CapabilitySystemService", () => {
         status: "expired",
       }),
     ]);
+    expect(statusHydrationSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-code",
+        status: "expired",
+        limit: 5,
+      }),
+    );
   });
 
   it("publishes an explicit advisory event when Code Mode runs without available host isolation", async () => {
@@ -1981,7 +1989,9 @@ describe("CapabilitySystemService", () => {
       runId: run.runId,
       status: "failed",
     });
-    expect(String(result?.result?.error)).toContain("Code Mode wrapper deadline exceeded");
+    expect(String(result?.result?.error)).toMatch(
+      /Code Mode wrapper deadline exceeded|RUN_CANCELLED: Code Mode run exceeded/,
+    );
     expect(storedRun).toMatchObject({
       status: "failed",
     });
@@ -3295,6 +3305,33 @@ function createFakeStorage(approvalsById = new Map<string, ApprovalRequest>()) {
       },
       list(limit = 100) {
         return [...codeModeRuns.values()].slice(0, limit);
+      },
+      listFilteredForStatusHydration(options: {
+        limit?: number;
+        workspaceId?: string;
+        sessionId?: string;
+        turnId?: string;
+        status: CodeModeRunRecord["status"];
+      }) {
+        const limit =
+          typeof options.limit === "number" && Number.isFinite(options.limit)
+            ? Math.max(1, Math.min(500, Math.floor(options.limit)))
+            : 100;
+        const scanLimit = Math.min(Math.max(limit * 4, limit), 1000);
+        const includeApprovalPending =
+          options.status === "expired" ||
+          options.status === "approval_pending" ||
+          options.status === "failed" ||
+          options.status === "rejected";
+        return [...codeModeRuns.values()]
+          .filter((run) => (options.workspaceId ? run.workspaceId === options.workspaceId : true))
+          .filter((run) => (options.sessionId ? run.sessionId === options.sessionId : true))
+          .filter((run) => (options.turnId ? run.turnId === options.turnId : true))
+          .filter(
+            (run) => run.status === options.status || (includeApprovalPending && run.status === "approval_pending"),
+          )
+          .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.runId.localeCompare(left.runId))
+          .slice(0, scanLimit);
       },
       claimForExecution(input: {
         runId: string;

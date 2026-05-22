@@ -591,7 +591,7 @@ describe("durable-execution-service orchestration workflow", () => {
         markHookRunDeadLettered: vi.fn(),
       },
       durableRunService: {
-        retryDurableRun: vi.fn(() => ({ ...run, status: "queued", attemptCount: 2 })),
+        scheduleRunningWorkflowRetry: vi.fn(() => ({ ...run, status: "queued", attemptCount: 2 })),
         requestRunProcessing,
       },
       computeDurableRetryDelayMs: vi.fn(() => 25),
@@ -611,7 +611,7 @@ describe("durable-execution-service orchestration workflow", () => {
         markHookRunDeadLettered: vi.fn(),
       },
       durableRunService: {
-        retryDurableRun: vi.fn(() => ({ ...run, status: "failed", attemptCount: 3 })),
+        scheduleRunningWorkflowRetry: vi.fn(() => ({ ...run, status: "dead_lettered", attemptCount: 3 })),
         requestRunProcessing: vi.fn(),
       },
       computeDurableRetryDelayMs: vi.fn(),

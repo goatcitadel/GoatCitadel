@@ -514,7 +514,7 @@ export function MissionThreadedControllerHost({
   const [pinnedGoal, setPinnedGoal] = useState<string | undefined>(undefined);
   const [search, setSearch] = useState("");
   const [sending, setSending] = useState(false);
-  const [fullWebAccess, setFullWebAccess] = useState(false);
+  const [fullWebAccess, setFullWebAccess] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [errorSource, setErrorSource] = useState<ChatErrorSource | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachmentRecord[]>([]);
@@ -522,8 +522,12 @@ export function MissionThreadedControllerHost({
   const [tagsValue, setTagsValue] = useState("");
   const [streamEnabled, setStreamEnabled] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
-    const raw = window.localStorage.getItem(STREAM_PREF_KEY);
-    return raw === null ? true : raw === "true";
+    try {
+      const raw = window.localStorage.getItem(STREAM_PREF_KEY);
+      return raw === null ? true : raw === "true";
+    } catch {
+      return true;
+    }
   });
   const [renameTitle, setRenameTitle] = useState("");
   const [isDragActive, setIsDragActive] = useState(false);
@@ -1272,7 +1276,11 @@ export function MissionThreadedControllerHost({
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem(STREAM_PREF_KEY, String(streamEnabled));
+    try {
+      window.localStorage.setItem(STREAM_PREF_KEY, String(streamEnabled));
+    } catch {
+      // Fallback: localStorage may be disabled or quota-exceeded; preference will not persist this session.
+    }
   }, [streamEnabled]);
 
   useEffect(() => {

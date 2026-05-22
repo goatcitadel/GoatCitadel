@@ -201,8 +201,8 @@ describe("ChatAgentOrchestrator Prompt Lab repo and evidence behavior", () => {
       .map((message) => (typeof message.content === "string" ? message.content : ""))
       .join("\n");
     expect(synthesisPrompt).toMatch(/import express from \\?"express\\?";/);
-    expect(synthesisPrompt).toContain('\\"dependencies\\": {');
-    expect(synthesisPrompt).toContain('\\"express\\": \\"^4.21.0\\"');
+    expect(synthesisPrompt).toMatch(/\\?"dependencies\\?": \{/);
+    expect(synthesisPrompt).toMatch(/\\?"express\\?": \\?"\^4\.21\.0\\?"/);
   });
 
   it("prefetches explicit Prompt Lab file evidence before accepting a prose-only completion", async () => {
@@ -296,6 +296,103 @@ describe("ChatAgentOrchestrator Prompt Lab repo and evidence behavior", () => {
     expect(invokedPaths).toContain("F:/code/personal-ai-mobile-app/src/api/streaming.ts");
     expect(result.turnTrace.toolRuns.length).toBeGreaterThanOrEqual(1);
     expect(result.assistantContent).not.toContain("I couldn't verify that with the required tools");
+  });
+
+  it("does not prefetch ordinary chat text that merely mentions local filenames", async () => {
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "Mentioning package.json and .env in prose does not require reading local files.",
+          },
+        },
+      ],
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>();
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-ordinary-file-mention-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-ordinary-file-mention-1",
+      content: "A pasted note mentions `package.json` and `.env`. Explain why secrets should stay out of commits.",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [
+        {
+          role: "user",
+          content: "A pasted note mentions `package.json` and `.env`. Explain why secrets should stay out of commits.",
+        },
+      ],
+    });
+
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.turnTrace.toolRuns).toEqual([]);
+    expect(result.assistantContent).toContain("does not require reading local files");
+  });
+
+  it("skips sensitive filenames during automatic Prompt Lab prefetch", async () => {
+    const wrappedPrompt = [
+      "## Prompt Lab Run Contract",
+      "- Mode: chat",
+      "- Tool tier: explicit-tools",
+      "- This is an explicit-tools evaluation. Use the tools requested in the prompt.",
+      "- Required tool families: file/code tools",
+      "",
+      "## User Task",
+      "Use file tools to inspect `package.json` and `.env`. Summarize only non-secret configuration shape.",
+    ].join("\n");
+    const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValueOnce({
+      model: "glm-5",
+      choices: [{ index: 0, message: { role: "assistant", content: "Configuration shape summarized." } }],
+    });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-prefetch-package-safe",
+      result: {
+        path: "package.json",
+        content: '{ "name": "goatcitadel" }',
+      },
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["file.read_range"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    await orchestrator.run({
+      sessionId: "sess-prompt-lab-sensitive-prefetch-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-prompt-lab-sensitive-prefetch-1",
+      content: wrappedPrompt,
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      normalizationProfile: "prompt_pack_harness",
+      historyMessages: [{ role: "user", content: wrappedPrompt }],
+    });
+
+    const invokedPaths = invokeTool.mock.calls.map((call) => String(call[0].args.path));
+    expect(invokedPaths).toEqual(["package.json"]);
   });
 
   it("prefetches exact prompt-listed files even without an explicit required tool-family line", async () => {

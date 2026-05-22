@@ -1586,7 +1586,7 @@ describe("ToolPolicyEngine policy edge coverage", () => {
     );
   });
 
-  it("records the bypass network audit event for public targets that would otherwise need approval", async () => {
+  it("records the bypass network audit event for non-browser public targets that would otherwise need approval", async () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(
       {
@@ -1629,7 +1629,7 @@ describe("ToolPolicyEngine policy edge coverage", () => {
     ).recordDangerProfileNetworkBypassIfNeeded(
       "audit-network",
       {
-        toolName: "http.get",
+        toolName: "http.post",
         args: { url: "https://user:secret@example.com/api?token=secret" },
         agentId: "agent",
         sessionId: "session",
@@ -1810,7 +1810,7 @@ describe("ToolPolicyEngine policy edge coverage", () => {
 });
 
 describe("ToolPolicyEngine outside-root read access", () => {
-  it("blocks browser navigation to public hosts when they are not allowlisted even in bypass mode", () => {
+  it("allows browser navigation to public hosts by default even in bypass mode", () => {
     const storage = createStorageStub();
     vi.mocked(storage.toolGrants.list).mockReturnValue([
       {
@@ -1843,9 +1843,9 @@ describe("ToolPolicyEngine outside-root read access", () => {
       sessionId: "session",
     });
 
-    expect(evaluation.allowed).toBe(false);
+    expect(evaluation.allowed).toBe(true);
     expect(evaluation.requiresApproval).toBe(false);
-    expect(evaluation.reasonCodes).toContain("structural_safety_block");
+    expect(evaluation.reasonCodes).toContain("allowed");
   });
 
   it("still blocks metadata hosts under the danger profile", () => {
@@ -1989,7 +1989,7 @@ describe("ToolPolicyEngine outside-root read access", () => {
     expect(navigateResult.policyReason).toContain("firecrawl.example");
   });
 
-  it("requires at least one native browser.search host when native fallback can run", async () => {
+  it("allows native browser.search without per-host search-engine allowlisting", async () => {
     const engine = new ToolPolicyEngine(
       {
         ...policyConfig,
@@ -2034,10 +2034,12 @@ describe("ToolPolicyEngine outside-root read access", () => {
       dryRun: true,
     });
 
-    expect(nativeResult.outcome).toBe("blocked");
-    expect(nativeResult.policyReason).toContain("browser.search requires at least one native search host");
-    expect(firecrawlFallbackResult.outcome).toBe("blocked");
-    expect(firecrawlFallbackResult.policyReason).toContain("browser.search requires at least one native search host");
+    expect(nativeResult.outcome).toBe("approval_required");
+    expect(nativeResult.policyReason).not.toContain("browser.search requires at least one native search host");
+    expect(firecrawlFallbackResult.outcome).toBe("approval_required");
+    expect(firecrawlFallbackResult.policyReason).not.toContain(
+      "browser.search requires at least one native search host",
+    );
     expect(firecrawlOnlyResult.outcome).toBe("approval_required");
     expect(firecrawlOnlyResult.policyReason).not.toContain("browser.search requires at least one native search host");
   });
@@ -2069,7 +2071,7 @@ describe("ToolPolicyEngine outside-root read access", () => {
     expect(result.policyReason).not.toContain("browser.search requires at least one native search host");
   });
 
-  it("does not audit public-host bypasses because bypass mode preserves the network allowlist", async () => {
+  it("does not audit public-host browser reads because public web access is the default", async () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(
       {
@@ -2104,7 +2106,7 @@ describe("ToolPolicyEngine outside-root read access", () => {
       dryRun: true,
     });
 
-    expect(result.outcome).toBe("blocked");
+    expect(result.outcome).toBe("executed");
     expect(vi.mocked(storage.audit.append)).not.toHaveBeenCalledWith(
       "tool_invocations",
       expect.objectContaining({ event: "approval_bypass_mode_network_target" }),

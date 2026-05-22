@@ -126,7 +126,7 @@ describe("ToolPolicyEngine loop 15 branch tails", () => {
     const engine = new ToolPolicyEngine(createConfig(), storage) as unknown as EngineWithBranchPrivates;
 
     await engine.recordDangerProfileNetworkBypassIfNeeded("audit-default-mode", {
-      toolName: "http.get",
+      toolName: "http.post",
       args: { url: "https://blocked.example.test/api" },
       agentId: "agent",
       sessionId: "session",
@@ -137,7 +137,7 @@ describe("ToolPolicyEngine loop 15 branch tails", () => {
       expect.objectContaining({
         event: "approval_bypass_mode_network_target",
         auditEventId: "audit-default-mode",
-        toolName: "http.get",
+        toolName: "http.post",
         targets: [
           expect.objectContaining({
             hostname: "blocked.example.test",

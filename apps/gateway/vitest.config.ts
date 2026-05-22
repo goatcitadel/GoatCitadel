@@ -15,6 +15,10 @@ export default defineConfig({
         find: "@goatcitadel/skills",
         replacement: path.resolve(configDir, "../../packages/skills/src/index.ts"),
       },
+      {
+        find: "@goatcitadel/extensions-sdk",
+        replacement: path.resolve(configDir, "../../packages/extensions-sdk/src/index.ts"),
+      },
     ],
   },
   test: {

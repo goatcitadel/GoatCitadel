@@ -303,7 +303,7 @@ describe("OrchestrationPhaseExecutionService", () => {
       childTurnId: "turn-user-input",
       childRunId: "child-run-user-input",
       error:
-        "Phase child turn is waiting for user input, but durable orchestration can only pause and resume child approval waits.",
+        "Phase child turn is waiting for user input, but durable orchestration can only pause and resume child approval waits. Refactor this phase to use approval-based waits, then resume the run after approval.",
     });
   });
 

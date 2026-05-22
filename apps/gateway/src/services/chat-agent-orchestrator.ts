@@ -261,6 +261,17 @@ const KNOWN_BARE_FILE_BASENAMES = new Set([
   "prettier.config.js",
   "turbo.json",
 ]);
+const SENSITIVE_LOCAL_PREFETCH_BASENAMES = new Set([
+  ".env",
+  ".env.local",
+  ".env.development",
+  ".env.production",
+  ".npmrc",
+  ".pypirc",
+  ".netrc",
+  "id_rsa",
+  "id_ed25519",
+]);
 const KNOWN_REPO_PATH_ROOT_SEGMENTS = new Set([
   "apps",
   "artifacts",
@@ -495,18 +506,32 @@ export class ChatAgentOrchestrator {
 
     const conversationMessages: ChatCompletionRequest["messages"] = [...input.historyMessages];
     const normalizationProfile = input.normalizationProfile ?? "live";
+    const promptLabHarnessTurn = isPromptLabHarnessContent(input.content);
     const parsedPromptLabTask = promptLabContract.userTask?.trim();
     const promptLabTaskForInspection =
       parsedPromptLabTask || extractPrimaryUserTaskContent(input.content) || input.content;
-    const promptLabFilePaths = extractExplicitLocalFilePathsFromPrompt(promptLabTaskForInspection);
+    const promptLabPrefetchAllowed =
+      promptLabHarnessTurn ||
+      normalizationProfile === "prompt_pack_harness" ||
+      promptLabContract.explicitTools ||
+      promptLabContract.repoGroundedAssist ||
+      promptLabContractRequiresFileTools(promptLabContract);
+    const promptLabFilePaths = promptLabPrefetchAllowed
+      ? filterPromptLabPrefetchFilePaths(extractExplicitLocalFilePathsFromPrompt(promptLabTaskForInspection))
+      : [];
     const promptLabExplicitFilesOnly = promptLabTaskLimitsInspectionToExplicitFiles(promptLabTaskForInspection);
-    const promptLabCompanionFilePaths = inferPromptLabCompanionFilePaths(
-      promptLabTaskForInspection,
-      promptLabExplicitFilesOnly ? [] : promptLabFilePaths,
-    );
-    const promptLabSuggestedFilePaths = promptLabExplicitFilesOnly
-      ? []
-      : inferPromptLabSuggestedFilePaths(promptLabTaskForInspection);
+    const promptLabCompanionFilePaths = promptLabPrefetchAllowed
+      ? filterPromptLabPrefetchFilePaths(
+          inferPromptLabCompanionFilePaths(
+            promptLabTaskForInspection,
+            promptLabExplicitFilesOnly ? [] : promptLabFilePaths,
+          ),
+        )
+      : [];
+    const promptLabSuggestedFilePaths =
+      promptLabExplicitFilesOnly || !promptLabPrefetchAllowed
+        ? []
+        : filterPromptLabPrefetchFilePaths(inferPromptLabSuggestedFilePaths(promptLabTaskForInspection));
     const promptLabPrefetchFilePaths = [
       ...new Set([...promptLabFilePaths, ...promptLabCompanionFilePaths, ...promptLabSuggestedFilePaths]),
     ];
@@ -717,7 +742,6 @@ export class ChatAgentOrchestrator {
         }
       }
     }
-    const promptLabHarnessTurn = isPromptLabHarnessContent(input.content);
     const delegatedOrchestrationPrompt = looksLikeDelegatedOrchestrationPrompt(input.content);
     if (!assistantContent && !promptLabHarnessTurn && !delegatedOrchestrationPrompt) {
       const clarificationFollowUp = buildClarificationFollowUpIfNeeded(input.content, input.historyMessages);
@@ -13754,6 +13778,19 @@ function looksLikeLocalFilePath(value: string): boolean {
   return /\.[A-Za-z0-9._-]+$/.test(normalized);
 }
 
+function filterPromptLabPrefetchFilePaths(paths: string[]): string[] {
+  return paths.filter((filePath) => !isSensitivePromptLabPrefetchPath(filePath));
+}
+
+function isSensitivePromptLabPrefetchPath(filePath: string): boolean {
+  const normalized = filePath.trim().replaceAll("\\", "/");
+  if (!normalized) {
+    return false;
+  }
+  const basename = normalized.split("/").filter(Boolean).at(-1)?.toLowerCase() ?? normalized.toLowerCase();
+  return SENSITIVE_LOCAL_PREFETCH_BASENAMES.has(basename);
+}
+
 function looksLikeHarnessContaminatedQuery(value: string): boolean {
   const normalized = value.toLowerCase().replace(/\s+/g, " ").trim();
   return PROMPT_HARNESS_QUERY_MARKERS.some((marker) => normalized.includes(marker));
@@ -13851,6 +13888,9 @@ function inferLocalToolPathFromPrompt(toolName: string, userContent: string): st
         return ".";
       }
       return collapsePromptPathToSearchRoot(explicitPath);
+    }
+    if (toolName === "code.search") {
+      return ".";
     }
     if (hasDynamicPathPlaceholder) {
       return undefined;

@@ -57,7 +57,9 @@ function assertHostAllowedForConfig(
 }
 
 function resolveNetworkAllowlist(config: ToolPolicyConfig, executionContext?: BrowserExecutionContext): string[] {
-  return executionContext?.fullWebAccess === true ? ["*"] : config.sandbox.networkAllowlist;
+  return executionContext?.fullWebAccess === true
+    ? [...config.sandbox.networkAllowlist, "*"]
+    : config.sandbox.networkAllowlist;
 }
 
 function getGrantHostAllowlist(executionContext?: BrowserExecutionContext): string[] {
@@ -116,6 +118,8 @@ type BrowserSessionState = {
   };
   updatedAt: number;
 };
+
+type BrowserPageStateMode = "stateless" | "session";
 
 let playwrightChromiumInstallPromise: Promise<void> | null = null;
 const browserSessionStates = new Map<string, { state: BrowserSessionState; lastAccess: number }>();
@@ -670,64 +674,71 @@ async function executeBrowserInteract(
     assertWritePathInJail(outputPath, config.sandbox.writeJailRoots);
   }
 
-  return withBrowserPage(url, args, config, executionContext, async (page, responseStatus, finalUrl) => {
-    for (const step of steps) {
-      const timeout = clampInt(step.timeoutMs, 12000, 500, 60000);
-      if (step.action === "click") {
-        const selector = ensureSelector(step.selector, "click");
-        await page.locator(selector).first().click({ timeout });
-        continue;
-      }
-      if (step.action === "type") {
-        const selector = ensureSelector(step.selector, "type");
-        const text = asNonEmptyString(step.text, "type.text");
-        await page.locator(selector).first().fill(text, { timeout });
-        continue;
-      }
-      if (step.action === "press") {
-        const key = asString(step.key) ?? "Enter";
-        if (step.selector) {
-          await page.locator(step.selector).first().press(key, { timeout });
-        } else {
-          await page.keyboard.press(key);
+  return withBrowserPage(
+    url,
+    args,
+    config,
+    executionContext,
+    async (page, responseStatus, finalUrl) => {
+      for (const step of steps) {
+        const timeout = clampInt(step.timeoutMs, 12000, 500, 60000);
+        if (step.action === "click") {
+          const selector = ensureSelector(step.selector, "click");
+          await page.locator(selector).first().click({ timeout });
+          continue;
         }
-        continue;
+        if (step.action === "type") {
+          const selector = ensureSelector(step.selector, "type");
+          const text = asNonEmptyString(step.text, "type.text");
+          await page.locator(selector).first().fill(text, { timeout });
+          continue;
+        }
+        if (step.action === "press") {
+          const key = asString(step.key) ?? "Enter";
+          if (step.selector) {
+            await page.locator(step.selector).first().press(key, { timeout });
+          } else {
+            await page.keyboard.press(key);
+          }
+          continue;
+        }
+        if (step.action === "wait_for_selector") {
+          const selector = ensureSelector(step.selector, "wait_for_selector");
+          await page.waitForSelector(selector, { timeout });
+          continue;
+        }
+        if (step.action === "wait") {
+          await page.waitForTimeout(clampInt(step.timeoutMs, 1000, 100, 30000));
+          continue;
+        }
       }
-      if (step.action === "wait_for_selector") {
-        const selector = ensureSelector(step.selector, "wait_for_selector");
-        await page.waitForSelector(selector, { timeout });
-        continue;
-      }
-      if (step.action === "wait") {
-        await page.waitForTimeout(clampInt(step.timeoutMs, 1000, 100, 30000));
-        continue;
-      }
-    }
 
-    const title = await page.title();
-    const text = await extractText(page, finalSelector, maxChars);
-    let savedPath: string | undefined;
-    if (outputPath) {
-      const resolvedPath = path.resolve(outputPath);
-      await fs.mkdir(path.dirname(resolvedPath), { recursive: true });
-      await page.screenshot({
-        path: resolvedPath,
-        fullPage: asBoolean(args.fullPage, true),
-      });
-      savedPath = resolvedPath;
-    }
+      const title = await page.title();
+      const text = await extractText(page, finalSelector, maxChars);
+      let savedPath: string | undefined;
+      if (outputPath) {
+        const resolvedPath = path.resolve(outputPath);
+        await fs.mkdir(path.dirname(resolvedPath), { recursive: true });
+        await page.screenshot({
+          path: resolvedPath,
+          fullPage: asBoolean(args.fullPage, true),
+        });
+        savedPath = resolvedPath;
+      }
 
-    return {
-      action: "interact",
-      title,
-      status: responseStatus,
-      finalUrl,
-      finalSelector,
-      textSnippet: text,
-      screenshotPath: savedPath,
-      stepsExecuted: steps.length,
-    };
-  });
+      return {
+        action: "interact",
+        title,
+        status: responseStatus,
+        finalUrl,
+        finalSelector,
+        textSnippet: text,
+        screenshotPath: savedPath,
+        stepsExecuted: steps.length,
+      };
+    },
+    { stateMode: browserPageStateModeForTool("browser.interact") },
+  );
 }
 
 async function executeBrowserCookiesGet(
@@ -992,6 +1003,11 @@ function resolveBrowserSessionId(
 
 // Test-only export for browser-tools.session-id-override.security.test.ts.
 export const __resolveBrowserSessionIdForTests = resolveBrowserSessionId;
+export const __browserPageStateModeForTests = browserPageStateModeForTool;
+
+function browserPageStateModeForTool(toolName: BrowserToolName): BrowserPageStateMode {
+  return toolName === "browser.interact" ? "session" : "stateless";
+}
 
 function requireBrowserSessionId(
   args: Record<string, unknown>,
@@ -1437,6 +1453,7 @@ async function withBrowserPage(
   config: ToolPolicyConfig,
   executionContext: BrowserExecutionContext | undefined,
   run: (page: PlaywrightPage, responseStatus: number | undefined, finalUrl: string) => Promise<Record<string, unknown>>,
+  options?: { stateMode?: BrowserPageStateMode },
 ): Promise<Record<string, unknown>> {
   throwIfBrowserExecutionAborted(executionContext?.signal);
   assertAllowedHttpUrl(url);
@@ -1446,7 +1463,8 @@ async function withBrowserPage(
   const headless = asBoolean(args.headless, true);
   const timeout = clampInt(args.timeoutMs, 20000, 2000, 120000);
   const waitUntil = parseWaitUntil(args.waitUntil);
-  const browserSessionId = resolveBrowserSessionId(args, executionContext);
+  const stateMode = options?.stateMode ?? "stateless";
+  const browserSessionId = stateMode === "session" ? resolveBrowserSessionId(args, executionContext) : undefined;
   const previousSessionState = browserSessionId
     ? cloneBrowserSessionState(getBrowserSessionState(browserSessionId))
     : undefined;

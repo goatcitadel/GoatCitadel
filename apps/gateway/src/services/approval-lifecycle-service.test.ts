@@ -539,6 +539,14 @@ describe("approval lifecycle service", () => {
         errorCode: "code_mode_run_missing",
         runId: "code-run-missing",
       }),
+      expect.objectContaining({
+        eventClass: "domain_fact",
+        eventAuthority: "durable_history",
+        links: expect.objectContaining({
+          approvalId: "approval-1",
+          runId: "code-run-missing",
+        }),
+      }),
     );
   });
 

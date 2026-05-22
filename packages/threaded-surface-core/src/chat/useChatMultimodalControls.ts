@@ -217,7 +217,11 @@ export function useChatMultimodalControls(input: {
     if (typeof window === "undefined") {
       return false;
     }
-    return window.localStorage.getItem(SPEAK_REPLIES_PREF_KEY) === "true";
+    try {
+      return window.localStorage.getItem(SPEAK_REPLIES_PREF_KEY) === "true";
+    } catch {
+      return false;
+    }
   });
 
   const activeProviderId =
@@ -308,7 +312,11 @@ export function useChatMultimodalControls(input: {
     if (typeof window === "undefined") {
       return;
     }
-    window.localStorage.setItem(SPEAK_REPLIES_PREF_KEY, String(speakResponsesEnabled));
+    try {
+      window.localStorage.setItem(SPEAK_REPLIES_PREF_KEY, String(speakResponsesEnabled));
+    } catch {
+      // Fallback: localStorage may be disabled or quota-exceeded; preference will not persist this session.
+    }
   }, [speakResponsesEnabled]);
 
   useEffect(() => {

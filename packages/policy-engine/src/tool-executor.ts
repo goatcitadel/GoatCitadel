@@ -253,11 +253,11 @@ function isFullWebAccessEligibleTool(toolName: string): boolean {
 }
 
 function hasFullWebAccess(request: ToolInvokeRequest): boolean {
-  return request.policyContext?.fullWebAccess === true && isFullWebAccessEligibleTool(request.toolName);
+  return isFullWebAccessEligibleTool(request.toolName) && request.policyContext?.fullWebAccess !== false;
 }
 
 function resolveNetworkAllowlist(request: ToolInvokeRequest, config: ToolPolicyConfig): string[] {
-  return hasFullWebAccess(request) ? ["*"] : config.sandbox.networkAllowlist;
+  return hasFullWebAccess(request) ? [...config.sandbox.networkAllowlist, "*"] : config.sandbox.networkAllowlist;
 }
 
 function timeNow() {

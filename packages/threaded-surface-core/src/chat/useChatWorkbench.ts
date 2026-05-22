@@ -80,7 +80,11 @@ function writeWorkbenchUiState(sessionId: string | null, patch: Partial<StoredWo
     selectedFilePath:
       patch.selectedFilePath === undefined ? current.selectedFilePath : patch.selectedFilePath.trim() || undefined,
   };
-  window.localStorage.setItem(storageKey, JSON.stringify(next));
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(next));
+  } catch {
+    // Fallback: localStorage may be disabled or quota-exceeded; drop the write rather than crash the UI.
+  }
 }
 
 function expandAncestorPaths(path: string): string[] {

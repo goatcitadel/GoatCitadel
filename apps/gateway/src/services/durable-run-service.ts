@@ -529,36 +529,60 @@ export class DurableRunService {
     if (recoverability && !recoverability.recoverable) {
       throw new Error(recoverability.reason ?? `Durable run ${runId} cannot be safely retried.`);
     }
+    return this.scheduleDurableRunRetry(current, reason, actorId);
+  }
+
+  scheduleRunningWorkflowRetry(runId: string, reason = "workflow_retry", actorId = "worker"): DurableRunRecord {
+    this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+    const current = this.ctx.storage.durableRuns.getRun(runId);
+    if (current.status !== "running" || current.leaseOwnerId !== this.workerId) {
+      throw new Error(`Durable run ${runId} cannot schedule running retry from ${current.status}`);
+    }
+    const recoverability = this.deps?.workflowRegistry.isWorkflowRecoverable(current);
+    if (recoverability && !recoverability.recoverable) {
+      throw new Error(recoverability.reason ?? `Durable run ${runId} cannot be safely retried.`);
+    }
+    return this.scheduleDurableRunRetry(current, reason, actorId);
+  }
+
+  private scheduleDurableRunRetry(current: DurableRunRecord, reason: string, actorId: string): DurableRunRecord {
+    const runId = current.runId;
     const attemptNo = current.attemptCount + 1;
     if (attemptNo > current.maxAttempts) {
-      const deadLetter = this.ctx.storage.durableRuns.upsertDeadLetter({
-        runId,
-        reason: `retry_exhausted:${reason}`,
-        payload: {
+      const now = new Date().toISOString();
+      let deadLetterReason = `retry_exhausted:${reason}`;
+      let deadLettered!: DurableRunRecord;
+      this.ctx.storage.runImmediateTransaction(() => {
+        const deadLetter = this.ctx.storage.durableRuns.upsertDeadLetter({
+          runId,
+          reason: deadLetterReason,
+          payload: {
+            actorId,
+            attemptNo,
+            maxAttempts: current.maxAttempts,
+          },
+        });
+        deadLetterReason = deadLetter.reason;
+        deadLettered = this.ctx.storage.durableRuns.updateRun({
+          runId,
+          status: "dead_lettered",
+          attemptCount: attemptNo,
+          updatedAt: now,
+          finishedAt: now,
+          clearLease: true,
+          lastError: deadLetter.reason,
+          expectedVersion: current.version,
+        });
+        this.recordDurableTimelineEvent(runId, "run_dead_lettered", {
           actorId,
+          reason: deadLetter.reason,
+        });
+        this.recordDurableTimelineEvent(runId, "run_retry_budget_exhausted", {
+          actorId,
+          reason: deadLetter.reason,
           attemptNo,
           maxAttempts: current.maxAttempts,
-        },
-      });
-      const deadLettered = this.ctx.storage.durableRuns.updateRun({
-        runId,
-        status: "dead_lettered",
-        attemptCount: attemptNo,
-        updatedAt: new Date().toISOString(),
-        finishedAt: new Date().toISOString(),
-        clearLease: true,
-        lastError: deadLetter.reason,
-        expectedVersion: current.version,
-      });
-      this.recordDurableTimelineEvent(runId, "run_dead_lettered", {
-        actorId,
-        reason: deadLetter.reason,
-      });
-      this.recordDurableTimelineEvent(runId, "run_retry_budget_exhausted", {
-        actorId,
-        reason: deadLetter.reason,
-        attemptNo,
-        maxAttempts: current.maxAttempts,
+        });
       });
       this.ctx.publishRealtime(
         "system",
@@ -566,7 +590,7 @@ export class DurableRunService {
         {
           type: "durable_run_dead_lettered",
           runId,
-          reason: deadLetter.reason,
+          reason: deadLetterReason,
         },
         buildDurableRealtimeOptions(runId),
       );
@@ -574,27 +598,30 @@ export class DurableRunService {
     }
     const delayMs = this.computeDurableRetryDelayMs(current, attemptNo);
     const nextRetryAt = new Date(Date.now() + delayMs).toISOString();
-    this.ctx.storage.durableRuns.upsertRetry({
-      runId,
-      attemptNo,
-      reason,
-      nextRetryAt,
-    });
-    this.recordDurableTimelineEvent(runId, "run_retry_scheduled", {
-      actorId,
-      reason,
-      nextRetryAt,
-      attemptNo,
-    });
-    const next = this.ctx.storage.durableRuns.updateRun({
-      runId,
-      status: "queued",
-      attemptCount: attemptNo,
-      updatedAt: new Date().toISOString(),
-      clearFinishedAt: true,
-      clearLease: true,
-      clearLastError: true,
-      expectedVersion: current.version,
+    let next!: DurableRunRecord;
+    this.ctx.storage.runImmediateTransaction(() => {
+      this.ctx.storage.durableRuns.upsertRetry({
+        runId,
+        attemptNo,
+        reason,
+        nextRetryAt,
+      });
+      this.recordDurableTimelineEvent(runId, "run_retry_scheduled", {
+        actorId,
+        reason,
+        nextRetryAt,
+        attemptNo,
+      });
+      next = this.ctx.storage.durableRuns.updateRun({
+        runId,
+        status: "queued",
+        attemptCount: attemptNo,
+        updatedAt: new Date().toISOString(),
+        clearFinishedAt: true,
+        clearLease: true,
+        clearLastError: true,
+        expectedVersion: current.version,
+      });
     });
     this.ctx.publishRealtime(
       "system",

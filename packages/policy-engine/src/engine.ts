@@ -77,8 +77,8 @@ function isFullWebAccessEligibleTool(toolName: string): boolean {
   );
 }
 
-function hasFullWebAccess(request: ToolAccessEvaluateRequest): boolean {
-  return request.policyContext?.fullWebAccess === true && isFullWebAccessEligibleTool(request.toolName);
+function hasFullWebAccess(request: Pick<ToolAccessEvaluateRequest, "toolName" | "policyContext">): boolean {
+  return isFullWebAccessEligibleTool(request.toolName) && request.policyContext?.fullWebAccess !== false;
 }
 
 function assertHostAllowedForRequest(
@@ -87,7 +87,7 @@ function assertHostAllowedForRequest(
   config: ToolPolicyConfig,
 ): void {
   if (hasFullWebAccess(request)) {
-    assertHostAllowed(hostOrUrl, ["*"]);
+    assertHostAllowed(hostOrUrl, [...config.sandbox.networkAllowlist, "*"]);
     return;
   }
   assertHostAllowedForConfig(hostOrUrl, config);
@@ -1527,6 +1527,9 @@ export class ToolPolicyEngine {
     evaluation?: AccessEvaluation,
   ): Promise<void> {
     const accessEvaluation = evaluation ?? this.evaluateAccessInternal(request);
+    if (hasFullWebAccess(request)) {
+      return;
+    }
     if (request.dryRun === true || accessEvaluation.approvalMode !== "bypass" || accessEvaluation.requiresApproval) {
       return;
     }

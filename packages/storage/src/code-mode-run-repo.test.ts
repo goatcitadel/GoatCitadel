@@ -215,6 +215,33 @@ describe("CodeModeRunRepository", () => {
     );
   });
 
+  it("bounds status-hydration scans before read-side filtering", () => {
+    const { repo } = createStore();
+    for (let index = 0; index < 40; index += 1) {
+      repo.upsert(
+        run({
+          runId: `failed-run-${index}`,
+          status: "failed",
+          createdAt: `2026-03-26T02:${String(index).padStart(2, "0")}:00.000Z`,
+        }),
+      );
+    }
+    for (let index = 0; index < 40; index += 1) {
+      repo.upsert(
+        run({
+          runId: `pending-run-${index}`,
+          status: "approval_pending",
+          approvalId: `approval-${index}`,
+          createdAt: `2026-03-26T01:${String(index).padStart(2, "0")}:00.000Z`,
+        }),
+      );
+    }
+
+    assert.equal(repo.listFilteredForStatusHydration({ status: "failed", limit: 5 }).length, 20);
+    assert.equal(repo.listFilteredForStatusHydration({ status: "expired", limit: 5 }).length, 20);
+    assert.equal(repo.listFiltered({ status: "failed", limit: 5 }).length, 5);
+  });
+
   it("claims pending runs atomically before execution", () => {
     const { repo } = createStore();
     repo.upsert(
@@ -375,7 +402,7 @@ describe("CodeModeRunRepository", () => {
       run({
         runId: "run-old-corrupt",
         status: "running",
-        createdAt: "2026-03-24T00:00:00.000Z",
+        createdAt: "2026-03-26T00:09:00.000Z",
       }),
     );
     setRawField(db, "run-old-corrupt", "result_json", "{bad json");

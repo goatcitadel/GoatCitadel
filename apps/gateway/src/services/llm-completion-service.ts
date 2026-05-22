@@ -40,6 +40,9 @@ import {
 } from "./hook-patch-helpers.js";
 import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
 
+const TOOL_PROTOCOL_RETRY_NORMALIZED = 1;
+const TOOL_PROTOCOL_RETRY_MINIMAL_THINKING = 2;
+
 export interface LlmCompletionHost {
   readonly config: Pick<GatewayRuntimeConfig, "assistant">;
   readonly memoryLifecycleService: Pick<MemoryLifecycleService, "composeContext">;
@@ -283,8 +286,8 @@ export async function createChatCompletion(
 
   const retryAttempts = [
     hookableRequest,
-    normalizeToolProtocolRetryRequest(hookableRequest, 1),
-    normalizeToolProtocolRetryRequest(hookableRequest, 2),
+    normalizeToolProtocolRetryRequest(hookableRequest, TOOL_PROTOCOL_RETRY_NORMALIZED),
+    normalizeToolProtocolRetryRequest(hookableRequest, TOOL_PROTOCOL_RETRY_MINIMAL_THINKING),
   ];
   const completionDeadline = createChatCompletionDeadline(hookableRequest.timeoutMs);
   let lastError: Error | undefined;
@@ -313,8 +316,9 @@ export async function createChatCompletion(
           routing.fallbackProviderId = routing.effectiveProviderId;
           routing.fallbackModel = routing.effectiveModel;
           routing.fallbackApiStyle = routing.effectiveApiStyle;
+          // Level 1 normalizes tool protocol details; level 2 also strips thinking metadata for stricter parsers.
           routing.fallbackReason =
-            index === 1
+            index === TOOL_PROTOCOL_RETRY_NORMALIZED
               ? "provider compatibility retry (normalized tool protocol)"
               : "provider compatibility retry (minimal thinking metadata)";
         }
@@ -374,7 +378,7 @@ export async function createChatCompletion(
         try {
           const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, hookableRequest.timeoutMs);
           response = await host.llmService.chatCompletions({
-            ...normalizeToolProtocolRetryRequest(hookableRequest, 2),
+            ...normalizeToolProtocolRetryRequest(hookableRequest, TOOL_PROTOCOL_RETRY_MINIMAL_THINKING),
             providerId: fallback.providerId,
             model: fallback.model,
             timeoutMs: attemptTimeoutMs ?? hookableRequest.timeoutMs,
@@ -678,8 +682,8 @@ export async function* createChatCompletionStream(
   const bufferedChunks: Array<Record<string, unknown>> = [];
   const retryAttempts = [
     withContext,
-    normalizeToolProtocolRetryRequest(withContext, 1),
-    normalizeToolProtocolRetryRequest(withContext, 2),
+    normalizeToolProtocolRetryRequest(withContext, TOOL_PROTOCOL_RETRY_NORMALIZED),
+    normalizeToolProtocolRetryRequest(withContext, TOOL_PROTOCOL_RETRY_MINIMAL_THINKING),
   ];
   const completionDeadline = createChatCompletionDeadline(withContext.timeoutMs);
   let streamed = false;
@@ -720,8 +724,9 @@ export async function* createChatCompletionStream(
           routing.fallbackProviderId = routing.effectiveProviderId;
           routing.fallbackModel = routing.effectiveModel;
           routing.fallbackApiStyle = routing.effectiveApiStyle;
+          // Level 1 normalizes tool protocol details; level 2 also strips thinking metadata for stricter parsers.
           routing.fallbackReason =
-            index === 1
+            index === TOOL_PROTOCOL_RETRY_NORMALIZED
               ? "provider compatibility retry (normalized tool protocol)"
               : "provider compatibility retry (minimal thinking metadata)";
         }
@@ -807,7 +812,7 @@ export async function* createChatCompletionStream(
         try {
           const attemptTimeoutMs = getRemainingChatCompletionTimeoutMs(completionDeadline, withContext.timeoutMs);
           for await (const chunk of host.llmService.chatCompletionsStream({
-            ...normalizeToolProtocolRetryRequest(withContext, 2),
+            ...normalizeToolProtocolRetryRequest(withContext, TOOL_PROTOCOL_RETRY_MINIMAL_THINKING),
             providerId: fallback.providerId,
             model: fallback.model,
             stream: true,

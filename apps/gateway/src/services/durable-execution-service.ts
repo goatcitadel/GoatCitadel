@@ -50,7 +50,10 @@ type DurableExecutionStorage = chatTurnDispatchService.ChatTurnDispatchHost["sto
 export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDispatchHost {
   readonly storage: DurableExecutionStorage;
   readonly gatewaySql: Storage["gatewaySql"];
-  readonly durableRunService: Pick<DurableRunService, "retryDurableRun" | "requestRunProcessing">;
+  readonly durableRunService: Pick<
+    DurableRunService,
+    "retryDurableRun" | "scheduleRunningWorkflowRetry" | "requestRunProcessing"
+  >;
   readonly hooksService: Pick<
     HooksService,
     "runInlineHooks" | "enqueueAfterHooks" | "executeHookDelivery" | "markHookRunDeadLettered"
@@ -796,7 +799,7 @@ export async function executeDurableHookDeliveryRun(
     if (isDurableWorkflowAbortError(error, context)) {
       throw error;
     }
-    const retry = host.durableRunService.retryDurableRun(
+    const retry = host.durableRunService.scheduleRunningWorkflowRetry(
       run.runId,
       error instanceof Error ? error.message : "hook delivery failed",
       "hooks",

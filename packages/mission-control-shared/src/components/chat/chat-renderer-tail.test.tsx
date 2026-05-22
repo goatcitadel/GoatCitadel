@@ -4,6 +4,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AssistantMessageRenderer } from "./AssistantMessageRenderer";
+import { normalizeAssistantDisplayText, normalizeCitationDisplayText } from "./assistant-display-text";
 import {
   ChatAttachmentActions,
   downloadChatAttachmentToDevice,
@@ -191,6 +192,13 @@ describe("chat rendering tail coverage", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("strips raw html comments even when one pass reveals another comment marker", () => {
+    const content = "<!<!-- hidden -->--><strong>Visible</strong>";
+
+    expect(normalizeAssistantDisplayText(content)).toBe("Visible");
+    expect(normalizeCitationDisplayText(content)).toBe("Visible");
   });
 
   it("renders assistant markdown fallback and copies decoded content through clipboard APIs", async () => {

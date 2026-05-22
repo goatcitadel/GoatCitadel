@@ -121,6 +121,7 @@ describe("executeTool", () => {
     expect(mocked.executeBrowserTool).toHaveBeenCalledWith("browser.navigate", request.args, policyConfig, {
       sessionId: "sess-1",
       signal: request.signal,
+      fullWebAccess: true,
       matchedGrantAllowedHosts: undefined,
     });
     expect(result).toMatchObject({ action: "navigate", title: "Example" });

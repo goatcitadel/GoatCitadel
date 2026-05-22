@@ -1178,11 +1178,15 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS error_details_json TEXT;
 
       CREATE INDEX IF NOT EXISTS idx_code_mode_runs_status_created
-        ON code_mode_runs(status, created_at DESC);
+        ON code_mode_runs(status, created_at DESC, run_id DESC);
       CREATE INDEX IF NOT EXISTS idx_code_mode_runs_session_created
         ON code_mode_runs(session_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_code_mode_runs_approval
         ON code_mode_runs(approval_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_code_mode_runs_workspace_status_created
+        ON code_mode_runs(workspace_id, status, created_at DESC, run_id DESC);
+      CREATE INDEX IF NOT EXISTS idx_code_mode_runs_session_status_created
+        ON code_mode_runs(session_id, status, created_at DESC, run_id DESC);
     `,
   },
   {
@@ -1314,6 +1318,18 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       SET name = 'cron_jobs_workdir_context_from_run_output_run_id'
       WHERE version = 33
         AND name = 'cron_jobs_last_run_output_and_run_id';
+    `,
+  },
+  {
+    version: 48,
+    name: "code_mode_run_status_listing_indexes",
+    sql: `
+      CREATE INDEX IF NOT EXISTS idx_code_mode_runs_status_created
+        ON code_mode_runs(status, created_at DESC, run_id DESC);
+      CREATE INDEX IF NOT EXISTS idx_code_mode_runs_workspace_status_created
+        ON code_mode_runs(workspace_id, status, created_at DESC, run_id DESC);
+      CREATE INDEX IF NOT EXISTS idx_code_mode_runs_session_status_created
+        ON code_mode_runs(session_id, status, created_at DESC, run_id DESC);
     `,
   },
 ];

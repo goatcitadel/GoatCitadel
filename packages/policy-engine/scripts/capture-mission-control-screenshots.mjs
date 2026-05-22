@@ -19,6 +19,7 @@ const gatewayPort = 18787;
 const uiPort = 15173;
 const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
 const uiUrl = `http://127.0.0.1:${uiPort}`;
+const DEFAULT_SCREENSHOT_SETTLE_MS = 1800;
 
 const publicScreenshotTargets = [
   {
@@ -75,6 +76,8 @@ const screenshotTargets = publicScreenshotTargets.map((target) => {
     href: route.href,
     readySelector: route.readySelector,
     readyText: route.readyText,
+    settleMs: route.settleMs ?? DEFAULT_SCREENSHOT_SETTLE_MS,
+    scrollY: route.scrollY,
   };
 });
 
@@ -518,9 +521,9 @@ async function captureScreenshots(activeWorkspaceId) {
     for (const target of screenshotTargets) {
       const targetUrl = new URL(target.href, uiUrl).toString();
       await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(target.settleMs ?? 1800);
-      if (target.waitForSelector) {
-        await page.waitForSelector(target.waitForSelector, {
+      await page.waitForTimeout(target.settleMs);
+      if (target.readySelector) {
+        await page.waitForSelector(target.readySelector, {
           state: "visible",
           timeout: 20_000,
         });
@@ -533,7 +536,7 @@ async function captureScreenshots(activeWorkspaceId) {
           { timeout: 20_000 },
         );
       }
-      if (target.scrollY) {
+      if (typeof target.scrollY === "number") {
         await page.evaluate((scrollY) => window.scrollTo(0, scrollY), target.scrollY);
         await page.waitForTimeout(500);
       } else {
