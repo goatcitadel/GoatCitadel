@@ -8,6 +8,45 @@ import { isVerboseLoggingEnabled } from "../runtime-ux.js";
 import { EventIngestService, logger } from "@goatcitadel/gateway-core";
 
 const log = logger.child("gateway-service");
+
+const INIT_STEP_SLOW_WARNING_MS = 10_000;
+
+/**
+ * Wrap a step inside the gateway's critical-init path so a hung step is
+ * visible in real time instead of presenting as 120s of silence followed by
+ * a supervisor health-timeout restart.
+ *
+ * Behaviour:
+ * - Silent in the happy path (steps complete within 10s).
+ * - After 10s of a single step still running, logs a `warn` so the operator
+ *   can see *which* step is stuck, even if the supervisor eventually kills
+ *   the process before initCritical returns.
+ * - On completion, always logs the elapsed ms when a slow warning fired, and
+ *   always logs in verbose mode for full-step timing.
+ *
+ * This is intentionally lightweight (one setTimeout per step, cleared on
+ * resolve) and has no behavioural side effects on the underlying work.
+ */
+async function traceInitStep<T>(stepName: string, fn: () => Promise<T> | T): Promise<T> {
+  const startedAt = Date.now();
+  let warned = false;
+  const warningTimer = setTimeout(() => {
+    warned = true;
+    log.warn(`initCritical step "${stepName}" still running after ${Math.round(INIT_STEP_SLOW_WARNING_MS / 1000)}s`);
+  }, INIT_STEP_SLOW_WARNING_MS);
+  warningTimer.unref();
+  try {
+    return await fn();
+  } finally {
+    clearTimeout(warningTimer);
+    const elapsedMs = Date.now() - startedAt;
+    if (warned) {
+      log.warn(`initCritical step "${stepName}" completed in ${elapsedMs}ms`);
+    } else if (isVerboseLoggingEnabled()) {
+      log.info(`initCritical step "${stepName}" completed in ${elapsedMs}ms`);
+    }
+  }
+}
 import { MeshService } from "@goatcitadel/mesh-core";
 import { OrchestrationEngine, type TurnRuntime } from "@goatcitadel/orchestration";
 import { ToolPolicyEngine, assertWritePathInJail, fetchAllowlisted } from "@goatcitadel/policy-engine";
@@ -1659,11 +1698,17 @@ export class GatewayService {
     if (this.criticalInitComplete) {
       return;
     }
-    await this.loadOnboardingMarker();
-    this.applyStoredFeatureFlags();
-    this.storage.agentProfiles.seedBuiltins(BUILTIN_AGENT_PROFILES);
-    const skills = await this.skillsService.reload();
-    this.ensureSkillStates(skills.map((skill) => skill.skillId));
+    await traceInitStep("loadOnboardingMarker", () => this.loadOnboardingMarker());
+    await traceInitStep("applyStoredFeatureFlags", () => {
+      this.applyStoredFeatureFlags();
+    });
+    await traceInitStep("seedBuiltinAgentProfiles", () => {
+      this.storage.agentProfiles.seedBuiltins(BUILTIN_AGENT_PROFILES);
+    });
+    const skills = await traceInitStep("skillsService.reload", () => this.skillsService.reload());
+    await traceInitStep("ensureSkillStates", () => {
+      this.ensureSkillStates(skills.map((skill) => skill.skillId));
+    });
     this.criticalInitComplete = true;
   }
 
