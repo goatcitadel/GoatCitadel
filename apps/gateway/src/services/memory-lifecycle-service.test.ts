@@ -658,4 +658,345 @@ describe("MemoryLifecycleService", () => {
       }),
     );
   });
+
+  it("owns structured entities, relations, decisions, retrospectives, history, and write-gate denial", () => {
+    const gatewaySql = createStructuredMemorySqlHarness();
+    const publishRealtime = vi.fn();
+    const gateDecision = {
+      decision: "allowed" as const,
+      authority: "operator" as const,
+      reasons: ["trusted_authority"],
+      contradictionHints: [],
+      redactionStatus: "none" as const,
+      createdAt: "2026-05-22T00:00:00.000Z",
+    };
+    const evaluate = vi.fn(() => gateDecision);
+    const createEnvelope = vi.fn();
+    const service = new MemoryLifecycleService({
+      context: {} as never,
+      learned: {} as never,
+      maintenance: {} as never,
+      admin: {
+        gatewaySql: gatewaySql as never,
+        tryParseJson: vi.fn((raw, fallback) => {
+          try {
+            return raw ? JSON.parse(String(raw)) : fallback;
+          } catch {
+            return fallback;
+          }
+        }),
+        requireFeatureEnabled: vi.fn(),
+        publishRealtime,
+      },
+      resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" })),
+      writeGate: { evaluate } as never,
+      evidence: { createEnvelope } as never,
+      readTranscriptOrEmpty: vi.fn(async () => []),
+    });
+
+    const project = service.createMemoryEntity(
+      {
+        workspaceId: "workspace-1",
+        title: "Project Alpha",
+        entityType: "project",
+        confidence: 0.91,
+        sourceRefs: [{ sourceType: "manual", sourceRef: "operator-note" }],
+      },
+      "operator-1",
+    );
+    const capability = service.createMemoryEntity(
+      {
+        workspaceId: "workspace-1",
+        title: "Automation Designer",
+        entityType: "capability",
+      },
+      "operator-1",
+    );
+    const relation = service.createMemoryRelation(
+      {
+        workspaceId: "workspace-1",
+        title: "Project Alpha uses Automation Designer",
+        fromEntityId: project.id,
+        toEntityId: capability.id,
+        relationType: "uses",
+      },
+      "operator-1",
+    );
+    const decision = service.createMemoryDecision(
+      {
+        workspaceId: "workspace-1",
+        title: "Keep automation advisory",
+        decision: "Draft automation recipes before cron creation.",
+        alternatives: ["Create cron jobs immediately"],
+        rationale: "Operators need preview and proof before recurring side effects.",
+        expectedOutcome: "Fewer accidental background mutations.",
+        reviewAt: "2026-06-22T00:00:00.000Z",
+        linkedEntityIds: [project.id],
+        linkedRelationIds: [relation.id],
+        sessionId: "session-1",
+        runId: "run-1",
+      },
+      "operator-1",
+    );
+
+    expect(service.listMemoryEntities({ workspaceId: "workspace-1" }).map((item) => item.title)).toEqual([
+      "Project Alpha",
+      "Automation Designer",
+    ]);
+    expect(service.listMemoryRelations({ workspaceId: "workspace-1" })).toEqual([
+      expect.objectContaining({
+        title: "Project Alpha uses Automation Designer",
+        status: "active",
+      }),
+    ]);
+    expect(service.listMemoryDecisions({ workspaceId: "workspace-1" })).toEqual([
+      expect.objectContaining({
+        title: "Keep automation advisory",
+        linkedEntityIds: [project.id],
+        linkedRelationIds: [relation.id],
+      }),
+    ]);
+
+    const reviewed = service.addMemoryDecisionRetrospective(
+      decision.id,
+      {
+        outcome: "validated",
+        notes: "The preview-first path avoided surprise cron creation.",
+        improvementCandidateId: "improvement-1",
+      },
+      "operator-1",
+    );
+    expect(reviewed).toMatchObject({
+      retrospective: {
+        outcome: "validated",
+        notes: "The preview-first path avoided surprise cron creation.",
+        improvementCandidateId: "improvement-1",
+      },
+      improvementCandidateId: "improvement-1",
+    });
+
+    const forgotten = service.forgetMemoryEntity(project.id, "operator-1");
+    expect(forgotten.status).toBe("forgotten");
+    expect(service.listMemoryRelations({ workspaceId: "workspace-1", status: "all" })).toEqual([
+      expect.objectContaining({
+        status: "superseded",
+        degradedReason: "linked_entity_forgotten",
+      }),
+    ]);
+    expect(service.listStructuredMemoryHistory("decision", decision.id).map((item) => item.changeType)).toEqual([
+      "retrospective_added",
+      "created",
+    ]);
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "system",
+      "memory",
+      expect.objectContaining({ type: "memory_decision_retrospective_added", decisionId: decision.id }),
+    );
+
+    evaluate.mockReturnValueOnce({
+      decision: "blocked",
+      authority: "agent_proposed",
+      reasons: ["secret_like_content"],
+      contradictionHints: [],
+      redactionStatus: "blocked_secret",
+      createdAt: "2026-05-22T01:00:00.000Z",
+    });
+    expect(() =>
+      service.createMemoryDecision(
+        {
+          title: "Unsafe agent memory",
+          decision: "Remember api_key sk-secret-token-1234567890.",
+          rationale: "Should be blocked.",
+          authority: "agent_proposed",
+        },
+        "agent-1",
+      ),
+    ).toThrow(/Structured memory write requires review/);
+    expect(createEnvelope).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventKind: "memory_write",
+        metadata: expect.objectContaining({
+          structuredMemory: true,
+          claimPreview: "[redacted]",
+        }),
+      }),
+    );
+  });
 });
+
+function createStructuredMemorySqlHarness() {
+  const entities = new Map<string, Record<string, unknown>>();
+  const relations = new Map<string, Record<string, unknown>>();
+  const decisions = new Map<string, Record<string, unknown>>();
+  const history: Record<string, unknown>[] = [];
+  return {
+    prepare(sql: string) {
+      const query = sql.replace(/\s+/g, " ").trim();
+      return {
+        get: (...args: unknown[]) => {
+          if (query.includes("SELECT * FROM memory_entities WHERE entity_id = ?")) {
+            return entities.get(String(args[0]));
+          }
+          if (query.includes("SELECT * FROM memory_decisions WHERE decision_id = ?")) {
+            return decisions.get(String(args[0]));
+          }
+          return undefined;
+        },
+        all: (...args: unknown[]) => {
+          if (query.includes("FROM memory_entities") && !query.includes("entity_id = ?")) {
+            const params = args[0] as Record<string, unknown>;
+            return filterStructuredRows([...entities.values()], params);
+          }
+          if (query.includes("FROM memory_relations") && !query.includes("linked_entity_forgotten")) {
+            const params = args[0] as Record<string, unknown>;
+            return filterStructuredRows([...relations.values()], params, (row) =>
+              params.entityId ? row.from_entity_id === params.entityId || row.to_entity_id === params.entityId : true,
+            );
+          }
+          if (query.includes("FROM memory_decisions")) {
+            const params = args[0] as Record<string, unknown>;
+            return filterStructuredRows([...decisions.values()], params);
+          }
+          if (query.includes("FROM memory_structured_change_history")) {
+            const [recordKind, recordId, limit] = args;
+            return history
+              .filter((row) => row.record_kind === recordKind && row.record_id === recordId)
+              .slice(0, Number(limit ?? 100));
+          }
+          return [];
+        },
+        run: (params: Record<string, unknown>) => {
+          if (query.includes("INSERT INTO memory_entities")) {
+            entities.set(String(params.id), {
+              entity_id: params.id,
+              workspace_id: params.workspaceId,
+              scope: params.scope,
+              title: params.title,
+              entity_type: params.entityType,
+              aliases_json: params.aliasesJson,
+              summary: params.summary ?? null,
+              status: params.status,
+              confidence: params.confidence,
+              source_refs_json: params.sourceRefsJson,
+              metadata_json: params.metadataJson,
+              authority: params.authority,
+              created_at: params.createdAt,
+              updated_at: params.updatedAt,
+              forgotten_at: null,
+              superseded_by_id: null,
+            });
+          }
+          if (query.includes("UPDATE memory_entities")) {
+            const row = entities.get(String(params.entityId));
+            if (row) {
+              row.status = "forgotten";
+              row.forgotten_at = params.forgottenAt;
+              row.updated_at = params.updatedAt;
+            }
+          }
+          if (query.includes("INSERT INTO memory_relations")) {
+            relations.set(String(params.id), {
+              relation_id: params.id,
+              workspace_id: params.workspaceId,
+              scope: params.scope,
+              title: params.title,
+              from_entity_id: params.fromEntityId,
+              to_entity_id: params.toEntityId,
+              relation_type: params.relationType,
+              status: params.status,
+              confidence: params.confidence,
+              source_refs_json: params.sourceRefsJson,
+              metadata_json: params.metadataJson,
+              authority: params.authority,
+              degraded_reason: null,
+              created_at: params.createdAt,
+              updated_at: params.updatedAt,
+              forgotten_at: null,
+              superseded_by_id: null,
+            });
+          }
+          if (query.includes("UPDATE memory_relations")) {
+            for (const row of relations.values()) {
+              if (row.from_entity_id === params.entityId || row.to_entity_id === params.entityId) {
+                row.status = "superseded";
+                row.degraded_reason = params.degradedReason;
+                row.updated_at = params.updatedAt;
+              }
+            }
+          }
+          if (query.includes("INSERT INTO memory_decisions")) {
+            decisions.set(String(params.id), {
+              decision_id: params.id,
+              workspace_id: params.workspaceId,
+              scope: params.scope,
+              title: params.title,
+              decision_text: params.decision,
+              alternatives_json: params.alternativesJson,
+              rationale: params.rationale,
+              expected_outcome: params.expectedOutcome ?? null,
+              review_at: params.reviewAt ?? null,
+              retrospective_json: null,
+              linked_entity_ids_json: params.linkedEntityIdsJson,
+              linked_relation_ids_json: params.linkedRelationIdsJson,
+              session_id: params.sessionId ?? null,
+              run_id: params.runId ?? null,
+              improvement_candidate_id: null,
+              status: params.status,
+              confidence: params.confidence,
+              source_refs_json: params.sourceRefsJson,
+              metadata_json: params.metadataJson,
+              authority: params.authority,
+              created_at: params.createdAt,
+              updated_at: params.updatedAt,
+              forgotten_at: null,
+              superseded_by_id: null,
+            });
+          }
+          if (query.includes("UPDATE memory_decisions") && query.includes("retrospective_json")) {
+            const row = decisions.get(String(params.decisionId));
+            if (row) {
+              row.retrospective_json = params.retrospectiveJson;
+              row.improvement_candidate_id = params.improvementCandidateId ?? row.improvement_candidate_id;
+              row.updated_at = params.updatedAt;
+            }
+          }
+          if (query.includes("UPDATE memory_decisions") && query.includes("status = 'forgotten'")) {
+            const row = decisions.get(String(params.decisionId));
+            if (row) {
+              row.status = "forgotten";
+              row.forgotten_at = params.forgottenAt;
+              row.updated_at = params.updatedAt;
+            }
+          }
+          if (query.includes("INSERT INTO memory_structured_change_history")) {
+            history.unshift({
+              change_id: params.changeId,
+              record_kind: params.recordKind,
+              record_id: params.recordId,
+              change_type: params.changeType,
+              actor_id: params.actorId,
+              payload_json: params.payloadJson,
+              created_at: params.createdAt,
+            });
+          }
+        },
+      };
+    },
+  };
+}
+
+function filterStructuredRows(
+  rows: Record<string, unknown>[],
+  params: Record<string, unknown>,
+  predicate: (row: Record<string, unknown>) => boolean = () => true,
+) {
+  return rows.filter((row) => {
+    if (params.workspaceId && row.workspace_id !== params.workspaceId) {
+      return false;
+    }
+    if (params.status && row.status !== params.status) {
+      return false;
+    }
+    return predicate(row);
+  });
+}

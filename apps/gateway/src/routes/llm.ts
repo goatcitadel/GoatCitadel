@@ -108,6 +108,13 @@ const modelQuerySchema = z.object({
   providerId: z.string().min(1).optional(),
 });
 
+const providerAdviceSchema = z.object({
+  preference: z.enum(["low_cost", "balanced", "capability_fit"]).optional(),
+  taskHint: z.string().trim().min(1).optional(),
+  requireConfiguredKey: z.boolean().optional(),
+  maxCandidates: z.number().int().positive().max(20).optional(),
+});
+
 const modelPreviewSchema = z.object({
   providerId: z.string().min(1),
   baseUrl: z.string().url(),
@@ -283,6 +290,18 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
 
     try {
       return reply.send(await fastify.services.llm.listLlmModels(parsed.data.providerId));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/llm/provider-advice", async (request, reply) => {
+    const parsed = providerAdviceSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.services.llm.getProviderAdvice(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

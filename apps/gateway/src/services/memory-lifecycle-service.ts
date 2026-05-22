@@ -1,5 +1,7 @@
+/* eslint-disable max-lines -- MemoryLifecycleService centralizes memory lifecycle writes, write-gate evidence, and structured memory governance until repository ownership is split. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import type {
   ChatTurnTraceRecord,
   DurableRunRecord,
@@ -10,6 +12,12 @@ import type {
   MemoryChangeEvent,
   MemoryContextComposeRequest,
   MemoryContextPack,
+  MemoryDecisionInput,
+  MemoryDecisionRecord,
+  MemoryDecisionRetrospective,
+  MemoryDecisionRetrospectiveInput,
+  MemoryEntityInput,
+  MemoryEntityRecord,
   MemoryItemRecord,
   MemoryLifecyclePatch,
   MemoryMaintenancePolicyPatchInput,
@@ -19,10 +27,21 @@ import type {
   MemoryMaintenanceRunNowInput,
   MemoryMaintenanceRunRecord,
   MemoryMaintenanceStatusRecord,
+  MemoryRelationInput,
+  MemoryRelationRecord,
   MemoryQmdStatsResponse,
+  StructuredMemoryAuthority,
+  StructuredMemoryScope,
+  StructuredMemorySourceRef,
+  StructuredMemoryStatus,
   TranscriptEvent,
 } from "@goatcitadel/contracts";
-import { deriveMemoryItemLifecycleState } from "@goatcitadel/contracts";
+import {
+  NotFoundError,
+  PolicyViolationError,
+  ValidationError,
+  deriveMemoryItemLifecycleState,
+} from "@goatcitadel/contracts";
 import { assertWritePathInJail } from "@goatcitadel/policy-engine";
 import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
 import { MemoryContextService } from "./memory-context-service.js";
@@ -71,6 +90,416 @@ export interface MemoryLifecycleDependencies {
  */
 export class MemoryLifecycleService {
   public constructor(private readonly deps: MemoryLifecycleDependencies) {}
+
+  public listMemoryEntities(
+    input: { workspaceId?: string; status?: StructuredMemoryStatus | "all"; query?: string; limit?: number } = {},
+  ): MemoryEntityRecord[] {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    const clauses = ["workspace_id = @workspaceId"];
+    const params: Record<string, string | number> = {
+      workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
+      limit: normalizeStructuredLimit(input.limit),
+    };
+    if (input.status && input.status !== "all") {
+      clauses.push("status = @status");
+      params.status = input.status;
+    }
+    const query = input.query?.trim().toLowerCase();
+    if (query) {
+      clauses.push(
+        "(LOWER(title) LIKE @query OR LOWER(entity_type) LIKE @query OR LOWER(COALESCE(summary, '')) LIKE @query)",
+      );
+      params.query = `%${query}%`;
+    }
+    const rows = this.deps.admin.gatewaySql
+      .prepare(
+        `
+      SELECT *
+      FROM memory_entities
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY updated_at DESC
+      LIMIT @limit
+    `,
+      )
+      .all(params) as MemoryEntityRow[];
+    return rows.map((row) => mapMemoryEntityRow(this.deps.admin, row));
+  }
+
+  public createMemoryEntity(input: MemoryEntityInput, actorId = "operator"): MemoryEntityRecord {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    const now = new Date().toISOString();
+    const entity: MemoryEntityRecord = {
+      id: randomUUID(),
+      workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
+      scope: normalizeStructuredScope(input.scope),
+      title: requireTrimmedText(input.title, "title"),
+      entityType: input.entityType?.trim() || "concept",
+      aliases: normalizeStringArray(input.aliases),
+      summary: optionalTrimmedText(input.summary),
+      status: "active",
+      confidence: normalizeConfidence(input.confidence),
+      sourceRefs: normalizeSourceRefs(input.sourceRefs, actorId),
+      metadata: input.metadata ?? {},
+      authority: normalizeAuthority(input.authority),
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.assertStructuredMemoryWriteAllowed(entity.authority, serializeStructuredMemoryForGate(entity));
+    this.deps.admin.gatewaySql
+      .prepare(
+        `
+      INSERT INTO memory_entities (
+        entity_id, workspace_id, scope, title, entity_type, aliases_json, summary, status, confidence,
+        source_refs_json, metadata_json, authority, created_at, updated_at, forgotten_at, superseded_by_id
+      ) VALUES (
+        @id, @workspaceId, @scope, @title, @entityType, @aliasesJson, @summary, @status, @confidence,
+        @sourceRefsJson, @metadataJson, @authority, @createdAt, @updatedAt, NULL, NULL
+      )
+    `,
+      )
+      .run({
+        ...entity,
+        aliasesJson: JSON.stringify(entity.aliases),
+        sourceRefsJson: JSON.stringify(entity.sourceRefs),
+        metadataJson: JSON.stringify(entity.metadata),
+      });
+    this.recordStructuredMemoryChange("entity", entity.id, "created", actorId, { title: entity.title });
+    this.deps.admin.publishRealtime("system", "memory", {
+      type: "memory_entity_created",
+      entityId: entity.id,
+      workspaceId: entity.workspaceId,
+    });
+    return entity;
+  }
+
+  public forgetMemoryEntity(entityId: string, actorId = "operator"): MemoryEntityRecord {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    const current = this.requireMemoryEntity(entityId);
+    if (current.status === "forgotten") {
+      return current;
+    }
+    const now = new Date().toISOString();
+    this.deps.admin.gatewaySql
+      .prepare(
+        `
+      UPDATE memory_entities
+      SET status = 'forgotten',
+          forgotten_at = @forgottenAt,
+          updated_at = @updatedAt
+      WHERE entity_id = @entityId
+    `,
+      )
+      .run({ entityId, forgottenAt: now, updatedAt: now });
+    this.deps.admin.gatewaySql
+      .prepare(
+        `
+      UPDATE memory_relations
+      SET status = 'superseded',
+          degraded_reason = @degradedReason,
+          updated_at = @updatedAt
+      WHERE status = 'active'
+        AND (from_entity_id = @entityId OR to_entity_id = @entityId)
+    `,
+      )
+      .run({
+        entityId,
+        degradedReason: "linked_entity_forgotten",
+        updatedAt: now,
+      });
+    this.recordStructuredMemoryChange("entity", entityId, "forgotten", actorId, { previousStatus: current.status });
+    this.deps.admin.publishRealtime("system", "memory", {
+      type: "memory_entity_forgotten",
+      entityId,
+      workspaceId: current.workspaceId,
+    });
+    return this.requireMemoryEntity(entityId);
+  }
+
+  public listMemoryRelations(
+    input: { workspaceId?: string; status?: StructuredMemoryStatus | "all"; entityId?: string; limit?: number } = {},
+  ): MemoryRelationRecord[] {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    const clauses = ["workspace_id = @workspaceId"];
+    const params: Record<string, string | number> = {
+      workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
+      limit: normalizeStructuredLimit(input.limit),
+    };
+    if (input.status && input.status !== "all") {
+      clauses.push("status = @status");
+      params.status = input.status;
+    }
+    if (input.entityId?.trim()) {
+      clauses.push("(from_entity_id = @entityId OR to_entity_id = @entityId)");
+      params.entityId = input.entityId.trim();
+    }
+    const rows = this.deps.admin.gatewaySql
+      .prepare(
+        `
+      SELECT *
+      FROM memory_relations
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY updated_at DESC
+      LIMIT @limit
+    `,
+      )
+      .all(params) as MemoryRelationRow[];
+    return rows.map((row) => mapMemoryRelationRow(this.deps.admin, row));
+  }
+
+  public createMemoryRelation(input: MemoryRelationInput, actorId = "operator"): MemoryRelationRecord {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    const from = this.requireMemoryEntity(input.fromEntityId);
+    const to = this.requireMemoryEntity(input.toEntityId);
+    if (from.status !== "active" || to.status !== "active") {
+      throw new ValidationError({
+        field: "entityId",
+        message: "Relations require active source and target entities.",
+      });
+    }
+    const now = new Date().toISOString();
+    const relationType = input.relationType.trim() || "related_to";
+    const relation: MemoryRelationRecord = {
+      id: randomUUID(),
+      workspaceId: normalizeStructuredWorkspaceId(input.workspaceId ?? from.workspaceId),
+      scope: normalizeStructuredScope(input.scope),
+      title: input.title?.trim() || `${from.title} ${relationType} ${to.title}`,
+      fromEntityId: from.id,
+      toEntityId: to.id,
+      relationType,
+      status: "active",
+      confidence: normalizeConfidence(input.confidence),
+      sourceRefs: normalizeSourceRefs(input.sourceRefs, actorId),
+      metadata: input.metadata ?? {},
+      authority: normalizeAuthority(input.authority),
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.assertStructuredMemoryWriteAllowed(relation.authority, serializeStructuredMemoryForGate(relation));
+    this.deps.admin.gatewaySql
+      .prepare(
+        `
+      INSERT INTO memory_relations (
+        relation_id, workspace_id, scope, title, from_entity_id, to_entity_id, relation_type, status, confidence,
+        source_refs_json, metadata_json, authority, degraded_reason, created_at, updated_at, forgotten_at, superseded_by_id
+      ) VALUES (
+        @id, @workspaceId, @scope, @title, @fromEntityId, @toEntityId, @relationType, @status, @confidence,
+        @sourceRefsJson, @metadataJson, @authority, NULL, @createdAt, @updatedAt, NULL, NULL
+      )
+    `,
+      )
+      .run({
+        ...relation,
+        sourceRefsJson: JSON.stringify(relation.sourceRefs),
+        metadataJson: JSON.stringify(relation.metadata),
+      });
+    this.recordStructuredMemoryChange("relation", relation.id, "created", actorId, { title: relation.title });
+    this.deps.admin.publishRealtime("system", "memory", {
+      type: "memory_relation_created",
+      relationId: relation.id,
+      workspaceId: relation.workspaceId,
+    });
+    return relation;
+  }
+
+  public listMemoryDecisions(
+    input: {
+      workspaceId?: string;
+      status?: StructuredMemoryStatus | "all";
+      dueForReview?: boolean;
+      limit?: number;
+    } = {},
+  ): MemoryDecisionRecord[] {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    const clauses = ["workspace_id = @workspaceId"];
+    const params: Record<string, string | number> = {
+      workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
+      limit: normalizeStructuredLimit(input.limit),
+    };
+    if (input.status && input.status !== "all") {
+      clauses.push("status = @status");
+      params.status = input.status;
+    }
+    if (input.dueForReview) {
+      clauses.push("review_at IS NOT NULL AND review_at <= @now AND status = 'active'");
+      params.now = new Date().toISOString();
+    }
+    const rows = this.deps.admin.gatewaySql
+      .prepare(
+        `
+      SELECT *
+      FROM memory_decisions
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY COALESCE(review_at, updated_at) DESC, updated_at DESC
+      LIMIT @limit
+    `,
+      )
+      .all(params) as MemoryDecisionRow[];
+    return rows.map((row) => mapMemoryDecisionRow(this.deps.admin, row));
+  }
+
+  public createMemoryDecision(input: MemoryDecisionInput, actorId = "operator"): MemoryDecisionRecord {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    const now = new Date().toISOString();
+    const decisionText = requireTrimmedText(input.decision, "decision");
+    const decision: MemoryDecisionRecord = {
+      id: randomUUID(),
+      workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
+      scope: normalizeStructuredScope(input.scope),
+      title: input.title?.trim() || decisionText.slice(0, 120),
+      decision: decisionText,
+      alternatives: normalizeStringArray(input.alternatives),
+      rationale: requireTrimmedText(input.rationale, "rationale"),
+      expectedOutcome: optionalTrimmedText(input.expectedOutcome),
+      reviewAt: optionalTrimmedText(input.reviewAt),
+      linkedEntityIds: normalizeStringArray(input.linkedEntityIds),
+      linkedRelationIds: normalizeStringArray(input.linkedRelationIds),
+      sessionId: optionalTrimmedText(input.sessionId),
+      runId: optionalTrimmedText(input.runId),
+      status: "active",
+      confidence: normalizeConfidence(input.confidence),
+      sourceRefs: normalizeSourceRefs(input.sourceRefs, actorId),
+      metadata: input.metadata ?? {},
+      authority: normalizeAuthority(input.authority),
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.assertStructuredMemoryWriteAllowed(decision.authority, serializeStructuredMemoryForGate(decision));
+    this.deps.admin.gatewaySql
+      .prepare(
+        `
+      INSERT INTO memory_decisions (
+        decision_id, workspace_id, scope, title, decision_text, alternatives_json, rationale, expected_outcome,
+        review_at, retrospective_json, linked_entity_ids_json, linked_relation_ids_json, session_id, run_id,
+        improvement_candidate_id, status, confidence, source_refs_json, metadata_json, authority, created_at,
+        updated_at, forgotten_at, superseded_by_id
+      ) VALUES (
+        @id, @workspaceId, @scope, @title, @decision, @alternativesJson, @rationale, @expectedOutcome,
+        @reviewAt, NULL, @linkedEntityIdsJson, @linkedRelationIdsJson, @sessionId, @runId,
+        NULL, @status, @confidence, @sourceRefsJson, @metadataJson, @authority, @createdAt,
+        @updatedAt, NULL, NULL
+      )
+    `,
+      )
+      .run({
+        ...decision,
+        alternativesJson: JSON.stringify(decision.alternatives),
+        linkedEntityIdsJson: JSON.stringify(decision.linkedEntityIds),
+        linkedRelationIdsJson: JSON.stringify(decision.linkedRelationIds),
+        sourceRefsJson: JSON.stringify(decision.sourceRefs),
+        metadataJson: JSON.stringify(decision.metadata),
+      });
+    this.recordStructuredMemoryChange("decision", decision.id, "created", actorId, { title: decision.title });
+    this.deps.admin.publishRealtime("system", "memory", {
+      type: "memory_decision_created",
+      decisionId: decision.id,
+      workspaceId: decision.workspaceId,
+    });
+    return decision;
+  }
+
+  public addMemoryDecisionRetrospective(
+    decisionId: string,
+    input: MemoryDecisionRetrospectiveInput,
+    actorId = "operator",
+  ): MemoryDecisionRecord {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    const current = this.requireMemoryDecision(decisionId);
+    const now = new Date().toISOString();
+    const retrospective: MemoryDecisionRetrospective = {
+      reviewedAt: now,
+      outcome: input.outcome,
+      notes: requireTrimmedText(input.notes, "notes"),
+      improvementCandidateId: optionalTrimmedText(input.improvementCandidateId),
+    };
+    this.assertStructuredMemoryWriteAllowed(
+      "operator",
+      `${current.title}\n${current.decision}\n${retrospective.outcome}\n${retrospective.notes}`,
+    );
+    this.deps.admin.gatewaySql
+      .prepare(
+        `
+      UPDATE memory_decisions
+      SET retrospective_json = @retrospectiveJson,
+          improvement_candidate_id = COALESCE(@improvementCandidateId, improvement_candidate_id),
+          updated_at = @updatedAt
+      WHERE decision_id = @decisionId
+    `,
+      )
+      .run({
+        decisionId,
+        retrospectiveJson: JSON.stringify(retrospective),
+        improvementCandidateId: retrospective.improvementCandidateId ?? null,
+        updatedAt: now,
+      });
+    this.recordStructuredMemoryChange("decision", decisionId, "retrospective_added", actorId, { ...retrospective });
+    this.deps.admin.publishRealtime("system", "memory", {
+      type: "memory_decision_retrospective_added",
+      decisionId,
+      workspaceId: current.workspaceId,
+    });
+    return this.requireMemoryDecision(decisionId);
+  }
+
+  public forgetMemoryDecision(decisionId: string, actorId = "operator"): MemoryDecisionRecord {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    const current = this.requireMemoryDecision(decisionId);
+    if (current.status === "forgotten") {
+      return current;
+    }
+    const now = new Date().toISOString();
+    this.deps.admin.gatewaySql
+      .prepare(
+        `
+      UPDATE memory_decisions
+      SET status = 'forgotten',
+          forgotten_at = @forgottenAt,
+          updated_at = @updatedAt
+      WHERE decision_id = @decisionId
+    `,
+      )
+      .run({ decisionId, forgottenAt: now, updatedAt: now });
+    this.recordStructuredMemoryChange("decision", decisionId, "forgotten", actorId, { previousStatus: current.status });
+    this.deps.admin.publishRealtime("system", "memory", {
+      type: "memory_decision_forgotten",
+      decisionId,
+      workspaceId: current.workspaceId,
+    });
+    return this.requireMemoryDecision(decisionId);
+  }
+
+  public listStructuredMemoryHistory(
+    recordKind: "entity" | "relation" | "decision",
+    recordId: string,
+    limit = 100,
+  ): MemoryChangeEvent[] {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    const rows = this.deps.admin.gatewaySql
+      .prepare(
+        `
+      SELECT change_id, record_id, change_type, actor_id, payload_json, created_at
+      FROM memory_structured_change_history
+      WHERE record_kind = ? AND record_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `,
+      )
+      .all(recordKind, recordId, Math.max(1, Math.min(500, Math.floor(limit)))) as Array<{
+      change_id: string;
+      record_id: string;
+      change_type: MemoryChangeEvent["changeType"];
+      actor_id: string | null;
+      payload_json: string | null;
+      created_at: string;
+    }>;
+    return rows.map((row) => ({
+      changeId: row.change_id,
+      itemId: row.record_id,
+      changeType: row.change_type,
+      actorId: row.actor_id ?? undefined,
+      payload: this.deps.admin.tryParseJson<Record<string, unknown>>(row.payload_json, {}),
+      createdAt: row.created_at,
+    }));
+  }
 
   public async listMemoryFiles(relativeDir = "memory"): Promise<MemoryFileEntry[]> {
     if (!this.deps.files) {
@@ -687,4 +1116,296 @@ export class MemoryLifecycleService {
   ): Promise<Record<string, unknown>> {
     return this.deps.maintenance.executeDurableRun(run, options);
   }
+
+  private requireMemoryEntity(entityId: string): MemoryEntityRecord {
+    const row = this.deps.admin.gatewaySql
+      .prepare("SELECT * FROM memory_entities WHERE entity_id = ?")
+      .get(entityId) as MemoryEntityRow | undefined;
+    if (!row) {
+      throw new NotFoundError({ entity: "Memory entity", id: entityId });
+    }
+    return mapMemoryEntityRow(this.deps.admin, row);
+  }
+
+  private requireMemoryDecision(decisionId: string): MemoryDecisionRecord {
+    const row = this.deps.admin.gatewaySql
+      .prepare("SELECT * FROM memory_decisions WHERE decision_id = ?")
+      .get(decisionId) as MemoryDecisionRow | undefined;
+    if (!row) {
+      throw new NotFoundError({ entity: "Memory decision", id: decisionId });
+    }
+    return mapMemoryDecisionRow(this.deps.admin, row);
+  }
+
+  private assertStructuredMemoryWriteAllowed(authority: StructuredMemoryAuthority, content: string): void {
+    const decision = this.deps.writeGate?.evaluate({
+      authority: authority as MemoryWriteAuthority,
+      content,
+      existingClaims: [],
+    });
+    if (decision && decision.decision !== "allowed") {
+      this.deps.evidence?.createEnvelope({
+        eventKind: "memory_write",
+        metadata: {
+          decision,
+          claimPreview: decision.redactionStatus === "blocked_secret" ? "[redacted]" : content.slice(0, 240),
+          structuredMemory: true,
+        },
+      });
+      throw new PolicyViolationError({
+        message: `Structured memory write requires review: ${decision.reasons.join(", ") || decision.decision}.`,
+        details: { decision },
+      });
+    }
+  }
+
+  private recordStructuredMemoryChange(
+    recordKind: "entity" | "relation" | "decision",
+    recordId: string,
+    changeType: MemoryChangeEvent["changeType"],
+    actorId: string | undefined,
+    payload: Record<string, unknown>,
+  ): void {
+    this.deps.admin.gatewaySql
+      .prepare(
+        `
+      INSERT INTO memory_structured_change_history (
+        change_id, record_kind, record_id, change_type, actor_id, payload_json, created_at
+      ) VALUES (
+        @changeId, @recordKind, @recordId, @changeType, @actorId, @payloadJson, @createdAt
+      )
+    `,
+      )
+      .run({
+        changeId: randomUUID(),
+        recordKind,
+        recordId,
+        changeType,
+        actorId: actorId?.trim() || null,
+        payloadJson: JSON.stringify(payload ?? {}),
+        createdAt: new Date().toISOString(),
+      });
+  }
+}
+
+interface MemoryEntityRow {
+  entity_id: string;
+  workspace_id: string;
+  scope: StructuredMemoryScope;
+  title: string;
+  entity_type: string;
+  aliases_json: string | null;
+  summary: string | null;
+  status: StructuredMemoryStatus;
+  confidence: number;
+  source_refs_json: string | null;
+  metadata_json: string | null;
+  authority: StructuredMemoryAuthority;
+  created_at: string;
+  updated_at: string;
+  forgotten_at: string | null;
+  superseded_by_id: string | null;
+}
+
+interface MemoryRelationRow {
+  relation_id: string;
+  workspace_id: string;
+  scope: StructuredMemoryScope;
+  title: string;
+  from_entity_id: string;
+  to_entity_id: string;
+  relation_type: string;
+  status: StructuredMemoryStatus;
+  confidence: number;
+  source_refs_json: string | null;
+  metadata_json: string | null;
+  authority: StructuredMemoryAuthority;
+  degraded_reason: string | null;
+  created_at: string;
+  updated_at: string;
+  forgotten_at: string | null;
+  superseded_by_id: string | null;
+}
+
+interface MemoryDecisionRow {
+  decision_id: string;
+  workspace_id: string;
+  scope: StructuredMemoryScope;
+  title: string;
+  decision_text: string;
+  alternatives_json: string | null;
+  rationale: string;
+  expected_outcome: string | null;
+  review_at: string | null;
+  retrospective_json: string | null;
+  linked_entity_ids_json: string | null;
+  linked_relation_ids_json: string | null;
+  session_id: string | null;
+  run_id: string | null;
+  improvement_candidate_id: string | null;
+  status: StructuredMemoryStatus;
+  confidence: number;
+  source_refs_json: string | null;
+  metadata_json: string | null;
+  authority: StructuredMemoryAuthority;
+  created_at: string;
+  updated_at: string;
+  forgotten_at: string | null;
+  superseded_by_id: string | null;
+}
+
+function mapMemoryEntityRow(host: MemoryLifecycleAdminDependencies, row: MemoryEntityRow): MemoryEntityRecord {
+  return {
+    id: row.entity_id,
+    workspaceId: row.workspace_id,
+    scope: normalizeStructuredScope(row.scope),
+    title: row.title,
+    entityType: row.entity_type,
+    aliases: host.tryParseJson<string[]>(row.aliases_json, []),
+    summary: row.summary ?? undefined,
+    status: normalizeStructuredStatus(row.status),
+    confidence: normalizeConfidence(row.confidence),
+    sourceRefs: host.tryParseJson<StructuredMemorySourceRef[]>(row.source_refs_json, []),
+    metadata: host.tryParseJson<Record<string, unknown>>(row.metadata_json, {}),
+    authority: normalizeAuthority(row.authority),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    forgottenAt: row.forgotten_at ?? undefined,
+    supersededById: row.superseded_by_id ?? undefined,
+  };
+}
+
+function mapMemoryRelationRow(host: MemoryLifecycleAdminDependencies, row: MemoryRelationRow): MemoryRelationRecord {
+  return {
+    id: row.relation_id,
+    workspaceId: row.workspace_id,
+    scope: normalizeStructuredScope(row.scope),
+    title: row.title,
+    fromEntityId: row.from_entity_id,
+    toEntityId: row.to_entity_id,
+    relationType: row.relation_type,
+    status: normalizeStructuredStatus(row.status),
+    confidence: normalizeConfidence(row.confidence),
+    sourceRefs: host.tryParseJson<StructuredMemorySourceRef[]>(row.source_refs_json, []),
+    metadata: host.tryParseJson<Record<string, unknown>>(row.metadata_json, {}),
+    authority: normalizeAuthority(row.authority),
+    degradedReason: row.degraded_reason ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    forgottenAt: row.forgotten_at ?? undefined,
+    supersededById: row.superseded_by_id ?? undefined,
+  };
+}
+
+function mapMemoryDecisionRow(host: MemoryLifecycleAdminDependencies, row: MemoryDecisionRow): MemoryDecisionRecord {
+  return {
+    id: row.decision_id,
+    workspaceId: row.workspace_id,
+    scope: normalizeStructuredScope(row.scope),
+    title: row.title,
+    decision: row.decision_text,
+    alternatives: host.tryParseJson<string[]>(row.alternatives_json, []),
+    rationale: row.rationale,
+    expectedOutcome: row.expected_outcome ?? undefined,
+    reviewAt: row.review_at ?? undefined,
+    retrospective: row.retrospective_json
+      ? host.tryParseJson<MemoryDecisionRetrospective | undefined>(row.retrospective_json, undefined)
+      : undefined,
+    linkedEntityIds: host.tryParseJson<string[]>(row.linked_entity_ids_json, []),
+    linkedRelationIds: host.tryParseJson<string[]>(row.linked_relation_ids_json, []),
+    sessionId: row.session_id ?? undefined,
+    runId: row.run_id ?? undefined,
+    improvementCandidateId: row.improvement_candidate_id ?? undefined,
+    status: normalizeStructuredStatus(row.status),
+    confidence: normalizeConfidence(row.confidence),
+    sourceRefs: host.tryParseJson<StructuredMemorySourceRef[]>(row.source_refs_json, []),
+    metadata: host.tryParseJson<Record<string, unknown>>(row.metadata_json, {}),
+    authority: normalizeAuthority(row.authority),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    forgottenAt: row.forgotten_at ?? undefined,
+    supersededById: row.superseded_by_id ?? undefined,
+  };
+}
+
+function normalizeStructuredWorkspaceId(value: string | undefined): string {
+  return value?.trim() || "default";
+}
+
+function normalizeStructuredScope(value: string | undefined): StructuredMemoryScope {
+  return value === "global" || value === "session" || value === "run" ? value : "workspace";
+}
+
+function normalizeStructuredStatus(value: string | undefined): StructuredMemoryStatus {
+  return value === "forgotten" || value === "superseded" ? value : "active";
+}
+
+function normalizeAuthority(value: string | undefined): StructuredMemoryAuthority {
+  return value === "agent_proposed" || value === "trusted_lifecycle" || value === "imported_skill" ? value : "operator";
+}
+
+function normalizeStructuredLimit(value: number | undefined): number {
+  return Math.max(1, Math.min(500, Math.floor(value ?? 100)));
+}
+
+function normalizeConfidence(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return 0.5;
+  }
+  return Number(Math.max(0, Math.min(1, Number(value))).toFixed(3));
+}
+
+function normalizeStringArray(value: string[] | undefined): string[] {
+  return Array.from(new Set((value ?? []).map((item) => item.trim()).filter(Boolean)));
+}
+
+function normalizeSourceRefs(
+  value: StructuredMemorySourceRef[] | undefined,
+  actorId: string,
+): StructuredMemorySourceRef[] {
+  const normalized = (value ?? [])
+    .map((item) => ({
+      sourceType: item.sourceType,
+      sourceRef: item.sourceRef.trim(),
+      title: item.title?.trim() || undefined,
+    }))
+    .filter((item) => item.sourceRef);
+  if (normalized.length > 0) {
+    return normalized;
+  }
+  return [{ sourceType: "manual", sourceRef: actorId?.trim() || "operator" }];
+}
+
+function requireTrimmedText(value: string | undefined, field: string): string {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    throw new ValidationError({ code: "FIELD_REQUIRED", field });
+  }
+  return trimmed;
+}
+
+function optionalTrimmedText(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+function serializeStructuredMemoryForGate(
+  value: MemoryEntityRecord | MemoryRelationRecord | MemoryDecisionRecord,
+): string {
+  return JSON.stringify({
+    title: value.title,
+    status: value.status,
+    confidence: value.confidence,
+    metadata: value.metadata,
+    ...("summary" in value ? { summary: value.summary, aliases: value.aliases } : {}),
+    ...("relationType" in value ? { relationType: value.relationType } : {}),
+    ...("decision" in value
+      ? {
+          decision: value.decision,
+          alternatives: value.alternatives,
+          rationale: value.rationale,
+          expectedOutcome: value.expectedOutcome,
+        }
+      : {}),
+  });
 }

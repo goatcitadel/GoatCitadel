@@ -1,6 +1,6 @@
 # A2UI Contract
 
-Last updated: 2026-03-30
+Last updated: 2026-05-22
 Contract id: `a2ui.v1`
 
 ## Purpose
@@ -65,6 +65,18 @@ The first operator surface is `mission_control`.
 
 - production-grade mobile/session transport
 - full parity between Mission Control canvas work and device surfaces
+
+## Canvas Diagnostics
+
+Canvas and A2UI status must expose proof fields separately from broad capability claims:
+
+- contract id and scope, such as `a2ui.v1` / `ui_canvas`
+- transport lane, such as `local_session` or `companion_session`
+- host identity and readiness
+- action grant/proof state
+- proof artifact path or explicit missing-artifact reason
+
+The ClawHub `canvas` source remains conditional/reference until GoatCitadel has a live host, bridge, node registry, action grant, and fresh proof artifact for the claimed lane.
 
 ## Next Safe Slice
 

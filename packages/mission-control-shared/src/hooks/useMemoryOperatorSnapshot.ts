@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   acceptMemoryMaintenanceRecommendation,
+  addMemoryDecisionRetrospective,
   fetchDurableRun,
   fetchDurableRunTimeline,
+  fetchMemoryDecisions,
+  fetchMemoryEntities,
   fetchMemoryFiles,
   fetchMemoryItemHistory,
   fetchMemoryItems,
@@ -10,6 +13,7 @@ import {
   fetchMemoryMaintenanceRunProvenance,
   fetchMemoryMaintenanceRuns,
   fetchMemoryMaintenanceStatus,
+  fetchMemoryRelations,
   fetchMemoryQmdStats,
   fetchSettings,
   forgetMemoryItem,
@@ -36,6 +40,9 @@ type MemoryOperatorSectionErrors = {
   files: string | null;
   qmdStats: string | null;
   memoryItems: string | null;
+  memoryEntities: string | null;
+  memoryRelations: string | null;
+  memoryDecisions: string | null;
   memoryHistory: string | null;
   maintenanceStatus: string | null;
   maintenanceRuns: string | null;
@@ -49,6 +56,9 @@ type MemoryOperatorSnapshot = {
   files: Awaited<ReturnType<typeof fetchMemoryFiles>>["items"];
   qmdStats: Awaited<ReturnType<typeof fetchMemoryQmdStats>> | null;
   memoryItems: Awaited<ReturnType<typeof fetchMemoryItems>>["items"];
+  memoryEntities: Awaited<ReturnType<typeof fetchMemoryEntities>>["items"];
+  memoryRelations: Awaited<ReturnType<typeof fetchMemoryRelations>>["items"];
+  memoryDecisions: Awaited<ReturnType<typeof fetchMemoryDecisions>>["items"];
   memoryHistory: Awaited<ReturnType<typeof fetchMemoryItemHistory>>["items"];
   maintenanceStatus: Awaited<ReturnType<typeof fetchMemoryMaintenanceStatus>> | null;
   maintenanceRuns: Awaited<ReturnType<typeof fetchMemoryMaintenanceRuns>>["items"];
@@ -100,12 +110,26 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     const maintenanceEnabled = settings?.features.memoryMaintenanceV1Enabled ?? false;
     const maintenanceDurableReady = settings?.features.durableKernelV1Enabled ?? false;
 
-    const itemsRes = memoryAdminEnabled
-      ? await fetchMemoryItems({ limit: 200, status: "all" }).catch((itemsError) => {
-          sectionErrors.memoryItems = getErrorMessage(itemsError);
-          return { items: [] };
-        })
-      : { items: [] };
+    const [itemsRes, entitiesRes, relationsRes, decisionsRes] = memoryAdminEnabled
+      ? await Promise.all([
+          fetchMemoryItems({ limit: 200, status: "all" }).catch((itemsError) => {
+            sectionErrors.memoryItems = getErrorMessage(itemsError);
+            return { items: [] };
+          }),
+          fetchMemoryEntities({ workspaceId, status: "all", limit: 80 }).catch((entitiesError) => {
+            sectionErrors.memoryEntities = getErrorMessage(entitiesError);
+            return { items: [] };
+          }),
+          fetchMemoryRelations({ workspaceId, status: "all", limit: 80 }).catch((relationsError) => {
+            sectionErrors.memoryRelations = getErrorMessage(relationsError);
+            return { items: [] };
+          }),
+          fetchMemoryDecisions({ workspaceId, status: "all", limit: 80 }).catch((decisionsError) => {
+            sectionErrors.memoryDecisions = getErrorMessage(decisionsError);
+            return { items: [] };
+          }),
+        ])
+      : [{ items: [] }, { items: [] }, { items: [] }, { items: [] }];
 
     const [maintenanceStatusRes, maintenanceRunsRes, maintenanceRecommendationsRes] =
       maintenanceEnabled && maintenanceDurableReady
@@ -129,6 +153,9 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
       files: filesRes.items,
       qmdStats,
       memoryItems: memoryAdminEnabled ? itemsRes.items : [],
+      memoryEntities: memoryAdminEnabled ? entitiesRes.items : [],
+      memoryRelations: memoryAdminEnabled ? relationsRes.items : [],
+      memoryDecisions: memoryAdminEnabled ? decisionsRes.items : [],
       memoryHistory: [],
       maintenanceStatus: maintenanceStatusRes,
       maintenanceRuns: maintenanceRunsRes.items,
@@ -441,6 +468,40 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     [data?.maintenanceDurableReady, data?.maintenanceEnabled, reload],
   );
 
+  const reviewDecision = useCallback(
+    async (decisionId: string) => {
+      if (data?.memoryAdminState !== "enabled") {
+        setNotice({
+          tone: "warning",
+          message: "Memory admin settings are not confirmed, so decision retrospectives are locked.",
+        });
+        return;
+      }
+      setBusyKey(`decision:${decisionId}:retrospective`);
+      setNotice(null);
+      try {
+        const updated = await addMemoryDecisionRetrospective(decisionId, {
+          outcome: "unknown",
+          notes: "Reviewed from Mission Control Next Library memory panel.",
+        });
+        setData((current) =>
+          current
+            ? {
+                ...current,
+                memoryDecisions: current.memoryDecisions.map((item) => (item.id === updated.id ? updated : item)),
+              }
+            : current,
+        );
+        setNotice({ tone: "success", message: "Decision retrospective recorded." });
+      } catch (reviewError) {
+        setNotice({ tone: "error", message: getErrorMessage(reviewError) });
+      } finally {
+        setBusyKey(null);
+      }
+    },
+    [data?.memoryAdminState],
+  );
+
   return {
     loading,
     error,
@@ -463,6 +524,7 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     runMaintenance,
     savePolicy,
     resolveRecommendation,
+    reviewDecision,
   };
 }
 
@@ -472,6 +534,9 @@ function createEmptySectionErrors(): MemoryOperatorSectionErrors {
     files: null,
     qmdStats: null,
     memoryItems: null,
+    memoryEntities: null,
+    memoryRelations: null,
+    memoryDecisions: null,
     memoryHistory: null,
     maintenanceStatus: null,
     maintenanceRuns: null,

@@ -26,6 +26,15 @@ const itemParamsSchema = z.object({
   itemId: z.string().trim().min(1),
 });
 
+const structuredIdParamsSchema = z.object({
+  id: z.string().trim().min(1),
+});
+
+const structuredHistoryParamsSchema = z.object({
+  kind: z.enum(["entity", "relation", "decision"]),
+  id: z.string().trim().min(1),
+});
+
 const contextParamsSchema = z.object({
   contextId: z.string().trim().min(1),
 });
@@ -81,6 +90,89 @@ const listItemsQuerySchema = z.object({
   status: z.enum(["active", "forgotten", "all"]).optional(),
   query: z.string().optional(),
   limit: z.coerce.number().int().positive().max(500).default(200),
+});
+
+const structuredScopeSchema = z.enum(["global", "workspace", "session", "run"]);
+const structuredStatusQuerySchema = z.enum(["active", "forgotten", "superseded", "all"]);
+const structuredAuthoritySchema = z.enum(["operator", "agent_proposed", "trusted_lifecycle", "imported_skill"]);
+const structuredSourceRefSchema = z.object({
+  sourceType: z.enum(["manual", "memory_item", "session", "run", "artifact", "external"]),
+  sourceRef: z.string().trim().min(1),
+  title: z.string().trim().min(1).optional(),
+});
+
+const queryBooleanSchema = z.preprocess((value) => {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true" || normalized === "1") {
+    return true;
+  }
+  if (normalized === "false" || normalized === "0") {
+    return false;
+  }
+  return value;
+}, z.boolean());
+
+const structuredListQuerySchema = z.object({
+  workspaceId: z.string().trim().min(1).optional(),
+  status: structuredStatusQuerySchema.optional(),
+  query: z.string().trim().min(1).optional(),
+  entityId: z.string().trim().min(1).optional(),
+  dueForReview: queryBooleanSchema.optional(),
+  limit: z.coerce.number().int().positive().max(500).default(100),
+});
+
+const entityCreateSchema = z.object({
+  workspaceId: z.string().trim().min(1).optional(),
+  scope: structuredScopeSchema.optional(),
+  title: z.string().trim().min(1),
+  entityType: z.string().trim().min(1).optional(),
+  aliases: z.array(z.string().trim().min(1)).optional(),
+  summary: z.string().trim().min(1).optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  sourceRefs: z.array(structuredSourceRefSchema).optional(),
+  metadata: z.record(z.unknown()).optional(),
+  authority: structuredAuthoritySchema.optional(),
+});
+
+const relationCreateSchema = z.object({
+  workspaceId: z.string().trim().min(1).optional(),
+  scope: structuredScopeSchema.optional(),
+  title: z.string().trim().min(1).optional(),
+  fromEntityId: z.string().trim().min(1),
+  toEntityId: z.string().trim().min(1),
+  relationType: z.string().trim().min(1),
+  confidence: z.number().min(0).max(1).optional(),
+  sourceRefs: z.array(structuredSourceRefSchema).optional(),
+  metadata: z.record(z.unknown()).optional(),
+  authority: structuredAuthoritySchema.optional(),
+});
+
+const decisionCreateSchema = z.object({
+  workspaceId: z.string().trim().min(1).optional(),
+  scope: structuredScopeSchema.optional(),
+  title: z.string().trim().min(1).optional(),
+  decision: z.string().trim().min(1),
+  alternatives: z.array(z.string().trim().min(1)).optional(),
+  rationale: z.string().trim().min(1),
+  expectedOutcome: z.string().trim().min(1).optional(),
+  reviewAt: z.string().datetime().optional(),
+  linkedEntityIds: z.array(z.string().trim().min(1)).optional(),
+  linkedRelationIds: z.array(z.string().trim().min(1)).optional(),
+  sessionId: z.string().trim().min(1).optional(),
+  runId: z.string().trim().min(1).optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  sourceRefs: z.array(structuredSourceRefSchema).optional(),
+  metadata: z.record(z.unknown()).optional(),
+  authority: structuredAuthoritySchema.optional(),
+});
+
+const decisionRetrospectiveSchema = z.object({
+  outcome: z.enum(["unknown", "validated", "partially_validated", "invalidated"]),
+  notes: z.string().trim().min(1),
+  improvementCandidateId: z.string().trim().min(1).optional(),
 });
 
 const patchItemSchema = z.object({
@@ -401,6 +493,140 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       if (message.toLowerCase().includes("at least one criterion")) {
         return reply.code(400).send({ error: message });
       }
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/memory/entities", operatorOnly, async (request, reply) => {
+    const parsed = structuredListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send({ items: memory.listEntities(parsed.data) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/memory/entities", operatorOnly, async (request, reply) => {
+    const parsed = entityCreateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(memory.createEntity(parsed.data, resolveActorId(request)));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/memory/entities/:id/forget", operatorOnly, async (request, reply) => {
+    const parsed = structuredIdParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(memory.forgetEntity(parsed.data.id, resolveActorId(request)));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/memory/relations", operatorOnly, async (request, reply) => {
+    const parsed = structuredListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send({ items: memory.listRelations(parsed.data) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/memory/relations", operatorOnly, async (request, reply) => {
+    const parsed = relationCreateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(memory.createRelation(parsed.data, resolveActorId(request)));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/memory/decisions", operatorOnly, async (request, reply) => {
+    const parsed = structuredListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send({ items: memory.listDecisions(parsed.data) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/memory/decisions", operatorOnly, async (request, reply) => {
+    const parsed = decisionCreateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(memory.createDecision(parsed.data, resolveActorId(request)));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/memory/decisions/:id/retrospective", operatorOnly, async (request, reply) => {
+    const params = structuredIdParamsSchema.safeParse(request.params);
+    const body = decisionRetrospectiveSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(memory.addDecisionRetrospective(params.data.id, body.data, resolveActorId(request)));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/memory/decisions/:id/forget", operatorOnly, async (request, reply) => {
+    const parsed = structuredIdParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(memory.forgetDecision(parsed.data.id, resolveActorId(request)));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/memory/structured/:kind/:id/history", operatorOnly, async (request, reply) => {
+    const params = structuredHistoryParamsSchema.safeParse(request.params);
+    const query = statsQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send({
+        items: memory.listStructuredHistory(params.data.kind, params.data.id, query.data.limit),
+      });
+    } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
   });

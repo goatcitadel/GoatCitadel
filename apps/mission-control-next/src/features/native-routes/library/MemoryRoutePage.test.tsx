@@ -62,6 +62,7 @@ const memorySnapshot = vi.hoisted(() => ({
   runMaintenance: vi.fn(),
   savePolicy: vi.fn(),
   resolveRecommendation: vi.fn(),
+  reviewDecision: vi.fn(),
   data: {
     files: [{ relativePath: "memory/workspace/note.md", size: 1024, modifiedAt: "2026-04-22T00:00:00.000Z" }],
     qmdStats: {
@@ -99,6 +100,63 @@ const memorySnapshot = vi.hoisted(() => ({
         updatedAt: "2026-04-22T00:00:00.000Z",
         ttlOverrideSeconds: 3600,
         expiresAt: "2026-04-23T00:00:00.000Z",
+      },
+    ],
+    memoryEntities: [
+      {
+        id: "entity-1",
+        workspaceId: "default",
+        scope: "workspace",
+        title: "Project Alpha",
+        entityType: "project",
+        aliases: ["Alpha"],
+        status: "active",
+        confidence: 0.9,
+        sourceRefs: [{ sourceType: "manual", sourceRef: "operator" }],
+        metadata: {},
+        authority: "operator",
+        createdAt: "2026-04-22T00:00:00.000Z",
+        updatedAt: "2026-04-22T00:00:00.000Z",
+      },
+    ],
+    memoryRelations: [
+      {
+        id: "relation-1",
+        workspaceId: "default",
+        scope: "workspace",
+        title: "Project Alpha uses Automation Designer",
+        fromEntityId: "entity-1",
+        toEntityId: "entity-2",
+        relationType: "uses",
+        status: "active",
+        confidence: 0.8,
+        sourceRefs: [{ sourceType: "manual", sourceRef: "operator" }],
+        metadata: {},
+        authority: "operator",
+        createdAt: "2026-04-22T00:00:00.000Z",
+        updatedAt: "2026-04-22T00:00:00.000Z",
+      },
+    ],
+    memoryDecisions: [
+      {
+        id: "decision-1",
+        workspaceId: "default",
+        scope: "workspace",
+        title: "Keep automation advisory",
+        decision: "Draft automation recipes before cron creation.",
+        alternatives: ["Create cron jobs immediately"],
+        rationale: "Operators need preview and proof first.",
+        expectedOutcome: "Fewer surprise side effects.",
+        reviewAt: "2026-06-22T00:00:00.000Z",
+        linkedEntityIds: ["entity-1"],
+        linkedRelationIds: ["relation-1"],
+        status: "active",
+        confidence: 0.75,
+        sourceRefs: [{ sourceType: "manual", sourceRef: "operator" }],
+        metadata: {},
+        authority: "operator",
+        createdAt: "2026-04-22T00:00:00.000Z",
+        updatedAt: "2026-04-22T00:00:00.000Z",
       },
     ],
     memoryHistory: [
@@ -164,6 +222,9 @@ const memorySnapshot = vi.hoisted(() => ({
       files: null,
       qmdStats: null,
       memoryItems: null,
+      memoryEntities: null,
+      memoryRelations: null,
+      memoryDecisions: null,
       memoryHistory: null,
       maintenanceStatus: null,
       maintenanceRuns: null,
@@ -260,6 +321,10 @@ describe("MemoryRoutePage", () => {
     expect(markup).toContain("Run maintenance now");
     expect(markup).toContain("Tighten cadence for fresh context.");
     expect(markup).toContain("Memory files");
+    expect(markup).toContain("Memory entities");
+    expect(markup).toContain("Relations");
+    expect(markup).toContain("Decision journal");
+    expect(markup).toContain("Keep automation advisory");
   });
 
   it("keeps quick-jump navigation on route objects", async () => {
@@ -298,6 +363,31 @@ describe("MemoryRoutePage", () => {
       theme: "library",
     });
     expect(navigate.mock.calls[0]?.[0]).not.toHaveProperty("page");
+  });
+
+  it("wires decision retrospective actions through the memory snapshot owner", async () => {
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <MemoryRoutePage
+          route={{ area: "library", section: "memory", theme: "library" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={0}
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+    });
+
+    const button = findButton(renderer!.root, "Record review");
+    await act(async () => {
+      button.props.onClick();
+      await Promise.resolve();
+    });
+
+    expect(memorySnapshot.reviewDecision).toHaveBeenCalledWith("decision-1");
   });
 
   it("wires memory item edits, maintenance policy controls, recommendation actions, and run selection", async () => {

@@ -4,6 +4,8 @@ import type {
   OrchestrationRun,
   OrchestrationRunPolicyContext,
   SkillListItem,
+  AutomationRecipeDraftRequest,
+  AutomationRecipeDraftResponse,
   WorkflowRecipeAgent,
   WorkflowRecipeApproval,
   WorkflowRecipeLimits,
@@ -87,6 +89,108 @@ export class WorkflowRecipeService {
   public listTemplates(): WorkflowRecipeTemplateRecord[] {
     return STARTER_TEMPLATES;
   }
+
+  public draftAutomationRecipe(input: AutomationRecipeDraftRequest): AutomationRecipeDraftResponse {
+    const recipe = buildAutomationDraftRecipe(input);
+    const preview = this.previewRecipe({ recipe });
+    return {
+      ...preview,
+      roiEstimate: estimateAutomationRoi(input),
+      proofChecklist: buildAutomationProofChecklist(input),
+      missingCapabilities: [...preview.missingSkills, ...preview.missingTools],
+    };
+  }
+}
+
+function buildAutomationDraftRecipe(input: AutomationRecipeDraftRequest): WorkflowRecipeRecord {
+  const taskDescription = requireText(input.taskDescription, "taskDescription");
+  const trigger = optionalText(input.trigger);
+  const frequency = optionalText(input.frequency);
+  const constraints = normalizeStringList(input.constraints) ?? [];
+  const successCriteria = normalizeStringList(input.successCriteria) ?? [];
+  const scheduleIntent = [frequency, trigger].filter(Boolean).join(" · ") || undefined;
+  return {
+    name: `Automation: ${taskDescription.slice(0, 64)}`,
+    goal: taskDescription,
+    process: "sequential",
+    agents: [
+      {
+        id: "automation-designer",
+        role: "Automation Designer",
+        goal: "Draft a reviewable automation plan without creating a cron job or external side effect.",
+        skills: ["automation-workflows"],
+      },
+      {
+        id: "qa",
+        role: "QA",
+        goal: "Identify proof lanes, failure modes, and operator approval points.",
+      },
+    ],
+    steps: [
+      {
+        id: "scope-and-triggers",
+        title: "Scope trigger and safeguards",
+        agent: "automation-designer",
+        prompt: [
+          `Task: ${taskDescription}`,
+          trigger ? `Trigger: ${trigger}` : "Trigger: operator review required",
+          frequency ? `Frequency: ${frequency}` : "Frequency: not scheduled yet",
+          constraints.length ? `Constraints: ${constraints.join("; ")}` : "Constraints: preserve policy gates.",
+        ].join("\n"),
+        requiresApproval: true,
+      },
+      {
+        id: "proof-plan",
+        title: "Draft proof checklist",
+        agent: "qa",
+        prompt: [
+          "Produce a concise proof checklist before any cron or workflow activation.",
+          successCriteria.length
+            ? `Success criteria: ${successCriteria.join("; ")}`
+            : "Success criteria: operator confirms useful result.",
+        ].join("\n"),
+        dependsOn: ["scope-and-triggers"],
+        requiresApproval: true,
+      },
+    ],
+    approval: {
+      mode: "before_each_step",
+    },
+    limits: {
+      maxIterations: 2,
+      maxRuntimeMinutes: 20,
+      maxCostUsd: 1,
+    },
+    skills: ["automation-workflows"],
+    memory: input.workspaceId ? [`workspace:${input.workspaceId}`] : undefined,
+    scheduleIntent,
+  };
+}
+
+function estimateAutomationRoi(input: AutomationRecipeDraftRequest): AutomationRecipeDraftResponse["roiEstimate"] {
+  const hasFrequency = Boolean(input.frequency?.trim());
+  const hasSuccessCriteria = (input.successCriteria ?? []).some((item) => item.trim());
+  return {
+    timeSavedMinutesPerRun: hasFrequency ? 15 : undefined,
+    confidence: hasFrequency && hasSuccessCriteria ? 0.72 : 0.48,
+    notes: [
+      "Estimate is advisory and does not create an automation.",
+      hasFrequency ? "Frequency supplied, so recurring value can be reviewed." : "No frequency supplied yet.",
+      hasSuccessCriteria ? "Success criteria supplied." : "Add success criteria before activation.",
+    ],
+  };
+}
+
+function buildAutomationProofChecklist(input: AutomationRecipeDraftRequest): string[] {
+  return [
+    "Preview the recipe and missing capabilities.",
+    "Confirm approval gates and risk boundaries.",
+    input.frequency?.trim()
+      ? "Review schedule intent before creating a cron job."
+      : "Choose a schedule before cron creation.",
+    "Run once manually and inspect artifacts.",
+    "Only then create or enable a recurring automation.",
+  ];
 }
 
 function parseRecipeInput(input: WorkflowRecipePreviewRequest): unknown {

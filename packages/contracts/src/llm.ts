@@ -235,6 +235,34 @@ export interface LlmModelPreviewResponse {
   warning?: string;
 }
 
+export interface LlmProviderAdviceRequest {
+  preference?: "low_cost" | "balanced" | "capability_fit";
+  taskHint?: string;
+  requireConfiguredKey?: boolean;
+  maxCandidates?: number;
+}
+
+export interface LlmProviderAdviceCandidate {
+  providerId: string;
+  providerLabel: string;
+  model: string;
+  configured: boolean;
+  estimatedCostUsd?: number;
+  costSource: "estimated" | "unknown";
+  fitScore: number;
+  riskNotes: string[];
+  requiredKeys: string[];
+}
+
+export interface LlmProviderAdviceResponse {
+  generatedAt: string;
+  preference: NonNullable<LlmProviderAdviceRequest["preference"]>;
+  candidates: LlmProviderAdviceCandidate[];
+  advisoryOnly: true;
+  mutationPerformed: false;
+  warnings: string[];
+}
+
 export type ChatCompletionRole = "system" | "developer" | "user" | "assistant" | "tool";
 
 export interface ChatCompletionReasoningConfig {

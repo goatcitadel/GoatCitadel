@@ -1261,7 +1261,7 @@ function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps) {
                 id: item.sourceUrl,
                 label: item.name,
                 description: item.description,
-                meta: `${item.sourceProvider} · ${item.installability ?? "reference"}`,
+                meta: `${item.sourceProvider} · ${describeSkillSourceDisposition(item)}`,
               }))}
               emptyLabel="No skill source matches are available right now."
             />
@@ -3015,6 +3015,60 @@ export function truncateText(value: string, limit: number) {
     return value;
   }
   return `${value.slice(0, limit).trimEnd()}\n\n…`;
+}
+
+function describeSkillSourceDisposition(item: {
+  installability?: string;
+  skillFamily?: string;
+  tags?: string[];
+  name?: string;
+}) {
+  if (item.installability === "not_installable") {
+    return "Rejected";
+  }
+  const family = item.skillFamily?.toLowerCase() ?? "";
+  const conditionalFamilies = new Set([
+    "openclaw_experiment",
+    "github_connector_playbook",
+    "google_cli_oauth",
+    "copy_humanizer",
+    "canvas_a2ui",
+  ]);
+  if (conditionalFamilies.has(family) || item.installability === "installable") {
+    return "Conditional install";
+  }
+  const referenceOnlyFamilies = new Set([
+    "auto_updates",
+    "global_search_broker",
+    "proactive_automation",
+    "automation_designer",
+    "decision_journal",
+    "typed_memory_ontology",
+    "frontend_review_guidance",
+    "voice_transcription",
+  ]);
+  if (referenceOnlyFamilies.has(family)) {
+    return "Reference only";
+  }
+  const nativeOverlapFamilies = new Set([
+    "harness_engineering",
+    "capability_evolution",
+    "browser_automation",
+    "cloudflare_dns",
+    "skill_vetting",
+    "multi_agent_swarm",
+  ]);
+  if (nativeOverlapFamilies.has(family)) {
+    return "Native overlap";
+  }
+  if (item.installability === "review_only") {
+    return "Reference only";
+  }
+  const haystack = [family, item.name, ...(item.tags ?? [])].filter(Boolean).join(" ").toLowerCase();
+  if (/native|overlap|vetting|capability|browser_automation|multi_agent_swarm/.test(haystack)) {
+    return "Native overlap";
+  }
+  return "Reference only";
 }
 
 export function formatDateTime(value?: string | null) {

@@ -81,6 +81,40 @@ describe("SkillImportService lookup", () => {
     });
   });
 
+  it("classifies reviewed ClawHub sources with native dispositions and overlap owners", async () => {
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const expectations = [
+      ["maximeprades/auto-updater", "auto_updates", "review_only", "Update Scout"],
+      ["shaivpidadi/free-ride", "openclaw_experiment", "review_only", "compatibility"],
+      ["steipete/github", "github_connector_playbook", "review_only", "GitHub connector"],
+      ["oswalpalash/ontology", "typed_memory_ontology", "review_only", "MemoryLifecycleService"],
+      ["biostartechnology/humanizer", "copy_humanizer", "review_only", "copy lint"],
+      ["gpyangyoujun/multi-search-engine", "global_search_broker", "review_only", "global search broker"],
+      ["halthelobster/proactive-agent", "proactive_automation", "review_only", "durable proactive"],
+      ["steipete/gog", "google_cli_oauth", "review_only", "Google connector"],
+      ["ivangdavila/self-improving", "safe_self_improvement", "not_installable", "native improvement ledger"],
+      ["pskoett/self-improving-agent", "safe_self_improvement", "not_installable", "native improvement ledger"],
+      ["matagul/desktop-control", "desktop_control_high_risk", "not_installable", "Reject direct import"],
+      ["steipete/openai-whisper", "voice_transcription", "review_only", "managed local whisper"],
+      ["jk-0001/automation-workflows", "automation_designer", "review_only", "Automation Designer"],
+      ["0xneosoul/neosoul-decision-agent", "decision_journal", "review_only", "Decision Journal"],
+      ["nextfrontierbuilds/elite-longterm-memory", "typed_memory_ontology", "review_only", "MemoryLifecycleService"],
+      ["mpociot/superdesign", "frontend_review_guidance", "review_only", "frontend review"],
+      ["xobi667/ui-ux-pro-max", "frontend_review_guidance", "review_only", "UI review"],
+      ["lura2/canvas", "canvas_a2ui", "review_only", "A2UI"],
+    ] as const;
+
+    for (const [slug, family, installability, hint] of expectations) {
+      const result = await service.lookupSources(`https://clawhub.ai/${slug}`, 5);
+      expect(result.bestMatch).toMatchObject({
+        sourceProvider: "clawhub",
+        skillFamily: family,
+        installability,
+      });
+      expect(result.bestMatch?.installHint).toEqual(expect.stringContaining(hint));
+    }
+  });
+
   it("treats Animal House as a non-installable external reference", async () => {
     const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
     const result = await service.lookupSources("https://animalhouse.ai/skills/animal-house", 5);

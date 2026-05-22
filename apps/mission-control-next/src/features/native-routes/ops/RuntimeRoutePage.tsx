@@ -1,6 +1,8 @@
+/* eslint-disable max-lines -- RuntimeRoutePage co-locates Ops route panels while native route extraction continues. */
 import { useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import { createCronJob } from "@goatcitadel/mission-control-shared/api/client";
+import type { AutomationRecipeDraftResponse } from "@goatcitadel/contracts";
+import { createCronJob, draftAutomationRecipe } from "@goatcitadel/mission-control-shared/api/client";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
 import { useOpsRuntimeSnapshot } from "@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot";
 import type { AppRoute } from "@next/app/route-model";
@@ -28,7 +30,13 @@ const CRON_ACTION_OPTIONS = [
 ] as const;
 type CronActionOption = (typeof CRON_ACTION_OPTIONS)[number];
 
-export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals, navigate }: NativeRoutePagesProps) {
+export function RuntimeRoutePage({
+  route,
+  activeWorkspaceId,
+  activeWorkspaceName,
+  pendingApprovals,
+  navigate,
+}: NativeRoutePagesProps) {
   const section = (route.section ?? "activity") as NonNullable<AppRoute["section"]>;
   const runtime = useOpsRuntimeSnapshot();
   const data = runtime.data;
@@ -40,6 +48,16 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
   });
   const [scheduleCreating, setScheduleCreating] = useState(false);
   const [scheduleNotice, setScheduleNotice] = useState<string | null>(null);
+  const [automationDraft, setAutomationDraft] = useState({
+    taskDescription: "",
+    trigger: "",
+    frequency: "",
+    successCriteria: "",
+    constraints: "",
+  });
+  const [automationPreview, setAutomationPreview] = useState<AutomationRecipeDraftResponse | null>(null);
+  const [automationBusy, setAutomationBusy] = useState(false);
+  const [automationNotice, setAutomationNotice] = useState<string | null>(null);
 
   const handleCreateSchedule = async () => {
     const name = scheduleDraft.name.trim();
@@ -69,6 +87,32 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
       setScheduleNotice(error instanceof Error ? error.message : "Could not create schedule.");
     } finally {
       setScheduleCreating(false);
+    }
+  };
+
+  const handleDraftAutomation = async () => {
+    const taskDescription = automationDraft.taskDescription.trim();
+    if (!taskDescription) {
+      setAutomationNotice("Task description is required.");
+      return;
+    }
+    setAutomationBusy(true);
+    setAutomationNotice(null);
+    try {
+      const preview = await draftAutomationRecipe({
+        taskDescription,
+        trigger: optionalDraftText(automationDraft.trigger),
+        frequency: optionalDraftText(automationDraft.frequency),
+        successCriteria: splitDraftList(automationDraft.successCriteria),
+        constraints: splitDraftList(automationDraft.constraints),
+        workspaceId: activeWorkspaceId,
+      });
+      setAutomationPreview(preview);
+      setAutomationNotice("Automation recipe drafted. No cron job was created.");
+    } catch (error) {
+      setAutomationNotice(error instanceof Error ? error.message : "Could not draft automation recipe.");
+    } finally {
+      setAutomationBusy(false);
     }
   };
 
@@ -272,6 +316,95 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
                   {scheduleCreating ? "Creating..." : "Create schedule"}
                 </button>
               </div>
+            </NativeCard>
+            <NativeCard
+              title="Automation Designer"
+              subtitle="Draft a reviewable recipe from intent. Schedule intent is previewed, not activated."
+              density="compact"
+              scrollBody
+              bodyMaxHeight="min(58vh, 32rem)"
+              stats={[
+                { label: "Mode", value: "Advisory" },
+                { label: "Cron created", value: "No" },
+              ]}
+            >
+              {automationNotice ? <div className="mc-next-runtime-notice">{automationNotice}</div> : null}
+              <div className="mc-next-settings-field-grid">
+                <label className="mc-next-settings-field span-2">
+                  <span>Task description</span>
+                  <textarea
+                    className="mc-next-settings-textarea"
+                    value={automationDraft.taskDescription}
+                    onChange={(event) =>
+                      setAutomationDraft((current) => ({ ...current, taskDescription: event.target.value }))
+                    }
+                    placeholder="Review new provider spend every weekday and prepare a concise operator note."
+                  />
+                </label>
+                <label className="mc-next-settings-field">
+                  <span>Trigger</span>
+                  <input
+                    className="mc-next-settings-input"
+                    value={automationDraft.trigger}
+                    onChange={(event) => setAutomationDraft((current) => ({ ...current, trigger: event.target.value }))}
+                    placeholder="manual review"
+                  />
+                </label>
+                <label className="mc-next-settings-field">
+                  <span>Frequency</span>
+                  <input
+                    className="mc-next-settings-input"
+                    value={automationDraft.frequency}
+                    onChange={(event) =>
+                      setAutomationDraft((current) => ({ ...current, frequency: event.target.value }))
+                    }
+                    placeholder="weekdays at 9"
+                  />
+                </label>
+                <label className="mc-next-settings-field span-2">
+                  <span>Success criteria</span>
+                  <input
+                    className="mc-next-settings-input"
+                    value={automationDraft.successCriteria}
+                    onChange={(event) =>
+                      setAutomationDraft((current) => ({ ...current, successCriteria: event.target.value }))
+                    }
+                    placeholder="comma-separated criteria"
+                  />
+                </label>
+                <label className="mc-next-settings-field span-2">
+                  <span>Constraints</span>
+                  <input
+                    className="mc-next-settings-input"
+                    value={automationDraft.constraints}
+                    onChange={(event) =>
+                      setAutomationDraft((current) => ({ ...current, constraints: event.target.value }))
+                    }
+                    placeholder="comma-separated constraints"
+                  />
+                </label>
+              </div>
+              <div className="mc-next-runtime-actions">
+                <button
+                  type="button"
+                  className="gc-button"
+                  onClick={() => void handleDraftAutomation()}
+                  disabled={automationBusy}
+                >
+                  {automationBusy ? "Drafting..." : "Preview recipe"}
+                </button>
+              </div>
+              {automationPreview ? (
+                <div className="mc-next-settings-code-block">
+                  <span>{automationPreview.recipe.name}</span>
+                  <p>{automationPreview.recipe.goal}</p>
+                  <ul className="mc-next-approvals-compact-list">
+                    {automationPreview.proofChecklist.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </NativeCard>
             <NativeCard
               title="Scheduler review"
@@ -724,8 +857,13 @@ export function RuntimeRoutePage({ route, activeWorkspaceName, pendingApprovals,
         );
     }
   }, [
+    activeWorkspaceId,
     activeWorkspaceName,
     activityFilter,
+    automationBusy,
+    automationDraft,
+    automationNotice,
+    automationPreview,
     data,
     navigate,
     pendingApprovals,
@@ -801,6 +939,19 @@ export function createScheduleJobId(name: string) {
     .replace(/^-+|-+$/g, "")
     .slice(0, 42);
   return `manual-${slug || "schedule"}-${Date.now().toString(36)}`;
+}
+
+function optionalDraftText(value: string): string | undefined {
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function splitDraftList(value: string): string[] | undefined {
+  const items = value
+    .split(/[,;\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return items.length ? Array.from(new Set(items)) : undefined;
 }
 
 export function capitalize(value: string) {

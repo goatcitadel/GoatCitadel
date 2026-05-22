@@ -4,8 +4,11 @@ import { useMemoryOperatorSnapshot } from "./useMemoryOperatorSnapshot";
 
 const apiMocks = vi.hoisted(() => ({
   acceptMemoryMaintenanceRecommendation: vi.fn(),
+  addMemoryDecisionRetrospective: vi.fn(),
   fetchDurableRun: vi.fn(),
   fetchDurableRunTimeline: vi.fn(),
+  fetchMemoryDecisions: vi.fn(),
+  fetchMemoryEntities: vi.fn(),
   fetchMemoryFiles: vi.fn(),
   fetchMemoryItemHistory: vi.fn(),
   fetchMemoryItems: vi.fn(),
@@ -14,6 +17,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchMemoryMaintenanceRuns: vi.fn(),
   fetchMemoryMaintenanceStatus: vi.fn(),
   fetchMemoryQmdStats: vi.fn(),
+  fetchMemoryRelations: vi.fn(),
   fetchSettings: vi.fn(),
   forgetMemoryItem: vi.fn(),
   patchMemoryItem: vi.fn(),
@@ -24,8 +28,11 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock("../api/client", () => ({
   acceptMemoryMaintenanceRecommendation: apiMocks.acceptMemoryMaintenanceRecommendation,
+  addMemoryDecisionRetrospective: apiMocks.addMemoryDecisionRetrospective,
   fetchDurableRun: apiMocks.fetchDurableRun,
   fetchDurableRunTimeline: apiMocks.fetchDurableRunTimeline,
+  fetchMemoryDecisions: apiMocks.fetchMemoryDecisions,
+  fetchMemoryEntities: apiMocks.fetchMemoryEntities,
   fetchMemoryFiles: apiMocks.fetchMemoryFiles,
   fetchMemoryItemHistory: apiMocks.fetchMemoryItemHistory,
   fetchMemoryItems: apiMocks.fetchMemoryItems,
@@ -34,6 +41,7 @@ vi.mock("../api/client", () => ({
   fetchMemoryMaintenanceRuns: apiMocks.fetchMemoryMaintenanceRuns,
   fetchMemoryMaintenanceStatus: apiMocks.fetchMemoryMaintenanceStatus,
   fetchMemoryQmdStats: apiMocks.fetchMemoryQmdStats,
+  fetchMemoryRelations: apiMocks.fetchMemoryRelations,
   fetchSettings: apiMocks.fetchSettings,
   forgetMemoryItem: apiMocks.forgetMemoryItem,
   patchMemoryItem: apiMocks.patchMemoryItem,
@@ -132,6 +140,67 @@ describe("useMemoryOperatorSnapshot", () => {
           updatedAt: "2026-04-22T00:00:00.000Z",
           ttlOverrideSeconds: 3600,
           expiresAt: "2026-04-23T00:00:00.000Z",
+        },
+      ],
+    });
+    apiMocks.fetchMemoryEntities.mockResolvedValue({
+      items: [
+        {
+          id: "entity-1",
+          workspaceId: "default",
+          scope: "workspace",
+          title: "Project Alpha",
+          entityType: "project",
+          aliases: [],
+          status: "active",
+          confidence: 0.9,
+          sourceRefs: [{ sourceType: "manual", sourceRef: "operator" }],
+          metadata: {},
+          authority: "operator",
+          createdAt: "2026-04-22T00:00:00.000Z",
+          updatedAt: "2026-04-22T00:00:00.000Z",
+        },
+      ],
+    });
+    apiMocks.fetchMemoryRelations.mockResolvedValue({
+      items: [
+        {
+          id: "relation-1",
+          workspaceId: "default",
+          scope: "workspace",
+          title: "Project Alpha uses Automation Designer",
+          fromEntityId: "entity-1",
+          toEntityId: "entity-2",
+          relationType: "uses",
+          status: "active",
+          confidence: 0.8,
+          sourceRefs: [{ sourceType: "manual", sourceRef: "operator" }],
+          metadata: {},
+          authority: "operator",
+          createdAt: "2026-04-22T00:00:00.000Z",
+          updatedAt: "2026-04-22T00:00:00.000Z",
+        },
+      ],
+    });
+    apiMocks.fetchMemoryDecisions.mockResolvedValue({
+      items: [
+        {
+          id: "decision-1",
+          workspaceId: "default",
+          scope: "workspace",
+          title: "Keep automation advisory",
+          decision: "Draft automation recipes before cron creation.",
+          alternatives: [],
+          rationale: "Proof first.",
+          linkedEntityIds: ["entity-1"],
+          linkedRelationIds: ["relation-1"],
+          status: "active",
+          confidence: 0.75,
+          sourceRefs: [{ sourceType: "manual", sourceRef: "operator" }],
+          metadata: {},
+          authority: "operator",
+          createdAt: "2026-04-22T00:00:00.000Z",
+          updatedAt: "2026-04-22T00:00:00.000Z",
         },
       ],
     });
@@ -241,6 +310,11 @@ describe("useMemoryOperatorSnapshot", () => {
     });
     apiMocks.acceptMemoryMaintenanceRecommendation.mockResolvedValue(undefined);
     apiMocks.rejectMemoryMaintenanceRecommendation.mockResolvedValue(undefined);
+    apiMocks.addMemoryDecisionRetrospective.mockResolvedValue({
+      id: "decision-1",
+      title: "Keep automation advisory",
+      retrospective: { outcome: "unknown", notes: "Review recorded.", reviewedAt: "2026-04-22T00:00:00.000Z" },
+    });
   });
 
   afterEach(() => {
@@ -259,8 +333,18 @@ describe("useMemoryOperatorSnapshot", () => {
     expect(latest?.selectedItem?.lifecycleState).toBe("active");
     expect(latest?.selectedRun?.runId).toBe("run-1");
     expect(latest?.data?.selectedDurableRun?.status).toBe("completed");
+    expect(latest?.data?.memoryEntities.map((item) => item.title)).toEqual(["Project Alpha"]);
+    expect(latest?.data?.memoryRelations.map((item) => item.relationType)).toEqual(["uses"]);
+    expect(latest?.data?.memoryDecisions.map((item) => item.title)).toEqual(["Keep automation advisory"]);
     expect(latest?.data?.memoryAdminState).toBe("enabled");
     expect(latest?.policyDraft?.timeZone).toBe("America/Los_Angeles");
+    expect(apiMocks.fetchMemoryEntities).toHaveBeenCalledWith({ workspaceId: "default", status: "all", limit: 80 });
+    expect(apiMocks.fetchMemoryRelations).toHaveBeenCalledWith({ workspaceId: "default", status: "all", limit: 80 });
+    expect(apiMocks.fetchMemoryDecisions).toHaveBeenCalledWith({
+      workspaceId: "default",
+      status: "all",
+      limit: 80,
+    });
     expect(apiMocks.fetchMemoryItemHistory).toHaveBeenCalledWith("mem-1", 100);
   });
 
@@ -355,6 +439,23 @@ describe("useMemoryOperatorSnapshot", () => {
       expect.objectContaining({ minHoursSinceLastSuccess: 48, minChangedSessions: 2 }),
     );
     expect(latest?.notice).toEqual({ tone: "success", message: "Memory maintenance policy saved." });
+  });
+
+  it("records decision retrospectives through the memory lifecycle API", async () => {
+    renderer = await mountHook((value) => {
+      latest = value;
+    });
+
+    await act(async () => {
+      await latest?.reviewDecision("decision-1");
+    });
+    await flush();
+
+    expect(apiMocks.addMemoryDecisionRetrospective).toHaveBeenCalledWith("decision-1", {
+      outcome: "unknown",
+      notes: "Reviewed from Mission Control Next Library memory panel.",
+    });
+    expect(latest?.notice).toEqual({ tone: "success", message: "Decision retrospective recorded." });
   });
 
   it("records optional section errors without disabling the whole snapshot", async () => {

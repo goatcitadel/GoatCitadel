@@ -9,7 +9,7 @@ import {
   type ReactNode,
   type SetStateAction,
 } from "react";
-import { providerTemplates, type CapabilityPackPreview } from "@goatcitadel/contracts";
+import { providerTemplates, type CapabilityPackPreview, type LlmProviderAdviceResponse } from "@goatcitadel/contracts";
 import {
   AlertTriangle,
   Cable,
@@ -94,6 +94,7 @@ import {
   fetchIntegrationPlugins,
   fetchGoogleMeetPrerequisiteStatus,
   fetchGoogleMeetSessions,
+  fetchLlmProviderAdvice,
   fetchSlackOAuthStatus,
   fetchLlamaCppModels,
   fetchMcpServers,
@@ -1617,6 +1618,11 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     readStoredOpenAICodexOAuthFlow,
   );
   const [codexOAuthBusy, setCodexOAuthBusy] = useState(false);
+  const [providerAdvice, setProviderAdvice] = useState<LoadState<LlmProviderAdviceResponse>>({
+    loading: false,
+    error: null,
+    data: null,
+  });
   const codexOAuthPollInFlightRef = useRef<string | null>(null);
   const codexOAuthStatusRequestIdRef = useRef(0);
   const [secretState, setSecretState] = useState<LoadState<Awaited<ReturnType<typeof fetchProviderSecretStatus>>>>({
@@ -1847,6 +1853,20 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       await reload();
     } catch (saveError) {
       setNotice({ tone: "error", message: getErrorMessage(saveError) });
+    }
+  };
+
+  const handleLoadProviderAdvice = async () => {
+    setProviderAdvice({ loading: true, error: null, data: null });
+    try {
+      const advice = await fetchLlmProviderAdvice({
+        preference: "balanced",
+        taskHint: "general GoatCitadel chat, code, and orchestration routing",
+        maxCandidates: 5,
+      });
+      setProviderAdvice({ loading: false, error: null, data: advice });
+    } catch (adviceError) {
+      setProviderAdvice({ loading: false, error: getErrorMessage(adviceError), data: null });
     }
   };
 
@@ -2291,6 +2311,64 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
               <button type="button" className="mc-next-button" onClick={() => void handleSaveRouting()}>
                 <Save size={16} />
                 Save routing
+              </button>
+            </SettingsButtonRow>
+          </SettingsPanel>
+          <SettingsPanel
+            title="Provider advice"
+            subtitle="Advisory routing guidance only; no provider configuration is mutated."
+            stats={[
+              { label: "Candidates", value: String(providerAdvice.data?.candidates.length ?? 0) },
+              {
+                label: "Mutation",
+                value: providerAdvice.data?.mutationPerformed === false ? "none" : "none",
+              },
+            ]}
+          >
+            {providerAdvice.error ? <SettingsNotice notice={{ tone: "error", message: providerAdvice.error }} /> : null}
+            {providerAdvice.data ? (
+              <>
+                <SettingsNotice
+                  notice={{
+                    tone: "info",
+                    message: providerAdvice.data.warnings[0] ?? "Provider advice is advisory only.",
+                  }}
+                />
+                <ul className="mc-next-approvals-compact-list">
+                  {providerAdvice.data.candidates.map((candidate) => (
+                    <li key={`${candidate.providerId}:${candidate.model}`}>
+                      <strong>
+                        {candidate.providerLabel} · {candidate.model}
+                      </strong>
+                      <span>
+                        Fit {candidate.fitScore} · Cost{" "}
+                        {candidate.estimatedCostUsd === undefined
+                          ? "unknown"
+                          : `$${candidate.estimatedCostUsd.toFixed(4)}`}
+                      </span>
+                      <p>{candidate.riskNotes.join(" ")}</p>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : (
+              <SettingsNotice
+                notice={{
+                  tone: "info",
+                  message:
+                    "Load advisory provider recommendations to compare configured keys, estimated cost, and routing risk without changing settings.",
+                }}
+              />
+            )}
+            <SettingsButtonRow>
+              <button
+                type="button"
+                className="mc-next-button-secondary"
+                onClick={() => void handleLoadProviderAdvice()}
+                disabled={providerAdvice.loading}
+              >
+                <Gauge size={16} />
+                {providerAdvice.loading ? "Loading advice..." : "Load advice"}
               </button>
             </SettingsButtonRow>
           </SettingsPanel>

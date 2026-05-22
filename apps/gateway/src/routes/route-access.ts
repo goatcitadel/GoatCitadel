@@ -98,6 +98,8 @@ const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessCla
   { prefix: "/api/v1/daemon", accessClass: "operator" },
   { prefix: "/api/v1/curator", accessClass: "operator" },
   { prefix: "/api/v1/improvement", accessClass: "operator" },
+  { prefix: "/api/v1/research", accessClass: "operator" },
+  { prefix: "/api/v1/update-scout", accessClass: "operator" },
   { prefix: "/api/v1/workspaces", accessClass: "operator" },
   { prefix: "/api/v1/hooks", accessClass: "operator" },
   { prefix: "/api/v1/durable", accessClass: "operator" },

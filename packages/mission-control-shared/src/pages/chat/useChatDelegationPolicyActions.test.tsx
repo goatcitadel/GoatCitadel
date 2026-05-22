@@ -194,6 +194,7 @@ function setupApiDefaults() {
   triggerChatProactiveMock.mockResolvedValue({
     runId: "proactive-1",
     status: "queued",
+    executionClass: "prompted_notification",
     reasoningSummary: "Queued for follow-up",
   });
   suggestChatDelegationMock.mockResolvedValue({
@@ -405,6 +406,18 @@ describe("useChatDelegationPolicyActions", () => {
       surface: "chat",
     });
     expect(latestHarness?.proactiveRuns[0]?.runId).toBe("proactive-1");
+    expect(latestHarness?.notices.at(-1)?.content).toContain("prompted notification");
+
+    triggerChatProactiveMock.mockResolvedValueOnce({
+      runId: "proactive-auto-1",
+      status: "queued",
+      executionClass: "autonomous_durable",
+      reasoningSummary: "Queued durable follow-up",
+    });
+    await act(async () => {
+      await latestHarness?.result.handleTriggerProactive();
+    });
+    expect(latestHarness?.notices.at(-1)?.content).toContain("autonomous durable run");
   });
 
   it("suggests and accepts delegation with execution-plan graph steps", async () => {

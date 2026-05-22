@@ -53,6 +53,8 @@ import { mediaRoutes } from "./routes/media.js";
 import { daemonRoutes } from "./routes/daemon.js";
 import { curatorRoutes } from "./routes/curator.js";
 import { improvementRoutes } from "./routes/improvement.js";
+import { researchSearchRoutes } from "./routes/research-search.js";
+import { updateScoutRoutes } from "./routes/update-scout.js";
 import { workspacesRoutes } from "./routes/workspaces.js";
 import { hooksRoutes } from "./routes/hooks.js";
 import { durableRoutes } from "./routes/durable.js";
@@ -348,6 +350,8 @@ export async function buildApp() {
   await app.register(mediaRoutes);
   await app.register(daemonRoutes);
   await app.register(improvementRoutes);
+  await app.register(researchSearchRoutes);
+  await app.register(updateScoutRoutes);
   await app.register(workspacesRoutes);
   await app.register(hooksRoutes);
   await app.register(durableRoutes);

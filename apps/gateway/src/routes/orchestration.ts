@@ -13,6 +13,14 @@ const recipeBodySchema = z
   .refine((value) => value.source !== undefined || value.recipe !== undefined, {
     message: "Provide source or recipe.",
   });
+const automationDraftBodySchema = z.object({
+  taskDescription: z.string().trim().min(1),
+  trigger: z.string().trim().min(1).optional(),
+  frequency: z.string().trim().min(1).optional(),
+  successCriteria: z.array(z.string().trim().min(1)).optional(),
+  constraints: z.array(z.string().trim().min(1)).optional(),
+  workspaceId: z.string().trim().min(1).max(80).optional(),
+});
 
 const routeIdSchema = z.string().trim().min(1).max(256);
 const workspaceQuerySchema = z.object({
@@ -69,6 +77,18 @@ export const orchestrationRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(orchestration.previewRecipe(parsed.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/orchestration/recipes/draft-automation", operatorOnly, async (request, reply) => {
+    const parsed = automationDraftBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(orchestration.draftAutomationRecipe(parsed.data));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

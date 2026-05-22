@@ -7,6 +7,7 @@ import type {
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { deleteProviderApiKeyWithFallback, persistProviderApiKeyWithFallback } from "./provider-secret-persistence.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
+import { buildLlmProviderAdvice } from "./llm-provider-advice-service.js";
 import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
 import * as mcpServerAdminService from "./mcp-server-admin-service.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
@@ -48,6 +49,7 @@ export function composeToolsMcpRouteDependencies(
         ...getLlmConfigForGateway(gateway),
         providerConfigs: gateway.llmService.exportConfigFile().providers,
       }),
+      getProviderAdvice: (input) => buildLlmProviderAdvice(input, gateway.llmService.listProviders()),
       listLlmModels: (providerId) => gateway.llmService.listModelsWithSource(providerId),
       listLlmProviders: () => gateway.llmService.listProviders(),
       pollOpenAICodexOAuthDeviceFlow: (flowId) => gateway.llmService.pollOpenAICodexOAuthDeviceFlow(flowId),

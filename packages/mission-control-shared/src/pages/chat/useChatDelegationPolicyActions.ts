@@ -419,7 +419,9 @@ export function useChatDelegationPolicyActions(input: {
         surface: "chat",
       });
       setProactiveRuns((current) => [run, ...current].slice(0, 30));
-      pushLocalNotice(`Proactive run ${run.status}: ${run.reasoningSummary}`);
+      pushLocalNotice(
+        `Proactive run ${run.status} (${formatProactiveExecutionClass(run.executionClass)}): ${run.reasoningSummary}`,
+      );
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -714,4 +716,14 @@ export function useChatDelegationPolicyActions(input: {
     handleAcceptDelegation,
     handleRunCodeDelegation,
   };
+}
+
+function formatProactiveExecutionClass(value: ProactiveRunRecord["executionClass"]) {
+  if (value === "prompted_notification") {
+    return "prompted notification";
+  }
+  if (value === "autonomous_durable") {
+    return "autonomous durable run";
+  }
+  return "execution class pending";
 }

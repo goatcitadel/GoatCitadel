@@ -6,6 +6,16 @@ type MemoryRoutePort = Pick<
   | "composeContext"
   | "forgetMemory"
   | "forgetMemoryItem"
+  | "forgetMemoryDecision"
+  | "forgetMemoryEntity"
+  | "listMemoryDecisions"
+  | "listMemoryEntities"
+  | "listMemoryRelations"
+  | "listStructuredMemoryHistory"
+  | "addMemoryDecisionRetrospective"
+  | "createMemoryDecision"
+  | "createMemoryEntity"
+  | "createMemoryRelation"
   | "getContext"
   | "getContextStats"
   | "getMaintenancePolicy"
@@ -98,5 +108,53 @@ export class MemoryRouteService {
 
   public forget(input: Parameters<MemoryRoutePort["forgetMemory"]>[0]) {
     return this.memory.forgetMemory(input);
+  }
+
+  public listEntities(input: Parameters<MemoryRoutePort["listMemoryEntities"]>[0]) {
+    return this.memory.listMemoryEntities(input);
+  }
+
+  public createEntity(input: Parameters<MemoryRoutePort["createMemoryEntity"]>[0], actorId: string) {
+    return this.memory.createMemoryEntity(input, actorId);
+  }
+
+  public forgetEntity(entityId: string, actorId: string) {
+    return this.memory.forgetMemoryEntity(entityId, actorId);
+  }
+
+  public listRelations(input: Parameters<MemoryRoutePort["listMemoryRelations"]>[0]) {
+    return this.memory.listMemoryRelations(input);
+  }
+
+  public createRelation(input: Parameters<MemoryRoutePort["createMemoryRelation"]>[0], actorId: string) {
+    return this.memory.createMemoryRelation(input, actorId);
+  }
+
+  public listDecisions(input: Parameters<MemoryRoutePort["listMemoryDecisions"]>[0]) {
+    return this.memory.listMemoryDecisions(input);
+  }
+
+  public createDecision(input: Parameters<MemoryRoutePort["createMemoryDecision"]>[0], actorId: string) {
+    return this.memory.createMemoryDecision(input, actorId);
+  }
+
+  public addDecisionRetrospective(
+    decisionId: string,
+    input: Parameters<MemoryRoutePort["addMemoryDecisionRetrospective"]>[1],
+    actorId: string,
+  ) {
+    return this.memory.addMemoryDecisionRetrospective(decisionId, input, actorId);
+  }
+
+  public forgetDecision(decisionId: string, actorId: string) {
+    return this.memory.forgetMemoryDecision(decisionId, actorId);
+  }
+
+  public listStructuredHistory(
+    recordKind: Parameters<MemoryRoutePort["listStructuredMemoryHistory"]>[0],
+    recordId: string,
+    limit: number,
+  ) {
+    return this.memory.listStructuredMemoryHistory(recordKind, recordId, limit);
   }
 }

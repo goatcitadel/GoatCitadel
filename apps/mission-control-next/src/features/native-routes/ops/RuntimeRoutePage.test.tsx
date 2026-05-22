@@ -21,6 +21,7 @@ import {
 
 const runtimeApiMocks = vi.hoisted(() => ({
   createCronJob: vi.fn(),
+  draftAutomationRecipe: vi.fn(),
 }));
 
 const runtimeSnapshotOverrides = vi.hoisted(() => ({
@@ -36,6 +37,7 @@ const runtimeSnapshotOverrides = vi.hoisted(() => ({
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   createCronJob: runtimeApiMocks.createCronJob,
+  draftAutomationRecipe: runtimeApiMocks.draftAutomationRecipe,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () => ({
@@ -249,6 +251,18 @@ function findExactButton(root: ReactTestInstance, label: string): ReactTestInsta
   return button;
 }
 
+function findFieldControl(
+  root: ReactTestInstance,
+  label: string,
+  control: "input" | "select" | "textarea",
+): ReactTestInstance {
+  const field = root.findAll((node) => node.type === "label" && collectText(node).includes(label))[0];
+  if (!field) {
+    throw new Error(`Missing field ${label}`);
+  }
+  return field.findByType(control);
+}
+
 describe("RuntimeRoutePage", () => {
   afterEach(() => {
     runtimeSnapshotOverrides.sourceStatus = null;
@@ -258,6 +272,7 @@ describe("RuntimeRoutePage", () => {
     runtimeSnapshotOverrides.daemonBusy = null;
     runtimeSnapshotOverrides.notice = undefined;
     runtimeApiMocks.createCronJob.mockReset();
+    runtimeApiMocks.draftAutomationRecipe.mockReset();
     runtimeSnapshotOverrides.reload.mockClear();
     runtimeSnapshotOverrides.runDaemonAction.mockClear();
   });
@@ -382,6 +397,70 @@ describe("RuntimeRoutePage", () => {
     );
     expect(runtimeSnapshotOverrides.reload).toHaveBeenCalled();
     expect(collectText(renderer!.root)).toContain("Schedule created.");
+  });
+
+  it("previews automation recipes without creating cron jobs", async () => {
+    runtimeApiMocks.draftAutomationRecipe.mockResolvedValue({
+      recipe: {
+        name: "Provider spend review automation",
+        goal: "Review provider spend and prepare an operator note.",
+        steps: [],
+        scheduleIntent: { trigger: "manual review", frequency: "weekdays at 9" },
+      },
+      warnings: ["Operator approval is required before activation."],
+      roiEstimate: { confidence: 0.6, rationale: "Small recurring review task." },
+      proofChecklist: ["Review generated recipe", "Validate schedule intent", "Confirm no cron job was created"],
+      missingCapabilities: [],
+    });
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <RuntimeRoutePage
+          route={{ area: "ops", section: "schedules", theme: "ops" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={2}
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Preview recipe").props.onClick();
+    });
+    expect(collectText(renderer!.root)).toContain("Task description is required.");
+
+    await act(async () => {
+      findFieldControl(renderer!.root, "Task description", "textarea").props.onChange({
+        target: { value: "Review provider spend and prepare a note." },
+      });
+      findFieldControl(renderer!.root, "Trigger", "input").props.onChange({ target: { value: "manual review" } });
+      findFieldControl(renderer!.root, "Frequency", "input").props.onChange({ target: { value: "weekdays at 9" } });
+      findFieldControl(renderer!.root, "Success criteria", "input").props.onChange({
+        target: { value: "fresh spend summary, clear operator note" },
+      });
+      findFieldControl(renderer!.root, "Constraints", "input").props.onChange({
+        target: { value: "no provider setting changes" },
+      });
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Preview recipe").props.onClick();
+    });
+
+    expect(runtimeApiMocks.draftAutomationRecipe).toHaveBeenCalledWith({
+      taskDescription: "Review provider spend and prepare a note.",
+      trigger: "manual review",
+      frequency: "weekdays at 9",
+      successCriteria: ["fresh spend summary", "clear operator note"],
+      constraints: ["no provider setting changes"],
+      workspaceId: "default",
+    });
+    expect(runtimeApiMocks.createCronJob).not.toHaveBeenCalled();
+    expect(collectText(renderer!.root)).toContain("Automation recipe drafted. No cron job was created.");
+    expect(collectText(renderer!.root)).toContain("Provider spend review automation");
+    expect(collectText(renderer!.root)).toContain("Confirm no cron job was created");
   });
 
   it("surfaces schedule creation failures without clearing the draft", async () => {

@@ -347,6 +347,66 @@ describe("NativeRoutePages proposal trust review", () => {
   });
 });
 
+describe("NativeRoutePages skill source dispositions", () => {
+  it("renders ClawHub source disposition labels without conflating reference-only and conditional imports", async () => {
+    mocks.fetchSkillSources.mockResolvedValueOnce({
+      items: [
+        {
+          sourceUrl: "https://clawhub.ai/maximeprades/auto-updater",
+          name: "Auto Updater",
+          description: "Update scouting reference.",
+          sourceProvider: "clawhub",
+          installability: "review_only",
+          skillFamily: "auto_updates",
+          tags: ["clawhub", "updater"],
+        },
+        {
+          sourceUrl: "https://clawhub.ai/lura2/canvas",
+          name: "Canvas",
+          description: "A2UI host proof required.",
+          sourceProvider: "clawhub",
+          installability: "review_only",
+          skillFamily: "canvas_a2ui",
+          tags: ["clawhub", "canvas"],
+        },
+        {
+          sourceUrl: "https://clawhub.ai/matagul/desktop-control",
+          name: "Desktop Control",
+          description: "Rejected desktop control import.",
+          sourceProvider: "clawhub",
+          installability: "not_installable",
+          skillFamily: "desktop_control_high_risk",
+          tags: ["clawhub", "desktop"],
+        },
+        {
+          sourceUrl: "https://clawhub.ai/spclaudehome/skill-vetter",
+          name: "Skill Vetter",
+          description: "Native skill governance overlap.",
+          sourceProvider: "clawhub",
+          installability: "review_only",
+          skillFamily: "skill_vetting",
+          tags: ["clawhub", "vetting"],
+        },
+      ],
+    } as any);
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderLibrarySkills();
+    });
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("Auto Updater");
+    expect(text).toContain("clawhub · Reference only");
+    expect(text).toContain("Canvas");
+    expect(text).toContain("clawhub · Conditional install");
+    expect(text).toContain("Desktop Control");
+    expect(text).toContain("clawhub · Rejected");
+    expect(text).toContain("Skill Vetter");
+    expect(text).toContain("clawhub · Native overlap");
+  });
+});
+
 function renderCoworkTasks(): ReactTestRenderer {
   return create(
     <NativeRoutePages

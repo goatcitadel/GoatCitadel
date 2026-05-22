@@ -7,8 +7,10 @@ import * as cron from "./cron";
 import * as demo from "./demo";
 import * as durable from "./durable";
 import * as recipes from "./orchestration-recipes";
+import * as researchSearch from "./research-search";
 import * as sessions from "./sessions";
 import * as shellClient from "./shell-client";
+import * as updateScout from "./update-scout";
 import * as workspaces from "./workspaces";
 import {
   ApiRequestError,
@@ -334,7 +336,28 @@ describe("additional shared API wrappers", () => {
         method: "POST",
       },
     );
+    await expectCall(
+      recipes.draftAutomationRecipe({ taskDescription: "Review updates" }),
+      "/api/v1/orchestration/recipes/draft-automation",
+      {
+        method: "POST",
+      },
+    );
     await expectCall(recipes.fetchWorkflowRecipeTemplates(), "/api/v1/orchestration/recipes/templates");
+    await expectCall(
+      researchSearch.runResearchSearch({ query: "provider pricing", engines: ["google"] }),
+      "/api/v1/research/search",
+      {
+        method: "POST",
+      },
+    );
+    await expectCall(
+      updateScout.runUpdateScout({ sources: [{ sourceRef: "https://clawhub.ai/maximeprades/auto-updater" }] }),
+      "/api/v1/update-scout/reports",
+      {
+        method: "POST",
+      },
+    );
   });
 });
 

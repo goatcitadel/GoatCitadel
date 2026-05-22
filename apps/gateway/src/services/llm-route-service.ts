@@ -5,6 +5,7 @@ export const llmRouteMethods = [
   "generateImage",
   "getLlmConfigWithDetails",
   "getOpenAICodexOAuthStatus",
+  "getProviderAdvice",
   "listLlmModels",
   "listLlmProviders",
   "pollOpenAICodexOAuthDeviceFlow",

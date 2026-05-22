@@ -345,6 +345,68 @@ describe("llm routes", () => {
     });
   });
 
+  it("returns provider advice as an advisory no-mutation response", async () => {
+    const getProviderAdvice = vi.fn(() => ({
+      generatedAt: "2026-05-22T00:00:00.000Z",
+      preference: "low_cost",
+      candidates: [
+        {
+          providerId: "openai",
+          providerLabel: "OpenAI",
+          model: "gpt-5.4-mini",
+          configured: true,
+          estimatedCostUsd: 0.1,
+          costSource: "estimated",
+          fitScore: 0.8,
+          riskNotes: ["No immediate advisory risk noted."],
+          requiredKeys: [],
+        },
+      ],
+      advisoryOnly: true,
+      mutationPerformed: false,
+      warnings: ["Provider advice is advisory only; no provider settings or keys were changed."],
+    }));
+
+    app = Fastify();
+    app.decorate("services", {
+      llm: {
+        createChatCompletion: vi.fn(),
+        getLlmConfig: vi.fn(),
+        listLlmProviders: vi.fn(),
+        updateLlmConfig: vi.fn(),
+        listLlmModels: vi.fn(),
+        previewLlmModels: vi.fn(),
+        getProviderAdvice,
+      },
+    } as never);
+    await app.register(llmRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/llm/provider-advice",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      payload: JSON.stringify({
+        preference: "low_cost",
+        requireConfiguredKey: true,
+        maxCandidates: 2,
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(getProviderAdvice).toHaveBeenCalledWith({
+      preference: "low_cost",
+      requireConfiguredKey: true,
+      maxCandidates: 2,
+    });
+    expect(response.json()).toMatchObject({
+      advisoryOnly: true,
+      mutationPerformed: false,
+      candidates: [expect.objectContaining({ providerId: "openai" })],
+    });
+  });
+
   it("accepts image generation requests", async () => {
     const generateImage = vi.fn(async (request) => ({
       operation: "edit",

@@ -84,3 +84,22 @@ export interface WorkflowRecipeTemplateRecord {
 export interface WorkflowRecipeTemplatesResponse {
   items: WorkflowRecipeTemplateRecord[];
 }
+
+export interface AutomationRecipeDraftRequest {
+  taskDescription: string;
+  trigger?: string;
+  frequency?: string;
+  successCriteria?: string[];
+  constraints?: string[];
+  workspaceId?: string;
+}
+
+export interface AutomationRecipeDraftResponse extends WorkflowRecipePreviewResponse {
+  roiEstimate: {
+    timeSavedMinutesPerRun?: number;
+    confidence: number;
+    notes: string[];
+  };
+  proofChecklist: string[];
+  missingCapabilities: string[];
+}

@@ -17,6 +17,7 @@ import type {
   DurableRunRecord,
   ProactivePolicy,
   ProactiveActionRecord,
+  ProactiveExecutionClass,
   ProactiveOriginSurface,
   ProactiveReferenceRootRecord,
   ProactiveRunRecord,
@@ -212,6 +213,20 @@ function buildProactiveRealtimeLinks(input: {
     ...(input.durableRunId ? { runId: input.durableRunId } : {}),
     ...(input.taskId ? { taskId: input.taskId } : {}),
     ...(input.approvalId ? { approvalId: input.approvalId } : {}),
+  };
+}
+
+function resolveProactiveExecutionClass(mode: ChatProactiveMode): ProactiveExecutionClass {
+  return mode === "suggest" ? "prompted_notification" : "autonomous_durable";
+}
+
+function annotateProactiveActionExecutionClass(
+  action: ProactiveActionRecord,
+  mode: ChatProactiveMode,
+): ProactiveActionRecord {
+  return {
+    ...action,
+    executionClass: action.executionClass ?? resolveProactiveExecutionClass(mode),
   };
 }
 
@@ -512,6 +527,13 @@ export class ChatProactiveService {
     return mapProactiveRunRow(row);
   }
 
+  private readProactiveRunMode(runId: string): ChatProactiveMode {
+    const row = this.ctx.gatewaySql.prepare("SELECT mode FROM proactive_runs WHERE run_id = ?").get(runId) as
+      | { mode?: ChatProactiveMode }
+      | undefined;
+    return row?.mode ?? "auto_full";
+  }
+
   private readProactiveRunActor(runId: string): {
     operatorId: string;
     authActorId: string;
@@ -771,10 +793,11 @@ export class ChatProactiveService {
     if (!row) {
       throw new Error(`Proactive action ${actionId} not found.`);
     }
-    return mapProactiveActionRow(row);
+    return mapProactiveActionRow(row, this.readProactiveRunMode(row.run_id));
   }
 
   private listProactiveRunActions(runId: string): ProactiveActionRecord[] {
+    const mode = this.readProactiveRunMode(runId);
     const rows = toProactiveActionRows(
       this.ctx.gatewaySql
         .prepare(
@@ -787,7 +810,7 @@ export class ChatProactiveService {
         )
         .all(runId),
     );
-    return rows.map(mapProactiveActionRow);
+    return rows.map((row) => mapProactiveActionRow(row, mode));
   }
 
   private refreshProactiveRunSummary(
@@ -1294,6 +1317,7 @@ export class ChatProactiveService {
       return existing;
     }
     const createdAt = new Date().toISOString();
+    const executionClass = resolveProactiveExecutionClass(this.readProactiveRun(proactiveRunId).mode);
     for (const action of actions) {
       this.insertProactiveAction({
         actionId: randomUUID(),
@@ -1304,6 +1328,7 @@ export class ChatProactiveService {
         status: "suggested",
         triggerSource,
         originSurface,
+        executionClass,
         toolName: action.toolName,
         args: action.args,
         result: action.note
@@ -2017,6 +2042,7 @@ export class ChatProactiveService {
       linkedDurableRunId: durableRun.runId,
       confidence: 0,
       reasoningSummary: input.reason ?? `proactive tick (${source})`,
+      executionClass: resolveProactiveExecutionClass(prefs.proactiveMode),
       resumeMetadata:
         input.operatorId ||
         input.authActorId ||
@@ -2097,6 +2123,7 @@ export class ChatProactiveService {
 }
 
 function mapProactiveRunRow(row: ProactiveRunRow): ProactiveRunRecord {
+  const executionClass = resolveProactiveExecutionClass(row.mode);
   return {
     runId: row.run_id,
     sessionId: row.session_id,
@@ -2105,6 +2132,7 @@ function mapProactiveRunRow(row: ProactiveRunRow): ProactiveRunRecord {
     approvalId: row.approval_id ?? undefined,
     status: row.status,
     mode: row.mode,
+    executionClass,
     triggerSource: row.trigger_source ?? undefined,
     originSurface: row.origin_surface ?? undefined,
     confidence: Number(row.confidence || 0),
@@ -2117,15 +2145,19 @@ function mapProactiveRunRow(row: ProactiveRunRow): ProactiveRunRecord {
     resumeMetadata: row.resume_metadata_json
       ? safeJsonParse<Record<string, unknown>>(row.resume_metadata_json, {})
       : undefined,
-    suggestedActions: safeJsonParse<ProactiveActionRecord[]>(row.suggested_actions_json, []),
-    executedActions: safeJsonParse<ProactiveActionRecord[]>(row.executed_actions_json, []),
+    suggestedActions: safeJsonParse<ProactiveActionRecord[]>(row.suggested_actions_json, []).map((action) =>
+      annotateProactiveActionExecutionClass(action, row.mode),
+    ),
+    executedActions: safeJsonParse<ProactiveActionRecord[]>(row.executed_actions_json, []).map((action) =>
+      annotateProactiveActionExecutionClass(action, row.mode),
+    ),
     startedAt: row.started_at,
     finishedAt: row.finished_at ?? undefined,
     error: row.error ?? undefined,
   };
 }
 
-function mapProactiveActionRow(row: ProactiveActionRow): ProactiveActionRecord {
+function mapProactiveActionRow(row: ProactiveActionRow, mode?: ChatProactiveMode): ProactiveActionRecord {
   return {
     actionId: row.action_id,
     runId: row.run_id,
@@ -2137,6 +2169,7 @@ function mapProactiveActionRow(row: ProactiveActionRow): ProactiveActionRecord {
     status: row.status,
     triggerSource: row.trigger_source ?? undefined,
     originSurface: row.origin_surface ?? undefined,
+    executionClass: mode ? resolveProactiveExecutionClass(mode) : "autonomous_durable",
     toolName: row.tool_name ?? undefined,
     args: row.args_json ? safeJsonParse<Record<string, unknown>>(row.args_json, {}) : undefined,
     result: row.result_json ? safeJsonParse<Record<string, unknown>>(row.result_json, {}) : undefined,

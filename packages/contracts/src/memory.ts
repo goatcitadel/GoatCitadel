@@ -125,6 +125,116 @@ export interface ContextManifestDetail {
 
 export type MemoryItemStatus = "active" | "forgotten";
 export type MemoryItemLifecycleState = "active" | "expired" | "forgotten";
+export type StructuredMemoryScope = "global" | "workspace" | "session" | "run";
+export type StructuredMemoryStatus = "active" | "forgotten" | "superseded";
+export type StructuredMemoryAuthority = "operator" | "agent_proposed" | "trusted_lifecycle" | "imported_skill";
+
+export interface StructuredMemorySourceRef {
+  sourceType: "manual" | "memory_item" | "session" | "run" | "artifact" | "external";
+  sourceRef: string;
+  title?: string;
+}
+
+export interface StructuredMemoryBaseRecord {
+  id: string;
+  workspaceId: string;
+  scope: StructuredMemoryScope;
+  title: string;
+  status: StructuredMemoryStatus;
+  confidence: number;
+  sourceRefs: StructuredMemorySourceRef[];
+  metadata: Record<string, unknown>;
+  authority: StructuredMemoryAuthority;
+  createdAt: string;
+  updatedAt: string;
+  forgottenAt?: string;
+  supersededById?: string;
+}
+
+export interface MemoryEntityRecord extends StructuredMemoryBaseRecord {
+  entityType: string;
+  aliases: string[];
+  summary?: string;
+}
+
+export interface MemoryRelationRecord extends StructuredMemoryBaseRecord {
+  fromEntityId: string;
+  toEntityId: string;
+  relationType: string;
+  degradedReason?: string;
+}
+
+export interface MemoryDecisionRetrospective {
+  reviewedAt: string;
+  outcome: "unknown" | "validated" | "partially_validated" | "invalidated";
+  notes: string;
+  improvementCandidateId?: string;
+}
+
+export interface MemoryDecisionRecord extends StructuredMemoryBaseRecord {
+  decision: string;
+  alternatives: string[];
+  rationale: string;
+  expectedOutcome?: string;
+  reviewAt?: string;
+  retrospective?: MemoryDecisionRetrospective;
+  linkedEntityIds: string[];
+  linkedRelationIds: string[];
+  sessionId?: string;
+  runId?: string;
+  improvementCandidateId?: string;
+}
+
+export interface MemoryEntityInput {
+  workspaceId?: string;
+  scope?: StructuredMemoryScope;
+  title: string;
+  entityType?: string;
+  aliases?: string[];
+  summary?: string;
+  confidence?: number;
+  sourceRefs?: StructuredMemorySourceRef[];
+  metadata?: Record<string, unknown>;
+  authority?: StructuredMemoryAuthority;
+}
+
+export interface MemoryRelationInput {
+  workspaceId?: string;
+  scope?: StructuredMemoryScope;
+  title?: string;
+  fromEntityId: string;
+  toEntityId: string;
+  relationType: string;
+  confidence?: number;
+  sourceRefs?: StructuredMemorySourceRef[];
+  metadata?: Record<string, unknown>;
+  authority?: StructuredMemoryAuthority;
+}
+
+export interface MemoryDecisionInput {
+  workspaceId?: string;
+  scope?: StructuredMemoryScope;
+  title?: string;
+  decision: string;
+  alternatives?: string[];
+  rationale: string;
+  expectedOutcome?: string;
+  reviewAt?: string;
+  linkedEntityIds?: string[];
+  linkedRelationIds?: string[];
+  sessionId?: string;
+  runId?: string;
+  confidence?: number;
+  sourceRefs?: StructuredMemorySourceRef[];
+  metadata?: Record<string, unknown>;
+  authority?: StructuredMemoryAuthority;
+}
+
+export interface MemoryDecisionRetrospectiveInput {
+  outcome: MemoryDecisionRetrospective["outcome"];
+  notes: string;
+  improvementCandidateId?: string;
+}
 
 export interface MemoryItemRecord {
   itemId: string;
@@ -153,7 +263,7 @@ export interface MemoryLifecyclePatch {
 export interface MemoryChangeEvent {
   changeId: string;
   itemId: string;
-  changeType: "created" | "updated" | "forgotten" | "ttl_changed" | "pin_changed";
+  changeType: "created" | "updated" | "forgotten" | "ttl_changed" | "pin_changed" | "retrospective_added";
   actorId?: string;
   payload: Record<string, unknown>;
   createdAt: string;

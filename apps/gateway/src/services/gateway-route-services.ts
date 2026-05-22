@@ -134,6 +134,7 @@ import {
   type RealtimeEventsRoutePort,
   type RealtimeEventsRouteService,
 } from "./realtime-events-route-service.js";
+import { ResearchSearchRouteService, type ResearchSearchRoutePort } from "./research-search-broker-service.js";
 import { RuntimeLifecycleRouteService, type RuntimeLifecycleRoutePort } from "./runtime-lifecycle-route-service.js";
 import {
   createSessionsListRouteService,
@@ -154,6 +155,7 @@ import {
   type ToolsInvokeRouteService,
 } from "./tools-invoke-route-service.js";
 import { createToolsRouteService, type ToolsRoutePort, type ToolsRouteService } from "./tools-route-service.js";
+import { UpdateScoutRouteService, type UpdateScoutRoutePort } from "./update-scout-service.js";
 import { createVoiceRouteService, type VoiceRoutePort, type VoiceRouteService } from "./voice-route-service.js";
 import {
   createWorkspacesRouteService,
@@ -207,6 +209,7 @@ export interface GatewayRouteServices {
   orchestration: OrchestrationRouteService;
   promptPacks: PromptPacksRouteService;
   realtimeEvents: RealtimeEventsRouteService;
+  researchSearch: ResearchSearchRouteService;
   runtimeLifecycle: RuntimeLifecycleRouteService;
   secrets: SecretsRouteService;
   settings: SettingsRouteService;
@@ -215,6 +218,7 @@ export interface GatewayRouteServices {
   tasks: TasksRouteService;
   tools: ToolsRouteService;
   toolsInvoke: ToolsInvokeRouteService;
+  updateScout: UpdateScoutRouteService;
   voice: VoiceRouteService;
   workspaces: WorkspacesRouteService;
 }
@@ -266,6 +270,7 @@ export interface GatewayRouteServiceDependencies {
   orchestration: OrchestrationRoutePort;
   promptPacks: PromptPacksRoutePort;
   realtimeEvents: RealtimeEventsRoutePort;
+  researchSearch: ResearchSearchRoutePort;
   runtimeLifecycle: RuntimeLifecycleRoutePort;
   secrets: SecretsRoutePort;
   settings: SettingsRoutePort;
@@ -274,6 +279,7 @@ export interface GatewayRouteServiceDependencies {
   tasks: TasksRoutePort;
   tools: ToolsRoutePort;
   toolsInvoke: ToolsInvokeRoutePort;
+  updateScout: UpdateScoutRoutePort;
   voice: VoiceRoutePort;
   workspaces: WorkspacesRoutePort;
 }
@@ -326,6 +332,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     orchestration: new OrchestrationRouteService(deps.orchestration),
     promptPacks: new PromptPacksRouteService(deps.promptPacks),
     realtimeEvents: createRealtimeEventsRouteService(deps.realtimeEvents),
+    researchSearch: new ResearchSearchRouteService(deps.researchSearch),
     runtimeLifecycle: new RuntimeLifecycleRouteService(deps.runtimeLifecycle),
     secrets: createSecretsRouteService(deps.secrets),
     settings: createSettingsRouteService(deps.settings),
@@ -334,6 +341,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     tasks: new TasksRouteService(deps.tasks),
     tools: createToolsRouteService(deps.tools),
     toolsInvoke: createToolsInvokeRouteService(deps.toolsInvoke),
+    updateScout: new UpdateScoutRouteService(deps.updateScout),
     voice: createVoiceRouteService(deps.voice),
     workspaces: createWorkspacesRouteService(deps.workspaces),
   };

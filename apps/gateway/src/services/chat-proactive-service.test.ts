@@ -606,10 +606,12 @@ describe("ChatProactiveService", () => {
     });
 
     const started = await service.triggerChatSessionProactive(state.session.sessionId, { source: "manual" });
+    expect(started.executionClass).toBe("prompted_notification");
     await service.executeDurableProactiveTickRun(state.durableRuns.get(started.linkedDurableRunId!)!);
 
     const completed = readRun(state, started.runId);
     const actions = actionsForRun(state, started.runId);
+    const status = service.getChatSessionProactiveStatus(state.session.sessionId);
     expect(completed).toMatchObject({
       status: "suggested",
       linkedTaskId: undefined,
@@ -623,6 +625,10 @@ describe("ChatProactiveService", () => {
         result: { note: "Consider asking Cowork for a plan." },
       }),
     ]);
+    expect(status.lastRun).toMatchObject({
+      executionClass: "prompted_notification",
+      suggestedActions: [expect.objectContaining({ executionClass: "prompted_notification" })],
+    });
     expect(publishRealtime).toHaveBeenCalledWith(
       "proactive_suggestion_created",
       "chat",
@@ -681,6 +687,7 @@ describe("ChatProactiveService", () => {
     });
 
     const started = await service.triggerChatSessionProactive(state.session.sessionId, { source: "manual" });
+    expect(started.executionClass).toBe("autonomous_durable");
     await service.executeDurableProactiveTickRun(state.durableRuns.get(started.linkedDurableRunId!)!);
 
     const completed = readRun(state, started.runId);

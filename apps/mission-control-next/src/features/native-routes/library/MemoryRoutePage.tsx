@@ -76,6 +76,16 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   const memoryCanMutate = memoryAdminState === "enabled";
   const maintenanceControlsReady = Boolean(memory.data?.maintenanceEnabled && memory.data.maintenanceDurableReady);
   const memoryWriteEnvelopes = evidence.items.filter((item) => item.eventKind === "memory_write");
+  const reviewableDecisions = useMemo(() => {
+    const now = Date.now();
+    return (memory.data?.memoryDecisions ?? []).filter((decision) => {
+      if (decision.status !== "active" || !decision.reviewAt || decision.retrospective) {
+        return false;
+      }
+      const reviewAt = Date.parse(decision.reviewAt);
+      return Number.isFinite(reviewAt) && reviewAt <= now;
+    });
+  }, [memory.data?.memoryDecisions]);
 
   useEffect(() => {
     let cancelled = false;
@@ -383,6 +393,111 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               Refresh evidence
             </button>
           </div>
+        </NativeCard>
+      </NativeGrid>
+      <NativeGrid>
+        <NativeCard
+          title="Memory entities"
+          subtitle="Typed memory records owned by MemoryLifecycleService and governed by the write gate."
+          stats={[
+            { label: "Entities", value: String(memory.data?.memoryEntities.length ?? 0) },
+            {
+              label: "Active",
+              value: String(memory.data?.memoryEntities.filter((item) => item.status === "active").length ?? 0),
+            },
+          ]}
+        >
+          <SectionTruthNotice message={sectionErrors?.memoryEntities ?? null} />
+          {(memory.data?.memoryEntities.length ?? 0) > 0 ? (
+            <ul className="mc-next-approvals-compact-list">
+              {memory.data?.memoryEntities.slice(0, 8).map((entity) => (
+                <li key={entity.id}>
+                  <strong>{entity.title}</strong>
+                  {" · "}
+                  {entity.entityType ?? entity.scope}
+                  {" · "}
+                  {entity.status}
+                  <p>{entity.summary ?? `${entity.sourceRefs.length} source refs · ${entity.confidence} confidence`}</p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mc-next-directory-empty">
+              {memoryCanMutate ? "No typed entities have been recorded yet." : "Entity truth is currently gated."}
+            </p>
+          )}
+        </NativeCard>
+        <NativeCard
+          title="Relations"
+          subtitle="Entity links degrade visibly when an endpoint is forgotten or superseded."
+          stats={[
+            { label: "Relations", value: String(memory.data?.memoryRelations.length ?? 0) },
+            {
+              label: "Degraded",
+              value: String(memory.data?.memoryRelations.filter((item) => item.status !== "active").length ?? 0),
+            },
+          ]}
+        >
+          <SectionTruthNotice message={sectionErrors?.memoryRelations ?? null} />
+          {(memory.data?.memoryRelations.length ?? 0) > 0 ? (
+            <ul className="mc-next-approvals-compact-list">
+              {memory.data?.memoryRelations.slice(0, 8).map((relation) => (
+                <li key={relation.id}>
+                  <strong>{relation.title}</strong>
+                  {" · "}
+                  {relation.relationType}
+                  {" · "}
+                  {relation.status}
+                  <p>
+                    {shortId(relation.fromEntityId)} to {shortId(relation.toEntityId)} · {relation.confidence}{" "}
+                    confidence
+                  </p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mc-next-directory-empty">
+              {memoryCanMutate ? "No typed relations have been recorded yet." : "Relation truth is currently gated."}
+            </p>
+          )}
+        </NativeCard>
+        <NativeCard
+          title="Decision journal"
+          subtitle="Decisions carry alternatives, rationale, review timing, and retrospective evidence."
+          stats={[
+            { label: "Decisions", value: String(memory.data?.memoryDecisions.length ?? 0) },
+            { label: "Due", value: String(reviewableDecisions.length) },
+          ]}
+        >
+          <SectionTruthNotice message={sectionErrors?.memoryDecisions ?? null} />
+          {(memory.data?.memoryDecisions.length ?? 0) > 0 ? (
+            <ul className="mc-next-approvals-compact-list">
+              {memory.data?.memoryDecisions.slice(0, 8).map((decision) => (
+                <li key={decision.id}>
+                  <strong>{decision.title}</strong>
+                  {" · "}
+                  {decision.status}
+                  {" · "}
+                  {decision.retrospective ? "reviewed" : formatMaybeDateTime(decision.reviewAt)}
+                  <p>{decision.rationale}</p>
+                  {!decision.retrospective && decision.reviewAt ? (
+                    <button
+                      type="button"
+                      className="gc-button subtle"
+                      disabled={!memoryCanMutate || memory.busyKey === `decision:${decision.id}:retrospective`}
+                      onClick={() => void memory.reviewDecision(decision.id)}
+                    >
+                      Record review
+                    </button>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mc-next-directory-empty">
+              {memoryCanMutate ? "No decision records have been recorded yet." : "Decision truth is currently gated."}
+            </p>
+          )}
         </NativeCard>
       </NativeGrid>
       <NativeGrid>

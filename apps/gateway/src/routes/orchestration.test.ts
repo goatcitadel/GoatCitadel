@@ -233,6 +233,66 @@ describe("orchestration routes", () => {
     expect(response.json()).toMatchObject({ plan: { planId: "recipe-weekly-review-abc" } });
   });
 
+  it("drafts automation recipes as advisory previews without creating plans", async () => {
+    const draftAutomationRecipe = vi.fn(() => ({
+      recipe: {
+        name: "Automation: Review updates",
+        goal: "Review updates.",
+        process: "sequential",
+        agents: [{ id: "automation-designer", role: "Automation Designer" }],
+        steps: [{ id: "scope-and-triggers", title: "Scope", agent: "automation-designer", prompt: "Review." }],
+        scheduleIntent: "weekly",
+      },
+      plan: { planId: "recipe-automation-review-updates" },
+      warnings: ["preview only"],
+      requiredApprovals: ["scope-and-triggers"],
+      missingTools: [],
+      missingSkills: ["automation-workflows"],
+      missingCapabilities: ["automation-workflows"],
+      estimatedLimits: { maxIterations: 2, maxRuntimeMinutes: 20, maxCostUsd: 1 },
+      roiEstimate: {
+        timeSavedMinutesPerRun: 15,
+        confidence: 0.72,
+        notes: ["advisory"],
+      },
+      proofChecklist: ["Run once manually."],
+    }));
+    const createPlanFromRecipe = vi.fn();
+    app = Fastify();
+    app.decorate("services", { orchestration: { createPlanFromRecipe, draftAutomationRecipe } } as never);
+    app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
+    await app.register(orchestrationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/orchestration/recipes/draft-automation",
+      payload: {
+        taskDescription: "Review updates.",
+        trigger: "when sources change",
+        frequency: "weekly",
+        successCriteria: ["report"],
+        constraints: ["no cron creation"],
+        workspaceId: "default",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(draftAutomationRecipe).toHaveBeenCalledWith({
+      taskDescription: "Review updates.",
+      trigger: "when sources change",
+      frequency: "weekly",
+      successCriteria: ["report"],
+      constraints: ["no cron creation"],
+      workspaceId: "default",
+    });
+    expect(createPlanFromRecipe).not.toHaveBeenCalled();
+    expect(response.json()).toMatchObject({
+      recipe: { scheduleIntent: "weekly" },
+      missingCapabilities: ["automation-workflows"],
+      proofChecklist: ["Run once manually."],
+    });
+  });
+
   it("creates recipe plans through the existing plan creation route service", async () => {
     const createPlanFromRecipe = vi.fn(async () => ({
       recipe: {

@@ -3,6 +3,8 @@ import type {
   OrchestrationRun,
   OrchestrationRunPolicyContext,
   MemoryContextPack,
+  AutomationRecipeDraftRequest,
+  AutomationRecipeDraftResponse,
   WorkflowRecipePlanCreateRequest,
   WorkflowRecipePlanCreateResponse,
   WorkflowRecipePreviewRequest,
@@ -20,6 +22,7 @@ export interface OrchestrationRoutePort {
     input: WorkflowRecipePlanCreateRequest,
     policyContext?: OrchestrationRunPolicyContext,
   ): Promise<WorkflowRecipePlanCreateResponse>;
+  draftAutomationRecipe(input: AutomationRecipeDraftRequest): AutomationRecipeDraftResponse;
   listRecipeTemplates(): WorkflowRecipeTemplatesResponse;
   previewRecipe(input: WorkflowRecipePreviewRequest): WorkflowRecipePreviewResponse;
   runOrchestrationPlan(planId: string, policyContext?: OrchestrationRunPolicyContext): Promise<OrchestrationRun>;
@@ -67,6 +70,10 @@ export class OrchestrationRouteService {
 
   public listRecipeTemplates(): WorkflowRecipeTemplatesResponse {
     return this.orchestration.listRecipeTemplates();
+  }
+
+  public draftAutomationRecipe(input: AutomationRecipeDraftRequest): AutomationRecipeDraftResponse {
+    return this.orchestration.draftAutomationRecipe(input);
   }
 
   public async runPlan(planId: string, policyContext?: OrchestrationRunPolicyContext): Promise<OrchestrationRun> {

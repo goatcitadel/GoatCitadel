@@ -6,7 +6,9 @@ import { createHooksRoutePort } from "./hooks-route-service.js";
 import { createLlamaCppRoutePort } from "./llama-cpp-route-service.js";
 import { createMeshRoutePort } from "./mesh-route-service.js";
 import { createNpuRoutePort } from "./npu-route-service.js";
+import { ResearchSearchBrokerService } from "./research-search-broker-service.js";
 import { createSessionsListRoutePort } from "./sessions-list-route-service.js";
+import { UpdateScoutService } from "./update-scout-service.js";
 import { WorkflowRecipeService } from "./workflow-recipe-service.js";
 import * as onboardingStateService from "./onboarding-state-service.js";
 import * as settingsAuthService from "./settings-auth-service.js";
@@ -42,8 +44,10 @@ export function composeRuntimeAdminRouteDependencies(
   | "orchestration"
   | "promptPacks"
   | "realtimeEvents"
+  | "researchSearch"
   | "runtimeLifecycle"
   | "sessionsList"
+  | "updateScout"
 > {
   const settingsRuntimeDeps = createSettingsRuntimeDependenciesForGateway(gateway);
   const settingsAuthDeps = createSettingsAuthRuntimeDependenciesForGateway(gateway);
@@ -59,6 +63,8 @@ export function composeRuntimeAdminRouteDependencies(
     },
     createOrchestrationPlan: (plan, policyContext) => gateway.createOrchestrationPlan(plan, policyContext),
   });
+  const researchSearch = new ResearchSearchBrokerService();
+  const updateScout = new UpdateScoutService();
   const warnedOutsideRootPathFingerprints = new Set<string>();
 
   return {
@@ -177,6 +183,7 @@ export function composeRuntimeAdminRouteDependencies(
     orchestration: {
       createOrchestrationPlan: (plan, policyContext) => gateway.createOrchestrationPlan(plan, policyContext),
       createPlanFromRecipe: (input, policyContext) => workflowRecipes.createPlanFromRecipe(input, policyContext),
+      draftAutomationRecipe: (input) => workflowRecipes.draftAutomationRecipe(input),
       listRecipeTemplates: () => ({ items: workflowRecipes.listTemplates() }),
       previewRecipe: (input) => workflowRecipes.previewRecipe(input),
       runOrchestrationPlan: (planId, policyContext) => gateway.runOrchestrationPlan(planId, policyContext),
@@ -190,6 +197,9 @@ export function composeRuntimeAdminRouteDependencies(
     },
     promptPacks: gateway.promptPackService,
     realtimeEvents: gateway.realtimeEventService,
+    researchSearch: {
+      search: (input) => researchSearch.search(input),
+    },
     runtimeLifecycle: {
       getRuntimeLifecycle: (input) => gateway.runtimeLifecycleReadService.getRuntimeLifecycle(input),
       getTranscript: (sessionId) => gateway.getTranscript(sessionId),
@@ -200,5 +210,8 @@ export function composeRuntimeAdminRouteDependencies(
       getSessionSummary: (sessionId) => gateway.getSessionSummary(sessionId),
       listSessionTimeline: (sessionId, limit) => gateway.listSessionTimeline(sessionId, limit),
     }),
+    updateScout: {
+      scout: (input) => updateScout.scout(input),
+    },
   };
 }

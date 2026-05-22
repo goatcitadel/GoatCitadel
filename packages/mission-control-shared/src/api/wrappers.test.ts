@@ -252,6 +252,52 @@ describe("shared API wrappers", () => {
     });
     await expectCall(memory.fetchMemoryItemHistory("item/1", 3000), "/api/v1/memory/items/item%2F1/history?limit=2000");
     await expectCall(
+      memory.fetchMemoryEntities({ workspaceId: "workspace 1", status: "active", query: "project", limit: 999 }),
+      "/api/v1/memory/entities?workspaceId=workspace+1&status=active&query=project&limit=500",
+    );
+    await expectCall(memory.createMemoryEntity({ title: "Project" } as never), "/api/v1/memory/entities", {
+      method: "POST",
+    });
+    await expectCall(memory.forgetMemoryEntity("entity/1"), "/api/v1/memory/entities/entity%2F1/forget", {
+      method: "POST",
+    });
+    await expectCall(
+      memory.fetchMemoryRelations({ workspaceId: "workspace", status: "all", entityId: "entity/1", limit: 7 }),
+      "/api/v1/memory/relations?workspaceId=workspace&status=all&limit=7&entityId=entity%2F1",
+    );
+    await expectCall(
+      memory.createMemoryRelation({ fromEntityId: "a", toEntityId: "b", relationType: "uses" }),
+      "/api/v1/memory/relations",
+      {
+        method: "POST",
+      },
+    );
+    await expectCall(
+      memory.fetchMemoryDecisions({ workspaceId: "workspace", dueForReview: false, limit: 3 }),
+      "/api/v1/memory/decisions?workspaceId=workspace&limit=3&dueForReview=false",
+    );
+    await expectCall(
+      memory.createMemoryDecision({ decision: "Ship it", rationale: "Enough proof." }),
+      "/api/v1/memory/decisions",
+      {
+        method: "POST",
+      },
+    );
+    await expectCall(
+      memory.addMemoryDecisionRetrospective("decision/1", { outcome: "validated", notes: "Worked." }),
+      "/api/v1/memory/decisions/decision%2F1/retrospective",
+      {
+        method: "POST",
+      },
+    );
+    await expectCall(memory.forgetMemoryDecision("decision/1"), "/api/v1/memory/decisions/decision%2F1/forget", {
+      method: "POST",
+    });
+    await expectCall(
+      memory.fetchStructuredMemoryHistory("decision", "decision/1", 999),
+      "/api/v1/memory/structured/decision/decision%2F1/history?limit=500",
+    );
+    await expectCall(
       memory.fetchMemoryMaintenancePolicy("workspace 1"),
       "/api/v1/memory/maintenance/policy?workspaceId=workspace%201",
     );
@@ -559,6 +605,13 @@ describe("shared API wrappers", () => {
     await expectCall(platform.fetchLlmConfig(), "/api/v1/llm/config");
     await expectCall(platform.fetchLlmModels("openai/codex"), "/api/v1/llm/models?providerId=openai%2Fcodex");
     await expectCall(platform.fetchLlmModels(), "/api/v1/llm/models");
+    await expectCall(
+      platform.fetchLlmProviderAdvice({ preference: "low_cost", maxCandidates: 2 }),
+      "/api/v1/llm/provider-advice",
+      {
+        method: "POST",
+      },
+    );
     await expectCall(platform.fetchAssemblyRuns(25), "/api/v1/assembly/runs?limit=25");
     await expectCall(platform.createAssemblyRun({} as never), "/api/v1/assembly/runs", { method: "POST" });
     await expectCall(platform.fetchAssemblyRunDetail("run/1"), "/api/v1/assembly/runs/run%2F1");

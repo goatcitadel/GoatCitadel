@@ -4,6 +4,8 @@ import type {
   WorkflowRecipePreviewRequest,
   WorkflowRecipePreviewResponse,
   WorkflowRecipeTemplatesResponse,
+  AutomationRecipeDraftRequest,
+  AutomationRecipeDraftResponse,
 } from "@goatcitadel/contracts";
 import { request } from "./client-core.js";
 
@@ -27,4 +29,13 @@ export async function createWorkflowRecipePlan(
 
 export async function fetchWorkflowRecipeTemplates(): Promise<WorkflowRecipeTemplatesResponse> {
   return request<WorkflowRecipeTemplatesResponse>("/api/v1/orchestration/recipes/templates");
+}
+
+export async function draftAutomationRecipe(
+  input: AutomationRecipeDraftRequest,
+): Promise<AutomationRecipeDraftResponse> {
+  return request<AutomationRecipeDraftResponse>("/api/v1/orchestration/recipes/draft-automation", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }

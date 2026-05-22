@@ -96,6 +96,32 @@ limits:
     expect(response.run.planId).toBe(response.plan.planId);
     expect(response.warnings.join(" ")).toContain("orchestration plan only");
   });
+
+  it("drafts advisory automation recipes without creating cron jobs or runs", () => {
+    const createOrchestrationPlan = vi.fn();
+    const service = createService(createOrchestrationPlan);
+
+    const draft = service.draftAutomationRecipe({
+      taskDescription: "Review ClawHub skills for native GoatCitadel overlap",
+      trigger: "When a source list changes",
+      frequency: "weekly",
+      successCriteria: ["Report new ideas", "List proof lanes"],
+      constraints: ["No raw skill installs", "No cron creation"],
+      workspaceId: "goatcitadel",
+    });
+
+    expect(createOrchestrationPlan).not.toHaveBeenCalled();
+    expect(draft.recipe).toMatchObject({
+      process: "sequential",
+      scheduleIntent: "weekly · When a source list changes",
+      memory: ["workspace:goatcitadel"],
+      approval: { mode: "before_each_step" },
+    });
+    expect(draft.requiredApprovals).toEqual(["scope-and-triggers", "proof-plan"]);
+    expect(draft.roiEstimate.notes.join(" ")).toContain("does not create an automation");
+    expect(draft.proofChecklist.join(" ")).toContain("Only then create or enable");
+    expect(draft.missingCapabilities).toContain("automation-workflows");
+  });
 });
 
 function createService(createOrchestrationPlan = vi.fn()) {

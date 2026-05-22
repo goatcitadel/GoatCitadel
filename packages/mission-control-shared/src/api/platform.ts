@@ -25,6 +25,8 @@ import type {
   EvidenceEnvelope,
   EvidenceEnvelopeListQuery,
   LlmModelDiscoverySource,
+  LlmProviderAdviceRequest,
+  LlmProviderAdviceResponse,
   LlmProviderConfig,
   LlmProviderRequestConfig,
   LlamaCppAdvisorRecommendation,
@@ -309,6 +311,13 @@ export async function fetchLlmModels(providerId?: string): Promise<{
 }> {
   const query = providerId ? `?providerId=${encodeURIComponent(providerId)}` : "";
   return request(`/api/v1/llm/models${query}`);
+}
+
+export async function fetchLlmProviderAdvice(input: LlmProviderAdviceRequest = {}): Promise<LlmProviderAdviceResponse> {
+  return request<LlmProviderAdviceResponse>("/api/v1/llm/provider-advice", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function fetchAssemblyRuns(limit = 50): Promise<{ items: AssemblyRunRecord[] }> {

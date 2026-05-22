@@ -1,4 +1,5 @@
 export type ProactiveMode = "off" | "suggest" | "auto_safe" | "auto_full";
+export type ProactiveExecutionClass = "prompted_notification" | "autonomous_durable";
 export type ProactiveTriggerSource = "scheduler" | "manual" | "chat" | "approval_resume";
 export type ProactiveOriginSurface = "chat" | "cowork" | "code";
 export type ProactiveStopReason =
@@ -26,13 +27,7 @@ export interface ProactivePolicy {
   updatedAt: string;
 }
 
-export type ProactiveRunStatus =
-  | "running"
-  | "no_action"
-  | "suggested"
-  | "executed"
-  | "blocked"
-  | "failed";
+export type ProactiveRunStatus = "running" | "no_action" | "suggested" | "executed" | "blocked" | "failed";
 
 export type ProactiveActionKind = "tool" | "delegate" | "note";
 
@@ -53,6 +48,7 @@ export interface ProactiveActionRecord {
   status: "suggested" | "executed" | "blocked" | "failed";
   triggerSource?: ProactiveTriggerSource;
   originSurface?: ProactiveOriginSurface;
+  executionClass?: ProactiveExecutionClass;
   toolName?: string;
   args?: Record<string, unknown>;
   result?: Record<string, unknown>;
@@ -70,6 +66,7 @@ export interface ProactiveRunRecord {
   approvalId?: string;
   status: ProactiveRunStatus;
   mode: ProactiveMode;
+  executionClass?: ProactiveExecutionClass;
   triggerSource?: ProactiveTriggerSource;
   originSurface?: ProactiveOriginSurface;
   confidence: number;

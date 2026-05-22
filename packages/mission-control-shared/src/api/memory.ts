@@ -4,6 +4,11 @@ import type {
   EmbeddingQueryInput,
   MemoryChangeEvent,
   MemoryContextPack,
+  MemoryDecisionInput,
+  MemoryDecisionRecord,
+  MemoryDecisionRetrospectiveInput,
+  MemoryEntityInput,
+  MemoryEntityRecord,
   MemoryItemRecord,
   MemoryLifecyclePatch,
   MemoryMaintenancePolicyPatchInput,
@@ -13,6 +18,8 @@ import type {
   MemoryMaintenanceRunNowInput,
   MemoryMaintenanceRunRecord,
   MemoryMaintenanceStatusRecord,
+  MemoryRelationInput,
+  MemoryRelationRecord,
   MemoryQmdStatsResponse,
   MemorySearchQuery,
   MemoryWriteInput,
@@ -234,4 +241,103 @@ export async function forgetMemory(input: {
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export async function fetchMemoryEntities(input?: {
+  workspaceId?: string;
+  status?: "active" | "forgotten" | "superseded" | "all";
+  query?: string;
+  limit?: number;
+}): Promise<{ items: MemoryEntityRecord[] }> {
+  const params = buildStructuredMemoryParams(input);
+  return request<{ items: MemoryEntityRecord[] }>(`/api/v1/memory/entities?${params.toString()}`);
+}
+
+export async function createMemoryEntity(input: MemoryEntityInput): Promise<MemoryEntityRecord> {
+  return request<MemoryEntityRecord>("/api/v1/memory/entities", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function forgetMemoryEntity(entityId: string): Promise<MemoryEntityRecord> {
+  return request<MemoryEntityRecord>(`/api/v1/memory/entities/${encodeURIComponent(entityId)}/forget`, {
+    method: "POST",
+  });
+}
+
+export async function fetchMemoryRelations(input?: {
+  workspaceId?: string;
+  status?: "active" | "forgotten" | "superseded" | "all";
+  entityId?: string;
+  limit?: number;
+}): Promise<{ items: MemoryRelationRecord[] }> {
+  const params = buildStructuredMemoryParams(input);
+  if (input?.entityId) params.set("entityId", input.entityId);
+  return request<{ items: MemoryRelationRecord[] }>(`/api/v1/memory/relations?${params.toString()}`);
+}
+
+export async function createMemoryRelation(input: MemoryRelationInput): Promise<MemoryRelationRecord> {
+  return request<MemoryRelationRecord>("/api/v1/memory/relations", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchMemoryDecisions(input?: {
+  workspaceId?: string;
+  status?: "active" | "forgotten" | "superseded" | "all";
+  dueForReview?: boolean;
+  limit?: number;
+}): Promise<{ items: MemoryDecisionRecord[] }> {
+  const params = buildStructuredMemoryParams(input);
+  if (input?.dueForReview !== undefined) params.set("dueForReview", String(input.dueForReview));
+  return request<{ items: MemoryDecisionRecord[] }>(`/api/v1/memory/decisions?${params.toString()}`);
+}
+
+export async function createMemoryDecision(input: MemoryDecisionInput): Promise<MemoryDecisionRecord> {
+  return request<MemoryDecisionRecord>("/api/v1/memory/decisions", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function addMemoryDecisionRetrospective(
+  decisionId: string,
+  input: MemoryDecisionRetrospectiveInput,
+): Promise<MemoryDecisionRecord> {
+  return request<MemoryDecisionRecord>(`/api/v1/memory/decisions/${encodeURIComponent(decisionId)}/retrospective`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function forgetMemoryDecision(decisionId: string): Promise<MemoryDecisionRecord> {
+  return request<MemoryDecisionRecord>(`/api/v1/memory/decisions/${encodeURIComponent(decisionId)}/forget`, {
+    method: "POST",
+  });
+}
+
+export async function fetchStructuredMemoryHistory(
+  kind: "entity" | "relation" | "decision",
+  id: string,
+  limit = 100,
+): Promise<{ items: MemoryChangeEvent[] }> {
+  return request<{ items: MemoryChangeEvent[] }>(
+    `/api/v1/memory/structured/${kind}/${encodeURIComponent(id)}/history?limit=${Math.max(1, Math.min(limit, 500))}`,
+  );
+}
+
+function buildStructuredMemoryParams(input?: {
+  workspaceId?: string;
+  status?: "active" | "forgotten" | "superseded" | "all";
+  query?: string;
+  limit?: number;
+}): URLSearchParams {
+  const params = new URLSearchParams();
+  if (input?.workspaceId) params.set("workspaceId", input.workspaceId);
+  if (input?.status) params.set("status", input.status);
+  if (input?.query) params.set("query", input.query);
+  params.set("limit", String(Math.max(1, Math.min(input?.limit ?? 100, 500))));
+  return params;
 }

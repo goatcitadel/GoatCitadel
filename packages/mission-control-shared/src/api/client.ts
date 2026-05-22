@@ -557,8 +557,14 @@ export type {
 } from "./improvement.js";
 export {
   acceptMemoryMaintenanceRecommendation,
+  addMemoryDecisionRetrospective,
   composeMemoryContext,
+  createMemoryDecision,
+  createMemoryEntity,
+  createMemoryRelation,
   fetchMemoryContext,
+  fetchMemoryDecisions,
+  fetchMemoryEntities,
   fetchMemoryFiles,
   fetchMemoryItemHistory,
   fetchMemoryItems,
@@ -568,7 +574,11 @@ export {
   fetchMemoryMaintenanceRuns,
   fetchMemoryMaintenanceStatus,
   fetchMemoryQmdStats,
+  fetchMemoryRelations,
+  fetchStructuredMemoryHistory,
   forgetMemory,
+  forgetMemoryDecision,
+  forgetMemoryEntity,
   forgetMemoryItem,
   knowledgeDocsIngest,
   knowledgeEmbeddingsIndex,
@@ -628,6 +638,7 @@ export {
 } from "./durable.js";
 export {
   createWorkflowRecipePlan,
+  draftAutomationRecipe,
   fetchWorkflowRecipeTemplates,
   previewWorkflowRecipe,
 } from "./orchestration-recipes.js";
@@ -724,6 +735,7 @@ export {
   fetchInstalledAddons,
   fetchLlmConfig,
   fetchLlmModels,
+  fetchLlmProviderAdvice,
   fetchOpenAICodexOAuthStatus,
   fetchMeshLeases,
   fetchMeshNodes,
@@ -767,6 +779,8 @@ export {
   uninstallAddon,
   updateAddon,
 } from "./platform.js";
+export { runResearchSearch } from "./research-search.js";
+export { runUpdateScout } from "./update-scout.js";
 export {
   fetchVoiceRuntimeStatus,
   fetchVoiceStatus,

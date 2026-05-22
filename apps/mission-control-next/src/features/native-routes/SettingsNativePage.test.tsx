@@ -18,6 +18,26 @@ const mocks = vi.hoisted(() => ({
       providerConfigs: [],
     },
   })),
+  fetchLlmProviderAdvice: vi.fn(async () => ({
+    generatedAt: "2026-05-22T00:00:00.000Z",
+    preference: "low_cost",
+    candidates: [
+      {
+        providerId: "openai",
+        providerLabel: "OpenAI",
+        model: "gpt-5.4-mini",
+        configured: true,
+        estimatedCostUsd: 0.1,
+        costSource: "estimated",
+        fitScore: 0.82,
+        riskNotes: ["No immediate advisory risk noted."],
+        requiredKeys: [],
+      },
+    ],
+    advisoryOnly: true,
+    mutationPerformed: false,
+    warnings: ["Provider advice is advisory only; no provider settings or keys were changed."],
+  })),
   fetchDeviceAccessGrants: vi.fn(async (): Promise<DeviceAccessGrantListResponse> => ({ items: [] })),
   fetchToolCatalog: vi.fn(async () => ({
     items: [
@@ -492,6 +512,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     deleteProviderSecret: mocks.deleteProviderSecret,
     fetchProviderSecretStatus: mocks.fetchProviderSecretStatus,
     fetchOpenAICodexOAuthStatus: mocks.fetchOpenAICodexOAuthStatus,
+    fetchLlmProviderAdvice: mocks.fetchLlmProviderAdvice,
     fetchSettings: mocks.fetchSettings,
     fetchToolCatalog: mocks.fetchToolCatalog,
     fetchToolGrants: mocks.fetchToolGrants,
@@ -1927,6 +1948,33 @@ describe("SettingsNativePage tools", () => {
 });
 
 describe("SettingsNativePage providers", () => {
+  it("loads provider advice without mutating provider settings", async () => {
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderPage("providers");
+    });
+    await flushAsyncUpdates();
+
+    expect(collectText(renderer!.root)).toContain("Provider advice");
+    expect(collectText(renderer!.root)).toContain("without changing settings");
+
+    await act(async () => {
+      findButton(renderer!.root, "Load advice").props.onClick();
+    });
+    await flushAsyncUpdates();
+
+    const text = collectText(renderer!.root);
+    expect(mocks.fetchLlmProviderAdvice).toHaveBeenCalledWith({
+      preference: "balanced",
+      taskHint: "general GoatCitadel chat, code, and orchestration routing",
+      maxCandidates: 5,
+    });
+    expect(text).toContain("OpenAI");
+    expect(text).toContain("gpt-5.4-mini");
+    expect(text).toContain("no provider settings or keys were changed");
+  });
+
   it("renders onboarding, budget, and unknown sections without silently falling through to General", async () => {
     let renderer: ReactTestRenderer | null = null;
 

@@ -23,8 +23,20 @@ Marketplace discovery merges:
 
 - `agentskill.sh`
 - `skillsmp.com`
+- reviewed ClawHub sources as native-overlap catalog records
 
 with equal source priority and explicit provenance.
+
+## Native Overlap Dispositions
+
+Reviewed ClawHub sources are not imported as raw callable skills when GoatCitadel already has a native owner. Mission Control Next must show the operator-facing disposition plainly:
+
+- `Native overlap`: use the GoatCitadel owner instead of importing the listing.
+- `Reference only`: keep as inspiration or docs input.
+- `Conditional install`: install only after validation, provenance review, and explicit operator action.
+- `Rejected`: do not install; route the idea to a future governed capability design if still useful.
+
+Current ClawHub defaults are documented in `docs/CLAW_HUB_NATIVE_CAPABILITY_GUIDANCE.md`.
 
 ## Intake Workflow
 

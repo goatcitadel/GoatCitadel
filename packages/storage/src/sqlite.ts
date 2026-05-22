@@ -932,6 +932,11 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "code_mode_run_status_listing_indexes",
     up: ensureCodeModeRunStatusListingIndexes,
   },
+  {
+    version: 95,
+    name: "structured_memory_decision_journal_schema",
+    up: createStructuredMemoryDecisionJournalSchema,
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -4843,6 +4848,108 @@ function createTranscriptOutboxSchema(db: DatabaseSync): void {
       ON transcript_outbox(delivered_at, enqueued_at ASC, event_id ASC);
     CREATE INDEX IF NOT EXISTS idx_transcript_outbox_session_pending
       ON transcript_outbox(session_id, delivered_at, enqueued_at ASC, event_id ASC);
+  `);
+}
+
+function createStructuredMemoryDecisionJournalSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_entities (
+      entity_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      title TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      aliases_json TEXT NOT NULL,
+      summary TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      confidence REAL NOT NULL DEFAULT 0.5,
+      source_refs_json TEXT NOT NULL,
+      metadata_json TEXT NOT NULL,
+      authority TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      forgotten_at TEXT,
+      superseded_by_id TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_memory_entities_workspace_status
+      ON memory_entities(workspace_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_memory_entities_type
+      ON memory_entities(entity_type, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS memory_relations (
+      relation_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      title TEXT NOT NULL,
+      from_entity_id TEXT NOT NULL,
+      to_entity_id TEXT NOT NULL,
+      relation_type TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      confidence REAL NOT NULL DEFAULT 0.5,
+      source_refs_json TEXT NOT NULL,
+      metadata_json TEXT NOT NULL,
+      authority TEXT NOT NULL,
+      degraded_reason TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      forgotten_at TEXT,
+      superseded_by_id TEXT,
+      FOREIGN KEY(from_entity_id) REFERENCES memory_entities(entity_id) ON DELETE RESTRICT,
+      FOREIGN KEY(to_entity_id) REFERENCES memory_entities(entity_id) ON DELETE RESTRICT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_memory_relations_workspace_status
+      ON memory_relations(workspace_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_memory_relations_entities
+      ON memory_relations(from_entity_id, to_entity_id, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS memory_decisions (
+      decision_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      title TEXT NOT NULL,
+      decision_text TEXT NOT NULL,
+      alternatives_json TEXT NOT NULL,
+      rationale TEXT NOT NULL,
+      expected_outcome TEXT,
+      review_at TEXT,
+      retrospective_json TEXT,
+      linked_entity_ids_json TEXT NOT NULL,
+      linked_relation_ids_json TEXT NOT NULL,
+      session_id TEXT,
+      run_id TEXT,
+      improvement_candidate_id TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      confidence REAL NOT NULL DEFAULT 0.5,
+      source_refs_json TEXT NOT NULL,
+      metadata_json TEXT NOT NULL,
+      authority TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      forgotten_at TEXT,
+      superseded_by_id TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_memory_decisions_workspace_status
+      ON memory_decisions(workspace_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_memory_decisions_review_at
+      ON memory_decisions(review_at, status);
+    CREATE INDEX IF NOT EXISTS idx_memory_decisions_session
+      ON memory_decisions(session_id, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS memory_structured_change_history (
+      change_id TEXT PRIMARY KEY,
+      record_kind TEXT NOT NULL,
+      record_id TEXT NOT NULL,
+      change_type TEXT NOT NULL,
+      actor_id TEXT,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_memory_structured_history_record
+      ON memory_structured_change_history(record_kind, record_id, created_at DESC);
   `);
 }
 
