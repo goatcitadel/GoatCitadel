@@ -1,4 +1,10 @@
-import type { ApprovalEffectRecord, ApprovalRequest, DurableWakeResult } from "@goatcitadel/contracts";
+import type {
+  ApprovalEffectRecord,
+  ApprovalRequest,
+  ChatDelegationStepRecord,
+  ChatTurnTraceRecord,
+  DurableWakeResult,
+} from "@goatcitadel/contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
   ApprovalEffectsService,
@@ -1504,6 +1510,333 @@ describe("approval-resolution-effects-service", () => {
           approvalId: "approval-1",
           runId: "code-run-1",
         },
+      }),
+    );
+  });
+
+  it("materializes approved tool actions into linked chat and delegation state", async () => {
+    let effectState = createEffect({
+      effectKind: "pending_action_execute",
+      targetKind: "pending_action",
+      targetId: "approval-1",
+      status: "running",
+    });
+    let parentStep: ChatDelegationStepRecord = {
+      stepId: "delegation-run-1:worker",
+      runId: "delegation-run-1",
+      role: "worker",
+      label: "Worker",
+      status: "running",
+      index: 0,
+      providerId: "openai",
+      model: "gpt-test",
+      startedAt: "2026-04-11T00:00:00.000Z",
+      childSessionId: "child-session-1",
+      childTurnId: "child-turn-1",
+      durableRunId: "child-durable-run",
+    };
+    const childTrace: ChatTurnTraceRecord = {
+      turnId: "child-turn-1",
+      sessionId: "child-session-1",
+      userMessageId: "user-child-1",
+      branchKind: "append",
+      status: "waiting_for_approval",
+      mode: "cowork",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      startedAt: "2026-04-11T00:00:00.000Z",
+      toolRuns: [],
+      citations: [],
+      durable: { runId: "child-durable-run", status: "waiting", checkpointKind: "run_waiting" },
+      failure: {
+        failureClass: "approval_required",
+        message: "Approval required by policy.",
+        retryable: true,
+        recommendedAction: "retry",
+      },
+    };
+    const parentTrace: ChatTurnTraceRecord = {
+      turnId: "parent-turn-1",
+      sessionId: "parent-session-1",
+      userMessageId: "user-parent-1",
+      branchKind: "append",
+      status: "waiting_for_approval",
+      mode: "cowork",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      startedAt: "2026-04-11T00:00:00.000Z",
+      toolRuns: [],
+      citations: [],
+      durable: { runId: "parent-durable-run", status: "waiting", checkpointKind: "run_waiting" },
+      orchestration: {
+        runId: "delegation-run-1",
+        objective: "Create a deck",
+        workflowTemplate: "cowork.plan.work.synthesize",
+        status: "running",
+        modePolicy: "cowork",
+        visibility: "expandable",
+        finalSummary: "Waiting",
+        routeDecision: {
+          workflowTemplate: "cowork.plan.work.synthesize",
+          visibility: "expandable",
+          intensity: "balanced",
+          reviewDepth: "standard",
+          parallelism: "sequential",
+          selectedRoles: ["worker"],
+          selectedProviders: [],
+          triggerReason: "test",
+        },
+        steps: [],
+      },
+    };
+    const completeEffect = vi.fn();
+    const markResolved = vi.fn();
+    const chatMessagesUpsert = vi.fn();
+    const chatToolRunsPatch = vi.fn();
+    const chatTurnTracesPatch = vi.fn();
+    const durableUpdateRun = vi.fn((input: Record<string, unknown>) => ({
+      runId: input.runId,
+      status: input.status,
+      metadata: input.metadata,
+    }));
+    const durableCreateCheckpoint = vi.fn();
+    const delegationStepPatch = vi.fn((stepId: string, input: Partial<ChatDelegationStepRecord>) => {
+      parentStep = { ...parentStep, ...input } as ChatDelegationStepRecord;
+      return parentStep;
+    });
+    const delegationRunPatch = vi.fn();
+    const executionPlanPatch = vi.fn();
+    const service = new ApprovalEffectsService(
+      {
+        storage: {
+          approvalEffects: {
+            get: vi.fn(() => effectState),
+            completeEffect,
+            failEffect: vi.fn(),
+            skipEffect: vi.fn(),
+          },
+          pendingApprovalActions: {
+            find: vi.fn(() => ({
+              approvalId: "approval-1",
+              actionType: "tool.invoke",
+              request: { toolName: "presentations.create" },
+              createdAt: "2026-04-11T00:00:00.000Z",
+              resolutionStatus: "pending",
+            })),
+            markResolved,
+          },
+          chatInlineApprovals: {
+            get: vi.fn(() => ({
+              approvalId: "approval-1",
+              sessionId: "child-session-1",
+              turnId: "child-turn-1",
+              toolName: "presentations.create",
+              status: "pending",
+              reason: "Approval required by policy.",
+              createdAt: "2026-04-11T00:00:00.000Z",
+            })),
+            upsert: vi.fn(),
+          },
+          chatToolRuns: {
+            listByTurn: vi.fn(() => [
+              {
+                toolRunId: "tool-run-1",
+                turnId: "child-turn-1",
+                sessionId: "child-session-1",
+                toolName: "presentations.create",
+                status: "approval_required",
+                approvalId: "approval-1",
+                startedAt: "2026-04-11T00:00:00.000Z",
+              },
+            ]),
+            patch: chatToolRunsPatch,
+          },
+          chatMessages: { upsert: chatMessagesUpsert },
+          chatTurnTraces: {
+            get: vi.fn((turnId: string) => (turnId === "child-turn-1" ? childTrace : parentTrace)),
+            patch: chatTurnTracesPatch,
+            listBySession: vi.fn(() => [parentTrace]),
+          },
+          durableRuns: {
+            getRun: vi.fn((runId: string) => ({ runId, status: "waiting", metadata: {} })),
+            updateRun: durableUpdateRun,
+            createCheckpoint: durableCreateCheckpoint,
+          },
+          chatDelegationSteps: {
+            listParentsByChildSessionIds: vi.fn(
+              () =>
+                new Map([
+                  [
+                    "child-session-1",
+                    {
+                      parentSessionId: "parent-session-1",
+                      runId: "delegation-run-1",
+                      stepId: "delegation-run-1:worker",
+                      role: "worker",
+                      label: "Worker",
+                      index: 0,
+                    },
+                  ],
+                ]),
+            ),
+            get: vi.fn(() => parentStep),
+            patch: delegationStepPatch,
+            listByRun: vi.fn(() => [parentStep]),
+          },
+          chatDelegationRuns: {
+            get: vi.fn(() => ({
+              runId: "delegation-run-1",
+              sessionId: "parent-session-1",
+              taskId: "chat-orchestration:parent-turn-1",
+              objective: "Create a deck",
+              roles: ["worker"],
+              mode: "sequential",
+              status: "running",
+              executionPlanId: "plan-1",
+              citations: [],
+              startedAt: "2026-04-11T00:00:00.000Z",
+            })),
+            patch: delegationRunPatch,
+          },
+          chatExecutionPlans: {
+            get: vi.fn(() => ({
+              planId: "plan-1",
+              sessionId: "parent-session-1",
+              turnId: "parent-turn-1",
+              mode: "cowork",
+              planningMode: "off",
+              status: "running",
+              source: "workflow_template",
+              advisoryOnly: false,
+              objective: "Create a deck",
+              summary: "Worker",
+              steps: [
+                {
+                  stepId: "worker",
+                  index: 0,
+                  objective: "Create the deck",
+                  parallelizable: false,
+                  status: "running",
+                  childSessionId: "child-session-1",
+                  childTurnId: "child-turn-1",
+                  durableRunId: "child-durable-run",
+                },
+              ],
+              createdAt: "2026-04-11T00:00:00.000Z",
+              updatedAt: "2026-04-11T00:00:00.000Z",
+            })),
+            patch: executionPlanPatch,
+          },
+        },
+        publishRealtime: vi.fn(),
+      } as unknown as ServiceContext,
+      {
+        backgroundTasks: new Set(),
+        wakeDurableRun: vi.fn(),
+        requestRunProcessing: vi.fn(),
+        findProactiveDurableRunIdsForApproval: vi.fn(() => []),
+        executeCodeModePendingApproval: vi.fn(),
+        executeApprovedPendingAction: vi.fn(async () => ({
+          outcome: "executed",
+          policyReason: "approved",
+          auditEventId: "audit-1",
+          result: {
+            title: "Benefits of Daily Walking",
+            path: "F:\\code\\personal-ai\\workspace\\goatcitadel_out\\walking.pptx",
+            slideCount: 6,
+            format: "pptx",
+          },
+        })),
+        enqueueAfterHooks: vi.fn(),
+        resolveApprovalHookWorkspaceId: vi.fn(() => "workspace-1"),
+      },
+    );
+    effectState = {
+      ...effectState,
+      claimedBy: (service as unknown as { workerId: string }).workerId,
+    };
+
+    await (
+      service as unknown as {
+        handlePendingActionExecute(effect: ApprovalEffectRecord): Promise<void>;
+      }
+    ).handlePendingActionExecute(effectState);
+
+    expect(markResolved).toHaveBeenCalledWith(
+      "approval-1",
+      "executed",
+      expect.objectContaining({
+        outcome: "executed",
+        result: expect.objectContaining({ slideCount: 6 }),
+      }),
+    );
+    expect(chatToolRunsPatch).toHaveBeenCalledWith(
+      "tool-run-1",
+      expect.objectContaining({
+        status: "executed",
+        result: expect.objectContaining({ format: "pptx" }),
+      }),
+    );
+    expect(chatMessagesUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "child-session-1",
+        content: expect.stringContaining("Benefits of Daily Walking"),
+      }),
+      expect.any(String),
+    );
+    expect(chatTurnTracesPatch).toHaveBeenCalledWith(
+      "child-turn-1",
+      expect.objectContaining({
+        status: "completed",
+        assistantMessageId: "assistant-approved-child-turn-1",
+      }),
+    );
+    expect(delegationStepPatch).toHaveBeenCalledWith(
+      "delegation-run-1:worker",
+      expect.objectContaining({
+        status: "completed",
+        childTurnId: "child-turn-1",
+      }),
+    );
+    expect(delegationRunPatch).toHaveBeenCalledWith(
+      "delegation-run-1",
+      expect.objectContaining({
+        status: "completed",
+        stitchedOutput: expect.stringContaining("Benefits of Daily Walking"),
+      }),
+    );
+    expect(executionPlanPatch).toHaveBeenCalledWith(
+      "plan-1",
+      expect.objectContaining({
+        status: "completed",
+      }),
+    );
+    expect(durableUpdateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "child-durable-run",
+        status: "completed",
+      }),
+    );
+    expect(durableUpdateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "parent-durable-run",
+        status: "completed",
+      }),
+    );
+    expect(durableCreateCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "child-durable-run",
+        checkpointKind: "run_completed",
+      }),
+    );
+    expect(completeEffect).toHaveBeenCalledWith(
+      "effect-1",
+      expect.any(String),
+      1,
+      expect.objectContaining({
+        result: expect.objectContaining({ outcome: "executed" }),
       }),
     );
   });

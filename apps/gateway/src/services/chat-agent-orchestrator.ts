@@ -18,6 +18,7 @@ import type {
   ChatTurnRepairKind,
   ChatTurnRepairSource,
   ChatTurnTraceRecord,
+  ChatUserInputPromptRecord,
   ChatWebMode,
   McpInvokeRequest,
   McpInvokeResponse,
@@ -223,6 +224,7 @@ export { normalizeAgentInputFromSend } from "./chat-agent-input-normalization.js
 const TOOL_FAILURE_CIRCUIT_BREAKER_THRESHOLD = 2;
 const TOOL_FAILURE_RATE_LIMIT_THRESHOLD = 4;
 const SAFE_WRITE_FALLBACK_DIR = "./workspace/goatcitadel_out";
+const WRITE_DESTINATION_PROMPT_TITLE = "Choose artifact destination";
 const QUERY_TOOL_NAMES = new Set(["browser.search", "memory.search", "embeddings.query"]);
 const PROMPT_HARNESS_QUERY_MARKERS = [
   "prompt lab run contract",
@@ -409,6 +411,7 @@ export interface ChatAgentOrchestratorDeps {
     reasonCodes: string[];
   };
   toolLoopDetection?: ToolLoopDetectionConfig;
+  safeWriteFallbackDir?: string;
 }
 
 type ToolSourceAttribution = NonNullable<ToolInvokeRequest["sourceAttribution"]>[number];
@@ -605,6 +608,7 @@ export class ChatAgentOrchestrator {
           expiresAt?: string;
         }
       | undefined;
+    let pendingUserInput: ChatUserInputPromptRecord | undefined;
     const usageTotals = {
       inputTokens: 0,
       outputTokens: 0,
@@ -2197,6 +2201,12 @@ export class ChatAgentOrchestrator {
               yield executed.chunk;
             }
 
+            if (executed.userInputPrompt) {
+              finalStatus = "waiting_for_user_input";
+              pendingUserInput = executed.userInputPrompt;
+              break;
+            }
+
             const softFailApprovalRequiredTool =
               executed.record.status === "approval_required" &&
               executed.record.approvalId &&
@@ -2395,7 +2405,7 @@ export class ChatAgentOrchestrator {
       toolRunCount < executionBudget.maxToolRunsPerTurn
     ) {
       throwIfChatTurnCancelled(input);
-      const rawArgs = buildSyntheticPresentationCreateArgs(input);
+      const rawArgs = buildSyntheticPresentationCreateArgs(input, this.deps.safeWriteFallbackDir);
       this.deps.storage.chatTurnTraces.patch(input.turnId, {
         status: "waiting_for_tool",
       });
@@ -2422,13 +2432,18 @@ export class ChatAgentOrchestrator {
       if (syntheticRun.chunk) {
         yield syntheticRun.chunk;
       }
-      const preRepairContent = assistantContent;
-      assistantContent = mergePresentationArtifactDeliveryContent(assistantContent, syntheticRun.record);
-      if (assistantContent !== preRepairContent) {
-        markCompletionRepair("degraded_answer_synthesis", "orchestrator", preRepairContent, assistantContent);
-      }
-      if (syntheticRun.record.status === "executed" && finalStatus === "failed") {
-        finalStatus = "completed";
+      if (syntheticRun.userInputPrompt) {
+        finalStatus = "waiting_for_user_input";
+        pendingUserInput = syntheticRun.userInputPrompt;
+      } else {
+        const preRepairContent = assistantContent;
+        assistantContent = mergePresentationArtifactDeliveryContent(assistantContent, syntheticRun.record);
+        if (assistantContent !== preRepairContent) {
+          markCompletionRepair("degraded_answer_synthesis", "orchestrator", preRepairContent, assistantContent);
+        }
+        if (syntheticRun.record.status === "executed" && finalStatus === "failed") {
+          finalStatus = "completed";
+        }
       }
     }
 
@@ -2442,7 +2457,7 @@ export class ChatAgentOrchestrator {
       toolRunCount < executionBudget.maxToolRunsPerTurn
     ) {
       throwIfChatTurnCancelled(input);
-      const rawArgs = buildSyntheticDocumentCreateArgs(input);
+      const rawArgs = buildSyntheticDocumentCreateArgs(input, this.deps.safeWriteFallbackDir);
       this.deps.storage.chatTurnTraces.patch(input.turnId, {
         status: "waiting_for_tool",
       });
@@ -2469,13 +2484,18 @@ export class ChatAgentOrchestrator {
       if (syntheticRun.chunk) {
         yield syntheticRun.chunk;
       }
-      const preRepairContent = assistantContent;
-      assistantContent = mergeDocumentArtifactDeliveryContent(assistantContent, syntheticRun.record);
-      if (assistantContent !== preRepairContent) {
-        markCompletionRepair("degraded_answer_synthesis", "orchestrator", preRepairContent, assistantContent);
-      }
-      if (syntheticRun.record.status === "executed" && finalStatus === "failed") {
-        finalStatus = "completed";
+      if (syntheticRun.userInputPrompt) {
+        finalStatus = "waiting_for_user_input";
+        pendingUserInput = syntheticRun.userInputPrompt;
+      } else {
+        const preRepairContent = assistantContent;
+        assistantContent = mergeDocumentArtifactDeliveryContent(assistantContent, syntheticRun.record);
+        if (assistantContent !== preRepairContent) {
+          markCompletionRepair("degraded_answer_synthesis", "orchestrator", preRepairContent, assistantContent);
+        }
+        if (syntheticRun.record.status === "executed" && finalStatus === "failed") {
+          finalStatus = "completed";
+        }
       }
     }
 
@@ -2641,6 +2661,7 @@ export class ChatAgentOrchestrator {
       completion: completionState,
       finalStatus,
       approvalPending: Boolean(approvalPayload),
+      userInputPending: Boolean(pendingUserInput),
     });
     const finalizedCompletionWithRuntime: NonNullable<ChatTurnTraceRecord["completion"]> = {
       ...finalizedCompletion,
@@ -2666,6 +2687,7 @@ export class ChatAgentOrchestrator {
       },
       loopGuard: createLoopGuardTrace(loopGuardState),
       finishedAt,
+      ...(pendingUserInput ? { pendingUserInput } : {}),
     });
     const hydratedTrace = {
       ...updatedTrace,
@@ -2679,6 +2701,13 @@ export class ChatAgentOrchestrator {
         sessionId: input.sessionId,
         turnId: input.turnId,
         approval: approvalPayload,
+      };
+    } else if (pendingUserInput) {
+      yield {
+        type: "user_input_required",
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        prompt: pendingUserInput,
       };
     } else if (finalStatus !== "cancelled") {
       if (usageObserved) {
@@ -2865,7 +2894,7 @@ export class ChatAgentOrchestrator {
           agentId: "assistant",
           taskId: input.policyTaskId,
           runId: input.policyRunId,
-          args: buildToolAccessProbeArgs(tool.toolName),
+          args: buildToolAccessProbeArgs(tool.toolName, this.deps.safeWriteFallbackDir),
           permissionProfileId: input.permissionProfileId,
           localOperatorOverrideId: input.localOperatorOverrideId,
           surface: input.mode,
@@ -3009,6 +3038,7 @@ export class ChatAgentOrchestrator {
     record: ChatToolRunRecord;
     approvalExpiresAt?: string;
     chunk?: ChatStreamChunkDraft;
+    userInputPrompt?: ChatUserInputPromptRecord;
   }> {
     const preflight = this.preflightToolInvocation({
       toolName: input.toolName,
@@ -3259,6 +3289,15 @@ export class ChatAgentOrchestrator {
               turnId: input.turnId,
               toolRun: updated,
             },
+            userInputPrompt: buildWriteDestinationUserInputPrompt({
+              sessionId: input.input.sessionId,
+              turnId: input.turnId,
+              toolName: preflight.toolName,
+              requestedPath: preflight.args.path,
+              fallbackPath: writeFallback.fallbackPath,
+              policyReason: fallbackError,
+              safeWriteFallbackDir: this.deps.safeWriteFallbackDir,
+            }),
           };
         }
 
@@ -3283,6 +3322,14 @@ export class ChatAgentOrchestrator {
             turnId: input.turnId,
             toolRun: updated,
           },
+          userInputPrompt: buildWriteDestinationUserInputPrompt({
+            sessionId: input.input.sessionId,
+            turnId: input.turnId,
+            toolName: preflight.toolName,
+            requestedPath: preflight.args.path,
+            policyReason: result.policyReason,
+            safeWriteFallbackDir: this.deps.safeWriteFallbackDir,
+          }),
         };
       }
 
@@ -3349,6 +3396,14 @@ export class ChatAgentOrchestrator {
           turnId: input.turnId,
           toolRun: updated,
         },
+        userInputPrompt: buildWriteDestinationUserInputPrompt({
+          sessionId: input.input.sessionId,
+          turnId: input.turnId,
+          toolName: preflight.toolName,
+          requestedPath: preflight.args.path,
+          policyReason: (error as Error).message,
+          safeWriteFallbackDir: this.deps.safeWriteFallbackDir,
+        }),
       };
     }
   }
@@ -4194,7 +4249,12 @@ export class ChatAgentOrchestrator {
     if (!isWriteJailBlockReason(input.policyReason)) {
       return undefined;
     }
-    const fallbackPath = buildSafeWriteFallbackPath(input.input.sessionId, input.toolName, input.args.path);
+    const fallbackPath = buildSafeWriteFallbackPath(
+      input.input.sessionId,
+      input.toolName,
+      input.args.path,
+      this.deps.safeWriteFallbackDir,
+    );
     if (!fallbackPath) {
       return undefined;
     }
@@ -4487,8 +4547,9 @@ function finalizeTurnCompletionState(input: {
   completion: NonNullable<ChatTurnTraceRecord["completion"]>;
   finalStatus: ChatTurnTraceRecord["status"];
   approvalPending: boolean;
+  userInputPending: boolean;
 }): NonNullable<ChatTurnTraceRecord["completion"]> {
-  if (input.approvalPending) {
+  if (input.approvalPending || input.userInputPending) {
     return {
       ...input.completion,
       status: "backgrounded",
@@ -4658,17 +4719,17 @@ function buildEssentialToolSet(input: {
   return [...tools];
 }
 
-function buildToolAccessProbeArgs(toolName: string): Record<string, unknown> {
+function buildToolAccessProbeArgs(toolName: string, safeWriteFallbackDir?: string): Record<string, unknown> {
   if (toolName === "presentations.create") {
     return {
-      path: "./workspace/goatcitadel_out/tool-access-probe.pptx",
+      path: buildSafeWritePath("tool-access-probe.pptx", safeWriteFallbackDir),
       title: "Tool access probe",
       slides: [{ title: "Probe", bullets: ["Verifies the tool can write inside the workspace jail."] }],
     };
   }
   if (toolName === "documents.create") {
     return {
-      path: "./workspace/goatcitadel_out/tool-access-probe.docx",
+      path: buildSafeWritePath("tool-access-probe.docx", safeWriteFallbackDir),
       format: "docx",
       title: "Tool access probe",
       body: "Verifies the tool can write inside the workspace jail.",
@@ -4676,25 +4737,25 @@ function buildToolAccessProbeArgs(toolName: string): Record<string, unknown> {
   }
   if (toolName === "artifacts.create") {
     return {
-      path: "./workspace/goatcitadel_out/tool-access-probe.md",
+      path: buildSafeWritePath("tool-access-probe.md", safeWriteFallbackDir),
       content: "Tool access probe",
     };
   }
   if (toolName === "fs.write") {
     return {
-      path: "./workspace/goatcitadel_out/tool-access-probe.txt",
+      path: buildSafeWritePath("tool-access-probe.txt", safeWriteFallbackDir),
       content: "Tool access probe",
     };
   }
   if (toolName === "fs.copy" || toolName === "fs.move") {
     return {
-      from: "./workspace/goatcitadel_out/tool-access-probe.txt",
-      to: "./workspace/goatcitadel_out/tool-access-probe-copy.txt",
+      from: buildSafeWritePath("tool-access-probe.txt", safeWriteFallbackDir),
+      to: buildSafeWritePath("tool-access-probe-copy.txt", safeWriteFallbackDir),
     };
   }
   if (toolName === "fs.delete") {
     return {
-      path: "./workspace/goatcitadel_out/tool-access-probe.txt",
+      path: buildSafeWritePath("tool-access-probe.txt", safeWriteFallbackDir),
     };
   }
   return {};
@@ -5244,29 +5305,40 @@ function detectDocumentArtifactIntent(content: string): boolean {
   );
 }
 
-function buildSyntheticPresentationCreateArgs(input: ChatAgentTurnInput): Record<string, unknown> {
+function buildSyntheticPresentationCreateArgs(
+  input: ChatAgentTurnInput,
+  safeWriteFallbackDir?: string,
+): Record<string, unknown> {
   const task = extractPrimaryUserTaskContent(input.content) ?? input.content;
   const title = inferPresentationTitle(task);
-  const path = buildSafeWriteFallbackPath(input.sessionId, "presentations.create", `${title}.pptx`);
+  const path =
+    extractAnsweredWriteDestination(input.content) ??
+    buildSafeWriteFallbackPath(input.sessionId, "presentations.create", `${title}.pptx`, safeWriteFallbackDir);
   return {
-    path: path ?? "./workspace/goatcitadel_out/presentation.pptx",
+    path: path ?? buildSafeWritePath("presentation.pptx", safeWriteFallbackDir),
     title,
     subtitle: "Generated by GoatCitadel Cowork",
     slides: buildSyntheticPresentationSlides(task, title),
   };
 }
 
-function buildSyntheticDocumentCreateArgs(input: ChatAgentTurnInput): Record<string, unknown> {
+function buildSyntheticDocumentCreateArgs(
+  input: ChatAgentTurnInput,
+  safeWriteFallbackDir?: string,
+): Record<string, unknown> {
   const task = extractPrimaryUserTaskContent(input.content) ?? input.content;
   const title = inferDocumentTitle(task);
   const format = inferDocumentFormat(task);
-  const path = buildSafeWriteFallbackPath(
-    input.sessionId,
-    "documents.create",
-    `${title}.${documentFormatExtension(format)}`,
-  );
+  const path =
+    extractAnsweredWriteDestination(input.content) ??
+    buildSafeWriteFallbackPath(
+      input.sessionId,
+      "documents.create",
+      `${title}.${documentFormatExtension(format)}`,
+      safeWriteFallbackDir,
+    );
   return {
-    path: path ?? `./workspace/goatcitadel_out/document.${documentFormatExtension(format)}`,
+    path: path ?? buildSafeWritePath(`document.${documentFormatExtension(format)}`, safeWriteFallbackDir),
     format,
     title,
     body: `Generated document for: ${task.trim().replace(/\s+/g, " ").slice(0, 500)}`,
@@ -14712,7 +14784,58 @@ function isWriteJailBlockReason(reason: string | undefined): boolean {
   return normalized.includes("write jail") || normalized.includes("outside write");
 }
 
-function buildSafeWriteFallbackPath(sessionId: string, toolName: string, originalPath: unknown): string | undefined {
+function isWriteDestinationTool(toolName: string): boolean {
+  return (
+    toolName === "fs.write" ||
+    toolName === "artifacts.create" ||
+    toolName === "documents.create" ||
+    toolName === "presentations.create"
+  );
+}
+
+function buildWriteDestinationUserInputPrompt(input: {
+  sessionId: string;
+  turnId: string;
+  toolName: string;
+  requestedPath: unknown;
+  policyReason?: string;
+  fallbackPath?: string;
+  safeWriteFallbackDir?: string;
+}): ChatUserInputPromptRecord | undefined {
+  if (!isWriteDestinationTool(input.toolName) || !isWriteJailBlockReason(input.policyReason)) {
+    return undefined;
+  }
+  const requestedPath = typeof input.requestedPath === "string" ? input.requestedPath.trim() : "";
+  const suggestedPath =
+    input.fallbackPath ??
+    buildSafeWriteFallbackPath(input.sessionId, input.toolName, requestedPath, input.safeWriteFallbackDir);
+  const blockedTarget = requestedPath ? ` Requested path: ${requestedPath}.` : "";
+  const suggestion = suggestedPath
+    ? ` Enter a destination inside an allowed write root, for example ${suggestedPath}.`
+    : " Enter a destination inside one of the configured write-jail roots.";
+  return {
+    promptId: `write-destination-${randomUUID()}`,
+    turnId: input.turnId,
+    kind: "text",
+    title: WRITE_DESTINATION_PROMPT_TITLE,
+    question: `I could not create this file because the path is outside the configured write jail.${blockedTarget}${suggestion}`,
+    required: true,
+    placeholder: suggestedPath ?? "workspace/goatcitadel_out/output.txt",
+    submitLabel: "Create file",
+  };
+}
+
+function buildSafeWritePath(fileName: string, safeWriteFallbackDir?: string): string {
+  const directory = (safeWriteFallbackDir?.trim() || SAFE_WRITE_FALLBACK_DIR).replace(/[\\/]+$/u, "");
+  return `${directory}/${fileName}`;
+}
+
+function buildSafeWriteFallbackPath(
+  sessionId: string,
+  toolName: string,
+  originalPath: unknown,
+  safeWriteFallbackDir?: string,
+): string | undefined {
   const safeSessionId = sessionId
     .trim()
     .replace(/[^a-zA-Z0-9_-]+/g, "-")
@@ -14744,7 +14867,18 @@ function buildSafeWriteFallbackPath(sessionId: string, toolName: string, origina
         : toolName === "artifacts.create"
           ? ".md"
           : ".txt");
-  return `${SAFE_WRITE_FALLBACK_DIR}/${safeBaseName}-${safeSessionId}${fallbackExt}`;
+  return buildSafeWritePath(`${safeBaseName}-${safeSessionId}${fallbackExt}`, safeWriteFallbackDir);
+}
+
+function extractAnsweredWriteDestination(content: string): string | undefined {
+  const match = content.match(
+    /(?:choose artifact destination|where should i create|destination inside an allowed write root)[\s\S]{0,900}?Answer:\s*([^\r\n]+)/i,
+  );
+  const answer = match?.[1]?.trim();
+  if (!answer || /^(?:none|skip|cancel)$/i.test(answer)) {
+    return undefined;
+  }
+  return answer.replace(/^`|`$/g, "").trim();
 }
 
 function sanitizePathSegment(value: string): string {

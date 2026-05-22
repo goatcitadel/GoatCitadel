@@ -6,6 +6,13 @@ import type {
   ApprovalRequest,
   RealtimeEvent,
   ApprovalResolveInput,
+  ChatCitationRecord,
+  ChatDelegationRunStatus,
+  ChatDelegationStepRecord,
+  ChatExecutionPlanStepRecord,
+  ChatMessageRecord,
+  ChatTurnTraceRecord,
+  PendingApprovalAction,
   DurableWakeResult,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
@@ -59,7 +66,11 @@ export interface ApprovalEffectsServiceContext {
     | "pendingApprovalActions"
     | "approvalInbox"
     | "chatInlineApprovals"
+    | "chatMessages"
+    | "chatToolRuns"
     | "chatDelegationSteps"
+    | "chatDelegationRuns"
+    | "chatExecutionPlans"
     | "chatTurnTraces"
     | "durableRuns"
     | "orchestration"
@@ -708,6 +719,9 @@ export class ApprovalEffectsService {
       refreshedPendingAction.resolutionStatus &&
       refreshedPendingAction.resolutionStatus !== "pending"
     ) {
+      if (refreshedPendingAction.resolutionStatus === "executed") {
+        this.materializeExecutedChatApproval(effect, refreshedPendingAction, refreshedPendingAction.result);
+      }
       this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
         result: {
           actionType: refreshedPendingAction.actionType,
@@ -750,15 +764,13 @@ export class ApprovalEffectsService {
     }
 
     if (executedAction?.outcome === "executed") {
+      const actionRecord = toolInvokeResultToRecord(executedAction, pendingAction.actionType);
       if (!refreshedPendingAction || refreshedPendingAction.resolutionStatus === "pending") {
-        this.ctx.storage.pendingApprovalActions.markResolved(
-          effect.approvalId,
-          "executed",
-          toolInvokeResultToRecord(executedAction),
-        );
+        this.ctx.storage.pendingApprovalActions.markResolved(effect.approvalId, "executed", actionRecord);
       }
+      this.materializeExecutedChatApproval(effect, pendingAction, actionRecord);
       this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
-        result: toolInvokeResultToRecord(executedAction),
+        result: actionRecord,
       });
       return;
     }
@@ -828,6 +840,357 @@ export class ApprovalEffectsService {
         state: updated.state,
       },
     });
+  }
+
+  private materializeExecutedChatApproval(
+    effect: ApprovalEffectRecord,
+    pendingAction: PendingApprovalAction,
+    actionRecord: Record<string, unknown> | undefined,
+  ): void {
+    if (pendingAction.actionType !== "tool.invoke") {
+      return;
+    }
+    const inlineApproval = this.ctx.storage.chatInlineApprovals.get(effect.approvalId);
+    if (!inlineApproval) {
+      return;
+    }
+    const now = new Date().toISOString();
+    const toolResult = asRecord(actionRecord?.result) ?? {};
+    const toolName =
+      asOptionalString(pendingAction.request.toolName) ??
+      asOptionalString(inlineApproval.toolName) ??
+      asOptionalString(actionRecord?.toolName) ??
+      "tool.invoke";
+    const toolRun = this.ctx.storage.chatToolRuns
+      .listByTurn(inlineApproval.turnId)
+      .find((candidate) => candidate.approvalId === effect.approvalId);
+    if (toolRun && toolRun.status !== "executed") {
+      this.ctx.storage.chatToolRuns.patch(toolRun.toolRunId, {
+        status: "executed",
+        result: toolResult,
+        finishedAt: now,
+      });
+    }
+    this.ctx.storage.chatInlineApprovals.upsert({
+      approvalId: inlineApproval.approvalId,
+      sessionId: inlineApproval.sessionId,
+      turnId: inlineApproval.turnId,
+      kind: inlineApproval.kind,
+      toolName: inlineApproval.toolName ?? toolName,
+      status: "approved",
+      reason: inlineApproval.reason,
+      riskLevel: inlineApproval.riskLevel,
+      details: inlineApproval.details,
+      expiresAt: inlineApproval.expiresAt,
+      resolvedBy: asOptionalString(effect.payload.resolvedBy) ?? "operator",
+      resolvedAt: now,
+    });
+
+    let childTrace: ChatTurnTraceRecord;
+    try {
+      childTrace = this.ctx.storage.chatTurnTraces.get(inlineApproval.turnId);
+    } catch {
+      return;
+    }
+    const outputText = buildApprovedToolActionOutput(toolName, toolResult);
+    this.completeChatTurnFromApprovedAction({
+      trace: childTrace,
+      outputText,
+      now,
+      approvalId: effect.approvalId,
+      actionRecord,
+    });
+    this.materializeDelegationParentsFromApprovedChild({
+      childTrace,
+      outputText,
+      now,
+      approvalId: effect.approvalId,
+    });
+  }
+
+  private completeChatTurnFromApprovedAction(input: {
+    trace: ChatTurnTraceRecord;
+    outputText: string;
+    now: string;
+    approvalId: string;
+    actionRecord?: Record<string, unknown>;
+  }): void {
+    const assistantMessageId = input.trace.assistantMessageId ?? `assistant-approved-${input.trace.turnId}`;
+    const message: ChatMessageRecord = {
+      messageId: assistantMessageId,
+      sessionId: input.trace.sessionId,
+      role: "assistant",
+      actorType: "agent",
+      actorId: "assistant",
+      content: input.outputText,
+      timestamp: input.now,
+    };
+    this.ctx.storage.chatMessages.upsert(message, input.now);
+    const durable = input.trace.durable?.runId
+      ? {
+          ...input.trace.durable,
+          status: "completed" as const,
+          checkpointKind: "run_completed" as const,
+        }
+      : input.trace.durable;
+    const tracePatch: Parameters<Storage["chatTurnTraces"]["patch"]>[1] = {
+      assistantMessageId,
+      status: "completed",
+      finishedAt: input.now,
+      completion: {
+        ...(input.trace.completion ?? {}),
+        status: "complete",
+        repaired: Boolean(input.trace.completion?.repaired),
+        repair: input.trace.completion?.repair ?? { applied: false },
+      },
+      durable,
+    };
+    (tracePatch as unknown as { failure: null }).failure = null;
+    this.ctx.storage.chatTurnTraces.patch(input.trace.turnId, tracePatch);
+    this.completeDurableRunIfPresent(input.trace.durable?.runId, {
+      now: input.now,
+      outputText: input.outputText,
+      checkpointState: {
+        approvalId: input.approvalId,
+        turnId: input.trace.turnId,
+        outputText: input.outputText,
+        approvedAction: input.actionRecord,
+      },
+    });
+    this.ctx.publishRealtime(
+      "chat_thread_updated",
+      "chat",
+      {
+        type: "chat_thread_approval_materialized",
+        sessionId: input.trace.sessionId,
+        turnId: input.trace.turnId,
+        activeLeafTurnId: input.trace.turnId,
+        approvalId: input.approvalId,
+      },
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: {
+          sessionId: input.trace.sessionId,
+          turnId: input.trace.turnId,
+          approvalId: input.approvalId,
+          ...(input.trace.durable?.runId ? { runId: input.trace.durable.runId } : {}),
+        },
+      },
+    );
+  }
+
+  private completeDurableRunIfPresent(
+    runId: string | undefined,
+    input: { now: string; outputText: string; checkpointState: Record<string, unknown> },
+  ): void {
+    if (!runId) {
+      return;
+    }
+    let run;
+    try {
+      run = this.ctx.storage.durableRuns.getRun(runId);
+    } catch {
+      return;
+    }
+    if (!isTerminalDurableRunStatus(run.status)) {
+      this.ctx.storage.durableRuns.updateRun({
+        runId,
+        status: "completed",
+        updatedAt: input.now,
+        finishedAt: input.now,
+        clearLease: true,
+        clearLastError: true,
+        metadata: {
+          ...(run.metadata ?? {}),
+          outputText: input.outputText,
+          finalOutput: input.outputText,
+          outputSummary: summarizeText(input.outputText),
+          finalSummary: summarizeText(input.outputText),
+        },
+      });
+      this.ctx.storage.durableRuns.createCheckpoint({
+        runId,
+        checkpointKind: "run_completed",
+        state: input.checkpointState,
+        createdAt: input.now,
+      });
+    }
+  }
+
+  private materializeDelegationParentsFromApprovedChild(input: {
+    childTrace: ChatTurnTraceRecord;
+    outputText: string;
+    now: string;
+    approvalId: string;
+  }): void {
+    const parents = this.ctx.storage.chatDelegationSteps.listParentsByChildSessionIds([input.childTrace.sessionId]);
+    const parent = parents.get(input.childTrace.sessionId);
+    if (!parent) {
+      return;
+    }
+    let step: ChatDelegationStepRecord;
+    try {
+      step = this.ctx.storage.chatDelegationSteps.get(parent.stepId);
+    } catch {
+      return;
+    }
+    const finishedAt = input.now;
+    const startedMs = Date.parse(step.startedAt);
+    const durationMs = Number.isFinite(startedMs) ? Math.max(0, Date.parse(finishedAt) - startedMs) : undefined;
+    this.ctx.storage.chatDelegationSteps.patch(step.stepId, {
+      status: "completed",
+      output: input.outputText,
+      summary: summarizeText(input.outputText, 180),
+      error: undefined,
+      failureGuidance: undefined,
+      childSessionId: input.childTrace.sessionId,
+      childTurnId: input.childTrace.turnId,
+      durableRunId: input.childTrace.durable?.runId,
+      citations: input.childTrace.citations ?? [],
+      finishedAt,
+      ...(durationMs !== undefined ? { durationMs } : {}),
+    });
+    this.reconcileDelegationRun(parent.parentSessionId, parent.runId, input.now, input.approvalId);
+  }
+
+  private reconcileDelegationRun(parentSessionId: string, runId: string, now: string, approvalId: string): void {
+    let run;
+    try {
+      run = this.ctx.storage.chatDelegationRuns.get(runId);
+    } catch {
+      return;
+    }
+    const steps = this.ctx.storage.chatDelegationSteps.listByRun(runId);
+    if (steps.length === 0) {
+      return;
+    }
+    const stitchedOutput = buildDelegationStitchedOutput(steps);
+    const status = deriveDelegationRunStatus(steps);
+    const finalSummary = summarizeText(stitchedOutput);
+    const citations = dedupeCitations(steps.flatMap((step) => step.citations ?? []));
+    this.ctx.storage.chatDelegationRuns.patch(runId, {
+      status,
+      finalSummary,
+      stitchedOutput,
+      citations,
+      ...(status === "running" ? {} : { finishedAt: now }),
+    });
+    if (run.executionPlanId) {
+      try {
+        const plan = this.ctx.storage.chatExecutionPlans.get(run.executionPlanId);
+        const nextSteps = reconcileExecutionPlanSteps(plan.steps, steps);
+        this.ctx.storage.chatExecutionPlans.patch(run.executionPlanId, {
+          status: status === "running" ? "running" : status === "completed" ? "completed" : status,
+          summary: finalSummary,
+          steps: nextSteps,
+          ...(status === "running" ? {} : { finishedAt: now }),
+        });
+      } catch {
+        // The delegation run remains canonical if the optional execution-plan projection is missing.
+      }
+    }
+    if (status === "running") {
+      return;
+    }
+    const parentTrace = this.ctx.storage.chatTurnTraces
+      .listBySession(parentSessionId)
+      .find((trace) => trace.orchestration?.runId === runId);
+    if (!parentTrace) {
+      return;
+    }
+    const parentStatus = status === "failed" ? "failed" : status === "partial" ? "partial" : "completed";
+    const assistantMessageId = parentTrace.assistantMessageId ?? `assistant-approved-${parentTrace.turnId}`;
+    this.ctx.storage.chatMessages.upsert(
+      {
+        messageId: assistantMessageId,
+        sessionId: parentTrace.sessionId,
+        role: "assistant",
+        actorType: "agent",
+        actorId: "assistant",
+        content: stitchedOutput,
+        timestamp: now,
+      },
+      now,
+    );
+    const parentTracePatch: Parameters<Storage["chatTurnTraces"]["patch"]>[1] = {
+      assistantMessageId,
+      status: parentStatus,
+      finishedAt: now,
+      completion: {
+        ...(parentTrace.completion ?? {}),
+        status: "complete",
+        repaired: Boolean(parentTrace.completion?.repaired),
+        repair: parentTrace.completion?.repair ?? { applied: false },
+      },
+      orchestration: parentTrace.orchestration
+        ? {
+            ...parentTrace.orchestration,
+            status,
+            finalSummary,
+            steps: steps.map((step) => ({
+              stepId: step.stepId,
+              role: step.role,
+              label: step.label,
+              index: step.index,
+              status: step.status,
+              providerId: step.providerId,
+              model: step.model,
+              startedAt: step.startedAt,
+              finishedAt: step.finishedAt,
+              durationMs: step.durationMs,
+              summary: step.summary,
+              error: step.error,
+            })),
+          }
+        : parentTrace.orchestration,
+      durable: parentTrace.durable?.runId
+        ? {
+            ...parentTrace.durable,
+            status: "completed",
+            checkpointKind: "run_completed",
+          }
+        : parentTrace.durable,
+    };
+    if (status === "failed") {
+      parentTracePatch.failure = parentTrace.failure;
+    } else {
+      (parentTracePatch as unknown as { failure: null }).failure = null;
+    }
+    this.ctx.storage.chatTurnTraces.patch(parentTrace.turnId, parentTracePatch);
+    this.completeDurableRunIfPresent(parentTrace.durable?.runId, {
+      now,
+      outputText: stitchedOutput,
+      checkpointState: {
+        approvalId,
+        turnId: parentTrace.turnId,
+        outputText: stitchedOutput,
+        delegationRunId: runId,
+      },
+    });
+    this.ctx.publishRealtime(
+      "chat_thread_updated",
+      "chat",
+      {
+        type: "chat_thread_delegation_approval_materialized",
+        sessionId: parentTrace.sessionId,
+        turnId: parentTrace.turnId,
+        activeLeafTurnId: parentTrace.turnId,
+        approvalId,
+        delegationRunId: runId,
+      },
+      {
+        eventClass: "operational_signal",
+        eventAuthority: "retained_stream",
+        links: {
+          sessionId: parentTrace.sessionId,
+          turnId: parentTrace.turnId,
+          approvalId,
+          runId,
+          ...(parentTrace.durable?.runId ? { durableRunId: parentTrace.durable.runId } : {}),
+        },
+      },
+    );
   }
 
   private async handleApprovalAfterHooks(effect: ApprovalEffectRecord): Promise<void> {
@@ -1047,6 +1410,143 @@ function isExpiredApprovalRequest(approval: ApprovalRequest): boolean {
     }
   }
   return expiresAt <= Date.now();
+}
+
+function buildApprovedToolActionOutput(toolName: string, result: Record<string, unknown>): string {
+  const title = asOptionalString(result.title);
+  const path =
+    asOptionalString(result.path) ?? asOptionalString(result.filePath) ?? asOptionalString(result.outputPath);
+  const slideCount = typeof result.slideCount === "number" ? result.slideCount : undefined;
+  const format = asOptionalString(result.format);
+  const lines = [`Approved tool action completed: \`${toolName}\`.`];
+  const details = [
+    title ? `title: ${title}` : undefined,
+    path ? `path: ${path}` : undefined,
+    slideCount !== undefined ? `slideCount: ${slideCount}` : undefined,
+    format ? `format: ${format}` : undefined,
+    ...Object.entries(result)
+      .filter(([key, value]) => {
+        if (key === "title" || key === "path" || key === "filePath" || key === "outputPath") {
+          return false;
+        }
+        if (key === "slideCount" || key === "format") {
+          return false;
+        }
+        return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+      })
+      .slice(0, 6)
+      .map(([key, value]) => `${key}: ${String(value)}`),
+  ].filter((value): value is string => Boolean(value));
+  if (details.length > 0) {
+    lines.push("", "Result:", ...details.map((detail) => `- ${detail}`));
+  }
+  return lines.join("\n");
+}
+
+function buildDelegationStitchedOutput(steps: ChatDelegationStepRecord[]): string {
+  return steps
+    .map((step) => {
+      const body =
+        step.status === "completed"
+          ? (step.output ?? "(delegate returned no output)")
+          : step.status === "running" || step.status === "pending"
+            ? `WAITING: ${step.output ?? "Delegate is still running."}`
+            : step.status === "cancelled"
+              ? `CANCELLED: ${step.error ?? step.output ?? "Delegate was cancelled."}`
+              : step.status === "skipped"
+                ? `SKIPPED: ${step.error ?? "Dependency did not complete."}`
+                : [
+                    `FAILED: ${step.error ?? "Delegate failed without an error message."}`,
+                    step.output?.trim() && step.output.trim() !== step.error?.trim()
+                      ? `Partial output:\n${step.output.trim()}`
+                      : undefined,
+                  ]
+                    .filter(Boolean)
+                    .join("\n\n");
+      return `### ${toTitleCase(step.role)}\n${body}`;
+    })
+    .join("\n\n")
+    .trim();
+}
+
+function deriveDelegationRunStatus(steps: ChatDelegationStepRecord[]): ChatDelegationRunStatus {
+  const activeSteps = steps.filter((step) => step.status === "running" || step.status === "pending").length;
+  if (activeSteps > 0) {
+    return "running";
+  }
+  const completedSteps = steps.filter((step) => step.status === "completed").length;
+  if (completedSteps === steps.length) {
+    return "completed";
+  }
+  const failedStepsWithPartialOutput = steps.filter(
+    (step) => step.status === "failed" && Boolean(step.output?.trim()),
+  ).length;
+  return completedSteps > 0 || failedStepsWithPartialOutput > 0 ? "partial" : "failed";
+}
+
+function reconcileExecutionPlanSteps(
+  planSteps: ChatExecutionPlanStepRecord[],
+  delegationSteps: ChatDelegationStepRecord[],
+): ChatExecutionPlanStepRecord[] {
+  return planSteps.map((planStep) => {
+    const delegationStep = delegationSteps.find(
+      (candidate) =>
+        candidate.childTurnId === planStep.childTurnId ||
+        candidate.childSessionId === planStep.childSessionId ||
+        candidate.index === planStep.index,
+    );
+    if (!delegationStep) {
+      return planStep;
+    }
+    return {
+      ...planStep,
+      status: mapDelegationStatusToExecutionPlanStatus(delegationStep.status),
+      summary: delegationStep.summary,
+      error: delegationStep.error,
+      startedAt: planStep.startedAt ?? delegationStep.startedAt,
+      finishedAt: delegationStep.finishedAt,
+      childRunId: planStep.childRunId,
+      durableRunId: delegationStep.durableRunId,
+      childSessionId: delegationStep.childSessionId,
+      childTurnId: delegationStep.childTurnId,
+    };
+  });
+}
+
+function mapDelegationStatusToExecutionPlanStatus(
+  status: ChatDelegationStepRecord["status"],
+): ChatExecutionPlanStepRecord["status"] {
+  if (status === "pending" || status === "running" || status === "completed" || status === "failed") {
+    return status;
+  }
+  return status === "cancelled" ? "cancelled" : "failed";
+}
+
+function dedupeCitations(citations: ChatCitationRecord[]): ChatCitationRecord[] {
+  const seen = new Set<string>();
+  const result: ChatCitationRecord[] = [];
+  for (const citation of citations) {
+    const key = citation.citationId || citation.url;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(citation);
+  }
+  return result;
+}
+
+function summarizeText(value: string, maxLength = 280): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...` : normalized;
+}
+
+function toTitleCase(value: string): string {
+  return value
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
 }
 
 export function deriveApprovalResolutionEffectsResult(

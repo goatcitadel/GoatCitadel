@@ -1199,12 +1199,25 @@ export function useChatOutboundExecution(input: {
           context: { allowScope, selectedSessionId: selectedSession.sessionId },
         });
         const result = await approveChatTool(approvalSessionId, pendingApproval.approvalId, { allowScope });
+        setPendingApproval(null);
         await refreshPendingApprovalQueue(approvalSessionId);
+        await loadSessionCoreState(selectedSession.sessionId, { background: true, includeThread: true }).catch(
+          () => undefined,
+        );
         if (approvalSessionId !== selectedSession.sessionId) {
           await refreshPendingApprovalQueue(selectedSession.sessionId).catch(() => undefined);
-          await loadSessionCoreState(selectedSession.sessionId, { background: true, includeThread: true }).catch(
-            () => undefined,
-          );
+        }
+        const refreshDelaysMs = result.resumed ? [750, 2_000] : [500, 1_500, 3_000];
+        for (const delayMs of refreshDelaysMs) {
+          globalThis.setTimeout(() => {
+            void refreshPendingApprovalQueue(approvalSessionId).catch(() => undefined);
+            void loadSessionCoreState(selectedSession.sessionId, { background: true, includeThread: true }).catch(
+              () => undefined,
+            );
+            if (approvalSessionId !== selectedSession.sessionId) {
+              void refreshPendingApprovalQueue(selectedSession.sessionId).catch(() => undefined);
+            }
+          }, delayMs);
         }
         const scopeLabel =
           allowScope === "session"

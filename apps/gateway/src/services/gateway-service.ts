@@ -898,6 +898,7 @@ export class GatewayService {
       invokeMcpTool: (request) => this.invokeMcpTool(request),
       listMcpBrowserFallbackTargets: () => this.listMcpBrowserFallbackTargets(),
       toolLoopDetection: this.config.toolPolicy.tools.loopDetection,
+      safeWriteFallbackDir: path.resolve(config.rootDir, config.assistant.workspaceDir, "goatcitadel_out"),
     });
     this.researchService = new ResearchService({
       storage: this.storage,

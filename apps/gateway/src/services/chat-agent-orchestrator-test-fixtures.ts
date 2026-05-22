@@ -2,6 +2,7 @@ import type {
   ChatCompletionResponse,
   ChatToolRunRecord,
   ChatTurnTraceRecord,
+  ChatUserInputPromptRecord,
   ToolCatalogEntry,
   ToolInvokeRequest,
   ToolInvokeResult,
@@ -28,6 +29,7 @@ type ExecuteToolCallResult = {
   };
   approvalExpiresAt?: string;
   chunk?: Record<string, unknown>;
+  userInputPrompt?: ChatUserInputPromptRecord;
 };
 
 export function createToolCatalog(toolNames: string[] = ["browser.search"]): ToolCatalogEntry[] {
@@ -421,6 +423,7 @@ export function createExecuteToolCallForTest(input: {
   toolNames: string[];
   storage?: ChatAgentOrchestratorDeps["storage"];
   persistToolArtifact?: NonNullable<ChatAgentOrchestratorDeps["persistToolArtifact"]>;
+  safeWriteFallbackDir?: string;
 }): (input: ExecuteToolCallInput) => Promise<ExecuteToolCallResult> {
   const orchestrator = new ChatAgentOrchestrator({
     storage: input.storage ?? (createMockStorage() as never),
@@ -431,6 +434,7 @@ export function createExecuteToolCallForTest(input: {
     }),
     invokeTool: input.invokeTool,
     persistToolArtifact: input.persistToolArtifact,
+    safeWriteFallbackDir: input.safeWriteFallbackDir,
   });
   const executeToolCall = (
     orchestrator as unknown as {

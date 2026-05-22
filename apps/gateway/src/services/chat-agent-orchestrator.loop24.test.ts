@@ -15,6 +15,7 @@ import {
   createExecuteToolCallForTest,
   createMockStorage,
   createToolCatalog,
+  namedToolCallCompletion,
 } from "./chat-agent-orchestrator-test-fixtures.js";
 
 describe("ChatAgentOrchestrator loop 24 coverage", () => {
@@ -176,6 +177,109 @@ describe("ChatAgentOrchestrator loop 24 coverage", () => {
     );
     expect(result.assistantContent).toContain("Created the PowerPoint presentation artifact");
     expect(result.assistantContent).toContain(".pptx");
+  });
+
+  it("uses the configured workspace artifact directory for write-jail fallbacks", async () => {
+    const safeWriteFallbackDir = "F:\\code\\personal-ai\\workspace\\goatcitadel_out";
+    const invokeTool = vi
+      .fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>()
+      .mockResolvedValueOnce({
+        outcome: "blocked",
+        policyReason: "Path is outside write jail: F:\\Users\\operator\\Desktop\\deck.pptx",
+        auditEventId: "audit-original-blocked",
+      })
+      .mockResolvedValueOnce({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "audit-fallback-executed",
+        result: {
+          path: "fallback-created.pptx",
+          bytesWritten: 12345,
+          format: "pptx",
+          title: "Walking Deck",
+          slideCount: 2,
+        },
+      });
+    const executeToolCall = createExecuteToolCallForTest({
+      invokeTool,
+      toolNames: ["presentations.create"],
+      safeWriteFallbackDir,
+    });
+
+    const result = await executeToolCall({
+      input: turnInput({ mode: "cowork" }),
+      turnId: "turn-fallback-dir",
+      toolName: "presentations.create",
+      rawArgs: {
+        path: "F:\\Users\\operator\\Desktop\\deck.pptx",
+        title: "Walking Deck",
+        slides: [{ title: "Start", bullets: ["Walk daily"] }],
+      },
+    });
+
+    expect(invokeTool).toHaveBeenCalledTimes(2);
+    expect(invokeTool.mock.calls[1]?.[0].args.path).toContain(safeWriteFallbackDir);
+    expect(result.record.status).toBe("executed");
+    expect(result.record.result).toMatchObject({
+      fallbackApplied: true,
+      fallbackPath: expect.stringContaining(safeWriteFallbackDir),
+    });
+  });
+
+  it("pauses for a destination prompt when requested and fallback artifact paths are both blocked", async () => {
+    const safeWriteFallbackDir = "F:\\code\\personal-ai\\workspace\\goatcitadel_out";
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce(
+        namedToolCallCompletion("presentations.create", {
+          path: "F:\\Users\\operator\\Desktop\\daily-walking.pptx",
+          title: "Benefits of Daily Walking",
+          slides: [{ title: "Physical Health", bullets: ["Supports heart health"] }],
+        }),
+      );
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "blocked",
+      policyReason: "Path is outside write jail: F:\\code\\personal-ai\\apps\\gateway",
+      auditEventId: "audit-write-blocked",
+    });
+    const orchestrator = new ChatAgentOrchestrator({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["presentations.create"]),
+      createChatCompletion,
+      invokeTool,
+      safeWriteFallbackDir,
+    });
+
+    const chunks = [];
+    for await (const chunk of orchestrator.runStream(
+      turnInput({
+        mode: "cowork",
+        content: "Create a real PowerPoint .pptx presentation about daily walking.",
+        historyMessages: [
+          { role: "user", content: "Create a real PowerPoint .pptx presentation about daily walking." },
+        ],
+      }),
+    )) {
+      chunks.push(chunk);
+    }
+
+    const userInputChunk = chunks.find((chunk) => chunk.type === "user_input_required");
+    const traceChunk = chunks.filter((chunk) => chunk.type === "trace_update").at(-1);
+    expect(userInputChunk).toMatchObject({
+      type: "user_input_required",
+      prompt: expect.objectContaining({
+        kind: "text",
+        title: "Choose artifact destination",
+        question: expect.stringContaining("outside the configured write jail"),
+        placeholder: expect.stringContaining(safeWriteFallbackDir),
+      }),
+    });
+    expect(traceChunk).toMatchObject({
+      trace: expect.objectContaining({
+        status: "waiting_for_user_input",
+      }),
+    });
+    expect(chunks.some((chunk) => chunk.type === "message_done")).toBe(false);
   });
 
   it("probes document access with safe args and creates a document fallback when the model answers with text", async () => {
