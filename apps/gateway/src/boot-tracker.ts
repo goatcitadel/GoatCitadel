@@ -3,21 +3,25 @@
  *
  * Imported as the very first side-effect in main.ts so its setInterval is
  * registered before the heavy plugin chain in buildApp() executes. The
- * heartbeat prints to stderr every 2s (unless --verbose lifts the noise
- * floor higher) with the elapsed seconds and the most recent checkpoint
- * label.
+ * heartbeat prints to stderr every 2s with the elapsed seconds and the most
+ * recent checkpoint label.
  *
- * Why this exists: the gateway dev supervisor has observed a reproducible
- * Windows pattern where the first gateway process after a clean start sits
- * silent for the full 120s health-timeout window, then a kill+respawn boots
- * fine in ~5s. initCritical() has been instrumented separately and does not
- * fire its slow-step warnings, which means the hang is BEFORE initCritical.
- * The next plausible suspects (loadGatewayConfig, ensureBundledPostgresRuntime,
- * fastify plugin registration order, or a sync module-load step) need
- * per-step visibility from inside the gateway process — the supervisor
- * cannot see them because it only polls /health and /livez from outside.
+ * GATED BEHIND `GOATCITADEL_VERBOSE=1` (or `pnpm dev --verbose`). Steady-state
+ * boots see zero output from this module; only when verbose is enabled does
+ * the heartbeat fire and `setBootCheckpoint` write its annotations. This
+ * keeps the production boot log clean while preserving the full per-step
+ * trace for future bug hunts — flip the env flag and the diagnostic surface
+ * comes back.
  *
- * Behaviour:
+ * Why this module exists: the gateway dev supervisor has observed a Windows
+ * pattern where a sync step inside the boot path (e.g., `execFileSync` with
+ * pipe-inherited stdio) blocks the event loop and produces 120s of silence,
+ * which the supervisor then treats as a health-timeout restart. The
+ * boot-tracker output lets us localize *which* sync call is the blocker the
+ * next time something like that regresses, by showing the LAST checkpoint
+ * before the heartbeat stops firing.
+ *
+ * Behaviour (verbose mode only):
  * - Module load fires the heartbeat interval immediately (every 2s).
  * - Each step in the boot path calls `setBootCheckpoint("step-name")` to
  *   advertise where we are.
@@ -31,6 +35,9 @@
  *
  * Output goes to stderr so it appears even if pino's stdout is buffered.
  */
+
+const VERBOSE_ENV_TRUTHY = new Set(["1", "true", "yes", "on"]);
+const verbose = VERBOSE_ENV_TRUTHY.has(process.env.GOATCITADEL_VERBOSE?.trim().toLowerCase() ?? "");
 
 const bootStartedAt = Date.now();
 let currentCheckpoint = "module-load";
@@ -49,21 +56,35 @@ function emitHeartbeat(): void {
   );
 }
 
-heartbeatTimer = setInterval(emitHeartbeat, HEARTBEAT_INTERVAL_MS);
-heartbeatTimer.unref();
-
-// Print the initial checkpoint immediately so we have an anchor.
-process.stderr.write(`[boot-tracker] started checkpoint="${currentCheckpoint}"\n`);
+if (verbose) {
+  heartbeatTimer = setInterval(emitHeartbeat, HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref();
+  process.stderr.write(`[boot-tracker] started checkpoint="${currentCheckpoint}"\n`);
+}
 
 export function setBootCheckpoint(name: string): void {
   if (ended) return;
+  // Always update the in-memory state so the heartbeat (when verbose) shows
+  // the freshest checkpoint even if the very next instruction blocks the
+  // event loop. Skip the write in non-verbose mode to keep boots quiet.
   const elapsedMs = Date.now() - bootStartedAt;
   const sinceCheckpointMs = Date.now() - lastCheckpointAt;
-  process.stderr.write(
-    `[boot-tracker] elapsed=${(elapsedMs / 1000).toFixed(1)}s checkpoint="${name}" prev="${currentCheckpoint}" prev_duration=${(sinceCheckpointMs / 1000).toFixed(1)}s\n`,
-  );
+  if (verbose) {
+    process.stderr.write(
+      `[boot-tracker] elapsed=${(elapsedMs / 1000).toFixed(1)}s checkpoint="${name}" prev="${currentCheckpoint}" prev_duration=${(sinceCheckpointMs / 1000).toFixed(1)}s\n`,
+    );
+  }
   currentCheckpoint = name;
   lastCheckpointAt = Date.now();
+}
+
+/**
+ * Whether boot-tracker output is currently enabled. Other modules that want
+ * to print one-shot diagnostic lines (e.g., probe-result snapshots) can gate
+ * their writes on this so verbose-mode toggling stays centralized.
+ */
+export function isBootTrackerVerbose(): boolean {
+  return verbose;
 }
 
 export function endBootTracking(): void {
@@ -73,8 +94,10 @@ export function endBootTracking(): void {
     clearInterval(heartbeatTimer);
     heartbeatTimer = undefined;
   }
-  const elapsedMs = Date.now() - bootStartedAt;
-  process.stderr.write(
-    `[boot-tracker] gateway boot complete in ${(elapsedMs / 1000).toFixed(1)}s, heartbeat stopped\n`,
-  );
+  if (verbose) {
+    const elapsedMs = Date.now() - bootStartedAt;
+    process.stderr.write(
+      `[boot-tracker] gateway boot complete in ${(elapsedMs / 1000).toFixed(1)}s, heartbeat stopped\n`,
+    );
+  }
 }

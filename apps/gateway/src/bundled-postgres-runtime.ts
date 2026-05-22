@@ -5,7 +5,7 @@ import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { PostgresDatabaseClient } from "@goatcitadel/storage";
-import { setBootCheckpoint } from "./boot-tracker.js";
+import { isBootTrackerVerbose, setBootCheckpoint } from "./boot-tracker.js";
 import type { GatewayRuntimeConfig } from "./config.js";
 import { isBundledPostgresMode, resolveGatewayPostgresConnectionOptions } from "./postgres-runtime-config.js";
 
@@ -73,9 +73,11 @@ export async function ensureBundledPostgresRuntime(
     databaseOverride: "postgres",
   });
   const probe = await probeBundledPostgresRuntime(config, maintenanceOptions);
-  process.stderr.write(
-    `[boot-tracker] probe result reachable=${probe.reachable} matchesExpectedRoot=${probe.matchesExpectedRoot} dataDirectory=${JSON.stringify(probe.dataDirectory)}\n`,
-  );
+  if (isBootTrackerVerbose()) {
+    process.stderr.write(
+      `[boot-tracker] probe result reachable=${probe.reachable} matchesExpectedRoot=${probe.matchesExpectedRoot} dataDirectory=${JSON.stringify(probe.dataDirectory)}\n`,
+    );
+  }
   setBootCheckpoint("bundled-pg:probe-returned");
   if (probe.matchesExpectedRoot) {
     await ensureDatabaseExists(config);
