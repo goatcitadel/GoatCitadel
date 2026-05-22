@@ -14,6 +14,7 @@ import {
   type ChatSessionWorkbenchFileDiffResponse,
   type ChatSessionWorkbenchFileResponse,
   type ChatSessionWorkbenchOutputResponse,
+  type ChatSessionWorkbenchPackageManager,
   type ChatSessionWorkbenchPatchApplyRequest,
   type ChatSessionWorkbenchPatchApplyResponse,
   type ChatSessionWorkbenchPatchExportResponse,
@@ -666,6 +667,51 @@ function syncWorkbenchState(deps: ChatWorkbenchDependencies, sessionId: string):
   return hydrateWorkbenchRecord(deps, patched, projectId);
 }
 
+const PACKAGE_MANAGER_LOCKFILES: Array<[string, ChatSessionWorkbenchPackageManager]> = [
+  ["pnpm-lock.yaml", "pnpm"],
+  ["package-lock.json", "npm"],
+  ["yarn.lock", "yarn"],
+  ["bun.lockb", "bun"],
+];
+
+export function detectPackageManagerFromRoot(root: string): ChatSessionWorkbenchPackageManager | undefined {
+  for (const [filename, manager] of PACKAGE_MANAGER_LOCKFILES) {
+    try {
+      if (fsSync.existsSync(path.join(root, filename))) {
+        return manager;
+      }
+    } catch {
+      // ignore unreadable paths; treat as no lockfile
+    }
+  }
+  return undefined;
+}
+
+function detectProjectPackageManager(
+  deps: ChatWorkbenchDependencies,
+  projectId: string | undefined,
+): ChatSessionWorkbenchPackageManager | undefined {
+  if (!projectId) {
+    return undefined;
+  }
+  let project: { workspacePath: string } | undefined;
+  try {
+    project = deps.storage.chatProjects.get(projectId);
+  } catch {
+    return undefined;
+  }
+  if (!project) {
+    return undefined;
+  }
+  const workspaceRoot = path.resolve(deps.config.rootDir, deps.config.assistant.workspaceDir);
+  const absoluteProjectPath = path.resolve(workspaceRoot, project.workspacePath);
+  const projectMatch = detectPackageManagerFromRoot(absoluteProjectPath);
+  if (projectMatch) {
+    return projectMatch;
+  }
+  return detectPackageManagerFromRoot(deps.config.rootDir);
+}
+
 async function buildWorkbenchFileResponse(
   deps: ChatWorkbenchDependencies,
   sessionId: string,
@@ -704,9 +750,11 @@ function hydrateWorkbenchRecord(
   input: ChatSessionWorkbenchRecord,
   fallbackProjectId?: string,
 ): ChatSessionWorkbenchRecord {
+  const effectiveProjectId = input.projectId ?? fallbackProjectId;
   return {
     ...input,
-    projectId: input.projectId ?? fallbackProjectId,
+    projectId: effectiveProjectId,
+    packageManager: input.packageManager ?? detectProjectPackageManager(deps, effectiveProjectId),
     worktreePath: input.worktreePath ? serializeWorkbenchPath(deps, input.worktreePath) : undefined,
   };
 }

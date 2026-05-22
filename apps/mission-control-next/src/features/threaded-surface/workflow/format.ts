@@ -1,4 +1,4 @@
-import type { CodeModeRunRecord } from "@goatcitadel/contracts";
+import type { ChatSessionWorkbenchPackageManager, CodeModeRunRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedWorkflowPanel } from "@goatcitadel/threaded-surface-core";
 
 export type WorkbenchPaneId = "files" | "selected-diff" | "repo-diff" | "output" | "snippets" | "artifact";
@@ -26,12 +26,31 @@ export interface CodeModeRunLedgerItem {
   finishedAt?: string;
 }
 
-export const VALIDATION_COMMAND_PRESETS = [
-  { label: "Typecheck", command: "pnpm typecheck" },
-  { label: "Test", command: "pnpm test" },
-  { label: "Lint", command: "pnpm lint" },
-  { label: "Fast verify", command: "pnpm verify:fast" },
+export interface ValidationCommandPreset {
+  label: string;
+  command: string;
+}
+
+const PACKAGE_MANAGER_RUN_PREFIXES: Record<ChatSessionWorkbenchPackageManager, (script: string) => string> = {
+  pnpm: (script) => `pnpm ${script}`,
+  npm: (script) => `npm run ${script}`,
+  yarn: (script) => `yarn ${script}`,
+  bun: (script) => `bun run ${script}`,
+};
+
+const VALIDATION_SCRIPT_LABELS: Array<{ script: string; label: string }> = [
+  { script: "typecheck", label: "Typecheck" },
+  { script: "test", label: "Test" },
+  { script: "lint", label: "Lint" },
+  { script: "verify:fast", label: "Fast verify" },
 ];
+
+export function getValidationCommandPresets(
+  packageManager: ChatSessionWorkbenchPackageManager = "pnpm",
+): ValidationCommandPreset[] {
+  const format = PACKAGE_MANAGER_RUN_PREFIXES[packageManager];
+  return VALIDATION_SCRIPT_LABELS.map(({ script, label }) => ({ label, command: format(script) }));
+}
 
 export function extractCodeBlocks(content: string): Array<{ id: string; language: string; content: string }> {
   return Array.from(content.matchAll(/```([\w.+-]*)\n([\s\S]*?)```/g))

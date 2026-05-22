@@ -633,9 +633,19 @@ describe("ThreadedWorkflowPanel", () => {
       await Promise.resolve();
     });
 
-    const revertButton = renderer!.root
-      .findAllByType("button")
-      .find((button) => button.children.includes("Revert all"));
+    const openMoreMenu = () => {
+      const moreButton = renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.some((child) => typeof child === "string" && child.startsWith("More")));
+      act(() => {
+        moreButton?.props.onClick();
+      });
+    };
+    const findRevertAllButton = () =>
+      renderer!.root.findAllByType("button").find((button) => button.children.includes("Revert all"));
+
+    openMoreMenu();
+    const revertButton = findRevertAllButton();
     expect(revertButton?.props.disabled).toBe(false);
     act(() => {
       revertButton?.props.onClick();
@@ -649,8 +659,9 @@ describe("ThreadedWorkflowPanel", () => {
     });
     expect(onRevertAll).not.toHaveBeenCalled();
 
+    openMoreMenu();
     act(() => {
-      revertButton?.props.onClick();
+      findRevertAllButton()?.props.onClick();
     });
     const reopenedConfirm = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
     act(() => {
@@ -680,9 +691,19 @@ describe("ThreadedWorkflowPanel", () => {
       await Promise.resolve();
     });
 
-    const revertButton = renderer!.root
-      .findAllByType("button")
-      .find((button) => button.children.includes("Revert file"));
+    const openMoreMenu = () => {
+      const moreButton = renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.some((child) => typeof child === "string" && child.startsWith("More")));
+      act(() => {
+        moreButton?.props.onClick();
+      });
+    };
+    const findRevertFileButton = () =>
+      renderer!.root.findAllByType("button").find((button) => button.children.includes("Revert file"));
+
+    openMoreMenu();
+    const revertButton = findRevertFileButton();
     expect(revertButton?.props.disabled).toBe(false);
     act(() => {
       revertButton?.props.onClick();
@@ -697,8 +718,9 @@ describe("ThreadedWorkflowPanel", () => {
     });
     expect(onRevertFile).not.toHaveBeenCalled();
 
+    openMoreMenu();
     act(() => {
-      revertButton?.props.onClick();
+      findRevertFileButton()?.props.onClick();
     });
     const reopenedConfirm = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
     act(() => {
@@ -1342,6 +1364,12 @@ describe("ThreadedWorkflowPanel", () => {
     });
     expect(onRunHelperSnippet).toHaveBeenCalledWith("ts", "console.log('snippet');");
 
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.some((child) => typeof child === "string" && child.startsWith("More")))
+        ?.props.onClick();
+    });
     await act(async () => {
       renderer!.root
         .findAllByType("button")

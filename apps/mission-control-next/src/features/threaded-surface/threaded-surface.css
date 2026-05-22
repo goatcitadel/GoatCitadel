@@ -1593,6 +1593,65 @@
   min-width: 0;
 }
 
+.mc-next-workbench-action-cluster {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.mc-next-workbench-action-divider {
+  width: 1px;
+  align-self: stretch;
+  min-height: 1.5rem;
+  background: color-mix(in oklab, var(--border) 78%, transparent);
+  margin-inline: 0.15rem;
+}
+
+.mc-next-workbench-action-cluster[data-cluster="destructive"] {
+  position: relative;
+}
+
+.mc-next-workbench-more-popover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.32rem;
+  padding: 0.42rem;
+  min-width: 10rem;
+  border-radius: 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  background: var(--card, var(--background));
+  box-shadow: 0 12px 32px color-mix(in oklab, var(--gc-shadow, rgba(0, 0, 0, 0.4)) 60%, transparent);
+  z-index: 60;
+}
+
+.mc-next-workbench-more-popover .mc-next-panel-button {
+  width: 100%;
+  text-align: left;
+}
+
+.mc-next-workbench-new-artifact-callout {
+  align-self: flex-start;
+  margin-top: 0.45rem;
+  padding: 0.32rem 0.72rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--gc-accent, var(--primary)) 60%, var(--border));
+  background: color-mix(in oklab, var(--gc-accent, var(--primary)) 12%, transparent);
+  color: inherit;
+  font-size: var(--text-xs, 0.75rem);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.mc-next-workbench-new-artifact-callout:hover,
+.mc-next-workbench-new-artifact-callout:focus-visible {
+  background: color-mix(in oklab, var(--gc-accent, var(--primary)) 22%, transparent);
+}
+
 .mc-next-thread-strip {
   align-items: flex-start;
   gap: 0.45rem;

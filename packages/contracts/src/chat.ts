@@ -262,6 +262,8 @@ export type ChatSessionWorkbenchWorktreeStatus = "uninitialized" | "ready" | "mi
 
 export type ChatSessionWorkbenchValidationStatus = "idle" | "pending" | "passed" | "failed";
 
+export type ChatSessionWorkbenchPackageManager = "pnpm" | "npm" | "yarn" | "bun";
+
 export interface ChatSessionWorkbenchValidationResult {
   status: "passed" | "failed" | "skipped" | "timed_out";
   commandLabel?: string;
@@ -275,6 +277,7 @@ export interface ChatSessionWorkbenchValidationResult {
 export interface ChatSessionWorkbenchRecord {
   sessionId: string;
   projectId?: string;
+  packageManager?: ChatSessionWorkbenchPackageManager;
   baseRef?: string;
   worktreePath?: string;
   worktreeStatus: ChatSessionWorkbenchWorktreeStatus;

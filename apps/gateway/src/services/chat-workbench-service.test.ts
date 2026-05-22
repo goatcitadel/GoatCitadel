@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyChatSessionWorkbenchPatch,
   createChatSessionWorkbenchWorktree,
+  detectPackageManagerFromRoot,
   exportChatSessionWorkbenchPatch,
   getChatSessionWorkbench,
   getChatSessionWorkbenchFile,
@@ -512,6 +513,78 @@ describe("chat workbench helpers", () => {
         state: expect.objectContaining({ validationStatus: "passed" }),
       }),
     );
+  });
+});
+
+describe("detectPackageManagerFromRoot", () => {
+  it("returns pnpm when pnpm-lock.yaml is present", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-pm-pnpm-"));
+    tempRoots.push(root);
+    await fs.writeFile(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: 9\n", "utf8");
+    expect(detectPackageManagerFromRoot(root)).toBe("pnpm");
+  });
+
+  it("returns npm when only package-lock.json is present", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-pm-npm-"));
+    tempRoots.push(root);
+    await fs.writeFile(path.join(root, "package-lock.json"), "{}", "utf8");
+    expect(detectPackageManagerFromRoot(root)).toBe("npm");
+  });
+
+  it("returns yarn when only yarn.lock is present", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-pm-yarn-"));
+    tempRoots.push(root);
+    await fs.writeFile(path.join(root, "yarn.lock"), "# yarn lockfile\n", "utf8");
+    expect(detectPackageManagerFromRoot(root)).toBe("yarn");
+  });
+
+  it("returns bun when only bun.lockb is present", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-pm-bun-"));
+    tempRoots.push(root);
+    await fs.writeFile(path.join(root, "bun.lockb"), "", "utf8");
+    expect(detectPackageManagerFromRoot(root)).toBe("bun");
+  });
+
+  it("returns undefined when no recognized lockfile is present", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-pm-none-"));
+    tempRoots.push(root);
+    expect(detectPackageManagerFromRoot(root)).toBeUndefined();
+  });
+
+  it("prefers pnpm-lock.yaml when multiple lockfiles coexist", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-pm-priority-"));
+    tempRoots.push(root);
+    await fs.writeFile(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: 9\n", "utf8");
+    await fs.writeFile(path.join(root, "package-lock.json"), "{}", "utf8");
+    expect(detectPackageManagerFromRoot(root)).toBe("pnpm");
+  });
+});
+
+describe("chat workbench package manager hydration", () => {
+  it("hydrates packageManager from the project workspace lockfile", async () => {
+    const { deps, rootDir } = await createGitWorkbenchFixture();
+    await fs.writeFile(path.join(rootDir, "workspace", "demo", "package-lock.json"), "{}", "utf8");
+
+    const state = await getChatSessionWorkbench(deps, "sess-1");
+
+    expect(state.packageManager).toBe("npm");
+  });
+
+  it("falls back to repo-root lockfile when the project subpath has none", async () => {
+    const { deps, rootDir } = await createGitWorkbenchFixture();
+    await fs.writeFile(path.join(rootDir, "yarn.lock"), "# yarn lockfile\n", "utf8");
+
+    const state = await getChatSessionWorkbench(deps, "sess-1");
+
+    expect(state.packageManager).toBe("yarn");
+  });
+
+  it("leaves packageManager undefined when no lockfile exists at either root", async () => {
+    const { deps } = await createGitWorkbenchFixture();
+
+    const state = await getChatSessionWorkbench(deps, "sess-1");
+
+    expect(state.packageManager).toBeUndefined();
   });
 });
 

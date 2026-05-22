@@ -1,5 +1,5 @@
 /* eslint-disable max-lines */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CodeModeRunRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedWorkflowPanel } from "@goatcitadel/threaded-surface-core";
 import { fetchCodeModeRun, fetchCodeModeRuns } from "@goatcitadel/mission-control-shared/api/capabilities";
@@ -11,7 +11,7 @@ import { WorkbenchFileTree } from "@goatcitadel/mission-control-shared/component
 import { WorkbenchMonacoEditor } from "@goatcitadel/mission-control-shared/components/WorkbenchMonacoEditor";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
 import {
-  VALIDATION_COMMAND_PRESETS,
+  getValidationCommandPresets,
   type CodeModeRunLedgerItem,
   type WorkbenchPaneId,
   extractCodeBlocks,
@@ -261,13 +261,21 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   );
   const readyForRepoOps = workbenchState?.worktreeStatus === "ready";
   const changedFiles = workbenchTree?.changedFiles ?? diff?.changedFiles ?? [];
+  const validationPresets = useMemo(
+    () => getValidationCommandPresets(workbenchState?.packageManager),
+    [workbenchState?.packageManager],
+  );
   const [activePane, setActivePane] = useState<WorkbenchPaneId>("files");
+  const [newArtifactPending, setNewArtifactPending] = useState(false);
+  const prevTurnIdRef = useRef<string | null>(null);
   const [activeBlockIndex, setActiveBlockIndex] = useState(0);
   const [validationCommand, setValidationCommand] = useState("pnpm test");
   const [pendingFilePath, setPendingFilePath] = useState<string | null>(null);
   const [confirmRevertFilePath, setConfirmRevertFilePath] = useState<string | null>(null);
   const [confirmRevertAllOpen, setConfirmRevertAllOpen] = useState(false);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const moreMenuRef = useRef<HTMLDivElement | null>(null);
   const [runList, setRunList] = useState<CodeModeRunRecord[]>([]);
   const [runListLoading, setRunListLoading] = useState(false);
   const [runListError, setRunListError] = useState<string | null>(null);
@@ -334,6 +342,29 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   useEffect(() => {
     setActiveBlockIndex(0);
   }, [codeBlocks.length, selectedTurn?.turnId]);
+
+  useEffect(() => {
+    if (!moreMenuOpen || typeof document === "undefined") {
+      return undefined;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (target && moreMenuRef.current && !moreMenuRef.current.contains(target)) {
+        setMoreMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMoreMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [moreMenuOpen]);
 
   useEffect(() => {
     const runIds = visibleRunIds ? visibleRunIds.split("|").filter(Boolean) : [];
@@ -424,30 +455,46 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   }, [selectedRunSummary?.runId, codeLedgerSessionId, codeLedgerTurnId, codeLedgerWorkspaceId]);
 
   useEffect(() => {
-    if (generatedArtifact) {
-      setActivePane("artifact");
+    const currentTurnId = selectedTurn?.turnId ?? null;
+    const isNewTurn = prevTurnIdRef.current !== currentTurnId;
+
+    if (isNewTurn) {
+      prevTurnIdRef.current = currentTurnId;
+      setNewArtifactPending(false);
+
+      if (generatedArtifact) {
+        setActivePane("artifact");
+        return;
+      }
+      if (hasDirtyDraft || selectedFile) {
+        setActivePane("files");
+        return;
+      }
+      if (selectedFileDiff) {
+        setActivePane("selected-diff");
+        return;
+      }
+      if (diff?.changedFiles.length) {
+        setActivePane("repo-diff");
+        return;
+      }
+      if (output?.helperRuns.length || output?.output) {
+        setActivePane("output");
+        return;
+      }
+      if (codeBlocks.length > 0) {
+        setActivePane("snippets");
+      }
       return;
     }
-    if (hasDirtyDraft || selectedFile) {
-      setActivePane("files");
-      return;
-    }
-    if (selectedFileDiff) {
-      setActivePane("selected-diff");
-      return;
-    }
-    if (diff?.changedFiles.length) {
-      setActivePane("repo-diff");
-      return;
-    }
-    if (output?.helperRuns.length || output?.output) {
-      setActivePane("output");
-      return;
-    }
-    if (codeBlocks.length > 0) {
-      setActivePane("snippets");
+
+    if (generatedArtifact && activePane !== "artifact") {
+      setNewArtifactPending(true);
+    } else {
+      setNewArtifactPending(false);
     }
   }, [
+    activePane,
     codeBlocks.length,
     diff?.changedFiles.length,
     generatedArtifact,
@@ -456,6 +503,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     output?.output,
     selectedFile,
     selectedFileDiff,
+    selectedTurn?.turnId,
   ]);
 
   const activeDraft = draftContent ?? selectedFile?.content ?? "";
@@ -515,109 +563,144 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
       </header>
 
       <div className="mc-next-workbench-action-row">
-        <button type="button" className="mc-next-panel-button" onClick={onRefresh} disabled={loading || busy}>
-          Refresh
-        </button>
-        <button
-          type="button"
-          className="mc-next-panel-button"
-          onClick={onSaveFile}
-          disabled={!selectedFile || !hasDirtyDraft || busy || saving}
-        >
-          {saving ? "Saving…" : "Save file"}
-        </button>
-        <button type="button" className="mc-next-panel-button" onClick={onDiscardDraft} disabled={!hasDirtyDraft}>
-          Discard draft
-        </button>
-        <button
-          type="button"
-          className="mc-next-panel-button"
-          onClick={onCreateWorktree}
-          disabled={needsProjectBinding || readyForRepoOps || busy}
-        >
-          Create worktree
-        </button>
-        <input
-          className="mc-next-workbench-command-input"
-          value={validationCommand}
-          onChange={(event) => setValidationCommand(event.target.value)}
-          disabled={busy}
-          aria-label="Validation command"
-        />
-        {VALIDATION_COMMAND_PRESETS.map((preset) => (
+        <div className="mc-next-workbench-action-cluster" data-cluster="draft">
           <button
-            key={preset.label}
             type="button"
             className="mc-next-panel-button"
-            disabled={busy || Boolean(validationBlockedReason) || !onRunValidationCommand}
-            title={validationBlockedReason ?? preset.command}
-            onClick={() => {
-              setValidationCommand(preset.command);
-              runValidationCommandLine(preset.command);
-            }}
+            onClick={onSaveFile}
+            disabled={!selectedFile || !hasDirtyDraft || busy || saving}
           >
-            {preset.label}
+            {saving ? "Saving…" : "Save file"}
           </button>
-        ))}
-        <button
-          type="button"
-          className="mc-next-panel-button"
-          onClick={runValidationFromInput}
-          disabled={busy || Boolean(validationBlockedReason) || !onRunValidationCommand}
-          title={
-            validationBlockedReason ?? (!onRunValidationCommand ? "Validation backend is unavailable." : undefined)
-          }
-        >
-          Test
-        </button>
-        <button
-          type="button"
-          className="mc-next-panel-button"
-          onClick={() => {
-            if (activePatchBlock) {
-              onApplyPatch?.(activePatchBlock.content);
+          <button type="button" className="mc-next-panel-button" onClick={onDiscardDraft} disabled={!hasDirtyDraft}>
+            Discard draft
+          </button>
+        </div>
+        <span aria-hidden="true" className="mc-next-workbench-action-divider" />
+        <div className="mc-next-workbench-action-cluster" data-cluster="repo">
+          <button type="button" className="mc-next-panel-button" onClick={onRefresh} disabled={loading || busy}>
+            Refresh
+          </button>
+          <button
+            type="button"
+            className="mc-next-panel-button"
+            onClick={onCreateWorktree}
+            disabled={needsProjectBinding || readyForRepoOps || busy}
+          >
+            Create worktree
+          </button>
+          <button
+            type="button"
+            className="mc-next-panel-button"
+            onClick={() => {
+              if (activePatchBlock) {
+                onApplyPatch?.(activePatchBlock.content);
+                setActivePane("output");
+              }
+            }}
+            disabled={busy || Boolean(applyBlockedReason) || !onApplyPatch}
+            title={applyBlockedReason ?? (!onApplyPatch ? "Patch apply backend is unavailable." : undefined)}
+          >
+            Apply
+          </button>
+          <button
+            type="button"
+            className="mc-next-panel-button"
+            onClick={() => {
+              onExportPatch?.();
               setActivePane("output");
+            }}
+            disabled={busy || Boolean(exportBlockedReason) || !onExportPatch}
+            title={exportBlockedReason ?? (!onExportPatch ? "Patch export backend is unavailable." : undefined)}
+          >
+            Export
+          </button>
+          <input
+            className="mc-next-workbench-command-input"
+            value={validationCommand}
+            onChange={(event) => setValidationCommand(event.target.value)}
+            disabled={busy}
+            aria-label="Validation command"
+          />
+          <button
+            type="button"
+            className="mc-next-panel-button"
+            onClick={runValidationFromInput}
+            disabled={busy || Boolean(validationBlockedReason) || !onRunValidationCommand}
+            title={
+              validationBlockedReason ?? (!onRunValidationCommand ? "Validation backend is unavailable." : undefined)
             }
-          }}
-          disabled={busy || Boolean(applyBlockedReason) || !onApplyPatch}
-          title={applyBlockedReason ?? (!onApplyPatch ? "Patch apply backend is unavailable." : undefined)}
-        >
-          Apply
-        </button>
-        <button
-          type="button"
-          className="mc-next-panel-button"
-          onClick={() => {
-            onExportPatch?.();
-            setActivePane("output");
-          }}
-          disabled={busy || Boolean(exportBlockedReason) || !onExportPatch}
-          title={exportBlockedReason ?? (!onExportPatch ? "Patch export backend is unavailable." : undefined)}
-        >
-          Export
-        </button>
-        <button
-          type="button"
-          className="mc-next-panel-button"
-          onClick={() => {
-            if (selectedFile?.path) {
-              setConfirmRevertFilePath(selectedFile.path);
+          >
+            Test
+          </button>
+          {validationPresets.map((preset) => (
+            <button
+              key={preset.label}
+              type="button"
+              className="mc-next-panel-button"
+              disabled={busy || Boolean(validationBlockedReason) || !onRunValidationCommand}
+              title={validationBlockedReason ?? preset.command}
+              onClick={() => {
+                setValidationCommand(preset.command);
+                runValidationCommandLine(preset.command);
+              }}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+        <span aria-hidden="true" className="mc-next-workbench-action-divider" />
+        <div className="mc-next-workbench-action-cluster" data-cluster="destructive" ref={moreMenuRef}>
+          <button
+            type="button"
+            className="mc-next-panel-button"
+            disabled={
+              busy ||
+              (Boolean(selectedRevertBlockedReason) && Boolean(allRevertBlockedReason)) ||
+              (!onRevertFile && !onRevertAll)
             }
-          }}
-          disabled={busy || Boolean(selectedRevertBlockedReason) || !onRevertFile}
-          title={selectedRevertBlockedReason ?? (!onRevertFile ? "File revert backend is unavailable." : undefined)}
-        >
-          Revert file
-        </button>
-        <button
-          type="button"
-          className="mc-next-panel-button"
-          onClick={() => setConfirmRevertAllOpen(true)}
-          disabled={busy || Boolean(allRevertBlockedReason) || !onRevertAll}
-          title={allRevertBlockedReason ?? (!onRevertAll ? "Revert backend is unavailable." : undefined)}
-        >
-          Revert all
-        </button>
+            aria-expanded={moreMenuOpen}
+            aria-haspopup="menu"
+            aria-label="More workbench actions"
+            onClick={() => setMoreMenuOpen((open) => !open)}
+          >
+            More ▾
+          </button>
+          {moreMenuOpen ? (
+            <div className="mc-next-workbench-more-popover" role="menu">
+              <button
+                type="button"
+                role="menuitem"
+                className="mc-next-panel-button"
+                disabled={busy || Boolean(selectedRevertBlockedReason) || !onRevertFile}
+                title={
+                  selectedRevertBlockedReason ?? (!onRevertFile ? "File revert backend is unavailable." : undefined)
+                }
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  if (selectedFile?.path) {
+                    setConfirmRevertFilePath(selectedFile.path);
+                  }
+                }}
+              >
+                Revert file
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="mc-next-panel-button"
+                disabled={busy || Boolean(allRevertBlockedReason) || !onRevertAll}
+                title={allRevertBlockedReason ?? (!onRevertAll ? "Revert backend is unavailable." : undefined)}
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  setConfirmRevertAllOpen(true);
+                }}
+              >
+                Revert all
+              </button>
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {error ? <div className="mc-next-panel-banner warning">{error}</div> : null}
@@ -672,6 +755,19 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
               </button>
             ))}
           </div>
+
+          {newArtifactPending && generatedArtifact && activePane !== "artifact" ? (
+            <button
+              type="button"
+              className="mc-next-workbench-new-artifact-callout"
+              onClick={() => {
+                setActivePane("artifact");
+                setNewArtifactPending(false);
+              }}
+            >
+              New artifact ready · View
+            </button>
+          ) : null}
 
           {activePane === "files" ? (
             selectedFile ? (
