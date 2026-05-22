@@ -5,7 +5,7 @@ import { StatusChip } from "@goatcitadel/mission-control-shared/components/Statu
 import { ChatComposerPlusMenu } from "@goatcitadel/mission-control-shared/components/ChatComposerPlusMenu";
 import { ChatQueueBar } from "@goatcitadel/mission-control-shared/components/chat/ChatQueueBar";
 import { Paperclip } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ContextStrip, type ContextStripMode } from "../native-routes/primitives";
 import { describeThreadedUiError } from "./threaded-error-copy";
 import { useAutoGrowTextarea } from "./useAutoGrowTextarea";
@@ -183,19 +183,33 @@ function PendingImagePreview({ attachment }: { attachment: PendingAttachment }) 
   const [blobPreviewUrl, setBlobPreviewUrl] = useState<string | null>(null);
   const [loadWithAuthHeaders, setLoadWithAuthHeaders] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const activeBlobPreviewUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
+    if (activeBlobPreviewUrlRef.current) {
+      URL.revokeObjectURL(activeBlobPreviewUrlRef.current);
+      activeBlobPreviewUrlRef.current = null;
+    }
     setBlobPreviewUrl(null);
     setLoadWithAuthHeaders(false);
     setError(null);
   }, [attachment.attachmentId]);
 
+  useEffect(
+    () => () => {
+      if (activeBlobPreviewUrlRef.current) {
+        URL.revokeObjectURL(activeBlobPreviewUrlRef.current);
+        activeBlobPreviewUrlRef.current = null;
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
-    if (!loadWithAuthHeaders || blobPreviewUrl) {
+    if (!loadWithAuthHeaders || activeBlobPreviewUrlRef.current) {
       return;
     }
     let active = true;
-    let objectUrl: string | null = null;
 
     async function loadPreview(): Promise<void> {
       try {
@@ -208,12 +222,15 @@ function PendingImagePreview({ attachment }: { attachment: PendingAttachment }) 
           throw new Error(`API error ${response.status}: ${text}`);
         }
         const blob = await response.blob();
-        objectUrl = URL.createObjectURL(blob);
+        const objectUrl = URL.createObjectURL(blob);
         if (!active) {
           URL.revokeObjectURL(objectUrl);
-          objectUrl = null;
           return;
         }
+        if (activeBlobPreviewUrlRef.current) {
+          URL.revokeObjectURL(activeBlobPreviewUrlRef.current);
+        }
+        activeBlobPreviewUrlRef.current = objectUrl;
         setBlobPreviewUrl(objectUrl);
       } catch (nextError) {
         if (active) {
@@ -226,11 +243,8 @@ function PendingImagePreview({ attachment }: { attachment: PendingAttachment }) 
     void loadPreview();
     return () => {
       active = false;
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
     };
-  }, [blobPreviewUrl, contentPath, directPreviewUrl, loadWithAuthHeaders]);
+  }, [contentPath, directPreviewUrl, loadWithAuthHeaders]);
 
   const previewUrl = blobPreviewUrl ?? directPreviewUrl;
   const fallbackLoading = loadWithAuthHeaders && !blobPreviewUrl && !error;

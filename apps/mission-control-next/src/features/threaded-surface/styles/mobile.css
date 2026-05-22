@@ -1,5 +1,8 @@
 @media (max-width: 1360px) {
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench.has-context,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.mode-chat.has-context,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel.has-context,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-code-panel.has-context,
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench,
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.mode-chat,
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel,
@@ -61,7 +64,10 @@
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel,
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-code-panel,
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-context,
-  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench.has-context {
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench.has-context,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.mode-chat.has-context,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel.has-context,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-code-panel.has-context {
     grid-template-columns: minmax(0, 1fr);
   }
 

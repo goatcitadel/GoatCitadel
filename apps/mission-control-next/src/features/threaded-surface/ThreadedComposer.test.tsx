@@ -704,7 +704,7 @@ describe("ThreadedComposer", () => {
   });
 
   it("falls back to authenticated image loading and surfaces preview failures", async () => {
-    const { createObjectURL } = stubObjectUrls();
+    const { createObjectURL, revokeObjectURL } = stubObjectUrls();
     const fetchMock = vi.fn(async () => ({
       ok: true,
       blob: async () => new Blob(["image"], { type: "image/png" }),
@@ -740,12 +740,57 @@ describe("ThreadedComposer", () => {
     );
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(renderer.root.findByType("img").props.src).toBe("blob:preview");
+    expect(revokeObjectURL).not.toHaveBeenCalledWith("blob:preview");
 
     await act(async () => {
       renderer.root.findByType("img").props.onError();
     });
 
     expect(collectText(renderer.root)).toContain("Preview unavailable: Preview unavailable.");
+  });
+
+  it("revokes active authenticated image object URLs on attachment removal", async () => {
+    const { revokeObjectURL } = stubObjectUrls();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        blob: async () => new Blob(["image"], { type: "image/png" }),
+      })),
+    );
+
+    const firstAttachment = {
+      attachmentId: "attachment-image-active",
+      sessionId: "session-1",
+      fileName: "active.png",
+      mimeType: "image/png",
+      mediaType: "image",
+      sizeBytes: 2048,
+      sha256: "hash-image",
+      storageRelPath: "chat/default/active.png",
+      extractStatus: "ready",
+      createdAt: "2026-04-22T00:00:00.000Z",
+    };
+
+    const renderer = await renderComposer({
+      pendingAttachments: [firstAttachment],
+    });
+
+    await act(async () => {
+      renderer.root.findByType("img").props.onError();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(renderer.root.findByType("img").props.src).toBe("blob:preview");
+    expect(revokeObjectURL).not.toHaveBeenCalledWith("blob:preview");
+
+    await act(async () => {
+      renderer.update(<ThreadedComposer props={buildProps({ pendingAttachments: [] })} />);
+      await Promise.resolve();
+    });
+
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:preview");
   });
 
   it("surfaces authenticated image fetch errors", async () => {

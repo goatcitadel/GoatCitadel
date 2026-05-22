@@ -594,7 +594,7 @@ export function MissionThreadedControllerHost({
   const activeStreamRef = useRef<ActiveChatStreamState | null>(null);
   const routeSearch = typeof window === "undefined" ? "" : window.location.search;
   const deferredSearch = useDeferredValue(search.trim());
-  const compactSurfaceLayout = useMediaQuery("(max-width: 840px)");
+  const compactSurfaceLayout = useMediaQuery("(max-width: 1023px)");
 
   const {
     config: runtimeLlmConfig,

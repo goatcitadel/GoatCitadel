@@ -110,7 +110,9 @@ export function ThreadedSurfacePage({
   permissionState?: ThreadedPermissionState;
 }) {
   const compactLayout = useMediaQuery("(max-width: 1180px)");
+  const railDrawerLayout = useMediaQuery("(max-width: 1023px)");
   const railOpen = input.sessionRailOpen;
+  const railDrawerOpen = railDrawerLayout && railOpen;
   const dockOpen = input.dockOpen && Boolean(input.activeSessionSurfaceProps);
   const activeProps = input.activeSessionSurfaceProps;
   const workflowPanel = input.workflowPanel;
@@ -166,17 +168,17 @@ export function ThreadedSurfacePage({
     >
       <button
         type="button"
-        className={`mc-next-threaded-scrim${railOpen ? " open" : ""}`}
-        aria-hidden={!railOpen}
-        tabIndex={railOpen ? 0 : -1}
+        className={`mc-next-threaded-scrim${railDrawerOpen ? " open" : ""}`}
+        aria-hidden={!railDrawerOpen}
+        tabIndex={railDrawerOpen ? 0 : -1}
         onClick={() => input.onSessionRailOpenChange(false)}
       />
 
       <aside
-        className={`mc-next-threaded-rail${railOpen ? " open" : ""}`}
+        className={`mc-next-threaded-rail${railDrawerOpen ? " open" : ""}`}
         aria-label="Sessions"
-        aria-hidden={compactLayout && !railOpen}
-        inert={compactLayout && !railOpen}
+        aria-hidden={railDrawerLayout && !railOpen}
+        inert={railDrawerLayout && !railOpen}
       >
         <div className="mc-next-threaded-rail-head">
           <div>

@@ -1,9 +1,19 @@
+import { readFileSync } from "node:fs";
 import React from "react";
 import { createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+
+const mediaQueryMock = vi.hoisted(() => ({
+  matches: new Map<string, boolean>(),
+}));
+
+vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({
+  useMediaQuery: (query: string) => mediaQueryMock.matches.get(query) ?? false,
+}));
+
 import {
   ThreadedSurfacePage,
   formatRelativeTime,
@@ -320,6 +330,14 @@ function findButtonByAriaLabel(root: ReactTestInstance, ariaLabel: string): Reac
   return root.findByProps({ "aria-label": ariaLabel });
 }
 
+function setMediaQuery(query: string, matches: boolean) {
+  mediaQueryMock.matches.set(query, matches);
+}
+
+beforeEach(() => {
+  mediaQueryMock.matches.clear();
+});
+
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -327,6 +345,74 @@ afterEach(() => {
 });
 
 describe("ThreadedSurfacePage", () => {
+  it("keeps the persistent desktop session rail interactive when drawer state is closed", async () => {
+    setMediaQuery("(max-width: 1023px)", false);
+    const input = buildInput() as any;
+    input.sessionRailOpen = false;
+    input.sessionRail.onCreateSession = vi.fn();
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="cowork" input={input} />);
+    });
+
+    const rail = renderer!.root.findByProps({ "aria-label": "Sessions" });
+    expect(rail.props.className).toBe("mc-next-threaded-rail");
+    expect(rail.props["aria-hidden"]).toBe(false);
+    expect(rail.props.inert).toBe(false);
+    expect(renderer!.root.findByProps({ className: "mc-next-threaded-scrim" }).props.tabIndex).toBe(-1);
+
+    await act(async () => {
+      findButton(renderer!.root, "New session").props.onClick();
+    });
+    expect(input.sessionRail.onCreateSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("only marks the mobile drawer rail inert while it is closed", async () => {
+    setMediaQuery("(max-width: 1023px)", true);
+    const input = buildInput() as any;
+    input.sessionRailOpen = false;
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="cowork" input={input} />);
+    });
+
+    let rail = renderer!.root.findByProps({ "aria-label": "Sessions" });
+    expect(rail.props.className).toBe("mc-next-threaded-rail");
+    expect(rail.props["aria-hidden"]).toBe(true);
+    expect(rail.props.inert).toBe(true);
+    expect(renderer!.root.findByProps({ className: "mc-next-threaded-scrim" }).props.tabIndex).toBe(-1);
+
+    await act(async () => {
+      renderer!.update(<ThreadedSurfacePage surface="cowork" input={{ ...input, sessionRailOpen: true }} />);
+    });
+    rail = renderer!.root.findByProps({ "aria-label": "Sessions" });
+    expect(rail.props.className).toBe("mc-next-threaded-rail open");
+    expect(rail.props["aria-hidden"]).toBe(false);
+    expect(rail.props.inert).toBe(false);
+    expect(renderer!.root.findByProps({ className: "mc-next-threaded-scrim open" }).props.tabIndex).toBe(0);
+  });
+
+  it("keeps high-specificity context grid selectors in both responsive collapse blocks", () => {
+    const css = readFileSync(new URL("./styles/mobile.css", import.meta.url), "utf8");
+    const selectors = [
+      ".mc-next-threaded-stage.mode-chat.has-context",
+      ".mc-next-threaded-stage.has-cowork-panel.has-context",
+      ".mc-next-threaded-stage.has-code-panel.has-context",
+    ];
+
+    for (const breakpoint of ["1360", "1023"]) {
+      const start = css.indexOf(`@media (max-width: ${breakpoint}px)`);
+      const next = css.indexOf("@media", start + 1);
+      const block = css.slice(start, next === -1 ? undefined : next);
+      expect(start).toBeGreaterThanOrEqual(0);
+      for (const selector of selectors) {
+        expect(block).toContain(selector);
+      }
+    }
+  });
+
   it("formats archive labels and session relative-time fallbacks", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-14T12:00:00.000Z"));
@@ -426,6 +512,7 @@ describe("ThreadedSurfacePage", () => {
   });
 
   it("wires session rail filters, project creation, file upload, and archive confirmation", async () => {
+    setMediaQuery("(max-width: 1023px)", true);
     const input = buildInput() as any;
     input.onSessionRailOpenChange = vi.fn();
     input.dropTargetProps.onUploadFiles = vi.fn();
@@ -753,6 +840,7 @@ describe("ThreadedSurfacePage", () => {
   });
 
   it("wires cowork active-session actions, project drafts, tag filters, and compact artifact dismissal", async () => {
+    setMediaQuery("(max-width: 840px)", true);
     vi.stubGlobal("HTMLElement", class HTMLElement {});
     vi.stubGlobal("window", {
       matchMedia: vi.fn((query: string) => ({
