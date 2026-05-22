@@ -1,5 +1,6 @@
 import fp from "fastify-plugin";
 import path from "node:path";
+import { setBootCheckpoint } from "../boot-tracker.js";
 import { ensureBundledPostgresRuntime } from "../bundled-postgres-runtime.js";
 import { repoHasConfigMarker } from "../config-files.js";
 import { loadGatewayConfig } from "../config.js";
@@ -20,16 +21,22 @@ declare module "fastify" {
 }
 
 export const gatewayPlugin = fp(async (fastify) => {
+  setBootCheckpoint("storage-plugin:detectRootDir");
   const rootDir = detectRootDir();
+  setBootCheckpoint("storage-plugin:loadGatewayConfig");
   const config = await loadGatewayConfig(rootDir);
+  setBootCheckpoint("storage-plugin:ensureBundledPostgresRuntime");
   const bundledPostgres = await ensureBundledPostgresRuntime(config);
+  setBootCheckpoint("storage-plugin:postgres-ready");
   const shouldStopBundledPostgres = shouldStopBundledPostgresOnClose();
   const gateway = createGatewayRuntime(config);
   gateway.attachDevDiagnosticsLogger(fastify.log);
   fastify.decorate("gatewayRuntime", gateway);
   fastify.decorate("gatewayAuth", gateway);
   fastify.decorate("gatewayConfig", config);
+  setBootCheckpoint("storage-plugin:initCritical-starting");
   await gateway.initCritical();
+  setBootCheckpoint("storage-plugin:initCritical-returned");
 
   // codeql[js/missing-rate-limiting] Startup initialization is not an HTTP route handler.
   fastify.addHook("onReady", async () => {

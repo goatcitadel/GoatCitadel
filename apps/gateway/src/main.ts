@@ -1,4 +1,9 @@
 /* eslint-disable no-console */
+// IMPORTANT: boot-tracker must be the first import so its heartbeat is
+// registered before the rest of the import graph executes. See
+// boot-tracker.ts for context on the Windows boot-hang investigation.
+import { endBootTracking, setBootCheckpoint } from "./boot-tracker.js";
+setBootCheckpoint("main.ts:imports-resolving");
 import { buildApp } from "./app.js";
 import { performShutdown } from "./shutdown.js";
 import {
@@ -10,6 +15,7 @@ import {
 import { setGoatcitadelTerminalTitle } from "./runtime-ux.js";
 import { env } from "./env.js";
 
+setBootCheckpoint("main.ts:body-start");
 const port = env.GATEWAY_PORT;
 const host = env.GATEWAY_HOST;
 const warnUnauthNonLoopback = resolveWarnUnauthNonLoopback();
@@ -17,7 +23,9 @@ const allowUnauthNetwork = resolveAllowUnauthNetwork();
 
 setGoatcitadelTerminalTitle(env.GOATCITADEL_TERMINAL_TASK?.trim() || "Gateway");
 
+setBootCheckpoint("main.ts:buildApp-starting");
 const app = await buildApp();
+setBootCheckpoint("main.ts:buildApp-returned");
 let shuttingDown = false;
 
 process.on("warning", (warning) => {
@@ -87,8 +95,10 @@ try {
       );
     }
   }
+  setBootCheckpoint("main.ts:listen-starting");
   await app.listen({ port, host });
   app.log.info(`gateway listening on http://${host}:${port}`);
+  endBootTracking();
 } catch (error) {
   app.log.error(error);
   process.exitCode = 1;
