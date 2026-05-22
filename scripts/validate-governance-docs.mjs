@@ -5,6 +5,7 @@ import {
   buildVisualBaselineFileName,
   NEXT_RELEASE_SURFACE_MANIFEST,
   NEXT_VISUAL_REGRESSION_MANIFEST,
+  NEXT_VISUAL_SCENARIO_MANIFEST,
   RELEASE_SURFACE_MANIFEST,
   RELEASE_SURFACE_VARIANTS,
   resolveVisualBaselineNamespace,
@@ -500,8 +501,27 @@ for (const route of NEXT_RELEASE_SURFACE_MANIFEST) {
   }
 }
 
-if (NEXT_VISUAL_REGRESSION_MANIFEST.length !== NEXT_RELEASE_SURFACE_MANIFEST.length) {
-  errors.push("scripts/verification/lib/release-surface-manifest.mjs must visually cover every Mission Control Next release-surface route.");
+if (
+  NEXT_VISUAL_REGRESSION_MANIFEST.length !==
+  NEXT_RELEASE_SURFACE_MANIFEST.length + NEXT_VISUAL_SCENARIO_MANIFEST.length
+) {
+  errors.push(
+    "scripts/verification/lib/release-surface-manifest.mjs must visually cover every release-surface route plus its scenario variants.",
+  );
+}
+const visualManifestSlugs = new Set(NEXT_VISUAL_REGRESSION_MANIFEST.map((route) => route.slug));
+for (const route of NEXT_RELEASE_SURFACE_MANIFEST) {
+  if (!visualManifestSlugs.has(route.slug)) {
+    errors.push(`Mission Control Next visual-regression manifest is missing canonical route ${route.slug}.`);
+  }
+}
+for (const route of NEXT_VISUAL_SCENARIO_MANIFEST) {
+  const key = nextReleaseRouteKey(route);
+  if (!canonicalRouteKeys.has(key)) {
+    errors.push(
+      `Mission Control Next visual scenario ${route.slug} targets unknown canonical route ${key}.`,
+    );
+  }
 }
 
 for (const route of NEXT_RELEASE_SURFACE_MANIFEST) {

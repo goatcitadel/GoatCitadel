@@ -8,6 +8,7 @@ import { Paperclip } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ContextStrip, type ContextStripMode } from "../native-routes/primitives";
 import { describeThreadedUiError } from "./threaded-error-copy";
+import { useAutoGrowTextarea } from "./useAutoGrowTextarea";
 
 type PendingAttachment = MissionThreadedActiveSessionSurfaceProps["pendingAttachments"][number];
 
@@ -340,6 +341,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const usageLabel = formatUsageLabel(props.thread);
   const usageTotals = computeUsageTotals(props.thread);
   const composerV2Enabled = useComposerV2Enabled();
+  useAutoGrowTextarea(props.composerRef, props.draft);
   const contextStripMode = toContextStripMode(props.mode);
   const contextStripModel = currentRouteLabel ?? props.trust?.providerModelSummary ?? "Routing pending";
   const memoryLabel = formatHistoricalMemoryLabel(props.thread);

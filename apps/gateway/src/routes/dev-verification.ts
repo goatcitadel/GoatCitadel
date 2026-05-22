@@ -31,6 +31,11 @@ const chatApprovalScenarioSchema = z.object({
   workspaceId: z.string().trim().min(1),
 });
 
+const chatUserInputScenarioSchema = z.object({
+  sessionId: z.string().trim().min(1),
+  workspaceId: z.string().trim().min(1),
+});
+
 const memoryItemSeedSchema = z.object({
   namespace: z.string().trim().min(1),
   title: z.string().trim().min(1),
@@ -335,6 +340,74 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       approvalId: approval.approvalId,
       approvalWaitRunId,
       chatTurnDurableRunId: chatTurnDurableRun.runId,
+    });
+  });
+
+  fastify.post("/api/v1/dev/verification/chat-user-input-scenario", async (request, reply) => {
+    if (!devVerificationEnabled()) {
+      return reply.code(404).send({ error: "Development verification endpoints are disabled." });
+    }
+    const parsed = chatUserInputScenarioSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+
+    const now = new Date().toISOString();
+    const turnId = randomUUID();
+    const userMessageId = randomUUID();
+    const promptId = randomUUID();
+    const storage = fastify.services.devVerification.storage;
+
+    storage.chatMessages.upsert({
+      messageId: userMessageId,
+      sessionId: parsed.data.sessionId,
+      role: "user",
+      actorType: "user",
+      actorId: "verification-operator",
+      content: "Help me choose the next verification step for this run.",
+      timestamp: now,
+    });
+    storage.chatTurnTraces.create({
+      turnId,
+      sessionId: parsed.data.sessionId,
+      userMessageId,
+      status: "waiting_for_user_input",
+      mode: "chat",
+      webMode: "auto",
+      memoryMode: "auto",
+      thinkingLevel: "standard",
+      pendingUserInput: {
+        promptId,
+        turnId,
+        kind: "single_select",
+        title: "Pick the next verification step",
+        question: "Which path should the verification run take from here?",
+        required: true,
+        dismissible: false,
+        submitLabel: "Submit answer",
+        options: [
+          {
+            optionId: "option-a",
+            label: "Continue with the current plan",
+            description: "Keep the existing run posture and resume on the previous step.",
+          },
+          {
+            optionId: "option-b",
+            label: "Pause for manual review",
+            description: "Hold the run so the operator can inspect intermediate evidence.",
+          },
+        ],
+      },
+      startedAt: now,
+    });
+    storage.chatSessionBranchState.setActiveLeaf(parsed.data.sessionId, turnId);
+
+    return reply.code(201).send({
+      sessionId: parsed.data.sessionId,
+      workspaceId: parsed.data.workspaceId,
+      turnId,
+      userMessageId,
+      promptId,
     });
   });
 

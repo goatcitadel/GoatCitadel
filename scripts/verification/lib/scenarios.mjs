@@ -2792,7 +2792,7 @@ export async function runVisualRegressionLane(context, options = {}) {
               },
               async ({ correlationId }) => {
                 const browserLogCursor = browserLog.mark();
-                await page.goto(buildVerificationUiUrl(stack.uiUrl, appendQuery(route.href, variant.themeQuery)), {
+                await page.goto(buildVerificationUiUrl(stack.uiUrl, resolveVisualRouteHref(route, variant, fixture)), {
                   waitUntil: "domcontentloaded",
                 });
                 await waitForVerificationRouteReady(
@@ -2801,7 +2801,9 @@ export async function runVisualRegressionLane(context, options = {}) {
                   verificationTarget.packageName,
                   VISUAL_ROUTE_READY_TIMEOUT_MS,
                 );
-                await setBrowserCorrelation(page, correlationId, fixture?.sessionId);
+                const correlationSessionId =
+                  (route?.fixtureSessionKey && fixture?.sessions?.[route.fixtureSessionKey]) || fixture?.sessionId;
+                await setBrowserCorrelation(page, correlationId, correlationSessionId);
                 const browserSanity = assertBrowserConsoleHealthy(
                   browserLog,
                   browserLogCursor,
@@ -4822,6 +4824,17 @@ function appendQuery(href, query) {
   return `${href}${href.includes("?") ? "&" : "?"}${query}`;
 }
 
+function resolveVisualRouteHref(route, variant, fixture) {
+  let href = appendQuery(route.href, variant.themeQuery);
+  if (route?.fixtureSessionKey && fixture?.sessions) {
+    const sessionId = fixture.sessions[route.fixtureSessionKey];
+    if (sessionId) {
+      href = appendQuery(href, `sessionId=${encodeURIComponent(sessionId)}`);
+    }
+  }
+  return href;
+}
+
 async function captureBrowserArtifacts(context, input) {
   const screenshotPath = path.join(context.artifactRoot, "screenshots", `${input.slug}.png`);
   const browserDiagnosticsPath = path.join(context.artifactRoot, "diagnostics", `${input.slug}-browser.json`);
@@ -4886,6 +4899,24 @@ async function seedMissionControlNextFixture(gatewayUrl, options = {}) {
       },
     );
     assertOk(artifactResponse, "create mission-control-next generated artifact");
+  }
+
+  // Seed a pending-user-input prompt on a SEPARATE session BEFORE the approval
+  // scenario, so the chat-approval session remains the most-recently-active
+  // session and existing "/chat" baselines that auto-pick the freshest session
+  // still resolve to the approval state. The chat-pending-user-input baseline
+  // targets the user-input session explicitly via fixtureSessionKey.
+  const seededSessionIds = Array.isArray(seedResponse.body?.sessionIds) ? seedResponse.body.sessionIds : [];
+  const userInputSessionId = seededSessionIds.find((candidate) => candidate && candidate !== sessionId);
+  if (userInputSessionId) {
+    const userInputResponse = await requestJson(gatewayUrl, "/api/v1/dev/verification/chat-user-input-scenario", {
+      method: "POST",
+      body: {
+        sessionId: userInputSessionId,
+        workspaceId,
+      },
+    });
+    assertOk(userInputResponse, "create mission-control-next chat user-input prompt");
   }
 
   const approvalResponse = await requestJson(gatewayUrl, "/api/v1/dev/verification/chat-approval-scenario", {
@@ -5060,7 +5091,11 @@ async function seedMissionControlNextFixture(gatewayUrl, options = {}) {
   return {
     workspaceId,
     sessionId,
-    sessionIds: seedResponse.body?.sessionIds ?? [],
+    sessionIds: seededSessionIds,
+    sessions: {
+      approval: sessionId,
+      ...(userInputSessionId ? { userInput: userInputSessionId } : {}),
+    },
     agentIds: createdAgents.map((agent) => agent?.agentId).filter(Boolean),
     taskIds: tasks.map((task) => task?.taskId).filter(Boolean),
   };

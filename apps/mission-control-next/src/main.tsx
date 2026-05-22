@@ -16,6 +16,10 @@ const visualRegressionMode =
 
 if (visualRegressionMode) {
   document.documentElement.dataset.visualRegression = "true";
+  const params = new URLSearchParams(globalThis.location?.search ?? "");
+  if (params.get("vr-blocked") === "1") {
+    document.documentElement.dataset.visualRegressionShowBlocked = "true";
+  }
 }
 
 void retireMissionControlServiceWorkers();

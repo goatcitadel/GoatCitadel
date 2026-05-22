@@ -872,22 +872,32 @@
   backdrop-filter: blur(7px);
 }
 
-:root[data-visual-regression="true"] .mc-next-thread-blocking-prompt {
+/*
+ * Visual-regression baselines hide blocking prompts and warning banners by
+ * default so existing route snapshots stay stable. Routes that explicitly want
+ * to capture blocked states opt in with the URL flag `?vr-blocked=1`, which
+ * sets `data-visual-regression-show-blocked="true"` on the root element. See
+ * apps/mission-control-next/src/main.tsx and the `chat-pending-approval` /
+ * `chat-pending-user-input` manifest entries in
+ * scripts/verification/lib/release-surface-manifest.mjs.
+ */
+:root[data-visual-regression="true"]:not([data-visual-regression-show-blocked="true"]) .mc-next-thread-blocking-prompt {
   display: none;
 }
 
-:root[data-visual-regression="true"] .mc-next-composer-banner.warning {
+:root[data-visual-regression="true"]:not([data-visual-regression-show-blocked="true"])
+  .mc-next-composer-banner.warning {
   display: none;
 }
 
-:root[data-visual-regression="true"]
+:root[data-visual-regression="true"]:not([data-visual-regression-show-blocked="true"])
   .mc-next-threaded-thread-card:has(.mc-next-thread-blocking-prompt)
   + .mc-next-threaded-composer-card {
   opacity: 1;
   filter: none;
 }
 
-:root[data-visual-regression="true"]
+:root[data-visual-regression="true"]:not([data-visual-regression-show-blocked="true"])
   .mc-next-threaded-thread-card:has(.mc-next-thread-blocking-prompt)
   + .mc-next-threaded-composer-card::after {
   content: none;
@@ -2000,7 +2010,14 @@
 }
 
 .mc-next-threaded-surface.unified .mc-next-composer-input-shell textarea {
-  min-height: 2.35rem;
+  /*
+   * The composer textarea grows with content via useAutoGrowTextarea. CSS owns
+   * the min-height floor (~5 lines) and the max-height ceiling (~14 lines past
+   * which an internal scrollbar engages); the hook owns the height between
+   * those bounds. Keep resize:none so the operator cannot drag past the cap.
+   */
+  min-height: 7.5rem;
+  max-height: 18rem;
   padding: 0.25rem 0;
   border: 0;
   border-radius: 0;

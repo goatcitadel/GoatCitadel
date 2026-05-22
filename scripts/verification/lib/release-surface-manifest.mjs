@@ -362,11 +362,36 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = [
   },
 ];
 
-const NEXT_VISUAL_ROUTE_SLUGS = new Set(NEXT_RELEASE_SURFACE_MANIFEST.map((route) => route.slug));
+/*
+ * Visual-only scenario variants for canonical routes. These do not register a
+ * new canonical surface; they capture additional visual states (pending
+ * approval, pending user input, etc.) of an existing canonical route by URL
+ * flag and fixture-session-key binding. The fields mirror the canonical
+ * manifest shape so the visual-regression lane can iterate both lists
+ * uniformly.
+ */
+export const NEXT_VISUAL_SCENARIO_MANIFEST = [
+  {
+    slug: "chat-pending-approval",
+    href: "/chat?vr-blocked=1",
+    readySelector: ".mc-next-thread-blocking-prompt[data-blocker-kind=\"approval\"]",
+    expectedArea: "chat",
+    expectedSection: "root",
+    interaction: "open-inspector",
+    fixtureSessionKey: "approval",
+  },
+  {
+    slug: "chat-pending-user-input",
+    href: "/chat?vr-blocked=1",
+    readySelector: ".mc-next-thread-blocking-prompt[data-blocker-kind=\"user-input\"]",
+    expectedArea: "chat",
+    expectedSection: "root",
+    interaction: "open-inspector",
+    fixtureSessionKey: "userInput",
+  },
+];
 
-export const NEXT_VISUAL_REGRESSION_MANIFEST = NEXT_RELEASE_SURFACE_MANIFEST.filter((route) =>
-  NEXT_VISUAL_ROUTE_SLUGS.has(route.slug),
-);
+export const NEXT_VISUAL_REGRESSION_MANIFEST = [...NEXT_RELEASE_SURFACE_MANIFEST, ...NEXT_VISUAL_SCENARIO_MANIFEST];
 
 export const NEXT_LEGACY_REDIRECT_MANIFEST = [
   { slug: "legacy-tab-chat", href: "/?tab=chat&surface=chat", expectedPath: "/chat", interaction: "open-inspector" },
