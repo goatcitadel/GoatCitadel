@@ -5,6 +5,7 @@ import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { PostgresDatabaseClient } from "@goatcitadel/storage";
+import { setBootCheckpoint } from "./boot-tracker.js";
 import type { GatewayRuntimeConfig } from "./config.js";
 import { isBundledPostgresMode, resolveGatewayPostgresConnectionOptions } from "./postgres-runtime-config.js";
 
@@ -66,11 +67,16 @@ export async function ensureBundledPostgresRuntime(
     return undefined;
   }
 
+  setBootCheckpoint("bundled-pg:probe-starting");
   const maintenanceOptions = resolveGatewayPostgresConnectionOptions(config, {
     applicationName: "goatcitadel-bundled-probe",
     databaseOverride: "postgres",
   });
   const probe = await probeBundledPostgresRuntime(config, maintenanceOptions);
+  process.stderr.write(
+    `[boot-tracker] probe result reachable=${probe.reachable} matchesExpectedRoot=${probe.matchesExpectedRoot} dataDirectory=${JSON.stringify(probe.dataDirectory)}\n`,
+  );
+  setBootCheckpoint("bundled-pg:probe-returned");
   if (probe.matchesExpectedRoot) {
     await ensureDatabaseExists(config);
     return undefined;
@@ -97,11 +103,16 @@ export async function ensureBundledPostgresRuntime(
   // downgrade that should never happen behind the operator's back. Fail
   // closed instead and surface the native error.
   const nativeConfigured = isNativeBundledPostgresConfigured(config);
+  setBootCheckpoint(`bundled-pg:try-native-start (nativeConfigured=${nativeConfigured})`);
   try {
     const nativeRuntime = await tryStartNativeBundledPostgres(config);
+    setBootCheckpoint(`bundled-pg:try-native-returned (got-runtime=${Boolean(nativeRuntime)})`);
     if (nativeRuntime) {
+      setBootCheckpoint("bundled-pg:waitForBundledPostgres");
       await waitForBundledPostgres(config);
+      setBootCheckpoint("bundled-pg:ensureDatabaseExists");
       await ensureDatabaseExists(config);
+      setBootCheckpoint("bundled-pg:native-path-complete");
       return nativeRuntime;
     }
   } catch (error) {
@@ -132,19 +143,24 @@ function isNativeBundledPostgresConfigured(config: GatewayRuntimeConfig): boolea
 async function tryStartNativeBundledPostgres(
   config: GatewayRuntimeConfig,
 ): Promise<BundledPostgresRuntimeHandle | undefined> {
+  setBootCheckpoint("native-pg:resolveCommands");
   const commands = resolveNativePostgresCommands(config);
   if (!commands) {
+    setBootCheckpoint("native-pg:no-commands-skipping");
     return undefined;
   }
 
+  setBootCheckpoint("native-pg:mkdir-dataDir");
   const dataDir = path.resolve(config.rootDir, config.assistant.database.bundledPostgres.dataDir);
   await fs.mkdir(dataDir, { recursive: true });
   const initialized = fsSync.existsSync(path.join(dataDir, "PG_VERSION"));
   if (!initialized) {
+    setBootCheckpoint("native-pg:initdb-running (SYNC)");
     execFileSync(commands.initdb, ["-D", dataDir, "-U", "postgres", "-A", "trust", "--encoding", "UTF8"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
+    setBootCheckpoint("native-pg:initdb-returned");
   }
 
   // Keep the native Postgres log outside PGDATA on Windows. When the log file
@@ -153,6 +169,7 @@ async function tryStartNativeBundledPostgres(
   // backup software touches that file mid-startup.
   const logFile = path.resolve(config.rootDir, config.assistant.dataDir, "logs", "goatcitadel-postgres.log");
   await fs.mkdir(path.dirname(logFile), { recursive: true });
+  setBootCheckpoint("native-pg:pg_ctl-start-running (SYNC, top suspect)");
   try {
     execFileSync(
       commands.pgCtl,
@@ -170,7 +187,11 @@ async function tryStartNativeBundledPostgres(
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
+    setBootCheckpoint("native-pg:pg_ctl-start-returned-ok");
   } catch (error) {
+    setBootCheckpoint(
+      `native-pg:pg_ctl-start-threw (msg=${error instanceof Error ? error.message.slice(0, 200).replace(/\n/g, " ") : "non-error"})`,
+    );
     if (
       !(await canReachExpectedBundledPostgres(
         config,
