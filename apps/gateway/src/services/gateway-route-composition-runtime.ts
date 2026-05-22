@@ -5,6 +5,7 @@ import { createFilesRoutePort } from "./files-route-service.js";
 import { createHooksRoutePort } from "./hooks-route-service.js";
 import { createLlamaCppRoutePort } from "./llama-cpp-route-service.js";
 import { createMeshRoutePort } from "./mesh-route-service.js";
+import { createMobileRoutePort } from "./mobile-route-service.js";
 import { createNpuRoutePort } from "./npu-route-service.js";
 import { ResearchSearchBrokerService } from "./research-search-broker-service.js";
 import { createSessionsListRoutePort } from "./sessions-list-route-service.js";
@@ -39,6 +40,7 @@ export function composeRuntimeAdminRouteDependencies(
   | "hooks"
   | "llamaCpp"
   | "mesh"
+  | "mobile"
   | "npu"
   | "onboarding"
   | "orchestration"
@@ -167,6 +169,10 @@ export function composeRuntimeAdminRouteDependencies(
     }),
     mesh: createMeshRoutePort({
       meshService: gateway.meshService,
+      publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
+    }),
+    mobile: createMobileRoutePort({
+      storage: gateway.storage,
       publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
     }),
     npu: createNpuRoutePort({

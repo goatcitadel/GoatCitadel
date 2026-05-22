@@ -45,6 +45,7 @@ export * from "./voice.js";
 export * from "./a2ui.js";
 export * from "./companion.js";
 export * from "./companion-auth.js";
+export * from "./mobile.js";
 export * from "./follow-on-parity.js";
 export * from "./openclaw-parity.js";
 export * from "./media.js";

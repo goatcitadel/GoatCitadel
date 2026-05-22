@@ -80,6 +80,7 @@ const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessCla
   { prefix: "/api/v1/files", accessClass: "operator" },
   { prefix: "/api/v1/memory", accessClass: "operator" },
   { prefix: "/api/v1/mesh", accessClass: "operator" },
+  { prefix: "/api/v1/mobile", accessClass: "operator" },
   { prefix: "/api/v1/onboarding", accessClass: "operator" },
   { prefix: "/api/v1/demo", accessClass: "operator" },
   { prefix: "/api/v1/npu", accessClass: "operator" },

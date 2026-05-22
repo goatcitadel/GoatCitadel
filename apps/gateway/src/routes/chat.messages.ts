@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { ChatSendMessageRequest } from "@goatcitadel/contracts";
+import { MOBILE_NATIVE_CAPABILITY_IDS, type ChatSendMessageRequest } from "@goatcitadel/contracts";
 import { z } from "zod";
 import {
   sessionParamsSchema,
@@ -32,6 +32,31 @@ const routeDecisionSchema = z.object({
   blockedReason: z.string().optional(),
   degradedReason: z.string().optional(),
   fingerprint: z.string().min(1),
+});
+
+const mobileCapabilityIdSchema = z.enum(MOBILE_NATIVE_CAPABILITY_IDS);
+
+const mobileContextSchema = z.object({
+  contextId: z.string().trim().min(1).optional(),
+  capabilityId: mobileCapabilityIdSchema,
+  capturedAt: z.string().datetime(),
+  expiresAt: z.string().datetime().optional(),
+  sensitivity: z.enum(["low", "moderate", "high"]),
+  summary: z.string().trim().min(1),
+  structuredFields: z.record(z.string(), z.string()),
+  attachmentIds: z.array(z.string().trim().min(1)).optional(),
+  userVisibleReason: z.string().trim().min(1),
+  provenance: z
+    .object({
+      platform: z.enum(["android", "ios", "web", "unknown"]).optional(),
+      appVersion: z.string().trim().min(1).optional(),
+      deviceId: z.string().trim().min(1).optional(),
+      grantId: z.string().trim().min(1).optional(),
+      companionSessionId: z.string().trim().min(1).optional(),
+      sessionId: z.string().trim().min(1).optional(),
+      source: z.enum(["mobile_app", "native_module", "gateway"]).optional(),
+    })
+    .optional(),
 });
 
 const sendMessageSchema = z.object({
@@ -67,6 +92,7 @@ const sendMessageSchema = z.object({
       ]),
     )
     .optional(),
+  mobileContext: z.array(mobileContextSchema).max(12).optional(),
   providerId: z.string().optional(),
   model: z.string().optional(),
   routeDecision: routeDecisionSchema.optional(),

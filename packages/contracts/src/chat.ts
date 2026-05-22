@@ -1,6 +1,7 @@
 /* eslint-disable max-lines */
 import type { DurableRunStatus } from "./durable.js";
 import type { ThreadKnowledgeCitationRecord } from "./knowledge.js";
+import type { MobileContextEnvelope } from "./mobile.js";
 import type { SkillSourceProvider } from "./skills.js";
 
 export type ChatProjectLifecycleStatus = "active" | "archived";
@@ -1370,6 +1371,7 @@ export interface ChatDelegateAcceptRequest {
 export interface ChatSendMessageRequest {
   content: string;
   parts?: ChatInputPart[];
+  mobileContext?: MobileContextEnvelope[];
   providerId?: string;
   model?: string;
   routeDecision?: RoutingDecisionSnapshot;

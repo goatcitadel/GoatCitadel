@@ -116,6 +116,7 @@ import { MemoryRouteService } from "./memory-route-service.js";
 import { McpRouteService, type McpRoutePort } from "./mcp-route-service.js";
 import { createMediaRouteService, type MediaRoutePort, type MediaRouteService } from "./media-route-service.js";
 import { createMeshRouteService, type MeshRoutePort, type MeshRouteService } from "./mesh-route-service.js";
+import { createMobileRouteService, type MobileRoutePort, type MobileRouteService } from "./mobile-route-service.js";
 import { createNpuRouteService, type NpuRoutePort, type NpuRouteService } from "./npu-route-service.js";
 import {
   createOnboardingRouteService,
@@ -203,6 +204,7 @@ export interface GatewayRouteServices {
   mcp: McpRouteService;
   media: MediaRouteService;
   mesh: MeshRouteService;
+  mobile: MobileRouteService;
   npu: NpuRouteService;
   onboarding: OnboardingRouteService;
   obsidian: ObsidianRouteService;
@@ -264,6 +266,7 @@ export interface GatewayRouteServiceDependencies {
   mcp: McpRoutePort;
   media: MediaRoutePort;
   mesh: MeshRoutePort;
+  mobile: MobileRoutePort;
   npu: NpuRoutePort;
   onboarding: OnboardingRoutePort;
   obsidian: ObsidianRoutePort;
@@ -326,6 +329,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     mcp: new McpRouteService(deps.mcp),
     media: createMediaRouteService(deps.media),
     mesh: createMeshRouteService(deps.mesh),
+    mobile: createMobileRouteService(deps.mobile),
     npu: createNpuRouteService(deps.npu),
     onboarding: createOnboardingRouteService(deps.onboarding),
     obsidian: createObsidianRouteService(deps.obsidian),
