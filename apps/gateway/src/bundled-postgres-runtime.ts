@@ -140,6 +140,49 @@ function isNativeBundledPostgresConfigured(config: GatewayRuntimeConfig): boolea
   return Boolean(config.assistant.database.bundledPostgres.binDir?.trim());
 }
 
+/**
+ * Inspect `<dataDir>/postmaster.pid` and return the postmaster PID if (and
+ * only if) it points to a process that is currently alive. Returns undefined
+ * for missing file, parse failure, or stale PIDs (process gone).
+ *
+ * postmaster.pid's first line is the postmaster PID. We use `process.kill(pid, 0)`
+ * to test liveness — that sends no signal, just probes existence:
+ *   - success → process is alive (PID is real)
+ *   - ESRCH    → process does not exist (stale pid file)
+ *   - EPERM    → process exists but we lack permission to signal it (still alive)
+ *   - anything else → treat as "unknown, assume not alive" so we fall through to pg_ctl
+ *
+ * This is the standard cross-platform "is process alive?" pattern; it works
+ * on Windows as well as POSIX since Node maps process.kill(pid, 0) onto
+ * OpenProcess + ExitCode checks under the hood.
+ */
+function readLivePostmasterPid(dataDir: string): number | undefined {
+  let raw: string;
+  try {
+    raw = fsSync.readFileSync(path.join(dataDir, "postmaster.pid"), "utf8");
+  } catch {
+    return undefined;
+  }
+  const firstLine = raw.split(/\r?\n/, 1)[0]?.trim();
+  if (!firstLine) {
+    return undefined;
+  }
+  const pid = Number.parseInt(firstLine, 10);
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return undefined;
+  }
+  try {
+    process.kill(pid, 0);
+    return pid;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM") {
+      return pid;
+    }
+    return undefined;
+  }
+}
+
 async function tryStartNativeBundledPostgres(
   config: GatewayRuntimeConfig,
 ): Promise<BundledPostgresRuntimeHandle | undefined> {
@@ -169,7 +212,26 @@ async function tryStartNativeBundledPostgres(
   // backup software touches that file mid-startup.
   const logFile = path.resolve(config.rootDir, config.assistant.dataDir, "logs", "goatcitadel-postgres.log");
   await fs.mkdir(path.dirname(logFile), { recursive: true });
-  setBootCheckpoint("native-pg:pg_ctl-start-running (SYNC, top suspect)");
+  // Calling `pg_ctl start` on Windows against a data directory whose
+  // postmaster.pid points to a live process causes pg_ctl to block for
+  // ~120s before reporting the existing server. Skip the start call entirely
+  // in that case — the existing postgres is what we want anyway, and
+  // `waitForBundledPostgres` will confirm reachability with its own retry loop.
+  const livePid = readLivePostmasterPid(dataDir);
+  if (livePid !== undefined) {
+    process.stderr.write(`[bundled-pg] postmaster.pid points to live PID ${livePid}; skipping pg_ctl start\n`);
+    setBootCheckpoint("native-pg:reuse-existing-postgres");
+    return {
+      strategy: "native",
+      // We did NOT start this postgres (it was already running when we
+      // arrived), so do not stop it on shutdown — mirrors the "probe matched"
+      // early-return path in ensureBundledPostgresRuntime which also doesn't
+      // manage postgres lifecycle.
+      stop: async () => {},
+    };
+  }
+
+  setBootCheckpoint("native-pg:pg_ctl-start-running (SYNC)");
   try {
     execFileSync(
       commands.pgCtl,
@@ -386,6 +448,20 @@ async function canReachExpectedBundledPostgres(
   return (await probeBundledPostgresRuntime(config, options)).matchesExpectedRoot;
 }
 
+/**
+ * Probe a (potentially already-running) bundled Postgres at the configured
+ * address.
+ *
+ * Probe errors are logged to stderr so when a transient first-attempt failure
+ * later triggers the pg_ctl fallback path, the operator can see the real
+ * underlying reason without rebuilding with extra diagnostics. (Historical
+ * note: on Windows the very first probe in a freshly-spawned gateway process
+ * occasionally fails even though postgres is healthy and listening; the
+ * existing `waitForBundledPostgres` polling loop covers that case by
+ * re-probing every 500ms — but only if we get to it without first blocking
+ * on a synchronous pg_ctl start. See readLivePostmasterPid below for how we
+ * avoid that pg_ctl-start hang when a live postgres is already present.)
+ */
 async function probeBundledPostgresRuntime(
   config: GatewayRuntimeConfig,
   options: ReturnType<typeof resolveGatewayPostgresConnectionOptions>,
@@ -399,7 +475,14 @@ async function probeBundledPostgresRuntime(
       matchesExpectedRoot: dataDirectory ? isExpectedBundledDataDirectory(config, dataDirectory) : false,
       dataDirectory,
     };
-  } catch {
+  } catch (error) {
+    process.stderr.write(
+      `[bundled-pg] probe failed: ${
+        error instanceof Error
+          ? `${error.message.split("\n")[0]} (code=${(error as NodeJS.ErrnoException).code ?? "unknown"})`
+          : String(error)
+      }\n`,
+    );
     return { reachable: false, matchesExpectedRoot: false };
   } finally {
     await client.close();
