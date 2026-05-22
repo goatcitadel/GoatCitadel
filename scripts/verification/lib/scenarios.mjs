@@ -35,6 +35,7 @@ import {
 } from "./release-surface-manifest.mjs";
 import {
   delay,
+  ensureGatewayWorkspaceBuild,
   prepareVerificationRuntime,
   resolveAvailablePort,
   requestJson,
@@ -243,6 +244,7 @@ export async function runCodeModeSandboxRequiredLane(context) {
       subsystem: "gateway",
     },
     async () => {
+      await ensureGatewayWorkspaceBuild(context);
       const proofPath = path.join(context.artifactRoot, "diagnostics", "code-mode-sandbox-required.json");
       const result = await runCommand(
         pnpmCommand(),
@@ -419,6 +421,7 @@ async function runAgenticProofScenario(context, definition) {
       subsystem: definition.subsystem,
     },
     async () => {
+      await ensureGatewayWorkspaceBuild(context);
       const proofPath = path.join(context.artifactRoot, "diagnostics", `${definition.id}.json`);
       const result = await runCommand(
         process.execPath,
@@ -892,7 +895,10 @@ async function runGatewayApiSurfaceScenarios(context, gatewayUrl, seed) {
       );
       assertOk(resolvedApproval, "approve code mode run");
 
-      const completedRun = await waitForCodeModeRunCompletion(gatewayUrl, runId);
+      const completedRun = await waitForCodeModeRunCompletion(gatewayUrl, runId, {
+        workspaceId: seed.workspaceId,
+        sessionId,
+      });
       if (completedRun.body?.status !== "completed") {
         throw new Error(`code mode run ${runId} finished with status ${completedRun.body?.status ?? "unknown"}`);
       }
@@ -1417,7 +1423,10 @@ export async function runOperatorProofLane(context, options = {}) {
         );
         assertOk(resolvedApproval, "approve operator-proof code mode run");
 
-        const completedRun = await waitForCodeModeRunCompletion(stack.gatewayUrl, runId);
+        const completedRun = await waitForCodeModeRunCompletion(stack.gatewayUrl, runId, {
+          workspaceId: seedResponse.body.workspaceId,
+          sessionId,
+        });
         if (completedRun.body?.status !== "completed") {
           throw new Error(`code mode run ${runId} finished with status ${completedRun.body?.status ?? "unknown"}`);
         }
@@ -4658,17 +4667,38 @@ function emptyArtifacts(overrides = {}) {
   };
 }
 
-async function waitForCodeModeRunCompletion(gatewayUrl, runId, attempts = 20) {
+async function waitForCodeModeRunCompletion(gatewayUrl, runId, options = {}) {
+  const attempts = typeof options === "number" ? options : options.attempts ?? 40;
+  const query = new URLSearchParams();
+  if (typeof options !== "number") {
+    if (typeof options.workspaceId === "string" && options.workspaceId.length > 0) {
+      query.set("workspaceId", options.workspaceId);
+    }
+    if (typeof options.sessionId === "string" && options.sessionId.length > 0) {
+      query.set("sessionId", options.sessionId);
+    }
+    if (typeof options.turnId === "string" && options.turnId.length > 0) {
+      query.set("turnId", options.turnId);
+    }
+  }
+  const queryString = query.toString();
+  const pathSuffix = queryString ? `?${queryString}` : "";
   let latest = null;
   for (let index = 0; index < attempts; index += 1) {
-    latest = await requestJson(gatewayUrl, `/api/v1/code-mode/runs/${encodeURIComponent(runId)}`);
+    latest = await requestJson(gatewayUrl, `/api/v1/code-mode/runs/${encodeURIComponent(runId)}${pathSuffix}`);
+    if (latest.status === 404) {
+      await delay(250);
+      continue;
+    }
     assertOk(latest, "read code mode run");
     if (latest.body?.status === "completed" || latest.body?.status === "failed") {
       return latest;
     }
     await delay(250);
   }
-  throw new Error(`code mode run ${runId} did not reach a terminal state in time`);
+  throw new Error(
+    `code mode run ${runId} did not reach a terminal state in time; last status=${latest?.status ?? "unknown"} body=${JSON.stringify(latest?.body ?? null)}`,
+  );
 }
 
 async function waitForCapabilityCandidate(gatewayUrl, candidateId, attempts = 20) {

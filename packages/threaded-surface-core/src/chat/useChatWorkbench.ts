@@ -29,6 +29,9 @@ interface StoredWorkbenchUiState {
   selectedFilePath?: string;
 }
 
+// Keep workbench refreshes fresh without churning every SSE burst; this matches the current 15s poll cadence.
+const WORKBENCH_REFRESH_STALE_MS = 20_000;
+
 export function describeWorkbenchActionError(cause: unknown, fallback: string): string {
   return cause instanceof Error ? cause.message : fallback;
 }
@@ -646,7 +649,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
     {
       enabled: enabled && Boolean(sessionId),
       coalesceMs: 900,
-      staleMs: 20_000,
+      staleMs: WORKBENCH_REFRESH_STALE_MS,
       pollIntervalMs: 15_000,
     },
   );

@@ -40,7 +40,9 @@ import {
 } from "./hook-patch-helpers.js";
 import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
 
+// Retry after normalizing provider tool-call output into GoatCitadel's expected protocol shape.
 const TOOL_PROTOCOL_RETRY_NORMALIZED = 1;
+// Retry with minimal provider reasoning metadata to reduce tool-call compatibility friction.
 const TOOL_PROTOCOL_RETRY_MINIMAL_THINKING = 2;
 
 export interface LlmCompletionHost {

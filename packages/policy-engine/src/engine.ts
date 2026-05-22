@@ -1528,6 +1528,7 @@ export class ToolPolicyEngine {
   ): Promise<void> {
     const accessEvaluation = evaluation ?? this.evaluateAccessInternal(request);
     if (hasFullWebAccess(request)) {
+      await this.recordFullWebAccessNetworkUseIfNeeded(auditEventId, request, accessEvaluation);
       return;
     }
     if (request.dryRun === true || accessEvaluation.approvalMode !== "bypass" || accessEvaluation.requiresApproval) {
@@ -1558,6 +1559,43 @@ export class ToolPolicyEngine {
       permissionProfileId: accessEvaluation.permissionProfileId,
       localOperatorOverrideId: accessEvaluation.localOperatorOverrideId,
       targets: bypassedTargets,
+    });
+  }
+
+  private async recordFullWebAccessNetworkUseIfNeeded(
+    auditEventId: string,
+    request: ToolInvokeRequest,
+    accessEvaluation: AccessEvaluation,
+  ): Promise<void> {
+    if (request.dryRun === true || !accessEvaluation.allowed || accessEvaluation.requiresApproval) {
+      return;
+    }
+    const publicTargets = extractOutboundHostCandidates(request).flatMap((target) => {
+      const decision = evaluateDangerousHostBypass(target, this.config.sandbox.networkAllowlist);
+      return decision.shouldAudit
+        ? [
+            {
+              target: redactUrlForError(target),
+              hostname: decision.hostname,
+              reason: `Full-web public access allowed network target outside the configured allowlist: ${redactUrlForError(target)}`,
+            },
+          ]
+        : [];
+    });
+    if (publicTargets.length === 0) {
+      return;
+    }
+    await this.storage.audit.append("tool_invocations", {
+      auditEventId,
+      event: "full_web_access_public_network_target",
+      agentId: request.agentId,
+      sessionId: request.sessionId,
+      taskId: request.taskId,
+      runId: request.runId,
+      toolName: request.toolName,
+      permissionProfileId: accessEvaluation.permissionProfileId,
+      localOperatorOverrideId: accessEvaluation.localOperatorOverrideId,
+      targets: publicTargets,
     });
   }
 }

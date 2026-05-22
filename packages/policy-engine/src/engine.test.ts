@@ -1666,6 +1666,95 @@ describe("ToolPolicyEngine policy edge coverage", () => {
     );
   });
 
+  it("records full-web public network use without treating it as an approval bypass", async () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: {
+          ...policyConfig.tools,
+          approvalMode: "bypass",
+        },
+        sandbox: {
+          ...policyConfig.sandbox,
+          networkAllowlist: ["localhost"],
+        },
+      },
+      storage,
+    );
+
+    await (
+      engine as unknown as {
+        recordDangerProfileNetworkBypassIfNeeded: (
+          auditEventId: string,
+          request: {
+            toolName: string;
+            args: Record<string, unknown>;
+            agentId: string;
+            sessionId: string;
+            taskId?: string;
+            runId?: string;
+            policyContext?: { fullWebAccess?: boolean; permissionProfileId?: string };
+          },
+          evaluation: {
+            allowed: boolean;
+            reasonCodes: string[];
+            requiresApproval: boolean;
+            riskLevel: "danger";
+            policyReason: string;
+            approvalMode: "bypass";
+            permissionProfileId?: string;
+            localOperatorOverrideId?: string;
+          },
+        ) => Promise<void>;
+      }
+    ).recordDangerProfileNetworkBypassIfNeeded(
+      "audit-full-web",
+      {
+        toolName: "browser.navigate",
+        args: { url: "https://user:secret@example.com/api?token=secret" },
+        agentId: "agent",
+        sessionId: "session",
+        taskId: "task",
+        runId: "run-1",
+        policyContext: { fullWebAccess: true },
+      },
+      {
+        allowed: true,
+        reasonCodes: ["allowed"],
+        requiresApproval: false,
+        riskLevel: "danger",
+        policyReason: "allowed by full web access",
+        approvalMode: "bypass",
+        permissionProfileId: "trusted_local_power",
+        localOperatorOverrideId: "override-1",
+      },
+    );
+
+    expect(storage.audit.append).toHaveBeenCalledWith(
+      "tool_invocations",
+      expect.objectContaining({
+        auditEventId: "audit-full-web",
+        event: "full_web_access_public_network_target",
+        permissionProfileId: "trusted_local_power",
+        localOperatorOverrideId: "override-1",
+        runId: "run-1",
+        targets: [
+          expect.objectContaining({
+            target: "https://example.com",
+            hostname: "example.com",
+            reason:
+              "Full-web public access allowed network target outside the configured allowlist: https://example.com",
+          }),
+        ],
+      }),
+    );
+    expect(storage.audit.append).not.toHaveBeenCalledWith(
+      "tool_invocations",
+      expect.objectContaining({ event: "approval_bypass_mode_network_target" }),
+    );
+  });
+
   it("covers approval, read-candidate, and bypass-network defensive defaults", async () => {
     const approvalStorage = createStorageStub();
     vi.mocked(approvalStorage.approvals.create).mockImplementation((input) => ({
@@ -1805,7 +1894,10 @@ describe("ToolPolicyEngine policy edge coverage", () => {
         approvalMode: "approve_risky",
       },
     );
-    expect(bypassStorage.audit.append).not.toHaveBeenCalled();
+    expect(bypassStorage.audit.append).not.toHaveBeenCalledWith(
+      "tool_invocations",
+      expect.objectContaining({ event: "approval_bypass_mode_network_target" }),
+    );
   });
 });
 
@@ -2071,7 +2163,7 @@ describe("ToolPolicyEngine outside-root read access", () => {
     expect(result.policyReason).not.toContain("browser.search requires at least one native search host");
   });
 
-  it("does not audit public-host browser reads because public web access is the default", async () => {
+  it("does not audit dry-run public-host browser reads because public web access is the default", async () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(
       {
@@ -2110,6 +2202,10 @@ describe("ToolPolicyEngine outside-root read access", () => {
     expect(vi.mocked(storage.audit.append)).not.toHaveBeenCalledWith(
       "tool_invocations",
       expect.objectContaining({ event: "approval_bypass_mode_network_target" }),
+    );
+    expect(vi.mocked(storage.audit.append)).not.toHaveBeenCalledWith(
+      "tool_invocations",
+      expect.objectContaining({ event: "full_web_access_public_network_target" }),
     );
   });
 

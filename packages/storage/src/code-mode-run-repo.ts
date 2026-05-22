@@ -377,7 +377,7 @@ function normalizeCodeModeRunLimit(value: number | undefined): number {
 }
 
 function normalizeCodeModeRunHydrationScanLimit(limit: number): number {
-  return Math.min(Math.max(limit * 4, limit), 1000);
+  return Math.min(limit * 4, 1000);
 }
 
 function uniqueCodeModeRunsByRunId(runs: CodeModeRunRecord[]): CodeModeRunRecord[] {
