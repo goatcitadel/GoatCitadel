@@ -222,6 +222,7 @@ export interface ChatSessionListQuery {
   tag?: string;
   q?: string;
   view?: ChatSessionLifecycleStatus | "all";
+  mode?: ChatMode;
   limit?: number;
   cursor?: string;
   includeHidden?: boolean;

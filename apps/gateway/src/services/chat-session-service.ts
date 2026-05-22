@@ -66,7 +66,8 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
     Boolean(query.projectId?.trim()) ||
     Boolean(query.folderId?.trim()) ||
     Boolean(query.tag?.trim()) ||
-    Boolean(query.q?.trim());
+    Boolean(query.q?.trim()) ||
+    Boolean(query.mode);
   const storageLimit = hasPostStorageFilters ? Math.min(20000, Math.max(limit * 20, 1000)) : limit;
   const allSessions = deps.storage.sessions.list(storageLimit, query.cursor);
   const projects = deps.storage.chatProjects.list("all", 2000, workspaceId);
@@ -124,6 +125,9 @@ export function listChatSessions(deps: ChatSessionDependencies, query: ChatSessi
   if (query.tag?.trim()) {
     const tag = query.tag.trim().toLowerCase();
     records = records.filter((record) => (record.tags ?? []).some((item) => item.toLowerCase() === tag));
+  }
+  if (query.mode) {
+    records = records.filter((record) => record.mode === query.mode);
   }
 
   const searchHitsBySessionId = query.q?.trim()

@@ -1,4 +1,5 @@
 import {
+  type ChatMode,
   type ChatSessionBindingRecord,
   type ChatSessionPrefsRecord,
   type ChatSpecialistCandidateRecord,
@@ -133,6 +134,7 @@ export function useChatSessionData(input: {
   applyFetchedThreadRef: MutableRefObject<(thread: ChatThreadResponse, requestVersion: number | null) => boolean>;
   messageMutationVersionRef: MutableRefObject<number>;
   lastLocalPrefMutationAtRef: MutableRefObject<number>;
+  surfaceMode?: ChatMode;
 }) {
   const {
     workspaceId,
@@ -145,6 +147,7 @@ export function useChatSessionData(input: {
     applyFetchedThreadRef,
     messageMutationVersionRef,
     lastLocalPrefMutationAtRef,
+    surfaceMode,
   } = input;
 
   const [projects, setProjects] = useState<ChatProjectsResponse | null>(null);
@@ -184,9 +187,9 @@ export function useChatSessionData(input: {
         category: "chat",
         event: "sidebar.load",
         message: "Refreshing chat sidebar data",
-        context: { workspaceId, historyView: nextHistoryView, sessionLimit },
+        context: { workspaceId, historyView: nextHistoryView, sessionLimit, surfaceMode: surfaceMode ?? null },
       });
-      const cacheKey = `${workspaceId}:${nextHistoryView}:${trimmedSearchQuery}:${sessionLimit}`;
+      const cacheKey = `${workspaceId}:${nextHistoryView}:${trimmedSearchQuery}:${sessionLimit}:${surfaceMode ?? "all"}`;
       const { projects: nextProjects, sessions: nextSessions } = await getDevBootstrapPromise(
         sidebarBootstrapCache,
         cacheKey,
@@ -199,6 +202,7 @@ export function useChatSessionData(input: {
               limit: sessionLimit,
               workspaceId,
               q: trimmedSearchQuery || undefined,
+              mode: surfaceMode,
             }),
           ]);
           return { projects, sessions };
@@ -220,7 +224,7 @@ export function useChatSessionData(input: {
           : (nextSessions.items[0]?.sessionId ?? null);
       });
     },
-    [historyView, searchQuery, setSelectedSessionId, workspaceId],
+    [historyView, searchQuery, setSelectedSessionId, surfaceMode, workspaceId],
   );
 
   const loadRuntimeCatalog = useCallback(async () => {

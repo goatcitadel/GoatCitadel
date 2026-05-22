@@ -117,23 +117,16 @@ export function ThreadedSurfacePage({
   const activeMode = activeProps?.mode ?? surface;
   const modeMeta = MODE_META[activeMode];
   const [codeWorkbenchOpen, setCodeWorkbenchOpen] = useState(true);
-  const [postureFilter, setPostureFilter] = useState<ChatMode | "all">("all");
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const workflowPanelOpen = Boolean(workflowPanel && (workflowPanel.kind !== "code" || codeWorkbenchOpen));
-  const filterSessionsByPosture = useMemo(
-    () => (items: Array<ChatSessionRecord & { projectName?: string | null }>) =>
-      postureFilter === "all" ? items : items.filter((item) => (item.mode ?? "chat") === postureFilter),
-    [postureFilter],
-  );
   const missionSessionGroups = useMemo(
-    () => groupDelegatedSessionsForRail(filterSessionsByPosture(input.sessionRail.missionSessions)),
-    [filterSessionsByPosture, input.sessionRail.missionSessions],
+    () => groupDelegatedSessionsForRail(input.sessionRail.missionSessions),
+    [input.sessionRail.missionSessions],
   );
   const externalSessionGroups = useMemo(
-    () => groupDelegatedSessionsForRail(filterSessionsByPosture(input.sessionRail.externalSessions)),
-    [filterSessionsByPosture, input.sessionRail.externalSessions],
+    () => groupDelegatedSessionsForRail(input.sessionRail.externalSessions),
+    [input.sessionRail.externalSessions],
   );
-  const allSessionCount = input.sessionRail.missionSessions.length + input.sessionRail.externalSessions.length;
   const stageLayoutClass = [
     "mc-next-threaded-stage",
     `mode-${activeMode}`,
@@ -182,8 +175,8 @@ export function ThreadedSurfacePage({
       <aside
         className={`mc-next-threaded-rail${railOpen ? " open" : ""}`}
         aria-label="Sessions"
-        aria-hidden={!railOpen}
-        inert={!railOpen}
+        aria-hidden={compactLayout && !railOpen}
+        inert={compactLayout && !railOpen}
       >
         <div className="mc-next-threaded-rail-head">
           <div>
@@ -224,20 +217,6 @@ export function ThreadedSurfacePage({
             placeholder="Search sessions"
           />
         </label>
-
-        {allSessionCount > 0 ? (
-          <div className="mc-next-threaded-filters posture">
-            <FilterChip active={postureFilter === "all"} onClick={() => setPostureFilter("all")}>
-              All {allSessionCount}
-            </FilterChip>
-            {(Object.keys(MODE_META) as ChatMode[]).map((mode) => (
-              <FilterChip key={mode} active={postureFilter === mode} onClick={() => setPostureFilter(mode)}>
-                <span className={`mc-next-threaded-mode-dot mode-${mode}${activeMode === mode ? " is-live" : ""}`} />
-                {MODE_META[mode].label}
-              </FilterChip>
-            ))}
-          </div>
-        ) : null}
 
         <div className="mc-next-threaded-filters secondary">
           <FilterChip

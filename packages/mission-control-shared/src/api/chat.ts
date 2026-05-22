@@ -215,6 +215,7 @@ export async function fetchChatSessions(input?: {
   tag?: string;
   q?: string;
   view?: "active" | "archived" | "all";
+  mode?: ChatMode;
   limit?: number;
   cursor?: string;
   includeHidden?: boolean;
@@ -227,6 +228,7 @@ export async function fetchChatSessions(input?: {
   if (input?.tag) query.set("tag", input.tag);
   if (input?.q) query.set("q", input.q);
   if (input?.view) query.set("view", input.view);
+  if (input?.mode) query.set("mode", input.mode);
   if (input?.includeHidden !== undefined) query.set("includeHidden", String(input.includeHidden));
   query.set("limit", String(input?.limit ?? 200));
   if (input?.cursor) query.set("cursor", input.cursor);

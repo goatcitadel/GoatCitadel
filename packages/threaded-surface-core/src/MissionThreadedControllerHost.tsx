@@ -665,6 +665,7 @@ export function MissionThreadedControllerHost({
     applyFetchedThreadRef,
     messageMutationVersionRef,
     lastLocalPrefMutationAtRef,
+    surfaceMode: lockSurface && surface ? surface : undefined,
   });
   const {
     projects,
@@ -745,7 +746,7 @@ export function MissionThreadedControllerHost({
 
   const threadController = useChatThreadController({
     surfaceMode: currentSessionMode,
-    showAllModes: lockSurface,
+    showAllModes: !lockSurface,
     routeSearch,
     sessions: sessions?.items,
     projects: projects?.items,

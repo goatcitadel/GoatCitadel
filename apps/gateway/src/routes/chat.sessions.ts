@@ -9,6 +9,7 @@ const listChatSessionsSchema = z.object({
   tag: z.string().min(1).optional(),
   q: z.string().optional(),
   view: z.enum(["active", "archived", "all"]).optional(),
+  mode: z.enum(["chat", "cowork", "code"]).optional(),
   limit: z.coerce.number().int().positive().max(1000).default(200),
   cursor: z.string().optional(),
   includeHidden: z

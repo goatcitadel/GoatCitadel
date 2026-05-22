@@ -460,8 +460,6 @@ describe("ThreadedSurfacePage", () => {
       findButtonByAriaLabel(renderer!.root, "Close session rail").props.onClick();
       findButton(renderer!.root, "New session").props.onClick();
       findButton(renderer!.root, "Hide project").props.onClick();
-      findButton(renderer!.root, "All").props.onClick();
-      findButton(renderer!.root, "Chat").props.onClick();
       findButton(renderer!.root, "Active").props.onClick();
       findButton(renderer!.root, "Archived").props.onClick();
       findButton(renderer!.root, "All projects").props.onClick();
