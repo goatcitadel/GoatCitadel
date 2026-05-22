@@ -245,6 +245,12 @@ describe("tool executor tail coverage", () => {
         google: { requested: false, status: "not_requested" },
       },
     });
+    const designReport = created.designReport as {
+      assetSources?: Array<{ id: string; status: string }>;
+      validation?: Array<{ id: string; status: string }>;
+    };
+    expect(designReport.assetSources?.find((asset) => asset.id === "renderer-generated-visual")?.status).toBe("used");
+    expect(designReport.validation?.find((check) => check.id === "pptx-package")?.status).toBe("passed");
     expect(deck.subarray(0, 2).toString("utf8")).toBe("PK");
     expect(deck.includes("ppt/presentation.xml")).toBe(true);
     expect(deck.includes("ppt/slides/slide1.xml")).toBe(true);

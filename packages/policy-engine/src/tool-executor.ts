@@ -1096,7 +1096,10 @@ async function documentsCreate(args: Record<string, unknown>, config: ToolPolicy
     mimeType: artifact.mimeType,
     title,
     sectionCount: sections.length,
-    designReport: buildArtifactDesignReport(design, { localPath: full }),
+    designReport: buildArtifactDesignReport(design, {
+      localPath: full,
+      usedAssetIds: usedDocumentAssetIds(format, design.mode),
+    }),
   };
 }
 
@@ -1131,7 +1134,10 @@ async function presentationsCreate(args: Record<string, unknown>, config: ToolPo
     format: "pptx",
     title,
     slideCount: slides.length + 1,
-    designReport: buildArtifactDesignReport(design, { localPath: full }),
+    designReport: buildArtifactDesignReport(design, {
+      localPath: full,
+      usedAssetIds: ["renderer-generated-visual", "built-in-shapes-icons"],
+    }),
   };
 }
 
@@ -1156,6 +1162,20 @@ function normalizePresentationDesignInput(args: Record<string, unknown>): unknow
   }
   const theme = asString(args.theme);
   return theme ? { preset: theme } : undefined;
+}
+
+function usedDocumentAssetIds(format: DocumentArtifactFormat, mode: string): string[] {
+  if (mode === "minimal" || mode === "plain") {
+    return [];
+  }
+  switch (format) {
+    case "docx":
+      return ["renderer-generated-visual", "built-in-shapes-icons"];
+    case "html":
+      return ["built-in-shapes-icons"];
+    default:
+      return [];
+  }
 }
 
 function resolveDocumentFormat(rawFormat: string | undefined, requestedPath: string): DocumentArtifactFormat {

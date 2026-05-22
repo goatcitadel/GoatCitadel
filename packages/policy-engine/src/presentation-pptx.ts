@@ -449,7 +449,7 @@ async function buildAbstractVisualDataUri(title: string, design: ArtifactDesignP
     `<rect x="155" y="810" width="300" height="300" rx="32" fill="#${design.tokens.accent}" opacity="0.9"/>`,
     `<rect x="505" y="810" width="300" height="300" rx="32" fill="#${design.tokens.accent2}" opacity="0.9"/>`,
     `<rect x="855" y="810" width="190" height="300" rx="32" fill="#${design.tokens.accent3}" opacity="0.9"/>`,
-    `<text x="155" y="1260" fill="#${design.tokens.mutedText}" font-family="Arial, sans-serif" font-size="54" font-weight="700">${escapeSvgText(title).slice(0, 34)}</text>`,
+    `<text x="155" y="1260" fill="#${design.tokens.mutedText}" font-family="Arial, sans-serif" font-size="54" font-weight="700">${escapeSvgText(title.slice(0, 34))}</text>`,
     `</svg>`,
   ].join("");
   const buffer = await sharp(Buffer.from(svg, "utf8")).png().toBuffer();

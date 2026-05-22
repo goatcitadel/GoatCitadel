@@ -326,22 +326,29 @@ export function normalizeArtifactDestinationRequest(value: unknown, kind: Artifa
 
 export function buildArtifactDesignReport(
   plan: ArtifactDesignPlan,
-  output: { localPath?: string; google?: Partial<ArtifactGoogleImportStatus>; residualRisks?: string[] } = {},
+  output: {
+    localPath?: string;
+    google?: Partial<ArtifactGoogleImportStatus>;
+    residualRisks?: string[];
+    usedAssetIds?: string[];
+  } = {},
 ): ArtifactDesignReport {
   const google = resolveGoogleImportStatus(plan.destination, output.google);
+  const assetPlan = finalizeAssetPlan(plan.assetPlan, output.usedAssetIds ?? []);
+  const validation = finalizeValidationChecks(plan.validationChecks, Boolean(output.localPath), google);
   return {
     mode: plan.mode,
     preset: plan.preset,
     visualLevel: plan.visualLevel,
     assetPolicy: plan.assetPolicy,
     layouts: plan.layouts.map((layout) => layout.name),
-    assetSources: plan.assetPlan.filter((asset) => asset.status !== "skipped"),
-    skippedAssets: plan.assetPlan.filter((asset) => asset.status === "skipped"),
-    validation: plan.validationChecks,
+    assetSources: assetPlan.filter((asset) => asset.status !== "skipped"),
+    skippedAssets: assetPlan.filter((asset) => asset.status === "skipped"),
+    validation,
     guideReferences: plan.guideReferences,
     localPath: output.localPath,
     google,
-    residualRisks: output.residualRisks ?? buildResidualRisks(plan, google),
+    residualRisks: output.residualRisks ?? buildResidualRisks(plan, google, assetPlan),
   };
 }
 
@@ -549,9 +556,46 @@ function resolveGoogleImportStatus(
   };
 }
 
-function buildResidualRisks(plan: ArtifactDesignPlan, google: ArtifactGoogleImportStatus): string[] {
+function finalizeAssetPlan(assets: ArtifactAssetPlanItem[], usedAssetIds: string[]): ArtifactAssetPlanItem[] {
+  const used = new Set(usedAssetIds);
+  return assets.map((asset) =>
+    used.has(asset.id) && asset.status === "planned" ? { ...asset, status: "used" } : asset,
+  );
+}
+
+function finalizeValidationChecks(
+  checks: ArtifactValidationCheck[],
+  hasLocalOutput: boolean,
+  google: ArtifactGoogleImportStatus,
+): ArtifactValidationCheck[] {
+  return checks.map((check) => {
+    if (check.id === "google-import") {
+      if (!google.requested) {
+        return { ...check, status: "skipped", detail: "Google import was not requested for this artifact." };
+      }
+      if (google.status === "imported") {
+        return { ...check, status: "passed", detail: "Google import completed successfully." };
+      }
+      return {
+        ...check,
+        status: google.status === "import_ready" ? "passed" : "warning",
+        detail: google.reason ?? "Local artifact was produced, but Google import did not complete.",
+      };
+    }
+    if (hasLocalOutput && check.status === "planned") {
+      return { ...check, status: "passed", detail: `${check.detail} Local artifact output completed.` };
+    }
+    return check;
+  });
+}
+
+function buildResidualRisks(
+  plan: ArtifactDesignPlan,
+  google: ArtifactGoogleImportStatus,
+  assets: ArtifactAssetPlanItem[],
+): string[] {
   const risks: string[] = [];
-  if (plan.assetPlan.some((asset) => asset.status === "skipped")) {
+  if (assets.some((asset) => asset.status === "skipped" && asset.type !== "built_in")) {
     risks.push(
       "Some external or web assets were skipped because source, license, provider, or approval data was unavailable.",
     );

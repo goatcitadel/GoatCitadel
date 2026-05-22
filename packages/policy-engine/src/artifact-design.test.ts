@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createArtifactDesignPlan } from "./artifact-design.js";
+import { buildArtifactDesignReport, createArtifactDesignPlan } from "./artifact-design.js";
 
 describe("artifact design brief selection", () => {
   it("defaults designed presentation requests to polished content-specific styling", () => {
@@ -36,6 +36,11 @@ describe("artifact design brief selection", () => {
     expect(plan.layouts).toEqual([
       { name: "plain-data", purpose: "Preserve machine-readable output without decoration." },
     ]);
+
+    const report = buildArtifactDesignReport(plan, { localPath: "out.json" });
+    expect(report.residualRisks).not.toContain(
+      "Some external or web assets were skipped because source, license, provider, or approval data was unavailable.",
+    );
   });
 
   it("honors explicit design overrides", () => {
@@ -69,5 +74,22 @@ describe("artifact design brief selection", () => {
 
     expect(plan.destination).toMatchObject({ kind: "google-slides", convert: true });
     expect(plan.validationChecks.map((check) => check.id)).toContain("google-import");
+  });
+
+  it("marks renderer-used assets and completed local checks in reports", () => {
+    const plan = createArtifactDesignPlan({
+      kind: "presentation",
+      format: "pptx",
+      title: "Quarterly Pitch",
+    });
+
+    const report = buildArtifactDesignReport(plan, {
+      localPath: "deck.pptx",
+      usedAssetIds: ["renderer-generated-visual", "built-in-shapes-icons"],
+    });
+
+    expect(report.assetSources.find((asset) => asset.id === "renderer-generated-visual")?.status).toBe("used");
+    expect(report.validation.filter((check) => check.status === "planned")).toHaveLength(0);
+    expect(report.validation.find((check) => check.id === "pptx-package")?.status).toBe("passed");
   });
 });

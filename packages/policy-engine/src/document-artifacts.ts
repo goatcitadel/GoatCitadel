@@ -407,14 +407,15 @@ async function buildDocxVisualBuffer(title: string, design: ArtifactDesignPlan):
     `<rect x="88" y="285" width="175" height="64" rx="16" fill="#${design.tokens.accent}" opacity="0.9"/>`,
     `<rect x="292" y="285" width="175" height="64" rx="16" fill="#${design.tokens.accent2}" opacity="0.9"/>`,
     `<rect x="496" y="285" width="175" height="64" rx="16" fill="#${design.tokens.accent3}" opacity="0.9"/>`,
-    `<text x="88" y="115" fill="#${design.tokens.mutedText}" font-family="Arial, sans-serif" font-size="38" font-weight="700">${escapeSvgText(title).slice(0, 46)}</text>`,
+    `<text x="88" y="115" fill="#${design.tokens.mutedText}" font-family="Arial, sans-serif" font-size="38" font-weight="700">${escapeSvgText(title.slice(0, 46))}</text>`,
     `</svg>`,
   ].join("");
   return sharp(Buffer.from(svg, "utf8")).png().toBuffer();
 }
 
 function cssFont(font: string): string {
-  return font.includes(" ") ? `"${font.replace(/"/g, "")}"` : font;
+  const safeFont = font.replace(/[^A-Za-z0-9 ._-]/g, "").trim() || "Arial";
+  return safeFont.includes(" ") ? `"${safeFont}"` : safeFont;
 }
 
 function buildDocxContentTypes(): string {
