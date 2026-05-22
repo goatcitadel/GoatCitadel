@@ -172,7 +172,12 @@ export function ThreadedSurfacePage({
         onClick={() => input.onSessionRailOpenChange(false)}
       />
 
-      <aside className={`mc-next-threaded-rail${railOpen ? " open" : ""}`}>
+      <aside
+        className={`mc-next-threaded-rail${railOpen ? " open" : ""}`}
+        aria-label="Sessions"
+        aria-hidden={!railOpen}
+        inert={!railOpen}
+      >
         <div className="mc-next-threaded-rail-head">
           <div>
             <p>Sessions</p>
@@ -213,17 +218,19 @@ export function ThreadedSurfacePage({
           />
         </label>
 
-        <div className="mc-next-threaded-filters posture">
-          <FilterChip active={postureFilter === "all"} onClick={() => setPostureFilter("all")}>
-            All {allSessionCount}
-          </FilterChip>
-          {(Object.keys(MODE_META) as ChatMode[]).map((mode) => (
-            <FilterChip key={mode} active={postureFilter === mode} onClick={() => setPostureFilter(mode)}>
-              <span className={`mc-next-threaded-mode-dot mode-${mode}${activeMode === mode ? " is-live" : ""}`} />
-              {MODE_META[mode].label}
+        {allSessionCount > 0 ? (
+          <div className="mc-next-threaded-filters posture">
+            <FilterChip active={postureFilter === "all"} onClick={() => setPostureFilter("all")}>
+              All {allSessionCount}
             </FilterChip>
-          ))}
-        </div>
+            {(Object.keys(MODE_META) as ChatMode[]).map((mode) => (
+              <FilterChip key={mode} active={postureFilter === mode} onClick={() => setPostureFilter(mode)}>
+                <span className={`mc-next-threaded-mode-dot mode-${mode}${activeMode === mode ? " is-live" : ""}`} />
+                {MODE_META[mode].label}
+              </FilterChip>
+            ))}
+          </div>
+        ) : null}
 
         <div className="mc-next-threaded-filters secondary">
           <FilterChip

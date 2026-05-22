@@ -720,7 +720,7 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
           </div>
         )}
       </div>
-      {!props.followOutput && props.streamStatus === "streaming" ? (
+      {!props.followOutput && props.thread && props.thread.turns.length > 0 ? (
         <button type="button" className="mc-next-thread-jump-latest" onClick={jumpToLatest}>
           Jump to latest
         </button>

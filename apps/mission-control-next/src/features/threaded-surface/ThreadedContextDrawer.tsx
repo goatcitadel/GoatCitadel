@@ -10,6 +10,7 @@ import type {
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
+import { shortId } from "./ThreadedWorkflowPanel";
 
 type DrawerTab = "context" | "trace" | "assist" | "session";
 
@@ -168,7 +169,8 @@ export function ThreadedContextDrawer({
             <>
               <section className="mc-next-context-card">
                 <p className="mc-next-panel-kicker">Turn trace</p>
-                <h4>{props.selectedTurn.turnId}</h4>
+                <h4>{shortId(props.selectedTurn.turnId)}</h4>
+                <p className="mc-next-thread-meta">{props.selectedTurn.turnId}</p>
                 <div className="mc-next-context-chip-row">
                   <StatusChip
                     tone={

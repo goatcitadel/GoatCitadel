@@ -78,7 +78,19 @@ function formatTokenLabel(tokens: number): string {
 }
 
 function formatCostLabel(costUsd: number): string {
-  return costUsd > 0 && costUsd < 0.01 ? "<$0.01" : `$${costUsd.toFixed(costUsd >= 10 ? 1 : 2)}`;
+  if (costUsd <= 0) {
+    return "$0.00";
+  }
+  if (costUsd >= 10) {
+    return `$${costUsd.toFixed(1)}`;
+  }
+  if (costUsd >= 0.01) {
+    return `$${costUsd.toFixed(2)}`;
+  }
+  // Sub-cent costs are kept truthful: report three significant figures so a
+  // long delegation that has crossed $0.005 reads as $0.005 rather than the
+  // misleading flat "<$0.01" placeholder it used to show.
+  return `$${costUsd.toFixed(3)}`;
 }
 
 function formatUsageLabel(thread: MissionThreadedActiveSessionSurfaceProps["thread"]): string {
@@ -473,8 +485,13 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
 
       <div className="mc-next-composer-head">
         <div className="mc-next-composer-title">
+          {/*
+           * The kicker carries the visible surface label. The legacy h3
+           * ("Send the next instruction" / recovery label) was hidden by the
+           * unified-shell CSS and the recovery state surfaces via its dedicated
+           * banner below, so the heading was dead text.
+           */}
           <p className="mc-next-composer-kicker">{getSurfaceLabel(props.mode)}</p>
-          <h3>{props.selectedTurnRecovery?.label ?? "Send the next instruction"}</h3>
         </div>
         <div className="mc-next-composer-chip-row">
           <span className="mc-next-composer-chip">{sessionStateLabel}</span>

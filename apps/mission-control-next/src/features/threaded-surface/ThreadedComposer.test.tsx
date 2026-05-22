@@ -530,7 +530,9 @@ describe("ThreadedComposer", () => {
     });
 
     expect(collectText(renderer.root)).toContain("Queued messages");
-    expect(collectText(renderer.root)).toContain("1,800 tokens / <$0.01");
+    // Sub-cent costs now report three significant figures instead of the
+    // flat "<$0.01" placeholder, so a 0.005 total reads as $0.005.
+    expect(collectText(renderer.root)).toContain("1,800 tokens / $0.005");
     expect(collectText(renderer.root)).toContain("Edit and delegate");
 
     await click(findButton(renderer.root, "Resume queued messages"));

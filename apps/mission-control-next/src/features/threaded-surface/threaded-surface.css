@@ -1252,13 +1252,13 @@
 }
 
 .mc-next-thread-step-output-details > summary::after {
-  content: "v";
+  content: "▼";
   color: color-mix(in oklab, var(--mc-area-color) 68%, var(--foreground));
   font-size: var(--text-xs);
 }
 
 .mc-next-thread-step-output-details[open] > summary::after {
-  content: "^";
+  content: "▲";
 }
 
 .mc-next-thread-step-output-details > summary:hover,
@@ -1955,10 +1955,6 @@
   gap: 0.45rem;
 }
 
-.mc-next-threaded-surface.unified .mc-next-composer-title h3 {
-  display: none;
-}
-
 .mc-next-threaded-surface.unified .mc-next-composer-kicker {
   margin: 0;
   color: var(--foreground);
@@ -1968,7 +1964,6 @@
   text-transform: none;
 }
 
-.mc-next-composer-head h3,
 .mc-next-context-card h4,
 .mc-next-cowork-head h4,
 .mc-next-workbench-head h4 {
@@ -2420,10 +2415,17 @@
     max-height: none;
     transform: translateX(-108%);
     transition: transform 180ms ease;
+    /*
+     * When closed (no .open class), the rail is transformed off-screen but
+     * still in the layout. Block pointer events so taps don't hit invisible
+     * controls; the inert attribute on the <aside> handles focus order.
+     */
+    pointer-events: none;
   }
 
   .mc-next-threaded-rail.open {
     transform: translateX(0);
+    pointer-events: auto;
   }
 
   .mc-next-threaded-scrim.open {
