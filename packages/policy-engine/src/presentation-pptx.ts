@@ -224,7 +224,11 @@ function buildSlideLayoutXml(): string {
 }
 
 function buildSlideLayoutRelationships(): string {
-  return xmlDocument(`<Relationships xmlns="${PACKAGE_REL_NS}"></Relationships>`);
+  return xmlDocument(
+    `<Relationships xmlns="${PACKAGE_REL_NS}">` +
+      `<Relationship Id="rId1" Type="${REL_NS}/slideMaster" Target="../slideMasters/slideMaster1.xml"/>` +
+      `</Relationships>`,
+  );
 }
 
 function buildThemeXml(): string {
@@ -237,8 +241,29 @@ function buildThemeXml(): string {
       `<a:accent3><a:srgbClr val="F472B6"/></a:accent3><a:accent4><a:srgbClr val="FBBF24"/></a:accent4>` +
       `<a:accent5><a:srgbClr val="A78BFA"/></a:accent5><a:accent6><a:srgbClr val="34D399"/></a:accent6>` +
       `<a:hlink><a:srgbClr val="60A5FA"/></a:hlink><a:folHlink><a:srgbClr val="A78BFA"/></a:folHlink>` +
-      `</a:clrScheme><a:fontScheme name="Aptos"><a:majorFont><a:latin typeface="Aptos Display"/></a:majorFont><a:minorFont><a:latin typeface="Aptos"/></a:minorFont></a:fontScheme>` +
-      `<a:fmtScheme name="GoatCitadel"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst><a:ln w="9525"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme>` +
+      `</a:clrScheme><a:fontScheme name="Aptos"><a:majorFont><a:latin typeface="Aptos Display"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Aptos"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme>` +
+      `<a:fmtScheme name="GoatCitadel">` +
+      `<a:fillStyleLst>` +
+      `<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>` +
+      `<a:solidFill><a:schemeClr val="accent1"/></a:solidFill>` +
+      `<a:solidFill><a:schemeClr val="accent2"/></a:solidFill>` +
+      `</a:fillStyleLst>` +
+      `<a:lnStyleLst>` +
+      `<a:ln w="9525"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln>` +
+      `<a:ln w="25400"><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></a:ln>` +
+      `<a:ln w="38100"><a:solidFill><a:schemeClr val="accent2"/></a:solidFill></a:ln>` +
+      `</a:lnStyleLst>` +
+      `<a:effectStyleLst>` +
+      `<a:effectStyle><a:effectLst/></a:effectStyle>` +
+      `<a:effectStyle><a:effectLst/></a:effectStyle>` +
+      `<a:effectStyle><a:effectLst/></a:effectStyle>` +
+      `</a:effectStyleLst>` +
+      `<a:bgFillStyleLst>` +
+      `<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>` +
+      `<a:solidFill><a:schemeClr val="lt1"/></a:solidFill>` +
+      `<a:solidFill><a:schemeClr val="dk1"/></a:solidFill>` +
+      `</a:bgFillStyleLst>` +
+      `</a:fmtScheme>` +
       `</a:themeElements><a:objectDefaults/><a:extraClrSchemeLst/></a:theme>`,
   );
 }
