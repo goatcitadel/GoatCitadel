@@ -847,65 +847,85 @@ export class ApprovalEffectsService {
     pendingAction: PendingApprovalAction,
     actionRecord: Record<string, unknown> | undefined,
   ): void {
-    if (pendingAction.actionType !== "tool.invoke") {
-      return;
-    }
-    const inlineApproval = this.ctx.storage.chatInlineApprovals.get(effect.approvalId);
-    if (!inlineApproval) {
-      return;
-    }
-    const now = new Date().toISOString();
-    const toolResult = asRecord(actionRecord?.result) ?? {};
-    const toolName =
-      asOptionalString(pendingAction.request.toolName) ??
-      asOptionalString(inlineApproval.toolName) ??
-      asOptionalString(actionRecord?.toolName) ??
-      "tool.invoke";
-    const toolRun = this.ctx.storage.chatToolRuns
-      .listByTurn(inlineApproval.turnId)
-      .find((candidate) => candidate.approvalId === effect.approvalId);
-    if (toolRun && toolRun.status !== "executed") {
-      this.ctx.storage.chatToolRuns.patch(toolRun.toolRunId, {
-        status: "executed",
-        result: toolResult,
-        finishedAt: now,
-      });
-    }
-    this.ctx.storage.chatInlineApprovals.upsert({
-      approvalId: inlineApproval.approvalId,
-      sessionId: inlineApproval.sessionId,
-      turnId: inlineApproval.turnId,
-      kind: inlineApproval.kind,
-      toolName: inlineApproval.toolName ?? toolName,
-      status: "approved",
-      reason: inlineApproval.reason,
-      riskLevel: inlineApproval.riskLevel,
-      details: inlineApproval.details,
-      expiresAt: inlineApproval.expiresAt,
-      resolvedBy: asOptionalString(effect.payload.resolvedBy) ?? "operator",
-      resolvedAt: now,
-    });
-
-    let childTrace: ChatTurnTraceRecord;
     try {
-      childTrace = this.ctx.storage.chatTurnTraces.get(inlineApproval.turnId);
-    } catch {
-      return;
+      if (pendingAction.actionType !== "tool.invoke") {
+        return;
+      }
+      const inlineApproval = this.ctx.storage.chatInlineApprovals.get(effect.approvalId);
+      if (!inlineApproval) {
+        return;
+      }
+      const now = new Date().toISOString();
+      const toolResult = asRecord(actionRecord?.result) ?? {};
+      const toolName =
+        asOptionalString(pendingAction.request.toolName) ??
+        asOptionalString(inlineApproval.toolName) ??
+        asOptionalString(actionRecord?.toolName) ??
+        "tool.invoke";
+      const toolRun = this.ctx.storage.chatToolRuns
+        .listByTurn(inlineApproval.turnId)
+        .find((candidate) => candidate.approvalId === effect.approvalId);
+      if (toolRun && toolRun.status !== "executed") {
+        this.ctx.storage.chatToolRuns.patch(toolRun.toolRunId, {
+          status: "executed",
+          result: toolResult,
+          finishedAt: now,
+        });
+      }
+      this.ctx.storage.chatInlineApprovals.upsert({
+        approvalId: inlineApproval.approvalId,
+        sessionId: inlineApproval.sessionId,
+        turnId: inlineApproval.turnId,
+        kind: inlineApproval.kind,
+        toolName: inlineApproval.toolName ?? toolName,
+        status: "approved",
+        reason: inlineApproval.reason,
+        riskLevel: inlineApproval.riskLevel,
+        details: inlineApproval.details,
+        expiresAt: inlineApproval.expiresAt,
+        resolvedBy: asOptionalString(effect.payload.resolvedBy) ?? "operator",
+        resolvedAt: now,
+      });
+
+      let childTrace: ChatTurnTraceRecord;
+      try {
+        childTrace = this.ctx.storage.chatTurnTraces.get(inlineApproval.turnId);
+      } catch {
+        return;
+      }
+      const outputText = buildApprovedToolActionOutput(toolName, toolResult);
+      this.completeChatTurnFromApprovedAction({
+        trace: childTrace,
+        outputText,
+        now,
+        approvalId: effect.approvalId,
+        actionRecord,
+      });
+      this.materializeDelegationParentsFromApprovedChild({
+        childTrace,
+        outputText,
+        now,
+        approvalId: effect.approvalId,
+      });
+    } catch (error) {
+      this.ctx.publishRealtime(
+        "approval_effect_materialization_failed",
+        "approvals",
+        {
+          approvalId: effect.approvalId,
+          effectKind: effect.effectKind,
+          targetId: effect.targetId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        {
+          eventClass: "operational_signal",
+          eventAuthority: "retained_stream",
+          links: {
+            approvalId: effect.approvalId,
+          },
+        },
+      );
     }
-    const outputText = buildApprovedToolActionOutput(toolName, toolResult);
-    this.completeChatTurnFromApprovedAction({
-      trace: childTrace,
-      outputText,
-      now,
-      approvalId: effect.approvalId,
-      actionRecord,
-    });
-    this.materializeDelegationParentsFromApprovedChild({
-      childTrace,
-      outputText,
-      now,
-      approvalId: effect.approvalId,
-    });
   }
 
   private completeChatTurnFromApprovedAction(input: {
