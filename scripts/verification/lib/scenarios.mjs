@@ -84,11 +84,12 @@ const VISUAL_DIFF_PIXEL_DELTA = 18;
 const VISUAL_DIFF_RATIO_THRESHOLD = 0.04;
 const VISUAL_DIFF_NORMALIZE_BLUR = 6;
 const VISUAL_DIFF_NORMALIZE_SCALE = 0.25;
-// Visual regression scenarios on smaller viewports (laptop-light, mobile-light)
-// sometimes need longer than 60s for the chat blocking-prompt to hydrate from
-// the seeded approval fixture. 120s absorbs that variance without slowing the
-// happy path (passing scenarios resolve in <10s).
-const VISUAL_ROUTE_READY_TIMEOUT_MS = 120000;
+// Passing scenarios resolve in well under 10s. The 60s ceiling is a generous
+// upper bound — anything approaching it indicates a real race in the seed or
+// hydration path, not a viewport-size variance. On timeout the lane writes a
+// *-route-ready-failure.json diagnostic capturing gateway thread state, queue
+// state, and DOM marker visibility; use that to root-cause rather than bumping.
+const VISUAL_ROUTE_READY_TIMEOUT_MS = 60000;
 const FAST_LANE_TEMP_MIN_FREE_BYTES = 1024 * 1024 * 1024;
 // The file upload fixture would otherwise render "now" in the file list baseline.
 const MISSION_CONTROL_NEXT_FILE_FIXTURE_MTIME = new Date("2026-05-17T21:51:00.000Z");
