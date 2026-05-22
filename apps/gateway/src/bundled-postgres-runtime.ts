@@ -233,15 +233,20 @@ async function tryStartNativeBundledPostgres(
 
   setBootCheckpoint("native-pg:pg_ctl-start-running");
   try {
-    // `-W` (--no-wait): pg_ctl returns immediately after spawning postgres
-    // instead of waiting for postgres to become reachable. We've observed
-    // pg_ctl's default `-w` wait hanging for the full 120s gateway-health
-    // window on Windows even after postgres has bound the port and logged
-    // "database system is ready to accept connections". The subsequent
-    // `waitForBundledPostgres` poll loop is what actually validates
-    // readiness via TCP and a `SHOW data_directory` query, so we don't lose
-    // any reliability by skipping pg_ctl's own ping — and we cut tens of
-    // seconds off cold-start dev boots.
+    // `-W` (--no-wait): tells pg_ctl not to wait for the postmaster's ready
+    // signal — `waitForBundledPostgres` below does that via TCP, which is
+    // more reliable on Windows.
+    //
+    // stdio: "ignore" is critical here. With piped stdio, execFileSync on
+    // Windows waits for the stdio PIPES to close, not just for pg_ctl to
+    // exit. pg_ctl spawns postgres via cmd.exe and the daemonised postgres
+    // process INHERITS those pipe handles. The result was that even though
+    // pg_ctl returned in ~3 seconds and postgres logged "database system is
+    // ready to accept connections", execFileSync kept blocking for the full
+    // 120 s gateway-health window because postgres was still holding the
+    // inherited pipe handles open. Using "ignore" (or "inherit") avoids
+    // creating those pipes entirely. Any pg_ctl error output is still
+    // captured by postgres's own log file via the -l flag.
     execFileSync(
       commands.pgCtl,
       [
@@ -256,7 +261,7 @@ async function tryStartNativeBundledPostgres(
       ],
       {
         encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: "ignore",
       },
     );
     setBootCheckpoint("native-pg:pg_ctl-start-returned-ok");
