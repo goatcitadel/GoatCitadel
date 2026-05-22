@@ -1448,6 +1448,67 @@ describe("useChatOutboundExecution", () => {
     );
   });
 
+  it("preserves queue-sourced approval when a reconciled thread cannot confirm the approval toolRun", async () => {
+    fetchChatPendingApprovalsMock.mockResolvedValueOnce({
+      activeApprovalId: "approval-queue",
+      remainingCount: 1,
+      items: [
+        {
+          approvalId: "approval-queue",
+          stale: false,
+          kind: "tool",
+          sessionId: "session-1",
+          toolName: "shell.exec",
+          reason: "Run from queue",
+        },
+      ],
+    });
+    await act(async () => {
+      create(<Harness initialThread={null} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(latest?.getSnapshot().pendingApproval).toEqual(
+      expect.objectContaining({ approvalId: "approval-queue", toolName: "shell.exec" }),
+    );
+
+    const threadMissingToolRun = {
+      sessionId: "session-1",
+      turns: [
+        {
+          turnId: "turn-1",
+          userMessage: {
+            messageId: "user-1",
+            sessionId: "session-1",
+            role: "user",
+            actorType: "user",
+            actorId: "operator",
+            content: "Original prompt",
+            timestamp: "2026-05-03T12:45:00.000Z",
+          },
+          trace: {
+            status: "waiting_for_approval",
+            routing: {},
+            toolRuns: [],
+            capabilityUpgradeSuggestions: [],
+            specialistCandidateSuggestions: [],
+          },
+        },
+      ],
+      selectedTurnId: "turn-1",
+      activeLeafTurnId: "turn-1",
+    } as unknown as ChatThreadResponse;
+
+    await act(async () => {
+      latest?.applyFetchedThread(threadMissingToolRun, null);
+      await Promise.resolve();
+    });
+
+    expect(latest?.getSnapshot().pendingApproval).toEqual(
+      expect.objectContaining({ approvalId: "approval-queue", toolName: "shell.exec" }),
+    );
+  });
+
   it("handles stream aborts, non-resumable stream errors, sidebar refresh failures, and finalized reconciliation rejects", async () => {
     const loadSidebar = vi.fn(async () => {
       throw new Error("sidebar down");

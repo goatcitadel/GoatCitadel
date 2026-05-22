@@ -533,7 +533,20 @@ export function useChatOutboundExecution(input: {
         return merged;
       });
     } else {
-      setPendingApproval(null);
+      setPendingApproval((current) => {
+        if (!current) {
+          return null;
+        }
+        const selectedTurn = thread
+          ? (thread.turns.find((turn) => turn.turnId === (thread.selectedTurnId ?? thread.activeLeafTurnId)) ??
+            thread.turns.at(-1) ??
+            null)
+          : null;
+        if (selectedTurn?.trace.status === "waiting_for_approval") {
+          return current;
+        }
+        return null;
+      });
     }
 
     const threadUserInput = deriveThreadPendingUserInput(thread);
