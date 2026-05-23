@@ -139,6 +139,13 @@ describe("realtime-derived", () => {
   it("derives notifications from explicit links, replay gaps, compatibility keywords, and quiet events", () => {
     expect(deriveRealtimeNotification(event({ links: { approvalId: "approval-1" } }))).toBeUndefined();
     expect(
+      deriveRealtimeNotification(event({ eventType: "approval_created", links: { approvalId: "approval-1" } })),
+    ).toMatchObject({
+      attentionKind: "approval_waiting",
+      soundCue: "waiting",
+      tone: "warning",
+    });
+    expect(
       deriveRealtimeNotification(event({ links: { approvalId: "approval-1", sessionId: "session-1" } })),
     ).toBeUndefined();
     expect(
@@ -159,14 +166,106 @@ describe("realtime-derived", () => {
       tone: "warning",
       groupKey: "stream-replay-gap",
       truthMode: "replay-gap",
+      soundCue: "problem",
+    });
+    expect(
+      deriveRealtimeNotification(
+        event({
+          eventType: "orchestration_event",
+          links: { runId: "run-1" },
+          payload: { event: "run_started" },
+        }),
+      ),
+    ).toMatchObject({
+      tone: "info",
+      attentionKind: "activity_update",
+      soundCue: "started",
+    });
+    expect(
+      deriveRealtimeNotification(
+        event({
+          eventType: "orchestration_event",
+          links: { runId: "run-1" },
+          payload: { event: "run_resumed" },
+        }),
+      ),
+    ).toMatchObject({
+      tone: "success",
+      attentionKind: "activity_update",
+      soundCue: "resumed",
+    });
+    expect(
+      deriveRealtimeNotification(
+        event({
+          eventType: "orchestration_event",
+          links: { runId: "run-1" },
+          payload: { event: "run_completed" },
+        }),
+      ),
+    ).toMatchObject({
+      tone: "success",
+      attentionKind: "run_completed",
+      soundCue: "done",
+    });
+    expect(
+      deriveRealtimeNotification(
+        event({
+          eventType: "task_updated",
+          links: { taskId: "task-1" },
+          payload: { status: "completed" },
+        }),
+      ),
+    ).toMatchObject({
+      message: "Task activity updated in Cowork.",
+      attentionKind: "activity_update",
+    });
+    expect(
+      deriveRealtimeNotification(
+        event({
+          eventType: "orchestration_event",
+          links: { runId: "run-1" },
+          payload: { event: "run_failed" },
+        }),
+      ),
+    ).toMatchObject({
+      tone: "error",
+      attentionKind: "run_failed",
+      soundCue: "problem",
+    });
+    expect(
+      deriveRealtimeNotification(
+        event({
+          eventType: "orchestration_event",
+          links: { approvalId: "approval-1", runId: "run-1" },
+          payload: { event: "run_paused_for_approval" },
+        }),
+      ),
+    ).toMatchObject({
+      tone: "warning",
+      attentionKind: "operator_blocked",
+      soundCue: "waiting",
     });
     expect(deriveRealtimeNotification(event({ eventType: "task_changed" }))).toMatchObject({
       groupKey: "cowork-tasks",
       truthMode: "compatibility",
+      soundCue: "soft_update",
+    });
+    expect(deriveRealtimeNotification(event({ eventType: "deliverable_added" }))).toMatchObject({
+      groupKey: "handoff-ready",
+      soundCue: "handoff_ready",
+    });
+    expect(deriveRealtimeNotification(event({ eventType: "gateway_disconnected" }))).toMatchObject({
+      groupKey: "connection-interrupted",
+      soundCue: "disconnected",
+    });
+    expect(deriveRealtimeNotification(event({ eventType: "gateway_connected" }))).toMatchObject({
+      groupKey: "connection-restored",
+      soundCue: "connected",
     });
     expect(deriveRealtimeNotification(event({ eventType: "chat_message_saved" }))).toMatchObject({
       groupKey: "chat-thread",
       truthMode: "compatibility",
+      soundCue: "message",
     });
     expect(deriveRealtimeNotification(event({ eventType: "heartbeat" }))).toBeUndefined();
   });

@@ -92,6 +92,12 @@ describe("ui preferences", () => {
       statusCenterExpanded: false,
       activeWorkspaceId: "default",
       theme: "dark",
+      notifications: {
+        toastsEnabled: true,
+        soundMode: "off",
+        desktopEnabled: false,
+        onlyWhenUnfocused: false,
+      },
     });
     act(() => {
       latest.setMode("advanced");
@@ -103,6 +109,10 @@ describe("ui preferences", () => {
       latest.setStatusCenterExpanded(true);
       latest.setActiveWorkspaceId("workspace-1");
       latest.setTheme("light");
+      latest.setNotificationToastsEnabled(false);
+      latest.setNotificationSoundMode("subtle");
+      latest.setNotificationDesktopEnabled(true);
+      latest.setNotificationOnlyWhenUnfocused(true);
     });
   });
 
@@ -117,6 +127,10 @@ describe("ui preferences", () => {
     storage.setItem("goatcitadel.ui.status_center_expanded.v1", "true");
     storage.setItem("goatcitadel.ui.workspace_id.v1", "../bad");
     storage.setItem("goatcitadel.ui.theme.v1", "light");
+    storage.setItem("goatcitadel.notifications.toasts.v1", "false");
+    storage.setItem("goatcitadel.notifications.sound_mode.v1", "normal");
+    storage.setItem("goatcitadel.notifications.desktop.v1", "true");
+    storage.setItem("goatcitadel.notifications.only_unfocused.v1", "true");
 
     const hook = renderPreferences();
 
@@ -130,6 +144,12 @@ describe("ui preferences", () => {
       statusCenterExpanded: true,
       activeWorkspaceId: "default",
       theme: "light",
+      notifications: {
+        toastsEnabled: false,
+        soundMode: "normal",
+        desktopEnabled: true,
+        onlyWhenUnfocused: true,
+      },
     });
 
     hook.renderer.unmount();
@@ -156,6 +176,10 @@ describe("ui preferences", () => {
       hook.result.setStatusCenterExpanded(true);
       hook.result.setActiveWorkspaceId("workspace.alpha-1");
       hook.result.setTheme("light");
+      hook.result.setNotificationToastsEnabled(false);
+      hook.result.setNotificationSoundMode("subtle");
+      hook.result.setNotificationDesktopEnabled(true);
+      hook.result.setNotificationOnlyWhenUnfocused(true);
     });
 
     expect(hook.result).toMatchObject({
@@ -167,6 +191,12 @@ describe("ui preferences", () => {
       statusCenterExpanded: true,
       activeWorkspaceId: "workspace.alpha-1",
       theme: "light",
+      notifications: {
+        toastsEnabled: false,
+        soundMode: "subtle",
+        desktopEnabled: true,
+        onlyWhenUnfocused: true,
+      },
     });
     expect(storage.getItem("goatcitadel.ui.density.v1")).toBe("compact");
     expect(storage.getItem("goatcitadel.ui.effects_mode.v1")).toBe("full");
@@ -175,6 +205,10 @@ describe("ui preferences", () => {
     expect(storage.getItem("goatcitadel.ui.status_center_expanded.v1")).toBe("true");
     expect(storage.getItem("goatcitadel.ui.workspace_id.v1")).toBe("workspace.alpha-1");
     expect(storage.getItem("goatcitadel.ui.theme.v1")).toBe("light");
+    expect(storage.getItem("goatcitadel.notifications.toasts.v1")).toBe("false");
+    expect(storage.getItem("goatcitadel.notifications.sound_mode.v1")).toBe("subtle");
+    expect(storage.getItem("goatcitadel.notifications.desktop.v1")).toBe("true");
+    expect(storage.getItem("goatcitadel.notifications.only_unfocused.v1")).toBe("true");
 
     act(() => {
       hook.result.setActiveWorkspaceId(" ");
@@ -193,6 +227,7 @@ describe("ui preferences", () => {
     storage.setItem("goatcitadel.ui.effects_mode.v1", "loud");
     storage.setItem("goatcitadel.ui.nav_mode.v1", "wide");
     storage.setItem("goatcitadel.ui.theme.v1", "solarized");
+    storage.setItem("goatcitadel.notifications.sound_mode.v1", "loud");
 
     const hook = renderPreferences();
 
@@ -203,6 +238,9 @@ describe("ui preferences", () => {
       navMode: "compact",
       showTechnicalDetails: true,
       theme: "dark",
+      notifications: {
+        soundMode: "off",
+      },
     });
     hook.renderer.unmount();
   });
@@ -220,6 +258,12 @@ describe("ui preferences", () => {
       statusCenterExpanded: false,
       activeWorkspaceId: "default",
       theme: "dark",
+      notifications: {
+        toastsEnabled: true,
+        soundMode: "off",
+        desktopEnabled: false,
+        onlyWhenUnfocused: false,
+      },
     });
     act(() => {
       serverHook.result.setDensity("comfortable");

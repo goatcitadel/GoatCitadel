@@ -1,10 +1,18 @@
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 import type { UiEffectsMode } from "./effects-mode";
+import type { OperatorAttentionSoundMode } from "./operator-attention";
 import type { ShellNavMode } from "../components/ShellNavRail";
 
 export type UiExperienceMode = "simple" | "advanced";
 export type UiDensity = "comfortable" | "default" | "compact";
 export type UiTheme = "dark" | "light";
+
+export interface UiNotificationPreferences {
+  toastsEnabled: boolean;
+  soundMode: OperatorAttentionSoundMode;
+  desktopEnabled: boolean;
+  onlyWhenUnfocused: boolean;
+}
 
 interface UiPreferencesValue {
   mode: UiExperienceMode;
@@ -25,6 +33,11 @@ interface UiPreferencesValue {
   setActiveWorkspaceId: (workspaceId: string) => void;
   theme: UiTheme;
   setTheme: (theme: UiTheme) => void;
+  notifications: UiNotificationPreferences;
+  setNotificationToastsEnabled: (enabled: boolean) => void;
+  setNotificationSoundMode: (mode: OperatorAttentionSoundMode) => void;
+  setNotificationDesktopEnabled: (enabled: boolean) => void;
+  setNotificationOnlyWhenUnfocused: (enabled: boolean) => void;
 }
 
 const MODE_KEY = "goatcitadel.ui.mode.v1";
@@ -36,6 +49,10 @@ const DETAIL_PANEL_PINNED_KEY = "goatcitadel.ui.detail_panel_pinned.v1";
 const STATUS_CENTER_EXPANDED_KEY = "goatcitadel.ui.status_center_expanded.v1";
 const WORKSPACE_KEY = "goatcitadel.ui.workspace_id.v1";
 const THEME_KEY = "goatcitadel.ui.theme.v1";
+const NOTIFICATION_TOASTS_KEY = "goatcitadel.notifications.toasts.v1";
+const NOTIFICATION_SOUND_MODE_KEY = "goatcitadel.notifications.sound_mode.v1";
+const NOTIFICATION_DESKTOP_KEY = "goatcitadel.notifications.desktop.v1";
+const NOTIFICATION_ONLY_UNFOCUSED_KEY = "goatcitadel.notifications.only_unfocused.v1";
 
 const UiPreferencesContext = createContext<UiPreferencesValue>({
   mode: "simple",
@@ -56,6 +73,16 @@ const UiPreferencesContext = createContext<UiPreferencesValue>({
   setActiveWorkspaceId: () => {},
   theme: "dark",
   setTheme: () => {},
+  notifications: {
+    toastsEnabled: true,
+    soundMode: "off",
+    desktopEnabled: false,
+    onlyWhenUnfocused: false,
+  },
+  setNotificationToastsEnabled: () => {},
+  setNotificationSoundMode: () => {},
+  setNotificationDesktopEnabled: () => {},
+  setNotificationOnlyWhenUnfocused: () => {},
 });
 
 export function UiPreferencesProvider(props: { children: ReactNode }) {
@@ -70,6 +97,9 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
   );
   const [activeWorkspaceId, setActiveWorkspaceIdState] = useState<string>(() => readWorkspaceIdFromStorage());
   const [theme, setThemeState] = useState<UiTheme>(() => readThemeFromStorage());
+  const [notifications, setNotificationsState] = useState<UiNotificationPreferences>(() =>
+    readNotificationPreferencesFromStorage(),
+  );
 
   const value = useMemo<UiPreferencesValue>(
     () => ({
@@ -122,6 +152,23 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
         setThemeState(nextTheme);
         writeStorage(THEME_KEY, nextTheme);
       },
+      notifications,
+      setNotificationToastsEnabled: (enabled) => {
+        setNotificationsState((current) => ({ ...current, toastsEnabled: enabled }));
+        writeStorage(NOTIFICATION_TOASTS_KEY, String(enabled));
+      },
+      setNotificationSoundMode: (nextSoundMode) => {
+        setNotificationsState((current) => ({ ...current, soundMode: nextSoundMode }));
+        writeStorage(NOTIFICATION_SOUND_MODE_KEY, nextSoundMode);
+      },
+      setNotificationDesktopEnabled: (enabled) => {
+        setNotificationsState((current) => ({ ...current, desktopEnabled: enabled }));
+        writeStorage(NOTIFICATION_DESKTOP_KEY, String(enabled));
+      },
+      setNotificationOnlyWhenUnfocused: (enabled) => {
+        setNotificationsState((current) => ({ ...current, onlyWhenUnfocused: enabled }));
+        writeStorage(NOTIFICATION_ONLY_UNFOCUSED_KEY, String(enabled));
+      },
     }),
     [
       mode,
@@ -133,6 +180,7 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
       statusCenterExpanded,
       activeWorkspaceId,
       theme,
+      notifications,
     ],
   );
 
@@ -241,4 +289,40 @@ function readThemeFromStorage(): UiTheme {
   }
   const raw = window.localStorage.getItem(THEME_KEY);
   return raw === "light" ? "light" : "dark";
+}
+
+function readNotificationPreferencesFromStorage(): UiNotificationPreferences {
+  if (typeof window === "undefined") {
+    return {
+      toastsEnabled: true,
+      soundMode: "off",
+      desktopEnabled: false,
+      onlyWhenUnfocused: false,
+    };
+  }
+  return {
+    toastsEnabled: readBooleanFromStorage(NOTIFICATION_TOASTS_KEY, true),
+    soundMode: readNotificationSoundModeFromStorage(),
+    desktopEnabled: readBooleanFromStorage(NOTIFICATION_DESKTOP_KEY, false),
+    onlyWhenUnfocused: readBooleanFromStorage(NOTIFICATION_ONLY_UNFOCUSED_KEY, false),
+  };
+}
+
+function readNotificationSoundModeFromStorage(): OperatorAttentionSoundMode {
+  const raw = window.localStorage.getItem(NOTIFICATION_SOUND_MODE_KEY);
+  if (raw === "subtle" || raw === "normal") {
+    return raw;
+  }
+  return "off";
+}
+
+function readBooleanFromStorage(key: string, defaultValue: boolean): boolean {
+  const raw = window.localStorage.getItem(key);
+  if (raw === "true") {
+    return true;
+  }
+  if (raw === "false") {
+    return false;
+  }
+  return defaultValue;
 }

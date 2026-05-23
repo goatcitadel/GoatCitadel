@@ -111,6 +111,14 @@ struct ApprovalNotificationPayload {
     status: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OperatorAttentionPayload {
+    title: String,
+    body: String,
+    route_path: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DesktopEventStreamCredential {
@@ -403,6 +411,8 @@ fn watch_approval_events(app: AppHandle, runtime: DesktopLaunchResult, stop: Arc
                 data_lines.clear();
                 if let Some(payload) = parse_approval_notification(&data) {
                     let _ = app.emit("desktop://approval-created", payload);
+                } else if let Some(payload) = parse_operator_attention_notification(&data) {
+                    let _ = app.emit("desktop://operator-attention", payload);
                 }
             }
         }
@@ -470,6 +480,84 @@ fn parse_approval_notification(data: &str) -> Option<ApprovalNotificationPayload
             .map(str::to_string),
         status: payload.get("status").and_then(Value::as_str).map(str::to_string),
     })
+}
+
+fn parse_operator_attention_notification(data: &str) -> Option<OperatorAttentionPayload> {
+    let value: Value = serde_json::from_str(data).ok()?;
+    let event_type = value.get("eventType")?.as_str()?.to_lowercase();
+    if event_type == "approval_created" {
+        return None;
+    }
+    let payload = value.get("payload").and_then(Value::as_object);
+    let payload_event = payload
+        .and_then(|item| item.get("event"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_lowercase();
+    let payload_status = payload
+        .and_then(|item| item.get("status"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_lowercase();
+    let signal = format!("{event_type} {payload_event} {payload_status}");
+
+    if signal.contains("run_completed")
+        || signal.contains("run.completed")
+        || signal.contains("run.stopped")
+        || signal.contains("run_stopped")
+        || (is_run_like_signal(&signal) && signal.contains("completed"))
+    {
+        return Some(OperatorAttentionPayload {
+            title: "GoatCitadel run completed".to_string(),
+            body: "Results are ready to review.".to_string(),
+            route_path: Some("/ops/activity".to_string()),
+        });
+    }
+
+    if signal.contains("run_failed")
+        || signal.contains("run.failed")
+        || is_runtime_degraded_signal(&signal)
+        || (is_run_like_signal(&signal)
+            && (signal.contains("failed")
+                || signal.contains("failure")
+                || signal.contains("error")
+                || signal.contains("critical")))
+    {
+        return Some(OperatorAttentionPayload {
+            title: "GoatCitadel needs attention".to_string(),
+            body: "A run or runtime signal needs operator review.".to_string(),
+            route_path: Some("/ops/notifications".to_string()),
+        });
+    }
+
+    if signal.contains("paused_for_approval")
+        || signal.contains("waiting_for_operator")
+        || (is_run_like_signal(&signal) && (signal.contains("blocked") || signal.contains("requires_operator")))
+    {
+        return Some(OperatorAttentionPayload {
+            title: "GoatCitadel is waiting".to_string(),
+            body: "Work is paused until the operator responds.".to_string(),
+            route_path: Some("/ops/approvals".to_string()),
+        });
+    }
+
+    None
+}
+
+fn is_run_like_signal(signal: &str) -> bool {
+    signal.contains("run_")
+        || signal.contains("run.")
+        || signal.contains("orchestration")
+        || signal.contains("durable")
+        || signal.contains("code_mode")
+}
+
+fn is_runtime_degraded_signal(signal: &str) -> bool {
+    signal.contains("degraded")
+        || signal.contains("provider_failed")
+        || signal.contains("gateway_failed")
+        || signal.contains("health_failed")
+        || signal.contains("daemon_stopped")
 }
 
 fn sleep_or_stop(stop: &Arc<AtomicBool>, duration: Duration) {
@@ -800,5 +888,43 @@ mod tests {
         assert_eq!(payload.kind.as_deref(), Some("tool"));
         assert_eq!(payload.risk_level.as_deref(), Some("medium"));
         assert_eq!(payload.status.as_deref(), Some("pending"));
+    }
+
+    #[test]
+    fn parses_operator_attention_notifications() {
+        assert!(parse_operator_attention_notification(
+            r#"{"eventType":"approval_created","payload":{"approvalId":"ap-1"}}"#,
+        )
+        .is_none());
+
+        let completed = parse_operator_attention_notification(
+            r#"{"eventType":"orchestration_event","payload":{"event":"run_completed","status":"completed"}}"#,
+        )
+        .expect("completed notification");
+        assert_eq!(completed.title, "GoatCitadel run completed");
+        assert_eq!(completed.route_path.as_deref(), Some("/ops/activity"));
+        assert!(parse_operator_attention_notification(
+            r#"{"eventType":"task_updated","payload":{"status":"completed"}}"#,
+        )
+        .is_none());
+
+        let failed = parse_operator_attention_notification(
+            r#"{"eventType":"orchestration_event","payload":{"event":"run_failed","status":"failed"}}"#,
+        )
+        .expect("failed notification");
+        assert_eq!(failed.title, "GoatCitadel needs attention");
+        assert_eq!(failed.route_path.as_deref(), Some("/ops/notifications"));
+        let degraded = parse_operator_attention_notification(
+            r#"{"eventType":"provider_failed","payload":{"status":"failed"}}"#,
+        )
+        .expect("degraded notification");
+        assert_eq!(degraded.title, "GoatCitadel needs attention");
+
+        let waiting = parse_operator_attention_notification(
+            r#"{"eventType":"orchestration_event","payload":{"event":"run_paused_for_approval"}}"#,
+        )
+        .expect("waiting notification");
+        assert_eq!(waiting.title, "GoatCitadel is waiting");
+        assert_eq!(waiting.route_path.as_deref(), Some("/ops/approvals"));
     }
 }

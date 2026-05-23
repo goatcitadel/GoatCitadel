@@ -21,7 +21,12 @@ const appMocks = vi.hoisted(() => ({
   setActiveWorkspaceId: vi.fn(),
   setDetailPanelPinned: vi.fn(),
   setMode: vi.fn(),
+  setNotificationDesktopEnabled: vi.fn(),
+  setNotificationOnlyWhenUnfocused: vi.fn(),
+  setNotificationSoundMode: vi.fn(),
+  setNotificationToastsEnabled: vi.fn(),
   setTheme: vi.fn(),
+  playOperatorAttentionSound: vi.fn(),
   streamCallbacks: {} as {
     onEvent?: (event: unknown) => void;
     onStateChange?: (state: string) => void;
@@ -154,7 +159,21 @@ vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
     setActiveWorkspaceId: appMocks.setActiveWorkspaceId,
     theme: "dark",
     setTheme: appMocks.setTheme,
+    notifications: {
+      toastsEnabled: true,
+      soundMode: "off",
+      desktopEnabled: false,
+      onlyWhenUnfocused: false,
+    },
+    setNotificationToastsEnabled: appMocks.setNotificationToastsEnabled,
+    setNotificationSoundMode: appMocks.setNotificationSoundMode,
+    setNotificationDesktopEnabled: appMocks.setNotificationDesktopEnabled,
+    setNotificationOnlyWhenUnfocused: appMocks.setNotificationOnlyWhenUnfocused,
   }),
+}));
+
+vi.mock("@goatcitadel/mission-control-shared/state/operator-attention", () => ({
+  playOperatorAttentionSound: appMocks.playOperatorAttentionSound,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/state/effects-mode", () => ({
@@ -308,6 +327,7 @@ describe("MissionControlNextApp", () => {
       tone: "info",
       message: "Realtime task update",
       groupKey: "task",
+      soundCue: "soft_update",
     });
     appMocks.fetchDashboardState.mockResolvedValue({
       pendingApprovals: 2,
@@ -450,6 +470,12 @@ describe("MissionControlNextApp", () => {
     });
     expect(window.location.pathname).toBe("/ops/notifications");
     expect(readNodeText(renderer.root.findByProps({ "aria-label": "Open notifications" }))).toBe("2");
+    expect(appMocks.playOperatorAttentionSound).toHaveBeenCalledWith("soft_update", "off");
+
+    await act(async () => {
+      renderer.root.findByProps({ "aria-label": "Enable notification sounds" }).props.onClick();
+    });
+    expect(appMocks.setNotificationSoundMode).toHaveBeenCalledWith("normal");
 
     await act(async () => {
       renderer.root.findByProps({ "aria-label": "Open approvals" }).props.onClick();

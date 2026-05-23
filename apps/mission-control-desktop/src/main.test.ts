@@ -223,6 +223,19 @@ describe("desktop shell bootstrap", () => {
       body: "tool / high",
     });
 
+    listeners.get("desktop://operator-attention")?.({
+      payload: {
+        title: "GoatCitadel run completed",
+        body: "Results are ready to review.",
+        routePath: "/ops/activity",
+      },
+    });
+    await flushPromises();
+    expect(tauriMocks.sendNotification).toHaveBeenCalledWith({
+      title: "GoatCitadel run completed",
+      body: "Results are ready to review.",
+    });
+
     listeners.get("desktop://runtime-stopped")?.();
     expect(element("status-copy").textContent).toBe("Runtime stopped.");
 
@@ -275,6 +288,17 @@ describe("desktop shell bootstrap", () => {
 
     expect(frameElement().src).toBe("http://127.0.0.1:5173/ops/approvals?approvalId=approval%201");
     expect(close).toHaveBeenCalled();
+
+    listeners.get("desktop://operator-attention")?.({
+      payload: {
+        title: "GoatCitadel needs attention",
+        body: "A run needs review.",
+        routePath: "/ops/notifications",
+      },
+    });
+    await flushPromises();
+    notificationClick?.();
+    expect(frameElement().src).toBe("http://127.0.0.1:5173/ops/notifications");
   });
 
   it("shows refresh errors and hides toast after the timer", async () => {

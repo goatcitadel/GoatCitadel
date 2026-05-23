@@ -17,6 +17,8 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   SunMedium,
+  Volume2,
+  VolumeX,
   Workflow,
   Wrench,
   X,
@@ -60,6 +62,7 @@ import {
   deriveRealtimeRefresh,
   type RealtimeTruthMode,
 } from "@goatcitadel/mission-control-shared/state/realtime-derived";
+import { playOperatorAttentionSound } from "@goatcitadel/mission-control-shared/state/operator-attention";
 import {
   LazyNativeRoutePages,
   LazyPromptPacksWorkbenchPage,
@@ -128,6 +131,8 @@ export function MissionControlNextApp() {
     setActiveWorkspaceId,
     theme,
     setTheme,
+    notifications: notificationPreferences,
+    setNotificationSoundMode,
   } = useUiPreferences();
   const effectiveEffectsMode = useMemo(() => resolveEffectiveEffectsMode(effectsMode), [effectsMode]);
   const [route, setRoute] = useState<AppRoute>(() => resolveRouteFromLocation(window.location.href));
@@ -183,6 +188,15 @@ export function MissionControlNextApp() {
   const hasVisibleInspector = detailPanelPinned || inspectorOpen;
   const activeWorkspaceName =
     workspaceOptions.find((item) => item.workspaceId === activeWorkspaceId)?.name ?? activeWorkspaceId;
+  const lastEnabledSoundModeRef = useRef<"subtle" | "normal">(
+    notificationPreferences.soundMode === "off" ? "normal" : notificationPreferences.soundMode,
+  );
+
+  useEffect(() => {
+    if (notificationPreferences.soundMode !== "off") {
+      lastEnabledSoundModeRef.current = notificationPreferences.soundMode;
+    }
+  }, [notificationPreferences.soundMode]);
 
   const pushNotification = useCallback((tone: NotificationItem["tone"], message: string, groupKey?: string) => {
     setNotifications((current) =>
@@ -195,6 +209,28 @@ export function MissionControlNextApp() {
       }),
     );
   }, []);
+
+  const deliverRealtimeNotification = useCallback(
+    (notification: ReturnType<typeof deriveRealtimeNotification>) => {
+      if (!notification) {
+        return;
+      }
+      const shouldDeliver =
+        !notificationPreferences.onlyWhenUnfocused ||
+        (typeof document !== "undefined" && document.visibilityState !== "visible");
+      if (!shouldDeliver) {
+        return;
+      }
+      if (notificationPreferences.toastsEnabled) {
+        pushNotification(notification.tone, notification.message, notification.groupKey);
+      }
+      void playOperatorAttentionSound(notification.soundCue, notificationPreferences.soundMode);
+      if (notificationPreferences.desktopEnabled) {
+        showBrowserNotification(notification.message, notification.tone);
+      }
+    },
+    [notificationPreferences, pushNotification],
+  );
 
   const copyTrustReportForRoute = useCallback(
     async (targetRoute: AppRoute) => {
@@ -526,9 +562,7 @@ export function MissionControlNextApp() {
         }
         setStreamTruthMode(derivedRefresh.truthMode);
         const notification = deriveRealtimeNotification(event);
-        if (notification) {
-          pushNotification(notification.tone, notification.message, notification.groupKey);
-        }
+        deliverRealtimeNotification(notification);
       },
       (nextState) => {
         setStreamState(nextState);
@@ -543,7 +577,7 @@ export function MissionControlNextApp() {
       close();
       resetEventStreamStatus();
     };
-  }, [gatewayAccess.status, pushNotification]);
+  }, [deliverRealtimeNotification, gatewayAccess.status]);
 
   useEffect(() => {
     if (detailEntry) {
@@ -692,6 +726,31 @@ export function MissionControlNextApp() {
               >
                 <Bell size={16} />
                 <span>{operatorNotificationCount}</span>
+              </button>
+              <button
+                type="button"
+                className={`mc-next-icon-button mc-next-audio-toggle${
+                  notificationPreferences.soundMode !== "off" ? " active" : ""
+                }`}
+                onClick={() =>
+                  setNotificationSoundMode(
+                    notificationPreferences.soundMode === "off" ? lastEnabledSoundModeRef.current : "off",
+                  )
+                }
+                aria-pressed={notificationPreferences.soundMode !== "off"}
+                aria-label={
+                  notificationPreferences.soundMode === "off"
+                    ? "Enable notification sounds"
+                    : "Disable notification sounds"
+                }
+                title={
+                  notificationPreferences.soundMode === "off"
+                    ? "Enable notification sounds"
+                    : "Disable notification sounds"
+                }
+              >
+                {notificationPreferences.soundMode === "off" ? <VolumeX size={16} /> : <Volume2 size={16} />}
+                <span>{notificationPreferences.soundMode === "off" ? "Off" : "On"}</span>
               </button>
               <button
                 type="button"
@@ -1127,6 +1186,22 @@ function StatusPill({
 
 export function resolveShellThemeClass(theme: "dark" | "light"): "theme-signal-noir" | "theme-citadel-light" {
   return theme === "light" ? "theme-citadel-light" : "theme-signal-noir";
+}
+
+function showBrowserNotification(message: string, tone: NotificationItem["tone"]): void {
+  if (typeof window === "undefined" || !("Notification" in window)) {
+    return;
+  }
+  const NotificationCtor = window.Notification;
+  if (NotificationCtor.permission !== "granted") {
+    return;
+  }
+  const title = tone === "error" ? "GoatCitadel needs attention" : "GoatCitadel";
+  try {
+    new NotificationCtor(title, { body: message });
+  } catch {
+    // Browser or host notification permissions can change after settings are saved.
+  }
 }
 
 export function describeRealtimeTruthUi(

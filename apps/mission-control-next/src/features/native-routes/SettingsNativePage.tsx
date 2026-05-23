@@ -12,6 +12,7 @@ import {
 import { providerTemplates, type CapabilityPackPreview, type LlmProviderAdviceResponse } from "@goatcitadel/contracts";
 import {
   AlertTriangle,
+  Bell,
   Cable,
   CheckCircle2,
   Code2,
@@ -32,6 +33,7 @@ import {
   Sparkles,
   Square,
   Trash2,
+  Volume2,
   Wrench,
 } from "lucide-react";
 import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
@@ -166,6 +168,7 @@ import {
   requestConfigFromDraft,
 } from "@goatcitadel/mission-control-shared/components/LlmTransportFields";
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import type { AppRoute } from "@next/app/route-model";
 import { ThreePartChip, type ChipTone } from "./primitives";
 import "./native-routes.css";
@@ -285,6 +288,13 @@ function renderSettingsSection(props: SettingsSectionProps) {
 }
 
 function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectionProps) {
+  const {
+    notifications,
+    setNotificationDesktopEnabled,
+    setNotificationOnlyWhenUnfocused,
+    setNotificationSoundMode,
+    setNotificationToastsEnabled,
+  } = useUiPreferences();
   const load = useCallback(async () => {
     const [settings, workspaces, integrations, mcpServers, tools, addons] = await Promise.all([
       nativeLoad("Settings", fetchSettings(), null),
@@ -418,6 +428,94 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
                 },
               ]}
             />
+          </SettingsPanel>
+          <SettingsPanel
+            title="Notifications and sounds"
+            subtitle="Choose how GoatCitadel asks for attention when work completes, blocks, or waits on approval."
+            stats={[
+              { label: "Toasts", value: notifications.toastsEnabled ? "On" : "Off" },
+              { label: "Sound", value: labelForNotificationSoundMode(notifications.soundMode) },
+              { label: "Desktop", value: notifications.desktopEnabled ? "On" : "Off" },
+            ]}
+          >
+            <SettingsFieldGrid>
+              <SettingsField label="In-app notifications">
+                <label className="mc-next-settings-check">
+                  <input
+                    type="checkbox"
+                    checked={notifications.toastsEnabled}
+                    onChange={(event) => setNotificationToastsEnabled(event.target.checked)}
+                  />
+                  <span>Show operator attention toasts</span>
+                </label>
+                <p className="mc-next-settings-field-note">
+                  Toasts stay tied to realtime events and Ops notification history.
+                </p>
+              </SettingsField>
+              <SettingsField label="Sound cue">
+                <select
+                  className="mc-next-settings-input"
+                  value={notifications.soundMode}
+                  onChange={(event) => setNotificationSoundMode(normalizeNotificationSoundMode(event.target.value))}
+                >
+                  <option value="off">Off</option>
+                  <option value="subtle">Subtle</option>
+                  <option value="normal">Normal</option>
+                </select>
+                <p className="mc-next-settings-field-note">
+                  Sounds use short synthesized cues for done, waiting, and problem states.
+                </p>
+              </SettingsField>
+              <SettingsField label="Desktop notifications">
+                <label className="mc-next-settings-check">
+                  <input
+                    type="checkbox"
+                    checked={notifications.desktopEnabled}
+                    onChange={(event) => {
+                      if (event.target.checked) {
+                        void requestBrowserNotificationPermission();
+                      }
+                      setNotificationDesktopEnabled(event.target.checked);
+                    }}
+                  />
+                  <span>Use system notifications when permission is granted</span>
+                </label>
+                <p className="mc-next-settings-field-note">
+                  Desktop notifications stay permission-aware in browser and native hosts.
+                </p>
+              </SettingsField>
+              <SettingsField label="Attention scope">
+                <label className="mc-next-settings-check">
+                  <input
+                    type="checkbox"
+                    checked={notifications.onlyWhenUnfocused}
+                    onChange={(event) => setNotificationOnlyWhenUnfocused(event.target.checked)}
+                  />
+                  <span>Only notify when Mission Control is unfocused</span>
+                </label>
+                <p className="mc-next-settings-field-note">
+                  Keep the active workspace quieter while preserving background completion alerts.
+                </p>
+              </SettingsField>
+            </SettingsFieldGrid>
+            <SettingsButtonRow>
+              <button
+                type="button"
+                className="mc-next-button-secondary"
+                onClick={() => void requestBrowserNotificationPermission()}
+              >
+                <Bell size={16} />
+                Check permission
+              </button>
+              <button
+                type="button"
+                className="mc-next-button-secondary"
+                onClick={() => setNotificationSoundMode(notifications.soundMode === "off" ? "subtle" : "off")}
+              >
+                <Volume2 size={16} />
+                {notifications.soundMode === "off" ? "Enable subtle sound" : "Mute sound"}
+              </button>
+            </SettingsButtonRow>
           </SettingsPanel>
         </SettingsGrid>
       ) : null}
@@ -7659,6 +7757,34 @@ function labelForBudgetMode(value: OnboardingState["settings"]["budgetMode"]): s
     return "Power";
   }
   return "Balanced";
+}
+
+function labelForNotificationSoundMode(value: "off" | "subtle" | "normal"): string {
+  if (value === "normal") {
+    return "Normal";
+  }
+  if (value === "subtle") {
+    return "Subtle";
+  }
+  return "Off";
+}
+
+function normalizeNotificationSoundMode(value: string): "off" | "subtle" | "normal" {
+  if (value === "normal" || value === "subtle") {
+    return value;
+  }
+  return "off";
+}
+
+async function requestBrowserNotificationPermission(): Promise<void> {
+  if (typeof window === "undefined" || !("Notification" in window) || Notification.permission !== "default") {
+    return;
+  }
+  try {
+    await Notification.requestPermission();
+  } catch {
+    // Permission prompts are host/browser controlled and may be unavailable in embedded contexts.
+  }
 }
 
 function formatProviderApiStyleLabel(value: ProviderEditorDraft["apiStyle"]): string {

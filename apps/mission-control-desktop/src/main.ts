@@ -51,6 +51,12 @@ interface ApprovalNotificationPayload {
   status?: string;
 }
 
+interface OperatorAttentionPayload {
+  title: string;
+  body: string;
+  routePath?: string;
+}
+
 const RUNTIME_HEALTH_POLL_MS = 10_000;
 const startup = mustGetElement<HTMLElement>("startup");
 const frame = mustGetElement<HTMLIFrameElement>("mission-control-frame");
@@ -89,6 +95,10 @@ openFolderButton.addEventListener("click", () => {
 
 void listen<ApprovalNotificationPayload>("desktop://approval-created", (event) => {
   void showApprovalNotification(event.payload);
+});
+
+void listen<OperatorAttentionPayload>("desktop://operator-attention", (event) => {
+  void showOperatorAttentionNotification(event.payload);
 });
 
 void listen("desktop://runtime-status-requested", () => {
@@ -249,6 +259,22 @@ async function showApprovalNotification(payload: ApprovalNotificationPayload): P
   }
 }
 
+async function showOperatorAttentionNotification(payload: OperatorAttentionPayload): Promise<void> {
+  const granted = await ensureNotificationPermission();
+  if (granted && "Notification" in window) {
+    const notification = new Notification(payload.title, { body: payload.body });
+    notification.onclick = () => {
+      openRoutePath(payload.routePath ?? "/ops/notifications");
+      notification.close();
+    };
+    return;
+  }
+
+  if (granted) {
+    sendNotification({ title: payload.title, body: payload.body });
+  }
+}
+
 async function ensureNotificationPermission(): Promise<boolean> {
   if (await isPermissionGranted()) {
     return true;
@@ -258,11 +284,16 @@ async function ensureNotificationPermission(): Promise<boolean> {
 }
 
 function openApprovalRoute(approvalId: string): void {
+  openRoutePath(`/ops/approvals?approvalId=${encodeURIComponent(approvalId)}`);
+}
+
+function openRoutePath(routePath: string): void {
   const uiUrl = lastRuntime?.uiUrl;
   if (!uiUrl) {
     return;
   }
-  frame.src = `${trimTrailingSlash(uiUrl)}/ops/approvals?approvalId=${encodeURIComponent(approvalId)}`;
+  const normalizedRoute = routePath.startsWith("/") ? routePath : `/${routePath}`;
+  frame.src = `${trimTrailingSlash(uiUrl)}${normalizedRoute}`;
   startup.classList.add("is-hidden");
   frame.classList.add("is-ready");
 }

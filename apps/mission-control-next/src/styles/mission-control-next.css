@@ -488,6 +488,12 @@
   height: 0.8rem;
 }
 
+.mc-next-audio-toggle.active {
+  border-color: color-mix(in oklab, var(--mc-area-color) 42%, var(--mc-border-subtle));
+  background: color-mix(in oklab, var(--mc-area-color) 12%, var(--mc-surface-1));
+  color: var(--mc-area-color);
+}
+
 .mc-next-topbar-right > button.mc-next-start-button,
 .mc-next-topbar-right > button.mc-next-mode-toggle {
   width: auto;
