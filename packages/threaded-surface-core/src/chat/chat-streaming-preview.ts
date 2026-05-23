@@ -27,6 +27,7 @@ interface ChatStreamingPreviewBufferOptions {
   maxDelayMs?: number;
   noNewlineRevealDelayMs?: number;
   noNewlineRevealChars?: number;
+  revealCharsPerFrame?: number;
   isReducedMotion?: () => boolean;
   requestFrame?: (callback: () => void) => number;
   cancelFrame?: (handle: number) => void;
@@ -34,16 +35,25 @@ interface ChatStreamingPreviewBufferOptions {
   clearTimer?: (handle: ReturnType<typeof setTimeout>) => void;
 }
 
+interface ChatStreamingPreviewFinishOptions {
+  clear?: boolean;
+  forceVisible?: boolean;
+  finalText?: string;
+}
+
 interface ResolveVisibleStreamingTextOptions {
   force?: boolean;
   reducedMotion?: boolean;
   noNewlineRevealDelayMs?: number;
   noNewlineRevealChars?: number;
+  previousVisibleText?: string;
+  revealCharsPerFrame?: number;
 }
 
 const DEFAULT_MAX_DELAY_MS = 50;
 const DEFAULT_NO_NEWLINE_DELAY_MS = 250;
 const DEFAULT_NO_NEWLINE_CHARS = 80;
+const DEFAULT_REVEAL_CHARS_PER_FRAME = 18;
 
 export function isReducedMotionPreferred(): boolean {
   return Boolean(
@@ -62,16 +72,32 @@ export function resolveVisibleStreamingText(
   if (!text || options.force || options.reducedMotion) {
     return text;
   }
-  const lastNewlineIndex = text.lastIndexOf("\n");
-  if (lastNewlineIndex >= 0) {
-    return text.slice(0, lastNewlineIndex + 1);
-  }
-  const revealDelay = options.noNewlineRevealDelayMs ?? DEFAULT_NO_NEWLINE_DELAY_MS;
-  const revealChars = options.noNewlineRevealChars ?? DEFAULT_NO_NEWLINE_CHARS;
-  if (now - startedAt >= revealDelay || text.length >= revealChars) {
+
+  const previousVisibleText = options.previousVisibleText ?? "";
+  const visiblePrefixLength = text.startsWith(previousVisibleText) ? previousVisibleText.length : 0;
+  if (visiblePrefixLength >= text.length) {
     return text;
   }
-  return "";
+
+  const baseRevealBudget = Math.max(1, options.revealCharsPerFrame ?? DEFAULT_REVEAL_CHARS_PER_FRAME);
+  const targetLength = Math.min(text.length, visiblePrefixLength + baseRevealBudget);
+  return text.slice(0, targetLength);
+}
+
+function hasHiddenStreamingText(preview: ChatStreamingPreview): boolean {
+  return preview.visibleText.length < preview.text.length;
+}
+
+function resolveFallbackDelayMs(
+  snapshot: ChatStreamingPreview,
+  startedAt: number,
+  noNewlineRevealDelayMs: number,
+): number {
+  if (snapshot.text.lastIndexOf("\n") >= 0) {
+    return DEFAULT_MAX_DELAY_MS;
+  }
+  const elapsedMs = snapshot.updatedAt - startedAt;
+  return Math.max(16, Math.min(DEFAULT_MAX_DELAY_MS, noNewlineRevealDelayMs - elapsedMs));
 }
 
 export class ChatStreamingPreviewBuffer {
@@ -80,17 +106,20 @@ export class ChatStreamingPreviewBuffer {
   private readonly maxDelayMs: number;
   private readonly noNewlineRevealDelayMs: number;
   private readonly noNewlineRevealChars: number;
+  private readonly revealCharsPerFrame: number;
   private readonly isReducedMotion: () => boolean;
   private readonly requestFrame: (callback: () => void) => number;
   private readonly cancelFrame: (handle: number) => void;
   private readonly setTimer: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
   private readonly clearTimer: (handle: ReturnType<typeof setTimeout>) => void;
+  private readonly deferFinalClear: boolean;
   private frameHandle: number | null = null;
   private timerHandle: ReturnType<typeof setTimeout> | null = null;
   private seed: ChatStreamingPreviewSeed | null = null;
   private text = "";
   private visibleText = "";
   private startedAt = 0;
+  private clearAfterVisible = false;
 
   constructor(options: ChatStreamingPreviewBufferOptions) {
     this.onFlush = options.onFlush;
@@ -98,6 +127,7 @@ export class ChatStreamingPreviewBuffer {
     this.maxDelayMs = options.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
     this.noNewlineRevealDelayMs = options.noNewlineRevealDelayMs ?? DEFAULT_NO_NEWLINE_DELAY_MS;
     this.noNewlineRevealChars = options.noNewlineRevealChars ?? DEFAULT_NO_NEWLINE_CHARS;
+    this.revealCharsPerFrame = options.revealCharsPerFrame ?? DEFAULT_REVEAL_CHARS_PER_FRAME;
     this.isReducedMotion = options.isReducedMotion ?? isReducedMotionPreferred;
     this.requestFrame =
       options.requestFrame ??
@@ -118,6 +148,9 @@ export class ChatStreamingPreviewBuffer {
       });
     this.setTimer = options.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
     this.clearTimer = options.clearTimer ?? ((handle) => clearTimeout(handle));
+    this.deferFinalClear = Boolean(
+      options.requestFrame || (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function"),
+    );
   }
 
   start(seed: ChatStreamingPreviewSeed): ChatStreamingPreview {
@@ -149,20 +182,31 @@ export class ChatStreamingPreviewBuffer {
     }
     const snapshot = this.createSnapshot(Boolean(options.forceVisible));
     this.onFlush(snapshot);
-    if (!options.forceVisible && snapshot.visibleText !== snapshot.text && snapshot.text.lastIndexOf("\n") < 0) {
-      const elapsedMs = snapshot.updatedAt - this.startedAt;
-      const delayMs = Math.max(0, this.noNewlineRevealDelayMs - elapsedMs);
+    const hasHiddenText = !options.forceVisible && hasHiddenStreamingText(snapshot);
+    if (hasHiddenText) {
+      const delayMs = resolveFallbackDelayMs(snapshot, this.startedAt, this.noNewlineRevealDelayMs);
       this.timerHandle = this.setTimer(() => {
         this.timerHandle = null;
         this.flush();
       }, delayMs);
+      this.scheduleFrameFlush();
+    } else if (this.clearAfterVisible) {
+      this.scheduleFinalClear();
     }
     return snapshot;
   }
 
-  finish(options: { clear?: boolean; forceVisible?: boolean } = {}): ChatStreamingPreview | null {
-    const snapshot = this.flush({ forceVisible: options.forceVisible ?? true });
-    if (options.clear !== false) {
+  finish(options: ChatStreamingPreviewFinishOptions = {}): ChatStreamingPreview | null {
+    if (options.finalText !== undefined) {
+      this.text = options.finalText;
+    }
+    const shouldClear = options.clear !== false;
+    const forceVisible = options.forceVisible ?? true;
+    const shouldDeferClear = shouldClear && !forceVisible;
+    this.clearAfterVisible = shouldDeferClear;
+    const snapshot = this.flush({ forceVisible });
+    if (shouldClear && !shouldDeferClear && (forceVisible || !snapshot || !hasHiddenStreamingText(snapshot))) {
+      this.clearAfterVisible = false;
       this.clear();
     }
     return snapshot;
@@ -174,6 +218,7 @@ export class ChatStreamingPreviewBuffer {
     this.text = "";
     this.visibleText = "";
     this.startedAt = 0;
+    this.clearAfterVisible = false;
     this.onFlush(null);
   }
 
@@ -188,19 +233,48 @@ export class ChatStreamingPreviewBuffer {
     return this.createSnapshot(Boolean(options.forceVisible));
   }
 
+  matches(sessionId: string, turnId: string): boolean {
+    return this.seed?.sessionId === sessionId && this.seed.turnId === turnId;
+  }
+
+  isSettlingFinalText(): boolean {
+    return this.clearAfterVisible && this.seed !== null;
+  }
+
   private scheduleFlush(): void {
-    if (this.frameHandle === null) {
-      this.frameHandle = this.requestFrame(() => {
-        this.frameHandle = null;
-        this.flush();
-      });
-    }
+    this.scheduleFrameFlush();
     if (this.timerHandle === null) {
       this.timerHandle = this.setTimer(() => {
         this.timerHandle = null;
         this.flush();
       }, this.maxDelayMs);
     }
+  }
+
+  private scheduleFrameFlush(): void {
+    if (this.frameHandle !== null) {
+      return;
+    }
+    this.frameHandle = this.requestFrame(() => {
+      this.frameHandle = null;
+      this.flush();
+    });
+  }
+
+  private scheduleFinalClear(): void {
+    if (!this.deferFinalClear) {
+      this.clearAfterVisible = false;
+      this.clear();
+      return;
+    }
+    if (this.frameHandle !== null) {
+      return;
+    }
+    this.frameHandle = this.requestFrame(() => {
+      this.frameHandle = null;
+      this.clearAfterVisible = false;
+      this.clear();
+    });
   }
 
   private cancelScheduledFlush(): void {
@@ -224,6 +298,8 @@ export class ChatStreamingPreviewBuffer {
       reducedMotion: this.isReducedMotion(),
       noNewlineRevealDelayMs: this.noNewlineRevealDelayMs,
       noNewlineRevealChars: this.noNewlineRevealChars,
+      previousVisibleText: this.visibleText,
+      revealCharsPerFrame: this.revealCharsPerFrame,
     });
     return {
       sessionId: this.seed.sessionId,

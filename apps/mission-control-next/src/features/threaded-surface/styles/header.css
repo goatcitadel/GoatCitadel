@@ -2,25 +2,25 @@
   min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 1rem;
+  gap: 0.62rem;
   padding: 0;
   background: var(--background);
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench {
-  grid-template-columns: minmax(0, 1.35fr) minmax(22rem, 0.95fr);
+  grid-template-columns: minmax(0, 1.42fr) minmax(20rem, 0.78fr);
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel {
-  grid-template-columns: minmax(34rem, 1fr) minmax(21rem, 0.48fr);
+  grid-template-columns: minmax(32rem, 1fr) minmax(18rem, 0.38fr);
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-code-panel {
-  grid-template-columns: minmax(32rem, 0.92fr) minmax(28rem, 0.72fr);
+  grid-template-columns: minmax(31rem, 0.98fr) minmax(24rem, 0.58fr);
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-context {
-  grid-template-columns: minmax(0, 1fr) minmax(22rem, 0.88fr);
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.58fr);
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.mode-chat {
@@ -28,26 +28,26 @@
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.mode-chat.has-context {
-  grid-template-columns: minmax(34rem, 1fr) minmax(18rem, 0.34fr);
+  grid-template-columns: minmax(32rem, 1fr) minmax(15rem, 0.26fr);
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench.has-context {
-  grid-template-columns: minmax(0, 1.3fr) minmax(20rem, 0.9fr) minmax(18rem, 0.72fr);
+  grid-template-columns: minmax(0, 1.38fr) minmax(18rem, 0.72fr) minmax(14rem, 0.32fr);
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel.has-context {
-  grid-template-columns: minmax(34rem, 1fr) minmax(20rem, 0.44fr) minmax(15rem, 0.32fr);
+  grid-template-columns: minmax(32rem, 1fr) minmax(18rem, 0.36fr) minmax(13rem, 0.24fr);
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-code-panel.has-context {
-  grid-template-columns: minmax(29rem, 0.92fr) minmax(24rem, 0.7fr) minmax(13rem, 0.3fr);
+  grid-template-columns: minmax(28rem, 0.98fr) minmax(21rem, 0.58fr) minmax(12rem, 0.24fr);
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-primary-column {
   min-width: 0;
   display: grid;
-  gap: 0.9rem;
-  max-width: min(100%, 980px);
+  gap: 0.52rem;
+  max-width: min(100%, 900px);
   width: 100%;
   margin-inline: auto;
 }
@@ -88,8 +88,8 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
-  gap: 0.55rem;
-  padding: 10px 0 8px;
+  gap: 0.38rem;
+  padding: 6px 0 5px;
   border: 0;
   border-bottom: 1px solid var(--mc-border-subtle);
   border-radius: 0;
@@ -104,7 +104,7 @@
   display: grid;
   grid-column: 2;
   grid-row: 1 / span 2;
-  gap: 0.45rem;
+  gap: 0.28rem;
   justify-items: end;
 }
 

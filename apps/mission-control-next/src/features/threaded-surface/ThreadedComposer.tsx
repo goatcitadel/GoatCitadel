@@ -350,12 +350,12 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           : "Web auto";
   const thinkingLabel = `Think ${props.currentThinkingLevel}`;
   const speedLabel = props.currentSpeedMode === "fast" ? "Fast" : "Standard";
-  const helperCopy =
-    props.mode === "code"
-      ? "Paste larger prompts, drag files, and keep heavier implementation context in one place."
-      : props.mode === "cowork"
-        ? "Queue follow-up work while a run streams so Cowork can keep momentum without losing context."
-        : "Drag files here, paste screenshots, and queue the next prompt while a turn is still streaming.";
+  const composerStatus =
+    props.hasActiveStream && props.midTurnDisposition === "steer"
+      ? "Steering active"
+      : props.hasActiveStream && props.midTurnDisposition === "queue"
+        ? "Queue active"
+        : null;
   const routeLabel =
     props.routePreflightLoading && !currentRouteLabel
       ? "Route checking"
@@ -366,7 +366,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const usageLabel = formatUsageLabel(props.thread);
   const usageTotals = computeUsageTotals(props.thread);
   const composerV2Enabled = useComposerV2Enabled();
-  useAutoGrowTextarea(props.composerRef, props.draft);
+  useAutoGrowTextarea(props.composerRef, props.draft, { minLines: 2, maxLines: 8 });
   const contextStripMode = toContextStripMode(props.mode);
   // planningEnabled was used by the inline Plan toggle, which moved to the
   // Context Drawer's Assist tab. The composer keeps the "Planning mode is on"
@@ -567,7 +567,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           onKeyDown={props.onComposerKeyDown}
           onPaste={props.onComposerPaste}
           placeholder={getPlaceholder(props.mode)}
-          rows={4}
+          rows={2}
         />
       </div>
 
@@ -717,7 +717,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
             onChange={(event) => props.onAudioFileSelected?.(event.target.files)}
           />
         </div>
-        <p className="mc-next-composer-helper">{helperCopy}</p>
+        {composerStatus ? <p className="mc-next-composer-helper">{composerStatus}</p> : null}
         <div className="mc-next-composer-controls-end">
           {props.sending && props.hasActiveStream ? (
             <button type="button" className="mc-next-composer-primary" onClick={props.onStopActiveTurn}>

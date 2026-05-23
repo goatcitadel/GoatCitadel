@@ -324,7 +324,10 @@ export function useChatOutboundExecution(input: {
     return streamingPreviewBufferRef.current;
   }, []);
 
-  const clearStreamingPreview = useCallback(() => {
+  const clearStreamingPreview = useCallback((options: { allowSettlingFinalText?: boolean } = {}) => {
+    if (options.allowSettlingFinalText && streamingPreviewBufferRef.current?.isSettlingFinalText()) {
+      return;
+    }
     streamingPreviewBufferRef.current?.clear();
     setStreamingPreview(null);
   }, []);
@@ -781,7 +784,15 @@ export function useChatOutboundExecution(input: {
               liveStream.runId = chunk.trace.durable.runId;
             }
             if (chunk.type === "message_done") {
-              streamingPreviewBufferRef.current?.finish({ clear: true, forceVisible: true });
+              const previewBuffer = getStreamingPreviewBuffer();
+              if (!previewBuffer.matches(chunk.sessionId, chunk.turnId)) {
+                previewBuffer.start({
+                  sessionId: chunk.sessionId,
+                  turnId: chunk.turnId,
+                  messageId: chunk.messageId,
+                });
+              }
+              previewBuffer.finish({ clear: true, forceVisible: false, finalText: chunk.content });
               finalizedStreamMessageRef.current = {
                 sessionId: chunk.sessionId,
                 placeholderId: chunk.messageId,
@@ -1129,7 +1140,7 @@ export function useChatOutboundExecution(input: {
           activeStreamRef.current = null;
         }
         if (!session || activeStream?.sessionId === session.sessionId) {
-          clearStreamingPreview();
+          clearStreamingPreview({ allowSettlingFinalText: true });
         }
         finishOutboundExecution();
       }

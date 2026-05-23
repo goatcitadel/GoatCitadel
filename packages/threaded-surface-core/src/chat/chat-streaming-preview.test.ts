@@ -2,17 +2,41 @@ import { describe, expect, it, vi } from "vitest";
 import { ChatStreamingPreviewBuffer, resolveVisibleStreamingText } from "./chat-streaming-preview";
 
 describe("chat streaming preview", () => {
-  it("reveals completed lines before the unstable tail", () => {
-    expect(resolveVisibleStreamingText("First line\nsecond", 1000, 1010)).toBe("First line\n");
+  it("reveals an in-progress line instead of waiting for a newline", () => {
+    expect(resolveVisibleStreamingText("First line\nsecond", 1000, 1010, { revealCharsPerFrame: 120 })).toBe(
+      "First line\nsecond",
+    );
   });
 
-  it("reveals short no-newline answers after the fallback delay", () => {
-    expect(resolveVisibleStreamingText("short answer", 1000, 1100)).toBe("");
-    expect(resolveVisibleStreamingText("short answer", 1000, 1260)).toBe("short answer");
+  it("continues from the prior visible prefix", () => {
+    expect(
+      resolveVisibleStreamingText("short answer continues", 1000, 1016, {
+        previousVisibleText: "short",
+        revealCharsPerFrame: 7,
+      }),
+    ).toBe("short answer");
   });
 
-  it("reveals long no-newline answers once the character threshold is reached", () => {
-    expect(resolveVisibleStreamingText("x".repeat(80), 1000, 1005)).toBe("x".repeat(80));
+  it("keeps late no-newline chunks on the frame reveal budget", () => {
+    expect(
+      resolveVisibleStreamingText("short answer continues", 1000, 2000, {
+        previousVisibleText: "short",
+        revealCharsPerFrame: 7,
+        noNewlineRevealChars: 80,
+      }),
+    ).toBe("short answer");
+  });
+
+  it("reveals long no-newline answers progressively", () => {
+    const content = "x".repeat(80);
+    const firstFrame = resolveVisibleStreamingText(content, 1000, 1005, { revealCharsPerFrame: 12 });
+    const secondFrame = resolveVisibleStreamingText(content, 1000, 1021, {
+      previousVisibleText: firstFrame,
+      revealCharsPerFrame: 12,
+    });
+
+    expect(firstFrame).toBe("x".repeat(12));
+    expect(secondFrame).toBe("x".repeat(24));
   });
 
   it("reveals all text in reduced-motion mode", () => {
@@ -44,7 +68,7 @@ describe("chat streaming preview", () => {
     buffer.append({ sessionId: "sess", turnId: "turn", messageId: "msg", delta: "Hello" });
     expect(onFlush).toHaveBeenCalledTimes(1);
 
-    now = 1260;
+    now = 1016;
     frameCallbacks.shift()?.();
     expect(onFlush).toHaveBeenCalledTimes(2);
     expect(onFlush).toHaveBeenLastCalledWith(
@@ -63,6 +87,81 @@ describe("chat streaming preview", () => {
         visibleText: "Hello again",
       }),
     );
+  });
+
+  it("keeps revealing a large incoming chunk on follow-up frames", () => {
+    const frameCallbacks: Array<() => void> = [];
+    const timerCallbacks: Array<() => void> = [];
+    const onFlush = vi.fn();
+    const buffer = new ChatStreamingPreviewBuffer({
+      now: () => 1000,
+      onFlush,
+      revealCharsPerFrame: 5,
+      requestFrame: (callback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      },
+      cancelFrame: vi.fn(),
+      setTimer: (callback) => {
+        timerCallbacks.push(callback);
+        return timerCallbacks.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimer: vi.fn(),
+      isReducedMotion: () => false,
+    });
+
+    buffer.start({ sessionId: "sess", turnId: "turn" });
+    buffer.append({ sessionId: "sess", turnId: "turn", delta: "Hello smooth stream" });
+
+    frameCallbacks.shift()?.();
+    expect(onFlush).toHaveBeenLastCalledWith(expect.objectContaining({ visibleText: "Hello" }));
+
+    frameCallbacks.shift()?.();
+    expect(onFlush).toHaveBeenLastCalledWith(expect.objectContaining({ visibleText: "Hello smoo" }));
+
+    frameCallbacks.shift()?.();
+    expect(onFlush).toHaveBeenLastCalledWith(expect.objectContaining({ visibleText: "Hello smooth st" }));
+    expect(timerCallbacks.length).toBeGreaterThan(0);
+  });
+
+  it("reveals message_done final text before clearing the preview", () => {
+    const frameCallbacks: Array<() => void> = [];
+    const onFlush = vi.fn();
+    const finalText = "A compact smooth chat UI keeps late final chunks visually streaming.";
+    const buffer = new ChatStreamingPreviewBuffer({
+      now: () => 1000,
+      onFlush,
+      revealCharsPerFrame: 8,
+      requestFrame: (callback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      },
+      cancelFrame: vi.fn(),
+      setTimer: (callback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimer: vi.fn(),
+      isReducedMotion: () => false,
+    });
+
+    buffer.start({ sessionId: "sess", turnId: "turn" });
+    buffer.finish({ clear: true, forceVisible: false, finalText });
+
+    expect(onFlush).toHaveBeenLastCalledWith(expect.objectContaining({ visibleText: finalText.slice(0, 8) }));
+    expect(onFlush).not.toHaveBeenLastCalledWith(null);
+
+    while (frameCallbacks.length > 0 && onFlush.mock.calls.at(-1)?.[0] !== null) {
+      frameCallbacks.shift()?.();
+    }
+
+    const visibleTexts = onFlush.mock.calls
+      .map(([preview]) => preview?.visibleText)
+      .filter((visibleText): visibleText is string => typeof visibleText === "string" && visibleText.length > 0);
+
+    expect(visibleTexts).toContain(finalText.slice(0, 16));
+    expect(visibleTexts.at(-1)).toBe(finalText);
+    expect(onFlush).toHaveBeenLastCalledWith(null);
   });
 
   it("cleans up scheduled work without publishing more preview state", () => {
