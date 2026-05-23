@@ -655,9 +655,11 @@ export function ChatThreadView({
       return;
     }
     threadEndRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
+    onBottomStateChange(true);
   }, [
     followOutput,
     notices.length,
+    onBottomStateChange,
     queuedCount,
     selectedTurnId,
     streamError,
@@ -671,8 +673,11 @@ export function ChatThreadView({
     if (!scrollElement) {
       return;
     }
+    if (followOutput) {
+      return;
+    }
     onBottomStateChange(isThreadScrollNearBottom(scrollElement));
-  }, [onBottomStateChange, notices.length, queuedCount, streamStatus, thread]);
+  }, [followOutput, onBottomStateChange, notices.length, queuedCount, streamStatus, thread]);
 
   if (loading) {
     return <div className="chat-v11-thread-loading">Loading thread…</div>;

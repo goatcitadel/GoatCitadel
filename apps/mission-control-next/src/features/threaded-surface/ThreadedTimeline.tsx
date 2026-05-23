@@ -1,12 +1,4 @@
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-} from "react";
+import { memo, useCallback, useLayoutEffect, useRef, useState } from "react";
 import {
   getChatTurnRecoveryActionLabel,
   isChatTurnActiveStatus,
@@ -18,11 +10,6 @@ import {
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { Badge } from "@goatcitadel/mission-control-shared/components/ui";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
-import {
-  ChatPendingApprovalPanel,
-  type ChatPendingApprovalState,
-} from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
-import { ChatPendingUserInputPanel } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingUserInputPanel";
 import {
   ChatStreamStatusBar,
   type ChatStreamStatus,
@@ -147,12 +134,16 @@ function formatCitationSource(citation: ChatCitationRecord): string {
 }
 
 function ThreadCitationList({ citations }: { citations: ChatCitationRecord[] }) {
+  const [expanded, setExpanded] = useState(false);
   if (citations.length === 0) {
     return null;
   }
+  const collapsedLimit = 6;
+  const visibleCitations = expanded ? citations : citations.slice(0, collapsedLimit);
+  const hiddenCount = citations.length - visibleCitations.length;
   return (
     <div className="mc-next-thread-citations" aria-label="Citations for this answer">
-      {citations.slice(0, 6).map((citation, index) => {
+      {visibleCitations.map((citation, index) => {
         const label = normalizeCitationDisplayText(citation.title) || citation.url;
         const snippet = normalizeCitationDisplayText(citation.snippet);
         const source = formatCitationSource(citation);
@@ -176,7 +167,16 @@ function ThreadCitationList({ citations }: { citations: ChatCitationRecord[] }) 
           </article>
         );
       })}
-      {citations.length > 6 ? <p className="mc-next-thread-note">+{citations.length - 6} more citations</p> : null}
+      {citations.length > collapsedLimit ? (
+        <button
+          type="button"
+          className="mc-next-thread-inline-button mc-next-thread-citations-toggle"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          {expanded ? "Show fewer citations" : `Show ${hiddenCount} more citations`}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -194,6 +194,7 @@ function ThreadBranchSwitcher({ turn, onSwitch }: { turn: ChatThreadTurnRecord; 
       <button
         type="button"
         className="mc-next-thread-inline-button"
+        aria-label={`Show previous variant for turn ${turn.turnId}`}
         disabled={!previousTurnId}
         onClick={() => previousTurnId && onSwitch(previousTurnId)}
       >
@@ -205,6 +206,7 @@ function ThreadBranchSwitcher({ turn, onSwitch }: { turn: ChatThreadTurnRecord; 
       <button
         type="button"
         className="mc-next-thread-inline-button"
+        aria-label={`Show next variant for turn ${turn.turnId}`}
         disabled={!nextTurnId}
         onClick={() => nextTurnId && onSwitch(nextTurnId)}
       >
@@ -218,8 +220,10 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
   mode,
   turn,
   selected,
+  contextSelected,
   streamingPreview,
-  onSelect,
+  onToggleContextTurn,
+  onStartNewThreadFromTurn,
   onSwitchBranch,
   onRetryTurn,
   onOpenRunDetails,
@@ -230,8 +234,10 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
   mode: ChatMode;
   turn: ChatThreadTurnRecord;
   selected: boolean;
+  contextSelected: boolean;
   streamingPreview?: MissionThreadedActiveSessionSurfaceProps["streamingPreview"];
-  onSelect: (turnId: string) => void;
+  onToggleContextTurn: (turnId: string) => void;
+  onStartNewThreadFromTurn: (turnId: string) => void;
   onSwitchBranch: (turnId: string) => void;
   onRetryTurn: (turnId: string) => void;
   onOpenRunDetails: (turnId: string) => void;
@@ -253,30 +259,26 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
       : "Running";
   const assistantPendingLabel = isStreamingTurn
     ? "Receiving response..."
-    : isChatTurnActiveStatus(turn.trace.status) || turn.trace.status === "cancelled" || turn.trace.status === "failed"
+    : isChatTurnActiveStatus(turn.trace.status) ||
+        turn.trace.status === "cancelled" ||
+        turn.trace.status === "failed" ||
+        turn.trace.status === "partial"
       ? getTurnPendingLabel(turn.trace)
       : "No assistant output yet.";
-
-  function handleSurfaceKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-    if (event.target !== event.currentTarget) {
-      return;
-    }
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      onSelect(turn.turnId);
-    }
-  }
+  const isPlainChat = mode === "chat";
+  const showOperationalDetails =
+    !isPlainChat ||
+    isStreamingTurn ||
+    turn.trace.status !== "completed" ||
+    turnHasRepairedAssistantOutput(turn) ||
+    turn.trace.routing.fallbackUsed ||
+    Boolean(turn.trace.failure) ||
+    turn.toolRuns.length > 0 ||
+    hasGeneratedArtifact;
 
   return (
     <article className={`mc-next-thread-turn${selected ? " selected" : ""}`}>
-      <div
-        className="mc-next-thread-turn-surface"
-        role="button"
-        tabIndex={0}
-        aria-pressed={selected}
-        onClick={() => onSelect(turn.turnId)}
-        onKeyDown={handleSurfaceKeyDown}
-      >
+      <div className="mc-next-thread-turn-surface" aria-current={selected ? "true" : undefined}>
         <div className="mc-next-thread-bubble user">
           <p className="mc-next-thread-meta">
             <strong>You</strong> · {formatActorTimestamp(turn.userMessage.timestamp)}
@@ -307,15 +309,33 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
           <ThreadCitationList citations={turn.citations} />
         </div>
       </div>
-      <div className="mc-next-thread-strip">
-        <StatusChip tone={getTraceTone(turn.trace)}>{turn.trace.status}</StatusChip>
-        {getRecoveryStripLabel(turn) ? <span>{getRecoveryStripLabel(turn)}</span> : null}
-        {summarizeRouting(turn).map((item) => (
-          <span key={item}>{item}</span>
-        ))}
-        {turn.toolRuns.length > 0 ? <span>{turn.toolRuns.length} tools</span> : null}
-        {turn.citations.length > 0 ? <span>{turn.citations.length} citations</span> : null}
-        <button type="button" className="mc-next-thread-inline-button" onClick={() => onOpenRunDetails(turn.turnId)}>
+      <div className={`mc-next-thread-strip${showOperationalDetails ? "" : " compact"}`}>
+        <label className="mc-next-thread-context-toggle">
+          <input
+            type="checkbox"
+            checked={contextSelected}
+            aria-label={`${contextSelected ? "Remove" : "Add"} turn ${turn.turnId} as context`}
+            onChange={() => onToggleContextTurn(turn.turnId)}
+          />
+          <span>Context</span>
+        </label>
+        {showOperationalDetails ? (
+          <>
+            <StatusChip tone={getTraceTone(turn.trace)}>{turn.trace.status}</StatusChip>
+            {getRecoveryStripLabel(turn) ? <span>{getRecoveryStripLabel(turn)}</span> : null}
+            {summarizeRouting(turn).map((item) => (
+              <span key={item}>{item}</span>
+            ))}
+            {turn.toolRuns.length > 0 ? <span>{turn.toolRuns.length} tools</span> : null}
+            {turn.citations.length > 0 ? <span>{turn.citations.length} citations</span> : null}
+          </>
+        ) : null}
+        <button
+          type="button"
+          className="mc-next-thread-inline-button"
+          aria-label={`Open execution detail for turn ${turn.turnId}`}
+          onClick={() => onOpenRunDetails(turn.turnId)}
+        >
           {mode === "cowork" ? "Run details" : "Details"}
         </button>
       </div>
@@ -326,6 +346,15 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
               {mode === "cowork" ? "Retry run step" : "Retry"}
             </button>
           ) : null}
+          <button
+            type="button"
+            className="mc-next-thread-inline-button"
+            aria-label={`Start a new thread from turn ${turn.turnId}`}
+            disabled={isStreamingTurn}
+            onClick={() => onStartNewThreadFromTurn(turn.turnId)}
+          >
+            Start new thread
+          </button>
           {turn.assistantMessage ? (
             <button
               type="button"
@@ -334,7 +363,7 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
                 hasGeneratedArtifact ? onOpenGeneratedArtifact(turn.turnId) : onCreateGeneratedArtifact(turn.turnId)
               }
             >
-              {hasGeneratedArtifact ? "Open artifact" : "Create artifact"}
+              {hasGeneratedArtifact ? "Open saved answer" : "Save answer"}
             </button>
           ) : null}
           {hasGeneratedArtifact ? (
@@ -343,7 +372,7 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
               className="mc-next-thread-inline-button"
               onClick={() => onCreateGeneratedArtifactVersion(turn.turnId)}
             >
-              New version
+              Save new version
             </button>
           ) : null}
         </div>
@@ -546,8 +575,11 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
   const scrollFrameRef = useRef<number | null>(null);
-  const pendingApproval = props.pendingApproval as ChatPendingApprovalState | null;
-  const blockerActive = Boolean(pendingApproval || props.pendingUserInput);
+  const lastTurn = props.thread?.turns.at(-1) ?? null;
+  const threadTurnCount = props.thread?.turns.length ?? 0;
+  const latestTurnId = props.thread?.activeLeafTurnId ?? lastTurn?.turnId ?? null;
+  const latestAssistantContentLength = lastTurn?.assistantMessage?.content.length ?? 0;
+  const latestTraceStatus = lastTurn?.trace.status ?? null;
   const liveStatus =
     props.streamError ??
     (props.streamStatus === "streaming"
@@ -585,6 +617,7 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
         block: "end",
         behavior: "auto",
       });
+      props.onBottomStateChange(true);
     });
     return () => {
       if (scrollFrameRef.current !== null) {
@@ -595,12 +628,16 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
   }, [
     props.followOutput,
     props.notices.length,
+    props.onBottomStateChange,
     props.queuedCount,
     props.selectedTurnId,
     props.streamError,
     props.streamStatus,
     props.streamingPreview?.updatedAt,
-    props.thread,
+    threadTurnCount,
+    latestTurnId,
+    latestAssistantContentLength,
+    latestTraceStatus,
   ]);
 
   useLayoutEffect(() => {
@@ -608,56 +645,20 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
     if (!scrollElement) {
       return;
     }
+    if (props.followOutput) {
+      return;
+    }
     props.onBottomStateChange(isThreadScrollNearBottom(scrollElement));
-  }, [props.onBottomStateChange, props.notices.length, props.queuedCount, props.streamStatus, props.thread]);
-
-  useEffect(() => {
-    const threadCard = shellRef.current?.closest(".mc-next-threaded-thread-card");
-    const composerCard = threadCard?.nextElementSibling;
-    if (!(composerCard instanceof HTMLElement) || !composerCard.classList.contains("mc-next-threaded-composer-card")) {
-      return undefined;
-    }
-
-    if (!blockerActive) {
-      return undefined;
-    }
-
-    const inertComposerCard = composerCard as HTMLElement & { inert?: boolean };
-    const activeElement = globalThis.document?.activeElement;
-    composerCard.setAttribute("aria-disabled", "true");
-    composerCard.setAttribute("data-blocked-by-inline-prompt", "true");
-    inertComposerCard.inert = true;
-    if (activeElement instanceof HTMLElement && composerCard.contains(activeElement)) {
-      activeElement.blur();
-    }
-
-    return () => {
-      composerCard.removeAttribute("aria-disabled");
-      composerCard.removeAttribute("data-blocked-by-inline-prompt");
-      inertComposerCard.inert = false;
-    };
-  }, [blockerActive]);
-
-  const blockingPrompt = pendingApproval ? (
-    <div className="mc-next-thread-blocking-prompt" data-blocker-kind="approval">
-      <ChatPendingApprovalPanel
-        pendingApproval={pendingApproval}
-        workspaceId={props.workspaceId}
-        approvalsHref={`/ops/approvals?approvalId=${encodeURIComponent(pendingApproval.approvalId)}`}
-        pending={props.approvalPending}
-        onApprove={props.onApprovePending}
-        onDeny={props.onDenyPending}
-      />
-    </div>
-  ) : props.pendingUserInput ? (
-    <div className="mc-next-thread-blocking-prompt" data-blocker-kind="user-input">
-      <ChatPendingUserInputPanel
-        pendingUserInput={props.pendingUserInput}
-        pending={props.userInputPending}
-        onSubmit={props.onSubmitUserInput}
-      />
-    </div>
-  ) : null;
+  }, [
+    props.followOutput,
+    props.onBottomStateChange,
+    props.notices.length,
+    props.queuedCount,
+    props.streamStatus,
+    threadTurnCount,
+    latestTurnId,
+    latestTraceStatus,
+  ]);
 
   return (
     <div ref={shellRef} className={`mc-next-thread-shell mode-${props.mode}`}>
@@ -703,8 +704,10 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
                   mode={props.mode}
                   turn={turn}
                   selected={props.selectedTurnId === turn.turnId}
+                  contextSelected={(props.selectedContextTurnIds ?? []).includes(turn.turnId)}
                   streamingPreview={props.streamingPreview?.turnId === turn.turnId ? props.streamingPreview : null}
-                  onSelect={props.onSelectTurn}
+                  onToggleContextTurn={props.onToggleContextTurn}
+                  onStartNewThreadFromTurn={props.onStartNewThreadFromTurn}
                   onSwitchBranch={props.onSwitchBranch}
                   onRetryTurn={props.onRetryTurn}
                   onOpenRunDetails={props.onOpenRunDetails}
@@ -714,7 +717,6 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
                 />
               ))}
               <ThreadNotices notices={props.notices} />
-              {blockingPrompt}
               <div ref={threadEndRef} aria-hidden="true" />
             </div>
           </div>
@@ -725,7 +727,6 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
           Jump to latest
         </button>
       ) : null}
-      {props.loading || !props.thread || props.thread.turns.length === 0 ? blockingPrompt : null}
     </div>
   );
 }

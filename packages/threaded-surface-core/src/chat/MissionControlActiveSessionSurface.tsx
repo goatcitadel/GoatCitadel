@@ -22,6 +22,13 @@ import type { ChatStreamingPreview } from "./chat-streaming-preview";
 import type { WorkTrustDescriptor } from "./work-trust";
 import type { ChatErrorSource } from "./chat-error-copy";
 import type { MidTurnDisposition } from "./chat-page-pure-helpers";
+import type { OutboundContextBlock } from "./useChatSurfaceOrchestration";
+
+export interface ThreadedContextSelectionState {
+  label: string;
+  turnCount: number;
+  sourceLabel?: string;
+}
 
 export interface MissionControlActiveSessionSurfaceProps {
   mode: ChatMode;
@@ -43,6 +50,9 @@ export interface MissionControlActiveSessionSurfaceProps {
   loading: boolean;
   thread: ChatThreadResponse | null;
   selectedTurnId: string | null;
+  selectedContextTurnIds: string[];
+  outboundContext: OutboundContextBlock | null;
+  contextSelection: ThreadedContextSelectionState | null;
   delegationRun: ActiveChatDelegationRun | null;
   delegationSuggestion: ChatDelegationSuggestionRecord | null;
   notices: ChatThreadNotice[];
@@ -62,6 +72,9 @@ export interface MissionControlActiveSessionSurfaceProps {
   eventStreamStatus: EventStreamStatus;
   onBottomStateChange: (next: boolean) => void;
   onSelectTurn: (turnId: string | null) => void;
+  onToggleContextTurn: (turnId: string) => void;
+  onClearContextSelection: () => void;
+  onStartNewThreadFromTurn: (turnId: string) => void;
   onSwitchBranch: (turnId: string) => void;
   onRetryTurn: (turnId: string) => void;
   onEditTurn: (turnId: string) => void;

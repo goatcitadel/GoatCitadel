@@ -21,6 +21,7 @@ import {
 
 const attachThreadKnowledgeAttachmentMock = vi.fn();
 const createChatGeneratedArtifactMock = vi.fn();
+const createChatSessionMock = vi.fn();
 const fetchAgentsMock = vi.fn();
 const fetchChatGeneratedArtifactMock = vi.fn();
 const fetchMcpServersMock = vi.fn();
@@ -160,6 +161,7 @@ const generatedArtifact = {
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   attachThreadKnowledgeAttachment: (...args: unknown[]) => attachThreadKnowledgeAttachmentMock(...args),
   createChatGeneratedArtifact: (...args: unknown[]) => createChatGeneratedArtifactMock(...args),
+  createChatSession: (...args: unknown[]) => createChatSessionMock(...args),
   fetchAgents: (...args: unknown[]) => fetchAgentsMock(...args),
   fetchChatGeneratedArtifact: (...args: unknown[]) => fetchChatGeneratedArtifactMock(...args),
   fetchMcpServers: (...args: unknown[]) => fetchMcpServersMock(...args),
@@ -410,6 +412,12 @@ function setupMocks() {
     item: { attachmentId: "knowledge-url", sourceRef: "https://docs.example.test", retrievalMode: "retrieval" },
   });
   removeThreadKnowledgeAttachmentMock.mockResolvedValue({ ok: true });
+  createChatSessionMock.mockResolvedValue({
+    ...selectedSession,
+    sessionId: "session-new",
+    sessionKey: "session-new",
+    title: "Trail from Launch plan",
+  });
   updateChatSessionPrefsMock.mockImplementation(async (_sessionId, patch) => ({ ...prefs, ...patch }));
   fetchSkillsMock.mockResolvedValue({ items: [{ skillId: "skill-1", name: "Skill", state: "enabled" }] });
   fetchMcpServersMock.mockResolvedValue({ items: [{ serverId: "server-1", label: "Server", status: "connected" }] });
@@ -1976,6 +1984,50 @@ describe("MissionThreadedControllerHost", () => {
     expect(fetchChatGeneratedArtifactMock).toHaveBeenCalled();
     expect(attachThreadKnowledgeAttachmentMock).toHaveBeenCalled();
     expect(updateChatSessionPrefsMock).toHaveBeenCalled();
+  });
+
+  it("starts a new thread with selected conversation context attached", async () => {
+    await renderHost();
+    await selectDefaultSession();
+
+    await act(async () => {
+      latestSurfaceInput?.activeSessionSurfaceProps?.onToggleContextTurn("turn-1");
+      await flushEffects(8);
+    });
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.contextSelection).toMatchObject({
+      label: "1 selected turn",
+      turnCount: 1,
+      sourceLabel: "Launch plan",
+    });
+
+    await act(async () => {
+      latestSurfaceInput?.activeSessionSurfaceProps?.onStartNewThreadFromTurn("turn-1");
+      await flushEffects(12);
+    });
+
+    expect(createChatSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "workspace-1",
+        mode: "chat",
+        projectId: "project-1",
+        title: "Trail from Launch plan",
+      }),
+      { originSurface: "chat" },
+    );
+    expect(updateChatSessionPrefsMock).toHaveBeenCalledWith(
+      "session-new",
+      expect.objectContaining({
+        providerId: "openai",
+        model: "gpt-5.5",
+        webMode: "auto",
+      }),
+    );
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.outboundContext).toMatchObject({
+      label: "1 selected turn",
+      sourceLabel: "Launch plan",
+      sessionId: "session-new",
+      turnIds: ["turn-1"],
+    });
   });
 
   it("covers cowork active-turn actions, loading headers, image auto-send variants, and model-switch edge cases", async () => {

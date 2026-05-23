@@ -55,6 +55,9 @@ function buildProps(overrides: Partial<any> = {}) {
     selectedTurn: null,
     selectedSessionId: "session-1",
     thread: { sessionId: "session-1", turns: [] },
+    selectedContextTurnIds: [],
+    outboundContext: null,
+    contextSelection: null,
     trust: {
       workspaceLabel: "Test workspace",
       gatewayTone: "muted",
@@ -71,6 +74,11 @@ function buildProps(overrides: Partial<any> = {}) {
     routePreflightError: null,
     routeBoundaryAckRequired: false,
     routeBoundaryAcknowledged: false,
+    pendingApproval: null,
+    pendingUserInput: null,
+    workspaceId: "default",
+    approvalPending: false,
+    userInputPending: false,
     sending: false,
     canSend: true,
     hasActiveStream: false,
@@ -84,7 +92,13 @@ function buildProps(overrides: Partial<any> = {}) {
     onTogglePlanningMode: vi.fn(),
     onDismissPresetWarning: vi.fn(),
     onAcknowledgeRouteBoundary: vi.fn(),
+    onApprovePending: vi.fn(),
+    onDenyPending: vi.fn(),
+    onSubmitUserInput: vi.fn(),
     onRetryTurn: vi.fn(),
+    onToggleContextTurn: vi.fn(),
+    onClearContextSelection: vi.fn(),
+    onStartNewThreadFromTurn: vi.fn(),
     onSetDeepMode: vi.fn(),
     onFullWebAccessChange: vi.fn(),
     onReviewRunDetails: vi.fn(),
@@ -294,6 +308,38 @@ describe("ThreadedComposer", () => {
     expect(emptyMemory).not.toContain("Last turn:");
   });
 
+  it("shows selected context and capability chips beside the composer title", async () => {
+    const onClearContextSelection = vi.fn();
+    const renderer = await renderComposer({
+      selectedContextTurnIds: ["turn-1"],
+      contextSelection: { label: "2 selected turns", turnCount: 2, sourceLabel: "Launch plan" },
+      onClearContextSelection,
+      thread: {
+        sessionId: "session-1",
+        turns: [
+          {
+            turnId: "turn-1",
+            trace: { status: "completed" },
+            toolRuns: [
+              { toolRunId: "skill-run", toolName: "skill.run", args: { skillId: "planner" } },
+              { toolRunId: "connector-run", toolName: "integration.send", args: { connectionId: "slack" } },
+              { toolRunId: "mcp-run", toolName: "mcp.invoke", args: { serverId: "github" } },
+            ],
+          },
+        ],
+      },
+    });
+
+    const text = collectText(renderer.root);
+    expect(text).toMatch(/Context:\s+2 selected turns/);
+    expect(text).toContain("Skills: planner");
+    expect(text).toContain("Connectors: slack");
+    expect(text).toContain("MCP: github");
+
+    await click(findButton(renderer.root, "Context:"));
+    expect(onClearContextSelection).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["off", "false", "0", "no", "disabled", " OFF "])(
     "honors %s as a composer v2 kill switch false value",
     (value) => {
@@ -326,6 +372,52 @@ describe("ThreadedComposer", () => {
     // the posture even while the underlying toggle now lives in the drawer.
     expect(markup).toContain("Planning mode is on");
     expect(markup).toContain("Turn planning off");
+  });
+
+  it("attaches approval blockers to the composer in compact form", () => {
+    const markup = buildMarkup({
+      pendingApproval: {
+        approvalId: "approval-1",
+        kind: "tool_call",
+        toolName: "filesystem.write",
+        reason: "Needs permission to update a file.",
+        affectedResources: ["README.md"],
+      },
+    });
+
+    expect(markup).toContain("mc-next-composer-blocking-prompt");
+    expect(markup).toContain('data-blocker-kind="approval"');
+    expect(markup).toContain('data-variant="compact"');
+    expect(markup).toContain("Approval required");
+    expect(markup).toContain("filesystem.write");
+    expect(markup).toContain("Needs permission to update a file.");
+    expect(markup).toContain("Allow once");
+    expect(markup).toContain("Deny");
+    expect(markup).toContain("Open persisted approval record");
+    expect(markup).not.toContain("Action type: tool_call");
+    expect(markup).not.toContain("Touches: README.md");
+  });
+
+  it("attaches user-input blockers to the composer in compact form", () => {
+    const markup = buildMarkup({
+      pendingUserInput: {
+        turnId: "turn-1",
+        promptId: "prompt-1",
+        kind: "text",
+        title: "Need a constraint",
+        question: "What budget should Cowork optimize for?",
+        placeholder: "Budget",
+        dismissible: false,
+      },
+    });
+
+    expect(markup).toContain("mc-next-composer-blocking-prompt");
+    expect(markup).toContain('data-blocker-kind="user-input"');
+    expect(markup).toContain('data-variant="compact"');
+    expect(markup).toContain("Need a constraint");
+    expect(markup).toContain("Answer required");
+    expect(markup).toContain("Submit");
+    expect(markup).not.toContain("Dismiss");
   });
 
   it("uses the compact suggestion popover for dollar skill mentions", () => {
@@ -385,7 +477,7 @@ describe("ThreadedComposer", () => {
   });
 
   it("covers residual route, mode, and primary label branches", async () => {
-    expect(buildMarkup({ editingTurnId: "turn-chat-edit" })).toContain("Edit and resend");
+    expect(buildMarkup({ editingTurnId: "turn-chat-edit" })).toContain("Send branch");
     expect(buildMarkup({ currentWebMode: "deep" })).toContain("Deep web");
     expect(buildMarkup({ currentWebMode: "quick" })).toContain("Quick web");
     expect(buildMarkup({ fullWebAccess: true })).toContain("Full web");
@@ -533,10 +625,10 @@ describe("ThreadedComposer", () => {
     // Sub-cent costs now report three significant figures instead of the
     // flat "<$0.01" placeholder, so a 0.005 total reads as $0.005.
     expect(collectText(renderer.root)).toContain("1,800 tokens / $0.005");
-    expect(collectText(renderer.root)).toContain("Edit and delegate");
+    expect(collectText(renderer.root)).toContain("Delegate branch");
 
     await click(findButton(renderer.root, "Resume queued messages"));
-    await click(findButton(renderer.root, "Cancel edit"));
+    await click(findButton(renderer.root, "Cancel branch"));
     await click(findButton(renderer.root, "Retry run step"));
     await click(findButton(renderer.root, "Review run details"));
 
@@ -551,7 +643,7 @@ describe("ThreadedComposer", () => {
     for (const button of findButtons(renderer.root, "Remove")) {
       await click(button);
     }
-    await click(findButton(renderer.root, "Edit and delegate"));
+    await click(findButton(renderer.root, "Delegate branch"));
 
     expect(callbacks.onResumeAll).toHaveBeenCalledTimes(1);
     expect(callbacks.onRemoveQueuedItem).toHaveBeenCalledWith("queue-1");
@@ -675,7 +767,7 @@ describe("ThreadedComposer", () => {
       editingTurnId: "turn-edit",
       onSend,
     });
-    expect(collectText(renderer.root)).toContain("Edit and implement");
+    expect(collectText(renderer.root)).toContain("Implement branch");
 
     renderer = await renderComposer({
       mode: "code",

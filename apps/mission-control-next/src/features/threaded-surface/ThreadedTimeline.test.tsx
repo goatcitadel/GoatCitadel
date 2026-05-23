@@ -107,6 +107,9 @@ function buildProps(overrides: Partial<any> = {}): any {
     onRefreshThread: vi.fn(),
     onBottomStateChange: vi.fn(),
     onSelectTurn: vi.fn(),
+    selectedContextTurnIds: [],
+    onToggleContextTurn: vi.fn(),
+    onStartNewThreadFromTurn: vi.fn(),
     onSwitchBranch: vi.fn(),
     onRetryTurn: vi.fn(),
     onEditTurn: vi.fn(),
@@ -126,6 +129,18 @@ function renderedText(renderer: TestRenderer.ReactTestRenderer): string {
     .findAll((node) => Array.isArray(node.children))
     .map((node) => node.children.join(""))
     .join(" ");
+}
+
+function setScrollMetrics(
+  element: HTMLElement,
+  metrics: { scrollHeight: number; scrollTop: number; clientHeight: number },
+) {
+  for (const [key, value] of Object.entries(metrics)) {
+    Object.defineProperty(element, key, {
+      configurable: true,
+      value,
+    });
+  }
 }
 
 describe("ThreadedTimeline", () => {
@@ -197,6 +212,32 @@ describe("ThreadedTimeline", () => {
     ]);
   });
 
+  it("lets operators expand citation evidence beyond the compact first six", () => {
+    const props = buildProps();
+    props.thread.turns[0].citations = Array.from({ length: 8 }, (_, index) => ({
+      citationId: `cite-${index + 1}`,
+      title: `Source ${index + 1}`,
+      url: `https://example.test/source-${index + 1}`,
+      sourceType: "web",
+    }));
+
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+    expect(renderedText(renderer)).toContain("Source 6");
+    expect(renderedText(renderer)).not.toContain("Source 7");
+    expect(renderedText(renderer)).toContain("Show 2 more citations");
+
+    const toggle = renderer.root.find(
+      (node) => node.type === "button" && node.children.join("") === "Show 2 more citations",
+    );
+    TestRenderer.act(() => {
+      toggle.props.onClick();
+    });
+
+    expect(renderedText(renderer)).toContain("Source 7");
+    expect(renderedText(renderer)).toContain("Source 8");
+    expect(renderedText(renderer)).toContain("Show fewer citations");
+  });
+
   it("renders the active streaming preview without leaking it to inactive turns", () => {
     const props = buildProps();
     delete props.thread.turns[0].assistantMessage;
@@ -220,7 +261,7 @@ describe("ThreadedTimeline", () => {
     expect(renderer.root.findByProps({ className: "mc-next-thread-bubble assistant streaming" })).toBeTruthy();
   });
 
-  it("renders pending approval as an inline blocker near the thread bottom", () => {
+  it("leaves pending approvals out of the transcript so the composer can own the decision", () => {
     const markup = renderToStaticMarkup(
       <ThreadedTimeline
         props={
@@ -236,14 +277,12 @@ describe("ThreadedTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("mc-next-thread-blocking-prompt");
-    expect(markup).toContain("Approval required");
-    expect(markup).toContain("Allow once");
-    expect(markup).toContain("Deny");
-    expect(markup).toContain("Open persisted approval record");
+    expect(markup).not.toContain("mc-next-thread-blocking-prompt");
+    expect(markup).not.toContain("Approval required");
+    expect(markup).not.toContain("Open persisted approval record");
   });
 
-  it("renders pending user input as an inline blocker with submit affordance", () => {
+  it("leaves pending user input out of the transcript so the composer can own the answer", () => {
     const markup = renderToStaticMarkup(
       <ThreadedTimeline
         props={
@@ -262,14 +301,13 @@ describe("ThreadedTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("mc-next-thread-blocking-prompt");
-    expect(markup).toContain("Need a constraint");
-    expect(markup).toContain("Answer required");
-    expect(markup).toContain("Submit");
+    expect(markup).not.toContain("mc-next-thread-blocking-prompt");
+    expect(markup).not.toContain("Need a constraint");
+    expect(markup).not.toContain("Answer required");
     expect(markup).not.toContain("Dismiss");
   });
 
-  it("marks the adjacent composer card inert while a blocker is active", async () => {
+  it("does not inert the adjacent composer when a blocker is active", async () => {
     await act(async () => {
       root?.render(
         <div>
@@ -299,9 +337,9 @@ describe("ThreadedTimeline", () => {
     const composerCard = container?.querySelector(".mc-next-threaded-composer-card") as
       | (HTMLElement & { inert?: boolean })
       | null;
-    expect(composerCard?.getAttribute("aria-disabled")).toBe("true");
-    expect(composerCard?.dataset.blockedByInlinePrompt).toBe("true");
-    expect(composerCard?.inert).toBe(true);
+    expect(composerCard?.hasAttribute("aria-disabled")).toBe(false);
+    expect(composerCard?.dataset.blockedByInlinePrompt).toBeUndefined();
+    expect(composerCard?.inert).not.toBe(true);
 
     await act(async () => {
       root?.render(
@@ -351,7 +389,7 @@ describe("ThreadedTimeline", () => {
       ["waiting_for_approval", "Waiting for approval"],
       ["waiting_for_user_input", "Waiting for your answer"],
       ["cancelled", "Turn cancelled"],
-      ["partial", "No assistant output yet"],
+      ["partial", "Turn partially completed"],
       ["completed", "No assistant output yet"],
     ] as const;
 
@@ -381,6 +419,8 @@ describe("ThreadedTimeline", () => {
     const props = buildProps({
       selectedTurnId: null,
       onSelectTurn: vi.fn(),
+      onToggleContextTurn: vi.fn(),
+      onStartNewThreadFromTurn: vi.fn(),
       onSwitchBranch: vi.fn(),
       onCreateGeneratedArtifactVersion: vi.fn(),
     });
@@ -432,49 +472,36 @@ describe("ThreadedTimeline", () => {
     expect(renderedText(renderer)).not.toContain("Enable memory");
 
     const turnSurface = renderer.root.findByProps({ className: "mc-next-thread-turn-surface" });
-    TestRenderer.act(() => {
-      turnSurface.props.onClick();
-    });
-    expect(props.onSelectTurn).toHaveBeenCalledWith("turn-1");
+    expect(turnSurface.props.role).toBeUndefined();
+    expect(turnSurface.props.onClick).toBeUndefined();
 
-    const preventDefault = vi.fn();
+    const contextTurn = renderer.root.findByProps({ "aria-label": "Add turn turn-1 as context" });
     TestRenderer.act(() => {
-      turnSurface.props.onKeyDown({
-        key: "Enter",
-        currentTarget: "surface",
-        target: "surface",
-        preventDefault,
-      });
+      contextTurn.props.onChange();
     });
-    expect(preventDefault).toHaveBeenCalled();
-    expect(props.onSelectTurn).toHaveBeenCalledWith("turn-1");
+    expect(props.onToggleContextTurn).toHaveBeenCalledWith("turn-1");
 
-    TestRenderer.act(() => {
-      turnSurface.props.onKeyDown({
-        key: " ",
-        currentTarget: "surface",
-        target: "child",
-        preventDefault: vi.fn(),
-      });
-    });
-    expect(props.onSelectTurn).toHaveBeenCalledTimes(2);
-
-    const previous = renderer.root.find((node) => node.type === "button" && node.children.join("") === "Previous");
-    const next = renderer.root.find((node) => node.type === "button" && node.children.join("") === "Next");
+    const previous = renderer.root.findByProps({ "aria-label": "Show previous variant for turn turn-1" });
+    const next = renderer.root.findByProps({ "aria-label": "Show next variant for turn turn-1" });
     const details = renderer.root.find((node) => node.type === "button" && node.children.join("") === "Run details");
     const retry = renderer.root.find((node) => node.type === "button" && node.children.join("") === "Retry run step");
+    const startThread = renderer.root.findByProps({ "aria-label": "Start a new thread from turn turn-1" });
     TestRenderer.act(() => {
       previous.props.onClick();
       next.props.onClick();
       details.props.onClick();
       retry.props.onClick();
+      startThread.props.onClick();
     });
     expect(props.onSwitchBranch).toHaveBeenCalledWith("turn-a");
     expect(props.onSwitchBranch).toHaveBeenCalledWith("turn-c");
     expect(props.onOpenRunDetails).toHaveBeenCalledWith("turn-1");
     expect(props.onRetryTurn).toHaveBeenCalledWith("turn-1");
+    expect(props.onStartNewThreadFromTurn).toHaveBeenCalledWith("turn-1");
 
-    const version = renderer.root.find((node) => node.type === "button" && node.children.join("") === "New version");
+    const version = renderer.root.find(
+      (node) => node.type === "button" && node.children.join("") === "Save new version",
+    );
     TestRenderer.act(() => {
       version.props.onClick();
     });
@@ -488,7 +515,7 @@ describe("ThreadedTimeline", () => {
     const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
 
     const createButton = renderer.root.find(
-      (node) => node.type === "button" && node.children.join("") === "Create artifact",
+      (node) => node.type === "button" && node.children.join("") === "Save answer",
     );
     TestRenderer.act(() => {
       createButton.props.onClick();
@@ -509,7 +536,7 @@ describe("ThreadedTimeline", () => {
     ];
     const withArtifact = TestRenderer.create(<ThreadedTimeline props={props as any} />);
     const openButton = withArtifact.root.find(
-      (node) => node.type === "button" && node.children.join("") === "Open artifact",
+      (node) => node.type === "button" && node.children.join("") === "Open saved answer",
     );
     TestRenderer.act(() => {
       openButton.props.onClick();
@@ -585,6 +612,126 @@ describe("ThreadedTimeline", () => {
     vi.unstubAllGlobals();
   });
 
+  it("keeps auto-follow pinned when new turns arrive while the operator is already at the bottom", async () => {
+    const onBottomStateChange = vi.fn();
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const props = buildProps({
+      mode: "chat",
+      followOutput: true,
+      streamStatus: "streaming",
+      onBottomStateChange,
+      delegationRun: null,
+    });
+
+    await act(async () => {
+      root?.render(<ThreadedTimeline props={props as any} />);
+      await Promise.resolve();
+    });
+    const scrollElement = container?.querySelector(".mc-next-thread-scroll") as HTMLElement;
+    setScrollMetrics(scrollElement, { scrollHeight: 900, scrollTop: 500, clientHeight: 400 });
+    onBottomStateChange.mockClear();
+    scrollIntoView.mockClear();
+
+    const nextTurn = {
+      ...props.thread.turns[0],
+      turnId: "turn-2",
+      userMessage: {
+        ...props.thread.turns[0].userMessage,
+        messageId: "user-2",
+        content: "Follow-up question.",
+      },
+      assistantMessage: {
+        ...props.thread.turns[0].assistantMessage,
+        messageId: "assistant-2",
+        content: "Follow-up answer.",
+      },
+      trace: {
+        ...props.thread.turns[0].trace,
+        turnId: "turn-2",
+        userMessageId: "user-2",
+      },
+    };
+    setScrollMetrics(scrollElement, { scrollHeight: 1200, scrollTop: 500, clientHeight: 400 });
+
+    await act(async () => {
+      root?.render(
+        <ThreadedTimeline
+          props={
+            {
+              ...props,
+              thread: {
+                ...props.thread,
+                activeLeafTurnId: "turn-2",
+                selectedTurnId: "turn-2",
+                turns: [...props.thread.turns, nextTurn],
+              },
+            } as any
+          }
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(onBottomStateChange).toHaveBeenCalledWith(true);
+    expect(onBottomStateChange).not.toHaveBeenCalledWith(false);
+    vi.unstubAllGlobals();
+    scrollIntoView.mockRestore();
+  });
+
+  it("stops auto-follow while the operator is reading above the bottom and resumes at the bottom", async () => {
+    const onBottomStateChange = vi.fn();
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(vi.fn());
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const props = buildProps({
+      mode: "chat",
+      followOutput: true,
+      onBottomStateChange,
+      delegationRun: null,
+    });
+
+    await act(async () => {
+      root?.render(<ThreadedTimeline props={props as any} />);
+      await Promise.resolve();
+    });
+    const scrollElement = container?.querySelector(".mc-next-thread-scroll") as HTMLElement;
+    setScrollMetrics(scrollElement, { scrollHeight: 1200, scrollTop: 200, clientHeight: 400 });
+
+    await act(async () => {
+      scrollElement.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(onBottomStateChange).toHaveBeenCalledWith(false);
+
+    onBottomStateChange.mockClear();
+    scrollIntoView.mockClear();
+    await act(async () => {
+      root?.render(<ThreadedTimeline props={{ ...props, followOutput: false } as any} />);
+      await Promise.resolve();
+    });
+
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(container?.textContent).toContain("Jump to latest");
+
+    setScrollMetrics(scrollElement, { scrollHeight: 1200, scrollTop: 800, clientHeight: 400 });
+    await act(async () => {
+      scrollElement.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(onBottomStateChange).toHaveBeenCalledWith(true);
+    vi.unstubAllGlobals();
+    scrollIntoView.mockRestore();
+  });
+
   it("covers repaired output, requested routing, fallback reasons, and empty delegation summaries", () => {
     const props = buildProps();
     props.thread.turns[0].trace.completion = { repaired: true };
@@ -614,6 +761,28 @@ describe("ThreadedTimeline", () => {
     expect(text).toContain("fallback: primary rate limited");
     expect(text).toContain("Completed 0 · Running 0 · Failed 0 · Skipped 0");
     expect(text).not.toContain("Now:");
+  });
+
+  it("keeps normal Chat turns conversation-first until exceptional", () => {
+    const props = buildProps({
+      mode: "chat",
+      delegationRun: null,
+      selectedTurnId: null,
+    });
+    props.thread.turns[0].trace.mode = "chat";
+    props.thread.turns[0].trace.routing = {
+      effectiveProviderId: "anthropic",
+      effectiveModel: "claude-sonnet",
+      effectiveApiStyle: "messages",
+    };
+
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+    expect(renderedText(renderer)).toContain("Context");
+    expect(renderedText(renderer)).toContain("Details");
+    expect(renderedText(renderer)).not.toContain("used anthropic · claude-sonnet · messages");
+
+    renderer.update(<ThreadedTimeline props={{ ...props, selectedTurnId: "turn-1" } as any} />);
+    expect(renderedText(renderer)).not.toContain("used anthropic · claude-sonnet · messages");
   });
 
   it("cancels pending follow-output scrolling when the timeline unmounts", () => {

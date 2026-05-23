@@ -499,6 +499,67 @@ describe("ChatThreadView", () => {
     expect(onBottomStateChange).not.toHaveBeenCalledWith(false);
   });
 
+  it("keeps following output when a new turn arrives while already pinned to the bottom", () => {
+    const onBottomStateChange = vi.fn();
+    const scrollIntoView = vi.fn();
+    const scrollElement = { scrollHeight: 900, scrollTop: 500, clientHeight: 400 };
+    const thread = createThread("plain content");
+    const props = {
+      ...buildThreadViewProps(thread),
+      followOutput: true,
+      streamStatus: "streaming" as const,
+      onBottomStateChange,
+    };
+    const renderer = TestRenderer.create(<ChatThreadView {...props} />, {
+      createNodeMock: (element) => {
+        if (element.type === "div" && element.props["aria-hidden"] === "true") {
+          return { scrollIntoView };
+        }
+        if (element.type === "div" && element.props.className === "chat-v11-thread-list chat-v11-thread-virtuoso") {
+          return scrollElement;
+        }
+        return null;
+      },
+    });
+    onBottomStateChange.mockClear();
+    scrollIntoView.mockClear();
+
+    scrollElement.scrollHeight = 1200;
+    const nextTurn = {
+      ...thread.turns[0],
+      turnId: "turn-2",
+      userMessage: {
+        ...thread.turns[0].userMessage,
+        messageId: "user-2",
+        content: "Follow-up question.",
+      },
+      assistantMessage: {
+        ...thread.turns[0].assistantMessage!,
+        messageId: "assistant-2",
+        content: "Follow-up answer.",
+      },
+      trace: {
+        ...thread.turns[0].trace,
+        turnId: "turn-2",
+        userMessageId: "user-2",
+      },
+    };
+
+    renderer.update(
+      <ChatThreadView
+        {...props}
+        thread={{
+          ...thread,
+          turns: [...thread.turns, nextTurn],
+        }}
+      />,
+    );
+
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(onBottomStateChange).toHaveBeenCalledWith(true);
+    expect(onBottomStateChange).not.toHaveBeenCalledWith(false);
+  });
+
   it("renders compact cowork delegation details and opens attached run details", () => {
     const onOpenRunDetails = vi.fn();
     const renderer = TestRenderer.create(

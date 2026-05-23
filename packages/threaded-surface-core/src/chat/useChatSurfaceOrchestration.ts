@@ -32,9 +32,35 @@ export interface OutboundQueueItem {
   paused?: boolean;
 }
 
+export interface OutboundContextBlock {
+  label: string;
+  content: string;
+  sourceLabel?: string;
+  sourceSessionId?: string;
+  turnIds?: string[];
+  sessionId?: string;
+  createdAt?: string;
+}
+
+export function resolveOutboundContentWithContext(content: string, context?: OutboundContextBlock | null): string {
+  const trimmedContent = content.trim();
+  const trimmedContext = context?.content.trim();
+  if (!trimmedContext) {
+    return trimmedContent;
+  }
+  return [
+    "[Selected conversation context]",
+    trimmedContext,
+    "",
+    "[New message]",
+    trimmedContent,
+  ].join("\n");
+}
+
 export function useChatSurfaceOrchestration(input: {
   draft: string;
   pendingAttachments: ChatAttachmentRecord[];
+  outboundContext?: OutboundContextBlock | null;
   selectedSessionId: string | null;
   thread: ChatThreadResponse | null;
   sending: boolean;
@@ -54,6 +80,7 @@ export function useChatSurfaceOrchestration(input: {
   ) => void;
   setPendingApproval: (value: null) => void;
   setError: (value: string | null) => void;
+  onOutboundContextConsumed?: () => void;
   loadSessionCoreStateRef: RefObject<
     (sessionId: string, options?: { background?: boolean; includeThread?: boolean }) => Promise<void>
   >;
@@ -71,10 +98,11 @@ export function useChatSurfaceOrchestration(input: {
 
   const handleSend = useCallback(async () => {
     const action: OutboundQueueItem["action"] = editingTurnId ? "edit" : "send";
-    const content = resolveOutboundDraftContent(input.draft, input.pendingAttachments.length, action);
-    if (!content) {
+    const draftContent = resolveOutboundDraftContent(input.draft, input.pendingAttachments.length, action);
+    if (!draftContent) {
       return;
     }
+    const content = action === "send" ? resolveOutboundContentWithContext(draftContent, input.outboundContext) : draftContent;
     const nextItem: OutboundQueueItem = {
       id: `queue-${Date.now()}`,
       action,
@@ -87,6 +115,9 @@ export function useChatSurfaceOrchestration(input: {
     input.setDraft("");
     input.setPendingAttachments([]);
     input.setPendingApproval(null);
+    if (action === "send" && input.outboundContext) {
+      input.onOutboundContextConsumed?.();
+    }
     if (!input.tryBeginOutboundExecutionRef.current?.()) {
       setQueuedOutbound((current) => [...current, nextItem]);
       input.pushLocalNoticeRef.current?.(

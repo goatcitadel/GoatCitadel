@@ -29,6 +29,7 @@ import {
   attachThreadKnowledgeAttachment,
   clearChatSessionGoal,
   createChatGeneratedArtifact,
+  createChatSession,
   fetchAgents,
   fetchChatGeneratedArtifact,
   fetchChatSessionGoal,
@@ -66,8 +67,12 @@ import {
   setDevDiagnosticsLatestTraceSummary,
 } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import type { ChatContextDockPanelsProps } from "./chat/ChatContextDockPanels.types";
-import type { MissionControlActiveSessionSurfaceProps } from "./chat/MissionControlActiveSessionSurface";
+import type {
+  MissionControlActiveSessionSurfaceProps,
+  ThreadedContextSelectionState,
+} from "./chat/MissionControlActiveSessionSurface";
 import { describeChatUiError, type ChatErrorSource } from "./chat/chat-error-copy";
+import type { OutboundContextBlock } from "./chat/useChatSurfaceOrchestration";
 import { formatCommandResult } from "./chat/chat-page-derivations";
 import { resolveProviderModelSelection } from "./chat/chat-page-helpers";
 import { formatWorkProviderModelSummary, type WorkTrustDescriptor } from "./chat/work-trust";
@@ -158,6 +163,8 @@ export interface MissionThreadedSessionRailData {
   archiveWorkspaceEnabled?: boolean;
   archiveWorkspaceCount?: number;
   archiveWorkspacePending?: boolean;
+  hasMoreSessions?: boolean;
+  loadingMoreSessions?: boolean;
   onToggleProjectCreate: () => void;
   onCreateSession: () => void;
   onSearchChange: (value: string) => void;
@@ -172,6 +179,7 @@ export interface MissionThreadedSessionRailData {
   onSelectTag: (tag: string | null) => void;
   onSelectSession: (sessionId: string, options?: { turnId?: string | null }) => void;
   renderSessionLabel: (sessionId: string) => string;
+  onLoadMoreSessions?: () => void;
 }
 
 export interface MissionThreadedEmptyStateProps {
@@ -221,6 +229,7 @@ export type MissionThreadedActiveSessionSurfaceProps = MissionControlActiveSessi
 export type MissionThreadedContextDockProps = ChatContextDockPanelsProps;
 
 const STREAM_PREF_KEY = "goatcitadel.chat.agent.stream.enabled";
+const SELECTED_CONTEXT_MAX_CHARS = 12_000;
 
 function formatSelectionSourceSummary(source?: RoutingPreflightResult["selectionSource"]): string {
   switch (source) {
@@ -233,6 +242,97 @@ function formatSelectionSourceSummary(source?: RoutingPreflightResult["selection
     default:
       return "Selection: pending";
   }
+}
+
+function truncateContextBlock(value: string): string {
+  if (value.length <= SELECTED_CONTEXT_MAX_CHARS) {
+    return value;
+  }
+  return `${value.slice(0, SELECTED_CONTEXT_MAX_CHARS).trimEnd()}\n\n[Context truncated for length]`;
+}
+
+function summarizeContextCount(count: number): string {
+  return count === 1 ? "1 selected turn" : `${count} selected turns`;
+}
+
+function trimForkTitle(value: string): string {
+  const trimmed = value.trim().replace(/\s+/g, " ");
+  if (trimmed.length <= 54) {
+    return trimmed || "chat";
+  }
+  return `${trimmed.slice(0, 51).trimEnd()}...`;
+}
+
+function getThreadSourceLabel(input: {
+  selectedSession?: ChatSessionRecord | null;
+  selectedSessionId?: string | null;
+  visibleSessionLabelById?: Map<string, string>;
+}): string {
+  const title = input.selectedSession?.title?.trim();
+  if (title) {
+    return title;
+  }
+  if (input.selectedSessionId) {
+    return input.visibleSessionLabelById?.get(input.selectedSessionId) ?? `Chat ${input.selectedSessionId.slice(-6)}`;
+  }
+  return "current chat";
+}
+
+function buildContextSelectionState(context: OutboundContextBlock | null): ThreadedContextSelectionState | null {
+  if (!context) {
+    return null;
+  }
+  return {
+    label: context.label,
+    turnCount: context.turnIds?.length ?? 0,
+    sourceLabel: context.sourceLabel,
+  };
+}
+
+function buildSelectedConversationContext(input: {
+  thread: ChatThreadResponse | null;
+  turnIds: string[];
+  sourceLabel: string;
+  sourceSessionId?: string;
+  targetSessionId?: string;
+}): OutboundContextBlock | null {
+  if (!input.thread || input.turnIds.length === 0) {
+    return null;
+  }
+  const selectedIds = new Set(input.turnIds);
+  const selectedTurns = input.thread.turns.filter((turn) => selectedIds.has(turn.turnId));
+  if (selectedTurns.length === 0) {
+    return null;
+  }
+  const sections = selectedTurns.map((turn, index) => {
+    const userContent = turn.userMessage.content.trim() || "(empty user message)";
+    const assistantContent = turn.assistantMessage?.content.trim();
+    return [
+      `Turn ${index + 1} (${turn.turnId})`,
+      `You: ${userContent}`,
+      assistantContent ? `GoatCitadel: ${assistantContent}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  });
+  const content = truncateContextBlock([`Source thread: ${input.sourceLabel}`, ...sections].join("\n\n"));
+  return {
+    label: summarizeContextCount(selectedTurns.length),
+    sourceLabel: input.sourceLabel,
+    sourceSessionId: input.sourceSessionId ?? input.thread.sessionId,
+    sessionId: input.targetSessionId,
+    turnIds: selectedTurns.map((turn) => turn.turnId),
+    content,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function buildPrefsPatchFromRecord(prefs: ChatSessionPrefsRecord | null): ChatSessionPrefsPatch | null {
+  if (!prefs) {
+    return null;
+  }
+  const { sessionId: _sessionId, createdAt: _createdAt, updatedAt: _updatedAt, ...patch } = prefs;
+  return patch;
 }
 
 export function formatRoutingTargetSummary(labels: Map<string, string>, providerId?: string, model?: string): string {
@@ -510,6 +610,8 @@ export function MissionThreadedControllerHost({
   const [historyView, setHistoryView] = useState<"active" | "archived">("active");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
+  const [selectedContextTurnIds, setSelectedContextTurnIds] = useState<string[]>([]);
+  const [pendingThreadContext, setPendingThreadContext] = useState<OutboundContextBlock | null>(null);
   const [draft, setDraft] = useState("");
   const [pinnedGoal, setPinnedGoal] = useState<string | undefined>(undefined);
   const [search, setSearch] = useState("");
@@ -700,6 +802,8 @@ export function MissionThreadedControllerHost({
     isRefreshing,
     messagesLoading,
     secondaryLoading,
+    sidebarNextCursor,
+    sidebarLoadingMore,
     loadSidebar,
     loadSessionCoreState,
   } = sessionData;
@@ -843,6 +947,40 @@ export function MissionThreadedControllerHost({
     handleSaveExternalBinding,
   } = sessionControls;
 
+  const threadContextSourceLabel = useMemo(
+    () => getThreadSourceLabel({ selectedSession, selectedSessionId, visibleSessionLabelById }),
+    [selectedSession, selectedSessionId, visibleSessionLabelById],
+  );
+  const selectedConversationContext = useMemo(
+    () =>
+      buildSelectedConversationContext({
+        thread,
+        turnIds: selectedContextTurnIds,
+        sourceLabel: threadContextSourceLabel,
+        sourceSessionId: selectedSessionId ?? undefined,
+      }),
+    [selectedContextTurnIds, selectedSessionId, thread, threadContextSourceLabel],
+  );
+  const activeOutboundContext =
+    pendingThreadContext && pendingThreadContext.sessionId === selectedSessionId
+      ? pendingThreadContext
+      : selectedConversationContext;
+  const contextSelection = buildContextSelectionState(activeOutboundContext);
+  useEffect(() => {
+    if (!thread || selectedContextTurnIds.length === 0) {
+      return;
+    }
+    const availableTurnIds = new Set(thread.turns.map((turn) => turn.turnId));
+    setSelectedContextTurnIds((current) => {
+      const next = current.filter((turnId) => availableTurnIds.has(turnId));
+      return next.length === current.length ? current : next;
+    });
+  }, [selectedContextTurnIds.length, thread]);
+  const handleOutboundContextConsumed = useCallback(() => {
+    setSelectedContextTurnIds([]);
+    setPendingThreadContext((current) => (current?.sessionId === selectedSessionId ? null : current));
+  }, [selectedSessionId]);
+
   const {
     queuedOutbound,
     setQueuedOutbound,
@@ -857,6 +995,7 @@ export function MissionThreadedControllerHost({
   } = useChatSurfaceOrchestration({
     draft,
     pendingAttachments,
+    outboundContext: activeOutboundContext,
     selectedSessionId,
     thread,
     sending,
@@ -869,6 +1008,7 @@ export function MissionThreadedControllerHost({
     setPendingAttachments,
     setPendingApproval: () => undefined,
     setError: setUiError,
+    onOutboundContextConsumed: handleOutboundContextConsumed,
     loadSessionCoreStateRef,
     abortActiveChatStream,
   });
@@ -1522,6 +1662,75 @@ export function MissionThreadedControllerHost({
       : activeDelegationRun;
   const visibleRunStateLabel = formatThreadedRunStateLabel(activeWorkflowTurn, visibleDelegationRun);
   const visibleRunStateSummary = formatThreadedRunStateSummary(activeWorkflowTurn, visibleDelegationRun);
+  const lifecycleNotices = useMemo<ChatThreadNotice[]>(() => {
+    const notices: ChatThreadNotice[] = [];
+    const activeTrace = activeWorkflowTurn?.trace;
+    const timestamp = activeWorkflowTurn?.assistantMessage?.timestamp ?? new Date().toISOString();
+    if (activeTrace?.routing.fallbackUsed) {
+      notices.push({
+        id: `lifecycle-fallback-${activeWorkflowTurn?.turnId ?? "active"}`,
+        tone: "warning",
+        content: activeTrace.routing.fallbackReason
+          ? `Fallback used for this turn: ${activeTrace.routing.fallbackReason}`
+          : "Fallback provider/model routing was used for this turn.",
+        timestamp,
+      });
+    }
+    if (activeTrace?.status === "waiting_for_approval") {
+      notices.push({
+        id: `lifecycle-approval-${activeWorkflowTurn?.turnId ?? "active"}`,
+        tone: "warning",
+        content: "Run is paused for approval. Respond to the blocker to let durable execution resume.",
+        timestamp,
+      });
+    }
+    if (activeTrace?.status === "waiting_for_user_input") {
+      notices.push({
+        id: `lifecycle-user-input-${activeWorkflowTurn?.turnId ?? "active"}`,
+        tone: "neutral",
+        content: "Run is waiting on operator input before it can continue.",
+        timestamp,
+      });
+    }
+    if (activeTrace?.completion?.repaired) {
+      notices.push({
+        id: `lifecycle-repair-${activeWorkflowTurn?.turnId ?? "active"}`,
+        tone: "warning",
+        content: "Final assistant output was repaired before completion was recorded.",
+        timestamp,
+      });
+    }
+    const latestCheckpoint = orchestrationCheckpoints.at(-1);
+    if (latestCheckpoint?.checkpointKind === "run_resumed") {
+      notices.push({
+        id: `lifecycle-resumed-${latestCheckpoint.checkpointId}`,
+        tone: "success",
+        content: "Durable execution resumed after a pause or approval gate.",
+        timestamp: latestCheckpoint.createdAt,
+      });
+    } else if (latestCheckpoint?.checkpointKind === "run_paused_for_approval") {
+      notices.push({
+        id: `lifecycle-paused-${latestCheckpoint.checkpointId}`,
+        tone: "warning",
+        content: "Durable execution paused for approval and is waiting for operator action.",
+        timestamp: latestCheckpoint.createdAt,
+      });
+    }
+    for (const diagnostic of agenticRunTree?.diagnostics.slice(0, 2) ?? []) {
+      notices.push({
+        id: `lifecycle-diagnostic-${diagnostic.signalId}`,
+        tone:
+          diagnostic.severity === "critical"
+            ? "critical"
+            : diagnostic.severity === "warning"
+              ? "warning"
+              : "neutral",
+        content: diagnostic.summary?.trim() || diagnostic.title,
+        timestamp: agenticRunTree?.generatedAt ?? timestamp,
+      });
+    }
+    return notices;
+  }, [activeWorkflowTurn, agenticRunTree, orchestrationCheckpoints]);
   const coworkViewModel = useMemo(
     () =>
       deriveCoworkRunViewModel({
@@ -1606,6 +1815,8 @@ export function MissionThreadedControllerHost({
     (sessionId: string, options?: { turnId?: string | null }) => {
       if (sessionId === selectedSessionId) {
         setSelectedTurnId(options?.turnId ?? null);
+        setSelectedContextTurnIds([]);
+        setPendingThreadContext(null);
         setActiveGeneratedArtifact(null);
         setSessionRailOpen(false);
         return;
@@ -1613,6 +1824,8 @@ export function MissionThreadedControllerHost({
       guardWorkbenchNavigation(() => {
         setSelectedSessionId(sessionId);
         setSelectedTurnId(options?.turnId ?? null);
+        setSelectedContextTurnIds([]);
+        setPendingThreadContext(null);
         setActiveGeneratedArtifact(null);
         setSessionRailOpen(false);
       }, "Switching sessions will discard the unsaved editor changes in the current Code workbench file.");
@@ -1926,6 +2139,92 @@ export function MissionThreadedControllerHost({
       }
     },
     [applyPrefPatchToSession, selectedSession],
+  );
+  const handleToggleContextTurn = useCallback((turnId: string) => {
+    setSelectedContextTurnIds((current) =>
+      current.includes(turnId) ? current.filter((item) => item !== turnId) : [...current, turnId],
+    );
+    setPendingThreadContext(null);
+  }, []);
+  const handleClearContextSelection = useCallback(() => {
+    setSelectedContextTurnIds([]);
+    setPendingThreadContext((current) => (current?.sessionId === selectedSessionId ? null : current));
+  }, [selectedSessionId]);
+  const handleStartNewThreadFromTurn = useCallback(
+    async (turnId: string) => {
+      if (!thread) {
+        setUiError("No active conversation is available to start a new thread from.");
+        return;
+      }
+      const contextTurnIds = selectedContextTurnIds.length > 0 ? selectedContextTurnIds : [turnId];
+      const sourceLabel = getThreadSourceLabel({ selectedSession, selectedSessionId, visibleSessionLabelById });
+      const context = buildSelectedConversationContext({
+        thread,
+        turnIds: contextTurnIds,
+        sourceLabel,
+        sourceSessionId: selectedSessionId ?? undefined,
+      });
+      if (!context) {
+        setUiError("Select at least one turn before starting a new thread with context.");
+        return;
+      }
+      setUiError(null);
+      try {
+        const projectId =
+          selectedSession?.projectId ??
+          (selectedProjectId !== "all" && selectedProjectId !== "none" ? selectedProjectId : undefined);
+        const nextHistoryView = historyView === "archived" ? "active" : historyView;
+        const created = await createChatSession(
+          {
+            workspaceId,
+            mode: messageMode,
+            projectId,
+            title: `Trail from ${trimForkTitle(sourceLabel)}`,
+          },
+          { originSurface: messageMode },
+        );
+        const prefsPatch = buildPrefsPatchFromRecord(prefs);
+        if (prefsPatch) {
+          await applyPrefPatchToSession(created.sessionId, prefsPatch, { syncLocalState: false });
+        }
+        if (nextHistoryView !== historyView) {
+          setHistoryView(nextHistoryView);
+        }
+        setSelectedSessionId(created.sessionId);
+        setSelectedTurnId(null);
+        setSelectedContextTurnIds([]);
+        setPendingThreadContext({ ...context, sessionId: created.sessionId });
+        setThread({
+          sessionId: created.sessionId,
+          turns: [],
+        });
+        setDraft("");
+        await loadSidebar(nextHistoryView, { bypassCache: true, preferredSessionId: created.sessionId });
+        pushLocalNotice(`Started a new thread with ${context.label} attached as context.`, "success");
+        composerRef.current?.focus();
+      } catch (cause) {
+        setUiError(cause instanceof Error ? cause.message : "Unable to start a new thread from this context.");
+      }
+    },
+    [
+      applyPrefPatchToSession,
+      composerRef,
+      historyView,
+      loadSidebar,
+      messageMode,
+      prefs,
+      pushLocalNotice,
+      selectedContextTurnIds,
+      selectedProjectId,
+      selectedSession,
+      selectedSessionId,
+      setHistoryView,
+      setSelectedSessionId,
+      setThread,
+      thread,
+      visibleSessionLabelById,
+      workspaceId,
+    ],
   );
   const handleTogglePlanningMode = useCallback(() => {
     void handlePrefPatch({ planningMode: planningMode === "advisory" ? "off" : "advisory" });
@@ -2454,6 +2753,8 @@ export function MissionThreadedControllerHost({
     archiveWorkspaceEnabled: isChatSurface && historyView === "active" && workspaceMissionSessionCount > 0,
     archiveWorkspaceCount: workspaceMissionSessionCount,
     archiveWorkspacePending,
+    hasMoreSessions: !deferredSearch && Boolean(sidebarNextCursor),
+    loadingMoreSessions: sidebarLoadingMore,
     onToggleProjectCreate: () => setShowProjectCreate((current) => !current),
     onCreateSession: handleCreateCurrentModeSession,
     onSearchChange: setSearch,
@@ -2468,6 +2769,7 @@ export function MissionThreadedControllerHost({
     onSelectTag: setSelectedTag,
     onSelectSession: handleSelectSessionFromRail,
     renderSessionLabel: (sessionId) => visibleSessionLabelById.get(sessionId) ?? `Chat ${sessionId.slice(-6)}`,
+    onLoadMoreSessions: () => void loadSidebar(historyView, { append: true }),
   };
 
   const activeSessionSurfaceProps: MissionControlActiveSessionSurfaceProps | null = selectedSession
@@ -2500,9 +2802,12 @@ export function MissionThreadedControllerHost({
         loading: messagesLoading,
         thread,
         selectedTurnId,
+        selectedContextTurnIds,
+        outboundContext: activeOutboundContext,
+        contextSelection,
         delegationRun: visibleDelegationRun,
         delegationSuggestion,
-        notices: localNotices,
+        notices: [...lifecycleNotices, ...localNotices],
         followOutput: followThreadOutput,
         streamStatus: streamStatus as ChatStreamStatus,
         streamingPreview,
@@ -2521,6 +2826,9 @@ export function MissionThreadedControllerHost({
         onSelectTurn: (turnId) => {
           setSelectedTurnId(turnId);
         },
+        onToggleContextTurn: handleToggleContextTurn,
+        onClearContextSelection: handleClearContextSelection,
+        onStartNewThreadFromTurn: (turnId) => void handleStartNewThreadFromTurn(turnId),
         onSwitchBranch: (turnId) => void handleSelectBranchTurnAndSync(turnId),
         onRetryTurn: (turnId) => void handleRetryTurn(turnId),
         onEditTurn: handleBeginEditTurn,

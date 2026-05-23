@@ -176,6 +176,9 @@ function buildActiveSessionProps(overrides: Partial<any> = {}) {
     loading: false,
     thread: { sessionId: "session-1", turns: [] },
     selectedTurnId: null,
+    selectedContextTurnIds: [],
+    outboundContext: null,
+    contextSelection: null,
     delegationRun: null,
     notices: [],
     followOutput: false,
@@ -191,6 +194,9 @@ function buildActiveSessionProps(overrides: Partial<any> = {}) {
     eventStreamStatus: { state: "open", reconnectAttempts: 0 },
     onBottomStateChange: noop,
     onSelectTurn: noop,
+    onToggleContextTurn: noop,
+    onClearContextSelection: noop,
+    onStartNewThreadFromTurn: noop,
     onSwitchBranch: noop,
     onRetryTurn: noop,
     onEditTurn: noop,
@@ -819,14 +825,14 @@ describe("ThreadedSurfacePage", () => {
       await Promise.resolve();
     });
 
-    expect(collectText(renderer!.root)).toContain("code");
-    await act(async () => {
-      findButton(renderer!.root, "Hide editor").props.onClick();
-    });
     expect(collectText(renderer!.root)).toContain("Code editor");
+    await act(async () => {
+      findButton(renderer!.root, "Code editor").props.onClick();
+    });
+    expect(collectText(renderer!.root)).toContain("Hide editor");
 
     await act(async () => {
-      const conversationWorkbenchButton = findExactButtons(renderer!.root, "Code editor").find(
+      const conversationWorkbenchButton = findExactButtons(renderer!.root, "Hide editor").find(
         (button) => button.props.className === "mc-next-threaded-secondary",
       );
       expect(conversationWorkbenchButton).toBeDefined();

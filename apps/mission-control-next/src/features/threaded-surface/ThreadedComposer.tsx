@@ -4,6 +4,11 @@ import { ChatAttachmentActions } from "@goatcitadel/mission-control-shared/compo
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
 import { ChatComposerPlusMenu } from "@goatcitadel/mission-control-shared/components/ChatComposerPlusMenu";
 import { ChatQueueBar } from "@goatcitadel/mission-control-shared/components/chat/ChatQueueBar";
+import {
+  ChatPendingApprovalPanel,
+  type ChatPendingApprovalState,
+} from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
+import { ChatPendingUserInputPanel } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingUserInputPanel";
 import { Paperclip } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ContextStrip, type ContextStripMode } from "../native-routes/primitives";
@@ -41,20 +46,20 @@ function getSendLabel(props: MissionThreadedActiveSessionSurfaceProps): string {
       return "Resolve blocker";
     }
     if (props.editingTurnId) {
-      return "Edit and delegate";
+      return "Delegate branch";
     }
     return props.sending ? "Delegating..." : "Delegate";
   }
 
   if (props.mode === "code") {
     if (props.editingTurnId) {
-      return "Edit and implement";
+      return "Implement branch";
     }
     return props.sending ? "Implementing..." : "Implement";
   }
 
   if (props.editingTurnId) {
-    return "Edit and resend";
+    return "Send branch";
   }
   return props.sending ? "Sending..." : "Send";
 }
@@ -175,6 +180,69 @@ function formatHistoricalMemoryLabel(thread: MissionThreadedActiveSessionSurface
     return undefined;
   }
   return `Last turn: ${memoryMode}`;
+}
+
+function readStringField(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function formatCompactList(values: Set<string>, fallbackLabel: string): string {
+  const items = Array.from(values).filter(Boolean);
+  if (items.length === 0) {
+    return "";
+  }
+  if (items.length === 1) {
+    return `${fallbackLabel}: ${items[0]}`;
+  }
+  return `${fallbackLabel}: ${items.length}`;
+}
+
+function getComposerCapabilityUseChips(props: MissionThreadedActiveSessionSurfaceProps) {
+  const selectedIds = new Set(props.selectedContextTurnIds ?? []);
+  const turns =
+    props.thread?.turns.filter((turn) => selectedIds.size > 0 && selectedIds.has(turn.turnId)) ??
+    [];
+  const scopedTurns =
+    turns.length > 0
+      ? turns
+      : props.selectedTurn
+        ? [props.selectedTurn]
+        : props.thread?.turns.at(-1)
+          ? [props.thread.turns.at(-1)!]
+          : [];
+  const skills = new Set<string>();
+  const connectors = new Set<string>();
+  const mcpServers = new Set<string>();
+
+  for (const turn of scopedTurns) {
+    for (const toolRun of turn.toolRuns ?? []) {
+      const args = toolRun.args ?? {};
+      const skillId = readStringField(args.skillId) ?? readStringField(args.skill);
+      if (skillId || /^skills?\./i.test(toolRun.toolName)) {
+        skills.add(skillId ?? toolRun.toolName);
+      }
+
+      const connectorId =
+        readStringField(args.connectorId) ??
+        readStringField(args.connectionId) ??
+        readStringField(args.integrationConnectionId);
+      if (connectorId || /\b(connector|integration)\b/i.test(toolRun.toolName)) {
+        connectors.add(connectorId ?? toolRun.toolName);
+      }
+
+      const serverId =
+        readStringField(args.serverId) ?? readStringField(args.mcpServerId) ?? readStringField(args.server);
+      if (serverId || /\bmcp\b/i.test(toolRun.toolName)) {
+        mcpServers.add(serverId ?? toolRun.toolName);
+      }
+    }
+  }
+
+  return [
+    formatCompactList(skills, "Skills"),
+    formatCompactList(connectors, "Connectors"),
+    formatCompactList(mcpServers, "MCP"),
+  ].filter(Boolean);
 }
 
 function PendingImagePreview({ attachment }: { attachment: PendingAttachment }) {
@@ -330,6 +398,40 @@ function ComposerDelegationApproval({ props }: { props: MissionThreadedActiveSes
   );
 }
 
+function ComposerBlockingPrompt({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
+  const pendingApproval = props.pendingApproval as ChatPendingApprovalState | null;
+  if (pendingApproval) {
+    return (
+      <div className="mc-next-composer-blocking-prompt" data-blocker-kind="approval">
+        <ChatPendingApprovalPanel
+          pendingApproval={pendingApproval}
+          workspaceId={props.workspaceId}
+          approvalsHref={`/ops/approvals?approvalId=${encodeURIComponent(pendingApproval.approvalId)}`}
+          pending={props.approvalPending}
+          variant="compact"
+          onApprove={props.onApprovePending}
+          onDeny={props.onDenyPending}
+        />
+      </div>
+    );
+  }
+
+  if (props.pendingUserInput) {
+    return (
+      <div className="mc-next-composer-blocking-prompt" data-blocker-kind="user-input">
+        <ChatPendingUserInputPanel
+          pendingUserInput={props.pendingUserInput}
+          pending={props.userInputPending}
+          variant="compact"
+          onSubmit={props.onSubmitUserInput}
+        />
+      </div>
+    );
+  }
+
+  return null;
+}
+
 export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
   const threadKnowledgeAttachments = props.threadKnowledgeAttachments ?? [];
   const presetOptions = props.presetOptions ?? [];
@@ -373,6 +475,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   // banner above the textarea via props.planningMode directly.
   const contextStripModel = currentRouteLabel ?? props.trust?.providerModelSummary ?? "Routing pending";
   const memoryLabel = formatHistoricalMemoryLabel(props.thread);
+  const capabilityUseChips = getComposerCapabilityUseChips(props);
   const plusActions = [
     {
       label: props.voiceBusy ? "Voice listening..." : props.voiceTalkActive ? "Stop voice talk" : "Start voice talk",
@@ -425,9 +528,9 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
 
       {props.editingTurnId ? (
         <div className="mc-next-composer-banner">
-          Editing branch from turn {props.editingTurnId.slice(-6)}.
+          Branching from turn {props.editingTurnId.slice(-6)}.
           <button type="button" className="mc-next-composer-inline-button" onClick={props.onCancelEdit}>
-            Cancel edit
+            Cancel branch
           </button>
         </div>
       ) : null}
@@ -464,7 +567,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       ) : null}
 
       {props.routePreflightLoading && !props.routePreflight ? (
-        <div className="mc-next-composer-banner info">
+        <div className="mc-next-composer-banner info mc-next-technical-detail">
           <StatusChip tone="muted">Route</StatusChip>
           <p>Checking the selected provider/model route before send.</p>
         </div>
@@ -487,14 +590,18 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
         </div>
       ) : null}
 
+      <ComposerBlockingPrompt props={props} />
+
       {composerV2Enabled ? (
-        <ContextStrip
-          model={contextStripModel}
-          mode={contextStripMode}
-          memory={memoryLabel}
-          tokens={formatTokenLabel(usageTotals.tokens)}
-          cost={formatCostLabel(usageTotals.costUsd)}
-        />
+        <div className="mc-next-composer-context-strip mc-next-technical-detail">
+          <ContextStrip
+            model={contextStripModel}
+            mode={contextStripMode}
+            memory={memoryLabel}
+            tokens={formatTokenLabel(usageTotals.tokens)}
+            cost={formatCostLabel(usageTotals.costUsd)}
+          />
+        </div>
       ) : null}
 
       <div className="mc-next-composer-head">
@@ -507,7 +614,24 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
            */}
           <p className="mc-next-composer-kicker">{getSurfaceLabel(props.mode)}</p>
         </div>
-        <div className="mc-next-composer-chip-row">
+        <div className="mc-next-composer-chip-row mc-next-technical-detail">
+          {props.contextSelection ? (
+            <button
+              type="button"
+              className="mc-next-composer-chip action"
+              onClick={props.onClearContextSelection}
+              title={
+                props.contextSelection.sourceLabel ? `Context from ${props.contextSelection.sourceLabel}` : undefined
+              }
+            >
+              Context: {props.contextSelection.label} ×
+            </button>
+          ) : null}
+          {capabilityUseChips.map((chip) => (
+            <span key={chip} className="mc-next-composer-chip subtle">
+              {chip}
+            </span>
+          ))}
           <span className="mc-next-composer-chip">{sessionStateLabel}</span>
           {webModeLabel ? <span className="mc-next-composer-chip subtle">{webModeLabel}</span> : null}
           {props.fullWebAccess ? <span className="mc-next-composer-chip emphasis">Full web</span> : null}

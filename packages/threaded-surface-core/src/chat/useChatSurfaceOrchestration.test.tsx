@@ -17,7 +17,9 @@ vi.mock("@goatcitadel/mission-control-shared/state/dev-diagnostics-store", () =>
 
 import {
   resolveOutboundDraftContent,
+  resolveOutboundContentWithContext,
   useChatSurfaceOrchestration,
+  type OutboundContextBlock,
   type OutboundQueueItem,
 } from "./useChatSurfaceOrchestration";
 
@@ -55,6 +57,8 @@ function Harness(props: {
   initialDraft?: string;
   initialAttachments?: unknown[];
   selectedSessionId?: string | null;
+  outboundContext?: OutboundContextBlock | null;
+  onOutboundContextConsumed?: ReturnType<typeof vi.fn>;
   sending?: boolean;
   canBegin?: boolean;
   activeStream?: { sessionId: string; streamToken: string; turnId?: string; controller: AbortController } | null;
@@ -75,6 +79,7 @@ function Harness(props: {
   const controller = useChatSurfaceOrchestration({
     draft,
     pendingAttachments: pendingAttachments as never,
+    outboundContext: props.outboundContext ?? null,
     selectedSessionId: props.selectedSessionId === undefined ? "session-1" : props.selectedSessionId,
     thread: {
       turns: [
@@ -94,6 +99,7 @@ function Harness(props: {
     setPendingAttachments: setPendingAttachments as never,
     setPendingApproval: setPendingApproval.current,
     setError: setError.current,
+    onOutboundContextConsumed: props.onOutboundContextConsumed,
     loadSessionCoreStateRef: loadSessionCoreState,
     abortActiveChatStream: abortActiveChatStream.current,
   });
@@ -139,6 +145,35 @@ describe("useChatSurfaceOrchestration", () => {
     expect(resolveOutboundDraftContent("   ", 1, "send")).toBe("Please review the attached files and continue.");
     expect(resolveOutboundDraftContent("   ", 1, "edit")).toBe("");
     expect(resolveOutboundDraftContent("   ", 0, "send")).toBe("");
+    expect(resolveOutboundContentWithContext(" Follow up ", { label: "1 selected turn", content: " Prior answer " })).toBe(
+      "[Selected conversation context]\nPrior answer\n\n[New message]\nFollow up",
+    );
+  });
+
+  it("sends selected conversation context with the next message and clears it", async () => {
+    const onOutboundContextConsumed = vi.fn();
+    mountHarness({
+      initialDraft: "What should I do next?",
+      outboundContext: {
+        label: "1 selected turn",
+        sourceLabel: "Launch plan",
+        sourceSessionId: "session-source",
+        turnIds: ["turn-1"],
+        content: "Source thread: Launch plan\n\nTurn turn-1\nYou: Build the launch plan\nGoatCitadel: Launch plan ready.",
+      },
+      onOutboundContextConsumed,
+    });
+
+    await act(async () => {
+      await latest!.controller.handleSend();
+    });
+
+    const item = latest!.executeOutbound.mock.calls[0]?.[0] as OutboundQueueItem;
+    expect(item.content).toContain("[Selected conversation context]");
+    expect(item.content).toContain("Source thread: Launch plan");
+    expect(item.content).toContain("[New message]");
+    expect(item.content).toContain("What should I do next?");
+    expect(onOutboundContextConsumed).toHaveBeenCalledTimes(1);
   });
 
   it("sends immediately when execution can begin and queues when it cannot", async () => {

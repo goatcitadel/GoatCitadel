@@ -230,6 +230,44 @@
   border-top: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
 }
 
+.mc-next-thread-strip.compact {
+  border-top-color: transparent;
+  opacity: 0.86;
+}
+
+.mc-next-shell.ui-hide-technical .mc-next-thread-strip.compact {
+  min-height: 1.2rem;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 140ms ease;
+}
+
+.mc-next-shell.ui-hide-technical .mc-next-thread-turn:hover .mc-next-thread-strip.compact,
+.mc-next-shell.ui-hide-technical .mc-next-thread-turn:focus-within .mc-next-thread-strip.compact {
+  opacity: 1;
+  visibility: visible;
+}
+
+.mc-next-shell.ui-hide-technical .mc-next-thread-actions {
+  max-height: 0;
+  margin-top: -0.12rem;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+  transition:
+    max-height 140ms ease,
+    opacity 140ms ease;
+}
+
+.mc-next-shell.ui-hide-technical .mc-next-thread-turn:hover .mc-next-thread-actions,
+.mc-next-shell.ui-hide-technical .mc-next-thread-turn:focus-within .mc-next-thread-actions {
+  max-height: 8rem;
+  opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
+}
+
 .mc-next-thread-turn:first-of-type .mc-next-thread-strip {
   border-top-color: transparent;
 }
@@ -237,7 +275,8 @@
 .mc-next-thread-strip > span,
 .mc-next-thread-actions > span,
 .mc-next-context-chip-row > span,
-.mc-next-composer-chip-row > span {
+.mc-next-composer-chip-row > span,
+.mc-next-composer-chip-row > button {
   min-width: 0;
   max-width: 100%;
   line-height: 1.25;
@@ -251,6 +290,32 @@
   font-variant-numeric: tabular-nums;
   font-size: var(--text-xs);
   letter-spacing: 0.01em;
+}
+
+.mc-next-thread-context-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  min-height: 1.75rem;
+  padding: 0.2rem 0.46rem;
+  border-radius: 0.34rem;
+  border: 1px solid var(--mc-border-subtle);
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  line-height: 1.18;
+  cursor: pointer;
+}
+
+.mc-next-thread-context-toggle input {
+  width: 0.85rem;
+  height: 0.85rem;
+  margin: 0;
+  accent-color: var(--mc-area-color);
+}
+
+.mc-next-thread-context-toggle:has(input:checked) {
+  border-color: color-mix(in oklab, var(--mc-area-color) 50%, var(--mc-border-subtle));
+  background: color-mix(in oklab, var(--mc-area-color) 12%, transparent);
 }
 
 .mc-next-thread-inline-button,
@@ -400,6 +465,16 @@
   color: var(--text-secondary);
   font-family: var(--mc-font-mono);
   font-size: var(--text-xs);
+}
+
+.mc-next-threaded-surface.unified button.mc-next-composer-chip {
+  gap: 0.24rem;
+  cursor: pointer;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-chip.action {
+  color: color-mix(in oklab, var(--mc-area-color) 70%, var(--foreground));
+  font-weight: 700;
 }
 
 .chat-plus-popover {
@@ -562,6 +637,118 @@
   color: var(--text-secondary);
   font-size: var(--text-xs);
   line-height: 1.42;
+}
+
+.mc-next-composer-blocking-prompt {
+  display: grid;
+  gap: 0.4rem;
+  scroll-margin-block: 0.75rem;
+}
+
+.mc-next-composer-blocking-prompt .chat-blocking-prompt,
+.mc-next-composer-blocking-prompt .chat-approval-card,
+.mc-next-composer-blocking-prompt .chat-user-input-card,
+.mc-next-composer-blocking-prompt .chat-user-input-options,
+.mc-next-composer-blocking-prompt .chat-user-input-option-copy {
+  display: grid;
+  gap: 0.42rem;
+}
+
+.mc-next-composer-blocking-prompt .chat-approval-card {
+  padding: 0.62rem 0.68rem;
+  border-radius: 0.48rem;
+  border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 36%, var(--border));
+  background: color-mix(in oklab, var(--gc-risk-caution) 8%, var(--mc-surface-1));
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--gc-risk-caution) 10%, transparent);
+}
+
+.mc-next-composer-blocking-prompt .chat-approval-header,
+.mc-next-composer-blocking-prompt .chat-approval-actions,
+.mc-next-composer-blocking-prompt .chat-user-input-option-row {
+  display: flex;
+  align-items: center;
+  gap: 0.34rem;
+  flex-wrap: wrap;
+}
+
+.mc-next-composer-blocking-prompt .chat-approval-header {
+  justify-content: space-between;
+}
+
+.mc-next-composer-blocking-prompt .chat-approval-title,
+.mc-next-composer-blocking-prompt .chat-approval-reason,
+.mc-next-composer-blocking-prompt .chat-approval-tool,
+.mc-next-composer-blocking-prompt .chat-approval-id,
+.mc-next-composer-blocking-prompt .chat-user-input-option-description {
+  margin: 0;
+}
+
+.mc-next-composer-blocking-prompt .chat-approval-title,
+.mc-next-composer-blocking-prompt .chat-approval-tool {
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  font-weight: 750;
+}
+
+.mc-next-composer-blocking-prompt .chat-approval-countdown {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 1.45rem;
+  padding: 0 0.45rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--gc-risk-caution) 14%, transparent);
+  color: color-mix(in oklab, var(--gc-risk-caution) 72%, var(--foreground));
+  font-size: var(--text-xs);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-next-composer-blocking-prompt .chat-approval-countdown.is-expired,
+.mc-next-composer-blocking-prompt .chat-approval-countdown.is-low-time {
+  background: color-mix(in oklab, var(--gc-risk-danger) 14%, transparent);
+  color: color-mix(in oklab, var(--gc-risk-danger) 76%, var(--foreground));
+}
+
+.mc-next-composer-blocking-prompt .chat-approval-reason,
+.mc-next-composer-blocking-prompt .chat-approval-id,
+.mc-next-composer-blocking-prompt .chat-user-input-option-description {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.36;
+}
+
+.mc-next-composer-blocking-prompt .chat-approval-actions {
+  align-items: stretch;
+}
+
+.mc-next-composer-blocking-prompt .chat-user-input-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: start;
+}
+
+.mc-next-composer-blocking-prompt .chat-user-input-input,
+.mc-next-composer-blocking-prompt .chat-user-input-textarea {
+  width: 100%;
+  min-height: 2.25rem;
+  padding: 0.48rem 0.56rem;
+  border-radius: 0.42rem;
+  border: 1px solid color-mix(in oklab, var(--border) 86%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-1) 95%, var(--background));
+  color: var(--foreground);
+}
+
+.mc-next-composer-blocking-prompt .chat-user-input-textarea {
+  resize: vertical;
+}
+
+.mc-next-composer-blocking-prompt .approval-technical-details {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
 }
 
 .mc-next-composer-delegation-objective {
