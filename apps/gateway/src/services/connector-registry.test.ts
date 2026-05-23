@@ -23,9 +23,7 @@ describe("buildGatewayConnectorRecords", () => {
 
   it("keeps approval delivery disabled for channel integrations without a usable default target", () => {
     const records = buildGatewayConnectorRecords({
-      integrationConnections: [
-        createIntegrationConnection("channel", "slack"),
-      ],
+      integrationConnections: [createIntegrationConnection("channel", "slack")],
       mcpServers: [],
       mcpTools: [],
     });
@@ -68,9 +66,7 @@ describe("buildGatewayConnectorRecords", () => {
 
     for (const testCase of cases) {
       const records = buildGatewayConnectorRecords({
-        integrationConnections: [
-          createIntegrationConnection("channel", testCase.key, testCase.config),
-        ],
+        integrationConnections: [createIntegrationConnection("channel", testCase.key, testCase.config)],
         mcpServers: [],
         mcpTools: [],
       });
@@ -83,9 +79,7 @@ describe("buildGatewayConnectorRecords", () => {
 
   it("publishes channel-specific guidance for missing approval delivery targets", () => {
     const records = buildGatewayConnectorRecords({
-      integrationConnections: [
-        createIntegrationConnection("channel", "imessage"),
-      ],
+      integrationConnections: [createIntegrationConnection("channel", "imessage")],
       mcpServers: [],
       mcpTools: [],
     });
@@ -173,82 +167,89 @@ describe("buildGatewayConnectorRecords", () => {
 
     const imessage = imessageRecords.find((item) => item.connectorId === "integration:conn-1");
     expect(imessage?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(true);
-    expect(imessage?.metadata?.supportedDeliveryActions).toEqual(expect.arrayContaining([
-      "channel.send",
-      "channel.reply",
-      "channel.react",
-      "channel.unsend",
-    ]));
+    expect(imessage?.metadata?.supportedDeliveryActions).toEqual(
+      expect.arrayContaining(["channel.send", "channel.reply", "channel.react", "channel.unsend"]),
+    );
     expect(imessage?.metadata?.setupReady).toBe(true);
-    expect(imessage?.metadata?.channelSupportNotes).toEqual(expect.arrayContaining([
-      "Reactions and unsend require BlueBubbles Private API support.",
-    ]));
-    expect((imessage?.metadata?.channelCapabilities as { runtimePolicy?: { typing?: boolean } })?.runtimePolicy?.typing).toBe(false);
+    expect(imessage?.metadata?.channelSupportNotes).toEqual(
+      expect.arrayContaining(["Reactions and unsend require BlueBubbles Private API support."]),
+    );
+    expect(
+      (imessage?.metadata?.channelCapabilities as { runtimePolicy?: { typing?: boolean } })?.runtimePolicy?.typing,
+    ).toBe(false);
 
     const slack = slackRecords.find((item) => item.connectorId === "integration:conn-1");
     expect(slack?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(true);
-    expect(slack?.metadata?.supportedDeliveryActions).toEqual(expect.arrayContaining([
-      "channel.send",
-      "channel.reply",
-      "channel.react",
-      "channel.unsend",
-    ]));
+    expect(slack?.metadata?.supportedDeliveryActions).toEqual(
+      expect.arrayContaining(["channel.send", "channel.reply", "channel.react", "channel.unsend"]),
+    );
     expect(slack?.metadata?.supportedAttachmentSources).toEqual(["url", "inline"]);
-    expect(slack?.metadata?.channelSupportNotes).toEqual(expect.arrayContaining([
-      "Guided setup can run a sandbox send/delete probe on the bot-token path before finalize.",
-      "Slack inbound routing remains disabled until a signing secret is configured.",
-    ]));
+    expect(slack?.metadata?.channelSupportNotes).toEqual(
+      expect.arrayContaining([
+        "Guided setup can run a sandbox send/delete probe on the bot-token path before finalize.",
+        "Slack inbound routing remains disabled until a signing secret is configured.",
+      ]),
+    );
 
     const discordWebhook = discordWebhookRecords.find((item) => item.connectorId === "integration:conn-1");
     expect(discordWebhook?.capabilities.find((item) => item.id === "interactive_actions")?.enabled).toBe(true);
     expect(discordWebhook?.metadata?.supportedDeliveryActions).toEqual([
       "channel.send",
       "channel.unsend",
+      "channel.activity",
     ]);
     expect(discordWebhook?.metadata?.supportedAttachmentSources).toEqual(["url", "inline"]);
-    expect(discordWebhook?.metadata?.channelSupportNotes).toEqual(expect.arrayContaining([
-      "Webhook-only Discord connections can unsend webhook-authored messages, but cannot add reactions, send typing indicators, or accept inbound traffic.",
-    ]));
-    expect((discordWebhook?.metadata?.channelCapabilities as { inboundModes?: string[] } | undefined)?.inboundModes).toEqual(["none"]);
+    expect(discordWebhook?.metadata?.channelSupportNotes).toEqual(
+      expect.arrayContaining([
+        "Webhook-only Discord connections can unsend webhook-authored messages, but cannot add reactions, send typing indicators, or accept inbound traffic.",
+      ]),
+    );
+    expect(
+      (discordWebhook?.metadata?.channelCapabilities as { inboundModes?: string[] } | undefined)?.inboundModes,
+    ).toEqual(["none"]);
 
     const googleChat = googleChatRecords.find((item) => item.connectorId === "integration:conn-1");
     expect(googleChat?.metadata?.supportedAttachmentSources).toEqual(["url"]);
-    expect(googleChat?.metadata?.channelSupportNotes).toEqual(expect.arrayContaining([
-      "Guided setup can run a sandbox webhook probe before finalize, but destination confirmation is still manual.",
-      "Google Chat webhook mode is outbound only and does not provide inbound routing.",
-    ]));
+    expect(googleChat?.metadata?.channelSupportNotes).toEqual(
+      expect.arrayContaining([
+        "Guided setup can run a sandbox webhook probe before finalize, but destination confirmation is still manual.",
+        "Google Chat webhook mode is outbound only and does not provide inbound routing.",
+      ]),
+    );
 
     const teams = teamsRecords.find((item) => item.connectorId === "integration:conn-1");
     expect(teams?.metadata?.supportedAttachmentSources).toEqual(["url"]);
-    expect(teams?.metadata?.channelSupportNotes).toEqual(expect.arrayContaining([
-      "Guided setup can run a sandbox webhook probe before finalize, but destination confirmation is still manual.",
-      "Teams webhook mode is outbound only and does not provide inbound routing.",
-    ]));
+    expect(teams?.metadata?.channelSupportNotes).toEqual(
+      expect.arrayContaining([
+        "Guided setup can run a sandbox webhook probe before finalize, but destination confirmation is still manual.",
+        "Teams webhook mode is outbound only and does not provide inbound routing.",
+      ]),
+    );
 
     const telegram = telegramRecords.find((item) => item.connectorId === "integration:conn-1");
-    expect(telegram?.metadata?.supportedDeliveryActions).toEqual(expect.arrayContaining([
-      "channel.send",
-      "channel.reply",
-      "channel.react",
-      "channel.unsend",
-      "channel.typing",
-    ]));
-    expect((telegram?.metadata?.channelCapabilities as { runtimePolicy?: { typing?: boolean } })?.runtimePolicy?.typing).toBe(true);
-    expect(telegram?.metadata?.channelSupportNotes).toEqual(expect.arrayContaining([
-      "Guided setup can run a sandbox send/delete probe before finalize.",
-      "Telegram inbound webhook routing is enabled through the Bot API secret-token webhook path.",
-    ]));
+    expect(telegram?.metadata?.supportedDeliveryActions).toEqual(
+      expect.arrayContaining(["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"]),
+    );
+    expect(
+      (telegram?.metadata?.channelCapabilities as { runtimePolicy?: { typing?: boolean } })?.runtimePolicy?.typing,
+    ).toBe(true);
+    expect(telegram?.metadata?.channelSupportNotes).toEqual(
+      expect.arrayContaining([
+        "Guided setup can run a sandbox send/delete probe before finalize.",
+        "Telegram inbound webhook routing is enabled through the Bot API secret-token webhook path.",
+      ]),
+    );
 
     const whatsapp = whatsappRecords.find((item) => item.connectorId === "integration:conn-1");
-    expect(whatsapp?.metadata?.supportedDeliveryActions).toEqual(expect.arrayContaining([
-      "channel.send",
-      "channel.reply",
-      "channel.react",
-    ]));
+    expect(whatsapp?.metadata?.supportedDeliveryActions).toEqual(
+      expect.arrayContaining(["channel.send", "channel.reply", "channel.react"]),
+    );
     expect(whatsapp?.metadata?.supportedAttachmentSources).toEqual(["url", "inline"]);
-    expect(whatsapp?.metadata?.channelSupportNotes).toEqual(expect.arrayContaining([
-      "WhatsApp Cloud API rich sends support public URL media and uploaded inline files for supported image, video, audio, and document types.",
-    ]));
+    expect(whatsapp?.metadata?.channelSupportNotes).toEqual(
+      expect.arrayContaining([
+        "WhatsApp Cloud API rich sends support public URL media and uploaded inline files for supported image, video, audio, and document types.",
+      ]),
+    );
   });
 
   it("publishes setup diagnostics for incomplete channel bridge configs", () => {
@@ -264,10 +265,12 @@ describe("buildGatewayConnectorRecords", () => {
 
     const connector = records.find((item) => item.connectorId === "integration:conn-1");
     expect(connector?.metadata?.setupReady).toBe(false);
-    expect(connector?.metadata?.setupDiagnostics).toEqual(expect.arrayContaining([
-      "Missing one of: config.bridgeUrl, config.baseUrl, config.serverUrl.",
-      "Missing one of: config.passwordEnv, config.password, config.apiPasswordEnv, config.apiPassword.",
-    ]));
+    expect(connector?.metadata?.setupDiagnostics).toEqual(
+      expect.arrayContaining([
+        "Missing one of: config.bridgeUrl, config.baseUrl, config.serverUrl.",
+        "Missing one of: config.passwordEnv, config.password, config.apiPasswordEnv, config.apiPassword.",
+      ]),
+    );
   });
 
   it("publishes the MCP approval delivery tool contract in connector metadata when the tool exists", () => {

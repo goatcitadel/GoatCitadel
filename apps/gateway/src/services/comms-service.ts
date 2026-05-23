@@ -2,6 +2,9 @@ import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
 import type {
   CalendarCreateEventInput,
   CalendarListQuery,
+  ChannelActivityEffectResult,
+  ChannelActivityInput,
+  ChannelActivityResult,
   ChannelReactInput,
   ChannelReplyInput,
   ChannelSendInput,
@@ -29,10 +32,27 @@ export interface CommsHost {
   getIntegrationConnection(connectionId: string): IntegrationConnection;
   emitDiscordTyping(connection: IntegrationConnection, input: ChannelTypingInput): Promise<ChannelTypingResult>;
   emitTelegramTyping(connection: IntegrationConnection, input: ChannelTypingInput): Promise<ChannelTypingResult>;
+  emitChannelActivity(
+    connection: IntegrationConnection,
+    input: ChannelActivityInput,
+    options: {
+      emoji?: string;
+      activityReactions: string[];
+      typing: boolean;
+    },
+  ): Promise<ChannelActivityEffectResult[]>;
 }
 
 const COMMS_SESSION = "session:operator:comms";
 const KNOWLEDGE_AGENT = "operator";
+const CHANNEL_ACTIVITY_EMOJI: Partial<Record<ChannelActivityInput["phase"], string>> = {
+  seen: "👀",
+  thinking: "🧠",
+  tooling: "🔧",
+  waiting_approval: "⚠️",
+  failed: "❌",
+};
+const CHANNEL_ACTIVITY_TYPING_PHASES = new Set<ChannelActivityInput["phase"]>(["thinking", "tooling"]);
 
 export async function commsSend(
   host: CommsHost,
@@ -137,7 +157,7 @@ export async function commsTyping(host: CommsHost, input: ChannelTypingInput): P
   if (connection.kind !== "channel") {
     throw new Error(`Integration connection ${input.connectionId} is not a channel connection.`);
   }
-  const capabilities = describeChannelCapabilities(connection.key, connection.config);
+  const capabilities = describeChannelCapabilities(connection.key, connection.config ?? {});
   if (!capabilities.supportedActions.includes("channel.typing")) {
     return {
       channelKey: connection.key,
@@ -166,6 +186,37 @@ export async function commsTyping(host: CommsHost, input: ChannelTypingInput): P
   };
 }
 
+export async function commsActivity(host: CommsHost, input: ChannelActivityInput): Promise<ChannelActivityResult> {
+  throwIfCommsAborted(input.signal);
+  const connection = host.getIntegrationConnection(input.connectionId);
+  if (connection.kind !== "channel") {
+    throw new Error(`Integration connection ${input.connectionId} is not a channel connection.`);
+  }
+  const capabilities = describeChannelCapabilities(connection.key, connection.config);
+  const nativeEffects = new Set(capabilities.activityCapabilities.nativeEffects);
+  const emoji = CHANNEL_ACTIVITY_EMOJI[input.phase];
+  const activityReactions =
+    nativeEffects.has("reaction") || nativeEffects.has("reaction_clear")
+      ? Object.values(CHANNEL_ACTIVITY_EMOJI).filter((value): value is string => Boolean(value))
+      : [];
+  const effects = await host.emitChannelActivity(connection, input, {
+    emoji,
+    activityReactions,
+    typing: nativeEffects.has("typing") && CHANNEL_ACTIVITY_TYPING_PHASES.has(input.phase),
+  });
+
+  return {
+    channelKey: connection.key,
+    connectionId: input.connectionId,
+    target: input.target,
+    messageId: input.messageId,
+    phase: input.phase,
+    status: summarizeChannelActivityStatus(input.phase, effects),
+    ...(emoji ? { emoji } : {}),
+    effects,
+  };
+}
+
 function throwIfCommsAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) {
     return;
@@ -176,7 +227,7 @@ function throwIfCommsAborted(signal?: AbortSignal): void {
 }
 
 function buildChannelToolGovernance(
-  input: ChannelSendInput | ChannelReactInput | ChannelUnsendInput,
+  input: ChannelSendInput | ChannelReactInput | ChannelUnsendInput | ChannelActivityInput,
 ): Partial<ToolInvokeRequest> {
   const sessionId = input.sessionId ?? COMMS_SESSION;
   const agentId = input.agentId ?? KNOWLEDGE_AGENT;
@@ -218,6 +269,24 @@ function buildChannelToolGovernance(
         }
       : undefined,
   };
+}
+
+function summarizeChannelActivityStatus(
+  phase: ChannelActivityInput["phase"],
+  effects: ChannelActivityEffectResult[],
+): ChannelActivityResult["status"] {
+  if (phase === "clear") {
+    return effects.some((effect) => effect.status === "failed") ? "partial" : "cleared";
+  }
+  const failed = effects.some((effect) => effect.status === "failed");
+  const sent = effects.some((effect) => effect.status === "sent" || effect.status === "cleared");
+  if (failed && sent) {
+    return "partial";
+  }
+  if (failed) {
+    return "failed";
+  }
+  return sent ? "sent" : "unsupported";
 }
 
 export async function commsGmailRead(

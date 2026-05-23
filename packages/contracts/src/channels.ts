@@ -1,3 +1,5 @@
+import type { ChannelActivityEffectResult, ChannelActivityPhase } from "./comms.js";
+
 export type IntegrationPluginInstallSourceType = "local" | "npm" | "git" | "url" | "manual" | "unknown";
 export type IntegrationPluginIntegrityStatus = "verified" | "missing" | "mismatch" | "unknown" | "not_applicable";
 export type IntegrationPluginTrustWarningSeverity = "info" | "warning" | "critical";
@@ -83,6 +85,7 @@ export type ChannelActionName =
   | "channel.react"
   | "channel.unsend"
   | "channel.typing"
+  | "channel.activity"
   | "channel.presence";
 
 export type ChannelAttachmentSource = "url" | "inline";
@@ -107,7 +110,16 @@ export interface ChannelRuntimePolicy {
   allowlist: boolean;
   mentionGating: boolean;
   typing: boolean;
+  activity: boolean;
   presence: boolean;
+}
+
+export interface ChannelActivityCapabilities {
+  supported: boolean;
+  phases: ChannelActivityPhase[];
+  nativeEffects: ChannelActivityEffectResult["effect"][];
+  clearOnTerminal: boolean;
+  activityEmoji: Partial<Record<ChannelActivityPhase, string>>;
 }
 
 export interface ChannelRuntimePosture {
@@ -127,6 +139,7 @@ export interface ChannelCapabilities {
   inboundModes: ChannelInboundMode[];
   threadCapabilities: ChannelThreadCapabilities;
   runtimePolicy: ChannelRuntimePolicy;
+  activityCapabilities: ChannelActivityCapabilities;
   runtimePosture: ChannelRuntimePosture;
   chunkingMode: ChannelChunkingMode;
   supportsStreaming: boolean;

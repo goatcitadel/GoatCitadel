@@ -267,6 +267,7 @@ function createWebhookServices(overrides: Record<string, unknown> = {}) {
     })),
     setChatSessionBinding: vi.fn(),
     respondToExistingChatMessage: vi.fn(async () => ({ turnId: "turn-webhook" })),
+    emitChannelActivity: vi.fn(async () => ({ effects: [] })),
     cancelLatestActiveChatTurnForSession: vi.fn(async () => ({ status: "no_active_run" })),
     resolveApprovalWithRemoteToken: vi.fn(async () => ({
       approval: { approvalId: "approval-1", status: "approved" },

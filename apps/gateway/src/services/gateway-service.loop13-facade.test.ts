@@ -98,6 +98,7 @@ vi.mock("./onboarding-state-service.js", () => ({
 }));
 
 vi.mock("./comms-service.js", () => ({
+  commsActivity: vi.fn(async (_host, input) => ({ action: "activity", input })),
   commsCalendarCreate: vi.fn(async (_host, input) => ({ action: "calendar.create", input })),
   commsCalendarList: vi.fn(async (_host, input) => ({ action: "calendar.list", input })),
   commsGmailRead: vi.fn(async (_host, input) => ({ action: "gmail.read", input })),

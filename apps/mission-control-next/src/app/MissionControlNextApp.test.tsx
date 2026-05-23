@@ -17,7 +17,9 @@ const appMocks = vi.hoisted(() => ({
   getGatewayApiBaseUrl: vi.fn(),
   preflightGatewayAccess: vi.fn(),
   publishEventStreamStatus: vi.fn(),
+  publishChannelActivityFromRealtimeEvent: vi.fn(),
   resetEventStreamStatus: vi.fn(),
+  resetChannelActivitySnapshots: vi.fn(),
   setActiveWorkspaceId: vi.fn(),
   setDetailPanelPinned: vi.fn(),
   setMode: vi.fn(),
@@ -187,6 +189,11 @@ vi.mock("@goatcitadel/mission-control-shared/state/refresh-bus", () => ({
 vi.mock("@goatcitadel/mission-control-shared/state/event-stream-status-store", () => ({
   publishEventStreamStatus: appMocks.publishEventStreamStatus,
   resetEventStreamStatus: appMocks.resetEventStreamStatus,
+}));
+
+vi.mock("@goatcitadel/mission-control-shared/state/channel-activity-store", () => ({
+  publishChannelActivityFromRealtimeEvent: appMocks.publishChannelActivityFromRealtimeEvent,
+  resetChannelActivitySnapshots: appMocks.resetChannelActivitySnapshots,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/state/realtime-derived", () => ({
@@ -401,6 +408,9 @@ describe("MissionControlNextApp", () => {
     expect(appMocks.emitRefresh).toHaveBeenCalledWith(
       "surface",
       expect.objectContaining({ reason: "test-refresh", eventId: "evt-1" }),
+    );
+    expect(appMocks.publishChannelActivityFromRealtimeEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ eventId: "evt-1" }),
     );
 
     await act(async () => {

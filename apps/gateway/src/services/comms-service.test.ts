@@ -5,7 +5,7 @@ import type {
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
-import { commsReact, commsSend, commsUnsend, type CommsHost } from "./comms-service.js";
+import { commsActivity, commsReact, commsSend, commsUnsend, type CommsHost } from "./comms-service.js";
 
 function createHost(): CommsHost & { invokeAndUnwrap: ReturnType<typeof vi.fn> } {
   return {
@@ -21,9 +21,19 @@ function createHost(): CommsHost & { invokeAndUnwrap: ReturnType<typeof vi.fn> }
       record: { attachmentId: "attachment-1", fileName: "a.txt", mimeType: "text/plain" } as ChatAttachmentRecord,
       bytes: Buffer.from("hello"),
     })),
-    getIntegrationConnection: vi.fn(() => ({ connectionId: "conn-1", kind: "channel" }) as IntegrationConnection),
+    getIntegrationConnection: vi.fn(
+      () =>
+        ({
+          connectionId: "conn-1",
+          kind: "channel",
+          key: "telegram",
+          label: "Telegram",
+          config: {},
+        }) as IntegrationConnection,
+    ),
     emitDiscordTyping: vi.fn(),
     emitTelegramTyping: vi.fn(),
+    emitChannelActivity: vi.fn(async () => [{ effect: "mission_control", supported: true, status: "sent" }]),
   };
 }
 
@@ -119,5 +129,30 @@ describe("comms service governance", () => {
         }),
       });
     }
+  });
+
+  it("routes shared channel activity through the activity host", async () => {
+    const host = createHost();
+
+    const result = await commsActivity(host, {
+      connectionId: "conn-1",
+      target: "chat-1",
+      messageId: "message-1",
+      phase: "thinking",
+      sessionId: "session-1",
+    });
+
+    expect(host.emitChannelActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionId: "conn-1", kind: "channel" }),
+      expect.objectContaining({ phase: "thinking", messageId: "message-1" }),
+      expect.objectContaining({ emoji: "🧠", typing: true }),
+    );
+    expect(result).toMatchObject({
+      connectionId: "conn-1",
+      messageId: "message-1",
+      phase: "thinking",
+      emoji: "🧠",
+      status: "sent",
+    });
   });
 });

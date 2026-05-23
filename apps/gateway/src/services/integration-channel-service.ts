@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
 import type {
+  ChannelActivityEffectResult,
+  ChannelActivityInput,
   ChannelCapabilities,
   ChannelRuntimeStatus,
   ChannelTypingInput,
@@ -14,6 +16,7 @@ import type {
   IntegrationKind,
   IntegrationPluginInstallInput,
   IntegrationPluginRecord,
+  RealtimeEvent,
 } from "@goatcitadel/contracts";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { INTEGRATION_CATALOG } from "./integration-catalog.js";
@@ -23,6 +26,7 @@ import {
 } from "./integration-plugin-author-contract.js";
 import { resolveChannelConfigTarget } from "./channel-config.js";
 import { sendTelegramTypingIndicator } from "./telegram-typing.js";
+import { emitChannelActivityImpl } from "./integration-channel-activity.js";
 
 export interface IntegrationChannelPort {
   storage: {
@@ -42,7 +46,12 @@ export interface IntegrationChannelPort {
       delete(connectionId: string): boolean;
     };
   };
-  publishRealtime(scope: string, channel: string, payload: Record<string, unknown>): void;
+  publishRealtime(
+    scope: string,
+    channel: string,
+    payload: Record<string, unknown>,
+    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
+  ): void;
   requireFeatureEnabled(flag: keyof RuntimeSettings["features"]): void;
   buildIntegrationConnectionChecks(connection: IntegrationConnection): ConnectorDiagnosticReport["checks"];
   runIntegrationConnectionLiveChecks(
@@ -146,6 +155,18 @@ export class IntegrationChannelService {
     input: ChannelTypingInput,
   ): Promise<ChannelTypingResult> {
     return emitTelegramTypingImpl(this.deps, connection, input);
+  }
+
+  public emitChannelActivity(
+    connection: IntegrationConnection,
+    input: ChannelActivityInput,
+    options: {
+      emoji?: string;
+      activityReactions: string[];
+      typing: boolean;
+    },
+  ): Promise<ChannelActivityEffectResult[]> {
+    return emitChannelActivityImpl(this.deps, connection, input, options);
   }
 
   public listIntegrationPlugins(): IntegrationPluginRecord[] {

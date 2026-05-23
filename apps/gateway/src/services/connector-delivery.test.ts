@@ -637,6 +637,56 @@ describe("dispatchConnectorDelivery", () => {
       result: { supported: true, status: "sent" },
     });
   });
+
+  it("routes shared channel activity through interactive channel actions", async () => {
+    const commsActivity = vi.fn(async () => ({
+      channelKey: "discord",
+      connectionId: "discord-1",
+      target: "channel:123",
+      messageId: "msg-1",
+      phase: "waiting_approval" as const,
+      status: "sent" as const,
+      emoji: "⚠️",
+      effects: [{ effect: "mission_control" as const, supported: true, status: "sent" as const }],
+    }));
+
+    const result = await dispatchConnectorDelivery(
+      createConnector("integration_connection", "integration:discord-1", "discord-1", ["interactive_actions"], {
+        key: "discord",
+      }),
+      createPayload("channel.activity", {
+        target: "channel:123",
+        messageId: "msg-1",
+        phase: "waiting_approval",
+        sessionId: "session-1",
+      }),
+      {
+        commsSend: vi.fn(),
+        commsReply: vi.fn(async () => ({})),
+        commsReact: vi.fn(),
+        commsUnsend: vi.fn(),
+        commsTyping: vi.fn(async () => createTypingResult()),
+        commsActivity,
+        invokeMcpTool: vi.fn(),
+        publishRealtime: vi.fn(),
+      },
+    );
+
+    expect(commsActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: "discord-1",
+        target: "channel:123",
+        messageId: "msg-1",
+        phase: "waiting_approval",
+        sessionId: "session-1",
+      }),
+    );
+    expect(result).toMatchObject({
+      capabilityId: "interactive_actions",
+      dispatchKind: "integration_channel_action",
+      result: { status: "sent", emoji: "⚠️" },
+    });
+  });
 });
 
 describe("dispatchConnectorDelivery with [[as_document]] directives", () => {

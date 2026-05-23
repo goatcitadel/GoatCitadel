@@ -69,7 +69,7 @@ describe("describeChannelCapabilities", () => {
       webhookUrl: "https://discord.com/api/webhooks/123/test",
     });
 
-    expect(capabilities.supportedActions).toEqual(["channel.send", "channel.unsend"]);
+    expect(capabilities.supportedActions).toEqual(["channel.send", "channel.unsend", "channel.activity"]);
     expect(capabilities.inboundModes).toEqual(["none"]);
     expect(capabilities.runtimePosture).toMatchObject({
       outboundTransport: "webhook",
@@ -77,7 +77,9 @@ describe("describeChannelCapabilities", () => {
       inboundReadiness: "unsupported",
     });
     expect(capabilities.runtimePolicy.typing).toBe(false);
+    expect(capabilities.runtimePolicy.activity).toBe(true);
     expect(capabilities.runtimePolicy.presence).toBe(false);
+    expect(capabilities.activityCapabilities.nativeEffects).toEqual(["mission_control"]);
   });
 
   it("reports missing setup requirements for incomplete bridge configs", () => {
@@ -190,7 +192,7 @@ describe("describeChannelCapabilities", () => {
 
   it("covers outbound-only and partial-runtime channel capability variants", () => {
     const slackWebhook = describeChannelCapabilities("slack", { webhookUrl: "https://hooks.slack.test/1" });
-    expect(slackWebhook.supportedActions).toEqual(["channel.send"]);
+    expect(slackWebhook.supportedActions).toEqual(["channel.send", "channel.activity"]);
     expect(slackWebhook.supportedAttachmentSources).toEqual(["url"]);
     expect(slackWebhook.runtimePosture).toMatchObject({
       outboundTransport: "webhook",
@@ -218,7 +220,7 @@ describe("describeChannelCapabilities", () => {
     });
 
     const discordUnconfigured = describeChannelCapabilities("discord", {});
-    expect(discordUnconfigured.supportedActions).toEqual(["channel.send"]);
+    expect(discordUnconfigured.supportedActions).toEqual(["channel.send", "channel.activity"]);
     expect(discordUnconfigured.supportNotes).toEqual([]);
 
     const telegramOutbound = describeChannelCapabilities("telegram", { token: "token" });
@@ -278,7 +280,11 @@ describe("describeChannelCapabilities", () => {
   it("falls back to default channel capabilities for unknown adapters", () => {
     const capabilities = describeChannelCapabilities("custom-channel", {});
 
-    expect(capabilities.supportedActions).toEqual(["channel.send"]);
+    expect(capabilities.supportedActions).toEqual(["channel.send", "channel.activity"]);
+    expect(capabilities.activityCapabilities).toMatchObject({
+      supported: true,
+      clearOnTerminal: true,
+    });
     expect(capabilities.inboundModes).toEqual(["none"]);
     expect(capabilities.threadCapabilities).toMatchObject({
       rooms: false,

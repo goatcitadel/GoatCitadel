@@ -4,6 +4,7 @@ export const integrationWebhookRouteMethods = [
   "getIntegrationConnection",
   "cancelLatestActiveChatTurnForSession",
   "hasRunningTurn",
+  "emitChannelActivity",
   "ingestChannelMessage",
   "parseChatCommand",
   "recordDevDiagnostic",
@@ -23,6 +24,7 @@ export function createIntegrationWebhookRoutePort(port: IntegrationWebhookPort):
   return {
     getIntegrationConnection: (...args) => port.getIntegrationConnection(...args),
     cancelLatestActiveChatTurnForSession: (...args) => port.cancelLatestActiveChatTurnForSession(...args),
+    emitChannelActivity: (...args) => port.emitChannelActivity(...args),
     hasRunningTurn: (...args) => port.hasRunningTurn(...args),
     ingestChannelMessage: (...args) => port.ingestChannelMessage(...args),
     parseChatCommand: (...args) => port.parseChatCommand(...args),

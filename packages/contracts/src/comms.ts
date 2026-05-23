@@ -80,6 +80,39 @@ export interface ChannelTypingResult {
   expiresAt?: string;
 }
 
+export type ChannelActivityPhase = "seen" | "thinking" | "tooling" | "waiting_approval" | "failed" | "clear";
+
+export interface ChannelActivityInput extends ChannelGovernanceInput {
+  connectionId: string;
+  target: string;
+  messageId: string;
+  phase: ChannelActivityPhase;
+  channelKey?: string;
+  threadId?: string;
+  turnId?: string;
+  label?: string;
+  correlationId?: string;
+  signal?: AbortSignal;
+}
+
+export interface ChannelActivityEffectResult {
+  effect: "mission_control" | "reaction" | "reaction_clear" | "typing" | "read_receipt";
+  supported: boolean;
+  status: "sent" | "cleared" | "unsupported" | "failed";
+  detail?: string;
+}
+
+export interface ChannelActivityResult {
+  channelKey: string;
+  connectionId: string;
+  target: string;
+  messageId: string;
+  phase: ChannelActivityPhase;
+  status: "sent" | "cleared" | "unsupported" | "failed" | "partial";
+  emoji?: string;
+  effects: ChannelActivityEffectResult[];
+}
+
 export type ChannelDeliveryStatus = "sent" | "retrying" | "degraded" | "blocked" | "not_available";
 
 export interface GmailSendInput {

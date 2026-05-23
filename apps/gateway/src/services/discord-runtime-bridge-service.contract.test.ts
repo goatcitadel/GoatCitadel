@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatSessionRecord } from "@goatcitadel/contracts";
+import type { ChatSendMessageResponse, ChatSessionRecord } from "@goatcitadel/contracts";
 import {
   ensureDiscordChatSession,
   handleDiscordRuntimeSlashCommand,
@@ -46,7 +46,14 @@ function createHost(): DiscordRuntimeBridgeHost & {
   } as DiscordRuntimeBridgeHost["storage"]["integrationConnections"]["get"] extends (id: string) => infer T ? T : never;
   const diagnostics = vi.fn();
   const updateSessionMock = vi.fn();
-  const respondMock = vi.fn();
+  const respondMock = vi.fn(
+    async (): Promise<ChatSendMessageResponse> => ({
+      sessionId: "session-target",
+      userMessage: { messageId: "source-1", sessionId: "session-target", role: "user", content: "hi" } as never,
+      transport: "integration",
+      turnId: "turn-1",
+    }),
+  );
   const isChatTurnWriteConflict = ((error: unknown): error is never =>
     (error as Error).message === "conflict") as DiscordRuntimeBridgeHost["isChatTurnWriteConflict"];
 
@@ -165,6 +172,7 @@ function createHost(): DiscordRuntimeBridgeHost & {
       transcriptOffset: 0,
     })) as unknown as DiscordRuntimeBridgeHost["ingestChannelMessage"],
     setChatSessionBinding: vi.fn(),
+    emitChannelActivity: vi.fn(async () => ({ effects: [] })),
     respondToExistingChatMessage: respondMock,
     isChatTurnWriteConflict,
     recordDevDiagnostic: diagnostics,

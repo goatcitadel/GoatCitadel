@@ -1,5 +1,7 @@
 import {
   ConflictError,
+  type ChannelActivityInput,
+  type ChannelActivityResult,
   type ChannelAttachmentInput,
   type ChannelGovernanceInput,
   type ChannelReplyInput,
@@ -25,7 +27,7 @@ export interface ConnectorDeliveryDispatchResult {
   result?: Record<string, unknown>;
 }
 
-type ConnectorActionResult = ToolInvokeResult | Record<string, unknown> | ChannelTypingResult;
+type ConnectorActionResult = ToolInvokeResult | Record<string, unknown> | ChannelTypingResult | ChannelActivityResult;
 
 export async function dispatchConnectorDelivery(
   connector: ConnectorRecord,
@@ -36,6 +38,7 @@ export async function dispatchConnectorDelivery(
     commsReact: (input: ChannelReactInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
     commsUnsend: (input: ChannelUnsendInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
     commsTyping: (input: ChannelTypingInput) => Promise<ChannelTypingResult | Record<string, unknown>>;
+    commsActivity?: (input: ChannelActivityInput) => Promise<ChannelActivityResult | Record<string, unknown>>;
     invokeMcpTool: (input: McpInvokeRequest) => Promise<McpInvokeResponse>;
     mcpInvokeContext?: Pick<
       McpInvokeRequest,
@@ -63,7 +66,14 @@ export async function dispatchConnectorDelivery(
   switch (connector.connectorType) {
     case "integration_connection":
       if (
-        !["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"].includes(payload.action)
+        ![
+          "channel.send",
+          "channel.reply",
+          "channel.react",
+          "channel.unsend",
+          "channel.typing",
+          "channel.activity",
+        ].includes(payload.action)
       ) {
         throw new ValidationError({
           message: `Connector delivery action ${payload.action} is not supported for integration connectors.`,
@@ -80,6 +90,7 @@ export async function dispatchConnectorDelivery(
         commsReact: deps.commsReact,
         commsUnsend: deps.commsUnsend,
         commsTyping: deps.commsTyping,
+        commsActivity: deps.commsActivity,
         signal: deps.signal,
       });
 
@@ -138,6 +149,7 @@ async function dispatchIntegrationChannelAction(
     commsReact: (input: ChannelReactInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
     commsUnsend: (input: ChannelUnsendInput) => Promise<ToolInvokeResult | Record<string, unknown>>;
     commsTyping: (input: ChannelTypingInput) => Promise<ChannelTypingResult | Record<string, unknown>>;
+    commsActivity?: (input: ChannelActivityInput) => Promise<ChannelActivityResult | Record<string, unknown>>;
     signal?: AbortSignal;
   },
 ): Promise<ConnectorDeliveryDispatchResult> {
@@ -197,6 +209,23 @@ async function dispatchIntegrationChannelAction(
       target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
       threadId: optionalString(actionPayload.threadId),
       durationMs: optionalInteger(actionPayload.durationMs),
+      ...governance,
+      signal: deps.signal,
+    });
+  } else if (payload.action === "channel.activity") {
+    if (!deps.commsActivity) {
+      throw new ValidationError({ message: "Connector delivery action channel.activity is not available." });
+    }
+    dispatchKind = "integration_channel_action";
+    result = await deps.commsActivity({
+      connectionId: connector.sourceId,
+      target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
+      messageId: requireNonEmptyString(actionPayload.messageId, "payload.messageId"),
+      phase: normalizeChannelActivityPhase(actionPayload.phase),
+      threadId: optionalString(actionPayload.threadId),
+      turnId: optionalString(actionPayload.turnId),
+      correlationId: optionalString(actionPayload.correlationId) ?? payload.correlationId,
+      label: optionalString(actionPayload.label),
       ...governance,
       signal: deps.signal,
     });
@@ -396,6 +425,21 @@ function requireNonEmptyString(value: unknown, field: string): string {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function normalizeChannelActivityPhase(value: unknown): ChannelActivityInput["phase"] {
+  const phase = optionalString(value);
+  if (
+    phase === "seen" ||
+    phase === "thinking" ||
+    phase === "tooling" ||
+    phase === "waiting_approval" ||
+    phase === "failed" ||
+    phase === "clear"
+  ) {
+    return phase;
+  }
+  throw new ValidationError({ message: "payload.phase must be a supported channel activity phase." });
 }
 
 function normalizeMcpSurface(value: unknown): McpInvokeRequest["surface"] | undefined {

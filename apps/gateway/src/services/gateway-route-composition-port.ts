@@ -108,6 +108,7 @@ export interface GatewayRouteCompositionPort {
     "cancelLatestActiveChatTurnForSession"
   >;
   clearChatTurnWriteLease: chatSessionService.ChatSessionDependencies["clearChatTurnWriteLease"];
+  commsActivity: RouteDependencyMethod<"comms", "commsActivity">;
   commsReply: RouteDependencyMethod<"comms", "commsReply">;
   commsSend: RouteDependencyMethod<"comms", "commsSend">;
   createApproval: RouteDependencyMethod<"devVerification", "createApproval">;
@@ -305,6 +306,7 @@ export function createGatewayRouteCompositionPort(
     bulkSetSkillState: gateway.bulkSetSkillState.bind(gateway),
     cancelLatestActiveChatTurnForSession: gateway.cancelLatestActiveChatTurnForSession.bind(gateway),
     clearChatTurnWriteLease: gateway.clearChatTurnWriteLease.bind(gateway),
+    commsActivity: gateway.commsActivity.bind(gateway),
     commsReply: gateway.commsReply.bind(gateway),
     commsSend: gateway.commsSend.bind(gateway),
     createApproval: gateway.createApproval.bind(gateway),

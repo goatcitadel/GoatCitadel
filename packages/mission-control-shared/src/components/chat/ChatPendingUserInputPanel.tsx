@@ -5,10 +5,11 @@ import { HelpHint } from "../HelpHint";
 export function ChatPendingUserInputPanel(props: {
   pendingUserInput: ChatUserInputPromptRecord | null;
   pending: boolean;
+  variant?: "default" | "compact";
   onSubmit: (response: { kind: "single_select"; optionId: string } | { kind: "text"; text: string }) => void;
   onDismiss?: () => void;
 }) {
-  const { pendingUserInput, pending, onSubmit, onDismiss } = props;
+  const { pendingUserInput, pending, variant, onSubmit, onDismiss } = props;
   const [selectedOptionId, setSelectedOptionId] = useState<string>("");
   const [textValue, setTextValue] = useState("");
 
@@ -54,7 +55,7 @@ export function ChatPendingUserInputPanel(props: {
 
   return (
     <div
-      className="chat-approval-card chat-user-input-card chat-blocking-prompt chat-blocking-prompt-user-input"
+      className={`chat-approval-card chat-user-input-card chat-blocking-prompt chat-blocking-prompt-user-input${variant === "compact" ? " compact" : ""}`}
       role="alert"
       aria-live="assertive"
       key={promptKey}

@@ -8,6 +8,8 @@
 
 import {
   type ChannelSendInput,
+  type ChannelActivityInput,
+  type ChannelActivityResult,
   type ChannelReplyInput,
   type ChannelReactInput,
   type ChannelTypingInput,
@@ -86,6 +88,7 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
   commsReact(input: ChannelReactInput): Promise<ToolInvokeResult | Record<string, unknown>>;
   commsUnsend(input: ChannelUnsendInput): Promise<ToolInvokeResult | Record<string, unknown>>;
   commsTyping(input: ChannelTypingInput): Promise<ChannelTypingResult | Record<string, unknown>>;
+  commsActivity(input: ChannelActivityInput): Promise<ChannelActivityResult | Record<string, unknown>>;
   invokeMcpTool(input: McpInvokeRequest): Promise<McpInvokeResponse>;
   computeDurableRetryDelayMs(current: DurableRunRecord, attemptNo: number): number;
   resolveDurableRunHookWorkspaceId(run: DurableRunRecord): string;
@@ -156,6 +159,7 @@ type DurableConnectorDeliveryWorkflowHost = DurableWorkflowCompletionHost &
     | "commsReact"
     | "commsUnsend"
     | "commsTyping"
+    | "commsActivity"
     | "invokeMcpTool"
     | "publishRealtime"
     | "resolveDurableRunHookWorkspaceId"
@@ -715,6 +719,7 @@ export async function executeDurableConnectorDeliveryRun(
     commsReact: (input) => host.commsReact(input),
     commsUnsend: (input) => host.commsUnsend(input),
     commsTyping: (input) => host.commsTyping(input),
+    commsActivity: (input) => host.commsActivity(input),
     invokeMcpTool: (input) => host.invokeMcpTool({ ...input, signal: context?.signal }),
     mcpInvokeContext: {
       workspaceId: payload.workspaceId ?? host.resolveDurableRunHookWorkspaceId(run),

@@ -1,4 +1,4 @@
-import { memo, useCallback, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   getChatTurnRecoveryActionLabel,
   isChatTurnActiveStatus,
@@ -18,6 +18,10 @@ import { AssistantMessageRenderer } from "@goatcitadel/mission-control-shared/co
 import { ChatAttachmentPreviewStack } from "@goatcitadel/mission-control-shared/components/chat/ChatAttachmentPreviewStack";
 import { SurfaceReconnectBanner } from "@goatcitadel/mission-control-shared/components/chat/SurfaceReconnectBanner";
 import { normalizeCitationDisplayText } from "@goatcitadel/mission-control-shared/components/chat/assistant-display-text";
+import {
+  useChannelActivitySnapshots,
+  type ChannelActivitySnapshot,
+} from "@goatcitadel/mission-control-shared/state/channel-activity-store";
 
 function formatActorTimestamp(timestamp: string): string {
   return new Date(timestamp).toLocaleTimeString();
@@ -107,6 +111,24 @@ function renderSuggestionSummary(turn: ChatThreadTurnRecord): string | null {
     .slice(0, 2)
     .map((item) => item.title)
     .join(" · ");
+}
+
+function ChannelActivityBadge({ activity }: { activity: ChannelActivitySnapshot | null }) {
+  if (!activity) {
+    return null;
+  }
+  return (
+    <span
+      className={`mc-next-thread-channel-activity phase-${activity.phase}`}
+      title={`${activity.label} on ${activity.channelKey ?? "channel"}`}
+      aria-label={`Channel activity: ${activity.label}`}
+      role="status"
+      aria-live="polite"
+    >
+      <span aria-hidden="true">{activity.emoji}</span>
+      <span>{activity.label}</span>
+    </span>
+  );
 }
 
 function getRecoveryStripLabel(turn: ChatThreadTurnRecord): string | null {
@@ -222,6 +244,7 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
   selected,
   contextSelected,
   streamingPreview,
+  channelActivity,
   onToggleContextTurn,
   onStartNewThreadFromTurn,
   onSwitchBranch,
@@ -236,6 +259,7 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
   selected: boolean;
   contextSelected: boolean;
   streamingPreview?: MissionThreadedActiveSessionSurfaceProps["streamingPreview"];
+  channelActivity?: ChannelActivitySnapshot | null;
   onToggleContextTurn: (turnId: string) => void;
   onStartNewThreadFromTurn: (turnId: string) => void;
   onSwitchBranch: (turnId: string) => void;
@@ -282,6 +306,7 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
         <div className="mc-next-thread-bubble user">
           <p className="mc-next-thread-meta">
             <strong>You</strong> · {formatActorTimestamp(turn.userMessage.timestamp)}
+            <ChannelActivityBadge activity={channelActivity ?? null} />
           </p>
           <AssistantMessageRenderer role="user" content={turn.userMessage.content} />
           <ChatAttachmentPreviewStack attachments={turn.userMessage.attachments} />
@@ -580,6 +605,11 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
   const latestTurnId = props.thread?.activeLeafTurnId ?? lastTurn?.turnId ?? null;
   const latestAssistantContentLength = lastTurn?.assistantMessage?.content.length ?? 0;
   const latestTraceStatus = lastTurn?.trace.status ?? null;
+  const channelActivities = useChannelActivitySnapshots(props.thread?.sessionId ?? null);
+  const channelActivityByMessageId = useMemo(
+    () => new Map(channelActivities.map((activity) => [activity.messageId, activity])),
+    [channelActivities],
+  );
   const liveStatus =
     props.streamError ??
     (props.streamStatus === "streaming"
@@ -706,6 +736,7 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
                   selected={props.selectedTurnId === turn.turnId}
                   contextSelected={(props.selectedContextTurnIds ?? []).includes(turn.turnId)}
                   streamingPreview={props.streamingPreview?.turnId === turn.turnId ? props.streamingPreview : null}
+                  channelActivity={channelActivityByMessageId.get(turn.userMessage.messageId) ?? null}
                   onToggleContextTurn={props.onToggleContextTurn}
                   onStartNewThreadFromTurn={props.onStartNewThreadFromTurn}
                   onSwitchBranch={props.onSwitchBranch}

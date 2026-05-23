@@ -24,10 +24,11 @@ export function ChatPendingApprovalPanel(props: {
   workspaceId?: string;
   approvalsHref?: string;
   pending: boolean;
+  variant?: "default" | "compact";
   onApprove: (allowScope: "once" | "session" | "workspace") => void;
   onDeny: () => void;
 }) {
-  const { pendingApproval, workspaceId, approvalsHref, pending, onApprove, onDeny } = props;
+  const { pendingApproval, workspaceId, approvalsHref, pending, variant, onApprove, onDeny } = props;
   if (!pendingApproval) {
     return null;
   }
@@ -47,7 +48,10 @@ export function ChatPendingApprovalPanel(props: {
   }
 
   return (
-    <div className="chat-blocking-prompt chat-blocking-prompt-approval" onKeyDown={handleKeyDown}>
+    <div
+      className={`chat-blocking-prompt chat-blocking-prompt-approval${variant === "compact" ? " compact" : ""}`}
+      onKeyDown={handleKeyDown}
+    >
       <InlineApprovalPrompt
         approvalId={pendingApproval.approvalId}
         kind={pendingApproval.kind}

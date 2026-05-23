@@ -94,6 +94,20 @@ const channelTypingSchema = z.object({
   taskId: z.string().min(1).optional(),
 });
 
+const channelActivitySchema = z.object({
+  connectionId: z.string().uuid(),
+  target: z.string().min(1),
+  messageId: z.string().min(1),
+  phase: z.enum(["seen", "thinking", "tooling", "waiting_approval", "failed", "clear"]),
+  threadId: z.string().min(1).optional(),
+  turnId: z.string().min(1).optional(),
+  correlationId: z.string().min(1).optional(),
+  label: z.string().min(1).optional(),
+  sessionId: z.string().min(1).optional(),
+  agentId: z.string().min(1).optional(),
+  taskId: z.string().min(1).optional(),
+});
+
 const connectionParamsSchema = z.object({
   connectionId: z.string().uuid(),
 });
@@ -228,6 +242,14 @@ export const commsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send(await fastify.services.comms.commsTyping(parsed.data));
+  });
+
+  fastify.post("/api/v1/comms/activity", async (request, reply) => {
+    const parsed = channelActivitySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send(await fastify.services.comms.commsActivity(parsed.data));
   });
 
   fastify.get("/api/v1/comms/capabilities/:connectionId", async (request, reply) => {

@@ -1,6 +1,7 @@
 import { Readable } from "node:stream";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import type { ChannelActivityInput, ChannelActivityResult } from "@goatcitadel/contracts";
 import type { ChatCommandOptions } from "../services/chat-command-service.js";
 
 export const CHANNEL_INBOUND_MAX_BYTES = 256 * 1024;
@@ -81,6 +82,9 @@ export type IntegrationWebhookRouteLike = {
     },
   ) => Promise<{
     turnId?: string;
+    trace?: {
+      status?: string;
+    };
   }>;
   resolveApprovalWithRemoteTokenId: (input: {
     tokenId: string;
@@ -110,6 +114,14 @@ export type IntegrationWebhookRouteLike = {
   ) => Promise<{
     message: string;
   }>;
+  emitChannelActivity: (input: ChannelActivityInput) => Promise<ChannelActivityResult>;
+  recordDevDiagnostic?: (input: {
+    level: "info" | "warn" | "error";
+    category: string;
+    event: string;
+    message: string;
+    context?: Record<string, unknown>;
+  }) => void;
   updateIntegrationConnection: (
     connectionId: string,
     patch: {
@@ -283,14 +295,37 @@ export async function dispatchInboundWebhookMessage(
 
   let responseTurnId: string | undefined;
   if (!ingestResult.deduped) {
-    const response = options.responseOptions
-      ? await integrationWebhooks.respondToExistingChatMessage(
-          ingestResult.session.sessionId,
-          options.message.eventId,
-          options.responseOptions,
-        )
-      : await integrationWebhooks.respondToExistingChatMessage(ingestResult.session.sessionId, options.message.eventId);
-    responseTurnId = response.turnId;
+    await emitInboundWebhookActivity(integrationWebhooks, options, ingestResult.session.sessionId, "seen");
+    try {
+      await emitInboundWebhookActivity(integrationWebhooks, options, ingestResult.session.sessionId, "thinking");
+      const response = options.responseOptions
+        ? await integrationWebhooks.respondToExistingChatMessage(
+            ingestResult.session.sessionId,
+            options.message.eventId,
+            options.responseOptions,
+          )
+        : await integrationWebhooks.respondToExistingChatMessage(
+            ingestResult.session.sessionId,
+            options.message.eventId,
+          );
+      responseTurnId = response.turnId;
+      await emitInboundWebhookActivity(
+        integrationWebhooks,
+        options,
+        ingestResult.session.sessionId,
+        response.trace?.status === "waiting_for_approval" ? "waiting_approval" : "clear",
+        responseTurnId,
+      );
+    } catch (error) {
+      await emitInboundWebhookActivity(
+        integrationWebhooks,
+        options,
+        ingestResult.session.sessionId,
+        "failed",
+        responseTurnId,
+      );
+      throw error;
+    }
   }
 
   return {
@@ -301,6 +336,52 @@ export async function dispatchInboundWebhookMessage(
     turnId: responseTurnId,
     eventType: options.eventType,
   };
+}
+
+async function emitInboundWebhookActivity(
+  integrationWebhooks: IntegrationWebhookRouteLike,
+  options: {
+    channel: string;
+    connectionId: string;
+    idempotencyKey: string;
+    bindingTarget?: string;
+    message: IngestChannelMessageInput;
+  },
+  sessionId: string,
+  phase: ChannelActivityInput["phase"],
+  turnId?: string,
+): Promise<void> {
+  const target = options.bindingTarget ?? options.message.room ?? options.message.peer ?? options.message.account;
+  if (!target?.trim()) {
+    return;
+  }
+  try {
+    await integrationWebhooks.emitChannelActivity({
+      connectionId: options.connectionId,
+      target,
+      messageId: options.message.eventId,
+      threadId: options.message.threadId,
+      sessionId,
+      turnId,
+      phase,
+      correlationId: options.idempotencyKey,
+    });
+  } catch (error) {
+    integrationWebhooks.recordDevDiagnostic?.({
+      level: "warn",
+      category: "channels",
+      event: "channel.activity_failed",
+      message: "Channel activity signal failed and the inbound reply flow continued.",
+      context: {
+        channel: options.channel,
+        connectionId: options.connectionId,
+        phase,
+        sessionId,
+        messageId: options.message.eventId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
+  }
 }
 
 export function createIgnoredWebhookReply(eventType: string | undefined, reason: string) {

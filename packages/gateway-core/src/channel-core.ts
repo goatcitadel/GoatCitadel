@@ -1,5 +1,7 @@
 import type {
   ChannelActionName,
+  ChannelActivityCapabilities,
+  ChannelActivityPhase,
   ChannelAttachmentSource,
   ChannelCapabilities,
   ChannelChunkingMode,
@@ -41,8 +43,26 @@ const DEFAULT_RUNTIME_POLICY: ChannelRuntimePolicy = {
   allowlist: false,
   mentionGating: false,
   typing: false,
+  activity: false,
   presence: false,
 };
+
+const CHANNEL_ACTIVITY_EMOJI: Partial<Record<ChannelActivityPhase, string>> = {
+  seen: "👀",
+  thinking: "🧠",
+  tooling: "🔧",
+  waiting_approval: "⚠️",
+  failed: "❌",
+};
+
+const CHANNEL_ACTIVITY_PHASES: ChannelActivityPhase[] = [
+  "seen",
+  "thinking",
+  "tooling",
+  "waiting_approval",
+  "failed",
+  "clear",
+];
 
 const CHANNEL_RULES: Record<string, ChannelRule> = {
   slack: {
@@ -503,6 +523,7 @@ export function describeChannelCapabilities(channelKey: string, config: Record<s
     ...(rule.resolveSupportedActions
       ? rule.resolveSupportedActions(config)
       : (rule.supportedActions as ChannelActionName[])),
+    "channel.activity",
   ]);
   const supportedAttachmentSources = uniqueAttachmentSources([
     ...(rule.resolveSupportedAttachmentSources?.(config) ?? rule.supportedAttachmentSources ?? []),
@@ -517,7 +538,9 @@ export function describeChannelCapabilities(channelKey: string, config: Record<s
     ...(rule.resolveRuntimePolicy?.(config) ?? rule.runtimePolicy ?? {}),
   };
   runtimePolicy.typing ||= supportedActions.includes("channel.typing");
+  runtimePolicy.activity ||= supportedActions.includes("channel.activity");
   runtimePolicy.presence ||= supportedActions.includes("channel.presence");
+  const activityCapabilities = buildActivityCapabilities(channelKey, supportedActions);
   const runtimePosture = rule.resolveRuntimePosture
     ? rule.resolveRuntimePosture(config)
     : (rule.runtimePosture as ChannelRuntimePosture);
@@ -531,12 +554,39 @@ export function describeChannelCapabilities(channelKey: string, config: Record<s
     inboundModes,
     threadCapabilities,
     runtimePolicy,
+    activityCapabilities,
     runtimePosture,
     chunkingMode: rule.chunkingMode,
     supportsStreaming: rule.supportsStreaming,
     supportNotes: [...(rule.resolveSupportNotes?.(config) ?? rule.supportNotes ?? [])],
     setupDiagnostics,
     setupReady: setupDiagnostics.length === 0,
+  };
+}
+
+function buildActivityCapabilities(
+  channelKey: string,
+  supportedActions: ChannelActionName[],
+): ChannelActivityCapabilities {
+  const nativeEffects: ChannelActivityCapabilities["nativeEffects"] = ["mission_control"];
+  if (supportedActions.includes("channel.react")) {
+    nativeEffects.push("reaction");
+    if (["discord", "slack", "telegram", "whatsapp"].includes(channelKey)) {
+      nativeEffects.push("reaction_clear");
+    }
+  }
+  if (supportedActions.includes("channel.typing")) {
+    nativeEffects.push("typing");
+  }
+  if (channelKey === "whatsapp") {
+    nativeEffects.push("read_receipt");
+  }
+  return {
+    supported: true,
+    phases: [...CHANNEL_ACTIVITY_PHASES],
+    nativeEffects: [...new Set(nativeEffects)],
+    clearOnTerminal: true,
+    activityEmoji: { ...CHANNEL_ACTIVITY_EMOJI },
   };
 }
 

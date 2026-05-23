@@ -6,6 +6,10 @@ import { createRoot, type Root } from "react-dom/client";
 import TestRenderer from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ThreadedTimeline } from "./ThreadedTimeline";
+import {
+  publishChannelActivityFromRealtimeEvent,
+  resetChannelActivitySnapshots,
+} from "@goatcitadel/mission-control-shared/state/channel-activity-store";
 
 function buildProps(overrides: Partial<any> = {}): any {
   return {
@@ -162,6 +166,7 @@ describe("ThreadedTimeline", () => {
     container?.remove();
     root = null;
     container = null;
+    resetChannelActivitySnapshots();
   });
 
   it("folds Cowork subagent activity behind an expandable card", () => {
@@ -210,6 +215,40 @@ describe("ThreadedTimeline", () => {
     expect(renderer.root.findAllByType("a").map((link) => link.props.href)).toEqual([
       "https://example.test/launch-notes",
     ]);
+  });
+
+  it("shows external channel activity on the source message bubble", () => {
+    let renderer!: TestRenderer.ReactTestRenderer;
+    TestRenderer.act(() => {
+      renderer = TestRenderer.create(<ThreadedTimeline props={buildProps() as any} />);
+    });
+    TestRenderer.act(() => {
+      publishChannelActivityFromRealtimeEvent({
+        eventId: "activity-1",
+        sequence: 1,
+        eventType: "channel_activity_updated",
+        source: "channels",
+        timestamp: "2026-05-23T00:00:00.000Z",
+        payload: {
+          connectionId: "conn-1",
+          channelKey: "telegram",
+          target: "chat-1",
+          messageId: "user-1",
+          phase: "waiting_approval",
+          emoji: "⚠️",
+          label: "Waiting approval",
+          sessionId: "session-1",
+        },
+      });
+    });
+    const text = renderedText(renderer);
+
+    expect(text).toContain("Waiting approval");
+    expect(renderer.root.findByProps({ "aria-label": "Channel activity: Waiting approval" })).toBeTruthy();
+    TestRenderer.act(() => {
+      resetChannelActivitySnapshots();
+      renderer.unmount();
+    });
   });
 
   it("lets operators expand citation evidence beyond the compact first six", () => {

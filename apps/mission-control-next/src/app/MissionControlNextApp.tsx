@@ -58,6 +58,10 @@ import {
   resetEventStreamStatus,
 } from "@goatcitadel/mission-control-shared/state/event-stream-status-store";
 import {
+  publishChannelActivityFromRealtimeEvent,
+  resetChannelActivitySnapshots,
+} from "@goatcitadel/mission-control-shared/state/channel-activity-store";
+import {
   deriveRealtimeNotification,
   deriveRealtimeRefresh,
   type RealtimeTruthMode,
@@ -545,11 +549,13 @@ export function MissionControlNextApp() {
     if (gatewayAccess.status !== "ready") {
       setStreamState("closed");
       resetEventStreamStatus();
+      resetChannelActivitySnapshots();
       return;
     }
 
     const close = connectEventStream(
       (event) => {
+        publishChannelActivityFromRealtimeEvent(event);
         const derivedRefresh = deriveRealtimeRefresh(event, { defaultTopics: ["surface"] });
         for (const topic of derivedRefresh.topics) {
           emitRefresh(topic, {
@@ -576,6 +582,7 @@ export function MissionControlNextApp() {
     return () => {
       close();
       resetEventStreamStatus();
+      resetChannelActivitySnapshots();
     };
   }, [deliverRealtimeNotification, gatewayAccess.status]);
 
@@ -1199,7 +1206,8 @@ function showBrowserNotification(message: string, tone: NotificationItem["tone"]
   const title = tone === "error" ? "GoatCitadel needs attention" : "GoatCitadel";
   try {
     new NotificationCtor(title, { body: message });
-  } catch {
+  } catch (error) {
+    void error;
     // Browser or host notification permissions can change after settings are saved.
   }
 }

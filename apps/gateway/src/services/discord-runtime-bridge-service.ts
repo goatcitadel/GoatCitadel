@@ -2,6 +2,9 @@ import { randomUUID } from "node:crypto";
 import { resolveSessionRoute } from "@goatcitadel/gateway-core";
 import type {
   ApprovalResolveInput,
+  ChannelActivityInput,
+  ChannelActivityResult,
+  ChatSendMessageResponse,
   ChatSessionPrefsRecord,
   ChatSessionRecord,
   IntegrationConnection,
@@ -110,6 +113,7 @@ export interface DiscordRuntimeBridgeHost {
   ): Promise<{ deduped: boolean; session: { sessionId: string } }>;
   isChatTurnWriteConflict(error: unknown): boolean;
   parseChatCommand(sessionId: string, commandText: string, options?: ChatCommandOptions): Promise<{ message: string }>;
+  emitChannelActivity(input: ChannelActivityInput): Promise<ChannelActivityResult>;
   recordDevDiagnostic(input: {
     level: "info" | "warn" | "error";
     category: string;
@@ -123,7 +127,7 @@ export interface DiscordRuntimeBridgeHost {
     decision: ApprovalResolveInput["decision"];
     resolvedBy?: string;
   }): Promise<ApprovalResolveResult>;
-  respondToExistingChatMessage(sessionId: string, sourceMessageId: string): Promise<unknown>;
+  respondToExistingChatMessage(sessionId: string, sourceMessageId: string): Promise<ChatSendMessageResponse>;
   setChatSessionBinding(input: {
     sessionId: string;
     transport: "integration";
@@ -622,12 +626,22 @@ export async function handleDiscordRuntimeInbound(
     return;
   }
   if (!ingestResult.deduped) {
+    await emitDiscordInboundActivity(host, input, ingestResult.session.sessionId, "seen");
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
-        await host.respondToExistingChatMessage(ingestResult.session.sessionId, input.sourceMessageId);
+        await emitDiscordInboundActivity(host, input, ingestResult.session.sessionId, "thinking");
+        const response = await host.respondToExistingChatMessage(ingestResult.session.sessionId, input.sourceMessageId);
+        await emitDiscordInboundActivity(
+          host,
+          input,
+          ingestResult.session.sessionId,
+          response.trace?.status === "waiting_for_approval" ? "waiting_approval" : "clear",
+          response.turnId,
+        );
         return;
       } catch (error) {
         if (!host.isChatTurnWriteConflict(error)) {
+          await emitDiscordInboundActivity(host, input, ingestResult.session.sessionId, "failed");
           throw error;
         }
         if (attempt >= 3) {
@@ -644,11 +658,52 @@ export async function handleDiscordRuntimeInbound(
               error: error instanceof Error ? error.message : String(error),
             },
           });
+          await emitDiscordInboundActivity(host, input, ingestResult.session.sessionId, "failed");
           return;
         }
         await wait(attempt * 750);
       }
     }
+  }
+}
+
+async function emitDiscordInboundActivity(
+  host: DiscordRuntimeBridgeHost,
+  input: {
+    connectionId: string;
+    target: string;
+    sourceMessageId: string;
+    threadId?: string;
+  },
+  sessionId: string,
+  phase: ChannelActivityInput["phase"],
+  turnId?: string,
+): Promise<void> {
+  try {
+    await host.emitChannelActivity({
+      connectionId: input.connectionId,
+      target: input.target,
+      messageId: input.sourceMessageId,
+      threadId: input.threadId,
+      sessionId,
+      turnId,
+      phase,
+      correlationId: `discord:${input.connectionId}:${input.sourceMessageId}`,
+    });
+  } catch (error) {
+    host.recordDevDiagnostic({
+      level: "warn",
+      category: "channels",
+      event: "discord.gateway.activity_failed",
+      message: "Discord gateway activity signal failed and the inbound reply flow continued.",
+      context: {
+        connectionId: input.connectionId,
+        sessionId,
+        sourceMessageId: input.sourceMessageId,
+        phase,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
   }
 }
 

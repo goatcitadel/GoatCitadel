@@ -173,6 +173,15 @@ describe("webhook-handler-factory contract behavior", () => {
       })),
       setChatSessionBinding: vi.fn(),
       respondToExistingChatMessage: vi.fn(async () => ({ turnId: "turn-1" })),
+      emitChannelActivity: vi.fn(async () => ({
+        channelKey: "telegram",
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        target: "room-1",
+        messageId: "event-1",
+        phase: "thinking",
+        status: "sent",
+        effects: [],
+      })),
     };
 
     const result = await dispatchInboundWebhookMessage(gateway as any, {
@@ -205,5 +214,14 @@ describe("webhook-handler-factory contract behavior", () => {
       writable: true,
     });
     expect(gateway.respondToExistingChatMessage).toHaveBeenCalledWith("session-1", "event-1");
+    expect(gateway.emitChannelActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "seen", messageId: "event-1", target: "room-1" }),
+    );
+    expect(gateway.emitChannelActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "thinking", messageId: "event-1", target: "room-1" }),
+    );
+    expect(gateway.emitChannelActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "clear", messageId: "event-1", target: "room-1", turnId: "turn-1" }),
+    );
   });
 });

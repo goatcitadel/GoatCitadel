@@ -7782,7 +7782,8 @@ async function requestBrowserNotificationPermission(): Promise<void> {
   }
   try {
     await Notification.requestPermission();
-  } catch {
+  } catch (error) {
+    void error;
     // Permission prompts are host/browser controlled and may be unavailable in embedded contexts.
   }
 }

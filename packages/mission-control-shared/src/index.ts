@@ -7,6 +7,7 @@ export * from "./hooks/useProviderModelCatalog.js";
 export * from "./hooks/useRefreshSubscription.js";
 export * from "./state/effects-mode.js";
 export * from "./state/event-stream-status-store.js";
+export * from "./state/channel-activity-store.js";
 export * from "./state/refresh-bus.js";
 export * from "./state/ui-preferences.js";
 export {

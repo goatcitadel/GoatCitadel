@@ -314,6 +314,37 @@
   background: color-mix(in oklab, var(--mc-area-color) 7%, var(--mc-surface-1));
 }
 
+.mc-next-thread-channel-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.24rem;
+  max-width: 100%;
+  min-height: 1.35rem;
+  margin-left: 0.42rem;
+  padding: 0 0.42rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 28%, var(--mc-border-subtle));
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--mc-area-color) 10%, transparent);
+  color: color-mix(in oklab, var(--foreground) 82%, var(--mc-area-color));
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1.1;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.mc-next-thread-channel-activity.phase-waiting_approval {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 36%, var(--mc-border-subtle));
+  background: color-mix(in oklab, var(--gc-risk-caution) 11%, transparent);
+  color: color-mix(in oklab, var(--gc-risk-caution) 76%, var(--foreground));
+}
+
+.mc-next-thread-channel-activity.phase-failed {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 36%, var(--mc-border-subtle));
+  background: color-mix(in oklab, var(--gc-risk-danger) 11%, transparent);
+  color: color-mix(in oklab, var(--gc-risk-danger) 76%, var(--foreground));
+}
+
 .mc-next-thread-bubble.assistant {
   background: color-mix(in oklab, var(--mc-surface-1) 70%, transparent);
 }

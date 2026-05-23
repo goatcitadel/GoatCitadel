@@ -36,6 +36,7 @@ export function decorateIntegrationServices(app: FastifyInstance, methods: Recor
       obsidian: routeMethods,
       integrationWebhooks: {
         hasRunningTurn: () => false,
+        emitChannelActivity: vi.fn(async () => ({ effects: [] })),
         ...routeMethods,
       },
     } as never);

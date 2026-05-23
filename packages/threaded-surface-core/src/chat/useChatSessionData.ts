@@ -68,6 +68,7 @@ type SidebarBootstrapResult = {
 export type ChatSidebarLoadOptions = {
   bypassCache?: boolean;
   preferredSessionId?: string | null;
+  append?: boolean;
 };
 
 type RuntimeCatalogBootstrapResult = {
@@ -171,6 +172,8 @@ export function useChatSessionData(input: {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [secondaryLoading, setSecondaryLoading] = useState(false);
+  const [sidebarNextCursor, setSidebarNextCursor] = useState<string | null>(null);
+  const [sidebarLoadingMore, setSidebarLoadingMore] = useState(false);
 
   const initializedRef = useRef(false);
   const loadCoreGenerationRef = useRef(0);
@@ -182,13 +185,60 @@ export function useChatSessionData(input: {
     async (nextHistoryView: ChatHistoryView = historyView, options: ChatSidebarLoadOptions = {}) => {
       const trimmedSearchQuery = searchQuery.trim();
       const sessionLimit = resolveSidebarSessionLimit(nextHistoryView, trimmedSearchQuery);
+      const append = Boolean(options.append && !trimmedSearchQuery);
+      const cursor = append ? (sidebarNextCursor ?? undefined) : undefined;
+      if (append && !cursor) {
+        return;
+      }
       recordClientDiagnostic({
         level: "debug",
         category: "chat",
         event: "sidebar.load",
         message: "Refreshing chat sidebar data",
-        context: { workspaceId, historyView: nextHistoryView, sessionLimit, surfaceMode: surfaceMode ?? null },
+        context: {
+          workspaceId,
+          historyView: nextHistoryView,
+          sessionLimit,
+          append,
+          surfaceMode: surfaceMode ?? null,
+        },
       });
+      if (append) {
+        setSidebarLoadingMore(true);
+        try {
+          const nextSessions = await fetchChatSessions({
+            scope: "all",
+            view: nextHistoryView,
+            limit: sessionLimit,
+            workspaceId,
+            cursor,
+            mode: surfaceMode,
+          });
+          setSessions((current) => {
+            if (!current) {
+              return nextSessions;
+            }
+            const seenSessionIds = new Set(current.items.map((item) => item.sessionId));
+            return {
+              ...nextSessions,
+              items: [
+                ...current.items,
+                ...nextSessions.items.filter((item) => {
+                  if (seenSessionIds.has(item.sessionId)) {
+                    return false;
+                  }
+                  seenSessionIds.add(item.sessionId);
+                  return true;
+                }),
+              ],
+            };
+          });
+          setSidebarNextCursor(nextSessions.nextCursor ?? null);
+        } finally {
+          setSidebarLoadingMore(false);
+        }
+        return;
+      }
       const cacheKey = `${workspaceId}:${nextHistoryView}:${trimmedSearchQuery}:${sessionLimit}:${surfaceMode ?? "all"}`;
       const { projects: nextProjects, sessions: nextSessions } = await getDevBootstrapPromise(
         sidebarBootstrapCache,
@@ -211,6 +261,7 @@ export function useChatSessionData(input: {
       );
       setProjects(nextProjects);
       setSessions(nextSessions);
+      setSidebarNextCursor(nextSessions.nextCursor ?? null);
       setSelectedSessionId((current) => {
         const preferredSessionId = options.preferredSessionId?.trim();
         if (preferredSessionId && nextSessions.items.some((item) => item.sessionId === preferredSessionId)) {
@@ -224,7 +275,7 @@ export function useChatSessionData(input: {
           : (nextSessions.items[0]?.sessionId ?? null);
       });
     },
-    [historyView, searchQuery, setSelectedSessionId, surfaceMode, workspaceId],
+    [historyView, searchQuery, setSelectedSessionId, sidebarNextCursor, surfaceMode, workspaceId],
   );
 
   const loadRuntimeCatalog = useCallback(async () => {
@@ -576,6 +627,8 @@ export function useChatSessionData(input: {
     isRefreshing,
     messagesLoading,
     secondaryLoading,
+    sidebarNextCursor,
+    sidebarLoadingMore,
     loadSidebar,
     loadRuntimeCatalog,
     loadSessionCoreState,

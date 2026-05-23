@@ -195,6 +195,44 @@ describe("comms routes", () => {
     );
   });
 
+  it("forwards channel activity requests to the gateway", async () => {
+    const commsActivity = vi.fn(async () => ({
+      channelKey: "telegram",
+      connectionId: "11111111-1111-4111-8111-111111111111",
+      target: "chat:123",
+      messageId: "msg-1",
+      phase: "thinking",
+      status: "sent",
+      emoji: "🧠",
+      effects: [{ effect: "mission_control", supported: true, status: "sent" }],
+    }));
+    app = Fastify();
+    decorateComms(app, { commsActivity });
+    await app.register(commsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/comms/activity",
+      payload: {
+        connectionId: "11111111-1111-4111-8111-111111111111",
+        target: "chat:123",
+        messageId: "msg-1",
+        phase: "thinking",
+        sessionId: "session-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(commsActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: "chat:123",
+        messageId: "msg-1",
+        phase: "thinking",
+        sessionId: "session-1",
+      }),
+    );
+  });
+
   it("lists channel delivery runtime records with retry and stale state visible", async () => {
     const listChannelDeliveryRuntime = vi.fn(() => [
       {
@@ -323,12 +361,40 @@ describe("comms routes", () => {
   it("returns channel capabilities from the gateway", async () => {
     const getIntegrationConnectionChannelCapabilities = vi.fn(() => ({
       channelKey: "discord",
-      supportedActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"],
-      supportedDeliveryActions: ["channel.send", "channel.reply", "channel.react", "channel.unsend", "channel.typing"],
+      supportedActions: [
+        "channel.send",
+        "channel.reply",
+        "channel.react",
+        "channel.unsend",
+        "channel.typing",
+        "channel.activity",
+      ],
+      supportedDeliveryActions: [
+        "channel.send",
+        "channel.reply",
+        "channel.react",
+        "channel.unsend",
+        "channel.typing",
+        "channel.activity",
+      ],
       supportedAttachmentSources: ["url", "inline"],
       inboundModes: ["gateway"],
       threadCapabilities: { rooms: true, threads: true, replies: true, direct: true, groups: true },
-      runtimePolicy: { pairing: true, allowlist: true, mentionGating: true, typing: true, presence: true },
+      runtimePolicy: {
+        pairing: true,
+        allowlist: true,
+        mentionGating: true,
+        typing: true,
+        activity: true,
+        presence: true,
+      },
+      activityCapabilities: {
+        supported: true,
+        phases: ["seen", "thinking", "tooling", "waiting_approval", "failed", "clear"],
+        nativeEffects: ["mission_control", "reaction", "reaction_clear", "typing"],
+        clearOnTerminal: true,
+        activityEmoji: { seen: "👀" },
+      },
       runtimePosture: {
         outboundTransport: "api",
         inboundTransport: "gateway",
@@ -363,7 +429,14 @@ describe("comms routes", () => {
       enabled: true,
       ready: true,
       inboundModes: ["gateway"],
-      runtimePolicy: { pairing: true, allowlist: true, mentionGating: true, typing: true, presence: true },
+      runtimePolicy: {
+        pairing: true,
+        allowlist: true,
+        mentionGating: true,
+        typing: true,
+        activity: true,
+        presence: true,
+      },
       runtimePosture: {
         outboundTransport: "api",
         inboundTransport: "gateway",

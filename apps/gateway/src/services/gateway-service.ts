@@ -120,6 +120,8 @@ import type {
   CreateAssemblyRunInput,
   CalendarCreateEventInput,
   CalendarListQuery,
+  ChannelActivityInput,
+  ChannelActivityResult,
   ChannelReactInput,
   ChannelReplyInput,
   ChannelSendInput,
@@ -514,6 +516,7 @@ import { evaluateDeploymentProfileToolAccess } from "../browser-runtime-guardrai
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
 import { buildApprovalRemoteTokenConnectorDeliveryPayload } from "./approval-connector-delivery.js";
 import {
+  commsActivity as commsActivityImpl,
   commsSend as commsSendImpl,
   commsReact as commsReactImpl,
   commsUnsend as commsUnsendImpl,
@@ -1393,6 +1396,7 @@ export class GatewayService {
           commsReact: (input) => this.commsReact(input),
           commsUnsend: (input) => this.commsUnsend(input),
           commsTyping: (input) => this.commsTyping(input),
+          commsActivity: (input) => this.commsActivity(input),
           invokeMcpTool: (input) => this.invokeMcpTool(input),
           resolveDurableRunHookWorkspaceId: (run) => this.resolveDurableRunHookWorkspaceId(run),
           publishRealtime: (eventType, source, payload, options) => {
@@ -6155,6 +6159,14 @@ export class GatewayService {
       throw new Error("replyToMessageId is required for channel replies.");
     }
     return this.commsSend(input);
+  }
+
+  public async commsActivity(input: ChannelActivityInput): Promise<ChannelActivityResult> {
+    return commsActivityImpl(this.buildCommsHost(), input);
+  }
+
+  public async emitChannelActivity(input: ChannelActivityInput): Promise<ChannelActivityResult> {
+    return this.commsActivity(input);
   }
 
   public async commsReact(input: ChannelReactInput): Promise<ToolInvokeResult | Record<string, unknown>> {

@@ -347,6 +347,7 @@ GoatCitadel now publishes shared channel capability metadata from the same `chan
 - `POST /api/v1/comms/react`
 - `POST /api/v1/comms/unsend`
 - `POST /api/v1/comms/typing`
+- `POST /api/v1/comms/activity`
 - `GET /api/v1/comms/capabilities/:connectionId`
 - `GET /api/v1/comms/diagnostics/:connectionId`
 
@@ -354,7 +355,7 @@ GoatCitadel now publishes shared channel capability metadata from the same `chan
 
 Each connection advertises:
 
-- supported actions such as `channel.send`, `channel.reply`, `channel.react`, `channel.unsend`, and `channel.typing`
+- supported actions such as `channel.send`, `channel.reply`, `channel.react`, `channel.unsend`, `channel.typing`, and `channel.activity`
 - supported attachment sources
 - inbound mode (`outbound-only`, `webhook`, `gateway`, or `poll`)
 - thread and reply support
@@ -362,6 +363,8 @@ Each connection advertises:
 - setup readiness plus actionable diagnostics
 
 Mission Control reads the same capability payload, so the UI and API should agree.
+
+Shared channel activity uses `channel.activity` as a best-effort operator signal. The default transient phases are `seen` (`👀`), `thinking` (`🧠`), `tooling` (`🔧`), `waiting_approval` (`⚠️`), `failed` (`❌`), and `clear`; successful completion clears the transient badge instead of leaving a permanent success reaction.
 
 ### Maturity semantics
 

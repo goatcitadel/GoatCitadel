@@ -3,6 +3,7 @@ import { createRouteService, type RoutePort, type RouteService } from "./route-s
 export const commsRouteMethods = [
   "commsCalendarCreate",
   "commsCalendarList",
+  "commsActivity",
   "commsGmailRead",
   "commsGmailSend",
   "commsReact",
@@ -25,6 +26,7 @@ export function createCommsRoutePort(port: CommsPort): CommsRoutePort {
   return {
     commsCalendarCreate: (...args) => port.commsCalendarCreate(...args),
     commsCalendarList: (...args) => port.commsCalendarList(...args),
+    commsActivity: (...args) => port.commsActivity(...args),
     commsGmailRead: (...args) => port.commsGmailRead(...args),
     commsGmailSend: (...args) => port.commsGmailSend(...args),
     commsReact: (...args) => port.commsReact(...args),

@@ -7,6 +7,7 @@ import { createObsidianRoutePort } from "./obsidian-route-service.js";
 import {
   commsCalendarCreate as commsCalendarCreateImpl,
   commsCalendarList as commsCalendarListImpl,
+  commsActivity as commsActivityImpl,
   commsGmailRead as commsGmailReadImpl,
   commsGmailSend as commsGmailSendImpl,
   commsReact as commsReactImpl,
@@ -75,6 +76,7 @@ export function composeIntegrationChannelRouteDependencies(
   const comms = createCommsRoutePort({
     commsCalendarCreate: (input) => commsCalendarCreateImpl(commsDeps, input),
     commsCalendarList: (input) => commsCalendarListImpl(commsDeps, input),
+    commsActivity: (input) => commsActivityImpl(commsDeps, input),
     commsGmailRead: (input) => commsGmailReadImpl(commsDeps, input),
     commsGmailSend: (input) => commsGmailSendImpl(commsDeps, input),
     commsReact: (input) => commsReactImpl(commsDeps, input),
@@ -200,6 +202,7 @@ export function composeIntegrationChannelRouteDependencies(
         gateway.ingestChannelMessage(channel, idempotencyKey, input),
       parseChatCommand: (sessionId, commandText, options) => gateway.parseChatCommand(sessionId, commandText, options),
       recordDevDiagnostic: (input) => gateway.recordDevDiagnostic(input),
+      emitChannelActivity: (input) => gateway.commsActivity(input),
       respondToExistingChatMessage: (sessionId, messageId, input) =>
         gateway.respondToExistingChatMessage(sessionId, messageId, input),
       resolveApprovalWithRemoteToken: (input) => gateway.resolveApprovalWithRemoteToken(input),
@@ -249,7 +252,8 @@ function createIntegrationChannelPortForGateway(
 ): IntegrationChannelServicePort {
   return {
     storage: gateway.storage,
-    publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
+    publishRealtime: (eventType, source, payload, options) =>
+      gateway.publishRealtime(eventType, source, payload, options),
     requireFeatureEnabled: (flag) => gateway.requireFeatureEnabled(flag),
     buildIntegrationConnectionChecks: (connection) =>
       integrationDiagnostics.buildIntegrationConnectionChecks(connection),
@@ -285,6 +289,8 @@ export function createCommsHostForGateway(
     emitDiscordTyping: (connection, input) =>
       gateway.discordRuntimeService.sendTyping(connection.connectionId, input.target, input.durationMs, input.signal),
     emitTelegramTyping: (connection, input) => integrationChannel.emitTelegramTyping(connection, input),
+    emitChannelActivity: (connection, input, options) =>
+      integrationChannel.emitChannelActivity(connection, input, options),
   };
 }
 
