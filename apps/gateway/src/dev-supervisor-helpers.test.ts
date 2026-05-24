@@ -112,7 +112,6 @@ describe("dev supervisor helper decisions", () => {
       gatewayDir,
       repoRoot,
       useTs7: true,
-      comspec: "C:\\Windows\\System32\\cmd.exe",
       platform: "win32",
     });
     expect(ts7Plan.command).toBe(process.execPath);
@@ -120,12 +119,12 @@ describe("dev supervisor helper decisions", () => {
     expect(ts7Plan.args).toContain("--group");
     expect(ts7Plan.args).toContain("gateway");
     expect(ts7Plan.description).toContain("TS7");
+    expect(ts7Plan.shell).toBe(false);
 
     const directPlan = resolveReferenceBuildSpawn({
       gatewayDir,
       repoRoot,
       useTs7: false,
-      comspec: "C:\\Windows\\System32\\cmd.exe",
       platform: "win32",
     });
     expect(directPlan.command).toBe(process.execPath);
@@ -133,31 +132,57 @@ describe("dev supervisor helper decisions", () => {
     expect(directPlan.args).toEqual(expect.arrayContaining(["-b", "tsconfig.json", "--pretty", "false"]));
     expect(directPlan.cwd).toBe(gatewayDir);
     expect(directPlan.description).toBe("tsc -b (direct)");
+    expect(directPlan.shell).toBe(false);
   });
 
-  it("falls back to pnpm exec when typescript/bin/tsc cannot be resolved", () => {
+  it("falls back to shell-free pnpm exec when typescript/bin/tsc cannot be resolved", () => {
     const isolatedDir = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-helpers-"));
     try {
+      const nodeExecutable = "C:\\Program Files\\nodejs\\node.exe";
+      const corepackEntrypoint = "C:\\Program Files\\nodejs\\node_modules\\corepack\\dist\\corepack.js";
       const plan = resolveReferenceBuildSpawn({
         gatewayDir: isolatedDir,
         repoRoot: isolatedDir,
         useTs7: false,
-        comspec: "C:\\Windows\\System32\\cmd.exe",
         platform: "win32",
+        nodeExecutable,
+        fileExists: (targetPath) => targetPath === corepackEntrypoint,
       });
-      expect(plan.command).toBe("C:\\Windows\\System32\\cmd.exe");
-      expect(plan.args).toEqual(["/d", "/s", "/c", "pnpm exec tsc -b tsconfig.json --pretty false"]);
-      expect(plan.description).toBe("tsc -b (pnpm exec)");
+      expect(plan.command).toBe(nodeExecutable);
+      expect(plan.args).toEqual([
+        corepackEntrypoint,
+        "pnpm",
+        "exec",
+        "tsc",
+        "-b",
+        "tsconfig.json",
+        "--pretty",
+        "false",
+      ]);
+      expect(plan.description).toBe("tsc -b (corepack pnpm exec)");
+      expect(plan.shell).toBe(false);
+
+      const noCorepackPlan = resolveReferenceBuildSpawn({
+        gatewayDir: isolatedDir,
+        repoRoot: isolatedDir,
+        useTs7: false,
+        platform: "win32",
+        nodeExecutable,
+        fileExists: () => false,
+      });
+      expect(noCorepackPlan.command).toBe("pnpm.cmd");
+      expect(noCorepackPlan.args).toEqual(["exec", "tsc", "-b", "tsconfig.json", "--pretty", "false"]);
+      expect(noCorepackPlan.shell).toBe(false);
 
       const linuxFallback = resolveReferenceBuildSpawn({
         gatewayDir: isolatedDir,
         repoRoot: isolatedDir,
         useTs7: false,
-        comspec: undefined,
         platform: "linux",
       });
       expect(linuxFallback.command).toBe("pnpm");
       expect(linuxFallback.args).toEqual(["exec", "tsc", "-b", "tsconfig.json", "--pretty", "false"]);
+      expect(linuxFallback.shell).toBe(false);
     } finally {
       fs.rmSync(isolatedDir, { recursive: true, force: true });
     }

@@ -112,20 +112,21 @@ export function shouldUseTs7(env: NodeJS.ProcessEnv = process.env): boolean {
  *   `GOATCITADEL_DEV_TS7=1`.
  * - **Direct `node + tsc.js`**: skips both the `cmd.exe /d /s /c` wrapper and the
  *   `pnpm exec` boot, saving ~300ms per supervised restart on Windows. The fallback
- *   to the `cmd.exe` form is kept for environments where `typescript/bin/tsc` does
- *   not resolve (extremely unusual; only happens when the workspace install is
- *   broken in which case we want the louder error message anyway).
+ *   to `pnpm exec` stays shell-free so workspace paths are never parsed as command
+ *   text by `cmd.exe` or a POSIX shell.
  */
 export function resolveReferenceBuildSpawn(opts: {
   gatewayDir: string;
   repoRoot: string;
   useTs7: boolean;
-  comspec: string | undefined;
   platform: NodeJS.Platform;
-}): { command: string; args: string[]; cwd: string; description: string } {
+  nodeExecutable?: string;
+  fileExists?: (targetPath: string) => boolean;
+}): { command: string; args: string[]; cwd: string; description: string; shell: false } {
+  const nodeExecutable = opts.nodeExecutable ?? process.execPath;
   if (opts.useTs7) {
     return {
-      command: process.execPath,
+      command: nodeExecutable,
       args: [
         path.join(opts.repoRoot, "scripts", "typescript", "run-ts7-workspace.mjs"),
         "--mode",
@@ -135,32 +136,28 @@ export function resolveReferenceBuildSpawn(opts: {
       ],
       cwd: opts.repoRoot,
       description: "TS7 (tsgo) reference build",
+      shell: false,
     };
   }
 
   const directTsc = resolveTscEntry(opts.gatewayDir);
   if (directTsc) {
     return {
-      command: process.execPath,
+      command: nodeExecutable,
       args: [directTsc, "-b", "tsconfig.json", "--pretty", "false"],
       cwd: opts.gatewayDir,
       description: "tsc -b (direct)",
+      shell: false,
     };
   }
 
-  if (opts.platform === "win32") {
-    return {
-      command: opts.comspec || "cmd.exe",
-      args: ["/d", "/s", "/c", "pnpm exec tsc -b tsconfig.json --pretty false"],
-      cwd: opts.gatewayDir,
-      description: "tsc -b (pnpm exec)",
-    };
-  }
+  const pnpm = resolvePnpmExecSpawn(opts.platform, nodeExecutable, opts.fileExists ?? fs.existsSync);
   return {
-    command: "pnpm",
-    args: ["exec", "tsc", "-b", "tsconfig.json", "--pretty", "false"],
+    command: pnpm.command,
+    args: [...pnpm.argsPrefix, "tsc", "-b", "tsconfig.json", "--pretty", "false"],
     cwd: opts.gatewayDir,
-    description: "tsc -b (pnpm exec)",
+    description: pnpm.description,
+    shell: false,
   };
 }
 
@@ -171,6 +168,33 @@ function resolveTscEntry(gatewayDir: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function resolvePnpmExecSpawn(
+  platform: NodeJS.Platform,
+  nodeExecutable: string,
+  fileExists: (targetPath: string) => boolean,
+): { command: string; argsPrefix: string[]; description: string } {
+  if (platform !== "win32") {
+    return { command: "pnpm", argsPrefix: ["exec"], description: "tsc -b (pnpm exec)" };
+  }
+
+  const corepackEntrypoint = path.win32.join(
+    path.win32.dirname(nodeExecutable),
+    "node_modules",
+    "corepack",
+    "dist",
+    "corepack.js",
+  );
+  if (fileExists(corepackEntrypoint)) {
+    return {
+      command: nodeExecutable,
+      argsPrefix: [corepackEntrypoint, "pnpm", "exec"],
+      description: "tsc -b (corepack pnpm exec)",
+    };
+  }
+
+  return { command: "pnpm.cmd", argsPrefix: ["exec"], description: "tsc -b (pnpm exec)" };
 }
 
 export function readReferenceSignatureCache(cacheFile: string): string | undefined {

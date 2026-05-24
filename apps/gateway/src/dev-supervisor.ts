@@ -319,7 +319,6 @@ function ensureGatewayProjectReferencesBuilt(currentSignature: string): boolean 
     gatewayDir,
     repoRoot,
     useTs7,
-    comspec: process.env.ComSpec,
     platform: process.platform,
   });
   log.info(`building gateway project references via ${spawnPlan.description}`, {
@@ -335,6 +334,7 @@ function ensureGatewayProjectReferencesBuilt(currentSignature: string): boolean 
   const result = spawnSync(spawnPlan.command, spawnPlan.args, {
     cwd: spawnPlan.cwd,
     env,
+    shell: false,
     stdio: "inherit",
   });
 
