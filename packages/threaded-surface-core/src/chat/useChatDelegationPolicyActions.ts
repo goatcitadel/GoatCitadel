@@ -357,6 +357,7 @@ export function useChatDelegationPolicyActions(input: {
   setProactiveRuns: React.Dispatch<React.SetStateAction<ProactiveRunRecord[]>>;
   pushLocalNotice: (content: string, tone?: "neutral" | "success" | "warning") => void;
   lastLocalPrefMutationAtRef: MutableRefObject<number>;
+  runtimeBlockerActiveRef?: MutableRefObject<boolean>;
 }) {
   const {
     selectedSession,
@@ -379,6 +380,7 @@ export function useChatDelegationPolicyActions(input: {
     setProactiveRuns,
     pushLocalNotice,
     lastLocalPrefMutationAtRef,
+    runtimeBlockerActiveRef,
   } = input;
 
   const [delegationSuggestion, setDelegationSuggestion] = useState<ChatDelegationSuggestionRecord | null>(null);
@@ -453,7 +455,7 @@ export function useChatDelegationPolicyActions(input: {
   ]);
 
   const handleRunQuickResearch = useCallback(async () => {
-    if (sending) return;
+    if (sending || runtimeBlockerActiveRef?.current) return;
     const session = await ensureSession();
     const query = draft.trim() || messages.filter((item) => item.role === "user").at(-1)?.content || "";
     if (!query) {
@@ -495,6 +497,7 @@ export function useChatDelegationPolicyActions(input: {
     activeWorkflowTurn?.turnId,
     surfaceMode,
     pushLocalNotice,
+    runtimeBlockerActiveRef,
     sending,
     setError,
     setSending,

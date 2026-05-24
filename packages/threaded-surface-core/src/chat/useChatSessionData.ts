@@ -176,17 +176,22 @@ export function useChatSessionData(input: {
   const [sidebarLoadingMore, setSidebarLoadingMore] = useState(false);
 
   const initializedRef = useRef(false);
+  const sidebarNextCursorRef = useRef<string | null>(null);
   const loadCoreGenerationRef = useRef(0);
   const loadSecondaryGenerationRef = useRef(0);
   const lastLoadedSessionIdRef = useRef<string | null>(null);
   const refreshSubscriptionStartedAtRef = useRef<number>(0);
+  const updateSidebarNextCursor = useCallback((nextCursor: string | null) => {
+    sidebarNextCursorRef.current = nextCursor;
+    setSidebarNextCursor(nextCursor);
+  }, []);
 
   const loadSidebar = useCallback(
     async (nextHistoryView: ChatHistoryView = historyView, options: ChatSidebarLoadOptions = {}) => {
       const trimmedSearchQuery = searchQuery.trim();
       const sessionLimit = resolveSidebarSessionLimit(nextHistoryView, trimmedSearchQuery);
       const append = Boolean(options.append && !trimmedSearchQuery);
-      const cursor = append ? (sidebarNextCursor ?? undefined) : undefined;
+      const cursor = append ? (sidebarNextCursorRef.current ?? undefined) : undefined;
       if (append && !cursor) {
         return;
       }
@@ -233,7 +238,7 @@ export function useChatSessionData(input: {
               ],
             };
           });
-          setSidebarNextCursor(nextSessions.nextCursor ?? null);
+          updateSidebarNextCursor(nextSessions.nextCursor ?? null);
         } finally {
           setSidebarLoadingMore(false);
         }
@@ -261,7 +266,7 @@ export function useChatSessionData(input: {
       );
       setProjects(nextProjects);
       setSessions(nextSessions);
-      setSidebarNextCursor(nextSessions.nextCursor ?? null);
+      updateSidebarNextCursor(nextSessions.nextCursor ?? null);
       setSelectedSessionId((current) => {
         const preferredSessionId = options.preferredSessionId?.trim();
         if (preferredSessionId && nextSessions.items.some((item) => item.sessionId === preferredSessionId)) {
@@ -275,7 +280,7 @@ export function useChatSessionData(input: {
           : (nextSessions.items[0]?.sessionId ?? null);
       });
     },
-    [historyView, searchQuery, setSelectedSessionId, sidebarNextCursor, surfaceMode, workspaceId],
+    [historyView, searchQuery, setSelectedSessionId, surfaceMode, updateSidebarNextCursor, workspaceId],
   );
 
   const loadRuntimeCatalog = useCallback(async () => {

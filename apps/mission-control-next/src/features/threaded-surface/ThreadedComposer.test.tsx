@@ -420,6 +420,89 @@ describe("ThreadedComposer", () => {
     expect(markup).not.toContain("Dismiss");
   });
 
+  it("disables side-effecting composer controls while blockers are active", async () => {
+    const callbacks = {
+      onAttachFiles: vi.fn(),
+      onAudioFileSelected: vi.fn(),
+      onPresetChange: vi.fn(),
+      onApplyPreset: vi.fn(),
+      onKnowledgeUrlDraftChange: vi.fn(),
+      onKnowledgeUrlModeChange: vi.fn(),
+      onAttachKnowledgeUrl: vi.fn(),
+    };
+    const renderer = await renderComposer({
+      draft: "Research this",
+      pendingApproval: {
+        approvalId: "approval-1",
+        kind: "tool_call",
+        toolName: "browser.search",
+        reason: "Needs approval.",
+      },
+      presetOptions: [{ value: "review", label: "Review preset" }],
+      selectedPresetId: "review",
+      knowledgeUrlDraft: "https://example.test/source",
+      knowledgeUrlMode: "retrieval",
+      voiceInputAvailable: true,
+      imageGenerationAvailable: true,
+      ...callbacks,
+    });
+
+    expect(renderer.root.findByProps({ "aria-label": "Open chat actions" }).props.disabled).toBe(true);
+
+    const attachFilesButton = renderer.root.findByProps({ "aria-label": "Attach files" });
+    expect(attachFilesButton.props.disabled).toBe(true);
+    await click(attachFilesButton);
+
+    const presetSelect = renderer.root.findByProps({ id: "threaded-composer-preset" });
+    const applyPresetButton = findButton(renderer.root, "Apply");
+    const knowledgeInput = renderer.root.findByProps({ id: "threaded-composer-knowledge-url" });
+    const knowledgeModeSelect = renderer.root.findAllByType("select").find((node) => node.props.value === "retrieval")!;
+    const attachSourceButton = findButton(renderer.root, "Attach source");
+    const audioInput = renderer.root.findByProps({ accept: "audio/*" });
+
+    expect(presetSelect.props.disabled).toBe(true);
+    expect(applyPresetButton.props.disabled).toBe(true);
+    expect(knowledgeInput.props.disabled).toBe(true);
+    expect(knowledgeModeSelect.props.disabled).toBe(true);
+    expect(attachSourceButton.props.disabled).toBe(true);
+    expect(audioInput.props.disabled).toBe(true);
+
+    await act(async () => {
+      presetSelect.props.onChange({ target: { value: "daily" } });
+      knowledgeInput.props.onChange({ target: { value: "https://example.test/next" } });
+      knowledgeModeSelect.props.onChange({ target: { value: "full_text" } });
+      audioInput.props.onChange({ target: { files: ["audio-file"] } });
+    });
+    await click(applyPresetButton);
+    await click(attachSourceButton);
+
+    expect(callbacks.onAttachFiles).not.toHaveBeenCalled();
+    expect(callbacks.onPresetChange).not.toHaveBeenCalled();
+    expect(callbacks.onApplyPreset).not.toHaveBeenCalled();
+    expect(callbacks.onKnowledgeUrlDraftChange).not.toHaveBeenCalled();
+    expect(callbacks.onKnowledgeUrlModeChange).not.toHaveBeenCalled();
+    expect(callbacks.onAttachKnowledgeUrl).not.toHaveBeenCalled();
+    expect(callbacks.onAudioFileSelected).not.toHaveBeenCalled();
+
+    await act(async () => {
+      renderer.update(
+        <ThreadedComposer
+          props={buildProps({
+            pendingApproval: null,
+            pendingUserInput: {
+              turnId: "turn-1",
+              promptId: "prompt-1",
+              kind: "text",
+              title: "Need input",
+              question: "Continue?",
+            },
+          })}
+        />,
+      );
+    });
+    expect(renderer.root.findByProps({ "aria-label": "Open chat actions" }).props.disabled).toBe(true);
+  });
+
   it("uses the compact suggestion popover for dollar skill mentions", () => {
     const markup = buildMarkup({
       commandSuggestions: [

@@ -280,6 +280,101 @@ describe("chat workbench helpers", () => {
         path: ".git/config",
       }),
     ).rejects.toThrow(/Git metadata/);
+    await expect(
+      runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+        operation: "delete",
+        path: ".GIT/config",
+      }),
+    ).rejects.toThrow(/Git metadata/);
+    await expect(
+      runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+        operation: "create_file",
+        path: "NODE_MODULES/pkg/index.js",
+      }),
+    ).rejects.toThrow(/node_modules/);
+  }, 30_000);
+
+  it("rejects symlink destinations and parents before workbench writes", async () => {
+    const { deps, projectRoot, rootDir } = await createGitWorkbenchFixture();
+    const createOutsideTarget = path.join(os.tmpdir(), `goatcitadel-workbench-create-${Date.now()}-${process.pid}.txt`);
+    const createLinkPath = path.join(projectRoot, "dangling-create.md");
+    if (!(await createDanglingFileSymlink(createLinkPath, createOutsideTarget))) {
+      return;
+    }
+
+    try {
+      await expect(
+        runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+          operation: "create_file",
+          path: "dangling-create.md",
+          content: "created outside\n",
+        }),
+      ).rejects.toThrow(/target already exists/);
+      await expect(fs.stat(createOutsideTarget)).rejects.toMatchObject({ code: "ENOENT" });
+
+      const saveOutsideTarget = path.join(os.tmpdir(), `goatcitadel-workbench-save-${Date.now()}-${process.pid}.txt`);
+      const saveLinkPath = path.join(projectRoot, "dangling-save.md");
+      if (!(await createDanglingFileSymlink(saveLinkPath, saveOutsideTarget))) {
+        return;
+      }
+      try {
+        await expect(
+          saveChatSessionWorkbenchFile(deps, "sess-1", {
+            path: "dangling-save.md",
+            content: "saved outside\n",
+          }),
+        ).rejects.toThrow(/dangling symbolic link/);
+        await expect(fs.stat(saveOutsideTarget)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        await fs.rm(saveOutsideTarget, { force: true });
+      }
+
+      await fs.writeFile(path.join(projectRoot, "source.md"), "source\n", "utf8");
+      const duplicateOutsideTarget = path.join(
+        os.tmpdir(),
+        `goatcitadel-workbench-duplicate-${Date.now()}-${process.pid}.txt`,
+      );
+      const duplicateLinkPath = path.join(projectRoot, "dangling-duplicate.md");
+      if (!(await createDanglingFileSymlink(duplicateLinkPath, duplicateOutsideTarget))) {
+        return;
+      }
+      try {
+        await expect(
+          runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+            operation: "duplicate",
+            path: "source.md",
+            targetPath: "dangling-duplicate.md",
+          }),
+        ).rejects.toThrow(/target already exists/);
+        await expect(fs.stat(duplicateOutsideTarget)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        await fs.rm(duplicateOutsideTarget, { force: true });
+      }
+
+      const outsideProjectDir = path.join(rootDir, "outside-project");
+      await fs.mkdir(outsideProjectDir, { recursive: true });
+      const linkedParentPath = path.join(projectRoot, "linked-parent");
+      if (!(await createDirectorySymlink(linkedParentPath, outsideProjectDir))) {
+        return;
+      }
+      await expect(
+        runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+          operation: "create_file",
+          path: "linked-parent/escaped.md",
+          content: "escaped project scope\n",
+        }),
+      ).rejects.toThrow(/outside the project root/);
+      await expect(fs.stat(path.join(outsideProjectDir, "escaped.md"))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        saveChatSessionWorkbenchFile(deps, "sess-1", {
+          path: "linked-parent/escaped-save.md",
+          content: "escaped save scope\n",
+        }),
+      ).rejects.toThrow(/outside the project root/);
+      await expect(fs.stat(path.join(outsideProjectDir, "escaped-save.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(createOutsideTarget, { force: true });
+    }
   }, 30_000);
 
   it("creates a workbench worktree from a git project and publishes the lifecycle event", async () => {
@@ -869,6 +964,32 @@ function run(command: string, args: string[], cwd: string): void {
 
 async function readNormalized(filePath: string): Promise<string> {
   return (await fs.readFile(filePath, "utf8")).replaceAll("\r\n", "\n");
+}
+
+async function createDanglingFileSymlink(linkPath: string, targetPath: string): Promise<boolean> {
+  try {
+    await fs.symlink(targetPath, linkPath, "file");
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES" || code === "ENOSYS") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function createDirectorySymlink(linkPath: string, targetPath: string): Promise<boolean> {
+  try {
+    await fs.symlink(targetPath, linkPath, process.platform === "win32" ? "junction" : "dir");
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES" || code === "ENOSYS") {
+      return false;
+    }
+    throw error;
+  }
 }
 
 async function removeTestWorkspace(target: string): Promise<void> {

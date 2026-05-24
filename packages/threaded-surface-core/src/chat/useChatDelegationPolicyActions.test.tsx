@@ -278,6 +278,7 @@ function Harness(props: {
   selectedSession?: ChatSessionRecord | null;
   thread?: ChatThreadResponse | null;
   codeModeNeedsProjectBinding?: boolean;
+  runtimeBlocked?: boolean;
 }) {
   const [sending, setSending] = useState(Boolean(props.sendingInitial));
   const [prefs, setPrefs] = useState<ChatSessionPrefsRecord | null>(
@@ -289,6 +290,8 @@ function Harness(props: {
   const noticesRef = useRef<Array<{ content: string; tone?: string }>>([]);
   const loadSidebar = useRef(vi.fn(async () => undefined)).current;
   const lastLocalPrefMutationAtRef = useRef(0);
+  const runtimeBlockerActiveRef = useRef(Boolean(props.runtimeBlocked));
+  runtimeBlockerActiveRef.current = Boolean(props.runtimeBlocked);
   const selectedSession = props.selectedSession === undefined ? makeSession() : props.selectedSession;
   const setError = useCallback((value: string | null) => {
     if (value) {
@@ -323,6 +326,7 @@ function Harness(props: {
     setProactiveRuns,
     pushLocalNotice,
     lastLocalPrefMutationAtRef,
+    runtimeBlockerActiveRef,
   });
 
   latestHarness = {
@@ -408,6 +412,20 @@ describe("useChatDelegationPolicyActions", () => {
       model: "claude-4",
       surface: "chat",
     });
+  });
+
+  it("does not start quick research while a runtime blocker is active", async () => {
+    await act(async () => {
+      create(<Harness runtimeBlocked />);
+      await flushEffects();
+    });
+
+    await act(async () => {
+      await latestHarness?.result.handleRunQuickResearch();
+    });
+
+    expect(runChatResearchMock).not.toHaveBeenCalled();
+    expect(latestHarness?.sending).toBe(false);
   });
 
   it("covers delegation status and selected-turn fallback helpers", () => {

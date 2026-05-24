@@ -318,6 +318,47 @@ describe("useChatSessionData", () => {
     expect(fetchChatProjectsMock).toHaveBeenLastCalledWith("all", 150, "workspace-search");
   });
 
+  it("appends sidebar pagination without reloading over the appended page", async () => {
+    fetchChatSessionsMock.mockResolvedValueOnce({
+      items: [makeSession("session-1"), makeSession("session-2")],
+      nextCursor: "cursor-page-2",
+    });
+
+    await act(async () => {
+      create(<Harness workspaceId="workspace-pagination" />);
+      await flushEffects();
+    });
+
+    expect(latestHarness?.result.sessions?.items.map((item) => item.sessionId)).toEqual(["session-1", "session-2"]);
+    expect(latestHarness?.result.sidebarNextCursor).toBe("cursor-page-2");
+
+    fetchChatSessionsMock.mockResolvedValueOnce({
+      items: [makeSession("session-2"), makeSession("session-3")],
+      nextCursor: null,
+    });
+    const callsBeforeAppend = fetchChatSessionsMock.mock.calls.length;
+
+    await act(async () => {
+      await latestHarness?.result.loadSidebar("active", { append: true });
+      await flushEffects();
+    });
+
+    expect(fetchChatSessionsMock).toHaveBeenCalledTimes(callsBeforeAppend + 1);
+    expect(fetchChatSessionsMock).toHaveBeenLastCalledWith({
+      scope: "all",
+      view: "active",
+      limit: 100,
+      workspaceId: "workspace-pagination",
+      cursor: "cursor-page-2",
+    });
+    expect(latestHarness?.result.sessions?.items.map((item) => item.sessionId)).toEqual([
+      "session-1",
+      "session-2",
+      "session-3",
+    ]);
+    expect(latestHarness?.result.sidebarNextCursor).toBeNull();
+  });
+
   it("refreshes view state through resolved refresh plans and reports failures", async () => {
     await act(async () => {
       create(<Harness workspaceId="workspace-refresh" initialSelectedSessionId="session-1" />);

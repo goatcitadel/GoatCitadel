@@ -49,6 +49,7 @@ export function useChatContextActions(input: {
   setMcpTemplates: React.Dispatch<React.SetStateAction<Array<McpServerTemplateRecord & { installed: boolean }>>>;
   pushLocalNotice: (content: string, tone?: "neutral" | "success" | "warning") => void;
   lastLocalPrefMutationAtRef: MutableRefObject<number>;
+  runtimeBlockerActiveRef?: MutableRefObject<boolean>;
   executeOutboundItemRef: MutableRefObject<(item: OutboundQueueItem) => Promise<void>>;
   tryBeginOutboundExecutionRef: MutableRefObject<() => boolean>;
   setQueuedOutbound: React.Dispatch<React.SetStateAction<OutboundQueueItem[]>>;

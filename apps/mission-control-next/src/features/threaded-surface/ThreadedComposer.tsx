@@ -476,16 +476,18 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const contextStripModel = currentRouteLabel ?? props.trust?.providerModelSummary ?? "Routing pending";
   const memoryLabel = formatHistoricalMemoryLabel(props.thread);
   const capabilityUseChips = getComposerCapabilityUseChips(props);
+  const runtimeBlockerActive = Boolean(props.pendingApproval || props.pendingUserInput);
+  const composerActionDisabled = props.sending || runtimeBlockerActive;
   const plusActions = [
     {
       label: props.voiceBusy ? "Voice listening..." : props.voiceTalkActive ? "Stop voice talk" : "Start voice talk",
-      disabled: !props.voiceInputAvailable || props.voiceBusy || props.sending,
+      disabled: !props.voiceInputAvailable || props.voiceBusy || composerActionDisabled,
       active: Boolean(props.voiceTalkActive),
       onSelect: () => props.onToggleVoiceTalk?.(),
     },
     {
       label: "Transcribe audio",
-      disabled: !props.voiceInputAvailable || props.voiceBusy || props.sending,
+      disabled: !props.voiceInputAvailable || props.voiceBusy || composerActionDisabled,
       onSelect: () => props.onOpenAudioTranscribe?.(),
     },
     ...(props.voiceOutputAvailable
@@ -499,20 +501,22 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       : []),
     {
       label: props.imageBusy ? "Creating image..." : "Create image",
-      disabled: !props.imageGenerationAvailable || props.imageBusy || props.sending || props.draft.trim().length === 0,
+      disabled:
+        !props.imageGenerationAvailable || props.imageBusy || composerActionDisabled || props.draft.trim().length === 0,
       onSelect: () => props.onGenerateImage?.(),
     },
     ...(props.imageEditAvailable
       ? [
           {
             label: props.imageBusy ? "Editing image..." : "Edit image",
-            disabled: props.imageBusy || props.sending || props.draft.trim().length === 0,
+            disabled: props.imageBusy || composerActionDisabled || props.draft.trim().length === 0,
             onSelect: () => props.onEditImage?.(),
           },
         ]
       : []),
     {
       label: "Quick web research",
+      disabled: composerActionDisabled,
       onSelect: props.onRunQuickResearch,
     },
   ];
@@ -768,7 +772,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
 
       <div className="mc-next-composer-controls">
         <div className="mc-next-composer-controls-start">
-          <ChatComposerPlusMenu disabled={props.sending} actions={plusActions}>
+          <ChatComposerPlusMenu disabled={composerActionDisabled} actions={plusActions}>
             {presetOptions.length > 0 ? (
               <div className="mc-next-composer-plus-section">
                 <label htmlFor="threaded-composer-preset">Preset</label>
@@ -776,7 +780,12 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
                   <select
                     id="threaded-composer-preset"
                     value={props.selectedPresetId}
-                    onChange={(event) => props.onPresetChange?.(event.target.value)}
+                    disabled={composerActionDisabled}
+                    onChange={(event) => {
+                      if (!composerActionDisabled) {
+                        props.onPresetChange?.(event.target.value);
+                      }
+                    }}
                   >
                     <option value="">Choose preset</option>
                     {presetOptions.map((preset) => (
@@ -788,8 +797,12 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
                   <button
                     type="button"
                     className="mc-next-composer-inline-button"
-                    disabled={!props.selectedPresetId}
-                    onClick={() => props.onApplyPreset?.()}
+                    disabled={composerActionDisabled || !props.selectedPresetId}
+                    onClick={() => {
+                      if (!composerActionDisabled) {
+                        props.onApplyPreset?.();
+                      }
+                    }}
                   >
                     Apply
                   </button>
@@ -802,12 +815,22 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
                 <input
                   id="threaded-composer-knowledge-url"
                   value={knowledgeUrlDraft}
-                  onChange={(event) => props.onKnowledgeUrlDraftChange?.(event.target.value)}
+                  disabled={composerActionDisabled}
+                  onChange={(event) => {
+                    if (!composerActionDisabled) {
+                      props.onKnowledgeUrlDraftChange?.(event.target.value);
+                    }
+                  }}
                   placeholder="Attach a URL"
                 />
                 <select
                   value={knowledgeUrlMode}
-                  onChange={(event) => props.onKnowledgeUrlModeChange?.(event.target.value as typeof knowledgeUrlMode)}
+                  disabled={composerActionDisabled}
+                  onChange={(event) => {
+                    if (!composerActionDisabled) {
+                      props.onKnowledgeUrlModeChange?.(event.target.value as typeof knowledgeUrlMode);
+                    }
+                  }}
                 >
                   <option value="retrieval">Use retrieval</option>
                   <option value="full_text">Read in full</option>
@@ -815,8 +838,12 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
                 <button
                   type="button"
                   className="mc-next-composer-inline-button"
-                  disabled={!knowledgeUrlDraft.trim()}
-                  onClick={() => props.onAttachKnowledgeUrl?.()}
+                  disabled={composerActionDisabled || !knowledgeUrlDraft.trim()}
+                  onClick={() => {
+                    if (!composerActionDisabled) {
+                      props.onAttachKnowledgeUrl?.();
+                    }
+                  }}
                 >
                   Attach source
                 </button>
@@ -826,8 +853,12 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           <button
             type="button"
             className="mc-next-composer-icon-button"
-            disabled={props.sending}
-            onClick={props.onAttachFiles}
+            disabled={composerActionDisabled}
+            onClick={() => {
+              if (!composerActionDisabled) {
+                props.onAttachFiles();
+              }
+            }}
             aria-label="Attach files"
             title="Attach files"
           >
@@ -838,7 +869,12 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
             type="file"
             accept="audio/*"
             className="mc-next-hidden-file"
-            onChange={(event) => props.onAudioFileSelected?.(event.target.files)}
+            disabled={composerActionDisabled}
+            onChange={(event) => {
+              if (!composerActionDisabled) {
+                props.onAudioFileSelected?.(event.target.files);
+              }
+            }}
           />
         </div>
         {composerStatus ? <p className="mc-next-composer-helper">{composerStatus}</p> : null}

@@ -175,16 +175,20 @@ export async function saveChatSessionWorkbenchFile(
 
   let existingStat: fsSync.Stats | null = null;
   try {
-    assertExistingPathRealpathAllowed(
+    assertExistingWorkbenchRealpathAllowed(
+      deps,
+      context.projectRoot,
       targetPath,
-      deps.config.toolPolicy.sandbox.writeJailRoots,
-      deps.config.toolPolicy.sandbox.readOnlyRoots,
+      "workbench file",
     );
     existingStat = await fs.stat(targetPath);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") {
       throw error;
+    }
+    if (await pathExistsEvenIfDangling(targetPath)) {
+      throw new ValidationError({ message: `Path points at a dangling symbolic link: ${normalized}` });
     }
   }
 
@@ -208,9 +212,14 @@ export async function saveChatSessionWorkbenchFile(
       throw new ValidationError({ message: `Parent directory does not exist for ${normalized}.` });
     }
     assertPathInsideRoot(parentDir, context.projectRoot, "workbench file parent");
+    assertExistingWorkbenchRealpathAllowed(deps, context.projectRoot, parentDir, "workbench file parent");
   }
 
-  await fs.writeFile(targetPath, input.content, "utf8");
+  if (existingStat) {
+    await fs.writeFile(targetPath, input.content, "utf8");
+  } else {
+    await fs.writeFile(targetPath, input.content, { encoding: "utf8", flag: "wx" });
+  }
   const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
   const validation = await runWorkbenchPostWriteValidation(deps, sessionId, context, changedFiles);
 
@@ -863,7 +872,7 @@ async function applyWorkbenchFileOperation(
           message: `File exceeds ${MAX_FILE_BYTES} bytes and is too large for the workbench editor.`,
         });
       }
-      await fs.writeFile(input.targetPath, content, "utf8");
+      await fs.writeFile(input.targetPath, content, { encoding: "utf8", flag: "wx" });
       return {
         activeFilePath: input.normalized,
         message: `Created file ${input.normalized}.`,
@@ -884,7 +893,12 @@ async function applyWorkbenchFileOperation(
           message: `${formatWorkbenchOperationName(input.operation)} requires a target path.`,
         });
       }
-      const sourceStat = await assertWorkbenchSourceAvailable(deps, input.targetPath, input.normalized);
+      const sourceStat = await assertWorkbenchSourceAvailable(
+        deps,
+        context.projectRoot,
+        input.targetPath,
+        input.normalized,
+      );
       await assertWorkbenchOperationParentAllowed(deps, context.projectRoot, path.dirname(input.destinationPath));
       await assertWorkbenchTargetAvailable(input.destinationPath, input.normalizedTarget);
       if (sourceStat.isDirectory()) {
@@ -905,7 +919,12 @@ async function applyWorkbenchFileOperation(
       if (!input.normalizedTarget || !input.destinationPath) {
         throw new ValidationError({ message: "Duplicate requires a target path." });
       }
-      const sourceStat = await assertWorkbenchSourceAvailable(deps, input.targetPath, input.normalized);
+      const sourceStat = await assertWorkbenchSourceAvailable(
+        deps,
+        context.projectRoot,
+        input.targetPath,
+        input.normalized,
+      );
       if (sourceStat.isDirectory()) {
         throw new ValidationError({ message: "Duplicate supports files only. Move or create a new folder instead." });
       }
@@ -918,14 +937,19 @@ async function applyWorkbenchFileOperation(
       await assertWorkbenchTargetAvailable(input.destinationPath, input.normalizedTarget);
       const content = await fs.readFile(input.targetPath);
       assertWorkbenchFileIsText(content, input.normalized, "editor");
-      await fs.writeFile(input.destinationPath, content);
+      await fs.writeFile(input.destinationPath, content, { flag: "wx" });
       return {
         activeFilePath: input.normalizedTarget,
         message: `Duplicated ${input.normalized} to ${input.normalizedTarget}.`,
       };
     }
     case "delete": {
-      const sourceStat = await assertWorkbenchSourceAvailable(deps, input.targetPath, input.normalized);
+      const sourceStat = await assertWorkbenchSourceAvailable(
+        deps,
+        context.projectRoot,
+        input.targetPath,
+        input.normalized,
+      );
       await fs.rm(input.targetPath, { recursive: sourceStat.isDirectory(), force: false });
       return {
         activeFilePath: deriveActiveFilePathAfterDelete(input.currentActiveFilePath, input.normalized),
@@ -1266,10 +1290,11 @@ async function readWorkbenchFilePayload(
   const targetPath = path.resolve(projectRoot, normalized);
   assertPathInsideRoot(targetPath, projectRoot, "workbench file");
   try {
-    assertExistingPathRealpathAllowed(
+    assertExistingWorkbenchRealpathAllowed(
+      deps,
+      projectRoot,
       targetPath,
-      deps.config.toolPolicy.sandbox.writeJailRoots,
-      deps.config.toolPolicy.sandbox.readOnlyRoots,
+      "workbench file",
     );
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
@@ -1629,7 +1654,7 @@ function operationRequiresTargetPath(operation: ChatSessionWorkbenchFileOperatio
 }
 
 function assertWorkbenchFileOperationPathAllowed(normalized: string): void {
-  const pathSegments = normalized.split("/");
+  const pathSegments = normalized.split("/").map((segment) => segment.toLowerCase());
   if (pathSegments.includes(".git")) {
     throw new ValidationError({ message: "Workbench file actions cannot mutate Git metadata." });
   }
@@ -1644,11 +1669,7 @@ async function assertWorkbenchOperationParentAllowed(
   parentPath: string,
 ): Promise<void> {
   assertPathInsideRoot(parentPath, projectRoot, "workbench file action parent");
-  assertExistingPathRealpathAllowed(
-    parentPath,
-    deps.config.toolPolicy.sandbox.writeJailRoots,
-    deps.config.toolPolicy.sandbox.readOnlyRoots,
-  );
+  assertExistingWorkbenchRealpathAllowed(deps, projectRoot, parentPath, "workbench file action parent");
   assertWritePathInJail(parentPath, deps.config.toolPolicy.sandbox.writeJailRoots);
   const parentStat = await fs.stat(parentPath).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") {
@@ -1663,14 +1684,11 @@ async function assertWorkbenchOperationParentAllowed(
 
 async function assertWorkbenchSourceAvailable(
   deps: ChatWorkbenchDependencies,
+  projectRoot: string,
   sourcePath: string,
   normalized: string,
 ): Promise<fsSync.Stats> {
-  assertExistingPathRealpathAllowed(
-    sourcePath,
-    deps.config.toolPolicy.sandbox.writeJailRoots,
-    deps.config.toolPolicy.sandbox.readOnlyRoots,
-  );
+  assertExistingWorkbenchRealpathAllowed(deps, projectRoot, sourcePath, "workbench file action source");
   const sourceStat = await fs.stat(sourcePath).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") {
       throw new NotFoundError({ entity: "Workbench file action path", id: normalized });
@@ -1681,7 +1699,7 @@ async function assertWorkbenchSourceAvailable(
 }
 
 async function assertWorkbenchTargetAvailable(targetPath: string, normalized: string): Promise<void> {
-  const existing = await fs.stat(targetPath).catch((error: NodeJS.ErrnoException) => {
+  const existing = await fs.lstat(targetPath).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") {
       return null;
     }
@@ -1690,6 +1708,32 @@ async function assertWorkbenchTargetAvailable(targetPath: string, normalized: st
   if (existing) {
     throw new ValidationError({ message: `Workbench file action target already exists: ${normalized}` });
   }
+}
+
+async function pathExistsEvenIfDangling(targetPath: string): Promise<boolean> {
+  return fs
+    .lstat(targetPath)
+    .then(() => true)
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") {
+        return false;
+      }
+      throw error;
+    });
+}
+
+function assertExistingWorkbenchRealpathAllowed(
+  deps: ChatWorkbenchDependencies,
+  projectRoot: string,
+  targetPath: string,
+  label: string,
+): void {
+  assertExistingPathRealpathAllowed(
+    targetPath,
+    deps.config.toolPolicy.sandbox.writeJailRoots,
+    deps.config.toolPolicy.sandbox.readOnlyRoots,
+  );
+  assertPathInsideRoot(fsSync.realpathSync(path.resolve(targetPath)), projectRoot, label);
 }
 
 function assertWorkbenchDirectoryMoveSafe(sourcePath: string, destinationPath: string): void {

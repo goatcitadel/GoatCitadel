@@ -1189,6 +1189,7 @@ export function MissionThreadedControllerHost({
     ],
   );
 
+  const runtimeBlockerActiveRef = useRef(false);
   const contextActions = useChatContextActions({
     selectedSessionId,
     selectedSession,
@@ -1222,6 +1223,7 @@ export function MissionThreadedControllerHost({
     setMcpTemplates,
     pushLocalNotice,
     lastLocalPrefMutationAtRef,
+    runtimeBlockerActiveRef,
     executeOutboundItemRef,
     tryBeginOutboundExecutionRef,
     setQueuedOutbound,
@@ -1304,6 +1306,7 @@ export function MissionThreadedControllerHost({
     activeStreamingTurnId,
     prefsRef,
   } = outbound;
+  runtimeBlockerActiveRef.current = Boolean(pendingApproval || pendingUserInput);
 
   useChatApprovalController({
     selectedSessionId,
