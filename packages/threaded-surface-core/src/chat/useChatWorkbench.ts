@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ChatSessionWorkbenchDiffResponse,
   ChatSessionWorkbenchFileDiffResponse,
+  ChatSessionWorkbenchFileOperationRequest,
   ChatSessionWorkbenchFileResponse,
   ChatSessionWorkbenchOutputResponse,
   ChatSessionWorkbenchRecord,
@@ -20,6 +21,7 @@ import {
   revertChatSessionWorkbenchChanges,
   revertChatSessionWorkbenchFile,
   runChatSessionWorkbenchCommand,
+  runChatSessionWorkbenchFileOperation,
   saveChatSessionWorkbenchFile,
 } from "@goatcitadel/mission-control-shared/api/chat";
 import { useRefreshSubscription } from "@goatcitadel/mission-control-shared/hooks/useRefreshSubscription";
@@ -424,6 +426,81 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
     }
   }, [applySelectedFileState, isCurrentSession, sessionId, setPersistedExpandedPaths]);
 
+  const runFileOperation = useCallback(
+    async (input: ChatSessionWorkbenchFileOperationRequest) => {
+      if (!sessionId) {
+        return false;
+      }
+      const requestSessionId = sessionId;
+      setBusy(true);
+      try {
+        const response = await runChatSessionWorkbenchFileOperation(requestSessionId, input);
+        if (!isCurrentSession(requestSessionId)) {
+          return false;
+        }
+
+        const nextDiff = await fetchChatSessionWorkbenchDiff(requestSessionId);
+        if (!isCurrentSession(requestSessionId)) {
+          return false;
+        }
+
+        setState(response.state);
+        setTree(response.tree);
+        setDiff(nextDiff);
+        setOutput(response.output);
+        setPersistedExpandedPaths(
+          deriveDefaultExpandedPaths(
+            response.tree,
+            response.targetPath ?? response.path,
+            readWorkbenchUiState(requestSessionId).expandedPaths,
+          ),
+        );
+
+        const candidatePathAfterOperation =
+          input.operation === "create_file" || input.operation === "duplicate" || input.operation === "rename"
+            ? (response.targetPath ?? response.path)
+            : input.operation === "move"
+              ? (response.targetPath ?? response.path)
+              : undefined;
+        const selectedPathAfterOperation =
+          candidatePathAfterOperation &&
+          response.tree.items.some((item) => item.kind === "file" && item.path === candidatePathAfterOperation)
+            ? candidatePathAfterOperation
+            : undefined;
+        if (selectedPathAfterOperation) {
+          const nextFileDiff = await fetchChatSessionWorkbenchFileDiff(requestSessionId, selectedPathAfterOperation);
+          const nextFile = await fetchChatSessionWorkbenchFile(requestSessionId, selectedPathAfterOperation);
+          if (!isCurrentSession(requestSessionId)) {
+            return false;
+          }
+          applySelectedFileState(nextFile, nextFileDiff, { preserveDraft: false });
+        } else if (
+          input.operation === "delete" &&
+          selectedFileRef.current &&
+          (selectedFileRef.current.path === response.path ||
+            selectedFileRef.current.path.startsWith(`${response.path}/`))
+        ) {
+          setSelectedFile(null);
+          setSelectedFileDiff(null);
+          setDraftContent("");
+        }
+
+        setError(null);
+        return true;
+      } catch (cause) {
+        if (isCurrentSession(requestSessionId)) {
+          setError(describeWorkbenchActionError(cause, "Unable to update the workbench file tree."));
+        }
+        return false;
+      } finally {
+        if (isCurrentSession(requestSessionId)) {
+          setBusy(false);
+        }
+      }
+    },
+    [applySelectedFileState, isCurrentSession, sessionId, setPersistedExpandedPaths],
+  );
+
   const createWorktree = useCallback(
     async (baseRef?: string) => {
       if (!sessionId) {
@@ -674,6 +751,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
     createWorkbenchWorktree: createWorktree,
     openWorkbenchFile: loadFile,
     saveWorkbenchFile: saveFile,
+    runWorkbenchFileOperation: runFileOperation,
     discardWorkbenchDraft: discardDraft,
     runWorkbenchValidationCommand: runValidationCommand,
     applyWorkbenchPatch: applyPatch,

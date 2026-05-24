@@ -1058,6 +1058,139 @@
   margin-top: 0.55rem;
 }
 
+.mc-next-project-home-base,
+.mc-next-project-controls,
+.mc-next-project-control-section {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.mc-next-project-home-base {
+  margin-bottom: 0.6rem;
+}
+
+.mc-next-project-home-head {
+  display: grid;
+  gap: 0.18rem;
+  padding: 0.58rem 0.64rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 18%, var(--border));
+  border-radius: var(--r-sm, 0.5rem);
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--mc-area-color) 10%, transparent), transparent 62%),
+    color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-project-home-head div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.mc-next-project-home-head span,
+.mc-next-project-control-heading {
+  color: var(--text-muted);
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mc-next-project-home-head strong {
+  color: var(--foreground);
+  font-size: 1rem;
+  line-height: 1.2;
+}
+
+.mc-next-project-home-head p,
+.mc-next-project-readiness-item p,
+.mc-next-project-recent-item p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+  line-height: 1.42;
+}
+
+.mc-next-project-home-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.4rem;
+}
+
+.mc-next-project-continue-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.36rem;
+}
+
+.mc-next-project-readiness-list,
+.mc-next-project-recent-list {
+  display: grid;
+  gap: 0.36rem;
+  min-width: 0;
+}
+
+.mc-next-project-readiness-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.42rem;
+  align-items: start;
+  padding: 0.46rem 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: 0.46rem;
+  background: color-mix(in oklab, var(--card) 94%, transparent);
+}
+
+.mc-next-project-readiness-item svg {
+  margin-top: 0.05rem;
+  color: color-mix(in oklab, var(--mc-area-color) 80%, var(--foreground));
+}
+
+.mc-next-project-readiness-item.is-attention svg {
+  color: color-mix(in oklab, #f59e0b 76%, var(--foreground));
+}
+
+.mc-next-project-readiness-item strong,
+.mc-next-project-recent-item strong,
+.mc-next-project-control-heading strong {
+  color: var(--foreground);
+  font-size: 0.74rem;
+  line-height: 1.3;
+}
+
+.mc-next-project-recent-item {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+  padding: 0.44rem 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: 0.46rem;
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-project-recent-item > span {
+  color: color-mix(in oklab, var(--mc-area-color) 65%, var(--text-muted));
+  font-size: 0.56rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mc-next-project-control-section {
+  padding: 0.55rem;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  border-radius: var(--r-sm, 0.5rem);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-project-control-heading {
+  display: flex;
+  gap: 0.32rem;
+  align-items: center;
+}
+
 .mc-next-settings-grid {
   display: grid;
   grid-template-columns: minmax(240px, 0.8fr) minmax(0, 1.4fr);
@@ -1506,6 +1639,119 @@
   overflow-wrap: anywhere;
 }
 
+.mc-next-settings-source-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.32rem;
+  margin-top: 0.2rem;
+}
+
+.mc-next-settings-source-legend span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.35rem;
+  padding: 0.14rem 0.42rem;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--mc-surface-1) 91%, transparent);
+  color: var(--text-secondary);
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.mc-next-provenance-coverage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.4rem;
+}
+
+.mc-next-provenance-coverage-item {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+  padding: 0.48rem 0.52rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: 0.46rem;
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-provenance-coverage-item.is-covered {
+  border-color: color-mix(in oklab, var(--mc-area-color) 24%, var(--border));
+}
+
+.mc-next-provenance-coverage-item div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.mc-next-provenance-coverage-item strong {
+  color: var(--foreground);
+  font-size: 0.72rem;
+  line-height: 1.25;
+}
+
+.mc-next-provenance-coverage-item span {
+  color: color-mix(in oklab, var(--mc-area-color) 62%, var(--text-muted));
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.mc-next-provenance-coverage-item p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.64rem;
+  line-height: 1.4;
+}
+
+.mc-next-decision-journal-item {
+  display: grid;
+  gap: 0.38rem;
+}
+
+.mc-next-decision-journal-item > span {
+  color: var(--text-secondary);
+  font-size: 0.64rem;
+}
+
+.mc-next-decision-journal-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.32rem;
+  margin: 0;
+}
+
+.mc-next-decision-journal-facts div {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+  padding: 0.34rem 0.38rem;
+  border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+  border-radius: 0.4rem;
+  background: color-mix(in oklab, var(--mc-surface-1) 91%, transparent);
+}
+
+.mc-next-decision-journal-facts dt {
+  color: var(--text-muted);
+  font-size: 0.55rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.mc-next-decision-journal-facts dd {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.64rem;
+  line-height: 1.38;
+  overflow-wrap: anywhere;
+}
+
 .mc-next-settings-code-block {
   display: grid;
   gap: 0.3rem;
@@ -1662,6 +1908,56 @@
   text-align: right;
 }
 
+.mc-next-ops-attention-list {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-ops-attention-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 0.55rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: 0.5rem;
+  background: color-mix(in oklab, var(--mc-surface-1) 93%, transparent);
+}
+
+.mc-next-ops-attention-item.tone-danger {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 34%, var(--border));
+}
+
+.mc-next-ops-attention-item.tone-caution {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 32%, var(--border));
+}
+
+.mc-next-ops-attention-copy {
+  display: grid;
+  gap: 0.28rem;
+  min-width: 0;
+}
+
+.mc-next-ops-attention-copy p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-ops-attention-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  min-width: min(15rem, 100%);
+}
+
 .mc-next-shell[data-area="library"] .page-header,
 .mc-next-shell[data-area="ops"] .page-header,
 .mc-next-shell[data-area="settings"] .page-header,
@@ -1764,6 +2060,18 @@
   }
 
   .mc-next-settings-action-row {
+    grid-template-columns: 1fr;
+  }
+
+  .mc-next-ops-attention-item {
+    grid-template-columns: 1fr;
+  }
+
+  .mc-next-ops-attention-actions {
+    justify-content: flex-start;
+  }
+
+  .mc-next-project-continue-row {
     grid-template-columns: 1fr;
   }
 }

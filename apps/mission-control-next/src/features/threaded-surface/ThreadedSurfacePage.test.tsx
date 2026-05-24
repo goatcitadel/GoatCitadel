@@ -825,14 +825,14 @@ describe("ThreadedSurfacePage", () => {
       await Promise.resolve();
     });
 
-    expect(collectText(renderer!.root)).toContain("Code editor");
-    await act(async () => {
-      findButton(renderer!.root, "Code editor").props.onClick();
-    });
     expect(collectText(renderer!.root)).toContain("Hide editor");
+    await act(async () => {
+      findButton(renderer!.root, "Hide editor").props.onClick();
+    });
+    expect(collectText(renderer!.root)).toContain("Code editor");
 
     await act(async () => {
-      const conversationWorkbenchButton = findExactButtons(renderer!.root, "Hide editor").find(
+      const conversationWorkbenchButton = findExactButtons(renderer!.root, "Code editor").find(
         (button) => button.props.className === "mc-next-threaded-secondary",
       );
       expect(conversationWorkbenchButton).toBeDefined();
@@ -843,6 +843,132 @@ describe("ThreadedSurfacePage", () => {
 
     expect(activeProps.onExportRunBundle).toHaveBeenCalledTimes(1);
     expect(input.onDockOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("opens Claude-style right-panel choices from the active-session header", async () => {
+    const onDockOpenChange = vi.fn();
+    const onSelectFile = vi.fn();
+    const onOpenTasks = vi.fn();
+    const activeProps = buildActiveSessionProps({
+      mode: "code",
+      queueItems: [{ id: "queue-1", action: "retry", label: "Retry latest turn", createdAt: "2026-05-23T10:00:00Z" }],
+      queuedCount: 1,
+      streamStatus: "queued",
+    });
+    const input = {
+      ...buildInput(),
+      messageMode: "code",
+      activeSessionSurfaceProps: activeProps,
+      emptyStateProps: {
+        ...(buildInput() as any).emptyStateProps,
+        onOpenTasks,
+      },
+      workflowPanel: {
+        kind: "code",
+        props: {
+          workbenchTree: {
+            changedFiles: ["src/app.ts"],
+            items: [{ path: "src/app.ts", name: "app.ts", kind: "file", depth: 1, changed: true }],
+          },
+          workbenchState: { validationStatus: "passed", worktreeStatus: "ready" },
+          selectedFile: { path: "src/app.ts", language: "typescript", content: "console.log('old');" },
+          selectedFileDiff: null,
+          diff: {
+            changedFiles: ["src/app.ts"],
+            diff: "diff --git a/src/app.ts b/src/app.ts\n+console.log('next');",
+            summary: { changedFiles: 1, additions: 1, deletions: 0 },
+          },
+          output: {
+            helperRuns: [{ runId: "run-1", status: "succeeded", language: "typescript", createdAt: "2026-05-23T10:00:00Z" }],
+            output: "Validation passed.",
+          },
+          hasDirtyDraft: false,
+          onSelectFile,
+        },
+      },
+      contextDockProps: {
+        routePreflight: { selectionSource: "manual" },
+      },
+      dockOpen: false,
+      onDockOpenChange,
+    } as any;
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="code" input={input} />);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      findButtonByAriaLabel(renderer!.root, "Open right panel menu").props.onClick();
+    });
+    expect(collectText(renderer!.root)).toContain("Background tasks");
+
+    await act(async () => {
+      findExactButton(renderer!.root, "Diff").props.onClick();
+    });
+    expect(onDockOpenChange).toHaveBeenCalledWith(true);
+    expect(collectText(renderer!.root)).toContain("Repo diff");
+    expect(collectText(renderer!.root)).toContain("src/app.ts");
+
+    await act(async () => {
+      findExactButton(renderer!.root, "Terminal").props.onClick();
+    });
+    expect(collectText(renderer!.root)).toContain("Run log");
+    expect(collectText(renderer!.root)).toContain("Validation passed.");
+
+    await act(async () => {
+      findExactButton(renderer!.root, "Files").props.onClick();
+    });
+    await act(async () => {
+      findButton(renderer!.root, "src/app.ts").props.onClick();
+    });
+    expect(onSelectFile).toHaveBeenCalledWith("src/app.ts");
+
+    await act(async () => {
+      findExactButton(renderer!.root, "Background tasks").props.onClick();
+    });
+    await act(async () => {
+      findButton(renderer!.root, "Open task board").props.onClick();
+    });
+    expect(onOpenTasks).toHaveBeenCalledTimes(1);
+  });
+
+  it("exposes keyboard-adjustable resize handles for the rail and right drawer", async () => {
+    const activeProps = buildActiveSessionProps({ mode: "chat" });
+    const input = {
+      ...buildInput(),
+      messageMode: "chat",
+      activeSessionSurfaceProps: activeProps,
+      emptyStateProps: null,
+      contextDockProps: {
+        routePreflight: null,
+      },
+      dockOpen: true,
+    } as any;
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(<ThreadedSurfacePage surface="chat" input={input} />);
+      await Promise.resolve();
+    });
+
+    let root = renderer!.root.findByProps({ className: "mc-next-threaded-surface unified" });
+    expect(root.props.style["--mc-session-rail-width"]).toBe("184px");
+
+    const railHandle = findButtonByAriaLabel(renderer!.root, "Resize session rail");
+    await act(async () => {
+      railHandle.props.onKeyDown({ key: "ArrowRight", preventDefault: vi.fn() });
+    });
+    root = renderer!.root.findByProps({ className: "mc-next-threaded-surface unified" });
+    expect(root.props.style["--mc-session-rail-width"]).toBe("208px");
+
+    const drawerHandle = findButtonByAriaLabel(renderer!.root, "Resize right drawer");
+    await act(async () => {
+      drawerHandle.props.onKeyDown({ key: "End", preventDefault: vi.fn() });
+    });
+    const stage = renderer!.root.findByProps({ className: "mc-next-threaded-stage mode-chat has-context" });
+    expect(stage.props.style["--mc-context-panel-width"]).toBe("520px");
   });
 
   it("wires cowork active-session actions, project drafts, tag filters, and compact artifact dismissal", async () => {

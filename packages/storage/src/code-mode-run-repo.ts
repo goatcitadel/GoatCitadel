@@ -54,6 +54,8 @@ export class CodeModeRunRepository {
   private readonly finishExecutionClaimStmt;
 
   public constructor(private readonly db: DatabaseClient) {
+    const optionalTextFilter = (column: string, param: string) =>
+      buildOptionalCodeModeTextFilterSql(this.db.dialect, column, param);
     this.upsertStmt = db.prepare(`
       INSERT INTO code_mode_runs (
         run_id, status, language, origin_surface, workspace_id, operator_id, permission_profile_id, permission_profile_label,
@@ -94,26 +96,26 @@ export class CodeModeRunRepository {
     `);
     this.listFilteredStmt = db.prepare(`
       SELECT * FROM code_mode_runs
-      WHERE (@workspaceId IS NULL OR workspace_id = @workspaceId)
-        AND (@sessionId IS NULL OR session_id = @sessionId)
-        AND (@turnId IS NULL OR turn_id = @turnId)
-        AND (@status IS NULL OR status = @status)
+      WHERE ${optionalTextFilter("workspace_id", "@workspaceId")}
+        AND ${optionalTextFilter("session_id", "@sessionId")}
+        AND ${optionalTextFilter("turn_id", "@turnId")}
+        AND ${optionalTextFilter("status", "@status")}
       ORDER BY created_at DESC, run_id DESC
       LIMIT @limit
     `);
     this.listFilteredForFailedHydrationStmt = db.prepare(`
       SELECT * FROM code_mode_runs
-      WHERE (@workspaceId IS NULL OR workspace_id = @workspaceId)
-        AND (@sessionId IS NULL OR session_id = @sessionId)
-        AND (@turnId IS NULL OR turn_id = @turnId)
+      WHERE ${optionalTextFilter("workspace_id", "@workspaceId")}
+        AND ${optionalTextFilter("session_id", "@sessionId")}
+        AND ${optionalTextFilter("turn_id", "@turnId")}
       ORDER BY created_at DESC, run_id DESC
       LIMIT @scanLimit
     `);
     this.listFilteredForStatusHydrationStmt = db.prepare(`
       SELECT * FROM code_mode_runs
-      WHERE (@workspaceId IS NULL OR workspace_id = @workspaceId)
-        AND (@sessionId IS NULL OR session_id = @sessionId)
-        AND (@turnId IS NULL OR turn_id = @turnId)
+      WHERE ${optionalTextFilter("workspace_id", "@workspaceId")}
+        AND ${optionalTextFilter("session_id", "@sessionId")}
+        AND ${optionalTextFilter("turn_id", "@turnId")}
         AND (status = @status OR (@includeApprovalPending = 1 AND status = 'approval_pending'))
       ORDER BY created_at DESC, run_id DESC
       LIMIT @scanLimit
@@ -144,7 +146,7 @@ export class CodeModeRunRepository {
       WHERE run_id = @runId
         AND approval_id = @approvalId
         AND status = 'running'
-        AND (@startedAt IS NULL OR started_at = @startedAt)
+        AND ${optionalTextFilter("started_at", "@startedAt")}
     `);
     this.finishExecutionClaimStmt = db.prepare(`
       UPDATE code_mode_runs
@@ -374,6 +376,13 @@ export class CodeModeRunRepository {
 
 function normalizeCodeModeRunLimit(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(1, Math.min(500, Math.floor(value))) : 100;
+}
+
+function buildOptionalCodeModeTextFilterSql(dialect: DatabaseClient["dialect"], column: string, param: string): string {
+  if (dialect === "postgres") {
+    return `(${param}::text IS NULL OR ${column} = ${param}::text)`;
+  }
+  return `(${param} IS NULL OR ${column} = ${param})`;
 }
 
 function normalizeCodeModeRunHydrationScanLimit(limit: number): number {

@@ -56,6 +56,7 @@ export function ChatPendingUserInputPanel(props: {
   return (
     <div
       className={`chat-approval-card chat-user-input-card chat-blocking-prompt chat-blocking-prompt-user-input${variant === "compact" ? " compact" : ""}`}
+      data-variant={variant ?? "default"}
       role="alert"
       aria-live="assertive"
       key={promptKey}

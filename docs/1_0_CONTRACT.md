@@ -31,6 +31,8 @@ The current `apps/mission-control-next` operator navigation is `Chat / Cowork / 
 - `Observe`: maps to current Ops, activity, runtime, cost, diagnostics, and Library evidence surfaces
 - `Tune`: maps to current Settings, providers, integrations, channels, tools, agents, and workspace controls
 
+Release-target mappings for the current UI are frozen in [docs/1_0_RELEASE_SURFACE_SCOPE.md](./1_0_RELEASE_SURFACE_SCOPE.md). Routes marked `experimental` or `needs_release_polish` must be labeled in the current shell and must not be cited as final release-ready proof until promoted to `ship` with matching evidence.
+
 Release-target mappings for the current UI:
 
 - `apps/mission-control-next` is the canonical `1.0` operator shell.
@@ -101,7 +103,7 @@ GoatCitadel may not claim `1.0` until all of these are true:
 
 - `verify:operator:proof` is green
 - `verify:durable:recovery` is green and includes stack-backed restart/recovery proof
-- `verify:surface:regression` is green across the current Mission Control Next release-surface manifest; governance/docs checks compare that manifest with the canonical route model so newly promoted routes do not silently fall out of release coverage
+- `verify:surface:regression` is green across the current Mission Control Next release-surface manifest; governance/docs checks compare that manifest with the canonical route model and release-scope table so newly promoted routes do not silently fall out of release coverage and non-ship routes remain visibly labeled
 - `verify:catalog:parity` is green and executes the runtime-backed operator action classes declared in its parity scenario; it is not a proof that every future visible catalog entry has a live action
 - `verify:visual:regression` is green and compares checked-in dark/light desktop/mobile baselines for every current Mission Control Next release-surface route declared in the canonical release-surface manifest; it stays read-only and any intentional baseline maintenance goes through `verify:visual:rebaseline`
 - `verify:backup:roundtrip` is green and restores the full minimum operator backup set (`data/index.db`, `data/transcripts/*.jsonl`, `data/audit/*.jsonl`, `config/*.json`)

@@ -520,6 +520,12 @@
   font-weight: 650;
 }
 
+.mc-next-release-badge[data-release-status="needs_release_polish"],
+.mc-next-release-badge[data-release-status="experimental"] {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 34%, var(--mc-border-subtle));
+  color: color-mix(in oklab, var(--gc-risk-caution) 75%, var(--foreground));
+}
+
 .mc-next-badge-button {
   appearance: none;
   cursor: pointer;
@@ -780,12 +786,33 @@
 }
 
 .mc-next-rail-link strong {
-  display: block;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
   font-size: 0.72rem;
+}
+
+.mc-next-rail-release-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1rem;
+  padding: 0 0.32rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 30%, var(--border));
+  color: color-mix(in oklab, var(--gc-risk-caution) 72%, var(--foreground));
+  font-size: 0.52rem;
+  font-weight: 750;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .mc-next-rail-link span {
   display: none;
+}
+
+.mc-next-rail-link .mc-next-rail-release-badge {
+  display: inline-flex;
 }
 
 .mc-next-rail-count {
@@ -1057,6 +1084,11 @@
   line-height: 1.2;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+.mc-next-status-pill[data-release-status="needs_release_polish"] strong,
+.mc-next-status-pill[data-release-status="experimental"] strong {
+  color: color-mix(in oklab, var(--gc-risk-caution) 78%, var(--foreground));
 }
 
 .mc-next-status-icon {

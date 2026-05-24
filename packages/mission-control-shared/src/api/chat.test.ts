@@ -217,6 +217,10 @@ describe("chat API origin surface headers", () => {
         relativePath: "src/index.ts",
         content: "export {};",
       } as never);
+      await chat.runChatSessionWorkbenchFileOperation(sessionId, {
+        operation: "create_file",
+        path: "src/new.ts",
+      });
       await chat.fetchChatSessionWorkbenchFileDiff(sessionId, "src/index.ts");
       await chat.fetchChatSessionWorkbenchDiff(sessionId);
       await chat.fetchChatSessionWorkbenchOutput(sessionId);

@@ -322,6 +322,31 @@ export interface ChatSessionWorkbenchSaveFileRequest {
   content: string;
 }
 
+export type ChatSessionWorkbenchFileOperationKind =
+  | "create_file"
+  | "create_folder"
+  | "rename"
+  | "delete"
+  | "duplicate"
+  | "move";
+
+export interface ChatSessionWorkbenchFileOperationRequest {
+  operation: ChatSessionWorkbenchFileOperationKind;
+  path: string;
+  targetPath?: string;
+  content?: string;
+}
+
+export interface ChatSessionWorkbenchFileOperationResponse {
+  state: ChatSessionWorkbenchRecord;
+  operation: ChatSessionWorkbenchFileOperationKind;
+  path: string;
+  targetPath?: string;
+  changedFiles: string[];
+  tree: ChatSessionWorkbenchTreeResponse;
+  output: ChatSessionWorkbenchOutputResponse;
+}
+
 export interface ChatSessionWorkbenchFileDiffResponse {
   state: ChatSessionWorkbenchRecord;
   path: string;

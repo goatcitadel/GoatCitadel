@@ -26,6 +26,8 @@ import type {
   ChatSessionWorkbenchCommandRunRequest,
   ChatSessionWorkbenchCommandRunResponse,
   ChatSessionWorkbenchFileDiffResponse,
+  ChatSessionWorkbenchFileOperationRequest,
+  ChatSessionWorkbenchFileOperationResponse,
   ChatSessionWorkbenchFileResponse,
   ChatSessionWorkbenchOutputResponse,
   ChatSessionWorkbenchPatchApplyRequest,
@@ -382,6 +384,19 @@ export async function saveChatSessionWorkbenchFile(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/file`,
     {
       method: "PUT",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function runChatSessionWorkbenchFileOperation(
+  sessionId: string,
+  input: ChatSessionWorkbenchFileOperationRequest,
+): Promise<ChatSessionWorkbenchFileOperationResponse> {
+  return request<ChatSessionWorkbenchFileOperationResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/file-operation`,
+    {
+      method: "POST",
       body: JSON.stringify(input),
     },
   );

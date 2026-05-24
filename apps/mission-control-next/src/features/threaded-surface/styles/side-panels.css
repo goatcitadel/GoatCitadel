@@ -14,6 +14,13 @@
   background: color-mix(in oklab, var(--mc-surface-2) 90%, var(--background));
 }
 
+.mc-next-threaded-resize-handle.panel {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 9px;
+}
+
 .mc-next-threaded-stage.mode-chat .mc-next-context-drawer {
   gap: 0.38rem;
 }
@@ -37,6 +44,168 @@
 
 .mc-next-threaded-side-panel.code {
   --mc-area-color: var(--mc-mode-code);
+}
+
+.mc-next-threaded-context-panel.utility {
+  padding: 0.46rem;
+}
+
+.mc-next-threaded-panel-switcher {
+  position: relative;
+  display: inline-flex;
+}
+
+.mc-next-threaded-panel-switcher-row {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+}
+
+.mc-next-threaded-panel-trigger.active {
+  border-color: color-mix(in oklab, var(--mc-area-color) 42%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 12%, transparent);
+}
+
+.mc-next-threaded-panel-menu {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  right: 0;
+  z-index: 34;
+  display: grid;
+  min-width: 13.5rem;
+  padding: 0.3rem;
+  border: 1px solid var(--mc-border-subtle);
+  border-radius: 0.46rem;
+  background: color-mix(in oklab, var(--mc-surface-2) 96%, var(--background));
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+}
+
+.mc-next-threaded-panel-menu-item,
+.mc-next-utility-panel-tab {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 0.48rem;
+  width: 100%;
+  min-width: 0;
+  min-height: 1.9rem;
+  padding: 0.35rem 0.46rem;
+  border: 0;
+  border-radius: 0.34rem;
+  background: transparent;
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mc-next-threaded-panel-menu-item:hover,
+.mc-next-threaded-panel-menu-item:focus-visible,
+.mc-next-threaded-panel-menu-item.active,
+.mc-next-utility-panel-tab:hover,
+.mc-next-utility-panel-tab:focus-visible,
+.mc-next-utility-panel-tab.active {
+  background: color-mix(in oklab, var(--mc-area-color) 14%, transparent);
+  outline: none;
+}
+
+.mc-next-utility-panel,
+.mc-next-utility-card,
+.mc-next-utility-panel-tabs,
+.mc-next-utility-actions {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.mc-next-utility-panel-head,
+.mc-next-utility-chip-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.mc-next-utility-panel-head h3,
+.mc-next-utility-card h4,
+.mc-next-utility-card p {
+  margin: 0;
+}
+
+.mc-next-utility-panel-tabs {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.mc-next-utility-panel-tab {
+  border: 1px solid var(--mc-border-subtle);
+  background: color-mix(in oklab, var(--mc-surface-1) 84%, transparent);
+}
+
+.mc-next-utility-card {
+  padding: 0.52rem;
+  border: 1px solid var(--mc-border-subtle);
+  border-radius: 0.46rem;
+  background: color-mix(in oklab, var(--mc-surface-1) 88%, transparent);
+}
+
+.mc-next-utility-card p,
+.mc-next-utility-list,
+.mc-next-utility-file-list {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.mc-next-utility-list,
+.mc-next-utility-file-list {
+  display: grid;
+  gap: 0.32rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-utility-file-list .mc-next-panel-button {
+  width: 100%;
+  justify-content: space-between;
+  text-align: left;
+}
+
+.mc-next-utility-file-list .mc-next-panel-button span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-next-utility-empty-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 32%, var(--border));
+  border-radius: 0.42rem;
+  color: color-mix(in oklab, var(--mc-area-color) 74%, var(--foreground));
+}
+
+.mc-next-utility-pre {
+  max-height: 24rem;
+  margin: 0;
+  overflow: auto;
+  padding: 0.52rem;
+  border-radius: 0.4rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--background) 92%, transparent);
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  line-height: 1.42;
+  white-space: pre-wrap;
+}
+
+.mc-next-utility-pre.terminal {
+  color: color-mix(in oklab, var(--mc-area-color) 64%, var(--foreground));
 }
 
 .mc-next-threaded-panel-fallback {
@@ -104,4 +273,10 @@
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
+}
+
+.mc-next-code-source-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
 }

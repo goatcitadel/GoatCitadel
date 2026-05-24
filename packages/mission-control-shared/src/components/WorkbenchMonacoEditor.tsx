@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type KeyboardEvent } from "react";
 import type { editor as MonacoEditorNamespace } from "monaco-editor";
 import { shouldRenderMonacoRuntime } from "./monaco-runtime";
 import {
@@ -13,6 +13,9 @@ interface WorkbenchMonacoEditorProps {
   readOnly?: boolean;
   height?: number | string;
   onChange?: (value: string) => void;
+  onCommandPalette?: () => void;
+  onQuickOpen?: () => void;
+  onSave?: () => void;
   className?: string;
 }
 
@@ -29,6 +32,9 @@ export function WorkbenchMonacoEditor({
   readOnly = false,
   height = "100%",
   onChange,
+  onCommandPalette,
+  onQuickOpen,
+  onSave,
   className,
 }: WorkbenchMonacoEditorProps) {
   const usesDiffLayout = language?.trim().toLowerCase() === "diff";
@@ -37,9 +43,9 @@ export function WorkbenchMonacoEditor({
   const monacoRef = useRef<MonacoEditorApiModule | null>(null);
   const editorRef = useRef<MonacoEditorNamespace.IStandaloneCodeEditor | null>(null);
   const modelRef = useRef<MonacoEditorNamespace.ITextModel | null>(null);
-  const latestPropsRef = useRef({ value, language: resolvedLanguage, readOnly, onChange });
+  const latestPropsRef = useRef({ value, language: resolvedLanguage, readOnly, onChange, onCommandPalette, onQuickOpen, onSave });
   const applyingExternalValueRef = useRef(false);
-  latestPropsRef.current = { value, language: resolvedLanguage, readOnly, onChange };
+  latestPropsRef.current = { value, language: resolvedLanguage, readOnly, onChange, onCommandPalette, onQuickOpen, onSave };
 
   useEffect(() => {
     if (!shouldRenderMonacoRuntime() || !containerRef.current) {
@@ -75,6 +81,11 @@ export function WorkbenchMonacoEditor({
         }
         latestPropsRef.current.onChange?.(editor.getValue());
       });
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => latestPropsRef.current.onSave?.());
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyP, () => latestPropsRef.current.onQuickOpen?.());
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyP, () =>
+        latestPropsRef.current.onCommandPalette?.(),
+      );
       editorRef.current = editor;
     });
 
@@ -111,6 +122,25 @@ export function WorkbenchMonacoEditor({
   }, [readOnly, resolvedLanguage, usesDiffLayout, value]);
 
   if (!shouldRenderMonacoRuntime()) {
+    const handleFallbackKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (!(event.ctrlKey || event.metaKey)) {
+        return;
+      }
+      if (event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        onSave?.();
+        return;
+      }
+      if (event.key.toLowerCase() === "p" && event.shiftKey) {
+        event.preventDefault();
+        onCommandPalette?.();
+        return;
+      }
+      if (event.key.toLowerCase() === "p") {
+        event.preventDefault();
+        onQuickOpen?.();
+      }
+    };
     if (readOnly) {
       return <pre className={className}>{value}</pre>;
     }
@@ -119,6 +149,7 @@ export function WorkbenchMonacoEditor({
         className={className}
         value={value}
         onChange={(event) => onChange?.(event.target.value)}
+        onKeyDown={handleFallbackKeyDown}
         spellCheck={false}
         style={{ minHeight: typeof height === "number" ? `${height}px` : height }}
       />

@@ -2,21 +2,30 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from "rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatMode, ChatProjectRecord, ChatSessionRecord } from "@goatcitadel/contracts";
 import {
+  archiveChatProject,
   createChatSession,
+  createChatProject,
   fetchChatProjects,
   fetchChatSessions,
+  updateChatProject,
 } from "@goatcitadel/mission-control-shared/api/client";
-import { ProjectsRoutePage } from "./ProjectsRoutePage";
+import { deriveProjectHome, ProjectsRoutePage } from "./ProjectsRoutePage";
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
+  archiveChatProject: vi.fn(),
   createChatSession: vi.fn(),
+  createChatProject: vi.fn(),
   fetchChatProjects: vi.fn(),
   fetchChatSessions: vi.fn(),
+  updateChatProject: vi.fn(),
 }));
 
+const mockedArchiveChatProject = vi.mocked(archiveChatProject);
 const mockedCreateChatSession = vi.mocked(createChatSession);
+const mockedCreateChatProject = vi.mocked(createChatProject);
 const mockedFetchChatProjects = vi.mocked(fetchChatProjects);
 const mockedFetchChatSessions = vi.mocked(fetchChatSessions);
+const mockedUpdateChatProject = vi.mocked(updateChatProject);
 
 function project(overrides: Partial<ChatProjectRecord>): ChatProjectRecord {
   return {
@@ -25,7 +34,7 @@ function project(overrides: Partial<ChatProjectRecord>): ChatProjectRecord {
     name: "Alpha",
     description: "Primary project",
     workspacePath: "F:\\code\\personal-ai",
-    status: "active",
+    lifecycleStatus: "active",
     createdAt: "2026-05-01T12:00:00.000Z",
     updatedAt: "2026-05-01T12:00:00.000Z",
     ...overrides,
@@ -86,6 +95,16 @@ function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
   const match = root.findAll((node) => node.type === "button" && collectText(node).includes(label))[0];
   if (!match) {
     throw new Error(`Unable to find button: ${label}`);
+  }
+  return match;
+}
+
+function findInputByPlaceholder(root: ReactTestInstance, placeholder: string): ReactTestInstance {
+  const match = root.findAll(
+    (node) => node.type === "input" && String(node.props.placeholder ?? "").includes(placeholder),
+  )[0];
+  if (!match) {
+    throw new Error(`Unable to find input: ${placeholder}`);
   }
   return match;
 }
@@ -152,6 +171,9 @@ describe("ProjectsRoutePage", () => {
       ],
     } as any);
     mockedCreateChatSession.mockResolvedValue({ sessionId: "new-code-session" } as any);
+    mockedCreateChatProject.mockResolvedValue(project({ projectId: "project-created", name: "Created" }));
+    mockedUpdateChatProject.mockResolvedValue(project({ projectId: "project-alpha", name: "Alpha renamed" }));
+    mockedArchiveChatProject.mockResolvedValue(project({ projectId: "project-alpha", lifecycleStatus: "archived" }));
   });
 
   it("loads project containers, counts thread modes, and auto-selects the first project", async () => {
@@ -173,6 +195,10 @@ describe("ProjectsRoutePage", () => {
 
     const text = pageText(renderer);
     expect(text).toContain("Project containers");
+    expect(text).toContain("Project overview");
+    expect(text).toContain("Continue Chat");
+    expect(text).toContain("Continue Cowork");
+    expect(text).toContain("Continue Code");
     expect(text).toContain("Alpha");
     expect(text).toContain("Chat 1");
     expect(text).toContain("Cowork 1");
@@ -243,6 +269,86 @@ describe("ProjectsRoutePage", () => {
       projectId: "project-beta",
       theme: "neon",
     });
+  });
+
+  it("derives a project home-base summary from source, sessions, and artifacts", () => {
+    const home = deriveProjectHome(project({ workspacePath: "F:\\code\\alpha" }), [
+      session({
+        sessionId: "code-proof",
+        mode: "code",
+        generatedArtifacts: [{ artifactId: "artifact-1" } as any],
+        lastActivityAt: "2026-05-02T12:05:00.000Z",
+      }),
+      session({ sessionId: "cowork-run", mode: "cowork", lastActivityAt: "2026-05-02T12:00:00.000Z" }),
+      session({ sessionId: "chat-run", mode: "chat", lastActivityAt: "2026-05-02T11:00:00.000Z" }),
+    ]);
+
+    expect(home.latestByMode.code?.sessionId).toBe("code-proof");
+    expect(home.latestByMode.cowork?.sessionId).toBe("cowork-run");
+    expect(home.latestByMode.chat?.sessionId).toBe("chat-run");
+    expect(home.artifactCount).toBe(1);
+    expect(home.healthLabel).toBe("Ready to continue");
+    expect(home.readiness.map((item) => [item.id, item.status])).toContainEqual(["artifacts", "ready"]);
+  });
+
+  it("creates, updates, archives, and routes project continuation actions", async () => {
+    const navigate = vi.fn();
+    const renderer = await renderPage(
+      defaultProps({ route: { area: "projects", projectId: "project-alpha", theme: "ops" }, navigate }),
+    );
+
+    act(() => {
+      findButton(renderer.root, "Continue Cowork").props.onClick();
+    });
+    expect(navigate).toHaveBeenCalledWith({
+      area: "cowork",
+      sessionId: "cowork-1",
+      projectId: "project-alpha",
+      theme: "ops",
+    });
+
+    act(() => {
+      findInputByPlaceholder(renderer.root, "Release readiness").props.onChange({
+        target: { value: "Created" },
+      });
+      findInputByPlaceholder(renderer.root, "Local project path").props.onChange({
+        target: { value: "F:\\code\\created" },
+      });
+    });
+    await act(async () => {
+      findButton(renderer.root, "Create project").props.onClick();
+      await Promise.resolve();
+    });
+    expect(mockedCreateChatProject).toHaveBeenCalledWith({
+      workspaceId: "default",
+      name: "Created",
+      workspacePath: "F:\\code\\created",
+      description: undefined,
+    });
+    expect(navigate).toHaveBeenCalledWith({ area: "projects", projectId: "project-created", theme: "ops" });
+
+    const alphaNameInput = renderer.root.findAll(
+      (node) => node.type === "input" && node.props.value === "Alpha",
+    )[0];
+    expect(alphaNameInput).toBeDefined();
+    act(() => {
+      alphaNameInput!.props.onChange({ target: { value: "Alpha renamed" } });
+    });
+    await act(async () => {
+      findButton(renderer.root, "Save project").props.onClick();
+      await Promise.resolve();
+    });
+    expect(mockedUpdateChatProject).toHaveBeenCalledWith(
+      "project-alpha",
+      expect.objectContaining({ name: "Alpha renamed", workspaceId: "default" }),
+    );
+
+    await act(async () => {
+      findButton(renderer.root, "Archive project").props.onClick();
+      await Promise.resolve();
+    });
+    expect(mockedArchiveChatProject).toHaveBeenCalledWith("project-alpha");
+    expect(navigate).toHaveBeenCalledWith({ area: "projects", theme: "ops" }, { replace: true });
   });
 
   it("shows empty state, disables new-thread actions, and allows refresh recovery", async () => {

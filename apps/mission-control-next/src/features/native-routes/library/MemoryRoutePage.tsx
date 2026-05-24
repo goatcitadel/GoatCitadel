@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { RefreshCw, ShieldCheck } from "lucide-react";
-import type { EvidenceEnvelope, MemoryItemRecord } from "@goatcitadel/contracts";
+import type {
+  EvidenceEnvelope,
+  MemoryDecisionRecord,
+  MemoryEntityRecord,
+  MemoryItemRecord,
+  MemoryRelationRecord,
+  StructuredMemorySourceRef,
+} from "@goatcitadel/contracts";
 import { fetchEvidenceEnvelopes } from "@goatcitadel/mission-control-shared/api/client";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
 import {
@@ -76,6 +83,23 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   const memoryCanMutate = memoryAdminState === "enabled";
   const maintenanceControlsReady = Boolean(memory.data?.maintenanceEnabled && memory.data.maintenanceDurableReady);
   const memoryWriteEnvelopes = evidence.items.filter((item) => item.eventKind === "memory_write");
+  const provenanceCoverage = useMemo(
+    () =>
+      buildProvenanceCoverage({
+        entities: memory.data?.memoryEntities ?? [],
+        relations: memory.data?.memoryRelations ?? [],
+        decisions: memory.data?.memoryDecisions ?? [],
+        memoryItems: memory.data?.memoryItems ?? [],
+        evidence: evidence.items,
+      }),
+    [
+      evidence.items,
+      memory.data?.memoryDecisions,
+      memory.data?.memoryEntities,
+      memory.data?.memoryItems,
+      memory.data?.memoryRelations,
+    ],
+  );
   const reviewableDecisions = useMemo(() => {
     const now = Date.now();
     return (memory.data?.memoryDecisions ?? []).filter((decision) => {
@@ -397,6 +421,31 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
       </NativeGrid>
       <NativeGrid>
         <NativeCard
+          title="Provenance map"
+          subtitle="Typed relationship coverage from MemoryLifecycleService snapshots; no separate graph store."
+          stats={[
+            { label: "Types", value: String(provenanceCoverage.filter((item) => item.records > 0).length) },
+            { label: "Links", value: String(memory.data?.memoryRelations.length ?? 0) },
+          ]}
+        >
+          <SectionTruthNotice
+            message={
+              sectionErrors?.memoryEntities ?? sectionErrors?.memoryRelations ?? sectionErrors?.memoryDecisions ?? null
+            }
+          />
+          <div className="mc-next-provenance-coverage-grid">
+            {provenanceCoverage.map((item) => (
+              <div key={item.id} className={`mc-next-provenance-coverage-item is-${item.status}`}>
+                <div>
+                  <strong>{item.label}</strong>
+                  <span>{item.records} records</span>
+                </div>
+                <p>{item.detail}</p>
+              </div>
+            ))}
+          </div>
+        </NativeCard>
+        <NativeCard
           title="Memory entities"
           subtitle="Typed memory records owned by MemoryLifecycleService and governed by the write gate."
           stats={[
@@ -417,7 +466,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   {entity.entityType ?? entity.scope}
                   {" · "}
                   {entity.status}
-                  <p>{entity.summary ?? `${entity.sourceRefs.length} source refs · ${entity.confidence} confidence`}</p>
+                  <p>{formatEntityProvenanceSummary(entity)}</p>
                 </li>
               ))}
             </ul>
@@ -473,13 +522,12 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           {(memory.data?.memoryDecisions.length ?? 0) > 0 ? (
             <ul className="mc-next-approvals-compact-list">
               {memory.data?.memoryDecisions.slice(0, 8).map((decision) => (
-                <li key={decision.id}>
+                <li key={decision.id} className="mc-next-decision-journal-item">
                   <strong>{decision.title}</strong>
-                  {" · "}
-                  {decision.status}
-                  {" · "}
-                  {decision.retrospective ? "reviewed" : formatMaybeDateTime(decision.reviewAt)}
-                  <p>{decision.rationale}</p>
+                  <span>
+                    {decision.status} · {decision.retrospective ? "reviewed" : formatMaybeDateTime(decision.reviewAt)}
+                  </span>
+                  <DecisionJournalFacts decision={decision} />
                   {!decision.retrospective && decision.reviewAt ? (
                     <button
                       type="button"
@@ -820,6 +868,34 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   );
 }
 
+function DecisionJournalFacts({ decision }: { decision: MemoryDecisionRecord }) {
+  const assumptions = readMetadataStringList(decision.metadata, "assumptions");
+  const reversibility = readMetadataString(decision.metadata, "reversibility") ?? "not recorded";
+  const outcome = decision.retrospective
+    ? `${decision.retrospective.outcome}: ${decision.retrospective.notes}`
+    : "not reviewed yet";
+  const facts = [
+    { label: "Chosen path", value: decision.decision },
+    { label: "Options", value: decision.alternatives.length ? decision.alternatives.join("; ") : "none recorded" },
+    { label: "Assumptions", value: assumptions.length ? assumptions.join("; ") : decision.rationale },
+    { label: "Confidence", value: formatConfidence(decision.confidence) },
+    { label: "Reversibility", value: reversibility },
+    { label: "Follow-up", value: formatMaybeDateTime(decision.reviewAt) },
+    { label: "Outcome", value: outcome },
+  ];
+
+  return (
+    <dl className="mc-next-decision-journal-facts">
+      {facts.map((fact) => (
+        <div key={fact.label}>
+          <dt>{fact.label}</dt>
+          <dd>{fact.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 export function readMemoryWriteDecision(envelope: EvidenceEnvelope): string {
   const metadata = asRecord(envelope.metadata);
   const decision = metadata?.decision;
@@ -828,6 +904,77 @@ export function readMemoryWriteDecision(envelope: EvidenceEnvelope): string {
   }
   const value = (decision as { decision?: unknown }).decision;
   return typeof value === "string" ? value : envelope.signatureStatus;
+}
+
+export type ProvenanceCoverageRow = {
+  id: string;
+  label: string;
+  records: number;
+  status: "covered" | "empty";
+  detail: string;
+};
+
+const PROVENANCE_KINDS = [
+  { id: "project", label: "Project" },
+  { id: "task", label: "Task" },
+  { id: "decision", label: "Decision" },
+  { id: "artifact", label: "Artifact" },
+  { id: "memory", label: "Memory" },
+  { id: "skill", label: "Skill" },
+  { id: "tool", label: "Tool" },
+  { id: "approval", label: "Approval" },
+  { id: "source", label: "Source" },
+] as const;
+
+export function buildProvenanceCoverage(input: {
+  entities: MemoryEntityRecord[];
+  relations: MemoryRelationRecord[];
+  decisions: MemoryDecisionRecord[];
+  memoryItems: MemoryItemRecord[];
+  evidence: EvidenceEnvelope[];
+}): ProvenanceCoverageRow[] {
+  const entityCounts = new Map<string, number>();
+  for (const entity of input.entities) {
+    const key = normalizeProvenanceKind(entity.entityType);
+    entityCounts.set(key, (entityCounts.get(key) ?? 0) + 1);
+  }
+  const sourceCount = countUniqueSourceRefs([
+    ...input.entities.flatMap((item) => item.sourceRefs),
+    ...input.relations.flatMap((item) => item.sourceRefs),
+    ...input.decisions.flatMap((item) => item.sourceRefs),
+  ]);
+  const counts: Record<(typeof PROVENANCE_KINDS)[number]["id"], number> = {
+    project: entityCounts.get("project") ?? 0,
+    task: entityCounts.get("task") ?? 0,
+    decision: input.decisions.length,
+    artifact: entityCounts.get("artifact") ?? 0,
+    memory: input.memoryItems.length + (entityCounts.get("memory") ?? 0),
+    skill: entityCounts.get("skill") ?? 0,
+    tool: entityCounts.get("tool") ?? 0,
+    approval: entityCounts.get("approval") ?? input.evidence.filter((item) => item.eventKind.includes("approval")).length,
+    source: sourceCount,
+  };
+
+  return PROVENANCE_KINDS.map((kind) => {
+    const records = counts[kind.id];
+    return {
+      ...kind,
+      records,
+      status: records > 0 ? "covered" : "empty",
+      detail:
+        records > 0
+          ? `${records} ${kind.label.toLowerCase()} records linked through memory lifecycle truth.`
+          : `${kind.label} records have not been captured in structured memory yet.`,
+    };
+  });
+}
+
+function formatEntityProvenanceSummary(entity: MemoryEntityRecord): string {
+  const source = formatSourceRefs(entity.sourceRefs);
+  const summary = entity.summary ? `${entity.summary} · ` : "";
+  return `${summary}${source} · ${formatConfidence(entity.confidence)} confidence · updated ${formatMaybeDateTime(
+    entity.updatedAt,
+  )}`;
 }
 
 function MemoryProvenancePanel({ item, writeEnvelopeCount }: { item: MemoryItemRecord; writeEnvelopeCount: number }) {
@@ -843,6 +990,8 @@ function MemoryProvenancePanel({ item, writeEnvelopeCount }: { item: MemoryItemR
     { label: "Why it may be used", value: reason },
     { label: "Source", value: source },
     { label: "Namespace", value: item.namespace },
+    { label: "Confidence", value: readMetadataString(item.metadata, "confidence") ?? "not recorded" },
+    { label: "Last used", value: readMetadataString(item.metadata, "lastUsedAt") ?? "not recorded" },
     { label: "Workspace", value: readMetadataString(item.metadata, "workspaceId") ?? "not attached" },
     { label: "Session", value: readMetadataString(item.metadata, "sessionId") ?? "not attached" },
     { label: "Task", value: readMetadataString(item.metadata, "taskId") ?? "not attached" },
@@ -870,8 +1019,71 @@ export function readMetadataString(metadata: unknown, key: string): string | und
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+export function readMetadataStringList(metadata: unknown, key: string): string[] {
+  const value = asRecord(metadata)?.[key];
+  if (typeof value === "string" && value.trim()) {
+    return [value.trim()];
+  }
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim());
+}
+
 export function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function normalizeProvenanceKind(value: string | undefined): string {
+  const normalized = value?.trim().toLowerCase().replace(/[_\s-]+/g, "_") ?? "";
+  if (normalized.includes("project")) {
+    return "project";
+  }
+  if (normalized.includes("task")) {
+    return "task";
+  }
+  if (normalized.includes("artifact") || normalized.includes("file")) {
+    return "artifact";
+  }
+  if (normalized.includes("memory") || normalized.includes("knowledge")) {
+    return "memory";
+  }
+  if (normalized.includes("skill")) {
+    return "skill";
+  }
+  if (normalized.includes("tool") || normalized.includes("capability")) {
+    return "tool";
+  }
+  if (normalized.includes("approval")) {
+    return "approval";
+  }
+  if (normalized.includes("source")) {
+    return "source";
+  }
+  return normalized || "unknown";
+}
+
+function countUniqueSourceRefs(sourceRefs: StructuredMemorySourceRef[]): number {
+  const refs = new Set<string>();
+  for (const ref of sourceRefs) {
+    refs.add(`${ref.sourceType}:${ref.sourceRef}`);
+  }
+  return refs.size;
+}
+
+function formatSourceRefs(sourceRefs: StructuredMemorySourceRef[]): string {
+  if (sourceRefs.length === 0) {
+    return "no source refs";
+  }
+  const first = sourceRefs[0]!;
+  return `${sourceRefs.length} source refs; primary ${first.title ?? `${first.sourceType}:${first.sourceRef}`}`;
+}
+
+function formatConfidence(confidence: number): string {
+  if (!Number.isFinite(confidence)) {
+    return "unknown";
+  }
+  return `${Math.round(confidence * 100)}%`;
 }
 
 function SectionTruthNotice({ message }: { message: string | null | undefined }) {

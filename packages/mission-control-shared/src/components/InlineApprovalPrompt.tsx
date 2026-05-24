@@ -24,6 +24,7 @@ export function InlineApprovalPrompt({
   affectedResources,
   codePreview,
   pending,
+  compact = false,
   approvalsHref,
   workspaceAllowAvailable,
   persistentAllowAvailable = true,
@@ -48,6 +49,7 @@ export function InlineApprovalPrompt({
   affectedResources?: string[];
   codePreview?: string;
   pending?: boolean;
+  compact?: boolean;
   approvalsHref?: string;
   workspaceAllowAvailable?: boolean;
   persistentAllowAvailable?: boolean;
@@ -128,15 +130,17 @@ export function InlineApprovalPrompt({
       </div>
       {toolName ? <p className="chat-approval-tool">{toolName}</p> : null}
       {riskSummary ? <p className="chat-approval-reason">{riskSummary}</p> : null}
-      {kind ? <p className="chat-approval-reason">Action type: {kind}</p> : null}
+      {!compact && kind ? <p className="chat-approval-reason">Action type: {kind}</p> : null}
       {reason ? <p className="chat-approval-reason">{reason}</p> : null}
       <p className="chat-approval-reason">{decisionSummary}</p>
-      {requestedOutputIntent ? <p className="chat-approval-reason">Expected result: {requestedOutputIntent}</p> : null}
-      {resourceSummary ? <p className="chat-approval-reason">Touches: {resourceSummary}</p> : null}
+      {!compact && requestedOutputIntent ? (
+        <p className="chat-approval-reason">Expected result: {requestedOutputIntent}</p>
+      ) : null}
+      {!compact && resourceSummary ? <p className="chat-approval-reason">Touches: {resourceSummary}</p> : null}
       {saveCandidateOnSuccess ? (
         <p className="chat-approval-reason">On success, GoatCitadel will stage a candidate skill for review.</p>
       ) : null}
-      <p className="chat-approval-reason">{scopeSummary}</p>
+      {!compact ? <p className="chat-approval-reason">{scopeSummary}</p> : null}
       <div className="chat-approval-actions">
         <button
           type="button"

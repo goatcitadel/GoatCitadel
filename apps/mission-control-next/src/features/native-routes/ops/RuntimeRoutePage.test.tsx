@@ -2,6 +2,7 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from "rea
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildNeedsAttentionItems,
   capitalize,
   createScheduleJobId,
   describeQmdImpact,
@@ -263,6 +264,17 @@ function findFieldControl(
   return field.findByType(control);
 }
 
+function findFirstByClass(root: ReactTestInstance, className: string): ReactTestInstance {
+  const match = root.findAll((node) => {
+    const value = node.props.className;
+    return typeof value === "string" && value.split(/\s+/).includes(className);
+  })[0];
+  if (!match) {
+    throw new Error(`Missing class ${className}`);
+  }
+  return match;
+}
+
 describe("RuntimeRoutePage", () => {
   afterEach(() => {
     runtimeSnapshotOverrides.sourceStatus = null;
@@ -341,6 +353,56 @@ describe("RuntimeRoutePage", () => {
     expect(sourceFailed({ sourceStatus: { daemon: { status: "error" } } }, "daemon")).toBe(true);
     expect(sourceFailed({ sourceStatus: { daemon: { status: "ok" } } }, "daemon")).toBe(false);
     expect(sourceFailed({ sourceStatus: {} }, "daemon")).toBe(false);
+    const attentionItems = buildNeedsAttentionItems(
+      {
+        dashboard: { pendingApprovals: 1, activeSubagents: 0, dailyCostUsd: 0 },
+        timeline: {
+          events: {
+            items: [
+              {
+                eventId: "evt-failed",
+                eventType: "durable.failed",
+                eventClass: "runtime",
+                source: "gateway",
+                timestamp: "2026-05-14T12:00:00.000Z",
+              },
+            ],
+          },
+          scheduler: { jobs: [], reviewQueue: [{ itemId: "review-1" }] },
+        },
+        health: { daemonStatus: { running: false, state: "stopped" }, backups: { latest: null } },
+        cost: null,
+        daemon: { running: false, state: "stopped" },
+        backups: [],
+        sessions: [],
+        mcpServers: [],
+        sourceStatus: {
+          dashboard: { status: "ok" },
+          timeline: { status: "ok" },
+          health: { status: "ok" },
+          cost: { status: "error", message: "cost offline" },
+          daemon: { status: "ok" },
+          backups: { status: "ok" },
+          sessions: { status: "ok" },
+          mcpServers: { status: "ok" },
+        },
+      } as any,
+      0,
+      "ops" as any,
+    );
+    expect(attentionItems.map((item) => item.id)).toEqual(
+      expect.arrayContaining([
+        "pending-approvals",
+        "daemon-runtime",
+        "backup-posture",
+        "scheduler-review",
+        "spend-coverage",
+        "failed-runtime-event",
+        "source-cost",
+      ]),
+    );
+    expect(attentionItems.every((item) => item.primaryLabel && item.inspectLabel)).toBe(true);
+    expect(attentionItems.find((item) => item.id === "source-cost")?.body).toBe("cost offline");
     expect(formatBytes(0)).toBe("0 B");
     expect(formatBytes(Number.POSITIVE_INFINITY)).toBe("0 B");
     expect(formatBytes(1024 * 1024 * 12)).toBe("12 MB");
@@ -718,10 +780,11 @@ describe("RuntimeRoutePage", () => {
     expect(collectText(renderer!.root)).not.toContain("daemon.started");
 
     await act(async () => findExactButton(renderer!.root, "Runtime").props.onClick());
-    expect(collectText(renderer!.root)).toContain("daemon.started");
-    expect(collectText(renderer!.root)).toContain("heartbeat");
-    expect(collectText(renderer!.root)).not.toContain("approval.resolved");
-    expect(collectText(renderer!.root)).not.toContain("tool.failed");
+    const runtimeFeedText = collectText(findFirstByClass(renderer!.root, "mc-next-activity-feed"));
+    expect(runtimeFeedText).toContain("daemon.started");
+    expect(runtimeFeedText).toContain("heartbeat");
+    expect(runtimeFeedText).not.toContain("approval.resolved");
+    expect(runtimeFeedText).not.toContain("tool.failed");
   });
 
   it("renders activity events with duplicate timestamp fallbacks without duplicate key warnings", async () => {

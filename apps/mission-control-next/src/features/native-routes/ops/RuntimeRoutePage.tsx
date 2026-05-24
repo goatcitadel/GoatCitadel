@@ -29,6 +29,19 @@ const CRON_ACTION_OPTIONS = [
   "watchdog",
 ] as const;
 type CronActionOption = (typeof CRON_ACTION_OPTIONS)[number];
+type OpsRuntimeData = NonNullable<ReturnType<typeof useOpsRuntimeSnapshot>["data"]>;
+
+type OpsAttentionItem = {
+  id: string;
+  title: string;
+  meta: string;
+  body: string;
+  primaryLabel: string;
+  primaryRoute: AppRoute;
+  inspectLabel: string;
+  inspectRoute: AppRoute;
+  tone: ChipTone;
+};
 
 export function RuntimeRoutePage({
   route,
@@ -180,6 +193,7 @@ export function RuntimeRoutePage({
       }
       return true;
     });
+    const needsAttentionItems = buildNeedsAttentionItems(data, pendingApprovals, route.theme);
 
     switch (section) {
       case "sessions":
@@ -772,6 +786,7 @@ export function RuntimeRoutePage({
       default:
         return (
           <NativeGrid>
+            <OpsNeedsAttentionCard items={needsAttentionItems} navigate={navigate} />
             <NativeCard
               title="Activity feed"
               subtitle="Recent events, scheduler pressure, and approval signal in one explicit operator view."
@@ -897,6 +912,46 @@ export function RuntimeRoutePage({
   );
 }
 
+function OpsNeedsAttentionCard({
+  items,
+  navigate,
+}: {
+  items: OpsAttentionItem[];
+  navigate: (route: AppRoute, options?: { replace?: boolean }) => void;
+}) {
+  return (
+    <NativeCard
+      title="Needs attention"
+      subtitle="The exception inbox for decisions, runtime issues, stale recovery signals, and spend coverage."
+      density="compact"
+      stats={[{ label: "Open", value: String(items.length) }]}
+    >
+      {items.length === 0 ? (
+        <p className="mc-next-directory-empty">No operator attention items right now.</p>
+      ) : (
+        <ul className="mc-next-ops-attention-list" aria-label="Needs attention">
+          {items.map((item) => (
+            <li key={item.id} className={`mc-next-ops-attention-item tone-${item.tone}`}>
+              <div className="mc-next-ops-attention-copy">
+                <ThreePartChip tone={item.tone} state={item.meta} mid={item.title} age="" />
+                <p>{item.body}</p>
+              </div>
+              <div className="mc-next-ops-attention-actions">
+                <button type="button" className="gc-button" onClick={() => navigate(item.primaryRoute)}>
+                  {item.primaryLabel}
+                </button>
+                <button type="button" className="gc-button subtle" onClick={() => navigate(item.inspectRoute)}>
+                  {item.inspectLabel}
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </NativeCard>
+  );
+}
+
 function MetricGrid({ items }: { items: Array<{ label: string; value: string; meta?: string }> }) {
   return (
     <div className="mc-next-runtime-metric-grid">
@@ -994,6 +1049,132 @@ export function toneForActivityEvent(eventType: string, eventClass?: string | nu
     return "safe";
   }
   return "muted";
+}
+
+export function buildNeedsAttentionItems(
+  data: OpsRuntimeData,
+  pendingApprovals: number,
+  theme: AppRoute["theme"],
+): OpsAttentionItem[] {
+  const items: OpsAttentionItem[] = [];
+  const pendingApprovalCount = data.dashboard?.pendingApprovals ?? pendingApprovals;
+  const daemonRuntimeUnavailable = sourceFailed(data, "daemon") && sourceFailed(data, "health");
+  const daemonRunning = daemonRuntimeUnavailable ? null : (data.daemon?.running ?? data.health?.daemonStatus.running);
+  const latestBackup = data.health?.backups.latest;
+  const latestBackupVerified = latestBackup?.verified === true && latestBackup?.contractVerified === true;
+  const schedulerReviewCount = data.timeline?.scheduler.reviewQueue.length ?? 0;
+  const unknownSpendEvents = data.cost?.usageAvailability?.unknownEvents ?? 0;
+  const failedRuntimeEvents = (data.timeline?.events.items ?? []).filter((item) =>
+    /failed|failure|error|degraded/i.test(`${item.eventType} ${item.eventClass ?? ""}`),
+  );
+  const sourceFailures = Object.entries(data.sourceStatus).filter(([, status]) => status.status === "error");
+
+  if (pendingApprovalCount > 0) {
+    items.push({
+      id: "pending-approvals",
+      title: "Pending approvals",
+      meta: `${pendingApprovalCount} waiting`,
+      body: "Operator decisions are blocking work from moving forward.",
+      primaryLabel: "Review queue",
+      primaryRoute: { area: "ops", section: "approvals", theme },
+      inspectLabel: "Open activity",
+      inspectRoute: { area: "ops", section: "activity", theme },
+      tone: "caution",
+    });
+  }
+
+  if (daemonRuntimeUnavailable || daemonRunning === false) {
+    items.push({
+      id: "daemon-runtime",
+      title: "Daemon/runtime issue",
+      meta: daemonRuntimeUnavailable ? "unavailable" : "stopped",
+      body: daemonRuntimeUnavailable
+        ? "Daemon and health sources are unavailable, so runtime control truth needs inspection."
+        : `Daemon is ${data.daemon?.state ?? data.health?.daemonStatus.state ?? "stopped"}.`,
+      primaryLabel: "Open runtime",
+      primaryRoute: { area: "ops", section: "runtime", theme },
+      inspectLabel: "Diagnostics",
+      inspectRoute: { area: "ops", section: "diagnostics", theme },
+      tone: "danger",
+    });
+  }
+
+  if (!sourceFailed(data, "health") && !latestBackupVerified) {
+    items.push({
+      id: "backup-posture",
+      title: latestBackup ? "Backup needs verification" : "No backup visible",
+      meta: latestBackup ? "stale proof" : "missing",
+      body: latestBackup
+        ? "A backup exists, but verified restore-contract evidence is not present."
+        : "No backup is visible in the current health snapshot.",
+      primaryLabel: "Open runtime",
+      primaryRoute: { area: "ops", section: "runtime", theme },
+      inspectLabel: "Diagnostics",
+      inspectRoute: { area: "ops", section: "diagnostics", theme },
+      tone: latestBackup ? "caution" : "danger",
+    });
+  }
+
+  if (schedulerReviewCount > 0) {
+    items.push({
+      id: "scheduler-review",
+      title: "Scheduler review queue",
+      meta: `${schedulerReviewCount} queued`,
+      body: "Scheduled work has items waiting for operator review.",
+      primaryLabel: "Open schedules",
+      primaryRoute: { area: "ops", section: "schedules", theme },
+      inspectLabel: "Activity",
+      inspectRoute: { area: "ops", section: "activity", theme },
+      tone: "caution",
+    });
+  }
+
+  if (unknownSpendEvents > 0 || sourceFailed(data, "cost")) {
+    items.push({
+      id: "spend-coverage",
+      title: sourceFailed(data, "cost") ? "Spend source unavailable" : "Spend coverage gap",
+      meta: sourceFailed(data, "cost") ? "unavailable" : `${unknownSpendEvents} unknown`,
+      body: sourceFailed(data, "cost")
+        ? "Cost data could not be loaded, so provider spend truth is incomplete."
+        : "Some runtime events are missing usage metadata and need cost review.",
+      primaryLabel: "Open costs",
+      primaryRoute: { area: "ops", section: "costs", theme },
+      inspectLabel: "Activity",
+      inspectRoute: { area: "ops", section: "activity", theme },
+      tone: "caution",
+    });
+  }
+
+  if (failedRuntimeEvents.length > 0) {
+    const first = failedRuntimeEvents[0]!;
+    items.push({
+      id: "failed-runtime-event",
+      title: "Failed runtime event",
+      meta: first.eventType,
+      body: first.timestamp ? `Latest failure signal at ${formatDateTime(first.timestamp)}.` : "A failure signal is present.",
+      primaryLabel: "Open activity",
+      primaryRoute: { area: "ops", section: "activity", theme },
+      inspectLabel: "Diagnostics",
+      inspectRoute: { area: "ops", section: "diagnostics", theme },
+      tone: "danger",
+    });
+  }
+
+  for (const [source, status] of sourceFailures.slice(0, 2)) {
+    items.push({
+      id: `source-${source}`,
+      title: `${capitalize(source)} source unavailable`,
+      meta: "source error",
+      body: readRuntimeSourceMessage(status) ?? "A runtime source could not be loaded.",
+      primaryLabel: "Diagnostics",
+      primaryRoute: { area: "ops", section: "diagnostics", theme },
+      inspectLabel: "Activity",
+      inspectRoute: { area: "ops", section: "activity", theme },
+      tone: "danger",
+    });
+  }
+
+  return items.slice(0, 8);
 }
 
 export function buildOpsHeadMetrics(
@@ -1131,6 +1312,18 @@ export function sourceFailed(
   source: string,
 ): boolean {
   return data.sourceStatus[source]?.status === "error";
+}
+
+function readRuntimeSourceMessage(status: unknown): string | null {
+  if (!status || typeof status !== "object") {
+    return null;
+  }
+  const record = status as { message?: unknown; error?: unknown };
+  return typeof record.message === "string"
+    ? record.message
+    : typeof record.error === "string"
+      ? record.error
+      : null;
 }
 
 export function formatBytes(value: number) {

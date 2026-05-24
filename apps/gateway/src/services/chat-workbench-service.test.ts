@@ -19,6 +19,7 @@ import {
   revertChatSessionWorkbenchFile,
   resolveWorkbenchPathStatus,
   runChatSessionWorkbenchCommand,
+  runChatSessionWorkbenchFileOperation,
   saveChatSessionWorkbenchFile,
   type ChatWorkbenchDependencies,
 } from "./chat-workbench-service.js";
@@ -203,6 +204,82 @@ describe("chat workbench helpers", () => {
 
     expect(reverted.revertedFiles).toEqual(["scratch.txt"]);
     await expect(fs.stat(path.join(projectRoot, "scratch.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+  }, 30_000);
+
+  it("runs governed file tree operations inside the project workbench scope", async () => {
+    const { deps, projectRoot } = await createGitWorkbenchFixture();
+
+    const createdFolder = await runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+      operation: "create_folder",
+      path: "docs",
+    });
+    const folderStat = await fs.stat(path.join(projectRoot, "docs"));
+    expect(folderStat.isDirectory()).toBe(true);
+    expect(createdFolder.output.output).toContain("Created folder docs.");
+
+    const createdFile = await runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+      operation: "create_file",
+      path: "docs/notes.md",
+      content: "# Notes\n",
+    });
+    expect(createdFile.state.activeFilePath).toBe("docs/notes.md");
+    expect(await readNormalized(path.join(projectRoot, "docs", "notes.md"))).toBe("# Notes\n");
+    expect(createdFile.tree.items.some((item) => item.path === "docs/notes.md")).toBe(true);
+
+    const renamed = await runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+      operation: "rename",
+      path: "docs/notes.md",
+      targetPath: "docs/renamed.md",
+    });
+    expect(renamed.state.activeFilePath).toBe("docs/renamed.md");
+    await expect(fs.stat(path.join(projectRoot, "docs", "notes.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readNormalized(path.join(projectRoot, "docs", "renamed.md"))).toBe("# Notes\n");
+
+    const duplicated = await runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+      operation: "duplicate",
+      path: "docs/renamed.md",
+      targetPath: "docs/copy.md",
+    });
+    expect(duplicated.state.activeFilePath).toBe("docs/copy.md");
+    expect(await readNormalized(path.join(projectRoot, "docs", "copy.md"))).toBe("# Notes\n");
+
+    const moved = await runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+      operation: "move",
+      path: "docs/copy.md",
+      targetPath: "copy.md",
+    });
+    expect(moved.state.activeFilePath).toBe("copy.md");
+    expect(await readNormalized(path.join(projectRoot, "copy.md"))).toBe("# Notes\n");
+
+    const deleted = await runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+      operation: "delete",
+      path: "copy.md",
+    });
+    expect(deleted.state.activeFilePath).toBeFalsy();
+    await expect(fs.stat(path.join(projectRoot, "copy.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(deps.publishRealtime).toHaveBeenCalledWith(
+      "chat_workbench_updated",
+      "chat",
+      expect.objectContaining({ type: "chat_workbench_file_operation_completed", operation: "delete" }),
+      expect.objectContaining({ eventAuthority: "retained_stream" }),
+    );
+  }, 30_000);
+
+  it("rejects file tree operations outside allowed workbench paths", async () => {
+    const { deps } = await createGitWorkbenchFixture();
+
+    await expect(
+      runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+        operation: "create_file",
+        path: "../escape.ts",
+      }),
+    ).rejects.toThrow(/Invalid relative path/);
+    await expect(
+      runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+        operation: "delete",
+        path: ".git/config",
+      }),
+    ).rejects.toThrow(/Git metadata/);
   }, 30_000);
 
   it("creates a workbench worktree from a git project and publishes the lifecycle event", async () => {

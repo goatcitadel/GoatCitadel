@@ -124,6 +124,13 @@ describe("chat session routes", () => {
       }),
     ).resolves.toMatchObject({ statusCode: 200 });
     await expect(
+      app.inject({
+        method: "POST",
+        url: "/api/v1/chat/sessions/sess-1/workbench/file-operation",
+        payload: { operation: "create_file", path: "src/new.ts" },
+      }),
+    ).resolves.toMatchObject({ statusCode: 200 });
+    await expect(
       app.inject({ method: "GET", url: "/api/v1/chat/sessions/sess-1/workbench/file-diff?path=README.md" }),
     ).resolves.toMatchObject({ statusCode: 200 });
     await expect(
@@ -283,6 +290,7 @@ function createChatSessionsService(overrides: Record<string, unknown> = {}) {
     getChatSessionWorkbenchTree: vi.fn(async () => ({ rootPath: "repo", items: [] })),
     getChatSessionWorkbenchFile: vi.fn(async () => ({ path: "README.md", content: "notes" })),
     saveChatSessionWorkbenchFile: vi.fn(async () => ({ path: "README.md", changed: true })),
+    runChatSessionWorkbenchFileOperation: vi.fn(async () => ({ operation: "create_file", path: "src/new.ts" })),
     getChatSessionWorkbenchFileDiff: vi.fn(async () => ({ path: "README.md", diff: "@@" })),
     getChatSessionWorkbenchDiff: vi.fn(async () => ({ changedFiles: ["README.md"], diff: "@@" })),
     getChatSessionWorkbenchOutput: vi.fn(async () => ({ output: "ok" })),

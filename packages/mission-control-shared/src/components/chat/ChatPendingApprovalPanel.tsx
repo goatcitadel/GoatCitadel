@@ -50,6 +50,7 @@ export function ChatPendingApprovalPanel(props: {
   return (
     <div
       className={`chat-blocking-prompt chat-blocking-prompt-approval${variant === "compact" ? " compact" : ""}`}
+      data-variant={variant ?? "default"}
       onKeyDown={handleKeyDown}
     >
       <InlineApprovalPrompt
@@ -69,6 +70,7 @@ export function ChatPendingApprovalPanel(props: {
         affectedResources={pendingApproval.affectedResources}
         codePreview={pendingApproval.codePreview}
         pending={pending}
+        compact={variant === "compact"}
         approvalsHref={
           approvalsHref ?? `?space=operate&page=approvals&approvalId=${encodeURIComponent(pendingApproval.approvalId)}`
         }

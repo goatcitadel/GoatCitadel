@@ -9,7 +9,12 @@ import {
   type ReactNode,
   type SetStateAction,
 } from "react";
-import { providerTemplates, type CapabilityPackPreview, type LlmProviderAdviceResponse } from "@goatcitadel/contracts";
+import {
+  providerTemplates,
+  type CapabilityPackPreview,
+  type DemoBootstrapStateResponse,
+  type LlmProviderAdviceResponse,
+} from "@goatcitadel/contracts";
 import {
   AlertTriangle,
   Bell,
@@ -237,6 +242,11 @@ type SettingsSectionProps = SettingsNativePageProps & {
   section: string;
 };
 
+type OnboardingPageState = OnboardingState & {
+  runtimeSettings: Awaited<ReturnType<typeof fetchSettings>> | null;
+  demoState: DemoBootstrapStateResponse | null;
+};
+
 export function SettingsNativePage(props: SettingsNativePageProps) {
   const section = props.route.section ? String(props.route.section) : "general";
 
@@ -360,6 +370,29 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
             workspaces={data.workspaces}
             onNavigate={(section) => navigate({ area: "settings", section, theme: route.theme })}
           />
+          <SettingsPanel
+            title="Setup path"
+            subtitle="Begin with the configuration that unlocks useful work; keep deep controls available after that."
+          >
+            <SettingsActionList
+              compact={false}
+              maxHeight=""
+              items={[
+                {
+                  label: "Beginner path",
+                  description: "Provider, model smoke, first Chat/Cowork/Code outcome, and one proof artifact.",
+                  actionLabel: "Start Here",
+                  onClick: () => navigate({ area: "settings", section: "onboarding", theme: route.theme }),
+                },
+                {
+                  label: "Advanced controls",
+                  description: "Permission profiles, tool grants, MCP servers, channels, add-ons, and runtime tuning.",
+                  actionLabel: "Open permissions",
+                  onClick: () => navigate({ area: "settings", section: "permissions", theme: route.theme }),
+                },
+              ]}
+            />
+          </SettingsPanel>
           <SettingsPanel
             title="Quick routes"
             subtitle="Jump straight into the settings surfaces that actually change behavior."
@@ -525,11 +558,12 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
 
 function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [onboarding, runtimeSettings] = await Promise.all([
+    const [onboarding, runtimeSettings, demoState] = await Promise.all([
       fetchOnboardingState(),
       fetchSettings().catch(() => null),
+      fetchDemoState().catch(() => null),
     ]);
-    return { ...onboarding, runtimeSettings };
+    return { ...onboarding, runtimeSettings, demoState } satisfies OnboardingPageState;
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -604,6 +638,7 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
       {data ? (
         <SettingsGrid variant="detail-wide">
           <DemoStartPanel route={route} navigate={navigate} setActiveWorkspaceId={setActiveWorkspaceId} />
+          <FirstOutcomePathPanel route={route} navigate={navigate} onboarding={data} demoState={data.demoState} />
           <SetupCenterPanel route={route} navigate={navigate} onboarding={data} />
           <SettingsPanel
             title="First-run setup"
@@ -869,6 +904,53 @@ function DemoStartPanel({
           Refresh
         </button>
       </SettingsButtonRow>
+    </SettingsPanel>
+  );
+}
+
+function FirstOutcomePathPanel({
+  route,
+  navigate,
+  onboarding,
+  demoState,
+}: {
+  route: AppRoute;
+  navigate: SettingsNativePageProps["navigate"];
+  onboarding: OnboardingState;
+  demoState: DemoBootstrapStateResponse | null;
+}) {
+  const items = deriveFirstOutcomePathItems(onboarding, demoState);
+  const completeCount = items.filter((item) => item.state === "complete").length;
+  const nextItem = items.find((item) => item.state !== "complete") ?? items[items.length - 1];
+
+  return (
+    <SettingsPanel
+      title="First trusted outcome"
+      subtitle="Follow one path from provider readiness to a proof-backed Chat, Cowork, or Code result."
+      stats={[
+        { label: "Progress", value: `${completeCount}/${items.length}` },
+        { label: "Next", value: nextItem?.label ?? "Ready" },
+        { label: "Evidence", value: items.at(-1)?.state === "complete" ? "Produced" : "Needed" },
+      ]}
+    >
+      <SettingsWizardSteps
+        steps={items.map((item) => ({
+          label: item.label,
+          description: item.description,
+          state: item.state,
+        }))}
+      />
+      <SettingsActionList
+        items={items.map((item) => ({
+          id: item.id,
+          label: item.label,
+          description: item.actionDescription,
+          meta: item.meta,
+          actionLabel: item.actionLabel,
+          onClick: () => navigate({ ...item.route, theme: route.theme }),
+        }))}
+        maxHeight=""
+      />
     </SettingsPanel>
   );
 }
@@ -2396,6 +2478,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                 </select>
               </SettingsField>
             </SettingsFieldGrid>
+            <SettingsConfigSourceLegend />
             {routingUsesFallbackModels ? (
               <SettingsNotice
                 notice={{
@@ -2660,10 +2743,15 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                         ? (codexOAuthStatus?.accountLabel ?? "ChatGPT/Codex plan")
                         : selectedProviderIsClaudeCodeOAuth
                           ? "Claude subscription token"
-                          : formatSecretStatusMeta(
-                              secretState.data?.source ?? selectedProvider.apiKeySource,
-                              secretState.data?.hasSecret ?? selectedProvider.hasApiKey ?? false,
-                            ),
+                        : formatSecretStatusMeta(
+                            secretState.data?.source ?? selectedProvider.apiKeySource,
+                            secretState.data?.hasSecret ?? selectedProvider.hasApiKey ?? false,
+                          ),
+                    },
+                    {
+                      label: "Secret source",
+                      value: formatEffectiveConfigSourceLabel(secretState.data?.source ?? selectedProvider.apiKeySource),
+                      meta: "Effective source label",
                     },
                     {
                       label: "Probe",
@@ -7150,6 +7238,17 @@ function SettingsMetricGrid({ items }: { items: Array<{ label: string; value: st
   );
 }
 
+function SettingsConfigSourceLegend() {
+  return (
+    <div className="mc-next-settings-source-legend" aria-label="Effective config source labels">
+      <span>{formatEffectiveConfigSourceLabel("env")}</span>
+      <span>{formatEffectiveConfigSourceLabel("inline")}</span>
+      <span>{formatEffectiveConfigSourceLabel("default")}</span>
+      <span>{formatEffectiveConfigSourceLabel("keychain")}</span>
+    </div>
+  );
+}
+
 function SettingsWizardSteps({
   steps,
 }: {
@@ -7525,6 +7624,134 @@ export function deriveSetupCenterItems(onboarding: OnboardingState): Array<{
   ];
 }
 
+type FirstOutcomePathItem = {
+  id: string;
+  label: string;
+  description: string;
+  actionDescription: string;
+  state: SettingsWizardStepState;
+  meta: string;
+  actionLabel: string;
+  route: AppRoute;
+};
+
+export function deriveFirstOutcomePathItems(
+  onboarding: OnboardingState,
+  demoState: DemoBootstrapStateResponse | null,
+): FirstOutcomePathItem[] {
+  const activeProvider = onboarding.settings.llm.providers.find(
+    (provider) => provider.providerId === onboarding.settings.llm.activeProviderId,
+  );
+  const activeModel = onboarding.settings.llm.activeModel.trim();
+  const providerConnected = Boolean(
+    activeProvider && activeModel && (activeProvider.hasApiKey || isLikelyLocalProviderBaseUrl(activeProvider.baseUrl)),
+  );
+  const hasChatStart = Boolean(demoState?.sessions.some((session) => session.mode === "chat"));
+  const hasCoworkStart = Boolean(
+    demoState?.sessions.some((session) => session.mode === "cowork") ||
+      demoState?.tasks.some((task) => task.title.toLowerCase().includes("cowork")),
+  );
+  const hasCodeBinding = Boolean(
+    demoState?.project?.workspacePath ||
+      demoState?.sessions.some((session) => session.mode === "code") ||
+      demoState?.tasks.some((task) => task.title.toLowerCase().includes("code")),
+  );
+  const providerFailure = describeProviderReadinessFailure(onboarding);
+
+  return [
+    {
+      id: "provider-connected",
+      label: "Provider connected",
+      description: providerConnected
+        ? `${activeProvider?.label ?? onboarding.settings.llm.activeProviderId} is selected with ${activeModel}.`
+        : providerFailure,
+      actionDescription: "Open Providers & Models to choose a provider, model, and secret source.",
+      state: providerConnected ? "complete" : "active",
+      meta: providerConnected ? "Pass" : "Needs provider setup",
+      actionLabel: "Configure",
+      route: { area: "settings", section: "providers" },
+    },
+    {
+      id: "model-smoke",
+      label: "Model smoke passed",
+      description: providerConnected
+        ? "Run a configured-provider smoke check and keep the pass/fail evidence before release claims."
+        : "Connect a provider first; smoke cannot run without a provider, model, and credential or local endpoint.",
+      actionDescription: "Open provider diagnostics and run the configured model check when credentials are ready.",
+      state: providerConnected ? "active" : "pending",
+      meta: providerConnected ? "Evidence required" : "Blocked by provider",
+      actionLabel: "Open checks",
+      route: { area: "settings", section: "providers" },
+    },
+    {
+      id: "first-chat",
+      label: "First Chat sent",
+      description: hasChatStart
+        ? "A starter Chat thread is available; send or inspect the first user outcome there."
+        : "Open Chat and send the first low-risk prompt after provider smoke passes.",
+      actionDescription: "Open Chat for the first normal response and runtime-context inspection.",
+      state: hasChatStart ? "complete" : providerConnected ? "active" : "pending",
+      meta: hasChatStart ? "Starter thread ready" : "Needs first send",
+      actionLabel: "Open Chat",
+      route: { area: "chat" },
+    },
+    {
+      id: "first-cowork",
+      label: "First Cowork run",
+      description: hasCoworkStart
+        ? "A starter Cowork run or task exists for supervised multi-step work."
+        : "Start a Cowork run so blockers, approvals, checkpoints, and evidence become inspectable.",
+      actionDescription: "Open Cowork to start or resume the first supervised run.",
+      state: hasCoworkStart ? "complete" : hasChatStart ? "active" : "pending",
+      meta: hasCoworkStart ? "Starter run ready" : "Needs run",
+      actionLabel: "Open Cowork",
+      route: { area: "cowork" },
+    },
+    {
+      id: "project-code-bound",
+      label: "Project or code source bound",
+      description: hasCodeBinding
+        ? "A starter project/code lane is available for the implementation loop."
+        : "Bind a project or code source so Code can edit, validate, and preserve artifact truth.",
+      actionDescription: "Open Code to bind source or Projects to continue existing work.",
+      state: hasCodeBinding ? "complete" : hasCoworkStart ? "active" : "pending",
+      meta: hasCodeBinding ? "Bound" : "Needs source",
+      actionLabel: "Open Code",
+      route: { area: "code" },
+    },
+    {
+      id: "proof-artifact",
+      label: "Validation or proof artifact",
+      description:
+        "Run validation from Code or inspect artifacts after the first outcome; this is the evidence that makes setup trustworthy.",
+      actionDescription: "Open generated artifacts or Code validation history to inspect proof.",
+      state: hasCodeBinding ? "active" : "pending",
+      meta: "Proof required",
+      actionLabel: "Inspect proof",
+      route: { area: "library", section: "artifacts" },
+    },
+  ];
+}
+
+export function describeProviderReadinessFailure(onboarding: OnboardingState): string {
+  const activeProviderId = onboarding.settings.llm.activeProviderId.trim();
+  const activeModel = onboarding.settings.llm.activeModel.trim();
+  if (!activeProviderId) {
+    return "Choose an active provider before sending cloud-backed work.";
+  }
+  const activeProvider = onboarding.settings.llm.providers.find((provider) => provider.providerId === activeProviderId);
+  if (!activeProvider) {
+    return `Provider ${activeProviderId} is selected but is not present in the provider catalog.`;
+  }
+  if (!activeModel) {
+    return `Provider ${activeProvider.label} is selected, but no model is active.`;
+  }
+  if (!activeProvider.hasApiKey && !isLikelyLocalProviderBaseUrl(activeProvider.baseUrl)) {
+    return `Provider ${activeProvider.label} needs an API key or a reachable local endpoint before smoke checks can run.`;
+  }
+  return `Provider ${activeProvider.label} needs a model smoke check before release claims.`;
+}
+
 export function wizardStateForChecklist(
   status?: OnboardingState["checklist"][number]["status"],
 ): SettingsWizardStepState {
@@ -7838,6 +8065,25 @@ function formatSecretStatusMeta(source: string | undefined, hasSecret: boolean):
     return "Key on file in inline config";
   }
   return "Key on file; value is never returned";
+}
+
+export function formatEffectiveConfigSourceLabel(source: string | undefined): string {
+  if (source === "env") {
+    return "env";
+  }
+  if (source === "keychain") {
+    return "secure store";
+  }
+  if (source === "inline") {
+    return "UI";
+  }
+  if (source === "default" || source === "template") {
+    return "default";
+  }
+  if (source === "managed") {
+    return "managed";
+  }
+  return "unknown";
 }
 
 function formatSecretStorageNotice(source: string | undefined, hasSecret: boolean): string {

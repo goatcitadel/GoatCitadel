@@ -18,6 +18,7 @@ const apiMocks = vi.hoisted(() => ({
   revertChatSessionWorkbenchChanges: vi.fn(),
   revertChatSessionWorkbenchFile: vi.fn(),
   runChatSessionWorkbenchCommand: vi.fn(),
+  runChatSessionWorkbenchFileOperation: vi.fn(),
   saveChatSessionWorkbenchFile: vi.fn(),
 }));
 
@@ -38,6 +39,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({
   revertChatSessionWorkbenchChanges: apiMocks.revertChatSessionWorkbenchChanges,
   revertChatSessionWorkbenchFile: apiMocks.revertChatSessionWorkbenchFile,
   runChatSessionWorkbenchCommand: apiMocks.runChatSessionWorkbenchCommand,
+  runChatSessionWorkbenchFileOperation: apiMocks.runChatSessionWorkbenchFileOperation,
   saveChatSessionWorkbenchFile: apiMocks.saveChatSessionWorkbenchFile,
 }));
 
@@ -125,6 +127,18 @@ function primeSuccessMocks() {
   apiMocks.runChatSessionWorkbenchCommand.mockResolvedValue({
     state: workbenchState,
     output: { state: workbenchState, output: "tests passed" },
+  });
+  apiMocks.runChatSessionWorkbenchFileOperation.mockResolvedValue({
+    state: { ...workbenchState, activeFilePath: "src/new.ts" },
+    operation: "create_file",
+    path: "src/new.ts",
+    changedFiles: ["src/new.ts"],
+    tree: {
+      ...workbenchTree,
+      changedFiles: ["src/new.ts"],
+      items: [...workbenchTree.items, { path: "src/new.ts", kind: "file" }],
+    },
+    output: { state: workbenchState, output: "Created file src/new.ts." },
   });
   apiMocks.applyChatSessionWorkbenchPatch.mockResolvedValue({
     state: workbenchState,
@@ -234,6 +248,9 @@ describe("useChatWorkbench", () => {
         state: workbenchState,
         patch: "diff --git exported",
       });
+      await expect(
+        latest!.runWorkbenchFileOperation({ operation: "create_file", path: "src/new.ts" }),
+      ).resolves.toBe(true);
       await expect(latest!.revertWorkbenchFile()).resolves.toBe(true);
       await expect(latest!.revertWorkbenchFile("README.md")).resolves.toBe(true);
       await expect(latest!.revertWorkbenchAll()).resolves.toBe(true);
@@ -246,6 +263,10 @@ describe("useChatWorkbench", () => {
     });
     expect(apiMocks.applyChatSessionWorkbenchPatch).toHaveBeenCalledWith("session-1", { patch: "diff --git" });
     expect(apiMocks.exportChatSessionWorkbenchPatch).toHaveBeenCalledWith("session-1");
+    expect(apiMocks.runChatSessionWorkbenchFileOperation).toHaveBeenCalledWith("session-1", {
+      operation: "create_file",
+      path: "src/new.ts",
+    });
     expect(apiMocks.revertChatSessionWorkbenchFile).toHaveBeenCalledWith("session-1", { path: "src/index.ts" });
     expect(apiMocks.revertChatSessionWorkbenchFile).toHaveBeenCalledWith("session-1", { path: "README.md" });
     expect(apiMocks.revertChatSessionWorkbenchChanges).toHaveBeenCalledWith("session-1");

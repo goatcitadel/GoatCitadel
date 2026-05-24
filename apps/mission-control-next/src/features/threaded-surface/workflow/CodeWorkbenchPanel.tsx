@@ -1,6 +1,10 @@
 /* eslint-disable max-lines */
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { CodeModeRunRecord } from "@goatcitadel/contracts";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import type {
+  ChatSessionWorkbenchFileOperationKind,
+  ChatSessionWorkbenchFileOperationRequest,
+  CodeModeRunRecord,
+} from "@goatcitadel/contracts";
 import type { MissionThreadedWorkflowPanel } from "@goatcitadel/threaded-surface-core";
 import { fetchCodeModeRun, fetchCodeModeRuns } from "@goatcitadel/mission-control-shared/api/capabilities";
 import { AgenticRuntimeVisibilityPanel } from "@goatcitadel/mission-control-shared/components/AgenticRuntimeVisibilityPanel";
@@ -27,6 +31,17 @@ import {
 } from "./format";
 
 type CodePanelType = Extract<MissionThreadedWorkflowPanel, { kind: "code" }>;
+
+const CODE_WORKBENCH_LAYOUT_STORAGE_KEY = "goatcitadel.code-workbench.layout.v1";
+const DEFAULT_FILE_PANE_PERCENT = 28;
+
+function readStoredFilePanePercent(): number {
+  if (typeof window === "undefined") {
+    return DEFAULT_FILE_PANE_PERCENT;
+  }
+  const parsed = Number(window.localStorage.getItem(CODE_WORKBENCH_LAYOUT_STORAGE_KEY));
+  return Number.isFinite(parsed) && parsed >= 18 && parsed <= 42 ? parsed : DEFAULT_FILE_PANE_PERCENT;
+}
 
 function CodeSourceChooser({
   availableProjects,
@@ -214,6 +229,29 @@ function CodeSourceChooser({
   );
 }
 
+const WORKBENCH_FILE_ACTIONS: Array<{ operation: ChatSessionWorkbenchFileOperationKind; label: string }> = [
+  { operation: "create_file", label: "Create file" },
+  { operation: "create_folder", label: "Create folder" },
+  { operation: "rename", label: "Rename" },
+  { operation: "delete", label: "Delete" },
+  { operation: "duplicate", label: "Duplicate" },
+  { operation: "move", label: "Move" },
+];
+
+function workbenchFileActionNeedsTarget(operation: ChatSessionWorkbenchFileOperationKind): boolean {
+  return operation === "rename" || operation === "duplicate" || operation === "move";
+}
+
+function workbenchFileActionPathPlaceholder(operation: ChatSessionWorkbenchFileOperationKind): string {
+  if (operation === "create_file") {
+    return "src/new-file.ts";
+  }
+  if (operation === "create_folder") {
+    return "src/new-folder";
+  }
+  return "src/current-file.ts";
+}
+
 export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const {
     selectedTurn,
@@ -245,6 +283,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     onExpandedPathsChange,
     onRefresh,
     onSaveFile,
+    onFileOperation,
     onDiscardDraft,
     onRunValidationCommand,
     onApplyPatch,
@@ -270,6 +309,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const prevTurnIdRef = useRef<string | null>(null);
   const [activeBlockIndex, setActiveBlockIndex] = useState(0);
   const [validationCommand, setValidationCommand] = useState("pnpm test");
+  const [filePanePercent, setFilePanePercent] = useState(readStoredFilePanePercent);
   const [pendingFilePath, setPendingFilePath] = useState<string | null>(null);
   const [confirmRevertFilePath, setConfirmRevertFilePath] = useState<string | null>(null);
   const [confirmRevertAllOpen, setConfirmRevertAllOpen] = useState(false);
@@ -282,6 +322,18 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const [runDetail, setRunDetail] = useState<CodeModeRunRecord | null>(null);
   const [runDetailLoading, setRunDetailLoading] = useState(false);
   const [runDetailError, setRunDetailError] = useState<string | null>(null);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [filePickerOpen, setFilePickerOpen] = useState(false);
+  const [filePickerQuery, setFilePickerQuery] = useState("");
+  const [diffViewMode, setDiffViewMode] = useState<"side-by-side" | "unified">("side-by-side");
+  const [runLogViewMode, setRunLogViewMode] = useState<"rendered" | "raw">("rendered");
+  const [runLogCleared, setRunLogCleared] = useState(false);
+  const [runLogCopyNotice, setRunLogCopyNotice] = useState<string | null>(null);
+  const [fileActionOperation, setFileActionOperation] =
+    useState<ChatSessionWorkbenchFileOperationKind>("create_file");
+  const [fileActionPath, setFileActionPath] = useState("");
+  const [fileActionTargetPath, setFileActionTargetPath] = useState("");
+  const [fileActionNotice, setFileActionNotice] = useState<string | null>(null);
   const hasPatchDiff = Boolean(diff?.diff.trim());
   const activeBlock = codeBlocks[activeBlockIndex] ?? null;
   const activePatchBlock = activeBlock && isPendingPatchBlock(activeBlock) ? activeBlock : null;
@@ -338,10 +390,46 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     worktreeBlockedReason ??
     draftConflictReason ??
     (changedFiles.length === 0 ? "No worktree changes to revert." : null);
+  const fileActionTargetRequired = workbenchFileActionNeedsTarget(fileActionOperation);
+  const fileActionBlockedReason =
+    worktreeBlockedReason ??
+    draftConflictReason ??
+    (!onFileOperation ? "File tree operations are unavailable." : null) ??
+    (!fileActionPath.trim() ? "Enter a project-relative path." : null) ??
+    (fileActionTargetRequired && !fileActionTargetPath.trim() ? "Enter a target path." : null);
+  const workbenchFileItems = useMemo(
+    () => (workbenchTree?.items ?? []).filter((item) => item.kind === "file"),
+    [workbenchTree?.items],
+  );
+  const filteredFilePickerItems = useMemo(() => {
+    const query = filePickerQuery.trim().toLowerCase();
+    if (!query) {
+      return workbenchFileItems.slice(0, 12);
+    }
+    return workbenchFileItems.filter((item) => item.path.toLowerCase().includes(query)).slice(0, 12);
+  }, [filePickerQuery, workbenchFileItems]);
+  const runLogText = [
+    output?.output,
+    ...visibleRunItems.flatMap((run) => [run.stdoutPreview, run.stderrPreview]),
+    selectedRunDetail?.stdoutPreview,
+    selectedRunDetail?.stderrPreview,
+  ]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .join("\n\n");
+  const workbenchBodyStyle = {
+    "--mc-code-file-pane": `${filePanePercent}%`,
+  } as CSSProperties;
 
   useEffect(() => {
     setActiveBlockIndex(0);
   }, [codeBlocks.length, selectedTurn?.turnId]);
+
+  useEffect(() => {
+    if (!selectedFile?.path || fileActionPath.trim()) {
+      return;
+    }
+    setFileActionPath(selectedFile.path);
+  }, [fileActionPath, selectedFile?.path]);
 
   useEffect(() => {
     if (!moreMenuOpen || typeof document === "undefined") {
@@ -374,6 +462,18 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     }
     setSelectedRunId((current) => (current && runIds.includes(current) ? current : runIds[0]!));
   }, [visibleRunIds]);
+
+  useEffect(() => {
+    setRunLogCleared(false);
+    setRunLogCopyNotice(null);
+  }, [output?.output, selectedRunDetail?.runId, visibleRunIds]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(CODE_WORKBENCH_LAYOUT_STORAGE_KEY, String(filePanePercent));
+  }, [filePanePercent]);
 
   useEffect(() => {
     if (!codeLedgerSessionId) {
@@ -520,6 +620,30 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     onSelectFile(relativePath);
   };
 
+  const runFileAction = async () => {
+    if (fileActionBlockedReason || busy || !onFileOperation) {
+      return;
+    }
+    const input: ChatSessionWorkbenchFileOperationRequest = {
+      operation: fileActionOperation,
+      path: fileActionPath.trim(),
+      targetPath: fileActionTargetRequired ? fileActionTargetPath.trim() : undefined,
+    };
+    const completed = await onFileOperation(input);
+    if (completed === false) {
+      setFileActionNotice("File action failed.");
+      return;
+    }
+    const actionLabel = WORKBENCH_FILE_ACTIONS.find((item) => item.operation === fileActionOperation)?.label;
+    setFileActionNotice(`${actionLabel} done.`);
+    if (fileActionOperation !== "delete") {
+      setFileActionPath(fileActionTargetRequired ? fileActionTargetPath.trim() : fileActionPath.trim());
+    }
+    if (fileActionTargetRequired) {
+      setFileActionTargetPath("");
+    }
+  };
+
   const runValidationCommandLine = (commandLine: string) => {
     if (!onRunValidationCommand || validationBlockedReason || busy) {
       return;
@@ -533,6 +657,28 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     setActivePane("output");
   };
   const runValidationFromInput = () => runValidationCommandLine(validationCommand);
+  const openQuickFilePicker = () => {
+    setCommandPaletteOpen(false);
+    setFilePickerOpen(true);
+  };
+  const openWorkbenchCommandPalette = () => {
+    setFilePickerOpen(false);
+    setCommandPaletteOpen(true);
+  };
+  const copyRunLog = () => {
+    if (!runLogText.trim()) {
+      setRunLogCopyNotice("No run log text is available.");
+      return;
+    }
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      void navigator.clipboard
+        .writeText(runLogText)
+        .then(() => setRunLogCopyNotice("Run log copied."))
+        .catch(() => setRunLogCopyNotice("Run log copy failed."));
+      return;
+    }
+    setRunLogCopyNotice("Clipboard is not available in this environment.");
+  };
 
   return (
     <section className="mc-next-workbench-panel">
@@ -701,11 +847,22 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             </div>
           ) : null}
         </div>
+        <span aria-hidden="true" className="mc-next-workbench-action-divider" />
+        <label className="mc-next-workbench-layout-control">
+          <span>Files pane</span>
+          <input
+            type="range"
+            min={18}
+            max={42}
+            value={filePanePercent}
+            onChange={(event) => setFilePanePercent(Number(event.target.value))}
+          />
+        </label>
       </div>
 
       {error ? <div className="mc-next-panel-banner warning">{error}</div> : null}
 
-      <div className="mc-next-workbench-body">
+      <div className="mc-next-workbench-body" style={workbenchBodyStyle}>
         <aside className="mc-next-workbench-sidebar">
           <div className="mc-next-panel-list-head">
             <strong>Files</strong>
@@ -721,15 +878,90 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             />
           ) : !readyForRepoOps ? (
             <p className="mc-next-workbench-empty">No worktree is active yet. Create one to unlock the repo view.</p>
-          ) : workbenchTree?.items?.length ? (
-            <WorkbenchFileTree
-              storageScopeKey={workbenchState?.sessionId ?? "workbench"}
-              items={workbenchTree.items}
-              selectedPath={selectedFile?.path}
-              expandedPaths={expandedPaths ?? []}
-              onExpandedPathsChange={onExpandedPathsChange}
-              onSelectFile={requestFileSelection}
-            />
+          ) : workbenchTree ? (
+            <>
+              <div className="mc-next-code-source-form" aria-label="File tree actions">
+                <label className="mc-next-code-source-field">
+                  <span>Action</span>
+                  <select
+                    value={fileActionOperation}
+                    onChange={(event) => {
+                      setFileActionOperation(event.target.value as ChatSessionWorkbenchFileOperationKind);
+                      setFileActionNotice(null);
+                    }}
+                  >
+                    {WORKBENCH_FILE_ACTIONS.map((item) => (
+                      <option key={item.operation} value={item.operation}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="mc-next-code-source-field">
+                  <span>Path</span>
+                  <input
+                    value={fileActionPath}
+                    placeholder={workbenchFileActionPathPlaceholder(fileActionOperation)}
+                    onChange={(event) => {
+                      setFileActionPath(event.target.value);
+                      setFileActionNotice(null);
+                    }}
+                  />
+                </label>
+                {fileActionTargetRequired ? (
+                  <label className="mc-next-code-source-field">
+                    <span>Target</span>
+                    <input
+                      value={fileActionTargetPath}
+                      placeholder="src/new-name.ts"
+                      onChange={(event) => {
+                        setFileActionTargetPath(event.target.value);
+                        setFileActionNotice(null);
+                      }}
+                    />
+                  </label>
+                ) : null}
+                <div className="mc-next-code-source-actions">
+                  <button
+                    type="button"
+                    className="mc-next-panel-button"
+                    disabled={!selectedFile}
+                    onClick={() => {
+                      if (selectedFile?.path) {
+                        setFileActionPath(selectedFile.path);
+                        setFileActionNotice(null);
+                      }
+                    }}
+                  >
+                    Use selected
+                  </button>
+                  <button
+                    type="button"
+                    className="mc-next-panel-button primary"
+                    disabled={busy || Boolean(fileActionBlockedReason)}
+                    title={fileActionBlockedReason ?? undefined}
+                    onClick={() => {
+                      void runFileAction();
+                    }}
+                  >
+                    Run action
+                  </button>
+                </div>
+                {fileActionNotice ? <p className="mc-next-workbench-empty">{fileActionNotice}</p> : null}
+              </div>
+              {workbenchTree.items.length ? (
+                <WorkbenchFileTree
+                  storageScopeKey={workbenchState?.sessionId ?? "workbench"}
+                  items={workbenchTree.items}
+                  selectedPath={selectedFile?.path}
+                  expandedPaths={expandedPaths ?? []}
+                  onExpandedPathsChange={onExpandedPathsChange}
+                  onSelectFile={requestFileSelection}
+                />
+              ) : (
+                <p className="mc-next-workbench-empty">No repo files are ready to inspect yet.</p>
+              )}
+            </>
           ) : (
             <p className="mc-next-workbench-empty">No repo files are ready to inspect yet.</p>
           )}
@@ -769,6 +1001,111 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             </button>
           ) : null}
 
+          {filePickerOpen ? (
+            <section className="mc-next-workbench-command-surface" aria-label="Workbench file picker">
+              <div className="mc-next-panel-list-head">
+                <strong>File picker</strong>
+                <button type="button" className="mc-next-panel-button" onClick={() => setFilePickerOpen(false)}>
+                  Close
+                </button>
+              </div>
+              <input
+                className="mc-next-workbench-command-input"
+                value={filePickerQuery}
+                onChange={(event) => setFilePickerQuery(event.target.value)}
+                placeholder="Filter files"
+                aria-label="Filter files"
+              />
+              {filteredFilePickerItems.length > 0 ? (
+                <ul className="mc-next-workbench-command-list">
+                  {filteredFilePickerItems.map((item) => (
+                    <li key={item.path}>
+                      <button
+                        type="button"
+                        className="mc-next-panel-button"
+                        onClick={() => {
+                          requestFileSelection(item.path);
+                          setFilePickerOpen(false);
+                        }}
+                      >
+                        {item.path}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mc-next-workbench-empty">No matching files.</p>
+              )}
+            </section>
+          ) : null}
+
+          {commandPaletteOpen ? (
+            <section className="mc-next-workbench-command-surface" aria-label="Workbench command palette">
+              <div className="mc-next-panel-list-head">
+                <strong>Workbench commands</strong>
+                <button type="button" className="mc-next-panel-button" onClick={() => setCommandPaletteOpen(false)}>
+                  Close
+                </button>
+              </div>
+              <div className="mc-next-workbench-command-list">
+                <button
+                  type="button"
+                  className="mc-next-panel-button"
+                  disabled={!selectedFile || !hasDirtyDraft || busy || saving}
+                  onClick={() => {
+                    onSaveFile();
+                    setCommandPaletteOpen(false);
+                  }}
+                >
+                  Save file
+                </button>
+                <button
+                  type="button"
+                  className="mc-next-panel-button"
+                  disabled={busy || Boolean(validationBlockedReason) || !onRunValidationCommand}
+                  onClick={() => {
+                    runValidationFromInput();
+                    setCommandPaletteOpen(false);
+                  }}
+                >
+                  Run validation
+                </button>
+                <button
+                  type="button"
+                  className="mc-next-panel-button"
+                  onClick={() => {
+                    setActivePane("output");
+                    setCommandPaletteOpen(false);
+                  }}
+                >
+                  Open run log
+                </button>
+                <button
+                  type="button"
+                  className="mc-next-panel-button"
+                  disabled={!hasPatchDiff}
+                  onClick={() => {
+                    setActivePane("repo-diff");
+                    setCommandPaletteOpen(false);
+                  }}
+                >
+                  Inspect repo diff
+                </button>
+                <button
+                  type="button"
+                  className="mc-next-panel-button"
+                  disabled={loading || busy}
+                  onClick={() => {
+                    onRefresh();
+                    setCommandPaletteOpen(false);
+                  }}
+                >
+                  Refresh workbench
+                </button>
+              </div>
+            </section>
+          ) : null}
+
           {activePane === "files" ? (
             selectedFile ? (
               <div className="mc-next-workbench-pane">
@@ -781,6 +1118,9 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
                   language={selectedFile.language}
                   height={520}
                   onChange={onDraftChange}
+                  onSave={onSaveFile}
+                  onQuickOpen={openQuickFilePicker}
+                  onCommandPalette={openWorkbenchCommandPalette}
                 />
               </div>
             ) : (
@@ -793,7 +1133,23 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
               <div className="mc-next-workbench-pane">
                 <div className="mc-next-panel-list-head">
                   <strong>Selected-file diff</strong>
-                  <span>{selectedFile.path}</span>
+                  <div className="mc-next-workbench-view-toggle" role="group" aria-label="Diff view mode">
+                    <span>{selectedFile.path}</span>
+                    <button
+                      type="button"
+                      className={`mc-next-panel-button${diffViewMode === "side-by-side" ? " active" : ""}`}
+                      onClick={() => setDiffViewMode("side-by-side")}
+                    >
+                      Side by side
+                    </button>
+                    <button
+                      type="button"
+                      className={`mc-next-panel-button${diffViewMode === "unified" ? " active" : ""}`}
+                      onClick={() => setDiffViewMode("unified")}
+                    >
+                      Unified
+                    </button>
+                  </div>
                 </div>
                 <MonacoDiffEditor
                   language={currentLanguage}
@@ -802,6 +1158,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
                     hasDirtyDraft ? activeDraft : (selectedFileDiff.modifiedContent ?? selectedFile.content ?? "")
                   }
                   height={520}
+                  renderSideBySide={diffViewMode === "side-by-side"}
                 />
               </div>
             ) : (
@@ -833,12 +1190,39 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             <div className="mc-next-workbench-pane">
               <div className="mc-next-panel-list-head">
                 <strong>Run log</strong>
-                <span>{visibleRunItems.length} Code Mode runs</span>
+                <div className="mc-next-workbench-view-toggle" role="group" aria-label="Run log controls">
+                  <span>{visibleRunItems.length} Code Mode runs</span>
+                  <button
+                    type="button"
+                    className={`mc-next-panel-button${runLogViewMode === "rendered" ? " active" : ""}`}
+                    onClick={() => setRunLogViewMode("rendered")}
+                  >
+                    Rendered
+                  </button>
+                  <button
+                    type="button"
+                    className={`mc-next-panel-button${runLogViewMode === "raw" ? " active" : ""}`}
+                    onClick={() => setRunLogViewMode("raw")}
+                  >
+                    Raw
+                  </button>
+                  <button type="button" className="mc-next-panel-button" onClick={copyRunLog}>
+                    Copy
+                  </button>
+                  <button type="button" className="mc-next-panel-button" onClick={() => setRunLogCleared(true)}>
+                    Clear
+                  </button>
+                </div>
               </div>
-              {output?.output ? (
-                <WorkbenchMonacoEditor value={output.output} language="markdown" readOnly height={240} />
+              {runLogCopyNotice ? <p className="mc-next-workbench-empty">{runLogCopyNotice}</p> : null}
+              {output?.output && !runLogCleared ? (
+                runLogViewMode === "raw" ? (
+                  <pre className="mc-next-workbench-raw-output">{output.output}</pre>
+                ) : (
+                  <WorkbenchMonacoEditor value={output.output} language="markdown" readOnly height={240} />
+                )
               ) : (
-                <p>No run log or helper output yet.</p>
+                <p>{runLogCleared ? "Run log hidden locally until the next command output arrives." : "No run log or helper output yet."}</p>
               )}
               {visibleRunItems.length ? (
                 <ul className="mc-next-workbench-helper-list">

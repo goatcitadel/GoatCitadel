@@ -372,6 +372,7 @@ export {
   revertChatSessionWorkbenchFile,
   runChatDelegation,
   runChatSessionWorkbenchCommand,
+  runChatSessionWorkbenchFileOperation,
   runChatResearch,
   selectChatBranchTurn,
   sendAgentChatMessage,

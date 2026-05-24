@@ -28,6 +28,7 @@ export const chatSessionsRouteMethods = [
   "revertChatSessionWorkbenchChanges",
   "revertChatSessionWorkbenchFile",
   "runChatSessionWorkbenchCommand",
+  "runChatSessionWorkbenchFileOperation",
   "saveChatSessionWorkbenchFile",
   "setChatSessionBinding",
   "unpinChatSession",

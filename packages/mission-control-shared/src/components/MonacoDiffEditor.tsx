@@ -13,6 +13,7 @@ interface MonacoDiffEditorProps {
   language?: string;
   height?: number | string;
   className?: string;
+  renderSideBySide?: boolean;
 }
 
 function resolveMonacoTheme(): "vs" | "vs-dark" {
@@ -22,7 +23,14 @@ function resolveMonacoTheme(): "vs" | "vs-dark" {
   return document.querySelector(".theme-citadel-light") ? "vs" : "vs-dark";
 }
 
-export function MonacoDiffEditor({ original, modified, language, height = "100%", className }: MonacoDiffEditorProps) {
+export function MonacoDiffEditor({
+  original,
+  modified,
+  language,
+  height = "100%",
+  className,
+  renderSideBySide = true,
+}: MonacoDiffEditorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const monacoRef = useRef<MonacoEditorApiModule | null>(null);
   const editorRef = useRef<MonacoEditorNamespace.IStandaloneDiffEditor | null>(null);
@@ -67,7 +75,7 @@ export function MonacoDiffEditor({ original, modified, language, height = "100%"
         lineNumbers: "on",
         minimap: { enabled: false },
         readOnly: true,
-        renderSideBySide: true,
+        renderSideBySide,
         scrollBeyondLastLine: false,
         smoothScrolling: true,
       });
@@ -89,6 +97,10 @@ export function MonacoDiffEditor({ original, modified, language, height = "100%"
   useEffect(() => {
     applyDiffModel(original, modified, language);
   }, [language, modified, original]);
+
+  useEffect(() => {
+    editorRef.current?.updateOptions({ renderSideBySide });
+  }, [renderSideBySide]);
 
   if (!shouldRenderMonacoRuntime()) {
     return (

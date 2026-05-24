@@ -12,6 +12,9 @@ import {
   type ChatSessionWorkbenchCommandRunResponse,
   type ChatSessionWorkbenchDiffResponse,
   type ChatSessionWorkbenchFileDiffResponse,
+  type ChatSessionWorkbenchFileOperationKind,
+  type ChatSessionWorkbenchFileOperationRequest,
+  type ChatSessionWorkbenchFileOperationResponse,
   type ChatSessionWorkbenchFileResponse,
   type ChatSessionWorkbenchOutputResponse,
   type ChatSessionWorkbenchPackageManager,
@@ -232,6 +235,88 @@ export async function saveChatSessionWorkbenchFile(
     },
   );
   return response;
+}
+
+export async function runChatSessionWorkbenchFileOperation(
+  deps: ChatWorkbenchDependencies,
+  sessionId: string,
+  input: ChatSessionWorkbenchFileOperationRequest,
+): Promise<ChatSessionWorkbenchFileOperationResponse> {
+  deps.requireChatSession(sessionId);
+  const state = syncWorkbenchState(deps, sessionId);
+  const context = resolveWorkbenchContext(deps, sessionId, state, true);
+  assertWorkbenchMutationScope(deps, context);
+
+  const operation = input.operation;
+  const normalized = normalizeWorkbenchRelativePath(input.path);
+  assertWorkbenchFileOperationPathAllowed(normalized);
+  const targetPath = path.resolve(context.projectRoot, normalized);
+  assertPathInsideRoot(targetPath, context.projectRoot, "workbench file action");
+  assertWritePathInJail(targetPath, deps.config.toolPolicy.sandbox.writeJailRoots);
+
+  const normalizedTarget =
+    operationRequiresTargetPath(operation) && input.targetPath
+      ? normalizeWorkbenchRelativePath(input.targetPath)
+      : undefined;
+  if (normalizedTarget) {
+    assertWorkbenchFileOperationPathAllowed(normalizedTarget);
+  }
+  const destinationPath = normalizedTarget ? path.resolve(context.projectRoot, normalizedTarget) : undefined;
+  if (destinationPath) {
+    assertPathInsideRoot(destinationPath, context.projectRoot, "workbench file action destination");
+    assertWritePathInJail(destinationPath, deps.config.toolPolicy.sandbox.writeJailRoots);
+  }
+
+  const { activeFilePath, message } = await applyWorkbenchFileOperation(deps, context, {
+    operation,
+    normalized,
+    targetPath,
+    normalizedTarget,
+    destinationPath,
+    content: input.content,
+    currentActiveFilePath: state.activeFilePath,
+  });
+
+  const changedFiles = listChangedFiles(context.worktreePath, context.repoScopePath);
+  const validation = await runWorkbenchPostWriteValidation(deps, sessionId, context, changedFiles);
+  const updated = deps.storage.chatSessionWorkbench.patch(sessionId, {
+    projectId: context.project.projectId,
+    activeFilePath,
+  });
+  const hydrated = hydrateWorkbenchRecord(deps, updated, context.project.projectId);
+  const tree = await getChatSessionWorkbenchTree(deps, sessionId);
+  const output = buildWorkbenchOperationOutput(hydrated, message, new Date().toISOString(), validation);
+
+  deps.publishRealtime(
+    "chat_workbench_updated",
+    "chat",
+    {
+      type: "chat_workbench_file_operation_completed",
+      sessionId,
+      projectId: context.project.projectId,
+      operation,
+      path: normalized,
+      targetPath: normalizedTarget,
+      changedFiles,
+      activeFilePath: hydrated.activeFilePath,
+      validationStatus: hydrated.validationStatus,
+    },
+    {
+      eventClass: "operational_signal",
+      eventAuthority: "retained_stream",
+      links: { sessionId },
+    },
+  );
+
+  return {
+    state: hydrated,
+    operation,
+    path: normalized,
+    targetPath: normalizedTarget,
+    changedFiles,
+    tree,
+    output,
+  };
 }
 
 export async function getChatSessionWorkbenchFileDiff(
@@ -746,6 +831,110 @@ async function buildWorkbenchFileResponse(
     changed: changedFiles.has(normalized),
     content,
   };
+}
+
+async function applyWorkbenchFileOperation(
+  deps: ChatWorkbenchDependencies,
+  context: {
+    project: { projectId: string; workspacePath: string };
+    projectRoot: string;
+    worktreePath: string;
+    repoScopePath: string;
+  },
+  input: {
+    operation: ChatSessionWorkbenchFileOperationKind;
+    normalized: string;
+    targetPath: string;
+    normalizedTarget?: string;
+    destinationPath?: string;
+    content?: string;
+    currentActiveFilePath?: string;
+  },
+): Promise<{ activeFilePath: string; message: string }> {
+  const parentPath = input.destinationPath ? path.dirname(input.destinationPath) : path.dirname(input.targetPath);
+  await assertWorkbenchOperationParentAllowed(deps, context.projectRoot, parentPath);
+
+  switch (input.operation) {
+    case "create_file": {
+      await assertWorkbenchTargetAvailable(input.targetPath, input.normalized);
+      const content = input.content ?? "";
+      if (Buffer.byteLength(content, "utf8") > MAX_FILE_BYTES) {
+        throw new ValidationError({
+          message: `File exceeds ${MAX_FILE_BYTES} bytes and is too large for the workbench editor.`,
+        });
+      }
+      await fs.writeFile(input.targetPath, content, "utf8");
+      return {
+        activeFilePath: input.normalized,
+        message: `Created file ${input.normalized}.`,
+      };
+    }
+    case "create_folder": {
+      await assertWorkbenchTargetAvailable(input.targetPath, input.normalized);
+      await fs.mkdir(input.targetPath);
+      return {
+        activeFilePath: input.currentActiveFilePath ?? "",
+        message: `Created folder ${input.normalized}.`,
+      };
+    }
+    case "rename":
+    case "move": {
+      if (!input.normalizedTarget || !input.destinationPath) {
+        throw new ValidationError({
+          message: `${formatWorkbenchOperationName(input.operation)} requires a target path.`,
+        });
+      }
+      const sourceStat = await assertWorkbenchSourceAvailable(deps, input.targetPath, input.normalized);
+      await assertWorkbenchOperationParentAllowed(deps, context.projectRoot, path.dirname(input.destinationPath));
+      await assertWorkbenchTargetAvailable(input.destinationPath, input.normalizedTarget);
+      if (sourceStat.isDirectory()) {
+        assertWorkbenchDirectoryMoveSafe(input.targetPath, input.destinationPath);
+      }
+      await fs.rename(input.targetPath, input.destinationPath);
+      return {
+        activeFilePath: deriveActiveFilePathAfterMove(
+          input.currentActiveFilePath,
+          input.normalized,
+          input.normalizedTarget,
+          sourceStat.isDirectory(),
+        ),
+        message: `${formatWorkbenchOperationName(input.operation)} ${input.normalized} to ${input.normalizedTarget}.`,
+      };
+    }
+    case "duplicate": {
+      if (!input.normalizedTarget || !input.destinationPath) {
+        throw new ValidationError({ message: "Duplicate requires a target path." });
+      }
+      const sourceStat = await assertWorkbenchSourceAvailable(deps, input.targetPath, input.normalized);
+      if (sourceStat.isDirectory()) {
+        throw new ValidationError({ message: "Duplicate supports files only. Move or create a new folder instead." });
+      }
+      if (sourceStat.size > MAX_FILE_BYTES) {
+        throw new ValidationError({
+          message: `File exceeds ${MAX_FILE_BYTES} bytes and is too large for workbench duplication.`,
+        });
+      }
+      await assertWorkbenchOperationParentAllowed(deps, context.projectRoot, path.dirname(input.destinationPath));
+      await assertWorkbenchTargetAvailable(input.destinationPath, input.normalizedTarget);
+      const content = await fs.readFile(input.targetPath);
+      assertWorkbenchFileIsText(content, input.normalized, "editor");
+      await fs.writeFile(input.destinationPath, content);
+      return {
+        activeFilePath: input.normalizedTarget,
+        message: `Duplicated ${input.normalized} to ${input.normalizedTarget}.`,
+      };
+    }
+    case "delete": {
+      const sourceStat = await assertWorkbenchSourceAvailable(deps, input.targetPath, input.normalized);
+      await fs.rm(input.targetPath, { recursive: sourceStat.isDirectory(), force: false });
+      return {
+        activeFilePath: deriveActiveFilePathAfterDelete(input.currentActiveFilePath, input.normalized),
+        message: `Deleted ${input.normalized}.`,
+      };
+    }
+    default:
+      return assertNeverWorkbenchFileOperation(input.operation);
+  }
 }
 
 function hydrateWorkbenchRecord(
@@ -1433,6 +1622,118 @@ function normalizeWorkbenchRelativePath(inputPath: string): string {
     throw new ValidationError({ message: `Absolute paths are not allowed: ${inputPath}` });
   }
   return normalized;
+}
+
+function operationRequiresTargetPath(operation: ChatSessionWorkbenchFileOperationKind): boolean {
+  return operation === "rename" || operation === "move" || operation === "duplicate";
+}
+
+function assertWorkbenchFileOperationPathAllowed(normalized: string): void {
+  const pathSegments = normalized.split("/");
+  if (pathSegments.includes(".git")) {
+    throw new ValidationError({ message: "Workbench file actions cannot mutate Git metadata." });
+  }
+  if (pathSegments.includes("node_modules")) {
+    throw new ValidationError({ message: "Workbench file actions cannot mutate node_modules." });
+  }
+}
+
+async function assertWorkbenchOperationParentAllowed(
+  deps: ChatWorkbenchDependencies,
+  projectRoot: string,
+  parentPath: string,
+): Promise<void> {
+  assertPathInsideRoot(parentPath, projectRoot, "workbench file action parent");
+  assertExistingPathRealpathAllowed(
+    parentPath,
+    deps.config.toolPolicy.sandbox.writeJailRoots,
+    deps.config.toolPolicy.sandbox.readOnlyRoots,
+  );
+  assertWritePathInJail(parentPath, deps.config.toolPolicy.sandbox.writeJailRoots);
+  const parentStat = await fs.stat(parentPath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  });
+  if (!parentStat?.isDirectory()) {
+    throw new ValidationError({ message: "Workbench file action parent directory does not exist." });
+  }
+}
+
+async function assertWorkbenchSourceAvailable(
+  deps: ChatWorkbenchDependencies,
+  sourcePath: string,
+  normalized: string,
+): Promise<fsSync.Stats> {
+  assertExistingPathRealpathAllowed(
+    sourcePath,
+    deps.config.toolPolicy.sandbox.writeJailRoots,
+    deps.config.toolPolicy.sandbox.readOnlyRoots,
+  );
+  const sourceStat = await fs.stat(sourcePath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") {
+      throw new NotFoundError({ entity: "Workbench file action path", id: normalized });
+    }
+    throw error;
+  });
+  return sourceStat;
+}
+
+async function assertWorkbenchTargetAvailable(targetPath: string, normalized: string): Promise<void> {
+  const existing = await fs.stat(targetPath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  });
+  if (existing) {
+    throw new ValidationError({ message: `Workbench file action target already exists: ${normalized}` });
+  }
+}
+
+function assertWorkbenchDirectoryMoveSafe(sourcePath: string, destinationPath: string): void {
+  const relative = path.relative(sourcePath, destinationPath);
+  if (!relative || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
+    throw new ValidationError({ message: "Workbench folders cannot be moved into themselves." });
+  }
+}
+
+function deriveActiveFilePathAfterMove(
+  currentActiveFilePath: string | undefined,
+  sourcePath: string,
+  destinationPath: string,
+  sourceIsDirectory: boolean,
+): string {
+  if (!currentActiveFilePath) {
+    return sourceIsDirectory ? "" : destinationPath;
+  }
+  if (currentActiveFilePath === sourcePath) {
+    return destinationPath;
+  }
+  if (sourceIsDirectory && currentActiveFilePath.startsWith(`${sourcePath}/`)) {
+    return `${destinationPath}/${currentActiveFilePath.slice(sourcePath.length + 1)}`;
+  }
+  return currentActiveFilePath;
+}
+
+function deriveActiveFilePathAfterDelete(currentActiveFilePath: string | undefined, deletedPath: string): string {
+  if (
+    !currentActiveFilePath ||
+    currentActiveFilePath === deletedPath ||
+    currentActiveFilePath.startsWith(`${deletedPath}/`)
+  ) {
+    return "";
+  }
+  return currentActiveFilePath;
+}
+
+function formatWorkbenchOperationName(operation: ChatSessionWorkbenchFileOperationKind): string {
+  return operation.replace("_", " ");
+}
+
+function assertNeverWorkbenchFileOperation(operation: never): never {
+  throw new ValidationError({ message: `Unsupported workbench file operation: ${operation}` });
 }
 
 function normalizeWorkbenchCommand(inputCommand: string): string {

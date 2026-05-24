@@ -79,8 +79,10 @@ import {
   RAIL_ITEMS,
   buildAppHref,
   buildNavigationTarget,
+  describeReleaseSurfaceStatus,
   getRouteDescription,
   getRouteLabel,
+  getRouteReleaseScope,
   isRailItemActive,
   normalizeAppRoute,
   type AppRoute,
@@ -181,6 +183,8 @@ export function MissionControlNextApp() {
   );
   const currentRouteLabel = getRouteLabel(route);
   const currentRouteDescription = getRouteDescription(route);
+  const currentReleaseScope = getRouteReleaseScope(route);
+  const currentReleaseStatusLabel = describeReleaseSurfaceStatus(currentReleaseScope.status);
   const realtimeStatusCopy = useMemo(
     () => describeRealtimeTruthUi(streamState, streamTruthMode),
     [streamState, streamTruthMode],
@@ -713,6 +717,9 @@ export function MissionControlNextApp() {
                 </select>
               </label>
               <div className="mc-next-topbar-status">
+                <span className="mc-next-badge mc-next-release-badge" data-release-status={currentReleaseScope.status}>
+                  {currentReleaseStatusLabel}
+                </span>
                 <span className="mc-next-badge">{realtimeStatusCopy.badge}</span>
                 <button
                   type="button"
@@ -800,6 +807,8 @@ export function MissionControlNextApp() {
                     <div className="mc-next-rail-group">
                       {group.items.map((item) => {
                         const target = buildNavigationTarget(route, item);
+                        const releaseScope = getRouteReleaseScope(target);
+                        const releaseStatusLabel = describeReleaseSurfaceStatus(releaseScope.status);
                         const backlogCount =
                           item.section === "tasks"
                             ? (status.dashboard?.taskStatusCounts ?? [])
@@ -816,7 +825,17 @@ export function MissionControlNextApp() {
                             onClick={() => navigate(target)}
                           >
                             <div>
-                              <strong>{item.label}</strong>
+                              <strong>
+                                {item.label}
+                                {releaseScope.status === "ship" ? null : (
+                                  <span
+                                    className="mc-next-rail-release-badge"
+                                    data-release-status={releaseScope.status}
+                                  >
+                                    {releaseStatusLabel}
+                                  </span>
+                                )}
+                              </strong>
                               <span>{item.description}</span>
                             </div>
                             {typeof backlogCount === "number" ? (
@@ -855,6 +874,15 @@ export function MissionControlNextApp() {
                     <span className={`mc-next-stage-chip${realtimeStatusCopy.degraded ? " warning" : ""}`}>
                       {realtimeStatusCopy.stage}
                     </span>
+                    {currentReleaseScope.status === "ship" ? null : (
+                      <span
+                        className="mc-next-stage-chip warning"
+                        data-release-status={currentReleaseScope.status}
+                        title={currentReleaseScope.note}
+                      >
+                        {currentReleaseStatusLabel}
+                      </span>
+                    )}
                     {shellStatusError ? (
                       <span className="mc-next-stage-chip warning">Shell status needs refresh</span>
                     ) : null}
@@ -907,6 +935,14 @@ export function MissionControlNextApp() {
           ) : null}
 
           <footer className="mc-next-status-strip" aria-label="Mission Control status strip">
+            {currentReleaseScope.status === "ship" ? null : (
+              <StatusPill
+                icon={<ShieldCheck size={15} />}
+                label="Release scope"
+                value={currentReleaseStatusLabel}
+                releaseStatus={currentReleaseScope.status}
+              />
+            )}
             <StatusPill icon={<ShieldCheck size={15} />} label={gatewayAccess.message} value="Gateway ready" />
             <StatusPill icon={<Activity size={15} />} label="Live updates" value={realtimeStatusCopy.strip} />
             <StatusPill
@@ -1166,11 +1202,13 @@ function StatusPill({
   label,
   value,
   onClick,
+  releaseStatus,
 }: {
   icon: ReactNode;
   label: string;
   value: string;
   onClick?: () => void;
+  releaseStatus?: string;
 }) {
   const content = (
     <>
@@ -1181,14 +1219,25 @@ function StatusPill({
       </div>
     </>
   );
+  const releaseStatusProps = releaseStatus ? { "data-release-status": releaseStatus } : {};
   if (onClick) {
     return (
-      <button type="button" className="mc-next-status-pill mc-next-status-pill-action" onClick={onClick} title={label}>
+      <button
+        type="button"
+        className="mc-next-status-pill mc-next-status-pill-action"
+        onClick={onClick}
+        title={label}
+        {...releaseStatusProps}
+      >
         {content}
       </button>
     );
   }
-  return <div className="mc-next-status-pill">{content}</div>;
+  return (
+    <div className="mc-next-status-pill" {...releaseStatusProps}>
+      {content}
+    </div>
+  );
 }
 
 export function resolveShellThemeClass(theme: "dark" | "light"): "theme-signal-noir" | "theme-citadel-light" {

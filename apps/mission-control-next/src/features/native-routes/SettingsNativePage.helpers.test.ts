@@ -10,8 +10,10 @@ import {
   createPersonalityEditorDraft,
   clearStoredOpenAICodexOAuthFlow,
   delay,
+  deriveFirstOutcomePathItems,
   deriveLlamaCppAlias,
   deriveSetupCenterItems,
+  describeProviderReadinessFailure,
   describeToolApprovalMode,
   describeToolGrantAvailability,
   describeToolProfile,
@@ -19,6 +21,7 @@ import {
   formatCapabilities,
   formatCheckedAtLabel,
   formatDateTime,
+  formatEffectiveConfigSourceLabel,
   formatJson,
   formatOpenAICodexOAuthExpiry,
   formatPersonalityCategoryLabel,
@@ -183,6 +186,83 @@ describe("SettingsNativePage helpers", () => {
     expect(descriptionForSettingsSection("missing")).toContain("not registered");
   });
 
+  it("derives a plain-English first-outcome path from provider and demo state", () => {
+    const missingProviderOnboarding = {
+      checklist: [],
+      settings: {
+        auth: { mode: "none" },
+        budgetMode: "balanced",
+        llm: {
+          activeProviderId: "",
+          activeModel: "",
+          providers: [],
+        },
+      },
+    } as any;
+
+    expect(describeProviderReadinessFailure(missingProviderOnboarding)).toBe(
+      "Choose an active provider before sending cloud-backed work.",
+    );
+    expect(deriveFirstOutcomePathItems(missingProviderOnboarding, null).map((item) => item.state)).toEqual([
+      "active",
+      "pending",
+      "pending",
+      "pending",
+      "pending",
+      "pending",
+    ]);
+
+    const readyProviderOnboarding = {
+      checklist: [],
+      settings: {
+        auth: { mode: "token" },
+        budgetMode: "balanced",
+        llm: {
+          activeProviderId: "openai",
+          activeModel: "gpt-5",
+          providers: [{ providerId: "openai", label: "OpenAI", hasApiKey: true }],
+        },
+      },
+    } as any;
+
+    const providerItems = deriveFirstOutcomePathItems(readyProviderOnboarding, null);
+    expect(providerItems.map((item) => item.state)).toEqual([
+      "complete",
+      "active",
+      "active",
+      "pending",
+      "pending",
+      "pending",
+    ]);
+    expect(providerItems[1]!.description).toContain("smoke check");
+    expect(providerItems[1]!.meta).toBe("Evidence required");
+
+    const demoItems = deriveFirstOutcomePathItems(readyProviderOnboarding, {
+      status: "ready",
+      workspace: { workspaceId: "workspace-1", name: "Demo", slug: "demo" },
+      project: { projectId: "project-1", name: "Demo Project", workspacePath: "F:\\code\\demo" },
+      sessions: [
+        { sessionId: "chat-1", title: "Chat", mode: "chat", projectId: "project-1" },
+        { sessionId: "cowork-1", title: "Cowork", mode: "cowork", projectId: "project-1" },
+        { sessionId: "code-1", title: "Code", mode: "code", projectId: "project-1" },
+      ],
+      tasks: [{ taskId: "task-1", title: "Cowork adoption tour", status: "open", priority: "medium" }],
+      starterPrompts: [],
+      memorySeeds: [],
+      nextRoute: "/chat",
+      notes: [],
+    } as any);
+    expect(demoItems.map((item) => item.state)).toEqual([
+      "complete",
+      "active",
+      "complete",
+      "complete",
+      "complete",
+      "active",
+    ]);
+    expect(demoItems.at(-1)!.meta).toBe("Proof required");
+  });
+
   it("handles JSON, list, channel, tool, and integration helper edges", () => {
     expect(parseJsonObject("")).toEqual({});
     expect(parseJsonObject("", { fallback: true })).toEqual({ fallback: true });
@@ -330,6 +410,11 @@ describe("SettingsNativePage helpers", () => {
     expect(formatProviderCredentialLabel("openai-codex", false, null)).toBe("OAuth missing");
     expect(formatProviderCredentialLabel("openai", true, null)).toBe("secret ready");
     expect(formatProviderCredentialLabel("openai", false, null)).toBe("secret missing");
+    expect(formatEffectiveConfigSourceLabel("env")).toBe("env");
+    expect(formatEffectiveConfigSourceLabel("inline")).toBe("UI");
+    expect(formatEffectiveConfigSourceLabel("keychain")).toBe("secure store");
+    expect(formatEffectiveConfigSourceLabel("default")).toBe("default");
+    expect(formatEffectiveConfigSourceLabel(undefined)).toBe("unknown");
     expect(formatCapabilities(undefined)).toBe("No capability metadata");
     expect(formatCapabilities({ vision: true, jsonMode: false, reasoning: true })).toBe("vision, reasoning");
     expect(formatCapabilities({ vision: false, jsonMode: false, toolCalling: false })).toBe(

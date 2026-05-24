@@ -5,7 +5,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { CapabilityArtifactRecord, CodeModeRunRecord } from "@goatcitadel/contracts";
-import type { DatabaseClient } from "./db.js";
+import type { DatabaseClient, DbStatement } from "./db.js";
 import { createDatabase } from "./sqlite.js";
 import { CodeModeRunRepository } from "./code-mode-run-repo.js";
 
@@ -242,6 +242,30 @@ describe("CodeModeRunRepository", () => {
     assert.equal(repo.listFiltered({ status: "failed", limit: 5 }).length, 5);
   });
 
+  it("casts optional filtered list parameters for postgres null filters", () => {
+    const db = new CodeModeSqlCaptureDatabase("postgres");
+    new CodeModeRunRepository(db);
+
+    const listSql = db.sql.find(
+      (sql) => sql.includes("LIMIT @limit") && sql.includes("workspace_id") && sql.includes("@status"),
+    );
+    assert.ok(listSql);
+    assert.match(listSql, /\(@workspaceId::text IS NULL OR workspace_id = @workspaceId::text\)/);
+    assert.match(listSql, /\(@sessionId::text IS NULL OR session_id = @sessionId::text\)/);
+    assert.match(listSql, /\(@turnId::text IS NULL OR turn_id = @turnId::text\)/);
+    assert.match(listSql, /\(@status::text IS NULL OR status = @status::text\)/);
+
+    const hydrationSql = db.sql.find((sql) => sql.includes("includeApprovalPending"));
+    assert.ok(hydrationSql);
+    assert.match(hydrationSql, /\(@workspaceId::text IS NULL OR workspace_id = @workspaceId::text\)/);
+    assert.match(hydrationSql, /\(@sessionId::text IS NULL OR session_id = @sessionId::text\)/);
+    assert.match(hydrationSql, /\(@turnId::text IS NULL OR turn_id = @turnId::text\)/);
+
+    const releaseSql = db.sql.find((sql) => sql.includes("SET\n        status = 'approval_pending'"));
+    assert.ok(releaseSql);
+    assert.match(releaseSql, /\(@startedAt::text IS NULL OR started_at = @startedAt::text\)/);
+  });
+
   it("claims pending runs atomically before execution", () => {
     const { repo } = createStore();
     repo.upsert(
@@ -430,3 +454,36 @@ describe("CodeModeRunRepository", () => {
     );
   });
 });
+
+class CodeModeSqlCaptureDatabase implements DatabaseClient {
+  public readonly sql: string[] = [];
+
+  public constructor(public readonly dialect: DatabaseClient["dialect"]) {}
+
+  public prepare(sql: string): DbStatement {
+    this.sql.push(sql);
+    return new CodeModeFakeStatement();
+  }
+
+  public exec(): void {}
+
+  public close(): void {}
+
+  public transaction<T>(_mode: "deferred" | "immediate" | "exclusive", callback: () => T): T {
+    return callback();
+  }
+}
+
+class CodeModeFakeStatement implements DbStatement {
+  public run(): { changes: number } {
+    return { changes: 0 };
+  }
+
+  public get<T = unknown>(): T | undefined {
+    return undefined;
+  }
+
+  public all<T = unknown>(): T[] {
+    return [];
+  }
+}

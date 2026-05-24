@@ -139,6 +139,7 @@ vi.mock("./chat-workbench-service.js", () => ({
   revertChatSessionWorkbenchChanges: vi.fn((_deps, sessionId) => ({ sessionId, reverted: true })),
   revertChatSessionWorkbenchFile: vi.fn((_deps, sessionId, input) => ({ sessionId, input, reverted: true })),
   runChatSessionWorkbenchCommand: vi.fn((_deps, sessionId, input) => ({ sessionId, input, exitCode: 0 })),
+  runChatSessionWorkbenchFileOperation: vi.fn((_deps, sessionId, input) => ({ sessionId, input, operated: true })),
   saveChatSessionWorkbenchFile: vi.fn((_deps, sessionId, input) => ({ sessionId, input, saved: true })),
 }));
 
@@ -419,6 +420,12 @@ describe("composeChatRouteDependencies", () => {
     expect(deps.chatSessions.runChatSessionWorkbenchCommand("session-1", { command: "pnpm test" })).toMatchObject({
       exitCode: 0,
     });
+    expect(
+      deps.chatSessions.runChatSessionWorkbenchFileOperation("session-1", {
+        operation: "create_file",
+        path: "src/new.ts",
+      }),
+    ).toMatchObject({ operated: true });
     expect(deps.chatSessions.saveChatSessionWorkbenchFile("session-1", { path: "README.md" })).toMatchObject({
       saved: true,
     });

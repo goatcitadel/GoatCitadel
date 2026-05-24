@@ -12,6 +12,7 @@ import {
 } from "./verification/lib/release-surface-manifest.mjs";
 
 const root = process.cwd();
+const VALID_RELEASE_SURFACE_STATUSES = new Set(["ship", "hide", "experimental", "needs_release_polish"]);
 
 const requiredFiles = [
   "README.md",
@@ -478,7 +479,27 @@ const nextRouteModelSource = await readFile(
   path.join(root, "apps", "mission-control-next", "src", "app", "route-model.ts"),
   "utf8",
 );
-const canonicalNextReleaseRoutes = deriveMissionControlNextReleaseRoutes(nextRouteModelSource);
+const declaredNextRouteKeys = new Set(deriveMissionControlNextRouteKeys(nextRouteModelSource));
+const routeReleaseScopes = deriveMissionControlNextRouteScopes(nextRouteModelSource);
+const routeReleaseScopeByKey = new Map(routeReleaseScopes.map((scope) => [nextReleaseRouteKey(scope), scope]));
+for (const key of declaredNextRouteKeys) {
+  if (!routeReleaseScopeByKey.has(key)) {
+    errors.push(`apps/mission-control-next/src/app/route-model.ts release scope is missing canonical route ${key}.`);
+  }
+}
+for (const scope of routeReleaseScopes) {
+  const key = nextReleaseRouteKey(scope);
+  if (!declaredNextRouteKeys.has(key)) {
+    errors.push(`apps/mission-control-next/src/app/route-model.ts release scope includes unknown route ${key}.`);
+  }
+  if (!VALID_RELEASE_SURFACE_STATUSES.has(scope.status)) {
+    errors.push(`Mission Control Next release scope ${key} uses unknown status ${scope.status}.`);
+  }
+  if (!scope.releaseAction || !scope.verification || !scope.note) {
+    errors.push(`Mission Control Next release scope ${key} must include action, verification, and note copy.`);
+  }
+}
+const canonicalNextReleaseRoutes = routeReleaseScopes.filter((scope) => scope.status !== "hide");
 const manifestRouteKeys = new Set(NEXT_RELEASE_SURFACE_MANIFEST.map(nextReleaseRouteKey));
 const canonicalRouteKeys = new Set(canonicalNextReleaseRoutes.map(nextReleaseRouteKey));
 if (NEXT_RELEASE_SURFACE_MANIFEST.length !== canonicalNextReleaseRoutes.length) {
@@ -498,6 +519,16 @@ for (const route of NEXT_RELEASE_SURFACE_MANIFEST) {
   const key = nextReleaseRouteKey(route);
   if (!canonicalRouteKeys.has(key)) {
     errors.push(`Mission Control Next release-surface manifest includes non-canonical route ${route.slug} (${key}).`);
+    continue;
+  }
+  const scopedRoute = routeReleaseScopeByKey.get(key);
+  if (!route.releaseStatus || route.releaseStatus !== scopedRoute?.status) {
+    errors.push(
+      `Mission Control Next release-surface manifest route ${route.slug} must carry releaseStatus=${scopedRoute?.status}.`,
+    );
+  }
+  if (route.releaseStatus === "hide") {
+    errors.push(`Mission Control Next hidden route ${route.slug} must not appear in the release-surface manifest.`);
   }
 }
 
@@ -608,20 +639,45 @@ async function validateRelativeMarkdownLinks(relPath, content, label = "relative
   }
 }
 
-function deriveMissionControlNextReleaseRoutes(source) {
+function deriveMissionControlNextRouteKeys(source) {
   const coworkSections = extractTypeUnionLiterals(source, "CoworkSection");
   const librarySections = extractTypeUnionLiterals(source, "LibrarySection");
   const opsSections = extractTypeUnionLiterals(source, "OpsSection");
   const settingsSections = extractTypeUnionLiterals(source, "SettingsSection");
   return [
-    { expectedArea: "chat", expectedSection: "root" },
-    ...coworkSections.map((section) => ({ expectedArea: "cowork", expectedSection: section })),
-    { expectedArea: "code", expectedSection: "root" },
-    { expectedArea: "projects", expectedSection: "root" },
-    ...librarySections.map((section) => ({ expectedArea: "library", expectedSection: section })),
-    ...opsSections.map((section) => ({ expectedArea: "ops", expectedSection: section })),
-    ...settingsSections.map((section) => ({ expectedArea: "settings", expectedSection: section })),
+    "chat/root",
+    ...coworkSections.map((section) => `cowork/${section}`),
+    "code/root",
+    "projects/root",
+    ...librarySections.map((section) => `library/${section}`),
+    ...opsSections.map((section) => `ops/${section}`),
+    ...settingsSections.map((section) => `settings/${section}`),
   ];
+}
+
+function deriveMissionControlNextRouteScopes(source) {
+  const match = source.match(/export const ROUTE_RELEASE_SCOPE = \[([\s\S]*?)\] as const satisfies/);
+  if (!match) {
+    errors.push("apps/mission-control-next/src/app/route-model.ts must export ROUTE_RELEASE_SCOPE.");
+    return [];
+  }
+  const entries = [];
+  for (const item of match[1].matchAll(
+    /\{\s*area: "([^"]+)",\s*section: "([^"]+)",\s*status: "([^"]+)",\s*releaseAction: "([^"]+)",\s*verification: "([^"]+)",\s*note: "([^"]+)",\s*\}/g,
+  )) {
+    entries.push({
+      expectedArea: item[1],
+      expectedSection: item[2],
+      status: item[3],
+      releaseAction: item[4],
+      verification: item[5],
+      note: item[6],
+    });
+  }
+  if (entries.length === 0) {
+    errors.push("apps/mission-control-next/src/app/route-model.ts ROUTE_RELEASE_SCOPE must be parseable.");
+  }
+  return entries;
 }
 
 function extractTypeUnionLiterals(source, typeName) {

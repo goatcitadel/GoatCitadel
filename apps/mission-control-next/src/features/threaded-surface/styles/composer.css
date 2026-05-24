@@ -184,6 +184,18 @@
   position: relative;
 }
 
+.mc-next-workbench-layout-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.mc-next-workbench-layout-control input {
+  width: 7rem;
+}
+
 .mc-next-workbench-more-popover {
   position: absolute;
   bottom: calc(100% + 6px);
@@ -203,6 +215,52 @@
 .mc-next-workbench-more-popover .mc-next-panel-button {
   width: 100%;
   text-align: left;
+}
+
+.mc-next-workbench-view-toggle,
+.mc-next-workbench-command-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.38rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.mc-next-workbench-view-toggle > span {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.mc-next-workbench-command-surface {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.55rem;
+  border-radius: 0.44rem;
+  border: 1px solid color-mix(in oklab, var(--accent) 36%, var(--border));
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+}
+
+.mc-next-workbench-command-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-workbench-command-list .mc-next-panel-button {
+  overflow-wrap: anywhere;
+}
+
+.mc-next-workbench-raw-output {
+  margin: 0;
+  max-height: 16rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  padding: 0.55rem;
+  border-radius: 0.4rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+  color: var(--foreground);
+  font-size: var(--text-xs);
 }
 
 .mc-next-workbench-new-artifact-callout {
@@ -923,11 +981,14 @@
 
 .mc-next-context-card,
 .mc-next-panel-list,
+.mc-next-cowork-command-center,
+.mc-next-cowork-intervention,
 .mc-next-cowork-mission-brief,
 .mc-next-cowork-action-callout,
 .mc-next-cowork-now,
 .mc-next-cowork-blockers,
 .mc-next-cowork-run-map,
+.mc-next-cowork-checkpoints,
 .mc-next-workbench-pane {
   padding: 0.5rem;
   border-radius: 0.42rem;
@@ -987,10 +1048,76 @@
 }
 
 .mc-next-cowork-stage-card span,
+.mc-next-cowork-command-center dt,
+.mc-next-cowork-intervention p,
 .mc-next-cowork-mission-brief dt,
-.mc-next-cowork-facts dt {
+.mc-next-cowork-facts dt,
+.mc-next-cowork-checkpoint-list summary span,
+.mc-next-cowork-checkpoint-list summary em {
   color: var(--text-secondary);
   font-size: var(--text-xs);
+}
+
+.mc-next-cowork-command-center {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: 0.7rem;
+  align-items: start;
+  border-color: color-mix(in oklab, var(--accent) 34%, var(--border));
+}
+
+.mc-next-cowork-command-primary,
+.mc-next-cowork-command-state,
+.mc-next-cowork-command-action {
+  display: grid;
+  gap: 0.38rem;
+  min-width: 0;
+}
+
+.mc-next-cowork-command-center h5,
+.mc-next-cowork-command-center p,
+.mc-next-cowork-intervention h5,
+.mc-next-cowork-intervention p,
+.mc-next-cowork-checkpoints h5,
+.mc-next-cowork-checkpoints p {
+  margin: 0;
+}
+
+.mc-next-cowork-command-center dl {
+  display: grid;
+  gap: 0.32rem;
+  margin: 0;
+}
+
+.mc-next-cowork-command-center dd {
+  margin: 0.08rem 0 0;
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.mc-next-cowork-intervention {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+  gap: 0.5rem;
+  background: color-mix(in oklab, var(--mc-surface-1) 98%, transparent);
+}
+
+.mc-next-cowork-intervention article {
+  display: grid;
+  gap: 0.34rem;
+  min-width: 0;
+  padding: 0.45rem;
+  border-radius: 0.4rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+}
+
+.mc-next-cowork-intervention article.is-attention {
+  border-color: color-mix(in oklab, var(--warning) 50%, var(--border));
 }
 
 .mc-next-cowork-mission-brief {
@@ -1093,6 +1220,18 @@
   background: color-mix(in oklab, var(--card) 96%, transparent);
 }
 
+.mc-next-cowork-run-map-node.is-complete {
+  border-color: color-mix(in oklab, var(--success) 46%, var(--border));
+}
+
+.mc-next-cowork-run-map-node.is-active {
+  border-color: color-mix(in oklab, var(--accent) 56%, var(--border));
+}
+
+.mc-next-cowork-run-map-node.is-blocked {
+  border-color: color-mix(in oklab, var(--danger) 50%, var(--border));
+}
+
 .mc-next-cowork-run-map-node span {
   color: var(--accent);
   font-size: var(--text-xs);
@@ -1107,6 +1246,64 @@
   width: 2rem;
   height: 1px;
   background: color-mix(in oklab, var(--accent) 70%, var(--border));
+}
+
+.mc-next-cowork-checkpoints {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.mc-next-cowork-checkpoints.compact {
+  padding: 0.45rem;
+}
+
+.mc-next-cowork-checkpoints-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.65rem;
+  align-items: flex-start;
+}
+
+.mc-next-cowork-checkpoint-list {
+  display: grid;
+  gap: 0.38rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-cowork-checkpoint-list li {
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: color-mix(in oklab, var(--card) 96%, transparent);
+}
+
+.mc-next-cowork-checkpoint-list details {
+  padding: 0.42rem 0.48rem;
+}
+
+.mc-next-cowork-checkpoint-list summary {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.75fr) minmax(0, 1fr) minmax(6rem, auto);
+  gap: 0.45rem;
+  align-items: center;
+  cursor: pointer;
+}
+
+.mc-next-cowork-checkpoint-list summary strong,
+.mc-next-cowork-checkpoint-list summary em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-cowork-checkpoint-list summary em {
+  font-style: normal;
+}
+
+.mc-next-cowork-checkpoint-list details p {
+  margin: 0.42rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
 }
 
 .mc-next-workbench-body {
@@ -1126,7 +1323,7 @@
 }
 
 .mc-next-threaded-side-panel.code .mc-next-workbench-body {
-  grid-template-columns: minmax(10rem, 0.5fr) minmax(0, 1.5fr);
+  grid-template-columns: minmax(10rem, var(--mc-code-file-pane, 28%)) minmax(0, 1fr);
   overflow: hidden;
 }
 

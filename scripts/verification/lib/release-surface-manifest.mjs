@@ -80,7 +80,49 @@ export const RELEASE_SURFACE_VARIANTS = [
   },
 ];
 
-export const NEXT_RELEASE_SURFACE_MANIFEST = [
+export const NEXT_RELEASE_SURFACE_STATUS_BY_SLUG = {
+  chat: "ship",
+  cowork: "needs_release_polish",
+  "cowork-tasks": "needs_release_polish",
+  "cowork-board": "needs_release_polish",
+  code: "needs_release_polish",
+  projects: "needs_release_polish",
+  "library-agents": "ship",
+  "library-skills": "ship",
+  "library-capabilities": "ship",
+  "library-memory": "needs_release_polish",
+  "library-knowledge": "needs_release_polish",
+  "library-files": "ship",
+  "library-artifacts": "needs_release_polish",
+  "library-prompt-packs": "ship",
+  "library-curator": "experimental",
+  "ops-activity": "needs_release_polish",
+  "ops-sessions": "ship",
+  "ops-schedules": "needs_release_polish",
+  "ops-improvement": "experimental",
+  "ops-notifications": "needs_release_polish",
+  "ops-approvals": "ship",
+  "ops-costs": "ship",
+  "ops-runtime": "ship",
+  "ops-diagnostics": "ship",
+  "ops-kanban": "experimental",
+  "settings-general": "ship",
+  "settings-onboarding": "needs_release_polish",
+  "settings-providers": "needs_release_polish",
+  "settings-personalities": "experimental",
+  "settings-access": "ship",
+  "settings-permissions": "ship",
+  "settings-runtime": "ship",
+  "settings-workspaces": "ship",
+  "settings-budget": "ship",
+  "settings-addons": "experimental",
+  "settings-integrations": "needs_release_polish",
+  "settings-channels": "needs_release_polish",
+  "settings-mcp": "needs_release_polish",
+  "settings-tools": "ship",
+};
+
+export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
   {
     slug: "chat",
     href: "/chat",
@@ -393,7 +435,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = [
     expectedSection: "tools",
     interaction: "open-inspector",
   },
-];
+]);
 
 /*
  * Visual-only scenario variants for canonical routes. These do not register a
@@ -513,6 +555,13 @@ export const NEXT_LEGACY_REDIRECT_MANIFEST = [
     interaction: "open-inspector",
   },
 ];
+
+function withReleaseSurfaceStatus(routes) {
+  return routes.map((route) => ({
+    ...route,
+    releaseStatus: NEXT_RELEASE_SURFACE_STATUS_BY_SLUG[route.slug] ?? "hide",
+  }));
+}
 
 export const CURRENT_SHELL_CONTRACT = {
   shellSelector: ".layout-shell",

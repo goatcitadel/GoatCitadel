@@ -211,6 +211,7 @@ function buildCodePanel(
       onExpandedPathsChange: vi.fn(),
       onRefresh: vi.fn(),
       onSaveFile: vi.fn(),
+      onFileOperation: vi.fn(),
       onDiscardDraft: vi.fn(),
       onRunValidationCommand: vi.fn(),
       onApplyPatch: vi.fn(),
@@ -623,6 +624,74 @@ describe("ThreadedWorkflowPanel", () => {
     });
     expect(onDiscardDraft).toHaveBeenCalled();
     expect(onSelectFile).toHaveBeenCalledWith("src/other.ts");
+  });
+
+  it("routes file-tree actions through the governed workbench operation callback", async () => {
+    const onFileOperation = vi.fn().mockResolvedValue(true);
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(
+        <ThreadedWorkflowPanel
+          panel={buildCodePanel({
+            onFileOperation,
+            selectedFile: {
+              state: buildCodePanel().props.workbenchState,
+              path: "src/app.ts",
+              language: "typescript",
+              content: "console.log('draft');",
+              changed: true,
+            } as any,
+            workbenchTree: {
+              state: buildCodePanel().props.workbenchState,
+              rootPath: "F:\\code\\personal-ai",
+              changedFiles: ["src/app.ts"],
+              items: [
+                { path: "src", name: "src", kind: "directory", depth: 0, changed: true },
+                { path: "src/app.ts", name: "app.ts", kind: "file", depth: 1, changed: true },
+              ],
+            } as any,
+          })}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    const pathInput = renderer!.root.findByProps({ placeholder: "src/new-file.ts" });
+    await act(async () => {
+      pathInput.props.onChange({ target: { value: "src/new.ts" } });
+    });
+    const runButton = renderer!.root
+      .findAllByType("button")
+      .find((button) => instanceText(button.children).includes("Run action"));
+    await act(async () => {
+      runButton?.props.onClick();
+      await Promise.resolve();
+    });
+    expect(onFileOperation).toHaveBeenCalledWith({ operation: "create_file", path: "src/new.ts" });
+
+    const actionSelect = renderer!.root.findAllByType("select").find((select) => select.props.value === "create_file");
+    await act(async () => {
+      actionSelect?.props.onChange({ target: { value: "rename" } });
+    });
+    const useSelectedButton = renderer!.root
+      .findAllByType("button")
+      .find((button) => instanceText(button.children).includes("Use selected"));
+    await act(async () => {
+      useSelectedButton?.props.onClick();
+    });
+    const targetInput = renderer!.root.findByProps({ placeholder: "src/new-name.ts" });
+    await act(async () => {
+      targetInput.props.onChange({ target: { value: "src/renamed.ts" } });
+    });
+    await act(async () => {
+      runButton?.props.onClick();
+      await Promise.resolve();
+    });
+    expect(onFileOperation).toHaveBeenLastCalledWith({
+      operation: "rename",
+      path: "src/app.ts",
+      targetPath: "src/renamed.ts",
+    });
   });
 
   it("requires confirmation before reverting all worktree changes", async () => {
@@ -1290,8 +1359,17 @@ describe("ThreadedWorkflowPanel", () => {
     });
 
     expect(JSON.stringify(renderer!.toJSON())).toContain("src/app.ts");
-    renderer!.root.findByProps({ height: 520 }).props.onChange("console.log('next');");
+    const editor = renderer!.root.findByProps({ height: 520 });
+    editor.props.onChange("console.log('next');");
     expect(onDraftChange).toHaveBeenCalledWith("console.log('next');");
+    await act(async () => {
+      editor.props.onQuickOpen();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("File picker");
+    await act(async () => {
+      editor.props.onCommandPalette();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Workbench commands");
 
     await act(async () => {
       renderer!.root
@@ -1300,6 +1378,13 @@ describe("ThreadedWorkflowPanel", () => {
         ?.props.onClick();
     });
     expect(JSON.stringify(renderer!.toJSON())).toContain("Selected-file diff");
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Unified"))
+        ?.props.onClick();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Unified");
 
     await act(async () => {
       renderer!.root
@@ -1319,6 +1404,20 @@ describe("ThreadedWorkflowPanel", () => {
     expect(onExportPatch).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(renderer!.toJSON())).toContain("Validation passed.");
     expect(JSON.stringify(renderer!.toJSON())).toContain("warn");
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Raw"))
+        ?.props.onClick();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Validation passed.");
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Clear"))
+        ?.props.onClick();
+    });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Run log hidden locally");
     expect(mockedFetchCodeModeRuns).toHaveBeenCalledWith({
       sessionId: "session-1",
       workspaceId: "workspace-1",
@@ -1877,11 +1976,12 @@ describe("ThreadedWorkflowPanel", () => {
         .find((button) => button.children.includes("Run Map"))
         ?.props.onClick();
     });
-    expect(JSON.stringify(renderer!.toJSON())).toContain("Gate: ");
-    expect(JSON.stringify(renderer!.toJSON())).toContain("coverage evidence");
-    await act(async () => {
-      renderer!.root
-        .findAllByType("button")
+      expect(JSON.stringify(renderer!.toJSON())).toContain("Gate: ");
+      expect(JSON.stringify(renderer!.toJSON())).toContain("coverage evidence");
+      expect(JSON.stringify(renderer!.toJSON())).toContain("Timestamped checkpoints");
+      await act(async () => {
+        renderer!.root
+          .findAllByType("button")
         .find((button) => button.children.includes("Inspect evidence"))
         ?.props.onClick();
     });
@@ -1938,11 +2038,11 @@ describe("ThreadedWorkflowPanel", () => {
 
       expect(JSON.stringify(renderer!.toJSON())).toContain("1+ visible roles");
       await act(async () => {
-        findButton(renderer!, "Stop run")?.props.onClick();
+        findButton(renderer!, "Stop at checkpoint")?.props.onClick();
         findButton(renderer!, item.label)?.props.onClick();
       });
       const stopConfirm = renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.open);
-      expect(stopConfirm?.props.title).toBe("Stop the active Cowork run?");
+      expect(stopConfirm?.props.title).toBe("Stop at next checkpoint?");
       await act(async () => {
         stopConfirm?.props.onConfirm();
       });

@@ -312,6 +312,45 @@ describe("chat routes additional coverage", () => {
         stderrTruncated: false,
       },
     }));
+    const runChatSessionWorkbenchFileOperation = vi.fn(async () => ({
+      state: {
+        sessionId: "sess-1",
+        projectId: "proj-1",
+        worktreeStatus: "ready",
+        validationStatus: "passed",
+        activeFilePath: "src/new.ts",
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:03:00.000Z",
+      },
+      operation: "create_file",
+      path: "src/new.ts",
+      changedFiles: ["src/new.ts"],
+      tree: {
+        state: {
+          sessionId: "sess-1",
+          projectId: "proj-1",
+          worktreeStatus: "ready",
+          validationStatus: "passed",
+          createdAt: "2026-04-10T00:00:00.000Z",
+          updatedAt: "2026-04-10T00:03:00.000Z",
+        },
+        rootPath: "workspace/demo",
+        changedFiles: ["src/new.ts"],
+        items: [{ path: "src/new.ts", name: "new.ts", kind: "file", changed: true, depth: 1 }],
+      },
+      output: {
+        state: {
+          sessionId: "sess-1",
+          projectId: "proj-1",
+          worktreeStatus: "ready",
+          validationStatus: "passed",
+          createdAt: "2026-04-10T00:00:00.000Z",
+          updatedAt: "2026-04-10T00:03:00.000Z",
+        },
+        helperRuns: [],
+        output: "Created file src/new.ts.",
+      },
+    }));
     const applyChatSessionWorkbenchPatch = vi.fn(async () => ({
       state: {
         sessionId: "sess-1",
@@ -420,6 +459,7 @@ describe("chat routes additional coverage", () => {
         revertChatSessionWorkbenchChanges,
         revertChatSessionWorkbenchFile,
         runChatSessionWorkbenchCommand,
+        runChatSessionWorkbenchFileOperation,
       },
     } as never);
     await app.register(chatRoutes);
@@ -523,6 +563,24 @@ describe("chat routes additional coverage", () => {
       command: "pnpm",
       args: ["test"],
       timeoutMs: 30_000,
+    });
+
+    const fileOperationResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/workbench/file-operation",
+      payload: {
+        operation: "create_file",
+        path: "src/new.ts",
+      },
+    });
+    expect(fileOperationResponse.statusCode).toBe(200);
+    expect(fileOperationResponse.json()).toMatchObject({
+      operation: "create_file",
+      path: "src/new.ts",
+    });
+    expect(runChatSessionWorkbenchFileOperation).toHaveBeenCalledWith("sess-1", {
+      operation: "create_file",
+      path: "src/new.ts",
     });
 
     const patchApplyResponse = await app.inject({

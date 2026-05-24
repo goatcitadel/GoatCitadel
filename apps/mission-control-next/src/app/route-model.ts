@@ -36,6 +36,7 @@ export type SettingsSection =
   | "channels"
   | "mcp"
   | "tools";
+export type ReleaseSurfaceStatus = "ship" | "hide" | "experimental" | "needs_release_polish";
 
 export interface AppRoute {
   area: PrimaryArea;
@@ -64,6 +65,20 @@ export interface RailItem {
   section?: AppRoute["section"];
   preserveThread?: boolean;
 }
+
+export interface RouteReleaseScope {
+  area: PrimaryArea;
+  section: "root" | CoworkSection | LibrarySection | OpsSection | SettingsSection;
+  status: ReleaseSurfaceStatus;
+  releaseAction: string;
+  verification: string;
+  note: string;
+}
+
+type RouteReleaseKeyInput = {
+  area: PrimaryArea;
+  section?: RouteReleaseScope["section"] | AppRoute["section"];
+};
 
 export const AREA_META: Record<PrimaryArea, AreaMeta> = {
   chat: {
@@ -458,6 +473,323 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
   ],
 };
 
+export const ROUTE_RELEASE_SCOPE = [
+  {
+    area: "chat",
+    section: "root",
+    status: "ship",
+    releaseAction: "Send a normal Chat turn and inspect model/tool/runtime context when present.",
+    verification: "verify:surface:regression, verify:runtime:truth",
+    note: "Core conversational lane remains release-bearing.",
+  },
+  {
+    area: "cowork",
+    section: "workspace",
+    status: "needs_release_polish",
+    releaseAction: "Start or resume a durable Cowork run, then inspect blockers, approvals, and evidence.",
+    verification: "verify:surface:regression, verify:durable:recovery, verify:runtime:truth",
+    note: "Flagship flow stays visible but still needs the next-action and live-control clarity pass.",
+  },
+  {
+    area: "cowork",
+    section: "tasks",
+    status: "needs_release_polish",
+    releaseAction: "Review task state, blocked work, and deliverables from the Cowork lane.",
+    verification: "verify:surface:regression",
+    note: "Task board is visible; release polish should tighten continuation and blocker hierarchy.",
+  },
+  {
+    area: "cowork",
+    section: "board",
+    status: "needs_release_polish",
+    releaseAction: "Inspect agent posture and delegation board state.",
+    verification: "verify:surface:regression",
+    note: "Agent board remains visible but should not imply autonomous live-control parity.",
+  },
+  {
+    area: "code",
+    section: "root",
+    status: "needs_release_polish",
+    releaseAction: "Bind a code source, edit files, run validation, inspect diffs, and review Code Mode proof.",
+    verification: "verify:surface:regression, verify:code:workbench-loop, verify:code-mode:sandbox",
+    note: "Code is release-bearing, but the workbench needs completion before final release claims.",
+  },
+  {
+    area: "projects",
+    section: "root",
+    status: "needs_release_polish",
+    releaseAction: "Select a project and continue related Chat, Cowork, or Code work.",
+    verification: "verify:surface:regression",
+    note: "Projects is visible; it needs home-base continuation and readiness affordances.",
+  },
+  {
+    area: "library",
+    section: "agents",
+    status: "ship",
+    releaseAction: "Inspect reusable agent profiles and catalog controls.",
+    verification: "verify:surface:regression",
+    note: "Agent catalog is a visible Library route with operator navigation.",
+  },
+  {
+    area: "library",
+    section: "skills",
+    status: "ship",
+    releaseAction: "Review skill activation posture and lifecycle evidence.",
+    verification: "verify:surface:regression, verify:agentic:proof",
+    note: "Skills are release-bearing when trust/provenance stays visible.",
+  },
+  {
+    area: "library",
+    section: "capabilities",
+    status: "ship",
+    releaseAction: "Inspect capability availability, degraded posture, and callable/inspectable truth.",
+    verification: "verify:surface:regression, verify:catalog:parity",
+    note: "Capability truth remains part of the release surface.",
+  },
+  {
+    area: "library",
+    section: "memory",
+    status: "needs_release_polish",
+    releaseAction: "Inspect, edit, forget, and audit memory lifecycle state through MemoryLifecycleService.",
+    verification: "verify:surface:regression, verify:memory:truth",
+    note: "Memory lifecycle ships, but the broader provenance relationship layer remains release polish.",
+  },
+  {
+    area: "library",
+    section: "knowledge",
+    status: "needs_release_polish",
+    releaseAction: "Inspect knowledge sources and attachable context with source visibility.",
+    verification: "verify:surface:regression",
+    note: "Knowledge stays visible while provenance and source-linking are tightened.",
+  },
+  {
+    area: "library",
+    section: "files",
+    status: "ship",
+    releaseAction: "Browse uploaded and workspace files from the Library lane.",
+    verification: "verify:surface:regression",
+    note: "File browsing is release-bearing as an inspectable support surface.",
+  },
+  {
+    area: "library",
+    section: "artifacts",
+    status: "needs_release_polish",
+    releaseAction: "Reopen generated artifacts and inspect linked run/source evidence.",
+    verification: "verify:surface:regression",
+    note: "Artifacts are visible; linked decision/run provenance needs release polish.",
+  },
+  {
+    area: "library",
+    section: "prompt-packs",
+    status: "ship",
+    releaseAction: "Author, export, benchmark, and review prompt packs.",
+    verification: "verify:surface:regression, prompt:gates",
+    note: "Prompt-pack workflows remain release-bearing.",
+  },
+  {
+    area: "library",
+    section: "curator",
+    status: "experimental",
+    releaseAction: "Review skill health proposals without treating archive recommendations as final release automation.",
+    verification: "verify:surface:regression label check",
+    note: "Curator remains visible as experimental operator assistance.",
+  },
+  {
+    area: "ops",
+    section: "activity",
+    status: "needs_release_polish",
+    releaseAction: "Inspect realtime and retained operational events.",
+    verification: "verify:surface:regression, verify:realtime:truth",
+    note: "Activity ships, but Ops still needs the unified needs-attention inbox.",
+  },
+  {
+    area: "ops",
+    section: "sessions",
+    status: "ship",
+    releaseAction: "Inspect session timelines, summaries, and operator evidence.",
+    verification: "verify:surface:regression",
+    note: "Sessions are release-bearing evidence navigation.",
+  },
+  {
+    area: "ops",
+    section: "schedules",
+    status: "needs_release_polish",
+    releaseAction: "Review scheduler posture and create governed recurring work.",
+    verification: "verify:surface:regression",
+    note: "Schedules remain visible; review-queue copy and primary actions need polish.",
+  },
+  {
+    area: "ops",
+    section: "improvement",
+    status: "experimental",
+    releaseAction: "Inspect improvement loops as experimental replay/self-improvement support.",
+    verification: "verify:surface:regression label check",
+    note: "Improvement remains visible but must not be described as autonomous release magic.",
+  },
+  {
+    area: "ops",
+    section: "notifications",
+    status: "needs_release_polish",
+    releaseAction: "Review runtime issues, self-repair proposals, and follow-up signals.",
+    verification: "verify:surface:regression",
+    note: "Notifications should converge into the Ops exception inbox.",
+  },
+  {
+    area: "ops",
+    section: "approvals",
+    status: "ship",
+    releaseAction: "Review pending decisions, replay effects, and approval history.",
+    verification: "verify:surface:regression, verify:auth:matrix",
+    note: "Approval governance is release-bearing.",
+  },
+  {
+    area: "ops",
+    section: "costs",
+    status: "ship",
+    releaseAction: "Inspect spend visibility and cost evidence.",
+    verification: "verify:surface:regression",
+    note: "Cost visibility remains part of release trust.",
+  },
+  {
+    area: "ops",
+    section: "runtime",
+    status: "ship",
+    releaseAction: "Inspect gateway health, daemon posture, host vitals, and backup state.",
+    verification: "verify:surface:regression, verify:runtime:truth",
+    note: "Runtime truth is release-bearing.",
+  },
+  {
+    area: "ops",
+    section: "diagnostics",
+    status: "ship",
+    releaseAction: "Inspect durable, daemon, admin, docs, and readiness diagnostics.",
+    verification: "verify:surface:regression, docs:check",
+    note: "Diagnostics stay available behind drill-in surfaces.",
+  },
+  {
+    area: "ops",
+    section: "kanban",
+    status: "experimental",
+    releaseAction: "Inspect multi-agent board posture without treating bulk controls as final release control.",
+    verification: "verify:surface:regression label check",
+    note: "Kanban remains visible as experimental multi-agent operations.",
+  },
+  {
+    area: "settings",
+    section: "general",
+    status: "ship",
+    releaseAction: "Configure base defaults inherited by operator surfaces.",
+    verification: "verify:surface:regression",
+    note: "General settings are release-bearing.",
+  },
+  {
+    area: "settings",
+    section: "providers",
+    status: "needs_release_polish",
+    releaseAction: "Configure provider credentials and run provider/model smoke evidence.",
+    verification: "verify:surface:regression, provider exercise paths",
+    note: "Providers stay visible; first-run smoke and plain-English failures need completion.",
+  },
+  {
+    area: "settings",
+    section: "personalities",
+    status: "experimental",
+    releaseAction: "Adjust personality presets without treating them as a release-critical runtime guarantee.",
+    verification: "verify:surface:regression label check",
+    note: "Personalities remain experimental polish around Chat defaults.",
+  },
+  {
+    area: "settings",
+    section: "access",
+    status: "ship",
+    releaseAction: "Inspect auth posture, secret storage truth, and access boundaries.",
+    verification: "verify:surface:regression, verify:auth:matrix",
+    note: "Access and secret truth are release-bearing.",
+  },
+  {
+    area: "settings",
+    section: "permissions",
+    status: "ship",
+    releaseAction: "Configure permission profiles and local operator override evidence.",
+    verification: "verify:surface:regression, verify:agentic:governance",
+    note: "Permission governance is release-bearing.",
+  },
+  {
+    area: "settings",
+    section: "budget",
+    status: "ship",
+    releaseAction: "Set budget mode and review cost evidence.",
+    verification: "verify:surface:regression",
+    note: "Budget controls are release-bearing trust controls.",
+  },
+  {
+    area: "settings",
+    section: "onboarding",
+    status: "needs_release_polish",
+    releaseAction: "Follow Start Here readiness through provider, model, first Chat, Cowork, project, and proof steps.",
+    verification: "verify:install, verify:surface:regression",
+    note: "Start Here is visible but needs the full first-run golden path.",
+  },
+  {
+    area: "settings",
+    section: "runtime",
+    status: "ship",
+    releaseAction: "Configure mesh, local runtimes, backups, and serving posture.",
+    verification: "verify:surface:regression, verify:runtime:truth",
+    note: "Runtime settings are release-bearing when experimental sidecars stay labeled.",
+  },
+  {
+    area: "settings",
+    section: "workspaces",
+    status: "ship",
+    releaseAction: "Configure workspace context, guidance, and extension posture.",
+    verification: "verify:surface:regression",
+    note: "Workspace controls remain release-bearing.",
+  },
+  {
+    area: "settings",
+    section: "addons",
+    status: "experimental",
+    releaseAction: "Inspect add-on posture without implying a full marketplace/install lifecycle.",
+    verification: "verify:surface:regression label check",
+    note: "Add-ons stay experimental until install/enable/disable proof is promoted.",
+  },
+  {
+    area: "settings",
+    section: "integrations",
+    status: "needs_release_polish",
+    releaseAction: "Review connector status and open real setup/action paths where supported.",
+    verification: "verify:surface:regression, verify:catalog:parity",
+    note: "Integrations remain visible but must keep blocked/incomplete copy explicit.",
+  },
+  {
+    area: "settings",
+    section: "channels",
+    status: "needs_release_polish",
+    releaseAction: "Run guided channel setup with live-auth or live-send diagnostics where supported.",
+    verification: "verify:surface:regression, channel setup tests",
+    note: "Channels remain visible; each visible channel needs action or blocked copy.",
+  },
+  {
+    area: "settings",
+    section: "mcp",
+    status: "needs_release_polish",
+    releaseAction: "Configure local stdio MCP and Approval Inbox paths while remote transports stay blocked/experimental.",
+    verification: "verify:surface:regression, mcp visibility tests",
+    note: "MCP stays visible with local-transport truth and remote-transport limits.",
+  },
+  {
+    area: "settings",
+    section: "tools",
+    status: "ship",
+    releaseAction: "Inspect low-level tool catalog and scoped allow/deny grants.",
+    verification: "verify:surface:regression, verify:agentic:governance",
+    note: "Tool grants and deny-wins policy are release-bearing.",
+  },
+] as const satisfies readonly RouteReleaseScope[];
+
+const ROUTE_RELEASE_SCOPE_BY_KEY = new Map(ROUTE_RELEASE_SCOPE.map((scope) => [getRouteReleaseKey(scope), scope]));
+
 export function normalizeAppRoute(route: AppRoute): AppRoute {
   const base = {
     area: route.area,
@@ -593,6 +925,45 @@ export function getRouteDescription(route: AppRoute): string {
   );
 }
 
+export function getRouteReleaseKey(route: RouteReleaseKeyInput): string {
+  const section =
+    route.area === "chat" || route.area === "code" || route.area === "projects"
+      ? "root"
+      : ((route.section as RouteReleaseScope["section"] | undefined) ?? defaultSectionForArea(route.area));
+  return `${route.area}/${section}`;
+}
+
+export function getRouteReleaseScope(route: AppRoute): RouteReleaseScope {
+  const key = getRouteReleaseKey(normalizeAppRoute(route));
+  return (
+    ROUTE_RELEASE_SCOPE_BY_KEY.get(key) ?? {
+      area: route.area,
+      section: "root",
+      status: "hide",
+      releaseAction: "Route is not part of the current visible release surface.",
+      verification: "not release-bearing",
+      note: "Missing route-scope metadata fails closed as hidden.",
+    }
+  );
+}
+
+export function describeReleaseSurfaceStatus(status: ReleaseSurfaceStatus): string {
+  if (status === "ship") {
+    return "Release-ready";
+  }
+  if (status === "needs_release_polish") {
+    return "Needs release polish";
+  }
+  if (status === "experimental") {
+    return "Experimental";
+  }
+  return "Hidden";
+}
+
+export function isReleaseSurfaceReady(status: ReleaseSurfaceStatus): boolean {
+  return status === "ship";
+}
+
 export function buildNavigationTarget(current: AppRoute, item: RailItem): AppRoute {
   const preserveThread = item.preserveThread ?? false;
   return normalizeAppRoute({
@@ -620,6 +991,22 @@ export function isRailItemActive(route: AppRoute, item: RailItem): boolean {
     return true;
   }
   return item.section === next.section;
+}
+
+function defaultSectionForArea(area: PrimaryArea): RouteReleaseScope["section"] {
+  if (area === "cowork") {
+    return "workspace";
+  }
+  if (area === "library") {
+    return "agents";
+  }
+  if (area === "ops") {
+    return "activity";
+  }
+  if (area === "settings") {
+    return "general";
+  }
+  return "root";
 }
 
 function isPrimaryArea(value: string | undefined): value is PrimaryArea {

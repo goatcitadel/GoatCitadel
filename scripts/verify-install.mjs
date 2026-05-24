@@ -104,12 +104,105 @@ async function main() {
       subsystem: "gateway",
     }, async () => {
       const response = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/status");
+      const providers = Array.isArray(response.body?.providers) ? response.body.providers : [];
+      const activeProvider = providers.find((provider) => provider.active);
       return {
         status: response.ok ? "passed" : "failed",
         error: response.ok ? undefined : JSON.stringify(response.body),
+        providerId: activeProvider?.providerId,
+        modelId: response.body?.activeModel,
         metrics: {
           statusCode: response.status,
-          providerCount: Array.isArray(response.body?.providers) ? response.body.providers.length : 0,
+          providerCount: providers.length,
+          configuredProviderCount: providers.filter((provider) => provider.hasSecret).length,
+          activeProviderConfigured: Boolean(activeProvider?.hasSecret),
+        },
+      };
+    });
+
+    await runScenario(context, {
+      id: "install.provider.smoke-path",
+      lane: "install-smoke",
+      title: "Configured-provider smoke evidence path is explicit",
+      subsystem: "providers",
+    }, async () => {
+      const statusResponse = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/status");
+      const providers = Array.isArray(statusResponse.body?.providers) ? statusResponse.body.providers : [];
+      const activeProvider = providers.find((provider) => provider.active);
+      const shouldExercise = process.env.GOATCITADEL_VERIFY_INSTALL_LIVE_PROVIDER === "1";
+      if (shouldExercise && activeProvider) {
+        const exercise = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/provider-exercise", {
+          method: "POST",
+          body: {
+            providerId: activeProvider.providerId,
+            model: statusResponse.body?.activeModel || activeProvider.defaultModel,
+            scenario: "simple",
+          },
+        });
+        return {
+          status: exercise.ok && exercise.body?.ok ? "passed" : "failed",
+          providerId: activeProvider.providerId,
+          modelId: exercise.body?.model ?? statusResponse.body?.activeModel,
+          error: exercise.body?.ok ? undefined : exercise.body?.error ?? JSON.stringify(exercise.body),
+          notes: exercise.body?.ok ? ["Live provider smoke returned a response."] : [],
+          metrics: {
+            statusCode: exercise.status,
+            elapsedMs: exercise.body?.elapsedMs ?? 0,
+          },
+        };
+      }
+      return {
+        status: statusResponse.ok && activeProvider ? "passed" : "failed",
+        providerId: activeProvider?.providerId,
+        modelId: statusResponse.body?.activeModel,
+        error: statusResponse.ok ? undefined : JSON.stringify(statusResponse.body),
+        notes: [
+          "Install smoke verified the provider readiness and live-smoke endpoint path. Set GOATCITADEL_VERIFY_INSTALL_LIVE_PROVIDER=1 with real credentials to produce live model pass/fail evidence.",
+        ],
+        metrics: {
+          statusCode: statusResponse.status,
+          liveProviderExercise: shouldExercise,
+          activeProviderConfigured: Boolean(activeProvider?.hasSecret),
+        },
+      };
+    });
+
+    await runScenario(context, {
+      id: "install.gateway.demo-first-outcome",
+      lane: "install-smoke",
+      title: "Safe demo bootstrap creates first-run Chat, Cowork, Code, and project anchors",
+      subsystem: "gateway",
+    }, async () => {
+      const bootstrap = await requestJson(stack.gatewayUrl, "/api/v1/demo/bootstrap", {
+        method: "POST",
+        body: {},
+      });
+      const state = await requestJson(stack.gatewayUrl, "/api/v1/demo/state");
+      const sessions = Array.isArray(bootstrap.body?.sessions) ? bootstrap.body.sessions : [];
+      const modes = new Set(sessions.map((session) => session.mode));
+      const hasFirstRunAnchors =
+        Boolean(bootstrap.body?.workspace) &&
+        Boolean(bootstrap.body?.project) &&
+        modes.has("chat") &&
+        modes.has("cowork") &&
+        modes.has("code") &&
+        Array.isArray(bootstrap.body?.tasks) &&
+        bootstrap.body.tasks.length >= 2 &&
+        state.body?.status === "ready";
+      return {
+        status: bootstrap.ok && state.ok && hasFirstRunAnchors ? "passed" : "failed",
+        error: bootstrap.ok && state.ok ? undefined : JSON.stringify({ bootstrap: bootstrap.body, state: state.body }),
+        notes: bootstrap.body?.notes ?? [],
+        metrics: {
+          bootstrapStatusCode: bootstrap.status,
+          stateStatusCode: state.status,
+          sessionCount: sessions.length,
+          taskCount: Array.isArray(bootstrap.body?.tasks) ? bootstrap.body.tasks.length : 0,
+          hasWorkspace: Boolean(bootstrap.body?.workspace),
+          hasProject: Boolean(bootstrap.body?.project),
+          hasChat: modes.has("chat"),
+          hasCowork: modes.has("cowork"),
+          hasCode: modes.has("code"),
         },
       };
     });

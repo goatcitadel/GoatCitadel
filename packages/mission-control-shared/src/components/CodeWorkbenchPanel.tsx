@@ -3,6 +3,7 @@ import type {
   ChatGeneratedArtifactRecord,
   ChatSessionWorkbenchDiffResponse,
   ChatSessionWorkbenchFileDiffResponse,
+  ChatSessionWorkbenchFileOperationRequest,
   ChatSessionWorkbenchFileResponse,
   ChatSessionWorkbenchOutputResponse,
   ChatSessionWorkbenchRecord,
@@ -117,6 +118,7 @@ export function CodeWorkbenchPanel({
   onExpandedPathsChange: (nextPaths: string[]) => void;
   onRefresh: () => void;
   onSaveFile: () => void;
+  onFileOperation?: (input: ChatSessionWorkbenchFileOperationRequest) => Promise<unknown> | unknown;
   onDiscardDraft: () => void;
   onRunValidationCommand?: (input: { command: string; args?: string[]; timeoutMs?: number }) => void;
   onApplyPatch?: (patch: string) => void;

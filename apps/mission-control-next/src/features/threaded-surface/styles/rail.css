@@ -2,8 +2,9 @@
   --mc-mode-chat: var(--gc-area-chat, oklch(0.72 0.12 240));
   --mc-mode-cowork: var(--gc-area-cowork, oklch(0.73 0.13 315));
   --mc-mode-code: var(--gc-area-code, oklch(0.74 0.12 175));
+  position: relative;
   display: grid;
-  grid-template-columns: 184px minmax(0, 1fr);
+  grid-template-columns: var(--mc-session-rail-width, 184px) minmax(0, 1fr);
   gap: 0;
   min-height: calc(100dvh - 58px);
   border-top: 0;
@@ -41,6 +42,49 @@
 
 .mc-next-threaded-dropzone {
   position: relative;
+}
+
+.mc-next-threaded-resize-handle {
+  all: unset;
+  box-sizing: border-box;
+  position: absolute;
+  z-index: 18;
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.mc-next-threaded-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0.65rem;
+  bottom: 0.65rem;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: color-mix(in oklab, var(--mc-border-subtle) 82%, transparent);
+}
+
+.mc-next-threaded-resize-handle:hover::after,
+.mc-next-threaded-resize-handle:focus-visible::after,
+.mc-next-threaded-resize-handle.dragging::after {
+  width: 2px;
+  background: color-mix(in oklab, var(--mc-area-color) 72%, var(--foreground));
+  box-shadow: 0 0 14px color-mix(in oklab, var(--mc-area-color) 24%, transparent);
+}
+
+.mc-next-threaded-resize-handle:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--mc-area-color) 72%, var(--foreground));
+  outline-offset: -2px;
+}
+
+.mc-next-threaded-resize-handle.rail {
+  top: 0;
+  bottom: 0;
+  left: calc(var(--mc-session-rail-width, 184px) - 4px);
+  width: 8px;
 }
 
 .mc-next-threaded-drop-overlay {

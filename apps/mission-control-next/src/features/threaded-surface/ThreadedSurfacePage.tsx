@@ -1,5 +1,32 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { ChevronRight, Code2, FolderPlus, Menu, MessageSquareText, PanelRight, Search, Workflow } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Code2,
+  Eye,
+  FileDiff,
+  FileText,
+  Folder,
+  FolderPlus,
+  ListChecks,
+  Menu,
+  MessageSquareText,
+  PanelRight,
+  Play,
+  Search,
+  Terminal,
+  Workflow,
+} from "lucide-react";
 import type { ChatMode, ChatSessionRecord } from "@goatcitadel/contracts";
 import type {
   MissionThreadedActiveSessionSurfaceProps,
@@ -48,6 +75,24 @@ const MODE_META: Record<ChatMode, { label: string; icon: typeof MessageSquareTex
     icon: Code2,
     helper: "Implementation-focused thread with workbench and code-mode tools.",
   },
+};
+
+type ThreadedUtilityPanelId = "preview" | "diff" | "terminal" | "files" | "background" | "plan";
+type ThreadedUtilityPanelMeta = { id: ThreadedUtilityPanelId; label: string; icon: typeof PanelRight };
+
+const UTILITY_PANEL_ITEMS: ThreadedUtilityPanelMeta[] = [
+  { id: "preview", label: "Preview", icon: Play },
+  { id: "diff", label: "Diff", icon: FileDiff },
+  { id: "terminal", label: "Terminal", icon: Terminal },
+  { id: "files", label: "Files", icon: Folder },
+  { id: "background", label: "Background tasks", icon: Eye },
+  { id: "plan", label: "Plan", icon: ListChecks },
+];
+
+const PANE_WIDTHS = {
+  rail: { initial: 184, min: 148, max: 340 },
+  workbench: { initial: 560, min: 320, max: 840 },
+  context: { initial: 320, min: 224, max: 520 },
 };
 
 export interface ThreadedPermissionState {
@@ -111,10 +156,29 @@ export function ThreadedSurfacePage({
 }) {
   const compactLayout = useMediaQuery("(max-width: 1180px)");
   const railDrawerLayout = useMediaQuery("(max-width: 1023px)");
+  const railPane = useHorizontalPaneResize({
+    direction: "right",
+    initialWidth: PANE_WIDTHS.rail.initial,
+    maxWidth: PANE_WIDTHS.rail.max,
+    minWidth: PANE_WIDTHS.rail.min,
+  });
+  const workbenchPane = useHorizontalPaneResize({
+    direction: "left",
+    initialWidth: PANE_WIDTHS.workbench.initial,
+    maxWidth: PANE_WIDTHS.workbench.max,
+    minWidth: PANE_WIDTHS.workbench.min,
+  });
+  const contextPane = useHorizontalPaneResize({
+    direction: "left",
+    initialWidth: PANE_WIDTHS.context.initial,
+    maxWidth: PANE_WIDTHS.context.max,
+    minWidth: PANE_WIDTHS.context.min,
+  });
   const railOpen = input.sessionRailOpen;
   const railDrawerOpen = railDrawerLayout && railOpen;
-  const dockOpen = input.dockOpen && Boolean(input.activeSessionSurfaceProps);
   const activeProps = input.activeSessionSurfaceProps;
+  const [activeUtilityPanel, setActiveUtilityPanel] = useState<ThreadedUtilityPanelId | null>(null);
+  const dockOpen = Boolean((input.dockOpen || activeUtilityPanel) && activeProps);
   const workflowPanel = input.workflowPanel;
   const activeMode = activeProps?.mode ?? surface;
   const modeMeta = MODE_META[activeMode];
@@ -144,6 +208,29 @@ export function ThreadedSurfacePage({
     archiveWorkspaceCount > 0
       ? `Archive ${archiveWorkspaceCount} active mission chats in this workspace? Archived chats leave the default history rail but stay recoverable from Archived view.`
       : "Archive active mission chats in this workspace?";
+  const rootStyle = useMemo(
+    () =>
+      ({
+        "--mc-session-rail-width": `${railPane.width}px`,
+      }) as CSSProperties,
+    [railPane.width],
+  );
+  const stageStyle = useMemo(
+    () =>
+      ({
+        "--mc-workbench-panel-width": `${workbenchPane.width}px`,
+        "--mc-context-panel-width": `${contextPane.width}px`,
+      }) as CSSProperties,
+    [contextPane.width, workbenchPane.width],
+  );
+  const handleDockOpenChange = (next: boolean) => {
+    setActiveUtilityPanel(null);
+    input.onDockOpenChange(next);
+  };
+  const handleSelectUtilityPanel = (panel: ThreadedUtilityPanelId) => {
+    setActiveUtilityPanel(panel);
+    input.onDockOpenChange(true);
+  };
   const handleArchiveWorkspace = () => {
     if (
       !input.sessionRail.archiveWorkspaceEnabled ||
@@ -165,6 +252,7 @@ export function ThreadedSurfacePage({
       data-mode={surface}
       data-active-mode={activeMode}
       data-area={surface}
+      style={rootStyle}
     >
       <button
         type="button"
@@ -331,7 +419,21 @@ export function ThreadedSurfacePage({
         />
       </aside>
 
-      <section className={stageLayoutClass}>
+      {!railDrawerLayout ? (
+        <PaneResizeHandle
+          ariaLabel="Resize session rail"
+          className="rail"
+          dragging={railPane.dragging}
+          maxWidth={PANE_WIDTHS.rail.max}
+          minWidth={PANE_WIDTHS.rail.min}
+          onDoubleClick={railPane.reset}
+          onKeyDown={railPane.handleKeyDown}
+          onPointerDown={railPane.handlePointerDown}
+          width={railPane.width}
+        />
+      ) : null}
+
+      <section className={stageLayoutClass} style={stageStyle}>
         <div className="mc-next-threaded-primary-column">
           <input
             ref={input.dropTargetProps.fileInputRef}
@@ -363,10 +465,10 @@ export function ThreadedSurfacePage({
               <button
                 type="button"
                 className="mc-next-threaded-menu-button"
-                onClick={() => input.onDockOpenChange(!input.dockOpen)}
+                onClick={() => handleDockOpenChange(!dockOpen)}
               >
                 <PanelRight size={16} />
-                <span>{input.dockOpen ? "Hide context" : "Context"}</span>
+                <span>{dockOpen ? "Hide context" : "Context"}</span>
               </button>
             ) : null}
           </div>
@@ -377,7 +479,10 @@ export function ThreadedSurfacePage({
               compactLayout={compactLayout}
               props={activeProps}
               dropTarget={input.dropTargetProps}
-              onToggleDock={() => input.onDockOpenChange(!input.dockOpen)}
+              dockOpen={dockOpen}
+              activeUtilityPanel={activeUtilityPanel}
+              onToggleDock={() => handleDockOpenChange(!dockOpen)}
+              onSelectUtilityPanel={handleSelectUtilityPanel}
               codeWorkbenchOpen={codeWorkbenchOpen}
               onToggleCodeWorkbench={
                 workflowPanel?.kind === "code" ? () => setCodeWorkbenchOpen((current) => !current) : undefined
@@ -396,18 +501,53 @@ export function ThreadedSurfacePage({
 
         {workflowPanelOpen && workflowPanel ? (
           <aside className={`mc-next-threaded-side-panel ${workflowPanel.kind}`}>
+            <PaneResizeHandle
+              ariaLabel={`Resize ${workflowPanel.kind === "code" ? "code workbench" : "cowork panel"}`}
+              className="panel"
+              dragging={workbenchPane.dragging}
+              maxWidth={PANE_WIDTHS.workbench.max}
+              minWidth={PANE_WIDTHS.workbench.min}
+              onDoubleClick={workbenchPane.reset}
+              onKeyDown={workbenchPane.handleKeyDown}
+              onPointerDown={workbenchPane.handlePointerDown}
+              width={workbenchPane.width}
+            />
             <ThreadedWorkflowPanel panel={workflowPanel} />
           </aside>
         ) : null}
 
         {dockOpen && input.contextDockProps ? (
-          <aside className="mc-next-threaded-context-panel">
-            <ThreadedContextDrawer
-              surface={activeMode}
-              props={input.contextDockProps}
-              permissionSummary={formatThreadedPermissionSummary(permissionState)}
-              permissionOverrideActive={Boolean(permissionState?.localOperatorOverrideId)}
+          <aside className={`mc-next-threaded-context-panel${activeUtilityPanel ? " utility" : ""}`}>
+            <PaneResizeHandle
+              ariaLabel="Resize right drawer"
+              className="panel"
+              dragging={contextPane.dragging}
+              maxWidth={PANE_WIDTHS.context.max}
+              minWidth={PANE_WIDTHS.context.min}
+              onDoubleClick={contextPane.reset}
+              onKeyDown={contextPane.handleKeyDown}
+              onPointerDown={contextPane.handlePointerDown}
+              width={contextPane.width}
             />
+            {activeUtilityPanel && activeProps ? (
+              <ThreadedUtilityPanel
+                activePanel={activeUtilityPanel}
+                activeProps={activeProps}
+                contextDockProps={input.contextDockProps}
+                onClose={() => handleDockOpenChange(false)}
+                onOpenTasks={input.emptyStateProps?.onOpenTasks}
+                onSelectPanel={setActiveUtilityPanel}
+                surface={activeMode}
+                workflowPanel={workflowPanel}
+              />
+            ) : (
+              <ThreadedContextDrawer
+                surface={activeMode}
+                props={input.contextDockProps}
+                permissionSummary={formatThreadedPermissionSummary(permissionState)}
+                permissionOverrideActive={Boolean(permissionState?.localOperatorOverrideId)}
+              />
+            )}
           </aside>
         ) : null}
       </section>
@@ -433,7 +573,10 @@ function ThreadConversationSurface({
   compactLayout,
   props,
   dropTarget,
+  dockOpen,
+  activeUtilityPanel,
   onToggleDock,
+  onSelectUtilityPanel,
   codeWorkbenchOpen,
   onToggleCodeWorkbench,
   permissionState,
@@ -442,7 +585,10 @@ function ThreadConversationSurface({
   compactLayout: boolean;
   props: MissionThreadedActiveSessionSurfaceProps;
   dropTarget: MissionThreadedDropTargetProps;
+  dockOpen: boolean;
+  activeUtilityPanel: ThreadedUtilityPanelId | null;
   onToggleDock: () => void;
+  onSelectUtilityPanel: (panel: ThreadedUtilityPanelId) => void;
   codeWorkbenchOpen: boolean;
   onToggleCodeWorkbench?: () => void;
   permissionState?: ThreadedPermissionState;
@@ -513,6 +659,9 @@ function ThreadConversationSurface({
               onChangeModel={props.onRequestModelChange}
             />
           </div>
+          <div className="mc-next-threaded-panel-switcher-row">
+            <ThreadedPanelSwitcher activePanel={activeUtilityPanel} onSelectPanel={onSelectUtilityPanel} />
+          </div>
           <div className="mc-next-threaded-action-row">
             {actions.map((action) => (
               <button key={action.label} type="button" className="mc-next-threaded-secondary" onClick={action.onClick}>
@@ -543,7 +692,7 @@ function ThreadConversationSurface({
               {getArchiveActionLabel(props.sessionLifecycleStatus, props.sessionArchivePending)}
             </button>
             <button type="button" className="mc-next-threaded-secondary" onClick={onToggleDock}>
-              {props.dockOpen ? "Hide context" : "Show context"}
+              {dockOpen ? "Hide context" : "Show context"}
             </button>
           </div>
         </div>
@@ -579,6 +728,550 @@ function ThreadConversationSurface({
 export function getArchiveActionLabel(lifecycleStatus: string, pending: boolean) {
   if (pending) return lifecycleStatus === "archived" ? "Restoring..." : "Archiving...";
   return lifecycleStatus === "archived" ? "Restore" : "Archive";
+}
+
+type CodeWorkflowPanel = Extract<NonNullable<MissionThreadedRenderSurfaceInput["workflowPanel"]>, { kind: "code" }>;
+type CoworkWorkflowPanel = Extract<NonNullable<MissionThreadedRenderSurfaceInput["workflowPanel"]>, { kind: "cowork" }>;
+
+function clampPaneWidth(value: number, minWidth: number, maxWidth: number): number {
+  return Math.min(maxWidth, Math.max(minWidth, Math.round(value)));
+}
+
+function useHorizontalPaneResize({
+  direction,
+  initialWidth,
+  maxWidth,
+  minWidth,
+}: {
+  direction: "left" | "right";
+  initialWidth: number;
+  maxWidth: number;
+  minWidth: number;
+}) {
+  const [width, setWidth] = useState(initialWidth);
+  const [dragging, setDragging] = useState(false);
+  const dragStateRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
+
+  const resizeBy = useCallback(
+    (delta: number) => {
+      setWidth((current) => clampPaneWidth(current + delta, minWidth, maxWidth));
+    },
+    [maxWidth, minWidth],
+  );
+
+  const reset = useCallback(() => {
+    setWidth(initialWidth);
+  }, [initialWidth]);
+
+  const handlePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (event.button !== 0 || typeof window === "undefined" || window.innerWidth < 1024) {
+        return;
+      }
+      dragStateRef.current = {
+        pointerId: event.pointerId,
+        startWidth: width,
+        startX: event.clientX,
+      };
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      setDragging(true);
+      event.preventDefault();
+    },
+    [width],
+  );
+
+  const handleKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        resizeBy(-24);
+        return;
+      }
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        resizeBy(24);
+        return;
+      }
+      if (event.key === "Home") {
+        event.preventDefault();
+        setWidth(minWidth);
+        return;
+      }
+      if (event.key === "End") {
+        event.preventDefault();
+        setWidth(maxWidth);
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        reset();
+      }
+    },
+    [maxWidth, minWidth, reset, resizeBy],
+  );
+
+  useEffect(() => {
+    if (!dragging || typeof window === "undefined") {
+      return undefined;
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const dragState = dragStateRef.current;
+      if (!dragState || event.pointerId !== dragState.pointerId) {
+        return;
+      }
+      const deltaX = event.clientX - dragState.startX;
+      const directedDelta = direction === "right" ? deltaX : -deltaX;
+      setWidth(clampPaneWidth(dragState.startWidth + directedDelta, minWidth, maxWidth));
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      const dragState = dragStateRef.current;
+      if (!dragState || event.pointerId !== dragState.pointerId) {
+        return;
+      }
+      dragStateRef.current = null;
+      setDragging(false);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
+    };
+  }, [direction, dragging, maxWidth, minWidth]);
+
+  return {
+    dragging,
+    handleKeyDown,
+    handlePointerDown,
+    reset,
+    width,
+  };
+}
+
+function PaneResizeHandle({
+  ariaLabel,
+  className,
+  dragging,
+  maxWidth,
+  minWidth,
+  onDoubleClick,
+  onKeyDown,
+  onPointerDown,
+  width,
+}: {
+  ariaLabel: string;
+  className: string;
+  dragging: boolean;
+  maxWidth: number;
+  minWidth: number;
+  onDoubleClick: () => void;
+  onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => void;
+  onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void;
+  width: number;
+}) {
+  return (
+    <button
+      type="button"
+      role="separator"
+      aria-label={ariaLabel}
+      aria-orientation="vertical"
+      aria-valuemax={maxWidth}
+      aria-valuemin={minWidth}
+      aria-valuenow={Math.round(width)}
+      className={`mc-next-threaded-resize-handle ${className}${dragging ? " dragging" : ""}`}
+      onDoubleClick={onDoubleClick}
+      onKeyDown={onKeyDown}
+      onPointerDown={onPointerDown}
+      title="Drag to resize. Double-click to reset."
+    />
+  );
+}
+
+function ThreadedPanelSwitcher({
+  activePanel,
+  onSelectPanel,
+}: {
+  activePanel: ThreadedUtilityPanelId | null;
+  onSelectPanel: (panel: ThreadedUtilityPanelId) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open || typeof document === "undefined") {
+      return undefined;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (target && menuRef.current && !menuRef.current.contains(target)) {
+        setOpen(false);
+      }
+    };
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div className="mc-next-threaded-panel-switcher" ref={menuRef}>
+      <button
+        type="button"
+        className={`mc-next-threaded-secondary mc-next-threaded-panel-trigger${activePanel ? " active" : ""}`}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label="Open right panel menu"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <PanelRight size={14} />
+        <span>Panels</span>
+        <ChevronDown size={13} />
+      </button>
+      {open ? (
+        <div className="mc-next-threaded-panel-menu" role="menu">
+          {UTILITY_PANEL_ITEMS.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                role="menuitem"
+                className={`mc-next-threaded-panel-menu-item${activePanel === item.id ? " active" : ""}`}
+                onClick={() => {
+                  onSelectPanel(item.id);
+                  setOpen(false);
+                }}
+              >
+                <Icon size={14} />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ThreadedUtilityPanel({
+  activePanel,
+  activeProps,
+  contextDockProps,
+  onClose,
+  onOpenTasks,
+  onSelectPanel,
+  surface,
+  workflowPanel,
+}: {
+  activePanel: ThreadedUtilityPanelId;
+  activeProps: MissionThreadedActiveSessionSurfaceProps;
+  contextDockProps: MissionThreadedRenderSurfaceInput["contextDockProps"];
+  onClose: () => void;
+  onOpenTasks?: () => void;
+  onSelectPanel: (panel: ThreadedUtilityPanelId) => void;
+  surface: ChatMode;
+  workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"];
+}) {
+  const meta = UTILITY_PANEL_ITEMS.find((item) => item.id === activePanel) ?? UTILITY_PANEL_ITEMS[0]!;
+
+  return (
+    <div className="mc-next-utility-panel" data-mode={surface} data-panel={activePanel}>
+      <div className="mc-next-utility-panel-head">
+        <div>
+          <p className="mc-next-panel-kicker">Right drawer</p>
+          <h3>{meta.label}</h3>
+        </div>
+        <button type="button" className="mc-next-panel-button" onClick={onClose}>
+          Close
+        </button>
+      </div>
+      <div className="mc-next-utility-panel-tabs">
+        {UTILITY_PANEL_ITEMS.map((item) => {
+          const Icon = item.icon;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={`mc-next-utility-panel-tab${activePanel === item.id ? " active" : ""}`}
+              onClick={() => onSelectPanel(item.id)}
+            >
+              <Icon size={14} />
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
+      </div>
+      {activePanel === "preview" ? (
+        <UtilityPreviewPanel activeProps={activeProps} />
+      ) : activePanel === "diff" ? (
+        <UtilityDiffPanel workflowPanel={workflowPanel} />
+      ) : activePanel === "terminal" ? (
+        <UtilityTerminalPanel workflowPanel={workflowPanel} />
+      ) : activePanel === "files" ? (
+        <UtilityFilesPanel workflowPanel={workflowPanel} />
+      ) : activePanel === "background" ? (
+        <UtilityBackgroundTasksPanel activeProps={activeProps} onOpenTasks={onOpenTasks} workflowPanel={workflowPanel} />
+      ) : (
+        <UtilityPlanPanel activeProps={activeProps} contextDockProps={contextDockProps} />
+      )}
+    </div>
+  );
+}
+
+function UtilityPreviewPanel({ activeProps }: { activeProps: MissionThreadedActiveSessionSurfaceProps }) {
+  const selectedTurn = activeProps.selectedTurn;
+  const assistantPreview = formatUtilitySnippet(selectedTurn?.assistantMessage?.content);
+  const userPreview = formatUtilitySnippet(selectedTurn?.userMessage?.content);
+
+  if (activeProps.activeGeneratedArtifact) {
+    return (
+      <section className="mc-next-utility-card">
+        <GeneratedArtifactViewer artifact={activeProps.activeGeneratedArtifact} compact />
+      </section>
+    );
+  }
+
+  return (
+    <section className="mc-next-utility-card">
+      <div className="mc-next-utility-empty-icon">
+        <FileText size={18} />
+      </div>
+      <h4>{selectedTurn ? "Selected turn preview" : "No preview selected"}</h4>
+      {selectedTurn ? (
+        <>
+          <p className="mc-next-panel-kicker">User</p>
+          <p>{userPreview}</p>
+          <p className="mc-next-panel-kicker">Assistant</p>
+          <p>{assistantPreview}</p>
+        </>
+      ) : (
+        <p>Select a turn or open a generated artifact to preview it here.</p>
+      )}
+    </section>
+  );
+}
+
+function UtilityDiffPanel({
+  workflowPanel,
+}: {
+  workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"];
+}) {
+  const codePanel = getCodeWorkflowPanel(workflowPanel);
+  const diff = codePanel?.props.diff;
+  const selectedFileDiff = codePanel?.props.selectedFileDiff;
+  const changedFiles = codePanel?.props.workbenchTree?.changedFiles ?? diff?.changedFiles ?? [];
+  const diffText =
+    diff?.diff ||
+    [selectedFileDiff?.originalContent, selectedFileDiff?.modifiedContent].filter(Boolean).join("\n\n---\n\n");
+
+  return (
+    <section className="mc-next-utility-card">
+      <h4>Repo diff</h4>
+      <div className="mc-next-utility-chip-row">
+        <StatusChip tone={changedFiles.length > 0 ? "warning" : "muted"}>{changedFiles.length} changed</StatusChip>
+        {diff?.summary ? (
+          <StatusChip tone="muted">
+            +{diff.summary.additions} / -{diff.summary.deletions}
+          </StatusChip>
+        ) : null}
+      </div>
+      {changedFiles.length > 0 ? (
+        <ul className="mc-next-utility-list">
+          {changedFiles.slice(0, 12).map((file) => (
+            <li key={file}>{file}</li>
+          ))}
+        </ul>
+      ) : (
+        <p>No worktree diff is open for this session.</p>
+      )}
+      {diffText ? <pre className="mc-next-utility-pre">{formatUtilitySnippet(diffText, 2400)}</pre> : null}
+    </section>
+  );
+}
+
+function UtilityTerminalPanel({
+  workflowPanel,
+}: {
+  workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"];
+}) {
+  const codePanel = getCodeWorkflowPanel(workflowPanel);
+  const output = codePanel?.props.output;
+  const helperRuns = output?.helperRuns ?? [];
+  const terminalText = formatUtilitySnippet(output?.output, 2400);
+
+  return (
+    <section className="mc-next-utility-card">
+      <h4>Run log</h4>
+      <div className="mc-next-utility-chip-row">
+        <StatusChip tone={helperRuns.length > 0 ? "success" : "muted"}>
+          {helperRuns.length} command record{helperRuns.length === 1 ? "" : "s"}
+        </StatusChip>
+        <StatusChip tone="muted">{codePanel?.props.workbenchState?.validationStatus ?? "validation idle"}</StatusChip>
+      </div>
+      {output?.output ? <pre className="mc-next-utility-pre terminal">{terminalText}</pre> : <p>No run output yet.</p>}
+      {helperRuns.length > 0 ? (
+        <ul className="mc-next-utility-list">
+          {helperRuns.slice(0, 5).map((run) => (
+            <li key={run.runId}>
+              {run.language ?? "command"} · {run.status ?? "recorded"}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+
+function UtilityFilesPanel({
+  workflowPanel,
+}: {
+  workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"];
+}) {
+  const codePanel = getCodeWorkflowPanel(workflowPanel);
+  const files = (codePanel?.props.workbenchTree?.items ?? []).filter((item) => item.kind === "file");
+  const hasDirtyDraft = Boolean(codePanel?.props.hasDirtyDraft);
+  const selectedPath = codePanel?.props.selectedFile?.path;
+
+  return (
+    <section className="mc-next-utility-card">
+      <h4>Workbench files</h4>
+      <div className="mc-next-utility-chip-row">
+        <StatusChip tone={files.length > 0 ? "success" : "muted"}>{files.length} files</StatusChip>
+        {hasDirtyDraft ? <StatusChip tone="warning">Unsaved draft</StatusChip> : null}
+      </div>
+      {files.length > 0 ? (
+        <ul className="mc-next-utility-file-list">
+          {files.slice(0, 28).map((file) => (
+            <li key={file.path}>
+              <button
+                type="button"
+                className={`mc-next-panel-button${selectedPath === file.path ? " active" : ""}`}
+                disabled={hasDirtyDraft && selectedPath !== file.path}
+                onClick={() => codePanel?.props.onSelectFile(file.path)}
+              >
+                <span>{file.path}</span>
+                {file.changed ? <span>changed</span> : null}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p>No workbench files are loaded yet.</p>
+      )}
+    </section>
+  );
+}
+
+function UtilityBackgroundTasksPanel({
+  activeProps,
+  onOpenTasks,
+  workflowPanel,
+}: {
+  activeProps: MissionThreadedActiveSessionSurfaceProps;
+  onOpenTasks?: () => void;
+  workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"];
+}) {
+  const coworkPanel = getCoworkWorkflowPanel(workflowPanel);
+  const blockers = coworkPanel?.props.viewModel.blockers ?? [];
+
+  return (
+    <section className="mc-next-utility-card">
+      <h4>Background work</h4>
+      <div className="mc-next-utility-chip-row">
+        <StatusChip tone={activeProps.queuedCount > 0 ? "warning" : "muted"}>{activeProps.queuedCount} queued</StatusChip>
+        <StatusChip tone={activeProps.streamStatus === "streaming" ? "success" : "muted"}>
+          {activeProps.streamStatus}
+        </StatusChip>
+        {blockers.length > 0 ? <StatusChip tone="warning">{blockers.length} blockers</StatusChip> : null}
+      </div>
+      {activeProps.queueItems.length > 0 ? (
+        <ul className="mc-next-utility-list">
+          {activeProps.queueItems.slice(0, 8).map((item) => (
+            <li key={item.id}>{item.label}</li>
+          ))}
+        </ul>
+      ) : (
+        <p>No queued background work is waiting on this thread.</p>
+      )}
+      {coworkPanel?.props.viewModel.runMap.objective ? (
+        <p>{coworkPanel.props.viewModel.runMap.objective}</p>
+      ) : null}
+      {onOpenTasks ? (
+        <button type="button" className="mc-next-panel-button" onClick={onOpenTasks}>
+          Open task board
+        </button>
+      ) : null}
+    </section>
+  );
+}
+
+function UtilityPlanPanel({
+  activeProps,
+  contextDockProps,
+}: {
+  activeProps: MissionThreadedActiveSessionSurfaceProps;
+  contextDockProps: MissionThreadedRenderSurfaceInput["contextDockProps"];
+}) {
+  const planningEnabled = activeProps.planningMode === "advisory";
+
+  return (
+    <section className="mc-next-utility-card">
+      <div className="mc-next-utility-chip-row">
+        <StatusChip tone={planningEnabled ? "success" : "muted"}>
+          {planningEnabled ? "Planning on" : "Planning off"}
+        </StatusChip>
+        <StatusChip tone="muted">{contextDockProps?.routePreflight?.selectionSource ?? "route pending"}</StatusChip>
+        <StatusChip tone={activeProps.routeBoundaryAckRequired ? "warning" : "muted"}>
+          {activeProps.routeBoundaryAckRequired ? "boundary acknowledgement needed" : "route clear"}
+        </StatusChip>
+      </div>
+      <h4>{activeProps.pinnedGoal ?? "Current plan"}</h4>
+      <p>{activeProps.routePreflight?.degradedReason ?? activeProps.routePreflight?.blockedReason ?? activeProps.summary}</p>
+      <div className="mc-next-utility-actions">
+        <button type="button" className="mc-next-panel-button" onClick={activeProps.onTogglePlanningMode}>
+          {planningEnabled ? "Turn planning off" : "Turn planning on"}
+        </button>
+        <button type="button" className="mc-next-panel-button" onClick={activeProps.onReviewRunDetails}>
+          Review run details
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function getCodeWorkflowPanel(
+  workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"],
+): CodeWorkflowPanel | null {
+  return workflowPanel?.kind === "code" ? workflowPanel : null;
+}
+
+function getCoworkWorkflowPanel(
+  workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"],
+): CoworkWorkflowPanel | null {
+  return workflowPanel?.kind === "cowork" ? workflowPanel : null;
+}
+
+function formatUtilitySnippet(value?: string | null, maxLength = 1200): string {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return "No content yet.";
+  }
+  if (trimmed.length <= maxLength) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, maxLength).trimEnd()}\n...`;
 }
 
 function ThreadEmptyState({

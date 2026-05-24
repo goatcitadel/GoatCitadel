@@ -1,7 +1,14 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { asRecord, MemoryRoutePage, readMemoryWriteDecision, readMetadataString } from "./MemoryRoutePage";
+import {
+  asRecord,
+  buildProvenanceCoverage,
+  MemoryRoutePage,
+  readMemoryWriteDecision,
+  readMetadataString,
+  readMetadataStringList,
+} from "./MemoryRoutePage";
 
 const memorySnapshot = vi.hoisted(() => ({
   loading: false,
@@ -100,6 +107,12 @@ const memorySnapshot = vi.hoisted(() => ({
         updatedAt: "2026-04-22T00:00:00.000Z",
         ttlOverrideSeconds: 3600,
         expiresAt: "2026-04-23T00:00:00.000Z",
+        metadata: {
+          source: "operator",
+          confidence: "high",
+          lastUsedAt: "2026-04-22T00:10:00.000Z",
+          workspaceId: "default",
+        },
       },
     ],
     memoryEntities: [
@@ -113,7 +126,7 @@ const memorySnapshot = vi.hoisted(() => ({
         status: "active",
         confidence: 0.9,
         sourceRefs: [{ sourceType: "manual", sourceRef: "operator" }],
-        metadata: {},
+        metadata: { assumptions: ["Operators review before side effects"], reversibility: "easy to revise" },
         authority: "operator",
         createdAt: "2026-04-22T00:00:00.000Z",
         updatedAt: "2026-04-22T00:00:00.000Z",
@@ -295,6 +308,9 @@ describe("MemoryRoutePage", () => {
     expect(readMetadataString({ reason: "  Useful context " }, "reason")).toBe("Useful context");
     expect(readMetadataString({ reason: "   " }, "reason")).toBeUndefined();
     expect(readMetadataString({ reason: 42 }, "reason")).toBeUndefined();
+    expect(readMetadataStringList({ assumptions: [" one ", 42, "two"] }, "assumptions")).toEqual(["one", "two"]);
+    expect(readMetadataStringList({ assumptions: "single" }, "assumptions")).toEqual(["single"]);
+    expect(readMetadataStringList({ assumptions: [] }, "assumptions")).toEqual([]);
     expect(
       readMemoryWriteDecision({ metadata: { decision: { decision: "approved" } }, signatureStatus: "signed" } as any),
     ).toBe("approved");
@@ -302,6 +318,24 @@ describe("MemoryRoutePage", () => {
       "signed",
     );
     expect(readMemoryWriteDecision({ metadata: null, signatureStatus: "unsigned" } as any)).toBe("unsigned");
+  });
+
+  it("builds typed provenance coverage without creating a second graph", () => {
+    const coverage = buildProvenanceCoverage({
+      entities: [
+        { entityType: "project", sourceRefs: [{ sourceType: "manual", sourceRef: "operator" }] },
+        { entityType: "tool", sourceRefs: [{ sourceType: "artifact", sourceRef: "artifact-1" }] },
+      ] as any,
+      relations: [{ sourceRefs: [{ sourceType: "manual", sourceRef: "operator" }] }] as any,
+      decisions: [{ sourceRefs: [{ sourceType: "run", sourceRef: "run-1" }] }] as any,
+      memoryItems: [{ itemId: "mem-1" }] as any,
+      evidence: [{ eventKind: "approval.decided" }] as any,
+    });
+
+    expect(coverage.find((item) => item.id === "project")).toMatchObject({ records: 1, status: "covered" });
+    expect(coverage.find((item) => item.id === "decision")).toMatchObject({ records: 1, status: "covered" });
+    expect(coverage.find((item) => item.id === "approval")).toMatchObject({ records: 1, status: "covered" });
+    expect(coverage.find((item) => item.id === "source")?.records).toBe(3);
   });
 
   it("renders lifecycle-aware memory operator truth", () => {
@@ -321,10 +355,14 @@ describe("MemoryRoutePage", () => {
     expect(markup).toContain("Run maintenance now");
     expect(markup).toContain("Tighten cadence for fresh context.");
     expect(markup).toContain("Memory files");
+    expect(markup).toContain("Provenance map");
     expect(markup).toContain("Memory entities");
     expect(markup).toContain("Relations");
     expect(markup).toContain("Decision journal");
     expect(markup).toContain("Keep automation advisory");
+    expect(markup).toContain("Chosen path");
+    expect(markup).toContain("Options");
+    expect(markup).toContain("Reversibility");
   });
 
   it("keeps quick-jump navigation on route objects", async () => {

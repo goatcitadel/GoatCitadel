@@ -49,6 +49,7 @@ vi.mock("react-arborist", () => ({
 import { InlineApprovalPrompt } from "./InlineApprovalPrompt";
 import { SideInspectorDrawer } from "./SideInspectorDrawer";
 import { WorkbenchFileTree } from "./WorkbenchFileTree";
+import { WorkbenchMonacoEditor } from "./WorkbenchMonacoEditor";
 
 function textOf(node: unknown): string {
   if (node == null) {
@@ -148,6 +149,39 @@ describe("workbench tree, inspector drawer, and approval prompt tails", () => {
     });
     expect(onExpandedPathsChange).toHaveBeenCalledWith(["src"]);
     expect(onSelectFile).toHaveBeenCalledWith("src/app.ts");
+  });
+
+  it("routes fallback workbench editor keyboard commands", () => {
+    const onChange = vi.fn();
+    const onSave = vi.fn();
+    const onQuickOpen = vi.fn();
+    const onCommandPalette = vi.fn();
+    const preventDefault = vi.fn();
+
+    renderer = create(
+      <WorkbenchMonacoEditor
+        value="console.log('workbench');"
+        language="typescript"
+        onChange={onChange}
+        onSave={onSave}
+        onQuickOpen={onQuickOpen}
+        onCommandPalette={onCommandPalette}
+      />,
+    );
+
+    const textarea = renderer.root.findByType("textarea");
+    act(() => {
+      textarea.props.onChange({ target: { value: "next" } });
+      textarea.props.onKeyDown({ ctrlKey: true, metaKey: false, shiftKey: false, key: "s", preventDefault });
+      textarea.props.onKeyDown({ ctrlKey: true, metaKey: false, shiftKey: false, key: "p", preventDefault });
+      textarea.props.onKeyDown({ ctrlKey: true, metaKey: false, shiftKey: true, key: "p", preventDefault });
+    });
+
+    expect(onChange).toHaveBeenCalledWith("next");
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onQuickOpen).toHaveBeenCalledTimes(1);
+    expect(onCommandPalette).toHaveBeenCalledTimes(1);
+    expect(preventDefault).toHaveBeenCalledTimes(3);
   });
 
   it("supports side inspector actions, drag bounds, close reset, and blocked drag targets", () => {

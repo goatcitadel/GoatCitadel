@@ -8,19 +8,19 @@
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench {
-  grid-template-columns: minmax(0, 1.42fr) minmax(20rem, 0.78fr);
+  grid-template-columns: minmax(0, 1fr) minmax(20rem, var(--mc-workbench-panel-width, 35rem));
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel {
-  grid-template-columns: minmax(32rem, 1fr) minmax(18rem, 0.38fr);
+  grid-template-columns: minmax(32rem, 1fr) minmax(18rem, var(--mc-workbench-panel-width, 35rem));
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-code-panel {
-  grid-template-columns: minmax(31rem, 0.98fr) minmax(24rem, 0.58fr);
+  grid-template-columns: minmax(31rem, 1fr) minmax(24rem, var(--mc-workbench-panel-width, 35rem));
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-context {
-  grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.58fr);
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, var(--mc-context-panel-width, 20rem));
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.mode-chat {
@@ -28,19 +28,25 @@
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.mode-chat.has-context {
-  grid-template-columns: minmax(32rem, 1fr) minmax(15rem, 0.26fr);
+  grid-template-columns: minmax(32rem, 1fr) minmax(15rem, var(--mc-context-panel-width, 20rem));
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench.has-context {
-  grid-template-columns: minmax(0, 1.38fr) minmax(18rem, 0.72fr) minmax(14rem, 0.32fr);
+  grid-template-columns:
+    minmax(0, 1fr) minmax(18rem, var(--mc-workbench-panel-width, 35rem))
+    minmax(14rem, var(--mc-context-panel-width, 20rem));
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel.has-context {
-  grid-template-columns: minmax(32rem, 1fr) minmax(18rem, 0.36fr) minmax(13rem, 0.24fr);
+  grid-template-columns:
+    minmax(32rem, 1fr) minmax(18rem, var(--mc-workbench-panel-width, 35rem))
+    minmax(13rem, var(--mc-context-panel-width, 20rem));
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-code-panel.has-context {
-  grid-template-columns: minmax(28rem, 0.98fr) minmax(21rem, 0.58fr) minmax(12rem, 0.24fr);
+  grid-template-columns:
+    minmax(28rem, 1fr) minmax(21rem, var(--mc-workbench-panel-width, 35rem))
+    minmax(12rem, var(--mc-context-panel-width, 20rem));
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-primary-column {

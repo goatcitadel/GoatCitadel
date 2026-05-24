@@ -4448,9 +4448,16 @@ async function waitForVerificationRouteReady(page, route, packageName = DEFAULT_
   if (route.readyText) {
     if (packageName === NEXT_UI_PACKAGE) {
       await page.locator("h1, h2, h3").filter({ hasText: route.readyText }).first().waitFor({ timeout: timeoutMs });
-      return;
+    } else {
+      await page.getByText(route.readyText, { exact: false }).first().waitFor({ timeout: timeoutMs });
     }
-    await page.getByText(route.readyText, { exact: false }).first().waitFor({ timeout: timeoutMs });
+  }
+  if (packageName === NEXT_UI_PACKAGE && route.releaseStatus && route.releaseStatus !== "ship") {
+    await page
+      .locator(`[data-release-status="${route.releaseStatus}"]:visible`)
+      .filter({ hasText: route.releaseStatus === "experimental" ? "Experimental" : "Needs release polish" })
+      .first()
+      .waitFor({ timeout: timeoutMs });
   }
 }
 

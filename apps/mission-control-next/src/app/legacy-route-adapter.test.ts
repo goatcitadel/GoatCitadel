@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   RAIL_ITEMS,
+  ROUTE_RELEASE_SCOPE,
   buildAppHref,
   buildNavigationTarget,
+  describeReleaseSurfaceStatus,
   getRouteDescription,
   getRouteLabel,
+  getRouteReleaseKey,
+  getRouteReleaseScope,
   isRailItemActive,
   normalizeAppRoute,
   parseAppRoute,
@@ -334,5 +338,27 @@ describe("mission-control-next route model", () => {
     );
     expect(buildAppHref({ area: "library", section: undefined as any })).toBe("/library/agents");
     expect(getRouteLabel({ area: "library", section: "missing" as any })).toBe("Library");
+  });
+
+  it("classifies every current route in the release scope table", () => {
+    const routeKeys = new Set(ROUTE_RELEASE_SCOPE.map((scope) => getRouteReleaseKey(scope)));
+    expect(routeKeys.size).toBe(ROUTE_RELEASE_SCOPE.length);
+    expect(routeKeys).toEqual(
+      new Set([
+        "chat/root",
+        "cowork/workspace",
+        "cowork/tasks",
+        "cowork/board",
+        "code/root",
+        "projects/root",
+        ...RAIL_ITEMS.library.map((item) => `library/${item.section}`),
+        ...RAIL_ITEMS.ops.map((item) => `ops/${item.section}`),
+        ...RAIL_ITEMS.settings.map((item) => `settings/${item.section}`),
+      ]),
+    );
+    expect(getRouteReleaseScope({ area: "library", section: "curator" }).status).toBe("experimental");
+    expect(getRouteReleaseScope({ area: "code" }).status).toBe("needs_release_polish");
+    expect(describeReleaseSurfaceStatus("ship")).toBe("Release-ready");
+    expect(describeReleaseSurfaceStatus("hide")).toBe("Hidden");
   });
 });

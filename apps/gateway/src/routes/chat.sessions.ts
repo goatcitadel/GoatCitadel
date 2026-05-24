@@ -84,6 +84,13 @@ const workbenchSaveFileBodySchema = z.object({
   content: z.string(),
 });
 
+const workbenchFileOperationBodySchema = z.object({
+  operation: z.enum(["create_file", "create_folder", "rename", "delete", "duplicate", "move"]),
+  path: z.string().min(1),
+  targetPath: z.string().min(1).optional(),
+  content: z.string().optional(),
+});
+
 const workbenchCommandRunBodySchema = z.object({
   command: z.string().min(1).max(128),
   args: z.array(z.string().max(4096)).max(64).optional(),
@@ -413,6 +420,26 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     try {
       return reply.send(
         await fastify.services.chatSessions.saveChatSessionWorkbenchFile(params.data.sessionId, body.data),
+      );
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/chat/sessions/:sessionId/workbench/file-operation", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    const body = workbenchFileOperationBodySchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(
+        await fastify.services.chatSessions.runChatSessionWorkbenchFileOperation(params.data.sessionId, body.data),
       );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
