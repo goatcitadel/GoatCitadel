@@ -1,23 +1,27 @@
 // Critique toggle + tiny shared behaviors for the mockup deck.
 (() => {
-  const STORAGE = 'mc-mockup-critique';
-  const saved = localStorage.getItem(STORAGE);
-  if (saved === 'off') document.body.classList.add('critique-off');
+  const doc = globalThis.document;
+  const storage = globalThis.localStorage;
+  if (!doc || !storage) return;
 
-  document.addEventListener('click', (e) => {
+  const STORAGE = 'mc-mockup-critique';
+  const saved = storage.getItem(STORAGE);
+  if (saved === 'off') doc.body.classList.add('critique-off');
+
+  doc.addEventListener('click', (e) => {
     const t = e.target.closest('[data-critique-toggle]');
     if (!t) return;
     e.preventDefault();
-    document.body.classList.toggle('critique-off');
-    const off = document.body.classList.contains('critique-off');
+    doc.body.classList.toggle('critique-off');
+    const off = doc.body.classList.contains('critique-off');
     t.querySelector('[data-critique-label]')?.replaceChildren(
-      document.createTextNode(off ? 'Show critique' : 'Critique on'),
+      doc.createTextNode(off ? 'Show critique' : 'Critique on'),
     );
-    localStorage.setItem(STORAGE, off ? 'off' : 'on');
+    storage.setItem(STORAGE, off ? 'off' : 'on');
   });
 
   // Tab interactions (purely visual swap)
-  document.querySelectorAll('[data-tabs]').forEach((group) => {
+  doc.querySelectorAll('[data-tabs]').forEach((group) => {
     group.querySelectorAll('button').forEach((btn) => {
       btn.addEventListener('click', () => {
         group.querySelectorAll('button').forEach((b) => b.classList.remove('active'));

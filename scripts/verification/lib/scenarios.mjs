@@ -4389,6 +4389,14 @@ async function waitForVerificationRouteReady(page, route, packageName = DEFAULT_
   if (route.readySelector) {
     await page.waitForSelector(route.readySelector, { timeout: timeoutMs });
     if (packageName === NEXT_UI_PACKAGE && route.readySelector.includes("mc-next-threaded-surface")) {
+      const threadedEmptyStateVisible = await page
+        .locator(".mc-next-threaded-surface .mc-next-threaded-empty")
+        .first()
+        .isVisible()
+        .catch(() => false);
+      if (threadedEmptyStateVisible) {
+        return;
+      }
       await page.waitForFunction(
         () => !document.querySelector(".mc-next-threaded-surface .mc-next-thread-empty"),
         undefined,
