@@ -1,4 +1,4 @@
-import sharp from "sharp";
+/* eslint-disable max-lines -- Presentation packaging, fallback OOXML, and visual diagnostics share local helpers in this module. */
 import { createArtifactDesignPlan, type ArtifactDesignPlan } from "./artifact-design.js";
 import {
   resolveContentSlideRenderer,
@@ -28,6 +28,24 @@ export interface PresentationPptxInput {
   createdAt?: Date;
   design?: ArtifactDesignPlan;
   visualAsset?: PresentationVisualAsset;
+}
+
+export interface PresentationSlideVisual {
+  dataUri: string;
+  source: string;
+  altText: string;
+}
+
+export interface PresentationPptxDiagnostics {
+  renderer: "pptxgenjs" | "fallback";
+  fallbackTriggered: boolean;
+  warnings: string[];
+  usedAssetIds: string[];
+  errorMessage?: string;
+}
+
+export interface PresentationPptxResult extends PresentationPptxDiagnostics {
+  buffer: Buffer;
 }
 
 export interface ZipEntry {
@@ -69,10 +87,30 @@ interface PptxPresentationLike {
 type PptxGenConstructor = new () => PptxPresentationLike;
 
 export async function createPresentationPptx(input: PresentationPptxInput): Promise<Buffer> {
+  return (await createPresentationPptxWithDiagnostics(input)).buffer;
+}
+
+export async function createPresentationPptxWithDiagnostics(
+  input: PresentationPptxInput,
+): Promise<PresentationPptxResult> {
   try {
-    return await createPptxGenPresentation(input);
-  } catch {
-    return createFallbackPresentationPptx(input);
+    return {
+      buffer: await createPptxGenPresentation(input),
+      renderer: "pptxgenjs",
+      fallbackTriggered: false,
+      warnings: [],
+      usedAssetIds: ["renderer-generated-visual", "built-in-shapes-icons"],
+    };
+  } catch (error) {
+    const errorMessage = summarizePresentationRenderError(error);
+    return {
+      buffer: createFallbackPresentationPptx(input),
+      renderer: "fallback",
+      fallbackTriggered: true,
+      warnings: [`PPTX visual renderer failed; generated a text-only fallback deck instead. Cause: ${errorMessage}`],
+      usedAssetIds: [],
+      errorMessage,
+    };
   }
 }
 
@@ -107,31 +145,32 @@ async function createPptxGenPresentation(input: PresentationPptxInput): Promise<
     bodyFontFace: design.typography.bodyFont,
   };
 
-  const visualAsset = normalizePresentationVisualAsset(input.visualAsset);
-  const visualData = visualAsset
-    ? visualAssetToDataUri(visualAsset)
-    : await buildAbstractVisualDataUri(input.title, design);
-  const visualSource = visualAsset
-    ? `${visualAsset.source ?? "generated-image"}${visualAsset.sourceModel ? `:${visualAsset.sourceModel}` : ""}`
-    : "local-renderer";
   const layoutPlan = resolvePresentationDeckLayoutPlan(design, slides);
+  const visualAsset = normalizePresentationVisualAsset(input.visualAsset);
+  const slideVisuals = await buildPresentationSlideVisuals(input.title, slides, design, layoutPlan, visualAsset);
   slides.forEach((slide, index) => {
     const pptSlide = pptx.addSlide();
+    const slideVisual = slideVisuals[index] ?? slideVisuals[0];
+    if (!slideVisual) {
+      throw new Error("No presentation visual was generated for the slide deck.");
+    }
     pptSlide.background = { color: design.tokens.background };
     pptSlide.color = design.tokens.text;
     drawSlideFrame(pptx, pptSlide, design, index);
     if (index === 0) {
-      drawHeroSlide(pptx, pptSlide, slide, design, visualData);
+      drawHeroSlide(pptx, pptSlide, slide, design, slideVisual.dataUri);
     } else {
-      drawContentSlide(pptx, pptSlide, slide, design, visualData, index, layoutPlan[index]);
+      drawContentSlide(pptx, pptSlide, slide, design, slideVisual.dataUri, index, layoutPlan[index]);
     }
     const notes = [
       slide.speakerNotes,
       `Layout: ${layoutPlan[index]?.renderer ?? "unknown"}; density=${layoutPlan[index]?.density ?? "unknown"}; reason=${layoutPlan[index]?.reason ?? "n/a"}.`,
       `GoatCitadel design provenance: preset=${design.preset}; visualLevel=${design.visualLevel}; assetPolicy=${design.assetPolicy}.`,
-      `Visual source: ${visualSource}.`,
-      visualAsset?.revisedPrompt ? `Visual revised prompt: ${visualAsset.revisedPrompt}` : undefined,
-      `Assets: ${design.assetPlan.map((asset) => `${asset.id}:${asset.status}`).join(", ")}`,
+      `Visual source: ${slideVisual.source}.`,
+      visualAsset?.revisedPrompt && index === 0
+        ? `Cover visual revised prompt: ${visualAsset.revisedPrompt}`
+        : undefined,
+      "Renderer assets used: renderer-generated-visual, built-in-shapes-icons.",
     ]
       .filter(Boolean)
       .join("\n");
@@ -572,22 +611,129 @@ function visualAssetToDataUri(asset: PresentationVisualAsset): string {
   return `data:${asset.mimeType ?? "image/png"};base64,${asset.bytesBase64}`;
 }
 
-async function buildAbstractVisualDataUri(title: string, design: ArtifactDesignPlan): Promise<string> {
+export async function buildPresentationSlideVisuals(
+  deckTitle: string,
+  slides: PresentationSlide[],
+  design: ArtifactDesignPlan,
+  layoutPlan: PresentationSlideLayoutDecision[],
+  visualAsset?: PresentationVisualAsset,
+): Promise<PresentationSlideVisual[]> {
+  return Promise.all(
+    slides.map(async (slide, index) => {
+      if (index === 0 && visualAsset) {
+        const source = `${visualAsset.source ?? "generated-image"}${
+          visualAsset.sourceModel ? `:${visualAsset.sourceModel}` : ""
+        }`;
+        return {
+          dataUri: visualAssetToDataUri(visualAsset),
+          source,
+          altText: visualAsset.altText ?? `Generated cover visual for ${deckTitle}.`,
+        };
+      }
+      return {
+        dataUri: await buildAbstractVisualDataUri(
+          {
+            deckTitle,
+            slideTitle: slide.title,
+            bullets: slide.bullets,
+            slideIndex: index,
+            renderer: layoutPlan[index]?.renderer ?? "image-text",
+          },
+          design,
+        ),
+        source: "local-renderer",
+        altText: `Generated supporting visual for ${slide.title}.`,
+      };
+    }),
+  );
+}
+
+interface AbstractVisualSeed {
+  deckTitle: string;
+  slideTitle: string;
+  bullets: string[];
+  slideIndex: number;
+  renderer: string;
+}
+
+async function buildAbstractVisualDataUri(seed: AbstractVisualSeed, design: ArtifactDesignPlan): Promise<string> {
+  const hash = hashVisualSeed(`${seed.deckTitle}|${seed.slideTitle}|${seed.bullets.join("|")}|${seed.slideIndex}`);
+  const colors = rotatePalette([design.tokens.accent, design.tokens.accent2, design.tokens.accent3], hash % 3);
+  const curveY = 300 + (hash % 90);
+  const circleX = 760 + (hash % 220);
+  const circleY = 160 + ((hash >>> 4) % 120);
+  const lowerCircleX = 170 + ((hash >>> 8) % 180);
+  const barCount = Math.max(2, Math.min(4, seed.bullets.length || 2));
+  const bars = Array.from({ length: barCount }, (_, index) => {
+    const width = 155 + ((hash >>> (index * 3)) % 150);
+    const x = 155 + index * 230;
+    const y = 815 + index * 72;
+    return `<rect x="${x}" y="${y}" width="${width}" height="48" rx="24" fill="#${colors[index % colors.length]}" opacity="${index === 0 ? "0.9" : "0.72"}"/>`;
+  }).join("");
+  const markerCount = Math.max(2, Math.min(5, seed.bullets.length + 1));
+  const markers = Array.from({ length: markerCount }, (_, index) => {
+    const x = 190 + index * 190;
+    const y = 1105 + ((hash >>> (index + 2)) % 70);
+    return `<circle cx="${x}" cy="${y}" r="${34 - Math.min(index, 3) * 3}" fill="#${colors[index % colors.length]}" opacity="0.82"/>`;
+  }).join("");
+  const rendererLabel = titleCaseLabel(seed.renderer.replace(/[-_]+/g, " "));
+  const slideTitle = truncateSvgText(seed.slideTitle ?? seed.deckTitle ?? "", 34);
+  const subtitle = truncateSvgText(seed.bullets[0] ?? seed.deckTitle ?? "", 46);
   const svg = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1500" viewBox="0 0 1200 1500">`,
     `<rect width="1200" height="1500" rx="48" fill="#${design.tokens.surface}"/>`,
-    `<circle cx="920" cy="190" r="260" fill="#${design.tokens.accent}" opacity="0.18"/>`,
-    `<circle cx="240" cy="1200" r="330" fill="#${design.tokens.accent2}" opacity="0.16"/>`,
-    `<path d="M120 345 C360 180 520 550 760 390 S1040 275 1110 520" fill="none" stroke="#${design.tokens.accent}" stroke-width="34" stroke-linecap="round" opacity="0.82"/>`,
+    `<circle cx="${circleX}" cy="${circleY}" r="250" fill="#${colors[0]}" opacity="0.18"/>`,
+    `<circle cx="${lowerCircleX}" cy="1190" r="315" fill="#${colors[1]}" opacity="0.16"/>`,
+    `<path d="M120 ${curveY} C320 ${curveY - 170} 520 ${curveY + 180} 730 ${curveY + 32} S1030 ${curveY - 70} 1110 ${curveY + 190}" fill="none" stroke="#${colors[0]}" stroke-width="34" stroke-linecap="round" opacity="0.82"/>`,
     `<path d="M155 720 H1030" stroke="#${design.tokens.border}" stroke-width="8" opacity="0.75"/>`,
-    `<rect x="155" y="810" width="300" height="300" rx="32" fill="#${design.tokens.accent}" opacity="0.9"/>`,
-    `<rect x="505" y="810" width="300" height="300" rx="32" fill="#${design.tokens.accent2}" opacity="0.9"/>`,
-    `<rect x="855" y="810" width="190" height="300" rx="32" fill="#${design.tokens.accent3}" opacity="0.9"/>`,
-    `<text x="155" y="1260" fill="#${design.tokens.mutedText}" font-family="Arial, sans-serif" font-size="54" font-weight="700">${escapeSvgText(title.slice(0, 34))}</text>`,
+    bars,
+    markers,
+    `<text x="155" y="1238" fill="#${design.tokens.text}" font-family="Arial, sans-serif" font-size="50" font-weight="700">${escapeSvgText(slideTitle)}</text>`,
+    `<text x="155" y="1312" fill="#${design.tokens.mutedText}" font-family="Arial, sans-serif" font-size="32" font-weight="600">${escapeSvgText(rendererLabel)}</text>`,
+    `<text x="155" y="1370" fill="#${design.tokens.mutedText}" font-family="Arial, sans-serif" font-size="28">${escapeSvgText(subtitle)}</text>`,
     `</svg>`,
   ].join("");
+  const sharp = (await import("sharp")).default;
   const buffer = await sharp(Buffer.from(svg, "utf8")).png().toBuffer();
   return `data:image/png;base64,${buffer.toString("base64")}`;
+}
+
+function rotatePalette(colors: string[], offset: number): string[] {
+  return colors.map((_, index) => colors[(index + offset) % colors.length] ?? colors[index] ?? "0EA5E9");
+}
+
+function hashVisualSeed(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function truncateSvgText(value: unknown, maxLength: number): string {
+  const normalized = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+  return normalized.length > maxLength ? `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}...` : normalized;
+}
+
+function summarizePresentationRenderError(error: unknown): string {
+  if (error instanceof Error) {
+    const name = error.name || "Error";
+    const message = error.message.replace(/\s+/g, " ").trim();
+    return truncateSvgText(`${name}: ${message || "unknown renderer failure"}`, 280);
+  }
+  if (typeof error === "string") {
+    return truncateSvgText(error, 280);
+  }
+  return "unknown renderer failure";
+}
+
+function titleCaseLabel(value: string): string {
+  return value
+    .split(" ")
+    .filter(Boolean)
+    .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1).toLowerCase()}`)
+    .join(" ");
 }
 
 async function loadPptxGen(): Promise<PptxGenConstructor> {

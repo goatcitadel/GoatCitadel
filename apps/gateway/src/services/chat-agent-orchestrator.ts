@@ -5378,8 +5378,8 @@ function buildPresentationVisualPrompt(content: string, title: string, slidesVal
     : "";
   return [
     `Create a polished PowerPoint-supporting visual for "${title}".`,
-    "Use a clean editorial composition with strong hierarchy, generous negative space, and no readable text.",
-    "The image should work as a reusable hero/supporting visual across multiple slides.",
+    "Use a clean editorial cover composition with strong hierarchy, generous negative space, and no readable text.",
+    "The image should work as a title-slide anchor; the renderer will create distinct supporting visuals per slide.",
     slideTitles ? `Deck sections: ${slideTitles}.` : undefined,
     `User request: ${content.replace(/\s+/g, " ").trim().slice(0, 600)}`,
   ]
@@ -5502,58 +5502,7 @@ function titleCasePresentationText(value: string): string {
 }
 
 function buildSyntheticPresentationSlides(content: string, title: string): Array<{ title: string; bullets: string[] }> {
-  if (/\bfree time\b/i.test(content)) {
-    return [
-      {
-        title: "Why Free Time Matters",
-        bullets: [
-          "Restores attention, energy, and creativity",
-          "Creates room for health, relationships, and curiosity",
-          "Works best when activities match mood, time, and budget",
-        ],
-      },
-      {
-        title: "Top 10 Ideas",
-        bullets: [
-          "Read, walk, exercise, cook, learn, create",
-          "Volunteer, explore locally, connect with friends, rest intentionally",
-          "Mix active, social, creative, and quiet choices",
-        ],
-      },
-      {
-        title: "Active Options",
-        bullets: [
-          "Take a walk, hike, bike ride, or gym session",
-          "Try a class or recreational sport",
-          "Choose movement that feels repeatable, not punishing",
-        ],
-      },
-      {
-        title: "Creative Options",
-        bullets: [
-          "Write, draw, play music, garden, or make something useful",
-          "Use small projects to lower the starting friction",
-          "Keep a simple idea list for open evenings",
-        ],
-      },
-      {
-        title: "Social and Local Options",
-        bullets: [
-          "Meet friends, visit a park, museum, cafe, or local event",
-          "Volunteer for a cause that already matters to you",
-          "Rotate familiar favorites with one new thing each month",
-        ],
-      },
-      {
-        title: "Choosing Well",
-        bullets: [
-          "Match the activity to your energy level",
-          "Protect some free time from productivity pressure",
-          "Track what leaves you feeling better afterward",
-        ],
-      },
-    ];
-  }
+  const bullets = extractPresentationBulletsFromPrompt(content);
   return [
     {
       title,
@@ -5565,7 +5514,7 @@ function buildSyntheticPresentationSlides(content: string, title: string): Array
     },
     {
       title: "Key Points",
-      bullets: extractPresentationBulletsFromPrompt(content),
+      bullets,
     },
     {
       title: "Recommended Structure",

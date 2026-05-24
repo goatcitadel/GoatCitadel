@@ -231,6 +231,13 @@ describe("ChatAgentOrchestrator loop 24 coverage", () => {
       expect.objectContaining({
         toolName: "presentations.create",
         args: expect.objectContaining({
+          slides: expect.arrayContaining([
+            expect.objectContaining({ title: "Daily Walking" }),
+            expect.objectContaining({
+              title: "Key Points",
+              bullets: expect.arrayContaining([expect.stringContaining("daily walking")]),
+            }),
+          ]),
           visualAsset: expect.objectContaining({
             bytesBase64: "generated-image-base64",
             source: "openai",
@@ -239,6 +246,8 @@ describe("ChatAgentOrchestrator loop 24 coverage", () => {
         }),
       }),
     );
+    const presentationArgs = invokeTool.mock.calls[0]?.[0].args;
+    expect(JSON.stringify(presentationArgs?.slides ?? [])).not.toContain("starting friction");
   });
 
   it("uses the configured workspace artifact directory for write-jail fallbacks", async () => {

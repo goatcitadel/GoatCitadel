@@ -443,8 +443,10 @@ describe("channel bot live probes", () => {
 
   it("runs Zalo OA sandbox send probes against the official account send path", async () => {
     const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url === "https://bot-api.zaloplatforms.com/botzalo-token/sendMessage" && init?.method === "POST") {
-        return new Response(JSON.stringify({ ok: true, result: { message_id: "msg-123" } }), { status: 200 });
+      if (url === "https://openapi.zalo.me/v2.0/oa/message" && init?.method === "POST") {
+        return new Response(JSON.stringify({ error: 0, message: "Success", data: { message_id: "msg-123" } }), {
+          status: 200,
+        });
       }
       throw new Error(`unexpected probe call: ${init?.method ?? "GET"} ${url}`);
     });
@@ -459,10 +461,11 @@ describe("channel bot live probes", () => {
 
     expect(result.probe.steps).toEqual([expect.objectContaining({ key: "zalo_sandbox_send", status: "pass" })]);
     const sendCall = fetcher.mock.calls[0];
-    expect(sendCall?.[0]).toBe("https://bot-api.zaloplatforms.com/botzalo-token/sendMessage");
+    expect(sendCall?.[0]).toBe("https://openapi.zalo.me/v2.0/oa/message");
+    expect(sendCall?.[1]?.headers).toMatchObject({ access_token: "zalo-token" });
     expect(JSON.parse(String(sendCall?.[1]?.body))).toEqual({
-      chat_id: "chat-123",
-      text: "[GoatCitadel Zalo probe 2026-04-02T12:00:00.000Z] Channel setup smoke check.",
+      recipient: { user_id: "chat-123" },
+      message: { text: "[GoatCitadel Zalo probe 2026-04-02T12:00:00.000Z] Channel setup smoke check." },
     });
   });
 

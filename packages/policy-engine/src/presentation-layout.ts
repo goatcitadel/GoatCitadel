@@ -23,7 +23,12 @@ export interface PresentationDeckQualitySummary {
   emptyContentSlideCount: number;
   sparseContentSlideCount: number;
   denseContentSlideCount: number;
+  weakContentSlideCount: number;
+  dominantRenderer?: ContentSlideRenderer;
+  dominantRendererCount: number;
   rendererCounts: Record<ContentSlideRenderer, number>;
+  templateWarnings: string[];
+  contentWarnings: string[];
   warnings: string[];
 }
 
@@ -70,25 +75,50 @@ export function analyzePresentationDeckQuality(
     }
   });
   const densities = contentSlides.map((slide) => classifySlideDensity(slide.bullets));
+  const weakContentSlideCount = contentSlides.filter((slide) => hasWeakSlideContent(slide)).length;
+  const dominantRendererEntry = Object.entries(rendererCounts).sort((left, right) => right[1] - left[1])[0] as
+    | [ContentSlideRenderer, number]
+    | undefined;
+  const dominantRenderer = dominantRendererEntry?.[0];
+  const dominantRendererCount = dominantRendererEntry?.[1] ?? 0;
+  const templateWarnings: string[] = [];
+  const contentWarnings: string[] = [];
   const emptyContentSlideCount = densities.filter((density) => density === "empty").length;
   const denseContentSlideCount = densities.filter((density) => density === "dense").length;
-  const warnings: string[] = [];
   if (contentSlides.length === 0) {
-    warnings.push("No content slides were supplied beyond the title slide.");
+    contentWarnings.push("No content slides were supplied beyond the title slide.");
   }
   if (emptyContentSlideCount > 0) {
-    warnings.push(`${emptyContentSlideCount} content slide(s) had no supporting bullets.`);
+    contentWarnings.push(`${emptyContentSlideCount} content slide(s) had no supporting bullets.`);
   }
   if (denseContentSlideCount > 0) {
-    warnings.push(`${denseContentSlideCount} content slide(s) had high text density and may need manual editing.`);
+    contentWarnings.push(
+      `${denseContentSlideCount} content slide(s) had high text density and may need manual editing.`,
+    );
   }
+  if (contentSlides.length >= 3 && weakContentSlideCount / contentSlides.length >= 0.5) {
+    contentWarnings.push(
+      `${weakContentSlideCount} content slide(s) used very brief bullets; expand the story or add concrete examples before treating the deck as polished.`,
+    );
+  }
+  if (contentSlides.length >= 4 && dominantRenderer && dominantRendererCount / contentSlides.length >= 0.8) {
+    templateWarnings.push(
+      `Layout variety is low: ${dominantRendererCount} of ${contentSlides.length} content slide(s) use ${dominantRenderer}.`,
+    );
+  }
+  const warnings = [...templateWarnings, ...contentWarnings];
   return {
     slideCount: deckSlides.length,
     contentSlideCount: contentSlides.length,
     emptyContentSlideCount,
     sparseContentSlideCount: densities.filter((density) => density === "sparse").length,
     denseContentSlideCount,
+    weakContentSlideCount,
+    dominantRenderer,
+    dominantRendererCount,
     rendererCounts,
+    templateWarnings,
+    contentWarnings,
     warnings,
   };
 }
@@ -133,18 +163,41 @@ function shouldUseTwoColumn(bullets: string[], layout: string): boolean {
 
 function shouldUseCallout(content: Pick<PresentationSlideContent, "title" | "bullets">, layout: string): boolean {
   const firstBullet = content.bullets[0] ?? "";
-  if (content.bullets.length > 2) {
+  if (content.bullets.length > 3) {
     return false;
   }
   const combined = `${content.title} ${firstBullet}`.toLowerCase();
-  const calloutTerm = /\b(benefit|impact|metric|result|takeaway|key|why|priority|finding|risk|change)\b/u.test(
+  const calloutTerm = /\b(benefits?|impact|metrics?|results?|takeaway|key|priority|findings?|risks?|change)\b/u.test(
     combined,
   );
-  return firstBullet.length <= 140 && (layout === "stat-callout" || content.bullets.length === 1 || calloutTerm);
+  const conciseBenefitSlide =
+    content.bullets.length === 3 && /\b(benefits?|impact|metrics?|results?|findings?|risks?)\b/u.test(combined);
+  return (
+    firstBullet.length <= 140 &&
+    (layout === "stat-callout" || content.bullets.length <= 2 || conciseBenefitSlide || calloutTerm)
+  );
 }
 
 function measureBulletTextWeight(bullets: string[]): number {
   return bullets.reduce((total, bullet) => total + bullet.trim().length, 0);
+}
+
+function hasWeakSlideContent(slide: PresentationSlideContent): boolean {
+  const nonEmptyBullets = slide.bullets.map((bullet) => bullet.trim()).filter(Boolean);
+  if (nonEmptyBullets.length === 0) {
+    return false;
+  }
+  if (nonEmptyBullets.length === 1) {
+    const onlyBullet = nonEmptyBullets[0] ?? "";
+    return onlyBullet.length < 40 || countWords(onlyBullet) < 5;
+  }
+  const totalWords = nonEmptyBullets.reduce((total, bullet) => total + countWords(bullet), 0);
+  const averageWords = totalWords / nonEmptyBullets.length;
+  return averageWords < 5 && measureBulletTextWeight(nonEmptyBullets) < 130;
+}
+
+function countWords(value: string): number {
+  return value.split(/\s+/u).filter(Boolean).length;
 }
 
 function describeRendererChoice(

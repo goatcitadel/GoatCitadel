@@ -1187,13 +1187,13 @@ describe("tool executor channel failure coverage", () => {
       if (url.includes("/ocs/v2.php/apps/spreed/api/v1/bot/")) {
         return new Response("nextcloud down", { status: 500 });
       }
-      if (url.startsWith("https://bot-api.zaloplatforms.com/")) {
-        return new Response(JSON.stringify({ ok: false, description: "zalo denied" }), { status: 200 });
+      if (url === "https://openapi.zalo.me/v2.0/oa/message") {
+        return new Response(JSON.stringify({ error: -1, message: "zalo denied" }), { status: 200 });
       }
       throw new Error(`Unexpected Nextcloud/Zalo URL: ${url}`);
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
-    const commsConfig = withAllowlist(config, "cloud.example.com", "bot-api.zaloplatforms.com");
+    const commsConfig = withAllowlist(config, "cloud.example.com", "openapi.zalo.me");
 
     for (const [connectionId, connectionConfig, expected] of [
       [
@@ -1812,13 +1812,13 @@ describe("tool executor channel failure coverage", () => {
         }
         return new Response(JSON.stringify({ messages: [{}] }), { status: 200 });
       }
-      if (url.startsWith("https://bot-api.zaloplatforms.com/")) {
+      if (url === "https://openapi.zalo.me/v2.0/oa/message") {
         return new Response("{malformed", { status: 500 });
       }
       throw new Error(`Unexpected WhatsApp/Zalo URL: ${url}`);
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
-    const commsConfig = withAllowlist(config, "graph.facebook.com", "bot-api.zaloplatforms.com");
+    const commsConfig = withAllowlist(config, "graph.facebook.com", "openapi.zalo.me");
 
     const inlineUpload = await executeTool(
       request("whatsapp.send", {

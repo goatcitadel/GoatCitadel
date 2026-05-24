@@ -1285,16 +1285,16 @@ export async function runZaloBotLiveChecks(input: ZaloProbeInput): Promise<BotPr
 
   try {
     const send = await readJsonResponse(
-      await input.fetcher(`https://bot-api.zaloplatforms.com/bot${encodeURIComponent(input.accessToken)}/sendMessage`, {
+      await input.fetcher("https://openapi.zalo.me/v2.0/oa/message", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", access_token: input.accessToken },
         body: JSON.stringify({
-          chat_id: target,
-          text: `[GoatCitadel Zalo probe ${checkedAt}] Channel setup smoke check.`,
+          recipient: { user_id: target },
+          message: { text: `[GoatCitadel Zalo probe ${checkedAt}] Channel setup smoke check.` },
         }),
       }),
     );
-    if (send.status < 200 || send.status >= 300 || asRecord(send.payload).ok === false) {
+    if (send.status < 200 || send.status >= 300 || isZaloApiErrorPayload(send.payload)) {
       probe.steps.push({
         key: "zalo_sandbox_send",
         label: "Sandbox send",
@@ -1473,6 +1473,25 @@ function formatSlackProbeDetail(detail: string | undefined): string | undefined 
 function parseJsonRecord(text: string): Record<string, unknown> {
   const payload = parseJsonValue(text);
   return asRecord(payload);
+}
+
+function parseZaloErrorCode(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && /^-?\d+$/u.test(value.trim())) {
+    return Number(value.trim());
+  }
+  return undefined;
+}
+
+function isZaloApiErrorPayload(payload: unknown): boolean {
+  const body = asRecord(payload);
+  const code = parseZaloErrorCode(body.error);
+  if (code !== undefined) {
+    return code !== 0;
+  }
+  return body.error !== undefined && body.error !== null && body.error !== "";
 }
 
 function parseJsonValue(text: string): unknown {

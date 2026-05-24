@@ -30,7 +30,12 @@ import { parseIngestionSourceType } from "./ingestion-source-type.js";
 import { matchesToolPattern } from "./tool-patterns.js";
 import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import { analyzePresentationDeckQuality, type PresentationDeckQualitySummary } from "./presentation-layout.js";
-import { createPresentationPptx, type PresentationSlide, type PresentationVisualAsset } from "./presentation-pptx.js";
+import {
+  createPresentationPptxWithDiagnostics,
+  type PresentationPptxDiagnostics,
+  type PresentationSlide,
+  type PresentationVisualAsset,
+} from "./presentation-pptx.js";
 import {
   createDocumentArtifact,
   documentArtifactExtension,
@@ -75,7 +80,7 @@ const FIXED_OUTBOUND_HOSTS_BY_TOOL = new Map<string, string[]>([
   ["telegram.send", ["api.telegram.org"]],
   ["telegram.unsend", ["api.telegram.org"]],
   ["whatsapp.send", ["graph.facebook.com"]],
-  ["zalo.send", ["bot-api.zaloplatforms.com"]],
+  ["zalo.send", ["openapi.zalo.me"]],
 ]);
 const FIXED_OUTBOUND_HOSTS_BY_CHANNEL_KEY = new Map<string, string[]>([
   ["discord", ["discord.com"]],
@@ -85,7 +90,7 @@ const FIXED_OUTBOUND_HOSTS_BY_CHANNEL_KEY = new Map<string, string[]>([
   ["slack", ["slack.com"]],
   ["telegram", ["api.telegram.org"]],
   ["whatsapp", ["graph.facebook.com"]],
-  ["zalo", ["bot-api.zaloplatforms.com"]],
+  ["zalo", ["openapi.zalo.me"]],
 ]);
 
 function scrubSensitiveOutput(text: string): string {
@@ -1133,7 +1138,7 @@ async function presentationsCreate(args: Record<string, unknown>, config: ToolPo
   ];
   const deckQuality = analyzePresentationDeckQuality(design, deckSlides);
   const visualAsset = normalizePresentationVisualAsset(args.visualAsset);
-  const pptx = await createPresentationPptx({
+  const pptx = await createPresentationPptxWithDiagnostics({
     title,
     subtitle: subtitle || undefined,
     slides,
@@ -1142,13 +1147,15 @@ async function presentationsCreate(args: Record<string, unknown>, config: ToolPo
   });
   const full = path.resolve(p);
   await fs.mkdir(path.dirname(full), { recursive: true });
-  await fs.writeFile(full, pptx);
+  await fs.writeFile(full, pptx.buffer);
   return {
     path: full,
-    bytesWritten: pptx.length,
+    bytesWritten: pptx.buffer.length,
     format: "pptx",
     title,
     slideCount: slides.length + 1,
+    renderer: pptx.renderer,
+    warnings: pptx.warnings,
     visualAsset: visualAsset
       ? {
           source: visualAsset.source,
@@ -1158,33 +1165,41 @@ async function presentationsCreate(args: Record<string, unknown>, config: ToolPo
       : undefined,
     designReport: buildArtifactDesignReport(design, {
       localPath: full,
-      usedAssetIds: ["renderer-generated-visual", "built-in-shapes-icons"],
-      validationResults: presentationValidationResults(deckQuality),
+      usedAssetIds: pptx.usedAssetIds,
+      validationResults: presentationValidationResults(deckQuality, pptx),
+      residualRisks: pptx.warnings.length > 0 ? pptx.warnings : undefined,
     }),
   };
 }
 
 function presentationValidationResults(
   quality: PresentationDeckQualitySummary,
+  pptx?: PresentationPptxDiagnostics,
 ): Record<string, Partial<Pick<ArtifactValidationCheck, "status" | "detail">>> {
-  const contentDensityStatus = quality.warnings.length > 0 ? "warning" : "passed";
+  const templateWarnings = [...(quality.templateWarnings ?? []), ...(pptx?.fallbackTriggered ? pptx.warnings : [])];
+  const contentWarnings = quality.contentWarnings ?? [];
+  const templateStatus = templateWarnings.length > 0 ? "warning" : "passed";
+  const contentDensityStatus = contentWarnings.length > 0 ? "warning" : "passed";
   const rendererSummary = Object.entries(quality.rendererCounts)
     .filter(([, count]) => count > 0)
     .map(([renderer, count]) => `${renderer}:${count}`)
     .join(", ");
   return {
     "presentation-template": {
-      status: "passed",
-      detail: `Resolved ${quality.contentSlideCount} content slide(s) through content-aware templates${
-        rendererSummary ? ` (${rendererSummary})` : ""
-      }.`,
+      status: templateStatus,
+      detail:
+        templateStatus === "passed"
+          ? `Resolved ${quality.contentSlideCount} content slide(s) through content-aware templates${
+              rendererSummary ? ` (${rendererSummary})` : ""
+            }.`
+          : templateWarnings.join(" "),
     },
     "content-density": {
       status: contentDensityStatus,
       detail:
         contentDensityStatus === "passed"
           ? `Checked ${quality.contentSlideCount} content slide(s); sparse slides avoid forced columns and dense slides use column layouts.`
-          : quality.warnings.join(" "),
+          : contentWarnings.join(" "),
     },
   };
 }
@@ -3264,13 +3279,13 @@ async function zaloSend(
   let messageId: string | undefined;
   for (const chunk of chunks) {
     const res = await fetchAllowlisted(
-      `https://bot-api.zaloplatforms.com/bot${accessToken}/sendMessage`,
+      "https://openapi.zalo.me/v2.0/oa/message",
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", access_token: accessToken },
         body: JSON.stringify({
-          chat_id: chatId,
-          text: chunk,
+          recipient: { user_id: chatId },
+          message: { text: chunk },
         }),
       },
       allowlist,
@@ -3279,12 +3294,11 @@ async function zaloSend(
     );
     const bodyText = await res.response.text();
     const body = parseJsonRecord(bodyText);
-    if (!res.response.ok || body.ok === false) {
-      const description = asString(body.description);
+    if (!res.response.ok || isZaloApiErrorPayload(body)) {
+      const description = readZaloApiErrorDescription(body);
       throw new Error(`zalo.send failed (${res.response.status})${description ? `: ${description}` : ""}`);
     }
-    const result = record(body.result);
-    messageId = asString(result.message_id) ?? messageId;
+    messageId = readZaloMessageId(body) ?? messageId;
   }
 
   return messageId ?? `zalo-${Date.now()}`;
@@ -3575,6 +3589,42 @@ function normalizeZaloTarget(target: string | undefined): string | undefined {
     .replace(/^(zalo|zl):/i, "")
     .replace(/^group:/i, "")
     .trim();
+}
+
+function parseZaloErrorCode(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && /^-?\d+$/u.test(value.trim())) {
+    return Number(value.trim());
+  }
+  return undefined;
+}
+
+function isZaloApiErrorPayload(body: Record<string, unknown>): boolean {
+  const code = parseZaloErrorCode(body.error);
+  if (code !== undefined) {
+    return code !== 0;
+  }
+  return body.error !== undefined && body.error !== null && body.error !== "";
+}
+
+function readZaloApiErrorDescription(body: Record<string, unknown>): string | undefined {
+  const error = record(body.error);
+  return asString(body.message) ?? asString(body.description) ?? asString(error.message) ?? asString(body.error);
+}
+
+function readZaloMessageId(body: Record<string, unknown>): string | undefined {
+  const data = record(body.data);
+  const result = record(body.result);
+  const message = record(body.message);
+  return (
+    providerMessageIdFromValue(data.message_id) ??
+    providerMessageIdFromValue(data.msg_id) ??
+    providerMessageIdFromValue(result.message_id) ??
+    providerMessageIdFromValue(message.message_id) ??
+    providerMessageIdFromValue(body.message_id)
+  );
 }
 
 function stripZalouserTargetPrefix(target: string): string {

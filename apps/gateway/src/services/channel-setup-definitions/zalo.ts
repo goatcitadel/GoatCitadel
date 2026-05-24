@@ -24,7 +24,7 @@ export function createZaloDefinition(): ChannelSetupRuntimeDefinition {
       difficulty: "intermediate",
       manualModePolicy: "available-secondary",
       introSummary: "Connect a Zalo Official Account sender with an access token and a default recipient id.",
-      prerequisites: ["A Zalo Official Account bot token.", "A sandbox Zalo recipient id for manual confirmation."],
+      prerequisites: ["A Zalo Official Account access token.", "A sandbox Zalo OA user id for manual confirmation."],
       steps: [
         {
           id: "overview",
@@ -67,11 +67,11 @@ export function createZaloDefinition(): ChannelSetupRuntimeDefinition {
             },
             {
               key: "defaultRecipientId",
-              label: "Default recipient ID",
+              label: "Default OA user ID",
               type: "text",
               required: true,
-              explanation: "Fallback Zalo recipient id for manual sends.",
-              looksLike: "zalo-user-id",
+              explanation: "Fallback Zalo OA user_id for manual sends.",
+              looksLike: "zalo-oa-user-id",
               canChangeLater: true,
             },
           ],

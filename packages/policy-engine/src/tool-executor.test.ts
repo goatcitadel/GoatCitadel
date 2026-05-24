@@ -4603,8 +4603,9 @@ describe("executeTool", () => {
       async () =>
         new Response(
           JSON.stringify({
-            ok: true,
-            result: { message_id: "zalo-msg-1" },
+            error: 0,
+            message: "Success",
+            data: { message_id: "zalo-msg-1" },
           }),
           {
             status: 200,
@@ -4653,21 +4654,27 @@ describe("executeTool", () => {
         ...policyConfig,
         sandbox: {
           ...policyConfig.sandbox,
-          networkAllowlist: ["bot-api.zaloplatforms.com"],
+          networkAllowlist: ["openapi.zalo.me"],
         },
       },
       commsStorage,
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://bot-api.zaloplatforms.com/botzalo-token/sendMessage",
+      "https://openapi.zalo.me/v2.0/oa/message",
       expect.objectContaining({
         method: "POST",
+        headers: expect.objectContaining({
+          access_token: "zalo-token",
+        }),
       }),
     );
     const zaloCallArgs = fetchMock.mock.calls[0] as unknown[] | undefined;
     const zaloBody = (zaloCallArgs?.[1] as (RequestInit & { body?: BodyInit | null }) | undefined)?.body;
-    expect(String(zaloBody ?? "")).toContain('"chat_id":"chat-123"');
+    expect(JSON.parse(String(zaloBody ?? ""))).toEqual({
+      recipient: { user_id: "chat-123" },
+      message: { text: "Broadcast ready." },
+    });
     expect(result).toMatchObject({
       status: "sent",
       providerMessageId: "zalo-msg-1",
