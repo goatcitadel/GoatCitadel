@@ -5,15 +5,19 @@
   top: 0;
   min-width: 0;
   max-height: calc(100dvh - 58px);
+  padding-right: calc(0.62rem + var(--mc-scrollbar-safe-gutter));
   overflow-x: hidden;
   overflow-y: auto;
   overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .mc-next-threaded-stage.mode-chat .mc-next-threaded-context-panel {
   height: calc(100dvh - 58px);
   padding: 0.46rem;
   padding-left: calc(0.46rem + 9px);
+  padding-right: calc(0.46rem + var(--mc-scrollbar-safe-gutter));
   border-left: 1px solid var(--mc-border-subtle);
   background: color-mix(in oklab, var(--mc-surface-2) 90%, var(--background));
 }
@@ -39,6 +43,7 @@
   height: calc(100dvh - 58px);
   padding: 0.5rem;
   padding-left: calc(0.5rem + 9px);
+  padding-right: calc(0.5rem + var(--mc-scrollbar-safe-gutter));
   border-left: 1px solid var(--mc-border-subtle);
   background: color-mix(in oklab, var(--mc-surface-2) 92%, var(--background));
 }
@@ -54,6 +59,7 @@
 .mc-next-threaded-context-panel.utility {
   padding: 0.46rem;
   padding-left: calc(0.46rem + 9px);
+  padding-right: calc(0.46rem + var(--mc-scrollbar-safe-gutter));
 }
 
 .mc-next-threaded-panel-switcher {
@@ -201,6 +207,9 @@
   margin: 0;
   overflow: auto;
   padding: 0.52rem;
+  padding-right: calc(0.52rem + var(--mc-scrollbar-safe-gutter));
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   border-radius: 0.4rem;
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--background) 92%, transparent);

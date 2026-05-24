@@ -436,6 +436,7 @@
   overflow: auto;
   overscroll-behavior: contain;
   padding-right: 0.18rem;
+  padding-inline-end: var(--mc-scrollbar-safe-gutter);
   scrollbar-gutter: stable;
 }
 
@@ -753,6 +754,9 @@
 .mc-next-approvals-details pre {
   overflow: auto;
   padding: 0.55rem;
+  padding-inline-end: calc(0.55rem + var(--mc-scrollbar-safe-gutter));
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   border-radius: 0.48rem;
   font-size: 0.66rem;
   background: color-mix(in oklab, var(--background) 84%, var(--mc-surface-1));
@@ -991,6 +995,7 @@
   max-height: 30rem;
   overflow: auto;
   overscroll-behavior: contain;
+  padding-inline-end: var(--mc-scrollbar-safe-gutter);
   scrollbar-gutter: stable;
 }
 
@@ -1322,12 +1327,15 @@
   width: 100%;
   min-width: 0;
   padding: 0.5rem 0.62rem;
+  padding-inline-end: calc(0.62rem + var(--mc-scrollbar-safe-gutter));
   border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
   border-radius: var(--r-sm, 0.5rem);
   background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
   color: var(--foreground);
   font: 400 13px/1.4 var(--mc-font-sans);
   outline: none;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .mc-next-settings-input:is(select) {
@@ -1828,6 +1836,9 @@
 
 .mc-next-settings-code-block pre {
   margin: 0;
+  padding-inline-end: var(--mc-scrollbar-safe-gutter);
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--foreground);
@@ -1938,6 +1949,7 @@
   gap: 0.32rem;
   margin: 0;
   padding: 0;
+  padding-inline-end: var(--mc-scrollbar-safe-gutter);
   list-style: none;
   overflow: auto;
   overscroll-behavior: contain;

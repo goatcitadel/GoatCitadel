@@ -326,6 +326,7 @@
   max-height: calc(100dvh - 7rem);
   overflow: auto;
   padding-right: 0.1rem;
+  padding-inline-end: var(--mc-scrollbar-safe-gutter);
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
 }
@@ -415,6 +416,7 @@
   color: var(--foreground);
   min-height: 1.9rem;
   padding: 0.38rem 0.48rem;
+  padding-inline-end: calc(0.48rem + var(--mc-scrollbar-safe-gutter));
   font: inherit;
   line-height: 1.25;
   box-shadow: inset 0 1px 0 color-mix(in oklab, white 6%, transparent);
@@ -423,6 +425,8 @@
 .mc-pp-field textarea {
   resize: vertical;
   min-height: 6rem;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .mc-pp-field textarea::placeholder,
@@ -443,6 +447,7 @@
   max-height: clamp(10rem, 22dvh, 15rem);
   overflow: auto;
   padding-right: 0.15rem;
+  padding-inline-end: var(--mc-scrollbar-safe-gutter);
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
 }
@@ -631,6 +636,7 @@
   max-height: clamp(22rem, calc(100dvh - 17rem), 42rem);
   overflow: auto;
   padding-right: 0.15rem;
+  padding-inline-end: var(--mc-scrollbar-safe-gutter);
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
 }
@@ -875,10 +881,13 @@
   background: color-mix(in oklab, var(--mc-surface-1) 94%, var(--background));
   color: var(--foreground);
   padding: 0.95rem 1rem;
+  padding-inline-end: calc(1rem + var(--mc-scrollbar-safe-gutter));
   font-family: ui-monospace, "SFMono-Regular", monospace;
   font-size: 0.88rem;
   line-height: 1.6;
   white-space: pre-wrap;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .mc-pp-placeholder-grid,
@@ -980,6 +989,9 @@
 
 .mc-pp-table-wrap {
   overflow: auto;
+  padding-inline-end: var(--mc-scrollbar-safe-gutter);
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .mc-pp-table {
@@ -1129,7 +1141,9 @@
   .mc-pp-tab-list {
     overflow-x: auto;
     flex-wrap: nowrap;
+    padding-inline-end: var(--mc-scrollbar-safe-gutter);
     padding-bottom: 0.2rem;
+    scrollbar-gutter: stable;
   }
 
   .mc-pp-tab-list {

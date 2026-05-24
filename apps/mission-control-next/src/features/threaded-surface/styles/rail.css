@@ -2,6 +2,7 @@
   --mc-mode-chat: var(--gc-area-chat, oklch(0.72 0.12 240));
   --mc-mode-cowork: var(--gc-area-cowork, oklch(0.73 0.13 315));
   --mc-mode-code: var(--gc-area-code, oklch(0.74 0.12 175));
+  --mc-scrollbar-safe-gutter: 0.85rem;
   position: relative;
   display: grid;
   grid-template-columns: var(--mc-session-rail-width, 184px) minmax(0, 1fr);
@@ -110,8 +111,11 @@
   display: grid;
   gap: 0.34rem;
   padding: 6px 5px;
+  padding-inline-end: calc(5px + var(--mc-scrollbar-safe-gutter));
   max-height: calc(100dvh - 58px);
   overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   border-radius: 0;
   border-width: 0 1px 0 0;
   border-color: var(--mc-border-subtle);

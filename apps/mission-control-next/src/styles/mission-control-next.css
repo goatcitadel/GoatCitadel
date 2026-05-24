@@ -11,6 +11,7 @@
   --gc-risk-danger: oklch(0.7 0.18 28);
   --gc-risk-nuclear: oklch(0.68 0.22 345);
   --mc-area-color: var(--gc-area-chat);
+  --mc-scrollbar-safe-gutter: 0.85rem;
   min-height: 100dvh;
   position: relative;
   overflow-x: clip;
@@ -224,6 +225,7 @@
 
 .mc-gc-combobox-content [data-slot="command-list"] {
   padding: 0.35rem 0.4rem 0.45rem;
+  padding-inline-end: calc(0.4rem + var(--mc-scrollbar-safe-gutter));
   max-height: min(18rem, calc(100dvh - 9rem));
   scrollbar-gutter: stable;
 }
@@ -241,6 +243,8 @@
 .mc-gc-combobox-list {
   overflow-y: auto;
   overscroll-behavior: contain;
+  padding-inline-end: var(--mc-scrollbar-safe-gutter);
+  scrollbar-gutter: stable;
 }
 
 .mc-gc-combobox-list::-webkit-scrollbar {
@@ -670,6 +674,9 @@
   max-height: calc(100dvh - 58px);
   overflow: auto;
   padding: 8px 6px;
+  padding-inline-end: calc(6px + var(--mc-scrollbar-safe-gutter));
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   border-radius: 0;
   border: 0;
   border-right: 1px solid var(--mc-border-subtle);
@@ -929,11 +936,14 @@
   width: min(24rem, calc(100vw - 2rem));
   max-height: calc(100dvh - 6.3rem);
   padding: 1rem;
+  padding-inline-end: calc(1rem + var(--mc-scrollbar-safe-gutter));
   border-radius: var(--r-lg, 1.25rem);
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--mc-surface-2) 96%, transparent);
   box-shadow: var(--mc-shadow-strong);
   overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   transform: translate3d(var(--side-inspector-drag-x, 0), var(--side-inspector-drag-y, 0), 0);
 }
 

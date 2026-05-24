@@ -256,6 +256,9 @@
   overflow: auto;
   white-space: pre-wrap;
   padding: 0.55rem;
+  padding-right: calc(0.55rem + var(--mc-scrollbar-safe-gutter));
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   border-radius: 0.4rem;
   border: 1px solid var(--border);
   background: color-mix(in oklab, var(--card) 96%, transparent);
@@ -855,6 +858,7 @@
   background: color-mix(in oklab, var(--mc-surface-1) 95%, var(--background));
   color: var(--foreground);
   padding: 0.42rem 0.5rem;
+  padding-inline-end: calc(0.5rem + var(--mc-scrollbar-safe-gutter));
   font-size: var(--text-xs);
 }
 
@@ -873,12 +877,15 @@
   min-height: 2.4rem;
   max-height: 10rem;
   padding: 0.25rem 0;
+  padding-inline-end: var(--mc-scrollbar-safe-gutter);
   border: 0;
   border-radius: 0;
   background: transparent;
   resize: none;
   outline: none;
   box-shadow: none;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .mc-next-threaded-surface.unified .mc-next-composer-input-shell textarea:focus,
@@ -1029,7 +1036,14 @@
 
 .mc-next-panel-list-head span,
 .mc-next-panel-list-head button {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
+}
+
+.mc-next-panel-list-head span {
+  overflow-wrap: normal;
+  text-align: right;
+  white-space: nowrap;
+  word-break: normal;
 }
 
 .mc-next-cowork-stage-strip {
@@ -1200,6 +1214,7 @@
   gap: 0.45rem;
   overflow-x: auto;
   padding: 0.15rem 0.05rem 0.35rem;
+  scrollbar-gutter: stable;
 }
 
 .mc-next-cowork-run-map-node-wrap {
@@ -1331,6 +1346,9 @@
 .mc-next-threaded-side-panel.code .mc-next-workbench-main,
 .mc-next-threaded-side-panel.code .mc-next-workbench-pane {
   overflow: auto;
+  padding-inline-end: var(--mc-scrollbar-safe-gutter);
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .mc-next-threaded-side-panel.code .mc-next-workbench-sidebar:last-child {
@@ -1340,6 +1358,9 @@
   align-items: start;
   max-height: 11rem;
   overflow: auto;
+  padding-inline-end: var(--mc-scrollbar-safe-gutter);
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .mc-next-threaded-side-panel.cowork .mc-next-cowork-panel {

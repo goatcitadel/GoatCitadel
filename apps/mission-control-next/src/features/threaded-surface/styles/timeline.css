@@ -6,7 +6,10 @@
 .mc-next-thread-scroll {
   max-height: min(68dvh, 52rem);
   overflow: auto;
+  padding-inline-end: var(--mc-scrollbar-safe-gutter);
+  overscroll-behavior: contain;
   scroll-behavior: auto;
+  scrollbar-gutter: stable;
   overflow-anchor: none;
 }
 
@@ -391,6 +394,9 @@
 .mc-assistant-markdown pre {
   max-width: 100%;
   overflow: auto;
+  padding-inline-end: var(--mc-scrollbar-safe-gutter);
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .mc-assistant-streaming-markdown {
