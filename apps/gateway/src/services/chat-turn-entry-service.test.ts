@@ -625,6 +625,87 @@ describe("agentSendChatMessage", () => {
     expect(chunks.at(-1)).toEqual(expect.objectContaining({ type: "done", turnId: "turn-1" }));
   });
 
+  it("keeps durable streamed send runs alive when the SSE abort signal fires", async () => {
+    const host = createHost({});
+    const controller = new AbortController();
+    let resolveStreamReady: (() => void) | undefined;
+    const streamReady = new Promise<void>((resolve) => {
+      resolveStreamReady = resolve;
+    });
+
+    dispatchMocks.launchPreparedAgentChatTurnStream.mockReturnValueOnce("durable-run-1");
+    host.streamPersistedChatTurnEvents = vi.fn(async function* (
+      _sessionId,
+      turnId,
+      options?: { signal?: AbortSignal },
+    ) {
+      resolveStreamReady?.();
+      await new Promise<void>((resolve) => {
+        if (options?.signal?.aborted) {
+          resolve();
+          return;
+        }
+        options?.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      yield { type: "done", sessionId: "session-1", turnId };
+    }) as never;
+
+    const pending = collectChunks(
+      agentSendChatMessageStream(host, "session-1", { content: "hello" }, { abortSignal: controller.signal }),
+    );
+
+    await streamReady;
+    controller.abort();
+    const chunks = await pending;
+
+    expect(host.cancelDurableChatRun).not.toHaveBeenCalled();
+    expect(host.getActiveChatTurnExecution("turn-1")?.controller.signal.aborted).toBe(false);
+    expect(host.streamPersistedChatTurnEvents).toHaveBeenCalledWith("session-1", "turn-1", {
+      liveTail: true,
+      signal: controller.signal,
+    });
+    expect(chunks.at(-1)).toEqual(expect.objectContaining({ type: "done", turnId: "turn-1" }));
+  });
+
+  it("still aborts non-durable streamed send execution when the SSE abort signal fires", async () => {
+    const host = createHost({});
+    const controller = new AbortController();
+    let resolveStreamReady: (() => void) | undefined;
+    const streamReady = new Promise<void>((resolve) => {
+      resolveStreamReady = resolve;
+    });
+
+    dispatchMocks.launchPreparedAgentChatTurnStream.mockReturnValueOnce(undefined);
+    host.streamPersistedChatTurnEvents = vi.fn(async function* (
+      _sessionId,
+      turnId,
+      options?: { signal?: AbortSignal },
+    ) {
+      resolveStreamReady?.();
+      await new Promise<void>((resolve) => {
+        if (options?.signal?.aborted) {
+          resolve();
+          return;
+        }
+        options?.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      yield { type: "done", sessionId: "session-1", turnId };
+    }) as never;
+
+    const pending = collectChunks(
+      agentSendChatMessageStream(host, "session-1", { content: "hello" }, { abortSignal: controller.signal }),
+    );
+
+    await streamReady;
+    expect(host.getActiveChatTurnExecution("turn-1")?.controller.signal.aborted).toBe(false);
+    controller.abort();
+    const chunks = await pending;
+
+    expect(host.cancelDurableChatRun).not.toHaveBeenCalled();
+    expect(host.getActiveChatTurnExecution("turn-1")?.controller.signal.aborted).toBe(true);
+    expect(chunks.at(-1)).toEqual(expect.objectContaining({ type: "done", turnId: "turn-1" }));
+  });
+
   it("streams retry and edit turns through integration envelopes when bound off LLM", async () => {
     const host = createHost({});
     host.storage.chatSessionBindings.get = vi.fn(() => ({

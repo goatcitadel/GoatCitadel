@@ -1080,12 +1080,10 @@ function bindStreamAbortToTurn(
     return undefined;
   }
   const fire = (): void => {
-    if (durableRunId && host.cancelDurableChatRun) {
-      try {
-        host.cancelDurableChatRun(durableRunId, "abort_signal");
-      } catch {
-        // The stream abort path is best-effort when the durable run has already settled.
-      }
+    if (durableRunId) {
+      // A passive SSE disconnect is not operator intent to cancel a durable Chat/Cowork/Code turn.
+      // Explicit stop still flows through cancelChatTurn, which cancels the durable run with evidence.
+      return;
     }
     const active = host.getActiveChatTurnExecution(turnId);
     if (active && !active.controller.signal.aborted) {
