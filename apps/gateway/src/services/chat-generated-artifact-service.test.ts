@@ -24,6 +24,7 @@ function seedSession(
   sessionId: string,
   workspaceId = "default",
   mode: "chat" | "cowork" | "code" = "code",
+  projectId?: string,
 ): ChatSessionRecord {
   const now = "2026-04-20T00:00:00.000Z";
   storage.sessions.upsert({
@@ -55,6 +56,7 @@ function seedSession(
     sessionId,
     sessionKey: `mission:operator:${sessionId}`,
     workspaceId,
+    projectId,
     scope: "mission",
     includeInHistory: true,
     pinned: false,
@@ -156,7 +158,7 @@ describe("chat-generated-artifact-service", () => {
     const { storage, rootDir } = await createStorage();
     roots.push(rootDir);
     storages.push(storage);
-    const session = seedSession(storage, "sess-2", "default", "chat");
+    const session = seedSession(storage, "sess-2", "default", "chat", "project-2");
     seedAssistantTurn(
       storage,
       session.sessionId,
@@ -182,6 +184,7 @@ describe("chat-generated-artifact-service", () => {
     const hydrated = getChatGeneratedArtifact(host, superseded.artifactId, { workspaceId: session.workspaceId });
 
     assert.equal(initial.sourceBlockIndex, 0);
+    assert.equal(initial.projectId, "project-2");
     assert.match(initial.contentHash ?? "", /^[a-f0-9]{64}$/);
     assert.equal(initial.sourceSurface, "code");
     assert.equal(superseded.version, 2);

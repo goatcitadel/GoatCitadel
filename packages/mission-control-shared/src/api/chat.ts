@@ -501,6 +501,7 @@ export async function fetchChatMessages(
 export async function fetchChatGeneratedArtifacts(input?: {
   sessionId?: string;
   workspaceId?: string;
+  projectId?: string;
   sourceSurface?: ChatGeneratedArtifactSourceSurface;
   kind?: ChatGeneratedArtifactKind;
   limit?: number;
@@ -508,6 +509,7 @@ export async function fetchChatGeneratedArtifacts(input?: {
   const query = new URLSearchParams();
   if (input?.sessionId) query.set("sessionId", input.sessionId);
   if (input?.workspaceId) query.set("workspaceId", input.workspaceId);
+  if (input?.projectId) query.set("projectId", input.projectId);
   if (input?.sourceSurface) query.set("sourceSurface", input.sourceSurface);
   if (input?.kind) query.set("kind", input.kind);
   query.set("limit", String(input?.limit ?? 300));

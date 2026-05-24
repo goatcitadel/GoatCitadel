@@ -944,6 +944,42 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "chat_session_workbench", "package_manager", "TEXT");
     },
   },
+  {
+    version: 97,
+    name: "chat_generated_artifacts_project_scope",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "chat_generated_artifacts", "project_id", "TEXT");
+      if (tableExists(db, "chat_generated_artifacts")) {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_chat_generated_artifacts_project_created
+            ON chat_generated_artifacts(project_id, created_at DESC);
+        `);
+      }
+    },
+  },
+  {
+    version: 98,
+    name: "chat_generated_artifacts_project_scope_backfill",
+    up: (db) => {
+      if (!tableExists(db, "chat_generated_artifacts") || !tableExists(db, "chat_session_projects")) {
+        return;
+      }
+      db.exec(`
+        UPDATE chat_generated_artifacts
+        SET project_id = (
+          SELECT chat_session_projects.project_id
+          FROM chat_session_projects
+          WHERE chat_session_projects.session_id = chat_generated_artifacts.session_id
+        )
+        WHERE project_id IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM chat_session_projects
+            WHERE chat_session_projects.session_id = chat_generated_artifacts.session_id
+          );
+      `);
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -5314,6 +5350,7 @@ function createChatGeneratedArtifactsAndThreadKnowledgeSchema(db: DatabaseSync):
       artifact_id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,
       workspace_id TEXT,
+      project_id TEXT,
       turn_id TEXT NOT NULL,
       title TEXT NOT NULL,
       kind TEXT NOT NULL,
@@ -5336,6 +5373,8 @@ function createChatGeneratedArtifactsAndThreadKnowledgeSchema(db: DatabaseSync):
       ON chat_generated_artifacts(turn_id, version DESC, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_chat_generated_artifacts_workspace_created
       ON chat_generated_artifacts(workspace_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_chat_generated_artifacts_project_created
+      ON chat_generated_artifacts(project_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_chat_generated_artifacts_surface_kind_created
       ON chat_generated_artifacts(source_surface, kind, created_at DESC);
 

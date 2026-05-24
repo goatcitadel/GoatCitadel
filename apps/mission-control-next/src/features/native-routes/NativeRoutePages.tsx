@@ -107,6 +107,20 @@ const TASK_STATUS_OPTIONS: TaskRecord["status"][] = [
 const TASK_PRIORITY_OPTIONS: TaskRecord["priority"][] = ["low", "normal", "high", "urgent"];
 const TASK_DELIVERABLE_TYPE_OPTIONS: TaskDeliverableRecord["deliverableType"][] = ["artifact", "file", "url"];
 
+export type CoworkTaskContinuationSummary = {
+  nextActionLabel: string;
+  nextActionDetail: string;
+  blockerCount: number;
+  activeCount: number;
+  reviewCount: number;
+  deliverableCount: number;
+  recoveryCount: number;
+  selectedTaskLabel: string;
+  hierarchyDetail: string;
+  boardTruth: string;
+  firstBlockedTaskId?: string;
+};
+
 export function NativeRoutePages(props: NativeRoutePagesProps) {
   const { route } = props;
 
@@ -238,6 +252,17 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
   );
   const selectedTask =
     allSelectableTasks.find((item) => item.taskId === selectedTaskId) ?? allSelectableTasks[0] ?? null;
+  const coworkContinuation = useMemo(
+    () =>
+      deriveCoworkTaskContinuation({
+        tasks,
+        deletedTasks,
+        selectedTask,
+        deliverables: deliverables.data ?? [],
+        deliverablesLoading: deliverables.loading,
+      }),
+    [deletedTasks, deliverables.data, deliverables.loading, selectedTask, tasks],
+  );
 
   useEffect(() => {
     if (!selectedTask) {
@@ -407,7 +432,7 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
       <NativeGrid className="mc-next-native-board-grid">
         <NativeCard
           title="Agent board"
-          subtitle="Live operator posture with current board controls."
+          subtitle="Inspectable operator posture. Board controls record intent; they are not autonomous live-control guarantees."
           density="compact"
           scrollBody
           bodyMaxHeight="min(62vh, 34rem)"
@@ -427,6 +452,54 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
             maxHeight="min(52vh, 28rem)"
             ariaLabel="Operator posture"
           />
+        </NativeCard>
+        <NativeCard
+          title="Board truth"
+          subtitle="Current task state, blocker pressure, and supported handoffs without overstating autonomous control."
+          density="compact"
+          stats={[
+            { label: "Intent model", value: "Recorded" },
+            { label: "Live control", value: "Executor-honored" },
+          ]}
+        >
+          <LibraryMetricGrid
+            items={[
+              {
+                label: "Next action",
+                value: coworkContinuation.nextActionLabel,
+                meta: coworkContinuation.nextActionDetail,
+              },
+              {
+                label: "Blockers",
+                value: String(coworkContinuation.blockerCount),
+                meta: coworkContinuation.blockerCount ? "Review before continuing" : "No blocked tasks visible",
+              },
+              {
+                label: "Hierarchy",
+                value: coworkContinuation.selectedTaskLabel,
+                meta: coworkContinuation.hierarchyDetail,
+              },
+            ]}
+          />
+          <p className="mc-next-settings-field-note">{coworkContinuation.boardTruth}</p>
+          <LibraryButtonRow>
+            <button
+              type="button"
+              className="mc-next-button"
+              onClick={() => navigate({ area: "cowork", section: "tasks", theme: route.theme })}
+            >
+              <Workflow className="h-4 w-4" />
+              Review tasks
+            </button>
+            <button
+              type="button"
+              className="mc-next-button-secondary"
+              onClick={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
+            >
+              <CheckCircle2 className="h-4 w-4" />
+              Approval queue
+            </button>
+          </LibraryButtonRow>
         </NativeCard>
         <NativeCard title="Work distribution" subtitle="Current task flow by status lane." density="compact">
           <div className="mc-next-board-lanes">
@@ -463,6 +536,63 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
       </NativeGrid>
     ) : (
       <NativeGrid className="mc-next-cowork-task-grid">
+        <NativeCard
+          title="Continuation cue"
+          subtitle="The task-board entry point for what to do next, where work is blocked, and which deliverables prove progress."
+          density="compact"
+          stats={[
+            { label: "Blockers", value: String(coworkContinuation.blockerCount) },
+            { label: "Deliverables", value: String(coworkContinuation.deliverableCount) },
+          ]}
+        >
+          <LibraryMetricGrid
+            items={[
+              {
+                label: "Next action",
+                value: coworkContinuation.nextActionLabel,
+                meta: coworkContinuation.nextActionDetail,
+              },
+              {
+                label: "Selected hierarchy",
+                value: coworkContinuation.selectedTaskLabel,
+                meta: coworkContinuation.hierarchyDetail,
+              },
+              {
+                label: "Open work",
+                value: String(coworkContinuation.activeCount + coworkContinuation.reviewCount),
+                meta: `${coworkContinuation.activeCount} active · ${coworkContinuation.reviewCount} in review`,
+              },
+            ]}
+          />
+          <LibraryButtonRow>
+            <button
+              type="button"
+              className="mc-next-button"
+              onClick={() => navigate({ area: "cowork", theme: route.theme })}
+            >
+              <Workflow className="h-4 w-4" />
+              Continue Cowork
+            </button>
+            {coworkContinuation.firstBlockedTaskId ? (
+              <button
+                type="button"
+                className="mc-next-button-secondary"
+                onClick={() => setSelectedTaskId(coworkContinuation.firstBlockedTaskId!)}
+              >
+                <AlertTriangle className="h-4 w-4" />
+                Open blocker
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="mc-next-button-secondary"
+              onClick={() => navigate({ area: "cowork", section: "board", theme: route.theme })}
+            >
+              <Workflow className="h-4 w-4" />
+              Agent board
+            </button>
+          </LibraryButtonRow>
+        </NativeCard>
         <QuickJumpCard
           title="Cowork routes"
           subtitle="Keep orchestration surfaces connected from one Cowork route."
@@ -649,6 +779,9 @@ function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navig
                   </button>
                 )}
               </LibraryButtonRow>
+              <LibraryCodeBlock label="Task -> deliverables">
+                {`${selectedTask.title}\n${coworkContinuation.hierarchyDetail}`}
+              </LibraryCodeBlock>
               {deliverables.error ? <LibraryNotice notice={{ tone: "warning", message: deliverables.error }} /> : null}
               <LibraryFieldGrid>
                 <LibraryField label="Deliverable title">
@@ -2071,6 +2204,45 @@ function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePagesProps)
             ) : null}
           </NativeCard>
           <NativeCard
+            title="Source visibility"
+            subtitle="Knowledge context stays tied to visible file, citation, and context-pack source evidence."
+          >
+            <LibraryMetricGrid
+              items={[
+                {
+                  label: "Selected source",
+                  value: selectedFilePath ? "file" : "none",
+                  meta: selectedFilePath || "Choose a source to inspect provenance.",
+                },
+                {
+                  label: "Preview",
+                  value: preview.loading
+                    ? "loading"
+                    : preview.error
+                      ? "failed"
+                      : preview.data
+                        ? "loaded"
+                        : "not loaded",
+                  meta: preview.data?.contentType ?? preview.error ?? "No preview yet",
+                },
+                {
+                  label: "Context packs",
+                  value: String(data?.qmd?.recent.length ?? 0),
+                  meta: `${data?.qmd?.recent.reduce((total, item) => total + item.citations.length, 0) ?? 0} citations visible`,
+                },
+              ]}
+            />
+            <LibraryActionList
+              items={(data?.qmd?.recent ?? []).flatMap((item) =>
+                item.citations
+                  .slice(0, 3)
+                  .map((citation, index) => formatKnowledgeCitationAction(citation, item.contextId, index)),
+              )}
+              emptyLabel="No context-pack citations are available yet."
+              maxHeight="min(32vh, 18rem)"
+            />
+          </NativeCard>
+          <NativeCard
             title="Recent context packs"
             subtitle="Recent distilled memory contexts that the system produced for retrieval-heavy flows."
           >
@@ -2098,7 +2270,7 @@ function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePagesProps)
                 id: item.contextId,
                 label: item.contextId,
                 description: truncateText(item.contextText, 180),
-                meta: `${item.scope} · ${item.quality.status} · ${item.citations.length} citations`,
+                meta: `${item.scope} · ${item.quality.status} · ${formatKnowledgeCitationSummary(item.citations)}`,
               }))}
               emptyLabel="No recent context packs are available."
             />
@@ -2107,6 +2279,32 @@ function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePagesProps)
       </div>
     </LibrarySectionShell>
   );
+}
+
+export function formatKnowledgeCitationSummary(citations: unknown[]): string {
+  if (!citations.length) {
+    return "0 citations";
+  }
+  const sourceTypes = new Set(
+    citations
+      .map((citation) => readPayloadString(citation, ["sourceType", "kind", "retrievalMode"]))
+      .filter((value): value is string => Boolean(value)),
+  );
+  const sourceLabel = sourceTypes.size ? Array.from(sourceTypes).slice(0, 2).join(", ") : "source";
+  return `${citations.length} citation${citations.length === 1 ? "" : "s"} · ${sourceLabel}`;
+}
+
+export function formatKnowledgeCitationAction(citation: unknown, contextId: string, index: number) {
+  const label = readPayloadString(citation, ["title", "sourceRef", "source", "path", "url"]) ?? `Citation ${index + 1}`;
+  const chunk = readPayloadString(citation, ["chunkId", "chunk", "locator"]);
+  const mode = readPayloadString(citation, ["retrievalMode", "sourceType", "kind"]) ?? "source";
+  const score = readPayloadString(citation, ["score", "confidence"]);
+  return {
+    id: `${contextId}:${index}:${label}`,
+    label,
+    description: chunk ? `Context ${contextId} cites chunk ${chunk}.` : `Context ${contextId} cites this source.`,
+    meta: [mode, score ? `score ${score}` : undefined].filter((value): value is string => Boolean(value)).join(" · "),
+  };
 }
 
 function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesProps) {
@@ -2302,24 +2500,22 @@ function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesProps) {
   );
 }
 
-function LibraryArtifactsSection({ activeWorkspaceId }: NativeRoutePagesProps) {
+function LibraryArtifactsSection({ activeWorkspaceId, route, navigate }: NativeRoutePagesProps) {
   const [selectedArtifactId, setSelectedArtifactId] = useState("");
   const [surfaceFilter, setSurfaceFilter] = useState<ChatGeneratedArtifactRecord["sourceSurface"] | "all">("all");
   const [search, setSearch] = useState("");
   const { loading, error, data, reload } = useAsyncLoad(async () => {
-    const artifacts = await nativeLoad(
-      "Artifacts",
-      fetchChatGeneratedArtifacts({
-        workspaceId: activeWorkspaceId,
-        limit: 80,
-      }),
-      { items: [] },
-    );
+    const artifactQuery = {
+      workspaceId: activeWorkspaceId,
+      ...(route.projectId ? { projectId: route.projectId } : {}),
+      limit: 80,
+    };
+    const artifacts = await nativeLoad("Artifacts", fetchChatGeneratedArtifacts(artifactQuery), { items: [] });
     return {
       issues: nativeLoadIssues([artifacts]),
       artifacts: artifacts.data.items,
     };
-  }, [activeWorkspaceId]);
+  }, [activeWorkspaceId, route.projectId]);
 
   const visibleArtifacts = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -2327,7 +2523,15 @@ function LibraryArtifactsSection({ activeWorkspaceId }: NativeRoutePagesProps) {
       if (surfaceFilter !== "all" && item.sourceSurface !== surfaceFilter) {
         return false;
       }
-      return !query || item.title.toLowerCase().includes(query) || item.kind.toLowerCase().includes(query);
+      return (
+        !query ||
+        item.title.toLowerCase().includes(query) ||
+        item.kind.toLowerCase().includes(query) ||
+        item.sessionId.toLowerCase().includes(query) ||
+        item.turnId.toLowerCase().includes(query) ||
+        item.projectId?.toLowerCase().includes(query) ||
+        item.contentHash?.toLowerCase().includes(query)
+      );
     });
   }, [data?.artifacts, search, surfaceFilter]);
 
@@ -2336,10 +2540,14 @@ function LibraryArtifactsSection({ activeWorkspaceId }: NativeRoutePagesProps) {
       setSelectedArtifactId("");
       return;
     }
+    if (route.artifactId && visibleArtifacts.some((item) => item.artifactId === route.artifactId)) {
+      setSelectedArtifactId(route.artifactId);
+      return;
+    }
     setSelectedArtifactId((current) =>
       visibleArtifacts.some((item) => item.artifactId === current) ? current : (visibleArtifacts[0]?.artifactId ?? ""),
     );
-  }, [visibleArtifacts]);
+  }, [route.artifactId, visibleArtifacts]);
 
   const selectedArtifact = visibleArtifacts.find((item) => item.artifactId === selectedArtifactId) ?? null;
 
@@ -2353,6 +2561,7 @@ function LibraryArtifactsSection({ activeWorkspaceId }: NativeRoutePagesProps) {
           stats={[
             { label: "Visible", value: String(visibleArtifacts.length) },
             { label: "Workspace", value: activeWorkspaceId },
+            { label: "Project", value: route.projectId ? "Scoped" : "All" },
           ]}
         >
           <div className="mc-next-settings-field-grid">
@@ -2381,7 +2590,9 @@ function LibraryArtifactsSection({ activeWorkspaceId }: NativeRoutePagesProps) {
               id: item.artifactId,
               title: item.title,
               meta: item.sourceSurface,
-              body: `${item.kind} · v${item.version} · ${formatDateTime(item.updatedAt)}`,
+              body: `${item.kind} · v${item.version} · ${
+                item.projectId ? `project ${item.projectId}` : "unscoped"
+              } · ${formatDateTime(item.updatedAt)}`,
             }))}
             selectedId={selectedArtifactId}
             onSelect={setSelectedArtifactId}
@@ -2408,6 +2619,7 @@ function LibraryArtifactsSection({ activeWorkspaceId }: NativeRoutePagesProps) {
                 <LibraryMetricGrid
                   items={[
                     { label: "Kind", value: selectedArtifact.kind, meta: `v${selectedArtifact.version}` },
+                    { label: "Project", value: selectedArtifact.projectId ?? "Unscoped", meta: "Artifact binding" },
                     {
                       label: "Provider",
                       value: selectedArtifact.providerId ?? "Unknown",
@@ -2417,6 +2629,44 @@ function LibraryArtifactsSection({ activeWorkspaceId }: NativeRoutePagesProps) {
                     { label: "Updated", value: formatDateTime(selectedArtifact.updatedAt), meta: "Artifact timestamp" },
                   ]}
                 />
+                <LibraryButtonRow>
+                  <button
+                    type="button"
+                    className="mc-next-button"
+                    onClick={() =>
+                      navigate({
+                        area: selectedArtifact.sourceSurface,
+                        sessionId: selectedArtifact.sessionId,
+                        ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
+                        turnId: selectedArtifact.turnId,
+                        artifactId: selectedArtifact.artifactId,
+                        theme: route.theme,
+                      })
+                    }
+                  >
+                    <Workflow className="h-4 w-4" />
+                    Open source thread
+                  </button>
+                  <button
+                    type="button"
+                    className="mc-next-button-secondary"
+                    onClick={() =>
+                      navigate({
+                        area: "library",
+                        section: "artifacts",
+                        artifactId: selectedArtifact.artifactId,
+                        ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
+                        theme: route.theme,
+                      })
+                    }
+                  >
+                    <FileText className="h-4 w-4" />
+                    Reopen artifact
+                  </button>
+                </LibraryButtonRow>
+                <LibraryCodeBlock label="Artifact provenance">
+                  {formatArtifactProvenance(selectedArtifact)}
+                </LibraryCodeBlock>
                 <LibraryCodeBlock label="Content">{truncateText(selectedArtifact.content, 2800)}</LibraryCodeBlock>
               </>
             ) : (
@@ -2426,6 +2676,27 @@ function LibraryArtifactsSection({ activeWorkspaceId }: NativeRoutePagesProps) {
         </div>
       </div>
     </LibrarySectionShell>
+  );
+}
+
+export function formatArtifactProvenance(artifact: ChatGeneratedArtifactRecord): string {
+  return JSON.stringify(
+    {
+      artifactId: artifact.artifactId,
+      sourceSurface: artifact.sourceSurface,
+      sessionId: artifact.sessionId,
+      projectId: artifact.projectId ?? "unscoped",
+      turnId: artifact.turnId,
+      provider: artifact.providerId ?? "unknown",
+      model: artifact.model ?? "unknown",
+      contentHash: artifact.contentHash ?? "not recorded",
+      sourceBlockIndex: artifact.sourceBlockIndex ?? "not recorded",
+      supersedesArtifactId: artifact.supersedesArtifactId ?? "none",
+      createdAt: artifact.createdAt,
+      updatedAt: artifact.updatedAt,
+    },
+    null,
+    2,
   );
 }
 
@@ -2445,6 +2716,124 @@ function SettingsNativePage({
       setActiveWorkspaceId={setActiveWorkspaceId}
     />
   );
+}
+
+export function deriveCoworkTaskContinuation(input: {
+  tasks: TaskRecord[];
+  deletedTasks: TaskRecord[];
+  selectedTask: TaskRecord | null;
+  deliverables: TaskDeliverableRecord[];
+  deliverablesLoading?: boolean;
+}): CoworkTaskContinuationSummary {
+  const blockedTasks = input.tasks.filter((item) => item.status === "blocked");
+  const reviewTasks = input.tasks.filter((item) => item.status === "review");
+  const activeTasks = input.tasks.filter((item) => ["assigned", "in_progress", "testing"].includes(item.status));
+  const planningTasks = input.tasks.filter((item) => item.status === "planning" || item.status === "inbox");
+  const selectedTaskLabel = input.selectedTask ? formatTaskStatus(input.selectedTask.status) : "No task selected";
+  const deliverableCount = input.deliverables.length;
+  const hierarchyDetail = input.selectedTask
+    ? `${input.selectedTask.title} -> ${
+        input.deliverablesLoading
+          ? "loading deliverables"
+          : `${deliverableCount} deliverable${deliverableCount === 1 ? "" : "s"} attached`
+      }`
+    : "Select or create a task before attaching deliverables.";
+
+  if (blockedTasks.length > 0) {
+    const first = blockedTasks[0]!;
+    return {
+      nextActionLabel: "Clear blocker",
+      nextActionDetail: `${first.title} is blocked; inspect detail before resuming work.`,
+      blockerCount: blockedTasks.length,
+      activeCount: activeTasks.length,
+      reviewCount: reviewTasks.length,
+      deliverableCount,
+      recoveryCount: input.deletedTasks.length,
+      selectedTaskLabel,
+      hierarchyDetail,
+      boardTruth:
+        "The board is an operator projection of task and runtime posture. It does not bypass approvals or force live executor control.",
+      firstBlockedTaskId: first.taskId,
+    };
+  }
+
+  if (reviewTasks.length > 0) {
+    return {
+      nextActionLabel: "Review output",
+      nextActionDetail: `${reviewTasks.length} task${reviewTasks.length === 1 ? "" : "s"} ready for review.`,
+      blockerCount: 0,
+      activeCount: activeTasks.length,
+      reviewCount: reviewTasks.length,
+      deliverableCount,
+      recoveryCount: input.deletedTasks.length,
+      selectedTaskLabel,
+      hierarchyDetail,
+      boardTruth:
+        "The board is an operator projection of task and runtime posture. It does not bypass approvals or force live executor control.",
+    };
+  }
+
+  if (activeTasks.length > 0) {
+    return {
+      nextActionLabel: "Continue active work",
+      nextActionDetail: `${activeTasks.length} task${activeTasks.length === 1 ? "" : "s"} still in motion.`,
+      blockerCount: 0,
+      activeCount: activeTasks.length,
+      reviewCount: 0,
+      deliverableCount,
+      recoveryCount: input.deletedTasks.length,
+      selectedTaskLabel,
+      hierarchyDetail,
+      boardTruth:
+        "The board is an operator projection of task and runtime posture. It does not bypass approvals or force live executor control.",
+    };
+  }
+
+  if (planningTasks.length > 0) {
+    return {
+      nextActionLabel: "Start planned task",
+      nextActionDetail: `${planningTasks.length} planned task${planningTasks.length === 1 ? "" : "s"} waiting for execution.`,
+      blockerCount: 0,
+      activeCount: 0,
+      reviewCount: 0,
+      deliverableCount,
+      recoveryCount: input.deletedTasks.length,
+      selectedTaskLabel,
+      hierarchyDetail,
+      boardTruth:
+        "The board is an operator projection of task and runtime posture. It does not bypass approvals or force live executor control.",
+    };
+  }
+
+  if (input.deletedTasks.length > 0) {
+    return {
+      nextActionLabel: "Restore or create",
+      nextActionDetail: `${input.deletedTasks.length} archived task${input.deletedTasks.length === 1 ? "" : "s"} can be restored if still relevant.`,
+      blockerCount: 0,
+      activeCount: 0,
+      reviewCount: 0,
+      deliverableCount,
+      recoveryCount: input.deletedTasks.length,
+      selectedTaskLabel,
+      hierarchyDetail,
+      boardTruth:
+        "The board is an operator projection of task and runtime posture. It does not bypass approvals or force live executor control.",
+    };
+  }
+
+  return {
+    nextActionLabel: "Create first task",
+    nextActionDetail: "No task is active in this workspace yet.",
+    blockerCount: 0,
+    activeCount: 0,
+    reviewCount: 0,
+    deliverableCount,
+    recoveryCount: 0,
+    selectedTaskLabel,
+    hierarchyDetail,
+    boardTruth:
+      "The board is an operator projection of task and runtime posture. It does not bypass approvals or force live executor control.",
+  };
 }
 
 function NativeLane({

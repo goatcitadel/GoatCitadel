@@ -1125,6 +1125,71 @@
   gap: 0.36rem;
 }
 
+.mc-next-project-lane-resume-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.36rem;
+}
+
+.mc-next-project-lane-resume-shell {
+  display: grid;
+  gap: 0.34rem;
+  min-width: 0;
+}
+
+.mc-next-project-lane-resume {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+  min-height: 4.6rem;
+  padding: 0.48rem 0.52rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  border-radius: 0.48rem;
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mc-next-project-lane-resume.is-chat {
+  border-color: color-mix(in oklab, var(--gc-area-chat) 24%, var(--border));
+}
+
+.mc-next-project-lane-resume.is-cowork {
+  border-color: color-mix(in oklab, var(--gc-area-cowork) 24%, var(--border));
+}
+
+.mc-next-project-lane-resume.is-code {
+  border-color: color-mix(in oklab, var(--gc-area-code) 24%, var(--border));
+}
+
+.mc-next-project-lane-resume span {
+  color: var(--text-muted);
+  font-size: 0.56rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mc-next-project-lane-resume strong,
+.mc-next-project-lane-resume p {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-project-lane-resume strong {
+  color: var(--foreground);
+  font-size: 0.72rem;
+  line-height: 1.25;
+}
+
+.mc-next-project-lane-resume p {
+  color: var(--text-secondary);
+  font-size: 0.62rem;
+  line-height: 1.36;
+}
+
 .mc-next-project-readiness-list,
 .mc-next-project-recent-list {
   display: grid;
@@ -2049,6 +2114,10 @@
   .mc-next-cowork-task-grid .mc-next-task-lanes {
     grid-template-columns: 1fr;
     overflow-x: visible;
+  }
+
+  .mc-next-project-lane-resume-list {
+    grid-template-columns: 1fr;
   }
 
   .mc-next-settings-field-grid {

@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { findProviderTemplate, type LlmModelDiscoverySource, type LlmProviderRequestConfig } from "@goatcitadel/contracts";
+import {
+  findProviderTemplate,
+  type LlmModelDiscoverySource,
+  type LlmProviderRequestConfig,
+} from "@goatcitadel/contracts";
 import type { LlmRuntimeConfigResponse, RuntimeSettingsResponse } from "../api/client";
 import { fetchLlmConfig, fetchLlmModels, previewLlmModels } from "../api/client";
 import { useRefreshSubscription } from "./useRefreshSubscription";
@@ -219,14 +223,18 @@ export function useProviderModelCatalog(refreshTopic: "chat" | "system" = "syste
             warning: response.warning,
           });
           return { items, source: response.source };
-        } catch {
+        } catch (err) {
+          const fallbackSource: LlmModelDiscoverySource = "error_fallback";
+          const warning = err instanceof Error && err.message ? err.message : "Model discovery failed.";
           sharedProviderModelCache.set(normalized, {
             items: [],
             expiresAt: Date.now() + PROVIDER_MODELS_NEGATIVE_TTL_MS,
             state: "error",
+            source: fallbackSource,
             checkedAt: new Date().toISOString(),
+            warning,
           });
-          return { items: [] };
+          return { items: [], source: fallbackSource };
         } finally {
           sharedProviderModelRequests.delete(normalized);
           syncProviderState();

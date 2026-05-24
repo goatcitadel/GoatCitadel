@@ -376,6 +376,34 @@ const mocks = vi.hoisted(() => ({
       },
     },
   })),
+  fetchDemoState: vi.fn(async () => ({
+    status: "ready",
+    workspace: { workspaceId: "demo-workspace", name: "Demo", slug: "demo" },
+    project: { projectId: "demo-project", name: "Demo Project", workspacePath: "F:\\code\\demo" },
+    sessions: [
+      { sessionId: "chat-demo", title: "Chat demo", mode: "chat", projectId: "demo-project" },
+      { sessionId: "cowork-demo", title: "Cowork demo", mode: "cowork", projectId: "demo-project" },
+    ],
+    tasks: [],
+    starterPrompts: [],
+    memorySeeds: [],
+    nextRoute: "/chat",
+    notes: [],
+  })),
+  bootstrapDemo: vi.fn(async () => ({
+    status: "ready",
+    workspace: { workspaceId: "demo-workspace", name: "Demo", slug: "demo" },
+    project: { projectId: "demo-project", name: "Demo Project", workspacePath: "F:\\code\\demo" },
+    sessions: [
+      { sessionId: "chat-demo", title: "Chat demo", mode: "chat", projectId: "demo-project" },
+      { sessionId: "cowork-demo", title: "Cowork demo", mode: "cowork", projectId: "demo-project" },
+    ],
+    tasks: [],
+    starterPrompts: [],
+    memorySeeds: [],
+    nextRoute: "/chat",
+    notes: [],
+  })),
   bootstrapOnboarding: vi.fn(async () => ({
     state: await mocks.fetchOnboardingState(),
     appliedAt: "2026-05-02T19:00:00.000Z",
@@ -533,6 +561,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     bootstrapOnboarding: mocks.bootstrapOnboarding,
     completeOnboarding: mocks.completeOnboarding,
     fetchOnboardingState: mocks.fetchOnboardingState,
+    fetchDemoState: mocks.fetchDemoState,
+    bootstrapDemo: mocks.bootstrapDemo,
     fetchIntegrationCatalog: mocks.fetchIntegrationCatalog,
     fetchIntegrationConnections: mocks.fetchIntegrationConnections,
     fetchIntegrationFormSchema: mocks.fetchIntegrationFormSchema,
@@ -1981,8 +2011,13 @@ describe("SettingsNativePage providers", () => {
     await act(async () => {
       renderer = renderPage("onboarding");
     });
+    await flushAsyncUpdates();
     let text = collectText(renderer!.root);
     expect(text).toContain("First-run setup");
+    expect(text).toContain("First trusted outcome");
+    expect(text).toContain("Model discovery checked");
+    expect(text).toContain("Ecosystem proof lanes");
+    expect(text).toContain("Voice Wake / Talk Mode");
     expect(text).toContain("Provider configured");
     expect(text).toContain("Apply first-run defaults");
     expect(text).toContain("Tool profile");

@@ -10,6 +10,7 @@ interface ChatGeneratedArtifactRow {
   artifact_id: string;
   session_id: string;
   workspace_id: string | null;
+  project_id: string | null;
   turn_id: string;
   title: string;
   kind: ChatGeneratedArtifactKind;
@@ -31,6 +32,7 @@ export class ChatGeneratedArtifactRepository {
   private readonly getStmt;
   private readonly listBySessionStmt;
   private readonly listByTurnStmt;
+  private readonly updateProjectForSessionStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
@@ -38,6 +40,7 @@ export class ChatGeneratedArtifactRepository {
         artifact_id,
         session_id,
         workspace_id,
+        project_id,
         turn_id,
         title,
         kind,
@@ -56,6 +59,7 @@ export class ChatGeneratedArtifactRepository {
         @artifactId,
         @sessionId,
         @workspaceId,
+        @projectId,
         @turnId,
         @title,
         @kind,
@@ -92,6 +96,13 @@ export class ChatGeneratedArtifactRepository {
       ORDER BY version DESC, created_at DESC, artifact_id DESC
       LIMIT @limit
     `);
+    this.updateProjectForSessionStmt = db.prepare(`
+      UPDATE chat_generated_artifacts
+      SET
+        project_id = @projectId,
+        updated_at = @updatedAt
+      WHERE session_id = @sessionId
+    `);
   }
 
   public create(input: ChatGeneratedArtifactRecord): ChatGeneratedArtifactRecord {
@@ -99,6 +110,7 @@ export class ChatGeneratedArtifactRepository {
       artifactId: sanitizeRequired(input.artifactId, "artifactId"),
       sessionId: sanitizeRequired(input.sessionId, "sessionId"),
       workspaceId: sanitizeOptional(input.workspaceId),
+      projectId: sanitizeOptional(input.projectId),
       turnId: sanitizeRequired(input.turnId, "turnId"),
       title: sanitizeRequired(input.title, "title"),
       kind: input.kind,
@@ -143,6 +155,15 @@ export class ChatGeneratedArtifactRepository {
       }),
     );
     return rows.map(mapRow);
+  }
+
+  public updateProjectForSession(sessionId: string, projectId?: string, updatedAt = new Date().toISOString()): number {
+    const result = this.updateProjectForSessionStmt.run({
+      sessionId: sanitizeRequired(sessionId, "sessionId"),
+      projectId: sanitizeOptional(projectId),
+      updatedAt,
+    });
+    return result.changes;
   }
 
   public listBySessionIds(sessionIds: string[]): Map<string, ChatGeneratedArtifactRecord[]> {
@@ -200,6 +221,7 @@ export class ChatGeneratedArtifactRepository {
   public listVisible(
     input: {
       workspaceId?: string;
+      projectId?: string;
       sourceSurface?: ChatGeneratedArtifactSourceSurface;
       kind?: ChatGeneratedArtifactKind;
       limit?: number;
@@ -210,6 +232,10 @@ export class ChatGeneratedArtifactRepository {
     if (input.workspaceId?.trim()) {
       clauses.push("workspace_id = ?");
       params.push(input.workspaceId.trim());
+    }
+    if (input.projectId?.trim()) {
+      clauses.push("project_id = ?");
+      params.push(input.projectId.trim());
     }
     if (input.sourceSurface) {
       clauses.push("source_surface = ?");
@@ -266,6 +292,7 @@ function isChatGeneratedArtifactRow(value: unknown): value is ChatGeneratedArtif
     typeof value.artifact_id === "string" &&
     typeof value.session_id === "string" &&
     (typeof value.workspace_id === "string" || value.workspace_id === null) &&
+    (typeof value.project_id === "string" || value.project_id === null) &&
     typeof value.turn_id === "string" &&
     typeof value.title === "string" &&
     typeof value.kind === "string" &&
@@ -296,6 +323,7 @@ function mapRow(row: ChatGeneratedArtifactRow): ChatGeneratedArtifactRecord {
     artifactId: row.artifact_id,
     sessionId: row.session_id,
     workspaceId: row.workspace_id ?? undefined,
+    projectId: row.project_id ?? undefined,
     turnId: row.turn_id,
     title: row.title,
     kind: row.kind,

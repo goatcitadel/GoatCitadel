@@ -1792,11 +1792,42 @@ export class GatewayService {
     this.durableRunService.startWorker();
     this.approvalEffectsService.startWorker();
     this.promptPackService.resumeInterruptedBenchmarkRuns();
+    // Pre-warm LLM model catalogs for configured providers in the background.
+    void this.prewarmLlmModelCatalogs().catch((error) => {
+      log.warn("Failed to pre-warm LLM model catalogs on startup", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+
     if (isVerboseLoggingEnabled()) {
       log.info("feature flags", { flags: this.readFeatureFlags() });
     } else {
       log.info("runtime ready");
     }
+  }
+
+  private async prewarmLlmModelCatalogs(): Promise<void> {
+    const config = this.llmService.getRuntimeConfig({ useCache: true });
+    const providersToWarm = config.providers.filter((p) => p.hasApiKey);
+    if (providersToWarm.length === 0) {
+      return;
+    }
+    log.info("pre-warming LLM model catalogs in background", {
+      providerIds: providersToWarm.map((p) => p.providerId),
+    });
+    await Promise.allSettled(
+      providersToWarm.map(async (p) => {
+        try {
+          await this.llmService.listModels(p.providerId);
+          log.debug("pre-warmed LLM model catalog", { providerId: p.providerId });
+        } catch (error) {
+          log.debug("failed to pre-warm LLM model catalog", {
+            providerId: p.providerId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }),
+    );
   }
 
   public async ingestEvent(idempotencyKey: string, payload: GatewayEventInput): Promise<GatewayEventResult> {

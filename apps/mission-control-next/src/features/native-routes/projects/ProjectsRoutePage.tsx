@@ -9,11 +9,17 @@ import {
   RefreshCw,
   Save,
 } from "lucide-react";
-import type { ChatMode, ChatProjectRecord, ChatSessionRecord } from "@goatcitadel/contracts";
+import type {
+  ChatGeneratedArtifactRecord,
+  ChatMode,
+  ChatProjectRecord,
+  ChatSessionRecord,
+} from "@goatcitadel/contracts";
 import {
   archiveChatProject,
   createChatSession,
   createChatProject,
+  fetchChatGeneratedArtifacts,
   fetchChatProjects,
   fetchChatSessions,
   updateChatProject,
@@ -23,47 +29,31 @@ import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayou
 import { ModeBar } from "../primitives";
 import { readRouteDiagnosticNow, recordRouteAction, recordRouteDataLoad } from "../route-diagnostics";
 import type { NativeRoutePagesProps } from "../types";
+import {
+  SURFACES,
+  countHomeArtifacts,
+  createEmptyCounts,
+  dateValue,
+  deriveProjectHome,
+  formatDateTime,
+  getErrorMessage,
+  labelForMode,
+  normalizeMode,
+  type ProjectCounts,
+  type ProjectHome,
+} from "./ProjectsRoutePage.helpers";
 import "../native-routes.css";
+
+export { deriveProjectHome } from "./ProjectsRoutePage.helpers";
 
 type ProjectsState = {
   loading: boolean;
   error: string | null;
+  artifactIssue: string | null;
   projects: ChatProjectRecord[];
   sessions: ChatSessionRecord[];
+  artifacts: ChatGeneratedArtifactRecord[];
 };
-
-type ProjectCounts = Record<ChatMode, number>;
-type ProjectReadinessStatus = "ready" | "attention";
-
-type ProjectReadinessItem = {
-  id: string;
-  label: string;
-  detail: string;
-  status: ProjectReadinessStatus;
-};
-
-type ProjectHome = {
-  latestByMode: Record<ChatMode, ChatSessionRecord | null>;
-  recentSessions: ChatSessionRecord[];
-  readiness: ProjectReadinessItem[];
-  activeCount: number;
-  artifactCount: number;
-  lastActivityLabel: string;
-  healthLabel: string;
-  healthDetail: string;
-};
-
-const EMPTY_COUNTS: ProjectCounts = {
-  chat: 0,
-  cowork: 0,
-  code: 0,
-};
-
-const SURFACES: Array<{ mode: ChatMode; label: string; action: string }> = [
-  { mode: "chat", label: "Chat", action: "New Chat" },
-  { mode: "cowork", label: "Cowork", action: "New Cowork" },
-  { mode: "code", label: "Code", action: "New Code" },
-];
 
 export function ProjectsRoutePage({
   route,
@@ -75,8 +65,10 @@ export function ProjectsRoutePage({
   const [state, setState] = useState<ProjectsState>({
     loading: true,
     error: null,
+    artifactIssue: null,
     projects: [],
     sessions: [],
+    artifacts: [],
   });
   const [actionError, setActionError] = useState<string | null>(null);
   const [projectActionBusy, setProjectActionBusy] = useState<string | null>(null);
@@ -93,7 +85,8 @@ export function ProjectsRoutePage({
         route: "projects",
         label: "Projects",
         startedAt,
-        itemCount: nextData.projects.length + nextData.sessions.length,
+        itemCount: nextData.projects.length + nextData.sessions.length + nextData.artifacts.length,
+        issueCount: nextData.artifactIssue ? 1 : 0,
       });
     } catch (error) {
       setState((current) => ({
@@ -122,7 +115,8 @@ export function ProjectsRoutePage({
         route: "projects",
         label: "Projects",
         startedAt,
-        itemCount: nextData.projects.length + nextData.sessions.length,
+        itemCount: nextData.projects.length + nextData.sessions.length + nextData.artifacts.length,
+        issueCount: nextData.artifactIssue ? 1 : 0,
       });
     }
     void load().catch((error: Error) => {
@@ -193,8 +187,8 @@ export function ProjectsRoutePage({
   }, [selectedProject?.description, selectedProject?.name, selectedProject?.workspacePath]);
 
   const projectHome = useMemo(
-    () => (selectedProject ? deriveProjectHome(selectedProject, selectedSessions) : null),
-    [selectedProject, selectedSessions],
+    () => (selectedProject ? deriveProjectHome(selectedProject, selectedSessions, state.artifacts) : null),
+    [selectedProject, selectedSessions, state.artifacts],
   );
 
   const handleNewSession = async (mode: ChatMode) => {
@@ -385,7 +379,7 @@ export function ProjectsRoutePage({
           >
             {state.projects.length ? (
               state.projects.map((project) => {
-                const counts = countsByProject.get(project.projectId) ?? EMPTY_COUNTS;
+                const counts = countsByProject.get(project.projectId) ?? createEmptyCounts();
                 return (
                   <button
                     key={project.projectId}
@@ -424,17 +418,32 @@ export function ProjectsRoutePage({
           stats={SURFACES.map((surface) => ({
             label: surface.label,
             value: String(
-              selectedProject ? (countsByProject.get(selectedProject.projectId) ?? EMPTY_COUNTS)[surface.mode] : 0,
+              selectedProject
+                ? (countsByProject.get(selectedProject.projectId) ?? createEmptyCounts())[surface.mode]
+                : 0,
             ),
           }))}
         >
           {actionError ? <div className="mc-next-settings-notice error">{actionError}</div> : null}
+          {state.artifactIssue ? (
+            <div className="mc-next-settings-notice warning">
+              Project artifact records could not load: {state.artifactIssue}
+            </div>
+          ) : null}
           {selectedProject && projectHome ? (
             <ProjectHomeBasePanel
               home={projectHome}
               pendingApprovals={pendingApprovals}
               onContinue={(mode) => void handleContinueSession(mode)}
-              onOpenLibrary={() => navigate({ area: "library", section: "memory", theme: route.theme })}
+              onOpenMemory={() => navigate({ area: "library", section: "memory", theme: route.theme })}
+              onOpenArtifacts={() =>
+                navigate({
+                  area: "library",
+                  section: "artifacts",
+                  projectId: selectedProject.projectId,
+                  theme: route.theme,
+                })
+              }
             />
           ) : null}
           <div className="mc-next-settings-button-row">
@@ -492,9 +501,7 @@ export function ProjectsRoutePage({
                 <input
                   className="mc-next-settings-input"
                   value={createDraft.workspacePath}
-                  onChange={(event) =>
-                    setCreateDraft((current) => ({ ...current, workspacePath: event.target.value }))
-                  }
+                  onChange={(event) => setCreateDraft((current) => ({ ...current, workspacePath: event.target.value }))}
                   placeholder="Local project path"
                 />
               </label>
@@ -503,9 +510,7 @@ export function ProjectsRoutePage({
                 <textarea
                   className="mc-next-settings-textarea"
                   value={createDraft.description}
-                  onChange={(event) =>
-                    setCreateDraft((current) => ({ ...current, description: event.target.value }))
-                  }
+                  onChange={(event) => setCreateDraft((current) => ({ ...current, description: event.target.value }))}
                   placeholder="What this project is for."
                 />
               </label>
@@ -584,12 +589,14 @@ function ProjectHomeBasePanel({
   home,
   pendingApprovals,
   onContinue,
-  onOpenLibrary,
+  onOpenMemory,
+  onOpenArtifacts,
 }: {
   home: ProjectHome;
   pendingApprovals: number;
   onContinue: (mode: ChatMode) => void;
-  onOpenLibrary: () => void;
+  onOpenMemory: () => void;
+  onOpenArtifacts: () => void;
 }) {
   return (
     <section className="mc-next-project-home-base" aria-label="Project overview">
@@ -602,24 +609,63 @@ function ProjectHomeBasePanel({
       </div>
 
       <div className="mc-next-project-home-metrics">
-        <ProjectHomeMetric label="Active threads" value={String(home.activeCount)} detail="Chat, Cowork, and Code work still in motion." />
-        <ProjectHomeMetric label="Artifacts" value={String(home.artifactCount)} detail="Generated outputs attached to project threads." />
+        <ProjectHomeMetric
+          label="Active threads"
+          value={String(home.activeCount)}
+          detail="Chat, Cowork, and Code work still in motion."
+        />
+        <ProjectHomeMetric
+          label="Artifacts"
+          value={String(home.artifactCount)}
+          detail={
+            home.artifactCountSource === "records"
+              ? "Generated outputs with project ownership recorded."
+              : "Generated outputs referenced by project threads."
+          }
+        />
         <ProjectHomeMetric label="Approvals" value={String(pendingApprovals)} detail="Workspace-wide approval queue." />
-        <ProjectHomeMetric label="Last activity" value={home.lastActivityLabel} detail="Most recent project thread update." />
+        <ProjectHomeMetric
+          label="Last activity"
+          value={home.lastActivityLabel}
+          detail="Most recent project thread update."
+        />
       </div>
 
       <div className="mc-next-project-continue-row">
         {SURFACES.map((surface) => (
-          <button
-            key={surface.mode}
-            type="button"
-            className="mc-next-button"
-            onClick={() => onContinue(surface.mode)}
-          >
+          <button key={surface.mode} type="button" className="mc-next-button" onClick={() => onContinue(surface.mode)}>
             <MessageSquarePlus className="h-4 w-4" />
             {home.latestByMode[surface.mode] ? `Continue ${surface.label}` : `Start ${surface.label}`}
           </button>
         ))}
+      </div>
+
+      <div className="mc-next-project-lane-resume-shell">
+        <div className="mc-next-directory-lane-head">
+          <strong>Latest continuation</strong>
+          <span>Chat / Cowork / Code</span>
+        </div>
+        <div className="mc-next-project-lane-resume-list" aria-label="Latest project continuation points">
+          {SURFACES.map((surface) => {
+            const latest = home.latestByMode[surface.mode];
+            return (
+              <button
+                key={`latest-${surface.mode}`}
+                type="button"
+                className={`mc-next-project-lane-resume is-${surface.mode}`}
+                onClick={() => onContinue(surface.mode)}
+              >
+                <span>{surface.label}</span>
+                <strong>{latest ? latest.title?.trim() || latest.sessionKey : `Start ${surface.label}`}</strong>
+                <p>
+                  {latest
+                    ? `${formatDateTime(latest.lastActivityAt)} · ${latest.lifecycleStatus} · ${countHomeArtifacts(home, latest)} artifacts`
+                    : "No continuation point yet."}
+                </p>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className="mc-next-project-readiness-list">
@@ -645,7 +691,7 @@ function ProjectHomeBasePanel({
               <span>{labelForMode(normalizeMode(session.mode))}</span>
               <strong>{session.title?.trim() || session.sessionKey}</strong>
               <p>
-                {formatDateTime(session.lastActivityAt)} · {countArtifacts(session)} artifacts
+                {formatDateTime(session.lastActivityAt)} · {countHomeArtifacts(home, session)} artifacts
               </p>
             </div>
           ))
@@ -654,9 +700,14 @@ function ProjectHomeBasePanel({
         )}
       </div>
 
-      <button type="button" className="mc-next-settings-filter" onClick={onOpenLibrary}>
-        Review memory and provenance in Library
-      </button>
+      <div className="mc-next-settings-button-row">
+        <button type="button" className="mc-next-settings-filter" onClick={onOpenMemory}>
+          Review memory and provenance
+        </button>
+        <button type="button" className="mc-next-settings-filter" onClick={onOpenArtifacts}>
+          Reopen project artifacts
+        </button>
+      </div>
     </section>
   );
 }
@@ -669,83 +720,6 @@ function ProjectHomeMetric({ label, value, detail }: { label: string; value: str
       <p>{detail}</p>
     </div>
   );
-}
-
-export function deriveProjectHome(project: ChatProjectRecord, sessions: ChatSessionRecord[]): ProjectHome {
-  const sortedSessions = [...sessions].sort((left, right) => dateValue(right.lastActivityAt) - dateValue(left.lastActivityAt));
-  const latestByMode = createEmptyLatestByMode();
-  for (const session of sortedSessions) {
-    const mode = normalizeMode(session.mode);
-    if (!latestByMode[mode]) {
-      latestByMode[mode] = session;
-    }
-  }
-  const artifactCount = sortedSessions.reduce((total, session) => total + countArtifacts(session), 0);
-  const activeCount = sortedSessions.filter((session) => session.lifecycleStatus !== "archived").length;
-  const hasSourcePath = Boolean(project.workspacePath?.trim());
-  const hasChat = Boolean(latestByMode.chat);
-  const hasCowork = Boolean(latestByMode.cowork);
-  const hasCode = Boolean(latestByMode.code);
-  const hasArtifacts = artifactCount > 0;
-
-  const readiness: ProjectReadinessItem[] = [
-    {
-      id: "source",
-      label: "Project source",
-      status: hasSourcePath ? "ready" : "attention",
-      detail: hasSourcePath
-        ? `Bound to ${project.workspacePath}.`
-        : "Add a workspace path before Code can become a practical workbench.",
-    },
-    {
-      id: "chat",
-      label: "Chat continuity",
-      status: hasChat ? "ready" : "attention",
-      detail: hasChat ? "A project chat is ready to continue." : "Start a project chat for fast context and drafting.",
-    },
-    {
-      id: "cowork",
-      label: "Cowork run",
-      status: hasCowork ? "ready" : "attention",
-      detail: hasCowork
-        ? "A supervised run is available from this project."
-        : "Start Cowork when this project needs a durable plan and approval loop.",
-    },
-    {
-      id: "code",
-      label: "Code workbench",
-      status: hasCode ? "ready" : "attention",
-      detail: hasCode
-        ? "A Code thread is available for implementation work."
-        : "Open Code when this project needs edits, validation, or patch artifacts.",
-    },
-    {
-      id: "artifacts",
-      label: "Proof artifacts",
-      status: hasArtifacts ? "ready" : "attention",
-      detail: hasArtifacts
-        ? `${artifactCount} generated artifacts are attached to project threads.`
-        : "No validation or output artifacts are attached yet.",
-    },
-    {
-      id: "knowledge",
-      label: "Knowledge and provenance",
-      status: "attention",
-      detail: "Project-scoped memory review still lives in Library; inspect or remove knowledge there.",
-    },
-  ];
-
-  const health = deriveProjectHealth({ hasSourcePath, hasChat, hasCowork, hasCode, hasArtifacts, sessionCount: sessions.length });
-
-  return {
-    latestByMode,
-    recentSessions: sortedSessions.slice(0, 4),
-    readiness,
-    activeCount,
-    artifactCount,
-    lastActivityLabel: sortedSessions[0] ? formatDateTime(sortedSessions[0].lastActivityAt) : "None",
-    ...health,
-  };
 }
 
 function ProjectThreadGroup({
@@ -825,107 +799,19 @@ function NewSessionButton({
   );
 }
 
-function normalizeMode(mode?: ChatMode): ChatMode {
-  return mode === "cowork" || mode === "code" ? mode : "chat";
-}
-
-function createEmptyCounts(): ProjectCounts {
-  return { ...EMPTY_COUNTS };
-}
-
-function createEmptyLatestByMode(): Record<ChatMode, ChatSessionRecord | null> {
-  return {
-    chat: null,
-    cowork: null,
-    code: null,
-  };
-}
-
-function countArtifacts(session: ChatSessionRecord): number {
-  return session.generatedArtifacts?.length ?? 0;
-}
-
-function deriveProjectHealth(input: {
-  hasSourcePath: boolean;
-  hasChat: boolean;
-  hasCowork: boolean;
-  hasCode: boolean;
-  hasArtifacts: boolean;
-  sessionCount: number;
-}): Pick<ProjectHome, "healthLabel" | "healthDetail"> {
-  if (!input.hasSourcePath) {
-    return {
-      healthLabel: "Needs source",
-      healthDetail: "Add a workspace path before this project can anchor Code and evidence.",
-    };
-  }
-  if (input.sessionCount === 0) {
-    return {
-      healthLabel: "Ready for first thread",
-      healthDetail: "The project exists; start Chat, Cowork, or Code to create a continuation point.",
-    };
-  }
-  if (!input.hasCowork || !input.hasCode) {
-    return {
-      healthLabel: "Needs work lanes",
-      healthDetail: "Add Cowork or Code when this project needs durable execution or implementation proof.",
-    };
-  }
-  if (!input.hasArtifacts) {
-    return {
-      healthLabel: "Needs proof",
-      healthDetail: "Run validation or produce artifacts so future sessions have evidence to inspect.",
-    };
-  }
-  if (!input.hasChat) {
-    return {
-      healthLabel: "Needs chat lane",
-      healthDetail: "Add a lightweight Chat thread for fast project questions and drafting.",
-    };
-  }
-  return {
-    healthLabel: "Ready to continue",
-    healthDetail: "Chat, Cowork, Code, and evidence are all represented for this project.",
-  };
-}
-
-function labelForMode(mode: ChatMode): string {
-  return mode === "cowork" ? "Cowork" : mode === "code" ? "Code" : "Chat";
-}
-
-function dateValue(value?: string): number {
-  if (!value) {
-    return 0;
-  }
-  const parsed = new Date(value).getTime();
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function formatDateTime(value?: string | null) {
-  if (!value) {
-    return "Unknown";
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function getErrorMessage(error: unknown) {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-  return "Something went wrong.";
-}
-
-async function fetchProjectData(activeWorkspaceId: string): Promise<Pick<ProjectsState, "projects" | "sessions">> {
-  const [projectsResponse, sessionsResponse] = await Promise.all([
+async function fetchProjectData(
+  activeWorkspaceId: string,
+): Promise<Pick<ProjectsState, "projects" | "sessions" | "artifacts" | "artifactIssue">> {
+  const artifactsRequest = fetchChatGeneratedArtifacts({
+    workspaceId: activeWorkspaceId,
+    limit: 1000,
+  })
+    .then((response) => ({ items: response.items, issue: null as string | null }))
+    .catch((error: unknown) => ({
+      items: [] as ChatGeneratedArtifactRecord[],
+      issue: getErrorMessage(error),
+    }));
+  const [projectsResponse, sessionsResponse, artifactsResponse] = await Promise.all([
     fetchChatProjects("active", 300, activeWorkspaceId),
     fetchChatSessions({
       workspaceId: activeWorkspaceId,
@@ -934,9 +820,12 @@ async function fetchProjectData(activeWorkspaceId: string): Promise<Pick<Project
       includeHidden: true,
       limit: 1000,
     }),
+    artifactsRequest,
   ]);
   return {
     projects: projectsResponse.items,
     sessions: sessionsResponse.items,
+    artifacts: artifactsResponse.items,
+    artifactIssue: artifactsResponse.issue,
   };
 }

@@ -10,9 +10,13 @@ import {
   createPersonalityEditorDraft,
   clearStoredOpenAICodexOAuthFlow,
   delay,
+  deriveEcosystemProofLaneItems,
   deriveFirstOutcomePathItems,
   deriveLlamaCppAlias,
+  deriveOnboardingProviderSmokeEvidenceItems,
+  deriveProviderSmokeEvidenceItems,
   deriveSetupCenterItems,
+  describeProviderRequestOverrides,
   describeProviderReadinessFailure,
   describeToolApprovalMode,
   describeToolGrantAvailability,
@@ -210,6 +214,7 @@ describe("SettingsNativePage helpers", () => {
       "pending",
       "pending",
       "pending",
+      "pending",
     ]);
 
     const readyProviderOnboarding = {
@@ -226,16 +231,36 @@ describe("SettingsNativePage helpers", () => {
     } as any;
 
     const providerItems = deriveFirstOutcomePathItems(readyProviderOnboarding, null);
+    expect(providerItems.map((item) => item.label)).toEqual([
+      "Provider key ready",
+      "Model discovery checked",
+      "Provider smoke evidence",
+      "First Chat sent",
+      "First Cowork run",
+      "Project created",
+      "Proof artifact produced",
+    ]);
     expect(providerItems.map((item) => item.state)).toEqual([
       "complete",
+      "active",
       "active",
       "active",
       "pending",
       "pending",
       "pending",
     ]);
-    expect(providerItems[1]!.description).toContain("smoke check");
-    expect(providerItems[1]!.meta).toBe("Evidence required");
+    expect(providerItems[1]!.description).toContain("Refresh model discovery");
+    expect(providerItems[2]!.meta).toBe("Evidence required");
+    expect(deriveOnboardingProviderSmokeEvidenceItems(readyProviderOnboarding).map((item) => item.label)).toEqual([
+      "Provider configured",
+      "Smoke ready",
+      "Passed with evidence",
+    ]);
+    expect(deriveOnboardingProviderSmokeEvidenceItems(readyProviderOnboarding).map((item) => item.state)).toEqual([
+      "complete",
+      "complete",
+      "active",
+    ]);
 
     const demoItems = deriveFirstOutcomePathItems(readyProviderOnboarding, {
       status: "ready",
@@ -255,12 +280,28 @@ describe("SettingsNativePage helpers", () => {
     expect(demoItems.map((item) => item.state)).toEqual([
       "complete",
       "active",
+      "active",
       "complete",
       "complete",
       "complete",
       "active",
     ]);
     expect(demoItems.at(-1)!.meta).toBe("Proof required");
+  });
+
+  it("orders ecosystem proof lanes without over-claiming blocked parity", () => {
+    const lanes = deriveEcosystemProofLaneItems();
+
+    expect(lanes.map((item) => item.label)).toEqual([
+      "Voice Wake / Talk Mode",
+      "Browser control",
+      "Extension / plugin SDK breadth",
+      "Packaging and remote deployment parity",
+      "Mobile companion/device surfaces",
+      "Canvas / A2UI parity",
+    ]);
+    expect(lanes[1]!.route).toEqual({ area: "settings", section: "mcp" });
+    expect(lanes[3]!.description).toContain("named packaging proof");
   });
 
   it("handles JSON, list, channel, tool, and integration helper edges", () => {
@@ -384,6 +425,9 @@ describe("SettingsNativePage helpers", () => {
       "401",
     );
     expect(formatProviderProbeSourceMeta({ modelProbeSource: "error_fallback" })).toBe("Fallback after probe error");
+    expect(formatProviderProbeSourceMeta({ modelProbeState: "error", modelProbeWarning: "proxy failed" })).toBe(
+      "Live discovery failed: proxy failed",
+    );
     expect(formatProviderModelsMeta(undefined, 0)).toBe("Not probed");
     expect(formatProviderModelsMeta({ modelProbeState: "ready", modelProbeSource: "live" }, 2)).toBe("Live verified");
     expect(formatProviderModelsMeta({ modelProbeState: "ready", modelProbeSource: "live" }, 0)).toBe(
@@ -420,6 +464,25 @@ describe("SettingsNativePage helpers", () => {
     expect(formatCapabilities({ vision: false, jsonMode: false, toolCalling: false })).toBe(
       "No advertised capabilities",
     );
+    expect(
+      describeProviderRequestOverrides({
+        auth: { type: "bearer", tokenEnv: "PROVIDER_TOKEN" },
+        proxy: { url: "http://proxy.local" },
+        tls: { caCertPath: "ca.pem", serverName: "provider.local" },
+      }),
+    ).toBe("bearer auth, proxy, TLS CA cert/server name");
+    expect(
+      deriveProviderSmokeEvidenceItems({
+        providerId: "openai",
+        providerLabel: "OpenAI",
+        credentialReady: true,
+        credentialMeta: "secure store",
+        localEndpoint: false,
+        modelCount: 0,
+        modelProbeState: "error",
+        modelProbeWarning: "401 Unauthorized",
+      }).map((item) => item.description),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("Blocked by model discovery failure")]));
     expect(getErrorMessage(new Error("boom"))).toBe("boom");
     expect(getErrorMessage("boom")).toBe("Something went wrong.");
     expect(formatJson({ enabled: true })).toBe('{\n  "enabled": true\n}');

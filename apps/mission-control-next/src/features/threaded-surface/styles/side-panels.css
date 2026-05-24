@@ -3,13 +3,17 @@
   align-self: start;
   position: sticky;
   top: 0;
+  min-width: 0;
   max-height: calc(100dvh - 58px);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
 }
 
 .mc-next-threaded-stage.mode-chat .mc-next-threaded-context-panel {
   height: calc(100dvh - 58px);
   padding: 0.46rem;
+  padding-left: calc(0.46rem + 9px);
   border-left: 1px solid var(--mc-border-subtle);
   background: color-mix(in oklab, var(--mc-surface-2) 90%, var(--background));
 }
@@ -34,6 +38,7 @@
 .mc-next-threaded-side-panel.code {
   height: calc(100dvh - 58px);
   padding: 0.5rem;
+  padding-left: calc(0.5rem + 9px);
   border-left: 1px solid var(--mc-border-subtle);
   background: color-mix(in oklab, var(--mc-surface-2) 92%, var(--background));
 }
@@ -48,6 +53,7 @@
 
 .mc-next-threaded-context-panel.utility {
   padding: 0.46rem;
+  padding-left: calc(0.46rem + 9px);
 }
 
 .mc-next-threaded-panel-switcher {

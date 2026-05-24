@@ -67,6 +67,65 @@ describe("sqlite schema migrations", () => {
     db.close();
   });
 
+  it("backfills generated artifact project scope from existing session assignments", () => {
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-artifact-project-${randomUUID()}.db`);
+    createdFiles.push(dbPath);
+    const db = createDatabase({ dbPath });
+    const now = "2026-05-24T00:00:00.000Z";
+    db.prepare(
+      `
+      INSERT INTO chat_projects (project_id, name, workspace_path, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `,
+    ).run("project-alpha", "Alpha", "F:\\code\\personal-ai", now, now);
+    db.prepare(
+      `
+      INSERT INTO chat_session_projects (session_id, project_id, assigned_at)
+      VALUES (?, ?, ?)
+    `,
+    ).run("session-alpha", "project-alpha", now);
+    db.prepare(
+      `
+      INSERT INTO chat_generated_artifacts (
+        artifact_id,
+        session_id,
+        workspace_id,
+        project_id,
+        turn_id,
+        title,
+        kind,
+        content,
+        source_surface,
+        version,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    ).run(
+      "artifact-alpha",
+      "session-alpha",
+      "default",
+      null,
+      "turn-alpha",
+      "Artifact",
+      "markdown",
+      "# Artifact",
+      "code",
+      1,
+      now,
+      now,
+    );
+    db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(98);
+    db.close();
+
+    const migrated = createDatabase({ dbPath });
+    const row = migrated
+      .prepare("SELECT project_id FROM chat_generated_artifacts WHERE artifact_id = ?")
+      .get("artifact-alpha") as { project_id: string | null };
+    assert.equal(row.project_id, "project-alpha");
+    migrated.close();
+  });
+
   it("applies requested SQLite tuning pragmas", () => {
     const dbPath = path.join(os.tmpdir(), `goatcitadel-migrations-tuning-${randomUUID()}.db`);
     createdFiles.push(dbPath);

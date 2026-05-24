@@ -112,6 +112,7 @@ const workbenchRevertFileBodySchema = z.object({
 const generatedArtifactsQuerySchema = z.object({
   sessionId: z.string().min(1).optional(),
   workspaceId: z.string().min(1).optional(),
+  projectId: z.string().min(1).optional(),
   sourceSurface: z.enum(["chat", "cowork", "code"]).optional(),
   kind: z.enum(["markdown", "html", "mermaid", "code", "text"]).optional(),
   limit: z.coerce.number().int().positive().max(1000).default(300),

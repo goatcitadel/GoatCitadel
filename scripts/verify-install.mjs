@@ -144,25 +144,32 @@ async function main() {
           providerId: activeProvider.providerId,
           modelId: exercise.body?.model ?? statusResponse.body?.activeModel,
           error: exercise.body?.ok ? undefined : exercise.body?.error ?? JSON.stringify(exercise.body),
-          notes: exercise.body?.ok ? ["Live provider smoke returned a response."] : [],
+          notes: exercise.body?.ok ? ["Provider smoke passed with live model evidence."] : [],
           metrics: {
             statusCode: exercise.status,
             elapsedMs: exercise.body?.elapsedMs ?? 0,
+            providerSmokeState: exercise.body?.ok ? "passed_with_evidence" : "failed_with_evidence",
+            liveProviderExercise: true,
           },
         };
       }
+      const activeProviderConfigured = Boolean(activeProvider?.hasSecret);
       return {
         status: statusResponse.ok && activeProvider ? "passed" : "failed",
         providerId: activeProvider?.providerId,
         modelId: statusResponse.body?.activeModel,
         error: statusResponse.ok ? undefined : JSON.stringify(statusResponse.body),
         notes: [
-          "Install smoke verified the provider readiness and live-smoke endpoint path. Set GOATCITADEL_VERIFY_INSTALL_LIVE_PROVIDER=1 with real credentials to produce live model pass/fail evidence.",
+          activeProviderConfigured
+            ? "Provider is configured and smoke-ready; live provider smoke was not exercised."
+            : "Provider smoke path is visible, but active provider credentials are not configured.",
+          "Set GOATCITADEL_VERIFY_INSTALL_LIVE_PROVIDER=1 with real credentials to produce provider smoke pass/fail evidence.",
         ],
         metrics: {
           statusCode: statusResponse.status,
-          liveProviderExercise: shouldExercise,
-          activeProviderConfigured: Boolean(activeProvider?.hasSecret),
+          liveProviderExercise: false,
+          activeProviderConfigured,
+          providerSmokeState: activeProviderConfigured ? "smoke_ready" : "configured_only",
         },
       };
     });

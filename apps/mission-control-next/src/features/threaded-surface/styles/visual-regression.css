@@ -7,7 +7,9 @@
  * `chat-pending-user-input` manifest entries in
  * scripts/verification/lib/release-surface-manifest.mjs.
  */
-:root[data-visual-regression="true"]:not([data-visual-regression-show-blocked="true"]) .mc-next-thread-blocking-prompt {
+:root[data-visual-regression="true"]:not([data-visual-regression-show-blocked="true"]) .mc-next-thread-blocking-prompt,
+:root[data-visual-regression="true"]:not([data-visual-regression-show-blocked="true"])
+  .mc-next-composer-blocking-prompt {
   display: none;
 }
 

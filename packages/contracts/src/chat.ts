@@ -137,6 +137,7 @@ export interface ChatGeneratedArtifactReference {
   artifactId: string;
   kind: ChatGeneratedArtifactKind;
   title: string;
+  projectId?: string;
   sourceSurface: ChatGeneratedArtifactSourceSurface;
   version: number;
   supersedesArtifactId?: string;
@@ -153,6 +154,7 @@ export interface ChatGeneratedArtifactRecord {
   artifactId: string;
   sessionId: string;
   workspaceId?: string;
+  projectId?: string;
   turnId: string;
   title: string;
   kind: ChatGeneratedArtifactKind;

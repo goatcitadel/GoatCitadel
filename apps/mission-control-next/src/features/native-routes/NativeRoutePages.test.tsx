@@ -1,6 +1,12 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
-import { NativeRoutePages } from "./NativeRoutePages";
+import {
+  deriveCoworkTaskContinuation,
+  formatArtifactProvenance,
+  formatKnowledgeCitationAction,
+  formatKnowledgeCitationSummary,
+  NativeRoutePages,
+} from "./NativeRoutePages";
 
 const mocks = vi.hoisted(() => ({
   fetchTasksByView: vi.fn(async (view: "active" | "trash") => ({
@@ -47,6 +53,26 @@ const mocks = vi.hoisted(() => ({
   })),
   deleteTask: vi.fn(async () => ({ deleted: true, taskId: "task-1", mode: "soft" })),
   restoreTask: vi.fn(async () => ({ restored: true, taskId: "task-1" })),
+  fetchChatGeneratedArtifacts: vi.fn(async () => ({
+    items: [
+      {
+        artifactId: "artifact-1",
+        sessionId: "session-1",
+        workspaceId: "default",
+        turnId: "turn-1",
+        title: "Cowork synthesis",
+        kind: "markdown",
+        content: "# Result",
+        sourceSurface: "cowork",
+        version: 2,
+        providerId: "openai",
+        model: "gpt-5",
+        contentHash: "hash-1",
+        createdAt: "2026-05-02T19:00:00.000Z",
+        updatedAt: "2026-05-02T19:05:00.000Z",
+      },
+    ],
+  })),
   fetchSkillActivationPolicies: vi.fn(async () => ({
     policies: [],
     guardedAutoThreshold: 0.9,
@@ -212,6 +238,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     createTask: mocks.createTask,
     deleteTask: mocks.deleteTask,
     fetchOperators: mocks.fetchOperators,
+    fetchChatGeneratedArtifacts: mocks.fetchChatGeneratedArtifacts,
     fetchTaskDeliverables: mocks.fetchTaskDeliverables,
     fetchTasksByView: mocks.fetchTasksByView,
     restoreTask: mocks.restoreTask,
@@ -228,6 +255,36 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
 });
 
 describe("NativeRoutePages Cowork task board", () => {
+  it("derives a clear continuation cue from blockers, selected tasks, and deliverables", () => {
+    const summary = deriveCoworkTaskContinuation({
+      tasks: [
+        {
+          taskId: "task-blocked",
+          title: "Validate source freshness",
+          status: "blocked",
+          priority: "high",
+          createdAt: "2026-05-02T18:00:00.000Z",
+          updatedAt: "2026-05-02T18:00:00.000Z",
+        } as any,
+      ],
+      deletedTasks: [],
+      selectedTask: {
+        taskId: "task-blocked",
+        title: "Validate source freshness",
+        status: "blocked",
+        priority: "high",
+        createdAt: "2026-05-02T18:00:00.000Z",
+        updatedAt: "2026-05-02T18:00:00.000Z",
+      } as any,
+      deliverables: [{ deliverableId: "deliverable-1", title: "Evidence", deliverableType: "artifact" } as any],
+    });
+
+    expect(summary.nextActionLabel).toBe("Clear blocker");
+    expect(summary.firstBlockedTaskId).toBe("task-blocked");
+    expect(summary.hierarchyDetail).toContain("1 deliverable attached");
+    expect(summary.boardTruth).toContain("does not bypass approvals");
+  });
+
   it("creates, updates, adds deliverables, and soft-deletes tasks through task APIs", async () => {
     let renderer: ReactTestRenderer | null = null;
 
@@ -311,6 +368,65 @@ describe("NativeRoutePages Cowork task board", () => {
     });
 
     expect(mocks.restoreTask).toHaveBeenCalledWith("task-1", "default");
+  });
+});
+
+describe("NativeRoutePages Library provenance helpers", () => {
+  it("formats knowledge citation and artifact provenance for operator-facing source visibility", () => {
+    expect(formatKnowledgeCitationSummary([{ sourceType: "file" }, { retrievalMode: "memory" }])).toBe(
+      "2 citations · file, memory",
+    );
+    expect(formatKnowledgeCitationAction({ sourceRef: "docs/runbook.md", chunkId: "chunk-1" }, "ctx-1", 0)).toEqual(
+      expect.objectContaining({
+        label: "docs/runbook.md",
+        description: "Context ctx-1 cites chunk chunk-1.",
+      }),
+    );
+    expect(
+      formatArtifactProvenance({
+        artifactId: "artifact-1",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        title: "Cowork synthesis",
+        kind: "markdown",
+        content: "# Result",
+        sourceSurface: "cowork",
+        version: 2,
+        providerId: "openai",
+        model: "gpt-5",
+        contentHash: "hash-1",
+        createdAt: "2026-05-02T19:00:00.000Z",
+        updatedAt: "2026-05-02T19:05:00.000Z",
+      } as any),
+    ).toContain('"contentHash": "hash-1"');
+  });
+
+  it("reopens generated artifacts from the Library artifact route into their source thread", async () => {
+    const navigate = vi.fn();
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderLibraryArtifacts(navigate);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mocks.fetchChatGeneratedArtifacts).toHaveBeenCalledWith({
+      workspaceId: "default",
+      limit: 80,
+    });
+    expect(collectText(renderer!.root)).toContain("Artifact provenance");
+
+    await act(async () => {
+      findButton(renderer!.root, "Open source thread").props.onClick();
+    });
+    expect(navigate).toHaveBeenCalledWith({
+      area: "cowork",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      artifactId: "artifact-1",
+      theme: "ops",
+    });
   });
 });
 
@@ -428,6 +544,19 @@ function renderLibrarySkills(): ReactTestRenderer {
       activeWorkspaceName="Default"
       pendingApprovals={0}
       navigate={vi.fn()}
+      setActiveWorkspaceId={vi.fn()}
+    />,
+  );
+}
+
+function renderLibraryArtifacts(navigate = vi.fn()): ReactTestRenderer {
+  return create(
+    <NativeRoutePages
+      route={{ area: "library", section: "artifacts", artifactId: "artifact-1", theme: "ops" } as any}
+      activeWorkspaceId="default"
+      activeWorkspaceName="Default"
+      pendingApprovals={0}
+      navigate={navigate}
       setActiveWorkspaceId={vi.fn()}
     />,
   );

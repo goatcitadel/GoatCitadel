@@ -1,0 +1,260 @@
+import type {
+  ChatGeneratedArtifactRecord,
+  ChatMode,
+  ChatProjectRecord,
+  ChatSessionRecord,
+} from "@goatcitadel/contracts";
+
+export type ProjectCounts = Record<ChatMode, number>;
+type ProjectReadinessStatus = "ready" | "attention";
+
+type ProjectReadinessItem = {
+  id: string;
+  label: string;
+  detail: string;
+  status: ProjectReadinessStatus;
+};
+
+export type ProjectHome = {
+  latestByMode: Record<ChatMode, ChatSessionRecord | null>;
+  recentSessions: ChatSessionRecord[];
+  readiness: ProjectReadinessItem[];
+  activeCount: number;
+  artifactCount: number;
+  artifactCountsBySessionId: Record<string, number>;
+  artifactCountSource: "records" | "session_refs";
+  lastActivityLabel: string;
+  healthLabel: string;
+  healthDetail: string;
+};
+
+const EMPTY_COUNTS: ProjectCounts = {
+  chat: 0,
+  cowork: 0,
+  code: 0,
+};
+
+export const SURFACES: Array<{ mode: ChatMode; label: string; action: string }> = [
+  { mode: "chat", label: "Chat", action: "New Chat" },
+  { mode: "cowork", label: "Cowork", action: "New Cowork" },
+  { mode: "code", label: "Code", action: "New Code" },
+];
+
+export function deriveProjectHome(
+  project: ChatProjectRecord,
+  sessions: ChatSessionRecord[],
+  artifacts?: ChatGeneratedArtifactRecord[],
+): ProjectHome {
+  const sortedSessions = [...sessions].sort(
+    (left, right) => dateValue(right.lastActivityAt) - dateValue(left.lastActivityAt),
+  );
+  const latestByMode = createEmptyLatestByMode();
+  for (const session of sortedSessions) {
+    const mode = normalizeMode(session.mode);
+    if (!latestByMode[mode]) {
+      latestByMode[mode] = session;
+    }
+  }
+  const artifactCountsBySessionId =
+    artifacts === undefined
+      ? countSessionReferenceArtifacts(sortedSessions)
+      : countProjectArtifactRecords(project.projectId, artifacts);
+  const artifactCount = Object.values(artifactCountsBySessionId).reduce((total, count) => total + count, 0);
+  const activeCount = sortedSessions.filter((session) => session.lifecycleStatus !== "archived").length;
+  const hasSourcePath = Boolean(project.workspacePath?.trim());
+  const hasChat = Boolean(latestByMode.chat);
+  const hasCowork = Boolean(latestByMode.cowork);
+  const hasCode = Boolean(latestByMode.code);
+  const hasArtifacts = artifactCount > 0;
+
+  const readiness: ProjectReadinessItem[] = [
+    {
+      id: "source",
+      label: "Project source",
+      status: hasSourcePath ? "ready" : "attention",
+      detail: hasSourcePath
+        ? `Bound to ${project.workspacePath}.`
+        : "Add a workspace path before Code can become a practical workbench.",
+    },
+    {
+      id: "chat",
+      label: "Chat continuity",
+      status: hasChat ? "ready" : "attention",
+      detail: hasChat ? "A project chat is ready to continue." : "Start a project chat for fast context and drafting.",
+    },
+    {
+      id: "cowork",
+      label: "Cowork run",
+      status: hasCowork ? "ready" : "attention",
+      detail: hasCowork
+        ? "A supervised run is available from this project."
+        : "Start Cowork when this project needs a durable plan and approval loop.",
+    },
+    {
+      id: "code",
+      label: "Code workbench",
+      status: hasCode ? "ready" : "attention",
+      detail: hasCode
+        ? "A Code thread is available for implementation work."
+        : "Open Code when this project needs edits, validation, or patch artifacts.",
+    },
+    {
+      id: "artifacts",
+      label: "Proof artifacts",
+      status: hasArtifacts ? "ready" : "attention",
+      detail: hasArtifacts
+        ? `${artifactCount} generated artifacts are bound to this project.`
+        : "No validation or output artifacts are attached yet.",
+    },
+    {
+      id: "knowledge",
+      label: "Knowledge and provenance",
+      status: "attention",
+      detail: "Project-scoped memory review still lives in Library; inspect or remove knowledge there.",
+    },
+  ];
+
+  const health = deriveProjectHealth({
+    hasSourcePath,
+    hasChat,
+    hasCowork,
+    hasCode,
+    hasArtifacts,
+    sessionCount: sessions.length,
+  });
+
+  return {
+    latestByMode,
+    recentSessions: sortedSessions.slice(0, 4),
+    readiness,
+    activeCount,
+    artifactCount,
+    artifactCountsBySessionId,
+    artifactCountSource: artifacts === undefined ? "session_refs" : "records",
+    lastActivityLabel: sortedSessions[0] ? formatDateTime(sortedSessions[0].lastActivityAt) : "None",
+    ...health,
+  };
+}
+
+export function normalizeMode(mode?: ChatMode): ChatMode {
+  return mode === "cowork" || mode === "code" ? mode : "chat";
+}
+
+export function createEmptyCounts(): ProjectCounts {
+  return { ...EMPTY_COUNTS };
+}
+
+function createEmptyLatestByMode(): Record<ChatMode, ChatSessionRecord | null> {
+  return {
+    chat: null,
+    cowork: null,
+    code: null,
+  };
+}
+
+function countArtifacts(session: ChatSessionRecord): number {
+  return session.generatedArtifacts?.length ?? 0;
+}
+
+export function countHomeArtifacts(home: ProjectHome, session: ChatSessionRecord): number {
+  return home.artifactCountSource === "records"
+    ? (home.artifactCountsBySessionId[session.sessionId] ?? 0)
+    : countArtifacts(session);
+}
+
+function countSessionReferenceArtifacts(sessions: ChatSessionRecord[]): Record<string, number> {
+  return Object.fromEntries(sessions.map((session) => [session.sessionId, countArtifacts(session)]));
+}
+
+function countProjectArtifactRecords(
+  projectId: string,
+  artifacts: ChatGeneratedArtifactRecord[],
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const artifact of artifacts) {
+    if (artifact.projectId !== projectId) {
+      continue;
+    }
+    counts[artifact.sessionId] = (counts[artifact.sessionId] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function deriveProjectHealth(input: {
+  hasSourcePath: boolean;
+  hasChat: boolean;
+  hasCowork: boolean;
+  hasCode: boolean;
+  hasArtifacts: boolean;
+  sessionCount: number;
+}): Pick<ProjectHome, "healthLabel" | "healthDetail"> {
+  if (!input.hasSourcePath) {
+    return {
+      healthLabel: "Needs source",
+      healthDetail: "Add a workspace path before this project can anchor Code and evidence.",
+    };
+  }
+  if (input.sessionCount === 0) {
+    return {
+      healthLabel: "Ready for first thread",
+      healthDetail: "The project exists; start Chat, Cowork, or Code to create a continuation point.",
+    };
+  }
+  if (!input.hasCowork || !input.hasCode) {
+    return {
+      healthLabel: "Needs work lanes",
+      healthDetail: "Add Cowork or Code when this project needs durable execution or implementation proof.",
+    };
+  }
+  if (!input.hasArtifacts) {
+    return {
+      healthLabel: "Needs proof",
+      healthDetail: "Run validation or produce artifacts so future sessions have evidence to inspect.",
+    };
+  }
+  if (!input.hasChat) {
+    return {
+      healthLabel: "Needs chat lane",
+      healthDetail: "Add a lightweight Chat thread for fast project questions and drafting.",
+    };
+  }
+  return {
+    healthLabel: "Ready to continue",
+    healthDetail: "Chat, Cowork, Code, and evidence are all represented for this project.",
+  };
+}
+
+export function labelForMode(mode: ChatMode): string {
+  return mode === "cowork" ? "Cowork" : mode === "code" ? "Code" : "Chat";
+}
+
+export function dateValue(value?: string): number {
+  if (!value) {
+    return 0;
+  }
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export function formatDateTime(value?: string | null) {
+  if (!value) {
+    return "Unknown";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+export function getErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return "Something went wrong.";
+}

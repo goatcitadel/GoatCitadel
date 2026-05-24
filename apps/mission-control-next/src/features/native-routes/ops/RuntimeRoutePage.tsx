@@ -252,6 +252,7 @@ export function RuntimeRoutePage({
       case "schedules":
         return (
           <NativeGrid>
+            <OpsNeedsAttentionCard items={needsAttentionItems} navigate={navigate} />
             <NativeCard
               title="Scheduled jobs"
               subtitle="Current cadence and next-run posture for scheduled operator work."
@@ -738,7 +739,7 @@ export function RuntimeRoutePage({
           </NativeGrid>
         );
       case "notifications": {
-        const items = [
+        const notificationSignals = [
           ...(data.sourceStatus.health.status === "ok" && !data.health?.daemonStatus.running
             ? [
                 {
@@ -759,23 +760,24 @@ export function RuntimeRoutePage({
         ];
         return (
           <NativeGrid>
+            <OpsNeedsAttentionCard items={needsAttentionItems} navigate={navigate} />
             <NativeCard
-              title="Operator notifications"
-              subtitle="Runtime issues and repair opportunities stay visible until the operator acts."
+              title="Notification signals"
+              subtitle="Raw runtime issue and repair signals folded under the same exception inbox model."
               stats={[
-                { label: "Open", value: String(items.length) },
+                { label: "Signals", value: String(notificationSignals.length) },
                 { label: "Self-repair", value: "Approval-gated" },
               ]}
             >
-              <NativeList items={items} emptyLabel="No operator notifications." />
+              <NativeList items={notificationSignals} emptyLabel="No operator notification signals." />
             </NativeCard>
             <QuickJumpCard
-              title="Act on notification"
-              subtitle="Review the underlying surface before approving any repair or mutation."
+              title="Act on exception"
+              subtitle="Review the canonical surface before approving repair, schedule, or runtime mutation."
               actions={[
                 { label: "Approvals", route: { area: "ops", section: "approvals", theme: route.theme } },
+                { label: "Activity", route: { area: "ops", section: "activity", theme: route.theme } },
                 { label: "Runtime", route: { area: "ops", section: "runtime", theme: route.theme } },
-                { label: "Improvement", route: { area: "ops", section: "improvement", theme: route.theme } },
               ]}
               navigate={navigate}
             />
@@ -1151,7 +1153,9 @@ export function buildNeedsAttentionItems(
       id: "failed-runtime-event",
       title: "Failed runtime event",
       meta: first.eventType,
-      body: first.timestamp ? `Latest failure signal at ${formatDateTime(first.timestamp)}.` : "A failure signal is present.",
+      body: first.timestamp
+        ? `Latest failure signal at ${formatDateTime(first.timestamp)}.`
+        : "A failure signal is present.",
       primaryLabel: "Open activity",
       primaryRoute: { area: "ops", section: "activity", theme },
       inspectLabel: "Diagnostics",
@@ -1319,11 +1323,7 @@ function readRuntimeSourceMessage(status: unknown): string | null {
     return null;
   }
   const record = status as { message?: unknown; error?: unknown };
-  return typeof record.message === "string"
-    ? record.message
-    : typeof record.error === "string"
-      ? record.error
-      : null;
+  return typeof record.message === "string" ? record.message : typeof record.error === "string" ? record.error : null;
 }
 
 export function formatBytes(value: number) {

@@ -20,6 +20,7 @@ export function listChatGeneratedArtifacts(
   input: {
     sessionId?: string;
     workspaceId?: string;
+    projectId?: string;
     sourceSurface?: ChatGeneratedArtifactSourceSurface;
     kind?: ChatGeneratedArtifactKind;
     limit?: number;
@@ -31,6 +32,7 @@ export function listChatGeneratedArtifacts(
   }
   return deps.storage.chatGeneratedArtifacts.listVisible({
     workspaceId: input.workspaceId?.trim() || undefined,
+    projectId: input.projectId?.trim() || undefined,
     sourceSurface: input.sourceSurface,
     kind: input.kind,
     limit: input.limit ?? 500,
@@ -117,6 +119,7 @@ export function createChatGeneratedArtifactFromTurn(
       artifactId,
       sessionId,
       workspaceId: session.workspaceId,
+      projectId: session.projectId,
       turnId,
       title: inferred.title,
       kind: inferred.kind,
@@ -156,6 +159,7 @@ export function buildGeneratedArtifactReference(artifact: ChatGeneratedArtifactR
     artifactId: artifact.artifactId,
     kind: artifact.kind,
     title: artifact.title,
+    projectId: artifact.projectId,
     sourceSurface: artifact.sourceSurface,
     version: artifact.version,
     supersedesArtifactId: artifact.supersedesArtifactId,

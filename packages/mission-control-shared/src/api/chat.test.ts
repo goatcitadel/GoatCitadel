@@ -233,6 +233,7 @@ describe("chat API origin surface headers", () => {
       await chat.fetchChatGeneratedArtifacts({
         sessionId,
         workspaceId: "workspace-1",
+        projectId: "project-1",
         sourceSurface: "chat",
         kind: "document",
         limit: 3,
@@ -298,6 +299,7 @@ describe("chat API origin surface headers", () => {
       expect(downloaded.fileName).toBe("note.txt");
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/v1/chat/projects?"))).toBe(true);
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes("workspaceId=workspace-1"))).toBe(true);
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("projectId=project-1"))).toBe(true);
       expect(
         fetchMock.mock.calls.some(([url]) => String(url).includes("/api/v1/chat/sessions/session%201/agent-send")),
       ).toBe(true);

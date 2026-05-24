@@ -1,10 +1,6 @@
 import type { AuthMode, DeploymentProfile, IntegrationMaturity } from "./integrations.js";
 import type { A2UIContract } from "./a2ui.js";
-import type {
-  CompanionAuthRequirement,
-  CompanionContract,
-  CompanionServerPrerequisite,
-} from "./companion.js";
+import type { CompanionAuthRequirement, CompanionContract, CompanionServerPrerequisite } from "./companion.js";
 import type { VoiceRuntimeReadiness, VoiceRuntimeState } from "./voice.js";
 
 export type FollowOnParityEpicId =
@@ -27,13 +23,13 @@ export const FOLLOW_ON_PARITY_EPIC_IDS: FollowOnParityEpicId[] = [
 ];
 
 export const FOLLOW_ON_PARITY_RECOMMENDED_ORDER: FollowOnParityEpicId[] = [
-  "GC-P1-10",
   "GC-P2-12",
   "GC-P0-06",
   "GC-P2-11",
   "GC-P1-09",
   "GC-P1-08",
   "GC-P0-07",
+  "GC-P1-10",
 ];
 
 export type FollowOnParityEpicState = "have_foundation" | "partial" | "missing";
@@ -179,13 +175,7 @@ export interface ExtensionStarterPackArtifactRecord {
   files: ExtensionStarterPackFileRecord[];
 }
 
-export type FollowOnProofLaneArtifactLaneId =
-  | "browser"
-  | "packaging"
-  | "a2ui"
-  | "voice"
-  | "companion"
-  | "extensions";
+export type FollowOnProofLaneArtifactLaneId = "browser" | "packaging" | "a2ui" | "voice" | "companion" | "extensions";
 
 export interface FollowOnProofLaneArtifactRecord {
   laneId: FollowOnProofLaneArtifactLaneId;

@@ -39,6 +39,7 @@ function artifact(overrides: Partial<ChatGeneratedArtifactRecord> = {}): ChatGen
     artifactId: "artifact-1",
     sessionId: "session-1",
     workspaceId: "workspace-1",
+    projectId: "project-1",
     turnId: "turn-1",
     title: "Runbook",
     kind: "markdown",
@@ -63,6 +64,7 @@ describe("ChatGeneratedArtifactRepository", () => {
       artifact({
         version: 0,
         workspaceId: "   ",
+        projectId: "   ",
         language: "   ",
         providerId: "   ",
         model: "   ",
@@ -74,6 +76,7 @@ describe("ChatGeneratedArtifactRepository", () => {
       artifact({
         artifactId: "artifact-2",
         workspaceId: " workspace-1 ",
+        projectId: " project-1 ",
         turnId: "turn-1",
         title: "HTML preview",
         kind: "html",
@@ -93,6 +96,7 @@ describe("ChatGeneratedArtifactRepository", () => {
 
     assert.equal(first.version, 1);
     assert.equal(first.workspaceId, undefined);
+    assert.equal(first.projectId, undefined);
     assert.equal(first.language, undefined);
     assert.equal(first.providerId, undefined);
     assert.equal(first.model, undefined);
@@ -100,6 +104,7 @@ describe("ChatGeneratedArtifactRepository", () => {
     assert.equal(first.contentHash, undefined);
     assert.equal(second.version, 2);
     assert.equal(second.workspaceId, "workspace-1");
+    assert.equal(second.projectId, "project-1");
     assert.equal(second.supersedesArtifactId, "artifact-1");
     assert.equal(second.sourceBlockIndex, 4);
     assert.equal(repo.get("artifact-2").model, "claude-sonnet-4.5");
@@ -139,9 +144,25 @@ describe("ChatGeneratedArtifactRepository", () => {
       ["artifact-2"],
     );
     assert.deepEqual(
+      repo
+        .listVisible({ workspaceId: "workspace-1", projectId: " project-1 ", sourceSurface: "cowork", limit: 10 })
+        .map((item) => item.artifactId),
+      ["artifact-2"],
+    );
+    assert.deepEqual(
       repo.listVisible().map((item) => item.artifactId),
       ["artifact-2", "artifact-1"],
     );
+
+    assert.equal(repo.updateProjectForSession("session-1", " project-2 ", "2026-04-22T00:02:00.000Z"), 2);
+    assert.deepEqual(
+      repo.listVisible({ projectId: "project-2" }).map((item) => item.artifactId),
+      ["artifact-2", "artifact-1"],
+    );
+    assert.equal(repo.get("artifact-1").updatedAt, "2026-04-22T00:02:00.000Z");
+
+    assert.equal(repo.updateProjectForSession("session-1", undefined, "2026-04-22T00:03:00.000Z"), 2);
+    assert.equal(repo.get("artifact-2").projectId, undefined);
   });
 
   it("rejects missing required fields and missing artifacts", () => {
@@ -151,6 +172,7 @@ describe("ChatGeneratedArtifactRepository", () => {
     assert.throws(() => repo.create(artifact({ sessionId: "   " })), /sessionId is required/);
     assert.throws(() => repo.create(artifact({ turnId: "   " })), /turnId is required/);
     assert.throws(() => repo.create(artifact({ title: "   " })), /title is required/);
+    assert.throws(() => repo.updateProjectForSession("   ", "project-1"), /sessionId is required/);
   });
 
   it("filters malformed persisted rows from direct and dynamic queries", () => {
@@ -158,6 +180,7 @@ describe("ChatGeneratedArtifactRepository", () => {
       artifact_id: "artifact-valid",
       session_id: "session-1",
       workspace_id: null,
+      project_id: null,
       turn_id: "turn-1",
       title: "Valid",
       kind: "text",
@@ -179,6 +202,7 @@ describe("ChatGeneratedArtifactRepository", () => {
         fakeStatement({ get: () => null }),
         fakeStatement({ all: () => [null, { ...row, artifact_id: 42 }, row] }),
         fakeStatement({ all: () => "not-an-array" }),
+        fakeStatement(),
         fakeStatement({ all: () => [row] }),
         fakeStatement({ all: () => [row] }),
         fakeStatement({ all: () => [row] }),

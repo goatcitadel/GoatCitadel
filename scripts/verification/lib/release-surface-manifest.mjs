@@ -278,7 +278,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
   {
     slug: "ops-notifications",
     href: "/ops/notifications",
-    readyText: "Operator notifications",
+    readyText: "Notification signals",
     expectedArea: "ops",
     expectedSection: "notifications",
     interaction: "open-inspector",
@@ -449,7 +449,7 @@ export const NEXT_VISUAL_SCENARIO_MANIFEST = [
   {
     slug: "chat-pending-approval",
     href: "/chat?vr-blocked=1",
-    readySelector: ".mc-next-thread-blocking-prompt[data-blocker-kind=\"approval\"]",
+    readySelector: ".mc-next-composer-blocking-prompt[data-blocker-kind=\"approval\"]",
     expectedArea: "chat",
     expectedSection: "root",
     interaction: "open-inspector",
@@ -458,7 +458,7 @@ export const NEXT_VISUAL_SCENARIO_MANIFEST = [
   {
     slug: "chat-pending-user-input",
     href: "/chat?vr-blocked=1",
-    readySelector: ".mc-next-thread-blocking-prompt[data-blocker-kind=\"user-input\"]",
+    readySelector: ".mc-next-composer-blocking-prompt[data-blocker-kind=\"user-input\"]",
     expectedArea: "chat",
     expectedSection: "root",
     interaction: "open-inspector",

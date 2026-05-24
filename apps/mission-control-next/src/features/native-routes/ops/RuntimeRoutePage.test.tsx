@@ -608,7 +608,7 @@ describe("RuntimeRoutePage", () => {
       ["schedules", "Scheduler review"],
       ["improvement", "Improvement reports"],
       ["costs", "Spend summary"],
-      ["notifications", "Operator notifications"],
+      ["notifications", "Notification signals"],
       ["activity", "Activity feed"],
     ] as const;
 
@@ -641,7 +641,7 @@ describe("RuntimeRoutePage", () => {
     expect(noDataMarkup).not.toContain("Activity feed");
   });
 
-  it("keeps approvals out of the notifications open count", () => {
+  it("folds notifications into the shared needs-attention inbox", () => {
     const markup = renderToStaticMarkup(
       <RuntimeRoutePage
         route={{ area: "ops", section: "notifications", theme: "ops" } as any}
@@ -655,9 +655,8 @@ describe("RuntimeRoutePage", () => {
 
     expect(markup).toContain("Pending approvals");
     expect(markup).toContain("2");
-    expect(markup).toContain("Open");
-    expect(markup).toContain("0");
-    expect(markup).not.toContain("Approvals need review");
+    expect(markup).toContain("Needs attention");
+    expect(markup).toContain("Notification signals");
     expect(markup).not.toContain("approval.created");
   });
 

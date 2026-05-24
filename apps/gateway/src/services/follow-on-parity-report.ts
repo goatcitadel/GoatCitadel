@@ -165,6 +165,11 @@ export function buildFollowOnParityReport(input: BuildFollowOnParityReportInput)
     rawPackagingProofStatus,
     packagingProofCoverage,
   );
+  const packagingProofCurrent =
+    packagingProofStatus.hasArtifact &&
+    packagingProofStatus.freshness === "current" &&
+    packagingProofStatus.matchedCurrentProfile &&
+    packagingGuidance.blockingIssues.length === 0;
   const voiceArtifactStatus = buildProfileArtifactStatus(
     generatedAt,
     input.deploymentProfile,
@@ -356,7 +361,7 @@ export function buildFollowOnParityReport(input: BuildFollowOnParityReportInput)
       buildEpicRecord({
         epicId: "GC-P1-09",
         label: "Packaging and remote deployment parity",
-        state: "partial",
+        state: packagingProofCurrent ? "have_foundation" : "partial",
         summary:
           packagingProofCoverage.currentProfiles.length > 0
             ? `Deployment is running in ${input.deploymentProfile} with auth mode ${input.authMode}, loopback bypass ${input.allowLoopbackBypass ? "enabled" : "disabled"}, ${input.networkAllowlistCount} allowlisted hosts, and current completed packaging bundles on file for ${packagingProofCoverage.currentProfiles.join(", ")}.`

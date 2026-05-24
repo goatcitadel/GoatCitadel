@@ -256,6 +256,8 @@ describe("useProviderModelCatalog", () => {
     });
     expect(hook.result.getCachedModelProbe("custom")).toMatchObject({
       state: "error",
+      source: "error_fallback",
+      warning: "models failed",
       items: [],
     });
 

@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   asRecord,
   buildProvenanceCoverage,
+  formatDecisionProvenanceSummary,
+  formatRelationProvenanceSummary,
   MemoryRoutePage,
   readMemoryWriteDecision,
   readMetadataString,
@@ -336,6 +338,22 @@ describe("MemoryRoutePage", () => {
     expect(coverage.find((item) => item.id === "decision")).toMatchObject({ records: 1, status: "covered" });
     expect(coverage.find((item) => item.id === "approval")).toMatchObject({ records: 1, status: "covered" });
     expect(coverage.find((item) => item.id === "source")?.records).toBe(3);
+    expect(
+      formatRelationProvenanceSummary({
+        fromEntityId: "entity-alpha",
+        toEntityId: "entity-beta",
+        confidence: 0.8,
+        sourceRefs: [{ sourceType: "run", sourceRef: "run-1" }],
+      } as any),
+    ).toContain("run:run-1");
+    expect(
+      formatDecisionProvenanceSummary({
+        linkedEntityIds: ["entity-alpha"],
+        linkedRelationIds: ["relation-alpha"],
+        sourceRefs: [{ sourceType: "manual", sourceRef: "operator" }],
+        runId: "run-1",
+      } as any),
+    ).toContain("2 linked records");
   });
 
   it("renders lifecycle-aware memory operator truth", () => {
@@ -363,6 +381,9 @@ describe("MemoryRoutePage", () => {
     expect(markup).toContain("Chosen path");
     expect(markup).toContain("Options");
     expect(markup).toContain("Reversibility");
+    expect(markup).toContain("Run");
+    expect(markup).toContain("Artifact");
+    expect(markup).toContain("source refs");
   });
 
   it("keeps quick-jump navigation on route objects", async () => {

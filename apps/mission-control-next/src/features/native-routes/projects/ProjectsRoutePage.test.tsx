@@ -1,10 +1,16 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatMode, ChatProjectRecord, ChatSessionRecord } from "@goatcitadel/contracts";
+import type {
+  ChatGeneratedArtifactRecord,
+  ChatMode,
+  ChatProjectRecord,
+  ChatSessionRecord,
+} from "@goatcitadel/contracts";
 import {
   archiveChatProject,
   createChatSession,
   createChatProject,
+  fetchChatGeneratedArtifacts,
   fetchChatProjects,
   fetchChatSessions,
   updateChatProject,
@@ -15,6 +21,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   archiveChatProject: vi.fn(),
   createChatSession: vi.fn(),
   createChatProject: vi.fn(),
+  fetchChatGeneratedArtifacts: vi.fn(),
   fetchChatProjects: vi.fn(),
   fetchChatSessions: vi.fn(),
   updateChatProject: vi.fn(),
@@ -23,6 +30,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
 const mockedArchiveChatProject = vi.mocked(archiveChatProject);
 const mockedCreateChatSession = vi.mocked(createChatSession);
 const mockedCreateChatProject = vi.mocked(createChatProject);
+const mockedFetchChatGeneratedArtifacts = vi.mocked(fetchChatGeneratedArtifacts);
 const mockedFetchChatProjects = vi.mocked(fetchChatProjects);
 const mockedFetchChatSessions = vi.mocked(fetchChatSessions);
 const mockedUpdateChatProject = vi.mocked(updateChatProject);
@@ -57,6 +65,24 @@ function session(overrides: Partial<ChatSessionRecord> & { sessionId: string }):
     lastActivityAt: "2026-05-01T12:05:00.000Z",
     ...rest,
   } as ChatSessionRecord;
+}
+
+function artifact(overrides: Partial<ChatGeneratedArtifactRecord> = {}): ChatGeneratedArtifactRecord {
+  return {
+    artifactId: "artifact-alpha",
+    sessionId: "code-1",
+    workspaceId: "default",
+    projectId: "project-alpha",
+    turnId: "turn-alpha",
+    title: "Validation output",
+    kind: "markdown",
+    content: "# Validation",
+    sourceSurface: "code",
+    version: 1,
+    createdAt: "2026-05-01T12:12:00.000Z",
+    updatedAt: "2026-05-01T12:12:00.000Z",
+    ...overrides,
+  };
 }
 
 function defaultProps(overrides: Record<string, unknown> = {}) {
@@ -170,6 +196,9 @@ describe("ProjectsRoutePage", () => {
         }),
       ],
     } as any);
+    mockedFetchChatGeneratedArtifacts.mockResolvedValue({
+      items: [artifact()],
+    });
     mockedCreateChatSession.mockResolvedValue({ sessionId: "new-code-session" } as any);
     mockedCreateChatProject.mockResolvedValue(project({ projectId: "project-created", name: "Created" }));
     mockedUpdateChatProject.mockResolvedValue(project({ projectId: "project-alpha", name: "Alpha renamed" }));
@@ -188,6 +217,10 @@ describe("ProjectsRoutePage", () => {
       includeHidden: true,
       limit: 1000,
     });
+    expect(mockedFetchChatGeneratedArtifacts).toHaveBeenCalledWith({
+      workspaceId: "default",
+      limit: 1000,
+    });
     expect(navigate).toHaveBeenCalledWith(
       { area: "projects", projectId: "project-alpha", theme: "ops" },
       { replace: true },
@@ -199,6 +232,8 @@ describe("ProjectsRoutePage", () => {
     expect(text).toContain("Continue Chat");
     expect(text).toContain("Continue Cowork");
     expect(text).toContain("Continue Code");
+    expect(text).toContain("Latest continuation");
+    expect(text).toContain("Reopen project artifacts");
     expect(text).toContain("Alpha");
     expect(text).toContain("Chat 1");
     expect(text).toContain("Cowork 1");
@@ -221,6 +256,30 @@ describe("ProjectsRoutePage", () => {
       projectId: "project-alpha",
       theme: "ops",
     });
+
+    act(() => {
+      findButton(renderer.root, "Reopen project artifacts").props.onClick();
+    });
+    expect(navigate).toHaveBeenCalledWith({
+      area: "library",
+      section: "artifacts",
+      projectId: "project-alpha",
+      theme: "ops",
+    });
+  });
+
+  it("keeps project navigation usable and surfaces truth when generated artifacts fail to load", async () => {
+    mockedFetchChatGeneratedArtifacts.mockRejectedValueOnce(new Error("artifacts unavailable"));
+
+    const renderer = await renderPage(defaultProps({ route: { area: "projects", projectId: "project-alpha" } }));
+    const text = pageText(renderer);
+
+    expect(text).toContain("Project containers");
+    expect(text).toContain("Project overview");
+    expect(text).toContain("Alpha");
+    expect(text).toContain("Artifacts 0");
+    expect(text).toContain("Project artifact records could not load");
+    expect(text).toContain("artifacts unavailable");
   });
 
   it("selects explicit projects, starts sessions, and routes unknown modes through chat counts", async () => {
@@ -327,9 +386,7 @@ describe("ProjectsRoutePage", () => {
     });
     expect(navigate).toHaveBeenCalledWith({ area: "projects", projectId: "project-created", theme: "ops" });
 
-    const alphaNameInput = renderer.root.findAll(
-      (node) => node.type === "input" && node.props.value === "Alpha",
-    )[0];
+    const alphaNameInput = renderer.root.findAll((node) => node.type === "input" && node.props.value === "Alpha")[0];
     expect(alphaNameInput).toBeDefined();
     act(() => {
       alphaNameInput!.props.onChange({ target: { value: "Alpha renamed" } });

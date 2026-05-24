@@ -10,10 +10,7 @@ import type {
   OpenclawParityProgramEpicRecord,
   OpenclawParityProgramReport,
 } from "@goatcitadel/contracts";
-import {
-  OPENCLAW_PARITY_COMPLETION_ORDER,
-  OPENCLAW_PARITY_EPICS,
-} from "@goatcitadel/contracts";
+import { OPENCLAW_PARITY_COMPLETION_ORDER, OPENCLAW_PARITY_EPICS } from "@goatcitadel/contracts";
 
 const BASE_UNSAFE_CLAIMS: string[] = [
   "Discord, Slack, and Telegram still need fresh per-provider operator proof whenever runtime or policy behavior changes.",
@@ -30,23 +27,15 @@ export function buildOpenclawParityProgramReport(
     followOnParity.epics.map((epic) => [epic.epicId, epic]),
   );
   const epics = OPENCLAW_PARITY_EPICS.map((definition) =>
-    buildProgramEpicRecord(
-      definition,
-      followOnParity,
-      followOnEpicMap.get(definition.epicId as FollowOnParityEpicId),
-    ),
+    buildProgramEpicRecord(definition, followOnParity, followOnEpicMap.get(definition.epicId as FollowOnParityEpicId)),
   );
   const nextEpicId = OPENCLAW_PARITY_COMPLETION_ORDER.find((epicId) =>
     epics.some((epic) => epic.epicId === epicId && epic.status !== "complete"),
   );
   const nextEpic = epics.find((epic) => epic.epicId === nextEpicId);
   const blockerCounts = countProgramBlockers(epics);
-  const completedEpicIds = epics
-    .filter((epic) => epic.status === "complete")
-    .map((epic) => epic.epicId);
-  const openEpicIds = epics
-    .filter((epic) => epic.status !== "complete")
-    .map((epic) => epic.epicId);
+  const completedEpicIds = epics.filter((epic) => epic.status === "complete").map((epic) => epic.epicId);
+  const openEpicIds = epics.filter((epic) => epic.status !== "complete").map((epic) => epic.epicId);
 
   return {
     generatedAt,
@@ -61,19 +50,16 @@ export function buildOpenclawParityProgramReport(
   };
 }
 
-function buildUnsafeClaims(
-  followOnParity: FollowOnParityReport,
-): string[] {
+function buildUnsafeClaims(followOnParity: FollowOnParityReport): string[] {
   const claims = [...BASE_UNSAFE_CLAIMS];
   const localFirstVoiceCloseout = hasLocalFirstVoiceCloseout(followOnParity);
   const fullVoiceCoverage = hasFullVoiceProofCoverage(followOnParity);
-  const voiceProofCurrent = (
-    followOnParity.voice.artifactStatus.hasArtifact
-    && followOnParity.voice.artifactStatus.freshness === "current"
-    && followOnParity.voice.artifactStatus.matchedCurrentProfile
-    && followOnParity.voice.blockingIssues.length === 0
-    && followOnParity.voice.recoveryActions.length === 0
-  );
+  const voiceProofCurrent =
+    followOnParity.voice.artifactStatus.hasArtifact &&
+    followOnParity.voice.artifactStatus.freshness === "current" &&
+    followOnParity.voice.artifactStatus.matchedCurrentProfile &&
+    followOnParity.voice.blockingIssues.length === 0 &&
+    followOnParity.voice.recoveryActions.length === 0;
 
   if (fullVoiceCoverage) {
     claims.push(
@@ -105,83 +91,95 @@ function buildProgramEpicRecord(
       status: resolvedStatus,
       summary: followOnEpic.summary,
       nextSlice: followOnEpic.nextSlice,
-      blockers: resolvedStatus === "complete"
-        ? []
-        : buildFollowOnEpicBlockers(definition.epicId, followOnParity),
+      blockers: resolvedStatus === "complete" ? [] : buildFollowOnEpicBlockers(definition.epicId, followOnParity),
     };
   }
 
   switch (definition.epicId) {
     case "GC-P0-01":
       return record(definition, {
-        summary: "Shared channel runtime semantics are already routed through the common capability/action contract used by the current shipped channel surfaces.",
-        nextSlice: "Keep the shared channel-core contract as the only truth source while remaining beta and planned channels finish against it.",
+        summary:
+          "Shared channel runtime semantics are already routed through the common capability/action contract used by the current shipped channel surfaces.",
+        nextSlice:
+          "Keep the shared channel-core contract as the only truth source while remaining beta and planned channels finish against it.",
         blockers: [],
       });
     case "GC-P0-02":
       return record(definition, {
         status: resolvedStatus,
-        summary: "Discord, Slack, and Telegram now have inbound/runtime coverage plus guided probes, while Google Chat and Teams are accurate outbound webhook lanes rather than full inbound channels.",
-        nextSlice: "Keep Discord, Slack, and Telegram proofs fresh, and keep Google Chat and Teams explicitly documented as outbound webhook providers instead of inventing uniform channel parity.",
-        blockers: resolvedStatus === "complete"
-          ? []
-          : [
-            blocker(
-              "repo_runtime",
-              "Google Chat and Teams are webhook-only outbound lanes today, so the remaining work is keeping provider-lane truth exact rather than claiming inbound/runtime behavior they do not support.",
-            ),
-            blocker(
-              "manual_operator",
-              "Discord, Slack, and Telegram still need fresh per-provider operator proof whenever runtime, setup, or policy behavior changes; code-complete alone does not close the claim.",
-            ),
-          ],
+        summary:
+          "Discord, Slack, and Telegram now have inbound/runtime coverage plus guided probes, while Google Chat and Teams are accurate outbound webhook lanes rather than full inbound channels.",
+        nextSlice:
+          "Keep Discord, Slack, and Telegram proofs fresh, and keep Google Chat and Teams explicitly documented as outbound webhook providers instead of inventing uniform channel parity.",
+        blockers:
+          resolvedStatus === "complete"
+            ? []
+            : [
+                blocker(
+                  "repo_runtime",
+                  "Google Chat and Teams are webhook-only outbound lanes today, so the remaining work is keeping provider-lane truth exact rather than claiming inbound/runtime behavior they do not support.",
+                ),
+                blocker(
+                  "manual_operator",
+                  "Discord, Slack, and Telegram still need fresh per-provider operator proof whenever runtime, setup, or policy behavior changes; code-complete alone does not close the claim.",
+                ),
+              ],
       });
     case "GC-P0-03":
       return record(definition, {
         status: resolvedStatus,
-        summary: "WhatsApp, Signal, and iMessage/BlueBubbles now ship with guided setup, live runtime probes, and truthful beta-lane documentation that matches the current runtime bounds of each provider.",
-        nextSlice: "Keep the Tier-1 operator proof current and only widen provider capabilities when the runtime and docs move together.",
-        blockers: resolvedStatus === "complete"
-          ? []
-          : [
-            blocker(
-              "repo_runtime",
-              "WhatsApp still lacks delete parity, iMessage remains a local outbound bridge with platform-dependent limits, and Signal is still only a narrow outbound send lane.",
-            ),
-            blocker(
-              "manual_operator",
-              "Tier-1 providers still need repeatable operator proof that matches each provider's actual supported action set before any further maturity claims are promoted.",
-            ),
-          ],
+        summary:
+          "WhatsApp, Signal, and iMessage/BlueBubbles now ship with guided setup, live runtime probes, and truthful beta-lane documentation that matches the current runtime bounds of each provider.",
+        nextSlice:
+          "Keep the Tier-1 operator proof current and only widen provider capabilities when the runtime and docs move together.",
+        blockers:
+          resolvedStatus === "complete"
+            ? []
+            : [
+                blocker(
+                  "repo_runtime",
+                  "WhatsApp still lacks delete parity, iMessage remains a local outbound bridge with platform-dependent limits, and Signal is still only a narrow outbound send lane.",
+                ),
+                blocker(
+                  "manual_operator",
+                  "Tier-1 providers still need repeatable operator proof that matches each provider's actual supported action set before any further maturity claims are promoted.",
+                ),
+              ],
       });
     case "GC-P0-05":
       return record(definition, {
-        summary: "The shared channel action API is already complete enough to serve as the stable send/reply/react/unsend/typing contract boundary for parity work.",
-        nextSlice: "Keep new channels on the same action contract and avoid UI-only behavior branches that would fork parity truth.",
+        summary:
+          "The shared channel action API is already complete enough to serve as the stable send/reply/react/unsend/typing contract boundary for parity work.",
+        nextSlice:
+          "Keep new channels on the same action contract and avoid UI-only behavior branches that would fork parity truth.",
         blockers: [],
       });
     case "GC-P1-04":
       return record(definition, {
         status: resolvedStatus,
-        summary: "Mattermost, LINE, Zalo OA, and Zalo Personal now ship with guided setup, live runtime probes, and truthful beta-lane documentation that matches the current bounds of each channel runtime.",
-        nextSlice: "Keep the Tier-2 operator proof current and only widen provider capabilities when the runtime and docs move together.",
-        blockers: resolvedStatus === "complete"
-          ? []
-          : [
-            blocker(
-              "repo_runtime",
-              "Mattermost remains an outbound bot bridge, LINE only ships a narrow send lane plus optional inbound webhook routing, and the Zalo lanes are still limited bridge runtimes.",
-            ),
-            blocker(
-              "manual_operator",
-              "Mattermost, LINE, Zalo OA, and Zalo Personal still need repeatable operator proof that matches their current bounds before any further maturity claims are promoted.",
-            ),
-          ],
+        summary:
+          "Mattermost, LINE, Zalo OA, and Zalo Personal now ship with guided setup, live runtime probes, and truthful beta-lane documentation that matches the current bounds of each channel runtime.",
+        nextSlice:
+          "Keep the Tier-2 operator proof current and only widen provider capabilities when the runtime and docs move together.",
+        blockers:
+          resolvedStatus === "complete"
+            ? []
+            : [
+                blocker(
+                  "repo_runtime",
+                  "Mattermost remains an outbound bot bridge, LINE only ships a narrow send lane plus optional inbound webhook routing, and the Zalo lanes are still limited bridge runtimes.",
+                ),
+                blocker(
+                  "manual_operator",
+                  "Mattermost, LINE, Zalo OA, and Zalo Personal still need repeatable operator proof that matches their current bounds before any further maturity claims are promoted.",
+                ),
+              ],
       });
     default:
       return record(definition, {
         summary: `${definition.label} is still tracked as ${definition.status.replaceAll("_", " ")}.`,
-        nextSlice: "Use the parity completion program and live follow-on report to close the next smallest truthful slice.",
+        nextSlice:
+          "Use the parity completion program and live follow-on report to close the next smallest truthful slice.",
         blockers: [],
       });
   }
@@ -211,32 +209,43 @@ function resolveProgramEpicStatus(
   switch (definition.epicId) {
     case "GC-P0-06":
       if (
-        followOnEpic?.state === "have_foundation"
-        && followOnParity.browser.artifactStatus.hasArtifact
-        && followOnParity.browser.artifactStatus.freshness === "current"
-        && followOnParity.browser.artifactStatus.matchedCurrentProfile
-        && followOnParity.browser.blockingIssues.length === 0
+        followOnEpic?.state === "have_foundation" &&
+        followOnParity.browser.artifactStatus.hasArtifact &&
+        followOnParity.browser.artifactStatus.freshness === "current" &&
+        followOnParity.browser.artifactStatus.matchedCurrentProfile &&
+        followOnParity.browser.blockingIssues.length === 0
       ) {
         return "complete";
       }
       return definition.status;
     case "GC-P0-07":
       if (
-        followOnEpic?.state === "have_foundation"
-        && followOnParity.canvas.artifactStatus.hasArtifact
-        && followOnParity.canvas.artifactStatus.freshness === "current"
-        && followOnParity.canvas.artifactStatus.matchedCurrentProfile
-        && followOnParity.canvas.blockingIssues.length === 0
+        followOnEpic?.state === "have_foundation" &&
+        followOnParity.canvas.artifactStatus.hasArtifact &&
+        followOnParity.canvas.artifactStatus.freshness === "current" &&
+        followOnParity.canvas.artifactStatus.matchedCurrentProfile &&
+        followOnParity.canvas.blockingIssues.length === 0
       ) {
         return "complete";
       }
       return definition.status;
     case "GC-P1-08":
       if (
-        followOnEpic?.state === "have_foundation"
-        && followOnParity.companion.artifactStatus.hasArtifact
-        && followOnParity.companion.artifactStatus.freshness === "current"
-        && followOnParity.companion.blockingIssues.length === 0
+        followOnEpic?.state === "have_foundation" &&
+        followOnParity.companion.artifactStatus.hasArtifact &&
+        followOnParity.companion.artifactStatus.freshness === "current" &&
+        followOnParity.companion.blockingIssues.length === 0
+      ) {
+        return "complete";
+      }
+      return definition.status;
+    case "GC-P1-09":
+      if (
+        followOnEpic?.state === "have_foundation" &&
+        followOnParity.packaging.proofStatus.hasArtifact &&
+        followOnParity.packaging.proofStatus.freshness === "current" &&
+        followOnParity.packaging.proofStatus.matchedCurrentProfile &&
+        followOnParity.packaging.blockingIssues.length === 0
       ) {
         return "complete";
       }
@@ -328,11 +337,7 @@ function buildFollowOnEpicBlockers(
         ...followOnParity.voice.recoveryActions.map((action) => blocker("repo_runtime", action)),
         blocker(
           "manual_operator",
-          describeArtifactBlocker(
-            "Voice proof",
-            followOnParity.voice.artifactStatus,
-            followOnParity.deploymentProfile,
-          ),
+          describeArtifactBlocker("Voice proof", followOnParity.voice.artifactStatus, followOnParity.deploymentProfile),
         ),
       ];
     default:
@@ -342,18 +347,18 @@ function buildFollowOnEpicBlockers(
 
 function hasFullVoiceProofCoverage(followOnParity: FollowOnParityReport): boolean {
   return (
-    hasLocalFirstVoiceCloseout(followOnParity)
-    && followOnParity.voice.proofCoverage.currentProfiles.includes("local_dev")
-    && followOnParity.voice.proofCoverage.currentProfiles.includes("trusted_local")
-    && followOnParity.voice.proofCoverage.currentProfiles.includes("remote_hardened")
+    hasLocalFirstVoiceCloseout(followOnParity) &&
+    followOnParity.voice.proofCoverage.currentProfiles.includes("local_dev") &&
+    followOnParity.voice.proofCoverage.currentProfiles.includes("trusted_local") &&
+    followOnParity.voice.proofCoverage.currentProfiles.includes("remote_hardened")
   );
 }
 
 function hasLocalFirstVoiceCloseout(followOnParity: FollowOnParityReport): boolean {
   return (
-    followOnParity.voice.blockingIssues.length === 0
-    && followOnParity.voice.recoveryActions.length === 0
-    && followOnParity.voice.proofCoverage.currentProfiles.includes("local_dev")
+    followOnParity.voice.blockingIssues.length === 0 &&
+    followOnParity.voice.recoveryActions.length === 0 &&
+    followOnParity.voice.proofCoverage.currentProfiles.includes("local_dev")
   );
 }
 
@@ -361,19 +366,14 @@ function repoBlockingIssues(issues: string[]): OpenclawParityBlockerRecord[] {
   return issues.map((issue) => blocker("repo_runtime", issue));
 }
 
-function blocker(
-  kind: OpenclawParityBlockerKind,
-  summary: string,
-): OpenclawParityBlockerRecord {
+function blocker(kind: OpenclawParityBlockerKind, summary: string): OpenclawParityBlockerRecord {
   return {
     kind,
     summary,
   };
 }
 
-function countProgramBlockers(
-  epics: OpenclawParityProgramEpicRecord[],
-): OpenclawParityBlockerCounts {
+function countProgramBlockers(epics: OpenclawParityProgramEpicRecord[]): OpenclawParityBlockerCounts {
   const counts: OpenclawParityBlockerCounts = {
     repo_runtime: 0,
     manual_operator: 0,
@@ -400,10 +400,10 @@ function describeArtifactBlocker(
     return `${label} artifact is stale${typeof status.ageDays === "number" ? ` (${status.ageDays} day(s) old)` : ""} and must be refreshed before the parity claim can close.`;
   }
   if (
-    deploymentProfile
-    && "matchedCurrentProfile" in status
-    && status.latestArtifactDeploymentProfile
-    && !status.matchedCurrentProfile
+    deploymentProfile &&
+    "matchedCurrentProfile" in status &&
+    status.latestArtifactDeploymentProfile &&
+    !status.matchedCurrentProfile
   ) {
     return `${label} artifact targets ${status.latestArtifactDeploymentProfile} instead of ${deploymentProfile}; rerun the lane under the active profile before closing parity.`;
   }

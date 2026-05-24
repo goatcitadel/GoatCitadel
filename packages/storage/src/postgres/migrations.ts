@@ -1443,4 +1443,26 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS package_manager TEXT;
     `,
   },
+  {
+    version: 51,
+    name: "chat_generated_artifacts_project_scope",
+    sql: `
+      ALTER TABLE chat_generated_artifacts
+        ADD COLUMN IF NOT EXISTS project_id TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_chat_generated_artifacts_project_created
+        ON chat_generated_artifacts(project_id, created_at DESC);
+    `,
+  },
+  {
+    version: 52,
+    name: "chat_generated_artifacts_project_scope_backfill",
+    sql: `
+      UPDATE chat_generated_artifacts AS artifacts
+      SET project_id = projects.project_id
+      FROM chat_session_projects AS projects
+      WHERE artifacts.session_id = projects.session_id
+        AND artifacts.project_id IS NULL;
+    `,
+  },
 ];

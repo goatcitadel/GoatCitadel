@@ -1342,13 +1342,49 @@ export class LlmService {
     const key = `${resolved.provider.providerId}::${resolved.provider.baseUrl}`;
     const now = Date.now();
     const cached = this.modelDiscoveryCache.get(key);
-    if (cached && now - cached.cachedAt < LlmService.MODEL_DISCOVERY_TTL_MS) {
-      log.debug("model catalog cache hit", {
-        providerId: resolved.provider.providerId,
-        ageMs: now - cached.cachedAt,
-        itemCount: cached.result.items.length,
-      });
-      return cached.result;
+    if (cached) {
+      const ageMs = now - cached.cachedAt;
+      if (ageMs < LlmService.MODEL_DISCOVERY_TTL_MS) {
+        log.debug("model catalog cache hit", {
+          providerId: resolved.provider.providerId,
+          ageMs,
+          itemCount: cached.result.items.length,
+        });
+        return cached.result;
+      }
+
+      // Stale-while-revalidate: if younger than 1 hour, return cached immediately
+      // and trigger a background refresh.
+      if (ageMs < 3600_000) {
+        log.debug("model catalog cache hit (stale, revalidating in background)", {
+          providerId: resolved.provider.providerId,
+          ageMs,
+          itemCount: cached.result.items.length,
+        });
+
+        const inFlight = this.modelDiscoveryInFlight.get(key);
+        if (!inFlight) {
+          const pending = this.fetchModelsForResolvedProviderUncached(resolved)
+            .then((result) => {
+              if (result.source !== "error_fallback") {
+                this.modelDiscoveryCache.set(key, { cachedAt: Date.now(), result });
+              }
+              return result;
+            })
+            .catch((error) => {
+              log.warn("model catalog background revalidation failed", {
+                providerId: resolved.provider.providerId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+              return cached.result;
+            })
+            .finally(() => {
+              this.modelDiscoveryInFlight.delete(key);
+            });
+          this.modelDiscoveryInFlight.set(key, pending);
+        }
+        return cached.result;
+      }
     }
     // Stampede protection: coalesce concurrent cold-cache callers onto a single fetch.
     const inFlight = this.modelDiscoveryInFlight.get(key);

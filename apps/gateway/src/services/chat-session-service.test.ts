@@ -228,10 +228,24 @@ describe("chat session service", () => {
         outputArtifactId: "out-1",
         validationStatus: "passed",
       });
+      storage.chatGeneratedArtifacts.create({
+        artifactId: "artifact-before-project",
+        sessionId: session.sessionId,
+        workspaceId: "default",
+        turnId: "turn-before-project",
+        title: "Pre-assignment artifact",
+        kind: "markdown",
+        content: "# Artifact",
+        sourceSurface: "code",
+        version: 1,
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
 
       const assigned = assignChatSessionProject(deps, session.sessionId, project.projectId);
 
       expect(assigned.projectId).toBe(project.projectId);
+      expect(storage.chatGeneratedArtifacts.get("artifact-before-project").projectId).toBe(project.projectId);
       expect(storage.chatSessionWorkbench.get(session.sessionId)).toMatchObject({
         projectId: project.projectId,
         worktreeStatus: "uninitialized",
@@ -244,6 +258,7 @@ describe("chat session service", () => {
 
       const unassigned = assignChatSessionProject(deps, session.sessionId);
       expect(unassigned.projectId).toBeUndefined();
+      expect(storage.chatGeneratedArtifacts.get("artifact-before-project").projectId).toBeUndefined();
       expect(storage.chatSessionWorkbench.get(session.sessionId)?.projectId).toBeUndefined();
 
       expect(getChatSessionBinding(deps, session.sessionId)).toMatchObject({ transport: "llm" });

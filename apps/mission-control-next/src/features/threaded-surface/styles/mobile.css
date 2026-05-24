@@ -1,3 +1,48 @@
+@media (min-width: 1361px) and (max-width: 1680px) {
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench.has-context,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel.has-context {
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, min(var(--mc-workbench-panel-width, 35rem), 38vw));
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-code-panel.has-context {
+    grid-template-columns: minmax(0, 1fr) minmax(21rem, min(var(--mc-workbench-panel-width, 35rem), 42vw));
+  }
+
+  .mc-next-threaded-stage.has-workbench.has-context .mc-next-threaded-context-panel,
+  .mc-next-threaded-stage.has-cowork-panel.has-context .mc-next-threaded-context-panel,
+  .mc-next-threaded-stage.has-code-panel.has-context .mc-next-threaded-context-panel {
+    grid-column: 1 / -1;
+    position: static;
+    height: auto;
+    max-height: none;
+    border-left: 0;
+    border-top: 1px solid var(--mc-border-subtle);
+  }
+
+  .mc-next-threaded-stage.has-cowork-panel.has-context .mc-next-threaded-side-panel.cowork,
+  .mc-next-threaded-stage.has-code-panel.has-context .mc-next-threaded-side-panel.code {
+    max-width: none;
+  }
+
+  .mc-next-threaded-stage.has-workbench.has-context .mc-next-threaded-context-panel.utility,
+  .mc-next-threaded-stage.has-cowork-panel.has-context .mc-next-threaded-context-panel.utility,
+  .mc-next-threaded-stage.has-code-panel.has-context .mc-next-threaded-context-panel.utility {
+    padding-left: 0.46rem;
+  }
+
+  .mc-next-threaded-stage.has-workbench.has-context
+    .mc-next-threaded-context-panel
+    .mc-next-threaded-resize-handle.panel,
+  .mc-next-threaded-stage.has-cowork-panel.has-context
+    .mc-next-threaded-context-panel
+    .mc-next-threaded-resize-handle.panel,
+  .mc-next-threaded-stage.has-code-panel.has-context
+    .mc-next-threaded-context-panel
+    .mc-next-threaded-resize-handle.panel {
+    display: none;
+  }
+}
+
 @media (max-width: 1360px) {
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench.has-context,
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.mode-chat.has-context,
@@ -14,8 +59,14 @@
   .mc-next-threaded-side-panel.cowork,
   .mc-next-threaded-side-panel.code {
     height: auto;
+    padding-left: 0.5rem;
     border-left: 0;
     border-top: 1px solid var(--mc-border-subtle);
+  }
+
+  .mc-next-threaded-context-panel.utility,
+  .mc-next-threaded-stage.mode-chat .mc-next-threaded-context-panel {
+    padding-left: 0.46rem;
   }
 
   .mc-next-threaded-resize-handle.panel {
@@ -94,6 +145,7 @@
   .mc-next-threaded-side-panel.cowork,
   .mc-next-threaded-side-panel.code {
     height: auto;
+    padding-left: 0.5rem;
   }
 
   .mc-next-threaded-menu-button span {
@@ -242,6 +294,7 @@
   .mc-next-composer-banner,
   .mc-next-composer-head,
   .mc-next-panel-list-head,
+  .mc-next-composer-blocking-prompt .chat-approval-header,
   .mc-next-thread-blocking-prompt .chat-approval-header {
     align-items: stretch;
   }
@@ -261,6 +314,7 @@
   }
 
   .mc-next-composer-chip-row > span,
+  .mc-next-composer-blocking-prompt .chat-approval-countdown,
   .mc-next-thread-blocking-prompt .chat-approval-countdown,
   .mc-next-thread-inline-button,
   .mc-next-panel-button,

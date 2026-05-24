@@ -167,9 +167,16 @@ describe("chat session routes", () => {
     await expect(
       app.inject({
         method: "GET",
-        url: "/api/v1/chat/generated-artifacts?workspaceId=default&sourceSurface=chat&kind=markdown&limit=2",
+        url: "/api/v1/chat/generated-artifacts?workspaceId=default&projectId=project-1&sourceSurface=chat&kind=markdown&limit=2",
       }),
     ).resolves.toMatchObject({ statusCode: 200 });
+    expect(chatSessions.listChatGeneratedArtifacts).toHaveBeenCalledWith({
+      workspaceId: "default",
+      projectId: "project-1",
+      sourceSurface: "chat",
+      kind: "markdown",
+      limit: 2,
+    });
     await expect(
       app.inject({
         method: "GET",

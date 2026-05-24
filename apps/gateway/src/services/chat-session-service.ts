@@ -448,6 +448,7 @@ export function assignChatSessionProject(
   const workspaceId = deps.normalizeWorkspaceId(meta.workspaceId);
   if (!projectId) {
     deps.storage.chatSessionProjects.unassign(sessionId);
+    deps.storage.chatGeneratedArtifacts.updateProjectForSession(sessionId, undefined);
     resetWorkbenchForProjectChange(deps, sessionId, undefined);
     const updated = deps.requireChatSession(sessionId);
     deps.publishRealtime(
@@ -463,6 +464,7 @@ export function assignChatSessionProject(
   }
   const currentProjectId = deps.storage.chatSessionProjects.get(sessionId)?.projectId;
   deps.storage.chatSessionProjects.assign(sessionId, projectId);
+  deps.storage.chatGeneratedArtifacts.updateProjectForSession(sessionId, projectId);
   if (currentProjectId !== projectId) {
     resetWorkbenchForProjectChange(deps, sessionId, projectId);
   }

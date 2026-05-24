@@ -32,6 +32,7 @@ function seedSession(
   sessionId: string,
   workspaceId = "default",
   mode: "chat" | "cowork" | "code" = "code",
+  projectId?: string,
 ): ChatSessionRecord {
   storage.sessions.upsert({
     sessionId,
@@ -62,6 +63,7 @@ function seedSession(
     sessionId,
     sessionKey: `mission:operator:${sessionId}`,
     workspaceId,
+    projectId,
     scope: "mission",
     includeInHistory: true,
     pinned: false,
@@ -225,7 +227,7 @@ describe("chat-generated-artifact-service vitest coverage", () => {
     const { storage, rootDir } = await createStorage();
     roots.push(rootDir);
     storages.push(storage);
-    const session = seedSession(storage, "sess-list", "workspace-a", "cowork");
+    const session = seedSession(storage, "sess-list", "workspace-a", "cowork", "project-a");
     seedAssistantTurn(storage, session.sessionId, "turn-list", "```mermaid\ngraph TD\n  A --> B\n```", "cowork");
     const host = createHost(storage, session);
 
@@ -236,6 +238,7 @@ describe("chat-generated-artifact-service vitest coverage", () => {
     const sessionItems = listChatGeneratedArtifacts(host, { sessionId: " sess-list ", limit: 10 });
     const visibleItems = listChatGeneratedArtifacts(host, {
       workspaceId: " workspace-a ",
+      projectId: " project-a ",
       sourceSurface: "cowork",
       kind: "mermaid",
       limit: 10,
@@ -248,6 +251,7 @@ describe("chat-generated-artifact-service vitest coverage", () => {
 
     expect(sessionItems.map((item) => item.artifactId)).toEqual([artifact.artifactId]);
     expect(visibleItems.map((item) => item.artifactId)).toEqual([artifact.artifactId]);
+    expect(artifact.projectId).toBe("project-a");
     expect(hydrated.artifactId).toBe(artifact.artifactId);
     expect(host.requireChatSession).toHaveBeenCalledWith("sess-list");
     expect(turns[0]?.generatedArtifacts).toEqual([buildGeneratedArtifactReference(artifact)]);
@@ -451,6 +455,7 @@ function seedMockSession(): ChatSessionRecord {
     sessionId: "sess-collision",
     sessionKey: "mission:operator:sess-collision",
     workspaceId: "default",
+    projectId: "project-collision",
     scope: "mission",
     includeInHistory: true,
     pinned: false,

@@ -200,6 +200,23 @@ describe("Postgres runtime schema generation", () => {
     assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS content_hash TEXT/);
   });
 
+  it("repairs generated artifact project scope for older Postgres runtimes", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 51);
+
+    assert.equal(repairMigration?.name, "chat_generated_artifacts_project_scope");
+    assert.match(repairMigration?.sql ?? "", /ADD COLUMN IF NOT EXISTS project_id TEXT/);
+    assert.match(repairMigration?.sql ?? "", /idx_chat_generated_artifacts_project_created/);
+  });
+
+  it("backfills generated artifact project scope for already-assigned chat sessions", () => {
+    const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 52);
+
+    assert.equal(repairMigration?.name, "chat_generated_artifacts_project_scope_backfill");
+    assert.match(repairMigration?.sql ?? "", /UPDATE chat_generated_artifacts AS artifacts/);
+    assert.match(repairMigration?.sql ?? "", /FROM chat_session_projects AS projects/);
+    assert.match(repairMigration?.sql ?? "", /artifacts.project_id IS NULL/);
+  });
+
   it("repairs the imported agent catalog table for older Postgres runtimes", () => {
     const repairMigration = POSTGRES_MIGRATIONS.find((migration) => migration.version === 19);
 
