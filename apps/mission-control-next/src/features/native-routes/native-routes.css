@@ -610,7 +610,6 @@
 
 .mc-next-approvals-view-button {
   padding: 0.28rem 0.48rem;
-  border-radius: 0.42rem;
   font-size: 0.66rem;
   border-radius: 999px;
   font: inherit;
@@ -2173,83 +2172,83 @@
 .mc-next-approvals-shell-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 0.625rem;
 }
 .mc-next-approvals-shell-card {
-  background: rgba(255, 255, 255, 0.025);
-  border: 1px solid var(--mc-next-border, #2c3145);
-  border-left: 3px solid #4b5772;
-  border-radius: 6px;
-  padding: 10px 12px;
+  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+  border: 1px solid var(--mc-border-subtle);
+  border-left: 0.1875rem solid var(--mc-border-strong);
+  border-radius: 0.375rem;
+  padding: 0.625rem 0.75rem;
 }
 .mc-next-approvals-shell-card-risk-danger {
-  border-left-color: #f87171;
-  background: rgba(248, 113, 113, 0.06);
+  border-left-color: var(--gc-risk-danger);
+  background: color-mix(in oklab, var(--gc-risk-danger) 8%, transparent);
 }
 .mc-next-approvals-shell-card-risk-caution {
-  border-left-color: #fbbf24;
-  background: rgba(251, 191, 36, 0.05);
+  border-left-color: var(--gc-risk-caution);
+  background: color-mix(in oklab, var(--gc-risk-caution) 8%, transparent);
 }
 .mc-next-approvals-shell-card-risk-info {
-  border-left-color: #4ade80;
+  border-left-color: var(--gc-risk-safe);
 }
 .mc-next-approvals-shell-head {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: 0.5rem;
 }
 .mc-next-approvals-shell-summary {
   flex: 1;
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.4;
 }
 .mc-next-approvals-shell-chip {
-  font-size: 10px;
-  padding: 2px 7px;
-  border-radius: 4px;
+  font-size: 0.625rem;
+  padding: 0.125rem 0.4375rem;
+  border-radius: 0.25rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 .mc-next-approvals-shell-chip-danger {
-  background: rgba(248, 113, 113, 0.18);
-  color: #fca5a5;
+  background: color-mix(in oklab, var(--gc-risk-danger) 18%, transparent);
+  color: color-mix(in oklab, var(--gc-risk-danger) 72%, var(--foreground));
 }
 .mc-next-approvals-shell-chip-caution {
-  background: rgba(251, 191, 36, 0.18);
-  color: #fcd34d;
+  background: color-mix(in oklab, var(--gc-risk-caution) 18%, transparent);
+  color: color-mix(in oklab, var(--gc-risk-caution) 72%, var(--foreground));
 }
 .mc-next-approvals-shell-details {
-  margin: 8px 0 0;
+  margin: 0.5rem 0 0;
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 2px 12px;
-  font-size: 12px;
+  gap: 0.125rem 0.75rem;
+  font-size: 0.75rem;
 }
 .mc-next-approvals-shell-details dt {
-  color: var(--mc-next-muted, #9aa3b6);
+  color: var(--muted-foreground);
 }
 .mc-next-approvals-shell-details dd {
   margin: 0;
 }
 .mc-next-approvals-shell-note {
-  margin-left: 6px;
-  font-size: 11px;
+  margin-left: 0.375rem;
+  font-size: 0.6875rem;
 }
 .mc-next-approvals-shell-note-danger {
-  color: #fca5a5;
+  color: color-mix(in oklab, var(--gc-risk-danger) 72%, var(--foreground));
 }
 .mc-next-approvals-shell-note-caution {
-  color: #fcd34d;
+  color: color-mix(in oklab, var(--gc-risk-caution) 72%, var(--foreground));
 }
 .mc-next-approvals-shell-raw {
   display: block;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--mc-next-border, #2c3145);
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--mc-border-subtle);
   font-family: ui-monospace, Menlo, monospace;
-  font-size: 11px;
-  color: var(--mc-next-muted, #9aa3b6);
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
 }
 
 .mc-next-kanban-toolbar {
@@ -2278,7 +2277,7 @@
 }
 
 .mc-next-kanban-column {
-  background: var(--gc-surface-1, #f5f5f5);
+  background: var(--mc-surface-1, #f5f5f5);
   border-radius: 0.5rem;
   padding: 0.75rem;
   min-height: 6rem;
@@ -2313,8 +2312,8 @@
 }
 
 .mc-next-kanban-card {
-  background: var(--gc-surface-0, #ffffff);
-  border: 1px solid var(--gc-border, #e5e5e5);
+  background: var(--mc-surface-2, #ffffff);
+  border: 1px solid var(--border, #e5e5e5);
   border-radius: 0.375rem;
   padding: 0.5rem 0.75rem;
   font-size: 0.85rem;
@@ -2348,11 +2347,11 @@
 }
 
 .mc-next-kanban-card .distress.critical {
-  color: var(--gc-danger, #b91c1c);
+  color: var(--gc-risk-danger, #b91c1c);
 }
 
 .mc-next-kanban-card .distress.warn {
-  color: var(--gc-warning, #b45309);
+  color: var(--gc-risk-caution, #b45309);
 }
 
 .mc-next-kanban-card .retry {

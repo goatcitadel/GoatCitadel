@@ -51,6 +51,12 @@ import type { ChatErrorSource } from "./chat-error-copy";
 import type { ChatHistoryView, ChatSidebarLoadOptions } from "./useChatSessionData";
 import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
 
+const APPROVAL_RESUMED_REFRESH_DELAYS_MS = [750, 2_000] as const;
+const APPROVAL_FALLBACK_REFRESH_DELAYS_MS = [500, 1_500, 3_000] as const;
+const MAX_STREAM_RESUME_ATTEMPTS = 2;
+const ROUTE_FALLBACK_ACK_REQUIRED_MESSAGE = "Please confirm the route fallback before sending.";
+const STREAMING_REQUEST_FAILED_MESSAGE = "Streaming request failed.";
+
 export type PendingApprovalState = PendingApprovalRecord;
 export type PendingUserInputState = PendingUserInputRecord;
 
@@ -504,6 +510,8 @@ export function useChatOutboundExecution(input: {
     },
     [commitThreadUpdate, messageMutationVersionRef],
   );
+  // These callback refs are intentionally refreshed during render so sibling
+  // orchestration hooks can call the current implementation before effects run.
   applyFetchedThreadRef.current = applyFetchedThread;
 
   useEffect(() => {
@@ -608,6 +616,8 @@ export function useChatOutboundExecution(input: {
     setSending(false);
   }, [setSending]);
 
+  // See the note above applyFetchedThreadRef: this must stay current for the
+  // queue-drain hook even during the render that creates a new callback.
   tryBeginOutboundExecutionRef.current = tryBeginOutboundExecution;
 
   const executeOutboundItem = useCallback(
@@ -688,7 +698,7 @@ export function useChatOutboundExecution(input: {
         const requiresRouteAck =
           routePreflight?.fallbackResult === "local_to_cloud" || routePreflight?.fallbackResult === "cloud_to_local";
         if (routeHash && requiresRouteAck && !isRoutePreflightAcknowledged(routeHash)) {
-          throw new Error("Acknowledge the predicted fallback route boundary before continuing.");
+          throw new Error(ROUTE_FALLBACK_ACK_REQUIRED_MESSAGE);
         }
         recordChatOutboundPhase({
           phase: "provider_selected",
@@ -853,13 +863,14 @@ export function useChatOutboundExecution(input: {
               setPendingUserInput(chunk.prompt);
             }
             if (chunk.type === "error") {
-              setError(chunk.error || "Streaming request failed.", getOutboundErrorSource(item.action));
+              const errorMessage = chunk.error?.trim() || STREAMING_REQUEST_FAILED_MESSAGE;
+              setError(errorMessage, getOutboundErrorSource(item.action));
               promoteStreamingPreviewToThread(chunk.sessionId, "error");
               recordClientDiagnostic({
                 level: "error",
                 category: "chat",
                 event: "stream.chunk_error",
-                message: chunk.error || "Streaming request failed.",
+                message: errorMessage,
                 sessionId: session!.sessionId,
                 turnId: chunk.turnId,
               });
@@ -995,7 +1006,7 @@ export function useChatOutboundExecution(input: {
                 liveStream.sessionId === session.sessionId &&
                 liveStream.turnId,
               );
-              if (!canResume || resumeAttempts >= 2) {
+              if (!canResume || resumeAttempts >= MAX_STREAM_RESUME_ATTEMPTS) {
                 throw streamError;
               }
               resumeAttempts += 1;
@@ -1172,6 +1183,8 @@ export function useChatOutboundExecution(input: {
       pushLocalNotice,
     ],
   );
+  // See the note above applyFetchedThreadRef: outbound execution is exposed to
+  // another hook through a ref and must reflect the latest session/prefs.
   executeOutboundItemRef.current = executeOutboundItem;
 
   const handleSelectBranchTurn = useCallback(
@@ -1231,7 +1244,9 @@ export function useChatOutboundExecution(input: {
         if (approvalSessionId !== selectedSession.sessionId) {
           await refreshPendingApprovalQueue(selectedSession.sessionId).catch(() => undefined);
         }
-        const refreshDelaysMs = result.resumed ? [750, 2_000] : [500, 1_500, 3_000];
+        const refreshDelaysMs = result.resumed
+          ? APPROVAL_RESUMED_REFRESH_DELAYS_MS
+          : APPROVAL_FALLBACK_REFRESH_DELAYS_MS;
         for (const delayMs of refreshDelaysMs) {
           globalThis.setTimeout(() => {
             void refreshPendingApprovalQueue(approvalSessionId).catch(() => undefined);

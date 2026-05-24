@@ -62,6 +62,81 @@ describe("mobile-route-service", () => {
     );
     expect(publishRealtime).toHaveBeenCalledWith("mobile_capability_heartbeat", "mobile", expect.any(Object));
   });
+
+  it("applies capability list limits after deriving latest records", async () => {
+    const records: Record<string, unknown>[] = [
+      {
+        eventType: "mobile.capability_heartbeat",
+        capabilities: [createCapability("notification_awareness"), createCapability("location_context")],
+      },
+      {
+        eventType: "mobile.capability_heartbeat",
+        capabilities: [createCapability("camera_capture")],
+      },
+    ];
+    const service = createMobileRoutePort({
+      storage: { audit: { append: vi.fn(), list: vi.fn(async () => records) } } as never,
+      publishRealtime: vi.fn(),
+    });
+
+    await expect(service.listMobileCapabilities({ limit: 2 })).resolves.toEqual({
+      items: [
+        expect.objectContaining({ capabilityId: "camera_capture" }),
+        expect.objectContaining({ capabilityId: "location_context" }),
+      ],
+    });
+  });
+
+  it("returns the newest matching mobile audit entries without reversing the whole log", async () => {
+    const records = [
+      { eventType: "mobile.capability_heartbeat", capabilityId: "location_context", eventId: "old" },
+      { eventType: "approval.created", capabilityId: "location_context", eventId: "ignored" },
+      { eventType: "mobile.context_audit", capabilityId: "camera_capture", eventId: "other-capability" },
+      { eventType: "mobile.context_audit", capabilityId: "location_context", eventId: "newer" },
+      { eventType: "mobile.push_registration", capabilityId: "location_context", eventId: "newest" },
+    ];
+    const service = createMobileRoutePort({
+      storage: { audit: { append: vi.fn(), list: vi.fn(async () => records) } } as never,
+      publishRealtime: vi.fn(),
+    });
+
+    await expect(service.listMobileAudit({ capabilityId: "location_context", limit: 2 })).resolves.toEqual({
+      items: [expect.objectContaining({ eventId: "newest" }), expect.objectContaining({ eventId: "newer" })],
+    });
+  });
+
+  it("publishes context capability ids for accepted contexts only", async () => {
+    const records: Record<string, unknown>[] = [];
+    const publishRealtime = vi.fn();
+    const service = createMobileRoutePort({
+      storage: {
+        audit: {
+          append: vi.fn(async (_stream: string, payload: Record<string, unknown>) => {
+            records.push(payload);
+          }),
+          list: vi.fn(async () => records),
+        },
+      } as never,
+      publishRealtime,
+    });
+    const contexts = Array.from({ length: 14 }, (_, index) =>
+      createContext(index === 13 ? "notification_awareness" : "location_context", index),
+    );
+
+    await expect(service.recordMobileContextAudit({ contexts }, { deviceId: "device-1" })).resolves.toMatchObject({
+      accepted: 12,
+    });
+
+    expect(records).toHaveLength(12);
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "mobile_context_audit_recorded",
+      "mobile",
+      expect.objectContaining({
+        accepted: 12,
+        capabilityIds: Array.from({ length: 12 }, () => "location_context"),
+      }),
+    );
+  });
 });
 
 function createCapability(capabilityId: MobileNativeCapabilityRecord["capabilityId"]): MobileNativeCapabilityRecord {
@@ -81,5 +156,18 @@ function createCapability(capabilityId: MobileNativeCapabilityRecord["capability
       platform: "android",
       source: "mobile_app",
     },
+  };
+}
+
+function createContext(capabilityId: MobileContextEnvelope["capabilityId"], index: number): MobileContextEnvelope {
+  return {
+    capabilityId,
+    capturedAt: `2026-05-22T12:${String(index).padStart(2, "0")}:00.000Z`,
+    sensitivity: "moderate",
+    summary: `Context ${index}`,
+    structuredFields: {
+      place: "San Francisco, CA",
+    },
+    userVisibleReason: "operator requested mobile context",
   };
 }

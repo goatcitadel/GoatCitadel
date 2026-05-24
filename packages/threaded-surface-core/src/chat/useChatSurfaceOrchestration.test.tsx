@@ -145,9 +145,9 @@ describe("useChatSurfaceOrchestration", () => {
     expect(resolveOutboundDraftContent("   ", 1, "send")).toBe("Please review the attached files and continue.");
     expect(resolveOutboundDraftContent("   ", 1, "edit")).toBe("");
     expect(resolveOutboundDraftContent("   ", 0, "send")).toBe("");
-    expect(resolveOutboundContentWithContext(" Follow up ", { label: "1 selected turn", content: " Prior answer " })).toBe(
-      "[Selected conversation context]\nPrior answer\n\n[New message]\nFollow up",
-    );
+    expect(
+      resolveOutboundContentWithContext(" Follow up ", { label: "1 selected turn", content: " Prior answer " }),
+    ).toBe("[Selected conversation context]\nPrior answer\n\n[New message]\nFollow up");
   });
 
   it("sends selected conversation context with the next message and clears it", async () => {
@@ -159,7 +159,8 @@ describe("useChatSurfaceOrchestration", () => {
         sourceLabel: "Launch plan",
         sourceSessionId: "session-source",
         turnIds: ["turn-1"],
-        content: "Source thread: Launch plan\n\nTurn turn-1\nYou: Build the launch plan\nGoatCitadel: Launch plan ready.",
+        content:
+          "Source thread: Launch plan\n\nTurn turn-1\nYou: Build the launch plan\nGoatCitadel: Launch plan ready.",
       },
       onOutboundContextConsumed,
     });
@@ -237,6 +238,7 @@ describe("useChatSurfaceOrchestration", () => {
       action: "retry",
       targetTurnId: "turn-1",
     });
+    expect(latest!.snapshot().queuedOutbound[0]?.id).not.toBe(latest!.snapshot().queuedOutbound[1]?.id);
     expect(latest!.pushNotice).toHaveBeenCalledWith("Retry queued while the current turn finishes.");
 
     mountHarness({ canBegin: true });

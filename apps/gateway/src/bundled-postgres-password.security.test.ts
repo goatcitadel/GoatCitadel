@@ -16,9 +16,9 @@ import {
 // fix) connected as the postgres superuser without credentials. The fix:
 //   1. generate a per-install random password and persist it under
 //      `data/secrets/postgres-bundled-password` (mode 0600),
-//   2. pass the password via `POSTGRES_PASSWORD` and switch
+//   2. pass the password via a temporary Docker env file and switch
 //      `POSTGRES_HOST_AUTH_METHOD` to `scram-sha-256` so fresh data dirs
-//      require password auth,
+//      require password auth without putting the password in docker argv,
 //   3. surface the same password to `resolveGatewayPostgresConnectionOptions`
 //      so the gateway itself can connect.
 
@@ -97,8 +97,15 @@ describe("bundled Postgres Docker spawn uses password auth (codex #2)", () => {
     expect(source).not.toMatch(/"POSTGRES_HOST_AUTH_METHOD=trust"/);
   });
 
-  it("passes POSTGRES_PASSWORD into the docker run args", () => {
+  it("passes POSTGRES_PASSWORD through a temporary env file instead of docker argv", () => {
     expect(source).toMatch(/POSTGRES_PASSWORD=\$\{bundledPassword\}/);
+    expect(source).toMatch(/"--env-file"/);
+    expect(source).not.toMatch(/"--env"[\s\S]*`POSTGRES_PASSWORD=\$\{bundledPassword\}`/);
+  });
+
+  it("uses SHA-256 for new bundled Docker container names", () => {
+    expect(source).toMatch(/createHash\("sha256"\)/);
+    expect(source).not.toMatch(/createHash\("sha1"\)/);
   });
 
   it("binds the published port to 127.0.0.1 only", () => {

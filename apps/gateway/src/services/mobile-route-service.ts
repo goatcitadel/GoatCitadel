@@ -68,7 +68,8 @@ const SAFE_STRUCTURED_FIELD_KEYS = new Set([
 
 export function createMobileRoutePort(deps: MobileRoutePortDependencies): MobileRoutePort {
   return {
-    listMobileCapabilities: async (_input?: { limit?: number }): Promise<MobileCapabilityListResponse> => {
+    listMobileCapabilities: async (input?: { limit?: number }): Promise<MobileCapabilityListResponse> => {
+      const limit = Math.max(1, Math.min(input?.limit ?? 100, MAX_AUDIT_ITEMS));
       const records = await deps.storage.audit.list("approvals");
       const latest = new Map<MobileNativeCapabilityId, MobileNativeCapabilityRecord>();
       for (const record of records) {
@@ -83,16 +84,28 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
           latest.set(item.capabilityId, item);
         }
       }
-      return { items: [...latest.values()].sort((left, right) => left.capabilityId.localeCompare(right.capabilityId)) };
+      const items = [...latest.values()]
+        .sort((left, right) => left.capabilityId.localeCompare(right.capabilityId))
+        .slice(0, limit);
+      return { items };
     },
     listMobileAudit: async (input?: MobileAuditListInput): Promise<MobileAuditListResponse> => {
       const limit = Math.max(1, Math.min(input?.limit ?? 100, MAX_AUDIT_ITEMS));
       const records = await deps.storage.audit.list("approvals");
-      const items = records
-        .filter((record) => typeof record.eventType === "string" && record.eventType.startsWith("mobile."))
-        .filter((record) => !input?.capabilityId || record.capabilityId === input.capabilityId)
-        .slice(-limit)
-        .reverse();
+      const items: MobileAuditListResponse["items"] = [];
+      for (let index = records.length - 1; index >= 0 && items.length < limit; index -= 1) {
+        const record = records[index];
+        if (!record) {
+          continue;
+        }
+        if (typeof record.eventType !== "string" || !record.eventType.startsWith("mobile.")) {
+          continue;
+        }
+        if (input?.capabilityId && record.capabilityId !== input.capabilityId) {
+          continue;
+        }
+        items.push(record);
+      }
       return { items };
     },
     recordMobileCapabilityHeartbeat: async (
@@ -133,8 +146,9 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
       input: MobileContextAuditRequest,
       actor: MobileRouteActorContext,
     ): Promise<MobileContextAuditResponse> => {
+      const acceptedContexts = input.contexts.slice(0, MAX_CONTEXTS_PER_REQUEST);
       const contextEventIds: string[] = [];
-      for (const context of input.contexts.slice(0, MAX_CONTEXTS_PER_REQUEST)) {
+      for (const context of acceptedContexts) {
         const contextEventId = randomUUID();
         contextEventIds.push(contextEventId);
         await deps.storage.audit.append("approvals", {
@@ -148,7 +162,7 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
       deps.publishRealtime("mobile_context_audit_recorded", "mobile", {
         accepted: contextEventIds.length,
         contextEventIds,
-        capabilityIds: input.contexts.map((context) => context.capabilityId),
+        capabilityIds: acceptedContexts.map((context) => context.capabilityId),
         deviceId: actor.deviceId,
         companionSessionId: actor.companionSessionId,
       });

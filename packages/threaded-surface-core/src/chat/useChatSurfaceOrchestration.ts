@@ -1,10 +1,20 @@
 import type { ChatAttachmentRecord, ChatThreadResponse } from "@goatcitadel/contracts";
 import { cancelChatTurn } from "@goatcitadel/mission-control-shared/api/client";
 import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
-import { useCallback, useEffect, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadView";
 
 const ATTACHMENT_ONLY_SEND_PLACEHOLDER = "Please review the attached files and continue.";
+let fallbackQueueItemIdCounter = 0;
+
+function createQueueItemId(): string {
+  const randomUUID = globalThis.crypto?.randomUUID?.();
+  if (randomUUID) {
+    return `queue-${randomUUID}`;
+  }
+  fallbackQueueItemIdCounter = (fallbackQueueItemIdCounter + 1) % Number.MAX_SAFE_INTEGER;
+  return `queue-${Date.now()}-${fallbackQueueItemIdCounter}`;
+}
 
 export function resolveOutboundDraftContent(
   draft: string,
@@ -48,13 +58,7 @@ export function resolveOutboundContentWithContext(content: string, context?: Out
   if (!trimmedContext) {
     return trimmedContent;
   }
-  return [
-    "[Selected conversation context]",
-    trimmedContext,
-    "",
-    "[New message]",
-    trimmedContent,
-  ].join("\n");
+  return ["[Selected conversation context]", trimmedContext, "", "[New message]", trimmedContent].join("\n");
 }
 
 export function useChatSurfaceOrchestration(input: {
@@ -95,6 +99,7 @@ export function useChatSurfaceOrchestration(input: {
 }) {
   const [queuedOutbound, setQueuedOutbound] = useState<OutboundQueueItem[]>([]);
   const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
+  const drainingQueueItemIdRef = useRef<string | null>(null);
 
   const handleSend = useCallback(async () => {
     const action: OutboundQueueItem["action"] = editingTurnId ? "edit" : "send";
@@ -102,9 +107,10 @@ export function useChatSurfaceOrchestration(input: {
     if (!draftContent) {
       return;
     }
-    const content = action === "send" ? resolveOutboundContentWithContext(draftContent, input.outboundContext) : draftContent;
+    const content =
+      action === "send" ? resolveOutboundContentWithContext(draftContent, input.outboundContext) : draftContent;
     const nextItem: OutboundQueueItem = {
-      id: `queue-${Date.now()}`,
+      id: createQueueItemId(),
       action,
       sessionId: input.selectedSessionId ?? undefined,
       targetTurnId: editingTurnId ?? undefined,
@@ -131,7 +137,7 @@ export function useChatSurfaceOrchestration(input: {
   const handleRetryTurn = useCallback(
     async (turnId: string) => {
       const nextItem: OutboundQueueItem = {
-        id: `queue-${Date.now()}`,
+        id: createQueueItemId(),
         action: "retry",
         sessionId: input.selectedSessionId ?? undefined,
         targetTurnId: turnId,
@@ -221,15 +227,27 @@ export function useChatSurfaceOrchestration(input: {
   );
 
   useEffect(() => {
+    if (drainingQueueItemIdRef.current) {
+      return;
+    }
     const nextItem = queuedOutbound.find((item) => !item.paused);
     if (input.sending || !nextItem) {
       return;
     }
-    if (!input.tryBeginOutboundExecutionRef.current?.()) {
+    const executeOutboundItem = input.executeOutboundItemRef.current;
+    if (!executeOutboundItem || !input.tryBeginOutboundExecutionRef.current?.()) {
       return;
     }
+    drainingQueueItemIdRef.current = nextItem.id;
     setQueuedOutbound((current) => current.filter((item) => item.id !== nextItem.id));
-    void input.executeOutboundItemRef.current?.(nextItem);
+    void executeOutboundItem(nextItem)
+      .finally(() => {
+        if (drainingQueueItemIdRef.current === nextItem.id) {
+          drainingQueueItemIdRef.current = null;
+        }
+        setQueuedOutbound((current) => (current.some((item) => !item.paused) ? [...current] : current));
+      })
+      .catch(() => undefined);
   }, [input.executeOutboundItemRef, input.sending, input.tryBeginOutboundExecutionRef, queuedOutbound]);
 
   return {

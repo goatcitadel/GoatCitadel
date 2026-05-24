@@ -312,7 +312,12 @@ async function tryStartDockerBundledPostgres(
 
   const state = inspectDockerContainerState(containerName);
   if (state === "running") {
-    return undefined;
+    return {
+      strategy: "docker",
+      // The container was already running before this process arrived, so
+      // leave its lifecycle with the operator just like the native reuse path.
+      stop: async () => {},
+    };
   }
 
   if (state === "stopped") {
@@ -346,10 +351,11 @@ async function tryStartDockerBundledPostgres(
   //      network entirely (matches the native adapter's `-h 127.0.0.1`).
   //   2. A per-install random password (persisted under
   //      `data/secrets/postgres-bundled-password`, mode 0o600) is passed
-  //      via `POSTGRES_PASSWORD` AND `POSTGRES_HOST_AUTH_METHOD=scram-sha-256`,
-  //      so any local-process compromise that reaches the port still has
-  //      to read the password file (which the gateway's runtime account
-  //      restricts) before connecting as the postgres superuser.
+  //      via a temporary Docker env file with `POSTGRES_PASSWORD` AND
+  //      `POSTGRES_HOST_AUTH_METHOD=scram-sha-256`, so any local-process
+  //      compromise that reaches the port still has to read the password file
+  //      (which the gateway's runtime account restricts) before connecting as
+  //      the postgres superuser.
   //
   // Note: the postgres image only honours `POSTGRES_HOST_AUTH_METHOD` and
   // `POSTGRES_PASSWORD` when initialising a FRESH data directory. Existing
@@ -357,32 +363,48 @@ async function tryStartDockerBundledPostgres(
   // password is harmlessly passed but ignored. Operators who want
   // scram-sha-256 on an existing cluster must recreate the data dir.
   const bundledPassword = await ensureBundledPostgresPassword(config);
-  execFileSync(
-    "docker",
+  const dockerEnvDir = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-bundled-postgres-env-"));
+  const dockerEnvFile = path.join(dockerEnvDir, `${randomBytes(8).toString("hex")}.env`);
+  await fs.writeFile(
+    dockerEnvFile,
     [
-      "run",
-      "--detach",
-      "--name",
-      containerName,
-      "--publish",
-      `127.0.0.1:${config.assistant.database.bundledPostgres.port}:5432`,
-      "--volume",
-      `${dataDir}:/var/lib/postgresql/data`,
-      "--env",
       "POSTGRES_USER=postgres",
-      "--env",
       "POSTGRES_HOST_AUTH_METHOD=scram-sha-256",
-      "--env",
       `POSTGRES_PASSWORD=${bundledPassword}`,
-      "--env",
       "POSTGRES_DB=postgres",
-      POSTGRES_IMAGE,
-    ],
-    {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    },
+      "",
+    ].join("\n"),
+    { encoding: "utf8", mode: 0o600 },
   );
+  try {
+    await fs.chmod(dockerEnvFile, 0o600);
+  } catch {
+    // Windows / fs without chmod support - best-effort only.
+  }
+  try {
+    execFileSync(
+      "docker",
+      [
+        "run",
+        "--detach",
+        "--name",
+        containerName,
+        "--publish",
+        `127.0.0.1:${config.assistant.database.bundledPostgres.port}:5432`,
+        "--volume",
+        `${dataDir}:/var/lib/postgresql/data`,
+        "--env-file",
+        dockerEnvFile,
+        POSTGRES_IMAGE,
+      ],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+  } finally {
+    await fs.rm(dockerEnvDir, { recursive: true, force: true });
+  }
 
   return {
     strategy: "docker",
@@ -514,7 +536,10 @@ function isExpectedBundledDataDirectory(config: GatewayRuntimeConfig, actualData
   if (!isDockerPostgresDataDirectory(actualDataDirectory)) {
     return false;
   }
-  return inspectDockerContainerState(buildBundledDockerContainerName(config.rootDir)) === "running";
+  return (
+    inspectDockerContainerState(buildBundledDockerContainerName(config.rootDir)) === "running" ||
+    hasRunningBundledDockerContainerForDataDir(config)
+  );
 }
 
 function sameFilesystemPath(left: string, right: string): boolean {
@@ -562,6 +587,48 @@ function inspectDockerContainerState(containerName: string): "missing" | "runnin
     return "stopped";
   } catch {
     return "missing";
+  }
+}
+
+function hasRunningBundledDockerContainerForDataDir(config: GatewayRuntimeConfig): boolean {
+  const expectedDataDir = path.resolve(config.rootDir, config.assistant.database.bundledPostgres.dataDir);
+  const prefix = buildBundledDockerContainerNamePrefix();
+  try {
+    const names = execFileSync("docker", ["ps", "--filter", `name=^/${prefix}`, "--format", "{{.Names}}"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    for (const name of names) {
+      if (dockerContainerMountsDataDir(name, expectedDataDir)) {
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function dockerContainerMountsDataDir(containerName: string, expectedDataDir: string): boolean {
+  try {
+    const output = execFileSync("docker", ["inspect", "--format", "{{json .Mounts}}", containerName], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const mounts = JSON.parse(output) as Array<{ Destination?: string; Source?: string }>;
+    return mounts.some((mount) => {
+      const destination = mount.Destination?.trim().replaceAll("\\", "/").replace(/\/+$/, "");
+      return (
+        destination === "/var/lib/postgresql/data" &&
+        typeof mount.Source === "string" &&
+        sameFilesystemPath(mount.Source, expectedDataDir)
+      );
+    });
+  } catch {
+    return false;
   }
 }
 
@@ -623,13 +690,17 @@ function normalizeError(error: unknown): Error {
 }
 
 export function buildBundledDockerContainerName(rootDir: string): string {
-  const hash = createHash("sha1").update(rootDir).digest("hex").slice(0, 10);
+  const hash = createHash("sha256").update(rootDir).digest("hex").slice(0, 10);
+  return `${buildBundledDockerContainerNamePrefix()}-${hash}`;
+}
+
+function buildBundledDockerContainerNamePrefix(): string {
   const hostname = os
     .hostname()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
-  return `goatcitadel-postgres-${hostname || "local"}-${hash}`;
+  return `goatcitadel-postgres-${hostname || "local"}`;
 }
 
 function quoteIdentifier(identifier: string): string {
@@ -648,4 +719,5 @@ export const __bundledPostgresRuntimeInternals = {
   readLogTail,
   resolveNativePostgresCommands,
   sameFilesystemPath,
+  dockerContainerMountsDataDir,
 };

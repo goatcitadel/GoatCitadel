@@ -952,7 +952,7 @@ describe("useChatOutboundExecution", () => {
         createdAt: "2026-05-03T12:45:00.000Z",
       });
     });
-    expect(latest?.getSnapshot().error).toBe("Acknowledge the predicted fallback route boundary before continuing.");
+    expect(latest?.getSnapshot().error).toBe("Please confirm the route fallback before sending.");
 
     await act(async () => {
       create(<Harness />);
@@ -1940,6 +1940,7 @@ describe("useChatOutboundExecution", () => {
         eventId: "evt-error-default",
         sessionId: "session-1",
         turnId: "turn-defaults",
+        error: "   ",
       });
     });
     await act(async () => {
