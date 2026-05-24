@@ -649,6 +649,8 @@ export {
   fetchProviderSecretStatus,
   generateLlmImage,
   installAddon,
+  disableAddon,
+  enableAddon,
   launchAddon,
   previewLlmModels,
   pollOpenAICodexOAuthDeviceFlow,

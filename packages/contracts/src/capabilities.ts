@@ -17,6 +17,7 @@ export type CapabilityCatalogScope = "inspectable" | "callable";
 export type CapabilityProposalKind = "skill" | "tool";
 export type CodeModeLanguage = "javascript" | "typescript";
 export type CandidateLifecycleAction = "promote" | "revoke" | "rollback";
+export type CodeModeRunArtifactKind = "source" | "wrapper_manifest" | "policy_snapshot" | "stdout" | "stderr";
 
 export type CodeModeRunStatus =
   | "approval_pending"
@@ -175,6 +176,66 @@ export interface CodeModeRunRecord {
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
+}
+
+export interface CodeModeRunArtifactPreview {
+  runId: string;
+  artifactKind: CodeModeRunArtifactKind;
+  artifact: CapabilityArtifactRecord;
+  content: string;
+  sha256: string;
+  verifiedAt: string;
+  truncated: boolean;
+}
+
+export interface CodeModeRunComparisonRecord {
+  runId: string;
+  baselineRunId: string;
+  comparedAt: string;
+  run: Pick<
+    CodeModeRunRecord,
+    | "runId"
+    | "status"
+    | "capabilitySnapshotId"
+    | "codeModeInputHash"
+    | "wrapperManifestHash"
+    | "policySnapshotHash"
+    | "codeHash"
+    | "permissionProfileId"
+    | "localOperatorOverrideId"
+    | "createdAt"
+    | "finishedAt"
+  >;
+  baseline: Pick<
+    CodeModeRunRecord,
+    | "runId"
+    | "status"
+    | "capabilitySnapshotId"
+    | "codeModeInputHash"
+    | "wrapperManifestHash"
+    | "policySnapshotHash"
+    | "codeHash"
+    | "permissionProfileId"
+    | "localOperatorOverrideId"
+    | "createdAt"
+    | "finishedAt"
+  >;
+  matches: {
+    capabilitySnapshot: boolean;
+    source: boolean;
+    input: boolean;
+    wrapperManifest: boolean;
+    policySnapshot: boolean;
+    permissionProfile: boolean;
+    localOperatorOverride: boolean;
+    sandboxRunner: boolean;
+    sandboxProfile: boolean;
+    sandboxAvailability: boolean;
+  };
+  sandbox: {
+    run?: CodeModeSandboxMetadata;
+    baseline?: CodeModeSandboxMetadata;
+  };
 }
 
 export interface CodeModeRunRequest {

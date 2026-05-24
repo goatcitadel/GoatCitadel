@@ -1,7 +1,7 @@
 export type AddonTrustTier = "trusted" | "restricted" | "community";
 export type AddonRuntimeType = "separate_repo_app";
 export type AddonWebEntryMode = "none" | "external_local_url" | "embedded_proxy";
-export type AddonRuntimeStatus = "not_installed" | "installed" | "running" | "stopped" | "error";
+export type AddonRuntimeStatus = "not_installed" | "installed" | "disabled" | "running" | "stopped" | "error";
 export type AddonHealthStatus = "pass" | "warn" | "fail";
 
 export interface AddonInstallCommand {
@@ -55,6 +55,7 @@ export interface AddonInstalledRecord {
   updatedAt: string;
   consentedAt: string;
   consentedBy: string;
+  enabled?: boolean;
   runtimeStatus: AddonRuntimeStatus;
   pid?: number;
   lastError?: string;

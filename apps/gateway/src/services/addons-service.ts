@@ -38,7 +38,8 @@ const AddonInstalledRecordSchema = z.object({
   updatedAt: z.string().min(1),
   consentedAt: z.string().min(1),
   consentedBy: z.string().min(1),
-  runtimeStatus: z.enum(["not_installed", "installed", "running", "stopped", "error"]),
+  enabled: z.boolean().default(true),
+  runtimeStatus: z.enum(["not_installed", "installed", "disabled", "running", "stopped", "error"]),
   pid: z.number().int().positive().optional(),
   lastError: z.string().min(1).optional(),
 });
@@ -220,10 +221,58 @@ export class AddonsService {
       updatedAt: now,
       consentedAt: now,
       consentedBy: input.actorId?.trim() || "operator",
-      runtimeStatus: "installed",
+      enabled: false,
+      runtimeStatus: "disabled",
+    };
+    await this.writeManifest(manifest);
+    this.slotService?.unregister(addonId);
+    return {
+      status: await this.getStatus(addonId),
+    };
+  }
+
+  public async enable(addonId: string): Promise<AddonActionResponse> {
+    const addon = this.requireCatalogEntry(addonId);
+    const manifest = await this.readManifest();
+    const current = this.requireInstalledRecord(addonId, manifest);
+    const installedPath = assertAddonPathWithinRoot(current.installedPath, this.addonsRootDir);
+    if (!fsSync.existsSync(installedPath)) {
+      throw new Error(`Installed add-on path is missing: ${installedPath}`);
+    }
+    manifest.items[addonId] = {
+      ...current,
+      installedPath,
+      enabled: true,
+      runtimeStatus: current.runtimeStatus === "disabled" ? "installed" : current.runtimeStatus,
+      updatedAt: new Date().toISOString(),
+      lastError: undefined,
     };
     await this.writeManifest(manifest);
     this.slotService?.registerDeclarations(addonId, addon.dashboardSlots ?? []);
+    return {
+      status: await this.getStatus(addonId),
+    };
+  }
+
+  public async disable(addonId: string): Promise<AddonActionResponse> {
+    this.requireCatalogEntry(addonId);
+    const manifest = await this.readManifest();
+    const current = this.requireInstalledRecord(addonId, manifest);
+    const installedPath = assertAddonPathWithinRoot(current.installedPath, this.addonsRootDir);
+    if (typeof current.pid === "number") {
+      killProcessTree(current.pid);
+    }
+    manifest.items[addonId] = {
+      ...current,
+      installedPath,
+      enabled: false,
+      pid: undefined,
+      runtimeStatus: "disabled",
+      updatedAt: new Date().toISOString(),
+      lastError: undefined,
+    };
+    await this.writeManifest(manifest);
+    this.slotService?.unregister(addonId);
     return {
       status: await this.getStatus(addonId),
     };
@@ -249,7 +298,8 @@ export class AddonsService {
         launchUrl: current.launchUrl ?? addon.launchUrl,
         installRef: readGitRef(installedPath),
         updatedAt: new Date().toISOString(),
-        runtimeStatus: current.runtimeStatus === "running" ? "running" : "installed",
+        runtimeStatus:
+          current.enabled === false ? "disabled" : current.runtimeStatus === "running" ? "running" : "installed",
         lastError: undefined,
       };
       await this.writeManifest(manifest);
@@ -273,6 +323,9 @@ export class AddonsService {
     const addon = this.requireCatalogEntry(addonId);
     const manifest = await this.readManifest();
     const current = this.requireInstalledRecord(addonId, manifest);
+    if (current.enabled === false || current.runtimeStatus === "disabled") {
+      throw new Error(`Add-on ${addonId} is disabled. Enable it before launch.`);
+    }
     if (addonId !== "arena") {
       throw new Error(`Launch flow is not implemented for add-on ${addonId}.`);
     }
@@ -296,6 +349,7 @@ export class AddonsService {
     const updated: AddonInstalledRecord = {
       ...current,
       installedPath,
+      enabled: true,
       webEntryMode: addon.webEntryMode,
       launchUrl: current.launchUrl ?? addon.launchUrl,
       runtimeStatus: ready ? "running" : "error",
@@ -310,6 +364,7 @@ export class AddonsService {
   }
 
   public async stop(addonId: string): Promise<AddonActionResponse> {
+    this.requireCatalogEntry(addonId);
     const manifest = await this.readManifest();
     const current = this.requireInstalledRecord(addonId, manifest);
     const installedPath = assertAddonPathWithinRoot(current.installedPath, this.addonsRootDir);
@@ -319,9 +374,10 @@ export class AddonsService {
     const updated: AddonInstalledRecord = {
       ...current,
       installedPath,
+      enabled: current.enabled ?? true,
       pid: undefined,
       launchUrl: current.launchUrl ?? ARENA_LAUNCH_URL,
-      runtimeStatus: "stopped",
+      runtimeStatus: current.enabled === false ? "disabled" : "stopped",
       updatedAt: new Date().toISOString(),
       lastError: undefined,
     };
@@ -333,6 +389,7 @@ export class AddonsService {
   }
 
   public async uninstall(addonId: string): Promise<AddonUninstallResponse> {
+    this.requireCatalogEntry(addonId);
     const manifest = await this.readManifest();
     const current = this.requireInstalledRecord(addonId, manifest);
     const installedPath = assertAddonPathWithinRoot(current.installedPath, this.addonsRootDir);
@@ -361,6 +418,20 @@ export class AddonsService {
         message: "Add-on is not installed yet.",
       });
       return checks;
+    }
+
+    if (installed.enabled === false || installed.runtimeStatus === "disabled") {
+      checks.push({
+        key: "enabled",
+        status: "warn",
+        message: "Add-on is installed but disabled. Enable it before launch or dashboard slot registration.",
+      });
+    } else {
+      checks.push({
+        key: "enabled",
+        status: "pass",
+        message: "Add-on is enabled for operator-controlled launch and slot registration.",
+      });
     }
 
     const installedPath = assertAddonPathWithinRoot(installed.installedPath, this.addonsRootDir);
@@ -418,9 +489,18 @@ export class AddonsService {
     const normalizedRecord: AddonInstalledRecord = {
       ...installed,
       installedPath,
+      enabled: installed.enabled ?? true,
       webEntryMode: addon.webEntryMode,
       launchUrl: installed.launchUrl ?? addon.launchUrl,
     };
+    if (normalizedRecord.enabled === false || normalizedRecord.runtimeStatus === "disabled") {
+      return {
+        ...normalizedRecord,
+        pid: undefined,
+        runtimeStatus: "disabled",
+        lastError: undefined,
+      };
+    }
     if (!fsSync.existsSync(installedPath)) {
       return {
         ...normalizedRecord,

@@ -78,9 +78,11 @@ describe("addons routes", () => {
     expect(uninstallAddon).toHaveBeenCalledWith("arena");
   });
 
-  it("runs installed, update, launch, and stop lanes with route error posture", async () => {
+  it("runs installed, update, enable, disable, launch, and stop lanes with route error posture", async () => {
     const listInstalledAddons = vi.fn(async () => [{ addonId: "arena", installed: true }]);
     const updateAddon = vi.fn(async () => ({ addonId: "arena", updated: true }));
+    const enableAddon = vi.fn(async () => ({ addonId: "arena", enabled: true }));
+    const disableAddon = vi.fn(async () => ({ addonId: "arena", enabled: false }));
     const launchAddon = vi.fn(async () => ({ addonId: "arena", runtimeStatus: "running" }));
     const stopAddon = vi.fn(async () => ({ addonId: "arena", runtimeStatus: "stopped" }));
     app = Fastify();
@@ -88,6 +90,8 @@ describe("addons routes", () => {
       addons: {
         listInstalledAddons,
         updateAddon,
+        enableAddon,
+        disableAddon,
         launchAddon,
         stopAddon,
       },
@@ -100,6 +104,12 @@ describe("addons routes", () => {
     await expect(
       app.inject({ method: "POST", url: "/api/v1/addons/arena/update" }).then((response) => response.json()),
     ).resolves.toEqual({ addonId: "arena", updated: true });
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/addons/arena/enable" }).then((response) => response.json()),
+    ).resolves.toEqual({ addonId: "arena", enabled: true });
+    await expect(
+      app.inject({ method: "POST", url: "/api/v1/addons/arena/disable" }).then((response) => response.json()),
+    ).resolves.toEqual({ addonId: "arena", enabled: false });
     await expect(
       app.inject({ method: "POST", url: "/api/v1/addons/arena/launch" }).then((response) => response.json()),
     ).resolves.toEqual({ addonId: "arena", runtimeStatus: "running" });
@@ -192,6 +202,12 @@ describe("addons routes", () => {
         installAddon: vi.fn(async () => {
           throw new Error("install blocked");
         }),
+        enableAddon: vi.fn(async () => {
+          throw new Error("enable blocked");
+        }),
+        disableAddon: vi.fn(async () => {
+          throw new Error("disable blocked");
+        }),
         launchAddon: vi.fn(async () => {
           throw new Error("launch blocked");
         }),
@@ -216,6 +232,14 @@ describe("addons routes", () => {
     });
     expect(install.statusCode).toBe(400);
     expect(install.json()).toEqual({ error: "install blocked" });
+
+    const enable = await app.inject({ method: "POST", url: "/api/v1/addons/arena/enable" });
+    expect(enable.statusCode).toBe(400);
+    expect(enable.json()).toEqual({ error: "enable blocked" });
+
+    const disable = await app.inject({ method: "POST", url: "/api/v1/addons/arena/disable" });
+    expect(disable.statusCode).toBe(400);
+    expect(disable.json()).toEqual({ error: "disable blocked" });
 
     const launch = await app.inject({ method: "POST", url: "/api/v1/addons/arena/launch" });
     expect(launch.statusCode).toBe(400);

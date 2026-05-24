@@ -54,6 +54,14 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
   const runParamsSchema = z.object({
     runId: z.string().min(1),
   });
+  const runArtifactParamsSchema = z.object({
+    runId: z.string().min(1),
+    artifactKind: z.enum(["source", "wrapper_manifest", "policy_snapshot", "stdout", "stderr"]),
+  });
+  const runComparisonParamsSchema = z.object({
+    runId: z.string().min(1),
+    baselineRunId: z.string().min(1),
+  });
 
   const runDetailQuerySchema = z.object({
     sessionId: z.string().trim().min(1).optional(),
@@ -232,6 +240,56 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
         ...(query.data.turnId ? { turnId: query.data.turnId } : {}),
       });
       return reply.send(run);
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/code-mode/runs/:runId/artifacts/:artifactKind", async (request, reply) => {
+    const parsed = runArtifactParamsSchema.safeParse(request.params);
+    const query = runDetailQuerySchema.safeParse(request.query);
+    if (!parsed.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: parsed.success ? undefined : parsed.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
+    }
+    try {
+      const workspaceId = query.data.workspaceId ?? DEFAULT_WORKSPACE_ID;
+      return reply.send(
+        await fastify.services.capabilities.getCodeModeRunArtifactPreview(parsed.data.runId, parsed.data.artifactKind, {
+          workspaceId,
+          ...(query.data.sessionId ? { sessionId: query.data.sessionId } : {}),
+          ...(query.data.turnId ? { turnId: query.data.turnId } : {}),
+        }),
+      );
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/code-mode/runs/:runId/compare/:baselineRunId", async (request, reply) => {
+    const parsed = runComparisonParamsSchema.safeParse(request.params);
+    const query = runDetailQuerySchema.safeParse(request.query);
+    if (!parsed.success || !query.success) {
+      return reply.code(400).send({
+        error: {
+          params: parsed.success ? undefined : parsed.error.flatten(),
+          query: query.success ? undefined : query.error.flatten(),
+        },
+      });
+    }
+    try {
+      const workspaceId = query.data.workspaceId ?? DEFAULT_WORKSPACE_ID;
+      return reply.send(
+        fastify.services.capabilities.compareCodeModeRuns(parsed.data.runId, parsed.data.baselineRunId, {
+          workspaceId,
+          ...(query.data.sessionId ? { sessionId: query.data.sessionId } : {}),
+          ...(query.data.turnId ? { turnId: query.data.turnId } : {}),
+        }),
+      );
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }

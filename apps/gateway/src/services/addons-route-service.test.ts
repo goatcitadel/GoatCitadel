@@ -67,7 +67,7 @@ describe("addons route service", () => {
     expect(filtered).toEqual([{ addonId: "addon-2", slot: "library.skills.cards" }]);
   });
 
-  it("falls back to catalog launch URL and emits stop, uninstall, and update events", async () => {
+  it("falls back to catalog launch URL and emits lifecycle, stop, uninstall, and update events", async () => {
     const deps = fakeDeps();
     deps.addonsService.launch.mockResolvedValueOnce({
       status: { status: "running", addon: { launchUrl: "https://catalog.example.test" } },
@@ -75,6 +75,8 @@ describe("addons route service", () => {
     const service = createAddonsRouteService(createAddonsRoutePort(deps));
 
     await service.launchAddon("addon-2");
+    await expect(service.enableAddon("addon-2")).resolves.toEqual(result("installed"));
+    await expect(service.disableAddon("addon-2")).resolves.toEqual(result("disabled"));
     await expect(service.stopAddon("addon-2")).resolves.toEqual(result("stopped"));
     await expect(service.uninstallAddon("addon-2")).resolves.toEqual(result("uninstalled"));
     await expect(service.updateAddon("addon-2")).resolves.toEqual(result("updated"));
@@ -88,6 +90,14 @@ describe("addons route service", () => {
     expect(deps.publishRealtime).toHaveBeenCalledWith("addon_runtime_changed", "system", {
       addonId: "addon-2",
       status: "stopped",
+    });
+    expect(deps.publishRealtime).toHaveBeenCalledWith("addon_enabled", "system", {
+      addonId: "addon-2",
+      status: "installed",
+    });
+    expect(deps.publishRealtime).toHaveBeenCalledWith("addon_disabled", "system", {
+      addonId: "addon-2",
+      status: "disabled",
     });
     expect(deps.publishRealtime).toHaveBeenCalledWith("addon_uninstalled", "system", { addonId: "addon-2" });
     expect(deps.publishRealtime).toHaveBeenCalledWith("addon_updated", "system", {
@@ -111,6 +121,8 @@ function fakeDeps() {
   return {
     addonsService: {
       getStatus: vi.fn(() => ({ status: "installed" })),
+      disable: vi.fn(async () => result("disabled")),
+      enable: vi.fn(async () => result("installed")),
       install: vi.fn(async () => result("installed")),
       launch: vi.fn(async () => result("running")),
       listCatalog: vi.fn(() => [{ addonId: "addon-1" }]),

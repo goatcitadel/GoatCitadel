@@ -438,6 +438,7 @@ describe("shared loop 24 component tails", () => {
       }),
     };
     const editor = {
+      addCommand: vi.fn(),
       dispose: vi.fn(),
       getValue: vi.fn(() => "typed runtime"),
       onDidChangeModelContent: vi.fn((handler: () => void) => {
@@ -446,6 +447,16 @@ describe("shared loop 24 component tails", () => {
       updateOptions: vi.fn(),
     };
     const monaco = {
+      KeyMod: {
+        CtrlCmd: 2048,
+        Shift: 1024,
+        Alt: 512,
+        WinCtrl: 256,
+      },
+      KeyCode: {
+        KeyS: 49,
+        KeyP: 46,
+      },
       editor: {
         create: vi.fn(() => editor),
         createModel: vi.fn(() => model),

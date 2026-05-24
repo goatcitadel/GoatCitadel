@@ -51,6 +51,7 @@ function createMonaco() {
     };
   });
   const codeEditor = {
+    addCommand: vi.fn(),
     dispose: vi.fn(),
     getValue: vi.fn(() => "typed value"),
     onDidChangeModelContent: vi.fn((listener: () => void) => {
@@ -63,6 +64,16 @@ function createMonaco() {
     setModel: vi.fn(),
   };
   const monaco = {
+    KeyMod: {
+      CtrlCmd: 2048,
+      Shift: 1024,
+      Alt: 512,
+      WinCtrl: 256,
+    },
+    KeyCode: {
+      KeyS: 49,
+      KeyP: 46,
+    },
     editor: {
       create: vi.fn(() => codeEditor),
       createDiffEditor: vi.fn(() => diffEditor),

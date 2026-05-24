@@ -102,4 +102,27 @@ describe("capabilities API", () => {
       localOperatorOverrideId: "override-1",
     });
   });
+
+  it("builds scoped Code Mode artifact and comparison URLs", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { compareCodeModeRuns, fetchCodeModeRunArtifact } = await import("./capabilities");
+
+    await fetchCodeModeRunArtifact("run/1", "policy_snapshot", {
+      sessionId: "session-1",
+      turnId: "turn-1",
+      workspaceId: "workspace-1",
+    });
+    await compareCodeModeRuns("run/1", "run/0", {
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+    });
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      "/api/v1/code-mode/runs/run%2F1/artifacts/policy_snapshot?sessionId=session-1&turnId=turn-1&workspaceId=workspace-1",
+    );
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
+      "/api/v1/code-mode/runs/run%2F1/compare/run%2F0?sessionId=session-1&workspaceId=workspace-1",
+    );
+  });
 });

@@ -3,10 +3,18 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import type {
   ChatSessionWorkbenchFileOperationKind,
   ChatSessionWorkbenchFileOperationRequest,
+  CodeModeRunArtifactKind,
+  CodeModeRunArtifactPreview,
+  CodeModeRunComparisonRecord,
   CodeModeRunRecord,
 } from "@goatcitadel/contracts";
 import type { MissionThreadedWorkflowPanel } from "@goatcitadel/threaded-surface-core";
-import { fetchCodeModeRun, fetchCodeModeRuns } from "@goatcitadel/mission-control-shared/api/capabilities";
+import {
+  compareCodeModeRuns,
+  fetchCodeModeRun,
+  fetchCodeModeRunArtifact,
+  fetchCodeModeRuns,
+} from "@goatcitadel/mission-control-shared/api/capabilities";
 import { AgenticRuntimeVisibilityPanel } from "@goatcitadel/mission-control-shared/components/AgenticRuntimeVisibilityPanel";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { MonacoDiffEditor } from "@goatcitadel/mission-control-shared/components/MonacoDiffEditor";
@@ -34,6 +42,13 @@ type CodePanelType = Extract<MissionThreadedWorkflowPanel, { kind: "code" }>;
 
 const CODE_WORKBENCH_LAYOUT_STORAGE_KEY = "goatcitadel.code-workbench.layout.v1";
 const DEFAULT_FILE_PANE_PERCENT = 28;
+const CODE_MODE_ARTIFACT_KINDS: Array<{ kind: CodeModeRunArtifactKind; label: string }> = [
+  { kind: "source", label: "Source" },
+  { kind: "wrapper_manifest", label: "Wrapper" },
+  { kind: "policy_snapshot", label: "Policy" },
+  { kind: "stdout", label: "Stdout" },
+  { kind: "stderr", label: "Stderr" },
+];
 
 function readStoredFilePanePercent(): number {
   if (typeof window === "undefined") {
@@ -252,6 +267,45 @@ function workbenchFileActionPathPlaceholder(operation: ChatSessionWorkbenchFileO
   return "src/current-file.ts";
 }
 
+function isCodeModeArtifactAvailable(run: CodeModeRunRecord, artifactKind: CodeModeRunArtifactKind): boolean {
+  if (artifactKind === "stdout") {
+    return Boolean(run.stdoutArtifact);
+  }
+  if (artifactKind === "stderr") {
+    return Boolean(run.stderrArtifact);
+  }
+  return true;
+}
+
+function formatCodeModeArtifactKind(artifactKind: CodeModeRunArtifactKind): string {
+  return CODE_MODE_ARTIFACT_KINDS.find((item) => item.kind === artifactKind)?.label ?? artifactKind;
+}
+
+function codeModeArtifactLanguage(run: CodeModeRunRecord, artifactKind: CodeModeRunArtifactKind): string {
+  if (artifactKind === "source") {
+    return run.language === "javascript" ? "javascript" : "typescript";
+  }
+  if (artifactKind === "wrapper_manifest" || artifactKind === "policy_snapshot") {
+    return "json";
+  }
+  return "text";
+}
+
+function codeModeComparisonRows(comparison: CodeModeRunComparisonRecord): Array<{ label: string; matched: boolean }> {
+  return [
+    { label: "Capability snapshot", matched: comparison.matches.capabilitySnapshot },
+    { label: "Submitted source", matched: comparison.matches.source },
+    { label: "Frozen input", matched: comparison.matches.input },
+    { label: "Wrapper manifest", matched: comparison.matches.wrapperManifest },
+    { label: "Policy snapshot", matched: comparison.matches.policySnapshot },
+    { label: "Permission profile", matched: comparison.matches.permissionProfile },
+    { label: "Local override", matched: comparison.matches.localOperatorOverride },
+    { label: "Sandbox runner", matched: comparison.matches.sandboxRunner },
+    { label: "Sandbox profile", matched: comparison.matches.sandboxProfile },
+    { label: "Sandbox availability", matched: comparison.matches.sandboxAvailability },
+  ];
+}
+
 export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const {
     selectedTurn,
@@ -322,6 +376,14 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const [runDetail, setRunDetail] = useState<CodeModeRunRecord | null>(null);
   const [runDetailLoading, setRunDetailLoading] = useState(false);
   const [runDetailError, setRunDetailError] = useState<string | null>(null);
+  const [selectedArtifactKind, setSelectedArtifactKind] = useState<CodeModeRunArtifactKind>("source");
+  const [artifactPreview, setArtifactPreview] = useState<CodeModeRunArtifactPreview | null>(null);
+  const [artifactPreviewLoading, setArtifactPreviewLoading] = useState(false);
+  const [artifactPreviewError, setArtifactPreviewError] = useState<string | null>(null);
+  const [compareBaselineRunId, setCompareBaselineRunId] = useState("");
+  const [runComparison, setRunComparison] = useState<CodeModeRunComparisonRecord | null>(null);
+  const [runComparisonLoading, setRunComparisonLoading] = useState(false);
+  const [runComparisonError, setRunComparisonError] = useState<string | null>(null);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [filePickerOpen, setFilePickerOpen] = useState(false);
   const [filePickerQuery, setFilePickerQuery] = useState("");
@@ -329,8 +391,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const [runLogViewMode, setRunLogViewMode] = useState<"rendered" | "raw">("rendered");
   const [runLogCleared, setRunLogCleared] = useState(false);
   const [runLogCopyNotice, setRunLogCopyNotice] = useState<string | null>(null);
-  const [fileActionOperation, setFileActionOperation] =
-    useState<ChatSessionWorkbenchFileOperationKind>("create_file");
+  const [fileActionOperation, setFileActionOperation] = useState<ChatSessionWorkbenchFileOperationKind>("create_file");
   const [fileActionPath, setFileActionPath] = useState("");
   const [fileActionTargetPath, setFileActionTargetPath] = useState("");
   const [fileActionNotice, setFileActionNotice] = useState<string | null>(null);
@@ -370,6 +431,39 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   );
   const selectedRunDetail = runDetail?.runId === selectedRunSummary?.runId ? runDetail : null;
   const selectedRunApprovalId = selectedRunDetail?.approvalId ?? selectedRunSummary?.approvalId;
+  const selectedRunScope = useMemo(
+    () => ({
+      ...((selectedRunSummary?.sessionId ?? codeLedgerSessionId)
+        ? { sessionId: selectedRunSummary?.sessionId ?? codeLedgerSessionId ?? undefined }
+        : {}),
+      ...(selectedRunSummary?.turnId ? { turnId: selectedRunSummary.turnId } : {}),
+      ...((selectedRunSummary?.workspaceId ?? codeLedgerWorkspaceId)
+        ? { workspaceId: selectedRunSummary?.workspaceId ?? codeLedgerWorkspaceId ?? undefined }
+        : {}),
+    }),
+    [
+      codeLedgerSessionId,
+      codeLedgerWorkspaceId,
+      selectedRunSummary?.sessionId,
+      selectedRunSummary?.turnId,
+      selectedRunSummary?.workspaceId,
+    ],
+  );
+  const selectedRunComparisonScope = useMemo(
+    () => ({
+      ...((selectedRunSummary?.sessionId ?? codeLedgerSessionId)
+        ? { sessionId: selectedRunSummary?.sessionId ?? codeLedgerSessionId ?? undefined }
+        : {}),
+      ...((selectedRunSummary?.workspaceId ?? codeLedgerWorkspaceId)
+        ? { workspaceId: selectedRunSummary?.workspaceId ?? codeLedgerWorkspaceId ?? undefined }
+        : {}),
+    }),
+    [codeLedgerSessionId, codeLedgerWorkspaceId, selectedRunSummary?.sessionId, selectedRunSummary?.workspaceId],
+  );
+  const comparisonCandidates = useMemo(
+    () => visibleRunItems.filter((run) => run.runId !== selectedRunSummary?.runId),
+    [selectedRunSummary?.runId, visibleRunItems],
+  );
   const draftConflictReason = hasDirtyDraft ? "Save or discard the file draft before running repo operations." : null;
   const worktreeBlockedReason = !readyForRepoOps ? "Create a ready worktree before running repo operations." : null;
   const applyBlockedReason =
@@ -523,16 +617,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     setRunDetailLoading(true);
     setRunDetailError(null);
     setRunDetail(null);
-    const detailFilters = {
-      ...((selectedRunSummary.sessionId ?? codeLedgerSessionId)
-        ? { sessionId: selectedRunSummary.sessionId ?? codeLedgerSessionId ?? undefined }
-        : {}),
-      ...(selectedRunSummary.turnId ? { turnId: selectedRunSummary.turnId } : {}),
-      ...((selectedRunSummary.workspaceId ?? codeLedgerWorkspaceId)
-        ? { workspaceId: selectedRunSummary.workspaceId ?? codeLedgerWorkspaceId ?? undefined }
-        : {}),
-    };
-    fetchCodeModeRun(selectedRunSummary.runId, detailFilters)
+    fetchCodeModeRun(selectedRunSummary.runId, selectedRunScope)
       .then((detail) => {
         if (!cancelled) {
           setRunDetail(detail);
@@ -552,7 +637,90 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     return () => {
       cancelled = true;
     };
-  }, [selectedRunSummary?.runId, codeLedgerSessionId, codeLedgerTurnId, codeLedgerWorkspaceId]);
+  }, [selectedRunScope, selectedRunSummary?.runId]);
+
+  useEffect(() => {
+    setCompareBaselineRunId((current) => {
+      if (current && comparisonCandidates.some((run) => run.runId === current)) {
+        return current;
+      }
+      return comparisonCandidates[0]?.runId ?? "";
+    });
+  }, [comparisonCandidates]);
+
+  useEffect(() => {
+    if (!selectedRunDetail) {
+      setArtifactPreview(null);
+      setArtifactPreviewError(null);
+      setArtifactPreviewLoading(false);
+      return undefined;
+    }
+    if (!isCodeModeArtifactAvailable(selectedRunDetail, selectedArtifactKind)) {
+      setArtifactPreview(null);
+      setArtifactPreviewError(
+        `${formatCodeModeArtifactKind(selectedArtifactKind)} artifact is not recorded for this run.`,
+      );
+      setArtifactPreviewLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setArtifactPreviewLoading(true);
+    setArtifactPreviewError(null);
+    setArtifactPreview(null);
+    fetchCodeModeRunArtifact(selectedRunDetail.runId, selectedArtifactKind, selectedRunScope)
+      .then((preview) => {
+        if (!cancelled) {
+          setArtifactPreview(preview);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setArtifactPreview(null);
+          setArtifactPreviewError(error instanceof Error ? error.message : "Unable to load Code Mode artifact.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setArtifactPreviewLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedArtifactKind, selectedRunDetail, selectedRunScope]);
+
+  useEffect(() => {
+    if (!selectedRunDetail || !compareBaselineRunId) {
+      setRunComparison(null);
+      setRunComparisonError(null);
+      setRunComparisonLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setRunComparisonLoading(true);
+    setRunComparisonError(null);
+    setRunComparison(null);
+    compareCodeModeRuns(selectedRunDetail.runId, compareBaselineRunId, selectedRunComparisonScope)
+      .then((comparison) => {
+        if (!cancelled) {
+          setRunComparison(comparison);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setRunComparison(null);
+          setRunComparisonError(error instanceof Error ? error.message : "Unable to compare Code Mode runs.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setRunComparisonLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [compareBaselineRunId, selectedRunComparisonScope, selectedRunDetail]);
 
   useEffect(() => {
     const currentTurnId = selectedTurn?.turnId ?? null;
@@ -1222,7 +1390,11 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
                   <WorkbenchMonacoEditor value={output.output} language="markdown" readOnly height={240} />
                 )
               ) : (
-                <p>{runLogCleared ? "Run log hidden locally until the next command output arrives." : "No run log or helper output yet."}</p>
+                <p>
+                  {runLogCleared
+                    ? "Run log hidden locally until the next command output arrives."
+                    : "No run log or helper output yet."}
+                </p>
               )}
               {visibleRunItems.length ? (
                 <ul className="mc-next-workbench-helper-list">
@@ -1359,6 +1531,89 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
                           <p>{formatArtifactPath(selectedRunDetail.stderrArtifact)}</p>
                         </li>
                       </ul>
+                      <section className="mc-next-workbench-output-preview">
+                        <div className="mc-next-panel-list-head">
+                          <strong>Artifact inspect</strong>
+                          <span>
+                            {artifactPreviewLoading
+                              ? "verifying"
+                              : artifactPreview?.sha256
+                                ? formatShortHash(artifactPreview.sha256)
+                                : "idle"}
+                          </span>
+                        </div>
+                        <div className="mc-next-workbench-action-row">
+                          {CODE_MODE_ARTIFACT_KINDS.map((item) => (
+                            <button
+                              key={item.kind}
+                              type="button"
+                              className={`mc-next-panel-button${selectedArtifactKind === item.kind ? " active" : ""}`}
+                              onClick={() => setSelectedArtifactKind(item.kind)}
+                              disabled={!isCodeModeArtifactAvailable(selectedRunDetail, item.kind)}
+                              title={
+                                isCodeModeArtifactAvailable(selectedRunDetail, item.kind)
+                                  ? undefined
+                                  : `${item.label} artifact is not recorded for this run.`
+                              }
+                            >
+                              {item.label}
+                            </button>
+                          ))}
+                        </div>
+                        {artifactPreviewError ? (
+                          <div className="mc-next-panel-banner warning">{artifactPreviewError}</div>
+                        ) : null}
+                        {artifactPreview ? (
+                          <>
+                            <p className="mc-next-workbench-empty">
+                              {formatArtifactPath(artifactPreview.artifact)}
+                              {artifactPreview.truncated ? " · truncated" : ""}
+                            </p>
+                            <WorkbenchMonacoEditor
+                              value={artifactPreview.content}
+                              language={codeModeArtifactLanguage(selectedRunDetail, artifactPreview.artifactKind)}
+                              readOnly
+                              height={260}
+                            />
+                          </>
+                        ) : null}
+                      </section>
+                      {comparisonCandidates.length ? (
+                        <section className="mc-next-workbench-output-preview">
+                          <div className="mc-next-panel-list-head">
+                            <strong>Run comparison</strong>
+                            <label className="mc-next-code-source-field">
+                              <span>Baseline</span>
+                              <select
+                                value={compareBaselineRunId}
+                                onChange={(event) => setCompareBaselineRunId(event.target.value)}
+                              >
+                                {comparisonCandidates.map((run) => (
+                                  <option key={run.runId} value={run.runId}>
+                                    {shortId(run.runId)} · {run.status ?? "recorded"}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          </div>
+                          {runComparisonLoading ? (
+                            <p className="mc-next-workbench-empty">Comparing run evidence...</p>
+                          ) : null}
+                          {runComparisonError ? (
+                            <div className="mc-next-panel-banner warning">{runComparisonError}</div>
+                          ) : null}
+                          {runComparison ? (
+                            <ul className="mc-next-context-list">
+                              {codeModeComparisonRows(runComparison).map((row) => (
+                                <li key={row.label}>
+                                  <strong>{row.label}</strong>
+                                  <p>{row.matched ? "same" : "changed"}</p>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </section>
+                      ) : null}
                       {selectedRunDetail.stdoutPreview ? (
                         <div className="mc-next-workbench-output-preview">
                           <strong>Stdout preview{selectedRunDetail.stdoutTruncated ? " (truncated)" : ""}</strong>

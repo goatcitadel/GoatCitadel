@@ -91,6 +91,35 @@ describe("capabilities routes", () => {
           return run;
         },
       ),
+      getCodeModeRunArtifactPreview: vi.fn(
+        async (
+          runId: string,
+          artifactKind: string,
+          scope: { workspaceId?: string; sessionId?: string; turnId?: string },
+        ) => ({
+          runId,
+          artifactKind,
+          scope,
+          content: "return { ok: true };",
+          artifact: { relPath: "data/code-mode-artifacts/code-run-1/source.ts", sha256: "code-hash" },
+          sha256: "code-hash",
+          verifiedAt: "2026-04-10T00:00:00.000Z",
+          truncated: false,
+        }),
+      ),
+      compareCodeModeRuns: vi.fn(
+        (
+          runId: string,
+          baselineRunId: string,
+          scope: { workspaceId?: string; sessionId?: string; turnId?: string },
+        ) => ({
+          runId,
+          baselineRunId,
+          scope,
+          matches: { policySnapshot: false },
+          comparedAt: "2026-04-10T00:00:00.000Z",
+        }),
+      ),
       createCodeModeRun: vi.fn(async (payload: Record<string, unknown>) => ({
         runId: "code-run-created",
         status: "completed",
@@ -173,6 +202,8 @@ describe("capabilities routes", () => {
         listCapabilityProposals: vi.fn(() => []),
         listCodeModeRuns: vi.fn(() => []),
         getCodeModeRun: vi.fn(),
+        getCodeModeRunArtifactPreview: vi.fn(),
+        compareCodeModeRuns: vi.fn(),
         createCodeModeRun: vi.fn(),
         getCapabilityCatalogSnapshot: vi.fn(),
       },
@@ -259,6 +290,8 @@ describe("capabilities routes", () => {
         listCapabilityProposals: vi.fn(() => []),
         listCodeModeRuns: vi.fn(() => []),
         getCodeModeRun: vi.fn(),
+        getCodeModeRunArtifactPreview: vi.fn(),
+        compareCodeModeRuns: vi.fn(),
         getCapabilityCatalogSnapshot: vi.fn(),
       },
     } as never);
@@ -345,6 +378,8 @@ describe("capabilities routes", () => {
         listCapabilityProposals: vi.fn(() => []),
         listCodeModeRuns: vi.fn(() => []),
         getCodeModeRun: vi.fn(),
+        getCodeModeRunArtifactPreview: vi.fn(),
+        compareCodeModeRuns: vi.fn(),
         createCodeModeRun: vi.fn(),
       },
     } as never);
@@ -393,6 +428,8 @@ describe("capabilities routes", () => {
         listCapabilityProposals: vi.fn(() => []),
         listCodeModeRuns: vi.fn(() => []),
         getCodeModeRun: vi.fn(),
+        getCodeModeRunArtifactPreview: vi.fn(),
+        compareCodeModeRuns: vi.fn(),
         createCodeModeRun: vi.fn(),
       },
     } as never);
@@ -528,6 +565,42 @@ describe("capabilities routes", () => {
       sessionId: "session-1",
       turnId: "turn-1",
       workspaceId: "workspace-1",
+    });
+  });
+
+  it("reads verified Code Mode artifacts and compares scoped runs", async () => {
+    const service = await registerCapabilitiesService();
+
+    const artifactResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/code-mode/runs/code-run-1/artifacts/source?sessionId=session-1&turnId=turn-1&workspaceId=workspace-1",
+    });
+    const comparisonResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/code-mode/runs/code-run-1/compare/code-run-0?sessionId=session-1&turnId=turn-1&workspaceId=workspace-1",
+    });
+
+    expect(artifactResponse.statusCode).toBe(200);
+    expect(comparisonResponse.statusCode).toBe(200);
+    expect(service.getCodeModeRunArtifactPreview).toHaveBeenCalledWith("code-run-1", "source", {
+      sessionId: "session-1",
+      turnId: "turn-1",
+      workspaceId: "workspace-1",
+    });
+    expect(service.compareCodeModeRuns).toHaveBeenCalledWith("code-run-1", "code-run-0", {
+      sessionId: "session-1",
+      turnId: "turn-1",
+      workspaceId: "workspace-1",
+    });
+    expect(artifactResponse.json()).toMatchObject({
+      runId: "code-run-1",
+      artifactKind: "source",
+      content: "return { ok: true };",
+    });
+    expect(comparisonResponse.json()).toMatchObject({
+      runId: "code-run-1",
+      baselineRunId: "code-run-0",
+      matches: { policySnapshot: false },
     });
   });
 

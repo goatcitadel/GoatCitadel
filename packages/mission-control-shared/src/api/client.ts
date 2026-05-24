@@ -758,6 +758,8 @@ export {
   fetchEvidenceEnvelopes,
   installCapabilityPack,
   installAddon,
+  disableAddon,
+  enableAddon,
   launchAddon,
   listCuratorArchived,
   previewLlmModels,

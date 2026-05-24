@@ -86,6 +86,30 @@ export const addonsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  fastify.post("/api/v1/addons/:addonId/enable", async (request, reply) => {
+    const params = addonParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(await fastify.services.addons.enableAddon(params.data.addonId));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/addons/:addonId/disable", async (request, reply) => {
+    const params = addonParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(await fastify.services.addons.disableAddon(params.data.addonId));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
   fastify.post("/api/v1/addons/:addonId/launch", async (request, reply) => {
     const params = addonParamsSchema.safeParse(request.params);
     if (!params.success) {

@@ -6,6 +6,9 @@ import type {
   CapabilityCatalogSnapshotRecord,
   CapabilityProposalDetailRecord,
   CapabilityProposalRecord,
+  CodeModeRunArtifactKind,
+  CodeModeRunArtifactPreview,
+  CodeModeRunComparisonRecord,
   CodeModeRunListOptions,
   CodeModeRunRecord,
   CodeModeRunRequest,
@@ -119,6 +122,56 @@ export async function fetchCodeModeRun(
   }
   const suffix = params.size > 0 ? `?${params.toString()}` : "";
   return request(`/api/v1/code-mode/runs/${encodeURIComponent(runId)}${suffix}`);
+}
+
+export async function fetchCodeModeRunArtifact(
+  runId: string,
+  artifactKind: CodeModeRunArtifactKind,
+  input?: {
+    sessionId?: string;
+    turnId?: string;
+    workspaceId?: string;
+  },
+): Promise<CodeModeRunArtifactPreview> {
+  const params = new URLSearchParams();
+  if (input?.sessionId) {
+    params.set("sessionId", input.sessionId);
+  }
+  if (input?.turnId) {
+    params.set("turnId", input.turnId);
+  }
+  if (input?.workspaceId) {
+    params.set("workspaceId", input.workspaceId);
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  return request(
+    `/api/v1/code-mode/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactKind)}${suffix}`,
+  );
+}
+
+export async function compareCodeModeRuns(
+  runId: string,
+  baselineRunId: string,
+  input?: {
+    sessionId?: string;
+    turnId?: string;
+    workspaceId?: string;
+  },
+): Promise<CodeModeRunComparisonRecord> {
+  const params = new URLSearchParams();
+  if (input?.sessionId) {
+    params.set("sessionId", input.sessionId);
+  }
+  if (input?.turnId) {
+    params.set("turnId", input.turnId);
+  }
+  if (input?.workspaceId) {
+    params.set("workspaceId", input.workspaceId);
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  return request(
+    `/api/v1/code-mode/runs/${encodeURIComponent(runId)}/compare/${encodeURIComponent(baselineRunId)}${suffix}`,
+  );
 }
 
 export async function createCodeModeRun(input: CodeModeRunRequest): Promise<CodeModeRunRecord> {

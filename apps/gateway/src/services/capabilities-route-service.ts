@@ -8,10 +8,12 @@ export type CapabilitiesRoutePort = Pick<
   | "getCandidateDetail"
   | "getCatalogSnapshot"
   | "getCodeModeRun"
+  | "getCodeModeRunArtifactPreview"
   | "getCodeModeRunInScope"
   | "getProposalDetail"
   | "listCatalog"
   | "listCodeModeRuns"
+  | "compareCodeModeRuns"
   | "listProposals"
   | "promoteCandidate"
   | "revokeCandidate"
@@ -67,6 +69,22 @@ export class CapabilitiesRouteService {
 
   public getCodeModeRunInScope(runId: string, scope: Parameters<CapabilitiesRoutePort["getCodeModeRunInScope"]>[1]) {
     return this.capabilities.getCodeModeRunInScope(runId, scope);
+  }
+
+  public getCodeModeRunArtifactPreview(
+    runId: string,
+    artifactKind: Parameters<CapabilitiesRoutePort["getCodeModeRunArtifactPreview"]>[1],
+    scope?: Parameters<CapabilitiesRoutePort["getCodeModeRunArtifactPreview"]>[2],
+  ) {
+    return this.capabilities.getCodeModeRunArtifactPreview(runId, artifactKind, scope);
+  }
+
+  public compareCodeModeRuns(
+    runId: string,
+    baselineRunId: string,
+    scope?: Parameters<CapabilitiesRoutePort["compareCodeModeRuns"]>[2],
+  ) {
+    return this.capabilities.compareCodeModeRuns(runId, baselineRunId, scope);
   }
 
   public createCodeModeRun(input: Parameters<CapabilitiesRoutePort["createCodeModeRun"]>[0]) {

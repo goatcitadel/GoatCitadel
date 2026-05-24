@@ -21,7 +21,9 @@ const settingsMocks = vi.hoisted(() => {
     deleteOpenAICodexOAuthCredential: fn(),
     deletePersonality: fn(),
     deleteProviderSecret: fn(),
+    disableAddon: fn(),
     disconnectMcpServer: fn(),
+    enableAddon: fn(),
     discoverTelegramTargets: fn(),
     fetchAddonStatus: fn(),
     fetchAddonsCatalog: fn(),
@@ -136,7 +138,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   deleteOpenAICodexOAuthCredential: settingsMocks.deleteOpenAICodexOAuthCredential,
   deletePersonality: settingsMocks.deletePersonality,
   deleteProviderSecret: settingsMocks.deleteProviderSecret,
+  disableAddon: settingsMocks.disableAddon,
   disconnectMcpServer: settingsMocks.disconnectMcpServer,
+  enableAddon: settingsMocks.enableAddon,
   discoverTelegramTargets: settingsMocks.discoverTelegramTargets,
   fetchAddonStatus: settingsMocks.fetchAddonStatus,
   fetchAddonsCatalog: settingsMocks.fetchAddonsCatalog,
@@ -662,6 +666,8 @@ function setupResponses() {
   });
   settingsMocks.installAddon.mockResolvedValue({ ok: true });
   settingsMocks.updateAddon.mockResolvedValue({ ok: true });
+  settingsMocks.enableAddon.mockResolvedValue({ ok: true });
+  settingsMocks.disableAddon.mockResolvedValue({ ok: true });
   settingsMocks.launchAddon.mockResolvedValue({ ok: true });
   settingsMocks.stopAddon.mockResolvedValue({ ok: true });
   settingsMocks.uninstallAddon.mockResolvedValue({ ok: true });
@@ -828,7 +834,7 @@ describe("SettingsNativePage broad native sections", () => {
     expect(generalText).toContain("No active provider");
 
     const quickRouteButtons = buttons(general.root, "Open");
-    expect(quickRouteButtons).toHaveLength(16);
+    expect(quickRouteButtons).toHaveLength(17);
     for (const button of quickRouteButtons) {
       await click(button);
     }
@@ -1075,6 +1081,7 @@ describe("SettingsNativePage broad native sections", () => {
     expect(collectText(addons.root)).toContain("Add-on catalog");
     await click(findButton(addons.root, "Install"));
     await click(findButton(addons.root, "Update"));
+    await click(findButton(addons.root, "Disable"));
     await click(findButton(addons.root, "Launch"));
     await click(findButton(addons.root, "Stop"));
     await click(findButton(addons.root, "Uninstall"));
@@ -1084,6 +1091,7 @@ describe("SettingsNativePage broad native sections", () => {
       confirmRepoDownload: true,
     });
     expect(settingsMocks.updateAddon).toHaveBeenCalledWith("pixel-office");
+    expect(settingsMocks.disableAddon).toHaveBeenCalledWith("pixel-office");
     expect(settingsMocks.launchAddon).toHaveBeenCalledWith("pixel-office");
     expect(settingsMocks.stopAddon).toHaveBeenCalledWith("pixel-office");
     expect(settingsMocks.uninstallAddon).toHaveBeenCalledWith("pixel-office");
@@ -1218,10 +1226,14 @@ describe("SettingsNativePage broad native sections", () => {
     await click(openButtons[4]!);
     await click(openButtons[5]!);
     await click(openButtons[6]!);
+    await click(findButton(onboarding.root, "Inspect proof"));
+    await click(findButton(onboarding.root, "Access"));
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "providers", theme: "ops" });
+    expect(navigate).toHaveBeenCalledWith({ area: "chat", theme: "ops" });
+    expect(navigate).toHaveBeenCalledWith({ area: "cowork", theme: "ops" });
+    expect(navigate).toHaveBeenCalledWith({ area: "projects", theme: "ops" });
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "runtime", theme: "ops" });
-    expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "channels", theme: "ops" });
-    expect(navigate).toHaveBeenCalledWith({ area: "library", section: "capabilities", theme: "ops" });
+    expect(navigate).toHaveBeenCalledWith({ area: "library", section: "artifacts", theme: "ops" });
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "access", theme: "ops" });
 
     await click(findButton(onboarding.root, "Start safe demo"));
@@ -1265,6 +1277,7 @@ describe("SettingsNativePage broad native sections", () => {
       sessions: [{ sessionId: "chat-demo", mode: "chat" }],
       starterPrompts: [],
     });
+    settingsMocks.bootstrapDemo.mockReset();
     settingsMocks.bootstrapDemo.mockRejectedValueOnce(new Error("demo bootstrap failed"));
 
     const navigate = vi.fn();
@@ -1278,7 +1291,16 @@ describe("SettingsNativePage broad native sections", () => {
     expect(collectText(readyDemo.root)).toContain("demo bootstrap failed");
     expect(navigate).not.toHaveBeenCalled();
 
-    settingsMocks.fetchDemoState.mockRejectedValueOnce(new Error("demo state offline"));
+    settingsMocks.fetchDemoState.mockReset();
+    settingsMocks.fetchDemoState
+      .mockRejectedValueOnce(new Error("demo state offline"))
+      .mockRejectedValueOnce(new Error("demo state offline"))
+      .mockResolvedValueOnce({
+        status: "empty",
+        workspace: null,
+        sessions: [],
+        starterPrompts: [],
+      });
     const failedDemo = await mount("onboarding", { navigate, setActiveWorkspaceId });
     await flush();
     expect(collectText(failedDemo.root)).toContain("demo state offline");

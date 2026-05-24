@@ -14,6 +14,7 @@ import {
   type CapabilityPackPreview,
   type DemoBootstrapStateResponse,
   type LlmProviderAdviceResponse,
+  type LlmProviderRequestConfig,
 } from "@goatcitadel/contracts";
 import {
   AlertTriangle,
@@ -82,7 +83,9 @@ import {
   deleteMcpServer,
   deletePersonality,
   deleteProviderSecret,
+  disableAddon,
   disconnectMcpServer,
+  enableAddon,
   fetchAddonStatus,
   fetchAddonsCatalog,
   bootstrapDemo,
@@ -639,7 +642,9 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
         <SettingsGrid variant="detail-wide">
           <DemoStartPanel route={route} navigate={navigate} setActiveWorkspaceId={setActiveWorkspaceId} />
           <FirstOutcomePathPanel route={route} navigate={navigate} onboarding={data} demoState={data.demoState} />
+          <ProviderSmokeEvidencePanel route={route} navigate={navigate} onboarding={data} />
           <SetupCenterPanel route={route} navigate={navigate} onboarding={data} />
+          <EcosystemProofLanePanel route={route} navigate={navigate} />
           <SettingsPanel
             title="First-run setup"
             subtitle="Configured readiness for the first trustworthy send."
@@ -955,6 +960,61 @@ function FirstOutcomePathPanel({
   );
 }
 
+function ProviderSmokeEvidencePanel({
+  route,
+  navigate,
+  onboarding,
+}: {
+  route: AppRoute;
+  navigate: SettingsNativePageProps["navigate"];
+  onboarding: OnboardingState;
+}) {
+  const items = deriveOnboardingProviderSmokeEvidenceItems(onboarding);
+  const completeCount = items.filter((item) => item.state === "complete").length;
+  const nextItem = items.find((item) => item.state !== "complete") ?? items.at(-1);
+
+  return (
+    <SettingsPanel
+      title="Provider smoke evidence"
+      subtitle="Configured providers are not release proof until a live smoke lane records pass/fail evidence."
+      stats={[
+        { label: "State", value: nextItem?.label ?? "Ready" },
+        { label: "Complete", value: `${completeCount}/${items.length}` },
+        { label: "Live proof", value: items.at(-1)?.state === "complete" ? "Recorded" : "Needed" },
+      ]}
+    >
+      <SettingsWizardSteps
+        steps={items.map((item) => ({
+          label: item.label,
+          description: item.description,
+          state: item.state,
+        }))}
+      />
+      <SettingsActionList
+        items={[
+          {
+            id: "provider-smoke-settings",
+            label: "Provider diagnostics",
+            description: "Review the active provider, model, credential source, and diagnostics before a live smoke.",
+            meta: "Configured state",
+            actionLabel: "Open providers",
+            onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }),
+          },
+          {
+            id: "provider-smoke-live-proof",
+            label: "Live provider proof lane",
+            description:
+              "Run pnpm verify:install with GOATCITADEL_VERIFY_INSTALL_LIVE_PROVIDER=1 and real credentials to produce release pass/fail evidence.",
+            meta: "Fresh credentials required",
+            actionLabel: "Manual lane",
+          },
+        ]}
+        maxHeight=""
+      />
+    </SettingsPanel>
+  );
+}
+
 function SetupCenterPanel({
   route,
   navigate,
@@ -1006,6 +1066,36 @@ function SetupCenterPanel({
             onClick: () => navigate({ area: "library", section: "capabilities", theme: route.theme }),
           },
         ]}
+      />
+    </SettingsPanel>
+  );
+}
+
+function EcosystemProofLanePanel({
+  route,
+  navigate,
+}: {
+  route: AppRoute;
+  navigate: SettingsNativePageProps["navigate"];
+}) {
+  const items = deriveEcosystemProofLaneItems();
+
+  return (
+    <SettingsPanel
+      title="Ecosystem proof lanes"
+      subtitle="Follow-on setup order for ecosystem claims; blocked lanes stay explicit until a named proof lane passes."
+      stats={[
+        { label: "First", value: items[0]?.label ?? "None" },
+        { label: "Lanes", value: String(items.length) },
+        { label: "Claims", value: "Proof-gated" },
+      ]}
+    >
+      <SettingsActionList
+        items={items.map((item) => ({
+          ...item,
+          onClick: () => navigate({ ...item.route, theme: route.theme }),
+        }))}
+        maxHeight=""
       />
     </SettingsPanel>
   );
@@ -1716,6 +1806,11 @@ export function formatProviderProbeSourceMeta(provider?: {
       ? `Fallback after probe error: ${provider.modelProbeWarning}`
       : "Fallback after probe error";
   }
+  if (provider.modelProbeState === "error") {
+    return provider.modelProbeWarning
+      ? `Live discovery failed: ${provider.modelProbeWarning}`
+      : "Live discovery failed";
+  }
   if (provider.modelProbeSource === "template_fallback" || provider.modelProbeState === "fallback") {
     return "Template suggestions; not account-verified";
   }
@@ -1778,6 +1873,108 @@ export function formatProviderCredentialLabel(
     return "OAuth missing";
   }
   return hasApiKey ? "secret ready" : "secret missing";
+}
+
+type ProviderSmokeEvidenceInput = {
+  providerId: string;
+  providerLabel: string;
+  credentialReady: boolean;
+  credentialMeta: string;
+  localEndpoint: boolean;
+  modelCount: number;
+  modelProbeState?: "not_checked" | "ready" | "fallback" | "empty" | "error";
+  modelProbeSource?: "live" | "template_fallback" | "error_fallback";
+  modelProbeCheckedAt?: string;
+  modelProbeWarning?: string;
+  request?: LlmProviderRequestConfig;
+};
+
+export function describeProviderRequestOverrides(request?: LlmProviderRequestConfig): string {
+  if (!request) {
+    return "Default gateway transport";
+  }
+  const parts: string[] = [];
+  if (request.auth) {
+    parts.push(`${request.auth.type} auth`);
+  }
+  const headerCount = Object.keys(request.headers ?? {}).length;
+  if (headerCount > 0) {
+    parts.push(`${headerCount} header${headerCount === 1 ? "" : "s"}`);
+  }
+  if (request.proxy?.url) {
+    parts.push("proxy");
+  }
+  if (request.tls) {
+    const tlsParts = [
+      request.tls.caCertPath ? "CA cert" : "",
+      request.tls.clientCertPath ? "client cert" : "",
+      request.tls.serverName ? "server name" : "",
+      request.tls.insecureSkipVerify ? "skip verify" : "",
+    ].filter(Boolean);
+    parts.push(tlsParts.length ? `TLS ${tlsParts.join("/")}` : "TLS override");
+  }
+  return parts.length ? parts.join(", ") : "Default gateway transport";
+}
+
+export function deriveProviderSmokeEvidenceItems(input: ProviderSmokeEvidenceInput): Array<{
+  id: string;
+  label: string;
+  description: string;
+  meta: string;
+  actionLabel: string;
+}> {
+  const providerLabel = input.providerLabel || input.providerId;
+  const probeDescriptor = formatProviderProbeSourceMeta(input);
+  const modelMeta = formatProviderModelsMeta(input, input.modelCount);
+  const discoveryFailed = input.modelProbeState === "error" || input.modelProbeSource === "error_fallback";
+  const liveDiscoveryReady = input.modelProbeState === "ready" && input.modelProbeSource === "live";
+  const transportDescription = describeProviderRequestOverrides(input.request);
+
+  return [
+    {
+      id: "credential",
+      label: "Credential or local endpoint",
+      description: input.credentialReady
+        ? `${providerLabel} has a configured provider key, OAuth credential, or reachable local endpoint.`
+        : `${providerLabel} is not configured for sends yet; add a key, finish OAuth, or point it at a local endpoint.`,
+      meta: input.credentialMeta,
+      actionLabel: input.credentialReady ? "Ready" : "Needed",
+    },
+    {
+      id: "model-discovery",
+      label: "Model discovery",
+      description: liveDiscoveryReady
+        ? `Live discovery returned ${input.modelCount} account-visible model${input.modelCount === 1 ? "" : "s"}.`
+        : discoveryFailed
+          ? probeDescriptor
+          : "Refresh models after provider keys, proxy, and TLS settings are saved.",
+      meta: modelMeta,
+      actionLabel: liveDiscoveryReady ? "Refresh" : "Check",
+    },
+    {
+      id: "provider-smoke",
+      label: "Provider smoke evidence",
+      description: !input.credentialReady
+        ? "Blocked until the provider has a credential or local endpoint."
+        : discoveryFailed
+          ? "Blocked by model discovery failure; fix auth, proxy, TLS, or provider URL before making setup claims."
+          : liveDiscoveryReady
+            ? "Ready for the first configured-provider smoke send; keep pass/fail evidence with the setup record."
+            : "Needs a live model discovery or smoke check before public readiness claims.",
+      meta: input.credentialReady && liveDiscoveryReady ? "Smoke next" : "Proof required",
+      actionLabel: input.credentialReady ? "Probe" : "Blocked",
+    },
+    {
+      id: "transport",
+      label: "Auth/proxy/TLS path",
+      description:
+        transportDescription === "Default gateway transport"
+          ? "Using the default gateway transport; model errors will appear in the probe notice and cached evidence."
+          : `Custom request path: ${transportDescription}. Save errors and model probe errors are shown as readable operator notices.`,
+      meta: transportDescription,
+      actionLabel: "Inspect",
+    },
+  ];
 }
 
 function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
@@ -1924,6 +2121,42 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     editorMode === "new"
       ? "Create a new provider definition without expanding the gateway."
       : "Edit the selected provider through runtime settings. Secrets stay on the secure secret endpoints.";
+  const selectedProviderCredentialReady = selectedProvider
+    ? selectedProviderIsCodexOAuth
+      ? codexOAuthConnected
+      : selectedProviderIsClaudeCodeOAuth
+        ? Boolean(secretState.data?.hasSecret || selectedProvider.hasApiKey)
+        : Boolean(secretState.data?.hasSecret || selectedProvider.hasApiKey || selectedProviderIsLocal)
+    : false;
+  const selectedProviderCredentialMeta = selectedProvider
+    ? selectedProviderIsCodexOAuth
+      ? codexOAuthConnected
+        ? (codexOAuthStatus?.accountLabel ?? "OAuth connected")
+        : codexOAuthStatus?.requiresReauth
+          ? "OAuth requires reauth"
+          : "OAuth not connected"
+      : selectedProviderIsLocal && !(secretState.data?.hasSecret || selectedProvider.hasApiKey)
+        ? "Local endpoint, no key required"
+        : formatSecretStatusMeta(
+            secretState.data?.source ?? selectedProvider.apiKeySource,
+            secretState.data?.hasSecret ?? selectedProvider.hasApiKey ?? false,
+          )
+    : "No provider selected";
+  const selectedProviderSmokeEvidenceItems = selectedProvider
+    ? deriveProviderSmokeEvidenceItems({
+        providerId: selectedProvider.providerId,
+        providerLabel: selectedProvider.label,
+        credentialReady: selectedProviderCredentialReady,
+        credentialMeta: selectedProviderCredentialMeta,
+        localEndpoint: selectedProviderIsLocal,
+        modelCount: availableModels.length,
+        modelProbeState: selectedProvider.modelProbeState,
+        modelProbeSource: selectedProvider.modelProbeSource,
+        modelProbeCheckedAt: selectedProvider.modelProbeCheckedAt,
+        modelProbeWarning: selectedProvider.modelProbeWarning,
+        request: selectedProviderConfig?.request,
+      })
+    : [];
 
   useEffect(() => {
     if (!providers.length) {
@@ -2371,15 +2604,18 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
       const probe = getCachedModelProbe(normalized);
       const fallbackOnly = probe?.state === "fallback";
       const failedFallback = probe?.source === "error_fallback";
+      const failedProbe = probe?.state === "error";
       setNotice({
-        tone: items.length > 0 && !fallbackOnly ? "success" : "warning",
-        message: fallbackOnly
-          ? failedFallback
-            ? `Loaded ${items.length} fallback models for ${normalized}; live discovery failed${probe?.warning ? `: ${probe.warning}` : "."}`
-            : `Loaded ${items.length} suggested models for ${normalized}; this catalog was not verified against your account.`
-          : items.length > 0
-            ? `Refreshed ${items.length} models for ${normalized}.`
-            : `Probe completed for ${normalized}, but no models were returned.`,
+        tone: items.length > 0 && !fallbackOnly && !failedProbe ? "success" : "warning",
+        message: failedProbe
+          ? `Model discovery failed for ${normalized}${probe?.warning ? `: ${probe.warning}` : "."}`
+          : fallbackOnly
+            ? failedFallback
+              ? `Loaded ${items.length} fallback models for ${normalized}; live discovery failed${probe?.warning ? `: ${probe.warning}` : "."}`
+              : `Loaded ${items.length} suggested models for ${normalized}; this catalog was not verified against your account.`
+            : items.length > 0
+              ? `Refreshed ${items.length} models for ${normalized}.`
+              : `Probe completed for ${normalized}, but no models were returned.`,
       });
       await reload();
     } catch (probeError) {
@@ -2743,14 +2979,16 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                         ? (codexOAuthStatus?.accountLabel ?? "ChatGPT/Codex plan")
                         : selectedProviderIsClaudeCodeOAuth
                           ? "Claude subscription token"
-                        : formatSecretStatusMeta(
-                            secretState.data?.source ?? selectedProvider.apiKeySource,
-                            secretState.data?.hasSecret ?? selectedProvider.hasApiKey ?? false,
-                          ),
+                          : formatSecretStatusMeta(
+                              secretState.data?.source ?? selectedProvider.apiKeySource,
+                              secretState.data?.hasSecret ?? selectedProvider.hasApiKey ?? false,
+                            ),
                     },
                     {
                       label: "Secret source",
-                      value: formatEffectiveConfigSourceLabel(secretState.data?.source ?? selectedProvider.apiKeySource),
+                      value: formatEffectiveConfigSourceLabel(
+                        secretState.data?.source ?? selectedProvider.apiKeySource,
+                      ),
                       meta: "Effective source label",
                     },
                     {
@@ -2782,6 +3020,18 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                     />
                   </SettingsField>
                 </SettingsFieldGrid>
+                <SettingsActionList
+                  items={selectedProviderSmokeEvidenceItems.map((item) => ({
+                    ...item,
+                    onClick:
+                      item.id === "model-discovery" || item.id === "provider-smoke"
+                        ? () => void handleRefreshModels(selectedProvider.providerId)
+                        : item.id === "transport"
+                          ? () => setEditorMode("selected")
+                          : undefined,
+                  }))}
+                  maxHeight=""
+                />
                 {selectedProviderIsCodexOAuth ? (
                   <>
                     <SettingsNotice
@@ -4337,6 +4587,14 @@ function IntegrationsSection(_props: SettingsSectionProps) {
                   ]}
                 />
               ) : null}
+              <SettingsNotice
+                notice={{
+                  tone: "info",
+                  message: selectedCatalog?.operatorActions?.length
+                    ? `${selectedCatalog.operatorActions.length} operator action${selectedCatalog.operatorActions.length === 1 ? "" : "s"} are advertised by this catalog entry. Run actions only from a saved connection.`
+                    : "Catalog entries without operator actions are setup and diagnostics surfaces only; no hidden runtime action is implied.",
+                }}
+              />
               <SettingsButtonRow>
                 <button type="button" className="mc-next-button" onClick={() => void handleCreate()}>
                   <Plus size={16} />
@@ -4486,7 +4744,15 @@ function IntegrationsSection(_props: SettingsSectionProps) {
                       actionLabel: "Run",
                     }))}
                   />
-                ) : null}
+                ) : (
+                  <SettingsNotice
+                    notice={{
+                      tone: "info",
+                      message:
+                        "This integration has no advertised operator action. Save changes and run diagnostics here; runtime use stays blocked until a catalog action exists.",
+                    }}
+                  />
+                )}
                 {diagnostics ? <DiagnosticsPanel report={diagnostics} /> : null}
               </>
             ) : (
@@ -4907,6 +5173,13 @@ function ChannelsSection(_props: SettingsSectionProps) {
                   ))}
                 </select>
               </SettingsField>
+              <SettingsNotice
+                notice={{
+                  tone: "info",
+                  message:
+                    "Every listed channel starts as a setup draft. Slack uses OAuth, Telegram can discover targets, and all drafts must save, validate, test, and finalize before runtime use.",
+                }}
+              />
               <SettingsButtonRow>
                 {createCatalogId === "channel.slack" ? (
                   <button type="button" className="mc-next-button" onClick={() => void handleStartSlackOAuth()}>
@@ -5257,6 +5530,13 @@ function McpSection(_props: SettingsSectionProps) {
                   </label>
                 </SettingsField>
               </SettingsFieldGrid>
+              <SettingsNotice
+                notice={{
+                  tone: "info",
+                  message:
+                    "Runtime invocation is limited to local stdio servers and the built-in Approval Inbox. Generic remote http/sse transports stay configured-only and experimental until a named runtime proof exists.",
+                }}
+              />
               <SettingsButtonRow>
                 <button type="button" className="mc-next-button" onClick={() => void handleCreate()}>
                   <Plus size={16} />
@@ -6545,6 +6825,16 @@ function AddonsSection(_props: SettingsSectionProps) {
   const selectedAddon = data?.catalog.find((item) => item.addonId === selectedAddonId) ?? data?.catalog[0] ?? null;
   const selectedPack =
     data?.capabilityPacks.find((item) => item.packId === selectedPackId) ?? data?.capabilityPacks[0] ?? null;
+  const selectedInstalledRecord = selectedAddon
+    ? (status.data?.installed ?? installedById.get(selectedAddon.addonId))
+    : undefined;
+  const selectedAddonInstalled = Boolean(selectedInstalledRecord);
+  const selectedAddonEnabled = selectedInstalledRecord
+    ? selectedInstalledRecord.enabled !== false && selectedInstalledRecord.runtimeStatus !== "disabled"
+    : false;
+  const selectedAddonRuntimeStatus = status.data?.status ?? selectedInstalledRecord?.runtimeStatus ?? "not_installed";
+  const selectedAddonCanStop =
+    selectedAddonInstalled && selectedAddonEnabled && ["running", "error"].includes(selectedAddonRuntimeStatus);
 
   useEffect(() => {
     if (!data?.catalog.length) {
@@ -6645,12 +6935,20 @@ function AddonsSection(_props: SettingsSectionProps) {
             ]}
           >
             <SettingsSelectableList
-              items={data.catalog.map((item) => ({
-                id: item.addonId,
-                title: item.label,
-                meta: item.trustTier,
-                body: `${item.category} · ${installedById.has(item.addonId) ? "installed" : "not installed"}`,
-              }))}
+              items={data.catalog.map((item) => {
+                const installed = installedById.get(item.addonId);
+                const lifecycle = installed
+                  ? installed.enabled === false || installed.runtimeStatus === "disabled"
+                    ? "disabled"
+                    : "enabled"
+                  : "not installed";
+                return {
+                  id: item.addonId,
+                  title: item.label,
+                  meta: item.trustTier,
+                  body: `${item.category} · ${lifecycle}`,
+                };
+              })}
               selectedId={selectedAddonId}
               onSelect={setSelectedAddonId}
               emptyLabel="No add-ons returned from the catalog."
@@ -6671,11 +6969,13 @@ function AddonsSection(_props: SettingsSectionProps) {
                     { label: "Trust tier", value: selectedAddon.trustTier, meta: selectedAddon.owner },
                     {
                       label: "Runtime",
-                      value:
-                        status.data?.status ??
-                        installedById.get(selectedAddon.addonId)?.runtimeStatus ??
-                        "not_installed",
+                      value: selectedAddonRuntimeStatus,
                       meta: selectedAddon.runtimeType,
+                    },
+                    {
+                      label: "Lifecycle",
+                      value: selectedAddonInstalled ? (selectedAddonEnabled ? "enabled" : "disabled") : "not installed",
+                      meta: selectedInstalledRecord?.updatedAt ?? "No installed record",
                     },
                     {
                       label: "Web entry",
@@ -6714,6 +7014,35 @@ function AddonsSection(_props: SettingsSectionProps) {
                   <button
                     type="button"
                     className="mc-next-button-secondary"
+                    disabled={!selectedAddonInstalled || selectedAddonEnabled}
+                    onClick={() =>
+                      void runAddonAction(
+                        () => enableAddon(selectedAddon.addonId),
+                        `${selectedAddon.label} enabled for operator launch.`,
+                      )
+                    }
+                  >
+                    <ShieldCheck size={16} />
+                    Enable
+                  </button>
+                  <button
+                    type="button"
+                    className="mc-next-button-secondary"
+                    disabled={!selectedAddonInstalled || !selectedAddonEnabled}
+                    onClick={() =>
+                      void runAddonAction(
+                        () => disableAddon(selectedAddon.addonId),
+                        `${selectedAddon.label} disabled and slots removed.`,
+                      )
+                    }
+                  >
+                    <Plug2 size={16} />
+                    Disable
+                  </button>
+                  <button
+                    type="button"
+                    className="mc-next-button-secondary"
+                    disabled={!selectedAddonInstalled || !selectedAddonEnabled}
                     onClick={() =>
                       void runAddonAction(
                         () => launchAddon(selectedAddon.addonId),
@@ -6727,6 +7056,7 @@ function AddonsSection(_props: SettingsSectionProps) {
                   <button
                     type="button"
                     className="mc-next-button-secondary"
+                    disabled={!selectedAddonCanStop}
                     onClick={() =>
                       void runAddonAction(
                         () => stopAddon(selectedAddon.addonId),
@@ -7635,6 +7965,82 @@ type FirstOutcomePathItem = {
   route: AppRoute;
 };
 
+type OnboardingProviderSmokeEvidenceItem = {
+  id: string;
+  label: string;
+  description: string;
+  state: SettingsWizardStepState;
+  meta: string;
+};
+
+type EcosystemProofLaneItem = {
+  id: string;
+  label: string;
+  description: string;
+  meta: string;
+  actionLabel: string;
+  route: AppRoute;
+};
+
+export function deriveEcosystemProofLaneItems(): EcosystemProofLaneItem[] {
+  return [
+    {
+      id: "voice",
+      label: "Voice Wake / Talk Mode",
+      description:
+        "Select/install a local voice runtime and keep wake/talk proof before claiming voice parity beyond local runtime support.",
+      meta: "First follow-on lane",
+      actionLabel: "Runtime",
+      route: { area: "settings", section: "runtime" },
+    },
+    {
+      id: "browser-control",
+      label: "Browser control",
+      description:
+        "Use governed tools/MCP visibility for browser control. Remote browser automation claims need fresh proof.",
+      meta: "Tool-governed",
+      actionLabel: "MCP",
+      route: { area: "settings", section: "mcp" },
+    },
+    {
+      id: "extension-sdk",
+      label: "Extension / plugin SDK breadth",
+      description:
+        "Keep extension claims aligned with installed plugin trust metadata, diagnostics, and @goatcitadel/extensions-sdk evidence.",
+      meta: "Catalog-gated",
+      actionLabel: "Integrations",
+      route: { area: "settings", section: "integrations" },
+    },
+    {
+      id: "packaging-remote",
+      label: "Packaging and remote deployment parity",
+      description:
+        "Windows packaging is the shipped lane; remote, macOS, and Linux claims stay blocked until their named packaging proof passes.",
+      meta: "Proof-lane required",
+      actionLabel: "Ops",
+      route: { area: "ops", section: "diagnostics" },
+    },
+    {
+      id: "mobile-companion",
+      label: "Mobile companion/device surfaces",
+      description:
+        "Use signed device grants and companion-session auth; mobile companion surfaces are not an ungoverned backend shortcut.",
+      meta: "Access-gated",
+      actionLabel: "Access",
+      route: { area: "settings", section: "access" },
+    },
+    {
+      id: "canvas-a2ui",
+      label: "Canvas / A2UI parity",
+      description:
+        "Canvas/A2UI parity needs Mission Control proof and companion runtime evidence before platform-level claims are visible.",
+      meta: "Last follow-on lane",
+      actionLabel: "Capabilities",
+      route: { area: "library", section: "capabilities" },
+    },
+  ];
+}
+
 export function deriveFirstOutcomePathItems(
   onboarding: OnboardingState,
   demoState: DemoBootstrapStateResponse | null,
@@ -7643,37 +8049,48 @@ export function deriveFirstOutcomePathItems(
     (provider) => provider.providerId === onboarding.settings.llm.activeProviderId,
   );
   const activeModel = onboarding.settings.llm.activeModel.trim();
-  const providerConnected = Boolean(
-    activeProvider && activeModel && (activeProvider.hasApiKey || isLikelyLocalProviderBaseUrl(activeProvider.baseUrl)),
+  const providerCredentialReady = Boolean(
+    activeProvider && (activeProvider.hasApiKey || isLikelyLocalProviderBaseUrl(activeProvider.baseUrl)),
   );
-  const hasChatStart = Boolean(demoState?.sessions.some((session) => session.mode === "chat"));
+  const providerConnected = Boolean(activeProvider && activeModel && providerCredentialReady);
+  const demoSessions = demoState?.sessions ?? [];
+  const demoTasks = demoState?.tasks ?? [];
+  const hasChatStart = demoSessions.some((session) => session.mode === "chat");
   const hasCoworkStart = Boolean(
-    demoState?.sessions.some((session) => session.mode === "cowork") ||
-      demoState?.tasks.some((task) => task.title.toLowerCase().includes("cowork")),
+    demoSessions.some((session) => session.mode === "cowork") ||
+    demoTasks.some((task) => task.title.toLowerCase().includes("cowork")),
   );
-  const hasCodeBinding = Boolean(
-    demoState?.project?.workspacePath ||
-      demoState?.sessions.some((session) => session.mode === "code") ||
-      demoState?.tasks.some((task) => task.title.toLowerCase().includes("code")),
-  );
+  const hasProjectCreation = Boolean(demoState?.project?.projectId || demoState?.project?.workspacePath);
   const providerFailure = describeProviderReadinessFailure(onboarding);
 
   return [
     {
-      id: "provider-connected",
-      label: "Provider connected",
-      description: providerConnected
-        ? `${activeProvider?.label ?? onboarding.settings.llm.activeProviderId} is selected with ${activeModel}.`
+      id: "provider-key",
+      label: "Provider key ready",
+      description: providerCredentialReady
+        ? `${activeProvider?.label ?? onboarding.settings.llm.activeProviderId} has a provider key or local endpoint.`
         : providerFailure,
       actionDescription: "Open Providers & Models to choose a provider, model, and secret source.",
-      state: providerConnected ? "complete" : "active",
-      meta: providerConnected ? "Pass" : "Needs provider setup",
+      state: providerCredentialReady ? "complete" : "active",
+      meta: providerCredentialReady ? "Credential ready" : "Needs provider setup",
       actionLabel: "Configure",
       route: { area: "settings", section: "providers" },
     },
     {
-      id: "model-smoke",
-      label: "Model smoke passed",
+      id: "model-discovery",
+      label: "Model discovery checked",
+      description: providerConnected
+        ? `Refresh model discovery for ${activeProvider?.label ?? onboarding.settings.llm.activeProviderId}; ${activeModel} is the selected model.`
+        : "Connect a provider and choose a model before checking live account-visible models.",
+      actionDescription: "Open Providers & Models, then use Refresh models for the configured provider.",
+      state: providerConnected ? "active" : "pending",
+      meta: providerConnected ? "Refresh required" : "Blocked by provider",
+      actionLabel: "Refresh models",
+      route: { area: "settings", section: "providers" },
+    },
+    {
+      id: "provider-smoke",
+      label: "Provider smoke evidence",
       description: providerConnected
         ? "Run a configured-provider smoke check and keep the pass/fail evidence before release claims."
         : "Connect a provider first; smoke cannot run without a provider, model, and credential or local endpoint.",
@@ -7688,7 +8105,7 @@ export function deriveFirstOutcomePathItems(
       label: "First Chat sent",
       description: hasChatStart
         ? "A starter Chat thread is available; send or inspect the first user outcome there."
-        : "Open Chat and send the first low-risk prompt after provider smoke passes.",
+        : "Open Chat and send the first low-risk prompt after provider smoke evidence is ready.",
       actionDescription: "Open Chat for the first normal response and runtime-context inspection.",
       state: hasChatStart ? "complete" : providerConnected ? "active" : "pending",
       meta: hasChatStart ? "Starter thread ready" : "Needs first send",
@@ -7708,27 +8125,72 @@ export function deriveFirstOutcomePathItems(
       route: { area: "cowork" },
     },
     {
-      id: "project-code-bound",
-      label: "Project or code source bound",
-      description: hasCodeBinding
-        ? "A starter project/code lane is available for the implementation loop."
-        : "Bind a project or code source so Code can edit, validate, and preserve artifact truth.",
-      actionDescription: "Open Code to bind source or Projects to continue existing work.",
-      state: hasCodeBinding ? "complete" : hasCoworkStart ? "active" : "pending",
-      meta: hasCodeBinding ? "Bound" : "Needs source",
-      actionLabel: "Open Code",
-      route: { area: "code" },
+      id: "project-created",
+      label: "Project created",
+      description: hasProjectCreation
+        ? "A project exists for the first outcome and can group Chat, Cowork, Code, and artifacts."
+        : "Create or bind a project so the first outcome has a durable workspace container.",
+      actionDescription: "Open Projects to create or inspect the workspace container for the first outcome.",
+      state: hasProjectCreation ? "complete" : hasCoworkStart ? "active" : "pending",
+      meta: hasProjectCreation ? "Project ready" : "Needs project",
+      actionLabel: "Open Projects",
+      route: { area: "projects" },
     },
     {
       id: "proof-artifact",
-      label: "Validation or proof artifact",
+      label: "Proof artifact produced",
       description:
-        "Run validation from Code or inspect artifacts after the first outcome; this is the evidence that makes setup trustworthy.",
+        "Run validation or inspect generated artifacts after the first outcome; this is the evidence that makes setup trustworthy.",
       actionDescription: "Open generated artifacts or Code validation history to inspect proof.",
-      state: hasCodeBinding ? "active" : "pending",
+      state: hasProjectCreation ? "active" : "pending",
       meta: "Proof required",
       actionLabel: "Inspect proof",
       route: { area: "library", section: "artifacts" },
+    },
+  ];
+}
+
+export function deriveOnboardingProviderSmokeEvidenceItems(
+  onboarding: OnboardingState,
+): OnboardingProviderSmokeEvidenceItem[] {
+  const activeProvider = onboarding.settings.llm.providers.find(
+    (provider) => provider.providerId === onboarding.settings.llm.activeProviderId,
+  );
+  const activeProviderLabel =
+    activeProvider?.label ?? (onboarding.settings.llm.activeProviderId.trim() || "No provider");
+  const activeModel = onboarding.settings.llm.activeModel.trim();
+  const providerCredentialReady = Boolean(
+    activeProvider && (activeProvider.hasApiKey || isLikelyLocalProviderBaseUrl(activeProvider.baseUrl)),
+  );
+  const smokeReady = Boolean(activeProvider && activeModel && providerCredentialReady);
+
+  return [
+    {
+      id: "configured",
+      label: "Provider configured",
+      description: providerCredentialReady
+        ? `${activeProviderLabel} has a credential source or reachable local endpoint configured.`
+        : describeProviderReadinessFailure(onboarding),
+      state: providerCredentialReady ? "complete" : "active",
+      meta: providerCredentialReady ? "Configured" : "Needs setup",
+    },
+    {
+      id: "smoke-ready",
+      label: "Smoke ready",
+      description: smokeReady
+        ? `${activeProviderLabel} can be smoke-checked with selected model ${activeModel}.`
+        : "Choose a provider, model, and credential or local endpoint before running provider smoke.",
+      state: smokeReady ? "complete" : providerCredentialReady ? "active" : "pending",
+      meta: smokeReady ? "Ready to run" : "Blocked",
+    },
+    {
+      id: "passed-evidence",
+      label: "Passed with evidence",
+      description: smokeReady
+        ? "No live provider smoke evidence is implied here; run the live install lane with real credentials to record pass/fail proof."
+        : "Live provider proof is blocked until the provider is configured and smoke-ready.",
+      state: smokeReady ? "active" : "pending",
+      meta: "GOATCITADEL_VERIFY_INSTALL_LIVE_PROVIDER=1",
     },
   ];
 }

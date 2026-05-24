@@ -22,6 +22,9 @@ import type {
   ChatTurnTraceRecord,
   CodeModeLanguage,
   CodeModeSandboxMetadata,
+  CodeModeRunArtifactKind,
+  CodeModeRunArtifactPreview,
+  CodeModeRunComparisonRecord,
   CodeModeRunRecord,
   CodeModeRunRequest,
   CodeModeRunListOptions,
@@ -378,6 +381,74 @@ export class CapabilitySystemService {
 
   public getCodeModeRun(runId: string): CodeModeRunRecord {
     return this.hydrateCodeModeRunForRead(this.options.storage.codeModeRuns.get(runId));
+  }
+
+  public async getCodeModeRunArtifactPreview(
+    runId: string,
+    artifactKind: CodeModeRunArtifactKind,
+    scope?: Pick<CodeModeRunListOptions, "sessionId" | "turnId" | "workspaceId">,
+  ): Promise<CodeModeRunArtifactPreview> {
+    const run = scope ? this.getCodeModeRunInScope(runId, scope) : this.getCodeModeRun(runId);
+    const target = selectCodeModeRunArtifact(run, artifactKind);
+    const content = await this.readVerifiedManagedArtifactText(target.artifact, {
+      label: target.label,
+      expectedSha256: target.expectedContentSha256,
+    });
+    if (target.expectedJsonValueSha256) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(content);
+      } catch (error) {
+        throw new ConflictError({
+          message: `${target.label} is not valid JSON; refusing to inspect Code Mode run.`,
+          details: {
+            parseError: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+      assertJsonValueHash(parsed, target.expectedJsonValueSha256, target.label);
+    }
+    return {
+      runId,
+      artifactKind,
+      artifact: target.artifact,
+      content,
+      sha256: sha256Text(content),
+      verifiedAt: new Date().toISOString(),
+      truncated: target.truncated,
+    };
+  }
+
+  public compareCodeModeRuns(
+    runId: string,
+    baselineRunId: string,
+    scope?: Pick<CodeModeRunListOptions, "sessionId" | "turnId" | "workspaceId">,
+  ): CodeModeRunComparisonRecord {
+    const run = scope ? this.getCodeModeRunInScope(runId, scope) : this.getCodeModeRun(runId);
+    const baseline = scope ? this.getCodeModeRunInScope(baselineRunId, scope) : this.getCodeModeRun(baselineRunId);
+    return {
+      runId: run.runId,
+      baselineRunId: baseline.runId,
+      comparedAt: new Date().toISOString(),
+      run: summarizeCodeModeRunForComparison(run),
+      baseline: summarizeCodeModeRunForComparison(baseline),
+      matches: {
+        capabilitySnapshot: run.capabilitySnapshotId === baseline.capabilitySnapshotId,
+        source: run.codeHash === baseline.codeHash,
+        input: run.codeModeInputHash === baseline.codeModeInputHash,
+        wrapperManifest: run.wrapperManifestHash === baseline.wrapperManifestHash,
+        policySnapshot: run.policySnapshotHash === baseline.policySnapshotHash,
+        permissionProfile: run.permissionProfileId === baseline.permissionProfileId,
+        localOperatorOverride: run.localOperatorOverrideId === baseline.localOperatorOverrideId,
+        sandboxRunner: run.sandbox?.runnerId === baseline.sandbox?.runnerId,
+        sandboxProfile: run.sandbox?.isolationProfile === baseline.sandbox?.isolationProfile,
+        sandboxAvailability: run.sandbox?.available === baseline.sandbox?.available,
+      },
+      sandbox: {
+        run: run.sandbox,
+        baseline: baseline.sandbox,
+      },
+    };
   }
 
   public getCodeModeRunInScope(
@@ -2470,6 +2541,77 @@ export class CapabilitySystemService {
     }
     return content;
   }
+}
+
+function selectCodeModeRunArtifact(
+  run: CodeModeRunRecord,
+  artifactKind: CodeModeRunArtifactKind,
+): {
+  artifact: CapabilityArtifactRecord;
+  label: string;
+  expectedContentSha256?: string;
+  expectedJsonValueSha256?: string;
+  truncated: boolean;
+} {
+  switch (artifactKind) {
+    case "source":
+      return {
+        artifact: run.codeArtifact,
+        label: "Code Mode source artifact",
+        expectedContentSha256: run.codeHash,
+        truncated: false,
+      };
+    case "wrapper_manifest":
+      return {
+        artifact: run.wrapperManifestArtifact,
+        label: "Code Mode wrapper manifest artifact",
+        expectedJsonValueSha256: run.wrapperManifestHash,
+        truncated: false,
+      };
+    case "policy_snapshot":
+      return {
+        artifact: run.policySnapshotArtifact,
+        label: "Code Mode policy snapshot artifact",
+        expectedJsonValueSha256: run.policySnapshotHash,
+        truncated: false,
+      };
+    case "stdout":
+      if (!run.stdoutArtifact) {
+        throw new NotFoundError({ entity: "code mode stdout artifact", id: run.runId });
+      }
+      return {
+        artifact: run.stdoutArtifact,
+        label: "Code Mode stdout artifact",
+        truncated: run.stdoutTruncated,
+      };
+    case "stderr":
+      if (!run.stderrArtifact) {
+        throw new NotFoundError({ entity: "code mode stderr artifact", id: run.runId });
+      }
+      return {
+        artifact: run.stderrArtifact,
+        label: "Code Mode stderr artifact",
+        truncated: run.stderrTruncated,
+      };
+    default:
+      throw new ValidationError({ message: `Unsupported Code Mode artifact kind: ${artifactKind}` });
+  }
+}
+
+function summarizeCodeModeRunForComparison(run: CodeModeRunRecord): CodeModeRunComparisonRecord["run"] {
+  return {
+    runId: run.runId,
+    status: run.status,
+    capabilitySnapshotId: run.capabilitySnapshotId,
+    codeModeInputHash: run.codeModeInputHash,
+    wrapperManifestHash: run.wrapperManifestHash,
+    policySnapshotHash: run.policySnapshotHash,
+    codeHash: run.codeHash,
+    permissionProfileId: run.permissionProfileId,
+    localOperatorOverrideId: run.localOperatorOverrideId,
+    createdAt: run.createdAt,
+    finishedAt: run.finishedAt,
+  };
 }
 
 function buildSkillLifecycleRecord(skill: LoadedSkill): SkillLifecycleRecord {

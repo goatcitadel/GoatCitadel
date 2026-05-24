@@ -146,6 +146,20 @@ export async function updateAddon(addonId: string): Promise<AddonActionResponse>
   });
 }
 
+export async function enableAddon(addonId: string): Promise<AddonActionResponse> {
+  return request<AddonActionResponse>(`/api/v1/addons/${encodeURIComponent(addonId)}/enable`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function disableAddon(addonId: string): Promise<AddonActionResponse> {
+  return request<AddonActionResponse>(`/api/v1/addons/${encodeURIComponent(addonId)}/disable`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 export async function launchAddon(addonId: string): Promise<AddonActionResponse> {
   return request<AddonActionResponse>(`/api/v1/addons/${encodeURIComponent(addonId)}/launch`, {
     method: "POST",

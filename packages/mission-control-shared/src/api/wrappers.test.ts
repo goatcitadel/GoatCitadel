@@ -576,6 +576,8 @@ describe("shared API wrappers", () => {
       method: "POST",
     });
     await expectCall(platform.updateAddon("addon/1"), "/api/v1/addons/addon%2F1/update", { method: "POST" });
+    await expectCall(platform.enableAddon("addon/1"), "/api/v1/addons/addon%2F1/enable", { method: "POST" });
+    await expectCall(platform.disableAddon("addon/1"), "/api/v1/addons/addon%2F1/disable", { method: "POST" });
     await expectCall(platform.launchAddon("addon/1"), "/api/v1/addons/addon%2F1/launch", { method: "POST" });
     await expectCall(platform.stopAddon("addon/1"), "/api/v1/addons/addon%2F1/stop", { method: "POST" });
     await expectCall(platform.uninstallAddon("addon/1"), "/api/v1/addons/addon%2F1/uninstall", { method: "DELETE" });

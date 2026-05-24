@@ -101,6 +101,93 @@ describe("CapabilitySystemService", () => {
     expect(manifest.wrappers[0]).toMatchObject({ name: "tool.safe_read" });
   });
 
+  it("verifies Code Mode artifact previews and compares run snapshots without re-reading unmanaged files", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+
+    const baseline = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { run: 'baseline' };",
+      originSurface: "code",
+      sessionId: "session-a",
+      workspaceId: "workspace-a",
+    });
+    const current = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { run: 'current' };",
+      originSurface: "code",
+      sessionId: "session-a",
+      workspaceId: "workspace-a",
+    });
+
+    const sourcePreview = await harness.service.getCodeModeRunArtifactPreview(current.runId, "source", {
+      sessionId: "session-a",
+      workspaceId: "workspace-a",
+    });
+    const wrapperPreview = await harness.service.getCodeModeRunArtifactPreview(current.runId, "wrapper_manifest", {
+      sessionId: "session-a",
+      workspaceId: "workspace-a",
+    });
+    const comparison = harness.service.compareCodeModeRuns(current.runId, baseline.runId, {
+      sessionId: "session-a",
+      workspaceId: "workspace-a",
+    });
+
+    expect(sourcePreview).toMatchObject({
+      runId: current.runId,
+      artifactKind: "source",
+      content: "return { run: 'current' };",
+      sha256: current.codeHash,
+      truncated: false,
+    });
+    expect(wrapperPreview.content).toContain('"wrappers"');
+    expect(comparison.matches).toMatchObject({
+      source: false,
+      input: true,
+      permissionProfile: true,
+      sandboxAvailability: true,
+    });
+    expect(comparison.run.capabilitySnapshotId).toBe(current.capabilitySnapshotId);
+    expect(comparison.baseline.capabilitySnapshotId).toBe(baseline.capabilitySnapshotId);
+  });
+
+  it("fails Code Mode JSON artifact previews closed when managed artifact content is not JSON", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+      originSurface: "code",
+      sessionId: "session-a",
+      workspaceId: "workspace-a",
+    });
+    const wrapperPath = path.resolve(harness.rootDir, run.wrapperManifestArtifact.relPath);
+    const invalidJson = "{ not-json";
+    await fs.writeFile(wrapperPath, invalidJson, "utf8");
+    harness.storage.codeModeRuns.upsert({
+      ...harness.storage.codeModeRuns.get(run.runId),
+      wrapperManifestArtifact: {
+        ...run.wrapperManifestArtifact,
+        sha256: sha256Text(invalidJson),
+      },
+    });
+
+    await expect(
+      harness.service.getCodeModeRunArtifactPreview(run.runId, "wrapper_manifest", {
+        sessionId: "session-a",
+        workspaceId: "workspace-a",
+      }),
+    ).rejects.toThrow("not valid JSON");
+  });
+
   it("refreshes sandbox metadata for each Code Mode run creation", async () => {
     const unavailableSandbox = {
       runnerId: "goatcitadel.best-effort-host",

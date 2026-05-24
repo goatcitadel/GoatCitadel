@@ -5,7 +5,12 @@ import {
   fetchAgenticChannelDeliveries,
   fetchAgenticRuntimeAvailability,
 } from "@goatcitadel/mission-control-shared/api/agentic";
-import { fetchCodeModeRun, fetchCodeModeRuns } from "@goatcitadel/mission-control-shared/api/capabilities";
+import {
+  compareCodeModeRuns,
+  fetchCodeModeRun,
+  fetchCodeModeRuns,
+  fetchCodeModeRunArtifact,
+} from "@goatcitadel/mission-control-shared/api/capabilities";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { WorkbenchFileTree } from "@goatcitadel/mission-control-shared/components/WorkbenchFileTree";
 import {
@@ -23,14 +28,18 @@ vi.mock("@goatcitadel/mission-control-shared/api/agentic", () => ({
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/capabilities", () => ({
+  compareCodeModeRuns: vi.fn(),
   fetchCodeModeRun: vi.fn(),
   fetchCodeModeRuns: vi.fn(),
+  fetchCodeModeRunArtifact: vi.fn(),
 }));
 
 const mockedFetchAgenticRuntimeAvailability = vi.mocked(fetchAgenticRuntimeAvailability);
 const mockedFetchAgenticChannelDeliveries = vi.mocked(fetchAgenticChannelDeliveries);
 const mockedFetchCodeModeRun = vi.mocked(fetchCodeModeRun);
 const mockedFetchCodeModeRuns = vi.mocked(fetchCodeModeRuns);
+const mockedFetchCodeModeRunArtifact = vi.mocked(fetchCodeModeRunArtifact);
+const mockedCompareCodeModeRuns = vi.mocked(compareCodeModeRuns);
 
 function instanceText(value: unknown): string {
   if (typeof value === "string" || typeof value === "number") {
@@ -424,6 +433,64 @@ describe("ThreadedWorkflowPanel", () => {
       createdAt: "2026-05-05T12:00:00.000Z",
       startedAt: "2026-05-05T12:00:01.000Z",
       finishedAt: "2026-05-05T12:00:02.000Z",
+    });
+    mockedFetchCodeModeRunArtifact.mockResolvedValue({
+      runId: "helper-1",
+      artifactKind: "stdout",
+      content: "Legacy Helper Profile",
+      sha256: "stdout-hash-1234567890",
+      verifiedAt: "2026-05-05T12:00:02.000Z",
+      truncated: false,
+      artifact: {
+        artifactId: "artifact-stdout",
+        relPath: "data/code-mode-artifacts/helper-1/stdout.log",
+        sha256: "stdout-hash-1234567890",
+        bytes: 21,
+        mimeType: "text/plain",
+        createdAt: "2026-05-05T12:00:02.000Z",
+      },
+    });
+    mockedCompareCodeModeRuns.mockResolvedValue({
+      runId: "helper-1",
+      baselineRunId: "helper-2",
+      comparedAt: "2026-05-05T12:00:02.000Z",
+      run: {
+        runId: "helper-1",
+        status: "completed",
+        capabilitySnapshotId: "snap-1",
+        codeModeInputHash: "in-1",
+        wrapperManifestHash: "wrap-1",
+        policySnapshotHash: "policy-1",
+        codeHash: "code-1",
+        permissionProfileId: "profile-1",
+        localOperatorOverrideId: "override-1",
+        createdAt: "2026-05-05T12:00:02.000Z",
+      },
+      baseline: {
+        runId: "helper-2",
+        status: "completed",
+        capabilitySnapshotId: "snap-2",
+        codeModeInputHash: "in-2",
+        wrapperManifestHash: "wrap-2",
+        policySnapshotHash: "policy-2",
+        codeHash: "code-2",
+        permissionProfileId: "profile-2",
+        localOperatorOverrideId: "override-2",
+        createdAt: "2026-05-05T11:00:02.000Z",
+      },
+      matches: {
+        capabilitySnapshot: true,
+        source: true,
+        input: true,
+        wrapperManifest: true,
+        policySnapshot: true,
+        permissionProfile: true,
+        localOperatorOverride: true,
+        sandboxRunner: true,
+        sandboxProfile: true,
+        sandboxAvailability: true,
+      },
+      sandbox: {},
     });
   });
 
@@ -1976,12 +2043,12 @@ describe("ThreadedWorkflowPanel", () => {
         .find((button) => button.children.includes("Run Map"))
         ?.props.onClick();
     });
-      expect(JSON.stringify(renderer!.toJSON())).toContain("Gate: ");
-      expect(JSON.stringify(renderer!.toJSON())).toContain("coverage evidence");
-      expect(JSON.stringify(renderer!.toJSON())).toContain("Timestamped checkpoints");
-      await act(async () => {
-        renderer!.root
-          .findAllByType("button")
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Gate: ");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("coverage evidence");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Timestamped checkpoints");
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
         .find((button) => button.children.includes("Inspect evidence"))
         ?.props.onClick();
     });

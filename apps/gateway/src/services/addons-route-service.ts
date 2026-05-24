@@ -6,6 +6,8 @@ import type { AddonSlotService } from "./addon-slot-service.js";
 
 export const addonsRouteMethods = [
   "getAddonStatus",
+  "disableAddon",
+  "enableAddon",
   "installAddon",
   "launchAddon",
   "listAddonSlots",
@@ -47,6 +49,22 @@ export function createAddonsRoutePort(deps: AddonsRoutePortDependencies): Addons
         context: { status: result.status.status },
       });
       deps.publishRealtime("addon_installed", "system", {
+        addonId,
+        status: result.status.status,
+      });
+      return result;
+    },
+    disableAddon: async (addonId) => {
+      const result = await deps.addonsService.disable(addonId);
+      deps.publishRealtime("addon_disabled", "system", {
+        addonId,
+        status: result.status.status,
+      });
+      return result;
+    },
+    enableAddon: async (addonId) => {
+      const result = await deps.addonsService.enable(addonId);
+      deps.publishRealtime("addon_enabled", "system", {
         addonId,
         status: result.status.status,
       });

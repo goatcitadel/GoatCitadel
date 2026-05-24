@@ -143,6 +143,48 @@ describe("AddonsService", () => {
     await expect(service.uninstall("arena")).rejects.toThrow("Invalid add-on manifest");
   });
 
+  it("rejects unsupported manifest rows before process or filesystem lifecycle actions", async () => {
+    const addonsRoot = path.join(goatHome, "addons");
+    const addonPath = path.join(addonsRoot, "rogue");
+    await fs.mkdir(addonPath, { recursive: true });
+    await fs.writeFile(
+      path.join(addonsRoot, "manifest.json"),
+      `${JSON.stringify(
+        {
+          items: {
+            rogue: {
+              addonId: "rogue",
+              installedPath: addonPath,
+              repoUrl: "https://github.com/example/rogue-addon",
+              owner: "example",
+              sameOwnerAsGoatCitadel: false,
+              trustTier: "community",
+              runtimeType: "separate_repo_app",
+              webEntryMode: "external_local_url",
+              launchUrl: "http://127.0.0.1:3999/",
+              installedAt: "2026-03-06T00:00:00.000Z",
+              updatedAt: "2026-03-06T00:00:00.000Z",
+              consentedAt: "2026-03-06T00:00:00.000Z",
+              consentedBy: "operator",
+              enabled: true,
+              runtimeStatus: "stopped",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const service = new AddonsService(tempDir);
+
+    await expect(service.disable("rogue")).rejects.toThrow("Unknown add-on: rogue");
+    await expect(service.stop("rogue")).rejects.toThrow("Unknown add-on: rogue");
+    await expect(service.uninstall("rogue")).rejects.toThrow("Unknown add-on: rogue");
+    await expect(fs.stat(addonPath)).resolves.toBeDefined();
+  });
+
   it("rolls back addon updates when install or build fails after pull", async () => {
     const addonsRoot = path.join(goatHome, "addons");
     const addonPath = path.join(addonsRoot, "arena");
@@ -307,7 +349,7 @@ describe("AddonsService", () => {
     );
   });
 
-  it("registers dashboard slot declarations with the slot service on install", async () => {
+  it("keeps new add-ons disabled until enabled and registers dashboard slots on enable", async () => {
     execFileSyncMock.mockImplementation(() => "abc123\n");
     fetchMock.mockImplementation(
       async () =>
@@ -318,13 +360,27 @@ describe("AddonsService", () => {
     );
 
     const slotService = new AddonSlotService();
+    slotService.registerDeclarations("arena", [{ slot: "ops.approvals.actions" }]);
     const registerSpy = vi.spyOn(slotService, "registerDeclarations");
+    const unregisterSpy = vi.spyOn(slotService, "unregister");
     const service = new AddonsService(tempDir, { slotService });
 
-    await service.install("arena", { confirmRepoDownload: true, actorId: "operator" });
+    const installResult = await service.install("arena", { confirmRepoDownload: true, actorId: "operator" });
+    await expect(service.launch("arena")).rejects.toThrow("disabled");
+
+    expect(installResult.status.status).toBe("disabled");
+    expect(installResult.status.installed?.enabled).toBe(false);
+    expect(unregisterSpy).toHaveBeenCalledWith("arena");
+    expect(slotService.listAllRegistrations()).toEqual([]);
+    expect(registerSpy).not.toHaveBeenCalled();
+
+    await fs.mkdir(path.join(goatHome, "addons", "arena"), { recursive: true });
+    const enableResult = await service.enable("arena");
 
     expect(registerSpy).toHaveBeenCalledTimes(1);
     expect(registerSpy).toHaveBeenCalledWith("arena", expect.any(Array));
+    expect(enableResult.status.status).toBe("installed");
+    expect(enableResult.status.installed?.enabled).toBe(true);
     const [addonIdArg, declarationsArg] = registerSpy.mock.calls[0] ?? [];
     expect(addonIdArg).toBe("arena");
     expect(Array.isArray(declarationsArg)).toBe(true);
