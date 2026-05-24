@@ -99,6 +99,7 @@ export function useChatSurfaceOrchestration(input: {
 }) {
   const [queuedOutbound, setQueuedOutbound] = useState<OutboundQueueItem[]>([]);
   const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
+  const [queueDrainSignal, setQueueDrainSignal] = useState(0);
   const drainingQueueItemIdRef = useRef<string | null>(null);
 
   const handleSend = useCallback(async () => {
@@ -241,14 +242,20 @@ export function useChatSurfaceOrchestration(input: {
     drainingQueueItemIdRef.current = nextItem.id;
     setQueuedOutbound((current) => current.filter((item) => item.id !== nextItem.id));
     void executeOutboundItem(nextItem)
+      .catch(() => undefined)
       .finally(() => {
         if (drainingQueueItemIdRef.current === nextItem.id) {
           drainingQueueItemIdRef.current = null;
         }
-        setQueuedOutbound((current) => (current.some((item) => !item.paused) ? [...current] : current));
-      })
-      .catch(() => undefined);
-  }, [input.executeOutboundItemRef, input.sending, input.tryBeginOutboundExecutionRef, queuedOutbound]);
+        setQueueDrainSignal((current) => current + 1);
+      });
+  }, [
+    input.executeOutboundItemRef,
+    input.sending,
+    input.tryBeginOutboundExecutionRef,
+    queueDrainSignal,
+    queuedOutbound,
+  ]);
 
   return {
     queuedOutbound,
