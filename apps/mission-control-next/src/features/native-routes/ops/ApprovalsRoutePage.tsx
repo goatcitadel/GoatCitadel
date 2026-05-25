@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode }
 import { AlertTriangle, Clock, History, Play, RefreshCw, Waypoints } from "lucide-react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import { StatusChip, ThreePartChip } from "../primitives";
+import { EmptyState, StatusChip, ThreePartChip } from "../primitives";
 import {
   buildApprovalEvidenceModel,
   findTraceMetadata,
@@ -231,7 +231,7 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
               }`}
             >
               {approvals.visibleItems.length === 0 ? (
-                <p className="mc-next-directory-empty">{emptyApprovalsLabel}</p>
+                <EmptyState size="compact" title={emptyApprovalsLabel} />
               ) : (
                 approvals.visibleItems.map((approval) => {
                   const expired = isExpiredApproval(approval);
@@ -340,9 +340,7 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
                 liveLaneRoute={liveLaneRoute}
               />
             ) : (
-              <p className="mc-next-directory-empty">
-                Select a queue item to inspect its replay trail and recovery state.
-              </p>
+              <EmptyState size="compact" title="Select a queue item to inspect its replay trail and recovery state." />
             )}
             {approvals.summary ? <p className="mc-next-approvals-summary">{approvals.summary}</p> : null}
           </NativeCard>
@@ -676,7 +674,7 @@ function ApprovalInspectorCard(props: {
               <li>Updated: {formatDateTime(durable.updatedAt)}</li>
             </ul>
           ) : (
-            <p className="mc-next-directory-empty">No checkpoint details loaded yet.</p>
+            <EmptyState size="compact" title="No checkpoint details loaded yet." />
           )}
         </div>
 

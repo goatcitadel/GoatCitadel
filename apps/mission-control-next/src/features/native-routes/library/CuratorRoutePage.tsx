@@ -4,6 +4,7 @@ import type { CuratorSkillStatusItem, CuratorStatusResponse } from "@goatcitadel
 import { archiveCuratorSkill, fetchCuratorStatus, runCurator } from "@goatcitadel/mission-control-shared/api/client";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
+import { EmptyState } from "../primitives";
 import type { NativeRoutePagesProps } from "../types";
 import "../native-routes.css";
 
@@ -128,9 +129,12 @@ export function CuratorRoutePage({ route: _route, navigate: _navigate, activeWor
             </div>
           ) : null}
           {!notice ? (
-            <p className="mc-next-directory-empty">
-              {loading ? "Loading curator status…" : "Use the actions above to refresh or generate a curator report."}
-            </p>
+            <EmptyState
+              size="compact"
+              title={
+                loading ? "Loading curator status…" : "Use the actions above to refresh or generate a curator report."
+              }
+            />
           ) : null}
         </NativeCard>
       </NativeGrid>
@@ -141,7 +145,7 @@ export function CuratorRoutePage({ route: _route, navigate: _navigate, activeWor
           subtitle={data ? `${data.items.length} skills · generated ${data.generatedAt}` : "Loading…"}
         >
           {loading && !data ? (
-            <p className="mc-next-directory-empty">Loading curator status…</p>
+            <EmptyState size="compact" title="Loading curator status…" />
           ) : data && data.items.length > 0 ? (
             <div className="mc-next-approvals-list">
               {data.items.map((item) => (
@@ -180,7 +184,7 @@ export function CuratorRoutePage({ route: _route, navigate: _navigate, activeWor
               ))}
             </div>
           ) : (
-            <p className="mc-next-directory-empty">No skills found.</p>
+            <EmptyState size="compact" title="No skills found." />
           )}
         </NativeCard>
       </NativeGrid>

@@ -58,7 +58,7 @@
   align-items: center;
   gap: 0.5rem;
   margin: 0;
-  font-size: 10px;
+  font-size: var(--text-xs, 0.75rem);
   font-weight: 700;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -119,7 +119,7 @@
 }
 
 .mc-pp-threshold-bar-eyebrow {
-  font-size: 10px;
+  font-size: var(--text-xs, 0.75rem);
   font-weight: 700;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -222,7 +222,7 @@
 .mc-pp-summary-card span,
 .mc-pp-detail-card span,
 .mc-pp-metric-card span {
-  font-size: 10px;
+  font-size: var(--text-xs, 0.75rem);
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -373,8 +373,7 @@
 }
 
 .mc-pp-section-heading h4,
-.mc-pp-section-heading h5,
-.mc-pp-empty h4 {
+.mc-pp-section-heading h5 {
   margin: 0;
   font-size: 1rem;
   line-height: 1.18;
@@ -387,8 +386,7 @@
 }
 
 .mc-pp-section-heading p,
-.mc-pp-detail-head p,
-.mc-pp-empty p {
+.mc-pp-detail-head p {
   margin: 0.25rem 0 0;
   color: var(--text-secondary);
   font-size: 0.9rem;
@@ -1006,26 +1004,6 @@
   padding: 0.6rem 0.65rem;
   border-bottom: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
   text-align: left;
-}
-
-.mc-pp-empty {
-  display: grid;
-  gap: 0.3rem;
-  padding: 1rem;
-  border-radius: 1rem;
-  border: 1px dashed color-mix(in oklab, var(--border) 84%, transparent);
-  background: color-mix(in oklab, var(--mc-surface-1) 88%, transparent);
-}
-
-.mc-pp-empty.large {
-  min-height: 26rem;
-  place-content: center;
-  text-align: center;
-}
-
-.mc-pp-empty p {
-  margin: 0;
-  color: var(--text-secondary);
 }
 
 .mc-pp-loading-shell,

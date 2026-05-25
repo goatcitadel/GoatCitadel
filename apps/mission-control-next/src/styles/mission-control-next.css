@@ -32,7 +32,7 @@
   overflow-x: clip;
   background: var(--mc-shell-bg);
   color: var(--foreground);
-  font-size: 13px;
+  font-size: var(--text-sm, 0.8125rem);
 }
 
 .mc-next-shell[data-area="chat"] {
@@ -1420,7 +1420,7 @@
   background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
   color: var(--foreground);
   padding: 0.55rem 0.78rem;
-  font-size: 13px;
+  font-size: var(--text-sm, 0.8125rem);
   font-family: var(--mc-font-sans);
 }
 

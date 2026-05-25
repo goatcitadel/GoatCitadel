@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import type { AutomationRecipeDraftResponse } from "@goatcitadel/contracts";
 import { createCronJob, draftAutomationRecipe } from "@goatcitadel/mission-control-shared/api/client";
-import { StatusChip } from "../primitives";
+import { EmptyState, StatusChip, ThreePartChip, type ChipTone } from "../primitives";
 import { useOpsRuntimeSnapshot } from "@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot";
 import type { AppRoute } from "@next/app/route-model";
 import {
@@ -14,7 +14,6 @@ import {
   type NativePageMetric,
   QuickJumpCard,
 } from "../NativeRoutePageLayout";
-import { ThreePartChip, type ChipTone } from "../primitives";
 import { recordRouteAction } from "../route-diagnostics";
 import { RuntimeSpendChart, type SpendDay } from "./RuntimeSpendChart";
 import type { NativeRoutePagesProps } from "../types";
@@ -632,7 +631,7 @@ export function RuntimeRoutePage({
                 ]}
               />
               {!data.daemon?.controllable && data.daemon?.controlMessage ? (
-                <p className="mc-next-directory-empty">{data.daemon.controlMessage}</p>
+                <EmptyState size="compact" title={data.daemon.controlMessage} />
               ) : null}
               <div className="mc-next-runtime-actions">
                 <button
@@ -838,7 +837,7 @@ export function RuntimeRoutePage({
                 ))}
               </div>
               {filteredActivityEvents.length === 0 ? (
-                <p className="mc-next-directory-empty">No recent events.</p>
+                <EmptyState size="compact" title="No recent events." />
               ) : (
                 <ul
                   className="mc-next-activity-feed"
@@ -951,7 +950,7 @@ function OpsNeedsAttentionCard({
       stats={[{ label: "Open", value: String(items.length) }]}
     >
       {items.length === 0 ? (
-        <p className="mc-next-directory-empty">No operator attention items right now.</p>
+        <EmptyState size="compact" title="No operator attention items right now." />
       ) : (
         <ul className="mc-next-ops-attention-list" aria-label="Needs attention">
           {items.map((item) => (

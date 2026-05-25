@@ -3,7 +3,7 @@ import { AlertTriangle, ArrowRight } from "lucide-react";
 import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
 import type { AppRoute } from "@next/app/route-model";
 import { recordRouteDiagnostic } from "./route-diagnostics";
-import type { AreaSlug } from "./primitives";
+import { EmptyState, type AreaSlug } from "./primitives";
 
 export type NativePageMetric = {
   label: string;
@@ -201,7 +201,7 @@ export function NativeList({
   ariaLabel?: string;
 }) {
   if (items.length === 0) {
-    return <p className="mc-next-directory-empty">{emptyLabel}</p>;
+    return <EmptyState size="compact" title={emptyLabel} />;
   }
   return (
     <div

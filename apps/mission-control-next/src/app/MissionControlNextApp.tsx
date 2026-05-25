@@ -204,9 +204,15 @@ export function MissionControlNextApp() {
    * Items lean on PRIMARY_NAV for route jumps so the area set stays the
    * single source of truth. Each item carries the g+<letter> shortcut as
    * a keyword so users can also find it by typing "g c".
+   *
+   * Task #38 ("Find a setting"): settings sections appear after the area
+   * jumps so "Go to Settings" still wins for a bare "s", and the specific
+   * leaves surface as the user types more (e.g. "providers", "mcp").
+   * Includes the rail-hidden onboarding + permissions sections so deep
+   * links stay discoverable.
    */
   const commandItems = useMemo<CommandPaletteItem[]>(() => {
-    return PRIMARY_NAV.map(({ area }) => {
+    const areaItems = PRIMARY_NAV.map(({ area }) => {
       const meta = AREA_META[area];
       const letter = SHELL_ROUTE_SHORTCUT_LETTERS.get(area);
       return {
@@ -216,6 +222,17 @@ export function MissionControlNextApp() {
         run: () => navigate({ area }),
       };
     });
+    const settingsItems = RAIL_ITEMS.settings.map((railItem) => {
+      const section = railItem.section;
+      const descriptionWords = railItem.description.toLowerCase().split(/\s+/).slice(0, 6).join(" ");
+      return {
+        id: `settings-${section}`,
+        label: `Settings → ${railItem.label}`,
+        keywords: ["settings", ...(section ? [section] : []), railItem.label.toLowerCase(), descriptionWords],
+        run: () => navigate({ area: "settings", section }),
+      };
+    });
+    return [...areaItems, ...settingsItems];
   }, [navigate]);
 
   // H-7: dismiss the topmost UI layer when Escape fires (palette handled

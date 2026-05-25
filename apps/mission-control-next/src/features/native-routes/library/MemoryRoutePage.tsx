@@ -508,13 +508,21 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 <span>Item history</span>
                 <SectionTruthNotice message={sectionErrors?.memoryHistory ?? null} />
                 {memory.data?.memoryHistory.length ? (
+                  // Visible "·" separators wrapped in aria-hidden so screen
+                  // readers don't announce them as "middle dot" between the
+                  // change type, timestamp, and actor id (a11y H-8 follow-up).
                   <ul className="mc-next-approvals-compact-list">
                     {memory.data.memoryHistory.slice(0, 10).map((entry) => (
                       <li key={entry.changeId}>
                         <strong>{entry.changeType}</strong>
-                        {" · "}
+                        <span aria-hidden="true">{" · "}</span>
                         {formatShortDateTime(entry.createdAt)}
-                        {entry.actorId ? ` · ${entry.actorId}` : ""}
+                        {entry.actorId ? (
+                          <>
+                            <span aria-hidden="true">{" · "}</span>
+                            {entry.actorId}
+                          </>
+                        ) : null}
                       </li>
                     ))}
                   </ul>
@@ -1126,8 +1134,16 @@ function DecisionJournalFacts({ decision }: { decision: MemoryDecisionRecord }) 
 
   return (
     <dl className="mc-next-decision-journal-facts">
+      {/*
+        Each row is wrapped in a presentational <div> so the per-row visual
+        styling (border, background, grid cell) does not require subgrid. HTML5
+        allows <div> as a grouping element inside <dl>, but AT support for that
+        nesting is uneven — role="presentation" makes the wrapper transparent
+        to assistive tech so <dt>/<dd> appear as direct children of <dl>
+        semantically while the visual layout stays intact (a11y H-8 follow-up).
+      */}
       {facts.map((fact) => (
-        <div key={fact.label}>
+        <div key={fact.label} role="presentation">
           <dt>{fact.label}</dt>
           <dd>{fact.value}</dd>
         </div>
@@ -1164,15 +1180,25 @@ function MemoryProvenancePanel({ item, writeEnvelopeCount }: { item: MemoryItemR
   return (
     <div className="mc-next-settings-code-block">
       <span>Memory provenance</span>
-      <ul className="mc-next-approvals-compact-list">
+      {/*
+        Provenance is key/value pairs (label → value), which is semantically a
+        definition list. <ul>/<li> with "label · value" caused screen readers
+        to announce "middle dot" between every label and value (a11y H-8). The
+        <dl>/<dt>/<dd> markup makes the relationship implicit, and the visual
+        "·" separator is wrapped in aria-hidden so screen readers skip it but
+        sighted users keep the inline glyph.
+      */}
+      <dl className="mc-next-memory-provenance-list">
         {provenanceRows.map((row) => (
-          <li key={row.label}>
-            <strong>{row.label}</strong>
-            {" · "}
-            {row.value}
-          </li>
+          <div key={row.label} role="presentation">
+            <dt>{row.label}</dt>
+            <span aria-hidden="true" className="mc-next-memory-provenance-sep">
+              {" · "}
+            </span>
+            <dd>{row.value}</dd>
+          </div>
         ))}
-      </ul>
+      </dl>
     </div>
   );
 }
@@ -1182,7 +1208,12 @@ function SectionTruthNotice({ message }: { message: string | null | undefined })
     return null;
   }
   return (
-    <div className="mc-next-runtime-notice tone-warning">
+    // role="status" + aria-live="polite" so notices that appear after a fetch
+    // settles (rather than on initial render) are announced by screen readers
+    // without interrupting the user (a11y H-8 follow-up). These messages are
+    // informational ("truth unavailable", "history failed"); errors are not
+    // severe enough to warrant role="alert"/aria-live="assertive".
+    <div className="mc-next-runtime-notice tone-warning" role="status" aria-live="polite">
       <span>{message}</span>
     </div>
   );

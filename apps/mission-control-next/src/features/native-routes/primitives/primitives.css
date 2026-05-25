@@ -56,7 +56,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 10px;
+  font-size: var(--text-xs, 0.75rem);
   letter-spacing: 0.16em;
   text-transform: uppercase;
   font-weight: 700;
@@ -84,7 +84,7 @@
   margin: 0;
   max-width: 64ch;
   color: var(--fg-secondary, var(--text-secondary));
-  font-size: 13px;
+  font-size: var(--text-sm, 0.8125rem);
   line-height: 1.45;
 }
 
@@ -110,7 +110,7 @@
 }
 
 .mc-next-stage-head-metric-label {
-  font-size: 10px;
+  font-size: var(--text-xs, 0.75rem);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--fg-muted, var(--text-muted));
@@ -314,7 +314,7 @@
   border-bottom: 0;
   border-radius: 0.42rem 0.42rem 0 0;
   background: var(--bg-surface-1, var(--mc-surface-1));
-  font-size: 11px;
+  font-size: var(--text-xs, 0.75rem);
   color: var(--fg-secondary, var(--text-secondary));
 }
 
@@ -342,7 +342,7 @@
 }
 
 .mc-next-context-strip-cell-label {
-  font-size: 10px;
+  font-size: var(--text-xs, 0.75rem);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--fg-muted, var(--text-muted));

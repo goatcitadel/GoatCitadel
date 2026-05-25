@@ -120,7 +120,6 @@
 .mc-next-directory-copy span,
 .mc-next-directory-card-head p,
 .mc-next-directory-list-item p,
-.mc-next-directory-empty,
 .mc-next-directory-loading,
 .mc-next-directory-lane-item p {
   margin: 0;
@@ -131,7 +130,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 10px;
+  font-size: var(--text-xs, 0.75rem);
   font-weight: 700;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -203,7 +202,7 @@
 }
 
 .mc-next-directory-head-metric-label {
-  font-size: 10px;
+  font-size: var(--text-xs, 0.75rem);
   line-height: 1.22;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -343,13 +342,13 @@
 
 .mc-next-memory-shell .mc-next-settings-field span {
   letter-spacing: 0.08em;
-  font-size: 10px;
+  font-size: var(--text-xs, 0.75rem);
 }
 
 .mc-next-memory-shell .mc-next-settings-input,
 .mc-next-memory-shell .mc-next-settings-textarea {
   border-radius: var(--r-sm, 0.5rem);
-  font-size: 13px;
+  font-size: var(--text-sm, 0.8125rem);
 }
 
 .mc-next-memory-shell .mc-next-settings-code-block {
@@ -1127,7 +1126,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.6rem;
-  font-size: 10px;
+  font-size: var(--text-xs, 0.75rem);
   font-weight: 700;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -2049,6 +2048,46 @@
   overflow-wrap: anywhere;
 }
 
+/*
+  Memory provenance list — semantically a <dl> of label/value pairs.
+  Mirrors the inline "<strong>label</strong> · value" look that the prior
+  <ul>/<li> markup produced. The "·" separator lives in JSX wrapped in
+  aria-hidden so screen readers don't announce "middle dot" (a11y H-8),
+  while sighted users keep the visual rhythm.
+*/
+.mc-next-memory-provenance-list {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding-left: 1rem;
+  font-size: 0.66rem;
+  color: var(--text-secondary);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-memory-provenance-list > div {
+  display: block;
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+
+.mc-next-memory-provenance-list dt {
+  display: inline;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+  color: var(--foreground);
+}
+
+.mc-next-memory-provenance-list dd {
+  display: inline;
+  margin: 0;
+}
+
+.mc-next-memory-provenance-sep {
+  color: var(--text-muted);
+}
+
 .mc-next-settings-code-block {
   display: grid;
   gap: 0.3rem;
@@ -2659,7 +2698,7 @@
 
 .mc-next-runtime-spend-chart-axis-label {
   font-family: var(--mc-font-mono);
-  font-size: 10px;
+  font-size: var(--text-xs, 0.75rem);
   fill: var(--text-muted);
 }
 
