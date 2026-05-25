@@ -22,6 +22,7 @@ export const chatSessionsRouteMethods = [
   "listChatGeneratedArtifacts",
   "listChatSessions",
   "listChatThreadKnowledgeAttachments",
+  "listRecentCrossProjectSessions",
   "pinChatSession",
   "removeChatThreadKnowledgeAttachment",
   "restoreChatSession",

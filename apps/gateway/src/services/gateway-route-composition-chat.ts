@@ -128,6 +128,8 @@ export function composeChatRouteDependencies(
     listChatSessions: (query) => chatSessionService.listChatSessions(ChatSessionDependencies, query),
     listChatThreadKnowledgeAttachments: (sessionId) =>
       chatThreadKnowledgeService.listChatThreadKnowledgeAttachments(ChatThreadKnowledgeDependencies, sessionId),
+    listRecentCrossProjectSessions: (input) =>
+      chatSessionService.listRecentCrossProjectSessions(ChatSessionDependencies, input),
     pinChatSession: (sessionId) => chatSessionService.pinChatSession(ChatSessionDependencies, sessionId),
     removeChatThreadKnowledgeAttachment: (sessionId, attachmentId) =>
       chatThreadKnowledgeService.removeChatThreadKnowledgeAttachment(

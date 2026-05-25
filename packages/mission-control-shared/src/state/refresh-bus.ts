@@ -16,6 +16,7 @@ export type RefreshTopic =
   | "integrations"
   | "npu"
   | "llamaCpp"
+  | "projects"
   | "system";
 
 export interface RefreshSignal {

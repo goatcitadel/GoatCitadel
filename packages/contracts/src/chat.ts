@@ -1747,3 +1747,21 @@ export interface ChatGoalStatusResponse {
   turnsUsed: number;
   setAt: string | null;
 }
+
+export interface RecentCrossProjectSession {
+  sessionId: string;
+  projectId: string;
+  projectLabel: string;
+  title: string | null;
+  sessionKey: string;
+  mode: ChatMode;
+  lastActivityAt: string;
+  lifecycleStatus: ChatSessionLifecycleStatus;
+  turnCount?: number;
+}
+
+export interface CrossProjectRecentsResponse {
+  items: RecentCrossProjectSession[];
+  workspaceId: string;
+  generatedAt: string;
+}

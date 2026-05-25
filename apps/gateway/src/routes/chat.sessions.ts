@@ -133,6 +133,11 @@ const attachKnowledgeSchema = z
     message: "chatAttachmentId or url is required",
   });
 
+const crossProjectRecentsQuerySchema = z.object({
+  workspaceId: z.string().min(1),
+  limit: z.coerce.number().int().positive().max(20).default(8),
+});
+
 export function registerChatSessionRoutes(fastify: FastifyInstance): void {
   fastify.get("/api/v1/chat/generated-artifacts", async (request, reply) => {
     const parsed = generatedArtifactsQuerySchema.safeParse(request.query ?? {});
@@ -204,6 +209,23 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
+  });
+
+  fastify.get("/api/v1/chat/sessions/recents", async (request, reply) => {
+    const parsed = crossProjectRecentsQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    const workspaceId = parsed.data.workspaceId;
+    const items = fastify.services.chatSessions.listRecentCrossProjectSessions({
+      workspaceId,
+      limit: parsed.data.limit,
+    });
+    return reply.send({
+      items,
+      workspaceId,
+      generatedAt: new Date().toISOString(),
+    });
   });
 
   fastify.patch("/api/v1/chat/sessions/:sessionId", async (request, reply) => {

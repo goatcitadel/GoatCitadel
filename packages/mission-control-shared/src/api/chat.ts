@@ -48,6 +48,7 @@ import type {
   ChatSpecialistCandidateSuggestionRecord,
   ChatSteerRequest,
   ChatSteerResponse,
+  CrossProjectRecentsResponse,
   RoutingPreflightRequest,
   RoutingPreflightResult,
   ChatStreamChunk,
@@ -1293,6 +1294,17 @@ export async function clearChatSessionGoal(sessionId: string): Promise<ChatGoalS
   return request<ChatGoalStatusResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/goal`, {
     method: "DELETE",
   });
+}
+
+export async function fetchCrossProjectRecentSessions(
+  workspaceId: string,
+  limit = 8,
+): Promise<CrossProjectRecentsResponse> {
+  const query = new URLSearchParams({
+    workspaceId,
+    limit: String(Math.max(1, Math.min(20, limit))),
+  });
+  return request<CrossProjectRecentsResponse>(`/api/v1/chat/sessions/recents?${query.toString()}`);
 }
 
 async function encodeFileBase64(file: File): Promise<string> {

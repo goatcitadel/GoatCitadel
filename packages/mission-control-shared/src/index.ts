@@ -1,4 +1,5 @@
 export * from "./api/index.js";
+export * from "./hooks/useCrossProjectRecentSessions.js";
 export * from "./hooks/useEventStreamStatus.js";
 export * from "./hooks/useMediaQuery.js";
 export * from "./hooks/useMemoryOperatorSnapshot.js";

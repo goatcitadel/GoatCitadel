@@ -22,6 +22,7 @@ import {
   type ChatSessionPrefsRecord,
   type ChatSessionRecord,
   type ChatSessionSearchHitRecord,
+  type RecentCrossProjectSession,
   type SessionMeta,
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
@@ -664,4 +665,41 @@ function scoreSearchHit(content: string, query: string): number {
     return 2;
   }
   return 1;
+}
+
+const CROSS_PROJECT_RECENTS_MAX_LIMIT = 20;
+
+/**
+ * Lists recent sessions that are bound to a project, sorted by lastActivityAt desc.
+ * turnCount is omitted for v1 — the storage layer does not denormalize it,
+ * and computing it per session would require N additional queries.
+ */
+export function listRecentCrossProjectSessions(
+  deps: ChatSessionDependencies,
+  input: { workspaceId: string; limit: number },
+): RecentCrossProjectSession[] {
+  const limit = Math.max(1, Math.min(CROSS_PROJECT_RECENTS_MAX_LIMIT, input.limit));
+  const fetchLimit = Math.max(20, limit * 3);
+
+  const candidates = listChatSessions(deps, {
+    workspaceId: input.workspaceId,
+    scope: "all",
+    view: "active",
+    includeHidden: false,
+    limit: fetchLimit,
+  });
+
+  const withProject = candidates.filter((record) => Boolean(record.projectId));
+  withProject.sort((left, right) => Date.parse(right.lastActivityAt) - Date.parse(left.lastActivityAt));
+
+  return withProject.slice(0, limit).map((record) => ({
+    sessionId: record.sessionId,
+    projectId: record.projectId as string,
+    projectLabel: record.projectName ?? (record.projectId as string),
+    title: record.title ?? null,
+    sessionKey: record.sessionKey,
+    mode: record.mode ?? "chat",
+    lastActivityAt: record.lastActivityAt,
+    lifecycleStatus: record.lifecycleStatus,
+  }));
 }
