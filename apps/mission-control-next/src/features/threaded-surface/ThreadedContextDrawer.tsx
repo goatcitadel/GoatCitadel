@@ -116,6 +116,19 @@ export function ThreadedContextDrawer({
               >
                 {props.streamEnabled ? "Disable streaming" : "Enable streaming"}
               </button>
+              <div className="mc-next-visual-stream-toggle" role="group" aria-label="Visual stream mode">
+                {(["smooth", "instant"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={`mc-next-panel-button${props.visualStreamMode === mode ? " active" : ""}`}
+                    aria-pressed={props.visualStreamMode === mode}
+                    onClick={() => props.onVisualStreamModeChange(mode)}
+                  >
+                    {mode === "smooth" ? "Smooth" : "Instant"}
+                  </button>
+                ))}
+              </div>
               {props.selectedProviderId ? (
                 <button
                   type="button"

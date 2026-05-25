@@ -18,7 +18,7 @@ import type { ChatStreamStatus } from "@goatcitadel/mission-control-shared/compo
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadView";
 import type { ActiveChatDelegationRun } from "./useChatDelegationPolicyActions";
 import type { PendingUserInputState } from "./useChatOutboundExecution";
-import type { ChatStreamingPreview } from "./chat-streaming-preview";
+import type { ChatStreamingPreview, ChatVisualStreamMode } from "./chat-streaming-preview";
 import type { WorkTrustDescriptor } from "./work-trust";
 import type { ChatErrorSource } from "./chat-error-copy";
 import type { MidTurnDisposition } from "./chat-page-pure-helpers";
@@ -58,6 +58,7 @@ export interface MissionControlActiveSessionSurfaceProps {
   notices: ChatThreadNotice[];
   followOutput: boolean;
   streamStatus: ChatStreamStatus;
+  visualStreamMode: ChatVisualStreamMode;
   streamingPreview: ChatStreamingPreview | null;
   activeStreamingTurnId: string | null;
   queuedCount: number;

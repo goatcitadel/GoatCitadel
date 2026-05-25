@@ -18,6 +18,14 @@ import type {
   ChatModePresetRecord,
   ChatSessionPrefsRecord,
   ChatSessionRecord,
+  ChatSessionWorkbenchCommandRunRequest,
+  ChatSessionWorkbenchDiffResponse,
+  ChatSessionWorkbenchFileDiffResponse,
+  ChatSessionWorkbenchFileOperationRequest,
+  ChatSessionWorkbenchFileResponse,
+  ChatSessionWorkbenchOutputResponse,
+  ChatSessionWorkbenchRecord,
+  ChatSessionWorkbenchTreeResponse,
   RoutingPreflightResult,
   ChatSessionPrefsPatch,
   ChatThreadResponse,
@@ -53,7 +61,6 @@ import { CardSkeleton } from "@goatcitadel/mission-control-shared/components/Car
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { PageHeader } from "@goatcitadel/mission-control-shared/components/PageHeader";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
-import type { CodeWorkbenchPanel as LegacyCodeWorkbenchPanelComponent } from "@goatcitadel/mission-control-shared/components/CodeWorkbenchPanel";
 import type { CoworkCanvasPanel as LegacyCoworkCanvasPanelComponent } from "@goatcitadel/mission-control-shared/components/CoworkCanvasPanel";
 import type { ChatStreamStatus } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadView";
@@ -67,6 +74,7 @@ import {
   setDevDiagnosticsLatestTraceSummary,
 } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import type { ChatContextDockPanelsProps } from "./chat/ChatContextDockPanels.types";
+import type { ChatVisualStreamMode } from "./chat/chat-streaming-preview";
 import type {
   MissionControlActiveSessionSurfaceProps,
   ThreadedContextSelectionState,
@@ -206,9 +214,57 @@ export interface MissionThreadedDropTargetProps {
   onDrop: DragEventHandler<HTMLElement>;
 }
 
+export interface MissionThreadedCodeWorkflowPanelProps {
+  workspaceId: string;
+  selectedTurn: ChatThreadResponse["turns"][number] | null;
+  projectName?: string;
+  needsProjectBinding: boolean;
+  workbenchState: ChatSessionWorkbenchRecord | null;
+  workbenchTree: ChatSessionWorkbenchTreeResponse | null;
+  selectedFile: ChatSessionWorkbenchFileResponse | null;
+  selectedFileDiff: ChatSessionWorkbenchFileDiffResponse | null;
+  draftContent: string;
+  expandedPaths: string[];
+  diff: ChatSessionWorkbenchDiffResponse | null;
+  output: ChatSessionWorkbenchOutputResponse | null;
+  loading: boolean;
+  busy: boolean;
+  saving: boolean;
+  error: string | null;
+  hasDirtyDraft: boolean;
+  generatedArtifact: ChatGeneratedArtifactRecord | null;
+  onCloseGeneratedArtifact?: () => void;
+  availableProjects?: Array<{ projectId: string; name: string; workspacePath: string }>;
+  selectedProjectCandidateId?: string;
+  sourceBindingBusy?: boolean;
+  onBindExistingProject?: (projectId: string) => Promise<unknown>;
+  onImportProjectSource?: (input: {
+    sourceType: "local_folder" | "github_repo";
+    name?: string;
+    sourcePath?: string;
+    repoUrl?: string;
+    ref?: string;
+  }) => Promise<unknown>;
+  onCreateWorktree?: () => void;
+  onSelectFile: (relativePath: string) => void;
+  onDraftChange: (nextValue: string) => void;
+  onExpandedPathsChange: (nextPaths: string[]) => void;
+  onRefresh: () => void;
+  onSaveFile: () => void;
+  onFileOperation?: (input: ChatSessionWorkbenchFileOperationRequest) => Promise<boolean>;
+  onDiscardDraft: () => void;
+  onRunValidationCommand?: (input: ChatSessionWorkbenchCommandRunRequest) => void;
+  onApplyPatch?: (patch?: string) => void;
+  onExportPatch?: () => Promise<void>;
+  onRevertFile?: (relativePath?: string) => void;
+  onRevertAll?: () => void;
+  onRunHelperSnippet: (language: string, source: string) => void;
+  onOpenApprovals?: (approvalId?: string) => void;
+}
+
 export type MissionThreadedWorkflowPanel =
   | { kind: "cowork"; props: ComponentProps<typeof LegacyCoworkCanvasPanelComponent> }
-  | { kind: "code"; props: ComponentProps<typeof LegacyCodeWorkbenchPanelComponent> }
+  | { kind: "code"; props: MissionThreadedCodeWorkflowPanelProps }
   | null;
 
 export interface MissionThreadedRenderSurfaceInput {
@@ -229,7 +285,19 @@ export type MissionThreadedActiveSessionSurfaceProps = MissionControlActiveSessi
 export type MissionThreadedContextDockProps = ChatContextDockPanelsProps;
 
 const STREAM_PREF_KEY = "goatcitadel.chat.agent.stream.enabled";
+const VISUAL_STREAM_MODE_PREF_KEY = "goatcitadel.chat.visual_stream_mode.v1";
 const SELECTED_CONTEXT_MAX_CHARS = 12_000;
+
+function readVisualStreamModeFromStorage(): ChatVisualStreamMode {
+  if (typeof window === "undefined") {
+    return "smooth";
+  }
+  try {
+    return window.localStorage.getItem(VISUAL_STREAM_MODE_PREF_KEY) === "instant" ? "instant" : "smooth";
+  } catch {
+    return "smooth";
+  }
+}
 
 function formatSelectionSourceSummary(source?: RoutingPreflightResult["selectionSource"]): string {
   switch (source) {
@@ -631,6 +699,9 @@ export function MissionThreadedControllerHost({
       return true;
     }
   });
+  const [visualStreamMode, setVisualStreamMode] = useState<ChatVisualStreamMode>(() =>
+    readVisualStreamModeFromStorage(),
+  );
   const [renameTitle, setRenameTitle] = useState("");
   const [isDragActive, setIsDragActive] = useState(false);
   const [followThreadOutput, setFollowThreadOutput] = useState(true);
@@ -1260,6 +1331,7 @@ export function MissionThreadedControllerHost({
     selectedSessionId,
     selectedSession,
     streamEnabled,
+    visualStreamMode,
     sending,
     error,
     queuedOutbound,
@@ -1426,6 +1498,15 @@ export function MissionThreadedControllerHost({
       // Fallback: localStorage may be disabled or quota-exceeded; preference will not persist this session.
     }
   }, [streamEnabled]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(VISUAL_STREAM_MODE_PREF_KEY, visualStreamMode);
+    } catch {
+      // Fallback: localStorage may be disabled or quota-exceeded; preference will not persist this session.
+    }
+  }, [visualStreamMode]);
 
   useEffect(() => {
     setRenameTitle(selectedSession?.title ?? "");
@@ -1724,11 +1805,7 @@ export function MissionThreadedControllerHost({
       notices.push({
         id: `lifecycle-diagnostic-${diagnostic.signalId}`,
         tone:
-          diagnostic.severity === "critical"
-            ? "critical"
-            : diagnostic.severity === "warning"
-              ? "warning"
-              : "neutral",
+          diagnostic.severity === "critical" ? "critical" : diagnostic.severity === "warning" ? "warning" : "neutral",
         content: diagnostic.summary?.trim() || diagnostic.title,
         timestamp: agenticRunTree?.generatedAt ?? timestamp,
       });
@@ -2814,6 +2891,7 @@ export function MissionThreadedControllerHost({
         notices: [...lifecycleNotices, ...localNotices],
         followOutput: followThreadOutput,
         streamStatus: streamStatus as ChatStreamStatus,
+        visualStreamMode,
         streamingPreview,
         activeStreamingTurnId,
         queuedCount: queuedOutbound.length,
@@ -3142,7 +3220,9 @@ export function MissionThreadedControllerHost({
           selectedProviderId,
           selectedModel,
           streamEnabled,
+          visualStreamMode,
           onStreamEnabledChange: setStreamEnabled,
+          onVisualStreamModeChange: setVisualStreamMode,
           prefs,
           selectedSessionId,
           showTracePanel,

@@ -1070,10 +1070,19 @@ describe("MissionThreadedControllerHost", () => {
 
     expect(latestSurfaceInput?.messageMode).toBe("chat");
     expect(latestSurfaceInput?.activeSessionSurfaceProps?.sessionTitle).toBe("Launch plan");
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.visualStreamMode).toBe("smooth");
+    expect(latestSurfaceInput?.contextDockProps?.visualStreamMode).toBe("smooth");
     expect(setDevDiagnosticsActiveChatSessionMock).toHaveBeenCalledWith("session-1");
     expect(setDevDiagnosticsLatestTraceSummaryMock).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: "session-1", turnId: "turn-1" }),
     );
+
+    await act(async () => {
+      latestSurfaceInput?.contextDockProps?.onVisualStreamModeChange("instant");
+      await flushEffects();
+    });
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.visualStreamMode).toBe("instant");
+    expect(window.localStorage.getItem("goatcitadel.chat.visual_stream_mode.v1")).toBe("instant");
 
     await act(async () => {
       latestSurfaceInput?.onSessionRailOpenChange(true);

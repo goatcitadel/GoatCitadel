@@ -1,4 +1,16 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  Children,
+  cloneElement,
+  isValidElement,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import {
   AssistantRuntimeProvider,
   MessagePrimitive,
@@ -9,10 +21,12 @@ import {
 } from "@assistant-ui/react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import { Check, Copy } from "lucide-react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "../../lib/utils";
 import { normalizeAssistantDisplayText } from "./assistant-display-text";
+
+export type AssistantStreamPresentationMode = "smooth" | "instant";
 
 function buildAssistantStatus(running: boolean): MessageStatus {
   if (running) {
@@ -66,11 +80,13 @@ export function AssistantMessageRenderer({
   role,
   content,
   running = false,
+  streamPresentationMode = "smooth",
   className,
 }: {
   role: "user" | "assistant";
   content: string;
   running?: boolean;
+  streamPresentationMode?: AssistantStreamPresentationMode;
   className?: string;
 }) {
   const stableMessageId = useId();
@@ -92,6 +108,7 @@ export function AssistantMessageRenderer({
         className={cn(
           "mc-assistant-renderer mc-assistant-renderer-fallback",
           running ? "mc-assistant-renderer-running" : "",
+          `mc-assistant-stream-${streamPresentationMode}`,
           className,
         )}
       >
@@ -103,9 +120,11 @@ export function AssistantMessageRenderer({
             )}
           >
             {role === "assistant" && running ? (
-              <StreamingMarkdown content={displayContent} />
+              <StreamingMarkdown content={displayContent} streamPresentationMode={streamPresentationMode} />
             ) : (
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{displayContent}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={assistantMarkdownComponents}>
+                {displayContent}
+              </ReactMarkdown>
             )}
           </div>
         </AssistantMessageContainer>
@@ -119,6 +138,7 @@ export function AssistantMessageRenderer({
       messageId={stableMessageId}
       content={displayContent}
       running={running}
+      streamPresentationMode={streamPresentationMode}
       className={className}
     />
   );
@@ -129,12 +149,14 @@ function AssistantMessageRuntimeRenderer({
   messageId,
   content,
   running,
+  streamPresentationMode,
   className,
 }: {
   role: "user" | "assistant";
   messageId: string;
   content: string;
   running: boolean;
+  streamPresentationMode: AssistantStreamPresentationMode;
   className?: string;
 }) {
   const messages = useMemo<readonly ThreadMessage[]>(
@@ -152,7 +174,12 @@ function AssistantMessageRuntimeRenderer({
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <ThreadPrimitive.Root
-        className={cn("mc-assistant-renderer", running ? "mc-assistant-renderer-running" : "", className)}
+        className={cn(
+          "mc-assistant-renderer",
+          running ? "mc-assistant-renderer-running" : "",
+          `mc-assistant-stream-${streamPresentationMode}`,
+          className,
+        )}
       >
         <ThreadPrimitive.Viewport
           autoScroll={false}
@@ -183,6 +210,149 @@ function AssistantMessageRuntimeRenderer({
       </ThreadPrimitive.Root>
     </AssistantRuntimeProvider>
   );
+}
+
+const assistantMarkdownComponents: Components = {
+  a({ children, href, node: _node, ...props }) {
+    const external = Boolean(href && !href.startsWith("#"));
+    return (
+      <a href={href} rel={external ? "noreferrer" : undefined} target={external ? "_blank" : undefined} {...props}>
+        {children}
+      </a>
+    );
+  },
+  blockquote({ children, node: _node, ...props }) {
+    return <blockquote {...props}>{children}</blockquote>;
+  },
+  code({ children, className, node: _node, ...props }) {
+    const content = String(children ?? "");
+    const language = /language-([a-z0-9_+-]+)/i.exec(className ?? "")?.[1];
+    const isBlock = Boolean(language || content.includes("\n"));
+    if (isBlock) {
+      return (
+        <pre className="mc-assistant-code-block" data-language={language}>
+          <code className={className} {...props}>
+            {children}
+          </code>
+        </pre>
+      );
+    }
+    return (
+      <code className={cn("mc-assistant-inline-code", className)} {...props}>
+        {children}
+      </code>
+    );
+  },
+  li({ children, node: _node, ...props }) {
+    return <li {...props}>{children}</li>;
+  },
+  ol({ children, node: _node, ...props }) {
+    return <ol {...props}>{children}</ol>;
+  },
+  pre({ children }) {
+    return <>{children}</>;
+  },
+  table({ children, node: _node, ...props }) {
+    return (
+      <div className="mc-assistant-table-scroll">
+        <table {...props}>{children}</table>
+      </div>
+    );
+  },
+  tbody({ children, node: _node, ...props }) {
+    return <tbody {...props}>{children}</tbody>;
+  },
+  td({ children, node: _node, ...props }) {
+    return <td {...props}>{children}</td>;
+  },
+  th({ children, node: _node, ...props }) {
+    return <th {...props}>{children}</th>;
+  },
+  thead({ children, node: _node, ...props }) {
+    return <thead {...props}>{children}</thead>;
+  },
+  tr({ children, node: _node, ...props }) {
+    return <tr {...props}>{children}</tr>;
+  },
+  ul({ children, node: _node, ...props }) {
+    return <ul {...props}>{children}</ul>;
+  },
+};
+
+const streamingMarkdownComponents: Components = {
+  ...assistantMarkdownComponents,
+  blockquote({ children, node: _node, ...props }) {
+    return <blockquote {...props}>{renderStreamingChildren(children, "blockquote")}</blockquote>;
+  },
+  em({ children, node: _node, ...props }) {
+    return <em {...props}>{renderStreamingChildren(children, "em")}</em>;
+  },
+  h1({ children, node: _node, ...props }) {
+    return <h1 {...props}>{renderStreamingChildren(children, "h1")}</h1>;
+  },
+  h2({ children, node: _node, ...props }) {
+    return <h2 {...props}>{renderStreamingChildren(children, "h2")}</h2>;
+  },
+  h3({ children, node: _node, ...props }) {
+    return <h3 {...props}>{renderStreamingChildren(children, "h3")}</h3>;
+  },
+  h4({ children, node: _node, ...props }) {
+    return <h4 {...props}>{renderStreamingChildren(children, "h4")}</h4>;
+  },
+  li({ children, node: _node, ...props }) {
+    return <li {...props}>{renderStreamingChildren(children, "li")}</li>;
+  },
+  p({ children, node: _node, ...props }) {
+    return <p {...props}>{renderStreamingChildren(children, "p")}</p>;
+  },
+  strong({ children, node: _node, ...props }) {
+    return <strong {...props}>{renderStreamingChildren(children, "strong")}</strong>;
+  },
+  td({ children, node: _node, ...props }) {
+    return <td {...props}>{renderStreamingChildren(children, "td")}</td>;
+  },
+  th({ children, node: _node, ...props }) {
+    return <th {...props}>{renderStreamingChildren(children, "th")}</th>;
+  },
+};
+
+function renderStreamingChildren(children: ReactNode, keyPrefix: string): ReactNode {
+  return Children.map(children, (child, index) => {
+    if (typeof child === "string") {
+      return renderStreamingTextTokens(child, `${keyPrefix}-${index}`);
+    }
+    if (!isValidElement(child)) {
+      return child;
+    }
+    const element = child as ReactElement<{ children?: ReactNode }>;
+    if (!element.props.children) {
+      return element;
+    }
+    return cloneElement(element, {
+      children: renderStreamingChildren(element.props.children, `${keyPrefix}-${index}`),
+    });
+  });
+}
+
+function renderStreamingTextTokens(value: string, keyPrefix: string): ReactNode {
+  const chunks = value.match(/\s+|\S+\s*/g) ?? [value];
+  let tokenIndex = 0;
+  return chunks.map((chunk, index) => {
+    if (!chunk.trim()) {
+      return chunk;
+    }
+    const delayMs = Math.min(tokenIndex, 8) * 14;
+    tokenIndex += 1;
+    return (
+      <span
+        key={`${keyPrefix}-${index}`}
+        className="mc-assistant-stream-token"
+        style={{ "--mc-stream-token-delay": `${delayMs}ms` } as CSSProperties}
+      >
+        {chunk}
+      </span>
+    );
+  });
 }
 
 function AssistantMessageContainer({
@@ -255,12 +425,28 @@ function AssistantMessageContainer({
   );
 }
 
-function StreamingMarkdown({ content }: { content: string }) {
+function StreamingMarkdown({
+  content,
+  streamPresentationMode,
+}: {
+  content: string;
+  streamPresentationMode: AssistantStreamPresentationMode;
+}) {
   const { stable, tail } = useMemo(() => splitStreamingMarkdown(content), [content]);
+  const tailComponents =
+    streamPresentationMode === "smooth" ? streamingMarkdownComponents : assistantMarkdownComponents;
   return (
     <div className="mc-assistant-streaming-markdown">
-      {stable ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{stable}</ReactMarkdown> : null}
-      {tail ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{tail}</ReactMarkdown> : null}
+      {stable ? (
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={assistantMarkdownComponents}>
+          {stable}
+        </ReactMarkdown>
+      ) : null}
+      {tail ? (
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={tailComponents}>
+          {tail}
+        </ReactMarkdown>
+      ) : null}
       <span className="mc-assistant-streaming-cursor" aria-hidden="true" />
     </div>
   );

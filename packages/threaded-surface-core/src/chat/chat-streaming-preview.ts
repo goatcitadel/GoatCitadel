@@ -8,6 +8,8 @@ export interface ChatStreamingPreview {
   updatedAt: number;
 }
 
+export type ChatVisualStreamMode = "smooth" | "instant";
+
 export interface ChatStreamingPreviewSeed {
   sessionId: string;
   turnId: string;

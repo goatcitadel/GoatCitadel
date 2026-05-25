@@ -98,6 +98,7 @@ function buildProps(overrides: Partial<any> = {}): any {
     notices: [],
     followOutput: false,
     streamStatus: "streaming",
+    visualStreamMode: "smooth",
     streamingPreview: null,
     activeStreamingTurnId: null,
     queuedCount: 0,
@@ -129,9 +130,19 @@ function buildProps(overrides: Partial<any> = {}): any {
 }
 
 function renderedText(renderer: TestRenderer.ReactTestRenderer): string {
+  const flatten = (value: unknown): string => {
+    if (typeof value === "string" || typeof value === "number") {
+      return String(value);
+    }
+    if (!value || typeof value !== "object") {
+      return "";
+    }
+    const childNode = value as { children?: unknown[] };
+    return Array.isArray(childNode.children) ? childNode.children.map(flatten).join("") : "";
+  };
   return renderer.root
     .findAll((node) => Array.isArray(node.children))
-    .map((node) => node.children.join(""))
+    .map((node) => node.children.map(flatten).join(""))
     .join(" ");
 }
 

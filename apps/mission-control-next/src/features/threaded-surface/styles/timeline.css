@@ -156,6 +156,11 @@
   background: transparent;
 }
 
+.mc-next-thread-turn:not(.selected):not(.streaming):not(.delegation):not(:focus-within) {
+  content-visibility: auto;
+  contain-intrinsic-size: 14rem;
+}
+
 .mc-next-thread-turn.selected::before {
   content: "";
   position: absolute;
@@ -410,6 +415,86 @@
   scrollbar-gutter: stable;
 }
 
+.mc-assistant-markdown table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-xs);
+}
+
+.mc-assistant-markdown th,
+.mc-assistant-markdown td {
+  padding: 0.42rem 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+  text-align: left;
+  vertical-align: top;
+}
+
+.mc-assistant-markdown th {
+  background: color-mix(in oklab, var(--mc-area-color) 10%, var(--mc-surface-2));
+  color: var(--foreground);
+  font-weight: 750;
+}
+
+.mc-assistant-markdown blockquote {
+  margin-inline: 0;
+  padding: 0.15rem 0 0.15rem 0.75rem;
+  border-left: 2px solid color-mix(in oklab, var(--mc-area-color) 42%, var(--border));
+  color: var(--text-secondary);
+}
+
+.mc-assistant-markdown a {
+  color: color-mix(in oklab, var(--mc-area-color) 72%, var(--foreground));
+  text-underline-offset: 0.18em;
+}
+
+.mc-assistant-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-gutter: stable;
+}
+
+.mc-assistant-inline-code {
+  padding: 0.05rem 0.24rem;
+  border-radius: 0.26rem;
+  background: color-mix(in oklab, var(--mc-area-color) 10%, var(--mc-surface-2));
+  color: color-mix(in oklab, var(--foreground) 88%, var(--mc-area-color));
+  font-family: var(--mc-font-mono);
+  font-size: 0.92em;
+}
+
+.mc-assistant-code-block {
+  position: relative;
+  margin: 0.55rem 0;
+  max-width: 100%;
+  overflow: auto;
+  padding: 0.72rem;
+  padding-inline-end: calc(0.72rem + var(--mc-scrollbar-safe-gutter));
+  border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+  border-radius: 0.46rem;
+  background: color-mix(in oklab, var(--mc-surface-2) 92%, var(--background));
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  line-height: 1.48;
+  scrollbar-gutter: stable;
+}
+
+.mc-assistant-code-block[data-language] {
+  padding-top: 1.85rem;
+}
+
+.mc-assistant-code-block[data-language]::before {
+  content: attr(data-language);
+  position: absolute;
+  top: 0.45rem;
+  right: 0.55rem;
+  color: var(--text-muted);
+  font-family: var(--mc-font-mono);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+}
+
 .mc-assistant-streaming-markdown {
   display: grid;
   gap: 0.42rem;
@@ -434,6 +519,62 @@
   animation: mcStreamingCursorBlink 1s steps(2, start) infinite;
 }
 
+.mc-assistant-stream-token {
+  display: inline;
+  opacity: 0;
+  animation: mcAssistantStreamTokenFade 120ms ease-out var(--mc-stream-token-delay, 0ms) forwards;
+}
+
+@keyframes mcAssistantStreamTokenFade {
+  from {
+    opacity: 0;
+    filter: blur(1px);
+  }
+
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+.mc-next-assistant-streaming-skeleton {
+  display: grid;
+  gap: 0.36rem;
+  width: min(20rem, 86%);
+  padding-block: 0.2rem;
+}
+
+.mc-next-assistant-streaming-skeleton > span {
+  height: 0.62rem;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--mc-area-color) 8%, var(--mc-surface-2)),
+    color-mix(in oklab, var(--mc-area-color) 18%, var(--mc-surface-2)),
+    color-mix(in oklab, var(--mc-area-color) 8%, var(--mc-surface-2))
+  );
+  background-size: 220% 100%;
+  animation: mcAssistantSkeletonSweep 1.2s ease-in-out infinite;
+}
+
+.mc-next-assistant-streaming-skeleton > span:nth-child(2) {
+  width: 72%;
+}
+
+.mc-next-assistant-streaming-skeleton > span:nth-child(3) {
+  width: 42%;
+}
+
+@keyframes mcAssistantSkeletonSweep {
+  0% {
+    background-position: 100% 0;
+  }
+
+  100% {
+    background-position: -120% 0;
+  }
+}
+
 @keyframes mcStreamingCursorBlink {
   50% {
     opacity: 0.2;
@@ -441,6 +582,12 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .mc-assistant-stream-token,
+  .mc-next-assistant-streaming-skeleton > span {
+    animation: none;
+    opacity: 1;
+  }
+
   .mc-assistant-streaming-cursor {
     animation: none;
     opacity: 0.65;
@@ -468,6 +615,20 @@
   white-space: normal;
   overflow-wrap: anywhere;
   cursor: pointer;
+}
+
+.mc-next-shell.ui-hide-technical .mc-next-thread-turn.routine-chat .mc-assistant-copy-button {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+  transition: opacity 140ms ease;
+}
+
+.mc-next-shell.ui-hide-technical .mc-next-thread-turn.routine-chat:hover .mc-assistant-copy-button,
+.mc-next-shell.ui-hide-technical .mc-next-thread-turn.routine-chat:focus-within .mc-assistant-copy-button {
+  opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
 }
 
 /* ============================================================

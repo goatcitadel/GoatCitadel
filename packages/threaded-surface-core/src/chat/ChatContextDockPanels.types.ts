@@ -22,6 +22,7 @@ import type { CoworkRunViewModel } from "@goatcitadel/mission-control-shared/com
 import type { ChatModelProviderOption } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
 import type { ChatProactivePolicyPatch } from "./useChatDelegationPolicyActions";
 import type { MissionControlDockSectionId } from "./useMissionControlSurfaceState";
+import type { ChatVisualStreamMode } from "./chat-streaming-preview";
 
 export interface ChatContextDockPanelsProps {
   mode: "chat" | "cowork" | "code";
@@ -53,7 +54,9 @@ export interface ChatContextDockPanelsProps {
   selectedProviderId?: string;
   selectedModel?: string;
   streamEnabled: boolean;
+  visualStreamMode: ChatVisualStreamMode;
   onStreamEnabledChange: (checked: boolean) => void;
+  onVisualStreamModeChange: (mode: ChatVisualStreamMode) => void;
   prefs: ChatSessionPrefsRecord | null;
   selectedSessionId: string | null;
   showTracePanel: boolean;

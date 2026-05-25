@@ -244,6 +244,7 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
   selected,
   contextSelected,
   streamingPreview,
+  visualStreamMode,
   channelActivity,
   onToggleContextTurn,
   onStartNewThreadFromTurn,
@@ -259,6 +260,7 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
   selected: boolean;
   contextSelected: boolean;
   streamingPreview?: MissionThreadedActiveSessionSurfaceProps["streamingPreview"];
+  visualStreamMode: MissionThreadedActiveSessionSurfaceProps["visualStreamMode"];
   channelActivity?: ChannelActivitySnapshot | null;
   onToggleContextTurn: (turnId: string) => void;
   onStartNewThreadFromTurn: (turnId: string) => void;
@@ -299,9 +301,18 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
     Boolean(turn.trace.failure) ||
     turn.toolRuns.length > 0 ||
     hasGeneratedArtifact;
+  const isRoutineChatTurn = isPlainChat && !showOperationalDetails;
+  const turnClassName = [
+    "mc-next-thread-turn",
+    selected ? "selected" : "",
+    isStreamingTurn ? "streaming" : "",
+    isRoutineChatTurn ? "routine-chat" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
-    <article className={`mc-next-thread-turn${selected ? " selected" : ""}`}>
+    <article className={turnClassName}>
       <div className="mc-next-thread-turn-surface" aria-current={selected ? "true" : undefined}>
         <div className="mc-next-thread-bubble user">
           <p className="mc-next-thread-meta">
@@ -327,7 +338,14 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
             ) : null}
           </p>
           {hasAssistantOutput ? (
-            <AssistantMessageRenderer role="assistant" content={assistantContent} running={isStreamingTurn} />
+            <AssistantMessageRenderer
+              role="assistant"
+              content={assistantContent}
+              running={isStreamingTurn}
+              streamPresentationMode={visualStreamMode}
+            />
+          ) : isStreamingTurn ? (
+            <StreamingAssistantSkeleton label={assistantPendingLabel} />
           ) : (
             <p>{assistantPendingLabel}</p>
           )}
@@ -407,6 +425,16 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
     </article>
   );
 });
+
+function StreamingAssistantSkeleton({ label }: { label: string }) {
+  return (
+    <div className="mc-next-assistant-streaming-skeleton" role="status" aria-label={label}>
+      <span aria-hidden="true" />
+      <span aria-hidden="true" />
+      <span aria-hidden="true" />
+    </div>
+  );
+}
 
 function isThreadScrollNearBottom(element: HTMLElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= 80;
@@ -641,13 +669,19 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
     if (scrollFrameRef.current !== null) {
       cancelAnimationFrame(scrollFrameRef.current);
     }
-    scrollFrameRef.current = requestAnimationFrame(() => {
-      scrollFrameRef.current = null;
+    const pinToThreadEnd = () => {
       threadEndRef.current?.scrollIntoView({
         block: "end",
         behavior: "auto",
       });
       props.onBottomStateChange(true);
+    };
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      pinToThreadEnd();
+      scrollFrameRef.current = requestAnimationFrame(() => {
+        scrollFrameRef.current = null;
+        pinToThreadEnd();
+      });
     });
     return () => {
       if (scrollFrameRef.current !== null) {
@@ -736,6 +770,7 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
                   selected={props.selectedTurnId === turn.turnId}
                   contextSelected={(props.selectedContextTurnIds ?? []).includes(turn.turnId)}
                   streamingPreview={props.streamingPreview?.turnId === turn.turnId ? props.streamingPreview : null}
+                  visualStreamMode={props.visualStreamMode}
                   channelActivity={channelActivityByMessageId.get(turn.userMessage.messageId) ?? null}
                   onToggleContextTurn={props.onToggleContextTurn}
                   onStartNewThreadFromTurn={props.onStartNewThreadFromTurn}

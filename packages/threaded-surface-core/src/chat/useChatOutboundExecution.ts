@@ -31,7 +31,12 @@ import {
   type PendingStreamTurnSeed,
   updateThreadFromStreamChunk,
 } from "@goatcitadel/mission-control-shared/components/chat/chat-thread-reducer";
-import { ChatStreamingPreviewBuffer, type ChatStreamingPreview } from "./chat-streaming-preview";
+import {
+  ChatStreamingPreviewBuffer,
+  isReducedMotionPreferred,
+  type ChatStreamingPreview,
+  type ChatVisualStreamMode,
+} from "./chat-streaming-preview";
 import type { ChatStreamStatus } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
 import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import { createChatExecutionCorrelationId, recordChatApprovalPhase, recordChatOutboundPhase } from "./chat-causality";
@@ -93,6 +98,7 @@ export function useChatOutboundExecution(input: {
   selectedSessionId: string | null;
   selectedSession: ChatSessionRecord | null;
   streamEnabled: boolean;
+  visualStreamMode?: ChatVisualStreamMode;
   sending: boolean;
   error: string | null;
   queuedOutbound: OutboundQueueItem[];
@@ -144,6 +150,7 @@ export function useChatOutboundExecution(input: {
     selectedSessionId,
     selectedSession,
     streamEnabled,
+    visualStreamMode = "smooth",
     sending,
     error,
     queuedOutbound,
@@ -193,6 +200,7 @@ export function useChatOutboundExecution(input: {
   const latestMessagesRef = useRef<ChatMessageRecord[]>(messages);
   const finalizedStreamMessageRef = useRef<FinalizedStreamMessageState | null>(null);
   const streamingPreviewBufferRef = useRef<ChatStreamingPreviewBuffer | null>(null);
+  const visualStreamModeRef = useRef<ChatVisualStreamMode>(visualStreamMode);
   const streamReconcileTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sendingRef = useRef(false);
   const prefsRef = useRef<ChatSessionPrefsRecord | null>(prefs);
@@ -305,6 +313,13 @@ export function useChatOutboundExecution(input: {
   }, [thread]);
 
   useEffect(() => {
+    visualStreamModeRef.current = visualStreamMode;
+    if (visualStreamMode === "instant") {
+      streamingPreviewBufferRef.current?.flush({ forceVisible: true });
+    }
+  }, [visualStreamMode]);
+
+  useEffect(() => {
     sendingRef.current = sending;
   }, [sending]);
 
@@ -325,6 +340,7 @@ export function useChatOutboundExecution(input: {
     if (!streamingPreviewBufferRef.current) {
       streamingPreviewBufferRef.current = new ChatStreamingPreviewBuffer({
         onFlush: setStreamingPreview,
+        isReducedMotion: () => visualStreamModeRef.current === "instant" || isReducedMotionPreferred(),
       });
     }
     return streamingPreviewBufferRef.current;

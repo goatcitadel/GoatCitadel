@@ -34,9 +34,11 @@ function baseProps(overrides: Record<string, unknown> = {}) {
     selectedProviderId: "openai",
     selectedModel: "gpt-5.4-mini",
     streamEnabled: true,
+    visualStreamMode: "smooth",
     planningMode: "advisory",
     routePreflight: { selectionSource: "session_prefs" },
     onStreamEnabledChange: vi.fn(),
+    onVisualStreamModeChange: vi.fn(),
     onPrefPatch: vi.fn(),
     activeGeneratedArtifact: null,
     onCloseGeneratedArtifact: vi.fn(),
@@ -512,6 +514,26 @@ describe("ThreadedContextDrawer", () => {
     expect(onPrefPatch).toHaveBeenCalledWith({ thinkingLevel: "deep" });
     expect(onPrefPatch).toHaveBeenCalledWith({ speedMode: "fast" });
     expect(onPrefPatch).toHaveBeenCalledWith({ subagentPolicy: "off" });
+  });
+
+  it("lets users choose smooth or instant visual streaming locally", async () => {
+    const onVisualStreamModeChange = vi.fn();
+    let renderer: ReactTestRenderer | null = null;
+    const props = baseProps({
+      visualStreamMode: "smooth",
+      onVisualStreamModeChange,
+    });
+
+    await act(async () => {
+      renderer = create(<ThreadedContextDrawer surface="chat" props={props} />);
+    });
+
+    expect(findButton(renderer!.root, "Smooth").props["aria-pressed"]).toBe(true);
+    await act(async () => {
+      findButton(renderer!.root, "Instant").props.onClick();
+    });
+
+    expect(onVisualStreamModeChange).toHaveBeenCalledWith("instant");
   });
 
   it("gates the first auto-subagent selection behind a consent confirmation", async () => {

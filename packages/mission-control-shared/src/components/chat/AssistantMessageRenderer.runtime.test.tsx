@@ -59,6 +59,17 @@ vi.mock("@assistant-ui/react-markdown", () => ({
 
 import { AssistantMessageRenderer } from "./AssistantMessageRenderer";
 
+function collectTreeText(value: unknown): string {
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value);
+  }
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+  const node = value as { children?: unknown[] };
+  return Array.isArray(node.children) ? node.children.map(collectTreeText).join("") : "";
+}
+
 function installRuntimeDom() {
   vi.stubGlobal("__GOATCITADEL_ENABLE_ASSISTANT_UI_RENDERER", true);
   vi.stubGlobal("window", {
@@ -215,5 +226,39 @@ describe("AssistantMessageRenderer runtime path", () => {
     expect(renderer.root.findByType("button").props.title).toBe("Copied");
     renderer.unmount();
     expect(window.clearTimeout).toHaveBeenCalled();
+  });
+
+  it("wraps the fallback streaming tail in smooth visual tokens", () => {
+    vi.unstubAllGlobals();
+
+    const renderer = create(
+      <AssistantMessageRenderer
+        role="assistant"
+        content="Visible preview tail"
+        running
+        streamPresentationMode="smooth"
+      />,
+    );
+
+    const tokens = renderer.root.findAllByProps({ className: "mc-assistant-stream-token" });
+    expect(tokens.map((token) => collectTreeText(token))).toEqual(["Visible ", "preview ", "tail"]);
+    expect(JSON.stringify(renderer.toJSON())).toContain("mc-assistant-stream-smooth");
+  });
+
+  it("keeps instant fallback streaming unwrapped while preserving display markdown", () => {
+    vi.unstubAllGlobals();
+
+    const renderer = create(
+      <AssistantMessageRenderer
+        role="assistant"
+        content={"| Store | Hours |\n| --- | --- |\n| Bakery | 9-5 |\n\n```ts\nconst open = true;\n```"}
+        running
+        streamPresentationMode="instant"
+      />,
+    );
+
+    expect(renderer.root.findAllByProps({ className: "mc-assistant-stream-token" })).toHaveLength(0);
+    expect(renderer.root.findByProps({ className: "mc-assistant-table-scroll" })).toBeTruthy();
+    expect(renderer.root.findByProps({ className: "mc-assistant-code-block", "data-language": "ts" })).toBeTruthy();
   });
 });

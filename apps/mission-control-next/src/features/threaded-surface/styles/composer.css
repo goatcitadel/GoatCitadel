@@ -218,7 +218,8 @@
 }
 
 .mc-next-workbench-view-toggle,
-.mc-next-workbench-command-list {
+.mc-next-workbench-command-list,
+.mc-next-visual-stream-toggle {
   display: flex;
   flex-wrap: wrap;
   gap: 0.38rem;
@@ -229,6 +230,23 @@
 .mc-next-workbench-view-toggle > span {
   color: var(--text-secondary);
   font-size: var(--text-xs);
+}
+
+.mc-next-visual-stream-toggle {
+  padding: 0.12rem;
+  border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+  border-radius: 0.42rem;
+  background: color-mix(in oklab, var(--mc-surface-1) 88%, transparent);
+}
+
+.mc-next-visual-stream-toggle .mc-next-panel-button {
+  min-height: 1.45rem;
+  border-color: transparent;
+}
+
+.mc-next-visual-stream-toggle .mc-next-panel-button.active {
+  border-color: color-mix(in oklab, var(--mc-area-color) 42%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 12%, transparent);
 }
 
 .mc-next-workbench-command-surface {
