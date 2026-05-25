@@ -18,3 +18,6 @@ export type { FilterPillProps } from "./FilterPill";
 
 export { FilterPillGroup } from "./FilterPillGroup";
 export type { FilterPillGroupProps, FilterPillOption } from "./FilterPillGroup";
+
+export { KbdHint } from "./KbdHint";
+export type { KbdHintProps } from "./KbdHint";

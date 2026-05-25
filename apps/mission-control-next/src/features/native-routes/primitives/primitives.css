@@ -1,6 +1,6 @@
 /* Mission Control Next primitives
    Co-located styles for StageHeader, ThreePartChip, ContextStrip, ModeBar,
-   StatusChip, EmptyState.
+   StatusChip, EmptyState, FilterPill, KbdHint.
    Consumes tokens from mission-control-next-tokens.css. */
 
 /* ============================================================
@@ -741,4 +741,194 @@
   flex-wrap: wrap;
   justify-content: center;
   font-size: var(--text-xs, 0.75rem);
+}
+
+/* ============================================================
+   KbdHint (.mc-next-kbd-hint) — H-7 (ship punchlist)
+   Display-only shortcut affordance. Use to label palette
+   triggers, menu items, onboarding copy. Pairs with the
+   useShellKeyboardManager hook for the actual key handling.
+   ============================================================ */
+.mc-next-kbd-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font: 500 var(--text-xs, 0.75rem) / 1 var(--font-sans, var(--mc-font-sans));
+  color: var(--fg-secondary, var(--text-secondary));
+  vertical-align: baseline;
+}
+
+.mc-next-kbd-hint[data-display="block"] {
+  display: flex;
+  margin-block: 0.35rem;
+}
+
+.mc-next-kbd-hint[data-size="md"] {
+  font-size: var(--text-sm, 0.8125rem);
+}
+
+.mc-next-kbd-hint-label {
+  color: var(--fg-muted, var(--text-muted));
+}
+
+.mc-next-kbd-hint-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.mc-next-kbd-hint-key-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.mc-next-kbd-hint kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.35rem;
+  height: 1.35rem;
+  padding: 0 0.35rem;
+  border-radius: var(--r-xs, 0.32rem);
+  border: 1px solid var(--border-default, var(--border));
+  background: var(--bg-surface-2, var(--mc-surface-2));
+  color: var(--fg-primary, var(--foreground));
+  font: 600 0.7rem / 1 var(--font-mono, var(--mc-font-mono));
+  letter-spacing: 0.02em;
+}
+
+.mc-next-kbd-hint[data-size="md"] kbd {
+  min-width: 1.55rem;
+  height: 1.55rem;
+  font-size: 0.78rem;
+}
+
+.mc-next-kbd-hint-sep {
+  color: var(--fg-faint, var(--text-muted));
+  font-size: 0.65rem;
+}
+
+/* ============================================================
+   CommandPalette (legacy `.command-palette` + `.modal-*` selectors)
+   The shared CommandPalette component emits these classes; H-7
+   surfaces it in next-app via Cmd+K. Add a minimal modal-card
+   look using next-app tokens so it doesn't render as a default
+   browser panel. Existing primitives.css owns the scope.
+   ============================================================ */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh 1rem 1rem;
+  background: color-mix(in oklab, var(--bg-app, var(--mc-shell-bg)) 78%, transparent);
+  backdrop-filter: blur(4px);
+}
+
+.modal-card.command-palette {
+  width: min(640px, 100%);
+  max-height: min(60vh, 540px);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--r-md, var(--mc-radius-md));
+  border: 1px solid var(--border-strong, var(--border-default));
+  background: var(--bg-surface-1, var(--mc-surface-1));
+  color: var(--fg-primary, var(--foreground));
+  box-shadow: 0 28px 60px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.command-palette-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.95rem 1rem 0.35rem;
+  border-bottom: 1px solid var(--border-subtle, var(--mc-border-subtle));
+}
+
+.command-palette-kicker {
+  margin: 0 0 0.15rem;
+  font: 700 0.625rem / 1 var(--font-sans, var(--mc-font-sans));
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--fg-muted, var(--text-muted));
+}
+
+.command-palette-head h3 {
+  margin: 0;
+  font: 600 var(--text-md, 0.875rem) / 1.2 var(--font-sans, var(--mc-font-sans));
+  color: var(--fg-primary, var(--foreground));
+}
+
+.command-palette-hint {
+  margin: 0;
+  font: 500 var(--text-xs, 0.75rem) / 1 var(--font-sans, var(--mc-font-sans));
+  color: var(--fg-muted, var(--text-muted));
+}
+
+.command-palette-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 1rem;
+  border-bottom: 1px solid var(--border-subtle, var(--mc-border-subtle));
+  background: var(--bg-surface-2, var(--mc-surface-2));
+}
+
+.command-palette-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-primary, var(--foreground));
+  font: 500 var(--text-sm, 0.8125rem) / 1.4 var(--font-sans, var(--mc-font-sans));
+  outline: none;
+}
+
+.command-palette-search input:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--mc-area-color, var(--area-chat)) 50%, transparent);
+  outline-offset: 2px;
+  border-radius: 0.25rem;
+}
+
+.command-palette-shortcut {
+  font: 600 var(--text-xs, 0.75rem) / 1 var(--font-mono, var(--mc-font-mono));
+  color: var(--fg-muted, var(--text-muted));
+  flex: 0 0 auto;
+}
+
+.command-palette-list {
+  margin: 0;
+  padding: 0.4rem;
+  list-style: none;
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+
+.command-palette-item + .command-palette-item {
+  margin-top: 2px;
+}
+
+.command-palette-action {
+  display: flex;
+  width: 100%;
+  text-align: left;
+  justify-content: flex-start;
+  padding: 0.55rem 0.7rem;
+}
+
+.command-palette-action.active {
+  border-color: var(--border-emphasis, var(--border-strong));
+  background: color-mix(in oklab, var(--mc-area-color, var(--area-chat)) 12%, var(--bg-surface-2, var(--mc-surface-2)));
+}
+
+.command-palette-empty {
+  padding: 1.5rem 1rem;
+  text-align: center;
+  font: 500 var(--text-sm, 0.8125rem) / 1.4 var(--font-sans, var(--mc-font-sans));
+  color: var(--fg-muted, var(--text-muted));
 }

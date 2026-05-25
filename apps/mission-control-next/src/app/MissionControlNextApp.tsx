@@ -46,6 +46,7 @@ import {
   type NotificationItem,
 } from "@goatcitadel/mission-control-shared/components/NotificationStack";
 import { PageErrorBoundary } from "@goatcitadel/mission-control-shared/components/PageErrorBoundary";
+import { CommandPalette, type CommandPaletteItem } from "@goatcitadel/mission-control-shared/components/CommandPalette";
 import { SideInspectorDrawer } from "@goatcitadel/mission-control-shared/components/SideInspectorDrawer";
 import {
   ShellDetailPanelProvider,
@@ -97,6 +98,7 @@ import {
   type RailItem,
 } from "./route-model";
 import { coerceLegacyHrefToNext, resolveRouteFromLocation } from "./legacy-route-adapter";
+import { SHELL_ROUTE_SHORTCUT_LETTERS, useShellKeyboardManager } from "./use-shell-keyboard-manager";
 
 type GatewayAccessViewState =
   | GatewayAccessPreflightResult
@@ -152,6 +154,10 @@ export function MissionControlNextApp() {
   const [route, setRoute] = useState<AppRoute>(() => resolveRouteFromLocation(window.location.href));
   const [navOpen, setNavOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  // H-7 (ship punchlist): shell-level command palette opened via Cmd/Ctrl+K
+  // and routed by useShellKeyboardManager. State stays here because Esc
+  // priority needs to know whether the palette is the topmost dismissible.
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [detailEntry, setDetailEntry] = useState<ShellDetailPanelEntry | null>(null);
   const [gatewayAccess, setGatewayAccess] = useState<GatewayAccessViewState>({
     status: "checking",
@@ -192,6 +198,48 @@ export function MissionControlNextApp() {
     cancelDiscard,
   } = useNavigateGuard<AppRoute>(rawNavigate, isSameShellRoute);
   const dirtyKeys = useAnySectionDirty();
+
+  /*
+   * H-7 (ship punchlist): shell command palette + keyboard model.
+   * Items lean on PRIMARY_NAV for route jumps so the area set stays the
+   * single source of truth. Each item carries the g+<letter> shortcut as
+   * a keyword so users can also find it by typing "g c".
+   */
+  const commandItems = useMemo<CommandPaletteItem[]>(() => {
+    return PRIMARY_NAV.map(({ area }) => {
+      const meta = AREA_META[area];
+      const letter = SHELL_ROUTE_SHORTCUT_LETTERS.get(area);
+      return {
+        id: `go-${area}`,
+        label: `Go to ${meta.label}`,
+        keywords: [area, meta.kicker, meta.label, ...(letter ? [`g ${letter}`, `g${letter}`] : [])],
+        run: () => navigate({ area }),
+      };
+    });
+  }, [navigate]);
+
+  // H-7: dismiss the topmost UI layer when Escape fires (palette handled
+  // separately because it's already a controlled dialog). Order matters:
+  // inspector > nav drawer.
+  const dismissTopmost = useCallback((): boolean => {
+    if (inspectorOpen) {
+      setInspectorOpen(false);
+      return true;
+    }
+    if (navOpen) {
+      setNavOpen(false);
+      return true;
+    }
+    return false;
+  }, [inspectorOpen, navOpen]);
+
+  useShellKeyboardManager({
+    onOpenPalette: () => setPaletteOpen(true),
+    onClosePalette: () => setPaletteOpen(false),
+    isPaletteOpen: paletteOpen,
+    onDismissTopmost: dismissTopmost,
+    onJumpToArea: (area) => navigate({ area }),
+  });
 
   const shellThemeClass = resolveShellThemeClass(route.theme === "light" ? "light" : theme);
   const currentAreaMeta = AREA_META[route.area];
@@ -999,6 +1047,9 @@ export function MissionControlNextApp() {
           onConfirm={confirmDiscard}
           onCancel={cancelDiscard}
         />
+        {/* H-7: shell command palette. Cmd/Ctrl+K opens; Esc closes via the
+            palette's own handler (priority over useShellKeyboardManager). */}
+        <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} items={commandItems} />
       </div>
     </ShellDetailPanelProvider>
   );
