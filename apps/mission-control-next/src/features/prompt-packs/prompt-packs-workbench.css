@@ -1160,3 +1160,134 @@
     justify-content: flex-start;
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * Prompt source editor — inline variable chips + light syntax cues.
+ * Read-only listing rendered by <PromptSourceEditor /> as a replacement for
+ * the flat <pre>{prompt}</pre> that previously left placeholders as raw
+ * `<UPPER_CASE>` tokens. Chips use canonical area / risk tokens so the
+ * editor stays in sync with the rest of Mission Control's theming.
+ * ───────────────────────────────────────────────────────────────────────── */
+
+.mc-pp-surface pre.mc-pp-prompt-editor,
+.mc-pp-prompt-editor {
+  --pp-line-gutter: 2ch;
+  display: block;
+  white-space: normal;
+  padding: 0;
+  padding-inline-end: 0;
+}
+
+.mc-pp-prompt-empty {
+  display: block;
+  padding: 0.95rem 1rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.mc-pp-prompt-row {
+  display: grid;
+  grid-template-columns: calc(var(--pp-line-gutter) + 0.5rem) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0.65rem;
+  padding: 0 1rem;
+  white-space: normal;
+}
+
+.mc-pp-prompt-row:first-child {
+  padding-top: 0.6rem;
+}
+
+.mc-pp-prompt-row:last-child {
+  padding-bottom: 0.6rem;
+}
+
+.mc-pp-prompt-row.is-role,
+.mc-pp-prompt-row.is-comment {
+  background: color-mix(in oklab, var(--mc-area-color) 5%, transparent);
+}
+
+.mc-pp-prompt-row.is-code-fence,
+.mc-pp-prompt-row.is-code {
+  background: color-mix(in oklab, var(--mc-surface-2) 75%, transparent);
+}
+
+.mc-pp-prompt-gutter {
+  color: color-mix(in oklab, var(--text-muted) 70%, transparent);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.78rem;
+  user-select: none;
+  text-align: right;
+  padding-right: 0.35rem;
+  border-right: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+}
+
+.mc-pp-prompt-line {
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.mc-pp-prompt-comment {
+  color: color-mix(in oklab, var(--text-muted) 90%, var(--foreground));
+  font-style: italic;
+}
+
+.mc-pp-prompt-code {
+  color: color-mix(in oklab, var(--area-code) 70%, var(--foreground));
+}
+
+.mc-pp-prompt-role {
+  display: inline-block;
+  margin-right: 0.4rem;
+  padding: 0.05rem 0.42rem;
+  border-radius: 0.3rem;
+  background: color-mix(in oklab, var(--area-cowork) 18%, transparent);
+  color: color-mix(in oklab, var(--area-cowork) 70%, var(--foreground));
+  font-weight: 650;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/*
+ * Variable chip — primary affordance of W-7. Two visual states:
+ *   - declared (default): tinted with the active area color so the chip
+ *     reads as a known parameter of the current prompt pack.
+ *   - undeclared: tinted with the caution color so reviewers can spot
+ *     placeholder syntax that won't be filled in by the runner.
+ */
+.mc-next-prompt-variable {
+  display: inline-block;
+  padding: 0.05rem 0.42rem;
+  margin: 0 0.05rem;
+  border-radius: 0.3rem;
+  border: 1px solid color-mix(in oklab, var(--area-projects) 36%, var(--border));
+  background: color-mix(in oklab, var(--area-projects) 14%, transparent);
+  color: color-mix(in oklab, var(--area-projects) 70%, var(--foreground));
+  font-family: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.mc-next-prompt-variable.is-undeclared {
+  border-color: color-mix(in oklab, var(--risk-caution) 50%, var(--border));
+  background: color-mix(in oklab, var(--risk-caution) 16%, transparent);
+  color: color-mix(in oklab, var(--risk-caution) 60%, var(--foreground));
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .mc-next-prompt-variable {
+    transition:
+      background-color 120ms ease,
+      border-color 120ms ease;
+  }
+}
+
+.mc-next-prompt-variable:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--area-projects) 70%, transparent);
+  outline-offset: 1px;
+}

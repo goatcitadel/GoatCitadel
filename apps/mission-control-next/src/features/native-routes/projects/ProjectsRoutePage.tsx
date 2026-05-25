@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Archive,
+  ArchiveRestore,
   CheckCircle2,
   CircleAlert,
   FolderPlus,
   MessageSquarePlus,
   Pencil,
+  Pin,
+  PinOff,
   RefreshCw,
   Save,
 } from "lucide-react";
@@ -22,11 +25,12 @@ import {
   fetchChatGeneratedArtifacts,
   fetchChatProjects,
   fetchChatSessions,
+  restoreChatProject,
   updateChatProject,
 } from "@goatcitadel/mission-control-shared/api/client";
 import type { AppRoute } from "@next/app/route-model";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
-import { ModeBar } from "../primitives";
+import { FilterPillGroup, ModeBar } from "../primitives";
 import { readRouteDiagnosticNow, recordRouteAction, recordRouteDataLoad } from "../route-diagnostics";
 import type { NativeRoutePagesProps } from "../types";
 import {
@@ -42,6 +46,7 @@ import {
   type ProjectCounts,
   type ProjectHome,
 } from "./ProjectsRoutePage.helpers";
+import { PROJECT_FILTER_VIEWS, useProjectPinController, type ProjectFilterView } from "./use-project-pin-archive";
 import "../native-routes.css";
 
 export { deriveProjectHome } from "./ProjectsRoutePage.helpers";
@@ -72,8 +77,12 @@ export function ProjectsRoutePage({
   });
   const [actionError, setActionError] = useState<string | null>(null);
   const [projectActionBusy, setProjectActionBusy] = useState<string | null>(null);
+  const [cardActionBusy, setCardActionBusy] = useState<string | null>(null);
   const [createDraft, setCreateDraft] = useState({ name: "", workspacePath: "", description: "" });
   const [editDraft, setEditDraft] = useState({ name: "", workspacePath: "", description: "" });
+  const [filterView, setFilterView] = useState<ProjectFilterView>("all");
+
+  const pinController = useProjectPinController(activeWorkspaceId);
 
   const loadProjects = useCallback(async () => {
     const startedAt = readRouteDiagnosticNow();
@@ -148,6 +157,39 @@ export function ProjectsRoutePage({
     }
     return next;
   }, [state.projects, state.sessions]);
+
+  const filterCounts = useMemo(() => {
+    const total = state.projects.length;
+    let pinned = 0;
+    let active = 0;
+    let archived = 0;
+    for (const project of state.projects) {
+      if (project.lifecycleStatus === "archived") {
+        archived += 1;
+      } else {
+        active += 1;
+      }
+      if (pinController.isPinned(project.projectId)) {
+        pinned += 1;
+      }
+    }
+    return { all: total, pinned, active, archived };
+  }, [pinController, state.projects]);
+
+  const visibleProjects = useMemo(() => {
+    return state.projects.filter((project) => {
+      switch (filterView) {
+        case "pinned":
+          return pinController.isPinned(project.projectId);
+        case "active":
+          return project.lifecycleStatus !== "archived";
+        case "archived":
+          return project.lifecycleStatus === "archived";
+        default:
+          return true;
+      }
+    });
+  }, [filterView, pinController, state.projects]);
 
   const selectedProject =
     state.projects.find((project) => project.projectId === route.projectId) ?? state.projects[0] ?? null;
@@ -305,27 +347,53 @@ export function ProjectsRoutePage({
     }
   };
 
-  const handleArchiveProject = async () => {
-    if (!selectedProject) {
-      return;
-    }
+  const handleArchiveProject = async (project: ChatProjectRecord) => {
     setActionError(null);
-    setProjectActionBusy("archive");
+    setCardActionBusy(`archive:${project.projectId}`);
     try {
-      const archived = await archiveChatProject(selectedProject.projectId);
+      const archived = await archiveChatProject(project.projectId);
       setState((current) => ({
         ...current,
-        projects: current.projects.filter((project) => project.projectId !== archived.projectId),
+        projects: current.projects.map((item) => (item.projectId === archived.projectId ? archived : item)),
       }));
       recordRouteAction("projects", "project.archived", {
         projectId: archived.projectId,
       });
-      navigate({ area: "projects", theme: route.theme }, { replace: true });
+      if (selectedProject?.projectId === project.projectId) {
+        navigate({ area: "projects", theme: route.theme }, { replace: true });
+      }
     } catch (error) {
       setActionError(getErrorMessage(error));
     } finally {
-      setProjectActionBusy(null);
+      setCardActionBusy(null);
     }
+  };
+
+  const handleRestoreProject = async (project: ChatProjectRecord) => {
+    setActionError(null);
+    setCardActionBusy(`restore:${project.projectId}`);
+    try {
+      const restored = await restoreChatProject(project.projectId);
+      setState((current) => ({
+        ...current,
+        projects: current.projects.map((item) => (item.projectId === restored.projectId ? restored : item)),
+      }));
+      recordRouteAction("projects", "project.restored", {
+        projectId: restored.projectId,
+      });
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+    } finally {
+      setCardActionBusy(null);
+    }
+  };
+
+  const handleTogglePin = (project: ChatProjectRecord) => {
+    pinController.togglePinned(project.projectId);
+    recordRouteAction("projects", "project.pin.toggled", {
+      projectId: project.projectId,
+      pinned: !pinController.isPinned(project.projectId),
+    });
   };
 
   const totalProjectSessions = state.sessions.filter((session) => session.projectId).length;
@@ -372,39 +440,98 @@ export function ProjectsRoutePage({
             </button>
           }
         >
+          <FilterPillGroup
+            label="Filter projects by state"
+            idPrefix="projects-filter"
+            value={filterView}
+            options={PROJECT_FILTER_VIEWS.map((entry) => ({
+              value: entry.id,
+              label: entry.label,
+              count: filterCounts[entry.id],
+              ariaLabel: `${entry.label} projects (${filterCounts[entry.id]})`,
+            }))}
+            onChange={(value) => setFilterView(value as ProjectFilterView)}
+          />
           <div
             className="mc-next-settings-selectable-list is-compact is-scrollable"
             data-native-scroll="true"
             style={{ maxHeight: "min(62vh, 38rem)" }}
           >
-            {state.projects.length ? (
-              state.projects.map((project) => {
+            {visibleProjects.length ? (
+              visibleProjects.map((project) => {
                 const counts = countsByProject.get(project.projectId) ?? createEmptyCounts();
+                const pinned = pinController.isPinned(project.projectId);
+                const isArchived = project.lifecycleStatus === "archived";
+                const isSelected = selectedProject?.projectId === project.projectId;
                 return (
-                  <button
+                  <div
                     key={project.projectId}
-                    type="button"
-                    className={`mc-next-settings-selectable${
-                      selectedProject?.projectId === project.projectId ? " active" : ""
-                    }`}
-                    onClick={() => navigate({ area: "projects", projectId: project.projectId, theme: route.theme })}
+                    className={`mc-next-project-card${isSelected ? " is-selected" : ""}${
+                      isArchived ? " is-archived" : ""
+                    }${pinned ? " is-pinned" : ""}`}
                   >
-                    <div className="mc-next-settings-selectable-head">
-                      <strong>{project.name}</strong>
-                      <span>{counts.chat + counts.cowork + counts.code} threads</span>
+                    <button
+                      type="button"
+                      className={`mc-next-settings-selectable mc-next-project-card-body${isSelected ? " active" : ""}`}
+                      onClick={() => navigate({ area: "projects", projectId: project.projectId, theme: route.theme })}
+                    >
+                      <div className="mc-next-settings-selectable-head">
+                        <strong>{project.name}</strong>
+                        <span>{counts.chat + counts.cowork + counts.code} threads</span>
+                      </div>
+                      <p>{project.description?.trim() || project.workspacePath}</p>
+                      <ModeBar chat={counts.chat} cowork={counts.cowork} code={counts.code} />
+                      <div className="mc-next-project-counts">
+                        <span>Chat {counts.chat}</span>
+                        <span>Cowork {counts.cowork}</span>
+                        <span>Code {counts.code}</span>
+                      </div>
+                    </button>
+                    <div
+                      className="mc-next-project-card-glyphs"
+                      role="group"
+                      aria-label={`Actions for ${project.name}`}
+                    >
+                      <ProjectGlyphButton
+                        label={pinned ? `Unpin project ${project.name}` : `Pin project ${project.name}`}
+                        pressed={pinned}
+                        onClick={() => handleTogglePin(project)}
+                      >
+                        {pinned ? (
+                          <PinOff className="h-3.5 w-3.5" aria-hidden="true" />
+                        ) : (
+                          <Pin className="h-3.5 w-3.5" aria-hidden="true" />
+                        )}
+                      </ProjectGlyphButton>
+                      {isArchived ? (
+                        <ProjectGlyphButton
+                          label={`Unarchive project ${project.name}`}
+                          pressed={false}
+                          busy={cardActionBusy === `restore:${project.projectId}`}
+                          onClick={() => void handleRestoreProject(project)}
+                        >
+                          <ArchiveRestore className="h-3.5 w-3.5" aria-hidden="true" />
+                        </ProjectGlyphButton>
+                      ) : (
+                        <ProjectGlyphButton
+                          label={`Archive project ${project.name}`}
+                          pressed={false}
+                          busy={cardActionBusy === `archive:${project.projectId}`}
+                          onClick={() => void handleArchiveProject(project)}
+                        >
+                          <Archive className="h-3.5 w-3.5" aria-hidden="true" />
+                        </ProjectGlyphButton>
+                      )}
                     </div>
-                    <p>{project.description?.trim() || project.workspacePath}</p>
-                    <ModeBar chat={counts.chat} cowork={counts.cowork} code={counts.code} />
-                    <div className="mc-next-project-counts">
-                      <span>Chat {counts.chat}</span>
-                      <span>Cowork {counts.cowork}</span>
-                      <span>Code {counts.code}</span>
-                    </div>
-                  </button>
+                  </div>
                 );
               })
             ) : (
-              <p className="mc-next-directory-empty">No active projects found in this workspace.</p>
+              <p className="mc-next-directory-empty">
+                {state.projects.length === 0
+                  ? "No active projects found in this workspace."
+                  : filterEmptyLabel(filterView)}
+              </p>
             )}
           </div>
         </NativeCard>
@@ -476,7 +603,11 @@ export function ProjectsRoutePage({
 
         <NativeCard
           title="Project controls"
-          subtitle="Create, update, or archive visible project containers."
+          subtitle={
+            selectedProject
+              ? "Create a new project or rename the selected one. Pin and archive live on each card."
+              : "Create a new project. Select one to rename it; pin and archive live on each card."
+          }
           density="compact"
           scrollBody
           bodyMaxHeight="min(70vh, 42rem)"
@@ -525,63 +656,100 @@ export function ProjectsRoutePage({
               </button>
             </section>
 
-            <section className="mc-next-project-control-section">
-              <div className="mc-next-project-control-heading">
-                <Pencil className="h-4 w-4" />
-                <strong>Edit selected</strong>
-              </div>
-              <label className="mc-next-settings-field">
-                <span>Name</span>
-                <input
-                  className="mc-next-settings-input"
-                  value={editDraft.name}
-                  disabled={!selectedProject}
-                  onChange={(event) => setEditDraft((current) => ({ ...current, name: event.target.value }))}
-                />
-              </label>
-              <label className="mc-next-settings-field">
-                <span>Workspace path</span>
-                <input
-                  className="mc-next-settings-input"
-                  value={editDraft.workspacePath}
-                  disabled={!selectedProject}
-                  onChange={(event) => setEditDraft((current) => ({ ...current, workspacePath: event.target.value }))}
-                />
-              </label>
-              <label className="mc-next-settings-field">
-                <span>Description</span>
-                <textarea
-                  className="mc-next-settings-textarea"
-                  value={editDraft.description}
-                  disabled={!selectedProject}
-                  onChange={(event) => setEditDraft((current) => ({ ...current, description: event.target.value }))}
-                />
-              </label>
-              <div className="mc-next-settings-button-row">
-                <button
-                  type="button"
-                  className="mc-next-button"
-                  disabled={!selectedProject || projectActionBusy === "save"}
-                  onClick={() => void handleSaveProject()}
-                >
-                  <Save className="h-4 w-4" />
-                  {projectActionBusy === "save" ? "Saving..." : "Save project"}
-                </button>
-                <button
-                  type="button"
-                  className="mc-next-settings-filter"
-                  disabled={!selectedProject || projectActionBusy === "archive"}
-                  onClick={() => void handleArchiveProject()}
-                >
-                  <Archive className="h-4 w-4" />
-                  {projectActionBusy === "archive" ? "Archiving..." : "Archive project"}
-                </button>
-              </div>
-            </section>
+            {selectedProject ? (
+              <section className="mc-next-project-control-section">
+                <div className="mc-next-project-control-heading">
+                  <Pencil className="h-4 w-4" />
+                  <strong>Edit selected</strong>
+                </div>
+                <label className="mc-next-settings-field">
+                  <span>Name</span>
+                  <input
+                    className="mc-next-settings-input"
+                    value={editDraft.name}
+                    onChange={(event) => setEditDraft((current) => ({ ...current, name: event.target.value }))}
+                  />
+                </label>
+                <label className="mc-next-settings-field">
+                  <span>Workspace path</span>
+                  <input
+                    className="mc-next-settings-input"
+                    value={editDraft.workspacePath}
+                    onChange={(event) => setEditDraft((current) => ({ ...current, workspacePath: event.target.value }))}
+                  />
+                </label>
+                <label className="mc-next-settings-field">
+                  <span>Description</span>
+                  <textarea
+                    className="mc-next-settings-textarea"
+                    value={editDraft.description}
+                    onChange={(event) => setEditDraft((current) => ({ ...current, description: event.target.value }))}
+                  />
+                </label>
+                <div className="mc-next-settings-button-row">
+                  <button
+                    type="button"
+                    className="mc-next-button"
+                    disabled={projectActionBusy === "save"}
+                    onClick={() => void handleSaveProject()}
+                  >
+                    <Save className="h-4 w-4" />
+                    {projectActionBusy === "save" ? "Saving..." : "Save project"}
+                  </button>
+                </div>
+                <p className="mc-next-settings-field-note">
+                  Pin or archive {selectedProject.name} from the card glyphs in the projects list.
+                </p>
+              </section>
+            ) : null}
           </div>
         </NativeCard>
       </NativeGrid>
     </NativePageFrame>
+  );
+}
+
+function filterEmptyLabel(view: ProjectFilterView): string {
+  switch (view) {
+    case "pinned":
+      return "No pinned projects yet. Pin a project from its card to keep it close.";
+    case "archived":
+      return "No archived projects in this workspace.";
+    case "active":
+      return "No active projects in this workspace.";
+    default:
+      return "No projects found in this workspace.";
+  }
+}
+
+function ProjectGlyphButton({
+  label,
+  pressed,
+  busy,
+  onClick,
+  children,
+}: {
+  label: string;
+  pressed: boolean;
+  busy?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className={`mc-next-project-card-glyph${pressed ? " is-pressed" : ""}`}
+      aria-pressed={pressed}
+      aria-label={label}
+      disabled={busy}
+      onClick={(event) => {
+        event?.stopPropagation?.();
+        onClick();
+      }}
+    >
+      {children}
+      <span className="mc-next-sr-only">{label}</span>
+    </button>
   );
 }
 
@@ -812,7 +980,7 @@ async function fetchProjectData(
       issue: getErrorMessage(error),
     }));
   const [projectsResponse, sessionsResponse, artifactsResponse] = await Promise.all([
-    fetchChatProjects("active", 300, activeWorkspaceId),
+    fetchChatProjects("all", 300, activeWorkspaceId),
     fetchChatSessions({
       workspaceId: activeWorkspaceId,
       scope: "all",

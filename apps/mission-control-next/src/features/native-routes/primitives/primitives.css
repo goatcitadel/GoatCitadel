@@ -580,6 +580,71 @@
 }
 
 /* ============================================================
+   FilterPill / FilterPillGroup (.mc-next-filter-pill)
+   Toggleable namespace / category filter pill rendered inside a
+   `role="tablist"` group. Visual reference:
+   apps/mission-control-next/mockups/memory.html lines 49-71.
+   Selected state uses the area accent (color-mix with --accent or
+   the area-color fallback) so it inherits whatever area context
+   the parent NativePageFrame is in.
+   ============================================================ */
+.mc-next-filter-pill-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  margin-top: 0.35rem;
+}
+
+.mc-next-filter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 1.45rem;
+  padding: 0 0.55rem;
+  border-radius: var(--r-pill, 999px);
+  border: 1px solid var(--border-subtle, var(--mc-border-subtle));
+  background: var(--bg-surface-1, var(--mc-surface-1));
+  color: var(--fg-secondary, var(--text-secondary));
+  font: 600 11px/1 var(--font-mono, var(--mc-font-mono));
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.mc-next-filter-pill:hover {
+  border-color: var(--border-default, var(--border));
+  color: var(--fg-primary, var(--foreground));
+}
+
+.mc-next-filter-pill:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--accent, var(--mc-area-color)) 60%, transparent);
+  outline-offset: 2px;
+}
+
+.mc-next-filter-pill.is-selected {
+  color: color-mix(in oklab, var(--accent, var(--mc-area-color)) 80%, var(--fg-primary, var(--foreground)));
+  border-color: color-mix(in oklab, var(--accent, var(--mc-area-color)) 32%, var(--border-default, var(--border)));
+  background: color-mix(in oklab, var(--accent, var(--mc-area-color)) 16%, var(--bg-surface-1, var(--mc-surface-1)));
+}
+
+.mc-next-filter-pill-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mc-next-filter-pill-count {
+  font: 500 10px/1 var(--font-mono, var(--mc-font-mono));
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-muted, var(--text-muted));
+}
+
+.mc-next-filter-pill.is-selected .mc-next-filter-pill-count {
+  color: color-mix(in oklab, var(--accent, var(--mc-area-color)) 60%, var(--fg-primary, var(--foreground)));
+}
+
+/* ============================================================
    EmptyState (.mc-next-empty-state)
    Canonical empty / zero-data primitive. Use across surfaces
    instead of bespoke "no data" markup. Pairs with primaryAction

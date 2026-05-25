@@ -209,7 +209,7 @@ describe("ProjectsRoutePage", () => {
     const navigate = vi.fn();
     const renderer = await renderPage(defaultProps({ navigate }));
 
-    expect(mockedFetchChatProjects).toHaveBeenCalledWith("active", 300, "default");
+    expect(mockedFetchChatProjects).toHaveBeenCalledWith("all", 300, "default");
     expect(mockedFetchChatSessions).toHaveBeenCalledWith({
       workspaceId: "default",
       scope: "all",
@@ -401,7 +401,7 @@ describe("ProjectsRoutePage", () => {
     );
 
     await act(async () => {
-      findButton(renderer.root, "Archive project").props.onClick();
+      findButton(renderer.root, "Archive project Alpha renamed").props.onClick();
       await Promise.resolve();
     });
     expect(mockedArchiveChatProject).toHaveBeenCalledWith("project-alpha");

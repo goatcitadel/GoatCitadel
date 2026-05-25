@@ -12,3 +12,9 @@ export type { ModeBarProps } from "./ModeBar";
 
 export { StatusChip } from "./StatusChip";
 export type { StatusChipProps, StatusChipSize, StatusChipTone } from "./StatusChip";
+
+export { FilterPill } from "./FilterPill";
+export type { FilterPillProps } from "./FilterPill";
+
+export { FilterPillGroup } from "./FilterPillGroup";
+export type { FilterPillGroupProps, FilterPillOption } from "./FilterPillGroup";

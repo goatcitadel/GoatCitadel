@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- PromptPacksWorkbenchPage keeps the full quality workbench in one place until the page is split into smaller route-scoped panels. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type {
   PromptPackAutoScoreRecord,
   PromptPackBenchmarkStatusRecord,
@@ -1727,7 +1728,7 @@ export function PromptPacksWorkbenchPage({
                           <p>Exact markdown used for the selected test.</p>
                         </div>
                       </div>
-                      <pre>{selectedTest.prompt}</pre>
+                      <PromptSourceEditor prompt={selectedTest.prompt} declaredPlaceholders={selectedPlaceholders} />
                     </section>
                     {selectedDiagnosticMetadata ? (
                       <section className="mc-pp-surface">
@@ -2576,6 +2577,279 @@ export function isPromptPackV2UiEnabled(): boolean {
     return true;
   }
   return !["0", "false", "off", "no", "disabled"].includes(raw);
+}
+
+/**
+ * Inline segments produced by {@link parsePromptForChips}.
+ * - `text`: plain run of characters.
+ * - `variable`: a `<PLACEHOLDER>` token rendered as an accessible chip.
+ *   `declared` is `true` when the placeholder appears in the test's declared
+ *   placeholder set (extracted via `extractPromptPlaceholders`).
+ */
+export type PromptInlineSegment =
+  | { kind: "text"; value: string }
+  | { kind: "variable"; name: string; raw: string; declared: boolean };
+
+/**
+ * Block-level rows produced by {@link parsePromptForChips}. Each row is one
+ * visible line in the editor; preserved verbatim so the rendered output is
+ * 1:1 with the source prompt (no whitespace or empty-line collapsing).
+ *
+ * - `comment`: line that begins with `#` (markdown header / comment).
+ * - `role-marker`: line that begins with a role token like `System:`,
+ *   `User:`, `Assistant:` followed by whitespace or end-of-line.
+ * - `code-fence`: a triple-backtick fence marker line.
+ * - `code`: a line inside a fenced code block.
+ * - `line`: everything else; rendered with inline segments + chips.
+ */
+export type PromptBlockRow =
+  | { kind: "line"; lineNumber: number; segments: PromptInlineSegment[] }
+  | { kind: "comment"; lineNumber: number; value: string }
+  | { kind: "role-marker"; lineNumber: number; role: string; rest: string; segments: PromptInlineSegment[] }
+  | { kind: "code-fence"; lineNumber: number; value: string }
+  | { kind: "code"; lineNumber: number; value: string };
+
+const ROLE_MARKER_PATTERN = /^(System|User|Assistant|Tool|Function|Developer)\s*:\s*/i;
+const VARIABLE_TOKEN_PATTERN = /<[^<>\n]{3,160}>/g;
+
+function looksLikePromptPlaceholder(inner: string): boolean {
+  if (!inner) {
+    return false;
+  }
+  return /[A-Z]{2,}/.test(inner) || /[_ ]/.test(inner) || /\b(PASTE|LOCAL|URL|TOPIC|PATH|EXAMPLE|YOUR)\b/i.test(inner);
+}
+
+function splitLineIntoInlineSegments(line: string, declaredKeys: Set<string>): PromptInlineSegment[] {
+  if (!line) {
+    return [];
+  }
+  const segments: PromptInlineSegment[] = [];
+  let cursor = 0;
+  // Reset lastIndex defensively — VARIABLE_TOKEN_PATTERN is global.
+  const matcher = new RegExp(VARIABLE_TOKEN_PATTERN.source, "g");
+  let match: RegExpExecArray | null;
+  while ((match = matcher.exec(line)) !== null) {
+    const inner = match[0].slice(1, -1).trim();
+    if (!looksLikePromptPlaceholder(inner)) {
+      continue;
+    }
+    if (match.index > cursor) {
+      segments.push({ kind: "text", value: line.slice(cursor, match.index) });
+    }
+    const normalizedKey = inner.toLowerCase().replace(/\s+/g, " ").trim();
+    segments.push({
+      kind: "variable",
+      name: inner,
+      raw: match[0],
+      declared: declaredKeys.has(normalizedKey),
+    });
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < line.length) {
+    segments.push({ kind: "text", value: line.slice(cursor) });
+  }
+  return segments.length > 0 ? segments : [{ kind: "text", value: line }];
+}
+
+/**
+ * Parse a prompt string into block rows for chip-aware rendering.
+ *
+ * Read-only by design — there is no caret/selection model. The flat
+ * `<pre>{prompt}</pre>` is replaced with a line-numbered listing where
+ * variable tokens become accessible chips, comment lines, role markers,
+ * and fenced code blocks each get a distinct style.
+ *
+ * @param prompt        Raw prompt source. `undefined`/empty returns `[]`.
+ * @param declaredVars  Optional list of placeholder tokens (e.g. the
+ *                      `<PASTE_TOPIC>` strings returned by
+ *                      `extractPromptPlaceholders`). When provided,
+ *                      matching variables are flagged `declared: true`
+ *                      so callers can tint them with the area color
+ *                      instead of the caution color used for unknown
+ *                      placeholders.
+ */
+export function parsePromptForChips(
+  prompt: string | undefined,
+  declaredVars: readonly string[] = [],
+): PromptBlockRow[] {
+  if (!prompt) {
+    return [];
+  }
+  const declaredKeys = new Set<string>();
+  for (const token of declaredVars) {
+    const trimmed = (token ?? "").trim();
+    if (!trimmed) {
+      continue;
+    }
+    const inner = trimmed.startsWith("<") && trimmed.endsWith(">") ? trimmed.slice(1, -1).trim() : trimmed;
+    const normalized = inner.toLowerCase().replace(/\s+/g, " ").trim();
+    if (normalized) {
+      declaredKeys.add(normalized);
+    }
+  }
+  const rows: PromptBlockRow[] = [];
+  // Split on \n so that the original string can be reproduced exactly when
+  // joined with newlines (CRLF input is normalised at this seam).
+  const lines = prompt.replace(/\r\n/g, "\n").split("\n");
+  let insideFence = false;
+  for (let index = 0; index < lines.length; index += 1) {
+    // `lines[index]` is guaranteed by the loop bound, but TS `noUncheckedIndexedAccess`
+    // surfaces `string | undefined`; coalesce so the rest of the loop can treat the row
+    // as a definite string without per-call narrowing.
+    const raw = lines[index] ?? "";
+    const lineNumber = index + 1;
+    if (raw.trimStart().startsWith("```")) {
+      rows.push({ kind: "code-fence", lineNumber, value: raw });
+      insideFence = !insideFence;
+      continue;
+    }
+    if (insideFence) {
+      rows.push({ kind: "code", lineNumber, value: raw });
+      continue;
+    }
+    if (raw.trimStart().startsWith("#")) {
+      rows.push({ kind: "comment", lineNumber, value: raw });
+      continue;
+    }
+    const roleMatch = raw.match(ROLE_MARKER_PATTERN);
+    if (roleMatch) {
+      const role = roleMatch[0].replace(/\s*:\s*$/, "").trim();
+      const rest = raw.slice(roleMatch[0].length);
+      rows.push({
+        kind: "role-marker",
+        lineNumber,
+        role,
+        rest,
+        segments: splitLineIntoInlineSegments(rest, declaredKeys),
+      });
+      continue;
+    }
+    rows.push({
+      kind: "line",
+      lineNumber,
+      segments: splitLineIntoInlineSegments(raw, declaredKeys),
+    });
+  }
+  return rows;
+}
+
+function renderInlineSegments(segments: PromptInlineSegment[]): ReactNode {
+  if (segments.length === 0) {
+    return null;
+  }
+  return segments.map((segment, segmentIndex) => {
+    if (segment.kind === "text") {
+      // Preserve whitespace exactly — the outer container uses `white-space:
+      // pre-wrap` so no further escaping is needed.
+      return <span key={segmentIndex}>{segment.value}</span>;
+    }
+    const label = segment.declared ? `Variable: ${segment.name}` : `Variable (not declared): ${segment.name}`;
+    return (
+      <code
+        key={segmentIndex}
+        className={`mc-next-prompt-variable${segment.declared ? "" : " is-undeclared"}`}
+        data-declared={segment.declared ? "true" : "false"}
+        title={label}
+        aria-label={label}
+      >
+        {segment.raw}
+      </code>
+    );
+  });
+}
+
+/**
+ * Read-only prompt source viewer with inline variable chips and light
+ * syntax cues. The flat `<pre>{prompt}</pre>` previously rendered here
+ * dropped both readability (variable boundaries) and scan-ability (line
+ * numbers, comment / role separation). This component restores those
+ * affordances using only canonical tokens; it intentionally does NOT
+ * support editing — prompt-pack tests are imported from markdown and
+ * surfaced read-only.
+ */
+export function PromptSourceEditor({
+  prompt,
+  declaredPlaceholders = [],
+}: {
+  prompt: string | undefined;
+  declaredPlaceholders?: readonly string[];
+}) {
+  const rows = useMemo(() => parsePromptForChips(prompt, declaredPlaceholders), [prompt, declaredPlaceholders]);
+  const lineNumberWidth = useMemo(() => {
+    if (rows.length === 0) {
+      return 2;
+    }
+    return Math.max(2, String(rows[rows.length - 1]?.lineNumber ?? rows.length).length);
+  }, [rows]);
+  if (!prompt) {
+    return (
+      <pre className="mc-pp-prompt-editor" aria-label="Prompt source">
+        <span className="mc-pp-prompt-empty">No prompt source available.</span>
+      </pre>
+    );
+  }
+  return (
+    <pre
+      className="mc-pp-prompt-editor"
+      aria-label="Prompt source"
+      style={{ ["--mc-pp-line-gutter" as keyof CSSProperties as string]: `${lineNumberWidth}ch` }}
+    >
+      {rows.map((row) => {
+        const gutter = (
+          <span className="mc-pp-prompt-gutter" aria-hidden="true">
+            {String(row.lineNumber).padStart(lineNumberWidth, " ")}
+          </span>
+        );
+        if (row.kind === "comment") {
+          return (
+            <span key={row.lineNumber} className="mc-pp-prompt-row is-comment">
+              {gutter}
+              <span className="mc-pp-prompt-line mc-pp-prompt-comment">{row.value || "​"}</span>
+              {"\n"}
+            </span>
+          );
+        }
+        if (row.kind === "code-fence") {
+          return (
+            <span key={row.lineNumber} className="mc-pp-prompt-row is-code-fence">
+              {gutter}
+              <span className="mc-pp-prompt-line mc-pp-prompt-code">{row.value || "​"}</span>
+              {"\n"}
+            </span>
+          );
+        }
+        if (row.kind === "code") {
+          return (
+            <span key={row.lineNumber} className="mc-pp-prompt-row is-code">
+              {gutter}
+              <span className="mc-pp-prompt-line mc-pp-prompt-code">{row.value || "​"}</span>
+              {"\n"}
+            </span>
+          );
+        }
+        if (row.kind === "role-marker") {
+          return (
+            <span key={row.lineNumber} className="mc-pp-prompt-row is-role">
+              {gutter}
+              <span className="mc-pp-prompt-line">
+                <span className="mc-pp-prompt-role">{row.role}:</span>
+                {renderInlineSegments(row.segments)}
+              </span>
+              {"\n"}
+            </span>
+          );
+        }
+        const inline = renderInlineSegments(row.segments);
+        return (
+          <span key={row.lineNumber} className="mc-pp-prompt-row">
+            {gutter}
+            <span className="mc-pp-prompt-line">{inline ?? "​"}</span>
+            {"\n"}
+          </span>
+        );
+      })}
+    </pre>
+  );
 }
 
 function AssessmentThresholdBar({ passRate, threshold }: { passRate: number; threshold: number }) {

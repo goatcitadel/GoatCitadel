@@ -251,30 +251,17 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
                         <span>{formatDateTime(approval.createdAt)}</span>
                       </div>
                       <div className="mc-next-approvals-chip-row">
-                        <StatusChip
-                          tone={
-                            approval.riskLevel === "nuclear"
-                              ? "critical"
-                              : approval.riskLevel === "danger"
-                                ? "warning"
-                                : "muted"
-                          }
-                        >
-                          {approval.riskLevel}
-                        </StatusChip>
-                        <StatusChip
-                          tone={
-                            effectiveStatus === "pending"
-                              ? "warning"
-                              : effectiveStatus === "approved"
-                                ? "success"
-                                : effectiveStatus === "expired"
-                                  ? "warning"
-                                  : "muted"
-                          }
-                        >
-                          {effectiveStatus}
-                        </StatusChip>
+                        {/* W-6: ThreePartChip is the canonical brand-spec primitive for ops
+                            queue rows (dot + state + age). The risk-tone dot replaces the
+                            standalone risk pill; the status sits in the mid slot; age (time
+                            since arrival) goes in the third slot so operators see urgency at
+                            a glance. */}
+                        <ThreePartChip
+                          tone={approval.riskLevel ?? "muted"}
+                          state={approval.riskLevel ?? "unknown"}
+                          mid={effectiveStatus}
+                          age={formatApprovalAge(approval.createdAt)}
+                        />
                         {approval.linkage?.durableRunId ? <StatusChip tone="default">durable</StatusChip> : null}
                         {approval.followUp && approval.followUp.status !== "none" ? (
                           <StatusChip tone={approvalFollowUpTone(approval.followUp.status)}>
@@ -569,7 +556,12 @@ function ApprovalInspectorCard(props: {
         </div>
         <div className="mc-next-approvals-actions">
           {approval.status === "pending" && !expired ? (
-            <ThreePartChip tone="caution" state="awaiting approval" mid={approval.kind ?? "decision"} age="—" />
+            <ThreePartChip
+              tone="caution"
+              state="awaiting approval"
+              mid={approval.kind ?? "decision"}
+              age={formatApprovalAge(approval.createdAt)}
+            />
           ) : null}
           {approval.status === "pending" && !expired ? (
             <>
@@ -901,6 +893,28 @@ function formatApprovalExplanationError(error: string): string {
     return "The approval is still usable, but the optional explainer sent a parameter this model provider does not accept.";
   }
   return `The approval is still usable. Explainer detail: ${message}`;
+}
+
+/**
+ * W-6: short relative age for queue-row ThreePartChip.
+ * Used as the third slot ("age") so operators see time-since-arrival
+ * at a glance — pairs with risk-tone dot + state mid for the canonical
+ * brand-spec ops chip.
+ */
+function formatApprovalAge(createdAt: string | number | Date | undefined): string {
+  if (createdAt === undefined) return "—";
+  const created = new Date(createdAt).getTime();
+  if (!Number.isFinite(created)) return "—";
+  const ms = Date.now() - created;
+  if (ms < 0) return "now";
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
 }
 
 function formatApprovalFollowUp(status: NonNullable<ApprovalRequest["followUp"]>["status"]): string {

@@ -16,6 +16,7 @@ import {
 } from "../NativeRoutePageLayout";
 import { ThreePartChip, type ChipTone } from "../primitives";
 import { recordRouteAction } from "../route-diagnostics";
+import { RuntimeSpendChart, type SpendDay } from "./RuntimeSpendChart";
 import type { NativeRoutePagesProps } from "../types";
 import "../native-routes.css";
 
@@ -477,9 +478,25 @@ export function RuntimeRoutePage({
             </NativeCard>
           </NativeGrid>
         );
-      case "costs":
+      case "costs": {
+        // The live `CostSummaryResponse` (`packages/mission-control-shared/src/api/types.ts:51-68`)
+        // returns only scope-aggregated items keyed by provider — there is no
+        // per-day timeseries field. Until the snapshot exposes a daily series
+        // (e.g. `data.cost.dailySeries`), the chart receives an empty array and
+        // renders its explicit empty state. No fabricated data.
+        const spendDays = readSpendDays(data);
         return (
           <NativeGrid>
+            <NativeCard
+              title="Spend — last 7 days"
+              subtitle="Stacked daily spend by provider with anomaly highlight."
+              stats={[
+                { label: "Scope", value: data.cost?.scope ?? "day" },
+                { label: "Days", value: String(spendDays.length) },
+              ]}
+            >
+              <RuntimeSpendChart days={spendDays} />
+            </NativeCard>
             <NativeCard
               title="Spend summary"
               subtitle="Tracked usage, coverage, and current spend leaders."
@@ -542,6 +559,7 @@ export function RuntimeRoutePage({
             </NativeCard>
           </NativeGrid>
         );
+      }
       case "runtime":
         return (
           <NativeGrid>
@@ -1334,6 +1352,74 @@ export function sourceFailed(
   source: string,
 ): boolean {
   return data.sourceStatus[source]?.status === "error";
+}
+
+/**
+ * Returns the seven-day stacked spend series for the chart, or an empty array
+ * when the live snapshot does not yet expose it.
+ *
+ * The current `CostSummaryResponse`
+ * (`packages/mission-control-shared/src/api/types.ts:51-68`) only carries
+ * scope-aggregated `items` and no per-day timeseries. We read defensively from
+ * an optional `dailySeries` field so the chart will automatically render the
+ * moment the API surface adds one — until then, the chart renders its
+ * canonical empty state and no data is fabricated. The expected shape is
+ * `Array<{ date, segments: Array<{ providerKey, label, costUsd }> }>`.
+ */
+export function readSpendDays(data: OpsRuntimeData): SpendDay[] {
+  const candidate = (data.cost as { dailySeries?: unknown } | null | undefined)?.dailySeries;
+  if (!Array.isArray(candidate)) {
+    return [];
+  }
+  const series: SpendDay[] = [];
+  for (const raw of candidate) {
+    if (!raw || typeof raw !== "object") {
+      continue;
+    }
+    const record = raw as {
+      date?: unknown;
+      isoDate?: unknown;
+      shortLabel?: unknown;
+      segments?: unknown;
+    };
+    const isoDate =
+      typeof record.isoDate === "string" ? record.isoDate : typeof record.date === "string" ? record.date : null;
+    if (!isoDate) {
+      continue;
+    }
+    const shortLabel = typeof record.shortLabel === "string" ? record.shortLabel : isoDate.slice(5);
+    const segments = Array.isArray(record.segments) ? record.segments : [];
+    const parsedSegments = segments
+      .map((rawSegment) => {
+        if (!rawSegment || typeof rawSegment !== "object") {
+          return null;
+        }
+        const segmentRecord = rawSegment as {
+          providerKey?: unknown;
+          key?: unknown;
+          label?: unknown;
+          costUsd?: unknown;
+        };
+        const providerKey =
+          typeof segmentRecord.providerKey === "string"
+            ? segmentRecord.providerKey
+            : typeof segmentRecord.key === "string"
+              ? segmentRecord.key
+              : null;
+        const cost = typeof segmentRecord.costUsd === "number" ? segmentRecord.costUsd : 0;
+        if (!providerKey) {
+          return null;
+        }
+        return {
+          providerKey,
+          label: typeof segmentRecord.label === "string" ? segmentRecord.label : providerKey,
+          costUsd: cost,
+        };
+      })
+      .filter((value): value is SpendDay["segments"][number] => value !== null);
+    series.push({ isoDate, shortLabel, segments: parsedSegments });
+  }
+  return series.slice(-7);
 }
 
 function readRuntimeSourceMessage(status: unknown): string | null {

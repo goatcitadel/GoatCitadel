@@ -1,8 +1,9 @@
+/* eslint-disable max-lines -- MemoryRoutePage coordinates memory list, search, namespace filter, edit form, and maintenance verbs in one orchestrator while decomposition lands (plan W3.5 in C:/Users/spurn/.claude/plans/swirling-questing-pizza.md). */
 import { useEffect, useMemo, useState } from "react";
 import { RefreshCw, ShieldCheck } from "lucide-react";
 import type { EvidenceEnvelope, MemoryDecisionRecord, MemoryItemRecord } from "@goatcitadel/contracts";
 import { fetchEvidenceEnvelopes } from "@goatcitadel/mission-control-shared/api/client";
-import { StatusChip } from "../primitives";
+import { FilterPillGroup, StatusChip, type FilterPillOption } from "../primitives";
 import {
   describeQmdImpact,
   formatBytes,
@@ -37,9 +38,41 @@ export {
   readMetadataStringList,
 } from "./MemoryRoutePage.helpers";
 
+/**
+ * Sentinel value for the "all" pill — clears the namespace filter.
+ * Lives outside the component so it is stable across renders.
+ */
+const NAMESPACE_FILTER_ALL = "__all__";
+
+/**
+ * Extract the top-level group of a memory namespace (the part before the first
+ * `/` or `.`). Falls back to the full string when no separator is found.
+ * Examples:
+ *   "knowledge/routing"  -> "knowledge"
+ *   "knowledge/files"    -> "knowledge"
+ *   "workspace.alpha"    -> "workspace"
+ *   "scratch"            -> "scratch"
+ *   ""                   -> "" (caller skips empty strings)
+ */
+function namespaceGroup(namespace: string): string {
+  if (!namespace) {
+    return "";
+  }
+  const slash = namespace.indexOf("/");
+  const dot = namespace.indexOf(".");
+  const cuts: number[] = [];
+  if (slash >= 0) cuts.push(slash);
+  if (dot >= 0) cuts.push(dot);
+  if (cuts.length === 0) {
+    return namespace;
+  }
+  return namespace.slice(0, Math.min(...cuts));
+}
+
 export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWorkspaceId }: NativeRoutePagesProps) {
   const memory = useMemoryOperatorSnapshot(activeWorkspaceId);
   const [search, setSearch] = useState("");
+  const [namespaceFilter, setNamespaceFilter] = useState<string>(NAMESPACE_FILTER_ALL);
   const [draft, setDraft] = useState({
     title: "",
     content: "",
@@ -75,19 +108,68 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
     });
   }, [memory.selectedItem]);
 
-  const visibleItems = useMemo(() => {
-    const items = memory.data?.memoryItems ?? [];
-    const query = search.trim().toLowerCase();
-    if (!query) {
-      return items;
+  const memoryItems = memory.data?.memoryItems ?? [];
+
+  const namespacePillOptions = useMemo<FilterPillOption[]>(() => {
+    const counts = new Map<string, number>();
+    for (const item of memoryItems) {
+      const group = namespaceGroup(item.namespace);
+      if (!group) {
+        continue;
+      }
+      counts.set(group, (counts.get(group) ?? 0) + 1);
     }
-    return items.filter(
-      (item) =>
+    const sorted = [...counts.entries()].sort((a, b) => {
+      if (b[1] !== a[1]) {
+        return b[1] - a[1];
+      }
+      return a[0].localeCompare(b[0]);
+    });
+    return [
+      {
+        value: NAMESPACE_FILTER_ALL,
+        label: "all",
+        count: memoryItems.length,
+        ariaLabel: `Show all namespaces (${memoryItems.length} items)`,
+      },
+      ...sorted.map(([group, count]) => ({
+        value: group,
+        label: group,
+        count,
+        ariaLabel: `Filter by namespace ${group} (${count} items)`,
+      })),
+    ];
+  }, [memoryItems]);
+
+  // Reset the namespace filter when the selected group disappears (e.g. items
+  // unloaded, workspace switched). Avoids stranding the operator on an empty
+  // filter that no longer matches anything.
+  useEffect(() => {
+    if (namespaceFilter === NAMESPACE_FILTER_ALL) {
+      return;
+    }
+    const stillVisible = namespacePillOptions.some((option) => option.value === namespaceFilter);
+    if (!stillVisible) {
+      setNamespaceFilter(NAMESPACE_FILTER_ALL);
+    }
+  }, [namespaceFilter, namespacePillOptions]);
+
+  const visibleItems = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return memoryItems.filter((item) => {
+      if (namespaceFilter !== NAMESPACE_FILTER_ALL && namespaceGroup(item.namespace) !== namespaceFilter) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      return (
         item.namespace.toLowerCase().includes(query) ||
         item.title.toLowerCase().includes(query) ||
-        item.content.toLowerCase().includes(query),
-    );
-  }, [memory.data?.memoryItems, search]);
+        item.content.toLowerCase().includes(query)
+      );
+    });
+  }, [memoryItems, namespaceFilter, search]);
 
   const fileAreas = useMemo(() => summarizeMemorySubspaces(memory.data?.files ?? []), [memory.data?.files]);
   const sectionErrors = memory.data?.sectionErrors;
@@ -184,6 +266,15 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               />
             </label>
           </div>
+          {namespacePillOptions.length > 1 ? (
+            <FilterPillGroup
+              label="Memory namespace filter"
+              options={namespacePillOptions}
+              value={namespaceFilter}
+              onChange={setNamespaceFilter}
+              idPrefix="memory-namespace-filter"
+            />
+          ) : null}
           <div className="mc-next-approvals-risk-strip">
             <StatusChip tone="success">
               Active {memory.data?.memoryItems.filter((item) => item.lifecycleState === "active").length ?? 0}

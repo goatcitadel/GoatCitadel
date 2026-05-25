@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ScoreDraft } from "@goatcitadel/mission-control-shared/pages/prompt-lab/prompt-lab-types";
 import {
   DiagnosticChipGroup,
+  PromptSourceEditor,
   buildLatestPromptPackAssessmentByTest,
   buildLatestPromptPackRunByTest,
   buildPromptPackSelectedRunLink,
@@ -15,6 +16,7 @@ import {
   formatPromptPackExecutionStyle,
   getPromptPackScoreDimensionLabels,
   isPromptPackV2UiEnabled,
+  parsePromptForChips,
   readPromptPackScoreDimension,
   resultCategoryClass,
   statusChipClass,
@@ -199,5 +201,77 @@ describe("PromptPacksWorkbenchPage helpers", () => {
     );
     expect(buildPromptPackSelectedRunLink("/chat?sessionId=session-1")).toBe("/chat?sessionId=session-1");
     expect(buildPromptPackSelectedRunLink(null, "http://localhost:5173")).toBeNull();
+  });
+
+  it("parses prompt source into chip-aware rows", () => {
+    expect(parsePromptForChips(undefined)).toEqual([]);
+    expect(parsePromptForChips("")).toEqual([]);
+
+    const rows = parsePromptForChips(
+      [
+        "# routing judge",
+        "Review <LOCAL PATH> and cite the truth.",
+        "System: Be honest. <UNKNOWN_TOKEN>",
+        "```",
+        "code line <PASTE_TOPIC>",
+        "```",
+        "Plain trailing line.",
+      ].join("\n"),
+      ["<LOCAL PATH>"],
+    );
+
+    expect(rows[0]).toMatchObject({ kind: "comment", lineNumber: 1, value: "# routing judge" });
+    expect(rows[1]).toMatchObject({ kind: "line", lineNumber: 2 });
+    const inline = (rows[1] as { segments: Array<{ kind: string; name?: string; declared?: boolean }> }).segments;
+    expect(
+      inline.some(
+        (segment) => segment.kind === "variable" && segment.name === "LOCAL PATH" && segment.declared === true,
+      ),
+    ).toBe(true);
+    expect(inline.find((segment) => segment.kind === "text")?.kind).toBe("text");
+
+    expect(rows[2]).toMatchObject({ kind: "role-marker", lineNumber: 3, role: "System" });
+    const roleSegments = (rows[2] as { segments: Array<{ kind: string; declared?: boolean }> }).segments;
+    expect(roleSegments.some((segment) => segment.kind === "variable" && segment.declared === false)).toBe(true);
+
+    expect(rows[3]).toMatchObject({ kind: "code-fence", lineNumber: 4 });
+    expect(rows[4]).toMatchObject({ kind: "code", lineNumber: 5 });
+    expect(rows[5]).toMatchObject({ kind: "code-fence", lineNumber: 6 });
+    expect(rows[6]).toMatchObject({ kind: "line", lineNumber: 7 });
+
+    // Tokens that do not look like placeholders stay as text.
+    const lower = parsePromptForChips("Email me at <a@b.c>");
+    expect(lower[0]?.kind).toBe("line");
+    const lowerSegments = (lower[0] as { segments: Array<{ kind: string }> }).segments;
+    expect(lowerSegments.every((segment) => segment.kind === "text")).toBe(true);
+
+    // CRLF input is normalised; row count matches LF input.
+    const crlf = parsePromptForChips("line one\r\nline two");
+    expect(crlf).toHaveLength(2);
+    expect(crlf[1]?.lineNumber).toBe(2);
+  });
+
+  it("renders PromptSourceEditor with chips, role markers, and an empty fallback", () => {
+    const empty = renderToStaticMarkup(<PromptSourceEditor prompt={undefined} />);
+    expect(empty).toContain("mc-pp-prompt-editor");
+    expect(empty).toContain("No prompt source available.");
+
+    const filled = renderToStaticMarkup(
+      <PromptSourceEditor
+        prompt={"# header\nReview <LOCAL PATH>.\nSystem: be honest.\n"}
+        declaredPlaceholders={["<LOCAL PATH>"]}
+      />,
+    );
+    expect(filled).toContain("mc-next-prompt-variable");
+    expect(filled).toContain('aria-label="Variable: LOCAL PATH"');
+    expect(filled).toContain("mc-pp-prompt-comment");
+    expect(filled).toContain("mc-pp-prompt-role");
+    expect(filled).toContain('aria-label="Prompt source"');
+
+    // Undeclared placeholder gets the caution-tinted modifier and the
+    // "(not declared)" prefix in the accessible label.
+    const undeclared = renderToStaticMarkup(<PromptSourceEditor prompt={"Use <PASTE_TOPIC> for context."} />);
+    expect(undeclared).toContain("is-undeclared");
+    expect(undeclared).toContain("Variable (not declared): PASTE_TOPIC");
   });
 });
