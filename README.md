@@ -49,7 +49,7 @@ These README-facing screenshots are regenerated from a sanitized Mission Control
 ## Current Product Truth
 
 - `apps/mission-control-next` is the canonical `1.0` Mission Control shell.
-- `apps/mission-control` is compatibility-only for rollback, comparison, and route-continuity checks.
+- `apps/mission-control` was retired in 1.x cleanup; the legacy source remains on disk for archive only and is no longer wired into builds, CI, or the dev launcher.
 - The Fastify gateway owns runtime APIs, routing, orchestration entrypoints, approvals, policy enforcement, integrations, audit, realtime events, and persistence coordination.
 - Chat, Cowork, and Code are distinct operator surfaces backed by shared runtime foundations.
 - Durable execution owns the shipped resumable mission-session Chat / Cowork / Code flow set.
@@ -112,7 +112,7 @@ pnpm config:sync
 pnpm dev
 ```
 
-`pnpm dev` starts the gateway plus `@goatcitadel/mission-control-next` by default. Use `pnpm dev:ui:legacy` only when you need the compatibility shell for rollback, comparison, or route-continuity checks.
+`pnpm dev` starts the gateway plus `@goatcitadel/mission-control-next`. The legacy `apps/mission-control` shell is retired and no longer reachable through the launcher.
 
 Default source endpoints:
 
@@ -209,8 +209,7 @@ PowerShell note: prefer `goatcitadel` or `goat`. GoatCitadel does not install `g
 ### Apps
 
 - [apps/mission-control-next](./apps/mission-control-next): canonical `1.0` React/Vite operator console used by `pnpm dev`
-- [apps/mission-control](./apps/mission-control): compatibility-only React/Vite operator console retained for rollback, comparison, and inbound route continuity
-- [apps/mission-control-desktop](./apps/mission-control-desktop): native desktop host for packaged Mission Control
+- [apps/mission-control-desktop](./apps/mission-control-desktop): native desktop host for packaged Mission Control (Tauri shell pointing at mission-control-next)
 - [apps/gateway](./apps/gateway): Fastify control plane and runtime APIs
 - [apps/npu-sidecar](./apps/npu-sidecar): optional experimental Python sidecar for local NPU-backed inference; not part of the current `1.0` readiness bar
 

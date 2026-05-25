@@ -421,8 +421,8 @@ if (/semantic pre-release versions/i.test(changelog) || /public surface is still
 
 const releaseEvidencePath = path.join(root, "docs", "1_0_RELEASE_EVIDENCE.md");
 const releaseEvidence = await readFile(releaseEvidencePath, "utf8");
-if (!/^Last updated: 2026-05-18$/m.test(releaseEvidence)) {
-  errors.push("docs/1_0_RELEASE_EVIDENCE.md must carry the current 2026-05-18 freshness header.");
+if (!/^Last updated: 2026-05-25$/m.test(releaseEvidence)) {
+  errors.push("docs/1_0_RELEASE_EVIDENCE.md must carry the current 2026-05-25 freshness header.");
 }
 if (!/large-service debt/i.test(releaseEvidence) || !/not proof that broad GatewayService decomposition is complete/i.test(releaseEvidence)) {
   errors.push("docs/1_0_RELEASE_EVIDENCE.md must keep architecture metrics framed as a large-service debt guard, not decomposition proof.");

@@ -23,7 +23,6 @@
     "dev:ui": "pnpm --filter @goatcitadel/mission-control-next dev",
     "dev:ui:current": "pnpm --filter @goatcitadel/mission-control-next dev",
     "dev:ui:next": "pnpm --filter @goatcitadel/mission-control-next dev",
-    "dev:ui:legacy": "pnpm --filter @goatcitadel/mission-control dev",
     "build": "pnpm --filter \"!@goatcitadel/mission-control\" -r build",
     "test": "pnpm --filter \"!@goatcitadel/mission-control\" -r test",
     "smoke": "pnpm --filter @goatcitadel/gateway smoke",
