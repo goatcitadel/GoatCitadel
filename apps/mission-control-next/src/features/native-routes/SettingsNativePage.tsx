@@ -179,7 +179,7 @@ import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hoo
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import type { AppRoute } from "@next/app/route-model";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import { ThreePartChip, StatusChip, type ChipTone } from "./primitives";
+import { ThreePartChip, StatusChip, EmptyState, type ChipTone } from "./primitives";
 import {
   describeDirtySections,
   useAnySectionDirty,
@@ -7822,7 +7822,7 @@ function SettingsCodeBlock({ label, children }: { label: string; children: React
 }
 
 function SettingsEmptyState({ label }: { label: string }) {
-  return <p className="mc-next-directory-empty">{label}</p>;
+  return <EmptyState title={label} size="compact" />;
 }
 
 function SettingsNotice({ notice }: { notice: Notice }) {

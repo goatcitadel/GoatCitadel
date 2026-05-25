@@ -71,6 +71,7 @@ import {
   type ScoreDraft,
 } from "@goatcitadel/mission-control-shared/pages/prompt-lab/prompt-lab-types";
 import { buildAppHref, type AppRoute } from "@next/app/route-model";
+import { EmptyState } from "../native-routes/primitives";
 import "./prompt-packs-workbench.css";
 
 const DEFAULT_BENCHMARK_TEST_CODES = "TEST-03, TEST-06, TEST-10, TEST-12, TEST-15, TEST-28";
@@ -1593,11 +1594,7 @@ export function PromptPacksWorkbenchPage({
                 </article>
               );
             })}
-            {filteredTests.length === 0 ? (
-              <div className="mc-pp-empty">
-                <p>No tests match this filter.</p>
-              </div>
-            ) : null}
+            {filteredTests.length === 0 ? <EmptyState size="compact" title="No tests match this filter." /> : null}
           </div>
         </section>
 
@@ -1805,9 +1802,7 @@ export function PromptPacksWorkbenchPage({
                       {selectedRun?.responseText ? (
                         <pre>{selectedRun.responseText}</pre>
                       ) : (
-                        <div className="mc-pp-empty">
-                          <p>No output available for the latest run.</p>
-                        </div>
+                        <EmptyState size="compact" title="No output available for the latest run." />
                       )}
                     </section>
                     <section className="mc-pp-surface">
@@ -1987,9 +1982,7 @@ export function PromptPacksWorkbenchPage({
                           </details>
                         </>
                       ) : (
-                        <div className="mc-pp-empty">
-                          <p>No auto-score evidence is available yet for this test.</p>
-                        </div>
+                        <EmptyState size="compact" title="No auto-score evidence is available yet for this test." />
                       )}
                     </section>
                   </div>
@@ -2265,10 +2258,10 @@ export function PromptPacksWorkbenchPage({
               </div>
             </>
           ) : (
-            <div className="mc-pp-empty large">
-              <h4>Select a test</h4>
-              <p>Pick a test from the list to inspect the prompt, output, scoring, and review controls.</p>
-            </div>
+            <EmptyState
+              title="Select a test"
+              description="Pick a test from the list to inspect the prompt, output, scoring, and review controls."
+            />
           )}
         </section>
       </div>

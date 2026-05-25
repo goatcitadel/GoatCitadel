@@ -1496,10 +1496,95 @@
 }
 
 /*
- * CHAT-013 partial closure: ChatQueueBar emits a legacy v11-prefixed class
- * from packages/mission-control-shared/.../ChatQueueBar.tsx. The bare class
- * has no CSS rule in next-app, but defining one here triggers the legacy-check
- * forbidden-selector rule. Proper fix requires renaming the class in the shared
- * component (3-app coordination: shared + next + legacy). Tracked as a
- * follow-up task. Until then, the queue bar renders unstyled (default block).
+ * CHAT-013 closure: ChatQueueBar emits BOTH the legacy queue class names and
+ * non-legacy `mc-queue-bar*` aliases so the legacy mission-control app keeps
+ * styling off its own selectors while next-app styles the new aliases here.
+ * Only the non-legacy aliases may appear below; the legacy-check script
+ * forbids the legacy prefix in any next-app source file.
  */
+.mc-queue-bar {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.52rem 0.6rem;
+  border-radius: 0.55rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-2) 94%, transparent);
+}
+
+.mc-queue-bar-header {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.mc-queue-bar-header > strong {
+  min-width: 0;
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-queue-bar-header > span {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.mc-queue-bar-header > button {
+  margin-left: auto;
+}
+
+.mc-queue-bar-list {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-queue-bar-list > li {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0.4rem 0.48rem;
+  border-radius: 0.42rem;
+  border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-queue-bar-list > li > div {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.mc-queue-bar-list > li > div > strong {
+  min-width: 0;
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-queue-bar-list > li > div > p {
+  margin: 0;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-queue-bar-list > li > button {
+  flex: 0 0 auto;
+}

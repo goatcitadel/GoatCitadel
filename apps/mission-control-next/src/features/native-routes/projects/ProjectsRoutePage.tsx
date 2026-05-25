@@ -30,7 +30,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import type { AppRoute } from "@next/app/route-model";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
-import { FilterPillGroup, ModeBar } from "../primitives";
+import { EmptyState, FilterPillGroup, ModeBar } from "../primitives";
 import { readRouteDiagnosticNow, recordRouteAction, recordRouteDataLoad } from "../route-diagnostics";
 import type { NativeRoutePagesProps } from "../types";
 import {
@@ -532,11 +532,14 @@ export function ProjectsRoutePage({
                 );
               })
             ) : (
-              <p className="mc-next-directory-empty">
-                {state.projects.length === 0
-                  ? "No active projects found in this workspace."
-                  : filterEmptyLabel(filterView)}
-              </p>
+              <EmptyState
+                size="compact"
+                title={
+                  state.projects.length === 0
+                    ? "No active projects found in this workspace."
+                    : filterEmptyLabel(filterView)
+                }
+              />
             )}
           </div>
         </NativeCard>
@@ -869,7 +872,7 @@ function ProjectHomeBasePanel({
             </div>
           ))
         ) : (
-          <p className="mc-next-directory-empty">No recent project threads yet.</p>
+          <EmptyState size="compact" title="No recent project threads yet." />
         )}
       </div>
 
@@ -940,7 +943,7 @@ function ProjectThreadGroup({
           ))}
         </div>
       ) : (
-        <p className="mc-next-directory-empty">No {label.toLowerCase()} threads in this project.</p>
+        <EmptyState size="compact" title={`No ${label.toLowerCase()} threads in this project.`} />
       )}
     </section>
   );

@@ -55,8 +55,8 @@ export function ChatQueueBar({
   const pausedCount = items.filter((item) => item.paused).length;
   const visibleItems = buildVisibleQueueItems(items);
   return (
-    <div className="chat-v11-queue-bar">
-      <div className="chat-v11-queue-header">
+    <div className="chat-v11-queue-bar mc-queue-bar">
+      <div className="chat-v11-queue-header mc-queue-bar-header">
         <strong>{title}</strong>
         <span>{items.length} pending</span>
         {pausedCount > 0 ? (
@@ -65,7 +65,7 @@ export function ChatQueueBar({
           </button>
         ) : null}
       </div>
-      <ul className="chat-v11-queue-list">
+      <ul className="chat-v11-queue-list mc-queue-bar-list">
         {visibleItems.map((item) => (
           <li key={item.id}>
             <div>

@@ -60,6 +60,7 @@ import type {
 import type { AppRoute } from "@next/app/route-model";
 import type { TaskDeliverableRecord, TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame, QuickJumpCard } from "./NativeRoutePageLayout";
+import { EmptyState } from "./primitives";
 import { SettingsNativePage as NextSettingsNativePage } from "./SettingsNativePage";
 import { CuratorRoutePage } from "./library/CuratorRoutePage";
 import { MemoryRoutePage } from "./library/MemoryRoutePage";
@@ -2856,7 +2857,7 @@ function NativeLane({
         <span>{count}</span>
       </div>
       {items.length === 0 ? (
-        <p className="mc-next-directory-empty">No items in this lane.</p>
+        <EmptyState size="compact" title="No items in this lane." />
       ) : (
         <div className="mc-next-directory-lane-list">
           {items.map((item) => (
@@ -3067,7 +3068,7 @@ function LibraryCodeBlock({ label, children }: { label: string; children: React.
 }
 
 function LibraryEmptyState({ label }: { label: string }) {
-  return <p className="mc-next-directory-empty">{label}</p>;
+  return <EmptyState title={label} size="compact" />;
 }
 
 function LibraryNotice({ notice }: { notice: Notice }) {

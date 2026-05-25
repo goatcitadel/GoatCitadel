@@ -21,3 +21,6 @@ export type { FilterPillGroupProps, FilterPillOption } from "./FilterPillGroup";
 
 export { KbdHint } from "./KbdHint";
 export type { KbdHintProps } from "./KbdHint";
+
+export { EmptyState } from "./EmptyState";
+export type { EmptyStateProps, EmptyStateSize, EmptyStateTone } from "./EmptyState";

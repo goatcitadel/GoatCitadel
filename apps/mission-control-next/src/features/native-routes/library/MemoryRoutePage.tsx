@@ -3,7 +3,7 @@ import { useEffect, useId, useMemo, useState } from "react";
 import { RefreshCw, ShieldCheck } from "lucide-react";
 import type { EvidenceEnvelope, MemoryDecisionRecord, MemoryItemRecord } from "@goatcitadel/contracts";
 import { fetchEvidenceEnvelopes } from "@goatcitadel/mission-control-shared/api/client";
-import { FilterPillGroup, StatusChip, type FilterPillOption } from "../primitives";
+import { EmptyState, FilterPillGroup, StatusChip, type FilterPillOption } from "../primitives";
 import {
   describeQmdImpact,
   formatBytes,
@@ -335,13 +335,16 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
             aria-activedescendant={memory.selectedItemId ? `memory-list-item-${memory.selectedItemId}` : undefined}
           >
             {visibleItems.length === 0 ? (
-              <p className="mc-next-directory-empty">
-                {memoryAdminTruthUnknown
-                  ? "Memory item truth is unavailable until backend settings truth reloads."
-                  : memoryAdminState === "disabled"
-                    ? "Memory lifecycle admin is disabled in settings."
-                    : "No memory items match the current filter."}
-              </p>
+              <EmptyState
+                size="compact"
+                title={
+                  memoryAdminTruthUnknown
+                    ? "Memory item truth is unavailable until backend settings truth reloads."
+                    : memoryAdminState === "disabled"
+                      ? "Memory lifecycle admin is disabled in settings."
+                      : "No memory items match the current filter."
+                }
+              />
             ) : (
               visibleItems.map((item) => {
                 const isSelected = memory.selectedItemId === item.itemId;
@@ -475,7 +478,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               <div className="mc-next-runtime-actions" role="group" aria-label="Memory item actions">
                 <button
                   type="button"
-                  className="gc-button"
+                  className="mc-next-button"
                   disabled={!memoryCanMutate || memory.busyKey === `item:${selectedVisibleItem.itemId}`}
                   aria-label={`Save changes to memory item ${selectedVisibleItem.title}`}
                   onClick={() =>
@@ -493,7 +496,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 </button>
                 <button
                   type="button"
-                  className="gc-button danger"
+                  className="mc-next-button-danger"
                   disabled={!memoryCanMutate || memory.busyKey === `forget:${selectedVisibleItem.itemId}`}
                   aria-label={`Forget memory item ${selectedVisibleItem.title} — permanent`}
                   onClick={() => void memory.forgetSelectedItem()}
@@ -516,12 +519,12 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                     ))}
                   </ul>
                 ) : (
-                  <p className="mc-next-directory-empty">No item history loaded.</p>
+                  <EmptyState size="compact" title="No item history loaded." />
                 )}
               </div>
             </>
           ) : (
-            <p className="mc-next-directory-empty">Select a memory item to inspect it.</p>
+            <EmptyState size="compact" title="Select a memory item to inspect it." />
           )}
         </NativeCard>
         <NativeCard
@@ -560,14 +563,15 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               })}
             </ul>
           ) : (
-            <p className="mc-next-directory-empty">
-              {evidence.loading ? "Loading evidence envelopes." : "No memory write-gate envelopes recorded yet."}
-            </p>
+            <EmptyState
+              size="compact"
+              title={evidence.loading ? "Loading evidence envelopes." : "No memory write-gate envelopes recorded yet."}
+            />
           )}
           <div className="mc-next-runtime-actions">
             <button
               type="button"
-              className="gc-button subtle"
+              className="mc-next-button-secondary"
               aria-label="Refresh evidence envelopes"
               onClick={() => {
                 setEvidence((current) => ({ ...current, loading: true, error: null }));
@@ -634,9 +638,10 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               ))}
             </ul>
           ) : (
-            <p className="mc-next-directory-empty">
-              {memoryCanMutate ? "No typed entities have been recorded yet." : "Entity truth is currently gated."}
-            </p>
+            <EmptyState
+              size="compact"
+              title={memoryCanMutate ? "No typed entities have been recorded yet." : "Entity truth is currently gated."}
+            />
           )}
         </NativeCard>
         <NativeCard
@@ -665,9 +670,12 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               ))}
             </ul>
           ) : (
-            <p className="mc-next-directory-empty">
-              {memoryCanMutate ? "No typed relations have been recorded yet." : "Relation truth is currently gated."}
-            </p>
+            <EmptyState
+              size="compact"
+              title={
+                memoryCanMutate ? "No typed relations have been recorded yet." : "Relation truth is currently gated."
+              }
+            />
           )}
         </NativeCard>
         <NativeCard
@@ -693,7 +701,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   {!decision.retrospective && decision.reviewAt ? (
                     <button
                       type="button"
-                      className="gc-button subtle"
+                      className="mc-next-button-secondary"
                       disabled={!memoryCanMutate || memory.busyKey === `decision:${decision.id}:retrospective`}
                       aria-label={`Record review for decision ${decision.title}`}
                       onClick={() => void memory.reviewDecision(decision.id)}
@@ -705,9 +713,12 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               ))}
             </ul>
           ) : (
-            <p className="mc-next-directory-empty">
-              {memoryCanMutate ? "No decision records have been recorded yet." : "Decision truth is currently gated."}
-            </p>
+            <EmptyState
+              size="compact"
+              title={
+                memoryCanMutate ? "No decision records have been recorded yet." : "Decision truth is currently gated."
+              }
+            />
           )}
         </NativeCard>
       </NativeGrid>
@@ -822,7 +833,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               <div className="mc-next-runtime-actions" role="group" aria-label="Memory maintenance actions">
                 <button
                   type="button"
-                  className="gc-button"
+                  className="mc-next-button"
                   disabled={!maintenanceControlsReady || memory.busyKey === "maintenance:run"}
                   aria-label="Run memory maintenance now"
                   onClick={() => void memory.runMaintenance()}
@@ -831,7 +842,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 </button>
                 <button
                   type="button"
-                  className="gc-button"
+                  className="mc-next-button"
                   disabled={!maintenanceControlsReady || !memory.policyDirty || memory.busyKey === "maintenance:policy"}
                   aria-label="Save memory maintenance policy"
                   onClick={() => void memory.savePolicy()}
@@ -840,7 +851,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 </button>
                 <button
                   type="button"
-                  className="gc-button subtle"
+                  className="mc-next-button-secondary"
                   aria-label="Refresh memory maintenance state"
                   onClick={() => void memory.reload()}
                 >
@@ -867,11 +878,14 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               </div>
             </>
           ) : (
-            <p className="mc-next-directory-empty">
-              {memoryAdminTruthUnknown
-                ? "Memory maintenance truth is unavailable until backend settings truth reloads."
-                : "Memory maintenance is not enabled in this workspace."}
-            </p>
+            <EmptyState
+              size="compact"
+              title={
+                memoryAdminTruthUnknown
+                  ? "Memory maintenance truth is unavailable until backend settings truth reloads."
+                  : "Memory maintenance is not enabled in this workspace."
+              }
+            />
           )}
         </NativeCard>
         <NativeCard
@@ -898,7 +912,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                         >
                           <button
                             type="button"
-                            className="gc-button subtle"
+                            className="mc-next-button-secondary"
                             disabled={!maintenanceControlsReady}
                             aria-label={`Accept recommendation ${item.kind}: ${item.summary}`}
                             onClick={() => void memory.resolveRecommendation(item.recommendationId, "accept")}
@@ -907,7 +921,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                           </button>
                           <button
                             type="button"
-                            className="gc-button subtle"
+                            className="mc-next-button-secondary"
                             disabled={!maintenanceControlsReady}
                             aria-label={`Reject recommendation ${item.kind}: ${item.summary}`}
                             onClick={() => void memory.resolveRecommendation(item.recommendationId, "reject")}
@@ -919,7 +933,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                     ))}
                   </ul>
                 ) : (
-                  <p className="mc-next-directory-empty">No maintenance recommendations.</p>
+                  <EmptyState size="compact" title="No maintenance recommendations." />
                 )}
               </div>
               <div className="mc-next-settings-code-block">
@@ -958,7 +972,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                     })}
                   </div>
                 ) : (
-                  <p className="mc-next-directory-empty">No maintenance runs yet.</p>
+                  <EmptyState size="compact" title="No maintenance runs yet." />
                 )}
               </div>
             </div>
@@ -1012,7 +1026,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                     ) : null}
                   </>
                 ) : (
-                  <p className="mc-next-directory-empty">Select a maintenance run to inspect provenance.</p>
+                  <EmptyState size="compact" title="Select a maintenance run to inspect provenance." />
                 )}
               </div>
             </div>
@@ -1052,7 +1066,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               ))}
             </ul>
           ) : (
-            <p className="mc-next-directory-empty">No recent context packs.</p>
+            <EmptyState size="compact" title="No recent context packs." />
           )}
         </NativeCard>
         <NativeCard
@@ -1075,7 +1089,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               ))}
             </ul>
           ) : (
-            <p className="mc-next-directory-empty">No memory file subspaces discovered.</p>
+            <EmptyState size="compact" title="No memory file subspaces discovered." />
           )}
         </NativeCard>
         <QuickJumpCard
