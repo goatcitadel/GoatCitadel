@@ -110,10 +110,11 @@ function classifySeverity(item, family) {
 function deriveLikelySurfaces(item, family) {
   const surfaces = new Set([item.subsystem]);
   if (family === "client_render") {
-    surfaces.add("apps/mission-control");
+    // W5 Phase 1: legacy `apps/mission-control` retired; next is the only client renderer.
+    surfaces.add("apps/mission-control-next");
   }
   if (family === "sse") {
-    surfaces.add("apps/mission-control/src/api/client.ts");
+    surfaces.add("apps/mission-control-next/src/main.tsx");
     surfaces.add("apps/gateway/src/routes/gateway-events.ts");
   }
   if (family === "provider_auth" || family === "provider_outage") {

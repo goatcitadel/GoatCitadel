@@ -2773,3 +2773,166 @@
     transition: none;
   }
 }
+
+/* ============================================================
+   W4.5 — Moved from styles/mission-control-next.css
+   These selectors are scoped to native-route surfaces (or are
+   unused dead bridges retained as defensive defaults). Moving
+   here trims the initial shell CSS bundle without altering
+   selector specificity.
+   ============================================================ */
+
+.mc-next-directory {
+  display: grid;
+  gap: 1rem;
+}
+
+.mc-next-shell .task-queue-card,
+.mc-next-shell .event-card,
+.mc-next-shell .quality-page-card,
+.mc-next-shell .operator-summary-card,
+.mc-next-shell .integrations-setup-mode-card,
+.mc-next-shell .channel-setup-connection-card,
+.mc-next-shell .channel-setup-field-card,
+.mc-next-shell .artifacts-generated-card,
+.mc-next-shell .chat-trace-card,
+.mc-next-shell .chat-preset-picker-card {
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--card) 95%, transparent);
+  box-shadow: none;
+}
+
+.mc-next-shell .operator-summary-card,
+.mc-next-shell .event-card {
+  padding: 0.62rem;
+}
+
+.mc-next-shell .task-queue-card-meta,
+.mc-next-shell .task-queue-card-note,
+.mc-next-shell .event-card-summary,
+.mc-next-shell .event-card-meta {
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.mc-next-shell .page-guide-card,
+.mc-next-shell .page-header-hint,
+.mc-next-shell .tune-hub-guide,
+.mc-next-shell .tune-hub-guide-body {
+  display: none;
+}
+
+.mc-next-shell .office-subtitle,
+.mc-next-shell .stat-card-label,
+.mc-next-shell .page-guide-copy,
+.mc-next-shell .page-header-eyebrow {
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.mc-next-shell .page-header-eyebrow,
+.mc-next-shell .stat-card-label,
+.mc-next-shell .prompt-lab-overview-label {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-transform: none;
+}
+
+.mc-next-shell .page-header,
+.mc-next-shell .page-header-citadel,
+.mc-next-shell .page-header-command {
+  padding: 0.55rem 0;
+  border-radius: 0;
+  border: 0;
+  border-bottom: 1px solid var(--mc-border-subtle);
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.mc-next-shell .page-header::before,
+.mc-next-shell .page-header::after {
+  display: none;
+}
+
+.mc-next-shell .page-header-title {
+  font-size: clamp(1.02rem, 1.45vw, 1.24rem);
+  line-height: 1.08;
+  letter-spacing: -0.03em;
+}
+
+.mc-next-shell .page-header-subtitle {
+  max-width: 52rem;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.38;
+}
+
+.mc-next-shell .stat-card-value {
+  font-size: clamp(0.82rem, 1.1vw, 1rem);
+}
+
+.mc-next-shell .stat-card-note {
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+}
+
+.mc-next-shell .workflow-summary-strip,
+.mc-next-shell .workflow-status-stack {
+  gap: 0.55rem;
+}
+
+.mc-next-shell .status-chip {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 1.18rem;
+  padding: 0.08rem 0.34rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+  color: var(--text-secondary);
+  font-size: 0.62rem;
+  line-height: 1.16;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  box-shadow: none;
+}
+
+.mc-next-shell .workflow-status-stack > .error,
+.mc-next-shell .workflow-status-stack > .office-subtitle {
+  padding: 0.42rem 0.48rem;
+  border-radius: 0.46rem;
+  border: 1px solid color-mix(in oklab, var(--border) 86%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-1) 92%, transparent);
+}
+
+.mc-next-shell .workflow-status-stack > .error {
+  color: color-mix(in oklab, var(--gc-risk-danger) 72%, var(--foreground));
+}
+
+.mc-next-shell .status-banner {
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--card) 95%, transparent);
+  color: var(--foreground);
+}
+
+.mc-next-shell .status-banner.warning {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 30%, var(--border));
+}
+
+.mc-next-shell .gc-data-table th,
+.mc-next-shell .gc-data-table td {
+  border-bottom-color: color-mix(in oklab, var(--border) 80%, transparent);
+}
+
+@media (max-width: 1023px) {
+  .mc-next-directory-grid {
+    grid-template-columns: 1fr;
+  }
+}

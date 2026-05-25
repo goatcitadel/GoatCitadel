@@ -54,7 +54,8 @@ const PRODUCTION_RISK_TIERS = [
     lineThreshold: 75,
     branchThreshold: 60,
     sourcePrefixes: [
-      "apps/mission-control/src/",
+      // W5 Phase 1: legacy `apps/mission-control/src/` retired from coverage —
+      // `mission-control-next` is the canonical Mission Control surface.
       "apps/mission-control-next/src/",
       "packages/mission-control-shared/src/",
       "packages/threaded-surface-core/src/",

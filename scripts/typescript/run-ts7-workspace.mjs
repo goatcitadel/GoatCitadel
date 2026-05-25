@@ -22,13 +22,8 @@ const PROJECT_GROUPS = {
     "packages/skills/tsconfig.json",
     "apps/gateway/tsconfig.json",
   ],
-  "mission-control": [
-    "packages/contracts/tsconfig.json",
-    "packages/mission-control-shared/tsconfig.json",
-    "packages/threaded-surface-core/tsconfig.json",
-    "apps/mission-control/tsconfig.json",
-    "apps/mission-control/tsconfig.node.json",
-  ],
+  // W5 Phase 1: legacy "mission-control" group retired — only "mission-control-next"
+  // remains as the Mission Control workspace target for typecheck/build.
   "mission-control-next": [
     "packages/contracts/tsconfig.json",
     "packages/mission-control-shared/tsconfig.json",

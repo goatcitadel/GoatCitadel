@@ -1,5 +1,5 @@
-/* eslint-disable max-lines -- The next shell coordinates top-level routing, realtime state, and inspector chrome while route extraction continues. */
-import { Suspense, startTransition, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+/* eslint-disable max-lines -- W4.4 (ship punchlist): cohesive state hooks now live in use-gateway-access, use-event-stream, use-shell-status, use-shell-notifications, and use-shell-inspector. Remaining length is shell JSX (topbar, rail, stage, status strip) plus the co-located route-dispatch + UI helpers consumed by helpers tests; further reduction would mean moving helpers across files at the cost of those test imports. */
+import { Suspense, startTransition, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Activity,
   Bell,
@@ -23,28 +23,15 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import type { DashboardStateResponse, HealthSummaryResponse } from "@goatcitadel/mission-control-shared/api/types";
 import {
-  connectEventStream,
-  consumeGatewayAccessBootstrapFromLocation,
   fetchWorkspaces,
   getGatewayApiBaseUrl,
-  preflightGatewayAccess,
   type EventStreamConnectionState,
-  type GatewayAccessPreflightResult,
 } from "@goatcitadel/mission-control-shared/api/shell-client";
-import {
-  fetchDashboardState,
-  fetchHealthSummary,
-  fetchRuntimeLifecycleExport,
-} from "@goatcitadel/mission-control-shared/api/client";
+import { fetchRuntimeLifecycleExport } from "@goatcitadel/mission-control-shared/api/client";
 import { GatewayAccessGate } from "@goatcitadel/mission-control-shared/components/GatewayAccessGate";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import {
-  NotificationStack,
-  upsertNotificationItem,
-  type NotificationItem,
-} from "@goatcitadel/mission-control-shared/components/NotificationStack";
+import { NotificationStack } from "@goatcitadel/mission-control-shared/components/NotificationStack";
 import { PageErrorBoundary } from "@goatcitadel/mission-control-shared/components/PageErrorBoundary";
 import { CommandPalette, type CommandPaletteItem } from "@goatcitadel/mission-control-shared/components/CommandPalette";
 import { SideInspectorDrawer } from "@goatcitadel/mission-control-shared/components/SideInspectorDrawer";
@@ -54,21 +41,7 @@ import {
 } from "@goatcitadel/mission-control-shared/components/ShellDetailPanelContext";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { resolveEffectiveEffectsMode } from "@goatcitadel/mission-control-shared/state/effects-mode";
-import { emitRefresh } from "@goatcitadel/mission-control-shared/state/refresh-bus";
-import {
-  publishEventStreamStatus,
-  resetEventStreamStatus,
-} from "@goatcitadel/mission-control-shared/state/event-stream-status-store";
-import {
-  publishChannelActivityFromRealtimeEvent,
-  resetChannelActivitySnapshots,
-} from "@goatcitadel/mission-control-shared/state/channel-activity-store";
-import {
-  deriveRealtimeNotification,
-  deriveRealtimeRefresh,
-  type RealtimeTruthMode,
-} from "@goatcitadel/mission-control-shared/state/realtime-derived";
-import { playOperatorAttentionSound } from "@goatcitadel/mission-control-shared/state/operator-attention";
+import { type RealtimeTruthMode } from "@goatcitadel/mission-control-shared/state/realtime-derived";
 import {
   LazyNativeRoutePages,
   LazyPromptPacksWorkbenchPage,
@@ -99,23 +72,11 @@ import {
 } from "./route-model";
 import { coerceLegacyHrefToNext, resolveRouteFromLocation } from "./legacy-route-adapter";
 import { SHELL_ROUTE_SHORTCUT_LETTERS, useShellKeyboardManager } from "./use-shell-keyboard-manager";
-
-type GatewayAccessViewState =
-  | GatewayAccessPreflightResult
-  | {
-      status: "checking";
-      message: string;
-      healthDetail?: string;
-      authMode?: "none" | "basic" | "token";
-    };
-
-type ShellStatusState = {
-  dashboard: DashboardStateResponse | null;
-  health: HealthSummaryResponse | null;
-  lastLoadedAt: number | null;
-  dashboardError: string | null;
-  healthError: string | null;
-};
+import { useGatewayAccess } from "./use-gateway-access";
+import { useShellStatus } from "./use-shell-status";
+import { useShellNotifications } from "./use-shell-notifications";
+import { useEventStream } from "./use-event-stream";
+import { useShellInspector } from "./use-shell-inspector";
 
 type RailSection = {
   id: string;
@@ -153,29 +114,25 @@ export function MissionControlNextApp() {
   const effectiveEffectsMode = useMemo(() => resolveEffectiveEffectsMode(effectsMode), [effectsMode]);
   const [route, setRoute] = useState<AppRoute>(() => resolveRouteFromLocation(window.location.href));
   const [navOpen, setNavOpen] = useState(false);
-  const [inspectorOpen, setInspectorOpen] = useState(false);
   // H-7 (ship punchlist): shell-level command palette opened via Cmd/Ctrl+K
   // and routed by useShellKeyboardManager. State stays here because Esc
   // priority needs to know whether the palette is the topmost dismissible.
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [detailEntry, setDetailEntry] = useState<ShellDetailPanelEntry | null>(null);
-  const [gatewayAccess, setGatewayAccess] = useState<GatewayAccessViewState>({
-    status: "checking",
-    message: "Verifying gateway reachability and Mission Control access policy.",
-  });
-  const [gatewayBusy, setGatewayBusy] = useState(true);
-  const [streamState, setStreamState] = useState<EventStreamConnectionState>("closed");
-  const [streamTruthMode, setStreamTruthMode] = useState<RealtimeTruthMode>("authoritative");
   const [workspaceOptions, setWorkspaceOptions] = useState<Array<{ workspaceId: string; name: string }>>([]);
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [status, setStatus] = useState<ShellStatusState>({
-    dashboard: null,
-    health: null,
-    lastLoadedAt: null,
-    dashboardError: null,
-    healthError: null,
+
+  // W4.4: cohesive state moved into dedicated hooks. The shell still composes
+  // them (e.g. status reset depends on gateway readiness, event stream feeds
+  // notifications) but no longer owns the underlying useState/useRef plumbing.
+  const { gatewayAccess, gatewayBusy, retryGatewayAccess } = useGatewayAccess();
+  const gatewayReady = gatewayAccess.status === "ready";
+  const { inspectorOpen, setInspectorOpen, detailEntry, setDetailEntry } = useShellInspector();
+  const { notifications, pushNotification, dismissNotification, deliverRealtimeNotification, lastEnabledSoundModeRef } =
+    useShellNotifications({ notificationPreferences });
+  const { streamState, streamTruthMode } = useEventStream({
+    gatewayReady,
+    onRealtimeNotification: deliverRealtimeNotification,
   });
-  const shellStatusRefreshIdRef = useRef(0);
+  const { status, refreshStatus } = useShellStatus({ gatewayReady });
 
   const rawNavigate = useCallback((nextRoute: AppRoute, options?: { replace?: boolean }) => {
     const normalized = normalizeAppRoute(nextRoute);
@@ -280,49 +237,6 @@ export function MissionControlNextApp() {
   const hasVisibleInspector = detailPanelPinned || inspectorOpen;
   const activeWorkspaceName =
     workspaceOptions.find((item) => item.workspaceId === activeWorkspaceId)?.name ?? activeWorkspaceId;
-  const lastEnabledSoundModeRef = useRef<"subtle" | "normal">(
-    notificationPreferences.soundMode === "off" ? "normal" : notificationPreferences.soundMode,
-  );
-
-  useEffect(() => {
-    if (notificationPreferences.soundMode !== "off") {
-      lastEnabledSoundModeRef.current = notificationPreferences.soundMode;
-    }
-  }, [notificationPreferences.soundMode]);
-
-  const pushNotification = useCallback((tone: NotificationItem["tone"], message: string, groupKey?: string) => {
-    setNotifications((current) =>
-      upsertNotificationItem(current, {
-        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        tone,
-        message,
-        timestamp: Date.now(),
-        groupKey,
-      }),
-    );
-  }, []);
-
-  const deliverRealtimeNotification = useCallback(
-    (notification: ReturnType<typeof deriveRealtimeNotification>) => {
-      if (!notification) {
-        return;
-      }
-      const shouldDeliver =
-        !notificationPreferences.onlyWhenUnfocused ||
-        (typeof document !== "undefined" && document.visibilityState !== "visible");
-      if (!shouldDeliver) {
-        return;
-      }
-      if (notificationPreferences.toastsEnabled) {
-        pushNotification(notification.tone, notification.message, notification.groupKey);
-      }
-      void playOperatorAttentionSound(notification.soundCue, notificationPreferences.soundMode);
-      if (notificationPreferences.desktopEnabled) {
-        showBrowserNotification(notification.message, notification.tone);
-      }
-    },
-    [notificationPreferences, pushNotification],
-  );
 
   const copyTrustReportForRoute = useCallback(
     async (targetRoute: AppRoute) => {
@@ -451,60 +365,6 @@ export function MissionControlNextApp() {
           `${formatUsd(status.dashboard?.dailyCostUsd ?? 0)} daily spend`,
         ];
 
-  const dismissNotification = useCallback((id: string) => {
-    setNotifications((current) => current.filter((item) => item.id !== id));
-  }, []);
-
-  const syncShellStatus = useCallback(async () => {
-    const refreshId = shellStatusRefreshIdRef.current + 1;
-    shellStatusRefreshIdRef.current = refreshId;
-    const isCurrentRefresh = () => shellStatusRefreshIdRef.current === refreshId;
-    void fetchDashboardState()
-      .then((dashboard) => {
-        if (!isCurrentRefresh()) {
-          return;
-        }
-        setStatus((current) => ({
-          ...current,
-          dashboard,
-          lastLoadedAt: Date.now(),
-          dashboardError: null,
-        }));
-      })
-      .catch((error) => {
-        if (!isCurrentRefresh()) {
-          return;
-        }
-        setStatus((current) => ({
-          ...current,
-          lastLoadedAt: Date.now(),
-          dashboardError: error instanceof Error ? error.message : "Unable to refresh dashboard status.",
-        }));
-      });
-    void fetchHealthSummary()
-      .then((health) => {
-        if (!isCurrentRefresh()) {
-          return;
-        }
-        setStatus((current) => ({
-          ...current,
-          health,
-          lastLoadedAt: Date.now(),
-          healthError: null,
-        }));
-      })
-      .catch((error) => {
-        if (!isCurrentRefresh()) {
-          return;
-        }
-        setStatus((current) => ({
-          ...current,
-          lastLoadedAt: Date.now(),
-          healthError: error instanceof Error ? error.message : "Unable to refresh daemon health.",
-        }));
-      });
-  }, []);
-
   const loadWorkspaceOptions = useCallback(async () => {
     try {
       const response = await fetchWorkspaces("all", 400);
@@ -524,23 +384,6 @@ export function MissionControlNextApp() {
       setWorkspaceOptions([]);
     }
   }, [activeWorkspaceId, setActiveWorkspaceId]);
-
-  const retryGatewayAccess = useCallback(async () => {
-    setGatewayBusy(true);
-    try {
-      const bootstrap = consumeGatewayAccessBootstrapFromLocation();
-      const next = await preflightGatewayAccess({ bootstrap });
-      setGatewayAccess(next);
-    } catch (error) {
-      setGatewayAccess({
-        status: "unreachable",
-        message: error instanceof Error ? error.message : "Gateway preflight failed.",
-        healthDetail: getGatewayApiBaseUrl(),
-      });
-    } finally {
-      setGatewayBusy(false);
-    }
-  }, []);
 
   useEffect(() => {
     const nextHref = coerceLegacyHrefToNext(window.location.href);
@@ -577,10 +420,6 @@ export function MissionControlNextApp() {
   }, [route.area]);
 
   useEffect(() => {
-    void retryGatewayAccess();
-  }, [retryGatewayAccess]);
-
-  useEffect(() => {
     const handlePopState = () => {
       setRoute(resolveRouteFromLocation(window.location.href));
     };
@@ -607,78 +446,17 @@ export function MissionControlNextApp() {
     };
   }, [shellThemeClass]);
 
+  // W4.4: workspace + status hydration when the gateway becomes ready.
+  // useShellStatus owns the refresh loop and reset-on-disconnect; the shell
+  // still owns workspace options and the initial parallel load so both data
+  // sources warm up together (status hook itself does not trigger first load).
   useEffect(() => {
-    if (gatewayAccess.status !== "ready") {
-      shellStatusRefreshIdRef.current += 1;
+    if (!gatewayReady) {
       setWorkspaceOptions([]);
-      setStatus({
-        dashboard: null,
-        health: null,
-        lastLoadedAt: null,
-        dashboardError: null,
-        healthError: null,
-      });
       return;
     }
-    void Promise.all([loadWorkspaceOptions(), syncShellStatus()]);
-  }, [gatewayAccess.status, loadWorkspaceOptions, syncShellStatus]);
-
-  useEffect(() => {
-    if (gatewayAccess.status !== "ready") {
-      return;
-    }
-    const intervalId = window.setInterval(() => {
-      void syncShellStatus();
-    }, 15000);
-    return () => window.clearInterval(intervalId);
-  }, [gatewayAccess.status, syncShellStatus]);
-
-  useEffect(() => {
-    if (gatewayAccess.status !== "ready") {
-      setStreamState("closed");
-      resetEventStreamStatus();
-      resetChannelActivitySnapshots();
-      return;
-    }
-
-    const close = connectEventStream(
-      (event) => {
-        publishChannelActivityFromRealtimeEvent(event);
-        const derivedRefresh = deriveRealtimeRefresh(event, { defaultTopics: ["surface"] });
-        for (const topic of derivedRefresh.topics) {
-          emitRefresh(topic, {
-            reason: derivedRefresh.signalReason,
-            source: event.source,
-            eventType: derivedRefresh.signalEventType,
-            eventId: event.eventId,
-            timestamp: Date.now(),
-          });
-        }
-        setStreamTruthMode(derivedRefresh.truthMode);
-        const notification = deriveRealtimeNotification(event);
-        deliverRealtimeNotification(notification);
-      },
-      (nextState) => {
-        setStreamState(nextState);
-        if (nextState === "closed") {
-          setStreamTruthMode("authoritative");
-        }
-      },
-      publishEventStreamStatus,
-    );
-
-    return () => {
-      close();
-      resetEventStreamStatus();
-      resetChannelActivitySnapshots();
-    };
-  }, [deliverRealtimeNotification, gatewayAccess.status]);
-
-  useEffect(() => {
-    if (detailEntry) {
-      setInspectorOpen(true);
-    }
-  }, [detailEntry]);
+    void Promise.all([loadWorkspaceOptions(), refreshStatus()]);
+  }, [gatewayReady, loadWorkspaceOptions, refreshStatus]);
 
   useEffect(() => {
     document.title = `GoatCitadel ${currentRouteLabel}`;
@@ -1348,23 +1126,6 @@ function StatusPill({
 
 export function resolveShellThemeClass(theme: "dark" | "light"): "theme-signal-noir" | "theme-citadel-light" {
   return theme === "light" ? "theme-citadel-light" : "theme-signal-noir";
-}
-
-function showBrowserNotification(message: string, tone: NotificationItem["tone"]): void {
-  if (typeof window === "undefined" || !("Notification" in window)) {
-    return;
-  }
-  const NotificationCtor = window.Notification;
-  if (NotificationCtor.permission !== "granted") {
-    return;
-  }
-  const title = tone === "error" ? "GoatCitadel needs attention" : "GoatCitadel";
-  try {
-    new NotificationCtor(title, { body: message });
-  } catch (error) {
-    void error;
-    // Browser or host notification permissions can change after settings are saved.
-  }
 }
 
 export function describeRealtimeTruthUi(
