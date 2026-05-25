@@ -1,14 +1,5 @@
 /* eslint-disable max-lines -- SettingsNativePage intentionally keeps the new settings routes in one editable module while the product surface is still settling. */
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type Dispatch,
-  type ReactNode,
-  type SetStateAction,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
   providerTemplates,
   type CapabilityPackPreview,
@@ -19,30 +10,23 @@ import {
 import {
   AlertTriangle,
   Bell,
-  Cable,
   CheckCircle2,
   Code2,
   Gauge,
-  HardDrive,
   KeyRound,
   ExternalLink,
-  Package2,
   Play,
   Plug2,
   Plus,
   RefreshCw,
   RotateCcw,
   Save,
-  Server,
   ShieldCheck,
   SlidersHorizontal,
-  Sparkles,
   Square,
   Trash2,
   Volume2,
-  Wrench,
 } from "lucide-react";
-import { BlocksShuffleLoader } from "../../components/BlocksShuffleLoader";
 import type {
   ChannelSetupDefinition,
   ConnectorDiagnosticReport,
@@ -179,7 +163,7 @@ import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hoo
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import type { AppRoute } from "@next/app/route-model";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import { ThreePartChip, StatusChip, EmptyState, type ChipTone } from "./primitives";
+import { StatusChip } from "./primitives";
 import {
   describeDirtySections,
   useAnySectionDirty,
@@ -188,35 +172,44 @@ import {
   useNavigateGuard,
 } from "./library/use-form-dirty";
 import "./native-routes.css";
-
-interface SettingsNativePageProps {
-  route: AppRoute;
-  activeWorkspaceId: string;
-  activeWorkspaceName: string;
-  navigate: (route: AppRoute, options?: { replace?: boolean }) => void;
-  setActiveWorkspaceId: (workspaceId: string) => void;
-}
-
-type LoadState<T> = {
-  loading: boolean;
-  error: string | null;
-  data: T | null;
-};
-
-type Notice = {
-  tone: "success" | "warning" | "error" | "info";
-  message: string;
-};
-
-type NativeLoadIssue = {
-  label: string;
-  message: string;
-};
-
-type NativeLoadResult<T> = {
-  data: T;
-  issue: NativeLoadIssue | null;
-};
+import { BudgetSection } from "./settings/sections/BudgetSection";
+import { UnknownSettingsSection } from "./settings/sections/UnknownSettingsSection";
+import {
+  SettingsActionList,
+  SettingsButtonRow,
+  SettingsCodeBlock,
+  SettingsConfigSourceLegend,
+  SettingsEmptyState,
+  SettingsField,
+  SettingsFieldGrid,
+  SettingsFilterBar,
+  SettingsGrid,
+  SettingsLoadWarnings,
+  SettingsMetricGrid,
+  SettingsNotice,
+  SettingsPageFrame,
+  SettingsPanel,
+  SettingsPosturePanel,
+  SettingsSectionShell,
+  SettingsSelectableList,
+  SettingsStack,
+  SettingsWizardSteps,
+  descriptionForSettingsSection,
+  formatEffectiveConfigSourceLabel,
+  getErrorMessage,
+  iconForSettingsSection,
+  labelForSettingsSection,
+  nativeLoad,
+  nativeLoadIssues,
+  useAsyncLoad,
+  type LoadState,
+  type NativeLoadIssue,
+  type NativeLoadResult,
+  type Notice,
+  type SettingsNativePageProps,
+  type SettingsSectionProps,
+  type SettingsWizardStepState,
+} from "./settings/SettingsShared";
 
 const TOOL_APPROVAL_MODE_OPTIONS: ToolApprovalMode[] = ["approve_all", "approve_risky", "bypass"];
 const TOOL_PROFILE_OPTIONS: ToolProfile[] = [
@@ -228,7 +221,7 @@ const TOOL_PROFILE_OPTIONS: ToolProfile[] = [
   "chat-agent",
   "danger",
 ];
-const BUDGET_MODE_OPTIONS: Array<OnboardingState["settings"]["budgetMode"]> = ["saver", "balanced", "power"];
+export const BUDGET_MODE_OPTIONS: Array<OnboardingState["settings"]["budgetMode"]> = ["saver", "balanced", "power"];
 const PROVIDER_API_STYLE_OPTIONS: ProviderEditorDraft["apiStyle"][] = [
   "openai-responses",
   "openai-codex-responses",
@@ -248,10 +241,6 @@ const PERSONALITY_CATEGORY_OPTIONS: PersonalityPresetCategory[] = [
   "chaos",
 ];
 const INTERNAL_APPROVAL_INBOX_URL = "goatcitadel://approval-inbox";
-
-type SettingsSectionProps = SettingsNativePageProps & {
-  section: string;
-};
 
 type OnboardingPageState = OnboardingState & {
   runtimeSettings: Awaited<ReturnType<typeof fetchSettings>> | null;
@@ -1141,173 +1130,6 @@ function EcosystemProofLanePanel({
   );
 }
 
-function BudgetSection({ route, navigate }: SettingsSectionProps) {
-  const load = useCallback(() => fetchSettings(), []);
-  const { loading, error, data, reload } = useAsyncLoad(load);
-  const [notice, setNotice] = useState<Notice | null>(null);
-  const [budgetDraft, setBudgetDraft] = useState<OnboardingState["settings"]["budgetMode"]>("balanced");
-  const [savingBudgetMode, setSavingBudgetMode] = useState(false);
-  const savingBudgetModeRef = useRef(false);
-
-  useEffect(() => {
-    if (data) {
-      setBudgetDraft(normalizeBudgetMode(data.budgetMode));
-    }
-  }, [data]);
-
-  const currentBudgetMode = normalizeBudgetMode(data?.budgetMode);
-  const saveBudgetMode = async () => {
-    if (savingBudgetModeRef.current) {
-      return;
-    }
-    try {
-      savingBudgetModeRef.current = true;
-      setSavingBudgetMode(true);
-      await patchSettings({ budgetMode: budgetDraft });
-      setNotice({ tone: "success", message: "Budget mode saved." });
-      await reload();
-    } catch (saveError) {
-      setNotice({ tone: "error", message: getErrorMessage(saveError) });
-    } finally {
-      savingBudgetModeRef.current = false;
-      setSavingBudgetMode(false);
-    }
-  };
-
-  if (loading) {
-    return (
-      <SettingsSectionShell loading={loading} error={null}>
-        {null}
-      </SettingsSectionShell>
-    );
-  }
-
-  const costEvidencePanel = (
-    <SettingsPanel
-      title="Cost evidence"
-      subtitle="Inspect the runtime signals that explain spend, routing, and provider behavior."
-    >
-      <SettingsActionList
-        items={[
-          {
-            label: "Open cost telemetry",
-            description: "Review provider usage and budget-facing runtime evidence in Ops.",
-            onClick: () => navigate({ area: "ops", section: "costs", theme: route.theme }),
-          },
-          {
-            label: "Tune provider routing",
-            description: "Change active model routing where cost, latency, and fallback choices are made.",
-            onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }),
-          },
-        ]}
-      />
-    </SettingsPanel>
-  );
-
-  return (
-    <>
-      {error ? (
-        <div className="mc-next-directory-alert">
-          <AlertTriangle className="h-4 w-4" />
-          <span>{error}</span>
-        </div>
-      ) : null}
-      {notice ? <SettingsNotice notice={notice} /> : null}
-      <SettingsGrid>
-        {data ? (
-          <SettingsPanel
-            title="Budget mode"
-            subtitle="Set the default cost posture used by runtime settings and first-run defaults."
-            stats={[
-              { label: "Current", value: labelForBudgetMode(currentBudgetMode) },
-              { label: "Selected", value: labelForBudgetMode(budgetDraft) },
-            ]}
-          >
-            <SettingsFieldGrid>
-              <SettingsField label="Mode">
-                <select
-                  className="mc-next-settings-input"
-                  value={budgetDraft}
-                  onChange={(event) => setBudgetDraft(normalizeBudgetMode(event.target.value))}
-                >
-                  {BUDGET_MODE_OPTIONS.map((mode) => (
-                    <option key={mode} value={mode}>
-                      {labelForBudgetMode(mode)}
-                    </option>
-                  ))}
-                </select>
-                <p className="mc-next-settings-field-note">{describeBudgetMode(budgetDraft)}</p>
-              </SettingsField>
-            </SettingsFieldGrid>
-            <SettingsButtonRow>
-              <button
-                type="button"
-                className="mc-next-button"
-                disabled={savingBudgetMode || budgetDraft === currentBudgetMode}
-                onClick={() => void saveBudgetMode()}
-              >
-                <Save size={16} />
-                {savingBudgetMode ? "Saving..." : "Save budget mode"}
-              </button>
-              <button
-                type="button"
-                className="mc-next-button-secondary"
-                disabled={savingBudgetMode}
-                onClick={() => void reload()}
-              >
-                <RefreshCw size={16} />
-                Refresh
-              </button>
-            </SettingsButtonRow>
-          </SettingsPanel>
-        ) : (
-          <SettingsPanel
-            title="Budget mode unavailable"
-            subtitle="Budget mode could not be loaded, but cost and provider evidence remain reachable."
-          >
-            <p className="mc-next-settings-field-note">
-              Refresh the route to retry the settings read before changing the runtime budget posture.
-            </p>
-            <SettingsButtonRow>
-              <button type="button" className="mc-next-button-secondary" onClick={() => void reload()}>
-                <RefreshCw size={16} />
-                Refresh
-              </button>
-            </SettingsButtonRow>
-          </SettingsPanel>
-        )}
-        {costEvidencePanel}
-      </SettingsGrid>
-    </>
-  );
-}
-
-function UnknownSettingsSection({ section, route, navigate }: SettingsSectionProps) {
-  return (
-    <SettingsGrid>
-      <SettingsPanel
-        title="Unknown settings section"
-        subtitle={`No settings section is registered for "${String(section)}".`}
-      >
-        <SettingsActionList
-          items={[
-            {
-              label: "Open General",
-              description: "Return to the settings overview.",
-              onClick: () => navigate({ area: "settings", section: "general", theme: route.theme }),
-            },
-            {
-              label: "Open Providers",
-              description: "Jump to the provider/model route used by Chat, Cowork, and Code.",
-              onClick: () => navigate({ area: "settings", section: "providers", theme: route.theme }),
-            },
-          ]}
-        />
-      </SettingsPanel>
-    </SettingsGrid>
-  );
-}
-
 type PersonalityEditorDraft = {
   id: string;
   label: string;
@@ -1691,8 +1513,6 @@ type ProviderEditorDraft = {
   defaultModel: string;
   apiKeyEnv: string;
 };
-
-type SettingsWizardStepState = "complete" | "active" | "pending";
 
 const OPENAI_CODEX_OAUTH_FLOW_STORAGE_KEY = "goatcitadel:openai-codex:oauth-flow";
 const OPENAI_CODEX_AUTH_HOST = "auth.openai.com";
@@ -7279,556 +7099,6 @@ function AddonsSection(_props: SettingsSectionProps) {
   );
 }
 
-function useAsyncLoad<T>(loader: () => Promise<T>) {
-  const [state, setState] = useState<LoadState<T>>({
-    loading: true,
-    error: null,
-    data: null,
-  });
-
-  const reload = useCallback(async () => {
-    setState((current) => ({ ...current, loading: true, error: null }));
-    try {
-      const data = await loader();
-      setState({
-        loading: false,
-        error: null,
-        data,
-      });
-    } catch (error) {
-      setState({
-        loading: false,
-        error: getErrorMessage(error),
-        data: null,
-      });
-    }
-  }, [loader]);
-
-  useEffect(() => {
-    void reload();
-  }, [reload]);
-
-  return {
-    ...state,
-    reload,
-  };
-}
-
-async function nativeLoad<T>(label: string, promise: Promise<T>, fallback: T): Promise<NativeLoadResult<T>> {
-  try {
-    return {
-      data: await promise,
-      issue: null,
-    };
-  } catch (error) {
-    return {
-      data: fallback,
-      issue: {
-        label,
-        message: getErrorMessage(error),
-      },
-    };
-  }
-}
-
-function nativeLoadIssues(results: Array<NativeLoadResult<unknown>>): NativeLoadIssue[] {
-  return results.map((result) => result.issue).filter((issue): issue is NativeLoadIssue => Boolean(issue));
-}
-
-function SettingsLoadWarnings({ issues, onRetry }: { issues: NativeLoadIssue[]; onRetry: () => void }) {
-  if (issues.length === 0) {
-    return null;
-  }
-  return (
-    <SettingsPanel title="Some data could not load" subtitle="The rest of this settings page is still usable.">
-      <SettingsActionList
-        items={issues.map((issue) => ({
-          label: issue.label,
-          description: issue.message,
-          tone: "warning",
-        }))}
-      />
-      <div className="mc-next-settings-actions">
-        <button type="button" className="mc-next-secondary-button" onClick={() => void onRetry()}>
-          <RefreshCw className="h-4 w-4" />
-          Retry
-        </button>
-      </div>
-    </SettingsPanel>
-  );
-}
-
-function SettingsPageFrame({
-  icon: Icon,
-  kicker,
-  title,
-  description,
-  children,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  kicker: string;
-  title: string;
-  description: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="mc-next-directory-page">
-      <header className="mc-next-directory-header" data-area="settings">
-        <div className="mc-next-directory-icon">
-          <Icon className="h-5 w-5" />
-        </div>
-        <div className="mc-next-directory-copy">
-          <p>{kicker}</p>
-          <h1>{title}</h1>
-          <span>{description}</span>
-        </div>
-      </header>
-      {children}
-    </section>
-  );
-}
-
-function SettingsSectionShell({
-  loading,
-  error,
-  children,
-}: {
-  loading: boolean;
-  error: string | null;
-  children: ReactNode;
-}) {
-  if (loading) {
-    return (
-      <div className="mc-next-settings-loading">
-        <BlocksShuffleLoader label="Loading current route data…" />
-      </div>
-    );
-  }
-  if (error) {
-    return (
-      <div className="mc-next-directory-alert">
-        <AlertTriangle className="h-4 w-4" />
-        <span>{error}</span>
-      </div>
-    );
-  }
-  return <>{children}</>;
-}
-
-function SettingsGrid({
-  children,
-  variant,
-}: {
-  children: ReactNode;
-  variant?: "default" | "balanced" | "detail-wide" | "three-column";
-}) {
-  const variantClass =
-    variant === "balanced"
-      ? "is-balanced"
-      : variant === "detail-wide"
-        ? "is-detail-wide"
-        : variant === "three-column"
-          ? "is-three-column"
-          : "";
-  return <div className={["mc-next-settings-grid", variantClass].filter(Boolean).join(" ")}>{children}</div>;
-}
-
-function SettingsStack({ children }: { children: ReactNode }) {
-  return <div className="mc-next-settings-stack">{children}</div>;
-}
-
-type SettingsPostureCardRow = { name: string; state: string; tone: ChipTone; age?: string };
-
-function SettingsPosturePanel({
-  settings,
-  mcpServers,
-  integrations,
-  workspaces,
-  onNavigate,
-}: {
-  settings: Awaited<ReturnType<typeof fetchSettings>> | null;
-  mcpServers: McpServerRecord[];
-  integrations: Array<{ connectionId?: string; enabled?: boolean; status?: string; pluginId?: string }>;
-  workspaces: Array<{ workspaceId?: string; name?: string }>;
-  onNavigate: (section: "providers" | "mcp" | "integrations" | "access") => void;
-}) {
-  const providers = settings?.llm.providers ?? [];
-  const activeProviderId = settings?.llm.activeProviderId ?? null;
-  const authMode = settings?.auth.mode ?? "unknown";
-
-  const providerRows: SettingsPostureCardRow[] = providers.slice(0, 4).map((provider) => {
-    const isActive = provider.providerId === activeProviderId;
-    return {
-      name: provider.providerId,
-      state: isActive ? "active" : "configured",
-      tone: isActive ? "safe" : "muted",
-    };
-  });
-
-  const mcpRows: SettingsPostureCardRow[] = mcpServers.slice(0, 4).map((server) => ({
-    name: server.label,
-    state: server.enabled ? "enabled" : "disabled",
-    tone: server.enabled ? "safe" : "muted",
-  }));
-
-  const integrationRows: SettingsPostureCardRow[] = integrations.slice(0, 4).map((connection) => ({
-    name: connection.pluginId ?? connection.connectionId ?? "integration",
-    state: connection.enabled === false ? "disabled" : "configured",
-    tone: connection.enabled === false ? "muted" : "safe",
-  }));
-
-  const identityRows: SettingsPostureCardRow[] = [
-    {
-      name: "Gateway auth",
-      state: authMode,
-      tone: authMode === "none" ? "caution" : authMode === "token" || authMode === "basic" ? "safe" : "muted",
-    },
-    {
-      name: "Workspaces",
-      state: `${workspaces.length} configured`,
-      tone: workspaces.length > 0 ? "safe" : "muted",
-    },
-  ];
-
-  return (
-    <SettingsPanel
-      title="Active posture"
-      subtitle="Configured and enabled posture for providers, MCP servers, integrations, and identity at a glance."
-    >
-      <div className="mc-next-settings-posture-grid">
-        <SettingsPostureCard
-          title="Providers"
-          count={providers.length}
-          rows={providerRows}
-          emptyLabel="No providers configured."
-          onOpen={() => onNavigate("providers")}
-        />
-        <SettingsPostureCard
-          title="MCP servers"
-          count={mcpServers.length}
-          rows={mcpRows}
-          emptyLabel="No MCP servers configured."
-          onOpen={() => onNavigate("mcp")}
-        />
-        <SettingsPostureCard
-          title="Integrations"
-          count={integrations.length}
-          rows={integrationRows}
-          emptyLabel="No integrations configured."
-          onOpen={() => onNavigate("integrations")}
-        />
-        <SettingsPostureCard
-          title="Identity & access"
-          count={identityRows.length}
-          rows={identityRows}
-          emptyLabel="No identity posture available."
-          onOpen={() => onNavigate("access")}
-        />
-      </div>
-    </SettingsPanel>
-  );
-}
-
-function SettingsPostureCard({
-  title,
-  count,
-  rows,
-  emptyLabel,
-  onOpen,
-}: {
-  title: string;
-  count: number;
-  rows: SettingsPostureCardRow[];
-  emptyLabel: string;
-  onOpen: () => void;
-}) {
-  return (
-    <article className="mc-next-settings-posture-card">
-      <header className="mc-next-settings-posture-card-head">
-        <div>
-          <h3>{title}</h3>
-          <span>{count} total</span>
-        </div>
-        <button type="button" className="mc-next-button-secondary" onClick={onOpen}>
-          Open
-        </button>
-      </header>
-      {rows.length > 0 ? (
-        <ul className="mc-next-settings-posture-card-rows">
-          {rows.map((row) => (
-            <li key={`${title}-${row.name}`} aria-label={`${title}: ${row.name} is ${row.state}`}>
-              <span className="mc-next-settings-posture-card-row-name" title={row.name}>
-                {row.name}
-              </span>
-              <ThreePartChip tone={row.tone} state={row.state} age={row.age} />
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="mc-next-settings-posture-card-empty">{emptyLabel}</p>
-      )}
-    </article>
-  );
-}
-
-function SettingsPanel({
-  title,
-  subtitle,
-  stats,
-  headerAccessory,
-  children,
-  compact = true,
-  scrollBody = false,
-  bodyMaxHeight,
-}: {
-  title: string;
-  subtitle: string;
-  stats?: Array<{ label: string; value: string }>;
-  /**
-   * Optional element rendered in the panel head — used to surface the
-   * "Unsaved" indicator next to the section title. Sections opt in by
-   * combining `useFormDirty` with this slot.
-   */
-  headerAccessory?: ReactNode;
-  children: ReactNode;
-  compact?: boolean;
-  scrollBody?: boolean;
-  bodyMaxHeight?: string;
-}) {
-  return (
-    <article className={`mc-next-directory-card mc-next-settings-panel${compact ? " is-compact" : ""}`}>
-      <div className="mc-next-directory-card-head">
-        <div>
-          <div
-            className="mc-next-settings-panel-title-row"
-            style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}
-          >
-            <h2>{title}</h2>
-            {headerAccessory}
-          </div>
-          <p>{subtitle}</p>
-        </div>
-        {stats?.length ? (
-          <div className="mc-next-directory-stats">
-            {stats.map((item) => (
-              <div key={`${item.label}-${item.value}`}>
-                <strong>{item.value}</strong>
-                <span>{item.label}</span>
-              </div>
-            ))}
-          </div>
-        ) : null}
-      </div>
-      <div
-        className={`mc-next-settings-panel-body${scrollBody ? " is-scrollable" : ""}`}
-        data-native-scroll={scrollBody ? "true" : undefined}
-        style={bodyMaxHeight ? { maxHeight: bodyMaxHeight } : undefined}
-      >
-        {children}
-      </div>
-    </article>
-  );
-}
-
-function SettingsFieldGrid({ children }: { children: ReactNode }) {
-  return <div className="mc-next-settings-field-grid">{children}</div>;
-}
-
-function SettingsField({ label, children, span = 1 }: { label: string; children: ReactNode; span?: 1 | 2 }) {
-  return (
-    <label className={`mc-next-settings-field${span === 2 ? " span-2" : ""}`}>
-      <span>{label}</span>
-      {children}
-    </label>
-  );
-}
-
-function SettingsButtonRow({ children }: { children: ReactNode }) {
-  return <div className="mc-next-settings-button-row">{children}</div>;
-}
-
-function SettingsMetricGrid({ items }: { items: Array<{ label: string; value: string; meta?: string }> }) {
-  return (
-    <div className="mc-next-settings-metric-grid">
-      {items.map((item) => (
-        <div key={`${item.label}-${item.value}`} className="mc-next-settings-metric">
-          <span>{item.label}</span>
-          <strong>{item.value}</strong>
-          {item.meta ? <p>{item.meta}</p> : null}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function SettingsConfigSourceLegend() {
-  return (
-    <div className="mc-next-settings-source-legend" aria-label="Effective config source labels">
-      <span>{formatEffectiveConfigSourceLabel("env")}</span>
-      <span>{formatEffectiveConfigSourceLabel("inline")}</span>
-      <span>{formatEffectiveConfigSourceLabel("default")}</span>
-      <span>{formatEffectiveConfigSourceLabel("keychain")}</span>
-    </div>
-  );
-}
-
-function SettingsWizardSteps({
-  steps,
-}: {
-  steps: Array<{ label: string; description: string; state: SettingsWizardStepState }>;
-}) {
-  return (
-    <ol className="mc-next-settings-wizard">
-      {steps.map((step, index) => (
-        <li key={step.label} className={`mc-next-settings-wizard-step ${step.state}`}>
-          <span className="mc-next-settings-wizard-index">
-            {step.state === "complete" ? <CheckCircle2 size={15} /> : index + 1}
-          </span>
-          <div>
-            <strong>{step.label}</strong>
-            <p>{step.description}</p>
-          </div>
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-function SettingsSelectableList({
-  items,
-  selectedId,
-  onSelect,
-  emptyLabel,
-  maxHeight = "min(56vh, 34rem)",
-  compact = true,
-}: {
-  items: Array<{ id: string; title: string; meta?: string; body?: string }>;
-  selectedId: string;
-  onSelect: (id: string) => void;
-  emptyLabel: string;
-  maxHeight?: string;
-  compact?: boolean;
-}) {
-  if (!items.length) {
-    return <SettingsEmptyState label={emptyLabel} />;
-  }
-  return (
-    <div
-      className={["mc-next-settings-selectable-list", compact ? "is-compact" : "", maxHeight ? "is-scrollable" : ""]
-        .filter(Boolean)
-        .join(" ")}
-      data-native-scroll={maxHeight ? "true" : undefined}
-      style={maxHeight ? { maxHeight } : undefined}
-    >
-      {items.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          className={`mc-next-settings-selectable${selectedId === item.id ? " active" : ""}`}
-          onClick={() => onSelect(item.id)}
-        >
-          <div className="mc-next-settings-selectable-head">
-            <strong>{item.title}</strong>
-            {item.meta ? <span>{item.meta}</span> : null}
-          </div>
-          {item.body ? <p>{item.body}</p> : null}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function SettingsActionList({
-  items,
-  emptyLabel = "Nothing here yet.",
-  maxHeight = "min(50vh, 30rem)",
-  compact = true,
-}: {
-  items: Array<{
-    id?: string;
-    label: string;
-    description: string;
-    meta?: string;
-    actionLabel?: string;
-    onClick?: () => void;
-  }>;
-  emptyLabel?: string;
-  maxHeight?: string;
-  compact?: boolean;
-}) {
-  if (!items.length) {
-    return <SettingsEmptyState label={emptyLabel} />;
-  }
-  return (
-    <div
-      className={["mc-next-settings-action-list", compact ? "is-compact" : "", maxHeight ? "is-scrollable" : ""]
-        .filter(Boolean)
-        .join(" ")}
-      data-native-scroll={maxHeight ? "true" : undefined}
-      style={maxHeight ? { maxHeight } : undefined}
-    >
-      {items.map((item) => (
-        <div key={item.id ?? `${item.label}-${item.meta ?? ""}`} className="mc-next-settings-action-row">
-          <div className="mc-next-settings-action-copy">
-            <strong>{item.label}</strong>
-            <p>{item.description}</p>
-            {item.meta ? <span>{item.meta}</span> : null}
-          </div>
-          {item.onClick ? (
-            <button type="button" className="mc-next-button-secondary" onClick={item.onClick}>
-              {item.actionLabel ?? "Open"}
-            </button>
-          ) : item.actionLabel ? (
-            <span className="mc-next-settings-chip">{item.actionLabel}</span>
-          ) : null}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function SettingsFilterBar({
-  options,
-  value,
-  onChange,
-}: {
-  options: Array<{ id: string; label: string }>;
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div className="mc-next-settings-filter-bar">
-      {options.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          className={`mc-next-settings-filter${value === item.id ? " active" : ""}`}
-          onClick={() => onChange(item.id)}
-        >
-          {item.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function SettingsCodeBlock({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="mc-next-settings-code-block">
-      <span>{label}</span>
-      <pre>{children}</pre>
-    </div>
-  );
-}
-
-function SettingsEmptyState({ label }: { label: string }) {
-  return <EmptyState title={label} size="compact" />;
-}
-
-function SettingsNotice({ notice }: { notice: Notice }) {
-  return <div className={`mc-next-settings-notice ${notice.tone}`}>{notice.message}</div>;
-}
-
 function DiagnosticsPanel({ report }: { report: ConnectorDiagnosticReport }) {
   return (
     <SettingsPanel title="Diagnostics" subtitle={`Status: ${report.status}`}>
@@ -8531,7 +7801,7 @@ export function describeBudgetMode(value: OnboardingState["settings"]["budgetMod
   return "Store a balanced budget preference for everyday cost evidence.";
 }
 
-function labelForBudgetMode(value: OnboardingState["settings"]["budgetMode"]): string {
+export function labelForBudgetMode(value: OnboardingState["settings"]["budgetMode"]): string {
   if (value === "saver") {
     return "Saver";
   }
@@ -8620,25 +7890,6 @@ function formatSecretStatusMeta(source: string | undefined, hasSecret: boolean):
     return "Key on file in inline config";
   }
   return "Key on file; value is never returned";
-}
-
-export function formatEffectiveConfigSourceLabel(source: string | undefined): string {
-  if (source === "env") {
-    return "env";
-  }
-  if (source === "keychain") {
-    return "secure store";
-  }
-  if (source === "inline") {
-    return "UI";
-  }
-  if (source === "default" || source === "template") {
-    return "default";
-  }
-  if (source === "managed") {
-    return "managed";
-  }
-  return "unknown";
 }
 
 function formatSecretStorageNotice(source: string | undefined, hasSecret: boolean): string {
@@ -8730,10 +7981,6 @@ export function formatCapabilities(
     .filter((entry) => entry[1])
     .map((entry) => entry[0]);
   return enabled.length ? enabled.join(", ") : "No advertised capabilities";
-}
-
-export function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "Something went wrong.";
 }
 
 export function deriveLlamaCppAlias(input: string) {
@@ -8842,107 +8089,41 @@ export function formatDateTime(value?: string | null) {
   return new Date(parsed).toLocaleString();
 }
 
-function iconForSettingsSection(section: string) {
-  switch (section) {
-    case "general":
-      return SlidersHorizontal;
-    case "onboarding":
-      return Play;
-    case "budget":
-      return Gauge;
-    case "providers":
-      return SlidersHorizontal;
-    case "personalities":
-      return Sparkles;
-    case "access":
-      return ShieldCheck;
-    case "permissions":
-      return ShieldCheck;
-    case "runtime":
-      return Gauge;
-    case "workspaces":
-      return HardDrive;
-    case "integrations":
-      return Cable;
-    case "channels":
-      return Plug2;
-    case "mcp":
-      return Server;
-    case "tools":
-      return Wrench;
-    case "addons":
-      return Package2;
-    default:
-      return SlidersHorizontal;
-  }
-}
-
-export function labelForSettingsSection(section: string) {
-  switch (section) {
-    case "general":
-      return "General";
-    case "onboarding":
-      return "Start Here";
-    case "budget":
-      return "Budget";
-    case "providers":
-      return "Providers & Models";
-    case "personalities":
-      return "Personalities";
-    case "access":
-      return "Access";
-    case "permissions":
-      return "Permissions";
-    case "runtime":
-      return "Runtime";
-    case "workspaces":
-      return "Workspaces";
-    case "integrations":
-      return "Integrations";
-    case "channels":
-      return "Channels";
-    case "mcp":
-      return "MCP";
-    case "tools":
-      return "Tools";
-    case "addons":
-      return "Add-ons";
-    default:
-      return "Unknown";
-  }
-}
-
-export function descriptionForSettingsSection(section: string) {
-  switch (section) {
-    case "general":
-      return "Core runtime defaults, provider posture, and high-signal setup routes.";
-    case "onboarding":
-      return "Safe demo launch, setup center, provider, runtime, channel, and sharing checkpoints.";
-    case "budget":
-      return "Set the runtime budget mode and inspect cost evidence.";
-    case "providers":
-      return "Choose active routing, inspect provider and model posture, and manage secrets.";
-    case "personalities":
-      return "Manage Chat tone presets and choose the global Chat default.";
-    case "access":
-      return "Manage gateway auth posture, install tokens, and device access.";
-    case "permissions":
-      return "Manage permission profiles, active defaults, and time-boxed local override controls with operator evidence.";
-    case "runtime":
-      return "Configure local runtimes and control the processes behind them.";
-    case "workspaces":
-      return "Create, edit, archive, restore, and switch workspace context.";
-    case "integrations":
-      return "Create and maintain external product and automation connections.";
-    case "channels":
-      return "Run setup drafts for channel connections, check readiness, send trial messages, and finalize.";
-    case "mcp":
-      return "Manage MCP servers, templates, transport config, and tool visibility.";
-    case "tools":
-      return "Review the tool catalog and manage grants from one place.";
-    case "addons":
-      return "Install and control optional add-on runtimes and their health.";
-    default:
-      return "This settings deep link is not registered.";
-  }
-}
+export {
+  SettingsActionList,
+  SettingsButtonRow,
+  SettingsCodeBlock,
+  SettingsConfigSourceLegend,
+  SettingsEmptyState,
+  SettingsField,
+  SettingsFieldGrid,
+  SettingsFilterBar,
+  SettingsGrid,
+  SettingsLoadWarnings,
+  SettingsMetricGrid,
+  SettingsNotice,
+  SettingsPageFrame,
+  SettingsPanel,
+  SettingsPosturePanel,
+  SettingsSectionShell,
+  SettingsSelectableList,
+  SettingsStack,
+  SettingsWizardSteps,
+  descriptionForSettingsSection,
+  formatEffectiveConfigSourceLabel,
+  getErrorMessage,
+  iconForSettingsSection,
+  labelForSettingsSection,
+  nativeLoad,
+  nativeLoadIssues,
+  useAsyncLoad,
+};
+export type {
+  LoadState,
+  NativeLoadIssue,
+  NativeLoadResult,
+  Notice,
+  SettingsNativePageProps,
+  SettingsSectionProps,
+  SettingsWizardStepState,
+};
