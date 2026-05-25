@@ -286,7 +286,7 @@
 .mc-next-app-frame {
   position: relative;
   display: grid;
-  grid-template-rows: 36px 1fr 22px;
+  grid-template-rows: 36px minmax(0, 1fr) auto;
   min-height: 100dvh;
 }
 
@@ -303,6 +303,7 @@
   border-bottom: 1px solid var(--mc-border-subtle);
   background: var(--background);
   backdrop-filter: none;
+  overflow: clip;
 }
 
 .mc-next-topbar-left,

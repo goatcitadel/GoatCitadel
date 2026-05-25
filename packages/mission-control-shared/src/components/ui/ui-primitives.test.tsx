@@ -682,10 +682,10 @@ describe("shared UI primitives", () => {
       plusMenu.root.findByProps({ className: "chat-plus-popover" }).props.onOpenAutoFocus({
         preventDefault: modalCallbacks.onDismiss,
       });
-      for (const label of ["Add files or photos", "Quick web research", "Custom"]) {
+      for (const label of ["Attach files", "Quick web research", "Custom"]) {
         plusMenu.root
           .findAllByType("button")
-          .find((button) => button.children.join("") === label)!
+          .find((button) => button.props["aria-label"] === label)!
           .props.onClick();
       }
     });

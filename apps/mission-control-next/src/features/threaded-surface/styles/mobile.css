@@ -238,7 +238,7 @@
 
   .mc-next-threaded-surface.unified .mc-next-composer-controls-start {
     display: grid;
-    grid-template-columns: auto auto minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr);
     align-items: start;
     gap: 0.42rem;
   }
@@ -329,7 +329,7 @@
   }
 
   .mc-next-composer-controls-start {
-    grid-template-columns: repeat(3, minmax(0, auto));
+    grid-template-columns: auto minmax(0, 1fr);
     justify-content: start;
   }
 

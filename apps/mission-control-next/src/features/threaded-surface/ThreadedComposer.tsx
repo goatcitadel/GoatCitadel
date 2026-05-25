@@ -9,7 +9,6 @@ import {
   type ChatPendingApprovalState,
 } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
 import { ChatPendingUserInputPanel } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingUserInputPanel";
-import { Paperclip } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ContextStrip, type ContextStripMode } from "../native-routes/primitives";
 import { describeThreadedUiError } from "./threaded-error-copy";
@@ -199,9 +198,7 @@ function formatCompactList(values: Set<string>, fallbackLabel: string): string {
 
 function getComposerCapabilityUseChips(props: MissionThreadedActiveSessionSurfaceProps) {
   const selectedIds = new Set(props.selectedContextTurnIds ?? []);
-  const turns =
-    props.thread?.turns.filter((turn) => selectedIds.size > 0 && selectedIds.has(turn.turnId)) ??
-    [];
+  const turns = props.thread?.turns.filter((turn) => selectedIds.size > 0 && selectedIds.has(turn.turnId)) ?? [];
   const scopedTurns =
     turns.length > 0
       ? turns
@@ -480,6 +477,49 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const composerActionDisabled = props.sending || runtimeBlockerActive;
   const plusActions = [
     {
+      label: props.planningMode === "advisory" ? "Plan mode on" : "Plan mode",
+      disabled: composerActionDisabled,
+      active: props.planningMode === "advisory",
+      onSelect: props.onTogglePlanningMode,
+    },
+    {
+      label: props.pinnedGoal ? "Goal status" : "Pursue goal",
+      disabled: composerActionDisabled || (!props.pinnedGoal && (!props.onSetGoal || !props.draft.trim())),
+      active: Boolean(props.pinnedGoal),
+      onSelect: () => {
+        if (props.pinnedGoal) {
+          void props.onGoalStatus?.();
+          return;
+        }
+        const draftGoal = props.draft.trim();
+        if (draftGoal) {
+          void props.onSetGoal?.(draftGoal);
+        }
+      },
+    },
+    ...(props.pinnedGoal
+      ? [
+          {
+            label: "Clear goal",
+            disabled: composerActionDisabled,
+            onSelect: () => void props.onClearGoal?.(),
+          },
+        ]
+      : []),
+    {
+      label: props.fullWebAccess ? "Full web access" : "Web access limited",
+      disabled: composerActionDisabled,
+      active: props.fullWebAccess,
+      tone: props.fullWebAccess ? ("warning" as const) : undefined,
+      onSelect: () => props.onFullWebAccessChange(!props.fullWebAccess),
+    },
+    {
+      label: props.currentWebMode === "deep" ? "Deep web on" : "Deep web research",
+      disabled: composerActionDisabled,
+      active: props.currentWebMode === "deep",
+      onSelect: props.onSetDeepMode,
+    },
+    {
       label: props.voiceBusy ? "Voice listening..." : props.voiceTalkActive ? "Stop voice talk" : "Start voice talk",
       disabled: !props.voiceInputAvailable || props.voiceBusy || composerActionDisabled,
       active: Boolean(props.voiceTalkActive),
@@ -518,6 +558,11 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
       label: "Quick web research",
       disabled: composerActionDisabled,
       onSelect: props.onRunQuickResearch,
+    },
+    {
+      label: "Review run details",
+      disabled: composerActionDisabled,
+      onSelect: props.onReviewRunDetails,
     },
   ];
 
@@ -772,7 +817,11 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
 
       <div className="mc-next-composer-controls">
         <div className="mc-next-composer-controls-start">
-          <ChatComposerPlusMenu disabled={composerActionDisabled} actions={plusActions}>
+          <ChatComposerPlusMenu
+            disabled={composerActionDisabled}
+            onAttachFiles={props.onAttachFiles}
+            actions={plusActions}
+          >
             {presetOptions.length > 0 ? (
               <div className="mc-next-composer-plus-section">
                 <label htmlFor="threaded-composer-preset">Preset</label>
@@ -850,20 +899,6 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
               </div>
             </div>
           </ChatComposerPlusMenu>
-          <button
-            type="button"
-            className="mc-next-composer-icon-button"
-            disabled={composerActionDisabled}
-            onClick={() => {
-              if (!composerActionDisabled) {
-                props.onAttachFiles();
-              }
-            }}
-            aria-label="Attach files"
-            title="Attach files"
-          >
-            <Paperclip aria-hidden="true" size={17} strokeWidth={2} />
-          </button>
           <input
             ref={props.audioInputRef}
             type="file"

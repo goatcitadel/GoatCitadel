@@ -411,7 +411,7 @@ describe("RuntimeRoutePage", () => {
     expect(formatUsd(1.23456)).toBe("$1.2346");
     expect(formatDateTime(null)).toBe("Unknown");
     expect(formatDateTime("bad-date")).toBe("Unknown");
-    expect(formatDateTime("2026-05-14T12:00:00.000Z")).toContain("2026");
+    expect(formatDateTime("2026-05-14T12:00:00.000Z")).toContain("5/14");
     expect(formatLoadAverage([])).toBe("n/a");
     expect(formatLoadAverage([1, 2.345, 3.456, 4])).toBe("1.00 / 2.35 / 3.46");
   });

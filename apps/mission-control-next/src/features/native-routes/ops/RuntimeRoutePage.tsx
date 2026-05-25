@@ -1308,7 +1308,21 @@ export function formatDateTime(value?: string | null) {
   if (!Number.isFinite(parsed)) {
     return "Unknown";
   }
-  return new Date(parsed).toLocaleString();
+  const date = new Date(parsed);
+  const currentYear = new Date().getFullYear();
+  const parts = new Intl.DateTimeFormat(undefined, {
+    month: "numeric",
+    day: "numeric",
+    year: date.getFullYear() === currentYear ? undefined : "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
+  const datePart =
+    date.getFullYear() === currentYear
+      ? `${get("month")}/${get("day")}`
+      : `${get("month")}/${get("day")}/${get("year")}`;
+  return `${datePart} ${get("hour")}:${get("minute")} ${get("dayPeriod")}`.trim();
 }
 
 export function sourceFailed(

@@ -6,7 +6,7 @@ import { ThreadedComposer } from "./ThreadedComposer";
 vi.mock("@goatcitadel/mission-control-shared/components/ChatComposerPlusMenu", async () => {
   const ReactModule = await import("react");
   return {
-    ChatComposerPlusMenu: ({ disabled, actions = [], children }: any) =>
+    ChatComposerPlusMenu: ({ disabled, onAttachFiles, actions = [], children }: any) =>
       ReactModule.createElement(
         "div",
         { className: "chat-plus-menu" },
@@ -15,6 +15,23 @@ vi.mock("@goatcitadel/mission-control-shared/components/ChatComposerPlusMenu", a
           { type: "button", disabled, "aria-label": "Open chat actions", onClick: () => undefined },
           "+",
         ),
+        onAttachFiles
+          ? ReactModule.createElement(
+              "button",
+              {
+                type: "button",
+                disabled,
+                "aria-label": "Attach files",
+                className: "chat-plus-action",
+                onClick: () => {
+                  if (!disabled) {
+                    onAttachFiles();
+                  }
+                },
+              },
+              "Add files or photos",
+            )
+          : null,
         ...actions.map((action: any) =>
           ReactModule.createElement(
             "button",
