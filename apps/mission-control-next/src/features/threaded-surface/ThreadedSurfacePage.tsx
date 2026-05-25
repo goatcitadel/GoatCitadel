@@ -90,7 +90,7 @@ const UTILITY_PANEL_ITEMS: ThreadedUtilityPanelMeta[] = [
 ];
 
 const PANE_WIDTHS = {
-  rail: { initial: 184, min: 148, max: 340 },
+  rail: { initial: 204, min: 164, max: 360 },
   workbench: { initial: 560, min: 320, max: 840 },
   context: { initial: 320, min: 224, max: 520 },
 };

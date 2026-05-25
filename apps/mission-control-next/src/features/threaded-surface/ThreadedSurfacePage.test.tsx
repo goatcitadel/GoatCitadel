@@ -954,14 +954,14 @@ describe("ThreadedSurfacePage", () => {
     });
 
     let root = renderer!.root.findByProps({ className: "mc-next-threaded-surface unified" });
-    expect(root.props.style["--mc-session-rail-width"]).toBe("184px");
+    expect(root.props.style["--mc-session-rail-width"]).toBe("204px");
 
     const railHandle = findButtonByAriaLabel(renderer!.root, "Resize session rail");
     await act(async () => {
       railHandle.props.onKeyDown({ key: "ArrowRight", preventDefault: vi.fn() });
     });
     root = renderer!.root.findByProps({ className: "mc-next-threaded-surface unified" });
-    expect(root.props.style["--mc-session-rail-width"]).toBe("208px");
+    expect(root.props.style["--mc-session-rail-width"]).toBe("228px");
 
     const drawerHandle = findButtonByAriaLabel(renderer!.root, "Resize right drawer");
     await act(async () => {

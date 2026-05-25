@@ -885,6 +885,22 @@
   line-height: 1.2;
 }
 
+.mc-next-cowork-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: start;
+}
+
+.mc-next-cowork-head p {
+  margin: 0;
+}
+
+.mc-next-cowork-toolbar {
+  justify-content: flex-end;
+  gap: 0.32rem;
+}
+
 .mc-next-composer-input-shell textarea,
 .mc-next-context-field input,
 .mc-next-context-field select,
@@ -1123,17 +1139,23 @@
 
 .mc-next-cowork-command-center {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
-  gap: 0.7rem;
+  grid-template-columns: minmax(0, 1.2fr) minmax(11rem, 0.8fr);
+  gap: 0.55rem;
   align-items: start;
   border-color: color-mix(in oklab, var(--accent) 34%, var(--border));
+}
+
+.mc-next-cowork-command-action {
+  grid-column: 1 / -1;
+  padding-top: 0.5rem;
+  border-top: 1px solid color-mix(in oklab, var(--border) 76%, transparent);
 }
 
 .mc-next-cowork-command-primary,
 .mc-next-cowork-command-state,
 .mc-next-cowork-command-action {
   display: grid;
-  gap: 0.38rem;
+  gap: 0.34rem;
   min-width: 0;
 }
 
@@ -1164,8 +1186,8 @@
   top: 0;
   z-index: 2;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
-  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10.5rem), 1fr));
+  gap: 0.42rem;
   background: color-mix(in oklab, var(--mc-surface-1) 98%, transparent);
 }
 
@@ -1414,6 +1436,21 @@
 
 .mc-next-threaded-side-panel.cowork .mc-next-cowork-panel {
   align-content: start;
+}
+
+.mc-next-threaded-side-panel.cowork {
+  container-type: inline-size;
+}
+
+@container (max-width: 34rem) {
+  .mc-next-cowork-command-center,
+  .mc-next-cowork-head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-cowork-toolbar {
+    justify-content: flex-start;
+  }
 }
 
 .mc-next-workbench-sidebar,
