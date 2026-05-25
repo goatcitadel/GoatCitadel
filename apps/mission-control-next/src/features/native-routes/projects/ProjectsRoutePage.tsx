@@ -28,6 +28,7 @@ import {
   restoreChatProject,
   updateChatProject,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { RecentCrossProjectSessionsRow } from "./RecentCrossProjectSessionsRow";
 import type { AppRoute } from "@next/app/route-model";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, FilterPillGroup, ModeBar } from "../primitives";
@@ -713,6 +714,7 @@ export function ProjectsRoutePage({
           </div>
         </NativeCard>
       </NativeGrid>
+      <RecentCrossProjectSessionsRow workspaceId={activeWorkspaceId} route={route} navigate={navigate} />
     </NativePageFrame>
   );
 }
