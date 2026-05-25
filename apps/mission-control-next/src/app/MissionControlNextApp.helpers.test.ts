@@ -20,9 +20,14 @@ describe("MissionControlNextApp shell helpers", () => {
       { id: "settings-foundations", label: "Foundations", items: [item("general")] },
       { id: "settings-surfaces", label: "Surfaces", items: [item("channels"), item("tools")] },
     ]);
+    // H-13 (ship punchlist): "onboarding" and "permissions" are intentionally
+    // hidden from the rail groups (target 14 → 12 leaves per brand-spec). They
+    // remain in RAIL_ITEMS for deep-link route resolution but no group filter
+    // selects them, so they fall out here.
     expect(
       buildRailSections("settings", [
         item("onboarding"),
+        item("permissions"),
         item("providers"),
         item("personalities"),
         item("access"),
@@ -36,7 +41,7 @@ describe("MissionControlNextApp shell helpers", () => {
       ["workspaces"],
       ["providers", "personalities", "access"],
       ["integrations", "mcp"],
-      ["onboarding", "runtime", "addons"],
+      ["runtime", "addons"],
     ]);
     expect(
       buildRailSections("library", [item("memory"), item("prompt-packs"), item("curator")]).map((group) => group.id),
@@ -64,10 +69,22 @@ describe("MissionControlNextApp shell helpers", () => {
   });
 
   it("renders every declared grouped rail item exactly once", () => {
+    /*
+     * H-13: settings carries two RAIL_ITEMS entries that are deliberately
+     * not in any group ("settings-onboarding", "settings-permissions") so
+     * the rail surfaces 12 of the 14 catalog entries. Library + ops still
+     * surface every declared rail item.
+     */
+    const settingsHiddenFromGroups = new Set(["settings-onboarding", "settings-permissions"]);
+
     for (const area of ["settings", "library", "ops"] as const) {
       const groupedItems = buildRailSections(area, RAIL_ITEMS[area]).flatMap((group) => group.items);
-      expect(groupedItems.map((entry) => entry.id).sort()).toEqual(RAIL_ITEMS[area].map((entry) => entry.id).sort());
-      expect(new Set(groupedItems.map((entry) => entry.id)).size).toBe(RAIL_ITEMS[area].length);
+      const expectedIds = RAIL_ITEMS[area]
+        .map((entry) => entry.id)
+        .filter((id) => area !== "settings" || !settingsHiddenFromGroups.has(id))
+        .sort();
+      expect(groupedItems.map((entry) => entry.id).sort()).toEqual(expectedIds);
+      expect(new Set(groupedItems.map((entry) => entry.id)).size).toBe(expectedIds.length);
     }
   });
 

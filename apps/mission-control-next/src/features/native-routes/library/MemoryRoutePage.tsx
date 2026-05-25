@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- MemoryRoutePage coordinates memory list, search, namespace filter, edit form, and maintenance verbs in one orchestrator while decomposition lands (plan W3.5 in C:/Users/spurn/.claude/plans/swirling-questing-pizza.md). */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { RefreshCw, ShieldCheck } from "lucide-react";
 import type { EvidenceEnvelope, MemoryDecisionRecord, MemoryItemRecord } from "@goatcitadel/contracts";
 import { fetchEvidenceEnvelopes } from "@goatcitadel/mission-control-shared/api/client";
@@ -88,6 +88,21 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
     error: null,
     items: [],
   });
+
+  // Stable, collision-safe IDs for label/input pairing (a11y H-8). Each id is
+  // hoisted with useId so screen readers can match each visible <label> to its
+  // <input>/<select>/<textarea> via htmlFor/id even when the same form mounts
+  // multiple times on a page or under React.StrictMode double-mount.
+  const searchInputId = useId();
+  const editTitleId = useId();
+  const editTtlId = useId();
+  const editPinnedId = useId();
+  const editContentId = useId();
+  const policyEnabledId = useId();
+  const policyRunModeId = useId();
+  const policyProviderId = useId();
+  const policyModelId = useId();
+  const memoryListCountId = useId();
 
   const memoryItems = memory.data?.memoryItems ?? [];
 
@@ -258,14 +273,18 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
             { label: "Workspace", value: activeWorkspaceName },
           ]}
         >
-          <div className="mc-next-settings-field-grid">
-            <label className="mc-next-settings-field span-2">
-              <span>Search memory</span>
+          <div className="mc-next-settings-field-grid" role="search" aria-label="Memory item search">
+            <label className="mc-next-settings-field span-2" htmlFor={searchInputId}>
+              <span id={`${searchInputId}-label`}>Search memory</span>
               <input
+                id={searchInputId}
+                type="search"
                 className="mc-next-settings-input"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder="Namespace, title, or content"
+                aria-label="Search memories by namespace, title, or content"
+                aria-describedby={memoryListCountId}
               />
             </label>
           </div>
@@ -304,7 +323,17 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   : null)
             }
           />
-          <div className="mc-next-approvals-list">
+          <div id={memoryListCountId} className="mc-next-sr-only" aria-live="polite" aria-atomic="true">
+            {visibleItems.length === 0
+              ? "No memory items match the current filter."
+              : `${visibleItems.length} memory ${visibleItems.length === 1 ? "item" : "items"} visible.`}
+          </div>
+          <div
+            className="mc-next-approvals-list"
+            role="listbox"
+            aria-label="Memory items"
+            aria-activedescendant={memory.selectedItemId ? `memory-list-item-${memory.selectedItemId}` : undefined}
+          >
             {visibleItems.length === 0 ? (
               <p className="mc-next-directory-empty">
                 {memoryAdminTruthUnknown
@@ -314,36 +343,45 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                     : "No memory items match the current filter."}
               </p>
             ) : (
-              visibleItems.map((item) => (
-                <button
-                  key={item.itemId}
-                  type="button"
-                  className={`mc-next-approvals-list-item${memory.selectedItemId === item.itemId ? " is-selected" : ""}`}
-                  onClick={() => memory.setSelectedItemId(item.itemId)}
-                >
-                  <div className="mc-next-directory-list-head">
-                    <strong>{item.title}</strong>
-                    <span>{formatShortDateTime(item.updatedAt)}</span>
-                  </div>
-                  <div className="mc-next-approvals-chip-row">
-                    <StatusChip
-                      tone={
-                        item.lifecycleState === "active"
-                          ? "success"
-                          : item.lifecycleState === "expired"
-                            ? "warning"
-                            : "muted"
-                      }
-                    >
-                      {item.lifecycleState}
-                    </StatusChip>
-                    <StatusChip tone={item.pinned ? "default" : "muted"}>
-                      {item.pinned ? "pinned" : "unpinned"}
-                    </StatusChip>
-                  </div>
-                  <p>{item.namespace}</p>
-                </button>
-              ))
+              visibleItems.map((item) => {
+                const isSelected = memory.selectedItemId === item.itemId;
+                return (
+                  <button
+                    key={item.itemId}
+                    id={`memory-list-item-${item.itemId}`}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    aria-pressed={isSelected}
+                    aria-current={isSelected ? "true" : undefined}
+                    aria-label={`Memory item ${item.title} in namespace ${item.namespace}, lifecycle ${item.lifecycleState}, ${item.pinned ? "pinned" : "unpinned"}, updated ${formatShortDateTime(item.updatedAt)}`}
+                    className={`mc-next-approvals-list-item${isSelected ? " is-selected" : ""}`}
+                    onClick={() => memory.setSelectedItemId(item.itemId)}
+                  >
+                    <div className="mc-next-directory-list-head">
+                      <strong>{item.title}</strong>
+                      <span>{formatShortDateTime(item.updatedAt)}</span>
+                    </div>
+                    <div className="mc-next-approvals-chip-row">
+                      <StatusChip
+                        tone={
+                          item.lifecycleState === "active"
+                            ? "success"
+                            : item.lifecycleState === "expired"
+                              ? "warning"
+                              : "muted"
+                        }
+                      >
+                        {item.lifecycleState}
+                      </StatusChip>
+                      <StatusChip tone={item.pinned ? "default" : "muted"}>
+                        {item.pinned ? "pinned" : "unpinned"}
+                      </StatusChip>
+                    </div>
+                    <p>{item.namespace}</p>
+                  </button>
+                );
+              })
             )}
           </div>
         </NativeCard>
@@ -375,19 +413,29 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 </div>
               </div>
               <MemoryProvenancePanel item={selectedVisibleItem} writeEnvelopeCount={memoryWriteEnvelopes.length} />
-              <div className="mc-next-settings-field-grid">
-                <label className="mc-next-settings-field span-2">
+              <div
+                className="mc-next-settings-field-grid"
+                role="group"
+                aria-label={`Edit memory item ${selectedVisibleItem.title}`}
+              >
+                <label className="mc-next-settings-field span-2" htmlFor={editTitleId}>
                   <span>Title</span>
                   <input
+                    id={editTitleId}
+                    type="text"
                     className="mc-next-settings-input"
                     value={draft.title}
                     disabled={!memoryCanMutate}
                     onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
+                    aria-label="Memory item title"
                   />
                 </label>
-                <label className="mc-next-settings-field">
+                <label className="mc-next-settings-field" htmlFor={editTtlId}>
                   <span>TTL override seconds</span>
                   <input
+                    id={editTtlId}
+                    type="text"
+                    inputMode="numeric"
                     className="mc-next-settings-input"
                     value={draft.ttlOverrideSeconds}
                     disabled={!memoryCanMutate}
@@ -395,35 +443,41 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                       setDraft((current) => ({ ...current, ttlOverrideSeconds: event.target.value }))
                     }
                     placeholder="empty = default"
+                    aria-label="TTL override in seconds, empty for default"
                   />
                 </label>
-                <label className="mc-next-settings-field">
+                <label className="mc-next-settings-field" htmlFor={editPinnedId}>
                   <span>Pinned</span>
                   <select
+                    id={editPinnedId}
                     className="mc-next-settings-input"
                     value={draft.pinned ? "true" : "false"}
                     disabled={!memoryCanMutate}
                     onChange={(event) => setDraft((current) => ({ ...current, pinned: event.target.value === "true" }))}
+                    aria-label="Pinned state for this memory item"
                   >
                     <option value="true">Pinned</option>
                     <option value="false">Not pinned</option>
                   </select>
                 </label>
-                <label className="mc-next-settings-field span-2">
+                <label className="mc-next-settings-field span-2" htmlFor={editContentId}>
                   <span>Content</span>
                   <textarea
+                    id={editContentId}
                     className="mc-next-settings-textarea"
                     value={draft.content}
                     disabled={!memoryCanMutate}
                     onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))}
+                    aria-label="Memory item content"
                   />
                 </label>
               </div>
-              <div className="mc-next-runtime-actions">
+              <div className="mc-next-runtime-actions" role="group" aria-label="Memory item actions">
                 <button
                   type="button"
                   className="gc-button"
                   disabled={!memoryCanMutate || memory.busyKey === `item:${selectedVisibleItem.itemId}`}
+                  aria-label={`Save changes to memory item ${selectedVisibleItem.title}`}
                   onClick={() =>
                     void memory.saveItemPatch(selectedVisibleItem.itemId, {
                       title: draft.title,
@@ -441,6 +495,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   type="button"
                   className="gc-button danger"
                   disabled={!memoryCanMutate || memory.busyKey === `forget:${selectedVisibleItem.itemId}`}
+                  aria-label={`Forget memory item ${selectedVisibleItem.title} — permanent`}
                   onClick={() => void memory.forgetSelectedItem()}
                 >
                   Forget item
@@ -513,6 +568,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
             <button
               type="button"
               className="gc-button subtle"
+              aria-label="Refresh evidence envelopes"
               onClick={() => {
                 setEvidence((current) => ({ ...current, loading: true, error: null }));
                 void fetchEvidenceEnvelopes({ limit: 12 })
@@ -520,7 +576,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   .catch((error: Error) => setEvidence({ loading: false, error: error.message, items: [] }));
               }}
             >
-              <ShieldCheck className="h-4 w-4" />
+              <ShieldCheck className="h-4 w-4" aria-hidden="true" />
               Refresh evidence
             </button>
           </div>
@@ -639,6 +695,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                       type="button"
                       className="gc-button subtle"
                       disabled={!memoryCanMutate || memory.busyKey === `decision:${decision.id}:retrospective`}
+                      aria-label={`Record review for decision ${decision.title}`}
                       onClick={() => void memory.reviewDecision(decision.id)}
                     >
                       Record review
@@ -681,13 +738,15 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           {memory.data?.maintenanceEnabled ? (
             <>
               {memory.policyDraft ? (
-                <div className="mc-next-settings-field-grid">
-                  <label className="mc-next-settings-field">
+                <div className="mc-next-settings-field-grid" role="group" aria-label="Memory maintenance policy">
+                  <label className="mc-next-settings-field" htmlFor={policyEnabledId}>
                     <span>Enabled</span>
                     <select
+                      id={policyEnabledId}
                       className="mc-next-settings-input"
                       value={memory.policyDraft.enabled ? "true" : "false"}
                       disabled={!maintenanceControlsReady}
+                      aria-label="Maintenance policy enabled state"
                       onChange={(event) => {
                         memory.setPolicyDirty(true);
                         memory.setPolicyDraft((current) =>
@@ -699,12 +758,14 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                       <option value="false">Disabled</option>
                     </select>
                   </label>
-                  <label className="mc-next-settings-field">
+                  <label className="mc-next-settings-field" htmlFor={policyRunModeId}>
                     <span>Run mode</span>
                     <select
+                      id={policyRunModeId}
                       className="mc-next-settings-input"
                       value={memory.policyDraft.runMode}
                       disabled={!maintenanceControlsReady}
+                      aria-label="Maintenance run mode"
                       onChange={(event) => {
                         memory.setPolicyDirty(true);
                         memory.setPolicyDraft((current) =>
@@ -722,12 +783,15 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                       <option value="hybrid">hybrid</option>
                     </select>
                   </label>
-                  <label className="mc-next-settings-field">
+                  <label className="mc-next-settings-field" htmlFor={policyProviderId}>
                     <span>Provider</span>
                     <input
+                      id={policyProviderId}
+                      type="text"
                       className="mc-next-settings-input"
                       value={memory.policyDraft.providerId}
                       disabled={!maintenanceControlsReady}
+                      aria-label="Maintenance provider identifier"
                       onChange={(event) => {
                         memory.setPolicyDirty(true);
                         memory.setPolicyDraft((current) =>
@@ -736,12 +800,15 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                       }}
                     />
                   </label>
-                  <label className="mc-next-settings-field">
+                  <label className="mc-next-settings-field" htmlFor={policyModelId}>
                     <span>Model</span>
                     <input
+                      id={policyModelId}
+                      type="text"
                       className="mc-next-settings-input"
                       value={memory.policyDraft.model}
                       disabled={!maintenanceControlsReady}
+                      aria-label="Maintenance model identifier"
                       onChange={(event) => {
                         memory.setPolicyDirty(true);
                         memory.setPolicyDraft((current) =>
@@ -752,11 +819,12 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   </label>
                 </div>
               ) : null}
-              <div className="mc-next-runtime-actions">
+              <div className="mc-next-runtime-actions" role="group" aria-label="Memory maintenance actions">
                 <button
                   type="button"
                   className="gc-button"
                   disabled={!maintenanceControlsReady || memory.busyKey === "maintenance:run"}
+                  aria-label="Run memory maintenance now"
                   onClick={() => void memory.runMaintenance()}
                 >
                   Run maintenance now
@@ -765,12 +833,18 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                   type="button"
                   className="gc-button"
                   disabled={!maintenanceControlsReady || !memory.policyDirty || memory.busyKey === "maintenance:policy"}
+                  aria-label="Save memory maintenance policy"
                   onClick={() => void memory.savePolicy()}
                 >
                   Save policy
                 </button>
-                <button type="button" className="gc-button subtle" onClick={() => void memory.reload()}>
-                  <RefreshCw className="h-4 w-4" />
+                <button
+                  type="button"
+                  className="gc-button subtle"
+                  aria-label="Refresh memory maintenance state"
+                  onClick={() => void memory.reload()}
+                >
+                  <RefreshCw className="h-4 w-4" aria-hidden="true" />
                   Refresh
                 </button>
               </div>
@@ -817,11 +891,16 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                         {item.status}
                         {" · "}
                         {item.summary}
-                        <div className="mc-next-runtime-actions">
+                        <div
+                          className="mc-next-runtime-actions"
+                          role="group"
+                          aria-label={`Resolve recommendation ${item.kind}`}
+                        >
                           <button
                             type="button"
                             className="gc-button subtle"
                             disabled={!maintenanceControlsReady}
+                            aria-label={`Accept recommendation ${item.kind}: ${item.summary}`}
                             onClick={() => void memory.resolveRecommendation(item.recommendationId, "accept")}
                           >
                             Accept
@@ -830,6 +909,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                             type="button"
                             className="gc-button subtle"
                             disabled={!maintenanceControlsReady}
+                            aria-label={`Reject recommendation ${item.kind}: ${item.summary}`}
                             onClick={() => void memory.resolveRecommendation(item.recommendationId, "reject")}
                           >
                             Reject
@@ -845,21 +925,37 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               <div className="mc-next-settings-code-block">
                 <span>Recent runs</span>
                 {(memory.data?.maintenanceRuns.length ?? 0) > 0 ? (
-                  <div className="mc-next-settings-selectable-list">
-                    {memory.data?.maintenanceRuns.slice(0, 8).map((run) => (
-                      <button
-                        key={run.runId}
-                        type="button"
-                        className={`mc-next-settings-selectable${memory.selectedRunId === run.runId ? " active" : ""}`}
-                        onClick={() => memory.setSelectedRunId(run.runId)}
-                      >
-                        <div className="mc-next-settings-selectable-head">
-                          <strong>{run.status}</strong>
-                          <span>{formatShortDateTime(run.updatedAt)}</span>
-                        </div>
-                        <p>{run.summary || run.triggerSource}</p>
-                      </button>
-                    ))}
+                  <div
+                    className="mc-next-settings-selectable-list"
+                    role="listbox"
+                    aria-label="Recent maintenance runs"
+                    aria-activedescendant={
+                      memory.selectedRunId ? `memory-maintenance-run-${memory.selectedRunId}` : undefined
+                    }
+                  >
+                    {memory.data?.maintenanceRuns.slice(0, 8).map((run) => {
+                      const isSelected = memory.selectedRunId === run.runId;
+                      return (
+                        <button
+                          key={run.runId}
+                          id={`memory-maintenance-run-${run.runId}`}
+                          type="button"
+                          role="option"
+                          aria-selected={isSelected}
+                          aria-pressed={isSelected}
+                          aria-current={isSelected ? "true" : undefined}
+                          aria-label={`Maintenance run ${run.status}, updated ${formatShortDateTime(run.updatedAt)}, ${run.summary || run.triggerSource}`}
+                          className={`mc-next-settings-selectable${isSelected ? " active" : ""}`}
+                          onClick={() => memory.setSelectedRunId(run.runId)}
+                        >
+                          <div className="mc-next-settings-selectable-head">
+                            <strong>{run.status}</strong>
+                            <span>{formatShortDateTime(run.updatedAt)}</span>
+                          </div>
+                          <p>{run.summary || run.triggerSource}</p>
+                        </button>
+                      );
+                    })}
                   </div>
                 ) : (
                   <p className="mc-next-directory-empty">No maintenance runs yet.</p>

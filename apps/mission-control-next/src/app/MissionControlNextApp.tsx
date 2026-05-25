@@ -1182,6 +1182,19 @@ export function RouteSurfaceFallback({ label, description }: { label: string; de
 
 export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSection[] {
   if (area === "settings") {
+    /*
+     * H-13 (ship punchlist): Settings IA rail target is 14 → 12 leaves to fit
+     * one screen on a 13" laptop. Two leaves are intentionally NOT surfaced
+     * in any group:
+     *   - "permissions": semantic overlap with "access" — both are
+     *     authorization. Folded into Access in spirit; the route still
+     *     resolves for deep links + redirects.
+     *   - "onboarding" ("Start Here"): a one-time first-run flow rather
+     *     than ongoing settings; deserves its own discoverable entry point
+     *     elsewhere (W3.2 follow-up).
+     * Net distribution: Foundations(2) / Identity(3) / Surfaces(4) /
+     * Operations(3) = 12, matching brand-spec.md.
+     */
     return [
       {
         id: "settings-foundations",
@@ -1192,11 +1205,7 @@ export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSec
         id: "settings-identity",
         label: "Identity",
         items: items.filter(
-          (item) =>
-            item.section === "access" ||
-            item.section === "permissions" ||
-            item.section === "personalities" ||
-            item.section === "providers",
+          (item) => item.section === "access" || item.section === "personalities" || item.section === "providers",
         ),
       },
       {
@@ -1214,11 +1223,7 @@ export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSec
         id: "settings-operations",
         label: "Operations",
         items: items.filter(
-          (item) =>
-            item.section === "runtime" ||
-            item.section === "addons" ||
-            item.section === "budget" ||
-            item.section === "onboarding",
+          (item) => item.section === "runtime" || item.section === "addons" || item.section === "budget",
         ),
       },
     ].filter((group) => group.items.length);

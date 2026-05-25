@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { MissionThreadedWorkflowPanel } from "@goatcitadel/threaded-surface-core";
 import { AgenticRuntimeVisibilityPanel } from "@goatcitadel/mission-control-shared/components/AgenticRuntimeVisibilityPanel";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
@@ -7,6 +7,22 @@ import { describeAgenticControlCopy } from "./format";
 import { PanelList } from "./PanelList";
 
 type CoworkPanelType = Extract<MissionThreadedWorkflowPanel, { kind: "cowork" }>;
+
+type CoworkTabId = "plan" | "run-map" | "timeline" | "actions";
+
+const COWORK_TAB_DEFS: ReadonlyArray<{ id: CoworkTabId; label: string }> = [
+  { id: "plan", label: "Plan" },
+  { id: "run-map", label: "Run Map" },
+  { id: "timeline", label: "Timeline" },
+  { id: "actions", label: "Operator actions" },
+];
+
+function prefersReducedMotion(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
+  }
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
 
 export function NextCoworkPanel({ panel }: { panel: CoworkPanelType }) {
   const {
@@ -21,10 +37,51 @@ export function NextCoworkPanel({ panel }: { panel: CoworkPanelType }) {
     agenticControlPending,
     agenticControlStatus,
   } = panel.props;
-  const [activeTab, setActiveTab] = useState<"plan" | "run-map" | "timeline" | "actions">("plan");
+  const [activeTab, setActiveTab] = useState<CoworkTabId>("plan");
   const [stopRunConfirmOpen, setStopRunConfirmOpen] = useState(false);
+  const tabIdPrefix = useId();
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const activeTrace = viewModel.raw.selectedTurn?.trace ?? viewModel.raw.activeTurn?.trace ?? null;
   const pendingApproval = activeTrace?.pendingApprovalSummary;
+  const activeTabIndex = COWORK_TAB_DEFS.findIndex((tab) => tab.id === activeTab);
+  const focusTabAt = useCallback((index: number) => {
+    const wrapped = ((index % COWORK_TAB_DEFS.length) + COWORK_TAB_DEFS.length) % COWORK_TAB_DEFS.length;
+    const nextTab = COWORK_TAB_DEFS[wrapped];
+    if (!nextTab) {
+      return;
+    }
+    setActiveTab(nextTab.id);
+    queueMicrotask(() => {
+      tabRefs.current[wrapped]?.focus();
+    });
+  }, []);
+  const handleTabKeyDown = useCallback(
+    (index: number) => (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      switch (event.key) {
+        case "ArrowRight":
+          event.preventDefault();
+          focusTabAt(index + 1);
+          break;
+        case "ArrowLeft":
+          event.preventDefault();
+          focusTabAt(index - 1);
+          break;
+        case "Home":
+          event.preventDefault();
+          focusTabAt(0);
+          break;
+        case "End":
+          event.preventDefault();
+          focusTabAt(COWORK_TAB_DEFS.length - 1);
+          break;
+        default:
+          break;
+      }
+    },
+    [focusTabAt],
+  );
+  const buildTabId = (tabId: CoworkTabId) => `${tabIdPrefix}-cowork-tab-${tabId}`;
+  const buildPanelId = (tabId: CoworkTabId) => `${tabIdPrefix}-cowork-panel-${tabId}`;
   const requestedModel =
     activeTrace?.routing.primaryModel ?? activeTrace?.routing.fallbackModel ?? activeTrace?.model ?? "not requested";
   const effectiveModel = activeTrace?.routing.effectiveModel ?? activeTrace?.model ?? "not resolved";
@@ -87,6 +144,7 @@ export function NextCoworkPanel({ panel }: { panel: CoworkPanelType }) {
         pendingApprovalLabel={
           pendingApproval ? (pendingApproval.description ?? pendingApproval.kind ?? "Pending approval") : "None pending"
         }
+        pendingApprovalId={pendingApproval?.approvalId}
         onOpenDetails={onOpenDetails}
         onShowTimeline={() => setActiveTab("timeline")}
       />
@@ -100,27 +158,38 @@ export function NextCoworkPanel({ panel }: { panel: CoworkPanelType }) {
         ))}
       </div>
 
-      <div className="mc-next-panel-tab-row">
-        {["plan", "run-map", "timeline", "actions"].map((tab) => (
-          <button
-            key={tab}
-            type="button"
-            className={`mc-next-panel-tab${activeTab === tab ? " active" : ""}`}
-            onClick={() => setActiveTab(tab as typeof activeTab)}
-          >
-            {tab === "plan"
-              ? "Plan"
-              : tab === "run-map"
-                ? "Run Map"
-                : tab === "timeline"
-                  ? "Timeline"
-                  : "Operator actions"}
-          </button>
-        ))}
+      <div className="mc-next-panel-tab-row" role="tablist" aria-label="Cowork workflow views">
+        {COWORK_TAB_DEFS.map((tab, index) => {
+          const selected = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              ref={(node) => {
+                tabRefs.current[index] = node;
+              }}
+              type="button"
+              role="tab"
+              id={buildTabId(tab.id)}
+              aria-selected={selected}
+              aria-controls={buildPanelId(tab.id)}
+              tabIndex={index === activeTabIndex ? 0 : -1}
+              className={`mc-next-panel-tab${selected ? " active" : ""}`}
+              onClick={() => setActiveTab(tab.id)}
+              onKeyDown={handleTabKeyDown(index)}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
       </div>
 
       {activeTab === "plan" ? (
-        <div className="mc-next-cowork-grid">
+        <div
+          className="mc-next-cowork-grid"
+          role="tabpanel"
+          id={buildPanelId("plan")}
+          aria-labelledby={buildTabId("plan")}
+        >
           <PanelList
             title="Plan"
             items={viewModel.planItems.items}
@@ -139,18 +208,26 @@ export function NextCoworkPanel({ panel }: { panel: CoworkPanelType }) {
         </div>
       ) : null}
 
-      {activeTab === "run-map" ? <RunMapPanel viewModel={viewModel} onOpenDetails={onOpenDetails} /> : null}
+      {activeTab === "run-map" ? (
+        <div role="tabpanel" id={buildPanelId("run-map")} aria-labelledby={buildTabId("run-map")}>
+          <RunMapPanel viewModel={viewModel} onOpenDetails={onOpenDetails} />
+        </div>
+      ) : null}
 
       {activeTab === "timeline" ? (
-        <CheckpointTimelinePanel viewModel={viewModel} fallbackItems={viewModel.timelineItems.items} />
+        <div role="tabpanel" id={buildPanelId("timeline")} aria-labelledby={buildTabId("timeline")}>
+          <CheckpointTimelinePanel viewModel={viewModel} fallbackItems={viewModel.timelineItems.items} />
+        </div>
       ) : null}
 
       {activeTab === "actions" ? (
-        <PanelList
-          title="Operator actions"
-          items={viewModel.operatorActionItems.items}
-          emptyCopy="Operator actions will collect here when Cowork needs follow-up work."
-        />
+        <div role="tabpanel" id={buildPanelId("actions")} aria-labelledby={buildTabId("actions")}>
+          <PanelList
+            title="Operator actions"
+            items={viewModel.operatorActionItems.items}
+            emptyCopy="Operator actions will collect here when Cowork needs follow-up work."
+          />
+        </div>
       ) : null}
 
       {viewModel.blockers.length > 0 ? (
@@ -309,11 +386,13 @@ function CoworkNextActionButton({
 function CoworkInterventionPanel({
   viewModel,
   pendingApprovalLabel,
+  pendingApprovalId,
   onOpenDetails,
   onShowTimeline,
 }: {
   viewModel: CoworkPanelType["props"]["viewModel"];
   pendingApprovalLabel: string;
+  pendingApprovalId?: string;
   onOpenDetails?: () => void;
   onShowTimeline: () => void;
 }) {
@@ -327,6 +406,54 @@ function CoworkInterventionPanel({
     viewModel.continuationGate.metrics.approvalWait ||
     viewModel.continuationGate.reasonCodes.includes("approval_wait");
 
+  // H-6: auto-focus and scroll a newly arrived approval into view.
+  // - `seenApprovalIdsRef` tracks every approval ID we have rendered so we
+  //   only autofocus *true* new arrivals — re-renders for the same approval
+  //   do not steal focus repeatedly.
+  // - `consumedApprovalIdsRef` records which arrivals we have already auto-
+  //   focused so React StrictMode double-invocation cannot trigger focus twice.
+  // - On the very first observed snapshot we prime the seen set without
+  //   focusing, matching the ApprovalsRoutePage `seenPendingIdsRef` pattern.
+  // - `prefers-reduced-motion` callers get `behavior: "auto"` instead of smooth
+  //   scrolling.
+  const approvalArticleRef = useRef<HTMLElement | null>(null);
+  const approvalResolveButtonRef = useRef<HTMLButtonElement | null>(null);
+  const seenApprovalIdsRef = useRef<Set<string>>(new Set());
+  const consumedApprovalIdsRef = useRef<Set<string>>(new Set());
+  const hasPrimedApprovalSeenRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (!pendingApprovalId) {
+      return;
+    }
+    // Prime the seen set on first observation so the initial paint does not
+    // hijack focus when an approval is already pending.
+    if (!hasPrimedApprovalSeenRef.current) {
+      hasPrimedApprovalSeenRef.current = true;
+      seenApprovalIdsRef.current.add(pendingApprovalId);
+      return;
+    }
+    if (seenApprovalIdsRef.current.has(pendingApprovalId)) {
+      return;
+    }
+    seenApprovalIdsRef.current.add(pendingApprovalId);
+    if (consumedApprovalIdsRef.current.has(pendingApprovalId)) {
+      return;
+    }
+    consumedApprovalIdsRef.current.add(pendingApprovalId);
+
+    const reduced = prefersReducedMotion();
+    const articleNode = approvalArticleRef.current;
+    if (articleNode && typeof articleNode.scrollIntoView === "function") {
+      articleNode.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "nearest" });
+    }
+    // Defer focus by one microtask so the scroll commit and any conditional
+    // render of the Resolve approval button has settled before we move focus.
+    queueMicrotask(() => {
+      approvalResolveButtonRef.current?.focus();
+    });
+  }, [pendingApprovalId]);
+
   return (
     <section className="mc-next-cowork-intervention" aria-label="Cowork blockers approvals and checkpoints">
       <article className={viewModel.blockers.length > 0 ? "is-attention" : ""}>
@@ -337,12 +464,12 @@ function CoworkInterventionPanel({
         ))}
         {viewModel.blockers.length === 0 ? <p>Current run state has no visible blocker.</p> : null}
       </article>
-      <article className={approvalBlocked ? "is-attention" : ""}>
+      <article ref={approvalArticleRef} className={approvalBlocked ? "is-attention" : ""}>
         <p className="mc-next-panel-kicker">Approvals</p>
         <h5>{approvalBlocked ? "Operator decision needed" : "Clear"}</h5>
         <p>{pendingApprovalLabel}</p>
         {approvalBlocked && onOpenDetails ? (
-          <button type="button" className="mc-next-panel-button" onClick={onOpenDetails}>
+          <button ref={approvalResolveButtonRef} type="button" className="mc-next-panel-button" onClick={onOpenDetails}>
             Resolve approval
           </button>
         ) : null}

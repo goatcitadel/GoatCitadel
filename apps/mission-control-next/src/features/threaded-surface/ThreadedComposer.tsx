@@ -8,7 +8,7 @@ import {
   type ChatPendingApprovalState,
 } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
 import { ChatPendingUserInputPanel } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingUserInputPanel";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ContextStrip, type ContextStripMode, StatusChip } from "../native-routes/primitives";
 import { describeThreadedUiError } from "./threaded-error-copy";
 import { useAutoGrowTextarea } from "./useAutoGrowTextarea";
@@ -465,6 +465,17 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const usageTotals = computeUsageTotals(props.thread);
   const composerV2Enabled = useComposerV2Enabled();
   useAutoGrowTextarea(props.composerRef, props.draft, { minLines: 2, maxLines: 8 });
+  const composerInstanceId = useId();
+  const commandSuggestionsListboxId = `${composerInstanceId}-command-suggestions`;
+  const commandSuggestionsOpen = props.commandSuggestions.length > 0;
+  const commandSuggestionOptionId = (key: string) => `${commandSuggestionsListboxId}-${key}`;
+  const activeCommandSuggestion =
+    commandSuggestionsOpen && props.commandIndex >= 0 && props.commandIndex < props.commandSuggestions.length
+      ? props.commandSuggestions[props.commandIndex]
+      : null;
+  const commandSuggestionsActiveDescendant = activeCommandSuggestion
+    ? commandSuggestionOptionId(activeCommandSuggestion.key)
+    : undefined;
   const contextStripMode = toContextStripMode(props.mode);
   // planningEnabled was used by the inline Plan toggle, which moved to the
   // Context Drawer's Assist tab. The composer keeps the "Planning mode is on"
@@ -740,22 +751,38 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           onPaste={props.onComposerPaste}
           placeholder={getPlaceholder(props.mode)}
           rows={2}
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={commandSuggestionsOpen}
+          aria-controls={commandSuggestionsOpen ? commandSuggestionsListboxId : undefined}
+          aria-activedescendant={commandSuggestionsActiveDescendant}
         />
       </div>
 
-      {props.commandSuggestions.length > 0 ? (
-        <div className="mc-next-command-popover" role="listbox" aria-label="Composer suggestions">
-          {props.commandSuggestions.map((item, index) => (
-            <button
-              key={item.key}
-              type="button"
-              className={`mc-next-command-item${index === props.commandIndex ? " active" : ""}`}
-              onClick={() => props.onApplyDraftCommand(item.applyValue)}
-            >
-              <strong>{item.command}</strong>
-              <span>{item.description}</span>
-            </button>
-          ))}
+      {commandSuggestionsOpen ? (
+        <div
+          className="mc-next-command-popover"
+          role="listbox"
+          id={commandSuggestionsListboxId}
+          aria-label="Composer suggestions"
+        >
+          {props.commandSuggestions.map((item, index) => {
+            const isHighlighted = index === props.commandIndex;
+            return (
+              <button
+                key={item.key}
+                id={commandSuggestionOptionId(item.key)}
+                type="button"
+                role="option"
+                aria-selected={isHighlighted}
+                className={`mc-next-command-item${isHighlighted ? " active" : ""}`}
+                onClick={() => props.onApplyDraftCommand(item.applyValue)}
+              >
+                <strong>{item.command}</strong>
+                <span>{item.description}</span>
+              </button>
+            );
+          })}
         </div>
       ) : null}
 

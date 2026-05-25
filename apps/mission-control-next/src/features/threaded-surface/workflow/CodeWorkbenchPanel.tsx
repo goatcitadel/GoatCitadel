@@ -1,5 +1,14 @@
 /* eslint-disable max-lines */
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import type {
   ChatSessionWorkbenchFileOperationKind,
   ChatSessionWorkbenchFileOperationRequest,
@@ -58,6 +67,30 @@ function readStoredFilePanePercent(): number {
   return Number.isFinite(parsed) && parsed >= 18 && parsed <= 42 ? parsed : DEFAULT_FILE_PANE_PERCENT;
 }
 
+type CodeSourceTabId = "existing" | "local" | "github";
+
+const CODE_SOURCE_TAB_DEFS: ReadonlyArray<{ id: CodeSourceTabId; label: string }> = [
+  { id: "existing", label: "Existing project" },
+  { id: "local", label: "Local folder" },
+  { id: "github", label: "GitHub repo" },
+];
+
+type CodeWorkbenchPaneDef = { id: WorkbenchPaneId; label: string };
+
+function buildWorkbenchPaneDefs(includeArtifact: boolean): ReadonlyArray<CodeWorkbenchPaneDef> {
+  const base: CodeWorkbenchPaneDef[] = [
+    { id: "files", label: "Files" },
+    { id: "selected-diff", label: "Selected diff" },
+    { id: "repo-diff", label: "Repo diff" },
+    { id: "output", label: "Run log" },
+    { id: "snippets", label: "Snippets" },
+  ];
+  if (includeArtifact) {
+    base.push({ id: "artifact", label: "Artifact" });
+  }
+  return base;
+}
+
 function CodeSourceChooser({
   availableProjects,
   selectedProjectCandidateId,
@@ -77,9 +110,7 @@ function CodeSourceChooser({
     ref?: string;
   }) => Promise<unknown>;
 }) {
-  const [activeTab, setActiveTab] = useState<"existing" | "local" | "github">(
-    availableProjects?.length ? "existing" : "local",
-  );
+  const [activeTab, setActiveTab] = useState<CodeSourceTabId>(availableProjects?.length ? "existing" : "local");
   const [existingProjectId, setExistingProjectId] = useState(
     selectedProjectCandidateId ?? availableProjects?.[0]?.projectId ?? "",
   );
@@ -88,6 +119,47 @@ function CodeSourceChooser({
   const [repoUrl, setRepoUrl] = useState("");
   const [repoRef, setRepoRef] = useState("");
   const [repoName, setRepoName] = useState("");
+  const sourceTabIdPrefix = useId();
+  const sourceTabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const activeSourceTabIndex = CODE_SOURCE_TAB_DEFS.findIndex((tab) => tab.id === activeTab);
+  const focusSourceTabAt = useCallback((index: number) => {
+    const wrapped = ((index % CODE_SOURCE_TAB_DEFS.length) + CODE_SOURCE_TAB_DEFS.length) % CODE_SOURCE_TAB_DEFS.length;
+    const nextTab = CODE_SOURCE_TAB_DEFS[wrapped];
+    if (!nextTab) {
+      return;
+    }
+    setActiveTab(nextTab.id);
+    queueMicrotask(() => {
+      sourceTabRefs.current[wrapped]?.focus();
+    });
+  }, []);
+  const handleSourceTabKeyDown = useCallback(
+    (index: number) => (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      switch (event.key) {
+        case "ArrowRight":
+          event.preventDefault();
+          focusSourceTabAt(index + 1);
+          break;
+        case "ArrowLeft":
+          event.preventDefault();
+          focusSourceTabAt(index - 1);
+          break;
+        case "Home":
+          event.preventDefault();
+          focusSourceTabAt(0);
+          break;
+        case "End":
+          event.preventDefault();
+          focusSourceTabAt(CODE_SOURCE_TAB_DEFS.length - 1);
+          break;
+        default:
+          break;
+      }
+    },
+    [focusSourceTabAt],
+  );
+  const buildSourceTabId = (tabId: CodeSourceTabId) => `${sourceTabIdPrefix}-code-source-tab-${tabId}`;
+  const buildSourcePanelId = (tabId: CodeSourceTabId) => `${sourceTabIdPrefix}-code-source-panel-${tabId}`;
 
   useEffect(() => {
     if (selectedProjectCandidateId) {
@@ -110,25 +182,38 @@ function CodeSourceChooser({
         repo-backed workbench.
       </p>
 
-      <div className="mc-next-panel-tab-row">
-        {[
-          ["existing", "Existing project"],
-          ["local", "Local folder"],
-          ["github", "GitHub repo"],
-        ].map(([tabId, label]) => (
-          <button
-            key={tabId}
-            type="button"
-            className={`mc-next-panel-tab${activeTab === tabId ? " active" : ""}`}
-            onClick={() => setActiveTab(tabId as typeof activeTab)}
-          >
-            {label}
-          </button>
-        ))}
+      <div className="mc-next-panel-tab-row" role="tablist" aria-label="Code source type">
+        {CODE_SOURCE_TAB_DEFS.map((tab, index) => {
+          const selected = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              ref={(node) => {
+                sourceTabRefs.current[index] = node;
+              }}
+              type="button"
+              role="tab"
+              id={buildSourceTabId(tab.id)}
+              aria-selected={selected}
+              aria-controls={buildSourcePanelId(tab.id)}
+              tabIndex={index === activeSourceTabIndex ? 0 : -1}
+              className={`mc-next-panel-tab${selected ? " active" : ""}`}
+              onClick={() => setActiveTab(tab.id)}
+              onKeyDown={handleSourceTabKeyDown(index)}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
       </div>
 
       {activeTab === "existing" ? (
-        <div className="mc-next-code-source-form">
+        <div
+          className="mc-next-code-source-form"
+          role="tabpanel"
+          id={buildSourcePanelId("existing")}
+          aria-labelledby={buildSourceTabId("existing")}
+        >
           <label className="mc-next-code-source-field">
             <span>Project</span>
             <select value={existingProjectId} onChange={(event) => setExistingProjectId(event.target.value)}>
@@ -157,7 +242,12 @@ function CodeSourceChooser({
       ) : null}
 
       {activeTab === "local" ? (
-        <div className="mc-next-code-source-form">
+        <div
+          className="mc-next-code-source-form"
+          role="tabpanel"
+          id={buildSourcePanelId("local")}
+          aria-labelledby={buildSourceTabId("local")}
+        >
           <label className="mc-next-code-source-field">
             <span>Folder path</span>
             <input
@@ -199,7 +289,12 @@ function CodeSourceChooser({
       ) : null}
 
       {activeTab === "github" ? (
-        <div className="mc-next-code-source-form">
+        <div
+          className="mc-next-code-source-form"
+          role="tabpanel"
+          id={buildSourcePanelId("github")}
+          aria-labelledby={buildSourceTabId("github")}
+        >
           <label className="mc-next-code-source-field">
             <span>Repo URL</span>
             <input
@@ -359,6 +454,51 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     [workbenchState?.packageManager],
   );
   const [activePane, setActivePane] = useState<WorkbenchPaneId>("files");
+  const workbenchTabIdPrefix = useId();
+  const workbenchTabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const workbenchPaneDefs = useMemo(() => buildWorkbenchPaneDefs(Boolean(generatedArtifact)), [generatedArtifact]);
+  const activeWorkbenchTabIndex = workbenchPaneDefs.findIndex((pane) => pane.id === activePane);
+  const focusWorkbenchTabAt = useCallback((index: number, panes: ReadonlyArray<CodeWorkbenchPaneDef>) => {
+    if (panes.length === 0) {
+      return;
+    }
+    const wrapped = ((index % panes.length) + panes.length) % panes.length;
+    const nextPane = panes[wrapped];
+    if (!nextPane) {
+      return;
+    }
+    setActivePane(nextPane.id);
+    queueMicrotask(() => {
+      workbenchTabRefs.current[wrapped]?.focus();
+    });
+  }, []);
+  const handleWorkbenchTabKeyDown = useCallback(
+    (index: number, panes: ReadonlyArray<CodeWorkbenchPaneDef>) => (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      switch (event.key) {
+        case "ArrowRight":
+          event.preventDefault();
+          focusWorkbenchTabAt(index + 1, panes);
+          break;
+        case "ArrowLeft":
+          event.preventDefault();
+          focusWorkbenchTabAt(index - 1, panes);
+          break;
+        case "Home":
+          event.preventDefault();
+          focusWorkbenchTabAt(0, panes);
+          break;
+        case "End":
+          event.preventDefault();
+          focusWorkbenchTabAt(panes.length - 1, panes);
+          break;
+        default:
+          break;
+      }
+    },
+    [focusWorkbenchTabAt],
+  );
+  const buildWorkbenchTabId = (paneId: WorkbenchPaneId) => `${workbenchTabIdPrefix}-workbench-tab-${paneId}`;
+  const buildWorkbenchPanelId = (paneId: WorkbenchPaneId) => `${workbenchTabIdPrefix}-workbench-panel-${paneId}`;
   const [newArtifactPending, setNewArtifactPending] = useState(false);
   const prevTurnIdRef = useRef<string | null>(null);
   const [activeBlockIndex, setActiveBlockIndex] = useState(0);
@@ -1136,24 +1276,29 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
         </aside>
 
         <section className="mc-next-workbench-main">
-          <div className="mc-next-panel-tab-row">
-            {[
-              ["files", "Files"],
-              ["selected-diff", "Selected diff"],
-              ["repo-diff", "Repo diff"],
-              ["output", "Run log"],
-              ["snippets", "Snippets"],
-              ...(generatedArtifact ? [["artifact", "Artifact"]] : []),
-            ].map(([paneId, label]) => (
-              <button
-                key={paneId}
-                type="button"
-                className={`mc-next-panel-tab${activePane === paneId ? " active" : ""}`}
-                onClick={() => setActivePane(paneId as WorkbenchPaneId)}
-              >
-                {label}
-              </button>
-            ))}
+          <div className="mc-next-panel-tab-row" role="tablist" aria-label="Workbench panes">
+            {workbenchPaneDefs.map((pane, index) => {
+              const selected = activePane === pane.id;
+              return (
+                <button
+                  key={pane.id}
+                  ref={(node) => {
+                    workbenchTabRefs.current[index] = node;
+                  }}
+                  type="button"
+                  role="tab"
+                  id={buildWorkbenchTabId(pane.id)}
+                  aria-selected={selected}
+                  aria-controls={buildWorkbenchPanelId(pane.id)}
+                  tabIndex={index === activeWorkbenchTabIndex ? 0 : -1}
+                  className={`mc-next-panel-tab${selected ? " active" : ""}`}
+                  onClick={() => setActivePane(pane.id)}
+                  onKeyDown={handleWorkbenchTabKeyDown(index, workbenchPaneDefs)}
+                >
+                  {pane.label}
+                </button>
+              );
+            })}
           </div>
 
           {newArtifactPending && generatedArtifact && activePane !== "artifact" ? (
@@ -1275,87 +1420,106 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
           ) : null}
 
           {activePane === "files" ? (
-            selectedFile ? (
-              <div className="mc-next-workbench-pane">
-                <div className="mc-next-panel-list-head">
-                  <strong>{selectedFile.path}</strong>
-                  <span>{selectedFile.language}</span>
+            <div role="tabpanel" id={buildWorkbenchPanelId("files")} aria-labelledby={buildWorkbenchTabId("files")}>
+              {selectedFile ? (
+                <div className="mc-next-workbench-pane">
+                  <div className="mc-next-panel-list-head">
+                    <strong>{selectedFile.path}</strong>
+                    <span>{selectedFile.language}</span>
+                  </div>
+                  <WorkbenchMonacoEditor
+                    value={activeDraft}
+                    language={selectedFile.language}
+                    height={520}
+                    onChange={onDraftChange}
+                    onSave={onSaveFile}
+                    onQuickOpen={openQuickFilePicker}
+                    onCommandPalette={openWorkbenchCommandPalette}
+                  />
                 </div>
-                <WorkbenchMonacoEditor
-                  value={activeDraft}
-                  language={selectedFile.language}
-                  height={520}
-                  onChange={onDraftChange}
-                  onSave={onSaveFile}
-                  onQuickOpen={openQuickFilePicker}
-                  onCommandPalette={openWorkbenchCommandPalette}
-                />
-              </div>
-            ) : (
-              <div className="mc-next-workbench-empty">Pick a file in the tree to start editing it.</div>
-            )
+              ) : (
+                <div className="mc-next-workbench-empty">Pick a file in the tree to start editing it.</div>
+              )}
+            </div>
           ) : null}
 
           {activePane === "selected-diff" ? (
-            selectedFile && selectedFileDiff ? (
-              <div className="mc-next-workbench-pane">
-                <div className="mc-next-panel-list-head">
-                  <strong>Selected-file diff</strong>
-                  <div className="mc-next-workbench-view-toggle" role="group" aria-label="Diff view mode">
-                    <span>{selectedFile.path}</span>
-                    <button
-                      type="button"
-                      className={`mc-next-panel-button${diffViewMode === "side-by-side" ? " active" : ""}`}
-                      onClick={() => setDiffViewMode("side-by-side")}
-                    >
-                      Side by side
-                    </button>
-                    <button
-                      type="button"
-                      className={`mc-next-panel-button${diffViewMode === "unified" ? " active" : ""}`}
-                      onClick={() => setDiffViewMode("unified")}
-                    >
-                      Unified
-                    </button>
+            <div
+              role="tabpanel"
+              id={buildWorkbenchPanelId("selected-diff")}
+              aria-labelledby={buildWorkbenchTabId("selected-diff")}
+            >
+              {selectedFile && selectedFileDiff ? (
+                <div className="mc-next-workbench-pane">
+                  <div className="mc-next-panel-list-head">
+                    <strong>Selected-file diff</strong>
+                    <div className="mc-next-workbench-view-toggle" role="group" aria-label="Diff view mode">
+                      <span>{selectedFile.path}</span>
+                      <button
+                        type="button"
+                        className={`mc-next-panel-button${diffViewMode === "side-by-side" ? " active" : ""}`}
+                        onClick={() => setDiffViewMode("side-by-side")}
+                      >
+                        Side by side
+                      </button>
+                      <button
+                        type="button"
+                        className={`mc-next-panel-button${diffViewMode === "unified" ? " active" : ""}`}
+                        onClick={() => setDiffViewMode("unified")}
+                      >
+                        Unified
+                      </button>
+                    </div>
                   </div>
+                  <MonacoDiffEditor
+                    language={currentLanguage}
+                    original={selectedFileDiff.originalContent ?? selectedFile.content ?? ""}
+                    modified={
+                      hasDirtyDraft ? activeDraft : (selectedFileDiff.modifiedContent ?? selectedFile.content ?? "")
+                    }
+                    height={520}
+                    renderSideBySide={diffViewMode === "side-by-side"}
+                  />
                 </div>
-                <MonacoDiffEditor
-                  language={currentLanguage}
-                  original={selectedFileDiff.originalContent ?? selectedFile.content ?? ""}
-                  modified={
-                    hasDirtyDraft ? activeDraft : (selectedFileDiff.modifiedContent ?? selectedFile.content ?? "")
-                  }
-                  height={520}
-                  renderSideBySide={diffViewMode === "side-by-side"}
-                />
-              </div>
-            ) : (
-              <div className="mc-next-workbench-empty">
-                Choose a repo file to compare the editor against the current git base.
-              </div>
-            )
+              ) : (
+                <div className="mc-next-workbench-empty">
+                  Choose a repo file to compare the editor against the current git base.
+                </div>
+              )}
+            </div>
           ) : null}
 
           {activePane === "repo-diff" ? (
-            diff ? (
-              <div className="mc-next-workbench-pane">
-                <div className="mc-next-panel-list-head">
-                  <strong>Repo diff</strong>
-                  <span>
-                    {diff.summary.changedFiles} files · +{diff.summary.additions} / -{diff.summary.deletions}
-                  </span>
+            <div
+              role="tabpanel"
+              id={buildWorkbenchPanelId("repo-diff")}
+              aria-labelledby={buildWorkbenchTabId("repo-diff")}
+            >
+              {diff ? (
+                <div className="mc-next-workbench-pane">
+                  <div className="mc-next-panel-list-head">
+                    <strong>Repo diff</strong>
+                    <span>
+                      {diff.summary.changedFiles} files · +{diff.summary.additions} / -{diff.summary.deletions}
+                    </span>
+                  </div>
+                  <WorkbenchMonacoEditor value={diff.diff || "No diff yet."} language="diff" readOnly height={520} />
                 </div>
-                <WorkbenchMonacoEditor value={diff.diff || "No diff yet."} language="diff" readOnly height={520} />
-              </div>
-            ) : (
-              <div className="mc-next-workbench-empty">
-                Create a worktree or refresh the session to populate repo changes.
-              </div>
-            )
+              ) : (
+                <div className="mc-next-workbench-empty">
+                  Create a worktree or refresh the session to populate repo changes.
+                </div>
+              )}
+            </div>
           ) : null}
 
           {activePane === "output" ? (
-            <div className="mc-next-workbench-pane">
+            <div
+              className="mc-next-workbench-pane"
+              role="tabpanel"
+              id={buildWorkbenchPanelId("output")}
+              aria-labelledby={buildWorkbenchTabId("output")}
+            >
               <div className="mc-next-panel-list-head">
                 <strong>Run log</strong>
                 <div className="mc-next-workbench-view-toggle" role="group" aria-label="Run log controls">
@@ -1661,57 +1825,69 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
           ) : null}
 
           {activePane === "snippets" ? (
-            activeBlock ? (
-              <div className="mc-next-workbench-pane">
-                <div className="mc-next-panel-list-head">
-                  <strong>Snippet helper</strong>
-                  <span>{activeBlock.language}</span>
-                </div>
-                <WorkbenchMonacoEditor
-                  value={activeBlock.content}
-                  language={activeBlock.language}
-                  readOnly
-                  height={320}
-                />
-                <div className="mc-next-workbench-action-row">
-                  {codeBlocks.map((block, index) => (
+            <div
+              role="tabpanel"
+              id={buildWorkbenchPanelId("snippets")}
+              aria-labelledby={buildWorkbenchTabId("snippets")}
+            >
+              {activeBlock ? (
+                <div className="mc-next-workbench-pane">
+                  <div className="mc-next-panel-list-head">
+                    <strong>Snippet helper</strong>
+                    <span>{activeBlock.language}</span>
+                  </div>
+                  <WorkbenchMonacoEditor
+                    value={activeBlock.content}
+                    language={activeBlock.language}
+                    readOnly
+                    height={320}
+                  />
+                  <div className="mc-next-workbench-action-row">
+                    {codeBlocks.map((block, index) => (
+                      <button
+                        key={block.id}
+                        type="button"
+                        className={`mc-next-panel-button${activeBlockIndex === index ? " active" : ""}`}
+                        onClick={() => setActiveBlockIndex(index)}
+                      >
+                        Snippet {index + 1}
+                      </button>
+                    ))}
                     <button
-                      key={block.id}
                       type="button"
-                      className={`mc-next-panel-button${activeBlockIndex === index ? " active" : ""}`}
-                      onClick={() => setActiveBlockIndex(index)}
+                      className="mc-next-panel-button primary"
+                      onClick={() => onRunHelperSnippet(activeBlock.language, activeBlock.content)}
                     >
-                      Snippet {index + 1}
+                      Run helper snippet
                     </button>
-                  ))}
-                  <button
-                    type="button"
-                    className="mc-next-panel-button primary"
-                    onClick={() => onRunHelperSnippet(activeBlock.language, activeBlock.content)}
-                  >
-                    Run helper snippet
-                  </button>
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <div className="mc-next-workbench-empty">
-                Code snippets from the latest assistant turn will appear here.
-              </div>
-            )
+              ) : (
+                <div className="mc-next-workbench-empty">
+                  Code snippets from the latest assistant turn will appear here.
+                </div>
+              )}
+            </div>
           ) : null}
 
           {activePane === "artifact" ? (
-            generatedArtifact ? (
-              <div className="mc-next-workbench-pane">
-                <div className="mc-next-panel-list-head">
-                  <strong>{generatedArtifact.title}</strong>
-                  <button type="button" className="mc-next-panel-button" onClick={onCloseGeneratedArtifact}>
-                    Close artifact
-                  </button>
+            <div
+              role="tabpanel"
+              id={buildWorkbenchPanelId("artifact")}
+              aria-labelledby={buildWorkbenchTabId("artifact")}
+            >
+              {generatedArtifact ? (
+                <div className="mc-next-workbench-pane">
+                  <div className="mc-next-panel-list-head">
+                    <strong>{generatedArtifact.title}</strong>
+                    <button type="button" className="mc-next-panel-button" onClick={onCloseGeneratedArtifact}>
+                      Close artifact
+                    </button>
+                  </div>
+                  <GeneratedArtifactViewer artifact={generatedArtifact} />
                 </div>
-                <GeneratedArtifactViewer artifact={generatedArtifact} />
-              </div>
-            ) : null
+              ) : null}
+            </div>
           ) : null}
         </section>
         <aside className="mc-next-workbench-sidebar">

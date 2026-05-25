@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { AlertTriangle, Clock, History, Play, RefreshCw, Waypoints } from "lucide-react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
@@ -553,6 +553,7 @@ function ApprovalInspectorCard(props: {
           <p className="mc-next-approvals-kicker">{decisionCopy.kicker}</p>
           <h3>{decisionCopy.title}</h3>
           {approval.explanation?.riskExplanation ? <p>{approval.explanation.riskExplanation}</p> : null}
+          <ApprovalDecisionContextStrip approval={approval} />
         </div>
         <div className="mc-next-approvals-actions">
           {approval.status === "pending" && !expired ? (
@@ -814,6 +815,123 @@ function ApprovalInspectorCard(props: {
       </details>
     </div>
   );
+}
+
+/**
+ * H-11: Decision-context strip rendered inside the approval inspector.
+ *
+ * Mirrors the 4-row table in apps/mission-control-next/mockups/approvals.html
+ * (lines 309-326): Scope / Actor / Reversible? / Prior verdicts. Operators
+ * triage blind without this — kicker+title alone do not surface what is being
+ * decided, who requested it, or whether the action can be undone.
+ *
+ * Markup uses semantic `<dl>` / `<dt>` / `<dd>` per task spec (a11y preferred
+ * over table). Each row uses a 2-column grid: muted label, primary-color value
+ * with monospace emphasis for IDs / namespaces / counts.
+ *
+ * Data sourcing:
+ * - Scope: approval.kind + namespace extracted from preview (best-effort)
+ * - Actor: approval.linkage.authActorId / operatorId, plus gateway context
+ *   (toolName / connectorId / turnId) when present
+ * - Reversible?: approval.rollbackNote — if present, render "Yes" with the
+ *   note inline; if absent, render "Unknown" (contract has no explicit
+ *   reversible field — see ApprovalRequest in packages/contracts)
+ * - Prior verdicts: NOT yet exposed by the contract. Rendered as "—" until
+ *   the queue hook surfaces verdict history per (kind, scope) pair.
+ */
+function ApprovalDecisionContextStrip({ approval }: { approval: ApprovalRequest }) {
+  const scopeValue = formatDecisionContextScope(approval);
+  const actorValue = formatDecisionContextActor(approval);
+  const reversibleValue = formatDecisionContextReversible(approval);
+
+  return (
+    <dl className="mc-next-approvals-decision-context" aria-label="Decision context" data-mc-decision-context="true">
+      <div className="mc-next-approvals-decision-context-row">
+        <dt>Scope</dt>
+        <dd>{scopeValue}</dd>
+      </div>
+      <div className="mc-next-approvals-decision-context-row">
+        <dt>Actor</dt>
+        <dd>{actorValue}</dd>
+      </div>
+      <div className="mc-next-approvals-decision-context-row">
+        <dt>Reversible?</dt>
+        <dd>{reversibleValue}</dd>
+      </div>
+      <div className="mc-next-approvals-decision-context-row">
+        <dt>Prior verdicts</dt>
+        {/*
+          MISSING DATA SOURCE: ApprovalRequest contract does not expose verdict
+          history per (kind, scope). useApprovalQueue does not aggregate it
+          either. Render em-dash placeholder until the queue hook (or a new
+          contract field) surfaces this signal. Do NOT fabricate counts.
+        */}
+        <dd className="mc-next-approvals-decision-context-empty" aria-label="Not available">
+          —
+        </dd>
+      </div>
+    </dl>
+  );
+}
+
+function formatDecisionContextScope(approval: ApprovalRequest): ReactNode {
+  const namespace = extractDecisionContextNamespace(approval);
+  const kind = approval.kind || "decision";
+  if (!namespace) {
+    return <span className="mc-next-approvals-decision-context-mono">{kind}</span>;
+  }
+  return (
+    <>
+      <span className="mc-next-approvals-decision-context-mono">{kind}</span>
+      <span aria-hidden="true"> · </span>
+      <strong className="mc-next-approvals-decision-context-mono">{namespace}</strong>
+    </>
+  );
+}
+
+function extractDecisionContextNamespace(approval: ApprovalRequest): string | null {
+  const preview = approval.preview as Record<string, unknown> | undefined;
+  if (!preview) return null;
+  const candidates = ["namespace", "scope", "path", "target", "channel", "topic"];
+  for (const key of candidates) {
+    const raw = preview[key];
+    if (typeof raw === "string" && raw.trim().length > 0) {
+      return raw.trim();
+    }
+  }
+  const targets = preview.targets;
+  if (Array.isArray(targets) && targets.length > 0 && typeof targets[0] === "string") {
+    return targets[0];
+  }
+  return null;
+}
+
+function formatDecisionContextActor(approval: ApprovalRequest): ReactNode {
+  const linkage = approval.linkage;
+  const actor = linkage?.authActorId || linkage?.operatorId || linkage?.toolName || "—";
+  const gatewayHint = linkage?.connectorId ?? linkage?.turnId ?? linkage?.toolName ?? linkage?.sessionId ?? null;
+  return (
+    <>
+      <strong className="mc-next-approvals-decision-context-mono">{actor}</strong>
+      {gatewayHint && gatewayHint !== actor ? (
+        <span className="mc-next-approvals-decision-context-aside"> (via gateway {gatewayHint})</span>
+      ) : null}
+    </>
+  );
+}
+
+function formatDecisionContextReversible(approval: ApprovalRequest): ReactNode {
+  const note = approval.rollbackNote?.trim();
+  if (note && note.length > 0) {
+    return (
+      <>
+        Yes — <strong>{note}</strong>
+      </>
+    );
+  }
+  // No rollback note on the contract — surface as "Unknown" rather than
+  // claiming the action is irreversible, since we cannot prove the negative.
+  return <span className="mc-next-approvals-decision-context-empty">Unknown</span>;
 }
 
 function buildApprovalDecisionCopy(

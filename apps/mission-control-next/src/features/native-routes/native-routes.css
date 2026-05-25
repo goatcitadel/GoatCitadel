@@ -604,6 +604,78 @@
   }
 }
 
+/*
+ * H-11: Decision-context strip — 4-row dl rendered inside the approval
+ * inspector's copy column. Mirrors approvals.html mockup lines 309-326.
+ * Two-column grid per row: muted label, primary-color value with mono
+ * emphasis for namespaces / IDs / counts.
+ */
+.mc-next-approvals-decision-context {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.55rem 0 0;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid color-mix(in oklab, var(--border) 90%, transparent);
+  border-radius: 0.55rem;
+  background: color-mix(in oklab, var(--mc-surface-2) 92%, transparent);
+}
+
+.mc-next-approvals-decision-context-row {
+  display: grid;
+  grid-template-columns: minmax(7.5rem, auto) minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: baseline;
+  padding: 0.28rem 0.35rem;
+  border-radius: 0.35rem;
+  background: color-mix(in oklab, var(--mc-surface-1) 78%, transparent);
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+}
+
+.mc-next-approvals-decision-context-row dt {
+  margin: 0;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.mc-next-approvals-decision-context-row dd {
+  margin: 0;
+  min-width: 0;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+}
+
+.mc-next-approvals-decision-context-row dd strong {
+  color: var(--foreground);
+  font-weight: 700;
+}
+
+.mc-next-approvals-decision-context-mono {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+}
+
+.mc-next-approvals-decision-context-aside {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.mc-next-approvals-decision-context-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+@media (max-width: 540px) {
+  .mc-next-approvals-decision-context-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.2rem;
+  }
+}
+
 .mc-next-approvals-toolbar {
   align-items: center;
 }
