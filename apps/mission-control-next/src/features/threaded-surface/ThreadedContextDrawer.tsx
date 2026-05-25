@@ -9,7 +9,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
-import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
+import { StatusChip } from "../native-routes/primitives";
 import { shortId } from "./ThreadedWorkflowPanel";
 
 type DrawerTab = "context" | "trace" | "assist" | "session";

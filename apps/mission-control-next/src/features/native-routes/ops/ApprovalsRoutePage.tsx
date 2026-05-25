@@ -2,8 +2,7 @@ import { useMemo, useState, type MouseEvent } from "react";
 import { AlertTriangle, Clock, History, Play, RefreshCw, Waypoints } from "lucide-react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
-import { ThreePartChip } from "../primitives";
+import { StatusChip, ThreePartChip } from "../primitives";
 import {
   buildApprovalEvidenceModel,
   findTraceMetadata,

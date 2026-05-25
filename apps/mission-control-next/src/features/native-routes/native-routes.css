@@ -98,7 +98,7 @@
 }
 
 .mc-next-directory-icon {
-  display: none;
+  display: flex;
   align-items: center;
   justify-content: center;
   width: 2.75rem;

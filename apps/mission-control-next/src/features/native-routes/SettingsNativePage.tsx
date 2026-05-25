@@ -3091,11 +3091,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                         <RefreshCw size={16} />
                         {providerProbeBusyId === selectedProvider.providerId ? "Probing..." : "Refresh models"}
                       </button>
-                      <button
-                        type="button"
-                        className="mc-next-button-secondary"
-                        onClick={() => void handleDeleteSecret()}
-                      >
+                      <button type="button" className="mc-next-button-danger" onClick={() => void handleDeleteSecret()}>
                         <Trash2 size={16} />
                         Delete secret
                       </button>
@@ -6160,7 +6156,7 @@ function PermissionsSection({ activeWorkspaceId }: SettingsSectionProps) {
                   </button>
                   <button
                     type="button"
-                    className="mc-next-button-secondary"
+                    className="mc-next-button-danger"
                     onClick={() => void handleArchiveSelectedProfile()}
                   >
                     <Trash2 size={16} />

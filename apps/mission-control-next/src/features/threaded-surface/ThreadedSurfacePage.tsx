@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- ThreadedSurfacePage coordinates chat/cowork/code layout, composer chrome, timeline, drawer, and workflow panels while decomposition lands (plan W3.1 in C:/Users/spurn/.claude/plans/swirling-questing-pizza.md). */
 import {
   useCallback,
   useEffect,
@@ -34,7 +35,7 @@ import type {
   MissionThreadedRenderSurfaceInput,
 } from "@goatcitadel/threaded-surface-core";
 import { groupDelegatedSessionsForRail } from "@goatcitadel/threaded-surface-core";
-import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
+import { StatusChip } from "../native-routes/primitives";
 import { ChatModelPicker } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
@@ -154,7 +155,6 @@ export function ThreadedSurfacePage({
   input: MissionThreadedRenderSurfaceInput;
   permissionState?: ThreadedPermissionState;
 }) {
-  const compactLayout = useMediaQuery("(max-width: 1180px)");
   const railDrawerLayout = useMediaQuery("(max-width: 1023px)");
   const railPane = useHorizontalPaneResize({
     direction: "right",
@@ -476,7 +476,6 @@ export function ThreadedSurfacePage({
           {activeProps ? (
             <ThreadConversationSurface
               surface={activeProps.mode}
-              compactLayout={compactLayout}
               props={activeProps}
               dropTarget={input.dropTargetProps}
               dockOpen={dockOpen}
@@ -570,7 +569,6 @@ export function ThreadedSurfacePage({
 
 function ThreadConversationSurface({
   surface,
-  compactLayout,
   props,
   dropTarget,
   dockOpen,
@@ -582,7 +580,6 @@ function ThreadConversationSurface({
   permissionState,
 }: {
   surface: ChatMode;
-  compactLayout: boolean;
   props: MissionThreadedActiveSessionSurfaceProps;
   dropTarget: MissionThreadedDropTargetProps;
   dockOpen: boolean;
@@ -698,7 +695,7 @@ function ThreadConversationSurface({
         </div>
       </header>
 
-      <section className={`mc-next-threaded-conversation${compactLayout ? " compact" : ""}`}>
+      <section className="mc-next-threaded-conversation">
         <div className="mc-next-threaded-thread-card">
           <ThreadedTimeline props={props} />
         </div>
@@ -1022,7 +1019,11 @@ function ThreadedUtilityPanel({
       ) : activePanel === "files" ? (
         <UtilityFilesPanel workflowPanel={workflowPanel} />
       ) : activePanel === "background" ? (
-        <UtilityBackgroundTasksPanel activeProps={activeProps} onOpenTasks={onOpenTasks} workflowPanel={workflowPanel} />
+        <UtilityBackgroundTasksPanel
+          activeProps={activeProps}
+          onOpenTasks={onOpenTasks}
+          workflowPanel={workflowPanel}
+        />
       ) : (
         <UtilityPlanPanel activeProps={activeProps} contextDockProps={contextDockProps} />
       )}
@@ -1063,11 +1064,7 @@ function UtilityPreviewPanel({ activeProps }: { activeProps: MissionThreadedActi
   );
 }
 
-function UtilityDiffPanel({
-  workflowPanel,
-}: {
-  workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"];
-}) {
+function UtilityDiffPanel({ workflowPanel }: { workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"] }) {
   const codePanel = getCodeWorkflowPanel(workflowPanel);
   const diff = codePanel?.props.diff;
   const selectedFileDiff = codePanel?.props.selectedFileDiff;
@@ -1134,11 +1131,7 @@ function UtilityTerminalPanel({
   );
 }
 
-function UtilityFilesPanel({
-  workflowPanel,
-}: {
-  workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"];
-}) {
+function UtilityFilesPanel({ workflowPanel }: { workflowPanel: MissionThreadedRenderSurfaceInput["workflowPanel"] }) {
   const codePanel = getCodeWorkflowPanel(workflowPanel);
   const files = (codePanel?.props.workbenchTree?.items ?? []).filter((item) => item.kind === "file");
   const hasDirtyDraft = Boolean(codePanel?.props.hasDirtyDraft);
@@ -1190,7 +1183,9 @@ function UtilityBackgroundTasksPanel({
     <section className="mc-next-utility-card">
       <h4>Background work</h4>
       <div className="mc-next-utility-chip-row">
-        <StatusChip tone={activeProps.queuedCount > 0 ? "warning" : "muted"}>{activeProps.queuedCount} queued</StatusChip>
+        <StatusChip tone={activeProps.queuedCount > 0 ? "warning" : "muted"}>
+          {activeProps.queuedCount} queued
+        </StatusChip>
         <StatusChip tone={activeProps.streamStatus === "streaming" ? "success" : "muted"}>
           {activeProps.streamStatus}
         </StatusChip>
@@ -1205,9 +1200,7 @@ function UtilityBackgroundTasksPanel({
       ) : (
         <p>No queued background work is waiting on this thread.</p>
       )}
-      {coworkPanel?.props.viewModel.runMap.objective ? (
-        <p>{coworkPanel.props.viewModel.runMap.objective}</p>
-      ) : null}
+      {coworkPanel?.props.viewModel.runMap.objective ? <p>{coworkPanel.props.viewModel.runMap.objective}</p> : null}
       {onOpenTasks ? (
         <button type="button" className="mc-next-panel-button" onClick={onOpenTasks}>
           Open task board
@@ -1238,7 +1231,9 @@ function UtilityPlanPanel({
         </StatusChip>
       </div>
       <h4>{activeProps.pinnedGoal ?? "Current plan"}</h4>
-      <p>{activeProps.routePreflight?.degradedReason ?? activeProps.routePreflight?.blockedReason ?? activeProps.summary}</p>
+      <p>
+        {activeProps.routePreflight?.degradedReason ?? activeProps.routePreflight?.blockedReason ?? activeProps.summary}
+      </p>
       <div className="mc-next-utility-actions">
         <button type="button" className="mc-next-panel-button" onClick={activeProps.onTogglePlanningMode}>
           {planningEnabled ? "Turn planning off" : "Turn planning on"}

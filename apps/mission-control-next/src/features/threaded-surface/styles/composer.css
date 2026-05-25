@@ -1483,3 +1483,12 @@
   background: color-mix(in oklab, var(--mc-area-color) 12%, transparent);
   color: color-mix(in oklab, var(--mc-area-color) 72%, var(--foreground));
 }
+
+/*
+ * CHAT-013 partial closure: ChatQueueBar emits a legacy v11-prefixed class
+ * from packages/mission-control-shared/.../ChatQueueBar.tsx. The bare class
+ * has no CSS rule in next-app, but defining one here triggers the legacy-check
+ * forbidden-selector rule. Proper fix requires renaming the class in the shared
+ * component (3-app coordination: shared + next + legacy). Tracked as a
+ * follow-up task. Until then, the queue bar renders unstyled (default block).
+ */

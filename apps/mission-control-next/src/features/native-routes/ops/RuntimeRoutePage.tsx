@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import type { AutomationRecipeDraftResponse } from "@goatcitadel/contracts";
 import { createCronJob, draftAutomationRecipe } from "@goatcitadel/mission-control-shared/api/client";
-import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
+import { StatusChip } from "../primitives";
 import { useOpsRuntimeSnapshot } from "@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot";
 import type { AppRoute } from "@next/app/route-model";
 import {

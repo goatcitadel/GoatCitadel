@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { MissionThreadedWorkflowPanel } from "@goatcitadel/threaded-surface-core";
 import { AgenticRuntimeVisibilityPanel } from "@goatcitadel/mission-control-shared/components/AgenticRuntimeVisibilityPanel";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
-import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
+import { StatusChip } from "../../native-routes/primitives";
 import { describeAgenticControlCopy } from "./format";
 import { PanelList } from "./PanelList";
 
@@ -538,7 +538,9 @@ function describeCheckpointDetails(details: Record<string, unknown>): string {
   const continuationGate = details.continuationGate;
   if (continuationGate && typeof continuationGate === "object" && !Array.isArray(continuationGate)) {
     const gate = continuationGate as { summary?: unknown; recommendedAction?: unknown };
-    return [gate.summary, gate.recommendedAction].filter((value): value is string => typeof value === "string").join(" ");
+    return [gate.summary, gate.recommendedAction]
+      .filter((value): value is string => typeof value === "string")
+      .join(" ");
   }
   if (typeof details.error === "string") {
     return details.error;

@@ -1,5 +1,6 @@
 /* Mission Control Next primitives
-   Co-located styles for StageHeader, ThreePartChip, ContextStrip, ModeBar.
+   Co-located styles for StageHeader, ThreePartChip, ContextStrip, ModeBar,
+   StatusChip, EmptyState.
    Consumes tokens from mission-control-next-tokens.css. */
 
 /* ============================================================
@@ -425,4 +426,254 @@
   .mc-next-context-strip {
     flex-wrap: wrap;
   }
+}
+
+/* ============================================================
+   StatusChip (.mc-next-status-chip)
+   Canonical single-pill status indicator. Replaces ad-hoc
+   .status-chip-success / -warning / -critical / -muted that
+   r4-ux CHAT-014 flagged as having no CSS.
+   ============================================================ */
+.mc-next-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 1.4rem;
+  padding: 0 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle, var(--mc-border-subtle));
+  background: var(--bg-surface-1, var(--mc-surface-1));
+  color: var(--fg-secondary, var(--text-secondary));
+  font: 600 var(--text-xs, 0.75rem) / 1 var(--font-sans, var(--mc-font-sans));
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.mc-next-status-chip[data-size="md"] {
+  height: 1.65rem;
+  padding: 0 0.75rem;
+  font-size: var(--text-sm, 0.8125rem);
+}
+
+.mc-next-status-chip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.65rem;
+  height: 0.65rem;
+  flex: 0 0 auto;
+}
+
+.mc-next-status-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mc-next-status-chip[data-tone="success"] {
+  color: color-mix(in oklab, var(--risk-safe, var(--gc-risk-safe)) 76%, var(--fg-primary, var(--foreground)));
+  border-color: color-mix(in oklab, var(--risk-safe, var(--gc-risk-safe)) 28%, var(--border-default, var(--border)));
+  background: color-mix(in oklab, var(--risk-safe, var(--gc-risk-safe)) 12%, var(--bg-surface-1, var(--mc-surface-1)));
+}
+
+.mc-next-status-chip[data-tone="success"] .mc-next-status-chip-icon {
+  color: var(--risk-safe, var(--gc-risk-safe));
+}
+
+.mc-next-status-chip[data-tone="warning"] {
+  color: color-mix(in oklab, var(--risk-caution, var(--gc-risk-caution)) 78%, var(--fg-primary, var(--foreground)));
+  border-color: color-mix(
+    in oklab,
+    var(--risk-caution, var(--gc-risk-caution)) 30%,
+    var(--border-default, var(--border))
+  );
+  background: color-mix(
+    in oklab,
+    var(--risk-caution, var(--gc-risk-caution)) 12%,
+    var(--bg-surface-1, var(--mc-surface-1))
+  );
+}
+
+.mc-next-status-chip[data-tone="warning"] .mc-next-status-chip-icon {
+  color: var(--risk-caution, var(--gc-risk-caution));
+}
+
+.mc-next-status-chip[data-tone="critical"] {
+  color: color-mix(in oklab, var(--risk-danger, var(--gc-risk-danger)) 74%, var(--fg-primary, var(--foreground)));
+  border-color: color-mix(
+    in oklab,
+    var(--risk-danger, var(--gc-risk-danger)) 32%,
+    var(--border-default, var(--border))
+  );
+  background: color-mix(
+    in oklab,
+    var(--risk-danger, var(--gc-risk-danger)) 14%,
+    var(--bg-surface-1, var(--mc-surface-1))
+  );
+}
+
+.mc-next-status-chip[data-tone="critical"] .mc-next-status-chip-icon {
+  color: var(--risk-danger, var(--gc-risk-danger));
+}
+
+.mc-next-status-chip[data-tone="muted"] {
+  color: var(--fg-muted, var(--text-muted));
+  border-color: var(--border-subtle, var(--mc-border-subtle));
+  background: var(--bg-surface-2, var(--mc-surface-2));
+}
+
+.mc-next-status-chip[data-tone="muted"] .mc-next-status-chip-icon {
+  color: var(--fg-faint, var(--text-muted));
+}
+
+.mc-next-status-chip[data-tone="neutral"] {
+  color: var(--fg-secondary, var(--text-secondary));
+  border-color: var(--border-default, var(--border));
+  background: var(--bg-surface-1, var(--mc-surface-1));
+}
+
+.mc-next-status-chip[data-tone="neutral"] .mc-next-status-chip-icon {
+  color: var(--fg-muted, var(--text-muted));
+}
+
+/*
+ * `default` and `live` tones support legacy WorkTrustTone callers
+ * (see packages/threaded-surface-core/src/chat/work-trust.ts).
+ *   - default: same plain look as neutral
+ *   - live: subtle pulse on the dot via animated icon color
+ */
+.mc-next-status-chip[data-tone="default"] {
+  color: var(--fg-secondary, var(--text-secondary));
+  border-color: var(--border-default, var(--border));
+  background: var(--bg-surface-1, var(--mc-surface-1));
+}
+
+.mc-next-status-chip[data-tone="default"] .mc-next-status-chip-icon {
+  color: var(--fg-muted, var(--text-muted));
+}
+
+.mc-next-status-chip[data-tone="live"] {
+  color: color-mix(in oklab, var(--risk-safe, var(--gc-risk-safe)) 76%, var(--fg-primary, var(--foreground)));
+  border-color: color-mix(in oklab, var(--risk-safe, var(--gc-risk-safe)) 28%, var(--border-default, var(--border)));
+  background: color-mix(in oklab, var(--risk-safe, var(--gc-risk-safe)) 12%, var(--bg-surface-1, var(--mc-surface-1)));
+}
+
+.mc-next-status-chip[data-tone="live"] .mc-next-status-chip-icon {
+  color: var(--risk-safe, var(--gc-risk-safe));
+  animation: mc-next-status-chip-live-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes mc-next-status-chip-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-next-status-chip[data-tone="live"] .mc-next-status-chip-icon {
+    animation: none;
+  }
+}
+
+/* ============================================================
+   EmptyState (.mc-next-empty-state)
+   Canonical empty / zero-data primitive. Use across surfaces
+   instead of bespoke "no data" markup. Pairs with primaryAction
+   slot for the recommended next step (e.g. "Start chat", "Add").
+   ============================================================ */
+.mc-next-empty-state {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  text-align: center;
+  gap: 0.8rem;
+  padding: 2.5rem 1.5rem;
+  border-radius: var(--r-md, var(--mc-radius-md));
+  border: 1px dashed var(--border-subtle, var(--mc-border-subtle));
+  background: var(--bg-surface-1, var(--mc-surface-1));
+  color: var(--fg-secondary, var(--text-secondary));
+  min-height: 12rem;
+}
+
+.mc-next-empty-state[data-size="compact"] {
+  padding: 1.25rem 1rem;
+  min-height: 6rem;
+  gap: 0.5rem;
+}
+
+.mc-next-empty-state[data-tone="accent"] {
+  border-color: color-mix(in oklab, var(--mc-area-color) 28%, var(--border-default, var(--border)));
+  background: color-mix(in oklab, var(--mc-area-color) 4%, var(--bg-surface-1, var(--mc-surface-1)));
+}
+
+.mc-next-empty-state-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--r-sm, var(--mc-radius-sm));
+  background: var(--bg-surface-2, var(--mc-surface-2));
+  color: var(--fg-muted, var(--text-muted));
+}
+
+.mc-next-empty-state[data-tone="accent"] .mc-next-empty-state-icon {
+  background: color-mix(in oklab, var(--mc-area-color) 12%, var(--bg-surface-2, var(--mc-surface-2)));
+  color: color-mix(in oklab, var(--mc-area-color) 60%, var(--fg-primary, var(--foreground)));
+}
+
+.mc-next-empty-state[data-size="compact"] .mc-next-empty-state-icon {
+  width: 1.75rem;
+  height: 1.75rem;
+}
+
+.mc-next-empty-state-copy {
+  display: grid;
+  gap: 0.3rem;
+  max-width: 38ch;
+}
+
+.mc-next-empty-state-title {
+  margin: 0;
+  font: 600 var(--text-lg, 1rem) / 1.25 var(--font-sans, var(--mc-font-sans));
+  letter-spacing: -0.01em;
+  color: var(--fg-primary, var(--foreground));
+}
+
+.mc-next-empty-state[data-size="compact"] .mc-next-empty-state-title {
+  font-size: var(--text-md, 0.875rem);
+}
+
+.mc-next-empty-state-description {
+  margin: 0;
+  font-size: var(--text-sm, 0.8125rem);
+  line-height: 1.45;
+  color: var(--fg-secondary, var(--text-secondary));
+}
+
+.mc-next-empty-state-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.mc-next-empty-state-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mc-next-empty-state-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  font-size: var(--text-xs, 0.75rem);
 }

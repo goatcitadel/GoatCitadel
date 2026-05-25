@@ -1,16 +1,31 @@
+/*
+ * W1.1 token unification — Phase A (deprecation aliases).
+ * The --gc-* and --mc-* token names below are RETAINED for backward compatibility
+ * but are now aliased to the canonical tokens declared in mission-control-next-tokens.css.
+ * NEW CODE should consume canonical names directly:
+ *   --gc-area-*  →  --area-*       (e.g. var(--area-chat))
+ *   --gc-risk-*  →  --risk-*       (e.g. var(--risk-safe))
+ *   --mc-surface-1/2/3  →  --bg-surface-1/2/3
+ *   --mc-border-subtle/strong  →  --border-subtle/strong
+ *   --mc-shell-bg  →  --bg-app
+ * Once all callsites have been migrated, the alias declarations below can be deleted.
+ * Tokens with no canonical equivalent (--mc-shell-bg gradient overlay in Citadel Light,
+ * --mc-shadow-*, --mc-scrollbar-*, --mc-area-color semantic alias) remain as the
+ * authoritative source. See `scripts/check-mission-control-next-token-drift.mjs`.
+ */
 .mc-next-shell {
-  --gc-area-chat: oklch(0.72 0.12 240);
-  --gc-area-cowork: oklch(0.73 0.13 315);
-  --gc-area-code: oklch(0.74 0.12 175);
-  --gc-area-projects: oklch(0.76 0.13 205);
-  --gc-area-library: oklch(0.72 0.1 255);
-  --gc-area-ops: oklch(0.71 0.08 220);
-  --gc-area-settings: oklch(0.78 0.1 85);
-  --gc-risk-safe: oklch(0.76 0.15 160);
-  --gc-risk-caution: oklch(0.84 0.15 85);
-  --gc-risk-danger: oklch(0.7 0.18 28);
-  --gc-risk-nuclear: oklch(0.68 0.22 345);
-  --mc-area-color: var(--gc-area-chat);
+  --gc-area-chat: var(--area-chat);
+  --gc-area-cowork: var(--area-cowork);
+  --gc-area-code: var(--area-code);
+  --gc-area-projects: var(--area-projects);
+  --gc-area-library: var(--area-library);
+  --gc-area-ops: var(--area-ops);
+  --gc-area-settings: var(--area-settings);
+  --gc-risk-safe: var(--risk-safe);
+  --gc-risk-caution: var(--risk-caution);
+  --gc-risk-danger: var(--risk-danger);
+  --gc-risk-nuclear: var(--risk-nuclear);
+  --mc-area-color: var(--area-chat);
   --mc-scrollbar-safe-gutter: 0.85rem;
   min-height: 100dvh;
   position: relative;
@@ -21,31 +36,31 @@
 }
 
 .mc-next-shell[data-area="chat"] {
-  --mc-area-color: var(--gc-area-chat);
+  --mc-area-color: var(--area-chat);
 }
 
 .mc-next-shell[data-area="cowork"] {
-  --mc-area-color: var(--gc-area-cowork);
+  --mc-area-color: var(--area-cowork);
 }
 
 .mc-next-shell[data-area="code"] {
-  --mc-area-color: var(--gc-area-code);
+  --mc-area-color: var(--area-code);
 }
 
 .mc-next-shell[data-area="projects"] {
-  --mc-area-color: var(--gc-area-projects);
+  --mc-area-color: var(--area-projects);
 }
 
 .mc-next-shell[data-area="library"] {
-  --mc-area-color: var(--gc-area-library);
+  --mc-area-color: var(--area-library);
 }
 
 .mc-next-shell[data-area="ops"] {
-  --mc-area-color: var(--gc-area-ops);
+  --mc-area-color: var(--area-ops);
 }
 
 .mc-next-shell[data-area="settings"] {
-  --mc-area-color: var(--gc-area-settings);
+  --mc-area-color: var(--area-settings);
 }
 
 .mc-next-shell.theme-signal-noir[data-area] {
@@ -59,6 +74,14 @@
   --input: oklch(0.72 0.01 255 / 40%);
   --primary: #f4ead6;
   --primary-foreground: #0b0d0f;
+  /*
+   * W1.1 Phase A: --mc-shell-bg, --mc-surface-1/2/3 are RETAINED for compatibility.
+   * Signal Noir values match canonical tokens (--bg-app, --bg-surface-1/2/3) in
+   * mission-control-next-tokens.css. Citadel Light values DIVERGE (next.css uses
+   * cool-blue rgba; tokens.css uses warm-cream #eeeae0). Phase B requires a
+   * design decision on which palette is authoritative before aliasing surfaces.
+   * Same for --mc-border-subtle/strong (alpha + formula differ).
+   */
   --mc-shell-bg: #14181d;
   --mc-surface-1: #181d24;
   --mc-surface-2: #10141a;
@@ -813,10 +836,6 @@
   font-weight: 750;
   line-height: 1;
   white-space: nowrap;
-}
-
-.mc-next-rail-link span {
-  display: none;
 }
 
 .mc-next-rail-link .mc-next-rail-release-badge {

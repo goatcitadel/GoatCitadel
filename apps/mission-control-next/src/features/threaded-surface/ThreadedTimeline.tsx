@@ -9,7 +9,7 @@ import {
 } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { Badge } from "@goatcitadel/mission-control-shared/components/ui";
-import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
+import { StatusChip } from "../native-routes/primitives";
 import {
   ChatStreamStatusBar,
   type ChatStreamStatus,

@@ -458,3 +458,133 @@
   overflow-wrap: anywhere;
   cursor: pointer;
 }
+
+/* ============================================================
+   ChatStreamStatusBar (.chat-stream-status-bar)
+   Rendered inside the timeline by ThreadedTimeline.tsx.
+   r4-ux CHAT-013 flagged the bare class as having no rule in
+   next-app CSS; add a minimal surface look so operators can
+   still distinguish idle / pending / active / error states.
+   ============================================================ */
+.chat-stream-status-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 1.65rem;
+  padding: 0.18rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle, var(--mc-border-subtle));
+  background: var(--bg-surface-1, var(--mc-surface-1));
+  color: var(--fg-secondary, var(--text-secondary));
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.chat-stream-status-bar .chat-stream-status-indicator {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--fg-muted, var(--text-muted));
+  flex: 0 0 auto;
+}
+
+.chat-stream-status-bar .chat-stream-status-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-stream-status-bar .chat-stream-status-error {
+  color: var(--gc-risk-danger, var(--mc-risk-danger));
+  font-weight: 700;
+}
+
+.chat-stream-status-bar.tone-pending .chat-stream-status-indicator {
+  background: var(--gc-risk-caution, var(--mc-risk-caution));
+}
+
+.chat-stream-status-bar.tone-active .chat-stream-status-indicator {
+  background: var(--gc-risk-safe, var(--mc-risk-safe));
+}
+
+.chat-stream-status-bar.tone-error {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 36%, var(--border-default, var(--border)));
+  background: color-mix(in oklab, var(--gc-risk-danger) 10%, var(--bg-surface-1, var(--mc-surface-1)));
+}
+
+.chat-stream-status-bar.tone-error .chat-stream-status-indicator {
+  background: var(--gc-risk-danger, var(--mc-risk-danger));
+}
+
+/* ============================================================
+   SurfaceReconnectBanner (.surface-reconnect-banner)
+   Rendered inside the timeline by ThreadedTimeline.tsx.
+   r4-ux CHAT-013 flagged the bare class as having no rule in
+   next-app CSS.
+   ============================================================ */
+.surface-reconnect-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--r-sm, 0.5rem);
+  border: 1px solid var(--border-subtle, var(--mc-border-subtle));
+  background: var(--bg-surface-2, var(--mc-surface-2));
+  color: var(--fg-secondary, var(--text-secondary));
+}
+
+.surface-reconnect-banner-copy {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.surface-reconnect-banner-title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--fg-primary, var(--foreground));
+}
+
+.surface-reconnect-banner-body {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--fg-muted, var(--text-muted));
+}
+
+.surface-reconnect-banner.tone-pending {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 30%, var(--border-default, var(--border)));
+  background: color-mix(in oklab, var(--gc-risk-caution) 8%, var(--bg-surface-1, var(--mc-surface-1)));
+}
+
+.surface-reconnect-banner.tone-warning {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 40%, var(--border-default, var(--border)));
+  background: color-mix(in oklab, var(--gc-risk-caution) 14%, var(--bg-surface-1, var(--mc-surface-1)));
+}
+
+.surface-reconnect-banner.tone-success {
+  border-color: color-mix(in oklab, var(--gc-risk-safe) 32%, var(--border-default, var(--border)));
+  background: color-mix(in oklab, var(--gc-risk-safe) 10%, var(--bg-surface-1, var(--mc-surface-1)));
+}
+
+/* ============================================================
+   .chat-approval-card baseline
+   Rendered via InlineApprovalPrompt inside the composer or
+   timeline blocking-prompt wrappers. Parent scopes already
+   override these, but the baseline ensures a sane look when
+   the component is rendered standalone. r4-ux CHAT-013.
+   ============================================================ */
+.chat-approval-card {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.68rem;
+  border-radius: var(--r-sm, 0.58rem);
+  border: 1px solid color-mix(in oklab, var(--gc-risk-caution) 36%, var(--border-default, var(--border)));
+  background: color-mix(in oklab, var(--gc-risk-caution) 8%, var(--bg-surface-1, var(--mc-surface-1)));
+  color: var(--fg-primary, var(--foreground));
+  font-size: var(--text-sm);
+}
