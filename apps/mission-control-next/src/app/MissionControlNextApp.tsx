@@ -39,6 +39,7 @@ import {
   fetchRuntimeLifecycleExport,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { GatewayAccessGate } from "@goatcitadel/mission-control-shared/components/GatewayAccessGate";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import {
   NotificationStack,
   upsertNotificationItem,
@@ -74,6 +75,12 @@ import {
   preloadThreadedSurfaceRoute,
 } from "./lazy-legacy-pages";
 import { BlocksShuffleLoader } from "../components/BlocksShuffleLoader";
+import {
+  describeDirtySections,
+  useAnySectionDirty,
+  useBeforeUnloadGuard,
+  useNavigateGuard,
+} from "../features/native-routes/library/use-form-dirty";
 import {
   AREA_META,
   RAIL_ITEMS,
@@ -125,6 +132,7 @@ const PRIMARY_NAV: Array<{ area: PrimaryArea; icon: typeof Bot }> = [
 ];
 
 export function MissionControlNextApp() {
+  useBeforeUnloadGuard();
   const {
     mode,
     setMode,
@@ -163,7 +171,7 @@ export function MissionControlNextApp() {
   });
   const shellStatusRefreshIdRef = useRef(0);
 
-  const navigate = useCallback((nextRoute: AppRoute, options?: { replace?: boolean }) => {
+  const rawNavigate = useCallback((nextRoute: AppRoute, options?: { replace?: boolean }) => {
     const normalized = normalizeAppRoute(nextRoute);
     const href = buildAppHref(normalized);
     const mutate = options?.replace ? window.history.replaceState : window.history.pushState;
@@ -173,6 +181,17 @@ export function MissionControlNextApp() {
     });
     setNavOpen(false);
   }, []);
+  const isSameShellRoute = useCallback(
+    (target: AppRoute) => buildAppHref(normalizeAppRoute(target)) === buildAppHref(normalizeAppRoute(route)),
+    [route],
+  );
+  const {
+    navigate,
+    pending: pendingDirtyNavigation,
+    confirmDiscard,
+    cancelDiscard,
+  } = useNavigateGuard<AppRoute>(rawNavigate, isSameShellRoute);
+  const dirtyKeys = useAnySectionDirty();
 
   const shellThemeClass = resolveShellThemeClass(route.theme === "light" ? "light" : theme);
   const currentAreaMeta = AREA_META[route.area];
@@ -966,6 +985,20 @@ export function MissionControlNextApp() {
         </div>
 
         <NotificationStack items={notifications} onDismiss={dismissNotification} />
+        <ConfirmModal
+          open={pendingDirtyNavigation !== null}
+          title="Discard unsaved changes?"
+          message={
+            dirtyKeys.length > 0
+              ? `You have unsaved changes in ${describeDirtySections(dirtyKeys)}.`
+              : "You have unsaved changes."
+          }
+          confirmLabel="Discard changes"
+          cancelLabel="Stay on this page"
+          danger
+          onConfirm={confirmDiscard}
+          onCancel={cancelDiscard}
+        />
       </div>
     </ShellDetailPanelProvider>
   );

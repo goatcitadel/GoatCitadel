@@ -298,11 +298,8 @@ describe("chat workbench helpers", () => {
     const { deps, projectRoot, rootDir } = await createGitWorkbenchFixture();
     const createOutsideTarget = path.join(os.tmpdir(), `goatcitadel-workbench-create-${Date.now()}-${process.pid}.txt`);
     const createLinkPath = path.join(projectRoot, "dangling-create.md");
-    if (!(await createDanglingFileSymlink(createLinkPath, createOutsideTarget))) {
-      return;
-    }
-
-    try {
+    const canCreateFileSymlinks = await createDanglingFileSymlink(createLinkPath, createOutsideTarget);
+    if (canCreateFileSymlinks) {
       await expect(
         runChatSessionWorkbenchFileOperation(deps, "sess-1", {
           operation: "create_file",
@@ -314,10 +311,7 @@ describe("chat workbench helpers", () => {
 
       const saveOutsideTarget = path.join(os.tmpdir(), `goatcitadel-workbench-save-${Date.now()}-${process.pid}.txt`);
       const saveLinkPath = path.join(projectRoot, "dangling-save.md");
-      if (!(await createDanglingFileSymlink(saveLinkPath, saveOutsideTarget))) {
-        return;
-      }
-      try {
+      if (await createDanglingFileSymlink(saveLinkPath, saveOutsideTarget)) {
         await expect(
           saveChatSessionWorkbenchFile(deps, "sess-1", {
             path: "dangling-save.md",
@@ -325,9 +319,8 @@ describe("chat workbench helpers", () => {
           }),
         ).rejects.toThrow(/dangling symbolic link/);
         await expect(fs.stat(saveOutsideTarget)).rejects.toMatchObject({ code: "ENOENT" });
-      } finally {
-        await fs.rm(saveOutsideTarget, { force: true });
       }
+      await fs.rm(saveOutsideTarget, { force: true });
 
       await fs.writeFile(path.join(projectRoot, "source.md"), "source\n", "utf8");
       const duplicateOutsideTarget = path.join(
@@ -335,10 +328,7 @@ describe("chat workbench helpers", () => {
         `goatcitadel-workbench-duplicate-${Date.now()}-${process.pid}.txt`,
       );
       const duplicateLinkPath = path.join(projectRoot, "dangling-duplicate.md");
-      if (!(await createDanglingFileSymlink(duplicateLinkPath, duplicateOutsideTarget))) {
-        return;
-      }
-      try {
+      if (await createDanglingFileSymlink(duplicateLinkPath, duplicateOutsideTarget)) {
         await expect(
           runChatSessionWorkbenchFileOperation(deps, "sess-1", {
             operation: "duplicate",
@@ -347,34 +337,35 @@ describe("chat workbench helpers", () => {
           }),
         ).rejects.toThrow(/target already exists/);
         await expect(fs.stat(duplicateOutsideTarget)).rejects.toMatchObject({ code: "ENOENT" });
-      } finally {
-        await fs.rm(duplicateOutsideTarget, { force: true });
       }
-
-      const outsideProjectDir = path.join(rootDir, "outside-project");
-      await fs.mkdir(outsideProjectDir, { recursive: true });
-      const linkedParentPath = path.join(projectRoot, "linked-parent");
-      if (!(await createDirectorySymlink(linkedParentPath, outsideProjectDir))) {
-        return;
-      }
-      await expect(
-        runChatSessionWorkbenchFileOperation(deps, "sess-1", {
-          operation: "create_file",
-          path: "linked-parent/escaped.md",
-          content: "escaped project scope\n",
-        }),
-      ).rejects.toThrow(/outside the project root/);
-      await expect(fs.stat(path.join(outsideProjectDir, "escaped.md"))).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(
-        saveChatSessionWorkbenchFile(deps, "sess-1", {
-          path: "linked-parent/escaped-save.md",
-          content: "escaped save scope\n",
-        }),
-      ).rejects.toThrow(/outside the project root/);
-      await expect(fs.stat(path.join(outsideProjectDir, "escaped-save.md"))).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      await fs.rm(createOutsideTarget, { force: true });
+      await fs.rm(duplicateOutsideTarget, { force: true });
+    } else {
+      expect(process.platform).toBe("win32");
+      console.warn("Skipping file-symlink workbench escape coverage; Windows file symlink privileges are unavailable.");
     }
+
+    const outsideProjectDir = path.join(rootDir, "outside-project");
+    await fs.mkdir(outsideProjectDir, { recursive: true });
+    const linkedParentPath = path.join(projectRoot, "linked-parent");
+    if (!(await createDirectorySymlink(linkedParentPath, outsideProjectDir))) {
+      throw new Error("Directory symlink/junction coverage unavailable; cannot verify parent escape guard.");
+    }
+    await expect(
+      runChatSessionWorkbenchFileOperation(deps, "sess-1", {
+        operation: "create_file",
+        path: "linked-parent/escaped.md",
+        content: "escaped project scope\n",
+      }),
+    ).rejects.toThrow(/outside the project root/);
+    await expect(fs.stat(path.join(outsideProjectDir, "escaped.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      saveChatSessionWorkbenchFile(deps, "sess-1", {
+        path: "linked-parent/escaped-save.md",
+        content: "escaped save scope\n",
+      }),
+    ).rejects.toThrow(/outside the project root/);
+    await expect(fs.stat(path.join(outsideProjectDir, "escaped-save.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    await fs.rm(createOutsideTarget, { force: true });
   }, 30_000);
 
   it("creates a workbench worktree from a git project and publishes the lifecycle event", async () => {

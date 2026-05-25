@@ -89,25 +89,6 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
     items: [],
   });
 
-  useEffect(() => {
-    const item = memory.selectedItem;
-    if (!item) {
-      setDraft({
-        title: "",
-        content: "",
-        pinned: false,
-        ttlOverrideSeconds: "",
-      });
-      return;
-    }
-    setDraft({
-      title: item.title,
-      content: item.content,
-      pinned: item.pinned,
-      ttlOverrideSeconds: item.ttlOverrideSeconds ? String(item.ttlOverrideSeconds) : "",
-    });
-  }, [memory.selectedItem]);
-
   const memoryItems = memory.data?.memoryItems ?? [];
 
   const namespacePillOptions = useMemo<FilterPillOption[]>(() => {
@@ -170,6 +151,28 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
       );
     });
   }, [memoryItems, namespaceFilter, search]);
+  const selectedVisibleItem = useMemo(
+    () => visibleItems.find((item) => item.itemId === memory.selectedItemId) ?? null,
+    [memory.selectedItemId, visibleItems],
+  );
+
+  useEffect(() => {
+    if (!selectedVisibleItem) {
+      setDraft({
+        title: "",
+        content: "",
+        pinned: false,
+        ttlOverrideSeconds: "",
+      });
+      return;
+    }
+    setDraft({
+      title: selectedVisibleItem.title,
+      content: selectedVisibleItem.content,
+      pinned: selectedVisibleItem.pinned,
+      ttlOverrideSeconds: selectedVisibleItem.ttlOverrideSeconds ? String(selectedVisibleItem.ttlOverrideSeconds) : "",
+    });
+  }, [selectedVisibleItem]);
 
   const fileAreas = useMemo(() => summarizeMemorySubspaces(memory.data?.files ?? []), [memory.data?.files]);
   const sectionErrors = memory.data?.sectionErrors;
@@ -345,33 +348,33 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
           </div>
         </NativeCard>
         <NativeCard
-          title={memory.selectedItem?.title ?? "Memory detail"}
+          title={selectedVisibleItem?.title ?? "Memory detail"}
           subtitle={
-            memory.selectedItem
-              ? `Lifecycle ${memory.selectedItem.lifecycleState} · ${memory.selectedItem.namespace}`
+            selectedVisibleItem
+              ? `Lifecycle ${selectedVisibleItem.lifecycleState} · ${selectedVisibleItem.namespace}`
               : "Select a memory item to inspect lifecycle state, history, and patch actions."
           }
         >
-          {memory.selectedItem ? (
+          {selectedVisibleItem ? (
             <>
               <div className="mc-next-runtime-metric-grid">
                 <div className="mc-next-runtime-metric">
                   <span>Lifecycle</span>
-                  <strong>{memory.selectedItem.lifecycleState}</strong>
-                  <p>{memory.selectedItem.status}</p>
+                  <strong>{selectedVisibleItem.lifecycleState}</strong>
+                  <p>{selectedVisibleItem.status}</p>
                 </div>
                 <div className="mc-next-runtime-metric">
                   <span>Expires</span>
-                  <strong>{formatMaybeDateTime(memory.selectedItem.expiresAt)}</strong>
-                  <p>TTL {memory.selectedItem.ttlOverrideSeconds ?? "default"}</p>
+                  <strong>{formatMaybeDateTime(selectedVisibleItem.expiresAt)}</strong>
+                  <p>TTL {selectedVisibleItem.ttlOverrideSeconds ?? "default"}</p>
                 </div>
                 <div className="mc-next-runtime-metric">
                   <span>Item ID</span>
-                  <strong>{shortId(memory.selectedItem.itemId)}</strong>
-                  <p>{formatShortDateTime(memory.selectedItem.updatedAt)}</p>
+                  <strong>{shortId(selectedVisibleItem.itemId)}</strong>
+                  <p>{formatShortDateTime(selectedVisibleItem.updatedAt)}</p>
                 </div>
               </div>
-              <MemoryProvenancePanel item={memory.selectedItem} writeEnvelopeCount={memoryWriteEnvelopes.length} />
+              <MemoryProvenancePanel item={selectedVisibleItem} writeEnvelopeCount={memoryWriteEnvelopes.length} />
               <div className="mc-next-settings-field-grid">
                 <label className="mc-next-settings-field span-2">
                   <span>Title</span>
@@ -420,9 +423,9 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 <button
                   type="button"
                   className="gc-button"
-                  disabled={!memoryCanMutate || memory.busyKey === `item:${memory.selectedItem.itemId}`}
+                  disabled={!memoryCanMutate || memory.busyKey === `item:${selectedVisibleItem.itemId}`}
                   onClick={() =>
-                    void memory.saveItemPatch(memory.selectedItem!.itemId, {
+                    void memory.saveItemPatch(selectedVisibleItem.itemId, {
                       title: draft.title,
                       content: draft.content,
                       pinned: draft.pinned,
@@ -437,7 +440,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                 <button
                   type="button"
                   className="gc-button danger"
-                  disabled={!memoryCanMutate || memory.busyKey === `forget:${memory.selectedItem.itemId}`}
+                  disabled={!memoryCanMutate || memory.busyKey === `forget:${selectedVisibleItem.itemId}`}
                   onClick={() => void memory.forgetSelectedItem()}
                 >
                   Forget item

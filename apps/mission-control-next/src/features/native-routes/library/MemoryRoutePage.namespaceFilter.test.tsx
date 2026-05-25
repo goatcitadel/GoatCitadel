@@ -159,6 +159,8 @@ function pillLabel(pill: ReactTestInstance): string {
 describe("MemoryRoutePage namespace filter pills", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    memorySnapshot.selectedItemId = null;
+    memorySnapshot.selectedItem = null;
     evidenceApiMocks.fetchEvidenceEnvelopes.mockResolvedValue({ items: [] });
   });
 
@@ -316,5 +318,35 @@ describe("MemoryRoutePage namespace filter pills", () => {
     expect(bodyText).toContain("Approval verdict policy v3");
     expect(bodyText).not.toContain("Haiku fallback heuristic");
     expect(bodyText).not.toContain("retention-pulse-w19.csv");
+  });
+
+  it("does not render detail for a selected item hidden by the active namespace filter", async () => {
+    const scratchItem = memorySnapshot.data.memoryItems.find((item) => item.itemId === "mem-5")!;
+    memorySnapshot.selectedItemId = scratchItem.itemId;
+    memorySnapshot.selectedItem = scratchItem;
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = create(
+        <MemoryRoutePage
+          route={{ area: "library", section: "memory", theme: "library" } as never}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={0}
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(collectText(renderer!.root)).toContain("Quick scratch");
+    const knowledgePill = findPills(renderer!.root).find((pill) => pillLabel(pill).startsWith("knowledge"))!;
+    await act(async () => {
+      knowledgePill.props.onClick();
+    });
+
+    const bodyText = collectText(renderer!.root);
+    expect(bodyText).not.toContain("Quick scratch");
+    expect(bodyText).toContain("Select a memory item to inspect lifecycle state");
   });
 });

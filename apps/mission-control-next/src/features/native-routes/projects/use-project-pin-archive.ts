@@ -6,12 +6,24 @@ function storageKeyFor(workspaceId: string): string {
   return `${STORAGE_KEY_PREFIX}${workspaceId || "default"}`;
 }
 
+function getProjectPinStorage(): Storage | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return window.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function readPinnedSet(workspaceId: string): ReadonlySet<string> {
-  if (typeof window === "undefined" || !window.localStorage) {
+  const storage = getProjectPinStorage();
+  if (!storage) {
     return new Set();
   }
   try {
-    const raw = window.localStorage.getItem(storageKeyFor(workspaceId));
+    const raw = storage.getItem(storageKeyFor(workspaceId));
     if (!raw) {
       return new Set();
     }
@@ -26,11 +38,12 @@ function readPinnedSet(workspaceId: string): ReadonlySet<string> {
 }
 
 function writePinnedSet(workspaceId: string, pinned: ReadonlySet<string>): void {
-  if (typeof window === "undefined" || !window.localStorage) {
+  const storage = getProjectPinStorage();
+  if (!storage) {
     return;
   }
   try {
-    window.localStorage.setItem(storageKeyFor(workspaceId), JSON.stringify([...pinned]));
+    storage.setItem(storageKeyFor(workspaceId), JSON.stringify([...pinned]));
   } catch {
     // Ignore quota or serialization errors; pin state is best-effort.
   }

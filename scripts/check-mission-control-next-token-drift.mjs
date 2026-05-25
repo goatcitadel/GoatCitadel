@@ -18,7 +18,7 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,19 +31,76 @@ const SCAN_ROOT = path.join(repoRoot, "apps", "mission-control-next", "src");
 // shrink this list to {mission-control-next.css} (the intentional alias file).
 // When this list reaches zero entries other than the alias file, deprecated
 // token namespaces should be deleted entirely.
-const GRANDFATHERED_FILES = new Set(
-  [
-    // The intentional Phase A alias file. Stays permanently until aliases are deleted.
-    "apps/mission-control-next/src/styles/mission-control-next.css",
-    // Legacy declarations widely consumed downstream — Phase B target.
-    "apps/mission-control-next/src/styles/mission-control-next-foundation.css",
-    // Per-area --mc-area-color setters. Phase B target: migrate to data-area + tokens.
-    "apps/mission-control-next/src/features/native-routes/native-routes.css",
-    // Feature-level mode/session-color drift. Phase B target.
-    "apps/mission-control-next/src/features/threaded-surface/styles/rail.css",
-    "apps/mission-control-next/src/features/threaded-surface/styles/side-panels.css",
-  ].map((p) => path.resolve(repoRoot, p.split("/").join(path.sep))),
-);
+const GRANDFATHERED_DECLARATIONS = buildGrandfatheredDeclarationMap(repoRoot);
+
+function buildGrandfatheredDeclarationMap(root) {
+  return new Map(
+    [
+      [
+        "apps/mission-control-next/src/styles/mission-control-next.css",
+        [
+          "--gc-area-chat",
+          "--gc-area-code",
+          "--gc-area-cowork",
+          "--gc-area-library",
+          "--gc-area-ops",
+          "--gc-area-projects",
+          "--gc-area-settings",
+          "--gc-risk-caution",
+          "--gc-risk-danger",
+          "--gc-risk-nuclear",
+          "--gc-risk-safe",
+          "--mc-area-color",
+          "--mc-border-strong",
+          "--mc-border-subtle",
+          "--mc-loader-gap",
+          "--mc-loader-shift",
+          "--mc-loader-size",
+          "--mc-scrollbar-safe-gutter",
+          "--mc-scrollbar-thumb",
+          "--mc-scrollbar-thumb-hover",
+          "--mc-scrollbar-track",
+          "--mc-shadow-soft",
+          "--mc-shadow-strong",
+          "--mc-shell-bg",
+          "--mc-surface-1",
+          "--mc-surface-2",
+          "--mc-surface-3",
+        ],
+      ],
+      [
+        "apps/mission-control-next/src/styles/mission-control-next-foundation.css",
+        [
+          "--mc-font-mono",
+          "--mc-font-sans",
+          "--mc-radius-lg",
+          "--mc-radius-md",
+          "--mc-radius-pill",
+          "--mc-radius-sm",
+          "--mc-radius-xl",
+          "--mc-shadow-soft",
+          "--mc-shadow-strong",
+        ],
+      ],
+      ["apps/mission-control-next/src/features/native-routes/native-routes.css", ["--mc-area-color"]],
+      [
+        "apps/mission-control-next/src/features/threaded-surface/styles/rail.css",
+        [
+          "--mc-area-color",
+          "--mc-mode-chat",
+          "--mc-mode-code",
+          "--mc-mode-cowork",
+          "--mc-scrollbar-safe-gutter",
+          "--mc-session-mode-color",
+        ],
+      ],
+      ["apps/mission-control-next/src/features/threaded-surface/styles/side-panels.css", ["--mc-area-color"]],
+    ].map(([file, tokens]) => [
+      path.resolve(root, file.split("/").join(path.sep)),
+      new Set(tokens),
+    ]),
+  );
+}
 
 // Patterns we reject as DECLARATIONS (left-hand side of a CSS custom property).
 // Note: we look for the property syntax `--foo:` to avoid catching `var(--foo)` references.
@@ -79,7 +136,7 @@ async function walk(dir, accumulator) {
   }
 }
 
-function findViolations(filePath, contents) {
+export function findViolations(filePath, contents) {
   const violations = [];
   const lines = contents.split(/\r?\n/);
   lines.forEach((line, index) => {
@@ -110,21 +167,29 @@ function findViolations(filePath, contents) {
   return violations;
 }
 
-async function main() {
+export async function collectTokenDriftViolations({
+  scanRoot = SCAN_ROOT,
+  grandfatheredDeclarations = GRANDFATHERED_DECLARATIONS,
+} = {}) {
   const files = [];
-  await walk(SCAN_ROOT, files);
+  await walk(scanRoot, files);
 
   const allViolations = [];
   let grandfatheredFileCount = 0;
   for (const file of files) {
-    if (GRANDFATHERED_FILES.has(path.resolve(file))) {
+    const allowedTokens = grandfatheredDeclarations.get(path.resolve(file));
+    if (allowedTokens) {
       grandfatheredFileCount += 1;
-      continue;
     }
     const contents = await fs.readFile(file, "utf8");
-    const violations = findViolations(file, contents);
+    const violations = findViolations(file, contents).filter((violation) => !allowedTokens?.has(violation.token));
     allViolations.push(...violations);
   }
+  return { files, grandfatheredFileCount, violations: allViolations };
+}
+
+async function main() {
+  const { files, grandfatheredFileCount, violations: allViolations } = await collectTokenDriftViolations();
 
   if (allViolations.length === 0) {
     console.log(
@@ -152,7 +217,9 @@ async function main() {
   process.exit(1);
 }
 
-main().catch((err) => {
-  console.error("token-drift: script error", err);
-  process.exit(2);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error("token-drift: script error", err);
+    process.exit(2);
+  });
+}

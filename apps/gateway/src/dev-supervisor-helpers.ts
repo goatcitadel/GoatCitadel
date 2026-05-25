@@ -194,7 +194,10 @@ function resolvePnpmExecSpawn(
     };
   }
 
-  return { command: "pnpm.cmd", argsPrefix: ["exec"], description: "tsc -b (pnpm exec)" };
+  throw new Error(
+    "Unable to resolve a shell-free pnpm entrypoint for the Windows reference build. " +
+      "Install Node with Corepack enabled or install workspace dependencies so typescript/bin/tsc can be resolved.",
+  );
 }
 
 export function readReferenceSignatureCache(cacheFile: string): string | undefined {

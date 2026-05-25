@@ -191,8 +191,13 @@ export function ProjectsRoutePage({
     });
   }, [filterView, pinController, state.projects]);
 
-  const selectedProject =
-    state.projects.find((project) => project.projectId === route.projectId) ?? state.projects[0] ?? null;
+  const fallbackProject =
+    visibleProjects.find((project) => project.lifecycleStatus !== "archived") ??
+    visibleProjects[0] ??
+    state.projects.find((project) => project.lifecycleStatus !== "archived") ??
+    state.projects[0] ??
+    null;
+  const selectedProject = state.projects.find((project) => project.projectId === route.projectId) ?? fallbackProject;
 
   useEffect(() => {
     if (route.projectId || !selectedProject) {

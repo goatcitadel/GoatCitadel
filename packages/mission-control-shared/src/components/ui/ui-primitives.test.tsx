@@ -693,6 +693,11 @@ describe("shared UI primitives", () => {
     expect(plusCallbacks.onRunQuickResearch).toHaveBeenCalled();
     expect(plusCallbacks.onSelect).toHaveBeenCalled();
     expect(modalCallbacks.onDismiss).toHaveBeenCalled();
+    expect(
+      plusMenu.root.findAllByType("button").find((button) => button.props["aria-label"] === "Custom")!.props[
+        "aria-pressed"
+      ],
+    ).toBe(true);
 
     const modelCallbacks = {
       onChangeProvider: vi.fn(),

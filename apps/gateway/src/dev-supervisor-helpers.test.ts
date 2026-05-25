@@ -135,7 +135,7 @@ describe("dev supervisor helper decisions", () => {
     expect(directPlan.shell).toBe(false);
   });
 
-  it("falls back to shell-free pnpm exec when typescript/bin/tsc cannot be resolved", () => {
+  it("uses shell-free reference-build fallbacks and rejects Windows cmd shims", () => {
     const isolatedDir = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-helpers-"));
     try {
       const nodeExecutable = "C:\\Program Files\\nodejs\\node.exe";
@@ -162,17 +162,16 @@ describe("dev supervisor helper decisions", () => {
       expect(plan.description).toBe("tsc -b (corepack pnpm exec)");
       expect(plan.shell).toBe(false);
 
-      const noCorepackPlan = resolveReferenceBuildSpawn({
-        gatewayDir: isolatedDir,
-        repoRoot: isolatedDir,
-        useTs7: false,
-        platform: "win32",
-        nodeExecutable,
-        fileExists: () => false,
-      });
-      expect(noCorepackPlan.command).toBe("pnpm.cmd");
-      expect(noCorepackPlan.args).toEqual(["exec", "tsc", "-b", "tsconfig.json", "--pretty", "false"]);
-      expect(noCorepackPlan.shell).toBe(false);
+      expect(() =>
+        resolveReferenceBuildSpawn({
+          gatewayDir: isolatedDir,
+          repoRoot: isolatedDir,
+          useTs7: false,
+          platform: "win32",
+          nodeExecutable,
+          fileExists: () => false,
+        }),
+      ).toThrow(/shell-free pnpm entrypoint/u);
 
       const linuxFallback = resolveReferenceBuildSpawn({
         gatewayDir: isolatedDir,

@@ -145,6 +145,7 @@ export function ChatComposerPlusMenu({
                 key={action.label}
                 type="button"
                 aria-label={action.label}
+                aria-pressed={typeof action.active === "boolean" ? action.active : undefined}
                 onClick={() => {
                   setOpen(false);
                   action.onSelect();

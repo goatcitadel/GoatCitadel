@@ -1347,6 +1347,16 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
   const isDirty = !editorLocked && !arePersonalityDraftsEqual(draft, baselineDraft);
   useFormDirty("settings:personalities", isDirty, { label: "Personalities" });
 
+  const confirmDiscardPersonalityChanges = useCallback(() => {
+    if (!isDirty) {
+      return true;
+    }
+    return (
+      typeof window === "undefined" ||
+      window.confirm("Discard unsaved personality changes before switching editor context?")
+    );
+  }, [isDirty]);
+
   useEffect(() => {
     if (!data?.items.length) {
       setSelectedPersonalityId("");
@@ -1365,9 +1375,20 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
   }, [editorMode, selectedPersonality]);
 
   const beginCustomPersonality = () => {
+    if (!confirmDiscardPersonalityChanges()) {
+      return;
+    }
     setEditorMode("new");
     setDraft(createEmptyPersonalityEditorDraft());
     setNotice(null);
+  };
+
+  const refreshPersonalities = () => {
+    if (!confirmDiscardPersonalityChanges()) {
+      return;
+    }
+    setEditorMode("selected");
+    void reload();
   };
 
   const savePersonality = async () => {
@@ -1469,7 +1490,7 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
                 <Plus size={16} />
                 Add custom personality
               </button>
-              <button type="button" className="mc-next-button-secondary" onClick={() => void reload()}>
+              <button type="button" className="mc-next-button-secondary" onClick={refreshPersonalities}>
                 <RefreshCw size={16} />
                 Refresh
               </button>
@@ -1485,6 +1506,9 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
               }))}
               selectedId={editorMode === "new" ? "" : selectedPersonalityId}
               onSelect={(id) => {
+                if (!confirmDiscardPersonalityChanges()) {
+                  return;
+                }
                 setEditorMode("selected");
                 setSelectedPersonalityId(id);
               }}

@@ -13,6 +13,7 @@ import {
   fetchChatGeneratedArtifacts,
   fetchChatProjects,
   fetchChatSessions,
+  restoreChatProject,
   updateChatProject,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { deriveProjectHome, ProjectsRoutePage } from "./ProjectsRoutePage";
@@ -24,6 +25,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchChatGeneratedArtifacts: vi.fn(),
   fetchChatProjects: vi.fn(),
   fetchChatSessions: vi.fn(),
+  restoreChatProject: vi.fn(),
   updateChatProject: vi.fn(),
 }));
 
@@ -33,6 +35,7 @@ const mockedCreateChatProject = vi.mocked(createChatProject);
 const mockedFetchChatGeneratedArtifacts = vi.mocked(fetchChatGeneratedArtifacts);
 const mockedFetchChatProjects = vi.mocked(fetchChatProjects);
 const mockedFetchChatSessions = vi.mocked(fetchChatSessions);
+const mockedRestoreChatProject = vi.mocked(restoreChatProject);
 const mockedUpdateChatProject = vi.mocked(updateChatProject);
 
 function project(overrides: Partial<ChatProjectRecord>): ChatProjectRecord {
@@ -125,6 +128,14 @@ function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
   return match;
 }
 
+function findButtonByAriaLabel(root: ReactTestInstance, label: string): ReactTestInstance {
+  const match = root.findAll((node) => node.type === "button" && node.props["aria-label"] === label)[0];
+  if (!match) {
+    throw new Error(`Unable to find button with aria-label: ${label}`);
+  }
+  return match;
+}
+
 function findInputByPlaceholder(root: ReactTestInstance, placeholder: string): ReactTestInstance {
   const match = root.findAll(
     (node) => node.type === "input" && String(node.props.placeholder ?? "").includes(placeholder),
@@ -203,6 +214,7 @@ describe("ProjectsRoutePage", () => {
     mockedCreateChatProject.mockResolvedValue(project({ projectId: "project-created", name: "Created" }));
     mockedUpdateChatProject.mockResolvedValue(project({ projectId: "project-alpha", name: "Alpha renamed" }));
     mockedArchiveChatProject.mockResolvedValue(project({ projectId: "project-alpha", lifecycleStatus: "archived" }));
+    mockedRestoreChatProject.mockResolvedValue(project({ projectId: "project-archived", lifecycleStatus: "active" }));
   });
 
   it("loads project containers, counts thread modes, and auto-selects the first project", async () => {
@@ -408,6 +420,56 @@ describe("ProjectsRoutePage", () => {
     expect(navigate).toHaveBeenCalledWith({ area: "projects", theme: "ops" }, { replace: true });
   });
 
+  it("does not auto-select an archived project when returning to the projects root", async () => {
+    mockedFetchChatProjects.mockResolvedValueOnce({
+      items: [
+        project({ projectId: "project-archived", name: "Archived", lifecycleStatus: "archived" }),
+        project({ projectId: "project-active", name: "Active", lifecycleStatus: "active" }),
+      ],
+    } as any);
+    mockedFetchChatSessions.mockResolvedValueOnce({ items: [] } as any);
+    const navigate = vi.fn();
+
+    await renderPage(defaultProps({ route: { area: "projects", theme: "ops" }, navigate }));
+
+    expect(navigate).toHaveBeenCalledWith(
+      { area: "projects", projectId: "project-active", theme: "ops" },
+      { replace: true },
+    );
+  });
+
+  it("restores archived projects and leaves failures visible", async () => {
+    mockedFetchChatProjects.mockResolvedValue({
+      items: [
+        project({ projectId: "project-alpha", name: "Alpha", lifecycleStatus: "active" }),
+        project({ projectId: "project-archived", name: "Archived", lifecycleStatus: "archived" }),
+      ],
+    } as any);
+    mockedRestoreChatProject.mockResolvedValueOnce(
+      project({ projectId: "project-archived", name: "Archived", lifecycleStatus: "active" }),
+    );
+    const renderer = await renderPage(defaultProps({ route: { area: "projects", projectId: "project-archived" } }));
+
+    await act(async () => {
+      findButtonByAriaLabel(renderer.root, "Unarchive project Archived").props.onClick({
+        stopPropagation: vi.fn(),
+      });
+      await Promise.resolve();
+    });
+    expect(mockedRestoreChatProject).toHaveBeenCalledWith("project-archived");
+    expect(findButtonByAriaLabel(renderer.root, "Archive project Archived")).toBeDefined();
+
+    mockedRestoreChatProject.mockRejectedValueOnce(new Error("restore failed"));
+    const failingRenderer = await renderPage(defaultProps({ route: { area: "projects", projectId: "project-archived" } }));
+    await act(async () => {
+      findButtonByAriaLabel(failingRenderer.root, "Unarchive project Archived").props.onClick({
+        stopPropagation: vi.fn(),
+      });
+      await Promise.resolve();
+    });
+    expect(renderedText(failingRenderer)).toContain("restore failed");
+  });
+
   it("shows empty state, disables new-thread actions, and allows refresh recovery", async () => {
     mockedFetchChatProjects.mockResolvedValueOnce({ items: [] } as any);
     mockedFetchChatSessions.mockResolvedValueOnce({ items: [] } as any);
@@ -456,6 +518,36 @@ describe("ProjectsRoutePage", () => {
 
     expect(renderedText(renderer)).toContain("project catalog down");
     expect(renderedText(renderer)).toContain("No active projects found in this workspace.");
+  });
+
+  it("keeps project pins best-effort when localStorage access is blocked", async () => {
+    const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const blockedWindow = {} as Window;
+    Object.defineProperty(blockedWindow, "localStorage", {
+      configurable: true,
+      get() {
+        throw new Error("localStorage blocked");
+      },
+    });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: blockedWindow,
+    });
+
+    try {
+      const renderer = await renderPage(
+        defaultProps({ route: { area: "projects", projectId: "project-alpha", theme: "ops" } }),
+      );
+
+      expect(pageText(renderer)).toContain("Project overview");
+      expect(pageText(renderer)).toContain("Alpha");
+    } finally {
+      if (windowDescriptor) {
+        Object.defineProperty(globalThis, "window", windowDescriptor);
+      } else {
+        Reflect.deleteProperty(globalThis, "window");
+      }
+    }
   });
 
   it("ignores async project loads after the route unmounts", async () => {
