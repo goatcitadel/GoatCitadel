@@ -31,8 +31,7 @@ jobs:
             apps/gateway/backups,apps/gateway/coverage,apps/gateway/coverage-exercise,
             apps/gateway/coverage-smoke,apps/gateway/dist,
             apps/mission-control-desktop/src-tauri/target,
-            apps/mission-control/coverage,apps/mission-control/dist,
-            apps/mission-control/dist-node,apps/mission-control-next/coverage,
+            apps/mission-control-next/coverage,
             apps/mission-control-next/dist,data/audit,data/transcripts
           timeout: 15m
           severity: HIGH,CRITICAL

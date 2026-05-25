@@ -1,24 +1,8 @@
-export const RELEASE_SURFACE_MANIFEST = [
-  { slug: "work-chat", href: "?space=operate&page=surface&surface=chat", readySelector: ".chat-v11.mode-chat" },
-  { slug: "work-cowork", href: "?space=operate&page=surface&surface=cowork", readySelector: ".chat-v11.mode-cowork" },
-  { slug: "work-code", href: "?space=operate&page=surface&surface=code", readySelector: ".chat-v11.mode-code" },
-  { slug: "work-tasks", href: "?space=operate&page=tasks", readyText: "Tasks" },
-  { slug: "work-approvals", href: "?space=operate&page=approvals", readyText: "Approvals" },
-  { slug: "observe-timeline", href: "?space=observe&page=activity&tab=activity", readyText: "Timeline" },
-  { slug: "observe-health", href: "?space=observe&page=costs", readyText: "Health" },
-  { slug: "observe-artifacts", href: "?space=observe&page=artifacts&tab=memory", readyText: "Artifacts" },
-  { slug: "observe-quality", href: "?space=observe&page=quality", readyText: "Quality" },
-  { slug: "tune-general", href: "?space=configure&page=settings&tab=general", readyText: "General" },
-  { slug: "tune-runtime", href: "?space=configure&page=settings&tab=runtime", readyText: "Runtime" },
-  { slug: "tune-workspaces", href: "?space=configure&page=settings&tab=workspaces", readyText: "Workspaces" },
-  {
-    slug: "tune-integrations",
-    href: "?space=configure&page=integrations&tab=overview",
-    readyText: "How connections work",
-  },
-  { slug: "tune-tools", href: "?space=configure&page=tools", readyText: "Tools" },
-  { slug: "tune-agents", href: "?space=configure&page=agents&tab=overview", readyText: "Agents" },
-];
+/*
+ * Legacy `RELEASE_SURFACE_MANIFEST` was retired in Track D Phase 3 alongside
+ * the on-disk `apps/mission-control/` source. The Mission Control Next
+ * manifest below is the only release-bearing surface set.
+ */
 
 export const RELEASE_SURFACE_VARIANTS = [
   {
@@ -585,12 +569,12 @@ export function resolveShellContract(packageName) {
   return packageName === "@goatcitadel/mission-control-next" ? NEXT_SHELL_CONTRACT : CURRENT_SHELL_CONTRACT;
 }
 
-export function resolveSurfaceRegressionManifest(packageName) {
-  return packageName === "@goatcitadel/mission-control-next" ? NEXT_RELEASE_SURFACE_MANIFEST : RELEASE_SURFACE_MANIFEST;
+export function resolveSurfaceRegressionManifest(_packageName) {
+  return NEXT_RELEASE_SURFACE_MANIFEST;
 }
 
-export function resolveVisualRegressionManifest(packageName) {
-  return packageName === "@goatcitadel/mission-control-next" ? NEXT_VISUAL_REGRESSION_MANIFEST : RELEASE_SURFACE_MANIFEST;
+export function resolveVisualRegressionManifest(_packageName) {
+  return NEXT_VISUAL_REGRESSION_MANIFEST;
 }
 
 export function resolveVisualRegressionVariants(_packageName) {

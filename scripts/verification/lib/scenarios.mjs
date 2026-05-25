@@ -24,7 +24,7 @@ import {
 } from "./architecture-metrics.mjs";
 import {
   buildVisualBaselineFileName,
-  RELEASE_SURFACE_MANIFEST,
+  NEXT_RELEASE_SURFACE_MANIFEST,
   RELEASE_SURFACE_VARIANTS,
   resolveLegacyRedirectManifest,
   resolveShellContract,
@@ -45,7 +45,7 @@ import {
   stopVerificationStack,
   waitForHttp,
 } from "./runtime.mjs";
-import { DEFAULT_UI_PACKAGE, LEGACY_UI_PACKAGE, resolveUiTarget } from "../../lib/ui-target.mjs";
+import { DEFAULT_UI_PACKAGE, resolveUiTarget } from "../../lib/ui-target.mjs";
 
 const PROVIDER_SCENARIOS = ["simple", "stream", "structured", "tools"];
 const UNSUPPORTED_PROVIDER_SCENARIOS = {
@@ -3655,7 +3655,6 @@ export async function runUiParityLane(context, options = {}) {
     },
   });
   const nextUi = await startVerificationUiProcess(context, stack.gatewayUrl, NEXT_UI_PACKAGE, "ui-parity-next");
-  const legacyUi = await startVerificationUiProcess(context, stack.gatewayUrl, LEGACY_UI_PACKAGE, "ui-parity-legacy");
   try {
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-ui-parity");
     const fixture = await seedMissionControlNextFixture(stack.gatewayUrl);
@@ -3672,9 +3671,10 @@ export async function runUiParityLane(context, options = {}) {
     await runScenario(
       context,
       {
-        id: "ui-parity.next-vs-legacy-operator-surfaces",
+        id: "ui-parity.next-operator-surfaces",
         lane: "ui-parity",
-        title: "Canonical next routes expose seeded operator facts while legacy compatibility surfaces render",
+        title:
+          "Canonical Mission Control Next routes expose seeded operator facts (legacy comparison retired in Track D Phase 3)",
         subsystem: "mission-control",
       },
       async ({ correlationId }) => {
@@ -3685,19 +3685,10 @@ export async function runUiParityLane(context, options = {}) {
             colorScheme: "dark",
           });
           await installMissionControlNextBrowserState(nextContext, fixture.workspaceId);
-          await installLegacyMissionControlBrowserState(nextContext, fixture.workspaceId);
-          const legacyContext = await browser.newContext({
-            viewport: { width: 1440, height: 1024 },
-            colorScheme: "dark",
-          });
-          await installLegacyMissionControlBrowserState(legacyContext, fixture.workspaceId);
 
           const nextPage = await nextContext.newPage();
-          const legacyPage = await legacyContext.newPage();
           const nextLog = attachBrowserLogging(nextPage);
-          const legacyLog = attachBrowserLogging(legacyPage);
           const nextCursor = nextLog.mark();
-          const legacyCursor = legacyLog.mark();
 
           const parity = {
             approvals: await collectUiParitySurface({
@@ -3706,16 +3697,6 @@ export async function runUiParityLane(context, options = {}) {
               href: `/ops/approvals`,
               route: { expectedArea: "ops", expectedSection: "approvals", readyText: "Approval queue" },
               packageName: NEXT_UI_PACKAGE,
-              correlationId,
-              sessionId: fixture.sessionId,
-              needle: approvalNeedle,
-            }),
-            legacyApprovals: await collectUiParitySurface({
-              page: legacyPage,
-              baseUrl: legacyUi.uiUrl,
-              href: "/?space=operate&page=approvals",
-              route: { href: "?space=operate&page=approvals", readyText: "Approvals" },
-              packageName: LEGACY_UI_PACKAGE,
               correlationId,
               sessionId: fixture.sessionId,
               needle: approvalNeedle,
@@ -3730,32 +3711,12 @@ export async function runUiParityLane(context, options = {}) {
               sessionId: fixture.sessionId,
               needle: "Daemon",
             }),
-            legacyRuntime: await collectUiParitySurface({
-              page: legacyPage,
-              baseUrl: legacyUi.uiUrl,
-              href: "/?space=observe&page=costs",
-              route: { href: "?space=observe&page=costs", readyText: "Health" },
-              packageName: LEGACY_UI_PACKAGE,
-              correlationId,
-              sessionId: fixture.sessionId,
-              needle: "Health",
-            }),
             activity: await collectUiParitySurface({
               page: nextPage,
               baseUrl: nextUi.uiUrl,
               href: "/ops/activity",
               route: { expectedArea: "ops", expectedSection: "activity", readyText: "Activity feed" },
               packageName: NEXT_UI_PACKAGE,
-              correlationId,
-              sessionId: fixture.sessionId,
-              needle: activityNeedle,
-            }),
-            legacyActivity: await collectUiParitySurface({
-              page: legacyPage,
-              baseUrl: legacyUi.uiUrl,
-              href: "/?space=observe&page=activity&tab=activity",
-              route: { href: "?space=observe&page=activity&tab=activity", readyText: "Timeline" },
-              packageName: LEGACY_UI_PACKAGE,
               correlationId,
               sessionId: fixture.sessionId,
               needle: activityNeedle,
@@ -3770,27 +3731,17 @@ export async function runUiParityLane(context, options = {}) {
               sessionId: fixture.sessionId,
               needle: memoryNeedle,
             }),
-            legacyMemory: await collectUiParitySurface({
-              page: legacyPage,
-              baseUrl: legacyUi.uiUrl,
-              href: "/?space=observe&page=artifacts&tab=memory",
-              route: { href: "?space=observe&page=artifacts&tab=memory", readyText: "Artifacts" },
-              packageName: LEGACY_UI_PACKAGE,
-              correlationId,
-              sessionId: fixture.sessionId,
-              needle: memoryNeedle,
-            }),
           };
 
-          const pairedChecks = [
-            ["approvals", parity.approvals, parity.legacyApprovals],
-            ["runtime", parity.runtime, parity.legacyRuntime],
-            ["activity", parity.activity, parity.legacyActivity],
-            ["memory", parity.memory, parity.legacyMemory],
+          const labelledChecks = [
+            ["approvals", parity.approvals],
+            ["runtime", parity.runtime],
+            ["activity", parity.activity],
+            ["memory", parity.memory],
           ];
-          for (const [label, nextResult, legacyResult] of pairedChecks) {
-            if (!nextResult.ready || !legacyResult.ready) {
-              throw new Error(`ui-parity ${label} route did not become ready in both shells`);
+          for (const [label, nextResult] of labelledChecks) {
+            if (!nextResult.ready) {
+              throw new Error(`ui-parity ${label} route did not become ready`);
             }
             if (!nextResult.needleVisible) {
               throw new Error(`ui-parity next ${label} surface did not expose the seeded fact ${nextResult.needle}`);
@@ -3805,14 +3756,6 @@ export async function runUiParityLane(context, options = {}) {
             correlationId,
             logCursor: nextCursor,
           });
-          const legacyArtifacts = await captureBrowserArtifacts(context, {
-            slug: "ui-parity-legacy",
-            page: legacyPage,
-            browserLog: legacyLog,
-            gatewayUrl: stack.gatewayUrl,
-            correlationId,
-            logCursor: legacyCursor,
-          });
           const outPath = path.join(context.artifactRoot, "diagnostics", "ui-parity-operator-surfaces.json");
           await writeJson(outPath, {
             fixture,
@@ -3824,21 +3767,17 @@ export async function runUiParityLane(context, options = {}) {
           return {
             status: "passed",
             metrics: {
-              approvalParity: Number(parity.approvals.needleVisible && parity.legacyApprovals.needleVisible),
-              activityParity: Number(parity.activity.needleVisible && parity.legacyActivity.needleVisible),
-              memoryParity: Number(parity.memory.needleVisible && parity.legacyMemory.needleVisible),
+              approvalReady: Number(parity.approvals.needleVisible),
+              activityReady: Number(parity.activity.needleVisible),
+              memoryReady: Number(parity.memory.needleVisible),
             },
             artifacts: {
-              diagnostics: [
-                ...nextArtifacts.diagnostics,
-                ...legacyArtifacts.diagnostics,
-                relativeToRun(context, outPath),
-              ],
-              screenshots: [...nextArtifacts.screenshots, ...legacyArtifacts.screenshots],
+              diagnostics: [...nextArtifacts.diagnostics, relativeToRun(context, outPath)],
+              screenshots: nextArtifacts.screenshots,
               traces: [],
-              logs: [...nextArtifacts.logs, ...legacyArtifacts.logs],
+              logs: nextArtifacts.logs,
               perf: [],
-              playwright: [...nextArtifacts.playwright, ...legacyArtifacts.playwright],
+              playwright: nextArtifacts.playwright,
             },
           };
         } finally {
@@ -3848,7 +3787,6 @@ export async function runUiParityLane(context, options = {}) {
     );
   } finally {
     await stopProcess(nextUi.handle);
-    await stopProcess(legacyUi.handle);
     await stopVerificationStack(stack);
   }
 }
@@ -6055,10 +5993,8 @@ async function loadVisualComparisonImage(filePath) {
 
 async function assertVisualBaselineCoverage(context, options = {}) {
   const packageName = options.packageName ?? DEFAULT_UI_PACKAGE;
-  const routes =
-    packageName === NEXT_UI_PACKAGE ? resolveVisualRegressionManifest(packageName) : RELEASE_SURFACE_MANIFEST;
-  const variants =
-    packageName === NEXT_UI_PACKAGE ? resolveVisualRegressionVariants(packageName) : RELEASE_SURFACE_VARIANTS;
+  const routes = resolveVisualRegressionManifest(packageName);
+  const variants = resolveVisualRegressionVariants(packageName);
   const baselineDir = resolveVisualBaselineDir(packageName);
   const expectedFiles = routes.flatMap((route) =>
     variants.map((variant) => buildVisualBaselineFileName(route.slug, variant.slug)),

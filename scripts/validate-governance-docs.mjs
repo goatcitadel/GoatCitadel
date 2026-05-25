@@ -6,7 +6,6 @@ import {
   NEXT_RELEASE_SURFACE_MANIFEST,
   NEXT_VISUAL_REGRESSION_MANIFEST,
   NEXT_VISUAL_SCENARIO_MANIFEST,
-  RELEASE_SURFACE_MANIFEST,
   RELEASE_SURFACE_VARIANTS,
   resolveVisualBaselineNamespace,
 } from "./verification/lib/release-surface-manifest.mjs";
@@ -67,7 +66,6 @@ const currentShellEvidencePatterns = [
 const workspacePackageFiles = [
   "package.json",
   "apps/gateway/package.json",
-  "apps/mission-control/package.json",
   "apps/mission-control-next/package.json",
   "apps/mission-control-desktop/package.json",
   "packages/contracts/package.json",
@@ -467,12 +465,8 @@ if (!/contractVerified/.test(backupVerifySource) || !/contractCoverage/.test(bac
 }
 
 const scenariosSource = await readFile(path.join(root, "scripts", "verification", "lib", "scenarios.mjs"), "utf8");
-if (!/release-surface-manifest\.mjs/.test(scenariosSource) || !/RELEASE_SURFACE_MANIFEST/.test(scenariosSource)) {
-  errors.push("scripts/verification/lib/scenarios.mjs must derive release-bearing route coverage from the shared release-surface manifest.");
-}
-
-if (RELEASE_SURFACE_MANIFEST.length !== 15) {
-  errors.push("scripts/verification/lib/release-surface-manifest.mjs must freeze the 15 legacy compatibility release-taxonomy surfaces.");
+if (!/release-surface-manifest\.mjs/.test(scenariosSource) || !/NEXT_RELEASE_SURFACE_MANIFEST/.test(scenariosSource)) {
+  errors.push("scripts/verification/lib/scenarios.mjs must derive release-bearing route coverage from the canonical Mission Control Next release-surface manifest.");
 }
 
 const nextRouteModelSource = await readFile(

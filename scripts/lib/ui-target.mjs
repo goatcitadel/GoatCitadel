@@ -1,19 +1,10 @@
 import path from "node:path";
 
 export const DEFAULT_UI_PACKAGE = "@goatcitadel/mission-control-next";
-/*
- * LEGACY_UI_PACKAGE remains exported solely for internal verification lanes
- * (verify:ui:parity legacy-surface smoke) that exercise the on-disk legacy
- * source until Track D Phase 3 archives it. The launcher's env-var fallback
- * (GOATCITADEL_UI_PACKAGE override) is now whitelisted to DEFAULT_UI_PACKAGE
- * only; users cannot opt into legacy through the dev or launcher path.
- */
-export const LEGACY_UI_PACKAGE = "@goatcitadel/mission-control";
 
 const SUPPORTED_LAUNCHER_PACKAGES = new Set([DEFAULT_UI_PACKAGE]);
 
 const DISPLAY_NAMES = new Map([
-  ["@goatcitadel/mission-control", "Mission Control"],
   ["@goatcitadel/mission-control-next", "Mission Control Next"],
 ]);
 
