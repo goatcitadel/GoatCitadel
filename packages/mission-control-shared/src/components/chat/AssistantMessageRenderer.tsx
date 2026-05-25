@@ -225,8 +225,20 @@ function AssistantMessageContainer({
     }
   }
 
+  const isStreamingAssistant = role === "assistant" && Boolean(running);
+  // H-2 (docs/review/mission-control-next-ship-punchlist.md): Wire streaming
+  // assistant text into a live region so SR follows the response. `aria-live`
+  // is conditional — applied only while streaming so unrelated DOM updates
+  // (timestamps, copy-button toggle) don't get re-announced after completion.
+  // `aria-atomic="false"` makes assistive tech read only the new chunks, not
+  // the whole bubble each tick.
   return (
-    <div className="mc-assistant-renderer-shell" aria-busy={role === "assistant" && running ? true : undefined}>
+    <div
+      className="mc-assistant-renderer-shell"
+      aria-busy={isStreamingAssistant ? true : undefined}
+      aria-live={isStreamingAssistant ? "polite" : undefined}
+      aria-atomic={isStreamingAssistant ? false : undefined}
+    >
       <div className="mc-assistant-renderer-body">{children}</div>
       {role === "assistant" ? (
         <button

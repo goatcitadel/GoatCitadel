@@ -1,4 +1,4 @@
-import { useMemo, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { AlertTriangle, Clock, History, Play, RefreshCw, Waypoints } from "lucide-react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
@@ -16,6 +16,9 @@ import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayou
 import type { NativeRoutePagesProps } from "../types";
 import { ShellExplanationList } from "./ShellExplanationList";
 import "../native-routes.css";
+
+const APPROVAL_COUNT_FLASH_MS = 1500;
+const APPROVAL_ENTER_MARK_MS = 260;
 
 type ApprovalConfirmation =
   | { kind: "bulk-reject" }
@@ -43,6 +46,63 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
     : (approvals.loading || approvals.error) && queueCounts.pending === 0
       ? pendingApprovals
       : queueCounts.pending;
+
+  const pendingApprovalIds = useMemo(
+    () => approvals.pendingItems.map((item) => item.approvalId),
+    [approvals.pendingItems],
+  );
+  const seenPendingIdsRef = useRef<Set<string>>(new Set());
+  const previousPendingCountRef = useRef<number>(displayedPendingCount);
+  const [newApprovalIds, setNewApprovalIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [countFlashKey, setCountFlashKey] = useState<number>(0);
+  const [liveAnnouncement, setLiveAnnouncement] = useState<string>("");
+
+  useEffect(() => {
+    const previouslySeen = seenPendingIdsRef.current;
+    const arrivedIds = pendingApprovalIds.filter((id) => !previouslySeen.has(id));
+    // On the first observed snapshot, prime the seen set without animating the
+    // initial batch — only true new arrivals after first paint should flash.
+    if (previouslySeen.size === 0 && pendingApprovalIds.length > 0) {
+      seenPendingIdsRef.current = new Set(pendingApprovalIds);
+      return;
+    }
+    if (arrivedIds.length === 0) {
+      // Still update the seen set so removed items can re-trigger if they
+      // return later in a separate refresh cycle.
+      seenPendingIdsRef.current = new Set(pendingApprovalIds);
+      return;
+    }
+    seenPendingIdsRef.current = new Set(pendingApprovalIds);
+    setNewApprovalIds(new Set(arrivedIds));
+    const clearTimer = setTimeout(() => {
+      setNewApprovalIds(new Set());
+    }, APPROVAL_ENTER_MARK_MS);
+    return () => clearTimeout(clearTimer);
+  }, [pendingApprovalIds]);
+
+  useEffect(() => {
+    const previousCount = previousPendingCountRef.current;
+    if (displayedPendingCount > previousCount) {
+      const arrived = displayedPendingCount - previousCount;
+      setCountFlashKey((value) => value + 1);
+      setLiveAnnouncement(
+        arrived === 1
+          ? `1 new approval pending. ${displayedPendingCount} total awaiting decision.`
+          : `${arrived} new approvals pending. ${displayedPendingCount} total awaiting decision.`,
+      );
+    }
+    previousPendingCountRef.current = displayedPendingCount;
+  }, [displayedPendingCount]);
+
+  useEffect(() => {
+    if (countFlashKey === 0) {
+      return;
+    }
+    const handle = setTimeout(() => setCountFlashKey(0), APPROVAL_COUNT_FLASH_MS);
+    return () => clearTimeout(handle);
+  }, [countFlashKey]);
+
+  const isCountFlashing = countFlashKey > 0;
   const emptyApprovalsLabel =
     approvals.view === "pending" && displayedPendingCount > 0 && approvals.error
       ? "Pending approvals exist, but the queue details could not be loaded."
@@ -85,7 +145,7 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
         loading={approvals.loading && !approvals.error}
         error={approvals.error}
         metrics={[
-          { label: "Pending", value: String(displayedPendingCount) },
+          { label: "Pending", value: String(displayedPendingCount), flash: isCountFlashing },
           { label: "History", value: String(queueCounts.history) },
           { label: "Recovery", value: String(queueCounts.recovery) },
           { label: "Replay trails", value: String(approvals.replayCount) },
@@ -119,6 +179,7 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
                   active={approvals.view === "pending"}
                   label={`Pending (${displayedPendingCount})`}
                   onClick={() => approvals.setView("pending")}
+                  flash={isCountFlashing}
                 />
                 <ApprovalViewButton
                   active={approvals.view === "history"}
@@ -156,7 +217,19 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
                 Nuclear {approvals.pendingRiskCounts.nuclear}
               </StatusChip>
             </div>
-            <div className="mc-next-approvals-list">
+            <div
+              className="mc-next-approvals-list"
+              aria-live="polite"
+              aria-relevant="additions"
+              aria-atomic="false"
+              aria-label={`Approvals queue, ${
+                approvals.view === "pending"
+                  ? `${displayedPendingCount} pending`
+                  : approvals.view === "history"
+                    ? `${queueCounts.history} in history`
+                    : `${queueCounts.recovery} in recovery`
+              }`}
+            >
               {approvals.visibleItems.length === 0 ? (
                 <p className="mc-next-directory-empty">{emptyApprovalsLabel}</p>
               ) : (
@@ -164,11 +237,13 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
                   const expired = isExpiredApproval(approval);
                   const effectiveStatus = expired ? "expired" : approval.status;
                   const selected = approval.approvalId === selectedApproval?.approvalId;
+                  const isNewArrival = approvals.view === "pending" && newApprovalIds.has(approval.approvalId);
                   return (
                     <button
                       key={approval.approvalId}
                       type="button"
                       className={`mc-next-approvals-list-item${selected ? " is-selected" : ""}`}
+                      data-mc-approval-new={isNewArrival ? "true" : undefined}
                       onClick={() => approvals.setSelectedApprovalId(approval.approvalId)}
                     >
                       <div className="mc-next-directory-list-head">
@@ -300,6 +375,15 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
         onCancel={() => setPendingConfirmation(null)}
         onConfirm={confirmPendingAction}
       />
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="mc-next-sr-only"
+        data-mc-approval-announcer="true"
+      >
+        {liveAnnouncement}
+      </div>
     </>
   );
 }
@@ -355,13 +439,24 @@ function shouldHandleClientNavigation(event: MouseEvent<HTMLAnchorElement>): boo
   );
 }
 
-function ApprovalViewButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+function ApprovalViewButton({
+  active,
+  label,
+  onClick,
+  flash = false,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+  flash?: boolean;
+}) {
   return (
     <button
       type="button"
       role="tab"
       aria-selected={active}
       className={`mc-next-approvals-view-button${active ? " is-active" : ""}`}
+      data-mc-approval-flash={flash ? "true" : undefined}
       onClick={onClick}
     >
       {label}

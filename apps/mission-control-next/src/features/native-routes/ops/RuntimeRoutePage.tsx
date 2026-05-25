@@ -827,6 +827,10 @@ export function RuntimeRoutePage({
                   data-native-scroll="true"
                   style={{ maxHeight: "min(52vh, 30rem)" }}
                   aria-label="Activity feed"
+                  role="log"
+                  aria-live="polite"
+                  aria-relevant="additions"
+                  aria-atomic="false"
                 >
                   {filteredActivityEvents.map((item, index) => (
                     <li

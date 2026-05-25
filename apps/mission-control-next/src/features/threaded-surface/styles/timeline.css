@@ -302,7 +302,18 @@
 
 .mc-next-thread-turn-surface {
   cursor: pointer;
-  outline: none;
+}
+
+/*
+ * H-3 (ship punchlist) / CHAT-016: keyboard focus visibility on turn surface.
+ * Mouse interaction is via click; keyboard users tab through turns and need a
+ * visible focus indicator. Subtle outline-only (no background change) keeps the
+ * surface visually quiet during mouse usage.
+ */
+.mc-next-thread-turn-surface:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--mc-area-color, var(--area-chat)) 55%, transparent);
+  outline-offset: 2px;
+  border-radius: 0.5rem;
 }
 
 .mc-next-thread-bubble {

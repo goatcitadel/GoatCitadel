@@ -944,9 +944,20 @@
   scrollbar-gutter: stable;
 }
 
-.mc-next-threaded-surface.unified .mc-next-composer-input-shell textarea:focus,
-.mc-next-threaded-surface.unified .mc-next-composer-input-shell textarea:focus-visible {
+.mc-next-threaded-surface.unified .mc-next-composer-input-shell textarea:focus {
   outline: none;
+  box-shadow: none;
+}
+
+/*
+ * H-3 (ship punchlist) / CHAT-016: restore keyboard focus visibility.
+ * Previously :focus-visible also set outline:none, leaving keyboard users
+ * with no visible focus. The parent .mc-next-composer:focus-within already
+ * provides a glow for mouse focus; keyboard users get a more explicit ring.
+ */
+.mc-next-threaded-surface.unified .mc-next-composer-input-shell textarea:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--mc-area-color, var(--area-chat)) 55%, transparent);
+  outline-offset: 2px;
   box-shadow: none;
 }
 

@@ -178,7 +178,15 @@ import {
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import type { AppRoute } from "@next/app/route-model";
-import { ThreePartChip, type ChipTone } from "./primitives";
+import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+import { ThreePartChip, StatusChip, type ChipTone } from "./primitives";
+import {
+  describeDirtySections,
+  useAnySectionDirty,
+  useBeforeUnloadGuard,
+  useFormDirty,
+  useNavigateGuard,
+} from "./library/use-form-dirty";
 import "./native-routes.css";
 
 interface SettingsNativePageProps {
@@ -253,6 +261,24 @@ type OnboardingPageState = OnboardingState & {
 export function SettingsNativePage(props: SettingsNativePageProps) {
   const section = props.route.section ? String(props.route.section) : "general";
 
+  // Ship punchlist H-9 (data integrity) — wire unsaved-state plumbing for the
+  // settings surface. The hook registry and beforeunload listener are tracked
+  // in ./library/use-form-dirty.ts; sections opt in by calling `useFormDirty`.
+  useBeforeUnloadGuard();
+  const isSameRoute = useCallback(
+    (target: AppRoute) =>
+      target.area === props.route.area && (target.section ?? "general") === (props.route.section ?? "general"),
+    [props.route.area, props.route.section],
+  );
+  const {
+    navigate: guardedNavigate,
+    pending,
+    confirmDiscard,
+    cancelDiscard,
+  } = useNavigateGuard<AppRoute>(props.navigate, isSameRoute);
+  const dirtyKeys = useAnySectionDirty();
+  const guardedProps: SettingsNativePageProps = { ...props, navigate: guardedNavigate };
+
   return (
     <SettingsPageFrame
       icon={iconForSettingsSection(section)}
@@ -260,7 +286,21 @@ export function SettingsNativePage(props: SettingsNativePageProps) {
       title={labelForSettingsSection(section)}
       description={descriptionForSettingsSection(section)}
     >
-      {renderSettingsSection({ ...props, section })}
+      {renderSettingsSection({ ...guardedProps, section })}
+      <ConfirmModal
+        open={pending !== null}
+        title="Discard unsaved changes?"
+        message={
+          dirtyKeys.length > 0
+            ? `You have unsaved changes in ${describeDirtySections(dirtyKeys)}.`
+            : "You have unsaved changes."
+        }
+        confirmLabel="Discard changes"
+        cancelLabel="Stay on this page"
+        danger
+        onConfirm={confirmDiscard}
+        onCancel={cancelDiscard}
+      />
     </SettingsPageFrame>
   );
 }
@@ -1294,6 +1334,19 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
   const editingBuiltin = editorMode === "selected" && selectedPersonality?.builtin === true;
   const canSave = editorMode === "new" || !editorLocked;
 
+  // Ship punchlist H-9 (data integrity) — report this section's dirty state to
+  // the shared registry so the page-level beforeunload + route-change guards
+  // can warn the operator before edits are lost. The baseline is rebuilt from
+  // the server snapshot, so a successful save (which triggers `reload()`)
+  // naturally collapses dirty back to clean.
+  const baselineDraft = useMemo(
+    () =>
+      editorMode === "new" ? createEmptyPersonalityEditorDraft() : createPersonalityEditorDraft(selectedPersonality),
+    [editorMode, selectedPersonality],
+  );
+  const isDirty = !editorLocked && !arePersonalityDraftsEqual(draft, baselineDraft);
+  useFormDirty("settings:personalities", isDirty, { label: "Personalities" });
+
   useEffect(() => {
     if (!data?.items.length) {
       setSelectedPersonalityId("");
@@ -1447,6 +1500,13 @@ function PersonalitiesSection(_props: SettingsSectionProps) {
               editorMode === "new"
                 ? "Create a persisted custom Chat overlay."
                 : "Edit tone fields, reset built-ins, or set the global Chat default."
+            }
+            headerAccessory={
+              isDirty ? (
+                <StatusChip tone="warning" size="sm">
+                  Unsaved
+                </StatusChip>
+              ) : null
             }
           >
             {editorMode === "new" || selectedPersonality ? (
@@ -7491,6 +7551,7 @@ function SettingsPanel({
   title,
   subtitle,
   stats,
+  headerAccessory,
   children,
   compact = true,
   scrollBody = false,
@@ -7499,6 +7560,12 @@ function SettingsPanel({
   title: string;
   subtitle: string;
   stats?: Array<{ label: string; value: string }>;
+  /**
+   * Optional element rendered in the panel head — used to surface the
+   * "Unsaved" indicator next to the section title. Sections opt in by
+   * combining `useFormDirty` with this slot.
+   */
+  headerAccessory?: ReactNode;
   children: ReactNode;
   compact?: boolean;
   scrollBody?: boolean;
@@ -7508,7 +7575,13 @@ function SettingsPanel({
     <article className={`mc-next-directory-card mc-next-settings-panel${compact ? " is-compact" : ""}`}>
       <div className="mc-next-directory-card-head">
         <div>
-          <h2>{title}</h2>
+          <div
+            className="mc-next-settings-panel-title-row"
+            style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}
+          >
+            <h2>{title}</h2>
+            {headerAccessory}
+          </div>
           <p>{subtitle}</p>
         </div>
         {stats?.length ? (
@@ -8688,6 +8761,19 @@ export function personalityDraftToMutationInput(draft: PersonalityEditorDraft) {
     systemOverlay: draft.systemOverlay.trim(),
     safetyNotes: splitLineList(draft.safetyNotes),
   };
+}
+
+export function arePersonalityDraftsEqual(a: PersonalityEditorDraft, b: PersonalityEditorDraft): boolean {
+  return (
+    a.id === b.id &&
+    a.label === b.label &&
+    a.category === b.category &&
+    a.description === b.description &&
+    a.tone === b.tone &&
+    a.style === b.style &&
+    a.systemOverlay === b.systemOverlay &&
+    a.safetyNotes === b.safetyNotes
+  );
 }
 
 export function formatPersonalityStatus(personality: PersonalityPreset, defaultPersonalityId: string): string {

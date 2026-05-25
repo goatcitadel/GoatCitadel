@@ -12,6 +12,9 @@ import {
   startDaemon,
   stopDaemon,
 } from "../api/client";
+import { useRefreshSubscription } from "./useRefreshSubscription";
+
+const RUNTIME_POLL_INTERVAL_MS = 15_000;
 
 type RuntimeSnapshotData = {
   dashboard: Awaited<ReturnType<typeof fetchDashboardState>> | null;
@@ -55,6 +58,8 @@ export function useOpsRuntimeSnapshot() {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [daemonBusy, setDaemonBusy] = useState<null | "start" | "restart" | "stop">(null);
   const [data, setData] = useState<RuntimeSnapshotData | null>(null);
+  const [lastFetchedAt, setLastFetchedAt] = useState<number | null>(null);
+  const [isStale, setIsStale] = useState(false);
 
   const load = useCallback(async () => {
     const [dashboard, timeline, health, cost, daemon, backups, sessions, mcpServers] = await Promise.all([
@@ -95,6 +100,8 @@ export function useOpsRuntimeSnapshot() {
     try {
       const next = await load();
       setData(next);
+      setLastFetchedAt(Date.now());
+      setIsStale(false);
     } catch (loadError) {
       setError(getErrorMessage(loadError));
     }
@@ -110,6 +117,8 @@ export function useOpsRuntimeSnapshot() {
           return;
         }
         setData(next);
+        setLastFetchedAt(Date.now());
+        setIsStale(false);
       })
       .catch((loadError) => {
         if (cancelled) {
@@ -127,6 +136,49 @@ export function useOpsRuntimeSnapshot() {
       cancelled = true;
     };
   }, [load]);
+
+  // Mirror the polling pattern used by `useApprovalQueue`: subscribe to the
+  // shared refresh bus so realtime events trigger an immediate refetch, and
+  // fall back to a 15s interval poll if no signal arrives. `useRefreshSubscription`
+  // already pauses the fallback poll while `document.hidden` is true and resumes
+  // on visibility change, so SR users and the activity feed never get stuck on
+  // stale data after the tab refocuses.
+  useRefreshSubscription(
+    "system",
+    async () => {
+      await reload();
+    },
+    {
+      coalesceMs: 1000,
+      staleMs: RUNTIME_POLL_INTERVAL_MS,
+      pollIntervalMs: RUNTIME_POLL_INTERVAL_MS,
+    },
+  );
+
+  // Mark the snapshot as stale once the data is older than 2x the poll interval.
+  // This lets the UI surface a "data may be stale" indicator without forcing a
+  // refetch (the polling above will catch up as soon as it can).
+  useEffect(() => {
+    if (lastFetchedAt === null) {
+      setIsStale(false);
+      return;
+    }
+    const staleAfter = lastFetchedAt + RUNTIME_POLL_INTERVAL_MS * 2;
+    const now = Date.now();
+    if (now >= staleAfter) {
+      setIsStale(true);
+      return;
+    }
+    if (typeof window === "undefined") {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setIsStale(true);
+    }, staleAfter - now);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [lastFetchedAt]);
 
   const runDaemonAction = useCallback(
     async (action: "start" | "restart" | "stop") => {
@@ -170,6 +222,8 @@ export function useOpsRuntimeSnapshot() {
     notice,
     daemonBusy,
     data,
+    lastFetchedAt,
+    isStale,
     reload,
     runDaemonAction,
     clearNotice: () => setNotice(null),

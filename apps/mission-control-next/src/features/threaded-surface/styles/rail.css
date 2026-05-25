@@ -337,8 +337,14 @@
   border: 0;
   background: transparent;
   color: var(--foreground);
-  outline: none;
   font-size: var(--text-xs);
+}
+
+/* H-3 (ship punchlist) / CHAT-016: keyboard focus on inline edit inputs. */
+.mc-next-threaded-project-card input:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--mc-area-color, var(--area-chat)) 55%, transparent);
+  outline-offset: 2px;
+  border-radius: 0.25rem;
 }
 
 .mc-next-threaded-project-card {

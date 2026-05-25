@@ -30,6 +30,13 @@ vi.mock("../api/client", () => ({
   stopDaemon: apiMocks.stopDaemon,
 }));
 
+// Mirror the mocking pattern from useApprovalQueue.test.tsx: the test runs in
+// the node env without a DOM, so window.setInterval is unavailable. The real
+// refresh subscription is exercised in useRefreshSubscription.test.tsx.
+vi.mock("./useRefreshSubscription", () => ({
+  useRefreshSubscription: vi.fn(),
+}));
+
 type HookValue = ReturnType<typeof useOpsRuntimeSnapshot>;
 
 function Harness({ onValue }: { onValue: (value: HookValue) => void }) {

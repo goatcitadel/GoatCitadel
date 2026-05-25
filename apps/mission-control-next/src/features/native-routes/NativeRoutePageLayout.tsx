@@ -9,6 +9,7 @@ export type NativePageMetric = {
   label: string;
   value: string;
   delta?: { value: string; tone: "up" | "down" | "neutral" };
+  flash?: boolean;
 };
 
 export function NativePageFrame({
@@ -96,7 +97,11 @@ export function NativePageFrame({
             {metrics?.length ? (
               <div className="mc-next-directory-head-metrics">
                 {metrics.map((metric) => (
-                  <div key={metric.label} className="mc-next-directory-head-metric">
+                  <div
+                    key={metric.label}
+                    className="mc-next-directory-head-metric"
+                    data-mc-approval-flash={metric.flash ? "true" : undefined}
+                  >
                     <span className="mc-next-directory-head-metric-label">{metric.label}</span>
                     <strong className="mc-next-directory-head-metric-value">{metric.value}</strong>
                     {metric.delta ? (

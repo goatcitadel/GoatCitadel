@@ -1920,8 +1920,96 @@
   .mc-next-button-danger,
   .mc-next-icon-button,
   .mc-next-rail,
-  .mc-spin {
+  .mc-spin,
+  .gc-button {
     transition: none;
     animation: none;
   }
+}
+
+/* ============================================================
+   .gc-button baseline — H-1 (ship punchlist)
+   25+ shared components emit className="gc-button" but no CSS
+   rule defined it in next-app, so every modal/banner/palette
+   action button rendered as default browser button (gray + beveled +
+   system font). Ported from apps/mission-control/src/styles/primitives.css
+   (legacy gc-button definition) using next-app's canonical tokens.
+   Includes .active + .danger modifiers + cursor:not-allowed on disabled
+   (also closes CC-013 from r4-ux Track A).
+   See docs/review/mission-control-next-ship-punchlist.md.
+   ============================================================ */
+.gc-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 2.25rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--r-sm, 0.5rem);
+  border: 1px solid var(--border-default, var(--border));
+  background: var(--surface-elevated, var(--mc-surface-3));
+  color: var(--text-primary, var(--foreground));
+  font: 600 var(--text-xs, 0.75rem) / 1 var(--font-sans, var(--mc-font-sans));
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease,
+    background-color 140ms ease,
+    color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.gc-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: var(--border-emphasis, var(--border-strong));
+  background: color-mix(
+    in oklab,
+    var(--mc-area-color, var(--area-chat)) 6%,
+    var(--surface-elevated, var(--mc-surface-3))
+  );
+}
+
+.gc-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--mc-area-color, var(--area-chat)) 50%, transparent);
+  outline-offset: 2px;
+}
+
+.gc-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  transform: none;
+  box-shadow: none;
+}
+
+.gc-button.active {
+  border-color: var(--border-emphasis, var(--border-strong));
+  background: color-mix(
+    in oklab,
+    var(--mc-area-color, var(--area-chat)) 14%,
+    var(--surface-elevated, var(--mc-surface-3))
+  );
+  color: var(--text-primary, var(--foreground));
+}
+
+.gc-button.danger {
+  border-color: color-mix(
+    in oklab,
+    var(--risk-danger, var(--gc-risk-danger)) 40%,
+    var(--border-default, var(--border))
+  );
+  color: color-mix(in oklab, var(--risk-danger, var(--gc-risk-danger)) 76%, var(--fg-primary, var(--foreground)));
+}
+
+.gc-button.danger:hover:not(:disabled) {
+  background: color-mix(
+    in oklab,
+    var(--risk-danger, var(--gc-risk-danger)) 12%,
+    var(--surface-elevated, var(--mc-surface-3))
+  );
+  border-color: color-mix(
+    in oklab,
+    var(--risk-danger, var(--gc-risk-danger)) 60%,
+    var(--border-default, var(--border))
+  );
 }
