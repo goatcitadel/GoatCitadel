@@ -569,15 +569,15 @@ export function resolveShellContract(packageName) {
   return packageName === "@goatcitadel/mission-control-next" ? NEXT_SHELL_CONTRACT : CURRENT_SHELL_CONTRACT;
 }
 
-export function resolveSurfaceRegressionManifest(_packageName) {
+export function resolveSurfaceRegressionManifest() {
   return NEXT_RELEASE_SURFACE_MANIFEST;
 }
 
-export function resolveVisualRegressionManifest(_packageName) {
+export function resolveVisualRegressionManifest() {
   return NEXT_VISUAL_REGRESSION_MANIFEST;
 }
 
-export function resolveVisualRegressionVariants(_packageName) {
+export function resolveVisualRegressionVariants() {
   return RELEASE_SURFACE_VARIANTS;
 }
 

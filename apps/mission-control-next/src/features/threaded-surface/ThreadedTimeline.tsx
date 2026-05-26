@@ -313,7 +313,7 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
 
   return (
     <article className={turnClassName}>
-      <div className="mc-next-thread-turn-surface" aria-current={selected ? "true" : undefined}>
+      <div className="mc-next-thread-turn-surface">
         <div className="mc-next-thread-bubble user">
           <p className="mc-next-thread-meta">
             <strong>You</strong> · {formatActorTimestamp(turn.userMessage.timestamp)}

@@ -871,8 +871,12 @@
 }
 
 .mc-next-composer-delegation-objective {
-  color: var(--foreground) !important;
+  color: var(--foreground);
   font-weight: 650;
+}
+
+.mc-next-threaded-surface.unified .mc-next-composer-delegation-objective {
+  color: var(--foreground);
 }
 
 .mc-next-composer-delegation-reason {

@@ -3,7 +3,7 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AssistantMessageRenderer } from "./AssistantMessageRenderer";
+import { AssistantMessageRenderer, copyTextToClipboard } from "./AssistantMessageRenderer";
 import { normalizeAssistantDisplayText, normalizeCitationDisplayText } from "./assistant-display-text";
 import {
   ChatAttachmentActions,
@@ -236,34 +236,12 @@ describe("chat rendering tail coverage", () => {
     expect(renderer.root.findAllByType("button")).toHaveLength(0);
   });
 
-  it("falls back to textarea clipboard copying when navigator clipboard is unavailable", async () => {
-    const textarea = {
-      value: "",
-      style: { position: "", opacity: "", pointerEvents: "" },
-      setAttribute: vi.fn(),
-      select: vi.fn(),
-    };
-    const execCommand = vi.fn(() => true);
-    vi.stubGlobal("window", undefined);
+  it("reports clipboard API unavailability without deprecated execCommand fallback", async () => {
     vi.stubGlobal("navigator", {});
-    vi.stubGlobal("document", {
-      createElement: vi.fn(() => textarea),
-      execCommand,
-      body: {
-        appendChild: vi.fn(),
-        removeChild: vi.fn(),
-      },
-    });
 
-    renderer = create(<AssistantMessageRenderer role="assistant" content="Copy via textarea" />);
-    await act(async () => {
-      renderer!.root.findByType("button").props.onClick();
-      await Promise.resolve();
-    });
-
-    expect(textarea.value).toBe("Copy via textarea");
-    expect(textarea.select).toHaveBeenCalled();
-    expect(execCommand).toHaveBeenCalledWith("copy");
+    await expect(copyTextToClipboard("Copy via textarea")).rejects.toThrow(
+      "Clipboard API is unavailable in this environment.",
+    );
   });
 
   it("renders generated artifact variants including Mermaid success and failure states", async () => {

@@ -673,16 +673,16 @@
 }
 
 .chat-stream-status-bar .chat-stream-status-error {
-  color: var(--gc-risk-danger, var(--mc-risk-danger));
+  color: var(--gc-risk-danger, var(--risk-danger));
   font-weight: 700;
 }
 
 .chat-stream-status-bar.tone-pending .chat-stream-status-indicator {
-  background: var(--gc-risk-caution, var(--mc-risk-caution));
+  background: var(--gc-risk-caution, var(--risk-caution));
 }
 
 .chat-stream-status-bar.tone-active .chat-stream-status-indicator {
-  background: var(--gc-risk-safe, var(--mc-risk-safe));
+  background: var(--gc-risk-safe, var(--risk-safe));
 }
 
 .chat-stream-status-bar.tone-error {
@@ -691,7 +691,7 @@
 }
 
 .chat-stream-status-bar.tone-error .chat-stream-status-indicator {
-  background: var(--gc-risk-danger, var(--mc-risk-danger));
+  background: var(--gc-risk-danger, var(--risk-danger));
 }
 
 /* ============================================================

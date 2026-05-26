@@ -24,8 +24,6 @@ import {
 } from "./architecture-metrics.mjs";
 import {
   buildVisualBaselineFileName,
-  NEXT_RELEASE_SURFACE_MANIFEST,
-  RELEASE_SURFACE_VARIANTS,
   resolveLegacyRedirectManifest,
   resolveShellContract,
   resolveSurfaceRegressionManifest,
@@ -116,15 +114,15 @@ export const FAST_LANE_COMMANDS = Object.freeze([
 function resolveVerificationTargetContext() {
   const uiTarget = resolveUiTarget(repoRoot, process.env);
   const packageName = uiTarget.packageName || DEFAULT_UI_PACKAGE;
-  const surfaceRoutes = resolveSurfaceRegressionManifest(packageName);
+  const surfaceRoutes = resolveSurfaceRegressionManifest();
   return {
     uiTarget,
     packageName,
     isNext: packageName === NEXT_UI_PACKAGE,
     shellContract: resolveShellContract(packageName),
     surfaceRoutes,
-    visualRoutes: resolveVisualRegressionManifest(packageName),
-    visualVariants: resolveVisualRegressionVariants(packageName),
+    visualRoutes: resolveVisualRegressionManifest(),
+    visualVariants: resolveVisualRegressionVariants(),
     redirectRoutes: resolveLegacyRedirectManifest(packageName),
     routeByHref: new Map(surfaceRoutes.map((route) => [route.href, route])),
   };
@@ -5258,17 +5256,6 @@ async function installMissionControlNextBrowserState(browserContext, workspaceId
   );
 }
 
-async function installLegacyMissionControlBrowserState(browserContext, workspaceId) {
-  await browserContext.addInitScript(
-    ({ activeWorkspaceId }) => {
-      window.localStorage.setItem("goatcitadel.ui.workspace_id.v1", activeWorkspaceId);
-      window.localStorage.setItem("goatcitadel.ui.mode.v1", "advanced");
-      window.localStorage.setItem("goatcitadel.ui.technical_details.v1", "false");
-    },
-    { activeWorkspaceId: workspaceId },
-  );
-}
-
 function forceVerificationUiPackage(packageName) {
   const previous = process.env.GOATCITADEL_UI_PACKAGE;
   process.env.GOATCITADEL_UI_PACKAGE = packageName;
@@ -6008,8 +5995,8 @@ async function loadVisualComparisonImage(filePath) {
 
 async function assertVisualBaselineCoverage(context, options = {}) {
   const packageName = options.packageName ?? DEFAULT_UI_PACKAGE;
-  const routes = resolveVisualRegressionManifest(packageName);
-  const variants = resolveVisualRegressionVariants(packageName);
+  const routes = resolveVisualRegressionManifest();
+  const variants = resolveVisualRegressionVariants();
   const baselineDir = resolveVisualBaselineDir(packageName);
   const expectedFiles = routes.flatMap((route) =>
     variants.map((variant) => buildVisualBaselineFileName(route.slug, variant.slug)),

@@ -367,7 +367,7 @@ function AssistantMessageContainer({
   children: React.ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
-  const resetTimerRef = useRef<number | null>(null);
+  const resetTimerRef = useRef<ReturnType<Window["setTimeout"]> | null>(null);
   const copyDisabled = role !== "assistant" || !content.trim();
 
   useEffect(() => {
@@ -465,22 +465,9 @@ function splitStreamingMarkdown(content: string): { stable: string; tail: string
   };
 }
 
-async function copyTextToClipboard(content: string): Promise<void> {
-  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(content);
-    return;
+export async function copyTextToClipboard(content: string): Promise<void> {
+  if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+    throw new Error("Clipboard API is unavailable in this environment. Copy requires navigator.clipboard.writeText().");
   }
-  if (typeof document === "undefined") {
-    throw new Error("Clipboard is unavailable.");
-  }
-  const textArea = document.createElement("textarea");
-  textArea.value = content;
-  textArea.setAttribute("readonly", "true");
-  textArea.style.position = "fixed";
-  textArea.style.opacity = "0";
-  textArea.style.pointerEvents = "none";
-  document.body.appendChild(textArea);
-  textArea.select();
-  document.execCommand("copy");
-  document.body.removeChild(textArea);
+  await navigator.clipboard.writeText(content);
 }
