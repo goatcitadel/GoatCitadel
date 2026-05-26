@@ -989,7 +989,11 @@ describe("ChatAgentOrchestrator Cowork repair behavior", () => {
             matches: [
               { path: "apps/gateway/src/routes/memory.ts", name: "memory.ts", type: "file" },
               { path: "packages/storage/src/memory-context-repo.ts", name: "memory-context-repo.ts", type: "file" },
-              { path: "apps/mission-control/src/pages/MemoryPage.tsx", name: "MemoryPage.tsx", type: "file" },
+              {
+                path: "apps/mission-control-next/src/features/native-routes/library/MemoryRoutePage.tsx",
+                name: "MemoryRoutePage.tsx",
+                type: "file",
+              },
             ],
           },
         };
@@ -1018,18 +1022,18 @@ describe("ChatAgentOrchestrator Cowork repair behavior", () => {
             },
           };
         }
-        if (path.endsWith("apps/mission-control/src/pages/MemoryPage.tsx")) {
+        if (path.endsWith("apps/mission-control-next/src/features/native-routes/library/MemoryRoutePage.tsx")) {
           return {
             outcome: "executed",
             policyReason: "allowed",
             auditEventId: "audit-cowork-memory-read-3",
             result: {
               path,
-              content: "export function MemoryPage() { return null; }",
+              content: "export function MemoryRoutePage() { return null; }",
             },
           };
         }
-        if (path.endsWith("apps/mission-control/src/pages/memory/MemoryMaintenancePanel.tsx")) {
+        if (path.endsWith("packages/mission-control-shared/src/hooks/useMemoryOperatorSnapshot.ts")) {
           return {
             outcome: "failed",
             policyReason: "allowed",
@@ -1980,7 +1984,10 @@ describe("ChatAgentOrchestrator Cowork repair behavior", () => {
         auditEventId: "audit-exact-citations-search-2",
         result: {
           matches: [
-            { path: "F:/code/personal-ai/apps/mission-control/src/pages/MemoryPage.tsx", name: "MemoryPage.tsx" },
+            {
+              path: "F:/code/personal-ai/apps/mission-control-next/src/features/native-routes/library/MemoryRoutePage.tsx",
+              name: "MemoryRoutePage.tsx",
+            },
           ],
         },
       })
@@ -1989,8 +1996,8 @@ describe("ChatAgentOrchestrator Cowork repair behavior", () => {
         policyReason: "allowed",
         auditEventId: "audit-exact-citations-read-2",
         result: {
-          path: "F:/code/personal-ai/apps/mission-control/src/pages/MemoryPage.tsx",
-          content: "export function MemoryPage() { return null; }",
+          path: "F:/code/personal-ai/apps/mission-control-next/src/features/native-routes/library/MemoryRoutePage.tsx",
+          content: "export function MemoryRoutePage() { return null; }",
         },
       })
       .mockResolvedValueOnce({
@@ -2320,7 +2327,10 @@ describe("ChatAgentOrchestrator Cowork repair behavior", () => {
         auditEventId: "audit-memory-shape-search-3",
         result: {
           matches: [
-            { path: "F:/code/personal-ai/apps/mission-control/src/pages/MemoryPage.tsx", name: "MemoryPage.tsx" },
+            {
+              path: "F:/code/personal-ai/apps/mission-control-next/src/features/native-routes/library/MemoryRoutePage.tsx",
+              name: "MemoryRoutePage.tsx",
+            },
           ],
         },
       })
@@ -2329,11 +2339,11 @@ describe("ChatAgentOrchestrator Cowork repair behavior", () => {
         policyReason: "allowed",
         auditEventId: "audit-memory-shape-read-3",
         result: {
-          path: "F:/code/personal-ai/apps/mission-control/src/pages/MemoryPage.tsx",
+          path: "F:/code/personal-ai/apps/mission-control-next/src/features/native-routes/library/MemoryRoutePage.tsx",
           content: [
             "import { fetchMemoryItems, fetchMemoryMaintenanceStatus, runMemoryMaintenanceNow } from '../api/client';",
-            "import { MemoryMaintenancePanel } from './memory/MemoryMaintenancePanel';",
-            "export function MemoryPage() { return null; }",
+            "import { useMemoryOperatorSnapshot } from '@goatcitadel/mission-control-shared/hooks/useMemoryOperatorSnapshot';",
+            "export function MemoryRoutePage() { return null; }",
           ].join("\n"),
         },
       });
@@ -2366,7 +2376,7 @@ describe("ChatAgentOrchestrator Cowork repair behavior", () => {
     expect(result.assistantContent).not.toContain("Observed memory lifecycle surfaces:");
     expect(result.assistantContent).toContain("apps/gateway/src/routes/memory.ts");
     expect(result.assistantContent).toContain("MemoryContextRepository");
-    expect(result.assistantContent).toContain("MemoryPage");
+    expect(result.assistantContent).toContain("MemoryRoutePage");
     expect(result.assistantContent).not.toContain("'content': 'import");
     expect(result.assistantContent).not.toContain("Exact citations used:");
     expect(result.assistantContent).not.toContain("## Exact files used");
@@ -2377,12 +2387,12 @@ describe("ChatAgentOrchestrator Cowork repair behavior", () => {
     ).toBe(true);
   });
 
-  it("treats MemoryMaintenancePanel as concrete operator-facing UI evidence for exact three-bullet prompts", async () => {
+  it("treats useMemoryOperatorSnapshot as concrete operator-facing state evidence for exact three-bullet prompts", async () => {
     const prompt = [
       "Use file or code tools to inspect these files:",
       "- `apps/gateway/src/routes/memory.ts`",
       "- `packages/storage/src/memory-context-repo.ts`",
-      "- `apps/mission-control/src/pages/memory/MemoryMaintenancePanel.tsx`",
+      "- `packages/mission-control-shared/src/hooks/useMemoryOperatorSnapshot.ts`",
       "",
       "Answer contract:",
       "- Cite the exact files used.",
@@ -2426,11 +2436,11 @@ describe("ChatAgentOrchestrator Cowork repair behavior", () => {
         policyReason: "allowed",
         auditEventId: "audit-memory-maintenance-read-3",
         result: {
-          path: "F:/code/personal-ai/apps/mission-control/src/pages/memory/MemoryMaintenancePanel.tsx",
+          path: "F:/code/personal-ai/packages/mission-control-shared/src/hooks/useMemoryOperatorSnapshot.ts",
           startLine: 1,
           endLine: 260,
           content:
-            "{'path': 'F:/code/personal-ai/apps/mission-control/src/pages/memory/MemoryMaintenancePanel.tsx', 'content': 'export function MemoryMaintenancePanel() { return null; }'}",
+            "{'path': 'F:/code/personal-ai/packages/mission-control-shared/src/hooks/useMemoryOperatorSnapshot.ts', 'content': 'export function useMemoryOperatorSnapshot() { return null; }'}",
         },
       });
     const orchestrator = new ChatAgentOrchestrator({
@@ -2456,9 +2466,9 @@ describe("ChatAgentOrchestrator Cowork repair behavior", () => {
       historyMessages: [{ role: "user", content: prompt }],
     });
 
-    expect(result.assistantContent).toContain("MemoryMaintenancePanel.tsx");
+    expect(result.assistantContent).toContain("useMemoryOperatorSnapshot.ts");
     expect(result.assistantContent).not.toContain("No operator-facing Memory UI file was concretely read");
-    expect(result.assistantContent).toContain("MemoryMaintenancePanel");
+    expect(result.assistantContent).toContain("useMemoryOperatorSnapshot");
     expect(result.assistantContent).not.toContain("'path':");
     expect(result.assistantContent).not.toContain("lines 1-260");
     expect(result.assistantContent).not.toContain("Exact citations used:");

@@ -4,6 +4,7 @@ import {
   ROUTE_RELEASE_SCOPE,
   buildAppHref,
   buildNavigationTarget,
+  describeReleaseScopeForOperator,
   describeReleaseSurfaceStatus,
   getRouteDescription,
   getRouteLabel,
@@ -12,6 +13,7 @@ import {
   isRailItemActive,
   normalizeAppRoute,
   parseAppRoute,
+  type ReleaseSurfaceStatus,
 } from "./route-model";
 import { adaptLegacyUrl, coerceLegacyHrefToNext, resolveRouteFromLocation } from "./legacy-route-adapter";
 
@@ -357,7 +359,15 @@ describe("mission-control-next route model", () => {
       ]),
     );
     expect(getRouteReleaseScope({ area: "library", section: "curator" }).status).toBe("experimental");
-    expect(getRouteReleaseScope({ area: "code" }).status).toBe("needs_release_polish");
+    expect(getRouteReleaseScope({ area: "code" }).status).toBe("ship");
+    expect(ROUTE_RELEASE_SCOPE.map((scope) => scope.status)).not.toContain(
+      "needs_release_polish" satisfies ReleaseSurfaceStatus,
+    );
+    expect(ROUTE_RELEASE_SCOPE.filter((scope) => scope.status === "ship")).toHaveLength(34);
+    expect(ROUTE_RELEASE_SCOPE.filter((scope) => scope.status === "experimental")).toHaveLength(5);
+    expect(describeReleaseScopeForOperator(getRouteReleaseScope({ area: "settings", section: "providers" }))).toBe(
+      "Release-ready. Action: Configure provider credentials and run provider/model smoke evidence. Verification: verify:surface:regression, provider exercise paths. Constraint: Provider setup is release-bearing with smoke evidence, model discovery state, and plain failure copy.",
+    );
     expect(describeReleaseSurfaceStatus("ship")).toBe("Release-ready");
     expect(describeReleaseSurfaceStatus("hide")).toBe("Hidden");
   });

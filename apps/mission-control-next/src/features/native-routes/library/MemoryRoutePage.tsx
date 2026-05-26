@@ -1,4 +1,4 @@
-/* eslint-disable max-lines -- MemoryRoutePage coordinates memory list, search, namespace filter, edit form, and maintenance verbs in one orchestrator while decomposition lands (plan W3.5 in C:/Users/spurn/.claude/plans/swirling-questing-pizza.md). */
+/* eslint-disable max-lines -- MemoryRoutePage coordinates memory list, search, namespace filter, edit form, and maintenance verbs in one orchestrator while decomposition lands (plan W3.5 in local decomposition notes). */
 import { useEffect, useId, useMemo, useState } from "react";
 import { RefreshCw, ShieldCheck } from "lucide-react";
 import type { EvidenceEnvelope, MemoryDecisionRecord, MemoryItemRecord } from "@goatcitadel/contracts";

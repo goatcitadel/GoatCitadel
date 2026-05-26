@@ -19,8 +19,8 @@ export function useRefreshSubscription(
 ): void {
   const callbackRef = useRef(callback);
   const latestSignalRef = useRef<RefreshSignal | null>(null);
-  const timerRef = useRef<number | null>(null);
-  const fallbackTimerRef = useRef<number | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fallbackTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const inFlightRef = useRef(false);
   const pendingRef = useRef(false);
   const lastSignalAtRef = useRef<number>(Date.now());
@@ -38,6 +38,7 @@ export function useRefreshSubscription(
   }, [callback]);
 
   useEffect(() => {
+    const timers = getTimerApi();
     const setFallbackActive = (active: boolean) => {
       if (fallbackActiveRef.current === active) {
         return;
@@ -112,7 +113,7 @@ export function useRefreshSubscription(
         });
         if (pendingRef.current) {
           pendingRef.current = false;
-          timerRef.current = window.setTimeout(() => {
+          timerRef.current = timers.setTimeout(() => {
             timerRef.current = null;
             void runLatest("event");
           }, coalesceMs);
@@ -139,14 +140,14 @@ export function useRefreshSubscription(
       if (timerRef.current !== null) {
         return;
       }
-      timerRef.current = window.setTimeout(() => {
+      timerRef.current = timers.setTimeout(() => {
         timerRef.current = null;
         void runLatest("event");
       }, coalesceMs);
     });
 
     if (typeof staleMs === "number" && staleMs > 0) {
-      fallbackTimerRef.current = window.setInterval(
+      fallbackTimerRef.current = timers.setInterval(
         () => {
           if (!enabled) {
             return;
@@ -171,11 +172,11 @@ export function useRefreshSubscription(
     return () => {
       unsubscribe();
       if (timerRef.current !== null) {
-        window.clearTimeout(timerRef.current);
+        timers.clearTimeout(timerRef.current);
       }
       timerRef.current = null;
       if (fallbackTimerRef.current !== null) {
-        window.clearInterval(fallbackTimerRef.current);
+        timers.clearInterval(fallbackTimerRef.current);
       }
       fallbackTimerRef.current = null;
       pendingRef.current = false;
@@ -184,4 +185,26 @@ export function useRefreshSubscription(
       setFallbackActive(false);
     };
   }, [coalesceMs, enabled, pollIntervalMs, runWhenHidden, staleMs, topic, options.onFallbackStateChange]);
+}
+
+function getTimerApi() {
+  const browserTimers = typeof window === "undefined" ? undefined : window;
+  return {
+    setTimeout:
+      typeof browserTimers?.setTimeout === "function"
+        ? browserTimers.setTimeout.bind(browserTimers)
+        : globalThis.setTimeout.bind(globalThis),
+    clearTimeout:
+      typeof browserTimers?.clearTimeout === "function"
+        ? browserTimers.clearTimeout.bind(browserTimers)
+        : globalThis.clearTimeout.bind(globalThis),
+    setInterval:
+      typeof browserTimers?.setInterval === "function"
+        ? browserTimers.setInterval.bind(browserTimers)
+        : globalThis.setInterval.bind(globalThis),
+    clearInterval:
+      typeof browserTimers?.clearInterval === "function"
+        ? browserTimers.clearInterval.bind(browserTimers)
+        : globalThis.clearInterval.bind(globalThis),
+  };
 }

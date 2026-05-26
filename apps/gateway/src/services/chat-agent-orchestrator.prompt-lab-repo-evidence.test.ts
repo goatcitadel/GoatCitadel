@@ -2667,8 +2667,8 @@ describe("ChatAgentOrchestrator Prompt Lab repo and evidence behavior", () => {
           message: {
             role: "assistant",
             content: [
-              "- Target test file or suite: `F:/code/personal-ai/apps/mission-control/src/pages/chat/ChatExternalBindingPanel.tsx`",
-              "- Setup: Add one focused case in `F:/code/personal-ai/apps/mission-control/src/pages/chat/ChatExternalBindingPanel.tsx` anchored in `F:/code/personal-ai/packages/storage/src/chat-session-binding-repo.ts`, and stage only the initial repo state needed to prove that explicit `eventClass`, `eventAuthority`, and `links` survive from event producer to storage to operator-facing API..",
+              "- Target test file or suite: `F:/code/personal-ai/apps/mission-control-next/src/features/threaded-surface/ThreadedSurfacePage.tsx`",
+              "- Setup: Add one focused case in `F:/code/personal-ai/apps/mission-control-next/src/features/threaded-surface/ThreadedSurfacePage.tsx` anchored in `F:/code/personal-ai/packages/storage/src/chat-session-binding-repo.ts`, and stage only the initial repo state needed to prove that explicit `eventClass`, `eventAuthority`, and `links` survive from event producer to storage to operator-facing API..",
               "- Act: Invoke the smallest path that exercises the behavior anchored in `chat-session-binding-repo.ts` once, then capture the single transition or comparison needed for the proof.",
               "- Assert: Assert must name all three fields at producer, persisted, and operator-facing stages.",
               "- Failure signature: Fail when the test can still pass even though explicit `eventClass`, `eventAuthority`, and `links` survive from event producer to storage to operator-facing API. is false, or when the observed side effect/state contradicts the intended guard.",
@@ -2817,7 +2817,7 @@ describe("ChatAgentOrchestrator Prompt Lab repo and evidence behavior", () => {
     expect(result.assistantContent).toContain("eventAuthority");
     expect(result.assistantContent).toContain("operator-facing API");
     expect(result.assistantContent).toContain("/api/v1/events?limit=1");
-    expect(result.assistantContent).not.toContain("ChatExternalBindingPanel.tsx");
+    expect(result.assistantContent).not.toContain("ThreadedSurfacePage.tsx");
     expect(result.assistantContent).not.toContain("chat-session-binding-repo.ts");
   });
 

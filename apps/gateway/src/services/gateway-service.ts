@@ -766,7 +766,7 @@ export class GatewayService {
     return this.storage.gatewaySql;
   }
 
-  public constructor(inputConfig: GatewayRuntimeConfig) {
+  constructor(inputConfig: GatewayRuntimeConfig) {
     this.config = applyDurableExecutionBaselineToConfig(inputConfig);
     const config = this.config;
     this.storage = createGatewayStorage(config);
@@ -6192,7 +6192,7 @@ export class GatewayService {
     return this.commsSend(input);
   }
 
-  public async commsActivity(input: ChannelActivityInput): Promise<ChannelActivityResult> {
+  async commsActivity(input: ChannelActivityInput): Promise<ChannelActivityResult> {
     return commsActivityImpl(this.buildCommsHost(), input);
   }
 

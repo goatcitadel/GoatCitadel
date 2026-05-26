@@ -1,6 +1,5 @@
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
-import reactHooks from "eslint-plugin-react-hooks";
 import prettier from "eslint-config-prettier";
 
 export default tseslint.config(
@@ -63,22 +62,6 @@ export default tseslint.config(
       "no-console": "off",
       "max-lines": "off",
       "@typescript-eslint/no-explicit-any": "off",
-    },
-  },
-  {
-    files: ["apps/mission-control/src/pixel-office/**/*.ts"],
-    rules: {
-      "@typescript-eslint/ban-ts-comment": "off",
-    },
-  },
-  {
-    files: ["apps/mission-control/**/*.tsx"],
-    plugins: {
-      "react-hooks": reactHooks,
-    },
-    rules: {
-      "react-hooks/rules-of-hooks": "error",
-      "react-hooks/exhaustive-deps": "warn",
     },
   },
 );

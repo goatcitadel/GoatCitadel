@@ -628,7 +628,12 @@ describe("NativeRoutePages library coverage", () => {
     ]);
     expect(getErrorMessage(new Error("Gateway offline"))).toBe("Gateway offline");
     expect(getErrorMessage(new Error(""))).toBe("Something went wrong.");
-    expect(getErrorMessage("plain failure")).toBe("Something went wrong.");
+    expect(getErrorMessage("plain failure")).toBe("plain failure");
+    expect(getErrorMessage({ message: "Provider rejected", code: "AUTH_FAILED" })).toBe(
+      "Provider rejected (AUTH_FAILED)",
+    );
+    expect(getErrorMessage({ code: "RATE_LIMITED" })).toBe("Request failed (RATE_LIMITED)");
+    expect(getErrorMessage({ reason: "hidden" })).toBe("Something went wrong.");
   });
 
   it("covers agent profile maintenance and route dispatch fallbacks", async () => {

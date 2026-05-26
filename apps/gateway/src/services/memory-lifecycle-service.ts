@@ -1261,12 +1261,12 @@ function mapMemoryEntityRow(host: MemoryLifecycleAdminDependencies, row: MemoryE
     scope: normalizeStructuredScope(row.scope),
     title: row.title,
     entityType: row.entity_type,
-    aliases: host.tryParseJson<string[]>(row.aliases_json, []),
+    aliases: parseMemoryJson(host, row.aliases_json, []),
     summary: row.summary ?? undefined,
     status: normalizeStructuredStatus(row.status),
     confidence: normalizeConfidence(row.confidence),
-    sourceRefs: host.tryParseJson<StructuredMemorySourceRef[]>(row.source_refs_json, []),
-    metadata: host.tryParseJson<Record<string, unknown>>(row.metadata_json, {}),
+    sourceRefs: parseMemoryJson(host, row.source_refs_json, []),
+    metadata: parseMemoryJson(host, row.metadata_json, {}),
     authority: normalizeAuthority(row.authority),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -1286,8 +1286,8 @@ function mapMemoryRelationRow(host: MemoryLifecycleAdminDependencies, row: Memor
     relationType: row.relation_type,
     status: normalizeStructuredStatus(row.status),
     confidence: normalizeConfidence(row.confidence),
-    sourceRefs: host.tryParseJson<StructuredMemorySourceRef[]>(row.source_refs_json, []),
-    metadata: host.tryParseJson<Record<string, unknown>>(row.metadata_json, {}),
+    sourceRefs: parseMemoryJson(host, row.source_refs_json, []),
+    metadata: parseMemoryJson(host, row.metadata_json, {}),
     authority: normalizeAuthority(row.authority),
     degradedReason: row.degraded_reason ?? undefined,
     createdAt: row.created_at,
@@ -1304,28 +1304,30 @@ function mapMemoryDecisionRow(host: MemoryLifecycleAdminDependencies, row: Memor
     scope: normalizeStructuredScope(row.scope),
     title: row.title,
     decision: row.decision_text,
-    alternatives: host.tryParseJson<string[]>(row.alternatives_json, []),
+    alternatives: parseMemoryJson(host, row.alternatives_json, []),
     rationale: row.rationale,
     expectedOutcome: row.expected_outcome ?? undefined,
     reviewAt: row.review_at ?? undefined,
-    retrospective: row.retrospective_json
-      ? host.tryParseJson<MemoryDecisionRetrospective | undefined>(row.retrospective_json, undefined)
-      : undefined,
-    linkedEntityIds: host.tryParseJson<string[]>(row.linked_entity_ids_json, []),
-    linkedRelationIds: host.tryParseJson<string[]>(row.linked_relation_ids_json, []),
+    retrospective: row.retrospective_json ? parseMemoryJson(host, row.retrospective_json, undefined) : undefined,
+    linkedEntityIds: parseMemoryJson(host, row.linked_entity_ids_json, []),
+    linkedRelationIds: parseMemoryJson(host, row.linked_relation_ids_json, []),
     sessionId: row.session_id ?? undefined,
     runId: row.run_id ?? undefined,
     improvementCandidateId: row.improvement_candidate_id ?? undefined,
     status: normalizeStructuredStatus(row.status),
     confidence: normalizeConfidence(row.confidence),
-    sourceRefs: host.tryParseJson<StructuredMemorySourceRef[]>(row.source_refs_json, []),
-    metadata: host.tryParseJson<Record<string, unknown>>(row.metadata_json, {}),
+    sourceRefs: parseMemoryJson(host, row.source_refs_json, []),
+    metadata: parseMemoryJson(host, row.metadata_json, {}),
     authority: normalizeAuthority(row.authority),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     forgottenAt: row.forgotten_at ?? undefined,
     supersededById: row.superseded_by_id ?? undefined,
   };
+}
+
+function parseMemoryJson<T>(host: MemoryLifecycleAdminDependencies, value: string | null | undefined, fallback: T): T {
+  return host.tryParseJson<T>(value, fallback);
 }
 
 function normalizeStructuredWorkspaceId(value: string | undefined): string {

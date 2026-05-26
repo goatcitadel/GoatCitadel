@@ -1,6 +1,7 @@
 {
   "name": "@goatcitadel/memory-core",
   "version": "1.0.0",
+  "goatcitadelOwner": "memory",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

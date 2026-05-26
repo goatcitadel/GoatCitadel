@@ -1,6 +1,6 @@
 # AGENTS.md - GoatCitadel
 
-Last updated: 2026-05-18
+Last updated: 2026-05-26
 
 ## Project Overview
 
@@ -17,7 +17,7 @@ It is not just a chat UI. It is a multi-surface, multi-provider, skill-aware wor
 ## Current Product Truth
 
 - `apps/mission-control-next` is the canonical `1.0` Mission Control shell.
-- `apps/mission-control` is compatibility-only for rollback, comparison, and route continuity.
+- `apps/mission-control` source is archived from disk; generated build/runtime residue may still exist locally but is not a shipped compatibility source.
 - The Fastify gateway owns orchestration, approvals, memory, integrations, audit trails, policy enforcement, durable execution, and runtime APIs.
 - Chat, Cowork, and Code are distinct operator surfaces backed by shared runtime foundations.
 - Durable execution owns the shipped resumable mission-session Chat, Cowork, and Code flow set.

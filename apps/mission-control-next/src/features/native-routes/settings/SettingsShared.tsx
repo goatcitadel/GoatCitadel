@@ -69,8 +69,37 @@ export type SettingsWizardStepState = "complete" | "active" | "pending";
 // Utilities
 // ---------------------------------------------------------------------------
 
-export function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+function readErrorString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function isErrorRecord(error: unknown): error is Record<string, unknown> {
+  return typeof error === "object" && error !== null;
+}
+
+export function getErrorMessage(error: unknown): string {
+  const errorMessage = error instanceof Error ? readErrorString(error.message) : null;
+  if (errorMessage) {
+    return errorMessage;
+  }
+  const stringMessage = readErrorString(error);
+  if (stringMessage) {
+    return stringMessage;
+  }
+  if (isErrorRecord(error)) {
+    const message = readErrorString(error.message) ?? readErrorString(error.error) ?? readErrorString(error.detail);
+    const code = readErrorString(error.code);
+    if (message && code) {
+      return `${message} (${code})`;
+    }
+    if (message) {
+      return message;
+    }
+    if (code) {
+      return `Request failed (${code})`;
+    }
+  }
+  return "Something went wrong.";
 }
 
 export function formatEffectiveConfigSourceLabel(source: string | undefined): string {

@@ -137,7 +137,7 @@ describe("SettingsNativePage loop 30 branch matrices", () => {
     expect(formatCapabilities({ voiceInput: true, voiceOutput: false, artifacts: true })).toBe("voiceInput, artifacts");
 
     expect(deriveLlamaCppAlias("C:\\models\\model.gguf")).toBe("model");
-    expect(getErrorMessage("not an error")).toBe("Something went wrong.");
+    expect(getErrorMessage("not an error")).toBe("not an error");
     expect(formatDateTime(null)).toBe("Unknown");
     expect(formatPersonalityCategoryLabel("research_assistant" as any)).toBe("Research Assistant");
     expect(normalizePersonalityEditorId("  Hello World! ")).toBe("hello-world");

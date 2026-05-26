@@ -25,7 +25,9 @@ export const mobileRouteMethods = [
 ] as const;
 
 export type MobileRouteMethod = (typeof mobileRouteMethods)[number];
-export type MobileRoutePort = RoutePort<MobileRouteMethod>;
+export interface MobileRoutePort extends RoutePort<MobileRouteMethod> {
+  readonly __mobileRoutePortBrand?: never;
+}
 export type MobileRouteService = RouteService<MobileRouteMethod>;
 
 export interface MobileRouteActorContext {

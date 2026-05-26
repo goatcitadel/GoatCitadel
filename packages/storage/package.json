@@ -1,6 +1,7 @@
 {
   "name": "@goatcitadel/storage",
   "version": "1.0.0",
+  "goatcitadelOwner": "storage",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

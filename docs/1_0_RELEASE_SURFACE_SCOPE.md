@@ -1,8 +1,8 @@
 # GoatCitadel 1.0 Release Surface Scope
 
-Last updated: 2026-05-23
+Last updated: 2026-05-26
 
-This table freezes the visible Mission Control Next route surface before the remaining release-readiness work. The canonical route list is [apps/mission-control-next/src/app/route-model.ts](../apps/mission-control-next/src/app/route-model.ts); surface and visual verification consume [scripts/verification/lib/release-surface-manifest.mjs](../scripts/verification/lib/release-surface-manifest.mjs).
+This table freezes the visible Mission Control Next `1.0` route surface after the final release-readiness promotion. The canonical route list is [apps/mission-control-next/src/app/route-model.ts](../apps/mission-control-next/src/app/route-model.ts); surface and visual verification consume [scripts/verification/lib/release-surface-manifest.mjs](../scripts/verification/lib/release-surface-manifest.mjs).
 
 Status meanings:
 
@@ -14,41 +14,41 @@ Status meanings:
 | Route | Status | Required action path or release truth |
 |---|---|---|
 | `/chat` | `ship` | Send a Chat turn and inspect model/tool/runtime context when present. |
-| `/cowork` | `needs_release_polish` | Start/resume durable Cowork work; polish next action, blockers, and live-control truth. |
-| `/cowork/tasks` | `needs_release_polish` | Review tasks/deliverables; tighten continuation and blocker hierarchy. |
-| `/cowork/board` | `needs_release_polish` | Inspect agent posture; avoid implying autonomous live-control parity. |
-| `/code` | `needs_release_polish` | Bind source, edit, validate, inspect diffs, and preserve Code Mode proof truth. |
-| `/projects` | `needs_release_polish` | Continue Chat/Cowork/Code work from a project home base. |
+| `/cowork` | `ship` | Start/resume durable Cowork work; inspect next action, blockers, approvals, and evidence truth. |
+| `/cowork/tasks` | `ship` | Review tasks/deliverables, continuation state, and blocker hierarchy. |
+| `/cowork/board` | `ship` | Inspect agent posture without implying autonomous live-control parity. |
+| `/code` | `ship` | Bind source, edit, validate, inspect diffs, and preserve Code Mode proof truth. |
+| `/projects` | `ship` | Continue Chat/Cowork/Code work from a project home base. |
 | `/library/agents` | `ship` | Inspect reusable agent profiles and catalog controls. |
 | `/library/skills` | `ship` | Review skill activation posture and lifecycle evidence. |
 | `/library/capabilities` | `ship` | Inspect capability availability, degraded posture, and callable/inspectable truth. |
-| `/library/memory` | `needs_release_polish` | Route memory lifecycle through `MemoryLifecycleService`; add broader relationship provenance. |
-| `/library/knowledge` | `needs_release_polish` | Inspect knowledge sources with source visibility and stronger provenance links. |
+| `/library/memory` | `ship` | Route memory lifecycle through `MemoryLifecycleService` with operator provenance. |
+| `/library/knowledge` | `ship` | Inspect knowledge sources with source visibility and provenance links. |
 | `/library/files` | `ship` | Browse uploaded and workspace files. |
-| `/library/artifacts` | `needs_release_polish` | Reopen artifacts and expose linked run/source/decision provenance. |
+| `/library/artifacts` | `ship` | Reopen artifacts and expose linked run/source/decision provenance. |
 | `/library/prompt-packs` | `ship` | Author, export, benchmark, and review prompt packs. |
 | `/library/curator` | `experimental` | Skill-health proposals only; not release automation. |
-| `/ops/activity` | `needs_release_polish` | Inspect events; converge toward a single needs-attention inbox. |
+| `/ops/activity` | `ship` | Inspect retained events and Ops attention signals. |
 | `/ops/sessions` | `ship` | Inspect session timelines, summaries, and operator evidence. |
-| `/ops/schedules` | `needs_release_polish` | Review scheduler posture; polish review queue and primary actions. |
+| `/ops/schedules` | `ship` | Review scheduler posture and primary governed-work actions. |
 | `/ops/improvement` | `experimental` | Improvement loops are experimental replay/self-improvement support. |
-| `/ops/notifications` | `needs_release_polish` | Review runtime issues and follow-up signals; fold into exception inbox. |
+| `/ops/notifications` | `ship` | Review runtime issues, self-repair proposals, and follow-up signals. |
 | `/ops/approvals` | `ship` | Review pending decisions, replay effects, and approval history. |
 | `/ops/costs` | `ship` | Inspect spend visibility and cost evidence. |
 | `/ops/runtime` | `ship` | Inspect gateway health, daemon posture, host vitals, and backups. |
 | `/ops/diagnostics` | `ship` | Inspect durable, daemon, admin, docs, and readiness diagnostics. |
 | `/ops/kanban` | `experimental` | Multi-agent board is experimental; bulk controls are not final release control. |
 | `/settings/general` | `ship` | Configure base defaults. |
-| `/settings/providers` | `needs_release_polish` | Configure credentials and run provider/model smoke evidence with plain failures. |
+| `/settings/providers` | `ship` | Configure credentials and run provider/model smoke evidence with plain failures. |
 | `/settings/personalities` | `experimental` | Personality presets are experimental Chat-default polish. |
 | `/settings/access` | `ship` | Inspect auth posture, secret storage truth, and access boundaries. |
 | `/settings/permissions` | `ship` | Configure permission profiles and local operator override evidence. |
 | `/settings/budget` | `ship` | Set budget mode and review cost evidence. |
-| `/settings/onboarding` | `needs_release_polish` | Complete Start Here: provider, model, first Chat, Cowork, project, and proof artifact. |
+| `/settings/onboarding` | `ship` | Complete Start Here: provider, model, first Chat, Cowork, project, and proof artifact. |
 | `/settings/runtime` | `ship` | Configure runtime posture while experimental sidecars stay labeled. |
 | `/settings/workspaces` | `ship` | Configure workspace context, guidance, and extension posture. |
 | `/settings/addons` | `experimental` | Add-on posture only; no full marketplace/install lifecycle claim. |
-| `/settings/integrations` | `needs_release_polish` | Each visible connector needs a real setup/action path or blocked/incomplete copy. |
-| `/settings/channels` | `needs_release_polish` | Each visible channel needs guided setup with live-auth/send diagnostics or blocked copy. |
-| `/settings/mcp` | `needs_release_polish` | Local stdio and Approval Inbox paths are visible; remote transports stay blocked/experimental. |
+| `/settings/integrations` | `ship` | Each visible connector has a setup/action path or explicit blocked/incomplete copy. |
+| `/settings/channels` | `ship` | Each visible channel has guided setup with live-auth/send diagnostics or blocked copy. |
+| `/settings/mcp` | `ship` | Local stdio and Approval Inbox paths are visible; remote transports stay blocked/experimental. |
 | `/settings/tools` | `ship` | Inspect tool catalog and scoped allow/deny grants. |

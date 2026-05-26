@@ -60,6 +60,7 @@ import {
   RAIL_ITEMS,
   buildAppHref,
   buildNavigationTarget,
+  describeReleaseScopeForOperator,
   describeReleaseSurfaceStatus,
   getRouteDescription,
   getRouteLabel,
@@ -226,6 +227,7 @@ export function MissionControlNextApp() {
   const currentRouteDescription = getRouteDescription(route);
   const currentReleaseScope = getRouteReleaseScope(route);
   const currentReleaseStatusLabel = describeReleaseSurfaceStatus(currentReleaseScope.status);
+  const currentReleaseScopeOperatorSummary = describeReleaseScopeForOperator(currentReleaseScope);
   const realtimeStatusCopy = useMemo(
     () => describeRealtimeTruthUi(streamState, streamTruthMode),
     [streamState, streamTruthMode],
@@ -318,6 +320,15 @@ export function MissionControlNextApp() {
             <p>{currentRouteDescription}</p>
           </section>
           <section className="mc-next-inspector-section">
+            <h4>Release readiness</h4>
+            <ul className="mc-next-inspector-list">
+              <li>Scope: {currentReleaseStatusLabel}</li>
+              <li>Action: {currentReleaseScope.releaseAction}</li>
+              <li>Verification: {currentReleaseScope.verification}</li>
+              <li>Constraint: {currentReleaseScope.note}</li>
+            </ul>
+          </section>
+          <section className="mc-next-inspector-section">
             <h4>Keep in view</h4>
             <ul className="mc-next-inspector-list">
               <li>Workspace: {activeWorkspaceName}</li>
@@ -332,6 +343,10 @@ export function MissionControlNextApp() {
     activeWorkspaceName,
     currentAreaMeta.kicker,
     currentAreaMeta.label,
+    currentReleaseScope.note,
+    currentReleaseScope.releaseAction,
+    currentReleaseScope.verification,
+    currentReleaseStatusLabel,
     currentRouteDescription,
     currentRouteLabel,
     copyTrustReportForRoute,
@@ -579,7 +594,12 @@ export function MissionControlNextApp() {
                 </select>
               </label>
               <div className="mc-next-topbar-status">
-                <span className="mc-next-badge mc-next-release-badge" data-release-status={currentReleaseScope.status}>
+                <span
+                  className="mc-next-badge mc-next-release-badge"
+                  data-release-status={currentReleaseScope.status}
+                  title={currentReleaseScopeOperatorSummary}
+                  aria-label={currentReleaseScopeOperatorSummary}
+                >
                   {currentReleaseStatusLabel}
                 </span>
                 <span className="mc-next-badge">{realtimeStatusCopy.badge}</span>
@@ -671,6 +691,7 @@ export function MissionControlNextApp() {
                         const target = buildNavigationTarget(route, item);
                         const releaseScope = getRouteReleaseScope(target);
                         const releaseStatusLabel = describeReleaseSurfaceStatus(releaseScope.status);
+                        const releaseScopeOperatorSummary = describeReleaseScopeForOperator(releaseScope);
                         const backlogCount =
                           item.section === "tasks"
                             ? (status.dashboard?.taskStatusCounts ?? [])
@@ -693,6 +714,8 @@ export function MissionControlNextApp() {
                                   <span
                                     className="mc-next-rail-release-badge"
                                     data-release-status={releaseScope.status}
+                                    title={releaseScopeOperatorSummary}
+                                    aria-label={releaseScopeOperatorSummary}
                                   >
                                     {releaseStatusLabel}
                                   </span>
@@ -740,7 +763,8 @@ export function MissionControlNextApp() {
                       <span
                         className="mc-next-stage-chip warning"
                         data-release-status={currentReleaseScope.status}
-                        title={currentReleaseScope.note}
+                        title={currentReleaseScopeOperatorSummary}
+                        aria-label={currentReleaseScopeOperatorSummary}
                       >
                         {currentReleaseStatusLabel}
                       </span>

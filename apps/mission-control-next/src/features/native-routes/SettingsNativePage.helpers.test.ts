@@ -484,7 +484,7 @@ describe("SettingsNativePage helpers", () => {
       }).map((item) => item.description),
     ).toEqual(expect.arrayContaining([expect.stringContaining("Blocked by model discovery failure")]));
     expect(getErrorMessage(new Error("boom"))).toBe("boom");
-    expect(getErrorMessage("boom")).toBe("Something went wrong.");
+    expect(getErrorMessage("boom")).toBe("boom");
     expect(formatJson({ enabled: true })).toBe('{\n  "enabled": true\n}');
     expect(formatDateTime(undefined)).toBe("Unknown");
     expect(formatDateTime("not-a-date")).toBe("Unknown");

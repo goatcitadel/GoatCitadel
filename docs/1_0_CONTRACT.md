@@ -1,6 +1,6 @@
 # GoatCitadel 1.0 Contract
 
-Last updated: 2026-05-18
+Last updated: 2026-05-26
 
 This document defines the product promise, visible scope, trust posture, upgrade guarantees, and release gates required before GoatCitadel may describe itself as `1.0`.
 
@@ -31,12 +31,12 @@ The current `apps/mission-control-next` operator navigation is `Chat / Cowork / 
 - `Observe`: maps to current Ops, activity, runtime, cost, diagnostics, and Library evidence surfaces
 - `Tune`: maps to current Settings, providers, integrations, channels, tools, agents, and workspace controls
 
-Release-target mappings for the current UI are frozen in [docs/1_0_RELEASE_SURFACE_SCOPE.md](./1_0_RELEASE_SURFACE_SCOPE.md). Routes marked `experimental` or `needs_release_polish` must be labeled in the current shell and must not be cited as final release-ready proof until promoted to `ship` with matching evidence.
+Release-target mappings for the current UI are frozen in [docs/1_0_RELEASE_SURFACE_SCOPE.md](./1_0_RELEASE_SURFACE_SCOPE.md). Routes marked `experimental` or `needs_release_polish` must be labeled in the current shell and must not be cited as final release-ready proof until promoted to `ship` with matching evidence. For the `1.0` surface, all non-experimental visible routes are promoted to `ship`.
 
 Release-target mappings for the current UI:
 
 - `apps/mission-control-next` is the canonical `1.0` operator shell.
-- `apps/mission-control` remains a compatibility shell for rollback, comparison, and inbound route continuity; it is compatibility-only and is not allowed to be the only complete implementation of a shipped operator-critical surface.
+- `apps/mission-control` source is archived from disk; generated build/runtime residue may still exist locally, but the deleted source tree is not a shipped compatibility shell and is not allowed to be cited as current implementation evidence.
 
 - `Timeline` corresponds to the current Activity + Sessions story
 - `Health` corresponds to the current Costs + System story
@@ -113,7 +113,7 @@ GoatCitadel may not claim `1.0` until all of these are true:
 - `verify:code-mode:sandbox` is green and proves Code Mode sandbox metadata and fail-closed posture remain truthful; wrapper/artifact integrity stays covered by the focused Code Mode service and storage tests cited in release evidence
 - `verify:agentic:governance` is green as targeted contract and behavior proof for policy/profile/override governance anchors across Chat, Cowork, Code, tools, approvals, and durable ownership
 - `verify:agentic:proof` is green as aggregate targeted contract and behavior proof for retained agentic evidence, orchestration lineage anchors, and the governance/harness proof families; it is not a live end-to-end product proof
-- `verify:ui:parity` is green as current-shell seeded-fact proof plus legacy compatibility-surface smoke while the legacy compatibility shell remains shipped
+- `verify:ui:parity` is green as current-shell seeded-fact proof against Mission Control Next surfaces; legacy comparison is retired with the archived `apps/mission-control` source
 - `verify:memory:truth` is green as a bespoke end-to-end proof lane for TTL/lifecycle truth
 - `verify:realtime:truth` is green as a bespoke end-to-end proof lane for replay-gap, compatibility-fallback, and explicit-event-envelope behavior
 - `verify:architecture:metrics` is green and does not show coupling regressions relative to the accepted baseline

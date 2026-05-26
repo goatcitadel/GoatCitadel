@@ -52,6 +52,10 @@ function textOf(node: unknown): string {
   return "";
 }
 
+function normalizedTextOf(node: unknown): string {
+  return textOf(node).replace(/\s+/g, " ").trim();
+}
+
 async function flush(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
@@ -214,7 +218,7 @@ describe("chat rendering tail coverage", () => {
     renderer = create(
       <AssistantMessageRenderer role="assistant" content={String.raw`Hello \u0057orld`} running className="custom" />,
     );
-    expect(textOf(renderer.toJSON())).toContain("Hello World");
+    expect(normalizedTextOf(renderer.toJSON())).toContain("Hello World");
 
     await act(async () => {
       renderer!.root.findByType("button").props.onClick();

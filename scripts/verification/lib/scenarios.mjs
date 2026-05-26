@@ -4788,6 +4788,20 @@ async function setBrowserCorrelation(page, correlationId, sessionId) {
 
 async function stabilizeVisualRegressionSnapshot(page) {
   await page.evaluate(() => {
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    for (const element of Array.from(document.querySelectorAll("*"))) {
+      if (!(element instanceof HTMLElement)) {
+        continue;
+      }
+      const canScroll = element.scrollHeight > element.clientHeight || element.scrollWidth > element.clientWidth;
+      if (canScroll) {
+        element.scrollTop = 0;
+        element.scrollLeft = 0;
+      }
+    }
+
     const replacements = [
       {
         pattern: /\b\d{1,2}\/\d{1,2}\/\d{4},\s*\d{1,2}:\d{2}(?::\d{2})?\s*[AP]M\b/g,
@@ -4827,6 +4841,7 @@ async function stabilizeVisualRegressionSnapshot(page) {
       node.textContent = next;
     }
   });
+  await page.waitForTimeout(100);
 }
 
 function appendQuery(href, query) {

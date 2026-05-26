@@ -49,7 +49,7 @@ These README-facing screenshots are regenerated from a sanitized Mission Control
 ## Current Product Truth
 
 - `apps/mission-control-next` is the canonical `1.0` Mission Control shell.
-- `apps/mission-control` was retired in 1.x cleanup; the legacy source remains on disk for archive only and is no longer wired into builds, CI, or the dev launcher.
+- `apps/mission-control` was retired in 1.x cleanup; the legacy source is archived from disk and is no longer wired into builds, CI, or the dev launcher.
 - The Fastify gateway owns runtime APIs, routing, orchestration entrypoints, approvals, policy enforcement, integrations, audit, realtime events, and persistence coordination.
 - Chat, Cowork, and Code are distinct operator surfaces backed by shared runtime foundations.
 - Durable execution owns the shipped resumable mission-session Chat / Cowork / Code flow set.
@@ -63,7 +63,7 @@ These README-facing screenshots are regenerated from a sanitized Mission Control
 
 - **Cowork delegation approvals are more explicit**: threaded surfaces keep approval state and follow-on actions visible in the active composer flow, with regression coverage around delegation policy actions.
 - **Cowork artifacts and document tooling are stronger**: PPTX/document artifact execution is represented through the policy/tool registry path, and trace persistence now preserves richer artifact metadata for operator review.
-- **Current and compatibility shells received contrast polish**: Cowork and threaded workflow surfaces have refreshed contrast treatment for denser operator output.
+- **Mission Control Next received contrast polish**: Cowork and threaded workflow surfaces have refreshed contrast treatment for denser operator output.
 - **Gateway runtime lifecycle work keeps tightening**: orchestration helpers, chat turn streaming, prompt-pack policy, duplicate-run prevention, queued starts, cancellation truth, cost-limit enforcement, worktree release, and durable abort handling are covered by focused regressions.
 - **Security and trust boundaries are more explicit**: MCP child env keys, Firecrawl env-name input, Code Mode env passthrough, secrets routes, and high-risk approval behavior use explicit allowlists and route-level regressions instead of broad ambient runtime state.
 - **First-run provider setup is clearer**: canonical Settings/onboarding keeps loopback bypass off by default, labels provider setup as `Providers & Models`, and shows key-on-file status without returning saved provider secrets to the browser.

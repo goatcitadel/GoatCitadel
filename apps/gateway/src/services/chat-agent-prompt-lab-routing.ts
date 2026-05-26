@@ -5,8 +5,8 @@ export const PROMPT_LAB_SUGGESTED_FILE_PATHS = {
     "apps/gateway/src/services/memory-context-service.ts",
     "apps/gateway/src/services/memory-lifecycle-service.ts",
     "packages/storage/src/memory-context-repo.ts",
-    "apps/mission-control/src/pages/MemoryPage.tsx",
-    "apps/mission-control/src/pages/memory/MemoryMaintenancePanel.tsx",
+    "apps/mission-control-next/src/features/native-routes/library/MemoryRoutePage.tsx",
+    "packages/mission-control-shared/src/hooks/useMemoryOperatorSnapshot.ts",
   ],
   guidanceRuntime: [
     "apps/gateway/src/services/guidance-doc-files.ts",
@@ -70,7 +70,6 @@ export const PROMPT_LAB_SUGGESTED_FILE_PATHS = {
     "apps/gateway/src/services/approval-resolution-effects-service.ts",
     "apps/gateway/src/routes/durable.ts",
     "packages/mission-control-shared/src/api/durable.ts",
-    "apps/mission-control/src/api/durable.ts",
     "apps/gateway/src/services/approval-resolution-effects-service.test.ts",
   ],
   promptPackParserRegression: [
@@ -145,7 +144,13 @@ export const PROMPT_LAB_LOCAL_SEARCH_QUERIES = {
     "listWorkspaceGuidance",
     "AGENTS.md",
   ],
-  memoryLifecycle: ["memory.ts", "memory-context-repo.ts", "MemoryPage.tsx", "MemoryMaintenancePanel.tsx", "memory"],
+  memoryLifecycle: [
+    "memory.ts",
+    "memory-context-repo.ts",
+    "MemoryRoutePage.tsx",
+    "useMemoryOperatorSnapshot.ts",
+    "memory",
+  ],
   cronReport: [
     "cron-job-repo.ts",
     "cron-automation-service.ts",
@@ -233,7 +238,7 @@ const CRON_REPORT_EVIDENCE_MATCHERS = {
   execution:
     /(?:^|\/)(?:apps\/gateway\/src\/services\/gateway\/update-review|apps\/gateway\/src\/services\/cron-scheduler-service)\.ts$/i,
   report:
-    /(?:^|\/)(?:apps\/gateway\/src\/routes\/prompt-packs|apps\/mission-control\/src\/api\/prompt-packs|apps\/gateway\/src\/routes\/costs|apps\/mission-control\/src\/api\/system)\.ts$/i,
+    /(?:^|\/)(?:apps\/gateway\/src\/routes\/prompt-packs|packages\/mission-control-shared\/src\/api\/prompt-packs|apps\/gateway\/src\/routes\/costs|packages\/mission-control-shared\/src\/api\/system)\.ts$/i,
 } as const;
 
 export function resolvePromptLabCronReportEvidencePaths(evidencePaths: readonly string[]): {

@@ -42,7 +42,7 @@ describe("ChatAgentOrchestrator loop42 orchestration repair coverage", () => {
       [
         "Inspect the repo if needed and identify the exact patch points for Mission Control truth labeling.",
         "The answer must distinguish canonical lifecycle linkage from inferred fallback linkage and missing links.",
-        "Concretely read `packages/contracts/src/runtime-lifecycle.ts`, `apps/gateway/src/services/runtime-lifecycle-read-service.ts`, `apps/mission-control/src/pages/ApprovalsPage.tsx`, and `apps/mission-control/src/pages/ApprovalsPage.test.tsx`.",
+        "Concretely read `packages/contracts/src/runtime-lifecycle.ts`, `apps/gateway/src/services/runtime-lifecycle-read-service.ts`, `apps/mission-control-next/src/features/native-routes/ops/ApprovalsRoutePage.tsx`, and `apps/mission-control-next/src/features/native-routes/ops/ApprovalsRoutePage.test.tsx`.",
       ].join(" "),
     );
 
@@ -51,7 +51,9 @@ describe("ChatAgentOrchestrator loop42 orchestration repair coverage", () => {
     expect(result.assistantContent).toContain("## Exact label set");
     expect(result.assistantContent).toContain("`Canonical`, `Inferred`, `Missing`");
     expect(result.assistantContent).toContain("## UI regression check");
-    expect(result.assistantContent).toContain("apps/mission-control/src/pages/ApprovalsPage.test.tsx");
+    expect(result.assistantContent).toContain(
+      "apps/mission-control-next/src/features/native-routes/ops/ApprovalsRoutePage.test.tsx",
+    );
     expect(result.assistantContent).not.toContain("generic patch");
   });
 
@@ -60,7 +62,7 @@ describe("ChatAgentOrchestrator loop42 orchestration repair coverage", () => {
       [
         "Inspect the repo if needed and identify the exact patch points for an explicit event authority envelope patch plan.",
         "The answer must cover eventClass, eventAuthority, links, producer propagation, storage round-trip, and consumer contract.",
-        "Concretely read `apps/gateway/src/services/tool-invocation-coordinator-service.ts`, `packages/storage/src/realtime-event-repo.ts`, `apps/gateway/src/routes/events.ts`, and `apps/mission-control/src/api/types.ts`.",
+        "Concretely read `apps/gateway/src/services/tool-invocation-coordinator-service.ts`, `packages/storage/src/realtime-event-repo.ts`, `apps/gateway/src/routes/events.ts`, and `packages/mission-control-shared/src/api/types.ts`.",
       ].join(" "),
     );
 
@@ -229,16 +231,16 @@ const TRUTH_LABELING_EVIDENCE_BY_PATH: Record<string, string> = {
     "  private applyFallbacks(input) { return { source: 'fallback_preview', fallbackSources: ['fallback_preview'] }; }",
     "}",
   ].join("\n"),
-  "apps/mission-control/src/pages/ApprovalsPage.tsx": [
+  "apps/mission-control-next/src/features/native-routes/ops/ApprovalsRoutePage.tsx": [
     "import { fetchRuntimeLifecycle } from '../api/client';",
-    "export function ApprovalsPage() {",
+    "export function ApprovalsRoutePage() {",
     "  const lifecycle = fetchRuntimeLifecycle({ approvalId: selectedApproval.id });",
     "  return <LifecyclePanel lifecycle={lifecycle} />;",
     "}",
   ].join("\n"),
-  "apps/mission-control/src/pages/ApprovalsPage.test.tsx": [
+  "apps/mission-control-next/src/features/native-routes/ops/ApprovalsRoutePage.test.tsx": [
     "import { render, screen } from '@testing-library/react';",
-    "describe('ApprovalsPage', () => {",
+    "describe('ApprovalsRoutePage', () => {",
     "  it('renders lifecycle linkage metadata from fetchRuntimeLifecycle', async () => {});",
     "});",
   ].join("\n"),
@@ -257,7 +259,7 @@ const TRUTH_LABELING_EVIDENCE_BY_PATH: Record<string, string> = {
   ].join("\n"),
   "apps/gateway/src/routes/events.ts":
     "export async function eventsRoutes(app) { app.get('/api/v1/events', async () => realtimeEvents.list()); }",
-  "apps/mission-control/src/api/types.ts": [
+  "packages/mission-control-shared/src/api/types.ts": [
     "export interface RealtimeEventDto {",
     "  eventClass: string;",
     "  eventAuthority: 'retained' | 'durable_history' | 'derived_projection';",

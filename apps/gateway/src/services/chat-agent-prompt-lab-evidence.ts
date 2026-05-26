@@ -307,16 +307,20 @@ export function extractPromptLabCitationExcerpt(
   if (/(?:^|\/)packages\/storage\/src\/memory-context-repo\.ts$/i.test(normalizedPath)) {
     preferredPathSpecificPatterns.push(/\bMemoryContextRepository\b/, /\bupsert\s*\(/, /\bfindFreshByCacheKey\s*\(/);
   }
-  if (/(?:^|\/)apps\/mission-control\/src\/pages\/MemoryPage\.tsx$/i.test(normalizedPath)) {
+  if (
+    /(?:^|\/)apps\/mission-control-next\/src\/features\/native-routes\/library\/MemoryRoutePage\.tsx$/i.test(
+      normalizedPath,
+    )
+  ) {
     preferredPathSpecificPatterns.push(
-      /\bMemoryPage\b/,
+      /\bMemoryRoutePage\b/,
       /\bfetchMemoryItems\b/,
       /\bfetchMemoryQmdStats\b/,
       /\bfetchMemoryMaintenanceStatus\b/,
     );
   }
-  if (/(?:^|\/)apps\/mission-control\/src\/pages\/memory\/MemoryMaintenancePanel\.tsx$/i.test(normalizedPath)) {
-    preferredPathSpecificPatterns.push(/\bMemoryMaintenancePanel\b/);
+  if (/(?:^|\/)packages\/mission-control-shared\/src\/hooks\/useMemoryOperatorSnapshot\.ts$/i.test(normalizedPath)) {
+    preferredPathSpecificPatterns.push(/\buseMemoryOperatorSnapshot\b/);
   }
 
   const pathSpecificPreferred = preferredPathSpecificPatterns

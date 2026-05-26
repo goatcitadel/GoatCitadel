@@ -189,7 +189,9 @@ describe("ChatAgentOrchestrator loop39 runtime and delegation repair behavior", 
       instruction: "Keep exactly these sections in order: `Researcher`, `Architect`, `QA`, `Product`, `Ops`.",
     });
 
-    expect(result.assistantContent).toContain("route -> persisted context repo -> Mission Control page");
+    expect(result.assistantContent).toContain(
+      "route -> persisted context repo -> Mission Control Next memory route -> shared operator snapshot hook",
+    );
     expect(result.assistantContent).toContain("fresh cache hits");
     expect(result.assistantContent).toContain("maintenance-action honesty");
     expect(result.assistantContent).toContain("UI labels as lifecycle truth");

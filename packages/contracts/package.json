@@ -1,6 +1,7 @@
 {
   "name": "@goatcitadel/contracts",
   "version": "1.0.0",
+  "goatcitadelOwner": "contracts",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

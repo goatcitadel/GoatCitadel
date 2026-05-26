@@ -159,6 +159,6 @@ describe("NativeRoutePages loop 30 helper matrix", () => {
     expect(formatBytes(1024 * 1024 * 1024 * 15)).toBe("15 GB");
     expect(formatTaskStatus("__")).toBe("");
     expect(getErrorMessage(new Error("native down"))).toBe("native down");
-    expect(getErrorMessage("bad")).toBe("Something went wrong.");
+    expect(getErrorMessage("bad")).toBe("bad");
   });
 });

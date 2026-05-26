@@ -7,12 +7,12 @@ describe("chat-agent-prompt-lab-routing", () => {
       resolvePromptLabCronReportEvidencePaths([
         "packages/storage/src/cron-job-repo.ts",
         "apps/gateway/src/services/cron-scheduler-service.ts",
-        "apps/mission-control/src/api/prompt-packs.ts",
+        "packages/mission-control-shared/src/api/prompt-packs.ts",
       ]),
     ).toEqual({
       cronPath: "packages/storage/src/cron-job-repo.ts",
       executionPath: "apps/gateway/src/services/cron-scheduler-service.ts",
-      reportPath: "apps/mission-control/src/api/prompt-packs.ts",
+      reportPath: "packages/mission-control-shared/src/api/prompt-packs.ts",
     });
   });
 

@@ -128,8 +128,8 @@ describe("OrchestrationEngine", () => {
         {
           ...plan.waves[0]!,
           ownership: [
-            { agentId: "agent-a", paths: ["apps/mission-control/**"] },
-            { agentId: "agent-b", paths: ["apps/mission-control/src"] },
+            { agentId: "agent-a", paths: ["apps/mission-control-next/**"] },
+            { agentId: "agent-b", paths: ["apps/mission-control-next/src"] },
           ],
           phases: [
             plan.waves[0]!.phases[0]!,
@@ -143,7 +143,7 @@ describe("OrchestrationEngine", () => {
     };
 
     expect(() => engine.validate(invalidPlan)).toThrow(
-      "Wave wave-1 ownership conflict: agent-a:apps/mission-control overlaps agent-b:apps/mission-control/src",
+      "Wave wave-1 ownership conflict: agent-a:apps/mission-control-next overlaps agent-b:apps/mission-control-next/src",
     );
   });
 

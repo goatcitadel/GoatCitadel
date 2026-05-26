@@ -80,7 +80,7 @@ export interface GatewayRouteCompositionPort {
   readonly llamaCppRuntime: LlamaCppRuntimeService;
   readonly llmService: LlmService;
   readonly mediaVoiceService: MediaVoiceService;
-  readonly memoryLifecycleService: MemoryLifecycleService;
+  get memoryLifecycleService(): MemoryLifecycleService;
   readonly meshService: MeshService;
   readonly npuSidecar: NpuSidecarService;
   readonly obsidianVaultService: ObsidianVaultService;

@@ -747,7 +747,8 @@ describe("prompt-pack normalization and repair", () => {
     const uiTrace = normalizePromptPackAgenticResponse({
       profile: resolvePromptPackExecutionProfile({ test: uiTraceTest }),
       prompt: uiTraceTest.prompt,
-      responseText: "## Findings\n`apps/mission-control/src/pages/PromptLabPage.tsx` renders auto score.",
+      responseText:
+        "## Findings\n`apps/mission-control-next/src/features/threaded-surface/ThreadedSurfacePage.tsx` renders auto score.",
       trace: createPromptPackFileTrace("sess-d510-ui-trace", [
         "apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx",
         "packages/mission-control-shared/src/api/prompt-packs.ts",
@@ -801,7 +802,7 @@ describe("prompt-pack normalization and repair", () => {
     expect(uiTrace).toContain("apps/mission-control-next/src/features/prompt-packs/PromptPacksWorkbenchPage.tsx");
     expect(uiTrace).toContain("score evidence");
     expect(uiTrace).toContain("v3 attribution display risk");
-    expect(uiTrace).not.toContain("apps/mission-control/src/pages/PromptLabPage.tsx");
+    expect(uiTrace).not.toContain("apps/mission-control-next/src/features/threaded-surface/ThreadedSurfacePage.tsx");
     expect(attribution).toContain("Target test file");
     expect(attribution).toContain("mergePromptPackAutoScoresV3");
     expect(attribution).toContain("Failure signature");

@@ -1,6 +1,6 @@
 # GoatCitadel 1.0 Release Evidence
 
-Last updated: 2026-05-25
+Last updated: 2026-05-26
 
 This document maps the public `1.0` claims to the repo-visible code paths, tests, and named verification lanes that back them.
 
@@ -36,7 +36,7 @@ Current shell posture for this map:
 ## Visible Surface Evidence
 
 - The canonical release-bearing primary surface manifest lives in [scripts/verification/lib/release-surface-manifest.mjs](../scripts/verification/lib/release-surface-manifest.mjs).
-- The visible route classification table lives in [docs/1_0_RELEASE_SURFACE_SCOPE.md](./1_0_RELEASE_SURFACE_SCOPE.md) and is anchored to `ROUTE_RELEASE_SCOPE` in [apps/mission-control-next/src/app/route-model.ts](../apps/mission-control-next/src/app/route-model.ts). Routes that are `experimental` or `needs_release_polish` remain visible only with matching shell labels and must not be cited as final release-ready proof.
+- The visible route classification table lives in [docs/1_0_RELEASE_SURFACE_SCOPE.md](./1_0_RELEASE_SURFACE_SCOPE.md) and is anchored to `ROUTE_RELEASE_SCOPE` in [apps/mission-control-next/src/app/route-model.ts](../apps/mission-control-next/src/app/route-model.ts). The current `1.0` surface is 39 visible routes: 34 `ship`, 0 `needs_release_polish`, and 5 `experimental`; experimental routes remain visible only with matching shell labels and must not be cited as final release-ready proof.
 - `verify:surface:regression` and `verify:visual:regression` both derive from the Mission Control Next release-surface manifest in [scripts/verification/lib/scenarios.mjs](../scripts/verification/lib/scenarios.mjs); visual proof now covers every current release-surface route.
 - `verify:ui:parity` runs canonical-shell seeded-fact proof against Mission Control Next surfaces (legacy comparison retired in Track D Phase 3).
 - `verify:visual:regression` is the read-only screenshot gate in [scripts/verification/run.mjs](../scripts/verification/run.mjs); intentional baseline maintenance now goes through `verify:visual:rebaseline`, which threads explicit baseline-write intent into [scripts/verification/lib/scenarios.mjs](../scripts/verification/lib/scenarios.mjs) instead of letting the normal lane rewrite proof artifacts.

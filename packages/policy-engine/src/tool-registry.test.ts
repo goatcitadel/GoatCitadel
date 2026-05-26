@@ -22,6 +22,19 @@ describe("tool registry", () => {
     expect(catalog.some((tool) => tool.toolName === "shell.exec_background")).toBe(true);
   });
 
+  it("points the background dev-server example at Mission Control Next", () => {
+    const catalog = createDefaultToolRegistry().toCatalog();
+    const tool = catalog.find((item) => item.toolName === "shell.exec_background");
+
+    expect(tool?.examples).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          args: expect.objectContaining({ cwd: "./apps/mission-control-next" }),
+        }),
+      ]),
+    );
+  });
+
   it("passes ranking metadata through the public catalog", () => {
     const catalog = createDefaultToolRegistry().toCatalog();
     const tool = catalog.find((item) => item.toolName === "code.search");

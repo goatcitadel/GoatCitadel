@@ -700,6 +700,22 @@ describe("MissionControlNextApp", () => {
     expect(JSON.stringify(failingRenderer.toJSON())).not.toContain("Trust report export failed: export offline");
   });
 
+  it("surfaces release readiness action and verification truth in the route inspector", async () => {
+    const renderer = await renderApp("http://localhost:5173/settings/providers");
+
+    await act(async () => {
+      findButton(renderer, "Open context inspector").props.onClick();
+    });
+
+    const rendered = JSON.stringify(renderer.toJSON());
+    expect(rendered).toContain("Release readiness");
+    expect(rendered).toContain("Scope: ");
+    expect(rendered).toContain("Release-ready");
+    expect(rendered).toContain("Configure provider credentials and run provider/model smoke evidence.");
+    expect(rendered).toContain("verify:surface:regression, provider exercise paths");
+    expect(rendered).toContain("smoke evidence, model discovery state, and plain failure copy");
+  });
+
   it("dispatches route content for native, prompt-pack, and threaded areas", async () => {
     let renderer = await renderApp("http://localhost:5173/library/prompt-packs?theme=light");
     expect(JSON.stringify(renderer.toJSON())).toContain("Prompt packs library");

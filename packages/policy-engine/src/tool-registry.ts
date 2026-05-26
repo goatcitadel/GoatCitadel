@@ -393,7 +393,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     examples: [
       {
         title: "Start the local dev server in the background",
-        args: { command: "pnpm dev", cwd: "./apps/mission-control" },
+        args: { command: "pnpm dev", cwd: "./apps/mission-control-next" },
       },
     ],
     pack: "devops",

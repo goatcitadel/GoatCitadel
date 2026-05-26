@@ -1,4 +1,4 @@
-/* eslint-disable max-lines -- ThreadedSurfacePage coordinates chat/cowork/code layout, composer chrome, timeline, drawer, and workflow panels while decomposition lands (plan W3.1 in C:/Users/spurn/.claude/plans/swirling-questing-pizza.md). */
+/* eslint-disable max-lines -- ThreadedSurfacePage coordinates chat/cowork/code layout, composer chrome, timeline, drawer, and workflow panels while decomposition lands (plan W3.1 in local decomposition notes). */
 import {
   useCallback,
   useEffect,

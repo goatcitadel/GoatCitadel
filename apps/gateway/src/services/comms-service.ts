@@ -54,6 +54,14 @@ const CHANNEL_ACTIVITY_EMOJI: Partial<Record<ChannelActivityInput["phase"], stri
 };
 const CHANNEL_ACTIVITY_TYPING_PHASES = new Set<ChannelActivityInput["phase"]>(["thinking", "tooling"]);
 
+function invokeCommsTool(
+  host: CommsHost,
+  request: ToolInvokeRequest,
+  realtimeType: string,
+): Promise<ToolInvokeResult | Record<string, unknown>> {
+  return host.invokeAndUnwrap(request, realtimeType);
+}
+
 export async function commsSend(
   host: CommsHost,
   input: ChannelSendInput,
@@ -64,7 +72,8 @@ export async function commsSend(
     { readChatAttachmentContent: (attachmentId) => host.readChatAttachmentContent(attachmentId) },
   );
   throwIfCommsAborted(input.signal);
-  return host.invokeAndUnwrap(
+  return invokeCommsTool(
+    host,
     {
       toolName: "channel.send",
       args: {
@@ -106,7 +115,8 @@ export async function commsReact(
   input: ChannelReactInput,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
   throwIfCommsAborted(input.signal);
-  return host.invokeAndUnwrap(
+  return invokeCommsTool(
+    host,
     {
       toolName: "channel.react",
       args: {
@@ -132,7 +142,8 @@ export async function commsUnsend(
   input: ChannelUnsendInput,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
   throwIfCommsAborted(input.signal);
-  return host.invokeAndUnwrap(
+  return invokeCommsTool(
+    host,
     {
       toolName: "channel.unsend",
       args: {
@@ -293,7 +304,8 @@ export async function commsGmailRead(
   host: CommsHost,
   input: GmailReadQuery,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
-  return host.invokeAndUnwrap(
+  return invokeCommsTool(
+    host,
     {
       toolName: "gmail.read",
       args: {
@@ -313,7 +325,8 @@ export async function commsGmailSend(
   host: CommsHost,
   input: GmailSendInput,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
-  return host.invokeAndUnwrap(
+  return invokeCommsTool(
+    host,
     {
       toolName: "gmail.send",
       args: {
@@ -337,7 +350,8 @@ export async function commsCalendarList(
   host: CommsHost,
   input: CalendarListQuery,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
-  return host.invokeAndUnwrap(
+  return invokeCommsTool(
+    host,
     {
       toolName: "calendar.list",
       args: {
@@ -359,7 +373,8 @@ export async function commsCalendarCreate(
   host: CommsHost,
   input: CalendarCreateEventInput,
 ): Promise<ToolInvokeResult | Record<string, unknown>> {
-  return host.invokeAndUnwrap(
+  return invokeCommsTool(
+    host,
     {
       toolName: "calendar.create_event",
       args: {

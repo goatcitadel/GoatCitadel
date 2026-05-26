@@ -8564,12 +8564,13 @@ function buildMemoryLifecycleCoworkFallback(input: {
     evidencePaths.find((path) => /(?:^|\/)packages\/storage\/src\/memory-context-repo\.ts$/i.test(path)) ??
     "packages/storage/src/memory-context-repo.ts";
   const pagePath =
-    evidencePaths.find((path) => /(?:^|\/)apps\/mission-control\/src\/pages\/MemoryPage\.tsx$/i.test(path)) ??
-    "apps/mission-control/src/pages/MemoryPage.tsx";
+    evidencePaths.find((path) =>
+      /(?:^|\/)apps\/mission-control-next\/src\/features\/native-routes\/library\/MemoryRoutePage\.tsx$/i.test(path),
+    ) ?? "apps/mission-control-next/src/features/native-routes/library/MemoryRoutePage.tsx";
   const maintenancePath =
     evidencePaths.find((path) =>
-      /(?:^|\/)apps\/mission-control\/src\/pages\/memory\/MemoryMaintenancePanel\.tsx$/i.test(path),
-    ) ?? "apps/mission-control/src/pages/memory/MemoryMaintenancePanel.tsx";
+      /(?:^|\/)packages\/mission-control-shared\/src\/hooks\/useMemoryOperatorSnapshot\.ts$/i.test(path),
+    ) ?? "packages/mission-control-shared/src/hooks/useMemoryOperatorSnapshot.ts";
   const exactFilesUsed = [routePath, repoPath, pagePath, maintenancePath].filter(
     (value, index, items) => items.indexOf(value) === index,
   );
@@ -8578,19 +8579,19 @@ function buildMemoryLifecycleCoworkFallback(input: {
     const normalized = normalizeCoworkRoleLabel(section);
     if (normalized === "researcher") {
       sections.push(
-        `## ${section}\n- The cleanest lifecycle chain is route -> persisted context repo -> Mission Control page/maintenance surface, anchored in \`${routePath}\`, \`${repoPath}\`, \`${pagePath}\`, and \`${maintenancePath}\`.\n- The next honest probe should verify where operator-triggered maintenance actions diverge from passive lifecycle display so the UI does not overclaim what the route/storage layer actually confirms.`,
+        `## ${section}\n- The cleanest lifecycle chain is route -> persisted context repo -> Mission Control Next memory route -> shared operator snapshot hook, anchored in \`${routePath}\`, \`${repoPath}\`, \`${pagePath}\`, and \`${maintenancePath}\`.\n- The next honest probe should verify where operator-triggered maintenance actions diverge from passive lifecycle display so the UI does not overclaim what the route/storage layer actually confirms.`,
       );
       continue;
     }
     if (normalized === "architect") {
       sections.push(
-        `## ${section}\n- Current lifecycle: \`${routePath}\` is the gateway boundary for composing/reading memory context and triggering maintenance; \`${repoPath}\` is the durable source for reuse and lifecycle decisions such as fresh cache hits, run-linked listings, expiry pruning, and older-than pruning; \`${pagePath}\` and \`${maintenancePath}\` display that state and expose operator maintenance controls.\n- Highest-value slice: keep lifecycle plus maintenance together. Seed fresh, expired, and stale context-pack rows; exercise the route/service path that composes or maintains packs; then verify the UI reports only states the repo can persist or acknowledge.\n- Confidence and limits: high confidence that route/storage own truth and UI owns presentation; still unproven until the regression executes route -> repo -> UI with real expiry/pruning fixtures.`,
+        `## ${section}\n- Current lifecycle: \`${routePath}\` is the gateway boundary for composing/reading memory context and triggering maintenance; \`${repoPath}\` is the durable source for reuse and lifecycle decisions such as fresh cache hits, run-linked listings, expiry pruning, and older-than pruning; \`${pagePath}\` renders the operator route while \`${maintenancePath}\` supplies the shared operator snapshot state.\n- Highest-value slice: keep lifecycle plus maintenance together. Seed fresh, expired, and stale context-pack rows; exercise the route/service path that composes or maintains packs; then verify the UI reports only states the repo can persist or acknowledge.\n- Confidence and limits: high confidence that route/storage own truth and UI owns presentation; still unproven until the regression executes route -> repo -> UI with real expiry/pruning fixtures.`,
       );
       continue;
     }
     if (normalized === "qa") {
       sections.push(
-        `## ${section}\n- Regression 1, display truth: setup fresh and expired memory context packs in \`${repoPath}\`; act through \`${routePath}\` and refresh \`${pagePath}\`; assert fresh packs remain reusable/visible, expired packs are not presented as current, and the failure signature is UI copy claiming freshness without repo-backed state.\n- Regression 2, pruning truth: setup stale rows older than the maintenance threshold plus recent rows; act through the maintenance control path surfaced by \`${maintenancePath}\`; assert pruned counts/status match storage results, recent rows survive, and the failure signature is a UI success message when storage did not prune or acknowledge anything.\n- Ambiguity guard: if a run only reads route or UI files, require the answer to say expiry/pruning behavior is unverified rather than inferring it from labels or button copy.`,
+        `## ${section}\n- Regression 1, display truth: setup fresh and expired memory context packs in \`${repoPath}\`; act through \`${routePath}\` and refresh \`${pagePath}\`; assert fresh packs remain reusable/visible, expired packs are not presented as current, and the failure signature is UI copy claiming freshness without repo-backed state.\n- Regression 2, pruning truth: setup stale rows older than the maintenance threshold plus recent rows; act through the shared operator snapshot path surfaced by \`${maintenancePath}\`; assert pruned counts/status match storage results, recent rows survive, and the failure signature is a UI success message when storage did not prune or acknowledge anything.\n- Ambiguity guard: if a run only reads route or UI files, require the answer to say expiry/pruning behavior is unverified rather than inferring it from labels or button copy.`,
       );
       continue;
     }
@@ -8601,7 +8602,7 @@ function buildMemoryLifecycleCoworkFallback(input: {
       continue;
     }
     sections.push(
-      `## ${section}\n- Anchor this role in \`${routePath}\`, \`${repoPath}\`, \`${pagePath}\`, and \`${maintenancePath}\` so the lifecycle summary stays grounded across route, storage, and UI instead of treating UI labels as lifecycle truth.\n- Prefer one display-path regression and one maintenance-path regression before adding broader memory coverage; both should carry an explicit unverified/ambiguous line when storage evidence is missing.`,
+      `## ${section}\n- Anchor this role in \`${routePath}\`, \`${repoPath}\`, \`${pagePath}\`, and \`${maintenancePath}\` so the lifecycle summary stays grounded across route, storage, and UI instead of treating UI labels as lifecycle truth.\n- Prefer one display-path regression and one operator-snapshot maintenance regression before adding broader memory coverage; both should carry an explicit unverified/ambiguous line when storage evidence is missing.`,
     );
   }
   if (!input.requestedRoleOrderOnly) {
@@ -8635,7 +8636,7 @@ function buildEventLinkPropagationCoworkFallback(input: {
     "apps/gateway/src/routes/events.ts";
   const apiPath =
     evidencePaths.find((path) =>
-      /(?:^|\/)(?:packages\/mission-control-shared|apps\/mission-control)\/src\/api\/(?:types|events)\.ts$/i.test(path),
+      /(?:^|\/)packages\/mission-control-shared\/src\/api\/(?:types|events)\.ts$/i.test(path),
     ) ?? "packages/mission-control-shared/src/api/types.ts";
   const exactFilesUsed = [producerPath, storagePath, routePath, apiPath].filter(
     (value, index, items) => items.indexOf(value) === index,
@@ -8692,7 +8693,7 @@ function buildRank1HardeningCoworkFallback(input: {
     "packages/contracts/src/durable.ts";
   const missionControlPath =
     evidencePaths.find((path) =>
-      /(?:^|\/)(?:apps\/mission-control\/src\/lib\/durable-timeline\.ts|packages\/mission-control-shared\/src\/api\/durable\.ts|apps\/mission-control\/src\/api\/durable\.ts)$/i.test(
+      /(?:^|\/)(?:packages\/mission-control-shared\/src\/api\/durable\.ts|packages\/threaded-surface-core\/src\/MissionThreadedControllerHost\.tsx|apps\/mission-control-next\/src\/features\/threaded-surface\/ThreadedWorkflowPanel\.tsx)$/i.test(
         path,
       ),
     ) ?? "packages/mission-control-shared/src/api/durable.ts";
@@ -10268,10 +10269,10 @@ function buildMemoryRoutesEvidenceFallback(input: {
     /(?:^|\/)apps\/gateway\/src\/services\/memory-lifecycle-service\.ts$/i.test(path),
   );
   const pageEvidence = pickPromptLabConcreteReadEvidence(concreteReadEvidence, ({ path }) =>
-    /(?:^|\/)apps\/mission-control\/src\/pages\/MemoryPage\.tsx$/i.test(path),
+    /(?:^|\/)apps\/mission-control-next\/src\/features\/native-routes\/library\/MemoryRoutePage\.tsx$/i.test(path),
   );
   const maintenanceEvidence = pickPromptLabConcreteReadEvidence(concreteReadEvidence, ({ path }) =>
-    /(?:^|\/)apps\/mission-control\/src\/pages\/memory\/MemoryMaintenancePanel\.tsx$/i.test(path),
+    /(?:^|\/)packages\/mission-control-shared\/src\/hooks\/useMemoryOperatorSnapshot\.ts$/i.test(path),
   );
   if (
     !routeEvidence &&
@@ -10375,20 +10376,16 @@ function buildMemoryRoutesEvidenceFallback(input: {
       ) ?? [];
     const observedMemoryPageCalls = [...new Set([...importedMemoryPageFetches, ...importedMemoryPageMutations])];
     const operatorSurfaceSummary = pageEvidence
-      ? `${pageCitation} proves the operator-facing shell exists via \`MemoryPage\`${
+      ? `${pageCitation} proves the operator-facing memory route exists via \`MemoryRoutePage\`${
           observedMemoryPageCalls.length > 0
             ? ` and imports client calls such as ${observedMemoryPageCalls
                 .slice(0, 6)
                 .map((name) => `\`${name}()\``)
                 .join(", ")}`
             : ""
-        }${
-          maintenanceEvidence
-            ? `, while ${maintenanceCitation} provides the dedicated \`MemoryMaintenancePanel\` surface`
-            : ""
-        }.`
+        }${maintenanceEvidence ? `, while ${maintenanceCitation} provides the shared operator snapshot state` : ""}.`
       : maintenanceEvidence
-        ? `${maintenanceCitation} is the concrete operator-facing memory maintenance surface read in this run; the broader \`MemoryPage\` shell was not concretely read here.`
+        ? `${maintenanceCitation} is the concrete shared memory operator snapshot read in this run; the broader \`MemoryRoutePage\` shell was not concretely read here.`
         : "No operator-facing Memory UI file was concretely read in this run, so the UI portion remains unverified.";
     return [
       `- Route surface: ${
@@ -10410,8 +10407,8 @@ function buildMemoryRoutesEvidenceFallback(input: {
                 ? `${repoCitation} is the storage-side place to verify freshness, expiry, and pruning state.`
                 : undefined,
               maintenanceEvidence
-                ? `${maintenanceCitation} is the operator-facing maintenance surface that must not overstate what the route/storage layer persisted.`
-                : "No dedicated maintenance UI file was concretely read, so the maintenance surface remains unverified.",
+                ? `${maintenanceCitation} is the operator snapshot state that must not overstate what the route/storage layer persisted.`
+                : "No shared operator snapshot file was concretely read, so the maintenance surface remains unverified.",
             ]
               .filter(Boolean)
               .join(" ")
@@ -10490,8 +10487,8 @@ function buildMemoryRoutesEvidenceFallback(input: {
     : "";
   const maintenanceBehavior = maintenanceEvidence
     ? [
-        /\bMemoryMaintenancePanel\b/.test(maintenanceEvidence.content)
-          ? "`MemoryMaintenancePanel` renders controls"
+        /\buseMemoryOperatorSnapshot\b/.test(maintenanceEvidence.content)
+          ? "`useMemoryOperatorSnapshot` exposes operator memory state"
           : undefined,
         /\bmaintenance\b/i.test(maintenanceEvidence.content)
           ? "maintenance copy/actions are operator-facing"
@@ -10518,10 +10515,10 @@ function buildMemoryRoutesEvidenceFallback(input: {
     "",
     "## Operator-Facing Lifecycle",
     pageEvidence
-      ? `- ${pageCitation} is the Mission Control memory page that surfaces memory state to the operator${pageBehavior ? `: ${pageBehavior}` : ""}; it should render route/service/storage state rather than creating a separate lifecycle truth.`
+      ? `- ${pageCitation} is the Mission Control Next memory route that surfaces memory state to the operator${pageBehavior ? `: ${pageBehavior}` : ""}; it should render route/service/storage state rather than creating a separate lifecycle truth.`
       : undefined,
     maintenanceEvidence
-      ? `- ${maintenanceCitation} is the maintenance/control panel for operator-triggered memory actions${maintenanceBehavior ? `: ${maintenanceBehavior}` : ""}; its copy should distinguish maintenance recommendations, manual runs, and persisted pruning/expiry outcomes.`
+      ? `- ${maintenanceCitation} is the shared operator snapshot hook for memory actions and status${maintenanceBehavior ? `: ${maintenanceBehavior}` : ""}; its consumers should distinguish maintenance recommendations, manual runs, and persisted pruning/expiry outcomes.`
       : undefined,
     "",
     "## Current Lifecycle Summary",
@@ -11012,7 +11009,7 @@ function buildPromptLabDurableLifecyclePatchPlanFallback(input: {
         : "- `apps/gateway/src/routes/durable.ts`: route/API consumer patch point for `POST /api/v1/durable/runs/:runId/events/wake`; confirm it returns the shared `DurableWakeResult` instead of a boolean/string fallback.",
       apiEvidence
         ? `- \`${apiEvidence.path}\`: keep the Mission Control durable client typed against the same \`DurableWakeResult\` contract so UI callers see the same additive outcome vocabulary as the gateway.`
-        : "- `packages/mission-control-shared/src/api/durable.ts` / `apps/mission-control/src/api/durable.ts`: operator-visible consumer patch point; update the client/status shaping to display the typed success, skip, and failure reasons without inventing wake state.",
+        : "- `packages/mission-control-shared/src/api/durable.ts`: operator-visible consumer patch point; update the client/status shaping to display the typed success, skip, and failure reasons without inventing wake state.",
       "",
       "## Compatibility note",
       "- Keep the outcome vocabulary additive and preserve current `woke` / `failed` meanings for existing callers while any new typed skip reasons roll out.",
@@ -11189,10 +11186,12 @@ function buildPromptLabDurableLifecyclePatchPlanFallback(input: {
       /\bapproval_linkage\b/,
     );
     const pageEvidence = pick(
-      /(?:^|\/)apps\/mission-control\/src\/pages\/ApprovalsPage\.tsx$/i,
+      /(?:^|\/)apps\/mission-control-next\/src\/features\/native-routes\/ops\/ApprovalsRoutePage\.tsx$/i,
       /\bfetchRuntimeLifecycle\b/,
     );
-    const testEvidence = pick(/(?:^|\/)apps\/mission-control\/src\/pages\/ApprovalsPage\.test\.tsx$/i);
+    const testEvidence = pick(
+      /(?:^|\/)apps\/mission-control-next\/src\/features\/native-routes\/ops\/ApprovalsRoutePage\.test\.tsx$/i,
+    );
     if (!contractEvidence || !readerEvidence || !pageEvidence) {
       return undefined;
     }
@@ -14190,8 +14189,8 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
   if (looksLikePromptLabMissionControlTruthLabelingPrompt(taskContent)) {
     addQuery("runtime-lifecycle.ts");
     addQuery("runtime-lifecycle-read-service.ts");
-    addQuery("ApprovalsPage.tsx");
-    addQuery("ApprovalsPage.test.tsx");
+    addQuery("ApprovalsRoutePage.tsx");
+    addQuery("ApprovalsRoutePage.test.tsx");
     addQuery("api/types.ts");
   }
   if (looksLikePromptLabExplicitEventAuthorityEnvelopePatchPlanPrompt(taskContent)) {
@@ -14420,15 +14419,15 @@ function inferPromptLabLocalSearchQueries(userContent: string): string[] {
     addQuery("registerMemoryRoutes");
   }
   if (/\bmemory\b/i.test(normalized) && /\b(ui|copy|page|operator-facing)\b/i.test(normalized)) {
-    addQuery("MemoryPage");
-    addQuery("MemoryPage.tsx");
-    addQuery("MemoryMaintenancePanel.tsx");
+    addQuery("MemoryRoutePage");
+    addQuery("MemoryRoutePage.tsx");
+    addQuery("useMemoryOperatorSnapshot.ts");
     addQuery("memory-summary");
   }
   if (/\bmemory\b/i.test(normalized) && /\b(expir|prun|maintenance|lifecycle)\b/i.test(normalized)) {
     addQuery("pruneExpired");
     addQuery("pruneOlderThan");
-    addQuery("MemoryMaintenancePanel.tsx");
+    addQuery("useMemoryOperatorSnapshot.ts");
     addQuery("memory-maintenance");
   }
   if (

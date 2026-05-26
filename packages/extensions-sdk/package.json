@@ -1,6 +1,7 @@
 {
   "name": "@goatcitadel/extensions-sdk",
   "version": "1.0.0",
+  "goatcitadelOwner": "extensions",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

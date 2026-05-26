@@ -104,9 +104,9 @@ const securityGuide = await readFile(path.join(root, "SECURITY.md"), "utf8");
 const securityTriageGuide = await readFile(path.join(root, "docs", "security", "findings-triage.md"), "utf8");
 if (
   !/apps\/mission-control-next` is the canonical `1\.0` Mission Control shell/i.test(agentsGuide) ||
-  !/apps\/mission-control` is compatibility-only/i.test(agentsGuide)
+  !/apps\/mission-control` source .*archived from disk/i.test(agentsGuide)
 ) {
-  errors.push("AGENTS.md must keep the canonical Mission Control Next and compatibility-only legacy shell guidance explicit.");
+  errors.push("AGENTS.md must keep the canonical Mission Control Next and archived legacy shell guidance explicit.");
 }
 if (!/trusted-code surface/i.test(agentsGuide) || !/Do not claim hostile-code sandboxing/i.test(agentsGuide)) {
   errors.push("AGENTS.md must keep Code Mode guidance truthful and avoid hostile-code sandbox claims.");
@@ -354,8 +354,8 @@ if (!/@goatcitadel\/extensions-sdk@1\.0\.0/.test(pluginSdkDoc)) {
 }
 
 const contract = await readFile(path.join(root, "docs", "1_0_CONTRACT.md"), "utf8");
-if (!/^Last updated: 2026-05-18$/m.test(contract)) {
-  errors.push("docs/1_0_CONTRACT.md must carry the current 2026-05-18 freshness header.");
+if (!/^Last updated: 2026-05-26$/m.test(contract)) {
+  errors.push("docs/1_0_CONTRACT.md must carry the current 2026-05-26 freshness header.");
 }
 if (
   !/## Source of Truth Order[\s\S]*1\. current implementation under `apps\/` and `packages\/`[\s\S]*2\. \[docs\/CANONICAL_RUNTIME_STATE_MODEL\.md\]\(\.\/CANONICAL_RUNTIME_STATE_MODEL\.md\)[\s\S]*3\. this contract for `1\.0` promise and release-scope truth[\s\S]*4\. \[docs\/ENGINEERING_HANDBOOK\.md\]\(\.\/ENGINEERING_HANDBOOK\.md\)/m.test(
@@ -419,8 +419,8 @@ if (/semantic pre-release versions/i.test(changelog) || /public surface is still
 
 const releaseEvidencePath = path.join(root, "docs", "1_0_RELEASE_EVIDENCE.md");
 const releaseEvidence = await readFile(releaseEvidencePath, "utf8");
-if (!/^Last updated: 2026-05-25$/m.test(releaseEvidence)) {
-  errors.push("docs/1_0_RELEASE_EVIDENCE.md must carry the current 2026-05-25 freshness header.");
+if (!/^Last updated: 2026-05-26$/m.test(releaseEvidence)) {
+  errors.push("docs/1_0_RELEASE_EVIDENCE.md must carry the current 2026-05-26 freshness header.");
 }
 if (!/large-service debt/i.test(releaseEvidence) || !/not proof that broad GatewayService decomposition is complete/i.test(releaseEvidence)) {
   errors.push("docs/1_0_RELEASE_EVIDENCE.md must keep architecture metrics framed as a large-service debt guard, not decomposition proof.");
@@ -431,10 +431,10 @@ if (!/Permission Profiles and Override Evidence/i.test(releaseEvidence)) {
 for (const [index, line] of releaseEvidence.split(/\r?\n/).entries()) {
   if (
     /\]\(\.\.\/apps\/mission-control\//.test(line) &&
-    !/(compatibility-only|legacy|rollback|parity)/i.test(line)
+    !/(archived|legacy|retired|compatibility-only|rollback|parity)/i.test(line)
   ) {
     errors.push(
-      `docs/1_0_RELEASE_EVIDENCE.md:${index + 1} cites apps/mission-control without labeling it compatibility-only evidence.`,
+      `docs/1_0_RELEASE_EVIDENCE.md:${index + 1} cites apps/mission-control without labeling it archived or legacy evidence.`,
     );
   }
   if (

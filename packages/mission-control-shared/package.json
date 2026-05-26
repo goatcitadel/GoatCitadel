@@ -1,6 +1,7 @@
 {
   "name": "@goatcitadel/mission-control-shared",
   "version": "1.0.0",
+  "goatcitadelOwner": "mission-control",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
