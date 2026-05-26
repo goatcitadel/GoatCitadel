@@ -2,8 +2,12 @@
   min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 0.62rem;
   padding: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
   background: var(--background);
 }
 
@@ -52,10 +56,20 @@
 .mc-next-threaded-surface.unified .mc-next-threaded-primary-column {
   min-width: 0;
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
   gap: 0.52rem;
+  min-height: 0;
+  height: 100%;
   max-width: min(100%, 900px);
   width: 100%;
   margin-inline: auto;
+}
+
+.mc-next-surface-host-work .mc-next-threaded-primary-column > .mc-next-threaded-dropzone {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  height: 100%;
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-stage.mode-chat.has-context .mc-next-threaded-primary-column {
@@ -214,5 +228,7 @@
 
 .mc-next-threaded-conversation {
   display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: 0;
+  min-height: 0;
 }

@@ -1435,6 +1435,7 @@
 .mc-next-threaded-side-panel.code .mc-next-workbench-panel {
   height: 100%;
   grid-template-rows: auto auto auto minmax(0, 1fr);
+  padding-inline-start: 0.35rem;
 }
 
 .mc-next-threaded-side-panel.code .mc-next-workbench-body {

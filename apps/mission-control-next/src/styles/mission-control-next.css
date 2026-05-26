@@ -314,7 +314,9 @@
   position: relative;
   display: grid;
   grid-template-rows: 36px minmax(0, 1fr) auto;
+  height: 100dvh;
   min-height: 100dvh;
+  overflow: hidden;
 }
 
 .mc-next-topbar {
@@ -690,6 +692,8 @@
 
 .mc-next-body.is-work-area {
   grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  overflow: hidden;
 }
 
 .mc-next-rail {
@@ -897,6 +901,8 @@
 
 .mc-next-stage-work {
   gap: 0.35rem;
+  height: 100%;
+  overflow: hidden;
 }
 
 .mc-next-stage-header {
@@ -950,6 +956,17 @@
   min-width: 0;
   min-height: 0;
   display: grid;
+}
+
+.mc-next-stage-work .mc-next-stage-scroll,
+.mc-next-stage-work .mc-next-surface-host-work {
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
+  overflow: hidden;
+}
+
+.mc-next-stage-work .mc-next-surface-host-work > * {
+  min-height: 0;
 }
 
 .mc-next-shell-inspector.side-inspector-drawer {

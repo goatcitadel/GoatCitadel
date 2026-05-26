@@ -6,8 +6,11 @@
   position: relative;
   display: grid;
   grid-template-columns: var(--mc-session-rail-width, 204px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 0;
+  height: 100%;
   min-height: calc(100dvh - 58px);
+  overflow: hidden;
   border-top: 0;
   background: var(--background);
 }
@@ -121,6 +124,15 @@
   border-color: var(--mc-border-subtle);
   background: var(--mc-surface-2);
   box-shadow: none;
+}
+
+.mc-next-surface-host-work .mc-next-threaded-surface.unified {
+  min-height: 0;
+}
+
+.mc-next-surface-host-work .mc-next-threaded-surface.unified .mc-next-threaded-rail {
+  height: 100%;
+  max-height: none;
 }
 
 .mc-next-threaded-surface.unified .mc-next-threaded-rail-actions {

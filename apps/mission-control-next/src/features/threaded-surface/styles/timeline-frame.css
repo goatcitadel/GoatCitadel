@@ -24,6 +24,12 @@
   border: 0;
 }
 
+.mc-next-surface-host-work .mc-next-threaded-surface.unified .mc-next-threaded-thread-card {
+  display: grid;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .mc-next-thread-live-region {
   position: absolute;
   width: 1px;
@@ -43,6 +49,11 @@
   padding: 7px 0;
   border: 0;
   background: linear-gradient(to top, var(--background) 72%, transparent);
+}
+
+.mc-next-surface-host-work .mc-next-threaded-surface.unified .mc-next-threaded-composer-card {
+  position: relative;
+  bottom: auto;
 }
 
 .mc-next-threaded-thread-card:has(.mc-next-thread-blocking-prompt) + .mc-next-threaded-composer-card {

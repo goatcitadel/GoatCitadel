@@ -13,6 +13,13 @@
   scrollbar-gutter: stable;
 }
 
+.mc-next-surface-host-work .mc-next-threaded-side-panel,
+.mc-next-surface-host-work .mc-next-threaded-context-panel {
+  align-self: stretch;
+  height: 100%;
+  max-height: none;
+}
+
 .mc-next-threaded-stage.mode-chat .mc-next-threaded-context-panel {
   height: calc(100dvh - 58px);
   padding: 0.46rem;
@@ -54,6 +61,12 @@
 
 .mc-next-threaded-side-panel.code {
   --mc-area-color: var(--mc-mode-code);
+}
+
+.mc-next-surface-host-work .mc-next-threaded-side-panel.cowork,
+.mc-next-surface-host-work .mc-next-threaded-side-panel.code {
+  height: 100%;
+  max-height: none;
 }
 
 .mc-next-threaded-context-panel.utility {
@@ -237,6 +250,17 @@
   display: grid;
   gap: 0.54rem;
   min-width: 0;
+}
+
+.mc-next-surface-host-work .mc-next-thread-shell,
+.mc-next-surface-host-work .mc-next-workbench-panel,
+.mc-next-surface-host-work .mc-next-context-drawer {
+  min-height: 0;
+  height: 100%;
+}
+
+.mc-next-surface-host-work .mc-next-thread-shell {
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .mc-next-threaded-surface.unified .mc-next-composer {

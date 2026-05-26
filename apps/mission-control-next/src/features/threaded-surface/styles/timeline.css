@@ -13,6 +13,11 @@
   overflow-anchor: none;
 }
 
+.mc-next-surface-host-work .mc-next-thread-scroll {
+  height: 100%;
+  max-height: none;
+}
+
 .mc-next-thread-jump-latest {
   position: sticky;
   z-index: 6;

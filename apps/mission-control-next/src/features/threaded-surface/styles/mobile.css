@@ -1,3 +1,54 @@
+@media (max-width: 1680px) {
+  .mc-next-app-frame,
+  .mc-next-body.is-work-area,
+  .mc-next-stage-work,
+  .mc-next-stage-work .mc-next-stage-scroll {
+    height: auto;
+    overflow: visible;
+  }
+
+  .mc-next-stage-work .mc-next-stage-scroll {
+    min-height: 0;
+  }
+
+  .mc-next-stage-work .mc-next-surface-host-work {
+    grid-template-rows: auto;
+    height: auto;
+    min-height: 100%;
+    overflow: visible;
+  }
+
+  .mc-next-surface-host-work .mc-next-threaded-surface.unified,
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage,
+  .mc-next-threaded-surface.unified .mc-next-threaded-primary-column,
+  .mc-next-surface-host-work .mc-next-threaded-primary-column > .mc-next-threaded-dropzone {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .mc-next-threaded-surface.unified .mc-next-threaded-stage,
+  .mc-next-threaded-surface.unified .mc-next-threaded-primary-column,
+  .mc-next-surface-host-work .mc-next-threaded-primary-column > .mc-next-threaded-dropzone,
+  .mc-next-threaded-conversation {
+    grid-template-rows: auto;
+  }
+
+  .mc-next-surface-host-work .mc-next-thread-scroll {
+    height: auto;
+    max-height: min(68dvh, 52rem);
+  }
+
+  .mc-next-surface-host-work .mc-next-threaded-side-panel,
+  .mc-next-surface-host-work .mc-next-threaded-context-panel,
+  .mc-next-surface-host-work .mc-next-threaded-side-panel.cowork,
+  .mc-next-surface-host-work .mc-next-threaded-side-panel.code {
+    align-self: start;
+    height: auto;
+    max-height: none;
+  }
+}
+
 @media (min-width: 1361px) and (max-width: 1680px) {
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-workbench.has-context,
   .mc-next-threaded-surface.unified .mc-next-threaded-stage.has-cowork-panel.has-context {
