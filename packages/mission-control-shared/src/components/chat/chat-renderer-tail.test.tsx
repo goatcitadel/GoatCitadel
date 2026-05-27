@@ -237,11 +237,29 @@ describe("chat rendering tail coverage", () => {
   });
 
   it("reports clipboard API unavailability without deprecated execCommand fallback", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("window", {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    });
+    vi.stubGlobal("document", undefined);
     vi.stubGlobal("navigator", {});
 
     await expect(copyTextToClipboard("Copy via textarea")).rejects.toThrow(
       "Clipboard API is unavailable in this environment.",
     );
+
+    renderer = create(<AssistantMessageRenderer role="assistant" content="Copy via textarea" />);
+    await act(async () => {
+      renderer!.root.findByType("button").props.onClick();
+      await Promise.resolve();
+    });
+    expect(renderer.root.findByType("button").props["aria-label"]).toBe("Copy unavailable from this browser");
+
+    act(() => {
+      vi.advanceTimersByTime(1800);
+    });
+    expect(renderer.root.findByType("button").props["aria-label"]).toBe("Copy response to clipboard");
   });
 
   it("renders generated artifact variants including Mermaid success and failure states", async () => {

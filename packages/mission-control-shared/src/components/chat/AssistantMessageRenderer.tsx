@@ -366,7 +366,7 @@ function AssistantMessageContainer({
   running?: boolean;
   children: React.ReactNode;
 }) {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const resetTimerRef = useRef<ReturnType<Window["setTimeout"]> | null>(null);
   const copyDisabled = role !== "assistant" || !content.trim();
 
@@ -382,20 +382,31 @@ function AssistantMessageContainer({
     if (copyDisabled) {
       return;
     }
-    await copyTextToClipboard(content);
-    setCopied(true);
+    try {
+      await copyTextToClipboard(content);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
     if (typeof window !== "undefined") {
       if (resetTimerRef.current !== null) {
         window.clearTimeout(resetTimerRef.current);
       }
       resetTimerRef.current = window.setTimeout(() => {
-        setCopied(false);
+        setCopyState("idle");
         resetTimerRef.current = null;
       }, 1800);
     }
   }
 
   const isStreamingAssistant = role === "assistant" && Boolean(running);
+  const copyButtonLabel =
+    copyState === "copied"
+      ? "Response copied to clipboard"
+      : copyState === "failed"
+        ? "Copy unavailable from this browser"
+        : "Copy response to clipboard";
+  const copyButtonTitle = copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy unavailable" : "Copy";
   // H-2 (docs/review/mission-control-next-ship-punchlist.md): Wire streaming
   // assistant text into a live region so SR follows the response. `aria-live`
   // is conditional — applied only while streaming so unrelated DOM updates
@@ -413,12 +424,16 @@ function AssistantMessageContainer({
       {role === "assistant" ? (
         <button
           type="button"
-          className={cn("mc-assistant-copy-button", copied ? "copied" : "")}
+          className={cn(
+            "mc-assistant-copy-button",
+            copyState === "copied" ? "copied" : "",
+            copyState === "failed" ? "failed" : "",
+          )}
           onClick={() => void handleCopy()}
-          aria-label={copied ? "Response copied to clipboard" : "Copy response to clipboard"}
-          title={copied ? "Copied" : "Copy"}
+          aria-label={copyButtonLabel}
+          title={copyButtonTitle}
         >
-          {copied ? <Check size={14} strokeWidth={2.2} /> : <Copy size={14} strokeWidth={2.2} />}
+          {copyState === "copied" ? <Check size={14} strokeWidth={2.2} /> : <Copy size={14} strokeWidth={2.2} />}
         </button>
       ) : null}
     </div>

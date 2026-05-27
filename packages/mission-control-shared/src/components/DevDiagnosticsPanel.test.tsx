@@ -209,6 +209,9 @@ describe("DevDiagnosticsPanel", () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(2);
     expect(storeMocks.buildDevDiagnosticsBundle).toHaveBeenCalled();
     expect(storeMocks.clearClientDiagnostics).toHaveBeenCalled();
+    expect(renderer.root.findByProps({ className: "dev-diagnostics-copy-status" }).children.join("")).toBe(
+      "Session bundle copied.",
+    );
 
     const close = renderer.root.findAllByType("button").find((button) => button.children.join("") === "Close")!;
     await act(async () => {
@@ -218,6 +221,24 @@ describe("DevDiagnosticsPanel", () => {
 
     renderer.unmount();
     expect(closeStream).toHaveBeenCalled();
+  });
+
+  it("reports clipboard failures without leaking rejected copy promises", async () => {
+    vi.mocked(navigator.clipboard.writeText).mockRejectedValueOnce(new Error("denied"));
+    const renderer = create(<DevDiagnosticsPanel open onClose={() => undefined} />);
+    await flushAsync();
+
+    const copyRecent = renderer.root
+      .findAllByType("button")
+      .find((button) => button.children.join("") === "Copy last 100")!;
+    await act(async () => {
+      await copyRecent.props.onClick();
+    });
+
+    expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(1);
+    expect(renderer.root.findByProps({ className: "dev-diagnostics-copy-status" }).children.join("")).toBe(
+      "Copy failed: denied",
+    );
   });
 
   it("handles fetch failures and empty filtered states", async () => {

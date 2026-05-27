@@ -40,6 +40,7 @@ export function DevDiagnosticsPanel({ open, onClose }: { open: boolean; onClose:
   const [level, setLevel] = useState<string>("");
   const [correlationIdFilter, setCorrelationIdFilter] = useState("");
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open || !isDevDiagnosticsEnabled()) {
@@ -95,8 +96,23 @@ export function DevDiagnosticsPanel({ open, onClose }: { open: boolean; onClose:
     return null;
   }
 
+  const writeDiagnosticsClipboard = async (content: string, successStatus: string) => {
+    try {
+      if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+        throw new Error("Clipboard API is unavailable.");
+      }
+      await navigator.clipboard.writeText(content);
+      setCopyStatus(successStatus);
+    } catch (error) {
+      setCopyStatus(error instanceof Error ? `Copy failed: ${error.message}` : "Copy failed.");
+    }
+  };
+
   const handleCopyRecent = async () => {
-    await navigator.clipboard.writeText(JSON.stringify(buildDevDiagnosticsBundle(gatewayItems), null, 2));
+    await writeDiagnosticsClipboard(
+      JSON.stringify(buildDevDiagnosticsBundle(gatewayItems), null, 2),
+      "Diagnostics copied.",
+    );
   };
 
   const handleCopySession = async () => {
@@ -105,7 +121,7 @@ export function DevDiagnosticsPanel({ open, onClose }: { open: boolean; onClose:
         (item) => !diagnosticsState.activeChatSessionId || item.sessionId === diagnosticsState.activeChatSessionId,
       ),
     );
-    await navigator.clipboard.writeText(JSON.stringify(bundle, null, 2));
+    await writeDiagnosticsClipboard(JSON.stringify(bundle, null, 2), "Session bundle copied.");
   };
 
   return (
@@ -205,6 +221,11 @@ export function DevDiagnosticsPanel({ open, onClose }: { open: boolean; onClose:
           Clear
         </button>
       </div>
+      {copyStatus ? (
+        <p className="dev-diagnostics-copy-status" role="status">
+          {copyStatus}
+        </p>
+      ) : null}
       <div className="dev-diagnostics-layout">
         <div className="dev-diagnostics-list" role="list">
           {mergedItems.length === 0 ? (
