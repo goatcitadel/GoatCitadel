@@ -419,6 +419,22 @@ describe("ThreadedSurfacePage", () => {
     }
   });
 
+  it("collapses narrow Cowork side-panel sections before text can overlap", () => {
+    const css = readFileSync(new URL("./styles/composer.css", import.meta.url), "utf8");
+    const start = css.indexOf("@container (max-width: 36rem)");
+    const next = css.indexOf("@container", start + 1);
+    const block = css.slice(start, next === -1 ? undefined : next);
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(block).toContain(".mc-next-cowork-command-center");
+    expect(block).toContain(".mc-next-cowork-command-action");
+    expect(block).toContain("grid-column: auto");
+    expect(block).toContain(".mc-next-cowork-intervention");
+    expect(block).toContain("position: static");
+    expect(block).toContain(".mc-next-cowork-checkpoint-list summary");
+    expect(block).toContain("grid-template-columns: minmax(0, 1fr)");
+  });
+
   it("formats archive labels and session relative-time fallbacks", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-14T12:00:00.000Z"));
@@ -879,7 +895,9 @@ describe("ThreadedSurfacePage", () => {
             summary: { changedFiles: 1, additions: 1, deletions: 0 },
           },
           output: {
-            helperRuns: [{ runId: "run-1", status: "succeeded", language: "typescript", createdAt: "2026-05-23T10:00:00Z" }],
+            helperRuns: [
+              { runId: "run-1", status: "succeeded", language: "typescript", createdAt: "2026-05-23T10:00:00Z" },
+            ],
             output: "Validation passed.",
           },
           hasDirtyDraft: false,

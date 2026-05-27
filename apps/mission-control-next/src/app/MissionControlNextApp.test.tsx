@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createElement, type ReactNode } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -369,6 +370,19 @@ describe("MissionControlNextApp", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("keeps topbar chrome shrink-safe instead of clipping right-side controls", () => {
+    const css = readFileSync(new URL("../styles/mission-control-next.css", import.meta.url), "utf8").replaceAll(
+      "\r\n",
+      "\n",
+    );
+
+    expect(css).toContain(".mc-next-topbar-left {\n  flex: 1 1 auto;");
+    expect(css).toContain(".mc-next-topbar-right {\n  flex: 0 1 auto;");
+    expect(css).toContain(".mc-next-primary-nav {\n  display: inline-flex;");
+    expect(css).toContain("overflow-x: auto;");
+    expect(css).toContain(".mc-next-command-search {\n  order: -1;\n  flex: 1 1 18rem;\n  min-width: 9rem;");
   });
 
   it("renders access-gate states and lets retry recover from preflight failures", async () => {

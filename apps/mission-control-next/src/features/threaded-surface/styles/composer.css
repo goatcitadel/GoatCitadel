@@ -1198,7 +1198,10 @@
 .mc-next-cowork-intervention p,
 .mc-next-cowork-checkpoints h5,
 .mc-next-cowork-checkpoints p {
+  min-width: 0;
   margin: 0;
+  line-height: 1.32;
+  overflow-wrap: anywhere;
 }
 
 .mc-next-cowork-command-center dl {
@@ -1484,6 +1487,41 @@
 
   .mc-next-cowork-toolbar {
     justify-content: flex-start;
+  }
+}
+
+@container (max-width: 36rem) {
+  .mc-next-cowork-command-center {
+    gap: 0.48rem;
+  }
+
+  .mc-next-cowork-command-action {
+    grid-column: auto;
+  }
+
+  .mc-next-cowork-command-center dl,
+  .mc-next-cowork-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-cowork-intervention {
+    position: static;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-cowork-run-map-head,
+  .mc-next-cowork-run-map-footer,
+  .mc-next-cowork-checkpoints-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-cowork-run-map-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-cowork-checkpoint-list summary {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

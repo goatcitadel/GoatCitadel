@@ -343,14 +343,15 @@
 }
 
 .mc-next-topbar-left {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   min-width: 0;
 }
 
 .mc-next-topbar-right {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   flex-wrap: nowrap;
   justify-content: flex-end;
+  min-width: 0;
 }
 
 .mc-next-brand {
@@ -400,17 +401,27 @@
 .mc-next-primary-nav {
   display: inline-flex;
   align-items: center;
+  flex: 1 1 auto;
   gap: 0.12rem;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
   padding: 0.12rem;
   border-radius: 0.42rem;
   border: 1px solid var(--mc-border-subtle);
   background: var(--mc-surface-1);
   box-shadow: none;
+  scrollbar-width: none;
+}
+
+.mc-next-primary-nav::-webkit-scrollbar {
+  display: none;
 }
 
 .mc-next-primary-link {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
   gap: 0.24rem;
   min-height: 1.55rem;
   padding: 0 0.42rem;
@@ -424,6 +435,12 @@
     background-color 160ms ease,
     color 160ms ease,
     transform 160ms ease;
+}
+
+.mc-next-primary-link span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .mc-next-primary-link:hover,
@@ -441,6 +458,7 @@
 .mc-next-command-search {
   order: -1;
   flex: 1 1 18rem;
+  min-width: 9rem;
   max-width: 25rem;
   height: 24px;
   display: flex;
