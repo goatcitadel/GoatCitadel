@@ -15,6 +15,8 @@ import { sessionsListRoute } from "./routes/sessions-list.js";
 import { toolsInvokeRoute } from "./routes/tools-invoke.js";
 import { approvalsRoutes } from "./routes/approvals.js";
 import { costsRoutes } from "./routes/costs.js";
+import { browserSessionsRoutes } from "./routes/browser-sessions.js";
+import { reviewReadinessRoutes } from "./routes/review-readiness.js";
 import { skillsRoutes } from "./routes/skills.js";
 import { orchestrationRoutes } from "./routes/orchestration.js";
 import { assemblyRoutes } from "./routes/assembly.js";
@@ -323,6 +325,8 @@ export async function buildApp() {
   await app.register(toolsInvokeRoute);
   await app.register(approvalsRoutes);
   await app.register(costsRoutes);
+  await app.register(browserSessionsRoutes);
+  await app.register(reviewReadinessRoutes);
   await app.register(skillsRoutes);
   await app.register(curatorRoutes);
   await app.register(orchestrationRoutes);

@@ -236,6 +236,53 @@ export interface MemoryDecisionRetrospectiveInput {
   improvementCandidateId?: string;
 }
 
+export type MemoryLearningType = "workflow" | "bug_pattern" | "operator_preference" | "repo_fact" | "tooling";
+export type MemoryLearningStatus = "proposed" | "trusted" | "superseded" | "forgotten";
+
+export interface MemoryLearningFileRef {
+  path: string;
+  contentHash?: string;
+}
+
+export interface MemoryLearningRecord {
+  learningId: string;
+  workspaceId: string;
+  key: string;
+  type: MemoryLearningType;
+  insight: string;
+  confidence: number;
+  status: MemoryLearningStatus;
+  sourceRefs: StructuredMemorySourceRef[];
+  fileRefs: MemoryLearningFileRef[];
+  authority: StructuredMemoryAuthority;
+  supersededById?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MemoryLearningInput {
+  workspaceId?: string;
+  key: string;
+  type?: MemoryLearningType;
+  insight: string;
+  confidence?: number;
+  sourceRefs?: StructuredMemorySourceRef[];
+  fileRefs?: MemoryLearningFileRef[];
+  authority?: StructuredMemoryAuthority;
+}
+
+export interface MemoryLearningStalenessIssue {
+  learningId: string;
+  path?: string;
+  issue: "missing_file" | "changed_hash" | "stale_source_ref" | "low_confidence" | "likely_contradiction";
+  message: string;
+}
+
+export interface MemoryLearningStalenessReport {
+  checkedAt: string;
+  issues: MemoryLearningStalenessIssue[];
+}
+
 export interface MemoryItemRecord {
   itemId: string;
   namespace: string;

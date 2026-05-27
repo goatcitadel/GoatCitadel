@@ -5,6 +5,7 @@ import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import type {
+  BrowserSessionAccessCheck,
   ChannelDeliveryStatus,
   ContextSourceAttribution,
   IngestionBackend,
@@ -19,6 +20,7 @@ import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { assertReadPathAllowed, assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
 import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "./sandbox/network-guard.js";
 import { executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
+import { scanBrowserContentGuard } from "./browser-content-guard.js";
 import { collectLeakDetections, sanitizeForModel } from "./tool-security.js";
 import {
   buildArtifactDesignReport,
@@ -54,6 +56,10 @@ const TRUST_RESTRICTIVENESS: Record<ToolExecutionTrustLevel, number> = {
   mixed_untrusted: 2,
   untrusted_external: 3,
 };
+
+export interface ToolExecutorRuntimeHooks {
+  assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void;
+}
 
 const SENSITIVE_PATTERNS: readonly RegExp[] = [
   /sk-[a-zA-Z0-9]{20,}/g,
@@ -111,11 +117,23 @@ export function resolveFixedOutboundHostsForTool(toolName: string, connectionKey
   return [...hosts];
 }
 
+function resolveToolActorId(request: ToolInvokeRequest): string {
+  return request.policyContext?.authActorId?.trim() || request.consentContext?.operatorId?.trim() || request.agentId;
+}
+
 export async function executeTool(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
   storage: Storage,
+  runtimeHooks: ToolExecutorRuntimeHooks = {},
 ): Promise<Record<string, unknown>> {
+  const browserContentGuard = scanBrowserContentGuard(request.args);
+  if (browserContentGuard.blocked) {
+    throw new Error(
+      `Browser content guard blocked tool args: ${browserContentGuard.reason ?? "untrusted_content_canary_leak"}.`,
+    );
+  }
+
   const argLeakDetections = collectLeakDetections(request.args);
   if (argLeakDetections.length > 0 && (request.authContext?.secretRefs?.length ?? 0) === 0) {
     throw new Error(
@@ -129,6 +147,8 @@ export async function executeTool(
       signal: request.signal,
       matchedGrantAllowedHosts: resolveExecutionGrantAllowedHosts(request, storage),
       fullWebAccess: hasFullWebAccess(request),
+      actorId: resolveToolActorId(request),
+      assertBrowserSessionAccess: runtimeHooks.assertBrowserSessionAccess,
     });
     return finalizeToolResult(rawResult);
   }

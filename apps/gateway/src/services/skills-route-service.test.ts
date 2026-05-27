@@ -9,6 +9,17 @@ describe("SkillsRouteService", () => {
     const calls: Array<[keyof SkillsRoutePort, () => unknown | Promise<unknown>, unknown[]]> = [
       ["listSkills", () => service.listSkills(), []],
       ["reloadSkills", () => service.reloadSkills(), []],
+      ["listSkillExportTargets", () => service.listSkillExportTargets(), []],
+      [
+        "previewSkillExport",
+        () => service.previewSkillExport({ skillIds: ["skill-1"], target: "codex" }),
+        [{ skillIds: ["skill-1"], target: "codex" }],
+      ],
+      [
+        "packageSkillExport",
+        () => service.packageSkillExport({ skillIds: ["skill-1"], target: "generic-markdown" }),
+        [{ skillIds: ["skill-1"], target: "generic-markdown" }],
+      ],
       ["listSkillSources", () => service.listSkillSources("query", 5), ["query", 5]],
       [
         "lookupSkillSources",
@@ -83,10 +94,13 @@ function fakePort(): SkillsRoutePort {
     "installSkillImport",
     "listSkillImportHistory",
     "listSkillEvaluationRuns",
+    "listSkillExportTargets",
     "listSkillSources",
     "listSkills",
     "lookupSkillSources",
     "previewSkillEvaluation",
+    "previewSkillExport",
+    "packageSkillExport",
     "runSkillEvaluation",
     "getSkillEvaluationRun",
     "createSkillEvaluationProposal",

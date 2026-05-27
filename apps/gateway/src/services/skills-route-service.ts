@@ -10,6 +10,10 @@ import type {
   SkillActivationPolicy,
   SkillImportHistoryRecord,
   SkillImportValidationResult,
+  SkillExportPackageResponse,
+  SkillExportPreviewResponse,
+  SkillExportRequest,
+  SkillExportTargetProfile,
   SkillListItem,
   SkillResolveInput,
   SkillRuntimeState,
@@ -38,10 +42,13 @@ export interface SkillsRoutePort {
   }): Promise<SkillImportInstallResult>;
   listSkillImportHistory(limit?: number): SkillImportHistoryRecord[];
   listSkillEvaluationRuns(skillId: string): SkillEvaluationListResponse;
+  listSkillExportTargets(): SkillExportTargetProfile[];
   listSkillSources(query?: string, limit?: number): Promise<SkillSourceListResponse>;
   listSkills(): SkillListItem[];
   lookupSkillSources(queryOrUrl: string, limit?: number): Promise<SkillSourceLookupResponse>;
   previewSkillEvaluation(skillId: string, input: SkillEvaluationPreviewRequest): SkillEvaluationPreviewResponse;
+  previewSkillExport(input: SkillExportRequest): SkillExportPreviewResponse;
+  packageSkillExport(input: SkillExportRequest): SkillExportPackageResponse;
   runSkillEvaluation(skillId: string, input: SkillEvaluationRunRequest): SkillEvaluationRunResponse;
   getSkillEvaluationRun(runId: string): SkillEvaluationRunRecord;
   createSkillEvaluationProposal(runId: string): SkillEvaluationProposalResponse;
@@ -69,6 +76,18 @@ export class SkillsRouteService {
 
   public listSkillSources(query?: string, limit?: number) {
     return this.skills.listSkillSources(query, limit);
+  }
+
+  public listSkillExportTargets() {
+    return this.skills.listSkillExportTargets();
+  }
+
+  public previewSkillExport(input: SkillExportRequest) {
+    return this.skills.previewSkillExport(input);
+  }
+
+  public packageSkillExport(input: SkillExportRequest) {
+    return this.skills.packageSkillExport(input);
   }
 
   public lookupSkillSources(queryOrUrl: string, limit?: number) {

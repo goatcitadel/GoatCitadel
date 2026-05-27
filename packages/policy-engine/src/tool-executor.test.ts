@@ -8,15 +8,21 @@ import type { Storage } from "@goatcitadel/storage";
 
 const mocked = vi.hoisted(() => ({
   isBrowserToolName: vi.fn<(name: string) => boolean>(),
-  executeBrowserTool:
-    vi.fn<
-      (
-        toolName: string,
-        args: Record<string, unknown>,
-        config: ToolPolicyConfig,
-        executionContext?: { sessionId?: string; signal?: AbortSignal; matchedGrantAllowedHosts?: string[] },
-      ) => Promise<Record<string, unknown>>
-    >(),
+  executeBrowserTool: vi.fn<
+    (
+      toolName: string,
+      args: Record<string, unknown>,
+      config: ToolPolicyConfig,
+      executionContext?: {
+        actorId?: string;
+        assertBrowserSessionAccess?: unknown;
+        sessionId?: string;
+        signal?: AbortSignal;
+        matchedGrantAllowedHosts?: string[];
+        fullWebAccess?: boolean;
+      },
+    ) => Promise<Record<string, unknown>>
+  >(),
 }));
 
 vi.mock("./browser-tools.js", () => ({
@@ -25,6 +31,7 @@ vi.mock("./browser-tools.js", () => ({
 }));
 
 import { executeTool, resolveExecutableCommand, resolveRestrictedCommand } from "./tool-executor.js";
+import { createUntrustedContentEnvelope } from "./browser-content-guard.js";
 
 const LOCALHOST_HOST = new URL("http://localhost").hostname;
 const EXAMPLE_HOST = new URL("https://example.com").hostname;
@@ -123,6 +130,8 @@ describe("executeTool", () => {
       signal: request.signal,
       fullWebAccess: true,
       matchedGrantAllowedHosts: undefined,
+      actorId: "researcher",
+      assertBrowserSessionAccess: undefined,
     });
     expect(result).toMatchObject({ action: "navigate", title: "Example" });
   });
@@ -139,6 +148,21 @@ describe("executeTool", () => {
 
     await expect(executeTool(request, policyConfig, storageStub)).rejects.toThrow(
       "Unsupported tool executor: custom.unknown",
+    );
+  });
+
+  it("blocks tool side effects that contain an active browser canary", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const envelope = createUntrustedContentEnvelope("browser.extract", "hostile page text");
+    const request: ToolInvokeRequest = {
+      toolName: "fs.write",
+      args: { path: path.join(testWorkspaceRoot, "leak.txt"), content: envelope.canary },
+      agentId: "agent",
+      sessionId: "sess-browser-guard",
+    };
+
+    await expect(executeTool(request, policyConfig, storageStub)).rejects.toThrow(
+      /Browser content guard blocked tool args/i,
     );
   });
 

@@ -95,6 +95,8 @@ const listItemsQuerySchema = z.object({
 const structuredScopeSchema = z.enum(["global", "workspace", "session", "run"]);
 const structuredStatusQuerySchema = z.enum(["active", "forgotten", "superseded", "all"]);
 const structuredAuthoritySchema = z.enum(["operator", "agent_proposed", "trusted_lifecycle", "imported_skill"]);
+const learningStatusQuerySchema = z.enum(["proposed", "trusted", "superseded", "forgotten", "all"]);
+const learningTypeSchema = z.enum(["workflow", "bug_pattern", "operator_preference", "repo_fact", "tooling"]);
 const structuredSourceRefSchema = z.object({
   sourceType: z.enum(["manual", "memory_item", "session", "run", "artifact", "external"]),
   sourceRef: z.string().trim().min(1),
@@ -122,6 +124,36 @@ const structuredListQuerySchema = z.object({
   entityId: z.string().trim().min(1).optional(),
   dueForReview: queryBooleanSchema.optional(),
   limit: z.coerce.number().int().positive().max(500).default(100),
+});
+
+const learningListQuerySchema = z.object({
+  workspaceId: z.string().trim().min(1).optional(),
+  status: learningStatusQuerySchema.optional(),
+  query: z.string().trim().min(1).optional(),
+  key: z.string().trim().min(1).optional(),
+  limit: z.coerce.number().int().positive().max(500).default(100),
+});
+
+const learningFileRefSchema = z.object({
+  path: z.string().trim().min(1),
+  contentHash: z.string().trim().min(1).optional(),
+});
+
+const learningCreateSchema = z.object({
+  workspaceId: z.string().trim().min(1).optional(),
+  key: z.string().trim().min(1),
+  type: learningTypeSchema.optional(),
+  insight: z.string().trim().min(1),
+  confidence: z.number().min(0).max(1).optional(),
+  sourceRefs: z.array(structuredSourceRefSchema).optional(),
+  fileRefs: z.array(learningFileRefSchema).optional(),
+  authority: structuredAuthoritySchema.optional(),
+});
+
+const learningStalenessQuerySchema = z.object({
+  workspaceId: z.string().trim().min(1).optional(),
+  learningId: z.string().trim().min(1).optional(),
+  limit: z.coerce.number().int().positive().max(500).optional(),
 });
 
 const entityCreateSchema = z.object({
@@ -493,6 +525,84 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       if (message.toLowerCase().includes("at least one criterion")) {
         return reply.code(400).send({ error: message });
       }
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/memory/learnings", operatorOnly, async (request, reply) => {
+    const parsed = learningListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send({ items: memory.listLearnings(parsed.data) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/memory/learnings", operatorOnly, async (request, reply) => {
+    const parsed = learningCreateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(memory.createLearning(parsed.data, resolveActorId(request)));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/memory/learnings/propose", operatorOnly, async (request, reply) => {
+    const parsed = learningCreateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(202).send(memory.proposeLearning(parsed.data, resolveActorId(request)));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/memory/learnings/:id/supersede", operatorOnly, async (request, reply) => {
+    const params = structuredIdParamsSchema.safeParse(request.params);
+    const body = learningCreateSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.send(memory.supersedeLearning(params.data.id, body.data, resolveActorId(request)));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/memory/learnings/:id/forget", operatorOnly, async (request, reply) => {
+    const parsed = structuredIdParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(memory.forgetLearning(parsed.data.id, resolveActorId(request)));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/memory/learnings/staleness", operatorOnly, async (request, reply) => {
+    const parsed = learningStalenessQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(memory.checkLearningStaleness(parsed.data));
+    } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
   });

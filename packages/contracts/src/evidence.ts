@@ -4,7 +4,9 @@ export type EvidenceEnvelopeEventKind =
   | "durable_checkpoint"
   | "memory_write"
   | "capability_pack_install"
-  | "continuation_gate";
+  | "continuation_gate"
+  | "skill_export"
+  | "browser_content_guard";
 
 export type EvidenceEnvelopeSignatureStatus = "signed_hmac" | "unsigned_local" | "verification_failed";
 

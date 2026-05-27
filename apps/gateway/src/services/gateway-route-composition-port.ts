@@ -164,7 +164,10 @@ export interface GatewayRouteCompositionPort {
   listSkillImportHistory: RouteDependencyMethod<"skills", "listSkillImportHistory">;
   listSkillSources: RouteDependencyMethod<"skills", "listSkillSources">;
   listSkills: RouteDependencyMethod<"skills", "listSkills">;
+  listSkillExportTargets: RouteDependencyMethod<"skills", "listSkillExportTargets">;
   lookupSkillSources: RouteDependencyMethod<"skills", "lookupSkillSources">;
+  packageSkillExport: RouteDependencyMethod<"skills", "packageSkillExport">;
+  previewSkillExport: RouteDependencyMethod<"skills", "previewSkillExport">;
   normalizeWorkspaceId: chatSessionService.ChatSessionDependencies["normalizeWorkspaceId"];
   parseChatCommand: RouteDependencyMethod<"chatSupport", "commands">["parseChatCommand"];
   patchMcpServerState: mcpServerAdminService.McpServerAdminHost["patchMcpServerState"];
@@ -359,7 +362,10 @@ export function createGatewayRouteCompositionPort(
     listSkillImportHistory: gateway.listSkillImportHistory.bind(gateway),
     listSkillSources: gateway.listSkillSources.bind(gateway),
     listSkills: gateway.listSkills.bind(gateway),
+    listSkillExportTargets: gateway.listSkillExportTargets.bind(gateway),
     lookupSkillSources: gateway.lookupSkillSources.bind(gateway),
+    packageSkillExport: gateway.packageSkillExport.bind(gateway),
+    previewSkillExport: gateway.previewSkillExport.bind(gateway),
     normalizeWorkspaceId: gateway.normalizeWorkspaceId.bind(gateway),
     parseChatCommand: gateway.parseChatCommand.bind(gateway),
     patchMcpServerState: gateway.patchMcpServerState.bind(gateway),

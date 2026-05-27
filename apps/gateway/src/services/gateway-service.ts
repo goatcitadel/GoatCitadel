@@ -50,7 +50,7 @@ async function traceInitStep<T>(stepName: string, fn: () => Promise<T> | T): Pro
 import { MeshService } from "@goatcitadel/mesh-core";
 import { OrchestrationEngine, type TurnRuntime } from "@goatcitadel/orchestration";
 import { ToolPolicyEngine, assertWritePathInJail, fetchAllowlisted } from "@goatcitadel/policy-engine";
-import { SkillsService } from "@goatcitadel/skills";
+import { listSkillExportTargets, renderSkillExportPreview, SkillsService } from "@goatcitadel/skills";
 import {
   type Storage,
   type SessionAutonomyPrefsPatchInput,
@@ -269,6 +269,10 @@ import type {
   SessionSummary,
   SessionTimelineItem,
   SkillActivationPolicy,
+  SkillExportPackageResponse,
+  SkillExportPreviewResponse,
+  SkillExportRequest,
+  SkillExportTargetProfile,
   SkillImportHistoryRecord,
   SkillImportValidationResult,
   SkillListItem,
@@ -505,6 +509,8 @@ import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import { RuntimeLifecycleReadService } from "./runtime-lifecycle-read-service.js";
 import { CapabilitySystemService } from "./capability-system-service.js";
 import { TaskLifecycleService } from "./task-lifecycle-service.js";
+import { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
+import { ReviewReadinessService } from "./review-readiness-service.js";
 import { createDefaultArtifactProbers, createDurableTaskAutoBlockBridge } from "./gateway-kanban-wiring.js";
 import {
   ChannelDeliveryRuntimeService,
@@ -739,6 +745,8 @@ export class GatewayService {
   private readonly memoryWriteGateService: MemoryWriteGateService;
   private readonly capabilitySystemService: CapabilitySystemService;
   private readonly taskLifecycleService: TaskLifecycleService;
+  public readonly browserSessionRuntimeService: BrowserSessionRuntimeService;
+  public readonly reviewReadinessService: ReviewReadinessService;
   private readonly guidanceService: GuidanceService;
   private readonly channelDeliveryRuntimeService: ChannelDeliveryRuntimeService;
   private readonly backupRetentionService: BackupRetentionService;
@@ -830,7 +838,15 @@ export class GatewayService {
       getChatAttachment: (id) => this.getChatAttachment(id),
     });
     this.eventIngestService = new EventIngestService(this.storage);
-    this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined);
+    this.browserSessionRuntimeService = new BrowserSessionRuntimeService({
+      gatewaySql: this.gatewaySql,
+      publishRealtime: (eventType, source, payload) => {
+        this.publishRealtime(eventType, source, payload);
+      },
+    });
+    this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
+      assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
+    });
     const secretStore = new SecretStoreService();
     this.skillsService = new SkillsService([
       { source: "extra", dir: path.join(config.rootDir, "skills", "extra") },
@@ -868,6 +884,10 @@ export class GatewayService {
       probers: createDefaultArtifactProbers({
         networkAllowlist: config.toolPolicy.sandbox.networkAllowlist,
       }),
+    });
+    this.reviewReadinessService = new ReviewReadinessService({
+      rootDir: config.rootDir,
+      taskLifecycleService: this.taskLifecycleService,
     });
     this.orchestrationEngine = new OrchestrationEngine();
     this.orchestrationWorktreeService = new OrchestrationWorktreeService({
@@ -5548,6 +5568,32 @@ export class GatewayService {
     this.ensureSkillStates(loaded.map((skill) => skill.skillId));
     this.capabilitySystemService.ensureSkillLifecycleBackfill();
     return this.listSkills();
+  }
+
+  public listSkillExportTargets(): SkillExportTargetProfile[] {
+    return listSkillExportTargets();
+  }
+
+  public previewSkillExport(input: SkillExportRequest): SkillExportPreviewResponse {
+    return renderSkillExportPreview(input, this.skillsService.list());
+  }
+
+  public packageSkillExport(input: SkillExportRequest): SkillExportPackageResponse {
+    const preview = this.previewSkillExport(input);
+    const envelope = this.evidenceEnvelopeService.createEnvelope({
+      eventKind: "skill_export",
+      metadata: {
+        target: preview.target,
+        fileCount: preview.files.length,
+        fileHashes: preview.files.map((file) => file.sha256),
+        actorId: input.actorId ?? "operator",
+      },
+    });
+    return {
+      ...preview,
+      packageId: envelope.envelopeId,
+      evidenceRef: `evidence:${envelope.envelopeId}`,
+    };
   }
 
   public async executeCodeModePendingApproval(

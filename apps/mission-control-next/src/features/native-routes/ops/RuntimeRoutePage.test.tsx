@@ -25,6 +25,27 @@ const runtimeApiMocks = vi.hoisted(() => ({
   draftAutomationRecipe: vi.fn(),
 }));
 
+const reviewReadinessApiMocks = vi.hoisted(() => ({
+  fetchReviewReadiness: vi.fn(() =>
+    Promise.resolve({
+      branch: "codex/review-readiness",
+      sha: "abc123456789",
+      generatedAt: "2026-04-22T00:00:00.000Z",
+      lanes: [
+        {
+          lane: "skills-catalog",
+          status: "current",
+          artifactRef: "artifacts/verification/skills-catalog.json",
+          lastRunAt: "2026-04-22T00:00:00.000Z",
+          rerunHint: "pnpm verify:skills:catalog",
+        },
+      ],
+      openFindings: 1,
+      linkedTasks: [],
+    }),
+  ),
+}));
+
 const runtimeSnapshotOverrides = vi.hoisted(() => ({
   sourceStatus: null as null | Record<string, { status: "ok" | "error"; error?: string }>,
   daemon: undefined as unknown,
@@ -39,6 +60,10 @@ const runtimeSnapshotOverrides = vi.hoisted(() => ({
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   createCronJob: runtimeApiMocks.createCronJob,
   draftAutomationRecipe: runtimeApiMocks.draftAutomationRecipe,
+}));
+
+vi.mock("@goatcitadel/mission-control-shared/api/review-readiness", () => ({
+  fetchReviewReadiness: reviewReadinessApiMocks.fetchReviewReadiness,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () => ({
@@ -285,6 +310,7 @@ describe("RuntimeRoutePage", () => {
     runtimeSnapshotOverrides.notice = undefined;
     runtimeApiMocks.createCronJob.mockReset();
     runtimeApiMocks.draftAutomationRecipe.mockReset();
+    reviewReadinessApiMocks.fetchReviewReadiness.mockClear();
     runtimeSnapshotOverrides.reload.mockClear();
     runtimeSnapshotOverrides.runDaemonAction.mockClear();
   });
@@ -894,6 +920,8 @@ describe("RuntimeRoutePage", () => {
     );
 
     expect(promptPacksButton).toBeDefined();
+    expect(collectText(renderer!.root)).toContain("Code/Ops review readiness");
+    expect(collectText(renderer!.root)).toContain("skills-catalog");
 
     act(() => {
       promptPacksButton!.props.onClick();

@@ -2,8 +2,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import type { ToolPolicyConfig } from "@goatcitadel/contracts";
+import type { BrowserSessionAccessCheck, BrowserSessionGrantScope, ToolPolicyConfig } from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
+import { createUntrustedContentEnvelope } from "./browser-content-guard.js";
 import { stripHtmlNoiseTags, stripHtmlTags } from "./html-noise.js";
 import { assertHostAllowed, assertNotPrivateOrReservedHost, fetchAllowlisted } from "./sandbox/network-guard.js";
 import { assertWritePathInJail } from "./sandbox/path-jail.js";
@@ -25,9 +26,11 @@ type BrowserToolName =
 
 export interface BrowserExecutionContext {
   sessionId?: string;
+  actorId?: string;
   signal?: AbortSignal;
   matchedGrantAllowedHosts?: string[];
   fullWebAccess?: boolean;
+  assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void;
 }
 
 interface BrowserStepInput {
@@ -149,16 +152,16 @@ export async function executeBrowserTool(
   executionContext?: BrowserExecutionContext,
 ): Promise<Record<string, unknown>> {
   if (toolName === "browser.search") {
-    return executeBrowserSearch(args, config, executionContext);
+    return withUntrustedBrowserEnvelope(toolName, await executeBrowserSearch(args, config, executionContext));
   }
   if (toolName === "browser.navigate") {
-    return executeBrowserNavigate(args, config, executionContext);
+    return withUntrustedBrowserEnvelope(toolName, await executeBrowserNavigate(args, config, executionContext));
   }
   if (toolName === "browser.extract") {
-    return executeBrowserExtract(args, config, executionContext);
+    return withUntrustedBrowserEnvelope(toolName, await executeBrowserExtract(args, config, executionContext));
   }
   if (toolName === "browser.screenshot") {
-    return executeBrowserScreenshot(args, config, executionContext);
+    return withUntrustedBrowserEnvelope(toolName, await executeBrowserScreenshot(args, config, executionContext));
   }
   if (toolName === "browser.interact") {
     return executeBrowserInteract(args, config, executionContext);
@@ -428,6 +431,16 @@ function browserSearchBackendExecutionContext(
     sessionId: executionContext.sessionId,
     signal: executionContext.signal,
     fullWebAccess: executionContext.fullWebAccess,
+  };
+}
+
+function withUntrustedBrowserEnvelope(
+  toolName: "browser.search" | "browser.navigate" | "browser.extract" | "browser.screenshot",
+  result: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    ...result,
+    untrustedContent: createUntrustedContentEnvelope(toolName, JSON.stringify(result)),
   };
 }
 
@@ -1018,7 +1031,55 @@ function requireBrowserSessionId(
   if (!browserSessionId) {
     throw new Error(`${toolName} requires active session context`);
   }
+  assertBrowserSessionScope(browserSessionId, toolName, executionContext, args);
   return browserSessionId;
+}
+
+function assertBrowserSessionScope(
+  browserSessionId: string,
+  toolName: BrowserToolName,
+  executionContext?: BrowserExecutionContext,
+  args?: Record<string, unknown>,
+): void {
+  if (!executionContext?.assertBrowserSessionAccess) {
+    return;
+  }
+  executionContext.assertBrowserSessionAccess({
+    sessionId: browserSessionId,
+    actorId: executionContext.actorId ?? "agent",
+    requiredScope: requiredBrowserSessionScope(toolName),
+    host: resolveBrowserSessionGrantHost(args),
+  });
+}
+
+function requiredBrowserSessionScope(toolName: BrowserToolName): BrowserSessionGrantScope {
+  if (toolName === "browser.interact") {
+    return "interact";
+  }
+  if (
+    toolName === "browser.cookies.get" ||
+    toolName === "browser.cookies.set" ||
+    toolName === "browser.cookies.clear" ||
+    toolName === "browser.storage.get" ||
+    toolName === "browser.storage.set" ||
+    toolName === "browser.storage.clear" ||
+    toolName === "browser.context.configure"
+  ) {
+    return "state";
+  }
+  return "read";
+}
+
+function resolveBrowserSessionGrantHost(args?: Record<string, unknown>): string | undefined {
+  const rawUrl = asString(args?.url);
+  if (!rawUrl) {
+    return undefined;
+  }
+  try {
+    return new URL(rawUrl).hostname;
+  } catch {
+    return undefined;
+  }
 }
 
 function getBrowserSessionState(sessionId: string): BrowserSessionState {
@@ -1465,6 +1526,9 @@ async function withBrowserPage(
   const waitUntil = parseWaitUntil(args.waitUntil);
   const stateMode = options?.stateMode ?? "stateless";
   const browserSessionId = stateMode === "session" ? resolveBrowserSessionId(args, executionContext) : undefined;
+  if (browserSessionId) {
+    assertBrowserSessionScope(browserSessionId, "browser.interact", executionContext, args);
+  }
   const previousSessionState = browserSessionId
     ? cloneBrowserSessionState(getBrowserSessionState(browserSessionId))
     : undefined;

@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "tokenBudget": 40000,
+  "entries": [
+    {
+      "skillId": "bundled:agentic-skill-architect",
+      "owner": "library",
+      "source": "bundled",
+      "riskTier": "medium",
+      "expectedTests": ["packages/skills/src/bundled-skill.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
+      "skillId": "bundled:coding",
+      "owner": "code",
+      "source": "bundled",
+      "riskTier": "medium",
+      "expectedTests": ["packages/skills/src/bundled-skill.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
+      "skillId": "bundled:design-intelligence",
+      "owner": "mission-control-next",
+      "source": "bundled",
+      "riskTier": "medium",
+      "expectedTests": ["packages/skills/src/bundled-skill.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
+      "skillId": "bundled:documentation",
+      "owner": "docs",
+      "source": "bundled",
+      "riskTier": "low",
+      "expectedTests": ["packages/skills/src/bundled-skill.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
+      "skillId": "bundled:GoatCitadel Native Safe Improvement",
+      "owner": "library",
+      "source": "bundled",
+      "riskTier": "high",
+      "expectedTests": ["packages/skills/src/bundled-skill.test.ts"],
+      "catalogExposure": "inspectable"
+    },
+    {
+      "skillId": "bundled:mcp-vetter",
+      "owner": "settings",
+      "source": "bundled",
+      "riskTier": "medium",
+      "expectedTests": ["packages/skills/src/bundled-skill.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
+      "skillId": "bundled:n8n-workflow-architect",
+      "owner": "integrations",
+      "source": "bundled",
+      "riskTier": "medium",
+      "expectedTests": ["packages/skills/src/bundled-skill.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
+      "skillId": "bundled:operations",
+      "owner": "ops",
+      "source": "bundled",
+      "riskTier": "medium",
+      "expectedTests": ["packages/skills/src/bundled-skill.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
+      "skillId": "bundled:personal-assistant",
+      "owner": "chat",
+      "source": "bundled",
+      "riskTier": "low",
+      "expectedTests": ["packages/skills/src/bundled-skill.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
+      "skillId": "bundled:planning",
+      "owner": "cowork",
+      "source": "bundled",
+      "riskTier": "low",
+      "expectedTests": ["packages/skills/src/bundled-skill.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
+      "skillId": "bundled:qa",
+      "owner": "code",
+      "source": "bundled",
+      "riskTier": "low",
+      "expectedTests": ["packages/skills/src/bundled-skill.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
+      "skillId": "bundled:research",
+      "owner": "cowork",
+      "source": "bundled",
+      "riskTier": "low",
+      "expectedTests": ["packages/skills/src/bundled-skill.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
+      "skillId": "bundled:sendclaw",
+      "owner": "integrations",
+      "source": "bundled",
+      "riskTier": "high",
+      "expectedTests": ["scripts/check-skill-catalog.mjs"],
+      "catalogExposure": "inspectable"
+    },
+    {
+      "skillId": "extra:genie-npu-ir20",
+      "owner": "settings",
+      "source": "extra",
+      "riskTier": "medium",
+      "expectedTests": ["scripts/check-skill-catalog.mjs"],
+      "catalogExposure": "inspectable"
+    }
+  ]
+}

@@ -12,6 +12,15 @@ export interface SkillFrontmatter {
   };
 }
 
+export interface SkillRoutingHints {
+  phrases: string[];
+  keywords: string[];
+  surfaces: Array<"chat" | "cowork" | "code" | "library" | "ops" | "settings">;
+  whenToUse: string[];
+  whenNotToUse: string[];
+  confidenceBoost?: number;
+}
+
 export interface LoadedSkill {
   skillId: string;
   name: string;
@@ -21,6 +30,7 @@ export interface LoadedSkill {
   declaredTools: string[];
   requires: string[];
   keywords: string[];
+  routingHints?: SkillRoutingHints;
   instructionBody: string;
   mtime: string;
 }
@@ -219,4 +229,77 @@ export type SkillOutputDirective = SkillOutputDocumentDirective;
 export interface SkillOutputParseResult {
   text: string;
   directives: SkillOutputDirective[];
+}
+
+export type SkillCatalogExposureLevel = "hidden" | "inspectable" | "suggestable" | "callable";
+export type SkillCatalogRiskTier = "low" | "medium" | "high";
+
+export interface SkillCatalogCoverageEntry {
+  skillId: string;
+  owner: string;
+  source: LoadedSkill["source"] | "external";
+  riskTier: SkillCatalogRiskTier;
+  expectedTests: string[];
+  catalogExposure: SkillCatalogExposureLevel;
+}
+
+export interface SkillCatalogAuditFinding {
+  skillId?: string;
+  path?: string;
+  severity: "error" | "warning";
+  code:
+    | "missing_coverage"
+    | "invalid_frontmatter"
+    | "empty_body"
+    | "unresolved_placeholder"
+    | "catalog_budget_exceeded"
+    | "stale_generated_routing"
+    | "duplicate_skill";
+  message: string;
+}
+
+export interface SkillCatalogAuditResult {
+  ok: boolean;
+  generatedAt: string;
+  skillCount: number;
+  tokenEstimate: number;
+  tokenBudget: number;
+  coverageEntries: SkillCatalogCoverageEntry[];
+  findings: SkillCatalogAuditFinding[];
+}
+
+export type SkillExportTarget = "codex" | "claude" | "generic-markdown";
+
+export interface SkillExportTargetProfile {
+  target: SkillExportTarget;
+  label: string;
+  description: string;
+  supportsFrontmatter: boolean;
+  suppressesInternalMetadata: boolean;
+  previewOnly: boolean;
+}
+
+export interface SkillExportRequest {
+  skillIds: string[];
+  target: SkillExportTarget;
+  includeReferences?: boolean;
+  actorId?: string;
+}
+
+export interface SkillExportRenderedFile {
+  relativePath: string;
+  content: string;
+  sha256: string;
+}
+
+export interface SkillExportPreviewResponse {
+  target: SkillExportTarget;
+  generatedAt: string;
+  boundaryWarning: string;
+  files: SkillExportRenderedFile[];
+}
+
+export interface SkillExportPackageResponse extends SkillExportPreviewResponse {
+  packageId: string;
+  evidenceRef?: string;
 }

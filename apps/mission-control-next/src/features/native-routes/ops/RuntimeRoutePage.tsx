@@ -1,8 +1,9 @@
 /* eslint-disable max-lines -- RuntimeRoutePage co-locates Ops route panels while native route extraction continues. */
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import type { AutomationRecipeDraftResponse } from "@goatcitadel/contracts";
+import type { AutomationRecipeDraftResponse, ReviewReadinessSummary } from "@goatcitadel/contracts";
 import { createCronJob, draftAutomationRecipe } from "@goatcitadel/mission-control-shared/api/client";
+import { fetchReviewReadiness } from "@goatcitadel/mission-control-shared/api/review-readiness";
 import { EmptyState, StatusChip, ThreePartChip, type ChipTone } from "../primitives";
 import { useOpsRuntimeSnapshot } from "@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot";
 import type { AppRoute } from "@next/app/route-model";
@@ -71,6 +72,27 @@ export function RuntimeRoutePage({
   const [automationPreview, setAutomationPreview] = useState<AutomationRecipeDraftResponse | null>(null);
   const [automationBusy, setAutomationBusy] = useState(false);
   const [automationNotice, setAutomationNotice] = useState<string | null>(null);
+  const [reviewReadiness, setReviewReadiness] = useState<ReviewReadinessSummary | null>(null);
+  const [reviewReadinessLoading, setReviewReadinessLoading] = useState(false);
+  const [reviewReadinessError, setReviewReadinessError] = useState<string | null>(null);
+
+  const loadReviewReadiness = useCallback(async () => {
+    setReviewReadinessLoading(true);
+    try {
+      setReviewReadiness(await fetchReviewReadiness());
+      setReviewReadinessError(null);
+    } catch (error) {
+      setReviewReadinessError(error instanceof Error ? error.message : "Could not load review readiness.");
+    } finally {
+      setReviewReadinessLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (section === "diagnostics") {
+      void loadReviewReadiness();
+    }
+  }, [loadReviewReadiness, section]);
 
   const handleCreateSchedule = async () => {
     const name = scheduleDraft.name.trim();
@@ -743,6 +765,12 @@ export function RuntimeRoutePage({
                 emptyLabel="No daemon logs available."
               />
             </NativeCard>
+            <ReviewReadinessPanel
+              summary={reviewReadiness}
+              loading={reviewReadinessLoading}
+              error={reviewReadinessError}
+              onRefresh={loadReviewReadiness}
+            />
             <QuickJumpCard
               title="Diagnostics routes"
               subtitle="Jump between diagnostics and related operator routes."
@@ -906,6 +934,10 @@ export function RuntimeRoutePage({
     navigate,
     pendingApprovals,
     route.theme,
+    reviewReadiness,
+    reviewReadinessError,
+    reviewReadinessLoading,
+    loadReviewReadiness,
     runtime,
     scheduleCreating,
     scheduleDraft,
@@ -932,6 +964,79 @@ export function RuntimeRoutePage({
     >
       {content}
     </NativePageFrame>
+  );
+}
+
+function ReviewReadinessPanel({
+  summary,
+  loading,
+  error,
+  onRefresh,
+}: {
+  summary: ReviewReadinessSummary | null;
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => Promise<void>;
+}) {
+  const lanes = summary?.lanes ?? [];
+  const staleProofCount = lanes.filter((lane) => lane.status !== "current").length;
+  const linkedTasks = summary?.linkedTasks ?? [];
+  const sourceLabel = summary ? `${summary.branch}@${summary.sha.slice(0, 8)}` : "No snapshot";
+
+  return (
+    <NativeCard
+      title="Code/Ops review readiness"
+      subtitle="Gateway-owned review lanes, proof freshness, imported findings, and linked task state."
+      density="compact"
+      stats={[
+        { label: "Source", value: sourceLabel },
+        { label: "Stale proof", value: String(staleProofCount) },
+        { label: "Findings", value: String(summary?.openFindings ?? 0) },
+      ]}
+      actions={
+        <button type="button" className="gc-button subtle" disabled={loading} onClick={() => void onRefresh()}>
+          <RefreshCw className="h-4 w-4" />
+          Refresh
+        </button>
+      }
+    >
+      {error ? (
+        <div className="mc-next-runtime-notice tone-error">
+          <span>{error}</span>
+        </div>
+      ) : null}
+      {loading && !summary ? <EmptyState size="compact" title="Loading review readiness." /> : null}
+      {summary ? (
+        <div className="mc-next-directory-lane-list" aria-label="Review readiness lanes">
+          {lanes.map((lane) => (
+            <div key={lane.lane} className="mc-next-directory-lane-item">
+              <div className="mc-next-directory-lane-head">
+                <strong>{lane.lane}</strong>
+                <StatusChip tone={toneForReviewLane(lane.status)}>{lane.status}</StatusChip>
+              </div>
+              <p>
+                {lane.artifactRef ? formatReviewArtifactRef(lane.artifactRef) : "No verification artifact recorded."}
+              </p>
+              <div className="mc-next-directory-lane-status">
+                <span>{lane.lastRunAt ? formatDateTime(lane.lastRunAt) : "No run time"}</span>
+                <span>{lane.rerunHint}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <NativeList
+        items={linkedTasks.slice(0, 4).map((task) => ({
+          title: task.title,
+          meta: `${task.status} · ${task.priority}`,
+          body: `${task.taskId} · updated ${formatDateTime(task.updatedAt)}`,
+        }))}
+        emptyLabel="No imported review tasks."
+        density="compact"
+        maxHeight="min(28vh, 14rem)"
+        ariaLabel="Linked review tasks"
+      />
+    </NativeCard>
   );
 }
 
@@ -987,6 +1092,22 @@ function MetricGrid({ items }: { items: Array<{ label: string; value: string; me
       ))}
     </div>
   );
+}
+
+function toneForReviewLane(status: ReviewReadinessSummary["lanes"][number]["status"]) {
+  if (status === "current") {
+    return "success";
+  }
+  if (status === "stale") {
+    return "warning";
+  }
+  return "muted";
+}
+
+function formatReviewArtifactRef(value: string) {
+  const normalized = value.replaceAll("\\", "/");
+  const parts = normalized.split("/");
+  return parts.slice(-3).join("/");
 }
 
 export function formatHumanSessionTitle(item: {

@@ -25,6 +25,12 @@ type MemoryRoutePort = Pick<
   | "listMaintenanceRuns"
   | "listMemoryItemHistory"
   | "listMemoryItems"
+  | "listMemoryLearnings"
+  | "createMemoryLearning"
+  | "proposeMemoryLearning"
+  | "supersedeMemoryLearning"
+  | "forgetMemoryLearning"
+  | "checkMemoryLearningStaleness"
   | "listRecentContexts"
   | "patchMaintenancePolicy"
   | "patchMemoryItem"
@@ -108,6 +114,34 @@ export class MemoryRouteService {
 
   public forget(input: Parameters<MemoryRoutePort["forgetMemory"]>[0]) {
     return this.memory.forgetMemory(input);
+  }
+
+  public listLearnings(input: Parameters<MemoryRoutePort["listMemoryLearnings"]>[0]) {
+    return this.memory.listMemoryLearnings(input);
+  }
+
+  public createLearning(input: Parameters<MemoryRoutePort["createMemoryLearning"]>[0], actorId: string) {
+    return this.memory.createMemoryLearning(input, actorId);
+  }
+
+  public proposeLearning(input: Parameters<MemoryRoutePort["proposeMemoryLearning"]>[0], actorId: string) {
+    return this.memory.proposeMemoryLearning(input, actorId);
+  }
+
+  public supersedeLearning(
+    learningId: string,
+    input: Parameters<MemoryRoutePort["supersedeMemoryLearning"]>[1],
+    actorId: string,
+  ) {
+    return this.memory.supersedeMemoryLearning(learningId, input, actorId);
+  }
+
+  public forgetLearning(learningId: string, actorId: string) {
+    return this.memory.forgetMemoryLearning(learningId, actorId);
+  }
+
+  public checkLearningStaleness(input: Parameters<MemoryRoutePort["checkMemoryLearningStaleness"]>[0]) {
+    return this.memory.checkMemoryLearningStaleness(input);
   }
 
   public listEntities(input: Parameters<MemoryRoutePort["listMemoryEntities"]>[0]) {

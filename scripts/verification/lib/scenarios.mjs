@@ -24,6 +24,7 @@ import {
 } from "./architecture-metrics.mjs";
 import {
   buildVisualBaselineFileName,
+  NEXT_RELEASE_SURFACE_MANIFEST,
   resolveLegacyRedirectManifest,
   resolveShellContract,
   resolveSurfaceRegressionManifest,
@@ -93,6 +94,7 @@ const FAST_LANE_TEMP_MIN_FREE_BYTES = 1024 * 1024 * 1024;
 const MISSION_CONTROL_NEXT_FILE_FIXTURE_MTIME = new Date("2026-05-17T21:51:00.000Z");
 
 export const FAST_LANE_COMMANDS = Object.freeze([
+  { id: "fast.skills-catalog", title: "Skill catalog coverage", args: ["verify:skills:catalog"] },
   { id: "fast.repo-hygiene", title: "Repo hygiene", args: ["verify:repo:hygiene"] },
   { id: "fast.storage-migration-parity", title: "Storage migration parity", args: ["verify:storage:migration-parity"] },
   {
@@ -111,10 +113,46 @@ export const FAST_LANE_COMMANDS = Object.freeze([
   { id: "fast.docs", title: "Docs checks", args: ["docs:check"] },
 ]);
 
+export async function runSkillsCatalogLane(context) {
+  await runScenario(
+    context,
+    {
+      id: "skills-catalog.coverage-floor",
+      lane: "skills-catalog",
+      title: "Skill catalog coverage and token budget",
+      subsystem: "skills",
+    },
+    async () => {
+      const result = await runCommand(pnpmCommand(), ["verify:skills:catalog"], {
+        cwd: repoRoot,
+        artifactRoot: path.join(context.artifactRoot, "diagnostics"),
+        logName: "skills-catalog.coverage-floor",
+      });
+      return {
+        status: result.code === 0 ? "passed" : "failed",
+        error: result.code === 0 ? undefined : clampString(result.stderr || result.stdout, 1200),
+        metrics: {
+          exitCode: result.code,
+          durationMs: result.durationMs,
+        },
+        artifacts: {
+          diagnostics: [],
+          screenshots: [],
+          traces: [],
+          logs: [relativeToRun(context, result.stdoutPath), relativeToRun(context, result.stderrPath)],
+          perf: [],
+          playwright: [],
+        },
+      };
+    },
+  );
+}
+
 function resolveVerificationTargetContext() {
   const uiTarget = resolveUiTarget(repoRoot, process.env);
   const packageName = uiTarget.packageName || DEFAULT_UI_PACKAGE;
-  const surfaceRoutes = resolveSurfaceRegressionManifest();
+  const surfaceRoutes =
+    packageName === NEXT_UI_PACKAGE ? NEXT_RELEASE_SURFACE_MANIFEST : resolveSurfaceRegressionManifest();
   return {
     uiTarget,
     packageName,

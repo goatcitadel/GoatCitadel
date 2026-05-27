@@ -1,7 +1,8 @@
 /* eslint-disable max-lines -- MemoryLifecycleService centralizes memory lifecycle writes, write-gate evidence, and structured memory governance until repository ownership is split. */
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   ChatTurnTraceRecord,
   DurableRunRecord,
@@ -19,6 +20,12 @@ import type {
   MemoryEntityInput,
   MemoryEntityRecord,
   MemoryItemRecord,
+  MemoryLearningInput,
+  MemoryLearningRecord,
+  MemoryLearningStalenessIssue,
+  MemoryLearningStalenessReport,
+  MemoryLearningStatus,
+  MemoryLearningType,
   MemoryLifecyclePatch,
   MemoryMaintenancePolicyPatchInput,
   MemoryMaintenancePolicyRecord,
@@ -41,8 +48,9 @@ import {
   PolicyViolationError,
   ValidationError,
   deriveMemoryItemLifecycleState,
+  type BrowserContentGuardResult,
 } from "@goatcitadel/contracts";
-import { assertWritePathInJail } from "@goatcitadel/policy-engine";
+import { assertWritePathInJail, scanBrowserContentGuard } from "@goatcitadel/policy-engine";
 import { ChatLearnedMemoryService } from "./chat-learned-memory-service.js";
 import { MemoryContextService } from "./memory-context-service.js";
 import { mapMemoryItemRow, recordMemoryChange, requireMemoryItem, type MemoryItemHost } from "./memory-item-helpers.js";
@@ -90,6 +98,133 @@ export interface MemoryLifecycleDependencies {
  */
 export class MemoryLifecycleService {
   public constructor(private readonly deps: MemoryLifecycleDependencies) {}
+
+  public listMemoryLearnings(
+    input: {
+      workspaceId?: string;
+      status?: MemoryLearningStatus | "all";
+      query?: string;
+      key?: string;
+      limit?: number;
+    } = {},
+  ): MemoryLearningRecord[] {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    this.ensureLearningSchema();
+    const clauses = ["workspace_id = @workspaceId"];
+    const params: Record<string, string | number> = {
+      workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
+      limit: normalizeStructuredLimit(input.limit),
+    };
+    if (input.status && input.status !== "all") {
+      clauses.push("status = @status");
+      params.status = input.status;
+    }
+    if (input.key?.trim()) {
+      clauses.push("learning_key = @key");
+      params.key = input.key.trim();
+    }
+    if (input.query?.trim()) {
+      clauses.push("(LOWER(learning_key) LIKE @query OR LOWER(insight) LIKE @query)");
+      params.query = `%${input.query.trim().toLowerCase()}%`;
+    }
+    const rows = this.deps.admin.gatewaySql
+      .prepare(
+        `
+      SELECT *
+      FROM memory_learnings
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY updated_at DESC
+      LIMIT @limit
+    `,
+      )
+      .all(params) as MemoryLearningRow[];
+    return rows.map((row) => mapLearningRow(this.deps.admin, row));
+  }
+
+  public createMemoryLearning(input: MemoryLearningInput, actorId = "operator"): MemoryLearningRecord {
+    return this.insertMemoryLearning(input, actorId, input.authority === "agent_proposed" ? "proposed" : "trusted");
+  }
+
+  public proposeMemoryLearning(input: MemoryLearningInput, actorId = "agent"): MemoryLearningRecord {
+    return this.insertMemoryLearning({ ...input, authority: "agent_proposed" }, actorId, "proposed");
+  }
+
+  public supersedeMemoryLearning(
+    learningId: string,
+    input: MemoryLearningInput,
+    actorId = "operator",
+  ): { previous: MemoryLearningRecord; next: MemoryLearningRecord } {
+    this.ensureLearningSchema();
+    const previous = this.requireMemoryLearning(learningId);
+    const next = this.insertMemoryLearning(
+      {
+        ...input,
+        workspaceId: input.workspaceId ?? previous.workspaceId,
+        key: input.key || previous.key,
+      },
+      actorId,
+      input.authority === "agent_proposed" ? "proposed" : "trusted",
+    );
+    const now = new Date().toISOString();
+    this.deps.admin.gatewaySql
+      .prepare(
+        `
+      UPDATE memory_learnings
+      SET status = 'superseded', superseded_by_id = @nextId, updated_at = @updatedAt
+      WHERE learning_id = @learningId
+    `,
+      )
+      .run({ learningId, nextId: next.learningId, updatedAt: now });
+    this.deps.admin.publishRealtime("system", "memory", {
+      type: "memory_learning_superseded",
+      learningId,
+      supersededById: next.learningId,
+      workspaceId: previous.workspaceId,
+    });
+    return { previous: this.requireMemoryLearning(learningId), next };
+  }
+
+  public forgetMemoryLearning(learningId: string, actorId = "operator"): MemoryLearningRecord {
+    this.ensureLearningSchema();
+    const current = this.requireMemoryLearning(learningId);
+    if (current.status === "forgotten") {
+      return current;
+    }
+    const now = new Date().toISOString();
+    this.deps.admin.gatewaySql
+      .prepare(
+        `
+      UPDATE memory_learnings
+      SET status = 'forgotten', updated_at = @updatedAt
+      WHERE learning_id = @learningId
+    `,
+      )
+      .run({ learningId, updatedAt: now });
+    this.deps.admin.publishRealtime("system", "memory", {
+      type: "memory_learning_forgotten",
+      learningId,
+      actorId,
+      workspaceId: current.workspaceId,
+    });
+    return this.requireMemoryLearning(learningId);
+  }
+
+  public checkMemoryLearningStaleness(
+    input: {
+      learningId?: string;
+      workspaceId?: string;
+      limit?: number;
+    } = {},
+  ): MemoryLearningStalenessReport {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    this.ensureLearningSchema();
+    const checkedAt = new Date().toISOString();
+    const learnings = input.learningId
+      ? [this.requireMemoryLearning(input.learningId)]
+      : this.listMemoryLearnings({ workspaceId: input.workspaceId, status: "all", limit: input.limit });
+    const issues = learnings.flatMap((learning) => this.inspectLearningIssues(learning));
+    return { checkedAt, issues };
+  }
 
   public listMemoryEntities(
     input: { workspaceId?: string; status?: StructuredMemoryStatus | "all"; query?: string; limit?: number } = {},
@@ -158,10 +293,20 @@ export class MemoryLifecycleService {
     `,
       )
       .run({
-        ...entity,
+        id: entity.id,
+        workspaceId: entity.workspaceId,
+        scope: entity.scope,
+        title: entity.title,
+        entityType: entity.entityType,
         aliasesJson: JSON.stringify(entity.aliases),
+        summary: entity.summary ?? null,
+        status: entity.status,
+        confidence: entity.confidence,
         sourceRefsJson: JSON.stringify(entity.sourceRefs),
         metadataJson: JSON.stringify(entity.metadata),
+        authority: entity.authority,
+        createdAt: entity.createdAt,
+        updatedAt: entity.updatedAt,
       });
     this.recordStructuredMemoryChange("entity", entity.id, "created", actorId, { title: entity.title });
     this.deps.admin.publishRealtime("system", "memory", {
@@ -288,9 +433,20 @@ export class MemoryLifecycleService {
     `,
       )
       .run({
-        ...relation,
+        id: relation.id,
+        workspaceId: relation.workspaceId,
+        scope: relation.scope,
+        title: relation.title,
+        fromEntityId: relation.fromEntityId,
+        toEntityId: relation.toEntityId,
+        relationType: relation.relationType,
+        status: relation.status,
+        confidence: relation.confidence,
         sourceRefsJson: JSON.stringify(relation.sourceRefs),
         metadataJson: JSON.stringify(relation.metadata),
+        authority: relation.authority,
+        createdAt: relation.createdAt,
+        updatedAt: relation.updatedAt,
       });
     this.recordStructuredMemoryChange("relation", relation.id, "created", actorId, { title: relation.title });
     this.deps.admin.publishRealtime("system", "memory", {
@@ -381,12 +537,26 @@ export class MemoryLifecycleService {
     `,
       )
       .run({
-        ...decision,
+        id: decision.id,
+        workspaceId: decision.workspaceId,
+        scope: decision.scope,
+        title: decision.title,
+        decision: decision.decision,
         alternativesJson: JSON.stringify(decision.alternatives),
+        rationale: decision.rationale,
+        expectedOutcome: decision.expectedOutcome ?? null,
+        reviewAt: decision.reviewAt ?? null,
         linkedEntityIdsJson: JSON.stringify(decision.linkedEntityIds),
         linkedRelationIdsJson: JSON.stringify(decision.linkedRelationIds),
+        sessionId: decision.sessionId ?? null,
+        runId: decision.runId ?? null,
+        status: decision.status,
+        confidence: decision.confidence,
         sourceRefsJson: JSON.stringify(decision.sourceRefs),
         metadataJson: JSON.stringify(decision.metadata),
+        authority: decision.authority,
+        createdAt: decision.createdAt,
+        updatedAt: decision.updatedAt,
       });
     this.recordStructuredMemoryChange("decision", decision.id, "created", actorId, { title: decision.title });
     this.deps.admin.publishRealtime("system", "memory", {
@@ -992,6 +1162,9 @@ export class MemoryLifecycleService {
     if (!policy.allowWrite) {
       return;
     }
+    if (this.scanBrowserContentGuardForMemory(content, { sessionId, sourceRef: source.sourceRef }).blocked) {
+      return;
+    }
     if (this.deps.writeGate) {
       const authority: MemoryWriteAuthority = source.role === "user" ? "operator" : "agent_proposed";
       const existingClaims = this.deps.learned
@@ -1137,7 +1310,212 @@ export class MemoryLifecycleService {
     return mapMemoryDecisionRow(this.deps.admin, row);
   }
 
+  private requireMemoryLearning(learningId: string): MemoryLearningRecord {
+    const row = this.deps.admin.gatewaySql
+      .prepare("SELECT * FROM memory_learnings WHERE learning_id = ?")
+      .get(learningId) as MemoryLearningRow | undefined;
+    if (!row) {
+      throw new NotFoundError({ entity: "Memory learning", id: learningId });
+    }
+    return mapLearningRow(this.deps.admin, row);
+  }
+
+  private insertMemoryLearning(
+    input: MemoryLearningInput,
+    actorId: string,
+    status: MemoryLearningStatus,
+  ): MemoryLearningRecord {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    this.ensureLearningSchema();
+    const now = new Date().toISOString();
+    const authority = normalizeAuthority(input.authority ?? (status === "proposed" ? "agent_proposed" : "operator"));
+    const learning: MemoryLearningRecord = {
+      learningId: randomUUID(),
+      workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
+      key: requireTrimmedText(input.key, "key"),
+      type: normalizeLearningType(input.type),
+      insight: requireTrimmedText(input.insight, "insight"),
+      confidence: normalizeConfidence(input.confidence),
+      status,
+      sourceRefs: normalizeSourceRefs(input.sourceRefs, actorId),
+      fileRefs: this.normalizeLearningFileRefs(input.fileRefs),
+      authority,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.assertStructuredMemoryWriteAllowed(learning.authority, serializeLearningForGate(learning));
+    this.deps.admin.gatewaySql
+      .prepare(
+        `
+      INSERT INTO memory_learnings (
+        learning_id, workspace_id, learning_key, learning_type, insight, confidence, status,
+        source_refs_json, file_refs_json, authority, superseded_by_id, created_at, updated_at
+      ) VALUES (
+        @learningId, @workspaceId, @key, @type, @insight, @confidence, @status,
+        @sourceRefsJson, @fileRefsJson, @authority, NULL, @createdAt, @updatedAt
+      )
+    `,
+      )
+      .run({
+        learningId: learning.learningId,
+        workspaceId: learning.workspaceId,
+        key: learning.key,
+        type: learning.type,
+        insight: learning.insight,
+        confidence: learning.confidence,
+        status: learning.status,
+        sourceRefsJson: JSON.stringify(learning.sourceRefs),
+        fileRefsJson: JSON.stringify(learning.fileRefs),
+        authority: learning.authority,
+        createdAt: learning.createdAt,
+        updatedAt: learning.updatedAt,
+      });
+    this.deps.admin.publishRealtime("system", "memory", {
+      type: "memory_learning_created",
+      learningId: learning.learningId,
+      status: learning.status,
+      workspaceId: learning.workspaceId,
+    });
+    return learning;
+  }
+
+  private normalizeLearningFileRefs(
+    fileRefs: MemoryLearningInput["fileRefs"] | undefined,
+  ): MemoryLearningRecord["fileRefs"] {
+    return (fileRefs ?? []).map((ref) => {
+      const normalizedPath = requireTrimmedText(ref.path, "fileRefs.path");
+      const absolutePath = this.resolveLearningFilePath(normalizedPath);
+      return {
+        path: normalizedPath,
+        contentHash: ref.contentHash?.trim() || hashFileIfPresent(absolutePath),
+      };
+    });
+  }
+
+  private resolveLearningFilePath(filePath: string): string {
+    const rootDir = this.deps.files?.rootDir;
+    if (!rootDir) {
+      return path.resolve(filePath);
+    }
+    const absolutePath = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(rootDir, filePath);
+    const root = path.resolve(rootDir);
+    if (absolutePath !== root && !absolutePath.startsWith(`${root}${path.sep}`)) {
+      throw new ValidationError({
+        field: "fileRefs.path",
+        message: "Learning file refs must stay inside the GoatCitadel repository root.",
+      });
+    }
+    return absolutePath;
+  }
+
+  private inspectLearningIssues(learning: MemoryLearningRecord): MemoryLearningStalenessIssue[] {
+    const issues: MemoryLearningStalenessIssue[] = [];
+    for (const fileRef of learning.fileRefs) {
+      const absolutePath = this.resolveLearningFilePath(fileRef.path);
+      if (!fsSync.existsSync(absolutePath)) {
+        issues.push({
+          learningId: learning.learningId,
+          path: fileRef.path,
+          issue: "missing_file",
+          message: `Referenced file ${fileRef.path} no longer exists.`,
+        });
+        continue;
+      }
+      const currentHash = hashFileIfPresent(absolutePath);
+      if (fileRef.contentHash && currentHash && fileRef.contentHash !== currentHash) {
+        issues.push({
+          learningId: learning.learningId,
+          path: fileRef.path,
+          issue: "changed_hash",
+          message: `Referenced file ${fileRef.path} changed since the learning was recorded.`,
+        });
+      }
+    }
+    for (const sourceRef of learning.sourceRefs) {
+      const maybePath = sourceRef.sourceType === "artifact" ? sourceRef.sourceRef.replace(/^file:/, "") : "";
+      if (maybePath && !maybePath.startsWith("http") && (maybePath.includes("/") || maybePath.includes("\\"))) {
+        const absolutePath = this.resolveLearningFilePath(maybePath);
+        if (!fsSync.existsSync(absolutePath)) {
+          issues.push({
+            learningId: learning.learningId,
+            path: maybePath,
+            issue: "stale_source_ref",
+            message: `Source reference ${sourceRef.sourceRef} no longer resolves to a local file.`,
+          });
+        }
+      }
+    }
+    if (learning.confidence < 0.5 && learning.status !== "forgotten") {
+      issues.push({
+        learningId: learning.learningId,
+        issue: "low_confidence",
+        message: "Learning confidence is below the trusted-review threshold.",
+      });
+    }
+    const contradictions = this.listMemoryLearnings({
+      workspaceId: learning.workspaceId,
+      key: learning.key,
+      status: "all",
+      limit: 20,
+    }).filter(
+      (candidate) =>
+        candidate.learningId !== learning.learningId &&
+        candidate.status !== "forgotten" &&
+        candidate.insight.trim().toLowerCase() !== learning.insight.trim().toLowerCase(),
+    );
+    if (contradictions.length > 0 && learning.status !== "forgotten") {
+      issues.push({
+        learningId: learning.learningId,
+        issue: "likely_contradiction",
+        message: `Learning conflicts with ${contradictions.length} other active/proposed record(s) for key ${learning.key}.`,
+      });
+    }
+    return issues;
+  }
+
+  private ensureLearningSchema(): void {
+    this.deps.admin.gatewaySql
+      .prepare(
+        `
+      CREATE TABLE IF NOT EXISTS memory_learnings (
+        learning_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        learning_key TEXT NOT NULL,
+        learning_type TEXT NOT NULL,
+        insight TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        status TEXT NOT NULL,
+        source_refs_json TEXT NOT NULL,
+        file_refs_json TEXT NOT NULL,
+        authority TEXT NOT NULL,
+        superseded_by_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `,
+      )
+      .run();
+    this.deps.admin.gatewaySql
+      .prepare(
+        "CREATE INDEX IF NOT EXISTS idx_memory_learnings_workspace_status ON memory_learnings(workspace_id, status)",
+      )
+      .run();
+    this.deps.admin.gatewaySql
+      .prepare("CREATE INDEX IF NOT EXISTS idx_memory_learnings_key ON memory_learnings(workspace_id, learning_key)")
+      .run();
+  }
+
   private assertStructuredMemoryWriteAllowed(authority: StructuredMemoryAuthority, content: string): void {
+    const browserContentGuard = this.scanBrowserContentGuardForMemory(content, {
+      structuredMemory: true,
+      authority,
+    });
+    if (browserContentGuard.blocked) {
+      throw new PolicyViolationError({
+        message: "Browser content guard blocked memory write candidate.",
+        details: { browserContentGuard },
+      });
+    }
     const decision = this.deps.writeGate?.evaluate({
       authority: authority as MemoryWriteAuthority,
       content,
@@ -1157,6 +1535,25 @@ export class MemoryLifecycleService {
         details: { decision },
       });
     }
+  }
+
+  private scanBrowserContentGuardForMemory(
+    content: string,
+    metadata: Record<string, unknown>,
+  ): BrowserContentGuardResult {
+    const browserContentGuard = scanBrowserContentGuard(content);
+    if (browserContentGuard.blocked) {
+      this.deps.evidence?.createEnvelope({
+        eventKind: "browser_content_guard",
+        metadata: {
+          ...metadata,
+          browserContentGuard,
+          shieldWarning: "Untrusted browser content canary leaked into a memory-write candidate.",
+          claimPreview: "[blocked-browser-content]",
+        },
+      });
+    }
+    return browserContentGuard;
   }
 
   private recordStructuredMemoryChange(
@@ -1205,6 +1602,22 @@ interface MemoryEntityRow {
   updated_at: string;
   forgotten_at: string | null;
   superseded_by_id: string | null;
+}
+
+interface MemoryLearningRow {
+  learning_id: string;
+  workspace_id: string;
+  learning_key: string;
+  learning_type: string;
+  insight: string;
+  confidence: number;
+  status: MemoryLearningStatus;
+  source_refs_json: string | null;
+  file_refs_json: string | null;
+  authority: StructuredMemoryAuthority;
+  superseded_by_id: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 interface MemoryRelationRow {
@@ -1275,6 +1688,24 @@ function mapMemoryEntityRow(host: MemoryLifecycleAdminDependencies, row: MemoryE
   };
 }
 
+function mapLearningRow(host: MemoryLifecycleAdminDependencies, row: MemoryLearningRow): MemoryLearningRecord {
+  return {
+    learningId: row.learning_id,
+    workspaceId: row.workspace_id,
+    key: row.learning_key,
+    type: normalizeLearningType(row.learning_type),
+    insight: row.insight,
+    confidence: normalizeConfidence(row.confidence),
+    status: normalizeLearningStatus(row.status),
+    sourceRefs: parseMemoryJson(host, row.source_refs_json, []),
+    fileRefs: parseMemoryJson(host, row.file_refs_json, []),
+    authority: normalizeAuthority(row.authority),
+    supersededById: row.superseded_by_id ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function mapMemoryRelationRow(host: MemoryLifecycleAdminDependencies, row: MemoryRelationRow): MemoryRelationRecord {
   return {
     id: row.relation_id,
@@ -1340,6 +1771,20 @@ function normalizeStructuredScope(value: string | undefined): StructuredMemorySc
 
 function normalizeStructuredStatus(value: string | undefined): StructuredMemoryStatus {
   return value === "forgotten" || value === "superseded" ? value : "active";
+}
+
+function normalizeLearningStatus(value: string | undefined): MemoryLearningStatus {
+  return value === "trusted" || value === "superseded" || value === "forgotten" ? value : "proposed";
+}
+
+function normalizeLearningType(value: string | undefined): MemoryLearningType {
+  return value === "workflow" ||
+    value === "bug_pattern" ||
+    value === "operator_preference" ||
+    value === "repo_fact" ||
+    value === "tooling"
+    ? value
+    : "repo_fact";
 }
 
 function normalizeAuthority(value: string | undefined): StructuredMemoryAuthority {
@@ -1410,4 +1855,23 @@ function serializeStructuredMemoryForGate(
         }
       : {}),
   });
+}
+
+function serializeLearningForGate(value: MemoryLearningRecord): string {
+  return JSON.stringify({
+    key: value.key,
+    type: value.type,
+    insight: value.insight,
+    confidence: value.confidence,
+    status: value.status,
+    sourceRefs: value.sourceRefs,
+    fileRefs: value.fileRefs,
+  });
+}
+
+function hashFileIfPresent(filePath: string): string | undefined {
+  if (!fsSync.existsSync(filePath) || !fsSync.statSync(filePath).isFile()) {
+    return undefined;
+  }
+  return createHash("sha256").update(fsSync.readFileSync(filePath)).digest("hex");
 }

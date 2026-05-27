@@ -34,6 +34,7 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
 
   const importSourceTypeSchema = z.enum(["local_path", "local_zip", "git_url"]);
   const sourceProviderSchema = z.enum(["agentskill", "skillsmp", "clawhub", "github", "local", "external"]);
+  const skillExportTargetSchema = z.enum(["codex", "claude", "generic-markdown"]);
 
   const validateImportSchema = z.object({
     sourceRef: z.string().min(1),
@@ -44,6 +45,12 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
   const installImportSchema = validateImportSchema.extend({
     force: z.boolean().optional(),
     confirmHighRisk: z.boolean().optional(),
+  });
+
+  const skillExportSchema = z.object({
+    skillIds: z.array(z.string().min(1)).min(1).max(50),
+    target: skillExportTargetSchema,
+    includeReferences: z.boolean().optional(),
   });
 
   const importHistoryQuerySchema = z.object({
@@ -99,6 +106,34 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     return reply.send(await skills.listSkillSources(parsed.data.q, parsed.data.limit));
+  });
+
+  fastify.get("/api/v1/skills/export/targets", async (_request, reply) => {
+    return reply.send({ items: skills.listSkillExportTargets() });
+  });
+
+  fastify.post("/api/v1/skills/export/preview", async (request, reply) => {
+    const parsed = skillExportSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(skills.previewSkillExport({ ...parsed.data, actorId: request.authActorId }));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/skills/export/package", async (request, reply) => {
+    const parsed = skillExportSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(skills.packageSkillExport({ ...parsed.data, actorId: request.authActorId }));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.get("/api/v1/skills/lookup", async (request, reply) => {

@@ -20,6 +20,7 @@ import {
   runDeepEcosystemLane,
   runDurableRecoveryLane,
   runFastLane,
+  runSkillsCatalogLane,
   runMemoryTruthLane,
   runOperatorProofLane,
   runRealtimeTruthLane,
@@ -45,6 +46,7 @@ const VALID_LANES = new Set([
   "deep-core",
   "deep-ecosystem",
   "catalog-parity",
+  "skills-catalog",
   "api-compat",
   "operator-proof",
   "durable-recovery",
@@ -78,6 +80,7 @@ const REVIEW_LANES = new Set([
   "deep-core",
   "deep-ecosystem",
   "catalog-parity",
+  "skills-catalog",
   "api-compat",
   "operator-proof",
   "durable-recovery",
@@ -152,6 +155,8 @@ async function main() {
       await runDeepEcosystemLane(context, { profile });
     } else if (lane === "catalog-parity") {
       await runCatalogParityLane(context, { profile });
+    } else if (lane === "skills-catalog") {
+      await runSkillsCatalogLane(context);
     } else if (lane === "api-compat") {
       await runApiCompatibilityLane(context, { profile });
     } else if (lane === "operator-proof") {
@@ -207,6 +212,7 @@ async function main() {
       await runDeepCoreLane(context, { profile });
       await runDeepEcosystemLane(context, { profile });
       await runCatalogParityLane(context, { profile });
+      await runSkillsCatalogLane(context);
       await runApiCompatibilityLane(context, { profile });
       await runOperatorProofLane(context, { profile });
       await runDurableRecoveryLane(context, { profile });

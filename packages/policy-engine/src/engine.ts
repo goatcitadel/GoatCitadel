@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- policy evaluation rules remain co-located to keep branching behavior reviewable. */
 import type {
+  BrowserSessionAccessCheck,
   FilesystemReadAccessMode,
   ApprovalLinkage,
   EffectiveToolPolicy,
@@ -181,6 +182,10 @@ type ActiveToolGrantRepository = Storage["toolGrants"] & {
   listActive?: (scope?: ToolGrantScope, scopeRef?: string) => ToolGrantRecord[];
 };
 
+export interface ToolPolicyEngineRuntimeHooks {
+  assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void;
+}
+
 const DEFAULT_APPROVAL_TTL_MS = 15 * 60_000;
 
 export class ToolPolicyEngine {
@@ -191,6 +196,7 @@ export class ToolPolicyEngine {
     private readonly config: ToolPolicyConfig,
     private readonly storage: Storage,
     registry?: ToolRegistry,
+    private readonly runtimeHooks: ToolPolicyEngineRuntimeHooks = {},
   ) {
     this.registry = registry ?? createDefaultToolRegistry();
     this.approvals = new ApprovalGate(storage);
@@ -1333,7 +1339,7 @@ export class ToolPolicyEngine {
       };
     }
     try {
-      const result = await executeTool(executionRequest, this.config, this.storage);
+      const result = await executeTool(executionRequest, this.config, this.storage, this.runtimeHooks);
       await this.recordInvocation(auditEventId, request, "executed", policyReason, result, approvalId, evaluation);
       const completedAt = new Date().toISOString();
       return {

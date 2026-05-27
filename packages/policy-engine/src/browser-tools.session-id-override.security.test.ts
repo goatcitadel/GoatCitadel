@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { __browserPageStateModeForTests, __resolveBrowserSessionIdForTests } from "./browser-tools.js";
+import {
+  __browserPageStateModeForTests,
+  __resolveBrowserSessionIdForTests,
+  executeBrowserTool,
+} from "./browser-tools.js";
+import type { ToolPolicyConfig } from "@goatcitadel/contracts";
 
 // Regression coverage for CODEX_FINDING #24: `resolveBrowserSessionId`
 // previously trusted caller-supplied `args.browserSessionId` /
@@ -46,5 +51,30 @@ describe("resolveBrowserSessionId (codex #24)", () => {
 
   it("keeps persisted page state only for approved interaction", () => {
     expect(__browserPageStateModeForTests("browser.interact")).toBe("session");
+  });
+
+  it("requires the gateway browser-session grant hook when provided", async () => {
+    const config: ToolPolicyConfig = {
+      profiles: {},
+      tools: { allow: ["browser.storage.get"], deny: [] },
+      agents: {},
+      sandbox: {
+        writeJailRoots: [],
+        readOnlyRoots: [],
+        networkAllowlist: ["example.com"],
+        riskyShellPatterns: [],
+        requireApprovalForRiskyShell: true,
+      },
+    };
+
+    await expect(
+      executeBrowserTool("browser.storage.get", {}, config, {
+        sessionId: "browser-session-1",
+        actorId: "agent-1",
+        assertBrowserSessionAccess: () => {
+          throw new Error("missing browser session grant");
+        },
+      }),
+    ).rejects.toThrow("missing browser session grant");
   });
 });

@@ -40,6 +40,7 @@ describe("goatcitadel-native-safe-self-improvement bundled skill", () => {
     expect(skill?.keywords).toContain("goatcitadel-native-safe-self-improvement");
     expect(skill?.keywords).toContain("post-task reflection");
     expect(skill?.keywords).toContain("self-improvement log");
+    expect(skill?.routingHints?.phrases).toContain("log this routing gap");
   });
 
   it("supports explicit-by-name text and guarded auto activation without matching unrelated coding prompts", async () => {

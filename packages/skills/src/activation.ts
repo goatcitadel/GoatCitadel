@@ -1,14 +1,7 @@
-import type {
-  LoadedSkill,
-  SkillActivationDecision,
-  SkillResolveInput,
-} from "@goatcitadel/contracts";
+import type { LoadedSkill, SkillActivationDecision, SkillResolveInput } from "@goatcitadel/contracts";
 import { resolveDependencies } from "./deps.js";
 
-export function resolveSkillActivation(
-  input: SkillResolveInput,
-  allSkills: LoadedSkill[],
-): SkillActivationDecision {
+export function resolveSkillActivation(input: SkillResolveInput, allSkills: LoadedSkill[]): SkillActivationDecision {
   const text = input.text.toLowerCase();
   const explicit = new Set<string>(input.explicitSkills ?? extractExplicitSkills(input.text));
 
@@ -25,6 +18,16 @@ export function resolveSkillActivation(
     const keywordMatch = skill.keywords.some((keyword) => text.includes(keyword.toLowerCase()));
     if (keywordMatch) {
       skillReasons.push("keyword");
+    }
+
+    const routingKeywordMatch = skill.routingHints?.keywords.some((keyword) => text.includes(keyword.toLowerCase()));
+    if (routingKeywordMatch) {
+      skillReasons.push("routing_keyword");
+    }
+
+    const routingPhraseMatch = skill.routingHints?.phrases.some((phrase) => text.includes(phrase.toLowerCase()));
+    if (routingPhraseMatch) {
+      skillReasons.push("routing_phrase");
     }
 
     if (skillReasons.length > 0) {
@@ -44,7 +47,7 @@ export function resolveSkillActivation(
     selected: dependencyResult.ordered.map((skill) => ({
       ...skill,
       state: "enabled",
-      confidence: 1,
+      confidence: Math.min(1, 0.85 + (skill.routingHints?.confidenceBoost ?? 0)),
       requiresConfirmation: false,
     })),
     reasons,

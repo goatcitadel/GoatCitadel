@@ -2,6 +2,8 @@ import type { LlmRuntimeConfig } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
 import { GatewayService } from "./gateway-service.js";
+import type { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
+import type { ReviewReadinessService } from "./review-readiness-service.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 
 type GatewayLogger = {
@@ -12,7 +14,9 @@ type GatewayLogger = {
 };
 
 export interface GatewayRuntimePort {
+  readonly browserSessionRuntimeService: BrowserSessionRuntimeService;
   readonly mutationIdempotencyStore: MutationIdempotencyStore;
+  readonly reviewReadinessService: ReviewReadinessService;
   readonly routeServices: GatewayRouteServices;
   attachDevDiagnosticsLogger(logger: GatewayLogger): void;
   init(): Promise<void>;
@@ -85,8 +89,14 @@ export function createGatewayAdminRuntime(config: GatewayRuntimeConfig): Gateway
 
 function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInstance {
   return {
+    get browserSessionRuntimeService() {
+      return gateway.browserSessionRuntimeService;
+    },
     get mutationIdempotencyStore() {
       return gateway.mutationIdempotencyStore;
+    },
+    get reviewReadinessService() {
+      return gateway.reviewReadinessService;
     },
     get routeServices() {
       return gateway.routeServices;

@@ -4,6 +4,7 @@ import type { LoadedSkill, SkillResolveInput, SkillActivationDecision } from "@g
 import { parseSkillMarkdown } from "./frontmatter.js";
 import { resolveSkillPrecedence } from "./precedence.js";
 import { resolveSkillActivation } from "./activation.js";
+import { resolveGeneratedRoutingHints } from "./routing-hints.generated.js";
 
 export interface SkillSource {
   source: LoadedSkill["source"];
@@ -78,6 +79,7 @@ async function loadSkillFromDir(source: SkillSource, skillDir: string): Promise<
       declaredTools: parsed.frontmatter.metadata?.tools ?? [],
       requires: parsed.frontmatter.metadata?.requires ?? [],
       keywords: parsed.frontmatter.metadata?.keywords ?? [],
+      routingHints: resolveGeneratedRoutingHints(parsed.frontmatter.name),
       instructionBody: parsed.body,
       mtime: stat.mtime.toISOString(),
     };
