@@ -1,4 +1,13 @@
-import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import {
   getChatTurnRecoveryActionLabel,
   isChatTurnActiveStatus,
@@ -23,8 +32,37 @@ import {
   type ChannelActivitySnapshot,
 } from "@goatcitadel/mission-control-shared/state/channel-activity-store";
 
+const ACTOR_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
+});
+
+const ACTOR_ABSOLUTE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
+function parseTimestamp(timestamp: string): number | null {
+  const parsed = Date.parse(timestamp);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
 function formatActorTimestamp(timestamp: string): string {
-  return new Date(timestamp).toLocaleTimeString();
+  const parsed = parseTimestamp(timestamp);
+  return parsed === null ? "Time unknown" : ACTOR_TIME_FORMATTER.format(parsed);
+}
+
+function formatActorTimestampTitle(timestamp: string): string | undefined {
+  const parsed = parseTimestamp(timestamp);
+  return parsed === null ? timestamp || undefined : ACTOR_ABSOLUTE_TIME_FORMATTER.format(parsed);
+}
+
+function ActorTimestamp({ timestamp }: { timestamp: string }) {
+  return (
+    <time dateTime={timestamp} title={formatActorTimestampTitle(timestamp)}>
+      {formatActorTimestamp(timestamp)}
+    </time>
+  );
 }
 
 function toTitleCase(value: string): string {
@@ -203,6 +241,28 @@ function ThreadCitationList({ citations }: { citations: ChatCitationRecord[] }) 
   );
 }
 
+function isInteractiveTimelineEventTarget(target: EventTarget | null, currentTarget: EventTarget): boolean {
+  const maybeElement = target as { closest?: (selector: string) => Element | null } | null;
+  const interactiveAncestor = maybeElement?.closest?.(
+    'a, button, input, select, textarea, summary, details, [role="button"], [role="link"], [contenteditable="true"]',
+  );
+  return Boolean(interactiveAncestor && interactiveAncestor !== currentTarget);
+}
+
+function handleTurnSurfaceKeyDown(
+  event: ReactKeyboardEvent<HTMLDivElement>,
+  turnId: string,
+  onSelectTurn: (turnId: string | null) => void,
+) {
+  if (event.target !== event.currentTarget) {
+    return;
+  }
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    onSelectTurn(turnId);
+  }
+}
+
 function ThreadBranchSwitcher({ turn, onSwitch }: { turn: ChatThreadTurnRecord; onSwitch: (turnId: string) => void }) {
   if (turn.branch.siblingCount <= 1) {
     return null;
@@ -247,6 +307,7 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
   visualStreamMode,
   channelActivity,
   onToggleContextTurn,
+  onSelectTurn,
   onStartNewThreadFromTurn,
   onSwitchBranch,
   onRetryTurn,
@@ -263,6 +324,7 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
   visualStreamMode: MissionThreadedActiveSessionSurfaceProps["visualStreamMode"];
   channelActivity?: ChannelActivitySnapshot | null;
   onToggleContextTurn: (turnId: string) => void;
+  onSelectTurn: (turnId: string | null) => void;
   onStartNewThreadFromTurn: (turnId: string) => void;
   onSwitchBranch: (turnId: string) => void;
   onRetryTurn: (turnId: string) => void;
@@ -272,6 +334,8 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
   onCreateGeneratedArtifactVersion: (turnId: string) => void;
 }) {
   const suggestionSummary = renderSuggestionSummary(turn);
+  const recoveryLabel = getRecoveryStripLabel(turn);
+  const routingSummary = summarizeRouting(turn);
   const hasGeneratedArtifact = (turn.generatedArtifacts?.length ?? 0) > 0;
   const isStreamingTurn = Boolean(streamingPreview?.isRunning && streamingPreview.turnId === turn.turnId);
   const assistantContent = isStreamingTurn
@@ -313,10 +377,22 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
 
   return (
     <article className={turnClassName}>
-      <div className="mc-next-thread-turn-surface">
+      <div
+        className="mc-next-thread-turn-surface"
+        role="button"
+        tabIndex={0}
+        aria-pressed={selected}
+        aria-label={`Select turn ${turn.turnId}`}
+        onClick={(event: ReactMouseEvent<HTMLDivElement>) => {
+          if (!isInteractiveTimelineEventTarget(event.target, event.currentTarget)) {
+            onSelectTurn(turn.turnId);
+          }
+        }}
+        onKeyDown={(event) => handleTurnSurfaceKeyDown(event, turn.turnId, onSelectTurn)}
+      >
         <div className="mc-next-thread-bubble user">
           <p className="mc-next-thread-meta">
-            <strong>You</strong> · {formatActorTimestamp(turn.userMessage.timestamp)}
+            <strong>You</strong> · <ActorTimestamp timestamp={turn.userMessage.timestamp} />
             <ChannelActivityBadge activity={channelActivity ?? null} />
           </p>
           <AssistantMessageRenderer role="user" content={turn.userMessage.content} />
@@ -327,7 +403,12 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
           aria-busy={isStreamingTurn}
         >
           <p className="mc-next-thread-meta">
-            <strong>GoatCitadel</strong> · {assistantTimestamp}
+            <strong>GoatCitadel</strong> ·{" "}
+            {turn.assistantMessage ? (
+              <ActorTimestamp timestamp={turn.assistantMessage.timestamp} />
+            ) : (
+              assistantTimestamp
+            )}
             {turnHasRepairedAssistantOutput(turn) ? (
               <>
                 {" "}
@@ -365,8 +446,8 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
         {showOperationalDetails ? (
           <>
             <StatusChip tone={getTraceTone(turn.trace)}>{turn.trace.status}</StatusChip>
-            {getRecoveryStripLabel(turn) ? <span>{getRecoveryStripLabel(turn)}</span> : null}
-            {summarizeRouting(turn).map((item) => (
+            {recoveryLabel ? <span>{recoveryLabel}</span> : null}
+            {routingSummary.map((item) => (
               <span key={item}>{item}</span>
             ))}
             {turn.toolRuns.length > 0 ? <span>{turn.toolRuns.length} tools</span> : null}
@@ -449,7 +530,7 @@ function ThreadNotices({ notices }: { notices: MissionThreadedActiveSessionSurfa
       {notices.map((notice) => (
         <li key={notice.id} className={`tone-${notice.tone}`}>
           <p className="mc-next-thread-meta">
-            <strong>Notice</strong> · {formatActorTimestamp(notice.timestamp)}
+            <strong>Notice</strong> · <ActorTimestamp timestamp={notice.timestamp} />
           </p>
           <p>{notice.content}</p>
         </li>
@@ -471,15 +552,10 @@ function ThreadDelegationSummary({
   if (!delegationRun) {
     return null;
   }
-  const completedCount = delegationRun.steps.filter((step) => step.status === "completed").length;
-  const failedCount = delegationRun.steps.filter((step) => step.status === "failed").length;
-  const skippedCount = delegationRun.steps.filter((step) => step.status === "skipped").length;
-  const runningCount = delegationRun.steps.filter((step) => step.status === "running").length;
+  const { completedCount, failedCount, skippedCount, runningCount, currentStep } = summarizeDelegationRunSteps(
+    delegationRun.steps,
+  );
   const isCowork = mode === "cowork";
-  const currentStep =
-    delegationRun.steps.find((step) => step.status === "running") ??
-    [...delegationRun.steps].reverse().find((step) => step.status === "completed" || step.status === "failed") ??
-    delegationRun.steps[0];
   const formatStepLabel = (
     step: NonNullable<MissionThreadedActiveSessionSurfaceProps["delegationRun"]>["steps"][number],
   ) => step.label?.trim() || toTitleCase(step.role);
@@ -609,6 +685,50 @@ function ThreadDelegationSummary({
   );
 }
 
+function summarizeDelegationRunSteps(
+  steps: NonNullable<MissionThreadedActiveSessionSurfaceProps["delegationRun"]>["steps"],
+): {
+  completedCount: number;
+  failedCount: number;
+  skippedCount: number;
+  runningCount: number;
+  currentStep: NonNullable<MissionThreadedActiveSessionSurfaceProps["delegationRun"]>["steps"][number] | undefined;
+} {
+  let completedCount = 0;
+  let failedCount = 0;
+  let skippedCount = 0;
+  let runningCount = 0;
+  let currentRunningStep:
+    | NonNullable<MissionThreadedActiveSessionSurfaceProps["delegationRun"]>["steps"][number]
+    | undefined;
+  let latestSettledStep:
+    | NonNullable<MissionThreadedActiveSessionSurfaceProps["delegationRun"]>["steps"][number]
+    | undefined;
+
+  for (const step of steps) {
+    if (step.status === "completed") {
+      completedCount += 1;
+      latestSettledStep = step;
+    } else if (step.status === "failed") {
+      failedCount += 1;
+      latestSettledStep = step;
+    } else if (step.status === "skipped") {
+      skippedCount += 1;
+    } else if (step.status === "running") {
+      runningCount += 1;
+      currentRunningStep ??= step;
+    }
+  }
+
+  return {
+    completedCount,
+    failedCount,
+    skippedCount,
+    runningCount,
+    currentStep: currentRunningStep ?? latestSettledStep ?? steps[0],
+  };
+}
+
 function describeDelegationStitchedOutput(status?: string): string {
   switch (status) {
     case "completed":
@@ -637,6 +757,10 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
   const channelActivityByMessageId = useMemo(
     () => new Map(channelActivities.map((activity) => [activity.messageId, activity])),
     [channelActivities],
+  );
+  const selectedContextTurnIdSet = useMemo(
+    () => new Set(props.selectedContextTurnIds ?? []),
+    [props.selectedContextTurnIds],
   );
   const liveStatus =
     props.streamError ??
@@ -768,11 +892,12 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
                   mode={props.mode}
                   turn={turn}
                   selected={props.selectedTurnId === turn.turnId}
-                  contextSelected={(props.selectedContextTurnIds ?? []).includes(turn.turnId)}
+                  contextSelected={selectedContextTurnIdSet.has(turn.turnId)}
                   streamingPreview={props.streamingPreview?.turnId === turn.turnId ? props.streamingPreview : null}
                   visualStreamMode={props.visualStreamMode}
                   channelActivity={channelActivityByMessageId.get(turn.userMessage.messageId) ?? null}
                   onToggleContextTurn={props.onToggleContextTurn}
+                  onSelectTurn={props.onSelectTurn}
                   onStartNewThreadFromTurn={props.onStartNewThreadFromTurn}
                   onSwitchBranch={props.onSwitchBranch}
                   onRetryTurn={props.onRetryTurn}

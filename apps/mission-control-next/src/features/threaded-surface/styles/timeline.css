@@ -338,6 +338,96 @@
   background: color-mix(in oklab, var(--mc-area-color) 7%, var(--mc-surface-1));
 }
 
+.mc-next-thread-bubble .chat-v11-attachment-preview-stack {
+  display: grid;
+  gap: 0.42rem;
+  margin-top: 0.1rem;
+  min-width: 0;
+}
+
+.mc-next-thread-bubble .chat-v11-attachment-preview-card {
+  display: grid;
+  gap: 0.38rem;
+  min-width: 0;
+  padding: 0.54rem 0.6rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 18%, var(--mc-border-subtle));
+  border-radius: 0.46rem;
+  background: color-mix(in oklab, var(--mc-surface-2) 74%, transparent);
+  color: var(--foreground);
+}
+
+.mc-next-thread-bubble .chat-v11-attachment-preview-head,
+.mc-next-thread-bubble .chat-v11-attachment-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.mc-next-thread-bubble .chat-v11-attachment-preview-head {
+  justify-content: space-between;
+}
+
+.mc-next-thread-bubble .chat-v11-attachment-preview-head strong,
+.mc-next-thread-bubble .chat-v11-attachment-preview-copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-thread-bubble .chat-v11-attachment-preview-head span,
+.mc-next-thread-bubble .chat-v11-attachment-preview-meta,
+.mc-next-thread-bubble .chat-v11-attachment-preview-label,
+.mc-next-thread-bubble .chat-v11-attachment-action-status {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+}
+
+.mc-next-thread-bubble .chat-v11-attachment-preview-label {
+  color: color-mix(in oklab, var(--mc-area-color) 68%, var(--foreground));
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.mc-next-thread-bubble .chat-v11-attachment-preview-copy {
+  display: -webkit-box;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.42;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+}
+
+.mc-next-thread-bubble .chat-v11-attachment-preview-copy.muted {
+  color: var(--text-muted);
+}
+
+.mc-next-thread-bubble .chat-v11-attachment-preview-action {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.75rem;
+  max-width: 100%;
+  padding: 0 0.56rem;
+  border-radius: 0.36rem;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-1) 88%, transparent);
+  color: var(--foreground);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.mc-next-thread-bubble .chat-v11-attachment-preview-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .mc-next-thread-channel-activity {
   display: inline-flex;
   align-items: center;
@@ -451,6 +541,11 @@
 .mc-assistant-markdown a {
   color: color-mix(in oklab, var(--mc-area-color) 72%, var(--foreground));
   text-underline-offset: 0.18em;
+}
+
+.mc-assistant-link-disabled {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
 }
 
 .mc-assistant-table-scroll {

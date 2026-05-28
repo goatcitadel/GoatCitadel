@@ -397,6 +397,11 @@
   .mc-next-composer-attachment-actions {
     justify-content: flex-start;
   }
+
+  .mc-next-thread-bubble .chat-v11-attachment-preview-actions,
+  .mc-next-thread-bubble .chat-v11-attachment-preview-action {
+    width: 100%;
+  }
 }
 
 .mc-next-threaded-surface.unified .mc-next-composer-banner {

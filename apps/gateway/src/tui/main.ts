@@ -76,6 +76,8 @@ async function main(): Promise<void> {
         await viewDashboard(client);
       } else if (current === "chat") {
         await viewChat(client);
+      } else if (current === "code") {
+        await viewCode(client);
       } else if (current === "approvals") {
         await viewApprovals(client);
       } else if (current === "promptlab") {
@@ -670,6 +672,125 @@ async function viewChat(client: TuiApiClient): Promise<void> {
   }
   if (capabilitySuggestions.length > 0) {
     await handleCapabilitySuggestions(client, capabilitySuggestions);
+  }
+  await pause();
+}
+
+async function viewCode(client: TuiApiClient): Promise<void> {
+  const [sessions, runtimeLlm] = await Promise.all([
+    client.listChatSessions({ limit: 80, scope: "mission", view: "active" }),
+    client.fetchLlmConfig().catch(() => null),
+  ]);
+  console.log(
+    renderSection(
+      "Code Workspace",
+      "Compact runtime-truth view for code sessions, workbench diffs, run logs, approvals, and Code Mode evidence.",
+    ),
+  );
+  if (runtimeLlm) {
+    console.log(renderBox("Runtime model", buildRuntimeLlmSummaryLines(runtimeLlm), "info"));
+  }
+
+  const sessionItems = sessions.items ?? [];
+  const codeSessions = sessionItems.filter(isCodeSessionLike);
+  const visibleSessions = codeSessions.length > 0 ? codeSessions : sessionItems;
+  if (visibleSessions.length > 0) {
+    console.log(
+      renderBox(
+        codeSessions.length > 0 ? "Code sessions" : "Active sessions",
+        visibleSessions
+          .slice(0, MAX_TUI_SESSION_CHOICES)
+          .map((session, index) => `${index + 1}. ${formatSessionSummary(session)}`),
+        "info",
+      ),
+    );
+  } else {
+    console.log(renderBox("Code sessions", ["No active mission sessions were returned by the gateway."], "warning"));
+  }
+
+  const action = await select<"back" | "open">({
+    message: "Code action",
+    choices: [
+      { name: "Back", value: "back" },
+      { name: "Open session inspector", value: "open" },
+    ],
+  });
+  if (action === "back") {
+    return;
+  }
+
+  const sessionId = await chooseSessionId(visibleSessions, "Choose code session");
+  if (!sessionId) {
+    await pause();
+    return;
+  }
+  const selectedSession = visibleSessions.find((session) => toText(session.sessionId) === sessionId);
+  const selectedWorkspaceId = toText(selectedSession?.workspaceId);
+
+  const [workbenchResult, diffResult, outputResult, runResult] = await Promise.all([
+    client.getChatWorkbench(sessionId).catch((error) => ({ error: errorToText(error) })),
+    client.getChatWorkbenchDiff(sessionId).catch((error) => ({ error: errorToText(error) })),
+    client.getChatWorkbenchOutput(sessionId).catch((error) => ({ error: errorToText(error) })),
+    client
+      .listCodeModeRuns({ sessionId, workspaceId: selectedWorkspaceId || undefined, limit: 10 })
+      .catch((error) => ({ error: errorToText(error), items: [] })),
+  ]);
+  const workbench = asRecord(workbenchResult);
+  const state = asRecord(workbench.state);
+  const diff = asRecord(diffResult);
+  const diffSummary = asRecord(diff.summary);
+  const output = asRecord(outputResult);
+  const runs = Array.isArray(runResult.items) ? runResult.items : [];
+  const changedFiles = Array.isArray(diff.changedFiles) ? diff.changedFiles : [];
+  const helperRuns = Array.isArray(output.helperRuns) ? output.helperRuns : [];
+  const inspectorLines = [
+    `Session: ${sessionId}`,
+    `Worktree: ${toText(state.worktreeStatus) || "not initialized"}`,
+    `Path: ${toText(state.worktreePath) || "not created"}`,
+    `Base ref: ${toText(state.baseRef) || "not recorded"}`,
+    `Validation: ${toText(state.validationStatus) || "idle"}`,
+    `Changed files: ${toText(diffSummary.changedFiles) || String(changedFiles.length)}`,
+    `Additions/deletions: +${toText(diffSummary.additions) || "0"} / -${toText(diffSummary.deletions) || "0"}`,
+    `Run log records: ${helperRuns.length}`,
+    `Code Mode runs: ${runs.length}`,
+  ];
+  const errorLines = [
+    toText(workbench.error) ? `Workbench: ${toText(workbench.error)}` : "",
+    toText(diff.error) ? `Diff: ${toText(diff.error)}` : "",
+    toText(output.error) ? `Run log: ${toText(output.error)}` : "",
+    toText((runResult as { error?: unknown }).error)
+      ? `Code Mode: ${toText((runResult as { error?: unknown }).error)}`
+      : "",
+  ].filter(Boolean);
+
+  console.log(renderBox("Code inspector", inspectorLines, errorLines.length > 0 ? "warning" : "success"));
+  if (changedFiles.length > 0) {
+    console.log(
+      renderBox(
+        "Changed files",
+        changedFiles.slice(0, 12).map((item) => toText(item)),
+        "info",
+      ),
+    );
+  }
+  const outputText = toText(output.output);
+  if (outputText) {
+    console.log(renderBox("Latest run log", [summarizeText(outputText, 520)], "info"));
+  }
+  if (runs.length > 0) {
+    console.log(
+      renderBox(
+        "Code Mode ledger",
+        runs.slice(0, 8).map((run) => {
+          const item = asRecord(run);
+          return `${toText(item.runId) || "run"} · ${toText(item.status) || "recorded"} · ${toText(item.language) || "code"}`;
+        }),
+        "info",
+      ),
+    );
+  }
+  if (errorLines.length > 0) {
+    console.log(renderBox("Unavailable data", errorLines, "warning"));
   }
   await pause();
 }
@@ -2412,6 +2533,16 @@ async function handleCapabilitySuggestions(
       ),
     );
   }
+}
+
+function isCodeSessionLike(session: Record<string, unknown>): boolean {
+  return [session.kind, session.mode, session.messageMode, session.surface]
+    .map((value) => toText(value).toLowerCase())
+    .some((value) => value === "code");
+}
+
+function errorToText(error: unknown): string {
+  return error instanceof Error ? error.message : toText(error) || "Request failed";
 }
 
 async function pause(): Promise<void> {

@@ -6,6 +6,7 @@ describe("TUI helper edge decisions loop 23", () => {
     expect(HOME_VIEW_CHOICES.map((choice) => choice.value)).toEqual([
       "dashboard",
       "chat",
+      "code",
       "approvals",
       "promptlab",
       "memory",

@@ -112,6 +112,22 @@ vi.mock("./api-client.js", () => ({
       return state.client.patchChatPrefs(...args);
     }
 
+    public getChatWorkbench(...args: unknown[]) {
+      return state.client.getChatWorkbench(...args);
+    }
+
+    public getChatWorkbenchDiff(...args: unknown[]) {
+      return state.client.getChatWorkbenchDiff(...args);
+    }
+
+    public getChatWorkbenchOutput(...args: unknown[]) {
+      return state.client.getChatWorkbenchOutput(...args);
+    }
+
+    public listCodeModeRuns(...args: unknown[]) {
+      return state.client.listCodeModeRuns(...args);
+    }
+
     public updateSkillState(...args: unknown[]) {
       return state.client.updateSkillState(...args);
     }
@@ -1288,6 +1304,43 @@ describe("tui main loop28 entry coverage", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
+  it("opens the Code workspace inspector without mutating workbench state", async () => {
+    vi.spyOn(console, "clear").mockImplementation(() => undefined);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "table").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    state.selectQueue = ["code", "open", "session-existing", "exit"];
+    state.inputQueue = [""];
+    state.loadResolvedProfile.mockResolvedValue({
+      profileName: "ops",
+      filePath: "profile.json",
+      profile: {
+        gatewayBaseUrl: "http://127.0.0.1:8787",
+        pollIntervalsMs: { activity: 10 },
+      },
+      auth: {
+        mode: "none",
+      },
+    });
+    process.argv = ["node", "main.ts", "--read-only"];
+
+    await import("./main.js");
+    await waitFor(() => state.liveStop.mock.calls.length === 1);
+
+    expect(state.client.listChatSessions).toHaveBeenCalledWith({ limit: 80, scope: "mission", view: "active" });
+    expect(state.client.getChatWorkbench).toHaveBeenCalledWith("session-existing");
+    expect(state.client.getChatWorkbenchDiff).toHaveBeenCalledWith("session-existing");
+    expect(state.client.getChatWorkbenchOutput).toHaveBeenCalledWith("session-existing");
+    expect(state.client.listCodeModeRuns).toHaveBeenCalledWith({
+      sessionId: "session-existing",
+      workspaceId: "workspace-code",
+      limit: 10,
+    });
+    expect(state.client.createChatSession).not.toHaveBeenCalled();
+    expect(state.client.patchChatPrefs).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+  });
+
   it("applies capability install and MCP template follow-ups from chat traces", async () => {
     vi.spyOn(console, "clear").mockImplementation(() => undefined);
     vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -1386,6 +1439,7 @@ function createMockTuiClient() {
       items: [
         {
           sessionId: "session-existing",
+          workspaceId: "workspace-code",
           title: "Existing chat",
           updatedAt: "2026-05-15T12:00:00.000Z",
           messageCount: 4,
@@ -1478,6 +1532,27 @@ function createMockTuiClient() {
       yield { type: "done" };
     }),
     patchChatPrefs: vi.fn(async (_sessionId: string, input: Record<string, unknown>) => input),
+    getChatWorkbench: vi.fn(async () => ({
+      state: {
+        sessionId: "session-existing",
+        baseRef: "main",
+        worktreePath: "F:\\code\\personal-ai\\.worktrees\\session-existing",
+        worktreeStatus: "ready",
+        validationStatus: "passed",
+      },
+    })),
+    getChatWorkbenchDiff: vi.fn(async () => ({
+      changedFiles: ["src/app.ts"],
+      summary: { changedFiles: 1, additions: 3, deletions: 1 },
+      diff: "diff --git a/src/app.ts b/src/app.ts",
+    })),
+    getChatWorkbenchOutput: vi.fn(async () => ({
+      output: "pnpm test passed",
+      helperRuns: [{ runId: "run-1", status: "completed", language: "typescript" }],
+    })),
+    listCodeModeRuns: vi.fn(async () => ({
+      items: [{ runId: "code-run-1", status: "completed", language: "typescript" }],
+    })),
     updateSkillState: vi.fn(async (skillId: string) => ({ skillId })),
     installSkillImport: vi.fn(async () => ({ installedSkillId: "skill-fs-review" })),
     fetchMcpTemplates: vi.fn(async () => ({

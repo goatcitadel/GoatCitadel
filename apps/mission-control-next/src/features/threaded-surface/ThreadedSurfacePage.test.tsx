@@ -930,7 +930,7 @@ describe("ThreadedSurfacePage", () => {
     expect(collectText(renderer!.root)).toContain("src/app.ts");
 
     await act(async () => {
-      findExactButton(renderer!.root, "Terminal").props.onClick();
+      findExactButton(renderer!.root, "Run log").props.onClick();
     });
     expect(collectText(renderer!.root)).toContain("Run log");
     expect(collectText(renderer!.root)).toContain("Validation passed.");

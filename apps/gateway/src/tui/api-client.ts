@@ -287,6 +287,42 @@ export class TuiApiClient {
     );
   }
 
+  public async getChatWorkbench(sessionId: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench`, { method: "GET" });
+  }
+
+  public async getChatWorkbenchDiff(sessionId: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/diff`, { method: "GET" });
+  }
+
+  public async getChatWorkbenchOutput(sessionId: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/output`, { method: "GET" });
+  }
+
+  public async listCodeModeRuns(input?: {
+    sessionId?: string;
+    workspaceId?: string;
+    turnId?: string;
+    status?: string;
+    limit?: number;
+  }): Promise<{ items: Array<Record<string, unknown>> }> {
+    const query = new URLSearchParams();
+    query.set("limit", String(Math.max(1, Math.min(100, Math.trunc(input?.limit ?? 20) || 20))));
+    if (input?.sessionId) {
+      query.set("sessionId", input.sessionId);
+    }
+    if (input?.workspaceId) {
+      query.set("workspaceId", input.workspaceId);
+    }
+    if (input?.turnId) {
+      query.set("turnId", input.turnId);
+    }
+    if (input?.status) {
+      query.set("status", input.status);
+    }
+    return this.request(`/api/v1/code-mode/runs?${query.toString()}`, { method: "GET" });
+  }
+
   public async listCosts(scope: "day" | "session" | "agent" | "task"): Promise<TuiCostSummaryResponse> {
     return this.request(`/api/v1/costs/summary?scope=${scope}`, { method: "GET" });
   }

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
   navigateQueue: [
     "chat",
+    "code",
     "approvals",
     "promptlab",
     "memory",

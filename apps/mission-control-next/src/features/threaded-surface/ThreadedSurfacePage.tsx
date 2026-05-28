@@ -84,7 +84,7 @@ type ThreadedUtilityPanelMeta = { id: ThreadedUtilityPanelId; label: string; ico
 const UTILITY_PANEL_ITEMS: ThreadedUtilityPanelMeta[] = [
   { id: "preview", label: "Preview", icon: Play },
   { id: "diff", label: "Diff", icon: FileDiff },
-  { id: "terminal", label: "Terminal", icon: Terminal },
+  { id: "terminal", label: "Run log", icon: Terminal },
   { id: "files", label: "Files", icon: Folder },
   { id: "background", label: "Background tasks", icon: Eye },
   { id: "plan", label: "Plan", icon: ListChecks },

@@ -1,6 +1,7 @@
 export type HomeView =
   | "dashboard"
   | "chat"
+  | "code"
   | "approvals"
   | "promptlab"
   | "memory"
@@ -45,6 +46,11 @@ export interface HeaderSummaryInput {
   liveState: string;
   lastEventAt?: string;
   liveNote?: string;
+  activeProviderId?: string;
+  activeModel?: string;
+  activeSessionId?: string;
+  changedFiles?: number;
+  codeModeRuns?: number;
 }
 
 export const MANUAL_SESSION_ENTRY = "__manual_session__";
@@ -53,6 +59,7 @@ export const MAX_TUI_SESSION_CHOICES = 14;
 export const HOME_VIEW_CHOICES: ReadonlyArray<TuiChoice<HomeView>> = [
   { name: "Dashboard", value: "dashboard" },
   { name: "Chat", value: "chat" },
+  { name: "Code", value: "code" },
   { name: "Approvals", value: "approvals" },
   { name: "Prompt Lab", value: "promptlab" },
   { name: "Memory", value: "memory" },
@@ -154,11 +161,16 @@ export function buildRuntimeLlmSummaryLines(input: RuntimeLlmSummaryInput): stri
 }
 
 export function buildHeaderSummaryRows(input: HeaderSummaryInput): Array<{ key: string; value: string }> {
+  const providerModel = [input.activeProviderId, input.activeModel].filter(Boolean).join(" / ");
   return [
     { key: "Profile", value: input.profile },
     { key: "Gateway", value: input.gateway },
     { key: "Live", value: input.liveState },
     { key: "Mode", value: input.readOnly ? "read-only" : "read+safe-write" },
+    ...(providerModel ? [{ key: "Provider", value: providerModel }] : []),
+    ...(input.activeSessionId ? [{ key: "Session", value: summarizeText(input.activeSessionId, 40) }] : []),
+    ...(typeof input.changedFiles === "number" ? [{ key: "Changes", value: `${input.changedFiles} files` }] : []),
+    ...(typeof input.codeModeRuns === "number" ? [{ key: "Code Mode", value: `${input.codeModeRuns} runs` }] : []),
     { key: "Last event", value: input.lastEventAt ? formatTimestamp(input.lastEventAt) : "none yet" },
     ...(input.liveNote ? [{ key: "Feed note", value: summarizeText(input.liveNote, 100) }] : []),
   ];

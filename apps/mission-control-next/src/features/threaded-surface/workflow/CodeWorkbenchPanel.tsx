@@ -1,4 +1,5 @@
 /* eslint-disable max-lines */
+import { ChevronDown, ChevronRight, PanelRightOpen, X } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -8,6 +9,7 @@ import {
   useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
 } from "react";
 import type {
   ChatSessionWorkbenchFileOperationKind,
@@ -50,6 +52,7 @@ import {
 type CodePanelType = Extract<MissionThreadedWorkflowPanel, { kind: "code" }>;
 
 const CODE_WORKBENCH_LAYOUT_STORAGE_KEY = "goatcitadel.code-workbench.layout.v1";
+const CODE_WORKBENCH_INSPECTOR_STORAGE_KEY = "goatcitadel.code-workbench.inspector.v1";
 const DEFAULT_FILE_PANE_PERCENT = 28;
 const CODE_MODE_ARTIFACT_KINDS: Array<{ kind: CodeModeRunArtifactKind; label: string }> = [
   { kind: "source", label: "Source" },
@@ -68,12 +71,95 @@ function readStoredFilePanePercent(): number {
 }
 
 type CodeSourceTabId = "existing" | "local" | "github";
+type CodeInspectorSectionId =
+  | "progress"
+  | "environment"
+  | "changes"
+  | "local"
+  | "actions"
+  | "browser"
+  | "sources"
+  | "ledger"
+  | "runtime";
+
+interface CodeInspectorRow {
+  label: string;
+  value: string;
+  tone?: "good" | "warning" | "danger" | "muted";
+  title?: string;
+}
+
+interface CodeInspectorSection {
+  id: CodeInspectorSectionId;
+  label: string;
+  summary: string;
+  rows: CodeInspectorRow[];
+  extra?: ReactNode;
+}
 
 const CODE_SOURCE_TAB_DEFS: ReadonlyArray<{ id: CodeSourceTabId; label: string }> = [
   { id: "existing", label: "Existing project" },
   { id: "local", label: "Local folder" },
   { id: "github", label: "GitHub repo" },
 ];
+
+function readStoredInspectorSections(): Set<CodeInspectorSectionId> {
+  if (typeof window === "undefined") {
+    return new Set();
+  }
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(CODE_WORKBENCH_INSPECTOR_STORAGE_KEY) ?? "[]");
+    if (!Array.isArray(parsed)) {
+      return new Set();
+    }
+    return new Set(
+      parsed.filter((value): value is CodeInspectorSectionId =>
+        ["progress", "environment", "changes", "local", "actions", "browser", "sources", "ledger", "runtime"].includes(
+          value,
+        ),
+      ),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function formatOptionalText(value: unknown, fallback = "not recorded"): string {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return fallback;
+}
+
+function formatAvailability(
+  blockedReason: string | null | undefined,
+  unavailableReason?: string,
+): Omit<CodeInspectorRow, "label"> {
+  if (unavailableReason) {
+    return { value: unavailableReason, tone: "muted" };
+  }
+  return blockedReason ? { value: blockedReason, tone: "warning" } : { value: "Available", tone: "good" };
+}
+
+function formatProviderModelSummaryFromTurn(selectedTurn: CodePanelType["props"]["selectedTurn"]): string {
+  const trace = selectedTurn?.trace as { model?: unknown; routing?: Record<string, unknown> } | undefined;
+  const routing = trace?.routing;
+  const provider = formatOptionalText(
+    routing?.effectiveProviderId ?? routing?.primaryProviderId ?? routing?.requestedProviderId,
+    "",
+  );
+  const model = formatOptionalText(
+    routing?.effectiveModel ?? trace?.model ?? routing?.primaryModel ?? routing?.requestedModel,
+    "",
+  );
+  if (provider && model) {
+    return `${provider} / ${model}`;
+  }
+  return provider || model || "provider/model pending";
+}
 
 type CodeWorkbenchPaneDef = { id: WorkbenchPaneId; label: string };
 
@@ -89,6 +175,66 @@ function buildWorkbenchPaneDefs(includeArtifact: boolean): ReadonlyArray<CodeWor
     base.push({ id: "artifact", label: "Artifact" });
   }
   return base;
+}
+
+function CodeSessionInspector({
+  expandedSections,
+  onClose,
+  onToggleSection,
+  sections,
+  variant,
+}: {
+  expandedSections: Set<CodeInspectorSectionId>;
+  onClose?: () => void;
+  onToggleSection: (sectionId: CodeInspectorSectionId, open: boolean) => void;
+  sections: CodeInspectorSection[];
+  variant: "inline" | "drawer";
+}) {
+  return (
+    <section className="mc-next-code-session-inspector" data-variant={variant} aria-label="Code session inspector">
+      <header className="mc-next-code-session-inspector-head">
+        <div>
+          <p className="mc-next-panel-kicker">Session inspector</p>
+          <h5>Code context</h5>
+        </div>
+        {onClose ? (
+          <button type="button" className="mc-next-panel-button icon" aria-label="Close inspector" onClick={onClose}>
+            <X size={14} />
+          </button>
+        ) : null}
+      </header>
+      <div className="mc-next-code-session-inspector-stack">
+        {sections.map((section) => {
+          const expanded = expandedSections.has(section.id);
+          return (
+            <details
+              key={section.id}
+              className="mc-next-code-session-inspector-section"
+              open={expanded}
+              onToggle={(event) => onToggleSection(section.id, event.currentTarget.open)}
+            >
+              <summary>
+                {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                <span>{section.label}</span>
+                <em>{section.summary}</em>
+              </summary>
+              <div className="mc-next-code-session-inspector-rows">
+                {section.rows.map((row) => (
+                  <div key={`${section.id}-${row.label}`} className="mc-next-code-session-inspector-row">
+                    <span>{row.label}</span>
+                    <strong data-tone={row.tone ?? "muted"} title={row.title}>
+                      {row.value}
+                    </strong>
+                  </div>
+                ))}
+                {section.extra ? <div className="mc-next-code-session-inspector-extra">{section.extra}</div> : null}
+              </div>
+            </details>
+          );
+        })}
+      </div>
+    </section>
+  );
 }
 
 function CodeSourceChooser({
@@ -531,6 +677,8 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const [runLogViewMode, setRunLogViewMode] = useState<"rendered" | "raw">("rendered");
   const [runLogCleared, setRunLogCleared] = useState(false);
   const [runLogCopyNotice, setRunLogCopyNotice] = useState<string | null>(null);
+  const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(false);
+  const [expandedInspectorSections, setExpandedInspectorSections] = useState(readStoredInspectorSections);
   const [fileActionOperation, setFileActionOperation] = useState<ChatSessionWorkbenchFileOperationKind>("create_file");
   const [fileActionPath, setFileActionPath] = useState("");
   const [fileActionTargetPath, setFileActionTargetPath] = useState("");
@@ -653,6 +801,227 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const workbenchBodyStyle = {
     "--mc-code-file-pane": `${filePanePercent}%`,
   } as CSSProperties;
+  const providerModelSummary = formatProviderModelSummaryFromTurn(selectedTurn);
+  const actionStatus = (blockedReason: string | null | undefined, unavailableReason?: string) =>
+    formatAvailability(blockedReason, unavailableReason);
+  const inspectorSections = useMemo<CodeInspectorSection[]>(() => {
+    const activity = saving ? "Saving" : busy ? "Working" : loading ? "Refreshing" : "Idle";
+    const validation = workbenchState?.validationStatus ?? "idle";
+    const selectedTurnId = selectedTurn?.turnId ? shortId(selectedTurn.turnId) : "no turn selected";
+    const latestRun = selectedRunSummary;
+    const selectedRun = selectedRunDetail ?? selectedRunSummary;
+    const sandboxSummary = selectedRunDetail?.sandbox
+      ? formatSandboxPosture(selectedRunDetail.sandbox)
+      : "not recorded";
+    const permissionProfile = selectedRunDetail ? formatRunPermissionProfile(selectedRunDetail) : "not recorded";
+    const changedSummary = diff?.summary
+      ? `${diff.summary.changedFiles} files · +${diff.summary.additions} / -${diff.summary.deletions}`
+      : `${changedFiles.length} file${changedFiles.length === 1 ? "" : "s"}`;
+    const attachmentsCount =
+      (selectedTurn?.userMessage as { attachments?: unknown[] } | undefined)?.attachments?.length ?? 0;
+    const knowledgeCount =
+      (selectedTurn as { knowledgeAttachments?: unknown[] } | null | undefined)?.knowledgeAttachments?.length ?? 0;
+    const actionRows: CodeInspectorRow[] = [
+      {
+        label: "Test",
+        ...actionStatus(validationBlockedReason, !onRunValidationCommand ? "backend unavailable" : undefined),
+      },
+      { label: "Apply", ...actionStatus(applyBlockedReason, !onApplyPatch ? "backend unavailable" : undefined) },
+      { label: "Export", ...actionStatus(exportBlockedReason, !onExportPatch ? "backend unavailable" : undefined) },
+      {
+        label: "Revert file",
+        ...actionStatus(selectedRevertBlockedReason, !onRevertFile ? "backend unavailable" : undefined),
+      },
+      {
+        label: "Revert all",
+        ...actionStatus(allRevertBlockedReason, !onRevertAll ? "backend unavailable" : undefined),
+      },
+      { label: "Commit", value: "Not wired in Code workbench v1", tone: "muted" },
+      { label: "Pull request", value: "Not wired in Code workbench v1", tone: "muted" },
+    ];
+
+    return [
+      {
+        id: "progress",
+        label: "Progress",
+        summary: `${activity} · ${validation}`,
+        rows: [
+          { label: "Pane", value: workbenchPaneDefs.find((pane) => pane.id === activePane)?.label ?? activePane },
+          {
+            label: "Validation",
+            value: validation,
+            tone: validationStatusTone(validation) === "success" ? "good" : "warning",
+          },
+          {
+            label: "Run",
+            value: latestRun?.status ?? "no run selected",
+            tone: latestRun?.status === "completed" ? "good" : "muted",
+          },
+          { label: "Selected turn", value: selectedTurnId },
+          { label: "Activity", value: activity, tone: activity === "Idle" ? "muted" : "warning" },
+        ],
+      },
+      {
+        id: "environment",
+        label: "Environment",
+        summary: providerModelSummary,
+        rows: [
+          { label: "Provider/model", value: providerModelSummary },
+          { label: "Permission", value: permissionProfile },
+          { label: "Sandbox", value: sandboxSummary, title: sandboxSummary },
+          { label: "Gateway", value: "session-bound runtime", tone: "muted" },
+        ],
+      },
+      {
+        id: "changes",
+        label: "Changes",
+        summary: changedSummary,
+        rows: [
+          {
+            label: "Changed files",
+            value: String(changedFiles.length),
+            tone: changedFiles.length > 0 ? "warning" : "muted",
+          },
+          { label: "Diff summary", value: changedSummary },
+          {
+            label: "Draft",
+            value: hasDirtyDraft ? "Unsaved changes" : "clean",
+            tone: hasDirtyDraft ? "warning" : "good",
+          },
+          { label: "Selected file", value: selectedFile?.path ?? "none" },
+        ],
+      },
+      {
+        id: "local",
+        label: "Local",
+        summary: workbenchState?.worktreeStatus ?? "uninitialized",
+        rows: [
+          { label: "Project", value: projectName ?? "unbound" },
+          { label: "Workspace", value: workspaceId },
+          { label: "Base ref", value: workbenchState?.baseRef ?? "not recorded" },
+          {
+            label: "Worktree",
+            value: workbenchState?.worktreePath ?? "not created",
+            title: workbenchState?.worktreePath,
+          },
+        ],
+      },
+      {
+        id: "actions",
+        label: "Actions",
+        summary: actionRows.some((row) => row.value === "Available") ? "review ready" : "blocked or unavailable",
+        rows: actionRows,
+      },
+      {
+        id: "browser",
+        label: "Browser",
+        summary: generatedArtifact ? "artifact available" : "not connected",
+        rows: [
+          {
+            label: "Preview",
+            value: generatedArtifact ? generatedArtifact.title : "No live preview URL in Code workbench v1",
+          },
+          {
+            label: "Browser",
+            value: "Use rendered proof outside this panel until browser control is wired",
+            tone: "muted",
+          },
+        ],
+      },
+      {
+        id: "sources",
+        label: "Sources",
+        summary: selectedFile?.path ?? `${attachmentsCount + knowledgeCount} attached`,
+        rows: [
+          { label: "Selected file", value: selectedFile?.path ?? "none" },
+          { label: "User attachments", value: String(attachmentsCount) },
+          { label: "Knowledge", value: String(knowledgeCount) },
+          { label: "Snippets", value: String(codeBlocks.length) },
+        ],
+      },
+      {
+        id: "ledger",
+        label: "Code Mode ledger",
+        summary: runListLoading ? "loading" : `${visibleRunItems.length} runs`,
+        rows: [
+          { label: "Selected run", value: selectedRun?.runId ? shortId(selectedRun.runId) : "none" },
+          { label: "Status", value: selectedRun?.status ?? "not recorded" },
+          { label: "Approval", value: selectedRunApprovalId ? shortId(selectedRunApprovalId) : "not linked" },
+          {
+            label: "Artifact",
+            value: selectedRunDetail ? formatArtifactPath(selectedRunDetail.codeArtifact) : "not loaded",
+          },
+        ],
+        extra: runListError ? (
+          <div className="mc-next-panel-banner warning">{runListError}</div>
+        ) : visibleRunItems.length ? (
+          <ul className="mc-next-code-session-inspector-run-list">
+            {visibleRunItems.slice(0, 5).map((run) => (
+              <li key={run.runId}>
+                <strong>{shortId(run.runId)}</strong>
+                <span>
+                  {run.language ?? "Code Mode"} · {run.status ?? "recorded"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : null,
+      },
+      {
+        id: "runtime",
+        label: "Runtime",
+        summary: "capabilities",
+        rows: [{ label: "Visibility", value: "Expand for retained runtime signals" }],
+        extra: (
+          <AgenticRuntimeVisibilityPanel surface="code" className="mc-next-code-inspector-runtime" deliveryLimit={3} />
+        ),
+      },
+    ];
+  }, [
+    activePane,
+    allRevertBlockedReason,
+    applyBlockedReason,
+    busy,
+    changedFiles.length,
+    codeBlocks.length,
+    diff?.summary,
+    exportBlockedReason,
+    generatedArtifact,
+    hasDirtyDraft,
+    loading,
+    onApplyPatch,
+    onExportPatch,
+    onRevertAll,
+    onRevertFile,
+    onRunValidationCommand,
+    projectName,
+    providerModelSummary,
+    runListError,
+    runListLoading,
+    saving,
+    selectedFile?.path,
+    selectedRunApprovalId,
+    selectedRunDetail,
+    selectedRunSummary,
+    selectedRevertBlockedReason,
+    selectedTurn,
+    validationBlockedReason,
+    visibleRunItems,
+    workbenchPaneDefs,
+    workbenchState,
+    workspaceId,
+  ]);
+  const handleToggleInspectorSection = useCallback((sectionId: CodeInspectorSectionId, open: boolean) => {
+    setExpandedInspectorSections((current) => {
+      const next = new Set(current);
+      if (open) {
+        next.add(sectionId);
+      } else {
+        next.delete(sectionId);
+      }
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     setActiveBlockIndex(0);
@@ -708,6 +1077,13 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     }
     window.localStorage.setItem(CODE_WORKBENCH_LAYOUT_STORAGE_KEY, String(filePanePercent));
   }, [filePanePercent]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(CODE_WORKBENCH_INSPECTOR_STORAGE_KEY, JSON.stringify([...expandedInspectorSections]));
+  }, [expandedInspectorSections]);
 
   useEffect(() => {
     if (!codeLedgerSessionId) {
@@ -1013,8 +1389,29 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             Validation: {workbenchState?.validationStatus ?? "idle"}
           </StatusChip>
           {hasDirtyDraft ? <StatusChip tone="warning">Unsaved changes</StatusChip> : null}
+          <button
+            type="button"
+            className="mc-next-panel-button mc-next-code-inspector-open"
+            aria-expanded={inspectorDrawerOpen}
+            onClick={() => setInspectorDrawerOpen(true)}
+          >
+            <PanelRightOpen size={14} />
+            <span>Inspector</span>
+          </button>
         </div>
       </header>
+
+      <div className="mc-next-code-phase-strip" aria-label="Code workflow posture">
+        <span data-active={activePane === "snippets" ? "true" : "false"}>Plan</span>
+        <span data-active={activePane === "files" || activePane === "snippets" ? "true" : "false"}>Implement</span>
+        <span
+          data-active={
+            activePane === "selected-diff" || activePane === "repo-diff" || activePane === "output" ? "true" : "false"
+          }
+        >
+          Review
+        </span>
+      </div>
 
       <div className="mc-next-workbench-action-row">
         <div className="mc-next-workbench-action-cluster" data-cluster="draft">
@@ -1276,6 +1673,20 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
         </aside>
 
         <section className="mc-next-workbench-main">
+          <div className="mc-next-workbench-review-strip">
+            <span>
+              {changedFiles.length} changed ·{" "}
+              {diff?.summary ? `+${diff.summary.additions} / -${diff.summary.deletions}` : "diff pending"}
+            </span>
+            <div>
+              <button type="button" className="mc-next-panel-button" onClick={() => setActivePane("repo-diff")}>
+                Inspect repo diff
+              </button>
+              <button type="button" className="mc-next-panel-button" onClick={() => setActivePane("output")}>
+                Run log
+              </button>
+            </div>
+          </div>
           <div className="mc-next-panel-tab-row" role="tablist" aria-label="Workbench panes">
             {workbenchPaneDefs.map((pane, index) => {
               const selected = activePane === pane.id;
@@ -1890,58 +2301,39 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
             </div>
           ) : null}
         </section>
-        <aside className="mc-next-workbench-sidebar">
-          <section className="mc-next-panel-list">
-            <div className="mc-next-panel-list-head">
-              <strong>Task traceability</strong>
-              <span>{selectedTurn?.turnId ? shortId(selectedTurn.turnId) : "no turn"}</span>
-            </div>
-            <ul>
-              <li>
-                <strong>Session</strong>
-                <p>{workbenchState?.sessionId ?? selectedTurn?.trace.sessionId ?? "not linked"}</p>
-              </li>
-              <li>
-                <strong>Worktree</strong>
-                <p>{workbenchState?.worktreePath ?? "not created"}</p>
-              </li>
-              <li>
-                <strong>Validation</strong>
-                <p>{workbenchState?.validationStatus ?? "idle"}</p>
-              </li>
-              <li>
-                <strong>Result</strong>
-                <p>
-                  {changedFiles.length} changed files · {output?.helperRuns.length ?? 0} command records
-                </p>
-              </li>
-            </ul>
-          </section>
-          <section className="mc-next-panel-list">
-            <div className="mc-next-panel-list-head">
-              <strong>Code Mode ledger</strong>
-              <span>{runListLoading ? "loading" : `${visibleRunItems.length} runs`}</span>
-            </div>
-            {runListError ? <div className="mc-next-panel-banner warning">{runListError}</div> : null}
-            {visibleRunItems.length ? (
-              <ul>
-                {visibleRunItems.slice(0, 5).map((run) => (
-                  <li key={run.runId}>
-                    <strong>{shortId(run.runId)}</strong>
-                    <p>
-                      {run.language ?? "Code Mode"} · {run.status ?? "recorded"}
-                      {run.createdAt ? ` · ${new Date(run.createdAt).toLocaleTimeString()}` : ""}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p>No Code Mode runs have been captured yet.</p>
-            )}
-          </section>
-          <AgenticRuntimeVisibilityPanel surface="code" className="mc-next-panel-list" deliveryLimit={3} />
+        <aside className="mc-next-code-session-inspector-slot">
+          <CodeSessionInspector
+            expandedSections={expandedInspectorSections}
+            onToggleSection={handleToggleInspectorSection}
+            sections={inspectorSections}
+            variant="inline"
+          />
         </aside>
       </div>
+      {inspectorDrawerOpen ? (
+        <div
+          className="mc-next-code-inspector-sheet"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Code session inspector"
+        >
+          <button
+            type="button"
+            className="mc-next-code-inspector-scrim"
+            aria-label="Close inspector"
+            onClick={() => setInspectorDrawerOpen(false)}
+          />
+          <div className="mc-next-code-inspector-sheet-body">
+            <CodeSessionInspector
+              expandedSections={expandedInspectorSections}
+              onClose={() => setInspectorDrawerOpen(false)}
+              onToggleSection={handleToggleInspectorSection}
+              sections={inspectorSections}
+              variant="drawer"
+            />
+          </div>
+        </div>
+      ) : null}
       <ConfirmModal
         open={Boolean(pendingFilePath)}
         title="Discard unsaved file changes?"

@@ -1583,6 +1583,78 @@ describe("ThreadedWorkflowPanel", () => {
     expect(onCloseGeneratedArtifact).toHaveBeenCalledTimes(1);
   });
 
+  it("renders and persists the compact Code session inspector", async () => {
+    const priorWindow = (globalThis as { window?: unknown }).window;
+    const storedValues = new Map<string, string>();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        localStorage: {
+          getItem: (key: string) => storedValues.get(key) ?? null,
+          removeItem: (key: string) => storedValues.delete(key),
+          setItem: (key: string, value: string) => storedValues.set(key, value),
+        },
+      },
+    });
+    let renderer: ReactTestRenderer | undefined;
+
+    try {
+      await act(async () => {
+        renderer = create(
+          <ThreadedWorkflowPanel
+            panel={buildCodePanel({
+              generatedArtifact: {
+                id: "artifact-1",
+                title: "Preview artifact",
+                kind: "markdown",
+                sourceSurface: "code",
+                content: "# Preview",
+              } as any,
+              onApplyPatch: undefined,
+            } as any)}
+          />,
+        );
+        await Promise.resolve();
+      });
+
+      const rendered = JSON.stringify(renderer!.toJSON());
+      expect(rendered).toContain("Session inspector");
+      expect(rendered).toContain("Progress");
+      expect(rendered).toContain("Environment");
+      expect(rendered).toContain("Changes");
+      expect(rendered).toContain("Local");
+      expect(rendered).toContain("Browser");
+      expect(rendered).toContain("Sources");
+      expect(rendered).toContain("Code Mode ledger");
+      expect(rendered).toContain("Preview artifact");
+      expect(rendered).toContain("Not wired in Code workbench v1");
+      expect(rendered).toContain("backend unavailable");
+
+      const progressSection = renderer!.root.findAllByType("details")[0];
+      await act(async () => {
+        progressSection?.props.onToggle({ currentTarget: { open: true } });
+        await Promise.resolve();
+      });
+      expect(storedValues.get("goatcitadel.code-workbench.inspector.v1")).toContain("progress");
+
+      await act(async () => {
+        findButton(renderer!, "Inspector")?.props.onClick();
+      });
+      expect(JSON.stringify(renderer!.toJSON())).toContain("Close inspector");
+      const closeButton = renderer!.root.findAllByProps({ "aria-label": "Close inspector" })[0];
+      await act(async () => {
+        closeButton?.props.onClick();
+      });
+      expect(renderer!.root.findAllByProps({ role: "dialog" })).toHaveLength(0);
+    } finally {
+      if (priorWindow === undefined) {
+        Reflect.deleteProperty(globalThis, "window");
+      } else {
+        Object.defineProperty(globalThis, "window", { configurable: true, value: priorWindow });
+      }
+    }
+  });
+
   it("clears stale Code Mode run detail while fetching a newly selected run", async () => {
     let resolveSecondRun: (value: unknown) => void = () => undefined;
     mockedFetchCodeModeRuns.mockResolvedValueOnce({

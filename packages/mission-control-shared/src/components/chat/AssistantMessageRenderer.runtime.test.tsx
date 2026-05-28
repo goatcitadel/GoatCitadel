@@ -261,4 +261,21 @@ describe("AssistantMessageRenderer runtime path", () => {
     expect(renderer.root.findByProps({ className: "mc-assistant-table-scroll" })).toBeTruthy();
     expect(renderer.root.findByProps({ className: "mc-assistant-code-block", "data-language": "ts" })).toBeTruthy();
   });
+
+  it("keeps unsafe markdown links inert while preserving safe references", () => {
+    vi.unstubAllGlobals();
+
+    const renderer = create(
+      <AssistantMessageRenderer
+        role="assistant"
+        content="[safe](https://example.test/report) [local](/ops) [bad](javascript:alert(1))"
+      />,
+    );
+
+    expect(renderer.root.findAllByType("a").map((link) => link.props.href)).toEqual([
+      "https://example.test/report",
+      "/ops",
+    ]);
+    expect(renderer.root.findByProps({ className: "mc-assistant-link-disabled" })).toBeTruthy();
+  });
 });

@@ -28,6 +28,8 @@ import { normalizeAssistantDisplayText } from "./assistant-display-text";
 
 export type AssistantStreamPresentationMode = "smooth" | "instant";
 
+const MARKDOWN_REMARK_PLUGINS = [remarkGfm];
+
 function buildAssistantStatus(running: boolean): MessageStatus {
   if (running) {
     return { type: "running" };
@@ -122,7 +124,7 @@ export function AssistantMessageRenderer({
             {role === "assistant" && running ? (
               <StreamingMarkdown content={displayContent} streamPresentationMode={streamPresentationMode} />
             ) : (
-              <ReactMarkdown remarkPlugins={[remarkGfm]} components={assistantMarkdownComponents}>
+              <ReactMarkdown remarkPlugins={MARKDOWN_REMARK_PLUGINS} components={assistantMarkdownComponents}>
                 {displayContent}
               </ReactMarkdown>
             )}
@@ -214,9 +216,13 @@ function AssistantMessageRuntimeRenderer({
 
 const assistantMarkdownComponents: Components = {
   a({ children, href, node: _node, ...props }) {
-    const external = Boolean(href && !href.startsWith("#"));
+    const safeHref = resolveSafeMarkdownHref(href);
+    if (!safeHref) {
+      return <span className="mc-assistant-link-disabled">{children}</span>;
+    }
+    const external = isExternalMarkdownHref(safeHref);
     return (
-      <a href={href} rel={external ? "noreferrer" : undefined} target={external ? "_blank" : undefined} {...props}>
+      <a href={safeHref} rel={external ? "noreferrer" : undefined} target={external ? "_blank" : undefined} {...props}>
         {children}
       </a>
     );
@@ -278,6 +284,38 @@ const assistantMarkdownComponents: Components = {
     return <ul {...props}>{children}</ul>;
   },
 };
+
+function resolveSafeMarkdownHref(href: string | undefined): string | undefined {
+  const trimmed = href?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (
+    trimmed.startsWith("#") ||
+    (trimmed.startsWith("/") && !trimmed.startsWith("//")) ||
+    trimmed.startsWith("./") ||
+    trimmed.startsWith("../")
+  ) {
+    return trimmed;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:"
+      ? trimmed
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isExternalMarkdownHref(href: string): boolean {
+  try {
+    const parsed = new URL(href);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:";
+  } catch {
+    return false;
+  }
+}
 
 const streamingMarkdownComponents: Components = {
   ...assistantMarkdownComponents,
@@ -453,12 +491,12 @@ function StreamingMarkdown({
   return (
     <div className="mc-assistant-streaming-markdown">
       {stable ? (
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={assistantMarkdownComponents}>
+        <ReactMarkdown remarkPlugins={MARKDOWN_REMARK_PLUGINS} components={assistantMarkdownComponents}>
           {stable}
         </ReactMarkdown>
       ) : null}
       {tail ? (
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={tailComponents}>
+        <ReactMarkdown remarkPlugins={MARKDOWN_REMARK_PLUGINS} components={tailComponents}>
           {tail}
         </ReactMarkdown>
       ) : null}

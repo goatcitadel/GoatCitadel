@@ -191,6 +191,17 @@ describe("ThreadedTimeline", () => {
     expect(markup).not.toContain("<details open");
   });
 
+  it("renders transcript timestamps as semantic time elements", () => {
+    const renderer = TestRenderer.create(<ThreadedTimeline props={buildProps() as any} />);
+    const times = renderer.root.findAllByType("time");
+
+    expect(times.map((time) => time.props.dateTime)).toEqual(
+      expect.arrayContaining(["2026-04-30T00:00:00.000Z", "2026-04-30T00:00:01.000Z"]),
+    );
+    expect(times[0]?.children.join("")).toBeTruthy();
+    expect(times[0]?.props.title).toBeTruthy();
+  });
+
   it("renders citations as source cards and exposes stream status through aria-live", () => {
     const props = buildProps({
       queuedCount: 2,
@@ -522,8 +533,32 @@ describe("ThreadedTimeline", () => {
     expect(renderedText(renderer)).not.toContain("Enable memory");
 
     const turnSurface = renderer.root.findByProps({ className: "mc-next-thread-turn-surface" });
-    expect(turnSurface.props.role).toBeUndefined();
-    expect(turnSurface.props.onClick).toBeUndefined();
+    expect(turnSurface.props.role).toBe("button");
+    expect(turnSurface.props["aria-pressed"]).toBe(false);
+    expect(turnSurface.props["aria-label"]).toBe("Select turn turn-1");
+    const currentTarget = {};
+    TestRenderer.act(() => {
+      turnSurface.props.onClick({ target: { closest: () => null }, currentTarget });
+      turnSurface.props.onClick({ target: { closest: () => currentTarget }, currentTarget });
+      turnSurface.props.onKeyDown({
+        key: "Enter",
+        target: currentTarget,
+        currentTarget,
+        preventDefault: vi.fn(),
+      });
+      turnSurface.props.onKeyDown({
+        key: " ",
+        target: currentTarget,
+        currentTarget,
+        preventDefault: vi.fn(),
+      });
+      turnSurface.props.onClick({ target: { closest: () => ({ tagName: "BUTTON" }) }, currentTarget });
+    });
+    expect(props.onSelectTurn).toHaveBeenCalledTimes(4);
+    expect(props.onSelectTurn).toHaveBeenNthCalledWith(1, "turn-1");
+    expect(props.onSelectTurn).toHaveBeenNthCalledWith(2, "turn-1");
+    expect(props.onSelectTurn).toHaveBeenNthCalledWith(3, "turn-1");
+    expect(props.onSelectTurn).toHaveBeenNthCalledWith(4, "turn-1");
 
     const contextTurn = renderer.root.findByProps({ "aria-label": "Add turn turn-1 as context" });
     TestRenderer.act(() => {
