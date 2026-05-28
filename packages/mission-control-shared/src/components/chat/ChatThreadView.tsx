@@ -1,17 +1,20 @@
 import { memo, useCallback, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { getChatTurnRecoveryActionLabel, isChatTurnActiveStatus } from "@goatcitadel/contracts";
-import type {
-  ChatCapabilityUpgradeSuggestion,
-  ChatMode,
-  ChatThreadResponse,
-  ChatThreadTurnRecord,
-  ChatTurnTraceRecord,
-} from "@goatcitadel/contracts";
+import type { ChatMode, ChatThreadResponse, ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import { StatusChip } from "../StatusChip";
 import { Badge } from "../ui";
 import { ChatStreamStatusBar, type ChatStreamStatus } from "./ChatStreamStatusBar";
 import { AssistantMessageRenderer } from "./AssistantMessageRenderer";
 import { ChatAttachmentPreviewStack } from "./ChatAttachmentPreviewStack";
+import {
+  getAssistantPendingLabel,
+  getRecoveryStripLabel,
+  getTraceTone,
+  renderSuggestionSummary,
+  summarizeDelegationSteps,
+  summarizeTurnRouting,
+  toTitleCase,
+  turnHasRepairedAssistantOutput,
+} from "./chat-display-helpers";
 import type { ActiveChatDelegationRun } from "../../pages/chat/useChatDelegationPolicyActions";
 
 export interface ChatThreadNotice {
@@ -37,100 +40,6 @@ function formatTone(tone: ChatThreadNotice["tone"]): "neutral" | "warning" | "cr
 
 function formatActorTimestamp(timestamp: string): string {
   return new Date(timestamp).toLocaleTimeString();
-}
-
-function toTitleCase(value: string): string {
-  return value
-    .split(/[\s_-]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function turnHasRepairedAssistantOutput(turn: ChatThreadTurnRecord): boolean {
-  return Boolean(turn.trace.completion?.repaired);
-}
-
-function formatRoutingTarget(providerId?: string, model?: string, apiStyle?: string): string | null {
-  const parts = [providerId, model, apiStyle].filter((value): value is string => Boolean(value));
-  return parts.length > 0 ? parts.join(" · ") : null;
-}
-
-function summarizeRouting(turn: ChatThreadTurnRecord): string[] {
-  const requested = formatRoutingTarget(turn.trace.routing.primaryProviderId, turn.trace.routing.primaryModel);
-  const effective =
-    formatRoutingTarget(
-      turn.trace.routing.effectiveProviderId,
-      turn.trace.routing.effectiveModel,
-      turn.trace.routing.effectiveApiStyle,
-    ) ??
-    turn.trace.model ??
-    null;
-  const parts = [effective ? `effective ${effective}` : null];
-  if (requested && requested !== effective) {
-    parts.push(`requested ${requested}`);
-  }
-  if (turn.trace.routing.fallbackReason) {
-    parts.push(`fallback: ${turn.trace.routing.fallbackReason}`);
-  } else if (turn.trace.routing.fallbackUsed) {
-    parts.push("fallback used");
-  }
-  return parts.filter((value): value is string => Boolean(value));
-}
-
-function getTraceTone(trace: ChatTurnTraceRecord): "muted" | "warning" | "critical" | "success" {
-  if (trace.status === "failed") {
-    return "critical";
-  }
-  if (trace.status === "completed" && !trace.failure) {
-    return "success";
-  }
-  if (trace.status === "partial") {
-    return "warning";
-  }
-  if (trace.status === "cancelled") {
-    return "muted";
-  }
-  return "warning";
-}
-
-function getTurnPendingLabel(trace: ChatTurnTraceRecord): string {
-  switch (trace.status) {
-    case "queued":
-      return "Queued...";
-    case "waiting_for_tool":
-      return "Using tools...";
-    case "waiting_for_approval":
-      return "Waiting for approval.";
-    case "waiting_for_user_input":
-      return "Waiting for your answer.";
-    case "cancelled":
-      return "Turn cancelled.";
-    case "failed":
-      return trace.failure?.message ?? "Turn failed.";
-    case "partial":
-      return "Turn partially completed.";
-    default:
-      return "Working...";
-  }
-}
-
-function renderSuggestionSummary(suggestions: ChatCapabilityUpgradeSuggestion[] | undefined): string | null {
-  if (!suggestions || suggestions.length === 0) {
-    return null;
-  }
-  return suggestions
-    .slice(0, 2)
-    .map((item) => item.title)
-    .join(" · ");
-}
-
-function getRecoveryStripLabel(turn: ChatThreadTurnRecord): string | null {
-  const action = turn.trace.failure?.recommendedAction;
-  if (!action) {
-    return null;
-  }
-  return getChatTurnRecoveryActionLabel(action);
 }
 
 function ChatBranchSwitcher({ turn, onSwitch }: { turn: ChatThreadTurnRecord; onSwitch: (turnId: string) => void }) {
@@ -169,7 +78,7 @@ function ChatBranchSwitcher({ turn, onSwitch }: { turn: ChatThreadTurnRecord; on
 }
 
 function ChatTurnRunStrip({ turn }: { turn: ChatThreadTurnRecord }) {
-  const routing = summarizeRouting(turn);
+  const routing = summarizeTurnRouting(turn, { effectiveVerb: "effective" });
   const recoveryLabel = getRecoveryStripLabel(turn);
   return (
     <div className="chat-v11-turn-strip">
@@ -321,14 +230,7 @@ const ChatTurnCard = memo(function ChatTurnCard({
     : isStreamingTurn
       ? "Streaming"
       : "Running";
-  const assistantPendingLabel = isStreamingTurn
-    ? "Receiving response..."
-    : isChatTurnActiveStatus(turn.trace.status) ||
-        turn.trace.status === "cancelled" ||
-        turn.trace.status === "failed" ||
-        turn.trace.status === "partial"
-      ? getTurnPendingLabel(turn.trace)
-      : "No assistant output yet.";
+  const assistantPendingLabel = getAssistantPendingLabel(turn.trace, { isStreamingTurn });
 
   function handleSurfaceKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.target !== event.currentTarget) {
@@ -356,7 +258,7 @@ const ChatTurnCard = memo(function ChatTurnCard({
             <strong>You</strong> · {formatActorTimestamp(turn.userMessage.timestamp)}
           </p>
           <AssistantMessageRenderer role="user" content={turn.userMessage.content} />
-          <ChatAttachmentPreviewStack attachments={turn.userMessage.attachments} />
+          <ChatAttachmentPreviewStack attachments={turn.userMessage.attachments} eager={selected || isStreamingTurn} />
         </div>
         <div
           className={`chat-v11-turn-bubble assistant${isStreamingTurn ? " streaming" : ""}`}
@@ -445,15 +347,10 @@ function ChatDelegationRunSummary({
   if (!delegationRun) {
     return null;
   }
-  const completedCount = delegationRun.steps.filter((step) => step.status === "completed").length;
-  const failedCount = delegationRun.steps.filter((step) => step.status === "failed").length;
-  const skippedCount = delegationRun.steps.filter((step) => step.status === "skipped").length;
-  const runningCount = delegationRun.steps.filter((step) => step.status === "running").length;
+  const { completedCount, failedCount, skippedCount, runningCount, currentStep } = summarizeDelegationSteps(
+    delegationRun.steps,
+  );
   const isCowork = mode === "cowork";
-  const currentStep =
-    delegationRun.steps.find((step) => step.status === "running") ??
-    [...delegationRun.steps].reverse().find((step) => step.status === "completed" || step.status === "failed") ??
-    delegationRun.steps[0];
   const formatStepLabel = (step: ActiveChatDelegationRun["steps"][number]) =>
     step.label?.trim() || toTitleCase(step.role);
   const countsLine = `Completed ${completedCount} · Running ${runningCount} · Failed ${failedCount} · Skipped ${skippedCount}`;

@@ -402,6 +402,37 @@
   .mc-next-thread-bubble .chat-v11-attachment-preview-action {
     width: 100%;
   }
+
+  .mc-next-thread-action-menu {
+    width: 100%;
+  }
+
+  .mc-next-shell.ui-hide-technical .mc-next-thread-actions {
+    max-height: none;
+    margin-top: 0;
+    overflow: visible;
+    opacity: 1;
+    pointer-events: auto;
+    visibility: visible;
+  }
+
+  details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
+    display: inline-flex;
+    width: 100%;
+    justify-content: center;
+  }
+
+  details.mc-next-thread-action-menu:not([open]) > .mc-next-thread-action-menu-body {
+    display: none;
+  }
+
+  .mc-next-thread-action-menu-body,
+  .mc-next-thread-action-menu .mc-next-thread-action-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    width: 100%;
+  }
 }
 
 .mc-next-threaded-surface.unified .mc-next-composer-banner {

@@ -1,6 +1,6 @@
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatAttachmentPreviewResponse, ChatMessageRecord } from "@goatcitadel/contracts";
 import { ChatAttachmentPreviewStack, resetAttachmentPreviewStateForTests } from "./ChatAttachmentPreviewStack";
 
@@ -51,9 +51,14 @@ function hasText(renderer: ReactTestRenderer, text: string): boolean {
 
 describe("ChatAttachmentPreviewStack", () => {
   beforeEach(() => {
+    vi.unstubAllGlobals();
     resetAttachmentPreviewStateForTests();
     apiMocks.fetchChatAttachmentPreview.mockReset();
     apiMocks.downloadChatAttachment.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("does not render an empty attachment preview stack", async () => {
@@ -127,5 +132,64 @@ describe("ChatAttachmentPreviewStack", () => {
 
     expect(hasText(first, "Preview")).toBe(true);
     expect(hasText(second, "Shared extracted preview")).toBe(true);
+  });
+
+  it("defers preview loading until the attachment card is visible unless eager loading is requested", async () => {
+    let observerCallback: ((entries: Array<{ isIntersecting: boolean }>) => void) | null = null;
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    class MockIntersectionObserver {
+      constructor(callback: (entries: Array<{ isIntersecting: boolean }>) => void) {
+        observerCallback = callback;
+      }
+
+      observe = observe;
+      disconnect = disconnect;
+    }
+
+    vi.stubGlobal("window", {
+      IntersectionObserver: MockIntersectionObserver,
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    });
+    apiMocks.fetchChatAttachmentPreview.mockResolvedValue(
+      preview({
+        extractPreview: "Visible extracted preview",
+      }),
+    );
+
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChatAttachmentPreviewStack attachments={[attachment()]} />, {
+        createNodeMock: (element) => (element.type === "article" ? { kind: "attachment-card" } : null),
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(apiMocks.fetchChatAttachmentPreview).not.toHaveBeenCalled();
+    expect(hasText(renderer, "Preview will load when visible.")).toBe(true);
+    expect(observe).toHaveBeenCalled();
+
+    await act(async () => {
+      observerCallback?.([{ isIntersecting: true }]);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(disconnect).toHaveBeenCalled();
+    expect(apiMocks.fetchChatAttachmentPreview).toHaveBeenCalledWith("attachment-1");
+    expect(hasText(renderer, "Visible extracted preview")).toBe(true);
+
+    apiMocks.fetchChatAttachmentPreview.mockClear();
+    resetAttachmentPreviewStateForTests();
+    await act(async () => {
+      renderer.update(
+        <ChatAttachmentPreviewStack attachments={[attachment({ attachmentId: "eager-preview" })]} eager />,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(apiMocks.fetchChatAttachmentPreview).toHaveBeenCalledWith("eager-preview");
   });
 });

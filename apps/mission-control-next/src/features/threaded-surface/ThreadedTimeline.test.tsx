@@ -234,6 +234,7 @@ describe("ThreadedTimeline", () => {
     expect(text).toContain("Cowork response streaming with 2 queued.");
     expect(renderer.root.findByProps({ "aria-label": "Citations for this answer" })).toBeTruthy();
     expect(renderer.root.findByProps({ className: "mc-next-thread-live-region" }).props["aria-live"]).toBe("polite");
+    expect(renderer.root.findByProps({ className: "chat-stream-status-bar tone-active" }).props.role).toBeUndefined();
     expect(renderer.root.findAllByType("a").map((link) => link.props.href)).toEqual([
       "https://example.test/launch-notes",
     ]);
@@ -531,6 +532,11 @@ describe("ThreadedTimeline", () => {
     expect(renderedText(renderer)).toContain("Suggested next move: Install browser skill");
     expect(renderedText(renderer)).toContain("Connect Gmail");
     expect(renderedText(renderer)).not.toContain("Enable memory");
+    expect(renderer.root.findByProps({ className: "mc-next-thread-action-menu" }).type).toBe("details");
+    expect(
+      renderer.root.findByProps({ className: "mc-next-thread-inline-button mc-next-thread-action-menu-summary" })
+        .children,
+    ).toEqual(["Actions"]);
 
     const turnSurface = renderer.root.findByProps({ className: "mc-next-thread-turn-surface" });
     expect(turnSurface.props.role).toBe("button");
@@ -870,6 +876,78 @@ describe("ThreadedTimeline", () => {
     expect(renderedText(renderer)).not.toContain("used anthropic · claude-sonnet · messages");
   });
 
+  it("windows long transcripts while keeping selected, context-pinned, streaming, and recent turns rendered", () => {
+    const props = buildProps({
+      mode: "chat",
+      delegationRun: null,
+      selectedTurnId: "turn-5",
+      selectedContextTurnIds: ["turn-10"],
+      activeStreamingTurnId: "turn-110",
+      streamingPreview: {
+        sessionId: "session-1",
+        turnId: "turn-110",
+        messageId: "assistant-110",
+        text: "Streaming answer 110",
+        visibleText: "Streaming answer 110",
+        isRunning: true,
+        updatedAt: 110,
+      },
+    });
+    const baseTurn = props.thread.turns[0];
+    props.thread.turns = Array.from({ length: 120 }, (_, index) => {
+      const turnNumber = index + 1;
+      return {
+        ...baseTurn,
+        turnId: `turn-${turnNumber}`,
+        userMessage: {
+          ...baseTurn.userMessage,
+          messageId: `user-${turnNumber}`,
+          content: `User message ${turnNumber}`,
+        },
+        assistantMessage:
+          turnNumber === 110
+            ? undefined
+            : {
+                ...baseTurn.assistantMessage,
+                messageId: `assistant-${turnNumber}`,
+                content: `Assistant answer ${turnNumber}`,
+              },
+        trace: {
+          ...baseTurn.trace,
+          turnId: `turn-${turnNumber}`,
+          userMessageId: `user-${turnNumber}`,
+          status: turnNumber === 110 ? "running" : "completed",
+          mode: "chat",
+        },
+        branch: {
+          ...baseTurn.branch,
+          siblingTurnIds: [`turn-${turnNumber}`],
+        },
+      };
+    });
+    props.thread.activeLeafTurnId = "turn-120";
+
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+    const text = renderedText(renderer);
+
+    expect(text).toContain("User message 5");
+    expect(text).toContain("User message 10");
+    expect(text).toContain("Context pinned");
+    expect(text).toContain("Streaming answer 110");
+    expect(text).toContain("User message 120");
+    expect(text).toContain("hidden for performance");
+    expect(text).not.toContain("User message 30");
+
+    const showHidden = renderer.root.find(
+      (node) => node.type === "button" && node.children.join("") === "Show hidden turns",
+    );
+    TestRenderer.act(() => {
+      showHidden.props.onClick();
+    });
+
+    expect(renderedText(renderer)).toContain("User message 30");
+  });
+
   it("cancels pending follow-output scrolling when the timeline unmounts", () => {
     const cancelAnimationFrame = vi.fn();
     vi.stubGlobal(
@@ -943,11 +1021,13 @@ describe("ThreadedTimeline", () => {
     expect(stopPropagation).toHaveBeenCalled();
     expect(onOpenRunDetails).toHaveBeenCalledWith("turn-delegated");
 
-    const details = renderer.root.findByType("details");
+    const details = renderer.root.find((node) => node.type === "details" && typeof node.props.onToggle === "function");
     TestRenderer.act(() => {
       details.props.onToggle({ currentTarget: { open: true } });
     });
-    expect(renderer.root.findByType("details").props.open).toBe(true);
+    expect(
+      renderer.root.find((node) => node.type === "details" && typeof node.props.onToggle === "function").props.open,
+    ).toBe(true);
     expect(renderedText(renderer)).toContain("Delegated work is still running; final synthesis is not ready yet.");
   });
 });

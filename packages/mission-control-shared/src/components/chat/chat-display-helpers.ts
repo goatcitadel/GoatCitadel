@@ -1,0 +1,163 @@
+import {
+  getChatTurnRecoveryActionLabel,
+  isChatTurnActiveStatus,
+  type ChatCapabilityUpgradeSuggestion,
+  type ChatThreadTurnRecord,
+  type ChatTurnTraceRecord,
+} from "@goatcitadel/contracts";
+
+export type ChatTraceTone = "muted" | "warning" | "critical" | "success";
+
+export function toTitleCase(value: string): string {
+  return value
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+export function turnHasRepairedAssistantOutput(turn: ChatThreadTurnRecord): boolean {
+  return Boolean(turn.trace.completion?.repaired);
+}
+
+export function getTraceTone(trace: ChatTurnTraceRecord): ChatTraceTone {
+  if (trace.status === "failed") {
+    return "critical";
+  }
+  if (trace.status === "completed" && !trace.failure) {
+    return "success";
+  }
+  if (trace.status === "partial") {
+    return "warning";
+  }
+  if (trace.status === "cancelled") {
+    return "muted";
+  }
+  return "warning";
+}
+
+export function getTurnPendingLabel(trace: ChatTurnTraceRecord): string {
+  switch (trace.status) {
+    case "queued":
+      return "Queued...";
+    case "waiting_for_tool":
+      return "Using tools...";
+    case "waiting_for_approval":
+      return "Waiting for approval.";
+    case "waiting_for_user_input":
+      return "Waiting for your answer.";
+    case "cancelled":
+      return "Turn cancelled.";
+    case "failed":
+      return trace.failure?.message ?? "Turn failed.";
+    case "partial":
+      return "Turn partially completed.";
+    default:
+      return "Working...";
+  }
+}
+
+export function getAssistantPendingLabel(trace: ChatTurnTraceRecord, options: { isStreamingTurn: boolean }): string {
+  if (options.isStreamingTurn) {
+    return "Receiving response...";
+  }
+  if (
+    isChatTurnActiveStatus(trace.status) ||
+    trace.status === "cancelled" ||
+    trace.status === "failed" ||
+    trace.status === "partial"
+  ) {
+    return getTurnPendingLabel(trace);
+  }
+  return "No assistant output yet.";
+}
+
+export function formatRoutingTarget(providerId?: string, model?: string, apiStyle?: string): string | null {
+  const parts = [providerId, model, apiStyle].filter((value): value is string => Boolean(value));
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+export function summarizeTurnRouting(
+  turn: ChatThreadTurnRecord,
+  options: { effectiveVerb?: "used" | "effective" } = {},
+): string[] {
+  const requested = formatRoutingTarget(turn.trace.routing.primaryProviderId, turn.trace.routing.primaryModel);
+  const effective =
+    formatRoutingTarget(
+      turn.trace.routing.effectiveProviderId,
+      turn.trace.routing.effectiveModel,
+      turn.trace.routing.effectiveApiStyle,
+    ) ??
+    turn.trace.model ??
+    null;
+  const effectiveVerb = options.effectiveVerb ?? "used";
+  const parts = [effective ? `${effectiveVerb} ${effective}` : null];
+  if (requested && requested !== effective) {
+    parts.push(`requested ${requested}`);
+  }
+  if (turn.trace.routing.fallbackReason) {
+    parts.push(`fallback: ${turn.trace.routing.fallbackReason}`);
+  } else if (turn.trace.routing.fallbackUsed) {
+    parts.push("fallback used");
+  }
+  return parts.filter((value): value is string => Boolean(value));
+}
+
+export function renderSuggestionSummary(suggestions: ChatCapabilityUpgradeSuggestion[] | undefined): string | null {
+  if (!suggestions || suggestions.length === 0) {
+    return null;
+  }
+  return suggestions
+    .slice(0, 2)
+    .map((item) => item.title)
+    .join(" · ");
+}
+
+export function getRecoveryStripLabel(turn: ChatThreadTurnRecord): string | null {
+  const action = turn.trace.failure?.recommendedAction;
+  return action ? getChatTurnRecoveryActionLabel(action) : null;
+}
+
+export interface ChatDelegationStepLike {
+  status: string;
+}
+
+export function summarizeDelegationSteps<TStep extends ChatDelegationStepLike>(
+  steps: readonly TStep[],
+): {
+  completedCount: number;
+  failedCount: number;
+  skippedCount: number;
+  runningCount: number;
+  currentStep: TStep | undefined;
+} {
+  let completedCount = 0;
+  let failedCount = 0;
+  let skippedCount = 0;
+  let runningCount = 0;
+  let currentRunningStep: TStep | undefined;
+  let latestSettledStep: TStep | undefined;
+
+  for (const step of steps) {
+    if (step.status === "completed") {
+      completedCount += 1;
+      latestSettledStep = step;
+    } else if (step.status === "failed") {
+      failedCount += 1;
+      latestSettledStep = step;
+    } else if (step.status === "skipped") {
+      skippedCount += 1;
+    } else if (step.status === "running") {
+      runningCount += 1;
+      currentRunningStep ??= step;
+    }
+  }
+
+  return {
+    completedCount,
+    failedCount,
+    skippedCount,
+    runningCount,
+    currentStep: currentRunningStep ?? latestSettledStep ?? steps[0],
+  };
+}

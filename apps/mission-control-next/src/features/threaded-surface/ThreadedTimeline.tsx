@@ -1,6 +1,7 @@
 import {
   memo,
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -8,14 +9,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import {
-  getChatTurnRecoveryActionLabel,
-  isChatTurnActiveStatus,
-  type ChatCitationRecord,
-  type ChatMode,
-  type ChatThreadTurnRecord,
-  type ChatTurnTraceRecord,
-} from "@goatcitadel/contracts";
+import { type ChatCitationRecord, type ChatMode, type ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { Badge } from "@goatcitadel/mission-control-shared/components/ui";
 import { StatusChip } from "../native-routes/primitives";
@@ -28,9 +22,23 @@ import { ChatAttachmentPreviewStack } from "@goatcitadel/mission-control-shared/
 import { SurfaceReconnectBanner } from "@goatcitadel/mission-control-shared/components/chat/SurfaceReconnectBanner";
 import { normalizeCitationDisplayText } from "@goatcitadel/mission-control-shared/components/chat/assistant-display-text";
 import {
+  getAssistantPendingLabel,
+  getRecoveryStripLabel,
+  getTraceTone,
+  renderSuggestionSummary,
+  summarizeDelegationSteps,
+  summarizeTurnRouting,
+  toTitleCase,
+  turnHasRepairedAssistantOutput,
+} from "@goatcitadel/mission-control-shared/components/chat/chat-display-helpers";
+import {
   useChannelActivitySnapshots,
   type ChannelActivitySnapshot,
 } from "@goatcitadel/mission-control-shared/state/channel-activity-store";
+
+const THREAD_WINDOW_THRESHOLD = 80;
+const THREAD_WINDOW_SIZE = 60;
+const THREAD_PIN_OVERSCAN = 4;
 
 const ACTOR_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
@@ -65,92 +73,6 @@ function ActorTimestamp({ timestamp }: { timestamp: string }) {
   );
 }
 
-function toTitleCase(value: string): string {
-  return value
-    .split(/[\s_-]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function turnHasRepairedAssistantOutput(turn: ChatThreadTurnRecord): boolean {
-  return Boolean(turn.trace.completion?.repaired);
-}
-
-function getTraceTone(trace: ChatTurnTraceRecord): "muted" | "warning" | "critical" | "success" {
-  if (trace.status === "failed") {
-    return "critical";
-  }
-  if (trace.status === "completed" && !trace.failure) {
-    return "success";
-  }
-  if (trace.status === "partial") {
-    return "warning";
-  }
-  if (trace.status === "cancelled") {
-    return "muted";
-  }
-  return "warning";
-}
-
-function getTurnPendingLabel(trace: ChatTurnTraceRecord): string {
-  switch (trace.status) {
-    case "queued":
-      return "Queued…";
-    case "waiting_for_tool":
-      return "Using tools…";
-    case "waiting_for_approval":
-      return "Waiting for approval.";
-    case "waiting_for_user_input":
-      return "Waiting for your answer.";
-    case "cancelled":
-      return "Turn cancelled.";
-    case "failed":
-      return trace.failure?.message ?? "Turn failed.";
-    case "partial":
-      return "Turn partially completed.";
-    default:
-      return "Working…";
-  }
-}
-
-function formatRoutingTarget(providerId?: string, model?: string, apiStyle?: string): string | null {
-  const parts = [providerId, model, apiStyle].filter((value): value is string => Boolean(value));
-  return parts.length > 0 ? parts.join(" · ") : null;
-}
-
-function summarizeRouting(turn: ChatThreadTurnRecord): string[] {
-  const requested = formatRoutingTarget(turn.trace.routing.primaryProviderId, turn.trace.routing.primaryModel);
-  const effective =
-    formatRoutingTarget(
-      turn.trace.routing.effectiveProviderId,
-      turn.trace.routing.effectiveModel,
-      turn.trace.routing.effectiveApiStyle,
-    ) ??
-    turn.trace.model ??
-    null;
-  const parts = [effective ? `used ${effective}` : null];
-  if (requested && requested !== effective) {
-    parts.push(`requested ${requested}`);
-  }
-  if (turn.trace.routing.fallbackReason) {
-    parts.push(`fallback: ${turn.trace.routing.fallbackReason}`);
-  } else if (turn.trace.routing.fallbackUsed) {
-    parts.push("fallback used");
-  }
-  return parts.filter((value): value is string => Boolean(value));
-}
-
-function renderSuggestionSummary(turn: ChatThreadTurnRecord): string | null {
-  if (!turn.trace.capabilityUpgradeSuggestions || turn.trace.capabilityUpgradeSuggestions.length === 0) {
-    return null;
-  }
-  return turn.trace.capabilityUpgradeSuggestions
-    .slice(0, 2)
-    .map((item) => item.title)
-    .join(" · ");
-}
-
 function ChannelActivityBadge({ activity }: { activity: ChannelActivitySnapshot | null }) {
   if (!activity) {
     return null;
@@ -167,14 +89,6 @@ function ChannelActivityBadge({ activity }: { activity: ChannelActivitySnapshot 
       <span>{activity.label}</span>
     </span>
   );
-}
-
-function getRecoveryStripLabel(turn: ChatThreadTurnRecord): string | null {
-  const action = turn.trace.failure?.recommendedAction;
-  if (!action) {
-    return null;
-  }
-  return getChatTurnRecoveryActionLabel(action);
 }
 
 function isSafeCitationHref(url: string): boolean {
@@ -239,6 +153,100 @@ function ThreadCitationList({ citations }: { citations: ChatCitationRecord[] }) 
       ) : null}
     </div>
   );
+}
+
+type ThreadWindowItem =
+  | { kind: "turn"; turn: ChatThreadTurnRecord; index: number }
+  | { kind: "gap"; key: string; hiddenCount: number };
+
+function createIndexRange(start: number, end: number, total: number): [number, number] | null {
+  if (total <= 0) {
+    return null;
+  }
+  const clampedStart = Math.max(0, Math.min(start, total - 1));
+  const clampedEnd = Math.max(0, Math.min(end, total - 1));
+  return clampedStart <= clampedEnd ? [clampedStart, clampedEnd] : null;
+}
+
+function mergeIndexRanges(ranges: Array<[number, number]>): Array<[number, number]> {
+  const sorted = [...ranges].sort((left, right) => left[0] - right[0]);
+  const merged: Array<[number, number]> = [];
+  for (const range of sorted) {
+    const previous = merged.at(-1);
+    if (!previous || range[0] > previous[1] + 1) {
+      merged.push([...range] as [number, number]);
+      continue;
+    }
+    previous[1] = Math.max(previous[1], range[1]);
+  }
+  return merged;
+}
+
+function buildThreadWindow({
+  turns,
+  windowStart,
+  selectedTurnId,
+  contextTurnIds,
+  streamingTurnId,
+}: {
+  turns: ChatThreadTurnRecord[];
+  windowStart: number;
+  selectedTurnId: string | null;
+  contextTurnIds: string[];
+  streamingTurnId: string | null;
+}): ThreadWindowItem[] {
+  if (turns.length <= THREAD_WINDOW_THRESHOLD) {
+    return turns.map((turn, index) => ({ kind: "turn", turn, index }));
+  }
+
+  const ranges: Array<[number, number]> = [];
+  const baseRange = createIndexRange(windowStart, turns.length - 1, turns.length);
+  if (baseRange) {
+    ranges.push(baseRange);
+  }
+
+  const pinnedTurnIds = new Set<string>(contextTurnIds);
+  if (selectedTurnId) {
+    pinnedTurnIds.add(selectedTurnId);
+  }
+  if (streamingTurnId) {
+    pinnedTurnIds.add(streamingTurnId);
+  }
+
+  for (let index = 0; index < turns.length; index += 1) {
+    if (!pinnedTurnIds.has(turns[index]!.turnId)) {
+      continue;
+    }
+    const pinnedRange = createIndexRange(index - THREAD_PIN_OVERSCAN, index + THREAD_PIN_OVERSCAN, turns.length);
+    if (pinnedRange) {
+      ranges.push(pinnedRange);
+    }
+  }
+
+  const mergedRanges = mergeIndexRanges(ranges);
+  const items: ThreadWindowItem[] = [];
+  let cursor = 0;
+  for (const [start, end] of mergedRanges) {
+    if (start > cursor) {
+      items.push({
+        kind: "gap",
+        key: `gap-${cursor}-${start - 1}`,
+        hiddenCount: start - cursor,
+      });
+    }
+    for (let index = start; index <= end; index += 1) {
+      items.push({ kind: "turn", turn: turns[index]!, index });
+    }
+    cursor = end + 1;
+  }
+  if (cursor < turns.length) {
+    items.push({
+      kind: "gap",
+      key: `gap-${cursor}-${turns.length - 1}`,
+      hiddenCount: turns.length - cursor,
+    });
+  }
+  return items;
 }
 
 function isInteractiveTimelineEventTarget(target: EventTarget | null, currentTarget: EventTarget): boolean {
@@ -333,9 +341,9 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
   onCreateGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifactVersion: (turnId: string) => void;
 }) {
-  const suggestionSummary = renderSuggestionSummary(turn);
+  const suggestionSummary = renderSuggestionSummary(turn.trace.capabilityUpgradeSuggestions);
   const recoveryLabel = getRecoveryStripLabel(turn);
-  const routingSummary = summarizeRouting(turn);
+  const routingSummary = summarizeTurnRouting(turn, { effectiveVerb: "used" });
   const hasGeneratedArtifact = (turn.generatedArtifacts?.length ?? 0) > 0;
   const isStreamingTurn = Boolean(streamingPreview?.isRunning && streamingPreview.turnId === turn.turnId);
   const assistantContent = isStreamingTurn
@@ -347,14 +355,7 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
     : isStreamingTurn
       ? "Streaming"
       : "Running";
-  const assistantPendingLabel = isStreamingTurn
-    ? "Receiving response..."
-    : isChatTurnActiveStatus(turn.trace.status) ||
-        turn.trace.status === "cancelled" ||
-        turn.trace.status === "failed" ||
-        turn.trace.status === "partial"
-      ? getTurnPendingLabel(turn.trace)
-      : "No assistant output yet.";
+  const assistantPendingLabel = getAssistantPendingLabel(turn.trace, { isStreamingTurn });
   const isPlainChat = mode === "chat";
   const showOperationalDetails =
     !isPlainChat ||
@@ -369,6 +370,7 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
   const turnClassName = [
     "mc-next-thread-turn",
     selected ? "selected" : "",
+    contextSelected ? "context-pinned" : "",
     isStreamingTurn ? "streaming" : "",
     isRoutineChatTurn ? "routine-chat" : "",
   ]
@@ -396,7 +398,10 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
             <ChannelActivityBadge activity={channelActivity ?? null} />
           </p>
           <AssistantMessageRenderer role="user" content={turn.userMessage.content} />
-          <ChatAttachmentPreviewStack attachments={turn.userMessage.attachments} />
+          <ChatAttachmentPreviewStack
+            attachments={turn.userMessage.attachments}
+            eager={selected || contextSelected || isStreamingTurn}
+          />
         </div>
         <div
           className={`mc-next-thread-bubble assistant${isStreamingTurn ? " streaming" : ""}`}
@@ -443,6 +448,7 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
           />
           <span>Context</span>
         </label>
+        {contextSelected ? <span className="mc-next-thread-context-pin">Context pinned</span> : null}
         {showOperationalDetails ? (
           <>
             <StatusChip tone={getTraceTone(turn.trace)}>{turn.trace.status}</StatusChip>
@@ -464,42 +470,47 @@ const ThreadTurnCard = memo(function ThreadTurnCard({
         </button>
       </div>
       <div className="mc-next-thread-actions">
-        <div className="mc-next-thread-action-row">
-          {turn.assistantMessage ? (
-            <button type="button" className="mc-next-thread-inline-button" onClick={() => onRetryTurn(turn.turnId)}>
-              {mode === "cowork" ? "Retry run step" : "Retry"}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="mc-next-thread-inline-button"
-            aria-label={`Start a new thread from turn ${turn.turnId}`}
-            disabled={isStreamingTurn}
-            onClick={() => onStartNewThreadFromTurn(turn.turnId)}
-          >
-            Start new thread
-          </button>
-          {turn.assistantMessage ? (
-            <button
-              type="button"
-              className="mc-next-thread-inline-button"
-              onClick={() =>
-                hasGeneratedArtifact ? onOpenGeneratedArtifact(turn.turnId) : onCreateGeneratedArtifact(turn.turnId)
-              }
-            >
-              {hasGeneratedArtifact ? "Open saved answer" : "Save answer"}
-            </button>
-          ) : null}
-          {hasGeneratedArtifact ? (
-            <button
-              type="button"
-              className="mc-next-thread-inline-button"
-              onClick={() => onCreateGeneratedArtifactVersion(turn.turnId)}
-            >
-              Save new version
-            </button>
-          ) : null}
-        </div>
+        <details className="mc-next-thread-action-menu">
+          <summary className="mc-next-thread-inline-button mc-next-thread-action-menu-summary">Actions</summary>
+          <div className="mc-next-thread-action-menu-body">
+            <div className="mc-next-thread-action-row">
+              {turn.assistantMessage ? (
+                <button type="button" className="mc-next-thread-inline-button" onClick={() => onRetryTurn(turn.turnId)}>
+                  {mode === "cowork" ? "Retry run step" : "Retry"}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="mc-next-thread-inline-button"
+                aria-label={`Start a new thread from turn ${turn.turnId}`}
+                disabled={isStreamingTurn}
+                onClick={() => onStartNewThreadFromTurn(turn.turnId)}
+              >
+                Start new thread
+              </button>
+              {turn.assistantMessage ? (
+                <button
+                  type="button"
+                  className="mc-next-thread-inline-button"
+                  onClick={() =>
+                    hasGeneratedArtifact ? onOpenGeneratedArtifact(turn.turnId) : onCreateGeneratedArtifact(turn.turnId)
+                  }
+                >
+                  {hasGeneratedArtifact ? "Open saved answer" : "Save answer"}
+                </button>
+              ) : null}
+              {hasGeneratedArtifact ? (
+                <button
+                  type="button"
+                  className="mc-next-thread-inline-button"
+                  onClick={() => onCreateGeneratedArtifactVersion(turn.turnId)}
+                >
+                  Save new version
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </details>
         <ThreadBranchSwitcher turn={turn} onSwitch={onSwitchBranch} />
         {suggestionSummary ? <p className="mc-next-thread-note">Suggested next move: {suggestionSummary}</p> : null}
       </div>
@@ -539,6 +550,19 @@ function ThreadNotices({ notices }: { notices: MissionThreadedActiveSessionSurfa
   );
 }
 
+function ThreadWindowGap({ hiddenCount, onExpand }: { hiddenCount: number; onExpand: () => void }) {
+  return (
+    <div className="mc-next-thread-window-gap" role="status">
+      <span>
+        {hiddenCount} earlier turn{hiddenCount === 1 ? "" : "s"} hidden for performance.
+      </span>
+      <button type="button" className="mc-next-thread-inline-button" onClick={onExpand}>
+        Show hidden turns
+      </button>
+    </div>
+  );
+}
+
 function ThreadDelegationSummary({
   delegationRun,
   mode,
@@ -552,7 +576,7 @@ function ThreadDelegationSummary({
   if (!delegationRun) {
     return null;
   }
-  const { completedCount, failedCount, skippedCount, runningCount, currentStep } = summarizeDelegationRunSteps(
+  const { completedCount, failedCount, skippedCount, runningCount, currentStep } = summarizeDelegationSteps(
     delegationRun.steps,
   );
   const isCowork = mode === "cowork";
@@ -685,50 +709,6 @@ function ThreadDelegationSummary({
   );
 }
 
-function summarizeDelegationRunSteps(
-  steps: NonNullable<MissionThreadedActiveSessionSurfaceProps["delegationRun"]>["steps"],
-): {
-  completedCount: number;
-  failedCount: number;
-  skippedCount: number;
-  runningCount: number;
-  currentStep: NonNullable<MissionThreadedActiveSessionSurfaceProps["delegationRun"]>["steps"][number] | undefined;
-} {
-  let completedCount = 0;
-  let failedCount = 0;
-  let skippedCount = 0;
-  let runningCount = 0;
-  let currentRunningStep:
-    | NonNullable<MissionThreadedActiveSessionSurfaceProps["delegationRun"]>["steps"][number]
-    | undefined;
-  let latestSettledStep:
-    | NonNullable<MissionThreadedActiveSessionSurfaceProps["delegationRun"]>["steps"][number]
-    | undefined;
-
-  for (const step of steps) {
-    if (step.status === "completed") {
-      completedCount += 1;
-      latestSettledStep = step;
-    } else if (step.status === "failed") {
-      failedCount += 1;
-      latestSettledStep = step;
-    } else if (step.status === "skipped") {
-      skippedCount += 1;
-    } else if (step.status === "running") {
-      runningCount += 1;
-      currentRunningStep ??= step;
-    }
-  }
-
-  return {
-    completedCount,
-    failedCount,
-    skippedCount,
-    runningCount,
-    currentStep: currentRunningStep ?? latestSettledStep ?? steps[0],
-  };
-}
-
 function describeDelegationStitchedOutput(status?: string): string {
   switch (status) {
     case "completed":
@@ -748,6 +728,7 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
   const scrollFrameRef = useRef<number | null>(null);
+  const [manualWindowStart, setManualWindowStart] = useState<number | null>(null);
   const lastTurn = props.thread?.turns.at(-1) ?? null;
   const threadTurnCount = props.thread?.turns.length ?? 0;
   const latestTurnId = props.thread?.activeLeafTurnId ?? lastTurn?.turnId ?? null;
@@ -761,6 +742,26 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
   const selectedContextTurnIdSet = useMemo(
     () => new Set(props.selectedContextTurnIds ?? []),
     [props.selectedContextTurnIds],
+  );
+  const defaultWindowStart = Math.max(0, threadTurnCount - THREAD_WINDOW_SIZE);
+  const effectiveWindowStart = Math.min(manualWindowStart ?? defaultWindowStart, defaultWindowStart);
+  const windowedThreadItems = useMemo(
+    () =>
+      buildThreadWindow({
+        turns: props.thread?.turns ?? [],
+        windowStart: effectiveWindowStart,
+        selectedTurnId: props.selectedTurnId,
+        contextTurnIds: props.selectedContextTurnIds ?? [],
+        streamingTurnId: props.activeStreamingTurnId ?? props.streamingPreview?.turnId ?? null,
+      }),
+    [
+      effectiveWindowStart,
+      props.activeStreamingTurnId,
+      props.selectedContextTurnIds,
+      props.selectedTurnId,
+      props.streamingPreview?.turnId,
+      props.thread?.turns,
+    ],
   );
   const liveStatus =
     props.streamError ??
@@ -785,6 +786,14 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
     threadEndRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
     props.onBottomStateChange(true);
   }, [props.onBottomStateChange]);
+
+  const showHiddenTurns = useCallback(() => {
+    setManualWindowStart(0);
+  }, []);
+
+  useEffect(() => {
+    setManualWindowStart(null);
+  }, [props.thread?.sessionId]);
 
   useLayoutEffect(() => {
     if (!props.followOutput) {
@@ -850,7 +859,12 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
 
   return (
     <div ref={shellRef} className={`mc-next-thread-shell mode-${props.mode}`}>
-      <div className="mc-next-thread-live-region" role="status" aria-live="polite" aria-atomic="true">
+      <div
+        className="mc-next-thread-live-region"
+        role="status"
+        aria-live={liveStatus ? "polite" : "off"}
+        aria-atomic="true"
+      >
         {liveStatus}
       </div>
       <div className="mc-next-thread-status-lane">
@@ -879,6 +893,7 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
               status={props.streamStatus as ChatStreamStatus}
               queuedCount={props.queuedCount}
               error={props.streamError}
+              announce={false}
             />
             <div className="mc-next-thread-list">
               <ThreadDelegationSummary
@@ -886,27 +901,33 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
                 mode={props.mode}
                 onOpenRunDetails={props.onOpenRunDetails}
               />
-              {props.thread.turns.map((turn) => (
-                <ThreadTurnCard
-                  key={turn.turnId}
-                  mode={props.mode}
-                  turn={turn}
-                  selected={props.selectedTurnId === turn.turnId}
-                  contextSelected={selectedContextTurnIdSet.has(turn.turnId)}
-                  streamingPreview={props.streamingPreview?.turnId === turn.turnId ? props.streamingPreview : null}
-                  visualStreamMode={props.visualStreamMode}
-                  channelActivity={channelActivityByMessageId.get(turn.userMessage.messageId) ?? null}
-                  onToggleContextTurn={props.onToggleContextTurn}
-                  onSelectTurn={props.onSelectTurn}
-                  onStartNewThreadFromTurn={props.onStartNewThreadFromTurn}
-                  onSwitchBranch={props.onSwitchBranch}
-                  onRetryTurn={props.onRetryTurn}
-                  onOpenRunDetails={props.onOpenRunDetails}
-                  onOpenGeneratedArtifact={props.onOpenGeneratedArtifact}
-                  onCreateGeneratedArtifact={props.onCreateGeneratedArtifact}
-                  onCreateGeneratedArtifactVersion={props.onCreateGeneratedArtifactVersion}
-                />
-              ))}
+              {windowedThreadItems.map((item) =>
+                item.kind === "gap" ? (
+                  <ThreadWindowGap key={item.key} hiddenCount={item.hiddenCount} onExpand={showHiddenTurns} />
+                ) : (
+                  <ThreadTurnCard
+                    key={item.turn.turnId}
+                    mode={props.mode}
+                    turn={item.turn}
+                    selected={props.selectedTurnId === item.turn.turnId}
+                    contextSelected={selectedContextTurnIdSet.has(item.turn.turnId)}
+                    streamingPreview={
+                      props.streamingPreview?.turnId === item.turn.turnId ? props.streamingPreview : null
+                    }
+                    visualStreamMode={props.visualStreamMode}
+                    channelActivity={channelActivityByMessageId.get(item.turn.userMessage.messageId) ?? null}
+                    onToggleContextTurn={props.onToggleContextTurn}
+                    onSelectTurn={props.onSelectTurn}
+                    onStartNewThreadFromTurn={props.onStartNewThreadFromTurn}
+                    onSwitchBranch={props.onSwitchBranch}
+                    onRetryTurn={props.onRetryTurn}
+                    onOpenRunDetails={props.onOpenRunDetails}
+                    onOpenGeneratedArtifact={props.onOpenGeneratedArtifact}
+                    onCreateGeneratedArtifact={props.onCreateGeneratedArtifact}
+                    onCreateGeneratedArtifactVersion={props.onCreateGeneratedArtifactVersion}
+                  />
+                ),
+              )}
               <ThreadNotices notices={props.notices} />
               <div ref={threadEndRef} aria-hidden="true" />
             </div>

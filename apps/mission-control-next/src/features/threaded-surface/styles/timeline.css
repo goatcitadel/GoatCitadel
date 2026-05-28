@@ -161,7 +161,7 @@
   background: transparent;
 }
 
-.mc-next-thread-turn:not(.selected):not(.streaming):not(.delegation):not(:focus-within) {
+.mc-next-thread-turn:not(.selected):not(.streaming):not(.delegation):not(.context-pinned):not(:focus-within) {
   content-visibility: auto;
   contain-intrinsic-size: 14rem;
 }

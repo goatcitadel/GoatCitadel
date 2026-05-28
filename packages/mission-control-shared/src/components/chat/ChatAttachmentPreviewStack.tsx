@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChatMessageRecord, ChatAttachmentPreviewResponse } from "@goatcitadel/contracts";
 import { fetchChatAttachmentPreview } from "../../api/client";
 import { ChatAttachmentActions } from "./ChatAttachmentActions";
@@ -24,10 +24,14 @@ function summarizeExtraction(preview: ChatAttachmentPreviewResponse | null): str
 
 function ChatAttachmentPreviewCard({
   attachment,
+  eager,
 }: {
   attachment: NonNullable<ChatMessageRecord["attachments"]>[number];
+  eager: boolean;
 }) {
+  const cardRef = useRef<HTMLElement | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
+  const [shouldLoadPreview, setShouldLoadPreview] = useState(eager);
   const [preview, setPreview] = useState<ChatAttachmentPreviewResponse | null>(() => {
     const cached = attachmentPreviewCache.get(attachment.attachmentId);
     return cached ? cached.response : null;
@@ -35,15 +39,46 @@ function ChatAttachmentPreviewCard({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (eager) {
+      setShouldLoadPreview(true);
+    }
+  }, [eager]);
+
+  useEffect(() => {
+    if (shouldLoadPreview) {
+      return;
+    }
+    const target = cardRef.current;
+    if (!target || typeof window === "undefined" || typeof window.IntersectionObserver !== "function") {
+      setShouldLoadPreview(true);
+      return;
+    }
+    const observer = new window.IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setShouldLoadPreview(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "320px 0px" },
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [shouldLoadPreview]);
+
+  useEffect(() => {
+    if (!shouldLoadPreview) {
+      return;
+    }
     let cancelled = false;
-    let retryHandle: number | null = null;
+    let retryHandle: ReturnType<typeof globalThis.setTimeout> | null = null;
     void loadAttachmentPreview(attachment.attachmentId, { forceRefresh: refreshTick > 0 })
       .then((response) => {
         if (!cancelled) {
           setPreview(response);
           setError(null);
           if (shouldRetryAttachmentPreview(response)) {
-            retryHandle = window.setTimeout(() => {
+            retryHandle = globalThis.setTimeout(() => {
               setRefreshTick((current) => current + 1);
             }, ATTACHMENT_PREVIEW_RETRY_DELAY_MS);
           }
@@ -57,10 +92,10 @@ function ChatAttachmentPreviewCard({
     return () => {
       cancelled = true;
       if (retryHandle !== null) {
-        window.clearTimeout(retryHandle);
+        globalThis.clearTimeout(retryHandle);
       }
     };
-  }, [attachment.attachmentId, refreshTick]);
+  }, [attachment.attachmentId, refreshTick, shouldLoadPreview]);
 
   const extractionSummary = summarizeExtraction(preview);
   const extractionLabel = preview?.transcriptText
@@ -72,7 +107,7 @@ function ChatAttachmentPreviewCard({
         : null;
 
   return (
-    <article className="chat-v11-attachment-preview-card">
+    <article ref={cardRef} className="chat-v11-attachment-preview-card">
       <div className="chat-v11-attachment-preview-head">
         <strong>{attachment.fileName}</strong>
         <span>{attachment.mimeType}</span>
@@ -82,7 +117,9 @@ function ChatAttachmentPreviewCard({
         {preview ? ` · ${preview.analysisStatus}` : ""}
       </p>
       <ChatAttachmentActions attachmentId={attachment.attachmentId} fileName={attachment.fileName} />
-      {extractionSummary ? (
+      {!shouldLoadPreview && !preview ? (
+        <p className="chat-v11-attachment-preview-copy muted">Preview will load when visible.</p>
+      ) : extractionSummary ? (
         <>
           <p className="chat-v11-attachment-preview-label">{extractionLabel}</p>
           <p className="chat-v11-attachment-preview-copy">{extractionSummary}</p>
@@ -131,8 +168,10 @@ function loadAttachmentPreview(
 
 export function ChatAttachmentPreviewStack({
   attachments,
+  eager = false,
 }: {
   attachments: ChatMessageRecord["attachments"] | undefined;
+  eager?: boolean;
 }) {
   if (!attachments || attachments.length === 0) {
     return null;
@@ -141,7 +180,7 @@ export function ChatAttachmentPreviewStack({
   return (
     <div className="chat-v11-attachment-preview-stack">
       {attachments.map((attachment) => (
-        <ChatAttachmentPreviewCard key={attachment.attachmentId} attachment={attachment} />
+        <ChatAttachmentPreviewCard key={attachment.attachmentId} attachment={attachment} eager={eager} />
       ))}
     </div>
   );

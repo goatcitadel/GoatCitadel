@@ -2,6 +2,7 @@ import {
   Children,
   cloneElement,
   isValidElement,
+  memo,
   useEffect,
   useId,
   useMemo,
@@ -19,7 +20,6 @@ import {
   type MessageStatus,
   type ThreadMessage,
 } from "@assistant-ui/react";
-import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import { Check, Copy } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -115,20 +115,11 @@ export function AssistantMessageRenderer({
         )}
       >
         <AssistantMessageContainer role={role} content={displayContent} running={running}>
-          <div
-            className={cn(
-              "mc-assistant-markdown",
-              role === "user" ? "mc-assistant-markdown-user" : "mc-assistant-markdown-assistant",
-            )}
-          >
-            {role === "assistant" && running ? (
-              <StreamingMarkdown content={displayContent} streamPresentationMode={streamPresentationMode} />
-            ) : (
-              <ReactMarkdown remarkPlugins={MARKDOWN_REMARK_PLUGINS} components={assistantMarkdownComponents}>
-                {displayContent}
-              </ReactMarkdown>
-            )}
-          </div>
+          {role === "assistant" && running ? (
+            <StreamingMarkdown content={displayContent} streamPresentationMode={streamPresentationMode} />
+          ) : (
+            <MemoizedMarkdownBlock content={displayContent} role={role} components={assistantMarkdownComponents} />
+          )}
         </AssistantMessageContainer>
       </div>
     );
@@ -195,12 +186,7 @@ function AssistantMessageRuntimeRenderer({
                   <MessagePrimitive.Parts
                     components={{
                       Text: () => (
-                        <MarkdownTextPrimitive
-                          className={cn(
-                            "mc-assistant-markdown",
-                            role === "user" ? "mc-assistant-markdown-user" : "mc-assistant-markdown-assistant",
-                          )}
-                        />
+                        <MemoizedMarkdownBlock content={content} role={role} components={assistantMarkdownComponents} />
                       ),
                     }}
                   />
@@ -284,6 +270,29 @@ const assistantMarkdownComponents: Components = {
     return <ul {...props}>{children}</ul>;
   },
 };
+
+const MemoizedMarkdownBlock = memo(function MemoizedMarkdownBlock({
+  content,
+  role,
+  components,
+}: {
+  content: string;
+  role: "user" | "assistant";
+  components: Components;
+}) {
+  return (
+    <div
+      className={cn(
+        "mc-assistant-markdown",
+        role === "user" ? "mc-assistant-markdown-user" : "mc-assistant-markdown-assistant",
+      )}
+    >
+      <ReactMarkdown remarkPlugins={MARKDOWN_REMARK_PLUGINS} components={components}>
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+});
 
 function resolveSafeMarkdownHref(href: string | undefined): string | undefined {
   const trimmed = href?.trim();
@@ -491,15 +500,9 @@ function StreamingMarkdown({
   return (
     <div className="mc-assistant-streaming-markdown">
       {stable ? (
-        <ReactMarkdown remarkPlugins={MARKDOWN_REMARK_PLUGINS} components={assistantMarkdownComponents}>
-          {stable}
-        </ReactMarkdown>
+        <MemoizedMarkdownBlock content={stable} role="assistant" components={assistantMarkdownComponents} />
       ) : null}
-      {tail ? (
-        <ReactMarkdown remarkPlugins={MARKDOWN_REMARK_PLUGINS} components={tailComponents}>
-          {tail}
-        </ReactMarkdown>
-      ) : null}
+      {tail ? <MemoizedMarkdownBlock content={tail} role="assistant" components={tailComponents} /> : null}
       <span className="mc-assistant-streaming-cursor" aria-hidden="true" />
     </div>
   );

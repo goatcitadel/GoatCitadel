@@ -145,7 +145,7 @@ describe("AssistantMessageRenderer runtime path", () => {
       custom: {},
     });
     expect(JSON.stringify(renderer.toJSON())).toContain("custom-runtime");
-    expect(JSON.stringify(renderer.toJSON())).toContain("mock markdown text");
+    expect(JSON.stringify(renderer.toJSON())).toContain("Runtime World");
   });
 
   it("removes raw HTML noise before passing assistant text to the runtime and copy control", async () => {

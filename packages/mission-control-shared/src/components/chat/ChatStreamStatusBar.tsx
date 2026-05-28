@@ -5,6 +5,7 @@ interface ChatStreamStatusBarProps {
   status: ChatStreamStatus;
   queuedCount: number;
   error: string | null;
+  announce?: boolean;
 }
 
 function statusLabel(status: ChatStreamStatus, queuedCount: number, mode: "chat" | "cowork" | "code"): string {
@@ -44,7 +45,13 @@ function statusTone(status: ChatStreamStatus): string {
   }
 }
 
-export function ChatStreamStatusBar({ mode = "chat", status, queuedCount, error }: ChatStreamStatusBarProps) {
+export function ChatStreamStatusBar({
+  mode = "chat",
+  status,
+  queuedCount,
+  error,
+  announce = true,
+}: ChatStreamStatusBarProps) {
   if (status === "idle" && queuedCount === 0 && !error) {
     return null;
   }
@@ -53,7 +60,11 @@ export function ChatStreamStatusBar({ mode = "chat", status, queuedCount, error 
   const label = statusLabel(status, queuedCount, mode);
 
   return (
-    <div className={`chat-stream-status-bar tone-${tone}`} role="status" aria-live="polite">
+    <div
+      className={`chat-stream-status-bar tone-${tone}`}
+      role={announce ? "status" : undefined}
+      aria-live={announce ? "polite" : undefined}
+    >
       <span className="chat-stream-status-indicator" />
       <span className="chat-stream-status-label">{label}</span>
       {error && status === "error" ? <span className="chat-stream-status-error">{error}</span> : null}
