@@ -34,6 +34,16 @@ export type ChatDelegationMode = "sequential" | "parallel";
 export type ChatDelegationStepStatus = "pending" | "running" | "completed" | "failed" | "skipped" | "cancelled";
 export type ChatDelegationRunStatus = "running" | "completed" | "failed" | "partial";
 
+export interface ChatStreamingPreview {
+  sessionId: string;
+  turnId: string;
+  messageId?: string;
+  text: string;
+  visibleText: string;
+  isRunning: boolean;
+  updatedAt: number;
+}
+
 export type ChatInputPart =
   | {
       type: "text";

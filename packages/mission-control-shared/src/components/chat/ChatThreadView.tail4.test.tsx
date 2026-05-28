@@ -91,9 +91,19 @@ function buildProps(overrides: Partial<React.ComponentProps<typeof ChatThreadVie
 }
 
 function renderedText(renderer: TestRenderer.ReactTestRenderer): string {
+  const flatten = (value: unknown): string => {
+    if (typeof value === "string" || typeof value === "number") {
+      return String(value);
+    }
+    if (!value || typeof value !== "object") {
+      return "";
+    }
+    const childNode = value as { children?: unknown[] };
+    return Array.isArray(childNode.children) ? childNode.children.map(flatten).join("") : "";
+  };
   return renderer.root
     .findAll((node) => Array.isArray(node.children))
-    .map((node) => node.children.join(""))
+    .map((node) => node.children.map(flatten).join(""))
     .join(" ");
 }
 
@@ -104,7 +114,7 @@ describe("ChatThreadView tail coverage", () => {
 
     const text = renderedText(renderer);
     expect(text).toContain("provider_error");
-    expect(text).toContain("effective fallback-model");
+    expect(text).toContain("used fallback-model");
     expect(text).toContain("fallback used");
     expect(text).toContain("2 citations");
     expect(text).toContain("orchestrated");
@@ -114,10 +124,10 @@ describe("ChatThreadView tail coverage", () => {
     const buttons = renderer.root.findAllByType("button");
     TestRenderer.act(() => {
       buttons.find((button) => button.children.join("") === "Run details")?.props.onClick();
-      buttons.find((button) => button.children.join("") === "Open run details")?.props.onClick();
+      buttons.find((button) => button.children.join("") === "Actions")?.props.onClick?.();
       buttons.find((button) => button.children.join("") === "Retry run step")?.props.onClick();
       buttons.find((button) => button.children.join("") === "Edit and resend")?.props.onClick();
-      buttons.find((button) => button.children.join("") === "Create artifact")?.props.onClick();
+      buttons.find((button) => button.children.join("") === "Save answer")?.props.onClick();
     });
 
     expect(props.onOpenRunDetails).toHaveBeenCalledWith("turn-tail");
@@ -126,12 +136,12 @@ describe("ChatThreadView tail coverage", () => {
     expect(props.onCreateGeneratedArtifact).toHaveBeenCalledWith("turn-tail");
   });
 
-  it("hides turn actions when an unselected turn has no suggestions or artifact", () => {
+  it("keeps the canonical action menu available through the compatibility adapter", () => {
     const renderer = TestRenderer.create(<ChatThreadView {...buildProps({ selectedTurnId: null })} />);
 
     expect(
       renderer.root.findAll((node) => Array.isArray(node.children) && node.children.join("") === "Edit and resend"),
-    ).toHaveLength(0);
+    ).toHaveLength(1);
   });
 
   it("covers completed compact cowork delegation fallbacks and summary toggles", () => {
@@ -164,11 +174,16 @@ describe("ChatThreadView tail coverage", () => {
       renderer.root.findAll((node) => node.type === "button" && node.children.join("") === "Open details"),
     ).toHaveLength(0);
 
-    const details = renderer.root.findByType("details");
+    const details = renderer.root.find(
+      (node) => node.type === "details" && node.props.className !== "mc-next-thread-action-menu",
+    );
     TestRenderer.act(() => {
       details.props.onToggle({ currentTarget: { open: false } });
     });
-    expect(renderer.root.findByType("details").props.open).toBe(false);
+    expect(
+      renderer.root.find((node) => node.type === "details" && node.props.className !== "mc-next-thread-action-menu")
+        .props.open,
+    ).toBe(false);
   });
 
   it("covers compact cowork partial and pending status tones", () => {

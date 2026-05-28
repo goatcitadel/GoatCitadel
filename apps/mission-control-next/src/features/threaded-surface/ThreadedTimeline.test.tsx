@@ -540,7 +540,7 @@ describe("ThreadedTimeline", () => {
 
     const turnSurface = renderer.root.findByProps({ className: "mc-next-thread-turn-surface" });
     expect(turnSurface.props.role).toBe("button");
-    expect(turnSurface.props["aria-pressed"]).toBe(false);
+    expect(turnSurface.props["aria-current"]).toBeUndefined();
     expect(turnSurface.props["aria-label"]).toBe("Select turn turn-1");
     const currentTarget = {};
     TestRenderer.act(() => {

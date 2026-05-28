@@ -10,7 +10,7 @@
   overscroll-behavior: contain;
   scroll-behavior: auto;
   scrollbar-gutter: stable;
-  overflow-anchor: none;
+  overflow-anchor: auto;
 }
 
 .mc-next-surface-host-work .mc-next-thread-scroll {
@@ -619,13 +619,15 @@
   animation: mcStreamingCursorBlink 1s steps(2, start) infinite;
 }
 
-.mc-assistant-stream-token {
-  display: inline;
-  opacity: 0;
-  animation: mcAssistantStreamTokenFade 120ms ease-out var(--mc-stream-token-delay, 0ms) forwards;
+.mc-assistant-streaming-tail {
+  min-width: 0;
 }
 
-@keyframes mcAssistantStreamTokenFade {
+.mc-assistant-streaming-tail-smooth {
+  animation: mcAssistantStreamingTailFade 140ms ease-out both;
+}
+
+@keyframes mcAssistantStreamingTailFade {
   from {
     opacity: 0;
     filter: blur(1px);
@@ -682,7 +684,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .mc-assistant-stream-token,
+  .mc-assistant-streaming-tail-smooth,
   .mc-next-assistant-streaming-skeleton > span {
     animation: none;
     opacity: 1;

@@ -1,12 +1,6 @@
-export interface ChatStreamingPreview {
-  sessionId: string;
-  turnId: string;
-  messageId?: string;
-  text: string;
-  visibleText: string;
-  isRunning: boolean;
-  updatedAt: number;
-}
+import type { ChatStreamingPreview } from "@goatcitadel/contracts";
+
+export type { ChatStreamingPreview };
 
 export type ChatVisualStreamMode = "smooth" | "instant";
 

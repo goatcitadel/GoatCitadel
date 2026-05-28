@@ -78,9 +78,19 @@ function buildThreadViewProps(thread: ChatThreadResponse) {
 }
 
 function renderedText(renderer: TestRenderer.ReactTestRenderer): string {
+  const flatten = (value: unknown): string => {
+    if (typeof value === "string" || typeof value === "number") {
+      return String(value);
+    }
+    if (!value || typeof value !== "object") {
+      return "";
+    }
+    const childNode = value as { children?: unknown[] };
+    return Array.isArray(childNode.children) ? childNode.children.map(flatten).join("") : "";
+  };
   return renderer.root
     .findAll((node) => Array.isArray(node.children))
-    .map((node) => node.children.join(""))
+    .map((node) => node.children.map(flatten).join(""))
     .join(" ");
 }
 
@@ -162,7 +172,7 @@ describe("ChatThreadView", () => {
       .map((node) => node.children.join(""))
       .join(" ");
 
-    expect(text).toContain("effective glm · glm-5 · openai-chat-completions");
+    expect(text).toContain("used glm · glm-5 · openai-chat-completions");
     expect(text).toContain("requested openai · gpt-4.1-mini");
     expect(text).toContain("fallback: primary rate-limited");
   });
@@ -267,7 +277,7 @@ describe("ChatThreadView", () => {
     const createButton = renderer.root.find(
       (node) => node.type === "button" && node.props["aria-label"] === "Create generated artifact for turn turn-1",
     );
-    expect(createButton.children.join("")).toBe("Create artifact");
+    expect(createButton.children.join("")).toBe("Save answer");
 
     TestRenderer.act(() => {
       createButton.props.onClick();
@@ -299,7 +309,7 @@ describe("ChatThreadView", () => {
       (node) => node.type === "button" && node.props["aria-label"] === "Open generated artifact for turn turn-1",
     );
 
-    expect(openButton.children.join("")).toBe("Open artifact");
+    expect(openButton.children.join("")).toBe("Open saved answer");
   });
 
   it("renders loading and empty states for chat and cowork modes", () => {
@@ -417,10 +427,14 @@ describe("ChatThreadView", () => {
     expect(renderedText(renderer)).not.toContain("Enable memory");
 
     const turnSurface = renderer.root.find((node) => node.props["aria-label"] === "Select turn turn-1");
+    expect(turnSurface.props["aria-current"]).toBeUndefined();
+    const currentTarget = {};
     TestRenderer.act(() => {
-      turnSurface.props.onClick();
+      turnSurface.props.onClick({ target: { closest: () => null }, currentTarget });
+      turnSurface.props.onClick({ target: { closest: () => ({ tagName: "A" }) }, currentTarget });
     });
     expect(onSelectTurn).toHaveBeenCalledWith("turn-1");
+    expect(onSelectTurn).toHaveBeenCalledTimes(1);
 
     const preventDefault = vi.fn();
     TestRenderer.act(() => {
@@ -515,7 +529,11 @@ describe("ChatThreadView", () => {
         if (element.type === "div" && element.props["aria-hidden"] === "true") {
           return { scrollIntoView };
         }
-        if (element.type === "div" && element.props.className === "chat-v11-thread-list chat-v11-thread-virtuoso") {
+        if (
+          element.type === "div" &&
+          typeof element.props.className === "string" &&
+          element.props.className.includes("chat-v11-thread-list")
+        ) {
           return scrollElement;
         }
         return null;
@@ -603,7 +621,7 @@ describe("ChatThreadView", () => {
     expect(renderedText(renderer)).toContain("Now: Research Lead");
     expect(renderedText(renderer)).toContain("Map the launch risks");
     expect(renderedText(renderer)).toContain("Could not validate source freshness.");
-    expect(renderedText(renderer)).toContain("Final synthesized answer is shown in the main assistant message.");
+    expect(renderedText(renderer)).toContain("Failure output is available in the run details.");
 
     const openDetails = renderer.root.find(
       (node) => node.type === "button" && node.children.join("") === "Open details",

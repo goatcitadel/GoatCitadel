@@ -29,7 +29,7 @@ export {
   type MidTurnDisposition,
 } from "./chat/chat-page-pure-helpers";
 export { buildOrchestrationCommandSuggestions } from "./chat-command-suggestions";
-export type { ChatVisualStreamMode } from "./chat/chat-streaming-preview";
+export type { ChatStreamingPreview, ChatVisualStreamMode } from "./chat/chat-streaming-preview";
 
 export type {
   MissionThreadedActiveSessionSurfaceProps,

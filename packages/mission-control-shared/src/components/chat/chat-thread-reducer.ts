@@ -119,21 +119,18 @@ export function updateThreadFromStreamChunk(
     return current;
   }
 
-  let changed = false;
-  const turns = current.turns.map((turn) => {
-    if (turn.turnId !== chunk.turnId) {
-      return turn;
-    }
-    const nextTurn = updateTurnFromStreamChunk(turn, chunk, sessionId);
-    if (nextTurn !== turn) {
-      changed = true;
-    }
-    return nextTurn;
-  });
-
-  if (!changed) {
+  const turnIndex = current.turns.findIndex((turn) => turn.turnId === chunk.turnId);
+  if (turnIndex < 0) {
     return current;
   }
+  const currentTurn = current.turns[turnIndex]!;
+  const nextTurn = updateTurnFromStreamChunk(currentTurn, chunk, sessionId);
+
+  if (nextTurn === currentTurn) {
+    return current;
+  }
+  const turns = current.turns.slice();
+  turns[turnIndex] = nextTurn;
 
   return {
     ...current,
@@ -302,7 +299,7 @@ function appendOrReplaceCitation(
 }
 
 function dedupeCitations(citations: ChatThreadTurnRecord["citations"]): ChatThreadTurnRecord["citations"] {
-  let deduped: ChatThreadTurnRecord["citations"] = [];
+  const deduped: ChatThreadTurnRecord["citations"] = [];
   const seen = new Map<string, number>();
   for (const citation of citations) {
     const key = citation.knowledge
@@ -320,19 +317,15 @@ function dedupeCitations(citations: ChatThreadTurnRecord["citations"]): ChatThre
       deduped.push(citation);
       continue;
     }
-    deduped = deduped.map((item, i) =>
-      i === existingIndex
-        ? {
-            ...existing,
-            citationId: existing.citationId,
-            url: existing.url,
-            title: existing.title ?? citation.title,
-            snippet: existing.snippet ?? citation.snippet,
-            sourceType: existing.sourceType ?? citation.sourceType,
-            knowledge: existing.knowledge ?? citation.knowledge,
-          }
-        : item,
-    );
+    deduped[existingIndex] = {
+      ...existing,
+      citationId: existing.citationId,
+      url: existing.url,
+      title: existing.title ?? citation.title,
+      snippet: existing.snippet ?? citation.snippet,
+      sourceType: existing.sourceType ?? citation.sourceType,
+      knowledge: existing.knowledge ?? citation.knowledge,
+    };
   }
   return deduped;
 }

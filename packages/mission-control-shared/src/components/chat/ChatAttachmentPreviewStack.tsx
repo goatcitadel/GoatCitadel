@@ -4,6 +4,7 @@ import { fetchChatAttachmentPreview } from "../../api/client";
 import { ChatAttachmentActions } from "./ChatAttachmentActions";
 
 const ATTACHMENT_PREVIEW_CACHE_TTL_MS = 30_000;
+const ATTACHMENT_PREVIEW_CACHE_MAX_ENTRIES = 80;
 const ATTACHMENT_PREVIEW_RETRY_DELAY_MS = 5_000;
 
 const attachmentPreviewCache = new Map<
@@ -14,6 +15,39 @@ const attachmentPreviewCache = new Map<
   }
 >();
 const attachmentPreviewInFlight = new Map<string, Promise<ChatAttachmentPreviewResponse>>();
+
+function getInFlightCacheKey(attachmentId: string, forceRefresh: boolean): string {
+  return `${attachmentId}:${forceRefresh ? "refresh" : "cached"}`;
+}
+
+function getCachedAttachmentPreview(attachmentId: string, now = Date.now()): ChatAttachmentPreviewResponse | null {
+  const cached = attachmentPreviewCache.get(attachmentId);
+  if (!cached) {
+    return null;
+  }
+  if (now - cached.cachedAt >= ATTACHMENT_PREVIEW_CACHE_TTL_MS) {
+    attachmentPreviewCache.delete(attachmentId);
+    return null;
+  }
+  attachmentPreviewCache.delete(attachmentId);
+  attachmentPreviewCache.set(attachmentId, cached);
+  return cached.response;
+}
+
+function rememberAttachmentPreview(attachmentId: string, response: ChatAttachmentPreviewResponse): void {
+  attachmentPreviewCache.delete(attachmentId);
+  attachmentPreviewCache.set(attachmentId, {
+    response,
+    cachedAt: Date.now(),
+  });
+  while (attachmentPreviewCache.size > ATTACHMENT_PREVIEW_CACHE_MAX_ENTRIES) {
+    const oldestKey = attachmentPreviewCache.keys().next().value;
+    if (typeof oldestKey !== "string") {
+      break;
+    }
+    attachmentPreviewCache.delete(oldestKey);
+  }
+}
 
 function summarizeExtraction(preview: ChatAttachmentPreviewResponse | null): string | null {
   if (!preview) {
@@ -33,8 +67,7 @@ function ChatAttachmentPreviewCard({
   const [refreshTick, setRefreshTick] = useState(0);
   const [shouldLoadPreview, setShouldLoadPreview] = useState(eager);
   const [preview, setPreview] = useState<ChatAttachmentPreviewResponse | null>(() => {
-    const cached = attachmentPreviewCache.get(attachment.attachmentId);
-    return cached ? cached.response : null;
+    return getCachedAttachmentPreview(attachment.attachmentId);
   });
   const [error, setError] = useState<string | null>(null);
 
@@ -141,28 +174,29 @@ function loadAttachmentPreview(
   attachmentId: string,
   options?: { forceRefresh?: boolean },
 ): Promise<ChatAttachmentPreviewResponse> {
-  const cached = attachmentPreviewCache.get(attachmentId);
-  if (!options?.forceRefresh && cached && Date.now() - cached.cachedAt < ATTACHMENT_PREVIEW_CACHE_TTL_MS) {
-    return Promise.resolve(cached.response);
+  const forceRefresh = Boolean(options?.forceRefresh);
+  if (!forceRefresh) {
+    const cached = getCachedAttachmentPreview(attachmentId);
+    if (cached) {
+      return Promise.resolve(cached);
+    }
   }
-  const existingRequest = attachmentPreviewInFlight.get(attachmentId);
+  const requestKey = getInFlightCacheKey(attachmentId, forceRefresh);
+  const existingRequest = attachmentPreviewInFlight.get(requestKey);
   if (existingRequest) {
     return existingRequest;
   }
   const request = fetchChatAttachmentPreview(attachmentId)
     .then((response) => {
-      attachmentPreviewCache.set(attachmentId, {
-        response,
-        cachedAt: Date.now(),
-      });
-      attachmentPreviewInFlight.delete(attachmentId);
+      rememberAttachmentPreview(attachmentId, response);
+      attachmentPreviewInFlight.delete(requestKey);
       return response;
     })
     .catch((error) => {
-      attachmentPreviewInFlight.delete(attachmentId);
+      attachmentPreviewInFlight.delete(requestKey);
       throw error;
     });
-  attachmentPreviewInFlight.set(attachmentId, request);
+  attachmentPreviewInFlight.set(requestKey, request);
   return request;
 }
 

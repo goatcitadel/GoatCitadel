@@ -3,7 +3,7 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AssistantMessageRenderer, copyTextToClipboard } from "./AssistantMessageRenderer";
+import { AssistantMessageRenderer, copyTextToClipboard, splitStreamingMarkdown } from "./AssistantMessageRenderer";
 import { normalizeAssistantDisplayText, normalizeCitationDisplayText } from "./assistant-display-text";
 import {
   ChatAttachmentActions,
@@ -216,7 +216,7 @@ describe("chat rendering tail coverage", () => {
     vi.stubGlobal("navigator", { clipboard: { writeText } });
 
     renderer = create(
-      <AssistantMessageRenderer role="assistant" content={String.raw`Hello \u0057orld`} running className="custom" />,
+      <AssistantMessageRenderer role="assistant" content={String.raw`Hello \u0057orld`} className="custom" />,
     );
     expect(normalizedTextOf(renderer.toJSON())).toContain("Hello World");
 
@@ -234,6 +234,63 @@ describe("chat rendering tail coverage", () => {
 
     renderer.update(<AssistantMessageRenderer role="user" content="User copy" />);
     expect(renderer.root.findAllByType("button")).toHaveLength(0);
+  });
+
+  it("disables response copy while the assistant is still streaming", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+
+    renderer = create(<AssistantMessageRenderer role="assistant" content="Partial response" running />);
+    const copyButton = renderer.root.findByType("button");
+    expect(copyButton.props.disabled).toBe(true);
+    expect(copyButton.props["aria-label"]).toBe("Copy available when response completes");
+
+    await act(async () => {
+      copyButton.props.onClick();
+      await Promise.resolve();
+    });
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("keeps streaming markdown splits outside open fenced code blocks", () => {
+    expect(splitStreamingMarkdown("foo\n```js\nbar\n```\n\nbaz")).toEqual({
+      stable: "foo\n```js\nbar\n```\n\n",
+      tail: "baz",
+    });
+    expect(splitStreamingMarkdown("foo\n   ```js\nbar\n   ```   \n\nbaz")).toEqual({
+      stable: "foo\n   ```js\nbar\n   ```   \n\n",
+      tail: "baz",
+    });
+    expect(splitStreamingMarkdown("intro\n\n```js\nbar\n\nbaz")).toEqual({
+      stable: "intro\n\n",
+      tail: "```js\nbar\n\nbaz",
+    });
+    expect(splitStreamingMarkdown("intro\n\n```js\n```not closed\n\nstill code")).toEqual({
+      stable: "intro\n\n",
+      tail: "```js\n```not closed\n\nstill code",
+    });
+    expect(splitStreamingMarkdown("intro\n\n~~~txt\n~~~not closed\n\nstill code")).toEqual({
+      stable: "intro\n\n",
+      tail: "~~~txt\n~~~not closed\n\nstill code",
+    });
+  });
+
+  it("animates the streaming tail as one stable container instead of per-token spans", () => {
+    renderer = create(
+      <AssistantMessageRenderer
+        role="assistant"
+        content="Visible preview tail"
+        running
+        streamPresentationMode="smooth"
+      />,
+    );
+
+    expect(renderer.root.findAllByProps({ className: "mc-assistant-stream-token" })).toHaveLength(0);
+    expect(
+      renderer.root.findByProps({
+        className: "mc-assistant-streaming-tail mc-assistant-streaming-tail-smooth",
+      }),
+    ).toBeTruthy();
   });
 
   it("reports clipboard API unavailability without deprecated execCommand fallback", async () => {
