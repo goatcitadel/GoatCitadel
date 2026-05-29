@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ChatCitationRecord, type ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { ChatStreamStatusBar } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
@@ -12,8 +12,8 @@ import {
   ChatThreadWindowGap,
   THREAD_WINDOW_SIZE,
   buildThreadWindow,
-  isThreadScrollNearBottom,
 } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
+import { useScrollToBottom } from "@goatcitadel/mission-control-shared/components/chat/useScrollToBottom";
 import {
   useChannelActivitySnapshots,
   type ChannelActivitySnapshot,
@@ -103,9 +103,6 @@ function ThreadCitationList({ citations }: { citations: ChatCitationRecord[] }) 
 
 export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
   const shellRef = useRef<HTMLDivElement | null>(null);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const threadEndRef = useRef<HTMLDivElement | null>(null);
-  const scrollFrameRef = useRef<number | null>(null);
   const [manualWindowStart, setManualWindowStart] = useState<number | null>(null);
   const lastTurn = props.thread?.turns.at(-1) ?? null;
   const threadTurnCount = props.thread?.turns.length ?? 0;
@@ -160,44 +157,21 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
           ? `${toTitleCase(props.mode)} stream connecting.`
           : "");
 
-  const handleThreadScroll = useCallback(() => {
-    const scrollElement = scrollRef.current;
-    if (!scrollElement) {
-      props.onBottomStateChange(true);
-      return;
-    }
-    props.onBottomStateChange(isThreadScrollNearBottom(scrollElement));
-  }, [props.onBottomStateChange]);
-
-  useEffect(() => {
-    const scrollElement = scrollRef.current;
-    const endElement = threadEndRef.current;
-    if (
-      !scrollElement ||
-      !endElement ||
-      typeof window === "undefined" ||
-      typeof window.IntersectionObserver !== "function"
-    ) {
-      return;
-    }
-    const observer = new window.IntersectionObserver(
-      (entries) => {
-        const entry = entries[0];
-        props.onBottomStateChange(Boolean(entry?.isIntersecting) || isThreadScrollNearBottom(scrollElement));
-      },
-      {
-        root: scrollElement,
-        threshold: 0.98,
-      },
-    );
-    observer.observe(endElement);
-    return () => observer.disconnect();
-  }, [props.onBottomStateChange, props.thread?.sessionId, threadTurnCount]);
-
-  const jumpToLatest = useCallback(() => {
-    threadEndRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
-    props.onBottomStateChange(true);
-  }, [props.onBottomStateChange]);
+  const { scrollRef, threadEndRef, handleThreadScroll, jumpToLatest } = useScrollToBottom({
+    followOutput: props.followOutput,
+    onBottomStateChange: props.onBottomStateChange,
+    signals: {
+      sessionId: props.thread?.sessionId ?? null,
+      threadTurnCount,
+      latestTurnId,
+      latestTraceStatus,
+      noticeCount: props.notices.length,
+      queuedCount: props.queuedCount,
+      streamStatus: props.streamStatus,
+      selectedTurnId: props.selectedTurnId,
+      streamError: props.streamError,
+    },
+  });
 
   const showHiddenTurns = useCallback(() => {
     setManualWindowStart(0);
@@ -206,71 +180,6 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
   useEffect(() => {
     setManualWindowStart(null);
   }, [props.thread?.sessionId]);
-
-  useLayoutEffect(() => {
-    if (!props.followOutput) {
-      return;
-    }
-    if (typeof requestAnimationFrame !== "function") {
-      threadEndRef.current?.scrollIntoView({
-        block: "end",
-        behavior: "auto",
-      });
-      props.onBottomStateChange(true);
-      return;
-    }
-    if (scrollFrameRef.current !== null && typeof cancelAnimationFrame === "function") {
-      cancelAnimationFrame(scrollFrameRef.current);
-    }
-    const pinToThreadEnd = () => {
-      threadEndRef.current?.scrollIntoView({
-        block: "end",
-        behavior: "auto",
-      });
-      props.onBottomStateChange(true);
-    };
-    scrollFrameRef.current = requestAnimationFrame(() => {
-      scrollFrameRef.current = null;
-      pinToThreadEnd();
-    });
-    return () => {
-      if (scrollFrameRef.current !== null && typeof cancelAnimationFrame === "function") {
-        cancelAnimationFrame(scrollFrameRef.current);
-        scrollFrameRef.current = null;
-      }
-    };
-  }, [
-    props.followOutput,
-    props.notices.length,
-    props.onBottomStateChange,
-    props.queuedCount,
-    props.selectedTurnId,
-    props.streamError,
-    props.streamStatus,
-    threadTurnCount,
-    latestTurnId,
-    latestTraceStatus,
-  ]);
-
-  useLayoutEffect(() => {
-    const scrollElement = scrollRef.current;
-    if (!scrollElement) {
-      return;
-    }
-    if (props.followOutput) {
-      return;
-    }
-    props.onBottomStateChange(isThreadScrollNearBottom(scrollElement));
-  }, [
-    props.followOutput,
-    props.onBottomStateChange,
-    props.notices.length,
-    props.queuedCount,
-    props.streamStatus,
-    threadTurnCount,
-    latestTurnId,
-    latestTraceStatus,
-  ]);
 
   return (
     <div ref={shellRef} className={`mc-next-thread-shell mode-${props.mode}`}>
