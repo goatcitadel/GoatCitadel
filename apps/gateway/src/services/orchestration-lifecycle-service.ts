@@ -15,6 +15,7 @@ import {
   NotFoundError,
   type OrchestrationPlan,
   type OrchestrationPhase,
+  type OrchestrationPhaseChildDispatch,
   type OrchestrationPhaseExecutionResult,
   type OrchestrationRun,
   type OrchestrationRunPolicyContext,
@@ -80,6 +81,7 @@ export interface OrchestrationLifecycleRuntimeDeps {
       durableRun: DurableRunRecord;
       policyContext?: OrchestrationRunPolicyContext;
       signal?: AbortSignal;
+      onChildDispatched?: (dispatch: OrchestrationPhaseChildDispatch) => void;
     }): Promise<OrchestrationPhaseExecutionResult>;
   };
 }
@@ -837,57 +839,51 @@ export async function executeDurableOrchestrationRun(
     publishRunRealtime(host, plan, run, { event: "run_resumed" });
   } else if (run.status === "running" && run.currentPhaseId) {
     const resumedFrom = run.executionState;
-    const waitingChildPhase = readWaitingChildPhase(durableRun, run.currentPhaseId);
-    if (resumedFrom === "paused_for_approval" && waitingChildPhase) {
-      const childRun = getDurableRunIfAvailable(host, waitingChildPhase.childRunId);
-      if (!childRun) {
-        const missingChildError = `Child durable run ${waitingChildPhase.childRunId} is missing; refusing to duplicate orchestration phase ${run.currentPhaseId}.`;
-        const failedPhase = {
-          ...waitingChildPhase.payload,
+    // A phase that was already dispatched (approval wait OR an ordinary
+    // in-flight child turn that crashed mid-execution) carries a linkage
+    // breadcrumb in the durable metadata. We MUST harvest/reattach that child
+    // instead of re-dispatching it (ORCH-002 hard invariant: a phase with an
+    // already-dispatched child is never re-dispatched on resume).
+    const recoverableChildPhase = readRecoverableChildPhase(durableRun, run.currentPhaseId);
+    const isApprovalResume = resumedFrom === "paused_for_approval";
+    if (recoverableChildPhase) {
+      const childRunId = recoverableChildPhase.childRunId;
+      if (!childRunId) {
+        // The phase dispatched a child whose durable run id was never recorded
+        // (e.g. durable execution was disabled and the child ran inline, so its
+        // state died with the parent). We cannot safely harvest or reattach it,
+        // so fail the phase recoverably rather than blindly re-running it.
+        const unlinkedChildError = `Orchestration phase ${run.currentPhaseId} dispatched a child without a durable run id before interruption; refusing to duplicate the dispatch.`;
+        return failResumeWithoutChildLinkage({
+          host,
+          runtime,
+          plan,
+          run,
+          durableRun,
+          recordUpdate,
           phaseId: run.currentPhaseId,
-          status: "failed",
-          childRunId: waitingChildPhase.childRunId,
-          error: missingChildError,
-        };
-        recordUpdate(
-          {
-            ...run,
-            status: "failed",
-            executionState: "failed",
-            endedAt: new Date().toISOString(),
-            lastError: missingChildError,
-          },
-          "run_failed",
-          {
-            failedPhase,
-          },
-        );
-        host.recordDurableTimelineEvent(durableRun.runId, "run_failed", {
-          phaseId: run.currentPhaseId,
-          waveId: run.currentWaveId,
-          childRunId: waitingChildPhase.childRunId,
-          reason: "child_durable_run_missing",
-          error: missingChildError,
+          payload: recoverableChildPhase.payload,
+          error: unlinkedChildError,
         });
-        persistRunEvent(host, run, "run.child_durable_missing", {
-          phaseId: run.currentPhaseId,
-          waveId: run.currentWaveId,
-          childRunId: waitingChildPhase.childRunId,
-          error: missingChildError,
-        });
-        publishRunRealtime(host, plan, run, {
-          event: "run_failed",
-          error: missingChildError,
-        });
-        await releaseOrchestrationWorktreeIfAvailable(runtime, host, run, "failed");
-        return {
-          outcome: "failed",
-          checkpointState: buildCheckpointDetails(plan, run, durableRun.runId, {
-            failedPhase,
-          }),
-        };
       }
-      if (childRun && !isDurableRunTerminal(childRun)) {
+      const childRun = getDurableRunIfAvailable(host, childRunId);
+      if (!childRun) {
+        const missingChildError = `Child durable run ${childRunId} is missing; refusing to duplicate orchestration phase ${run.currentPhaseId}.`;
+        return failResumeWithoutChildLinkage({
+          host,
+          runtime,
+          plan,
+          run,
+          durableRun,
+          recordUpdate,
+          phaseId: run.currentPhaseId,
+          payload: recoverableChildPhase.payload,
+          error: missingChildError,
+          timelineReason: "child_durable_run_missing",
+          runEvent: "run.child_durable_missing",
+        });
+      }
+      if (!isDurableRunTerminal(childRun)) {
         host.updateDurableRunState({
           runId: durableRun.runId,
           status: "waiting",
@@ -895,43 +891,42 @@ export async function executeDurableOrchestrationRun(
           clearFinishedAt: true,
           clearLastError: true,
         });
-        host.requestDurableRunProcessing(waitingChildPhase.childRunId);
+        host.requestDurableRunProcessing(childRunId);
         host.recordDurableTimelineEvent(durableRun.runId, "run_waiting", {
           phaseId: run.currentPhaseId,
           waveId: run.currentWaveId,
-          childRunId: waitingChildPhase.childRunId,
+          childRunId,
           reason: "child_durable_run_not_terminal",
         });
         persistRunEvent(host, run, "run.waiting_for_child", {
           phaseId: run.currentPhaseId,
           waveId: run.currentWaveId,
-          childRunId: waitingChildPhase.childRunId,
+          childRunId,
           childStatus: childRun.status,
         });
         return {
           outcome: "paused",
           checkpointState: buildCheckpointDetails(plan, run, durableRun.runId, {
-            waitingPhase: waitingChildPhase.payload,
-            waitingForChildRunId: waitingChildPhase.childRunId,
+            waitingPhase: recoverableChildPhase.payload,
+            waitingForChildRunId: childRunId,
           }),
         };
       }
-      if (childRun) {
-        harvestedWaitingExecution = buildHarvestedWaitingExecution(waitingChildPhase.payload, childRun);
-      }
+      harvestedWaitingExecution = buildHarvestedWaitingExecution(recoverableChildPhase.payload, childRun);
     }
+    const resumedFromChild = isApprovalResume || Boolean(recoverableChildPhase);
     recordUpdate(
       {
         ...run,
         executionState: "running",
         lastError: undefined,
       },
-      resumedFrom === "paused_for_approval" ? "run_resumed" : undefined,
+      resumedFromChild ? "run_resumed" : undefined,
       {
         resumedFrom,
       },
     );
-    if (resumedFrom === "paused_for_approval") {
+    if (resumedFromChild) {
       host.recordDurableTimelineEvent(durableRun.runId, "run_resumed", {
         phaseId: run.currentPhaseId,
         waveId: run.currentWaveId,
@@ -1005,6 +1000,7 @@ export async function executeDurableOrchestrationRun(
           durableRun,
           policyContext,
           signal: context?.signal,
+          onChildDispatched: (dispatch) => persistDispatchedChildPhase(host, plan, run, durableRun, dispatch),
         });
       }
       throwIfWorkflowAborted(context);
@@ -1248,21 +1244,147 @@ export async function executeDurableOrchestrationRun(
   };
 }
 
-function readWaitingChildPhase(
+/**
+ * Reads the linkage breadcrumb for a phase that already dispatched its child
+ * turn, so resume can harvest/reattach the existing child instead of
+ * re-dispatching it (ORCH-002).
+ *
+ * Two breadcrumb shapes are recognized, both keyed on the current phase id:
+ *  - `waitingPhase`: written by the approval-wait path. Always carries a child
+ *    durable run id (approval waits require a linked child).
+ *  - `dispatchedPhase`: written the instant a non-approval in-flight phase
+ *    dispatches its child. May lack a child durable run id when durable
+ *    execution was not used for the child (the unlinked case, handled by the
+ *    caller as a recoverable failure rather than a re-dispatch).
+ *
+ * `waitingPhase` is preferred when both are present because it is the richer,
+ * approval-correlated record.
+ */
+function readRecoverableChildPhase(
   durableRun: DurableRunRecord,
   currentPhaseId: string,
-): { childRunId: string; payload: Record<string, unknown> } | undefined {
+): { childRunId?: string; payload: Record<string, unknown> } | undefined {
   const metadata = asRecord(durableRun.metadata);
   const waitingPhase = asRecord(metadata?.waitingPhase);
-  if (!waitingPhase) {
-    return undefined;
+  if (waitingPhase && asString(waitingPhase.phaseId) === currentPhaseId) {
+    const childRunId = asString(waitingPhase.childRunId);
+    if (childRunId) {
+      return { childRunId, payload: waitingPhase };
+    }
   }
-  const phaseId = asString(waitingPhase.phaseId);
-  const childRunId = asString(waitingPhase.childRunId);
-  if (!phaseId || phaseId !== currentPhaseId || !childRunId) {
-    return undefined;
+  const dispatchedPhase = asRecord(metadata?.dispatchedPhase);
+  if (dispatchedPhase && asString(dispatchedPhase.phaseId) === currentPhaseId) {
+    return { childRunId: asString(dispatchedPhase.childRunId), payload: dispatchedPhase };
   }
-  return { childRunId, payload: waitingPhase };
+  return undefined;
+}
+
+/**
+ * Persists the in-flight child linkage breadcrumb for a phase into the parent
+ * durable run's metadata at (or before) dispatch. Merges with the freshly
+ * rebuilt orchestration metadata so an interruption during the child turn
+ * leaves a harvestable record. The breadcrumb is naturally dropped on the next
+ * lifecycle metadata write (phase advance / wait / failure) because those
+ * rebuild metadata from `buildDurableMetadata` without it.
+ */
+function persistDispatchedChildPhase(
+  host: OrchestrationLifecycleHost,
+  plan: OrchestrationPlan,
+  run: OrchestrationRun,
+  durableRun: DurableRunRecord,
+  dispatch: OrchestrationPhaseChildDispatch,
+): void {
+  if (dispatch.phaseId !== run.currentPhaseId) {
+    return;
+  }
+  const dispatchedPhase: Record<string, unknown> = {
+    phaseId: dispatch.phaseId,
+    ownerAgentId: findPhaseInPlan(plan, dispatch.phaseId).ownerAgentId,
+    dispatchInFlight: true,
+    ...(dispatch.childSessionId ? { childSessionId: dispatch.childSessionId } : {}),
+    ...(dispatch.childTurnId ? { childTurnId: dispatch.childTurnId } : {}),
+    ...(dispatch.childRunId ? { childRunId: dispatch.childRunId } : {}),
+  };
+  host.updateDurableRunState({
+    runId: durableRun.runId,
+    metadata: {
+      ...buildDurableMetadata(plan, run),
+      dispatchedPhase,
+    },
+  });
+  persistRunEvent(host, run, "phase.child_dispatched", {
+    phaseId: dispatch.phaseId,
+    waveId: run.currentWaveId,
+    childSessionId: dispatch.childSessionId,
+    childTurnId: dispatch.childTurnId,
+    childRunId: dispatch.childRunId,
+  });
+}
+
+/**
+ * Fails an orchestration run on resume when a phase has an already-dispatched
+ * child that cannot be harvested or reattached (missing child durable run, or a
+ * child that was never linked to a durable run). This preserves the ORCH-002
+ * invariant: such a phase is never re-dispatched.
+ */
+async function failResumeWithoutChildLinkage(input: {
+  host: OrchestrationLifecycleHost;
+  runtime: OrchestrationLifecycleRuntimeDeps;
+  plan: OrchestrationPlan;
+  run: OrchestrationRun;
+  durableRun: DurableRunRecord;
+  recordUpdate: (
+    next: OrchestrationRun,
+    checkpointKind?: OrchestrationCheckpoint["checkpointKind"],
+    checkpointExtras?: Record<string, unknown>,
+  ) => void;
+  phaseId: string;
+  payload: Record<string, unknown>;
+  error: string;
+  timelineReason?: string;
+  runEvent?: string;
+}): Promise<OrchestrationExecutionResult> {
+  const { host, runtime, plan, durableRun } = input;
+  const childRunId = asString(input.payload.childRunId);
+  const failedPhase = {
+    ...input.payload,
+    phaseId: input.phaseId,
+    status: "failed",
+    ...(childRunId ? { childRunId } : {}),
+    error: input.error,
+  };
+  const failedRun: OrchestrationRun = {
+    ...input.run,
+    status: "failed",
+    executionState: "failed",
+    endedAt: new Date().toISOString(),
+    lastError: input.error,
+  };
+  input.recordUpdate(failedRun, "run_failed", { failedPhase });
+  host.recordDurableTimelineEvent(durableRun.runId, "run_failed", {
+    phaseId: input.phaseId,
+    waveId: failedRun.currentWaveId,
+    childRunId,
+    reason: input.timelineReason ?? "child_dispatch_unrecoverable",
+    error: input.error,
+  });
+  persistRunEvent(host, failedRun, input.runEvent ?? "run.child_dispatch_unrecoverable", {
+    phaseId: input.phaseId,
+    waveId: failedRun.currentWaveId,
+    childRunId,
+    error: input.error,
+  });
+  publishRunRealtime(host, plan, failedRun, {
+    event: "run_failed",
+    error: input.error,
+  });
+  await releaseOrchestrationWorktreeIfAvailable(runtime, host, failedRun, "failed");
+  return {
+    outcome: "failed",
+    checkpointState: buildCheckpointDetails(plan, failedRun, durableRun.runId, {
+      failedPhase,
+    }),
+  };
 }
 
 function readMalformedWorkspacePayload(

@@ -46,6 +46,23 @@ export interface OrchestrationPhaseExecutionResult {
   error?: string;
 }
 
+/**
+ * Linkage breadcrumb reported the moment an orchestration phase dispatches its
+ * child Cowork turn. Persisted into the parent durable run's metadata so that a
+ * crash mid-phase leaves enough state to harvest/reattach the existing child on
+ * resume instead of re-dispatching it (ORCH-002).
+ *
+ * The child session id is known synchronously before the turn is launched; the
+ * child durable run id only becomes known once the durable child run has been
+ * created, so it is reported in a second callback invocation.
+ */
+export interface OrchestrationPhaseChildDispatch {
+  phaseId: string;
+  childSessionId?: string;
+  childTurnId?: string;
+  childRunId?: string;
+}
+
 export interface OrchestrationWave {
   waveId: string;
   verify: string[];
