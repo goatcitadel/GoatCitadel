@@ -825,6 +825,20 @@ describe("ThreadedTimeline", () => {
     scrollIntoView.mockRestore();
   });
 
+  it("shows the jump-to-latest affordance when scrolled away in a non-streaming thread and hides it at the bottom", async () => {
+    await act(async () => {
+      root?.render(<ThreadedTimeline props={buildProps({ followOutput: false, streamStatus: "idle" }) as any} />);
+      await Promise.resolve();
+    });
+    expect(container?.textContent).toContain("Jump to latest");
+
+    await act(async () => {
+      root?.render(<ThreadedTimeline props={buildProps({ followOutput: true, streamStatus: "idle" }) as any} />);
+      await Promise.resolve();
+    });
+    expect(container?.textContent).not.toContain("Jump to latest");
+  });
+
   it("covers repaired output, requested routing, fallback reasons, and empty delegation summaries", () => {
     const props = buildProps();
     props.thread.turns[0].trace.completion = { repaired: true };
