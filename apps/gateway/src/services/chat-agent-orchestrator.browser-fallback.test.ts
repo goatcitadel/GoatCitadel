@@ -10,6 +10,7 @@ import type {
   ToolInvokeRequest,
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
+import { CHAT_COMPLETION_TIMEOUT_MS_BY_MODE } from "./chat-agent-budget.js";
 import { ChatAgentOrchestrator } from "./chat-agent-orchestrator.js";
 import {
   createExecuteToolCallForTest,
@@ -6424,7 +6425,7 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
     expect(result.assistantContent).toContain("location and interests");
   });
 
-  it("uses the expanded testing timeout instead of the default 60s", async () => {
+  it("uses the bounded per-mode completion timeout, not the provider default", async () => {
     let capturedTimeoutMs: number | undefined;
     const createChatCompletion = vi
       .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
@@ -6473,11 +6474,11 @@ describe("ChatAgentOrchestrator browser fallback behavior", () => {
       historyMessages: [{ role: "user", content: "Search the web for AI tooling references" }],
     });
 
-    // During testing we intentionally give synthesis a much larger timeout so
-    // slower models are not penalized by the normal responsiveness budget.
+    // The bounded per-mode completion timeout is passed through to the provider
+    // call instead of the provider's own default. This is a chat/auto turn with
+    // no live-data intent, so it resolves to the default-mode completion budget.
     expect(capturedTimeoutMs).toBeDefined();
-    expect(capturedTimeoutMs).toBeGreaterThanOrEqual(30 * 60 * 1000 - 1000);
-    expect(capturedTimeoutMs).toBeLessThanOrEqual(30 * 60 * 1000);
+    expect(capturedTimeoutMs).toBe(CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.default);
   });
 
   it("stops alternate-URL retries when the turn budget expires mid-fallback", async () => {

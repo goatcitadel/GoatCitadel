@@ -14,10 +14,11 @@ import {
   isExpensiveChatTool,
   minimumRemainingBudgetForToolStart,
   resolveChatExecutionBudget,
+  CHAT_COMPLETION_TIMEOUT_MS_BY_MODE,
+  CHAT_TURN_BUDGET_MS_BY_MODE,
+  type ResolveChatExecutionBudgetInput,
   shouldExtendTurnBudgetForBrowserExecution,
   shouldUseConstrainedLocalAgentProfile,
-  TESTING_CHAT_COMPLETION_TIMEOUT_MS,
-  TESTING_CHAT_TURN_BUDGET_MS,
 } from "./chat-agent-budget.js";
 
 describe("chat-agent-budget", () => {
@@ -36,8 +37,8 @@ describe("chat-agent-budget", () => {
       }),
     ).toEqual(
       expect.objectContaining({
-        turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
-        completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
+        turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.deep,
+        completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.deep,
         maxToolLoops: 6,
         maxToolRunsPerTurn: 12,
         searchMaxResults: 8,
@@ -118,6 +119,52 @@ describe("chat-agent-budget", () => {
         promptLabExplicitTools: true,
       }),
     ).toEqual(expect.objectContaining({ maxToolLoops: 4, maxToolRunsPerTurn: 6, maxTokens: 1400 }));
+  });
+
+  it("uses generous-but-bounded per-web-mode turn and completion budgets", () => {
+    const THIRTY_MINUTES_MS = 30 * 60 * 1000;
+    const cases: { input: ResolveChatExecutionBudgetInput; turnBudgetMs: number; completionTimeoutMs: number }[] = [
+      {
+        input: { mode: "chat", webMode: "quick", thinkingLevel: "standard" },
+        turnBudgetMs: 120000,
+        completionTimeoutMs: 60000,
+      },
+      {
+        input: { mode: "chat", webMode: "off", thinkingLevel: "standard" },
+        turnBudgetMs: 120000,
+        completionTimeoutMs: 90000,
+      },
+      {
+        input: { mode: "chat", webMode: "auto", thinkingLevel: "standard", liveDataIntent: true },
+        turnBudgetMs: 240000,
+        completionTimeoutMs: 150000,
+      },
+      {
+        input: { mode: "chat", webMode: "auto", thinkingLevel: "standard" },
+        turnBudgetMs: 240000,
+        completionTimeoutMs: 150000,
+      },
+      {
+        input: { mode: "chat", webMode: "deep", thinkingLevel: "deep" },
+        turnBudgetMs: 480000,
+        completionTimeoutMs: 240000,
+      },
+      {
+        input: { mode: "cowork", webMode: "auto", thinkingLevel: "standard", researchListIntent: true },
+        turnBudgetMs: 480000,
+        completionTimeoutMs: 240000,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const budget = resolveChatExecutionBudget(testCase.input);
+      expect(budget.turnBudgetMs).toBe(testCase.turnBudgetMs);
+      expect(budget.completionTimeoutMs).toBe(testCase.completionTimeoutMs);
+      expect(budget.turnBudgetMs).toBeLessThan(THIRTY_MINUTES_MS);
+      expect(budget.completionTimeoutMs).toBeLessThanOrEqual(budget.turnBudgetMs);
+      expect(budget.expensiveToolMinimumRemainingMs).toBeLessThan(budget.turnBudgetMs);
+      expect(budget.minSynthesisReserveMs).toBeLessThan(budget.turnBudgetMs);
+    }
   });
 
   it("applies prompt-lab helper budgets without weakening existing larger limits", () => {

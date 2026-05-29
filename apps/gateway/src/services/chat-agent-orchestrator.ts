@@ -87,9 +87,9 @@ import {
   ensureChatTurnBudgetRemaining,
   extendTurnBudgetForExecutedBrowserTool,
   minimumRemainingBudgetForToolStart,
+  CHAT_COMPLETION_TIMEOUT_MS_BY_MODE,
   resolveChatExecutionBudget,
   shouldUseConstrainedLocalAgentProfile,
-  TESTING_CHAT_COMPLETION_TIMEOUT_MS,
 } from "./chat-agent-budget.js";
 import {
   classifyBrowserToolResult,
@@ -223,6 +223,11 @@ import {
 export { defaultThinkingTokens } from "./chat-agent-budget.js";
 export { normalizeAgentInputFromSend } from "./chat-agent-input-normalization.js";
 
+// Bounded ceiling for the final synthesis/repair completion pass. Matches the
+// largest per-mode completion timeout so a hung provider call cannot block the
+// final pass indefinitely; the effective timeout is further clamped to the
+// remaining turn budget when a deadline is known.
+const FINAL_PASS_COMPLETION_TIMEOUT_MS = CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.deep;
 const TOOL_FAILURE_CIRCUIT_BREAKER_THRESHOLD = 2;
 const TOOL_FAILURE_RATE_LIMIT_THRESHOLD = 4;
 const SAFE_WRITE_FALLBACK_DIR = "./workspace/goatcitadel_out";
@@ -4335,10 +4340,10 @@ export class ChatAgentOrchestrator {
     }
     const toolSummary = summarizeToolRunsForSynthesis(input.toolRuns, input.input.content);
     const synthesisTimeoutMs = input.allowOverBudget
-      ? TESTING_CHAT_COMPLETION_TIMEOUT_MS
+      ? FINAL_PASS_COMPLETION_TIMEOUT_MS
       : input.turnBudgetDeadline
-        ? Math.min(TESTING_CHAT_COMPLETION_TIMEOUT_MS, Math.max(3000, input.turnBudgetDeadline - Date.now()))
-        : TESTING_CHAT_COMPLETION_TIMEOUT_MS;
+        ? Math.min(FINAL_PASS_COMPLETION_TIMEOUT_MS, Math.max(3000, input.turnBudgetDeadline - Date.now()))
+        : FINAL_PASS_COMPLETION_TIMEOUT_MS;
     try {
       const completion = await this.deps.createChatCompletion({
         providerId: input.input.providerId,
@@ -4417,8 +4422,8 @@ export class ChatAgentOrchestrator {
       }
     }
     const timeoutMs = input.turnBudgetDeadline
-      ? Math.min(TESTING_CHAT_COMPLETION_TIMEOUT_MS, Math.max(3000, input.turnBudgetDeadline - Date.now()))
-      : TESTING_CHAT_COMPLETION_TIMEOUT_MS;
+      ? Math.min(FINAL_PASS_COMPLETION_TIMEOUT_MS, Math.max(3000, input.turnBudgetDeadline - Date.now()))
+      : FINAL_PASS_COMPLETION_TIMEOUT_MS;
     const toolSummary = summarizeToolRunsForSynthesis(input.toolRuns, input.input.content);
     const ignoreDraft = looksLikeUserSafeFailureMessage(input.partialAssistantContent);
     try {

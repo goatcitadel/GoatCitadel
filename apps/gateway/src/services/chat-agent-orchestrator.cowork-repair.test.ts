@@ -5084,12 +5084,27 @@ describe("ChatAgentOrchestrator Cowork repair behavior", () => {
       "## User Task",
       "Call the provided tools in sequence, then summarize the evidence.",
     ].join("\n");
-    const toolCalls = Array.from({ length: 9 }, (_, index) => ({
+    // Each call passes a distinct timezone so the (now-enabled) tool-loop guard
+    // does not suppress them as byte-identical repeats. This keeps the turn
+    // exercising the raised explicit-tools tool-run cap rather than tripping the
+    // loop guard.
+    const timezones = [
+      "UTC",
+      "America/New_York",
+      "Europe/Paris",
+      "Asia/Tokyo",
+      "Australia/Sydney",
+      "America/Los_Angeles",
+      "Europe/London",
+      "Asia/Kolkata",
+      "Africa/Cairo",
+    ];
+    const toolCalls = timezones.map((timezone, index) => ({
       id: `call-time-now-${index + 1}`,
       type: "function" as const,
       function: {
         name: "time_now",
-        arguments: JSON.stringify({}),
+        arguments: JSON.stringify({ timezone }),
       },
     }));
     const createChatCompletion = vi

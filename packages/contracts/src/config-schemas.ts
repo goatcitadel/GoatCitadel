@@ -6,7 +6,7 @@ import { z } from "zod";
 
 const ToolLoopDetectionConfigSchema = z
   .object({
-    enabled: z.boolean().default(false),
+    enabled: z.boolean().default(true),
     historySize: z.number().int().min(2).max(50).default(8),
     warningThreshold: z.number().int().min(2).max(50).default(3),
     criticalThreshold: z.number().int().min(2).max(50).default(4),
@@ -50,7 +50,7 @@ export const ToolPolicyConfigSchema = z
         allow: z.array(z.string()).default([]),
         deny: z.array(z.string()).default([]),
         loopDetection: ToolLoopDetectionConfigSchema.default({
-          enabled: false,
+          enabled: true,
           historySize: 8,
           warningThreshold: 3,
           criticalThreshold: 4,

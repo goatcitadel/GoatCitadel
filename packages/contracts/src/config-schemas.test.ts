@@ -88,7 +88,7 @@ describe("ToolPolicyConfigSchema", () => {
     expect(result.sandbox.readAccessMode).toBe("roots_only");
   });
 
-  it("defaults loop detection to disabled with detector thresholds", () => {
+  it("defaults loop detection to enabled with detector thresholds", () => {
     const input = {
       profiles: {},
       tools: { profile: "standard", allow: [], deny: [] },
@@ -97,7 +97,7 @@ describe("ToolPolicyConfigSchema", () => {
     };
     const result = ToolPolicyConfigSchema.parse(input);
     expect(result.tools.loopDetection).toMatchObject({
-      enabled: false,
+      enabled: true,
       historySize: 8,
       warningThreshold: 3,
       criticalThreshold: 4,
