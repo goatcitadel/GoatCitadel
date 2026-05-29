@@ -120,6 +120,79 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
       requestedCursor,
       connectedAt: new Date().toISOString(),
     });
+    let closed = false;
+    let writeChain = Promise.resolve();
+    let unsubscribe = () => undefined;
+    // Declared up-front (and cleared in cleanup) because cleanup() can run
+    // before the keep-alive interval is created — e.g. a replay-gap early return
+    // or a disconnect during replay. Assigned after the replay buffer is flushed.
+    let keepAlive: ReturnType<typeof setInterval> | undefined = undefined;
+    function cleanup(closeReason = "client_disconnect") {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      controller.abort(new Error(closeReason));
+      if (keepAlive !== undefined) {
+        clearInterval(keepAlive);
+      }
+      unsubscribe();
+      fastify.services.realtimeEvents.closeRealtimeStreamLease({
+        leaseId: lease.leaseId,
+        closeReason,
+      });
+      releaseConnection();
+      try {
+        raw.end();
+      } catch {
+        // ignore
+      }
+    }
+
+    // Attach the live subscription BEFORE taking the replay snapshot so events
+    // published in the gap between snapshot and subscribe are not lost. Live
+    // events are buffered in memory until the replay snapshot has been flushed,
+    // then drained (deduplicated against the snapshot by monotonic sequence) and
+    // finally delivered directly. See INFRA-003.
+    let replayFlushed = false;
+    let lastDeliveredSequence = requestedCursor;
+    const liveBuffer: RealtimeEvent[] = [];
+    const deliverLiveEvent = (event: RealtimeEvent) => {
+      writeChain = writeChain
+        .then(async () => {
+          if (closed) {
+            return;
+          }
+          // Drop events already covered by the replay snapshot or an earlier
+          // delivery so nothing is forwarded twice.
+          if (lastDeliveredSequence !== undefined && event.sequence <= lastDeliveredSequence) {
+            return;
+          }
+          const wrote = await send(event, event.sequence);
+          if (!wrote) {
+            cleanup("stream_write_error");
+            return;
+          }
+          lastDeliveredSequence = event.sequence;
+          fastify.services.realtimeEvents.touchRealtimeStreamLease({
+            leaseId: lease.leaseId,
+            lastSentSequence: event.sequence,
+            lastEventAt: event.timestamp,
+          });
+        })
+        .catch(() => cleanup("stream_write_error"));
+    };
+    unsubscribe = fastify.services.realtimeEvents.subscribeRealtime((event: RealtimeEvent) => {
+      if (replayFlushed) {
+        deliverLiveEvent(event);
+        return;
+      }
+      liveBuffer.push(event);
+    });
+
+    raw.on("close", () => cleanup("client_disconnect"));
+    request.raw.on("aborted", () => cleanup("client_aborted"));
+
     const bounds = fastify.services.realtimeEvents.getRealtimeEventSequenceBounds();
     if (
       requestedCursor !== undefined &&
@@ -132,12 +205,7 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
         oldestCursor: bounds.oldestSequence,
         newestCursor: bounds.newestSequence,
       });
-      fastify.services.realtimeEvents.closeRealtimeStreamLease({
-        leaseId: lease.leaseId,
-        closeReason: "replay_gap",
-      });
-      releaseConnection();
-      raw.end();
+      cleanup("replay_gap");
       reply.hijack();
       return;
     }
@@ -161,57 +229,70 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
         newestCursor: bounds.newestSequence,
         replayLimit: STREAM_REPLAY_LIMIT,
       });
-      fastify.services.realtimeEvents.closeRealtimeStreamLease({
-        leaseId: lease.leaseId,
-        closeReason: "replay_gap",
-      });
-      releaseConnection();
-      raw.end();
+      cleanup("replay_gap");
       reply.hijack();
       return;
     }
     for (const event of replay) {
       await send(event, event.sequence);
     }
+    if (latestReplayEvent !== undefined) {
+      lastDeliveredSequence = latestReplayEvent.sequence;
+    }
+
+    // Flush events that arrived while the snapshot was being read/written.
+    // Drain in a loop because additional events may be buffered while we await
+    // each write. Dedup by monotonic sequence so events already covered by the
+    // snapshot (or earlier flushed entries) are not sent twice, and preserve
+    // ascending order. Once the buffer is empty we switch to direct delivery;
+    // the listener guard means no event can slip in between the final drain and
+    // the flag flip.
+    let flushIndex = 0;
+    let flushedEventCount = 0;
+    let lastFlushedEvent: RealtimeEvent | undefined;
+    while (!closed && flushIndex < liveBuffer.length) {
+      const event = liveBuffer[flushIndex];
+      flushIndex += 1;
+      if (!event) {
+        continue;
+      }
+      if (lastDeliveredSequence !== undefined && event.sequence <= lastDeliveredSequence) {
+        continue;
+      }
+      const wrote = await send(event, event.sequence);
+      if (!wrote) {
+        cleanup("stream_write_error");
+        reply.hijack();
+        return;
+      }
+      lastDeliveredSequence = event.sequence;
+      flushedEventCount += 1;
+      lastFlushedEvent = event;
+    }
+    replayFlushed = true;
+
+    if (closed) {
+      reply.hijack();
+      return;
+    }
+
+    const lastSentEvent = lastFlushedEvent ?? latestReplayEvent;
     fastify.services.realtimeEvents.touchRealtimeStreamLease({
       leaseId: lease.leaseId,
       requestedCursor,
-      lastSentSequence: latestReplayEvent?.sequence,
-      lastEventAt: latestReplayEvent?.timestamp,
+      lastSentSequence: lastSentEvent?.sequence,
+      lastEventAt: lastSentEvent?.timestamp,
     });
     await sendNamedEvent("stream-ready", {
       leaseId: lease.leaseId,
       clientId: lease.clientId,
       gatewayNodeId: lease.gatewayNodeId,
       requestedCursor,
-      replayedEventCount: replay.length,
-      lastSentSequence: latestReplayEvent?.sequence,
+      replayedEventCount: replay.length + flushedEventCount,
+      lastSentSequence: lastSentEvent?.sequence,
     });
 
-    let closed = false;
-    let writeChain = Promise.resolve();
-    let unsubscribe = () => undefined;
-    function cleanup(closeReason = "client_disconnect") {
-      if (closed) {
-        return;
-      }
-      closed = true;
-      controller.abort(new Error(closeReason));
-      clearInterval(keepAlive);
-      unsubscribe();
-      fastify.services.realtimeEvents.closeRealtimeStreamLease({
-        leaseId: lease.leaseId,
-        closeReason,
-      });
-      releaseConnection();
-      try {
-        raw.end();
-      } catch {
-        // ignore
-      }
-    }
-
-    const keepAlive = setInterval(() => {
+    keepAlive = setInterval(() => {
       void writeSseChunk(raw, ": keep-alive\n\n", controller.signal)
         .then((wrote) => {
           if (!wrote) {
@@ -225,25 +306,6 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
         .catch(() => cleanup("keepalive_write_error"));
     }, 25000);
 
-    unsubscribe = fastify.services.realtimeEvents.subscribeRealtime((event: RealtimeEvent) => {
-      writeChain = writeChain
-        .then(async () => {
-          const wrote = await send(event, event.sequence);
-          if (!wrote) {
-            cleanup("stream_write_error");
-            return;
-          }
-          fastify.services.realtimeEvents.touchRealtimeStreamLease({
-            leaseId: lease.leaseId,
-            lastSentSequence: event.sequence,
-            lastEventAt: event.timestamp,
-          });
-        })
-        .catch(() => cleanup("stream_write_error"));
-    });
-
-    raw.on("close", () => cleanup("client_disconnect"));
-    request.raw.on("aborted", () => cleanup("client_aborted"));
     reply.hijack();
   });
 };
