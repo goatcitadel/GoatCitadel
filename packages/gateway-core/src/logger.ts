@@ -27,8 +27,86 @@ export interface Logger {
 }
 
 const REDACTED_LOG_VALUE = "[redacted]";
-const SENSITIVE_LOG_KEY_PATTERN =
-  /(?:api[_-]?key|authorization|bearer|client[_-]?secret|companion[_-]?session[_-]?token|connector[_-]?secret[_-]?value|cookie|idempotency[_-]?key|password|provider[_-]?api[_-]?key|refresh[_-]?token|request[_-]?secret|secret|session[_-]?token|token)$/i;
+
+/**
+ * Segments that mark a key as credential-bearing wherever they appear. These
+ * words do not occur in benign usage/config fields, so a whole-segment match is
+ * safe to redact regardless of position.
+ */
+const SECRET_KEY_SEGMENTS = new Set([
+  "authorization",
+  "bearer",
+  "cookie",
+  "credential",
+  "credentials",
+  "passwd",
+  "password",
+  "secret",
+]);
+
+/**
+ * Adjacent segment pairs that together denote a credential. The trailing word
+ * ("key", "secret", "token") is too broad on its own (e.g. cacheKey,
+ * tokenCount), so it only triggers redaction next to one of these qualifiers.
+ */
+const SECRET_SEGMENT_PAIRS: ReadonlyArray<readonly [string, string]> = [
+  ["api", "key"],
+  ["private", "key"],
+  ["idempotency", "key"],
+  ["client", "secret"],
+];
+
+/**
+ * Segments that mark a key as a usage/count/limit/tokenizer field. When any of
+ * these is present, a "token" segment is treated as a metric (e.g.
+ * prompt_tokens, max_tokens, token_count, tokenizer) and never redacted.
+ */
+const TOKEN_USAGE_SEGMENTS = new Set(["budget", "count", "limit", "max", "per", "remaining", "total", "usage", "used"]);
+
+/** Split a key into lowercase segments on `_`, `-`, and camelCase boundaries. */
+function splitKeySegments(key: string): readonly string[] {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .split(/[\s_-]+/)
+    .map((segment) => segment.toLowerCase())
+    .filter((segment) => segment.length > 0);
+}
+
+/**
+ * A singular `token` segment denotes a credential (authToken, accessToken,
+ * sessionToken, x-api-token, or a bare `token`). Plural `tokens` (prompt_tokens,
+ * maxTokens) and tokenizer/usage fields are metrics and are excluded.
+ */
+function hasCredentialTokenSegment(segments: readonly string[]): boolean {
+  if (!segments.includes("token")) {
+    return false;
+  }
+  if (segments.some((segment) => TOKEN_USAGE_SEGMENTS.has(segment))) {
+    return false;
+  }
+  return segments.at(-1) === "token";
+}
+
+/**
+ * Decide whether a metadata key should be redacted. Matching is segment-aware
+ * (case-insensitive, boundary-aware) so `authToken`, `apiKeyHash`,
+ * `secretValue`, `clientSecret`, and `x-api-key` redact, while usage counters
+ * such as `prompt_tokens`, `maxTokens`, `tokenCount`, and `tokenizer` do not.
+ */
+function isSensitiveLogKey(key: string): boolean {
+  const segments = splitKeySegments(key);
+  if (segments.some((segment) => SECRET_KEY_SEGMENTS.has(segment))) {
+    return true;
+  }
+  const hasSegmentPair = SECRET_SEGMENT_PAIRS.some(([first, second]) =>
+    segments.some((segment, index) => segment === first && segments[index + 1] === second),
+  );
+  if (hasSegmentPair) {
+    return true;
+  }
+  return hasCredentialTokenSegment(segments);
+}
 
 function formatError(errorOrContext: unknown): LogContext {
   if (errorOrContext instanceof Error) {
@@ -113,7 +191,7 @@ function sanitizeLogValue(value: unknown, seen: WeakSet<object>): unknown {
     if (typeof entry === "function") {
       continue;
     }
-    if (SENSITIVE_LOG_KEY_PATTERN.test(key)) {
+    if (isSensitiveLogKey(key)) {
       result[key] = REDACTED_LOG_VALUE;
       continue;
     }
