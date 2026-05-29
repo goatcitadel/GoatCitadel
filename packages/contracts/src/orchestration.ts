@@ -16,6 +16,14 @@ export type OrchestrationExecutionState =
   | "cancelled";
 export type OrchestrationWorktreeStatus = "uninitialized" | "allocating" | "ready" | "blocked";
 
+/**
+ * Why an orchestration run reached the `stopped_by_limit` status.
+ *
+ * - `plan_limit`: a plan-level cap was reached (`maxIterations`, `maxRuntimeMinutes`, or `maxCostUsd`).
+ * - `wave_budget_exceeded`: a wave's accumulated cost reached or exceeded its `budgetUsd`.
+ */
+export type OrchestrationStopReason = "plan_limit" | "wave_budget_exceeded";
+
 export interface OrchestrationPhase {
   phaseId: string;
   ownerAgentId: string;
@@ -83,6 +91,14 @@ export interface OrchestrationRun extends OrchestrationRunPolicyContext {
   currentPhaseId?: string;
   totalCostUsd: number;
   totalIterations: number;
+  /**
+   * Accumulated cost (USD) attributed to each wave, keyed by `waveId`. Used to enforce
+   * per-wave `budgetUsd` independently of the plan-level `maxCostUsd` cap. Persisted with
+   * the run so wave budgets remain enforced across durable resume.
+   */
+  waveCostUsdByWaveId?: Record<string, number>;
+  /** Populated only when `status` is `stopped_by_limit`, distinguishing plan vs wave caps. */
+  stopReason?: OrchestrationStopReason;
   workspaceId?: string;
   durableRunId?: string;
   executionState?: OrchestrationExecutionState;

@@ -1232,6 +1232,7 @@ export async function executeDurableOrchestrationRun(
   persistRunEvent(host, run, run.status === "stopped_by_limit" ? "run.stopped" : "run.completed", {
     totalIterations: run.totalIterations,
     totalCostUsd: run.totalCostUsd,
+    ...(run.status === "stopped_by_limit" ? { stopReason: run.stopReason ?? "plan_limit" } : {}),
   });
   publishRunRealtime(host, plan, run, {
     event: run.status === "stopped_by_limit" ? "run_stopped" : "run_completed",

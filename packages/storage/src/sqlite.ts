@@ -980,6 +980,14 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       `);
     },
   },
+  {
+    version: 99,
+    name: "orchestration_runs_wave_budget_accumulator",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "orchestration_runs", "wave_cost_usd_by_wave_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "orchestration_runs", "stop_reason", "TEXT");
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -1365,6 +1373,8 @@ function createBaseSchema(db: DatabaseSync): void {
       current_phase_id TEXT,
       total_cost_usd REAL NOT NULL DEFAULT 0,
       total_iterations INTEGER NOT NULL DEFAULT 0,
+      wave_cost_usd_by_wave_id TEXT,
+      stop_reason TEXT,
       workspace_id TEXT,
       durable_run_id TEXT,
       operator_id TEXT,
