@@ -202,6 +202,10 @@ export function useChatOutboundExecution(input: {
   const streamingPreviewBufferRef = useRef<ChatStreamingPreviewBuffer | null>(null);
   const visualStreamModeRef = useRef<ChatVisualStreamMode>(visualStreamMode);
   const streamReconcileTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Deferred approval-resolve refresh timers (APPROVAL_*_REFRESH_DELAYS_MS). Tracked
+  // so they can be cleared on unmount and on session switch, preventing refetches /
+  // setState for a session the operator has already left.
+  const approvalRefreshTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const sendingRef = useRef(false);
   const prefsRef = useRef<ChatSessionPrefsRecord | null>(prefs);
   const threadRef = useRef<ChatThreadResponse | null>(thread);
@@ -1264,7 +1268,8 @@ export function useChatOutboundExecution(input: {
           ? APPROVAL_RESUMED_REFRESH_DELAYS_MS
           : APPROVAL_FALLBACK_REFRESH_DELAYS_MS;
         for (const delayMs of refreshDelaysMs) {
-          globalThis.setTimeout(() => {
+          const timer = globalThis.setTimeout(() => {
+            approvalRefreshTimersRef.current.delete(timer);
             void refreshPendingApprovalQueue(approvalSessionId).catch(() => undefined);
             void loadSessionCoreState(selectedSession.sessionId, { background: true, includeThread: true }).catch(
               () => undefined,
@@ -1273,6 +1278,7 @@ export function useChatOutboundExecution(input: {
               void refreshPendingApprovalQueue(selectedSession.sessionId).catch(() => undefined);
             }
           }, delayMs);
+          approvalRefreshTimersRef.current.add(timer);
         }
         const scopeLabel =
           allowScope === "session"
@@ -1416,6 +1422,17 @@ export function useChatOutboundExecution(input: {
     return "idle";
   }, [error, queuedOutbound, sending]);
 
+  // Clear deferred approval-resolve refresh timers when the operator switches
+  // sessions, so the previous session is not re-fetched for up to ~3s afterwards.
+  useEffect(() => {
+    return () => {
+      for (const timer of approvalRefreshTimersRef.current) {
+        clearTimeout(timer);
+      }
+      approvalRefreshTimersRef.current.clear();
+    };
+  }, [selectedSessionId]);
+
   useEffect(
     () => () => {
       abortActiveChatStream(activeStreamRef.current);
@@ -1424,6 +1441,10 @@ export function useChatOutboundExecution(input: {
         clearTimeout(streamReconcileTimeoutRef.current);
         streamReconcileTimeoutRef.current = null;
       }
+      for (const timer of approvalRefreshTimersRef.current) {
+        clearTimeout(timer);
+      }
+      approvalRefreshTimersRef.current.clear();
       streamingPreviewBufferRef.current?.dispose();
       streamingPreviewBufferRef.current = null;
       setStreamingPreview(null);

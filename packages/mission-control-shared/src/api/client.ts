@@ -970,8 +970,24 @@ async function ensureEventStreamConnected(): Promise<void> {
     if (sharedEventSource !== source) {
       return;
     }
+    let parsed: unknown;
     try {
-      const event = JSON.parse(evt.data) as RealtimeEvent;
+      parsed = JSON.parse(evt.data);
+    } catch {
+      // ignore unparseable frames
+      return;
+    }
+    const event = normalizeRealtimeEvent(parsed);
+    if (!event) {
+      recordClientDiagnostic({
+        level: "warn",
+        category: "sse",
+        event: "malformed",
+        message: "Dropped malformed realtime event frame",
+      });
+      return;
+    }
+    try {
       if (typeof event.sequence === "number" && Number.isFinite(event.sequence)) {
         persistRealtimeCursor(event.sequence);
       }
@@ -1174,6 +1190,37 @@ function getOrCreateRealtimeClientId(): string {
   const next = crypto.randomUUID();
   window.localStorage.setItem(EVENT_CLIENT_ID_STORAGE_KEY, next);
   return next;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Validate and normalize a parsed SSE frame into a RealtimeEvent. Returns null
+ * when the frame is missing the discriminant fields required by downstream pure
+ * derivers (deriveRealtimeRefresh/Notification/EventTone), so a malformed/partial
+ * frame is dropped at the boundary instead of throwing later (e.g. on
+ * `event.payload.kind`). `payload` is defaulted to `{}` when missing/non-object
+ * so every consumer can safely read `event.payload.*`.
+ */
+function normalizeRealtimeEvent(raw: unknown): RealtimeEvent | null {
+  if (!isPlainRecord(raw)) {
+    return null;
+  }
+  if (typeof raw.eventType !== "string" || typeof raw.source !== "string") {
+    return null;
+  }
+  const payload = isPlainRecord(raw.payload) ? raw.payload : {};
+  const timestamp =
+    typeof raw.timestamp === "string" && raw.timestamp.length > 0 ? raw.timestamp : new Date().toISOString();
+  // Discriminant fields are runtime-validated above; preserve any unknown extra
+  // fields by spreading the original record, then guarantee payload/timestamp.
+  return {
+    ...raw,
+    payload,
+    timestamp,
+  } as unknown as RealtimeEvent;
 }
 
 function buildReplayGapRealtimeEvent(rawPayload: string): RealtimeEvent {

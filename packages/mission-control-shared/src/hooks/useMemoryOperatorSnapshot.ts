@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   acceptMemoryMaintenanceRecommendation,
   addMemoryDecisionRetrospective,
@@ -83,6 +83,10 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [policyDraft, setPolicyDraft] = useState<MemoryMaintenancePolicyDraft | null>(null);
   const [policyDirty, setPolicyDirty] = useState(false);
+  // Monotonic load id: results from a superseded load (overlapping reloads, or a
+  // reload that resolves after unmount/workspace switch) are dropped. Mirrors the
+  // guard in useCrossProjectRecentSessions / useApprovalQueue.
+  const loadSequenceRef = useRef(0);
 
   const load = useCallback(async () => {
     const sectionErrors = createEmptySectionErrors();
@@ -172,9 +176,14 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
   }, [workspaceId]);
 
   const reload = useCallback(async () => {
+    const loadId = loadSequenceRef.current + 1;
+    loadSequenceRef.current = loadId;
     setError(null);
     try {
       const next = await load();
+      if (loadSequenceRef.current !== loadId) {
+        return;
+      }
       setData(next);
       setSelectedItemId((current) => current ?? next.memoryItems[0]?.itemId ?? null);
       setSelectedRunId((current) => current ?? next.maintenanceRuns[0]?.runId ?? null);
@@ -182,17 +191,21 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
         setPolicyDraft(toMemoryMaintenancePolicyDraft(next.maintenanceStatus.policy));
       }
     } catch (loadError) {
+      if (loadSequenceRef.current !== loadId) {
+        return;
+      }
       setError(getErrorMessage(loadError));
     }
   }, [load, policyDirty]);
 
   useEffect(() => {
-    let cancelled = false;
+    const loadId = loadSequenceRef.current + 1;
+    loadSequenceRef.current = loadId;
     setLoading(true);
     setError(null);
     void load()
       .then((next) => {
-        if (cancelled) {
+        if (loadSequenceRef.current !== loadId) {
           return;
         }
         setData(next);
@@ -203,17 +216,20 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
         }
       })
       .catch((loadError) => {
-        if (!cancelled) {
-          setError(getErrorMessage(loadError));
+        if (loadSequenceRef.current !== loadId) {
+          return;
         }
+        setError(getErrorMessage(loadError));
       })
       .finally(() => {
-        if (!cancelled) {
+        if (loadSequenceRef.current === loadId) {
           setLoading(false);
         }
       });
     return () => {
-      cancelled = true;
+      // Invalidate this load (and any reload in flight) so a late resolution
+      // after unmount or workspace switch cannot setState on an unmounted hook.
+      loadSequenceRef.current += 1;
     };
   }, [load]);
 

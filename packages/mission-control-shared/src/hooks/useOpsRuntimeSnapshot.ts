@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchCostSummary,
   fetchDaemonStatus,
@@ -60,6 +60,10 @@ export function useOpsRuntimeSnapshot() {
   const [data, setData] = useState<RuntimeSnapshotData | null>(null);
   const [lastFetchedAt, setLastFetchedAt] = useState<number | null>(null);
   const [isStale, setIsStale] = useState(false);
+  // Monotonic load id: results from a superseded load (overlapping reloads, or a
+  // reload that resolves after unmount/teardown) are dropped. Mirrors the guard in
+  // useCrossProjectRecentSessions / useApprovalQueue.
+  const loadSequenceRef = useRef(0);
 
   const load = useCallback(async () => {
     const [dashboard, timeline, health, cost, daemon, backups, sessions, mcpServers] = await Promise.all([
@@ -96,24 +100,33 @@ export function useOpsRuntimeSnapshot() {
   }, []);
 
   const reload = useCallback(async () => {
+    const loadId = loadSequenceRef.current + 1;
+    loadSequenceRef.current = loadId;
     setError(null);
     try {
       const next = await load();
+      if (loadSequenceRef.current !== loadId) {
+        return;
+      }
       setData(next);
       setLastFetchedAt(Date.now());
       setIsStale(false);
     } catch (loadError) {
+      if (loadSequenceRef.current !== loadId) {
+        return;
+      }
       setError(getErrorMessage(loadError));
     }
   }, [load]);
 
   useEffect(() => {
-    let cancelled = false;
+    const loadId = loadSequenceRef.current + 1;
+    loadSequenceRef.current = loadId;
     setLoading(true);
     setError(null);
     void load()
       .then((next) => {
-        if (cancelled) {
+        if (loadSequenceRef.current !== loadId) {
           return;
         }
         setData(next);
@@ -121,19 +134,21 @@ export function useOpsRuntimeSnapshot() {
         setIsStale(false);
       })
       .catch((loadError) => {
-        if (cancelled) {
+        if (loadSequenceRef.current !== loadId) {
           return;
         }
         setError(getErrorMessage(loadError));
       })
       .finally(() => {
-        if (!cancelled) {
+        if (loadSequenceRef.current === loadId) {
           setLoading(false);
         }
       });
 
     return () => {
-      cancelled = true;
+      // Invalidate this load (and any reload in flight) so a late resolution
+      // after unmount or session switch cannot setState on an unmounted hook.
+      loadSequenceRef.current += 1;
     };
   }, [load]);
 
