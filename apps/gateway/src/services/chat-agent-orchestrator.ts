@@ -3009,17 +3009,17 @@ export class ChatAgentOrchestrator {
         },
       };
     });
-    for (const explicitToolName of extractExplicitToolLikeReferences(input.content)) {
-      if (suppressLocalPathTools && LOCAL_PATH_TOOL_NAMES.has(explicitToolName)) {
-        continue;
-      }
-      if (canonicalToModel.has(explicitToolName)) {
-        continue;
-      }
-      const modelName = toProviderToolFunctionName(explicitToolName, modelToCanonical);
-      modelToCanonical.set(modelName, explicitToolName);
-      canonicalToModel.set(explicitToolName, modelName);
-    }
+    // AGENTORCH-005: the canonical maps (`modelToCanonical` /
+    // `canonicalToModel`) are the authoritative allow-map that
+    // `resolveAllowedModelToolCallName` consults to decide whether a model tool
+    // call is permitted. They are populated exclusively from the selected
+    // catalog above — i.e. tools that are registered AND passed the access
+    // check. `namespace.method` tokens that merely appear in user/model content
+    // are intentionally NOT registered here: doing so would widen the
+    // fail-closed allow-map to arbitrary content-derived names that were never
+    // catalog-registered or access-checked. Content references still influence
+    // tool selection/scoring via `detectExplicitToolMentions`, but they must
+    // not grant authorization.
 
     return {
       tools,
@@ -14712,26 +14712,6 @@ function detectExplicitToolMentions(content: string, toolNames: Iterable<string>
       (underscored !== dotted && hasStandaloneToolReference(normalized, underscored))
     ) {
       matches.add(toolName);
-    }
-  }
-  return matches;
-}
-
-function extractExplicitToolLikeReferences(content: string): Set<string> {
-  const matches = new Set<string>();
-  const normalized = content.toLowerCase();
-  for (const match of normalized.matchAll(
-    /\b(browser|http|file|code|memory|shell|git|tests|lint|time|artifacts|documents|presentations)\.[a-z][a-z0-9_.-]*\b/g,
-  )) {
-    matches.add(match[0]!);
-  }
-  for (const match of normalized.matchAll(
-    /\b(browser|http|file|code|memory|shell|git|tests|lint|time|artifacts|documents|presentations)_[a-z][a-z0-9_-]*\b/g,
-  )) {
-    const raw = match[0]!;
-    const namespaceEnd = raw.indexOf("_");
-    if (namespaceEnd > 0) {
-      matches.add(`${raw.slice(0, namespaceEnd)}.${raw.slice(namespaceEnd + 1)}`);
     }
   }
   return matches;
