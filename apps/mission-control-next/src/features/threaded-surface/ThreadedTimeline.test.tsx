@@ -235,6 +235,14 @@ describe("ThreadedTimeline", () => {
     expect(renderer.root.findByProps({ "aria-label": "Citations for this answer" })).toBeTruthy();
     expect(renderer.root.findByProps({ className: "mc-next-thread-live-region" }).props["aria-live"]).toBe("polite");
     expect(renderer.root.findByProps({ className: "chat-stream-status-bar tone-active" }).props.role).toBeUndefined();
+    // Exactly one element owns the streaming-status announcement: the dedicated live
+    // region. The embedded status bar is silenced (announce=false) and no other node in
+    // the streaming surface carries role="status" / aria-live for that announcement.
+    const streamingLiveRegions = renderer.root.findAll(
+      (node) => node.props.role === "status" || node.props["aria-live"] === "polite",
+    );
+    expect(streamingLiveRegions).toHaveLength(1);
+    expect(streamingLiveRegions[0]?.props.className).toBe("mc-next-thread-live-region");
     expect(renderer.root.findAllByType("a").map((link) => link.props.href)).toEqual([
       "https://example.test/launch-notes",
     ]);
@@ -539,7 +547,10 @@ describe("ThreadedTimeline", () => {
     ).toEqual(["Actions"]);
 
     const turnSurface = renderer.root.findByProps({ className: "mc-next-thread-turn-surface" });
-    expect(turnSurface.props.role).toBe("button");
+    // Corrected a11y contract: the turn surface wraps interactive content (links, copy
+    // button, citations), so it is a keyboard-activatable labelled group, not a button role.
+    expect(turnSurface.props.role).toBe("group");
+    expect(turnSurface.props.tabIndex).toBe(0);
     expect(turnSurface.props["aria-current"]).toBeUndefined();
     expect(turnSurface.props["aria-label"]).toBe("Select turn turn-1");
     const currentTarget = {};

@@ -181,7 +181,16 @@ export function ChatThreadView({
 
   return (
     <div className="chat-v11-thread-view mc-next-thread-view">
-      <ChatStreamStatusBar mode={mode} status={streamStatus} queuedCount={queuedCount} error={streamError} />
+      {/* Single live-region owner for streaming status in this surface. The streaming
+          skeleton is intentionally not a live region, so this status bar is the only
+          element that announces streaming/assistant activity to screen readers. */}
+      <ChatStreamStatusBar
+        mode={mode}
+        status={streamStatus}
+        queuedCount={queuedCount}
+        error={streamError}
+        announce={true}
+      />
       <div
         ref={scrollRef}
         className="chat-v11-thread-list chat-v11-thread-virtuoso mc-next-thread-list"
