@@ -4,6 +4,7 @@ import {
   normalizeSlackWebhookPayload,
   verifySlackSignature,
 } from "../services/slack-webhook.js";
+import { resolveAllowedSenders } from "@goatcitadel/contracts";
 import { readConfigSecret } from "./integration-webhooks-shared.js";
 import { asString } from "../services/webhook-json-helpers.js";
 import {
@@ -87,13 +88,14 @@ export function registerSlackWebhookRoutes(fastify: FastifyInstance): void {
           parsed: normalized,
         };
       },
-      dispatch: async ({ connectionId, request, rawBody, parsed }) =>
+      dispatch: async ({ connectionId, connection, request, rawBody, parsed }) =>
         dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
           channel: "slack",
           connectionId,
           idempotencyKey: deriveSlackWebhookIdempotencyKey(connectionId, request.body, rawBody),
           eventType: parsed.eventType,
           bindingTarget: parsed.room ?? parsed.peer,
+          allowedSenders: resolveAllowedSenders(connection.config),
           message: {
             eventId: parsed.eventId,
             account: parsed.account,

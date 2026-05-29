@@ -1,7 +1,7 @@
 import { Readable } from "node:stream";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import type { ChannelActivityInput, ChannelActivityResult } from "@goatcitadel/contracts";
+import { type ChannelActivityInput, type ChannelActivityResult, isSenderAllowed } from "@goatcitadel/contracts";
 import type { ChatCommandOptions } from "../services/chat-command-service.js";
 import { ChannelBotLoopGuard, type BotLoopGuardConfig } from "../services/channel-bot-loop-guard.js";
 
@@ -307,6 +307,13 @@ export async function dispatchInboundWebhookMessage(
     idempotencyKey: string;
     eventType: string;
     bindingTarget?: string;
+    /**
+     * Opt-in per-connection sender allowlist resolved from the connection
+     * config (see resolveAllowedSenders in @goatcitadel/contracts). An
+     * empty/unset list is default-allow and changes nothing; a non-empty list
+     * drops any inbound sender whose actorId is not listed.
+     */
+    allowedSenders?: readonly string[];
     message: IngestChannelMessageInput;
     responseOptions?: {
       deliveryReplyToMessageId?: string;
@@ -315,6 +322,32 @@ export async function dispatchInboundWebhookMessage(
   },
   loopGuard: ChannelBotLoopGuard = sharedInboundBotLoopGuard,
 ) {
+  // Sender allowlist gate (opt-in). Unlike the bot-loop guard, this runs
+  // *before* ingest/binding: a sender that is not allowlisted must never open
+  // or bind a session, nor dispatch a turn. An empty/unset allowlist is
+  // default-allow and falls straight through, preserving existing behavior.
+  if (!isSenderAllowed(options.allowedSenders ?? [], options.message.actorId)) {
+    integrationWebhooks.recordDevDiagnostic?.({
+      level: "warn",
+      category: "channels",
+      event: "channel.sender_not_allowlisted",
+      message: "Dropped an inbound channel message because the sender is not on the connection allowlist.",
+      context: {
+        channel: options.channel,
+        connectionId: options.connectionId,
+        actorId: options.message.actorId,
+        eventType: options.eventType,
+      },
+    });
+    return {
+      accepted: true,
+      replied: false,
+      ignored: true as const,
+      reason: "sender_not_allowlisted",
+      eventType: options.eventType,
+    };
+  }
+
   const ingestResult = await integrationWebhooks.ingestChannelMessage(
     options.channel,
     options.idempotencyKey,

@@ -299,6 +299,115 @@ describe("webhook-handler-factory contract behavior", () => {
     );
   });
 
+  it("drops an inbound message from a sender that is not on a non-empty allowlist", async () => {
+    const recordDevDiagnostic = vi.fn();
+    const gateway = {
+      ingestChannelMessage: vi.fn(),
+      setChatSessionBinding: vi.fn(),
+      respondToExistingChatMessage: vi.fn(),
+      emitChannelActivity: vi.fn(),
+      recordDevDiagnostic,
+    };
+
+    const result = await dispatchInboundWebhookMessage(gateway as any, {
+      channel: "slack",
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      idempotencyKey: "slack:event-blocked",
+      eventType: "message",
+      bindingTarget: "C1",
+      allowedSenders: ["U-OWNER"],
+      message: {
+        eventId: "event-blocked",
+        account: "11111111-1111-1111-1111-111111111111",
+        room: "C1",
+        actorId: "U-Intruder",
+        content: "let me in",
+      },
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        accepted: true,
+        replied: false,
+        ignored: true,
+        reason: "sender_not_allowlisted",
+        eventType: "message",
+      }),
+    );
+    // No session is opened, no binding is set, and no turn is dispatched.
+    expect(gateway.ingestChannelMessage).not.toHaveBeenCalled();
+    expect(gateway.setChatSessionBinding).not.toHaveBeenCalled();
+    expect(gateway.respondToExistingChatMessage).not.toHaveBeenCalled();
+    expect(recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "channel.sender_not_allowlisted", category: "channels" }),
+    );
+  });
+
+  it("allows a listed sender through the allowlist using a case-insensitive trimmed match", async () => {
+    const gateway = {
+      ingestChannelMessage: vi.fn(async () => ({
+        deduped: false,
+        session: { sessionId: "session-allow" },
+      })),
+      setChatSessionBinding: vi.fn(),
+      respondToExistingChatMessage: vi.fn(async () => ({ turnId: "turn-allow" })),
+      emitChannelActivity: vi.fn(async () => ({ effects: [] })),
+      recordDevDiagnostic: vi.fn(),
+    };
+
+    const result = await dispatchInboundWebhookMessage(gateway as any, {
+      channel: "slack",
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      idempotencyKey: "slack:event-allow",
+      eventType: "message",
+      bindingTarget: "C1",
+      allowedSenders: ["u-owner"],
+      message: {
+        eventId: "event-allow",
+        account: "11111111-1111-1111-1111-111111111111",
+        room: "C1",
+        actorId: "  U-Owner  ",
+        content: "hello",
+      },
+    });
+
+    expect(result.replied).toBe(true);
+    expect(gateway.ingestChannelMessage).toHaveBeenCalledTimes(1);
+    expect(gateway.respondToExistingChatMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats an empty/unset allowlist as default-allow for every sender", async () => {
+    const gateway = {
+      ingestChannelMessage: vi.fn(async () => ({
+        deduped: false,
+        session: { sessionId: "session-open" },
+      })),
+      setChatSessionBinding: vi.fn(),
+      respondToExistingChatMessage: vi.fn(async () => ({ turnId: "turn-open" })),
+      emitChannelActivity: vi.fn(async () => ({ effects: [] })),
+      recordDevDiagnostic: vi.fn(),
+    };
+
+    const result = await dispatchInboundWebhookMessage(gateway as any, {
+      channel: "slack",
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      idempotencyKey: "slack:event-open",
+      eventType: "message",
+      bindingTarget: "C1",
+      allowedSenders: [],
+      message: {
+        eventId: "event-open",
+        account: "11111111-1111-1111-1111-111111111111",
+        room: "C1",
+        actorId: "anyone-at-all",
+        content: "hello",
+      },
+    });
+
+    expect(result.replied).toBe(true);
+    expect(gateway.ingestChannelMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("binds the chat session and replies only when the inbound webhook event is new", async () => {
     const gateway = {
       ingestChannelMessage: vi.fn(async () => ({

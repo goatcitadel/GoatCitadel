@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { PersonalityCatalogResponse } from "@goatcitadel/contracts";
+import { type PersonalityCatalogResponse, resolveAllowedSenders } from "@goatcitadel/contracts";
 import { listPersonalityPresets } from "../services/channel-personalities.js";
 import {
   buildChannelPersonalitySystemOverlay,
@@ -266,6 +266,7 @@ export function registerTelegramWebhookRoutes(fastify: FastifyInstance): void {
           idempotencyKey: deriveTelegramWebhookIdempotencyKey(connectionId, request.body, rawBody),
           eventType: parsed.eventType,
           bindingTarget: target,
+          allowedSenders: resolveAllowedSenders(connection.config),
           message: {
             eventId: parsed.eventId,
             account: parsed.account,

@@ -4,6 +4,7 @@ import {
   normalizeWhatsAppWebhookPayload,
   verifyWhatsAppWebhookSignature,
 } from "../services/whatsapp-webhook.js";
+import { resolveAllowedSenders } from "@goatcitadel/contracts";
 import { resolveWhatsAppAppSecret, resolveWhatsAppVerifyToken } from "./integration-webhooks-shared.js";
 import { timingSafeStringEqual } from "../services/webhook-json-helpers.js";
 import {
@@ -115,13 +116,14 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
           parsed: normalized,
         };
       },
-      dispatch: async ({ connectionId, request, rawBody, parsed }) =>
+      dispatch: async ({ connectionId, connection, request, rawBody, parsed }) =>
         dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
           channel: "whatsapp",
           connectionId,
           idempotencyKey: deriveWhatsAppWebhookIdempotencyKey(connectionId, request.body, rawBody),
           eventType: parsed.eventType,
           bindingTarget: parsed.peer,
+          allowedSenders: resolveAllowedSenders(connection.config),
           message: {
             eventId: parsed.eventId,
             account: parsed.account,
