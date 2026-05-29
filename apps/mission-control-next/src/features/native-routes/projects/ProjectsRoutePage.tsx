@@ -29,7 +29,14 @@ import {
   updateChatProject,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { RecentCrossProjectSessionsRow } from "./RecentCrossProjectSessionsRow";
+import {
+  NewSessionButton,
+  ProjectGlyphButton,
+  ProjectHomeMetric,
+  filterEmptyLabel,
+} from "./ProjectsRoutePage.components";
 import type { AppRoute } from "@next/app/route-model";
+import { useIsMounted } from "@next/hooks/use-is-mounted";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, FilterPillGroup, ModeBar } from "../primitives";
 import { readRouteDiagnosticNow, recordRouteAction, recordRouteDataLoad } from "../route-diagnostics";
@@ -82,6 +89,7 @@ export function ProjectsRoutePage({
   const [createDraft, setCreateDraft] = useState({ name: "", workspacePath: "", description: "" });
   const [editDraft, setEditDraft] = useState({ name: "", workspacePath: "", description: "" });
   const [filterView, setFilterView] = useState<ProjectFilterView>("all");
+  const isMounted = useIsMounted();
 
   const pinController = useProjectPinController(activeWorkspaceId);
 
@@ -267,7 +275,9 @@ export function ProjectsRoutePage({
         theme: route.theme,
       });
     } catch (error) {
-      setActionError(getErrorMessage(error));
+      if (isMounted()) {
+        setActionError(getErrorMessage(error));
+      }
     }
   };
 
@@ -304,6 +314,9 @@ export function ProjectsRoutePage({
         workspacePath,
         description: createDraft.description.trim() || undefined,
       });
+      if (!isMounted()) {
+        return;
+      }
       setState((current) => ({
         ...current,
         projects: [project, ...current.projects.filter((item) => item.projectId !== project.projectId)],
@@ -314,9 +327,13 @@ export function ProjectsRoutePage({
       });
       navigate({ area: "projects", projectId: project.projectId, theme: route.theme });
     } catch (error) {
-      setActionError(getErrorMessage(error));
+      if (isMounted()) {
+        setActionError(getErrorMessage(error));
+      }
     } finally {
-      setProjectActionBusy(null);
+      if (isMounted()) {
+        setProjectActionBusy(null);
+      }
     }
   };
 
@@ -339,6 +356,9 @@ export function ProjectsRoutePage({
         workspacePath,
         description: editDraft.description.trim() || undefined,
       });
+      if (!isMounted()) {
+        return;
+      }
       setState((current) => ({
         ...current,
         projects: current.projects.map((item) => (item.projectId === project.projectId ? project : item)),
@@ -347,9 +367,13 @@ export function ProjectsRoutePage({
         projectId: project.projectId,
       });
     } catch (error) {
-      setActionError(getErrorMessage(error));
+      if (isMounted()) {
+        setActionError(getErrorMessage(error));
+      }
     } finally {
-      setProjectActionBusy(null);
+      if (isMounted()) {
+        setProjectActionBusy(null);
+      }
     }
   };
 
@@ -358,6 +382,9 @@ export function ProjectsRoutePage({
     setCardActionBusy(`archive:${project.projectId}`);
     try {
       const archived = await archiveChatProject(project.projectId);
+      if (!isMounted()) {
+        return;
+      }
       setState((current) => ({
         ...current,
         projects: current.projects.map((item) => (item.projectId === archived.projectId ? archived : item)),
@@ -369,9 +396,13 @@ export function ProjectsRoutePage({
         navigate({ area: "projects", theme: route.theme }, { replace: true });
       }
     } catch (error) {
-      setActionError(getErrorMessage(error));
+      if (isMounted()) {
+        setActionError(getErrorMessage(error));
+      }
     } finally {
-      setCardActionBusy(null);
+      if (isMounted()) {
+        setCardActionBusy(null);
+      }
     }
   };
 
@@ -380,6 +411,9 @@ export function ProjectsRoutePage({
     setCardActionBusy(`restore:${project.projectId}`);
     try {
       const restored = await restoreChatProject(project.projectId);
+      if (!isMounted()) {
+        return;
+      }
       setState((current) => ({
         ...current,
         projects: current.projects.map((item) => (item.projectId === restored.projectId ? restored : item)),
@@ -388,9 +422,13 @@ export function ProjectsRoutePage({
         projectId: restored.projectId,
       });
     } catch (error) {
-      setActionError(getErrorMessage(error));
+      if (isMounted()) {
+        setActionError(getErrorMessage(error));
+      }
     } finally {
-      setCardActionBusy(null);
+      if (isMounted()) {
+        setCardActionBusy(null);
+      }
     }
   };
 
@@ -719,50 +757,6 @@ export function ProjectsRoutePage({
   );
 }
 
-function filterEmptyLabel(view: ProjectFilterView): string {
-  switch (view) {
-    case "pinned":
-      return "No pinned projects yet. Pin a project from its card to keep it close.";
-    case "archived":
-      return "No archived projects in this workspace.";
-    case "active":
-      return "No active projects in this workspace.";
-    default:
-      return "No projects found in this workspace.";
-  }
-}
-
-function ProjectGlyphButton({
-  label,
-  pressed,
-  busy,
-  onClick,
-  children,
-}: {
-  label: string;
-  pressed: boolean;
-  busy?: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      className={`mc-next-project-card-glyph${pressed ? " is-pressed" : ""}`}
-      aria-pressed={pressed}
-      aria-label={label}
-      disabled={busy}
-      onClick={(event) => {
-        event?.stopPropagation?.();
-        onClick();
-      }}
-    >
-      {children}
-      <span className="mc-next-sr-only">{label}</span>
-    </button>
-  );
-}
-
 function ProjectHomeBasePanel({
   home,
   pendingApprovals,
@@ -890,16 +884,6 @@ function ProjectHomeBasePanel({
   );
 }
 
-function ProjectHomeMetric({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return (
-    <div className="mc-next-settings-metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <p>{detail}</p>
-    </div>
-  );
-}
-
 function ProjectThreadGroup({
   mode,
   label,
@@ -948,32 +932,6 @@ function ProjectThreadGroup({
         <EmptyState size="compact" title={`No ${label.toLowerCase()} threads in this project.`} />
       )}
     </section>
-  );
-}
-
-function NewSessionButton({
-  mode,
-  label,
-  disabled,
-  onSelect,
-}: {
-  mode: ChatMode;
-  label: string;
-  disabled: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      className="mc-next-new-session-button"
-      data-mode={mode}
-      disabled={disabled}
-      onClick={onSelect}
-    >
-      <span className="mc-next-new-session-button-swatch" aria-hidden="true" />
-      <MessageSquarePlus className="h-4 w-4" />
-      {label}
-    </button>
   );
 }
 
