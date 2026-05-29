@@ -360,4 +360,114 @@ describe("anthropicProviderAdapter", () => {
         .next(),
     ).rejects.toThrow(/messages request failed \(401 Unauthorized\): bad key/);
   });
+
+  it("turns an HTML-bodied 200 response into a clean provider error instead of a SyntaxError", async () => {
+    const htmlBody = "<html><head><title>Just a moment...</title></head><body>Verifying...</body></html>";
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(htmlBody, { status: 200, statusText: "OK", headers: { "content-type": "application/json" } }),
+    );
+
+    const error = await anthropicProviderAdapter
+      .chatCompletions({ messages: [{ role: "user", content: "hello" }] }, resolved, "claude-test", host)
+      .then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).name).not.toBe("SyntaxError");
+    expect((error as Error).message).toMatch(/messages request returned malformed JSON \(200 OK\)/);
+    expect((error as Error).message).toMatch(/Just a moment/);
+  });
+
+  it("turns an HTML-bodied 200 stream fallback into a clean provider error instead of a SyntaxError", async () => {
+    const htmlBody = "<!doctype html><html><body>gateway timeout</body></html>";
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(htmlBody, { status: 200, statusText: "OK", headers: { "content-type": "application/json" } }),
+    );
+
+    const error = await anthropicProviderAdapter
+      .chatCompletionsStream({ messages: [{ role: "user", content: "hello" }] }, resolved, "claude-test", host)
+      .next()
+      .then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).name).not.toBe("SyntaxError");
+    expect((error as Error).message).toMatch(/messages request returned malformed JSON \(200 OK\)/);
+    expect((error as Error).message).toMatch(/gateway timeout/);
+  });
+
+  it("translates an OpenAI base64 data-URL image_url part into an Anthropic base64 image block", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ id: "msg_img", model: "claude-test", content: [{ type: "text", text: "ok" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await anthropicProviderAdapter.chatCompletions(
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "What is this?" },
+              { type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==" } },
+            ] as never,
+          },
+        ],
+      },
+      resolved,
+      "claude-test",
+      host,
+    );
+
+    const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(payload.messages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What is this?" },
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgoAAAANSUhEUg==" },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("translates an OpenAI https image_url part into an Anthropic url image block", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ id: "msg_img", model: "claude-test", content: [{ type: "text", text: "ok" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await anthropicProviderAdapter.chatCompletions(
+      {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "image_url", image_url: { url: "https://example.test/cat.jpg" } }] as never,
+          },
+        ],
+      },
+      resolved,
+      "claude-test",
+      host,
+    );
+
+    const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(payload.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "image", source: { type: "url", url: "https://example.test/cat.jpg" } }],
+      },
+    ]);
+  });
 });

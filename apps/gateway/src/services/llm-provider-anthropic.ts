@@ -7,6 +7,7 @@ import type {
   LlmProviderResolution,
 } from "./llm-provider-adapter.js";
 import { applyEstimatedCostToChatResponse, applyEstimatedCostToStreamChunk } from "./llm-pricing.js";
+import { parseProviderJsonResponse } from "./llm-response-parsing.js";
 
 type FetchRequestInitWithDispatcher = RequestInit & { dispatcher?: Dispatcher };
 
@@ -31,7 +32,7 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
       throw new Error(await buildHttpError("messages request", response));
     }
 
-    const json = (await response.json()) as Record<string, unknown>;
+    const json = await parseProviderJsonResponse<Record<string, unknown>>("messages request", response);
     return applyEstimatedCostToChatResponse(adaptAnthropicMessageResponse(json), {
       providerId: resolved.provider.providerId,
       model,
@@ -60,7 +61,7 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
 
     const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
     if (!contentType.includes("text/event-stream") || !response.body) {
-      const json = (await response.json()) as Record<string, unknown>;
+      const json = await parseProviderJsonResponse<Record<string, unknown>>("messages request", response);
       yield applyEstimatedCostToChatResponse(adaptAnthropicMessageResponse(json), {
         providerId: resolved.provider.providerId,
         model,
@@ -403,7 +404,43 @@ function mapAnthropicContentBlock(block: unknown): Record<string, unknown> | und
   if (block.type === "text" && typeof block.text === "string" && !block.text.trim()) {
     return undefined;
   }
+  if (block.type === "image_url") {
+    return mapAnthropicImageBlock(block) ?? undefined;
+  }
   return block;
+}
+
+function mapAnthropicImageBlock(block: Record<string, unknown>): Record<string, unknown> | undefined {
+  const imageUrl = isRecord(block.image_url) ? block.image_url : undefined;
+  const url =
+    typeof imageUrl?.url === "string" ? imageUrl.url : typeof block.image_url === "string" ? block.image_url : "";
+  if (!url) {
+    return undefined;
+  }
+  const dataUrl = parseImageDataUrl(url);
+  if (dataUrl) {
+    return {
+      type: "image",
+      source: { type: "base64", media_type: dataUrl.mediaType, data: dataUrl.data },
+    };
+  }
+  if (/^https?:\/\//i.test(url)) {
+    return { type: "image", source: { type: "url", url } };
+  }
+  return undefined;
+}
+
+function parseImageDataUrl(url: string): { mediaType: string; data: string } | undefined {
+  const match = /^data:([^;,]+);base64,(.*)$/s.exec(url);
+  if (!match) {
+    return undefined;
+  }
+  const mediaType = match[1]?.trim();
+  const data = match[2] ?? "";
+  if (!mediaType || !data) {
+    return undefined;
+  }
+  return { mediaType, data };
 }
 
 function anthropicContentValue(content: Array<Record<string, unknown>>): string | Array<Record<string, unknown>> {
@@ -594,12 +631,12 @@ function tryParseJsonRecord(payload: string): Record<string, unknown> | null {
 async function* streamJsonSseResponse(response: Response): AsyncGenerator<Record<string, unknown>> {
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (!response.body) {
-    const json = (await response.json()) as Record<string, unknown>;
+    const json = await parseProviderJsonResponse<Record<string, unknown>>("messages stream", response);
     yield json;
     return;
   }
   if (!contentType.includes("text/event-stream")) {
-    const json = (await response.json()) as Record<string, unknown>;
+    const json = await parseProviderJsonResponse<Record<string, unknown>>("messages stream", response);
     yield json;
     return;
   }
