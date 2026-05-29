@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { assertSafeGitPositionalArg } from "../security-utils.js";
 
 const execFileAsync = promisify(execFile);
 const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
@@ -191,7 +192,8 @@ export async function collectSkillSourceDrift(
     }
 
     try {
-      const result = await runCommand("git", ["ls-remote", sourceUrl, "HEAD"], {
+      const safeSourceUrl = assertSafeGitPositionalArg(sourceUrl, "Tracked upstream URL");
+      const result = await runCommand("git", ["ls-remote", "--", safeSourceUrl, "HEAD"], {
         cwd: rootDir,
         timeout: 12_000,
         windowsHide: true,
