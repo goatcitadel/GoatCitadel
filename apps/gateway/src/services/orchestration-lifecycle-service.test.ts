@@ -45,6 +45,8 @@ function buildPlan(): OrchestrationPlan {
   };
 }
 
+let createRunSeq = 0;
+
 function buildRun(planId = "plan-1"): OrchestrationRun {
   return {
     runId: "run-1",
@@ -83,6 +85,7 @@ function createHost(overrides: Partial<OrchestrationLifecycleHost> = {}): Orches
     updatedAt: "2026-04-12T00:00:00.000Z",
   };
   const storage = {
+    runImmediateTransaction: vi.fn(<T>(callback: () => T): T => callback()),
     orchestration: {
       upsertPlan: vi.fn(),
       getPlan: vi.fn(() => plan),
@@ -247,6 +250,52 @@ function createRuntimeDeps(overrides: RuntimeDepsOverrides = {}): OrchestrationL
       })),
       ...overrides.phaseExecutor,
     },
+  };
+}
+
+/**
+ * Stateful store that models the ORCH-001 concurrency contract.
+ *
+ * The optimistic OUTER read of findActiveRunByPlan always misses (returns
+ * undefined) — this represents the race window where two callers both observe
+ * "no active run" before either has committed. The serialization point is the
+ * synchronous runImmediateTransaction: the active-run re-check performed INSIDE
+ * the transaction sees committed state, exactly like SQLite IMMEDIATE
+ * transactions, so only the first caller inserts and the second observes the
+ * committed run.
+ */
+function createRaceStore(): {
+  createdRuns: OrchestrationRun[];
+  runImmediateTransaction: <T>(callback: () => T) => T;
+  findActiveRunByPlan: (planId: string, workspaceId?: string) => OrchestrationRun | undefined;
+  createRun: (run: OrchestrationRun) => OrchestrationRun;
+} {
+  const createdRuns: OrchestrationRun[] = [];
+  const activeByKey = new Map<string, OrchestrationRun>();
+  let insideTransaction = false;
+  const keyFor = (planId: string, workspaceId = "default"): string => `${planId}::${workspaceId}`;
+
+  return {
+    createdRuns,
+    runImmediateTransaction: vi.fn(<T>(callback: () => T): T => {
+      insideTransaction = true;
+      try {
+        return callback();
+      } finally {
+        insideTransaction = false;
+      }
+    }),
+    findActiveRunByPlan: vi.fn((planId: string, workspaceId = "default") => {
+      if (!insideTransaction) {
+        return undefined;
+      }
+      return activeByKey.get(keyFor(planId, workspaceId));
+    }),
+    createRun: vi.fn((run: OrchestrationRun) => {
+      createdRuns.push(run);
+      activeByKey.set(keyFor(run.planId, run.workspaceId), run);
+      return run;
+    }),
   };
 }
 
@@ -428,6 +477,87 @@ describe("orchestration-lifecycle-service", () => {
     expect(host.storage.orchestration.createRun).not.toHaveBeenCalled();
     expect(runtime.worktrees.allocate).not.toHaveBeenCalled();
     expect(host.requestDurableRunProcessing).toHaveBeenCalledWith("durable-active");
+  });
+
+  it("creates exactly one run when two runOrchestrationPlan calls race the same plan", async () => {
+    // Models the ORCH-001 race window: both callers observe "no active run" on
+    // the initial (outer) read, then both attempt to create concurrently. The
+    // atomic guard re-checks findActiveRunByPlan AND inserts the run row inside
+    // a single runImmediateTransaction, so the second caller must observe the
+    // run inserted by the first and return it idempotently — never creating a
+    // duplicate (which would mean two worktrees / doubled cost).
+    const store = createRaceStore();
+    const host = createHost({
+      storage: {
+        runImmediateTransaction: store.runImmediateTransaction,
+        orchestration: {
+          ...createHost().storage.orchestration,
+          findActiveRunByPlan: store.findActiveRunByPlan,
+          createRun: store.createRun,
+          getPlan: vi.fn(() => buildPlan()),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+      orchestrationEngine: {
+        ...createHost().orchestrationEngine,
+        createRun: vi.fn((currentPlan: OrchestrationPlan) => ({
+          ...buildRun(currentPlan.planId),
+          runId: `run-${currentPlan.planId}-${createRunSeq++}`,
+        })),
+      },
+    });
+    const runtimeA = createRuntimeDeps();
+    const runtimeB = createRuntimeDeps();
+
+    const [resultA, resultB] = await Promise.all([
+      runOrchestrationPlan(host, runtimeA, "plan-1"),
+      runOrchestrationPlan(host, runtimeB, "plan-1"),
+    ]);
+
+    expect(host.storage.orchestration.createRun).toHaveBeenCalledTimes(1);
+    expect(store.createdRuns).toHaveLength(1);
+    const createdRunId = store.createdRuns[0]!.runId;
+    expect(resultA.runId).toBe(createdRunId);
+    expect(resultB.runId).toBe(createdRunId);
+    // Worktree allocation (and thus durable-run setup) must happen only once.
+    const totalAllocations =
+      vi.mocked(runtimeA.worktrees.allocate).mock.calls.length +
+      vi.mocked(runtimeB.worktrees.allocate).mock.calls.length;
+    expect(totalAllocations).toBe(1);
+  });
+
+  it("creates two runs when two runOrchestrationPlan calls target different plans", async () => {
+    const store = createRaceStore();
+    const host = createHost({
+      storage: {
+        runImmediateTransaction: store.runImmediateTransaction,
+        orchestration: {
+          ...createHost().storage.orchestration,
+          findActiveRunByPlan: store.findActiveRunByPlan,
+          createRun: store.createRun,
+          getPlan: vi.fn((planId: string) => ({ ...buildPlan(), planId })),
+        },
+      } as OrchestrationLifecycleHost["storage"],
+      orchestrationEngine: {
+        ...createHost().orchestrationEngine,
+        createRun: vi.fn((currentPlan: OrchestrationPlan) => ({
+          ...buildRun(currentPlan.planId),
+          runId: `run-${currentPlan.planId}-${createRunSeq++}`,
+        })),
+      },
+    });
+    const runtimeA = createRuntimeDeps();
+    const runtimeB = createRuntimeDeps();
+
+    const [resultA, resultB] = await Promise.all([
+      runOrchestrationPlan(host, runtimeA, "plan-1"),
+      runOrchestrationPlan(host, runtimeB, "plan-2"),
+    ]);
+
+    expect(host.storage.orchestration.createRun).toHaveBeenCalledTimes(2);
+    expect(store.createdRuns).toHaveLength(2);
+    expect(new Set(store.createdRuns.map((entry) => entry.planId))).toEqual(new Set(["plan-1", "plan-2"]));
+    expect(resultA.planId).toBe("plan-1");
+    expect(resultB.planId).toBe("plan-2");
   });
 
   it("queues an active worktree-ready run instead of leaving it paused forever", async () => {

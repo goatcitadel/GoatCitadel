@@ -96,6 +96,7 @@ export interface OrchestrationLifecycleHost {
     };
   };
   readonly storage: {
+    runImmediateTransaction<T>(callback: () => T): T;
     orchestration: {
       upsertPlan(plan: OrchestrationPlan, workspaceId?: string): void;
       getPlan(planId: string, workspaceId?: string): OrchestrationPlan;
@@ -443,6 +444,49 @@ async function allocateOrchestrationOwnership(
   }
 }
 
+/**
+ * Atomically reserves the single active run row for a plan.
+ *
+ * ORCH-001: two concurrent starts for the same plan/workspace can both observe
+ * "no active run" and each insert a run, producing duplicate worktrees and
+ * doubled cost. To close that race, the active-run re-check and the run-row
+ * insert are performed together inside a single synchronous IMMEDIATE
+ * transaction. The transaction callback must stay synchronous and side-effect
+ * free with respect to the filesystem / git / durable worker — worktree
+ * allocation and durable-run setup happen OUTSIDE the transaction.
+ *
+ * Returns `{ created: false }` with the pre-existing active run when the guard
+ * detects a concurrently (or previously) created run, so callers can behave
+ * idempotently instead of duplicating work.
+ */
+function createOrchestrationRunRecord(
+  host: OrchestrationLifecycleHost,
+  plan: OrchestrationPlan,
+  workspaceId: string,
+  policyContext: OrchestrationRunPolicyContext,
+): { created: boolean; run: OrchestrationRun } {
+  // `upsertPlan` is idempotent on (planId, workspaceId) and `engine.createRun`
+  // is a pure computation, so both can run outside the transaction.
+  host.storage.orchestration.upsertPlan(plan, workspaceId);
+  const candidate = host.orchestrationEngine.createRun(plan);
+
+  return host.storage.runImmediateTransaction(() => {
+    const existing = host.storage.orchestration.findActiveRunByPlan(plan.planId, workspaceId);
+    if (existing) {
+      return { created: false, run: existing };
+    }
+    const persisted = host.storage.orchestration.createRun({
+      ...candidate,
+      ...policyContext,
+      workspaceId,
+      executionState: "created",
+      worktreeStatus: "uninitialized",
+      worktreeBaseRef: DEFAULT_WORKTREE_BASE_REF,
+    });
+    return { created: true, run: persisted };
+  });
+}
+
 export async function createOrchestrationPlan(
   host: OrchestrationLifecycleHost,
   runtime: OrchestrationLifecycleRuntimeDeps,
@@ -450,25 +494,14 @@ export async function createOrchestrationPlan(
   policyContext: OrchestrationRunPolicyContext = {},
 ): Promise<OrchestrationRun> {
   const workspaceId = normalizeRouteWorkspaceId(policyContext.workspaceId);
-  host.storage.orchestration.upsertPlan(plan, workspaceId);
-  const created = host.orchestrationEngine.createRun(plan);
-  const persisted = host.storage.orchestration.createRun({
-    ...created,
-    ...policyContext,
-    workspaceId,
-    executionState: "created",
-    worktreeStatus: "uninitialized",
-    worktreeBaseRef: DEFAULT_WORKTREE_BASE_REF,
-  });
+  const { created, run } = createOrchestrationRunRecord(host, plan, workspaceId, policyContext);
+  if (!created) {
+    // A run for this plan/workspace is already active; return it idempotently
+    // rather than allocating a second worktree / durable run.
+    return run;
+  }
 
-  persistCheckpoint(host, plan, persisted, "run_created", buildCheckpointDetails(plan, persisted));
-  persistRunEvent(host, persisted, "run.created", {
-    status: persisted.status,
-    executionState: persisted.executionState,
-  });
-  publishRunRealtime(host, plan, persisted, { event: "run_created" });
-
-  return allocateOrchestrationOwnership(host, runtime, plan, persisted);
+  return finishOrchestrationRunCreation(host, runtime, plan, run);
 }
 
 export async function runOrchestrationPlan(
@@ -482,20 +515,63 @@ export async function runOrchestrationPlan(
   host.orchestrationEngine.validate(plan);
   const activeRun = host.storage.orchestration.findActiveRunByPlan(planId, workspaceId);
   if (activeRun) {
-    if (activeRun.durableRunId && activeRun.executionState === "queued") {
-      host.requestDurableRunProcessing(activeRun.durableRunId);
-    }
-    if (activeRun.durableRunId && activeRun.executionState === "worktree_ready") {
-      return queueOrchestrationRun(host, plan, activeRun);
-    }
-    return activeRun;
-  }
-  const run = await createOrchestrationPlan(host, runtime, plan, policyContext);
-  if (run.status === "failed") {
-    return run;
+    return resumeExistingActiveRun(host, plan, activeRun);
   }
 
-  return queueOrchestrationRun(host, plan, run);
+  const { created, run } = createOrchestrationRunRecord(host, plan, workspaceId, policyContext);
+  if (!created) {
+    // Lost the create race to a concurrent start: adopt the active run the
+    // winner inserted instead of queueing a second durable run.
+    return resumeExistingActiveRun(host, plan, run);
+  }
+
+  const allocated = await finishOrchestrationRunCreation(host, runtime, plan, run);
+  if (allocated.status === "failed") {
+    return allocated;
+  }
+
+  return queueOrchestrationRun(host, plan, allocated);
+}
+
+/**
+ * Emits the `run_created` lifecycle truth for a freshly inserted run and then
+ * allocates its durable-run + worktree ownership (the async work that must stay
+ * outside the run-reservation transaction).
+ */
+async function finishOrchestrationRunCreation(
+  host: OrchestrationLifecycleHost,
+  runtime: OrchestrationLifecycleRuntimeDeps,
+  plan: OrchestrationPlan,
+  run: OrchestrationRun,
+): Promise<OrchestrationRun> {
+  persistCheckpoint(host, plan, run, "run_created", buildCheckpointDetails(plan, run));
+  persistRunEvent(host, run, "run.created", {
+    status: run.status,
+    executionState: run.executionState,
+  });
+  publishRunRealtime(host, plan, run, { event: "run_created" });
+
+  return allocateOrchestrationOwnership(host, runtime, plan, run);
+}
+
+/**
+ * Idempotently nudges an already-active run for a plan toward execution:
+ * requeue a worktree-ready run, request processing for a queued run, or simply
+ * return the active run unchanged. Shared by the fast-path active check and the
+ * concurrent-create loser path so both behave identically.
+ */
+function resumeExistingActiveRun(
+  host: OrchestrationLifecycleHost,
+  plan: OrchestrationPlan,
+  activeRun: OrchestrationRun,
+): OrchestrationRun | Promise<OrchestrationRun> {
+  if (activeRun.durableRunId && activeRun.executionState === "queued") {
+    host.requestDurableRunProcessing(activeRun.durableRunId);
+  }
+  if (activeRun.durableRunId && activeRun.executionState === "worktree_ready") {
+    return queueOrchestrationRun(host, plan, activeRun);
+  }
+  return activeRun;
 }
 
 async function queueOrchestrationRun(

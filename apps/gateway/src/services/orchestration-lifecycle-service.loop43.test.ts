@@ -435,6 +435,7 @@ function createHarness(options: HarnessOptions = {}): {
   let run = options.run ?? buildRun();
   let durableRun = options.durableRun ?? buildDurableRun();
   const storage = {
+    runImmediateTransaction: vi.fn(<T>(callback: () => T): T => callback()),
     orchestration: {
       upsertPlan: vi.fn((next: OrchestrationPlan) => {
         plan = next;

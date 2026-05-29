@@ -65,8 +65,9 @@ export class OrchestrationWorktreeService {
     if (!fsSync.existsSync(resolvedPath)) {
       return;
     }
+    const manager = this.createManager(worktreesRoot);
     try {
-      await this.createManager(worktreesRoot).remove(resolvedPath);
+      await manager.remove(resolvedPath);
     } catch (error) {
       log.warn("git worktree remove failed; falling back to filesystem cleanup", {
         runId: input.run.runId,
@@ -75,6 +76,28 @@ export class OrchestrationWorktreeService {
         error: error instanceof Error ? error.message : String(error),
       });
       await fs.rm(resolvedPath, { recursive: true, force: true });
+    }
+    // ORCH-004: prune stale `.git/worktrees/<id>` metadata after every removal
+    // path (including the filesystem fallback), so git's worktree registry does
+    // not accumulate orphaned entries for reclaimed run worktrees.
+    await this.pruneWorktreeMetadata(manager, input.run.runId, input.reason, resolvedPath);
+  }
+
+  private async pruneWorktreeMetadata(
+    manager: WorktreeManager,
+    runId: string,
+    reason: OrchestrationWorktreeReleaseReason,
+    resolvedPath: string,
+  ): Promise<void> {
+    try {
+      await manager.prune();
+    } catch (error) {
+      log.warn("git worktree prune failed after worktree release", {
+        runId,
+        reason,
+        worktreePath: resolvedPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
