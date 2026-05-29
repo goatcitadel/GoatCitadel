@@ -74,8 +74,13 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
         id: string;
         name: string;
         partialJson: string;
+        toolCallIndex: number;
       }
     >();
+    // Anthropic content-block indices include text blocks and may be sparse;
+    // downstream aggregation keys tool calls by a contiguous tool-call index, so
+    // assign each tool_use block its own stable ordinal as it starts.
+    let nextToolCallIndex = 0;
     let messageId: string | undefined;
     let messageModel: string | undefined;
     let finishReason: string | undefined;
@@ -96,7 +101,9 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
             id: String(block.id ?? `tool_${event.index}`),
             name: String(block.name ?? ""),
             partialJson: typeof block.input === "string" ? block.input : JSON.stringify(block.input ?? {}),
+            toolCallIndex: nextToolCallIndex,
           });
+          nextToolCallIndex += 1;
         }
         continue;
       }
@@ -140,7 +147,7 @@ export const anthropicProviderAdapter: LlmProviderAdapter = {
                 delta: {
                   tool_calls: [
                     {
-                      index: 0,
+                      index: toolUse.toolCallIndex,
                       id: toolUse.id,
                       type: "function",
                       function: {

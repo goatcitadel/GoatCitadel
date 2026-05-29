@@ -258,6 +258,88 @@ describe("anthropicProviderAdapter", () => {
     ]);
   });
 
+  it("keeps parallel tool calls distinct with stable per-tool indices during streaming", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            [
+              `data: ${JSON.stringify({ type: "message_start", message: { id: "msg_parallel", model: "claude-test" } })}`,
+              "",
+              `data: ${JSON.stringify({
+                type: "content_block_start",
+                index: 0,
+                content_block: { type: "tool_use", id: "tool_a", name: "lookup", input: "" },
+              })}`,
+              "",
+              `data: ${JSON.stringify({
+                type: "content_block_delta",
+                index: 0,
+                delta: { type: "input_json_delta", partial_json: '{"query":"goat"}' },
+              })}`,
+              "",
+              `data: ${JSON.stringify({ type: "content_block_stop", index: 0 })}`,
+              "",
+              `data: ${JSON.stringify({
+                type: "content_block_start",
+                index: 1,
+                content_block: { type: "tool_use", id: "tool_b", name: "translate", input: "" },
+              })}`,
+              "",
+              `data: ${JSON.stringify({
+                type: "content_block_delta",
+                index: 1,
+                delta: { type: "input_json_delta", partial_json: '{"text":"hi"}' },
+              })}`,
+              "",
+              `data: ${JSON.stringify({ type: "content_block_stop", index: 1 })}`,
+              "",
+              `data: ${JSON.stringify({ type: "message_stop" })}`,
+              "",
+              "data: [DONE]",
+              "",
+            ].join("\n"),
+          ),
+        );
+        controller.close();
+      },
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } }),
+    );
+
+    const toolCalls: Array<{ index: unknown; id: unknown; name: unknown; arguments: unknown }> = [];
+    for await (const chunk of anthropicProviderAdapter.chatCompletionsStream(
+      { messages: [{ role: "user", content: "stream" }], timeoutMs: -1 },
+      resolved,
+      "claude-test",
+      host,
+    )) {
+      const choice = (
+        chunk as {
+          choices?: Array<{ delta?: { tool_calls?: Array<Record<string, unknown>> } }>;
+        }
+      ).choices?.[0];
+      for (const call of choice?.delta?.tool_calls ?? []) {
+        toolCalls.push({
+          index: call.index,
+          id: call.id,
+          name: (call.function as { name?: unknown } | undefined)?.name,
+          arguments: (call.function as { arguments?: unknown } | undefined)?.arguments,
+        });
+      }
+    }
+
+    // Each parallel tool call must carry a distinct, stable index. The completion
+    // aggregator keys tool calls by this index, so emitting index 0 for every tool
+    // collapses parallel calls into one (ids/names overwritten, args concatenated).
+    expect(toolCalls).toEqual([
+      { index: 0, id: "tool_a", name: "lookup", arguments: '{"query":"goat"}' },
+      { index: 1, id: "tool_b", name: "translate", arguments: '{"text":"hi"}' },
+    ]);
+  });
+
   it("blocks redirects and includes provider error snippets for Anthropic failures", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response("moved", { status: 307 }));
     await expect(
