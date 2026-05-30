@@ -4,6 +4,7 @@ import {
   normalizeNextcloudTalkWebhookPayload,
   verifyNextcloudTalkSignature,
 } from "../services/nextcloud-talk-webhook.js";
+import { resolveAllowedSenders } from "@goatcitadel/contracts";
 import { resolveNextcloudTalkSecret } from "./integration-webhooks-shared.js";
 import {
   CHANNEL_INBOUND_MAX_BYTES,
@@ -101,13 +102,14 @@ export function registerNextcloudTalkWebhookRoutes(fastify: FastifyInstance): vo
           parsed: normalized,
         };
       },
-      dispatch: async ({ connectionId, rawBody, parsed }) =>
+      dispatch: async ({ connectionId, connection, rawBody, parsed }) =>
         dispatchInboundWebhookMessage(fastify.services.integrationWebhooks, {
           channel: "nextcloud-talk",
           connectionId,
           idempotencyKey: deriveNextcloudTalkWebhookIdempotencyKey(connectionId, rawBody),
           eventType: parsed.eventType,
           bindingTarget: parsed.room,
+          allowedSenders: resolveAllowedSenders(connection.config),
           message: {
             eventId: parsed.eventId,
             account: parsed.account,
