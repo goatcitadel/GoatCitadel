@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, AlertTriangle, LayoutDashboard, RefreshCw } from "lucide-react";
 import { bulkTaskAction, fetchTasksByView } from "@goatcitadel/mission-control-shared/api/client";
 import type { TaskRecord } from "@goatcitadel/contracts";
 import { NativePageFrame } from "../NativeRoutePageLayout";
+import { useIsMounted } from "@next/hooks/use-is-mounted";
 import type { NativeRoutePagesProps } from "../types";
 import { toKanbanCard, type KanbanCardModel, type KanbanColumnId } from "./kanban-card-model";
 import "../native-routes.css";
@@ -24,23 +25,42 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
   const [loading, setLoading] = useState(true);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const isMounted = useIsMounted();
+  // Monotonic request id drops superseded/late `fetchTasksByView` responses so
+  // a slow earlier load cannot overwrite a newer workspace's board, and so a
+  // resolution after unmount is ignored (MCNEXT-006 + MCNEXT-012).
+  const loadIdRef = useRef(0);
 
   const load = useCallback(async () => {
+    const loadId = loadIdRef.current + 1;
+    loadIdRef.current = loadId;
+    const isCurrentLoad = () => loadIdRef.current === loadId;
     setLoading(true);
     try {
       const result = await fetchTasksByView("active", undefined, props.activeWorkspaceId);
+      if (!isCurrentLoad()) {
+        return;
+      }
       setTasks(result.items as TaskRecord[]);
       setError(null);
       setActionError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (isCurrentLoad()) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
-      setLoading(false);
+      if (isCurrentLoad()) {
+        setLoading(false);
+      }
     }
   }, [props.activeWorkspaceId]);
 
   useEffect(() => {
     void load();
+    return () => {
+      // Supersede any in-flight load on unmount/workspace switch.
+      loadIdRef.current += 1;
+    };
   }, [load]);
 
   const cards = useMemo<KanbanCardModel[]>(() => (tasks ?? []).map((task) => toKanbanCard(task)), [tasks]);
@@ -83,16 +103,23 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
       setNotice(null);
       try {
         await bulkTaskAction(body);
+        if (!isMounted()) {
+          return;
+        }
         setSelected(new Set());
         setNotice(`${ids.length} selected task${ids.length === 1 ? "" : "s"} updated.`);
         await load();
       } catch (err) {
-        setActionError(err instanceof Error ? err.message : String(err));
+        if (isMounted()) {
+          setActionError(err instanceof Error ? err.message : String(err));
+        }
       } finally {
-        setBulkBusy(false);
+        if (isMounted()) {
+          setBulkBusy(false);
+        }
       }
     },
-    [load, selected],
+    [isMounted, load, selected],
   );
 
   const hasSelection = selected.size > 0;

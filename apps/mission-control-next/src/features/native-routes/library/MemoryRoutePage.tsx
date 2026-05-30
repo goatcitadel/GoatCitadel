@@ -14,6 +14,7 @@ import {
   summarizeMemorySubspaces,
 } from "@goatcitadel/mission-control-shared/content/memory-helpers";
 import { useMemoryOperatorSnapshot } from "@goatcitadel/mission-control-shared/hooks/useMemoryOperatorSnapshot";
+import { useIsMounted } from "@next/hooks/use-is-mounted";
 import { NativeCard, NativeGrid, NativePageFrame, QuickJumpCard } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
 import {
@@ -88,6 +89,7 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
     error: null,
     items: [],
   });
+  const isMounted = useIsMounted();
 
   // Stable, collision-safe IDs for label/input pairing (a11y H-8). Each id is
   // hoisted with useId so screen readers can match each visible <label> to its
@@ -584,8 +586,16 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               onClick={() => {
                 setEvidence((current) => ({ ...current, loading: true, error: null }));
                 void fetchEvidenceEnvelopes({ limit: 12 })
-                  .then((result) => setEvidence({ loading: false, error: null, items: result.items }))
-                  .catch((error: Error) => setEvidence({ loading: false, error: error.message, items: [] }));
+                  .then((result) => {
+                    if (isMounted()) {
+                      setEvidence({ loading: false, error: null, items: result.items });
+                    }
+                  })
+                  .catch((error: Error) => {
+                    if (isMounted()) {
+                      setEvidence({ loading: false, error: error.message, items: [] });
+                    }
+                  });
               }}
             >
               <ShieldCheck className="h-4 w-4" aria-hidden="true" />
