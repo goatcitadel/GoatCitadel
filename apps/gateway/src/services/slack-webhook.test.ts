@@ -222,6 +222,94 @@ describe("slack webhook helpers", () => {
     });
   });
 
+  it("drops bot-authored messages by bot_id, own bot user id, or own app id", () => {
+    const baseEvent = {
+      type: "message",
+      text: "loop candidate",
+      channel: "C123",
+      channel_type: "channel",
+      ts: "1712109984.500000",
+    };
+
+    expect(
+      normalizeSlackWebhookPayload({
+        connectionId: "conn-slack",
+        payload: {
+          type: "event_callback",
+          event_id: "Ev-bot-id",
+          event: { ...baseEvent, user: "U999", bot_id: "B123" },
+        },
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        kind: "ignore",
+        eventType: "message",
+      }),
+    );
+
+    expect(
+      normalizeSlackWebhookPayload({
+        connectionId: "conn-slack",
+        payload: {
+          type: "event_callback",
+          event_id: "Ev-self",
+          event: { ...baseEvent, user: "U-BOT" },
+        },
+        botUserId: "U-BOT",
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        kind: "ignore",
+        eventType: "message",
+      }),
+    );
+
+    expect(
+      normalizeSlackWebhookPayload({
+        connectionId: "conn-slack",
+        payload: {
+          type: "event_callback",
+          event_id: "Ev-app",
+          event: { ...baseEvent, user: "U777", app_id: "A123" },
+        },
+        appId: "A123",
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        kind: "ignore",
+        eventType: "message",
+      }),
+    );
+  });
+
+  it("still accepts a genuine human message when self/bot identifiers are configured", () => {
+    expect(
+      normalizeSlackWebhookPayload({
+        connectionId: "conn-slack",
+        payload: {
+          type: "event_callback",
+          event_id: "Ev-human",
+          event: {
+            type: "message",
+            user: "U-HUMAN",
+            text: "hello there",
+            channel: "C123",
+            channel_type: "channel",
+            ts: "1712109984.600000",
+          },
+        },
+        botUserId: "U-BOT",
+        appId: "A123",
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        kind: "message",
+        actorId: "U-HUMAN",
+        content: "hello there",
+      }),
+    );
+  });
+
   it("ignores bot or subtype message events and derives event idempotency keys", () => {
     const payload = {
       type: "event_callback",
