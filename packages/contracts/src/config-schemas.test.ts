@@ -77,6 +77,44 @@ describe("ToolPolicyConfigSchema", () => {
     expect((result as Record<string, unknown>).futureField).toBe(true);
   });
 
+  it("accepts an empty jail-root array (fail-closed) and rejects empty-string roots (fail-open)", () => {
+    const base = {
+      profiles: {},
+      tools: { profile: "minimal", allow: [], deny: [] },
+      agents: {},
+    } as const;
+
+    // Empty array grants no filesystem access -> safe (fail-closed).
+    expect(() =>
+      ToolPolicyConfigSchema.parse({ ...base, sandbox: { writeJailRoots: [], readOnlyRoots: [] } }),
+    ).not.toThrow();
+
+    // POSIX and Windows absolute paths are accepted.
+    const absolute = ToolPolicyConfigSchema.parse({
+      ...base,
+      sandbox: { writeJailRoots: ["/abs/path", "C:\\workspace"], readOnlyRoots: ["/srv/skills"] },
+    });
+    expect(absolute.sandbox.writeJailRoots).toEqual(["/abs/path", "C:\\workspace"]);
+
+    // Relative roots remain valid: the gateway resolves them against a trusted root.
+    expect(() =>
+      ToolPolicyConfigSchema.parse({
+        ...base,
+        sandbox: { writeJailRoots: ["./workspace"], readOnlyRoots: ["./skills"] },
+      }),
+    ).not.toThrow();
+
+    // An empty-string entry collapses to the working root via path.resolve -> rejected.
+    expect(() =>
+      ToolPolicyConfigSchema.parse({ ...base, sandbox: { writeJailRoots: [""], readOnlyRoots: [] } }),
+    ).toThrow(/non-empty path/i);
+
+    // A whitespace-only entry is likewise rejected on readOnlyRoots.
+    expect(() =>
+      ToolPolicyConfigSchema.parse({ ...base, sandbox: { writeJailRoots: [], readOnlyRoots: ["   "] } }),
+    ).toThrow(/non-empty path/i);
+  });
+
   it("defaults readAccessMode when omitted", () => {
     const input = {
       profiles: {},
