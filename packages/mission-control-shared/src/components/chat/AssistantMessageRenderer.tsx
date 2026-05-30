@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -69,11 +69,14 @@ const assistantMarkdownComponents: Components = {
     const isBlock = Boolean(language || content.includes("\n"));
     if (isBlock) {
       return (
-        <pre className="mc-assistant-code-block" data-language={language}>
-          <code className={className} {...props}>
-            {children}
-          </code>
-        </pre>
+        <AssistantCodeBlock
+          language={language}
+          codeClassName={className}
+          codeProps={props as HTMLAttributes<HTMLElement>}
+          rawText={content}
+        >
+          {children}
+        </AssistantCodeBlock>
       );
     }
     return (
@@ -117,6 +120,78 @@ const assistantMarkdownComponents: Components = {
     return <ul {...props}>{children}</ul>;
   },
 };
+
+function AssistantCodeBlock({
+  language,
+  codeClassName,
+  codeProps,
+  rawText,
+  children,
+}: {
+  language: string | undefined;
+  codeClassName: string | undefined;
+  codeProps: HTMLAttributes<HTMLElement>;
+  rawText: string;
+  children: ReactNode;
+}) {
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const resetRef = useRef<ReturnType<Window["setTimeout"]> | null>(null);
+  const trimmed = rawText.endsWith("\n") ? rawText.slice(0, -1) : rawText;
+
+  useEffect(() => {
+    return () => {
+      if (resetRef.current !== null && typeof window !== "undefined") {
+        window.clearTimeout(resetRef.current);
+      }
+    };
+  }, []);
+
+  async function handleCopy() {
+    try {
+      await copyTextToClipboard(trimmed);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
+    if (typeof window !== "undefined") {
+      if (resetRef.current !== null) {
+        window.clearTimeout(resetRef.current);
+      }
+      resetRef.current = window.setTimeout(() => {
+        setCopyState("idle");
+        resetRef.current = null;
+      }, 1800);
+    }
+  }
+
+  const copyLabel = copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy unavailable" : "Copy code";
+
+  return (
+    <div className="mc-assistant-code-shell" data-language={language ?? undefined}>
+      <div className="mc-assistant-code-header">
+        <span className="mc-assistant-code-language">{language ?? "code"}</span>
+        <button
+          type="button"
+          className={cn(
+            "mc-assistant-code-copy",
+            copyState === "copied" ? "copied" : "",
+            copyState === "failed" ? "failed" : "",
+          )}
+          onClick={() => void handleCopy()}
+          aria-label={copyLabel}
+          title={copyLabel}
+        >
+          {copyState === "copied" ? <Check size={12} strokeWidth={2.4} /> : <Copy size={12} strokeWidth={2.4} />}
+        </button>
+      </div>
+      <pre className="mc-assistant-code-block">
+        <code className={codeClassName} {...codeProps}>
+          {children}
+        </code>
+      </pre>
+    </div>
+  );
+}
 
 const MemoizedMarkdownBlock = memo(function MemoizedMarkdownBlock({
   content,

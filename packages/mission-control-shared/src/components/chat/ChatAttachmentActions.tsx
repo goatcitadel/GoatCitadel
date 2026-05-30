@@ -67,7 +67,7 @@ function preparePendingOpenWindow(fileName: string): Window | null {
   return opened;
 }
 
-async function loadAttachmentBlob(input: {
+export async function loadAttachmentBlob(input: {
   attachmentId: string;
   fallbackFileName: string;
 }): Promise<{ blob: Blob; fileName: string }> {
