@@ -1465,4 +1465,13 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         AND artifacts.project_id IS NULL;
     `,
   },
+  {
+    version: 53,
+    name: "orchestration_runs_wave_budget_accumulator",
+    sql: `
+      ALTER TABLE IF EXISTS orchestration_runs
+        ADD COLUMN IF NOT EXISTS wave_cost_usd_by_wave_id TEXT,
+        ADD COLUMN IF NOT EXISTS stop_reason TEXT;
+    `,
+  },
 ];

@@ -337,6 +337,49 @@ describe("orchestration lifecycle loop43 durable edge behavior", () => {
     });
   });
 
+  it("surfaces the wave_budget_exceeded stop reason on the run.stopped event", async () => {
+    const harness = createHarness({
+      run: {
+        ...buildRun(),
+        durableRunId: "durable-run-1",
+        executionState: "queued",
+        worktreePath: "F:/code/personal-ai/.worktrees/orchestration/run-1",
+        worktreeStatus: "ready",
+      },
+      engine: {
+        startRun: vi.fn((plan: OrchestrationPlan, run: OrchestrationRun) => ({
+          ...run,
+          status: "stopped_by_limit",
+          stopReason: "wave_budget_exceeded",
+          currentWaveId: "wave-1",
+          currentPhaseId: "phase-1",
+          totalIterations: 1,
+          totalCostUsd: 2,
+          waveCostUsdByWaveId: { "wave-1": 2 },
+        })),
+      },
+    });
+
+    const result = await executeDurableOrchestrationRun(harness.host, harness.runtime, buildDurableRun());
+
+    expect(result.outcome).toBe("completed");
+    expect(harness.host.createCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({ checkpointKind: "run_stopped" }),
+    );
+    expect(harness.host.storage.orchestration.appendRunEvent).toHaveBeenCalledWith(
+      "run-1",
+      "run.stopped",
+      expect.objectContaining({
+        totalCostUsd: 2,
+        stopReason: "wave_budget_exceeded",
+      }),
+    );
+    expect(harness.runtime.worktrees.release).toHaveBeenCalledWith({
+      run: expect.objectContaining({ status: "stopped_by_limit", stopReason: "wave_budget_exceeded" }),
+      reason: "stopped_by_limit",
+    });
+  });
+
   it("records wave advancement checkpoints and validates checkpoint workspace access", async () => {
     const harness = createHarness({
       plan: buildTwoWavePlan(),
