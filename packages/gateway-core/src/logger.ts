@@ -85,7 +85,11 @@ function hasCredentialTokenSegment(segments: readonly string[]): boolean {
   if (segments.some((segment) => TOKEN_USAGE_SEGMENTS.has(segment))) {
     return false;
   }
-  return segments.at(-1) === "token";
+  // Redact when "token" is the first or last segment (authToken, accessToken,
+  // tokenValue, tokenSecret, bare token). Usage metrics (prompt_tokens,
+  // maxTokens, token_count, tokenizer) are already excluded above via the
+  // plural/usage-segment guards, so a first-segment match adds no false positives.
+  return segments[0] === "token" || segments.at(-1) === "token";
 }
 
 /**
