@@ -140,7 +140,7 @@ export function ChatThreadView({
         <ChatThreadNotices notices={notices} />
         <div ref={threadEndRef} aria-hidden="true" />
       </div>
-      {!followOutput && streamStatus === "streaming" ? (
+      {!followOutput && thread.turns.length > 0 ? (
         <button type="button" className="chat-v11-thread-jump-latest mc-next-thread-jump-latest" onClick={jumpToLatest}>
           Jump to latest
         </button>

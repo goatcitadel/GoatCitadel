@@ -552,6 +552,44 @@ describe("ChatThreadView", () => {
     expect(onBottomStateChange).not.toHaveBeenCalledWith(false);
   });
 
+  it("shows the jump-to-latest affordance when scrolled away from the bottom in a non-streaming thread", () => {
+    const renderer = TestRenderer.create(
+      <ChatThreadView
+        {...buildThreadViewProps(createThread("plain content"))}
+        followOutput={false}
+        streamStatus="idle"
+      />,
+    );
+
+    const jumpButtons = renderer.root.findAll(
+      (node) =>
+        node.type === "button" &&
+        typeof node.props.className === "string" &&
+        node.props.className.includes("mc-next-thread-jump-latest"),
+    );
+    expect(jumpButtons).toHaveLength(1);
+    expect(jumpButtons[0]?.children.join("")).toBe("Jump to latest");
+  });
+
+  it("hides the jump-to-latest affordance while pinned to the bottom", () => {
+    const renderer = TestRenderer.create(
+      <ChatThreadView
+        {...buildThreadViewProps(createThread("plain content"))}
+        followOutput={true}
+        streamStatus="idle"
+      />,
+    );
+
+    expect(
+      renderer.root.findAll(
+        (node) =>
+          node.type === "button" &&
+          typeof node.props.className === "string" &&
+          node.props.className.includes("mc-next-thread-jump-latest"),
+      ),
+    ).toHaveLength(0);
+  });
+
   it("keeps following output when a new turn arrives while already pinned to the bottom", () => {
     const onBottomStateChange = vi.fn();
     const scrollIntoView = vi.fn();
