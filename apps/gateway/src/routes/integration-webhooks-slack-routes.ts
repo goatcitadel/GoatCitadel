@@ -5,6 +5,7 @@ import {
   verifySlackSignature,
 } from "../services/slack-webhook.js";
 import { readConfigSecret } from "./integration-webhooks-shared.js";
+import { asString } from "../services/webhook-json-helpers.js";
 import {
   CHANNEL_INBOUND_MAX_BYTES,
   createIgnoredWebhookReply,
@@ -62,10 +63,12 @@ export function registerSlackWebhookRoutes(fastify: FastifyInstance): void {
         }
         return { ok: true as const };
       },
-      parsePayload: ({ connectionId, request }) => {
+      parsePayload: ({ connectionId, connection, request }) => {
         const normalized = normalizeSlackWebhookPayload({
           connectionId,
           payload: request.body,
+          botUserId: asString(connection.config.slackBotUserId),
+          appId: asString(connection.config.slackAppId),
         });
         if (normalized.kind === "challenge") {
           return {

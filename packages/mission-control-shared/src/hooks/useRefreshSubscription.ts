@@ -18,6 +18,7 @@ export function useRefreshSubscription(
   options: UseRefreshSubscriptionOptions = {},
 ): void {
   const callbackRef = useRef(callback);
+  const onFallbackStateChangeRef = useRef(options.onFallbackStateChange);
   const latestSignalRef = useRef<RefreshSignal | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fallbackTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -35,7 +36,8 @@ export function useRefreshSubscription(
 
   useEffect(() => {
     callbackRef.current = callback;
-  }, [callback]);
+    onFallbackStateChangeRef.current = options.onFallbackStateChange;
+  }, [callback, options.onFallbackStateChange]);
 
   useEffect(() => {
     const timers = getTimerApi();
@@ -44,7 +46,7 @@ export function useRefreshSubscription(
         return;
       }
       fallbackActiveRef.current = active;
-      options.onFallbackStateChange?.(active);
+      onFallbackStateChangeRef.current?.(active);
     };
 
     if (!enabled) {
@@ -184,7 +186,10 @@ export function useRefreshSubscription(
       latestSignalRef.current = null;
       setFallbackActive(false);
     };
-  }, [coalesceMs, enabled, pollIntervalMs, runWhenHidden, staleMs, topic, options.onFallbackStateChange]);
+    // onFallbackStateChange is read via onFallbackStateChangeRef so an inline
+    // (non-memoized) callback does not tear down and re-subscribe the whole
+    // effect (which would restart the fallback poll wiring) on every parent render.
+  }, [coalesceMs, enabled, pollIntervalMs, runWhenHidden, staleMs, topic]);
 }
 
 function getTimerApi() {

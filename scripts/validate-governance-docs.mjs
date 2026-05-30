@@ -656,8 +656,10 @@ function deriveMissionControlNextRouteScopes(source) {
     return [];
   }
   const entries = [];
+  // Use `:\s*"` (not `: "`) so the parser tolerates Prettier wrapping a long
+  // string value onto the next line (e.g. `releaseAction:\n  "..."`).
   for (const item of match[1].matchAll(
-    /\{\s*area: "([^"]+)",\s*section: "([^"]+)",\s*status: "([^"]+)",\s*releaseAction: "([^"]+)",\s*verification: "([^"]+)",\s*note: "([^"]+)",\s*\}/g,
+    /\{\s*area:\s*"([^"]+)",\s*section:\s*"([^"]+)",\s*status:\s*"([^"]+)",\s*releaseAction:\s*"([^"]+)",\s*verification:\s*"([^"]+)",\s*note:\s*"([^"]+)",\s*\}/g,
   )) {
     entries.push({
       expectedArea: item[1],

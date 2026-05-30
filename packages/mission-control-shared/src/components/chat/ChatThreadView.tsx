@@ -1,4 +1,3 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type { ChatMode, ChatStreamingPreview, ChatThreadResponse } from "@goatcitadel/contracts";
 import type { ActiveChatDelegationRun } from "../../pages/chat/useChatDelegationPolicyActions";
 import { ChatStreamStatusBar, type ChatStreamStatus } from "./ChatStreamStatusBar";
@@ -6,9 +5,9 @@ import {
   ChatThreadDelegationSummary,
   ChatThreadNotices,
   ChatThreadTurnCard,
-  isThreadScrollNearBottom,
   type ChatThreadNotice,
 } from "./ChatThreadPrimitives";
+import { useScrollToBottom } from "./useScrollToBottom";
 
 export type { ChatThreadNotice } from "./ChatThreadPrimitives";
 
@@ -57,108 +56,26 @@ export function ChatThreadView({
   onCreateGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifactVersion: (turnId: string) => void;
 }) {
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const threadEndRef = useRef<HTMLDivElement | null>(null);
-  const scrollFrameRef = useRef<number | null>(null);
   const lastTurn = thread?.turns.at(-1) ?? null;
   const threadTurnCount = thread?.turns.length ?? 0;
   const latestTurnId = thread?.activeLeafTurnId ?? lastTurn?.turnId ?? null;
   const latestTraceStatus = lastTurn?.trace.status ?? null;
 
-  const handleThreadScroll = useCallback(() => {
-    const scrollElement = scrollRef.current;
-    if (!scrollElement) {
-      onBottomStateChange(true);
-      return;
-    }
-    onBottomStateChange(isThreadScrollNearBottom(scrollElement));
-  }, [onBottomStateChange]);
-
-  useEffect(() => {
-    const scrollElement = scrollRef.current;
-    const endElement = threadEndRef.current;
-    if (
-      !scrollElement ||
-      !endElement ||
-      typeof window === "undefined" ||
-      typeof window.IntersectionObserver !== "function"
-    ) {
-      return;
-    }
-    const observer = new window.IntersectionObserver(
-      (entries) => {
-        const entry = entries[0];
-        onBottomStateChange(Boolean(entry?.isIntersecting) || isThreadScrollNearBottom(scrollElement));
-      },
-      {
-        root: scrollElement,
-        threshold: 0.98,
-      },
-    );
-    observer.observe(endElement);
-    return () => observer.disconnect();
-  }, [onBottomStateChange, thread?.sessionId, threadTurnCount]);
-
-  const jumpToLatest = useCallback(() => {
-    threadEndRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
-    onBottomStateChange(true);
-  }, [onBottomStateChange]);
-
-  useLayoutEffect(() => {
-    if (!followOutput) {
-      return;
-    }
-    if (typeof requestAnimationFrame !== "function") {
-      threadEndRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
-      onBottomStateChange(true);
-      return;
-    }
-    if (scrollFrameRef.current !== null && typeof cancelAnimationFrame === "function") {
-      cancelAnimationFrame(scrollFrameRef.current);
-    }
-    scrollFrameRef.current = requestAnimationFrame(() => {
-      scrollFrameRef.current = null;
-      threadEndRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
-      onBottomStateChange(true);
-    });
-    return () => {
-      if (scrollFrameRef.current !== null && typeof cancelAnimationFrame === "function") {
-        cancelAnimationFrame(scrollFrameRef.current);
-        scrollFrameRef.current = null;
-      }
-    };
-  }, [
+  const { scrollRef, threadEndRef, handleThreadScroll, jumpToLatest } = useScrollToBottom({
     followOutput,
-    latestTraceStatus,
-    latestTurnId,
-    notices.length,
     onBottomStateChange,
-    queuedCount,
-    selectedTurnId,
-    streamError,
-    streamStatus,
-    threadTurnCount,
-  ]);
-
-  useLayoutEffect(() => {
-    const scrollElement = scrollRef.current;
-    if (!scrollElement) {
-      return;
-    }
-    if (followOutput) {
-      return;
-    }
-    onBottomStateChange(isThreadScrollNearBottom(scrollElement));
-  }, [
-    followOutput,
-    latestTraceStatus,
-    latestTurnId,
-    notices.length,
-    onBottomStateChange,
-    queuedCount,
-    streamStatus,
-    threadTurnCount,
-  ]);
+    signals: {
+      sessionId: thread?.sessionId ?? null,
+      threadTurnCount,
+      latestTurnId,
+      latestTraceStatus,
+      noticeCount: notices.length,
+      queuedCount,
+      streamStatus,
+      selectedTurnId,
+      streamError,
+    },
+  });
 
   if (loading) {
     return <div className="chat-v11-thread-loading mc-next-thread-empty">Loading thread...</div>;
@@ -181,7 +98,16 @@ export function ChatThreadView({
 
   return (
     <div className="chat-v11-thread-view mc-next-thread-view">
-      <ChatStreamStatusBar mode={mode} status={streamStatus} queuedCount={queuedCount} error={streamError} />
+      {/* Single live-region owner for streaming status in this surface. The streaming
+          skeleton is intentionally not a live region, so this status bar is the only
+          element that announces streaming/assistant activity to screen readers. */}
+      <ChatStreamStatusBar
+        mode={mode}
+        status={streamStatus}
+        queuedCount={queuedCount}
+        error={streamError}
+        announce={true}
+      />
       <div
         ref={scrollRef}
         className="chat-v11-thread-list chat-v11-thread-virtuoso mc-next-thread-list"

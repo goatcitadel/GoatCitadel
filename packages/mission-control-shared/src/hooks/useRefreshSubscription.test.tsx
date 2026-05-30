@@ -158,6 +158,33 @@ describe("useRefreshSubscription", () => {
     expect(callback).toHaveBeenCalled();
   });
 
+  it("does not resubscribe (or drop a pending refresh) when an inline onFallbackStateChange changes identity (MCSHARED-008)", async () => {
+    const callback = vi.fn();
+    const renderer = create(
+      <Harness callback={callback} options={{ coalesceMs: 50, onFallbackStateChange: () => undefined }} />,
+    );
+
+    // A signal arrives and schedules the coalesced refresh.
+    emitRefresh("chat", { reason: "pending", source: "test" });
+
+    // Parent re-renders with a brand-new inline onFallbackStateChange identity
+    // before the coalesce window elapses. Pre-fix this tore down the effect and
+    // cleared the pending coalesce timer, dropping the refresh.
+    renderer.update(
+      <Harness callback={callback} options={{ coalesceMs: 50, onFallbackStateChange: () => undefined }} />,
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+
+    // The pending refresh still fired exactly once despite the re-render.
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(callback.mock.calls[0]?.[0]).toMatchObject({ reason: "pending" });
+
+    renderer.unmount();
+  });
+
   it("handles disabled subscriptions and callback failures without leaking timers", async () => {
     const callback = vi.fn().mockRejectedValue(new Error("refresh failed"));
     const fallbackStates: boolean[] = [];

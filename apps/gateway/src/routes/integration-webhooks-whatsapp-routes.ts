@@ -5,6 +5,7 @@ import {
   verifyWhatsAppWebhookSignature,
 } from "../services/whatsapp-webhook.js";
 import { resolveWhatsAppAppSecret, resolveWhatsAppVerifyToken } from "./integration-webhooks-shared.js";
+import { timingSafeStringEqual } from "../services/webhook-json-helpers.js";
 import {
   CHANNEL_INBOUND_MAX_BYTES,
   createIgnoredWebhookReply,
@@ -56,7 +57,7 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
       if (mode !== "subscribe" || !challenge) {
         return reply.code(400).send({ error: "Invalid WhatsApp webhook verification query" });
       }
-      if (providedVerifyToken !== verifyToken) {
+      if (!providedVerifyToken || !timingSafeStringEqual(providedVerifyToken, verifyToken)) {
         return reply.code(401).send({ error: "Invalid WhatsApp webhook verify token" });
       }
 

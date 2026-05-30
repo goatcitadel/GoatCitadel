@@ -46,12 +46,20 @@ export function useShellNotifications(options: UseShellNotificationsOptions): Us
   const lastEnabledSoundModeRef = useRef<"subtle" | "normal">(
     notificationPreferences.soundMode === "off" ? "normal" : notificationPreferences.soundMode,
   );
+  // Hold the latest preferences behind a ref so `deliverRealtimeNotification`
+  // stays referentially stable. Without this its identity changes on every
+  // preference toggle (sound/toasts/desktop), which would re-run the consuming
+  // event-stream subscription effect and tear down/reconnect the live SSE
+  // stream on unrelated UI changes (MCNEXT-002). Delivery still uses the latest
+  // preferences because it reads them from the ref at event time.
+  const preferencesRef = useRef(notificationPreferences);
 
   useEffect(() => {
+    preferencesRef.current = notificationPreferences;
     if (notificationPreferences.soundMode !== "off") {
       lastEnabledSoundModeRef.current = notificationPreferences.soundMode;
     }
-  }, [notificationPreferences.soundMode]);
+  }, [notificationPreferences]);
 
   const pushNotification = useCallback((tone: NotificationItem["tone"], message: string, groupKey?: string) => {
     setNotifications((current) =>
@@ -74,21 +82,24 @@ export function useShellNotifications(options: UseShellNotificationsOptions): Us
       if (!notification) {
         return;
       }
+      // Read the latest preferences from the ref so this callback stays stable
+      // (see `preferencesRef` above): the event-stream subscription must not
+      // reconnect when the operator only toggles a notification preference.
+      const preferences = preferencesRef.current;
       const shouldDeliver =
-        !notificationPreferences.onlyWhenUnfocused ||
-        (typeof document !== "undefined" && document.visibilityState !== "visible");
+        !preferences.onlyWhenUnfocused || (typeof document !== "undefined" && document.visibilityState !== "visible");
       if (!shouldDeliver) {
         return;
       }
-      if (notificationPreferences.toastsEnabled) {
+      if (preferences.toastsEnabled) {
         pushNotification(notification.tone, notification.message, notification.groupKey);
       }
-      void playOperatorAttentionSound(notification.soundCue, notificationPreferences.soundMode);
-      if (notificationPreferences.desktopEnabled) {
+      void playOperatorAttentionSound(notification.soundCue, preferences.soundMode);
+      if (preferences.desktopEnabled) {
         showBrowserNotification(notification.message, notification.tone);
       }
     },
-    [notificationPreferences, pushNotification],
+    [pushNotification],
   );
 
   return {

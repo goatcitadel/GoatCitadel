@@ -167,11 +167,22 @@ export class OrchestrationEngine {
   ): OrchestrationRun {
     const now = options.now ?? new Date().toISOString();
     const next = this.nextPhase(plan, phaseId);
+    const costIncrementUsd = options.costIncrementUsd ?? 0;
+
+    // Attribute the increment to the wave that owns the phase being advanced from, not the
+    // wave we are advancing into. Resolving from the plan (rather than run.currentWaveId)
+    // keeps attribution correct even if a caller hands us a stale current wave id.
+    const executedWave = this.findWaveForPhase(plan, phaseId);
+    const waveCostUsdByWaveId = {
+      ...(run.waveCostUsdByWaveId ?? {}),
+      [executedWave.waveId]: (run.waveCostUsdByWaveId?.[executedWave.waveId] ?? 0) + costIncrementUsd,
+    };
 
     const candidate: OrchestrationRun = {
       ...run,
       totalIterations: run.totalIterations + 1,
-      totalCostUsd: run.totalCostUsd + (options.costIncrementUsd ?? 0),
+      totalCostUsd: run.totalCostUsd + costIncrementUsd,
+      waveCostUsdByWaveId,
       currentWaveId: next?.waveId,
       currentPhaseId: next?.phaseId,
       status: next ? (this.shouldPauseAtPhase(plan, next.phaseId) ? "paused" : "running") : "completed",
@@ -190,11 +201,36 @@ export class OrchestrationEngine {
       return {
         ...candidate,
         status: "stopped_by_limit",
+        stopReason: "plan_limit",
+        endedAt: now,
+      };
+    }
+
+    if (this.shouldStopByWaveBudget(executedWave, waveCostUsdByWaveId[executedWave.waveId]!)) {
+      return {
+        ...candidate,
+        currentWaveId: executedWave.waveId,
+        currentPhaseId: phaseId,
+        status: "stopped_by_limit",
+        stopReason: "wave_budget_exceeded",
         endedAt: now,
       };
     }
 
     return candidate;
+  }
+
+  private shouldStopByWaveBudget(wave: OrchestrationPlan["waves"][number], accumulatedCostUsd: number): boolean {
+    return wave.budgetUsd > 0 && accumulatedCostUsd >= wave.budgetUsd;
+  }
+
+  private findWaveForPhase(plan: OrchestrationPlan, phaseId: string): OrchestrationPlan["waves"][number] {
+    for (const wave of plan.waves) {
+      if (wave.phases.some((candidate) => candidate.phaseId === phaseId)) {
+        return wave;
+      }
+    }
+    throw new Error(`Phase ${phaseId} not found in plan ${plan.planId}`);
   }
 
   private requiresApproval(plan: OrchestrationPlan, phaseId: string): boolean {

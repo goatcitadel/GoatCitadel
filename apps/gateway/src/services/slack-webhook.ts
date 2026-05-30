@@ -87,6 +87,8 @@ export function deriveSlackWebhookIdempotencyKey(connectionId: string, payload: 
 export function normalizeSlackWebhookPayload(input: {
   connectionId: string;
   payload: unknown;
+  botUserId?: string;
+  appId?: string;
 }): SlackWebhookNormalization {
   const root = asRecord(input.payload);
   const envelopeType = asString(root.type);
@@ -131,7 +133,36 @@ export function normalizeSlackWebhookPayload(input: {
     };
   }
 
+  // Drop messages authored by a bot/app, including this connection's own bot.
+  // A bot_message subtype is not always present (e.g. user-token posts or
+  // some app messages), so the subtype check above is not sufficient on its
+  // own to prevent self-trigger loops. Compare the explicit bot/app markers
+  // and the connection's own bot user id captured at OAuth time.
+  const eventBotId = asString(event.bot_id);
+  const eventAppId = asString(event.app_id);
   const actorId = asString(event.user);
+  if (eventBotId) {
+    return {
+      kind: "ignore",
+      eventType,
+      reason: "Ignoring Slack message authored by a bot",
+    };
+  }
+  if (input.botUserId && actorId === input.botUserId) {
+    return {
+      kind: "ignore",
+      eventType,
+      reason: "Ignoring Slack message authored by this connection's bot user",
+    };
+  }
+  if (input.appId && eventAppId === input.appId) {
+    return {
+      kind: "ignore",
+      eventType,
+      reason: "Ignoring Slack message authored by this connection's app",
+    };
+  }
+
   const content = asString(event.text);
   const channel = asString(event.channel);
   const channelType = asString(event.channel_type);

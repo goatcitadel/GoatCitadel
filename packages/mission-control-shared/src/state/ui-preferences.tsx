@@ -195,7 +195,7 @@ function readModeFromStorage(): UiExperienceMode {
   if (typeof window === "undefined") {
     return "simple";
   }
-  const raw = window.localStorage.getItem(MODE_KEY);
+  const raw = readStorage(MODE_KEY);
   return raw === "advanced" ? "advanced" : "simple";
 }
 
@@ -203,7 +203,7 @@ function readDetailsFromStorage(): boolean {
   if (typeof window === "undefined") {
     return false;
   }
-  const raw = window.localStorage.getItem(DETAILS_KEY);
+  const raw = readStorage(DETAILS_KEY);
   if (raw === "true") {
     return true;
   }
@@ -218,7 +218,7 @@ function readDensityFromStorage(): UiDensity {
   if (typeof window === "undefined") {
     return "default";
   }
-  const raw = window.localStorage.getItem(DENSITY_KEY);
+  const raw = readStorage(DENSITY_KEY);
   if (raw === "comfortable" || raw === "compact") {
     return raw;
   }
@@ -229,7 +229,7 @@ function readEffectsModeFromStorage(): UiEffectsMode {
   if (typeof window === "undefined") {
     return "auto";
   }
-  const raw = window.localStorage.getItem(EFFECTS_MODE_KEY);
+  const raw = readStorage(EFFECTS_MODE_KEY);
   if (raw === "full" || raw === "reduced") {
     return raw;
   }
@@ -240,7 +240,7 @@ function readNavModeFromStorage(): ShellNavMode {
   if (typeof window === "undefined") {
     return "compact";
   }
-  const raw = window.localStorage.getItem(NAV_MODE_KEY);
+  const raw = readStorage(NAV_MODE_KEY);
   if (raw === "expanded" || raw === "compact" || raw === "icon") {
     return raw;
   }
@@ -251,28 +251,44 @@ function readDetailPanelPinnedFromStorage(): boolean {
   if (typeof window === "undefined") {
     return false;
   }
-  return window.localStorage.getItem(DETAIL_PANEL_PINNED_KEY) === "true";
+  return readStorage(DETAIL_PANEL_PINNED_KEY) === "true";
 }
 
 function readStatusCenterExpandedFromStorage(): boolean {
   if (typeof window === "undefined") {
     return false;
   }
-  return window.localStorage.getItem(STATUS_CENTER_EXPANDED_KEY) === "true";
+  return readStorage(STATUS_CENTER_EXPANDED_KEY) === "true";
 }
 
 function writeStorage(key: string, value: string): void {
   if (typeof window === "undefined") {
     return;
   }
-  window.localStorage.setItem(key, value);
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Fallback: localStorage may be disabled or quota-exceeded; drop the write rather than crash.
+  }
+}
+
+function readStorage(key: string): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    // Fallback: localStorage access may be denied (private mode); treat as absent rather than crash.
+    return null;
+  }
 }
 
 function readWorkspaceIdFromStorage(): string {
   if (typeof window === "undefined") {
     return "default";
   }
-  return normalizeWorkspaceId(window.localStorage.getItem(WORKSPACE_KEY));
+  return normalizeWorkspaceId(readStorage(WORKSPACE_KEY));
 }
 
 function normalizeWorkspaceId(value: string | null | undefined): string {
@@ -287,7 +303,7 @@ function readThemeFromStorage(): UiTheme {
   if (typeof window === "undefined") {
     return "dark";
   }
-  const raw = window.localStorage.getItem(THEME_KEY);
+  const raw = readStorage(THEME_KEY);
   return raw === "light" ? "light" : "dark";
 }
 
@@ -309,7 +325,7 @@ function readNotificationPreferencesFromStorage(): UiNotificationPreferences {
 }
 
 function readNotificationSoundModeFromStorage(): OperatorAttentionSoundMode {
-  const raw = window.localStorage.getItem(NOTIFICATION_SOUND_MODE_KEY);
+  const raw = readStorage(NOTIFICATION_SOUND_MODE_KEY);
   if (raw === "subtle" || raw === "normal") {
     return raw;
   }
@@ -317,7 +333,7 @@ function readNotificationSoundModeFromStorage(): OperatorAttentionSoundMode {
 }
 
 function readBooleanFromStorage(key: string, defaultValue: boolean): boolean {
-  const raw = window.localStorage.getItem(key);
+  const raw = readStorage(key);
   if (raw === "true") {
     return true;
   }

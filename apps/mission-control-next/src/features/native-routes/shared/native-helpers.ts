@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   CapabilityCatalogEntry,
   ChatGeneratedArtifactRecord,
@@ -73,17 +73,31 @@ export function useAsyncLoad<T>(loader: () => Promise<T>, deps: ReadonlyArray<un
     error: null,
     data: null,
   });
+  // Monotonic request id mirrors `useShellStatus.refreshIdRef`: a later reload
+  // bumps the id so an earlier (slower) response is dropped, and unmount bumps
+  // it so no in-flight response calls setState after teardown. This prevents
+  // last-writer-wins races on workspace switch and setState-after-unmount.
+  const requestIdRef = useRef(0);
 
   const reload = useCallback(async () => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    const isCurrentRequest = () => requestIdRef.current === requestId;
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
       const data = await loader();
+      if (!isCurrentRequest()) {
+        return;
+      }
       setState({
         loading: false,
         error: null,
         data,
       });
     } catch (loadError) {
+      if (!isCurrentRequest()) {
+        return;
+      }
       setState({
         loading: false,
         error: getErrorMessage(loadError),
@@ -94,6 +108,11 @@ export function useAsyncLoad<T>(loader: () => Promise<T>, deps: ReadonlyArray<un
 
   useEffect(() => {
     void reload();
+    return () => {
+      // Supersede any in-flight reload so its resolution is ignored once this
+      // effect (and typically the component) tears down.
+      requestIdRef.current += 1;
+    };
   }, [reload]);
 
   return { ...state, reload };

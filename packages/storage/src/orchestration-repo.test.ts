@@ -128,6 +128,61 @@ describe("OrchestrationRepository", () => {
     assert.equal(checkpoints[0]?.checkpointKind, "run_created");
   });
 
+  it("persists and restores the per-wave cost accumulator and stop reason across reload", () => {
+    const repo = createRepo();
+    repo.upsertPlan(plan);
+
+    const run: OrchestrationRun = {
+      runId: "run-wave-budget",
+      planId: "plan-1",
+      status: "running",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      currentWaveId: "wave-1",
+      currentPhaseId: "phase-1",
+      totalCostUsd: 0.8,
+      totalIterations: 2,
+      waveCostUsdByWaveId: { "wave-1": 0.5, "wave-2": 0.3 },
+      workspaceId: "default",
+    };
+    repo.createRun(run);
+
+    const afterCreate = repo.getRun("run-wave-budget");
+    assert.deepEqual(afterCreate.waveCostUsdByWaveId, { "wave-1": 0.5, "wave-2": 0.3 });
+    assert.equal(afterCreate.stopReason, undefined);
+
+    repo.updateRun({
+      ...afterCreate,
+      status: "stopped_by_limit",
+      stopReason: "wave_budget_exceeded",
+      waveCostUsdByWaveId: { "wave-1": 1.1, "wave-2": 0.3 },
+      endedAt: "2026-02-27T00:10:00.000Z",
+    });
+
+    const afterUpdate = repo.getRun("run-wave-budget");
+    assert.equal(afterUpdate.status, "stopped_by_limit");
+    assert.equal(afterUpdate.stopReason, "wave_budget_exceeded");
+    assert.deepEqual(afterUpdate.waveCostUsdByWaveId, { "wave-1": 1.1, "wave-2": 0.3 });
+  });
+
+  it("treats an absent per-wave accumulator and stop reason as undefined", () => {
+    const repo = createRepo();
+    repo.upsertPlan(plan);
+    const run: OrchestrationRun = {
+      runId: "run-no-wave-cost",
+      planId: "plan-1",
+      status: "running",
+      startedAt: "2026-02-27T00:00:00.000Z",
+      totalCostUsd: 0,
+      totalIterations: 0,
+      workspaceId: "default",
+    };
+    repo.createRun(run);
+
+    const persisted = repo.getRun("run-no-wave-cost");
+    assert.equal(persisted.waveCostUsdByWaveId, undefined);
+    assert.equal(persisted.stopReason, undefined);
+  });
+
   it("scopes plan payloads by workspace", () => {
     const repo = createRepo();
 

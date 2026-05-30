@@ -115,6 +115,24 @@ describe("collectSkillSourceDrift", () => {
       ),
       "utf8",
     );
+    fs.mkdirSync(path.join(rootDir, "skills", "extra", "leading-dash"), { recursive: true });
+    fs.writeFileSync(
+      path.join(rootDir, "skills", "extra", "leading-dash", "source.json"),
+      JSON.stringify(
+        {
+          manifestVersion: 2,
+          resolvedUpstream: {
+            // Passes the github.com substring gate but begins with '-'.
+            url: "-oProxyCommand=x github.com/example/leading-dash",
+            ref: "HEAD",
+            version: "abc123",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
   });
 
   afterEach(() => {
@@ -122,8 +140,10 @@ describe("collectSkillSourceDrift", () => {
   });
 
   it("reports upstream drift and local-source warnings", async () => {
+    const lsRemoteArgs: string[][] = [];
     const result = await collectSkillSourceDrift(rootDir, async (_file, args) => {
       if (args[0] === "ls-remote") {
+        lsRemoteArgs.push([...args]);
         return {
           stdout: "def456\tHEAD\n",
           stderr: "",
@@ -147,6 +167,25 @@ describe("collectSkillSourceDrift", () => {
       ]),
     );
     expect(result.warnings.some((warning) => warning.includes("local-only"))).toBe(true);
+    // The user-controlled URL is passed after a `--` separator so it cannot be read as an option.
+    expect(lsRemoteArgs).toContainEqual(["ls-remote", "--", "https://github.com/example/cloudflare-api", "HEAD"]);
+  });
+
+  it("rejects a leading-dash upstream URL without passing it to git", async () => {
+    const probedUrls: string[] = [];
+    const result = await collectSkillSourceDrift(rootDir, async (_file, args) => {
+      if (args[0] === "ls-remote") {
+        // The URL positional follows the `--` separator.
+        probedUrls.push(String(args[2]));
+      }
+      return { stdout: "def456\tHEAD\n", stderr: "" };
+    });
+
+    const dashItem = result.items.find((item) => item.skillId === "leading-dash");
+    expect(dashItem).toMatchObject({ status: "warning" });
+    expect(dashItem?.message).toContain("must not begin with '-'");
+    expect(result.warnings.some((warning) => warning.includes("leading-dash"))).toBe(true);
+    expect(probedUrls.some((url) => url.startsWith("-"))).toBe(false);
   });
 });
 

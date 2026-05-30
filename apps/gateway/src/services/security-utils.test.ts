@@ -1,7 +1,11 @@
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { normalizeMemoryForgetCriteria, serializePathWithinRoot } from "./security-utils.js";
+import {
+  assertSafeGitPositionalArg,
+  normalizeMemoryForgetCriteria,
+  serializePathWithinRoot,
+} from "./security-utils.js";
 
 describe("security utils", () => {
   it("normalizes forget criteria and enforces at least one filter", () => {
@@ -21,6 +25,24 @@ describe("security utils", () => {
     expect(normalized.query).toBe("context refresh");
   });
 
+  it("accepts ordinary git positional args and trims surrounding whitespace", () => {
+    expect(assertSafeGitPositionalArg("https://github.com/owner/repo.git", "Git source ref")).toBe(
+      "https://github.com/owner/repo.git",
+    );
+    expect(assertSafeGitPositionalArg("  v1.2.3 ", "Git source ref")).toBe("v1.2.3");
+    expect(assertSafeGitPositionalArg("release/2026-05", "Git source ref")).toBe("release/2026-05");
+  });
+
+  it("rejects empty and leading-dash git positional args", () => {
+    expect(() => assertSafeGitPositionalArg("   ", "Git source ref")).toThrow("Git source ref must not be empty.");
+    expect(() => assertSafeGitPositionalArg("--upload-pack=touch x", "Git source ref")).toThrow(
+      "Git source ref must not begin with '-'",
+    );
+    expect(() => assertSafeGitPositionalArg("-oProxyCommand=x", "Tracked upstream URL")).toThrow(
+      "Tracked upstream URL must not begin with '-'",
+    );
+  });
+
   it("serializes in-root paths and redacts out-of-root paths", () => {
     const rootDir = path.resolve(os.tmpdir(), `goatcitadel-security-utils-${Date.now()}`);
     const onOutsideRootPathWarning = vi.fn();
@@ -33,9 +55,11 @@ describe("security utils", () => {
     expect(serializePathWithinRoot(rootDir, outsideRoot, warned, onOutsideRootPathWarning)).toBe("[outside-root]");
     expect(serializePathWithinRoot(rootDir, outsideRoot, warned, onOutsideRootPathWarning)).toBe("[outside-root]");
     expect(onOutsideRootPathWarning).toHaveBeenCalledTimes(1);
-    expect(onOutsideRootPathWarning).toHaveBeenCalledWith(expect.objectContaining({
-      baseName: "token.txt",
-      normalizedPath: outsideRoot,
-    }));
+    expect(onOutsideRootPathWarning).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseName: "token.txt",
+        normalizedPath: outsideRoot,
+      }),
+    );
   });
 });

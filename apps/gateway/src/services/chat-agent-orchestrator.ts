@@ -628,6 +628,19 @@ export class ChatAgentOrchestrator {
     let completionLatencyMs = 0;
     let completionLatencyObserved = false;
     let providerCallCount = 0;
+    const accrueCompletionUsage = (usage: ChatStreamUsageRecord | null): void => {
+      if (!usage) {
+        return;
+      }
+      usageObserved = true;
+      usageTotals.inputTokens += usage.inputTokens ?? 0;
+      usageTotals.outputTokens += usage.outputTokens ?? 0;
+      usageTotals.cachedInputTokens += usage.cachedInputTokens ?? 0;
+      usageTotals.costUsd += usage.costUsd ?? 0;
+      if (usage.costSource) {
+        usageCostSources.add(usage.costSource);
+      }
+    };
     let circuitBreakerReason: string | undefined;
     let circuitBreakerFailureClass: ChatTurnFailureClass | undefined;
     let suppressIncompleteCompletionRepair = false;
@@ -1928,17 +1941,7 @@ export class ChatAgentOrchestrator {
             completionLatencyMs += Date.now() - completionStartedAt;
           }
           assistantModel = typeof completion.model === "string" ? completion.model : assistantModel;
-          const completionUsage = parseUsageFromCompletion(completion);
-          if (completionUsage) {
-            usageObserved = true;
-            usageTotals.inputTokens += completionUsage.inputTokens ?? 0;
-            usageTotals.outputTokens += completionUsage.outputTokens ?? 0;
-            usageTotals.cachedInputTokens += completionUsage.cachedInputTokens ?? 0;
-            usageTotals.costUsd += completionUsage.costUsd ?? 0;
-            if (completionUsage.costSource) {
-              usageCostSources.add(completionUsage.costSource);
-            }
-          }
+          accrueCompletionUsage(parseUsageFromCompletion(completion));
           const completionRouting = completion.routing as ChatTurnTraceRecord["routing"] | undefined;
           if (completionRouting) {
             routingState = {
@@ -2413,11 +2416,13 @@ export class ChatAgentOrchestrator {
       toolRunCount < executionBudget.maxToolRunsPerTurn
     ) {
       throwIfChatTurnCancelled(input);
-      const rawArgs = await attachGeneratedPresentationVisual(
+      const presentationVisual = await attachGeneratedPresentationVisual(
         buildSyntheticPresentationCreateArgs(input, this.deps.safeWriteFallbackDir),
         input,
         this.deps.generateImage,
       );
+      providerCallCount += presentationVisual.providerCalls;
+      const rawArgs = presentationVisual.args;
       this.deps.storage.chatTurnTraces.patch(input.turnId, {
         status: "waiting_for_tool",
       });
@@ -2525,6 +2530,8 @@ export class ChatAgentOrchestrator {
         turnBudgetDeadline,
         allowOverBudget: true,
       });
+      providerCallCount += repairedFallback.providerCalls;
+      accrueCompletionUsage(repairedFallback.usage);
       const repairedContent = repairedFallback.content.trim();
       if (
         repairedContent.length > 0 &&
@@ -2559,6 +2566,8 @@ export class ChatAgentOrchestrator {
         toolRuns,
         turnBudgetDeadline,
       });
+      providerCallCount += repairedCompletion.providerCalls;
+      accrueCompletionUsage(repairedCompletion.usage);
       if (
         repairedCompletion.content.trim().length > 0 &&
         !looksLikeSerializedToolCallMarkupContent(repairedCompletion.content)
@@ -2579,6 +2588,8 @@ export class ChatAgentOrchestrator {
         circuitBreakerReason,
         turnBudgetDeadline,
       });
+      providerCallCount += synthesizedFallback.providerCalls;
+      accrueCompletionUsage(synthesizedFallback.usage);
       const preRepairContent = assistantContent;
       assistantContent = synthesizedFallback.content;
       if (assistantContent.trim().length > 0) {
@@ -3014,17 +3025,17 @@ export class ChatAgentOrchestrator {
         },
       };
     });
-    for (const explicitToolName of extractExplicitToolLikeReferences(input.content)) {
-      if (suppressLocalPathTools && LOCAL_PATH_TOOL_NAMES.has(explicitToolName)) {
-        continue;
-      }
-      if (canonicalToModel.has(explicitToolName)) {
-        continue;
-      }
-      const modelName = toProviderToolFunctionName(explicitToolName, modelToCanonical);
-      modelToCanonical.set(modelName, explicitToolName);
-      canonicalToModel.set(explicitToolName, modelName);
-    }
+    // AGENTORCH-005: the canonical maps (`modelToCanonical` /
+    // `canonicalToModel`) are the authoritative allow-map that
+    // `resolveAllowedModelToolCallName` consults to decide whether a model tool
+    // call is permitted. They are populated exclusively from the selected
+    // catalog above — i.e. tools that are registered AND passed the access
+    // check. `namespace.method` tokens that merely appear in user/model content
+    // are intentionally NOT registered here: doing so would widen the
+    // fail-closed allow-map to arbitrary content-derived names that were never
+    // catalog-registered or access-checked. Content references still influence
+    // tool selection/scoring via `detectExplicitToolMentions`, but they must
+    // not grant authorization.
 
     return {
       tools,
@@ -4322,7 +4333,12 @@ export class ChatAgentOrchestrator {
     circuitBreakerReason?: string;
     turnBudgetDeadline?: number;
     allowOverBudget?: boolean;
-  }): Promise<{ content: string; deterministic: boolean }> {
+  }): Promise<{
+    content: string;
+    deterministic: boolean;
+    usage: ChatStreamUsageRecord | null;
+    providerCalls: number;
+  }> {
     const constrainedLocalRepoRecovery =
       shouldUseConstrainedLocalAgentProfile(input.input.providerId, input.input.model) &&
       input.input.normalizationProfile === "prompt_pack_harness" &&
@@ -4336,6 +4352,8 @@ export class ChatAgentOrchestrator {
       return {
         content: constrainedLocalRepoRecovery,
         deterministic: true,
+        usage: null,
+        providerCalls: 0,
       };
     }
     const toolSummary = summarizeToolRunsForSynthesis(input.toolRuns, input.input.content);
@@ -4344,7 +4362,10 @@ export class ChatAgentOrchestrator {
       : input.turnBudgetDeadline
         ? Math.min(FINAL_PASS_COMPLETION_TIMEOUT_MS, Math.max(3000, input.turnBudgetDeadline - Date.now()))
         : FINAL_PASS_COMPLETION_TIMEOUT_MS;
+    let providerCalls = 0;
+    let usage: ChatStreamUsageRecord | null = null;
     try {
+      providerCalls += 1;
       const completion = await this.deps.createChatCompletion({
         providerId: input.input.providerId,
         model: input.input.model,
@@ -4385,12 +4406,15 @@ export class ChatAgentOrchestrator {
           },
         ],
       });
+      usage = parseUsageFromCompletion(completion);
       const message = completion.choices?.[0]?.message as Record<string, unknown> | undefined;
       const synthesized = extractMessageContent(message ?? {}).trim();
       if (synthesized.length > 0) {
         return {
           content: synthesized,
           deterministic: false,
+          usage,
+          providerCalls,
         };
       }
     } catch {
@@ -4399,6 +4423,8 @@ export class ChatAgentOrchestrator {
     return {
       content: deterministic,
       deterministic: true,
+      usage,
+      providerCalls,
     };
   }
 
@@ -4408,7 +4434,7 @@ export class ChatAgentOrchestrator {
     conversationMessages: ChatCompletionRequest["messages"];
     toolRuns: ChatToolRunRecord[];
     turnBudgetDeadline?: number;
-  }): Promise<{ content: string }> {
+  }): Promise<{ content: string; usage: ChatStreamUsageRecord | null; providerCalls: number }> {
     const constrainedLocalRepair = shouldUseConstrainedLocalAgentProfile(input.input.providerId, input.input.model);
     const repoGroundedRepair =
       input.input.normalizationProfile === "prompt_pack_harness" &&
@@ -4418,6 +4444,8 @@ export class ChatAgentOrchestrator {
       if (recovered) {
         return {
           content: recovered,
+          usage: null,
+          providerCalls: 0,
         };
       }
     }
@@ -4426,7 +4454,10 @@ export class ChatAgentOrchestrator {
       : FINAL_PASS_COMPLETION_TIMEOUT_MS;
     const toolSummary = summarizeToolRunsForSynthesis(input.toolRuns, input.input.content);
     const ignoreDraft = looksLikeUserSafeFailureMessage(input.partialAssistantContent);
+    let providerCalls = 0;
+    let usage: ChatStreamUsageRecord | null = null;
     try {
+      providerCalls += 1;
       const completion = await this.deps.createChatCompletion({
         providerId: input.input.providerId,
         model: input.input.model,
@@ -4474,13 +4505,18 @@ export class ChatAgentOrchestrator {
           },
         ],
       });
+      usage = parseUsageFromCompletion(completion);
       const message = completion.choices?.[0]?.message as Record<string, unknown> | undefined;
       return {
         content: extractMessageContent(message ?? {}).trim(),
+        usage,
+        providerCalls,
       };
     } catch {
       return {
         content: "",
+        usage,
+        providerCalls,
       };
     }
   }
@@ -5338,12 +5374,14 @@ async function attachGeneratedPresentationVisual(
   args: Record<string, unknown>,
   input: ChatAgentTurnInput,
   generateImage?: ChatAgentOrchestratorDeps["generateImage"],
-): Promise<Record<string, unknown>> {
+): Promise<{ args: Record<string, unknown>; providerCalls: number }> {
   if (!generateImage) {
-    return args;
+    return { args, providerCalls: 0 };
   }
+  let providerCalls = 0;
   try {
     const prompt = buildPresentationVisualPrompt(input.content, String(args.title ?? "Presentation"), args.slides);
+    providerCalls += 1;
     const response = await generateImage({
       providerId: "openai",
       model: "gpt-image-2",
@@ -5355,21 +5393,24 @@ async function attachGeneratedPresentationVisual(
     });
     const image = response.data.find((item) => item.b64Json);
     if (!image?.b64Json) {
-      return args;
+      return { args, providerCalls };
     }
     return {
-      ...args,
-      visualAsset: {
-        bytesBase64: image.b64Json,
-        mimeType: "image/png",
-        altText: `Generated supporting visual for ${args.title ?? "presentation"}.`,
-        source: response.providerId ?? "openai",
-        sourceModel: response.model ?? "gpt-image-2",
-        revisedPrompt: image.revisedPrompt,
+      args: {
+        ...args,
+        visualAsset: {
+          bytesBase64: image.b64Json,
+          mimeType: "image/png",
+          altText: `Generated supporting visual for ${args.title ?? "presentation"}.`,
+          source: response.providerId ?? "openai",
+          sourceModel: response.model ?? "gpt-image-2",
+          revisedPrompt: image.revisedPrompt,
+        },
       },
+      providerCalls,
     };
   } catch {
-    return args;
+    return { args, providerCalls };
   }
 }
 
@@ -14717,26 +14758,6 @@ function detectExplicitToolMentions(content: string, toolNames: Iterable<string>
       (underscored !== dotted && hasStandaloneToolReference(normalized, underscored))
     ) {
       matches.add(toolName);
-    }
-  }
-  return matches;
-}
-
-function extractExplicitToolLikeReferences(content: string): Set<string> {
-  const matches = new Set<string>();
-  const normalized = content.toLowerCase();
-  for (const match of normalized.matchAll(
-    /\b(browser|http|file|code|memory|shell|git|tests|lint|time|artifacts|documents|presentations)\.[a-z][a-z0-9_.-]*\b/g,
-  )) {
-    matches.add(match[0]!);
-  }
-  for (const match of normalized.matchAll(
-    /\b(browser|http|file|code|memory|shell|git|tests|lint|time|artifacts|documents|presentations)_[a-z][a-z0-9_-]*\b/g,
-  )) {
-    const raw = match[0]!;
-    const namespaceEnd = raw.indexOf("_");
-    if (namespaceEnd > 0) {
-      matches.add(`${raw.slice(0, namespaceEnd)}.${raw.slice(namespaceEnd + 1)}`);
     }
   }
   return matches;

@@ -8,6 +8,7 @@ import type { GatewayRuntimeConfig } from "../config.js";
 const worktreeManagerMocks = vi.hoisted(() => ({
   create: vi.fn(),
   remove: vi.fn(),
+  prune: vi.fn(),
   constructor: vi.fn(),
 }));
 
@@ -17,6 +18,7 @@ vi.mock("@goatcitadel/orchestration", () => ({
     return {
       create: worktreeManagerMocks.create,
       remove: worktreeManagerMocks.remove,
+      prune: worktreeManagerMocks.prune,
     };
   }),
 }));
@@ -28,6 +30,7 @@ const tempDirs: string[] = [];
 afterEach(async () => {
   worktreeManagerMocks.create.mockReset();
   worktreeManagerMocks.remove.mockReset();
+  worktreeManagerMocks.prune.mockReset();
   worktreeManagerMocks.constructor.mockReset();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -113,10 +116,13 @@ describe("OrchestrationWorktreeService loop31 tails", () => {
     ).resolves.toBeUndefined();
 
     expect(worktreeManagerMocks.remove).toHaveBeenCalledWith(worktreePath);
+    // ORCH-004: even when git removal fails and we fall back to fs.rm, the
+    // stale .git/worktrees/<id> metadata must be pruned.
+    expect(worktreeManagerMocks.prune).toHaveBeenCalledTimes(1);
     await expect(fs.stat(worktreePath)).rejects.toThrow();
   });
 
-  it("uses git worktree removal when it succeeds", async () => {
+  it("uses git worktree removal when it succeeds and prunes stale metadata", async () => {
     const rootDir = await makeTempDir();
     const worktreePath = path.join(rootDir, ".worktrees", "orchestration", "run-1");
     await fs.mkdir(worktreePath, { recursive: true });
@@ -135,6 +141,8 @@ describe("OrchestrationWorktreeService loop31 tails", () => {
     ).resolves.toBeUndefined();
 
     expect(worktreeManagerMocks.remove).toHaveBeenCalledWith(worktreePath);
+    // ORCH-004: prune after a successful removal keeps git's worktree registry clean.
+    expect(worktreeManagerMocks.prune).toHaveBeenCalledTimes(1);
     await expect(fs.stat(worktreePath)).resolves.toBeTruthy();
   });
 

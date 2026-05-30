@@ -219,7 +219,8 @@ export function deriveRealtimeNotification(event: RealtimeEvent): DerivedRealtim
       message: payloadMessage ?? payloadTitle!,
       groupKey: `ui-${event.eventType}`,
       truthMode: "authoritative",
-      attentionKind: eventSignal.includes("error") || eventSignal.includes("failed") ? "runtime_degraded" : "activity_update",
+      attentionKind:
+        eventSignal.includes("error") || eventSignal.includes("failed") ? "runtime_degraded" : "activity_update",
       soundCue: eventSignal.includes("error") || eventSignal.includes("failed") ? "problem" : "soft_update",
     };
   }
@@ -380,19 +381,19 @@ export function deriveRealtimeEventTone(event: RealtimeEvent): RealtimeEventTone
 }
 
 function isReplayGap(event: RealtimeEvent): boolean {
-  return event.payload.kind === "replay_gap";
+  return event.payload?.kind === "replay_gap";
 }
 
 function buildEventHaystack(event: RealtimeEvent): string {
-  const payloadKind = typeof event.payload.kind === "string" ? event.payload.kind : "";
+  const payloadKind = typeof event.payload?.kind === "string" ? event.payload.kind : "";
   return [event.eventType, event.source, event.eventClass, event.eventAuthority, payloadKind]
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .join(" ")
     .toLowerCase();
 }
 
-function readString(payload: Record<string, unknown>, key: string): string | undefined {
-  const value = payload[key];
+function readString(payload: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = payload?.[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
@@ -422,7 +423,9 @@ function isRunResumedEvent(signal: string): boolean {
 }
 
 function isRunFailedEvent(signal: string): boolean {
-  return /run_failed|run\.failed/.test(signal) || (isRunLikeSignal(signal) && /failed|failure|error|critical/.test(signal));
+  return (
+    /run_failed|run\.failed/.test(signal) || (isRunLikeSignal(signal) && /failed|failure|error|critical/.test(signal))
+  );
 }
 
 function isOperatorBlockedEvent(signal: string): boolean {

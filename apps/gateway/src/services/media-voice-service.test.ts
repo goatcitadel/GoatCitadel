@@ -343,11 +343,15 @@ describe("MediaVoiceService", () => {
         event: "voice.transcribe.start",
       }),
     );
+    // Async execFile rejects when the (here: non-whisper) binary exits non-zero;
+    // the service records an error status. We assert the stable state rather than
+    // the platform-dependent underlying message (previously coupled to the
+    // execFileSync "Command failed" string).
     expect(systemSettings.set).toHaveBeenCalledWith(
       "voice_status_v1",
       expect.objectContaining({
         state: "error",
-        lastError: expect.stringContaining("Command failed"),
+        lastError: expect.any(String),
       }),
     );
   });

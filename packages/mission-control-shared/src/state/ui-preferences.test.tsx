@@ -32,6 +32,33 @@ class MemoryStorage implements Storage {
   }
 }
 
+/** Simulates Safari private mode / quota-exceeded: every access throws. */
+class ThrowingStorage implements Storage {
+  get length(): number {
+    return 0;
+  }
+
+  clear(): void {
+    throw new DOMException("storage disabled", "SecurityError");
+  }
+
+  getItem(): string | null {
+    throw new DOMException("storage disabled", "SecurityError");
+  }
+
+  key(): string | null {
+    throw new DOMException("storage disabled", "SecurityError");
+  }
+
+  removeItem(): void {
+    throw new DOMException("storage disabled", "SecurityError");
+  }
+
+  setItem(): void {
+    throw new DOMException("quota exceeded", "QuotaExceededError");
+  }
+}
+
 type UiPreferences = ReturnType<typeof useUiPreferences>;
 
 function installWindow(storage = new MemoryStorage()) {
@@ -290,6 +317,36 @@ describe("ui preferences", () => {
       activeWorkspaceId: "workspace_2",
       theme: "dark",
     });
+    hook.renderer.unmount();
+  });
+
+  it("mounts with defaults and swallows storage errors in private mode (MCSHARED-002)", () => {
+    installWindow(new ThrowingStorage());
+
+    // Reads throw (SecurityError) -> provider must still mount with defaults, not crash.
+    let hook!: ReturnType<typeof renderPreferences>;
+    expect(() => {
+      hook = renderPreferences();
+    }).not.toThrow();
+    expect(hook.result).toMatchObject({
+      mode: "simple",
+      density: "default",
+      theme: "dark",
+    });
+
+    // Writes throw (QuotaExceededError) -> setters must not propagate the throw.
+    expect(() => {
+      act(() => {
+        hook.result.setMode("advanced");
+        hook.result.setTheme("light");
+        hook.result.setDensity("compact");
+        hook.result.setNotificationSoundMode("subtle");
+      });
+    }).not.toThrow();
+    // In-memory state still updates even though persistence failed.
+    expect(hook.result.mode).toBe("advanced");
+    expect(hook.result.theme).toBe("light");
+
     hook.renderer.unmount();
   });
 });
