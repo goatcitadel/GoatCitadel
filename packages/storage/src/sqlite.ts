@@ -7,6 +7,16 @@ import type { DatabaseClient, DbStatement, DbTransactionMode } from "./db.js";
 import { hashPromptPackPolicyV2, stringifyPromptPackPolicyV2 } from "./prompt-pack-policy.js";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
+
+/**
+ * Quote a SQLite identifier (table/index name) for safe interpolation into
+ * PRAGMA statements, which do not accept bound parameters. Names are sourced
+ * from `sqlite_master`, but quoting keeps the statements robust if a name ever
+ * contains spaces or quotes. Embedded double quotes are doubled per SQLite rules.
+ */
+function quoteSqliteIdentifier(identifier: string): string {
+  return `"${identifier.replace(/"/g, '""')}"`;
+}
 const DEFAULT_PROMPT_PACK_POLICY_V2_JSON = stringifyPromptPackPolicyV2(DEFAULT_PROMPT_PACK_POLICY_V2);
 const DEFAULT_PROMPT_PACK_POLICY_V2_HASH = hashPromptPackPolicyV2(DEFAULT_PROMPT_PACK_POLICY_V2);
 
@@ -70,6 +80,11 @@ class SqliteDatabaseClient implements DatabaseClient {
     this.db.exec(beginSql);
     try {
       const result = callback();
+      if (result !== null && typeof (result as { then?: unknown }).then === "function") {
+        // A thenable would COMMIT before it resolves, running async work outside
+        // the transaction boundary. This transaction wrapper is synchronous only.
+        throw new TypeError("transaction() callback must be synchronous; it must not return a Promise");
+      }
       this.db.exec("COMMIT");
       return result;
     } catch (error) {
@@ -997,6 +1012,11 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "orchestration_runs", "stop_reason", "TEXT");
     },
   },
+  {
+    version: 100,
+    name: "llm_runtime_measurement_and_eval_proof",
+    up: createLlmRuntimeMeasurementSchema,
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -1038,14 +1058,14 @@ function buildTableBlueprint(db: DatabaseSync, tableName: string, sql: string): 
       .map((match) => match[1])
       .filter((value): value is string => typeof value === "string"),
   );
-  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
+  const columns = db.prepare(`PRAGMA table_info(${quoteSqliteIdentifier(tableName)})`).all() as Array<{
     name: string;
     type: string;
     notnull: number;
     dflt_value: string | null;
     pk: number;
   }>;
-  const foreignKeys = db.prepare(`PRAGMA foreign_key_list(${tableName})`).all() as Array<{
+  const foreignKeys = db.prepare(`PRAGMA foreign_key_list(${quoteSqliteIdentifier(tableName)})`).all() as Array<{
     id: number;
     seq: number;
     table: string;
@@ -1063,14 +1083,14 @@ function buildTableBlueprint(db: DatabaseSync, tableName: string, sql: string): 
     ).map((row) => [row.name, row.sql]),
   );
   const indexes = (
-    db.prepare(`PRAGMA index_list(${tableName})`).all() as Array<{
+    db.prepare(`PRAGMA index_list(${quoteSqliteIdentifier(tableName)})`).all() as Array<{
       name: string;
       unique: number;
       origin: string;
     }>
   )
     .map((index) => {
-      const indexColumns = db.prepare(`PRAGMA index_info(${index.name})`).all() as Array<{
+      const indexColumns = db.prepare(`PRAGMA index_info(${quoteSqliteIdentifier(index.name)})`).all() as Array<{
         name: string;
       }>;
       const columns = indexColumns
@@ -4071,6 +4091,51 @@ export const __sqliteInternals = {
   getPromptPackBenchmarkDedupTimestampForTest,
   getPromptPackBenchmarkDedupOrdinalForTest,
 };
+
+function createLlmRuntimeMeasurementSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS llm_runtime_measurements (
+      measurement_id TEXT PRIMARY KEY,
+      provider_id TEXT NOT NULL,
+      model TEXT NOT NULL,
+      engine_kind TEXT NOT NULL,
+      source TEXT NOT NULL,
+      status TEXT NOT NULL,
+      stream INTEGER NOT NULL DEFAULT 0,
+      session_id TEXT,
+      task_id TEXT,
+      run_id TEXT,
+      metrics_json TEXT NOT NULL DEFAULT '{}',
+      provenance_json TEXT NOT NULL DEFAULT '{}',
+      error_text TEXT,
+      collected_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_llm_runtime_measurements_provider_model_collected
+      ON llm_runtime_measurements(provider_id, model, collected_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_llm_runtime_measurements_session
+      ON llm_runtime_measurements(session_id, collected_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_llm_runtime_measurements_source_status
+      ON llm_runtime_measurements(source, status, collected_at DESC);
+
+    CREATE TABLE IF NOT EXISTS llm_eval_proof_runs (
+      run_id TEXT PRIMARY KEY,
+      prompt_hash TEXT NOT NULL,
+      session_id TEXT,
+      task_id TEXT,
+      status TEXT NOT NULL,
+      candidates_json TEXT NOT NULL DEFAULT '[]',
+      results_json TEXT NOT NULL DEFAULT '[]',
+      warnings_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_llm_eval_proof_runs_created
+      ON llm_eval_proof_runs(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_llm_eval_proof_runs_session
+      ON llm_eval_proof_runs(session_id, created_at DESC);
+  `);
+}
 
 function createWorkspaceIsolationSchema(db: DatabaseSync): void {
   db.exec(`
