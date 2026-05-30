@@ -241,6 +241,8 @@ describe("ProjectsRoutePage", () => {
     const text = pageText(renderer);
     expect(text).toContain("Project containers");
     expect(text).toContain("Project overview");
+    expect(text).toContain("Start from intent");
+    expect(text).toContain("Release proof");
     expect(text).toContain("Continue Chat");
     expect(text).toContain("Continue Cowork");
     expect(text).toContain("Continue Code");
@@ -339,6 +341,36 @@ describe("ProjectsRoutePage", () => {
       sessionId: "new-code-session",
       projectId: "project-beta",
       theme: "neon",
+    });
+  });
+
+  it("starts intent-specific project intake sessions", async () => {
+    const navigate = vi.fn();
+    const renderer = await renderPage(
+      defaultProps({ route: { area: "projects", projectId: "project-alpha", theme: "ops" }, navigate }),
+    );
+
+    await act(async () => {
+      findButtonByAriaLabel(renderer.root, "Start Review for Alpha").props.onClick();
+      await Promise.resolve();
+    });
+
+    expect(mockedCreateChatSession).toHaveBeenCalledWith(
+      {
+        workspaceId: "default",
+        projectId: "project-alpha",
+        mode: "code",
+        origin: "operator",
+        title: "Review - Alpha",
+        tags: ["project-intake", "intent:review"],
+      },
+      { originSurface: "code" },
+    );
+    expect(navigate).toHaveBeenCalledWith({
+      area: "code",
+      sessionId: "new-code-session",
+      projectId: "project-alpha",
+      theme: "ops",
     });
   });
 
@@ -460,7 +492,9 @@ describe("ProjectsRoutePage", () => {
     expect(findButtonByAriaLabel(renderer.root, "Archive project Archived")).toBeDefined();
 
     mockedRestoreChatProject.mockRejectedValueOnce(new Error("restore failed"));
-    const failingRenderer = await renderPage(defaultProps({ route: { area: "projects", projectId: "project-archived" } }));
+    const failingRenderer = await renderPage(
+      defaultProps({ route: { area: "projects", projectId: "project-archived" } }),
+    );
     await act(async () => {
       findButtonByAriaLabel(failingRenderer.root, "Unarchive project Archived").props.onClick({
         stopPropagation: vi.fn(),

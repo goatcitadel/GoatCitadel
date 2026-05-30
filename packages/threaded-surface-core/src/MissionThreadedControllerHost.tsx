@@ -57,7 +57,6 @@ import {
   fetchAgenticRunTree,
   type AgenticRunTreeResponse,
 } from "@goatcitadel/mission-control-shared/api/agentic";
-import { CardSkeleton } from "@goatcitadel/mission-control-shared/components/CardSkeleton";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { PageHeader } from "@goatcitadel/mission-control-shared/components/PageHeader";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
@@ -641,6 +640,65 @@ export function runWithSelectedSession<T>(
     return undefined;
   }
   return run(selectedSession);
+}
+
+function ThreadedLoadingState({
+  approvalsCount,
+  mode,
+  projectCount,
+  sessionCount,
+  workspaceName,
+}: {
+  approvalsCount: number;
+  mode: ChatMode;
+  projectCount: number | null;
+  sessionCount: number | null;
+  workspaceName: string;
+}) {
+  const label = mode === "cowork" ? "Cowork" : mode === "code" ? "Code" : "Chat";
+  const focus =
+    mode === "cowork"
+      ? "Preparing supervised work, checkpoints, and approvals."
+      : mode === "code"
+        ? "Preparing source context, workbench evidence, and validation posture."
+        : "Preparing model, policy, context, and recent threads.";
+
+  return (
+    <section className="mc-next-threaded-loading" aria-live="polite" aria-busy="true">
+      <div className="mc-next-threaded-loading-copy">
+        <p>{label}</p>
+        <h2>Preparing {label}</h2>
+        <span>{focus}</span>
+      </div>
+      <div className="mc-next-threaded-loading-grid" aria-label={`${label} startup readiness`}>
+        <span>
+          <strong>{workspaceName}</strong>
+          <span>Workspace</span>
+        </span>
+        <span>
+          <strong>{formatLoadingMetric(sessionCount)}</strong>
+          <span>Sessions</span>
+        </span>
+        <span>
+          <strong>{formatLoadingMetric(projectCount)}</strong>
+          <span>Projects</span>
+        </span>
+        <span>
+          <strong>{approvalsCount}</strong>
+          <span>Approvals</span>
+        </span>
+      </div>
+      <ol className="mc-next-threaded-loading-steps">
+        <li>Connecting session history</li>
+        <li>Checking runtime posture</li>
+        <li>Opening the conversation surface</li>
+      </ol>
+    </section>
+  );
+}
+
+function formatLoadingMetric(value: number | null): string {
+  return value === null ? "Loading" : String(value);
 }
 
 export function MissionThreadedControllerHost({
@@ -3333,7 +3391,13 @@ export function MissionThreadedControllerHost({
             className="page-header-command chat-v11-header"
           />
         ) : null}
-        <CardSkeleton lines={8} />
+        <ThreadedLoadingState
+          approvalsCount={approvalsCount}
+          mode={messageMode}
+          projectCount={projects ? projects.items.length : null}
+          sessionCount={sessions ? missionSessions.length + externalSessions.length : null}
+          workspaceName={workspaceName}
+        />
       </section>
     );
   }

@@ -76,6 +76,17 @@ metadata: "{not json"
 body`);
     expect(invalidJsonMetadata.frontmatter.metadata).toBeUndefined();
   });
+
+  it("tolerates BOM-prefixed SKILL.md frontmatter", () => {
+    const parsed = parseSkillMarkdown(`\uFEFF---
+name: BOM Skill
+description: Has a byte-order mark before the first fence
+---
+body`);
+
+    expect(parsed.frontmatter.name).toBe("BOM Skill");
+    expect(parsed.body).toBe("body");
+  });
 });
 
 describe("SkillsService loader edge cases", () => {

@@ -19,6 +19,7 @@ import type {
   ChatSpecialistCandidateSuggestionRecord,
   ChatStreamChunk,
   ChatTurnTraceRecord,
+  GatewayEventInput,
   ProactiveRunRecord,
 } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
@@ -442,7 +443,11 @@ async function runAgentSendChatMessageLlmPath(
       turnResult.assistantContent.trim().length > 0
         ? turnResult.assistantContent
         : buildEmptyAssistantTurnFallbackText();
-    const assistantUsage = turnResult.usage;
+    const assistantUsage = withCostAttribution(turnResult.usage, {
+      providerId: turnResult.turnTrace.routing.effectiveProviderId ?? input.providerId ?? prepared.prefs.providerId,
+      model:
+        turnResult.turnTrace.routing.effectiveModel ?? turnResult.assistantModel ?? input.model ?? prepared.prefs.model,
+    });
     const assistantEventId = prepared.assistantMessageId;
     await host.ingestEvent(randomUUID(), {
       eventId: assistantEventId,
@@ -575,6 +580,17 @@ async function runAgentSendChatMessageLlmPath(
     externalAbortListener?.();
     host.endActiveChatTurnExecution(prepared.turnId, controller);
   }
+}
+
+function withCostAttribution(
+  usage: GatewayEventInput["usage"] | undefined,
+  attribution: { providerId?: string; model?: string },
+): GatewayEventInput["usage"] {
+  return {
+    ...(usage ?? {}),
+    ...(attribution.providerId ? { providerId: attribution.providerId } : {}),
+    ...(attribution.model ? { model: attribution.model } : {}),
+  };
 }
 
 function bindExternalAbortToController(

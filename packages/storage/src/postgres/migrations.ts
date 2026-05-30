@@ -194,6 +194,8 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS closed_at_ts TIMESTAMPTZ GENERATED ALWAYS AS (gc_try_parse_timestamptz(closed_at)) STORED;
 
       ALTER TABLE cost_ledger
+        ADD COLUMN IF NOT EXISTS provider_id TEXT,
+        ADD COLUMN IF NOT EXISTS model_id TEXT,
         ADD COLUMN IF NOT EXISTS day_date DATE GENERATED ALWAYS AS (gc_try_parse_date(day)) STORED,
         ADD COLUMN IF NOT EXISTS created_at_ts TIMESTAMPTZ GENERATED ALWAYS AS (gc_try_parse_timestamptz(created_at)) STORED;
 
@@ -248,6 +250,9 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
       CREATE INDEX IF NOT EXISTS idx_cost_ledger_session_day_date
         ON cost_ledger(session_id, day_date DESC)
         WHERE day_date IS NOT NULL;
+
+      CREATE INDEX IF NOT EXISTS idx_cost_ledger_day_provider
+        ON cost_ledger(day, provider_id);
 
       CREATE INDEX IF NOT EXISTS idx_sessions_routing_hints_doc_gin
         ON sessions USING gin (routing_hints_doc)

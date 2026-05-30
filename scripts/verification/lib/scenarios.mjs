@@ -102,6 +102,11 @@ export const FAST_LANE_COMMANDS = Object.freeze([
     title: "Extensions SDK build",
     args: ["--filter", "@goatcitadel/extensions-sdk", "build"],
   },
+  {
+    id: "fast.extensions-sdk-package",
+    title: "Extensions SDK package artifact",
+    args: ["verify:extensions:package"],
+  },
   { id: "fast.typecheck", title: "Root typecheck", args: ["typecheck"] },
   {
     id: "fast.test",

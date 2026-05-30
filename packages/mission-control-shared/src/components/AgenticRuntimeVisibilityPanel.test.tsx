@@ -51,15 +51,16 @@ describe("AgenticRuntimeVisibilityPanel", () => {
           trackId: "a2a_protocol",
           label: "A2A protocol interoperability",
           kind: "agent_protocol",
-          status: "unavailable",
+          status: "blocked",
           callable: false,
-          implementationStatus: "missing",
-          summary: "A2A is not implemented as a protocol surface.",
-          reasons: ["No A2A Agent Card contracts, discovery routes, or JSON-RPC handlers are registered."],
-          evidence: [],
-          requiredNextSteps: [
-            "Add A2A contracts for Agent Cards, messages, tasks, artifacts, streaming events, and auth metadata",
+          implementationStatus: "partial",
+          summary:
+            "A2A has gateway-owned Agent Card draft and task-export preview routes, but callable protocol traffic remains blocked.",
+          reasons: [
+            "Operator-authenticated preview routes expose an unpublished Agent Card draft and A2A-style task envelope mapping without sending external traffic.",
           ],
+          evidence: [],
+          requiredNextSteps: ["Add gateway-owned A2A JSON-RPC server and client services before marking callable"],
           checkedAt: "2026-01-01T00:00:00.000Z",
         },
       ],
@@ -187,8 +188,9 @@ describe("AgenticRuntimeVisibilityPanel", () => {
     expect(rendered).toContain("2026-01-01T00:00:00.000Z");
     expect(rendered).toContain("Scalability");
     expect(rendered).toContain("A2A protocol interoperability");
-    expect(rendered).toContain("Protocol missing.");
-    expect(rendered).toContain("No A2A Agent Card contracts");
+    expect(rendered).toContain("Protocol partial.");
+    expect(rendered).toContain("task-export preview routes");
+    expect(rendered).toContain("without sending external traffic");
     expect(rendered).toContain("Sandbox posture is not satisfied.");
     expect(rendered).toContain("Executable pwsh.exe.");
     expect(rendered).toContain("Manual harness");

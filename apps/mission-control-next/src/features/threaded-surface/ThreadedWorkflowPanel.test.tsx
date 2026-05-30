@@ -1394,6 +1394,13 @@ describe("ThreadedWorkflowPanel", () => {
             output: {
               state: buildCodePanel().props.workbenchState,
               output: "Validation passed.",
+              validation: {
+                status: "passed",
+                commandLabel: "pnpm test",
+                changedFiles: ["src/app.ts"],
+                durationMs: 1234,
+                stdoutPreview: "ok",
+              },
               helperRuns: [
                 {
                   runId: "helper-1",
@@ -1516,6 +1523,19 @@ describe("ThreadedWorkflowPanel", () => {
     expect(JSON.stringify(renderer!.toJSON())).toContain("data/code-mode-artifacts/helper-1/source.ts");
     expect(JSON.stringify(renderer!.toJSON())).toContain("stdout from detail");
     expect(JSON.stringify(renderer!.toJSON())).toContain("stderr from detail");
+    await act(async () => {
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Review packet"))
+        ?.props.onClick();
+    });
+    const reviewPacket = JSON.stringify(renderer!.toJSON());
+    expect(reviewPacket).toContain("Validation evidence");
+    expect(reviewPacket).toContain("pnpm test");
+    expect(reviewPacket).toContain("Artifacts and approvals");
+    expect(reviewPacket).toContain("approv...de-1");
+    expect(reviewPacket).toContain("Ready to publish checklist");
+    expect(reviewPacket).toContain("data/code-mode-artifacts/helper-1/source.ts");
 
     await act(async () => {
       renderer!.root

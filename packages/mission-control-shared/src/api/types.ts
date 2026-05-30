@@ -65,6 +65,25 @@ export interface CostSummaryResponse {
     tokenTotal: number;
     costUsd: number;
   }>;
+  dailySeries?: Array<{
+    isoDate: string;
+    shortLabel?: string;
+    tokenInput?: number;
+    tokenOutput?: number;
+    tokenCachedInput?: number;
+    tokenTotal?: number;
+    costUsd?: number;
+    segments: Array<{
+      providerKey: string;
+      label: string;
+      tokenInput?: number;
+      tokenOutput?: number;
+      tokenCachedInput?: number;
+      tokenTotal?: number;
+      costUsd: number;
+      models?: string[];
+    }>;
+  }>;
 }
 
 export interface TaskRecord {
@@ -245,6 +264,18 @@ export interface SystemVitalsResponse {
   processHeapUsedBytes: number;
 }
 
+export interface DaemonControlHandoff {
+  owner: string;
+  serviceName: string;
+  reason: string;
+  desktopControl: string;
+  commands: Array<{
+    label: string;
+    command: string;
+    description: string;
+  }>;
+}
+
 export interface HealthSummaryResponse {
   generatedAt: string;
   systemVitals: SystemVitalsResponse;
@@ -259,6 +290,7 @@ export interface HealthSummaryResponse {
     supported: boolean;
     controllable: boolean;
     controlMessage: string;
+    controlHandoff?: DaemonControlHandoff;
   };
   daemonLogs: {
     items: Array<{ timestamp: string; level: "info" | "warn" | "error"; message: string }>;

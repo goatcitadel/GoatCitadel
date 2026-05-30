@@ -1,10 +1,12 @@
 import type { ChatCompletionRequest, ChatCompletionResponse, MemoryContextPack } from "@goatcitadel/contracts";
+import { coerceDurationMs } from "@goatcitadel/contracts";
 import { absorbCompletionStreamChunk, createCompletionStreamAggregate } from "./chat-agent-completion-adapters.js";
 import { isChatTurnCancelledError } from "./chat-turn-helpers.js";
 import { parseTransformLlmOutputHookPatch } from "./hook-patch-helpers.js";
 import type { HooksService } from "./hooks-service.js";
 
 export const CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT = 3;
+const MAX_CHAT_COMPLETION_TIMEOUT_MS = 30 * 60_000;
 
 export function extractPromptFromMessages(messages: ChatCompletionRequest["messages"]): string {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -86,6 +88,47 @@ export function shouldRetryTransientProviderError(error: Error): boolean {
     message.includes("too many requests") ||
     message.includes("rate limit")
   );
+}
+
+export type ProviderFailureClass =
+  | "auth_denial"
+  | "business_denial"
+  | "context_overflow"
+  | "rate_limited"
+  | "transient"
+  | "cancelled"
+  | "unknown";
+
+export function classifyProviderFailure(error: Error): ProviderFailureClass {
+  if (isChatTurnCancelledError(error)) {
+    return "cancelled";
+  }
+  const message = error.message.toLowerCase();
+  const statusMatch = error.message.match(/\((\d{3})(?:\s|[)])?/);
+  const status = statusMatch ? Number(statusMatch[1]) : undefined;
+  if (status === 401 || status === 403) {
+    if (/(quota|billing|payment|insufficient|credit|subscription|not\s+available|region|unsupported)/.test(message)) {
+      return "business_denial";
+    }
+    return "auth_denial";
+  }
+  if (status === 402 || /(quota|billing|payment|insufficient|credit|subscription|region restricted)/.test(message)) {
+    return "business_denial";
+  }
+  if (status === 429 || /(too many requests|rate limit|rate_limited)/.test(message)) {
+    return "rate_limited";
+  }
+  if (/(context length|context window|maximum context|token limit|too many tokens|prompt is too long)/.test(message)) {
+    return "context_overflow";
+  }
+  if (shouldRetryTransientProviderError(error)) {
+    return "transient";
+  }
+  return "unknown";
+}
+
+export function shouldAttemptCrossProviderFallback(error: Error): boolean {
+  return classifyProviderFailure(error) !== "context_overflow" && classifyProviderFailure(error) !== "cancelled";
 }
 
 export async function delayChatCompletionRetry(
@@ -171,10 +214,11 @@ export function normalizeToolProtocolRetryRequest(
 }
 
 export function createChatCompletionDeadline(timeoutMs: number | undefined): number | undefined {
-  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+  const boundedTimeoutMs = coerceDurationMs(timeoutMs, { maxMs: MAX_CHAT_COMPLETION_TIMEOUT_MS });
+  if (boundedTimeoutMs === undefined) {
     return undefined;
   }
-  return Date.now() + Math.floor(timeoutMs);
+  return Date.now() + boundedTimeoutMs;
 }
 
 export function getRemainingChatCompletionTimeoutMs(
@@ -182,13 +226,13 @@ export function getRemainingChatCompletionTimeoutMs(
   timeoutMs: number | undefined,
 ): number | undefined {
   if (deadline === undefined) {
-    return timeoutMs;
+    return coerceDurationMs(timeoutMs, { maxMs: MAX_CHAT_COMPLETION_TIMEOUT_MS });
   }
   const remaining = deadline - Date.now();
   if (remaining <= 0) {
     throw buildChatCompletionTimeoutError(timeoutMs);
   }
-  return Math.max(1, remaining);
+  return coerceDurationMs(remaining, { fallback: 1, maxMs: MAX_CHAT_COMPLETION_TIMEOUT_MS });
 }
 
 export function normalizeChatCompletionAttemptError(error: unknown, timeoutMs: number | undefined): Error {
@@ -214,8 +258,9 @@ export function normalizeChatCompletionAttemptError(error: unknown, timeoutMs: n
 }
 
 function buildChatCompletionTimeoutError(timeoutMs: number | undefined): Error {
-  if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0) {
-    return new Error(`Chat completion timed out after ${Math.floor(timeoutMs)}ms.`);
+  const boundedTimeoutMs = coerceDurationMs(timeoutMs, { maxMs: MAX_CHAT_COMPLETION_TIMEOUT_MS });
+  if (boundedTimeoutMs !== undefined) {
+    return new Error(`Chat completion timed out after ${boundedTimeoutMs}ms.`);
   }
   return new Error("Chat completion timed out.");
 }

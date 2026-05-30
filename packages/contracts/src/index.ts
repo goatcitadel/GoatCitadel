@@ -44,6 +44,7 @@ export * from "./ui-forms.js";
 export * from "./chat.js";
 export * from "./admin.js";
 export * from "./voice.js";
+export * from "./a2a.js";
 export * from "./a2ui.js";
 export * from "./companion.js";
 export * from "./companion-auth.js";

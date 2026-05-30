@@ -124,9 +124,9 @@ describe("tasks routes", () => {
         }),
         expect.objectContaining({
           trackId: "a2a_protocol",
-          status: "unavailable",
+          status: "blocked",
           callable: false,
-          implementationStatus: "missing",
+          implementationStatus: "partial",
         }),
       ]),
     });
@@ -141,12 +141,88 @@ describe("tasks routes", () => {
         expect.objectContaining({
           capabilityId: "scalability:a2a_protocol",
           family: "agent_protocol",
-          status: "unavailable",
+          status: "blocked",
           callable: false,
         }),
       ]),
     );
   }, 15_000);
+
+  it("exposes governed A2A agent-card and task-export preview routes without external sends", async () => {
+    app = buildApp({});
+    await app.register(tasksRoutes);
+
+    const card = await app.inject({
+      method: "GET",
+      url: "/api/v1/a2a/agent-card",
+      headers: { host: "127.0.0.1:8787" },
+    });
+    const preview = await app.inject({
+      method: "POST",
+      url: "/api/v1/a2a/task-preview",
+      payload: {
+        goal: "Review the release evidence and summarize blockers.",
+        sourceSurface: "cowork",
+        workspaceId: "default",
+        sessionId: "session-1",
+        artifactRefs: ["evidence:env-1", "artifact:report-1"],
+      },
+    });
+
+    expect(card.statusCode).toBe(200);
+    expect(card.json()).toMatchObject({
+      status: "preview_ready",
+      agentCard: {
+        name: "GoatCitadel Mission Control",
+        publicationStatus: "draft_operator_preview",
+        discoveryPublished: false,
+        supportedInterfaces: [
+          {
+            url: "http://127.0.0.1:8787/api/v1/a2a/jsonrpc",
+            protocolBinding: "JSONRPC",
+            protocolVersion: "1.0",
+            enabled: false,
+          },
+        ],
+        capabilities: {
+          streaming: false,
+          pushNotifications: false,
+        },
+      },
+      previewRoutes: {
+        taskPreview: "http://127.0.0.1:8787/api/v1/a2a/task-preview",
+      },
+      governance: {
+        exposure: "operator_api_only",
+        callable: false,
+        outboundNetworkEnabled: false,
+        inboundJsonRpcEnabled: false,
+      },
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json()).toMatchObject({
+      status: "preview",
+      task: {
+        contextId: "session-1",
+        status: { state: "submitted" },
+        messages: [
+          {
+            role: "user",
+            parts: [{ kind: "text", text: "Review the release evidence and summarize blockers." }],
+          },
+        ],
+        artifacts: [
+          expect.objectContaining({ uri: "evidence:env-1" }),
+          expect.objectContaining({ uri: "artifact:report-1" }),
+        ],
+      },
+      governance: {
+        replayPolicy: "preview_only",
+        outboundNetworkEnabled: false,
+      },
+      warnings: expect.arrayContaining([expect.stringContaining("no A2A client request")]),
+    });
+  });
 
   it("rejects malformed subagent metadata instead of persisting arbitrary payloads", async () => {
     const registerTaskSubagent = vi.fn();

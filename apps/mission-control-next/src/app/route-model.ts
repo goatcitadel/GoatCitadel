@@ -704,9 +704,9 @@ export const ROUTE_RELEASE_SCOPE = [
     area: "settings",
     section: "access",
     status: "ship",
-    releaseAction: "Inspect auth posture, secret storage truth, and access boundaries.",
+    releaseAction: "Inspect auth posture, device trust, desktop/mobile continuity, and access boundaries.",
     verification: "verify:surface:regression, verify:auth:matrix",
-    note: "Access and secret truth are release-bearing.",
+    note: "Access, secret truth, device grants, and desktop/mobile continuity are release-bearing.",
   },
   {
     area: "settings",
@@ -754,7 +754,7 @@ export const ROUTE_RELEASE_SCOPE = [
     status: "experimental",
     releaseAction: "Inspect add-on posture without implying a full marketplace/install lifecycle.",
     verification: "verify:surface:regression label check",
-    note: "Add-ons stay experimental until install/enable/disable proof is promoted.",
+    note: "Add-ons stay experimental until permission grants, durable logs, rollback, and marketplace boundaries are proven.",
   },
   {
     area: "settings",

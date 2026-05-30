@@ -1026,6 +1026,20 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "chat_side_chats",
     up: createChatSideChatsSchema,
   },
+  {
+    version: 102,
+    name: "cost_ledger_provider_timeseries",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "cost_ledger", "provider_id", "TEXT");
+      addColumnIfMissingIfTableExists(db, "cost_ledger", "model_id", "TEXT");
+      if (tableExists(db, "cost_ledger")) {
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_cost_ledger_day_provider
+            ON cost_ledger(day, provider_id);
+        `);
+      }
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -1310,6 +1324,8 @@ function createBaseSchema(db: DatabaseSync): void {
       session_id TEXT NOT NULL,
       agent_id TEXT,
       task_id TEXT,
+      provider_id TEXT,
+      model_id TEXT,
       day TEXT NOT NULL,
       token_input INTEGER NOT NULL DEFAULT 0,
       token_output INTEGER NOT NULL DEFAULT 0,

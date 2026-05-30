@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
           ]
         : [],
   })),
+  fetchAgenticRuns: vi.fn(async () => ({ items: [] })),
   fetchOperators: vi.fn(async () => ({ items: [] })),
   fetchTaskDeliverables: vi.fn(async () => ({ items: [] })),
   createTask: vi.fn(async () => ({
@@ -239,6 +240,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     deleteTask: mocks.deleteTask,
     fetchOperators: mocks.fetchOperators,
     fetchChatGeneratedArtifacts: mocks.fetchChatGeneratedArtifacts,
+    fetchAgenticRuns: mocks.fetchAgenticRuns,
     fetchTaskDeliverables: mocks.fetchTaskDeliverables,
     fetchTasksByView: mocks.fetchTasksByView,
     restoreTask: mocks.restoreTask,
@@ -283,6 +285,22 @@ describe("NativeRoutePages Cowork task board", () => {
     expect(summary.firstBlockedTaskId).toBe("task-blocked");
     expect(summary.hierarchyDetail).toContain("1 deliverable attached");
     expect(summary.boardTruth).toContain("does not bypass approvals");
+  });
+
+  it("renders a Cowork execution glance before task editing controls", async () => {
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderCoworkTasks();
+    });
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("Execution at a glance");
+    expect(text).toContain("Phase timeline");
+    expect(text).toContain("Current phase");
+    expect(text).toContain("Last checkpoint");
+    expect(text).toContain("Next checkpoint");
+    expect(text).toContain("task-board projection");
   });
 
   it("creates, updates, adds deliverables, and soft-deletes tasks through task APIs", async () => {

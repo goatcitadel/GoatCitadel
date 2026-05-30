@@ -1226,3 +1226,134 @@
 .mc-next-thread-citations-toggle {
   font-size: var(--text-xs);
 }
+
+.mc-next-chat-start-canvas {
+  display: grid;
+  gap: 0.85rem;
+  padding: 0.9rem;
+  min-height: 100%;
+  align-content: center;
+}
+
+.mc-next-chat-start-hero {
+  display: grid;
+  gap: 0.36rem;
+  max-width: 44rem;
+}
+
+.mc-next-chat-start-hero h2 {
+  margin: 0;
+  font-size: var(--text-xl);
+  line-height: 1.08;
+  letter-spacing: 0;
+}
+
+.mc-next-chat-start-hero p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.mc-next-chat-start-readiness {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.mc-next-chat-start-card {
+  display: grid;
+  align-content: start;
+  gap: 0.24rem;
+  min-width: 0;
+  min-height: 4.4rem;
+  padding: 0.58rem;
+  border-radius: 0.48rem;
+  border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-2) 90%, transparent);
+}
+
+.mc-next-chat-start-card span,
+.mc-next-chat-start-section h3 {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.mc-next-chat-start-card strong {
+  min-width: 0;
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  line-height: 1.28;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-chat-start-card.tone-live,
+.mc-next-chat-start-card.tone-success {
+  border-color: color-mix(in oklab, var(--mc-area-color) 36%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 10%, var(--mc-surface-2));
+}
+
+.mc-next-chat-start-card.tone-warning,
+.mc-next-chat-start-card.tone-critical {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 40%, var(--border));
+  background: color-mix(in oklab, var(--gc-risk-caution) 9%, var(--mc-surface-2));
+}
+
+.mc-next-chat-start-section {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.mc-next-chat-start-prompts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.mc-next-chat-start-prompt {
+  appearance: none;
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+  min-height: 5.2rem;
+  padding: 0.64rem;
+  border-radius: 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 24%, var(--border));
+  background: color-mix(in oklab, var(--card) 92%, transparent);
+  color: var(--foreground);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mc-next-chat-start-prompt:hover,
+.mc-next-chat-start-prompt:focus-visible {
+  border-color: color-mix(in oklab, var(--mc-area-color) 52%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 9%, var(--card));
+}
+
+.mc-next-chat-start-prompt:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--mc-area-color) 72%, var(--foreground));
+  outline-offset: 2px;
+}
+
+.mc-next-chat-start-prompt strong {
+  font-size: var(--text-sm);
+  line-height: 1.2;
+}
+
+.mc-next-chat-start-prompt span {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-chat-start-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+}

@@ -134,6 +134,81 @@ describe("integration-action-service", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("records audit-only durable envelopes for external writeback actions", async () => {
+    const connection = createConnection({
+      catalogId: "productivity.trello",
+      key: "trello",
+      label: "Trello",
+      config: {
+        apiKey: "trello-key",
+        token: "trello-token",
+        defaultListId: "list-123",
+      },
+    });
+    const createEnvelope = vi.fn(() => ({
+      envelopeId: "env-writeback-1",
+      eventKind: "external_writeback",
+      contentHash: "content-hash",
+      payloadHash: "payload-hash",
+      toolCallHashes: [],
+      memoryLineage: [],
+      signatureStatus: "unsigned_local",
+      metadata: {},
+      createdAt: "2026-04-10T12:00:00.000Z",
+    }));
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: vi.fn(
+        async () =>
+          new Response(JSON.stringify({ id: "card-1", url: "https://trello.example.test/c/card-1" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+      evidenceEnvelopeService: { createEnvelope } as never,
+    });
+
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "write", {
+      input: { name: "Durable card" },
+    });
+
+    expect(result.durableWriteback).toEqual(
+      expect.objectContaining({
+        status: "recorded",
+        replayPolicy: "audit_only",
+        resumable: false,
+        envelopeId: "env-writeback-1",
+        contentHash: "content-hash",
+        signatureStatus: "unsigned_local",
+      }),
+    );
+    expect(createEnvelope).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventKind: "external_writeback",
+        metadata: expect.objectContaining({
+          boundary: "integration_operator_action",
+          externalSideEffect: true,
+          replayPolicy: "audit_only",
+          resumable: false,
+          connectionId: connection.connectionId,
+          catalogId: "productivity.trello",
+          actionId: "write",
+          status: "executed",
+          inputKeys: ["name"],
+          outputKeys: ["id", "url"],
+          externalReferenceId: "id:card-1",
+        }),
+      }),
+    );
+    expect(host.publishRealtime).toHaveBeenCalledWith(
+      "system",
+      "integrations",
+      expect.objectContaining({
+        durableWritebackStatus: "recorded",
+        durableWritebackEnvelopeId: "env-writeback-1",
+      }),
+    );
+  });
+
   it("falls back between local bridge endpoints and reports the final bridge failure context", async () => {
     const connection = createConnection({
       config: {

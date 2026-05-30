@@ -160,6 +160,50 @@ export function LibraryActionList({
   );
 }
 
+export function LibraryActionCardGrid({
+  items,
+  emptyLabel = "No action cards available yet.",
+}: {
+  items: Array<{
+    id?: string;
+    label: string;
+    value: string;
+    description: string;
+    meta?: string;
+    actionLabel?: string;
+    onClick?: () => void;
+    tone?: "neutral" | "info" | "success" | "warning" | "danger";
+  }>;
+  emptyLabel?: string;
+}) {
+  if (!items.length) {
+    return <LibraryEmptyState label={emptyLabel} />;
+  }
+  return (
+    <div className="mc-next-library-action-card-grid">
+      {items.map((item) => (
+        <article
+          key={item.id ?? `${item.label}-${item.value}`}
+          className="mc-next-library-action-card"
+          data-tone={item.tone ?? "neutral"}
+        >
+          <span>{item.label}</span>
+          <strong>{item.value}</strong>
+          <p>{item.description}</p>
+          {item.meta ? <em>{item.meta}</em> : null}
+          {item.onClick ? (
+            <button type="button" className="mc-next-settings-filter" onClick={item.onClick}>
+              {item.actionLabel ?? "Open"}
+            </button>
+          ) : item.actionLabel ? (
+            <b>{item.actionLabel}</b>
+          ) : null}
+        </article>
+      ))}
+    </div>
+  );
+}
+
 export function LibraryFilterBar({
   options,
   value,

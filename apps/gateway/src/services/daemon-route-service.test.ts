@@ -28,6 +28,17 @@ describe("DaemonRouteService", () => {
       }),
     );
     expect(service.getDaemonStatus().controlMessage).toContain("external service manager");
+    expect(service.getDaemonStatus().controlHandoff).toEqual(
+      expect.objectContaining({
+        owner: "External service manager or launch terminal",
+        serviceName: "GoatCitadel Gateway",
+        desktopControl: expect.stringContaining("Mission Control desktop tray"),
+        commands: expect.arrayContaining([
+          expect.objectContaining({ label: "Inspect current process" }),
+          expect.objectContaining({ command: "pnpm dev:gateway" }),
+        ]),
+      }),
+    );
   });
 
   it("rejects daemon control requests and records operator-visible logs", () => {

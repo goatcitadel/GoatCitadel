@@ -32,6 +32,7 @@ const routeMocks = vi.hoisted(() => {
     fetchMemoryFiles: fn(),
     fetchMemoryQmdStats: fn(),
     fetchOperators: fn(),
+    fetchAgenticRuns: fn(),
     fetchSkillActivationPolicies: fn(),
     fetchSkillEvaluations: fn(),
     fetchSkillImportHistory: fn(),
@@ -76,6 +77,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchMemoryFiles: routeMocks.fetchMemoryFiles,
   fetchMemoryQmdStats: routeMocks.fetchMemoryQmdStats,
   fetchOperators: routeMocks.fetchOperators,
+  fetchAgenticRuns: routeMocks.fetchAgenticRuns,
   fetchSkillActivationPolicies: routeMocks.fetchSkillActivationPolicies,
   fetchSkillEvaluations: routeMocks.fetchSkillEvaluations,
   fetchSkillImportHistory: routeMocks.fetchSkillImportHistory,
@@ -238,6 +240,7 @@ function setupResponses() {
       },
     ],
   });
+  routeMocks.fetchAgenticRuns.mockResolvedValue({ items: [] });
   routeMocks.fetchTasksByView.mockImplementation(async (view: string) => ({
     view,
     items:
@@ -684,6 +687,8 @@ describe("NativeRoutePages library coverage", () => {
   it("covers skills, capability browsing, knowledge, files, and artifacts", async () => {
     const skills = await mount("library", "skills");
     expect(collectText(skills.root)).toContain("Installed skills");
+    expect(collectText(skills.root)).toContain("Validation lane");
+    expect(collectText(skills.root)).toContain("Proposal review");
     await click(findButton(skills.root, "Reload skills"));
     await click(exactButton(skills.root, "Enable"));
     await click(exactButton(skills.root, "Sleep"));
@@ -696,6 +701,8 @@ describe("NativeRoutePages library coverage", () => {
     const capabilities = await mount("library", "capabilities");
     expect(collectText(capabilities.root)).toContain("Capability browser");
     expect(collectText(capabilities.root)).toContain("can inspect or use when callable");
+    expect(collectText(capabilities.root)).toContain("Why this state");
+    expect(collectText(capabilities.root)).toContain("Activation path");
     await click(findButton(capabilities.root, "Degraded"));
     expect(collectText(capabilities.root)).toContain("Review proposal");
     await click(findButton(capabilities.root, "Review proposal"));
@@ -709,6 +716,8 @@ describe("NativeRoutePages library coverage", () => {
     await flush();
     expect(collectText(knowledge.root)).toContain("Knowledge sources");
     expect(collectText(knowledge.root)).toContain("Distilled context.");
+    expect(collectText(knowledge.root)).toContain("Ingestion health");
+    expect(collectText(knowledge.root)).toContain("Retrieval test");
     expect(routeMocks.downloadFile).toHaveBeenCalledWith("memory/workspace.md");
     await change(knowledge.root.findByProps({ placeholder: "Search the knowledge file list" }), "workspace");
     expect(collectText(knowledge.root)).toContain("memory/workspace.md");
@@ -716,6 +725,8 @@ describe("NativeRoutePages library coverage", () => {
     const files = await mount("library", "files");
     await flush();
     expect(collectText(files.root)).toContain("Workspace files");
+    expect(collectText(files.root)).toContain("Import / upload");
+    expect(collectText(files.root)).toContain("Link to project");
     await change(files.root.findByProps({ placeholder: "Search relative path" }), "brief");
     expect(collectText(files.root)).toContain("docs/brief.md");
     await change(field(files.root, "Template", "select"), "brief");
@@ -726,6 +737,8 @@ describe("NativeRoutePages library coverage", () => {
     const artifacts = await mount("library", "artifacts");
     expect(collectText(artifacts.root)).toContain("Generated artifacts");
     expect(collectText(artifacts.root)).toContain("Release notes");
+    expect(collectText(artifacts.root)).toContain("Use in Chat");
+    expect(collectText(artifacts.root)).toContain("Validation");
     await click(findButton(artifacts.root, "Cowork"));
     await change(artifacts.root.findByProps({ placeholder: "Search title or kind" }), "release");
     expect(collectText(artifacts.root)).toContain("# Release");
@@ -738,6 +751,9 @@ describe("NativeRoutePages library coverage", () => {
     const cowork = await mount("cowork", undefined, { navigate });
     expect(collectText(cowork.root)).toContain("Task board");
     expect(collectText(cowork.root)).toContain("Plan coverage");
+    expect(collectText(cowork.root)).toContain("Execution at a glance");
+    expect(collectText(cowork.root)).toContain("Phase timeline");
+    expect(collectText(cowork.root)).toContain("Next checkpoint");
 
     routeMocks.fetchTasksByView.mockClear();
     await click(findButton(cowork.root, "Refresh"));

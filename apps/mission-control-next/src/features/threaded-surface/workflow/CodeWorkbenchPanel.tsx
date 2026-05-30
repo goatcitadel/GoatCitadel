@@ -169,6 +169,7 @@ function buildWorkbenchPaneDefs(includeArtifact: boolean): ReadonlyArray<CodeWor
     { id: "files", label: "Files" },
     { id: "selected-diff", label: "Selected diff" },
     { id: "repo-diff", label: "Repo diff" },
+    { id: "review-packet", label: "Review packet" },
     { id: "output", label: "Run log" },
     { id: "snippets", label: "Snippets" },
   ];
@@ -548,6 +549,56 @@ function codeModeComparisonRows(comparison: CodeModeRunComparisonRecord): Array<
   ];
 }
 
+function summarizeValidationForReview(
+  validationStatus: string | undefined,
+  output: CodePanelType["props"]["output"],
+  helperRunCount: number,
+): {
+  status: string;
+  command: string;
+  skipped: string;
+  detail: string;
+  tone: "good" | "warning" | "danger" | "muted";
+} {
+  const validation = output?.validation;
+  const status = validation?.status ?? validationStatus ?? "idle";
+  const command =
+    validation?.commandLabel ??
+    (helperRunCount > 0
+      ? `${helperRunCount} Code Mode helper run${helperRunCount === 1 ? "" : "s"} recorded`
+      : "No validation command recorded");
+  const skipped =
+    validation?.status === "skipped"
+      ? (validation.reason ?? "Validation was skipped.")
+      : validation
+        ? "No skipped validation recorded."
+        : "Tests skipped or not yet recorded in this workbench.";
+  const duration = validation?.durationMs ? ` · ${Math.round(validation.durationMs / 100) / 10}s` : "";
+  const validationChangedFiles = validation?.changedFiles ?? [];
+  const detail = validationChangedFiles.length
+    ? `${validationChangedFiles.length} changed file${validationChangedFiles.length === 1 ? "" : "s"} covered${duration}`
+    : validation
+      ? `No changed-file coverage recorded${duration}`
+      : "Run validation from this workbench to attach concrete proof.";
+  return {
+    status,
+    command,
+    skipped,
+    detail,
+    tone: status === "passed" ? "good" : status === "failed" ? "danger" : status === "idle" ? "muted" : "warning",
+  };
+}
+
+function codeModeArtifactReviewRows(run: CodeModeRunRecord | null): Array<{ label: string; value: string }> {
+  return [
+    { label: "Source", value: formatArtifactPath(run?.codeArtifact) },
+    { label: "Wrapper", value: formatArtifactPath(run?.wrapperManifestArtifact) },
+    { label: "Policy", value: formatArtifactPath(run?.policySnapshotArtifact) },
+    { label: "Stdout", value: formatArtifactPath(run?.stdoutArtifact) },
+    { label: "Stderr", value: formatArtifactPath(run?.stderrArtifact) },
+  ];
+}
+
 export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const {
     selectedTurn,
@@ -721,6 +772,112 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   );
   const selectedRunDetail = runDetail?.runId === selectedRunSummary?.runId ? runDetail : null;
   const selectedRunApprovalId = selectedRunDetail?.approvalId ?? selectedRunSummary?.approvalId;
+  const reviewPacket = useMemo(() => {
+    const validation = summarizeValidationForReview(workbenchState?.validationStatus, output, visibleRunItems.length);
+    const intent =
+      typeof selectedTurn?.userMessage?.content === "string" && selectedTurn.userMessage.content.trim()
+        ? selectedTurn.userMessage.content.trim()
+        : "No user intent captured for the selected turn.";
+    const changedSummary = diff?.summary
+      ? `${diff.summary.changedFiles} file${diff.summary.changedFiles === 1 ? "" : "s"} · +${
+          diff.summary.additions
+        } / -${diff.summary.deletions}`
+      : `${changedFiles.length} changed file${changedFiles.length === 1 ? "" : "s"}`;
+    const latestRun = selectedRunDetail ?? selectedRunSummary;
+    const artifactRows = codeModeArtifactReviewRows(selectedRunDetail);
+    const artifactReady = artifactRows.some((row) => row.value !== "not recorded");
+    const publishCandidate = validation.status === "passed" && changedFiles.length > 0 && !hasDirtyDraft;
+
+    return {
+      intent,
+      metrics: [
+        {
+          label: "Patch intent",
+          value: selectedTurn?.turnId ? shortId(selectedTurn.turnId) : "no turn",
+          detail: intent,
+          tone: intent.startsWith("No user intent") ? "warning" : "good",
+        },
+        {
+          label: "Changed files",
+          value: changedSummary,
+          detail: changedFiles.length ? changedFiles.slice(0, 5).join(", ") : "No worktree changes recorded.",
+          tone: changedFiles.length ? "warning" : "muted",
+        },
+        {
+          label: "Validation",
+          value: validation.status,
+          detail: `${validation.command} · ${validation.detail}`,
+          tone: validation.tone,
+        },
+        {
+          label: "Ledger run",
+          value: latestRun?.runId ? shortId(latestRun.runId) : "none selected",
+          detail: latestRun?.status ?? "No Code Mode ledger run selected.",
+          tone: latestRun?.status === "completed" || latestRun?.status === "passed" ? "good" : "muted",
+        },
+      ],
+      validation,
+      artifactRows,
+      checklist: [
+        {
+          label: "Diff review",
+          status: changedFiles.length ? "Ready for review" : "No patch captured",
+          detail: changedFiles.length
+            ? "Inspect selected-file and repo diff before handoff."
+            : "Create or refresh a worktree diff before packaging.",
+          tone: changedFiles.length ? "good" : "warning",
+        },
+        {
+          label: "Validation proof",
+          status: validation.status,
+          detail: validation.skipped,
+          tone: validation.tone,
+        },
+        {
+          label: "Approval linkage",
+          status: selectedRunApprovalId ? `Linked ${shortId(selectedRunApprovalId)}` : "No approval linked",
+          detail: selectedRunApprovalId
+            ? "Approval evidence is visible from the Code Mode run."
+            : "No approval was recorded for the selected run.",
+          tone: selectedRunApprovalId ? "good" : "muted",
+        },
+        {
+          label: "Artifact hashes",
+          status: artifactReady ? "Recorded" : "Missing",
+          detail: artifactReady
+            ? "Source, wrapper, policy, stdout, or stderr artifact references are available below."
+            : "Load a Code Mode run detail to inspect immutable artifacts.",
+          tone: artifactReady ? "good" : "warning",
+        },
+        {
+          label: "Ready to publish",
+          status: publishCandidate ? "Candidate" : "Hold",
+          detail: publishCandidate
+            ? "Still verify branch state, untracked files, screenshots, and remote SHA before publishing."
+            : "Needs passed validation, changed-file review, and no unsaved editor draft.",
+          tone: publishCandidate ? "good" : "warning",
+        },
+      ],
+      risk: hasDirtyDraft
+        ? "Unsaved editor draft is still present."
+        : readyForRepoOps
+          ? "Remote branch parity, screenshots, and untracked artifacts are not recorded in this panel."
+          : "Create a ready worktree before treating this as publish evidence.",
+    };
+  }, [
+    changedFiles,
+    diff?.summary,
+    hasDirtyDraft,
+    output,
+    readyForRepoOps,
+    selectedRunApprovalId,
+    selectedRunDetail,
+    selectedRunSummary,
+    selectedTurn?.turnId,
+    selectedTurn?.userMessage?.content,
+    visibleRunItems.length,
+    workbenchState?.validationStatus,
+  ]);
   const selectedRunScope = useMemo(
     () => ({
       ...((selectedRunSummary?.sessionId ?? codeLedgerSessionId)
@@ -1428,7 +1585,12 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
         <span data-active={activePane === "files" || activePane === "snippets" ? "true" : "false"}>Implement</span>
         <span
           data-active={
-            activePane === "selected-diff" || activePane === "repo-diff" || activePane === "output" ? "true" : "false"
+            activePane === "selected-diff" ||
+            activePane === "repo-diff" ||
+            activePane === "review-packet" ||
+            activePane === "output"
+              ? "true"
+              : "false"
           }
         >
           Review
@@ -1704,6 +1866,9 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
               <button type="button" className="mc-next-panel-button" onClick={() => setActivePane("repo-diff")}>
                 Inspect repo diff
               </button>
+              <button type="button" className="mc-next-panel-button" onClick={() => setActivePane("review-packet")}>
+                Review packet
+              </button>
               <button type="button" className="mc-next-panel-button" onClick={() => setActivePane("output")}>
                 Run log
               </button>
@@ -1840,6 +2005,16 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
                 <button
                   type="button"
                   className="mc-next-panel-button"
+                  onClick={() => {
+                    setActivePane("review-packet");
+                    setCommandPaletteOpen(false);
+                  }}
+                >
+                  Open review packet
+                </button>
+                <button
+                  type="button"
+                  className="mc-next-panel-button"
                   disabled={loading || busy}
                   onClick={() => {
                     onRefresh();
@@ -1943,6 +2118,78 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
                   Create a worktree or refresh the session to populate repo changes.
                 </div>
               )}
+            </div>
+          ) : null}
+
+          {activePane === "review-packet" ? (
+            <div
+              className="mc-next-workbench-pane mc-next-workbench-review-packet"
+              role="tabpanel"
+              id={buildWorkbenchPanelId("review-packet")}
+              aria-labelledby={buildWorkbenchTabId("review-packet")}
+            >
+              <div className="mc-next-panel-list-head">
+                <strong>Review packet</strong>
+                <span>{reviewPacket.checklist.filter((item) => item.tone === "good").length} ready checks</span>
+              </div>
+              <div className="mc-next-code-review-packet-grid">
+                {reviewPacket.metrics.map((item) => (
+                  <article key={item.label} className="mc-next-code-review-packet-card" data-tone={item.tone}>
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                    <p>{item.detail}</p>
+                  </article>
+                ))}
+              </div>
+              <section className="mc-next-code-review-packet-section">
+                <div className="mc-next-panel-list-head">
+                  <strong>Validation evidence</strong>
+                  <span>{reviewPacket.validation.command}</span>
+                </div>
+                <div className="mc-next-code-review-packet-grid is-compact">
+                  <article className="mc-next-code-review-packet-card" data-tone={reviewPacket.validation.tone}>
+                    <span>Status</span>
+                    <strong>{reviewPacket.validation.status}</strong>
+                    <p>{reviewPacket.validation.detail}</p>
+                  </article>
+                  <article className="mc-next-code-review-packet-card" data-tone="muted">
+                    <span>Skipped</span>
+                    <strong>Disclosure</strong>
+                    <p>{reviewPacket.validation.skipped}</p>
+                  </article>
+                </div>
+              </section>
+              <section className="mc-next-code-review-packet-section">
+                <div className="mc-next-panel-list-head">
+                  <strong>Artifacts and approvals</strong>
+                  <span>
+                    {selectedRunApprovalId ? `approval ${shortId(selectedRunApprovalId)}` : "approval not linked"}
+                  </span>
+                </div>
+                <div className="mc-next-code-review-artifact-list">
+                  {reviewPacket.artifactRows.map((row) => (
+                    <div key={row.label}>
+                      <span>{row.label}</span>
+                      <strong>{row.value}</strong>
+                    </div>
+                  ))}
+                </div>
+              </section>
+              <section className="mc-next-code-review-packet-section">
+                <div className="mc-next-panel-list-head">
+                  <strong>Ready to publish checklist</strong>
+                  <span>{reviewPacket.risk}</span>
+                </div>
+                <ul className="mc-next-code-review-checklist">
+                  {reviewPacket.checklist.map((item) => (
+                    <li key={item.label} data-tone={item.tone}>
+                      <strong>{item.label}</strong>
+                      <span>{item.status}</span>
+                      <p>{item.detail}</p>
+                    </li>
+                  ))}
+                </ul>
+              </section>
             </div>
           ) : null}
 

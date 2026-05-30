@@ -1,80 +1,99 @@
 import { describe, it, expect } from "vitest";
-import type { TaskRecord } from "@goatcitadel/contracts";
+import type { AgenticRunListItem } from "@goatcitadel/contracts";
 import { toKanbanCard, toKanbanColumn, type KanbanColumnId } from "./kanban-card-model";
 
-const baseTask: TaskRecord = {
+const now = () => Date.parse("2026-05-30T17:00:00.000Z");
+
+const baseRun: AgenticRunListItem = {
   taskId: "t-1",
-  workspaceId: "default",
+  runId: "run-1",
+  boardId: "cowork:default",
   title: "Build feature",
-  status: "in_progress",
-  priority: "high",
-  assignedAgentId: "agent-7",
-  createdAt: "2026-05-15T11:00:00.000Z",
-  updatedAt: "2026-05-15T11:55:00.000Z",
+  taskStatus: "in_progress",
+  status: "running",
+  surface: "cowork",
+  contextMode: "fork",
+  profileId: "researcher",
+  updatedAt: "2026-05-30T16:55:00.000Z",
 };
 
 describe("kanban-card-model", () => {
-  it("toKanbanCard surfaces unresolved distress severity, retry count, heartbeat age", () => {
+  it("toKanbanCard surfaces run metadata, diagnostics, status, and age", () => {
     const card = toKanbanCard(
       {
-        ...baseTask,
-        distressSignals: [
+        ...baseRun,
+        diagnostics: [
           {
-            signalId: "ds-1",
-            code: "tool_error",
+            signalId: "diag-1",
+            code: "repeated_tool_result",
             severity: "critical",
-            title: "x",
-            summary: "y",
-            createdAt: "2026-05-15T11:30:00.000Z",
+            title: "Browser blocked",
+            summary: "Host is not allowlisted.",
+            createdAt: "2026-05-30T16:56:00.000Z",
           },
         ],
-        retryBudget: { maxRetries: 3, retryCount: 1 },
-        agenticContext: { heartbeatAt: "2026-05-15T11:50:00.000Z" },
       },
-      { now: () => Date.parse("2026-05-15T12:00:00.000Z") },
+      { now },
     );
-    expect(card.distressSummary).toMatchObject({ critical: 1, warn: 0, info: 0 });
-    expect(card.retryDisplay).toBe("1 / 3");
-    expect(card.lastHeartbeatAgeSeconds).toBe(600);
+    expect(card.column).toBe("running");
+    expect(card.diagnosticSummary).toMatchObject({ critical: 1, warning: 0, info: 0 });
+    expect(card.statusLabel).toBe("Running");
+    expect(card.surfaceLabel).toBe("Cowork");
+    expect(card.updatedDisplay).toBe("5m idle");
+    expect(card.contextMode).toBe("fork");
+    expect(card.profileId).toBe("researcher");
   });
 
-  it("toKanbanCard returns undefined heartbeat age when agenticContext has no heartbeatAt", () => {
-    const card = toKanbanCard(baseTask);
-    expect(card.lastHeartbeatAgeSeconds).toBeUndefined();
+  it("toKanbanCard marks old active run projections as stale attention items", () => {
+    const card = toKanbanCard(
+      {
+        ...baseRun,
+        updatedAt: "2026-05-30T15:00:00.000Z",
+      },
+      { now },
+    );
+    expect(card.column).toBe("needs_attention");
+    expect(card.statusLabel).toBe("Stale");
+    expect(card.stale).toBe(true);
+    expect(card.attentionReason).toBe("No recent run update.");
   });
 
-  it("toKanbanCard excludes resolved signals from distress summary", () => {
-    const card = toKanbanCard({
-      ...baseTask,
-      distressSignals: [
-        {
-          signalId: "ds-1",
-          code: "needs_user",
-          severity: "warn",
-          title: "x",
-          summary: "y",
-          createdAt: "2026-05-15T11:30:00.000Z",
-          resolvedAt: "2026-05-15T11:31:00.000Z",
-        },
-      ],
-    });
-    expect(card.distressSummary).toEqual({ info: 0, warn: 0, critical: 0 });
-    expect(card.unresolvedDistress).toEqual([]);
+  it("toKanbanCard excludes resolved diagnostics from the summary", () => {
+    const card = toKanbanCard(
+      {
+        ...baseRun,
+        diagnostics: [
+          {
+            signalId: "diag-1",
+            code: "stale_worker",
+            severity: "warning",
+            title: "Stale",
+            summary: "Resolved already.",
+            createdAt: "2026-05-30T16:30:00.000Z",
+            resolvedAt: "2026-05-30T16:31:00.000Z",
+          },
+        ],
+      },
+      { now },
+    );
+    expect(card.diagnosticSummary).toEqual({ info: 0, warning: 0, critical: 0 });
+    expect(card.unresolvedDiagnostics).toEqual([]);
   });
 
-  it("toKanbanColumn assigns statuses to the four operator columns", () => {
-    expect<KanbanColumnId>(toKanbanColumn("planning")).toBe("backlog");
-    expect<KanbanColumnId>(toKanbanColumn("inbox")).toBe("backlog");
-    expect<KanbanColumnId>(toKanbanColumn("assigned")).toBe("backlog");
-    expect<KanbanColumnId>(toKanbanColumn("in_progress")).toBe("in_progress");
-    expect<KanbanColumnId>(toKanbanColumn("testing")).toBe("in_progress");
-    expect<KanbanColumnId>(toKanbanColumn("review")).toBe("in_progress");
-    expect<KanbanColumnId>(toKanbanColumn("blocked")).toBe("blocked");
-    expect<KanbanColumnId>(toKanbanColumn("done")).toBe("done");
-  });
-
-  it("toKanbanCard renders no retryDisplay when retryBudget is absent", () => {
-    const card = toKanbanCard(baseTask);
-    expect(card.retryDisplay).toBeUndefined();
+  it("toKanbanColumn assigns run statuses to truthful operator columns", () => {
+    expect<KanbanColumnId>(toKanbanColumn("queued", "assigned")).toBe("queued");
+    expect<KanbanColumnId>(toKanbanColumn("planning", "planning")).toBe("queued");
+    expect<KanbanColumnId>(
+      toKanbanColumn("running", "in_progress", {
+        updatedAt: "2026-05-30T16:59:00.000Z",
+        now,
+      }),
+    ).toBe("running");
+    expect<KanbanColumnId>(toKanbanColumn("approval_required", "in_progress")).toBe("needs_attention");
+    expect<KanbanColumnId>(toKanbanColumn("paused", "in_progress")).toBe("needs_attention");
+    expect<KanbanColumnId>(toKanbanColumn("failed", "blocked")).toBe("needs_attention");
+    expect<KanbanColumnId>(toKanbanColumn("cancelled", "blocked")).toBe("needs_attention");
+    expect<KanbanColumnId>(toKanbanColumn("stopped_by_limit", "blocked")).toBe("needs_attention");
+    expect<KanbanColumnId>(toKanbanColumn("completed", "done")).toBe("closed");
   });
 });

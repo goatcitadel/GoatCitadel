@@ -7,6 +7,7 @@ import type {
 
 export type ProjectCounts = Record<ChatMode, number>;
 type ProjectReadinessStatus = "ready" | "attention";
+export type ProjectIntakeModeId = "ask" | "plan" | "implement" | "review" | "research" | "summarize" | "release-proof";
 
 type ProjectReadinessItem = {
   id: string;
@@ -38,6 +39,74 @@ export const SURFACES: Array<{ mode: ChatMode; label: string; action: string }> 
   { mode: "chat", label: "Chat", action: "New Chat" },
   { mode: "cowork", label: "Cowork", action: "New Cowork" },
   { mode: "code", label: "Code", action: "New Code" },
+];
+
+export type ProjectIntakeMode = {
+  id: ProjectIntakeModeId;
+  label: string;
+  mode: ChatMode;
+  titlePrefix: string;
+  tag: string;
+  detail: string;
+};
+
+export const PROJECT_INTAKE_MODES: ProjectIntakeMode[] = [
+  {
+    id: "ask",
+    label: "Ask",
+    mode: "chat",
+    titlePrefix: "Ask",
+    tag: "intent:ask",
+    detail: "Start a fast project question, draft, or decision thread.",
+  },
+  {
+    id: "plan",
+    label: "Plan",
+    mode: "cowork",
+    titlePrefix: "Plan",
+    tag: "intent:plan",
+    detail: "Open supervised planning with phases, risks, and approvals in view.",
+  },
+  {
+    id: "implement",
+    label: "Implement",
+    mode: "code",
+    titlePrefix: "Implement",
+    tag: "intent:implement",
+    detail: "Start Code for edits, debugging, and validation evidence.",
+  },
+  {
+    id: "review",
+    label: "Review",
+    mode: "code",
+    titlePrefix: "Review",
+    tag: "intent:review",
+    detail: "Create a review lane for diffs, tests, residual risk, and handoff notes.",
+  },
+  {
+    id: "research",
+    label: "Research",
+    mode: "cowork",
+    titlePrefix: "Research",
+    tag: "intent:research",
+    detail: "Use Cowork for multi-step investigation, source capture, and synthesis.",
+  },
+  {
+    id: "summarize",
+    label: "Summarize",
+    mode: "chat",
+    titlePrefix: "Summarize",
+    tag: "intent:summarize",
+    detail: "Summarize project state, recent work, documents, or next decisions.",
+  },
+  {
+    id: "release-proof",
+    label: "Release proof",
+    mode: "code",
+    titlePrefix: "Release proof",
+    tag: "intent:release-proof",
+    detail: "Collect validation, artifacts, dirty-tree truth, and publish readiness.",
+  },
 ];
 
 export function deriveProjectHome(

@@ -1,45 +1,63 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { TaskRecord } from "@goatcitadel/contracts";
+import type { AgenticRunListItem } from "@goatcitadel/contracts";
 import { KanbanRoutePage } from "./KanbanRoutePage";
 
-const fetchTasksByView = vi.fn();
+const fetchAgenticRuns = vi.fn();
 const bulkTaskAction = vi.fn();
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
-  fetchTasksByView: (...args: unknown[]) => fetchTasksByView(...args),
+  fetchAgenticRuns: (...args: unknown[]) => fetchAgenticRuns(...args),
   bulkTaskAction: (...args: unknown[]) => bulkTaskAction(...args),
 }));
 
-const baseTasks: TaskRecord[] = [
+const baseRuns: AgenticRunListItem[] = [
   {
     taskId: "t-1",
-    workspaceId: "default",
-    title: "Backlog item",
-    status: "inbox",
-    priority: "normal",
-    createdAt: "2026-05-15T11:00:00.000Z",
-    updatedAt: "2026-05-15T11:00:00.000Z",
+    runId: "run-queued",
+    title: "Queued run",
+    taskStatus: "assigned",
+    status: "queued",
+    surface: "cowork",
+    updatedAt: "2999-05-15T11:00:00.000Z",
   },
   {
     taskId: "t-2",
-    workspaceId: "default",
+    runId: "run-working",
     title: "Working",
-    status: "in_progress",
-    priority: "high",
-    assignedAgentId: "agent-7",
-    distressSignals: [
+    taskStatus: "in_progress",
+    status: "running",
+    surface: "cowork",
+    contextMode: "fork",
+    diagnostics: [
       {
-        signalId: "ds-1",
-        code: "tool_error",
+        signalId: "diag-1",
+        code: "repeated_tool_result",
         severity: "critical",
-        title: "boom",
-        summary: "x",
-        createdAt: "2026-05-15T11:30:00.000Z",
+        title: "Loop",
+        summary: "Repeated result.",
+        createdAt: "2999-05-15T11:30:00.000Z",
       },
     ],
-    createdAt: "2026-05-15T11:00:00.000Z",
-    updatedAt: "2026-05-15T11:30:00.000Z",
+    updatedAt: "2999-05-15T11:30:00.000Z",
+  },
+  {
+    taskId: "t-3",
+    runId: "run-failed",
+    title: "Failed handoff",
+    taskStatus: "blocked",
+    status: "failed",
+    surface: "cowork",
+    updatedAt: "2999-05-15T11:40:00.000Z",
+  },
+  {
+    taskId: "t-4",
+    runId: "run-complete",
+    title: "Closed run",
+    taskStatus: "done",
+    status: "completed",
+    surface: "code",
+    updatedAt: "2999-05-15T11:45:00.000Z",
   },
 ];
 
@@ -53,9 +71,9 @@ const baseProps = {
 };
 
 beforeEach(() => {
-  fetchTasksByView.mockReset();
+  fetchAgenticRuns.mockReset();
   bulkTaskAction.mockReset();
-  fetchTasksByView.mockResolvedValue({ items: baseTasks, view: "active" });
+  fetchAgenticRuns.mockResolvedValue({ items: baseRuns });
   bulkTaskAction.mockResolvedValue({ tasks: [] });
 });
 
@@ -70,7 +88,6 @@ async function renderPage(): Promise<ReactTestRenderer> {
   await act(async () => {
     renderer = create(<KanbanRoutePage {...baseProps} />);
   });
-  // flush the load effect's promise
   await act(async () => {
     await Promise.resolve();
   });
@@ -96,29 +113,31 @@ function findRequiredButton(renderer: ReactTestRenderer, label: string): ReactTe
 }
 
 describe("KanbanRoutePage", () => {
-  it("renders four columns and groups tasks correctly", async () => {
+  it("renders run-state columns and groups agentic runs correctly", async () => {
     const renderer = await renderPage();
     const text = collectText(renderer.root);
-    expect(text).toContain("Backlog");
-    expect(text).toContain("In Progress");
-    expect(text).toContain("Blocked");
-    expect(text).toContain("Done");
-    expect(text).toContain("Backlog item");
+    expect(text).toContain("Queued");
+    expect(text).toContain("Running");
+    expect(text).toContain("Needs Attention");
+    expect(text).toContain("Closed");
+    expect(text).toContain("Queued run");
     expect(text).toContain("Working");
+    expect(text).toContain("Failed handoff");
+    expect(text).toContain("Closed run");
     act(() => renderer.unmount());
   });
 
-  it("shows a critical distress chip on cards with unresolved critical signals", async () => {
+  it("shows a critical diagnostic chip on cards with unresolved critical diagnostics", async () => {
     const renderer = await renderPage();
-    const chip = renderer.root.findAll((node) => node.props?.["data-testid"] === "distress-chip-t-2")[0];
+    const chip = renderer.root.findAll((node) => node.props?.["data-testid"] === "diagnostic-chip-t-2")[0];
     expect(chip).toBeTruthy();
     expect(collectText(chip)).toMatch(/critical/i);
     act(() => renderer.unmount());
   });
 
-  it("fires bulkTaskAction with unblock when the operator clicks Unblock with selections", async () => {
+  it("fires bulkTaskAction with workspace scope when the operator clicks Unblock with selections", async () => {
     const renderer = await renderPage();
-    const checkbox = findRequiredByTestId(renderer, "kanban-select-t-2");
+    const checkbox = findRequiredByTestId(renderer, "kanban-select-t-3");
     await act(async () => {
       checkbox.props.onChange();
     });
@@ -126,17 +145,17 @@ describe("KanbanRoutePage", () => {
     await act(async () => {
       await unblockButton.props.onClick();
     });
-    expect(bulkTaskAction).toHaveBeenCalledWith({ action: "unblock", taskIds: ["t-2"] });
-    const updatedCheckbox = findRequiredByTestId(renderer, "kanban-select-t-2");
+    expect(bulkTaskAction).toHaveBeenCalledWith({ action: "unblock", taskIds: ["t-3"], workspaceId: "default" });
+    const updatedCheckbox = findRequiredByTestId(renderer, "kanban-select-t-3");
     expect((updatedCheckbox.props as { checked: boolean }).checked).toBe(false);
     expect(collectText(renderer.root)).toContain("1 selected task updated.");
     act(() => renderer.unmount());
   });
 
-  it("surfaces bulk action failures and keeps the selected task checked", async () => {
+  it("surfaces bulk action failures and keeps the selected run checked", async () => {
     bulkTaskAction.mockRejectedValueOnce(new Error("bulk route offline"));
     const renderer = await renderPage();
-    const checkbox = findRequiredByTestId(renderer, "kanban-select-t-2");
+    const checkbox = findRequiredByTestId(renderer, "kanban-select-t-3");
     await act(async () => {
       checkbox.props.onChange();
     });
@@ -147,14 +166,14 @@ describe("KanbanRoutePage", () => {
     });
 
     expect(collectText(renderer.root)).toContain("bulk route offline");
-    const checkedAfterFailure = findRequiredByTestId(renderer, "kanban-select-t-2");
+    const checkedAfterFailure = findRequiredByTestId(renderer, "kanban-select-t-3");
     expect((checkedAfterFailure.props as { checked: boolean }).checked).toBe(true);
     act(() => renderer.unmount());
   });
 
-  it("calls fetchTasksByView with the active workspace id", async () => {
+  it("calls fetchAgenticRuns with the active workspace id", async () => {
     const renderer = await renderPage();
-    expect(fetchTasksByView).toHaveBeenCalledWith("active", undefined, "default");
+    expect(fetchAgenticRuns).toHaveBeenCalledWith({ workspaceId: "default", limit: 200 });
     act(() => renderer.unmount());
   });
 });

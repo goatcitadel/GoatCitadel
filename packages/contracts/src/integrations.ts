@@ -1,4 +1,5 @@
 import type { IntegrationFormSchema } from "./ui-forms.js";
+import type { EvidenceEnvelopeSignatureStatus } from "./evidence.js";
 
 export type AuthMode = "none" | "token" | "basic";
 export type DeploymentProfile = "local_dev" | "trusted_local" | "remote_hardened";
@@ -122,6 +123,19 @@ export interface IntegrationActionInvokeInput {
 }
 
 export type IntegrationActionInvokeStatus = "executed" | "blocked" | "failed";
+export type IntegrationExternalWritebackEnvelopeStatus = "recorded" | "unavailable" | "failed";
+
+export interface IntegrationExternalWritebackEnvelope {
+  status: IntegrationExternalWritebackEnvelopeStatus;
+  replayPolicy: "audit_only";
+  resumable: false;
+  checkedAt: string;
+  envelopeId?: string;
+  contentHash?: string;
+  signatureStatus?: EvidenceEnvelopeSignatureStatus;
+  recordedAt?: string;
+  reason?: string;
+}
 
 export interface IntegrationActionInvokeResult {
   connectionId: string;
@@ -131,6 +145,7 @@ export interface IntegrationActionInvokeResult {
   message: string;
   blockedReason?: string;
   output?: Record<string, unknown>;
+  durableWriteback?: IntegrationExternalWritebackEnvelope;
   checkedAt: string;
 }
 
@@ -203,6 +218,8 @@ export interface ChannelInboundMessageInput {
     outputTokens?: number;
     cachedInputTokens?: number;
     costUsd?: number;
+    providerId?: string;
+    model?: string;
   };
   metadata?: Record<string, unknown>;
 }

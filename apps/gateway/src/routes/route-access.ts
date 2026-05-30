@@ -52,6 +52,7 @@ const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessCla
   { prefix: "/api/v1/approvals/remote-resolve", accessClass: "public" },
   { prefix: "/api/v1/events/stream", accessClass: "sse-read" },
   { prefix: "/api/v1/events", accessClass: "authenticated-read" },
+  { prefix: "/api/v1/a2a", accessClass: "operator" },
   { prefix: "/api/v1/agentic", accessClass: "operator" },
   { prefix: "/api/v1/gateway", accessClass: "operator" },
   { prefix: "/api/v1/runtime", accessClass: "operator" },

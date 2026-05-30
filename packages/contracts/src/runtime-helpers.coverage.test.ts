@@ -18,7 +18,7 @@ import { ToolPolicyConfigSchema } from "./config-schemas.js";
 import { deriveHookPhase, type HookTrigger } from "./hooks.js";
 import { deriveMemoryItemLifecycleState } from "./memory.js";
 import { inferProviderForModelId, providerAllowsForeignModelIds } from "./provider-templates.js";
-import { clampInt } from "./utils.js";
+import { clampInt, coerceBoundedInt, coerceDeadlineDate, coerceDurationMs, coercePositiveInt } from "./utils.js";
 import {
   buildVoiceOperatorGuidance,
   buildVoiceRecoveryActions,
@@ -211,6 +211,16 @@ describe("schema and utility helpers", () => {
     expect(clampInt(Number.NaN, 7, 1, 10)).toBe(7);
     expect(clampInt(-10, 0, 1, 10)).toBe(1);
     expect(clampInt(99, 0, 1, 10)).toBe(10);
+    expect(coerceBoundedInt("9.8", { fallback: 1, min: 2, max: 8 })).toBe(8);
+    expect(coercePositiveInt("-2", 5, 60)).toBe(1);
+    expect(coerceDurationMs(Number.POSITIVE_INFINITY, { fallback: 1000, maxMs: 60_000 })).toBe(1000);
+    expect(coerceDurationMs(999_999_999, { maxMs: 60_000 })).toBe(60_000);
+    expect(coerceDeadlineDate("not-a-date")).toBeUndefined();
+    expect(
+      coerceDeadlineDate("2027-01-01T00:00:00.000Z", {
+        max: new Date("2026-01-02T00:00:00.000Z"),
+      })?.toISOString(),
+    ).toBe("2026-01-02T00:00:00.000Z");
   });
 });
 

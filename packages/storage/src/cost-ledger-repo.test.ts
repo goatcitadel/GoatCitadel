@@ -99,6 +99,54 @@ describe("CostLedgerRepository", () => {
     assert.equal(availability.unknownEvents, 1);
   });
 
+  it("builds a seven-day provider spend series with anomaly-ready totals", () => {
+    const repo = createRepo();
+    repo.insert({
+      sessionId: "s1",
+      agentId: "assistant",
+      providerId: "openai",
+      modelId: "gpt-5",
+      tokenInput: 100,
+      tokenOutput: 50,
+      tokenCachedInput: 10,
+      costUsd: 1,
+      createdAt: "2026-02-21T10:00:00.000Z",
+    });
+    repo.insert({
+      sessionId: "s2",
+      agentId: "assistant",
+      providerId: "anthropic",
+      modelId: "claude-sonnet",
+      tokenInput: 200,
+      tokenOutput: 100,
+      tokenCachedInput: 0,
+      costUsd: 5,
+      createdAt: "2026-02-23T10:00:00.000Z",
+    });
+    repo.insert({
+      sessionId: "s3",
+      agentId: "assistant",
+      tokenInput: 20,
+      tokenOutput: 10,
+      tokenCachedInput: 0,
+      costUsd: 0.2,
+      createdAt: "2026-02-23T11:00:00.000Z",
+    });
+
+    const series = repo.dailySeries("2026-02-20T00:00:00.000Z", "2026-02-26T23:59:59.999Z");
+
+    assert.equal(series.length, 7);
+    assert.equal(series[0]?.isoDate, "2026-02-20");
+    assert.equal(series[3]?.isoDate, "2026-02-23");
+    assert.equal(series[1]?.segments[0]?.providerKey, "openai");
+    assert.deepEqual(series[1]?.segments[0]?.models, ["gpt-5"]);
+    assert.equal(series[3]?.costUsd, 5.2);
+    assert.deepEqual(
+      series[3]?.segments.map((segment) => segment.providerKey),
+      ["anthropic", "unattributed"],
+    );
+  });
+
   it("uses zero availability defaults when aggregate rows are missing or nullish", () => {
     const repo = createRepo();
     const internal = repo as unknown as {

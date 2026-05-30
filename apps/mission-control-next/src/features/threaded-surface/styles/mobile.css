@@ -269,6 +269,22 @@
     width: 100%;
   }
 
+  .mc-next-chat-start-readiness {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mc-next-threaded-empty-facts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .mc-next-threaded-loading-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mc-next-chat-start-prompts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .mc-next-threaded-panel-switcher,
   .mc-next-threaded-panel-trigger {
     width: 100%;
@@ -374,6 +390,7 @@
   .mc-next-composer-blocking-prompt .chat-approval-countdown,
   .mc-next-thread-blocking-prompt .chat-approval-countdown,
   .mc-next-thread-inline-button,
+  .mc-next-chat-start-prompt,
   .mc-next-panel-button,
   .mc-next-composer-inline-button,
   .mc-next-composer-primary {
@@ -405,6 +422,30 @@
 
   .mc-next-thread-action-menu {
     width: 100%;
+  }
+
+  .mc-next-chat-start-readiness,
+  .mc-next-chat-start-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-chat-start-actions {
+    display: grid;
+    width: 100%;
+  }
+
+  .mc-next-threaded-empty-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mc-next-threaded-loading {
+    min-height: 24rem;
+  }
+
+  .mc-next-threaded-loading-grid,
+  .mc-next-threaded-loading-steps {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .mc-next-shell.ui-hide-technical .mc-next-thread-actions {

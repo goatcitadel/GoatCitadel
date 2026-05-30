@@ -20,7 +20,7 @@ Implementation process guidance lives in `docs/GOATCITADEL_AGENTIC_CODING_WORKFL
 ## Current Runtime Truth
 
 - Durable execution is the canonical owner for the shipped resumable mission-session Chat / Cowork / Code flow set: LLM HTTP/SSE send entrypoints, approval wait/resume, linked proactive wakes, durable-linked chat stream resumption, worker restart recovery, retry scheduling, and dead-letter recovery mechanics.
-- External writeback sessions remain visible, but their integration send/retry/edit/stream path is still one-shot and non-resumable until durable external envelopes land.
+- External writeback sessions remain visible. Integration operator write actions record audit-only durable `external_writeback` evidence envelopes, but integration send/retry/edit/stream replay remains one-shot and non-resumable until a replay-safe external side-effect runner lands.
 - Legacy traces without durable linkage may still use compatibility reads or resume fallbacks for historical records, but mission-session LLM sends and retries no longer rely on a non-durable ownership path.
 - `MemoryLifecycleService` is the operator-facing memory lifecycle owner for context composition, learned-memory policy, and memory item list/edit/forget/history. `MemoryContextService`, `ChatLearnedMemoryService`, and `MemoryMaintenanceService` remain collaborators behind that boundary instead of separate policy owners. Manual lifecycle admin still obeys `memoryLifecycleAdminV1Enabled`; scheduled expired-memory auto-forget is controlled separately by `memoryLifecycleAutoForgetEnabled` so operators can disable cron deletion without disabling admin inspection.
 - `packages/mesh-core` has targeted service coverage but does not count toward the `1.0` readiness bar until it has full release evidence.
@@ -151,6 +151,10 @@ Mission Control is an API client, not a backend extension. It:
 - `@goatcitadel/policy-engine`: policy resolution and enforcement gates.
 - `@goatcitadel/skills`: skill loading and activation.
 - `@goatcitadel/orchestration`: orchestration run state transitions.
+
+Settings Add-ons is an experimental local/operator-reviewed extension surface for `1.0`, not a public marketplace. Keep claims conservative until permission grants, durable logs, rollback/version proof, runtime health, and local-vs-marketplace boundaries are implemented.
+
+Desktop/mobile continuity must stay gateway-owned: signed device grants, install-token/device-request flows, desktop daemon/runtime state, and session/project/artifact/approval handoffs are the source of truth. Do not imply companion apps can bypass auth, policy, approvals, or the desktop runtime boundary.
 
 ### 3.4 Workspaces and Guidance Resolution
 

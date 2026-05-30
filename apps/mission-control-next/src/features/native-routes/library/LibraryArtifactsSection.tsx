@@ -13,6 +13,7 @@ import {
   useAsyncLoad,
 } from "../shared/native-helpers";
 import {
+  LibraryActionCardGrid,
   LibraryButtonRow,
   LibraryCodeBlock,
   LibraryEmptyState,
@@ -73,6 +74,9 @@ export function LibraryArtifactsSection({ activeWorkspaceId, route, navigate }: 
   }, [route.artifactId, visibleArtifacts]);
 
   const selectedArtifact = visibleArtifacts.find((item) => item.artifactId === selectedArtifactId) ?? null;
+  const selectedArtifactValidationStatus = selectedArtifact
+    ? readArtifactValidationStatus(selectedArtifact)
+    : undefined;
 
   return (
     <LibrarySectionShell loading={loading} error={error}>
@@ -152,6 +156,92 @@ export function LibraryArtifactsSection({ activeWorkspaceId, route, navigate }: 
                     { label: "Updated", value: formatDateTime(selectedArtifact.updatedAt), meta: "Artifact timestamp" },
                   ]}
                 />
+                <LibraryActionCardGrid
+                  items={[
+                    {
+                      id: "viewer",
+                      label: "Viewer",
+                      value: describeArtifactViewer(selectedArtifact.kind),
+                      description:
+                        selectedArtifact.kind === "markdown" || selectedArtifact.kind === "text"
+                          ? "Preview below is readable content with provenance kept nearby."
+                          : "Preview below stays raw until a richer type-specific renderer exists.",
+                      meta: selectedArtifact.kind,
+                      tone:
+                        selectedArtifact.kind === "markdown" || selectedArtifact.kind === "text" ? "success" : "info",
+                    },
+                    {
+                      id: "timeline",
+                      label: "Timeline",
+                      value: `v${selectedArtifact.version}`,
+                      description: `${formatDateTime(selectedArtifact.createdAt)} -> ${formatDateTime(
+                        selectedArtifact.updatedAt,
+                      )}`,
+                      meta: selectedArtifact.supersedesArtifactId
+                        ? `Supersedes ${selectedArtifact.supersedesArtifactId}`
+                        : "No previous version linked.",
+                      tone: selectedArtifact.supersedesArtifactId ? "info" : "neutral",
+                    },
+                    {
+                      id: "validation",
+                      label: "Validation",
+                      value: selectedArtifactValidationStatus ?? "Not recorded",
+                      description:
+                        selectedArtifactValidationStatus === "passed"
+                          ? "Artifact carries a passing validation status."
+                          : "No validation status is attached to this artifact record yet.",
+                      meta: selectedArtifact.contentHash ? `hash ${selectedArtifact.contentHash}` : "No content hash",
+                      tone: selectedArtifactValidationStatus === "passed" ? "success" : "warning",
+                    },
+                    {
+                      id: "source-session",
+                      label: "Source session",
+                      value: selectedArtifact.sourceSurface,
+                      description: `${selectedArtifact.sessionId} · turn ${selectedArtifact.turnId}`,
+                      actionLabel: "Open thread",
+                      onClick: () =>
+                        navigate({
+                          area: selectedArtifact.sourceSurface,
+                          sessionId: selectedArtifact.sessionId,
+                          ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
+                          turnId: selectedArtifact.turnId,
+                          artifactId: selectedArtifact.artifactId,
+                          theme: route.theme,
+                        }),
+                      tone: "info",
+                    },
+                    {
+                      id: "use-chat",
+                      label: "Use in Chat",
+                      value: "Discuss",
+                      description: "Open Chat with the artifact id carried in the route for follow-up context.",
+                      actionLabel: "Chat",
+                      onClick: () =>
+                        navigate({
+                          area: "chat",
+                          artifactId: selectedArtifact.artifactId,
+                          ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
+                          theme: route.theme,
+                        }),
+                      tone: "neutral",
+                    },
+                    {
+                      id: "use-code",
+                      label: "Use in Code",
+                      value: "Review",
+                      description: "Open Code with this artifact selected as evidence for implementation or review.",
+                      actionLabel: "Code",
+                      onClick: () =>
+                        navigate({
+                          area: "code",
+                          artifactId: selectedArtifact.artifactId,
+                          ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
+                          theme: route.theme,
+                        }),
+                      tone: "neutral",
+                    },
+                  ]}
+                />
                 <LibraryButtonRow>
                   <button
                     type="button"
@@ -200,4 +290,28 @@ export function LibraryArtifactsSection({ activeWorkspaceId, route, navigate }: 
       </div>
     </LibrarySectionShell>
   );
+}
+
+function describeArtifactViewer(kind: ChatGeneratedArtifactRecord["kind"]) {
+  if (kind === "markdown") {
+    return "Markdown";
+  }
+  if (kind === "text") {
+    return "Text";
+  }
+  if (kind === "code") {
+    return "Code";
+  }
+  if (kind === "html") {
+    return "HTML";
+  }
+  if (kind === "mermaid") {
+    return "Mermaid";
+  }
+  return "Raw preview";
+}
+
+function readArtifactValidationStatus(artifact: ChatGeneratedArtifactRecord) {
+  const record = artifact as ChatGeneratedArtifactRecord & { validationStatus?: string };
+  return record.validationStatus;
 }

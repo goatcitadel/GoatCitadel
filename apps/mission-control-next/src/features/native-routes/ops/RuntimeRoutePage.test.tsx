@@ -201,6 +201,23 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () =>
               from: "",
               to: "",
               usageAvailability: { trackedEvents: 12, unknownEvents: 1, totalAgentEvents: 13 },
+              dailySeries: [
+                {
+                  isoDate: "2026-04-20",
+                  shortLabel: "Mon",
+                  segments: [{ providerKey: "openai", label: "OpenAI", costUsd: 1 }],
+                },
+                {
+                  isoDate: "2026-04-21",
+                  shortLabel: "Tue",
+                  segments: [{ providerKey: "openai", label: "OpenAI", costUsd: 1 }],
+                },
+                {
+                  isoDate: "2026-04-22",
+                  shortLabel: "Wed",
+                  segments: [{ providerKey: "anthropic", label: "Anthropic", costUsd: 4 }],
+                },
+              ],
               items: [
                 {
                   key: "openai:gpt-5",
@@ -978,6 +995,9 @@ describe("RuntimeRoutePage", () => {
     );
 
     expect(promptPacksButton).toBeDefined();
+    expect(collectText(renderer!.root)).toContain("Release proof dashboard");
+    expect(collectText(renderer!.root)).toContain("Route coverage");
+    expect(collectText(renderer!.root)).toContain("Screenshot freshness");
     expect(collectText(renderer!.root)).toContain("Code/Ops review readiness");
     expect(collectText(renderer!.root)).toContain("skills-catalog");
 
@@ -1123,6 +1143,23 @@ describe("RuntimeRoutePage", () => {
         from: "",
         to: "",
         usageAvailability: { trackedEvents: 0, unknownEvents: 0, totalAgentEvents: 0 },
+        dailySeries: [
+          {
+            isoDate: "2026-04-20",
+            shortLabel: "Mon",
+            segments: [{ providerKey: "openai", label: "OpenAI", costUsd: 1 }],
+          },
+          {
+            isoDate: "2026-04-21",
+            shortLabel: "Tue",
+            segments: [{ providerKey: "openai", label: "OpenAI", costUsd: 1 }],
+          },
+          {
+            isoDate: "2026-04-22",
+            shortLabel: "Wed",
+            segments: [{ providerKey: "anthropic", label: "Anthropic", costUsd: 4 }],
+          },
+        ],
         items: [
           {
             key: "unknown:model",
@@ -1143,6 +1180,24 @@ describe("RuntimeRoutePage", () => {
         supported: true,
         controllable: false,
         controlMessage: "manual",
+        controlHandoff: {
+          owner: "External service manager",
+          serviceName: "GoatCitadel Gateway",
+          reason: "Use the process manager that owns the gateway.",
+          desktopControl: "Mission Control desktop tray > Restart gateway",
+          commands: [
+            {
+              label: "Inspect current process",
+              command: "Get-Process -Id 42 -ErrorAction SilentlyContinue",
+              description: "Confirms the gateway process.",
+            },
+            {
+              label: "Start local dev gateway",
+              command: "pnpm dev:gateway",
+              description: "Start the source checkout gateway.",
+            },
+          ],
+        },
       },
       backups: [{ backupId: "backup-1", createdAt: undefined, files: ["a", "b"] }],
       sessions: [],
@@ -1173,7 +1228,10 @@ describe("RuntimeRoutePage", () => {
     expect(runtimeMarkup).toContain("Daemon stopped");
     expect(runtimeMarkup).toContain("No backup");
     expect(runtimeMarkup).toContain("Read only");
-    expect(runtimeMarkup).toContain("manual");
+    expect(runtimeMarkup).toContain("Manual handoff");
+    expect(runtimeMarkup).toContain("External service manager");
+    expect(runtimeMarkup).toContain("Mission Control desktop tray &gt; Restart gateway");
+    expect(runtimeMarkup).toContain("pnpm dev:gateway");
     expect(runtimeMarkup).toContain("Unknown · 2 files");
     expect(runtimeMarkup).toContain("http · general");
     let readOnlyRenderer: ReactTestRenderer | undefined;
@@ -1201,6 +1259,7 @@ describe("RuntimeRoutePage", () => {
     );
     expect(costsMarkup).toContain("Expanded");
     expect(costsMarkup).toContain("+42 tokens");
+    expect(costsMarkup).toContain("Wed spike");
     expect(costsMarkup).toContain("$0.00");
 
     runtimeSnapshotOverrides.data = {

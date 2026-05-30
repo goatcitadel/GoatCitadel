@@ -2,8 +2,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
   providerTemplates,
+  type AddonCatalogEntry,
+  type AddonInstalledRecord,
+  type CapabilityPackManifest,
   type CapabilityPackPreview,
   type DemoBootstrapStateResponse,
+  type DeviceAccessGrantRecord,
   type LlmProviderAdviceResponse,
   type LlmProviderRequestConfig,
 } from "@goatcitadel/contracts";
@@ -3160,16 +3164,88 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
   );
 }
 
+type AccessSettingsSnapshot = Awaited<ReturnType<typeof fetchSettings>>;
+type DaemonStatusSnapshot = Awaited<ReturnType<typeof fetchDaemonStatus>>;
+
+type DesktopMobileContinuityItem = {
+  id: string;
+  label: string;
+  description: string;
+  meta: string;
+  actionLabel: string;
+};
+
+export function deriveDesktopMobileContinuityItems(input: {
+  settings: AccessSettingsSnapshot;
+  grants: DeviceAccessGrantRecord[];
+  daemon: DaemonStatusSnapshot | null;
+}): DesktopMobileContinuityItem[] {
+  const activeGrants = input.grants.filter((grant) => !grant.revokedAt);
+  const mobileGrants = activeGrants.filter((grant) => ["mobile", "tablet"].includes(grant.deviceType));
+  const desktopGrants = activeGrants.filter((grant) => grant.deviceType === "desktop");
+  const authConfigured =
+    (input.settings.auth.mode === "token" && input.settings.auth.tokenConfigured) ||
+    (input.settings.auth.mode === "basic" && input.settings.auth.basicConfigured);
+  return [
+    {
+      id: "desktop-runtime",
+      label: "Desktop runtime anchor",
+      description: input.daemon
+        ? `Gateway daemon is ${input.daemon.state}; host ${input.daemon.host || "unknown"} owns the local runtime boundary.`
+        : "Gateway daemon status could not be loaded, so companion devices cannot inspect desktop runtime truth here.",
+      meta: input.daemon?.running ? "Desktop ready" : "Needs desktop proof",
+      actionLabel: input.daemon?.running ? "Ready" : "Check runtime",
+    },
+    {
+      id: "mobile-trust",
+      label: "Mobile approval path",
+      description: mobileGrants.length
+        ? `${mobileGrants.length} active mobile/tablet device grant(s) can reach the gateway under this auth posture.`
+        : "No active mobile/tablet grants are visible; approve a companion device before claiming mobile approvals.",
+      meta: mobileGrants.length ? "Access-gated" : "No mobile grant",
+      actionLabel: mobileGrants.length ? "Ready" : "Needs grant",
+    },
+    {
+      id: "desktop-device-trust",
+      label: "Desktop handoff trust",
+      description: desktopGrants.length
+        ? `${desktopGrants.length} active desktop device grant(s) are visible for browser or shell handoff.`
+        : "Desktop continuity currently relies on the local session and daemon, not an additional device grant.",
+      meta: desktopGrants.length ? "Device trust" : "Local session",
+      actionLabel: desktopGrants.length ? "Granted" : "Local only",
+    },
+    {
+      id: "install-token",
+      label: "Install token lane",
+      description: authConfigured
+        ? "Auth posture is configured enough to pair companion clients through the install-token/device-request flow."
+        : "Auth is open; generate and protect an install token before exposing companion access.",
+      meta: input.settings.auth.mode,
+      actionLabel: authConfigured ? "Pairable" : "Open local",
+    },
+    {
+      id: "share-session-handoff",
+      label: "Share/session handoff",
+      description:
+        "Mobile share intake and Code/Cowork result handoff must land through gateway-owned sessions, projects, artifacts, and approvals.",
+      meta: "Gateway-owned",
+      actionLabel: "Boundary",
+    },
+  ];
+}
+
 function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [settings, grants] = await Promise.all([
+    const [settings, grants, daemon] = await Promise.all([
       fetchSettings(),
       nativeLoad("Device grants", fetchDeviceAccessGrants("all"), { items: [] }),
+      nativeLoad("Daemon status", fetchDaemonStatus(), null),
     ]);
     return {
       settings,
-      issues: nativeLoadIssues([grants]),
+      issues: nativeLoadIssues([grants, daemon]),
       grants: grants.data.items,
+      daemon: daemon.data,
     };
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load);
@@ -3182,6 +3258,17 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
     basicPassword: "",
   });
   const [installToken, setInstallToken] = useState<string>("");
+  const continuityItems = useMemo(
+    () =>
+      data
+        ? deriveDesktopMobileContinuityItems({
+            settings: data.settings,
+            grants: data.grants,
+            daemon: data.daemon,
+          })
+        : [],
+    [data],
+  );
 
   useEffect(() => {
     if (!data) {
@@ -3368,6 +3455,28 @@ function AccessSection({ activeWorkspaceName }: SettingsSectionProps) {
                     meta: "Username/password presence",
                   },
                 ]}
+              />
+            </SettingsPanel>
+            <SettingsPanel
+              title="Desktop/mobile continuity"
+              subtitle="Trusted devices, desktop runtime state, and companion handoff boundaries."
+              stats={[
+                { label: "Desktop", value: data.daemon?.state ?? "unknown" },
+                {
+                  label: "Active devices",
+                  value: String(data.grants.filter((grant) => !grant.revokedAt).length),
+                },
+              ]}
+            >
+              <SettingsActionList
+                items={continuityItems.map((item) => ({
+                  id: item.id,
+                  label: item.label,
+                  description: item.description,
+                  meta: item.meta,
+                  actionLabel: item.actionLabel,
+                }))}
+                maxHeight="min(36vh, 22rem)"
               />
             </SettingsPanel>
           </SettingsStack>
@@ -6691,6 +6800,119 @@ function ToolsSection({ activeWorkspaceId }: SettingsSectionProps) {
   );
 }
 
+type AddonPostureCriterionState = "Proven" | "Partial" | "Out of 1.0";
+
+interface AddonProductPostureCriterion {
+  id: string;
+  label: string;
+  description: string;
+  meta: AddonPostureCriterionState;
+}
+
+interface AddonProductPosture {
+  stats: Array<{ label: string; value: string }>;
+  criteria: AddonProductPostureCriterion[];
+}
+
+function buildAddonProductPosture(data: {
+  catalog: AddonCatalogEntry[];
+  installed: AddonInstalledRecord[];
+  capabilityPacks: CapabilityPackManifest[];
+}): AddonProductPosture {
+  const catalogCount = data.catalog.length;
+  const installedCount = data.installed.length;
+  const enabledCount = data.installed.filter(
+    (item) => item.enabled !== false && item.runtimeStatus !== "disabled",
+  ).length;
+  const provenanceCount = data.catalog.filter((item) => item.owner && item.repoUrl && item.trustTier).length;
+  const explicitDownloadCount = data.catalog.filter((item) => item.requiresSeparateRepoDownload === true).length;
+  const healthCheckCount =
+    data.catalog.reduce((count, item) => count + (item.healthChecks ?? []).length, 0) +
+    data.installed.filter((item) => item.lastError || item.pid).length;
+  const reviewFirstPackCount = data.capabilityPacks.filter((pack) =>
+    pack.assets.some((asset) => asset.installMode === "review_required" || asset.installMode === "disabled"),
+  ).length;
+  const criteria: AddonProductPostureCriterion[] = [
+    {
+      id: "catalog-provenance",
+      label: "Catalog provenance",
+      description: catalogCount
+        ? `${provenanceCount}/${catalogCount} catalog entries expose owner, repository, and trust tier.`
+        : "No catalog entries are available from the gateway.",
+      meta: provenanceCount === catalogCount && catalogCount > 0 ? "Proven" : "Partial",
+    },
+    {
+      id: "install-review",
+      label: "Install review",
+      description: explicitDownloadCount
+        ? `${explicitDownloadCount} add-ons require explicit separate-repository download confirmation.`
+        : "Install routes exist, but no selected catalog entry currently proves the repo-download review gate.",
+      meta: explicitDownloadCount ? "Proven" : "Partial",
+    },
+    {
+      id: "permission-grants",
+      label: "Permission grants",
+      description:
+        "Per-add-on tool permissions and side-effect scopes are not modeled as a graduated grant surface yet.",
+      meta: "Out of 1.0",
+    },
+    {
+      id: "enable-disable-truth",
+      label: "Enable/disable truth",
+      description: installedCount
+        ? `${installedCount} installed records expose runtime status; ${enabledCount} are currently enabled.`
+        : "Lifecycle APIs are present, but no installed record is available to prove operator state.",
+      meta: installedCount ? "Proven" : "Partial",
+    },
+    {
+      id: "version-update",
+      label: "Version and update path",
+      description:
+        "Update actions and install refs exist, but catalog versioning is not yet a full marketplace contract.",
+      meta: "Partial",
+    },
+    {
+      id: "rollback-uninstall",
+      label: "Rollback and uninstall",
+      description: "Uninstall is operator-visible; rollback is not yet represented as a first-class add-on action.",
+      meta: "Partial",
+    },
+    {
+      id: "runtime-health",
+      label: "Runtime health",
+      description: healthCheckCount
+        ? `${healthCheckCount} health or runtime signals are visible across catalog and installed records.`
+        : "No health checks or process signals are visible for the current add-on set.",
+      meta: healthCheckCount ? "Proven" : "Partial",
+    },
+    {
+      id: "operator-logs",
+      label: "Operator logs",
+      description: "Add-on logs are not yet surfaced as a durable operator evidence lane.",
+      meta: "Out of 1.0",
+    },
+    {
+      id: "local-boundary",
+      label: "Local-only boundary",
+      description:
+        reviewFirstPackCount > 0
+          ? `${reviewFirstPackCount} capability packs still stage assets for review instead of implying marketplace install.`
+          : "The product posture remains local/operator-reviewed, with no public marketplace claim.",
+      meta: "Proven",
+    },
+  ];
+  const provenCount = criteria.filter((item) => item.meta === "Proven").length;
+  return {
+    stats: [
+      { label: "1.0 posture", value: "Experimental" },
+      { label: "Marketplace", value: "Out of 1.0" },
+      { label: "Installed proof", value: `${installedCount}/${catalogCount}` },
+      { label: "Graduation", value: `${provenCount}/${criteria.length}` },
+    ],
+    criteria,
+  };
+}
+
 function AddonsSection(_props: SettingsSectionProps) {
   const load = useCallback(async () => {
     const [catalog, installed, capabilityPacks] = await Promise.all([
@@ -6737,6 +6959,17 @@ function AddonsSection(_props: SettingsSectionProps) {
   const selectedAddonRuntimeStatus = status.data?.status ?? selectedInstalledRecord?.runtimeStatus ?? "not_installed";
   const selectedAddonCanStop =
     selectedAddonInstalled && selectedAddonEnabled && ["running", "error"].includes(selectedAddonRuntimeStatus);
+  const productPosture = useMemo(
+    () =>
+      data
+        ? buildAddonProductPosture({
+            catalog: data.catalog,
+            installed: data.installed,
+            capabilityPacks: data.capabilityPacks,
+          })
+        : null,
+    [data],
+  );
 
   useEffect(() => {
     if (!data?.catalog.length) {
@@ -6826,9 +7059,28 @@ function AddonsSection(_props: SettingsSectionProps) {
       {data ? (
         <SettingsGrid variant="three-column">
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
+          {productPosture ? (
+            <SettingsPanel
+              title="1.0 add-on posture"
+              subtitle="Experimental local extensions with operator-reviewed install and launch controls."
+              stats={productPosture.stats}
+              scrollBody
+              bodyMaxHeight="min(58vh, 34rem)"
+            >
+              <SettingsActionList
+                items={productPosture.criteria.map((item) => ({
+                  id: item.id,
+                  label: item.label,
+                  description: item.description,
+                  actionLabel: item.meta,
+                }))}
+                maxHeight="min(42vh, 24rem)"
+              />
+            </SettingsPanel>
+          ) : null}
           <SettingsPanel
             title="Add-on catalog"
-            subtitle="Optional add-on runtimes and their current install posture."
+            subtitle="Experimental add-on runtimes and their current local install posture."
             scrollBody
             bodyMaxHeight="min(58vh, 34rem)"
             stats={[
@@ -6859,7 +7111,7 @@ function AddonsSection(_props: SettingsSectionProps) {
           </SettingsPanel>
           <SettingsPanel
             title={selectedAddon?.label ?? "Add-on detail"}
-            subtitle="Install, update, launch, stop, or remove the selected add-on."
+            subtitle="Operator-reviewed lifecycle controls for the selected local add-on."
             scrollBody
             bodyMaxHeight="min(72vh, 42rem)"
           >

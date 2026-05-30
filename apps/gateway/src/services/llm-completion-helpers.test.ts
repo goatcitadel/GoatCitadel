@@ -7,8 +7,10 @@ import {
   delayChatCompletionRetry,
   extractPromptFromMessages,
   getRemainingChatCompletionTimeoutMs,
+  classifyProviderFailure,
   normalizeChatCompletionAttemptError,
   normalizeToolProtocolRetryRequest,
+  shouldAttemptCrossProviderFallback,
   shouldRetryToolProtocolError,
   shouldRetryTransientProviderError,
 } from "./llm-completion-helpers.js";
@@ -75,6 +77,15 @@ describe("llm-completion-helpers", () => {
     expect(
       shouldRetryTransientProviderError(new Error("request failed (403): upstream proxy temporarily unavailable")),
     ).toBe(true);
+  });
+
+  it("classifies provider denials and blocks cross-provider fallback for context overflow", () => {
+    expect(classifyProviderFailure(new Error("request failed (401 Unauthorized)"))).toBe("auth_denial");
+    expect(classifyProviderFailure(new Error("request failed (402): insufficient credits"))).toBe("business_denial");
+    expect(classifyProviderFailure(new Error("request failed (429 Too Many Requests)"))).toBe("rate_limited");
+    expect(classifyProviderFailure(new Error("maximum context length exceeded"))).toBe("context_overflow");
+    expect(shouldAttemptCrossProviderFallback(new Error("maximum context length exceeded"))).toBe(false);
+    expect(shouldAttemptCrossProviderFallback(new Error("request failed (503 Service Unavailable)"))).toBe(true);
   });
 
   it("normalizes invalid tool protocol payloads for bounded retry attempts", () => {
@@ -152,9 +163,12 @@ describe("llm-completion-helpers", () => {
 
     expect(createChatCompletionDeadline(undefined)).toBeUndefined();
     expect(createChatCompletionDeadline(0)).toBeUndefined();
+    expect(createChatCompletionDeadline(Number.POSITIVE_INFINITY)).toBeUndefined();
     const deadline = createChatCompletionDeadline(1500);
     expect(deadline).toBe(Date.now() + 1500);
     expect(getRemainingChatCompletionTimeoutMs(deadline, 1500)).toBe(1500);
+
+    expect(createChatCompletionDeadline(999_999_999)).toBe(Date.now() + 30 * 60_000);
 
     vi.setSystemTime(new Date("2026-05-14T12:00:02.000Z"));
     expect(() => getRemainingChatCompletionTimeoutMs(deadline, 1500)).toThrow(

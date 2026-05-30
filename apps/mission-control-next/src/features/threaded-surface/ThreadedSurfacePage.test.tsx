@@ -773,6 +773,9 @@ describe("ThreadedSurfacePage", () => {
     await act(async () => {
       renderer = create(<ThreadedSurfacePage surface="chat" input={emptyInput} />);
     });
+    expect(normalizeText(collectText(renderer!.root))).toContain("1 Sessions");
+    expect(normalizeText(collectText(renderer!.root))).toContain("0 Projects");
+    expect(normalizeText(collectText(renderer!.root))).toContain("0 Approvals");
     await act(async () => {
       findButton(renderer!.root, "Start chat").props.onClick();
       findButton(renderer!.root, "Attach files").props.onClick();

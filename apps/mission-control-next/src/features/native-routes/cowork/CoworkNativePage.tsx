@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Plus, RefreshCw, Save, Undo2, Workflow } from "lucide-react";
+import { CheckCircle2, Plus, RefreshCw, Save, Undo2, Workflow } from "lucide-react";
 import {
   addTaskDeliverable,
   createTask,
@@ -37,8 +37,15 @@ import {
   LibraryMetricGrid,
   LibraryNotice,
 } from "../shared/library-primitives";
+import { CoworkExecutionGlance, buildCoworkExecutionSnapshot } from "./CoworkExecutionGlance";
 
 type TaskCardRecord = TaskRecord;
+type CoworkOperatorRecord = {
+  operatorId: string;
+  sessionCount: number;
+  activeSessions: number;
+  lastActivityAt?: string;
+};
 
 const TASK_STATUS_OPTIONS: TaskRecord["status"][] = [
   "planning",
@@ -53,14 +60,20 @@ const TASK_STATUS_OPTIONS: TaskRecord["status"][] = [
 const TASK_PRIORITY_OPTIONS: TaskRecord["priority"][] = ["low", "normal", "high", "urgent"];
 const TASK_DELIVERABLE_TYPE_OPTIONS: TaskDeliverableRecord["deliverableType"][] = ["artifact", "file", "url"];
 
-export function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName, navigate }: NativeRoutePagesProps) {
+export function CoworkNativePage({
+  route,
+  activeWorkspaceId,
+  activeWorkspaceName,
+  pendingApprovals,
+  navigate,
+}: NativeRoutePagesProps) {
   const section = route.section ?? "workspace";
   const [state, setState] = useState<
     LoadState<{
       issues: NativeLoadIssue[];
       tasks: TaskCardRecord[];
       deletedTasks: TaskCardRecord[];
-      operators: Array<{ operatorId: string; sessionCount: number; activeSessions: number; lastActivityAt?: string }>;
+      operators: CoworkOperatorRecord[];
     }>
   >({
     loading: true,
@@ -176,6 +189,29 @@ export function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName
         deliverablesLoading: deliverables.loading,
       }),
     [deletedTasks, deliverables.data, deliverables.loading, selectedTask, tasks],
+  );
+  const executionSnapshot = useMemo(
+    () =>
+      buildCoworkExecutionSnapshot({
+        tasks,
+        deletedTasks,
+        selectedTask,
+        deliverables: deliverables.data ?? [],
+        deliverablesLoading: deliverables.loading,
+        operators,
+        pendingApprovals,
+        continuation: coworkContinuation,
+      }),
+    [
+      coworkContinuation,
+      deletedTasks,
+      deliverables.data,
+      deliverables.loading,
+      operators,
+      pendingApprovals,
+      selectedTask,
+      tasks,
+    ],
   );
 
   useEffect(() => {
@@ -483,63 +519,18 @@ export function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName
       </NativeGrid>
     ) : (
       <NativeGrid className="mc-next-cowork-task-grid">
-        <NativeCard
-          title="Continuation cue"
-          subtitle="The task-board entry point for what to do next, where work is blocked, and which deliverables prove progress."
-          density="compact"
-          stats={[
-            { label: "Blockers", value: String(coworkContinuation.blockerCount) },
-            { label: "Deliverables", value: String(coworkContinuation.deliverableCount) },
-          ]}
-        >
-          <LibraryMetricGrid
-            items={[
-              {
-                label: "Next action",
-                value: coworkContinuation.nextActionLabel,
-                meta: coworkContinuation.nextActionDetail,
-              },
-              {
-                label: "Selected hierarchy",
-                value: coworkContinuation.selectedTaskLabel,
-                meta: coworkContinuation.hierarchyDetail,
-              },
-              {
-                label: "Open work",
-                value: String(coworkContinuation.activeCount + coworkContinuation.reviewCount),
-                meta: `${coworkContinuation.activeCount} active · ${coworkContinuation.reviewCount} in review`,
-              },
-            ]}
-          />
-          <LibraryButtonRow>
-            <button
-              type="button"
-              className="mc-next-button"
-              onClick={() => navigate({ area: "cowork", theme: route.theme })}
-            >
-              <Workflow className="h-4 w-4" />
-              Continue Cowork
-            </button>
-            {coworkContinuation.firstBlockedTaskId ? (
-              <button
-                type="button"
-                className="mc-next-button-secondary"
-                onClick={() => setSelectedTaskId(coworkContinuation.firstBlockedTaskId!)}
-              >
-                <AlertTriangle className="h-4 w-4" />
-                Open blocker
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="mc-next-button-secondary"
-              onClick={() => navigate({ area: "cowork", section: "board", theme: route.theme })}
-            >
-              <Workflow className="h-4 w-4" />
-              Agent board
-            </button>
-          </LibraryButtonRow>
-        </NativeCard>
+        <CoworkExecutionGlance
+          snapshot={executionSnapshot}
+          continuation={coworkContinuation}
+          onContinue={() => navigate({ area: "cowork", theme: route.theme })}
+          onOpenApprovals={() => navigate({ area: "ops", section: "approvals", theme: route.theme })}
+          onOpenBoard={() => navigate({ area: "cowork", section: "board", theme: route.theme })}
+          onOpenBlocker={
+            coworkContinuation.firstBlockedTaskId
+              ? () => setSelectedTaskId(coworkContinuation.firstBlockedTaskId!)
+              : undefined
+          }
+        />
         <QuickJumpCard
           title="Cowork routes"
           subtitle="Keep orchestration surfaces connected from one Cowork route."

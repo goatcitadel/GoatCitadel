@@ -2,6 +2,7 @@ import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { AGENTIC_DIAGNOSTIC_CODES, type AgenticSubagentMetadata } from "@goatcitadel/contracts";
 import process from "node:process";
 import { z } from "zod";
+import { buildA2ABridgeStatus, buildA2ATaskExportPreview } from "../services/a2a-bridge-service.js";
 import { buildAgenticRuntimeAvailability } from "../services/agentic-capability-availability.js";
 import { probeAgenticHarnessAvailability } from "../services/agentic-harness-availability.js";
 import {
@@ -32,6 +33,16 @@ const agenticRunStatusSchema = z.enum([
   "cancelled",
   "stopped_by_limit",
 ]);
+
+const a2aTaskExportPreviewBodySchema = z.object({
+  goal: z.string().min(1).max(4000),
+  sourceSurface: z.enum(["chat", "cowork", "code", "project", "ops", "library"]).optional(),
+  workspaceId: z.string().min(1).max(120).optional(),
+  projectId: z.string().min(1).max(240).optional(),
+  sessionId: z.string().min(1).max(240).optional(),
+  taskId: z.string().min(1).max(240).optional(),
+  artifactRefs: z.array(z.string().min(1).max(1000)).max(12).optional(),
+});
 
 const listQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(200).default(50),
@@ -239,6 +250,25 @@ const deleteTaskBodySchema = z
   .optional();
 
 export const tasksRoutes: FastifyPluginAsync = async (fastify) => {
+  fastify.get("/api/v1/a2a/agent-card", async (request, reply) => {
+    const checkedAt = new Date().toISOString();
+    return reply.send(
+      buildA2ABridgeStatus({
+        checkedAt,
+        baseUrl: buildA2ARequestBaseUrl(request.headers),
+      }),
+    );
+  });
+
+  fastify.post("/api/v1/a2a/task-preview", async (request, reply) => {
+    const parsed = a2aTaskExportPreviewBodySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    const checkedAt = new Date().toISOString();
+    return reply.send(buildA2ATaskExportPreview(parsed.data, { checkedAt }));
+  });
+
   fastify.get("/api/v1/agentic/availability", async (_request, reply) => {
     const generatedAt = new Date().toISOString();
     try {
@@ -651,6 +681,17 @@ function readWorkspaceIdFromHeader(value: string | string[] | undefined): string
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function buildA2ARequestBaseUrl(headers: FastifyRequest["headers"]): string | undefined {
+  const host = typeof headers.host === "string" ? headers.host.trim() : "";
+  if (!host) {
+    return undefined;
+  }
+  const forwardedProto = headers["x-forwarded-proto"];
+  const protoCandidate = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
+  const proto = protoCandidate === "https" ? "https" : "http";
+  return `${proto}://${host}`;
 }
 
 function buildAgenticHarnessProbeOptions(generatedAt: string): Parameters<typeof probeAgenticHarnessAvailability>[0] {

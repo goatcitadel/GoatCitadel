@@ -10,6 +10,7 @@ import {
   createPersonalityEditorDraft,
   clearStoredOpenAICodexOAuthFlow,
   delay,
+  deriveDesktopMobileContinuityItems,
   deriveEcosystemProofLaneItems,
   deriveFirstOutcomePathItems,
   deriveLlamaCppAlias,
@@ -185,7 +186,7 @@ describe("SettingsNativePage helpers", () => {
     expect(labelForSettingsSection("mcp")).toBe("MCP");
     expect(labelForSettingsSection("permissions")).toBe("Permissions");
     expect(labelForSettingsSection("missing")).toBe("Unknown");
-    expect(descriptionForSettingsSection("addons")).toContain("optional add-on");
+    expect(descriptionForSettingsSection("addons")).toContain("experimental local add-ons");
     expect(descriptionForSettingsSection("permissions")).toContain("permission profiles");
     expect(descriptionForSettingsSection("missing")).toContain("not registered");
   });
@@ -302,6 +303,46 @@ describe("SettingsNativePage helpers", () => {
     ]);
     expect(lanes[1]!.route).toEqual({ area: "settings", section: "mcp" });
     expect(lanes[3]!.description).toContain("named packaging proof");
+  });
+
+  it("derives desktop and mobile continuity from daemon and device-grant truth", () => {
+    const items = deriveDesktopMobileContinuityItems({
+      settings: {
+        auth: {
+          mode: "token",
+          allowLoopbackBypass: false,
+          tokenConfigured: true,
+          basicConfigured: false,
+        },
+      } as any,
+      grants: [
+        {
+          grantId: "grant-mobile",
+          requestId: "request-mobile",
+          actorId: "operator",
+          deviceLabel: "Phone",
+          deviceType: "mobile",
+          platform: "Android",
+          grantedBy: "operator",
+          createdAt: "2026-05-02T18:00:00.000Z",
+          metadata: {},
+        },
+      ],
+      daemon: {
+        running: true,
+        pid: 1234,
+        uptimeSeconds: 60,
+        host: "desktop",
+        state: "running",
+        supported: true,
+        controllable: true,
+        controlMessage: "Ready",
+      },
+    });
+
+    expect(items.find((item) => item.id === "desktop-runtime")?.actionLabel).toBe("Ready");
+    expect(items.find((item) => item.id === "mobile-trust")?.description).toContain("1 active mobile/tablet");
+    expect(items.find((item) => item.id === "install-token")?.actionLabel).toBe("Pairable");
   });
 
   it("handles JSON, list, channel, tool, and integration helper edges", () => {

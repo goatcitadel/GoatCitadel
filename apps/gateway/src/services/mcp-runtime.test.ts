@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { McpServerRecord } from "@goatcitadel/contracts";
 import {
+  __internal,
   collectMcpBrowserFallbackTargets,
   discoverMcpTools,
   inferMcpToolsForServer,
@@ -266,6 +267,15 @@ describe("mcp runtime", () => {
     expect(
       inferMcpToolsForServer(browserServer, [{ ...inferMcpToolsForServer(browserServer, [])[0]!, toolName: "custom" }]),
     ).toEqual([expect.objectContaining({ toolName: "custom" })]);
+  });
+
+  it("resolves package-manager stdio commands for Windows shims and Linux container bins", () => {
+    expect(__internal.resolveSpawnCommand("npx", "win32", () => false)).toBe("npx.cmd");
+    expect(__internal.resolveSpawnCommand("npm", "linux", (candidate) => candidate === "/usr/local/bin/npm")).toBe(
+      "/usr/local/bin/npm",
+    );
+    expect(__internal.resolveSpawnCommand("node", "linux", () => false)).toBe("node");
+    expect(__internal.resolveSpawnCommand("/usr/bin/npx", "linux", () => true)).toBe("/usr/bin/npx");
   });
 
   it("selects approved browser fallback tools and prefers Playwright targets", () => {

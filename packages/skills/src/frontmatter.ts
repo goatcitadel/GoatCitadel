@@ -7,7 +7,8 @@ export interface ParsedSkillMarkdown {
 }
 
 export function parseSkillMarkdown(markdown: string): ParsedSkillMarkdown {
-  const lines = markdown.split(/\r?\n/);
+  const normalizedMarkdown = markdown.charCodeAt(0) === 0xfeff ? markdown.slice(1) : markdown;
+  const lines = normalizedMarkdown.split(/\r?\n/);
   if (lines[0]?.trim() !== "---") {
     throw new Error("SKILL.md must start with YAML frontmatter delimiter ---");
   }
@@ -33,13 +34,14 @@ export function parseSkillMarkdown(markdown: string): ParsedSkillMarkdown {
       ...parsed,
       metadata,
     },
-    body: lines.slice(secondFence + 1).join("\n").trim(),
+    body: lines
+      .slice(secondFence + 1)
+      .join("\n")
+      .trim(),
   };
 }
 
-function normalizeMetadata(
-  value: SkillFrontmatter["metadata"],
-): SkillFrontmatter["metadata"] {
+function normalizeMetadata(value: SkillFrontmatter["metadata"]): SkillFrontmatter["metadata"] {
   if (!value) {
     return undefined;
   }

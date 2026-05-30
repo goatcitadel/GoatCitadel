@@ -6,7 +6,8 @@ export type EvidenceEnvelopeEventKind =
   | "capability_pack_install"
   | "continuation_gate"
   | "skill_export"
-  | "browser_content_guard";
+  | "browser_content_guard"
+  | "external_writeback";
 
 export type EvidenceEnvelopeSignatureStatus = "signed_hmac" | "unsigned_local" | "verification_failed";
 

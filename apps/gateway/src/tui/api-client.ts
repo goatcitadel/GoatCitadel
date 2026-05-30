@@ -58,6 +58,17 @@ export interface TuiCostSummaryResponse {
     tokenTotal: number;
     costUsd: number;
   }>;
+  dailySeries?: Array<{
+    isoDate: string;
+    shortLabel?: string;
+    costUsd?: number;
+    segments: Array<{
+      providerKey: string;
+      label: string;
+      costUsd: number;
+      models?: string[];
+    }>;
+  }>;
 }
 
 const MAX_SSE_BUFFER_CHARS = 256_000;

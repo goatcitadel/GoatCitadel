@@ -1301,6 +1301,20 @@ function ThreadEmptyState({
       <h2>No active {MODE_META[surface].label.toLowerCase()} thread</h2>
       <p>{helper}</p>
       <p>{input.emptyStateProps.workspaceName}</p>
+      <div className="mc-next-threaded-empty-facts" aria-label="Workspace readiness">
+        <span>
+          <strong>{input.emptyStateProps.sessionCount}</strong>
+          <span>Sessions</span>
+        </span>
+        <span>
+          <strong>{input.emptyStateProps.projectCount}</strong>
+          <span>Projects</span>
+        </span>
+        <span>
+          <strong>{input.emptyStateProps.approvalsCount}</strong>
+          <span>Approvals</span>
+        </span>
+      </div>
       <div className="mc-next-threaded-empty-actions">
         <button type="button" className="mc-next-threaded-primary" onClick={input.emptyStateProps.onCreateSession}>
           Start {MODE_META[surface].label.toLowerCase()}

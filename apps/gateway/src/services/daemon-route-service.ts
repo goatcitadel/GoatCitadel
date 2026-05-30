@@ -4,6 +4,20 @@ const DAEMON_LOG_TAIL_SETTING_KEY = "daemon_log_tail_v1";
 
 type DaemonLogRecord = { timestamp: string; level: "info" | "warn" | "error"; message: string };
 
+interface DaemonControlHandoffCommand {
+  label: string;
+  command: string;
+  description: string;
+}
+
+interface DaemonControlHandoff {
+  owner: string;
+  serviceName: string;
+  reason: string;
+  desktopControl: string;
+  commands: DaemonControlHandoffCommand[];
+}
+
 interface DaemonSystemSettings {
   get<T>(key: string): { value: T } | undefined;
   set<T>(key: string, value: T): void;
@@ -24,6 +38,7 @@ export interface DaemonStatus {
   supported: boolean;
   controllable: boolean;
   controlMessage: string;
+  controlHandoff: DaemonControlHandoff;
 }
 
 export class DaemonRouteService {
@@ -45,6 +60,7 @@ export class DaemonRouteService {
       controllable: false,
       controlMessage:
         "This surface reports the current gateway process only. Start/stop/restart requires an external service manager and is not supported from Mission Control.",
+      controlHandoff: buildDaemonControlHandoff(),
     };
   }
 
@@ -106,6 +122,32 @@ export class DaemonRouteService {
     ].slice(-400);
     this.daemon.systemSettings.set(DAEMON_LOG_TAIL_SETTING_KEY, next);
   }
+}
+
+function buildDaemonControlHandoff(): DaemonControlHandoff {
+  const desktopHosted = process.env.GOATCITADEL_DESKTOP_HOST === "1";
+  const owner = desktopHosted ? "Mission Control desktop host" : "External service manager or launch terminal";
+  return {
+    owner,
+    serviceName: "GoatCitadel Gateway",
+    reason:
+      "Mission Control is served by the gateway process it would need to stop. Without an active trusted process-manager integration, the gateway only reports status and rejects direct lifecycle mutations.",
+    desktopControl: desktopHosted
+      ? "Use the native desktop tray actions for Status, Logs, Restart, or Stop."
+      : "For packaged installs, open the Mission Control desktop tray; for source checkouts, use the terminal or service wrapper that launched the gateway.",
+    commands: [
+      {
+        label: "Inspect current process",
+        command: `Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue`,
+        description: "Confirms the process Mission Control is currently observing.",
+      },
+      {
+        label: "Start local dev gateway",
+        command: "pnpm dev:gateway",
+        description: "Use from the repo root for source checkouts after stopping the existing gateway host.",
+      },
+    ],
+  };
 }
 
 export function createDaemonRouteService(port: DaemonRoutePort): DaemonRouteService {

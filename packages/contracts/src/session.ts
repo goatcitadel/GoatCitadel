@@ -96,6 +96,8 @@ export interface GatewayEventInput {
     outputTokens?: number;
     cachedInputTokens?: number;
     costUsd?: number;
+    providerId?: string;
+    model?: string;
   };
 }
 

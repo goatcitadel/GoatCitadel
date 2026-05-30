@@ -14,6 +14,7 @@ import {
   type CapabilityStatusFilter,
 } from "../shared/native-helpers";
 import {
+  LibraryActionCardGrid,
   LibraryButtonRow,
   LibraryCodeBlock,
   LibraryEmptyState,
@@ -142,6 +143,74 @@ export function LibraryCapabilitiesSection({ route, navigate }: NativeRoutePages
                     },
                   ]}
                 />
+                <LibraryActionCardGrid
+                  items={[
+                    {
+                      id: "availability",
+                      label: "Why this state",
+                      value: selectedStatus.label,
+                      description: selectedStatus.reason,
+                      meta: `${selectedCapability.kind} · ${selectedCapability.category}`,
+                      tone: capabilityStatusTone(selectedStatus.status),
+                    },
+                    {
+                      id: "trust-source",
+                      label: "Trust source",
+                      value: selectedCapability.trustLabel ?? selectedCapability.lifecycleState ?? "Unlabeled",
+                      description:
+                        selectedCapability.sourceProvider ??
+                        selectedCapability.sourceRef ??
+                        "Catalog entry does not expose external provenance.",
+                      meta: selectedCapability.reviewWarning ?? "Review warning not attached.",
+                      tone: selectedCapability.reviewWarning ? "warning" : "info",
+                    },
+                    {
+                      id: "activation-path",
+                      label: "Activation path",
+                      value: selectedCapability.callable
+                        ? "Callable now"
+                        : describeCapabilityActivationPath(selectedCapability),
+                      description: selectedCapability.callable
+                        ? "Runtime planners can consider this through the callable catalog under policy."
+                        : "Activation must happen through setup, skill lifecycle, or proposal review before runtime use.",
+                      meta:
+                        selectedCapability.toolName ??
+                        selectedCapability.skillId ??
+                        selectedCapability.proposalId ??
+                        selectedCapability.candidateId ??
+                        "No activation id",
+                      actionLabel: selectedCapability.callable ? "Governed use" : "Review setup",
+                      onClick: selectedCapability.callable
+                        ? undefined
+                        : () =>
+                            navigate({
+                              area: selectedCapability.skillId ? "library" : "settings",
+                              section: selectedCapability.skillId ? "skills" : "onboarding",
+                              theme: route.theme,
+                            }),
+                      tone: selectedCapability.callable ? "success" : "warning",
+                    },
+                    {
+                      id: "safe-starter",
+                      label: "Safe starter",
+                      value: selectedCapability.callable ? "Ask with scope" : "Inspect first",
+                      description: selectedCapability.callable
+                        ? `Start from a specific task and let policy decide whether ${selectedCapability.title} can be used.`
+                        : "Treat this as reference evidence until the callable catalog exposes it.",
+                      actionLabel: selectedCapability.callable ? "Policy gated" : "Not callable",
+                      tone: selectedCapability.callable ? "success" : "neutral",
+                    },
+                    {
+                      id: "recent-usage",
+                      label: "Recent usage",
+                      value: "Not attached",
+                      description:
+                        "The capability catalog does not currently attach last-run evidence or recent caller history here.",
+                      meta: "Audit detail remains in runtime logs.",
+                      tone: "neutral",
+                    },
+                  ]}
+                />
                 <LibraryCodeBlock label="What it can do">{selectedCapability.summary}</LibraryCodeBlock>
                 {selectedCapability.reviewWarning ? (
                   <div className="mc-next-directory-alert">
@@ -206,4 +275,44 @@ export function LibraryCapabilitiesSection({ route, navigate }: NativeRoutePages
       </div>
     </LibrarySectionShell>
   );
+}
+
+function capabilityStatusTone(
+  status: ReturnType<typeof deriveCapabilityStatus>["status"],
+): "neutral" | "info" | "success" | "warning" | "danger" {
+  if (status === "available") {
+    return "success";
+  }
+  if (status === "configured") {
+    return "info";
+  }
+  if (status === "degraded" || status === "inspect-only") {
+    return "warning";
+  }
+  if (status === "unavailable") {
+    return "danger";
+  }
+  return "neutral";
+}
+
+function describeCapabilityActivationPath(selectedCapability: {
+  callable: boolean;
+  proposalId?: string;
+  candidateId?: string;
+  skillId?: string;
+  toolName?: string;
+}) {
+  if (selectedCapability.callable) {
+    return selectedCapability.toolName ?? selectedCapability.skillId ?? "Callable";
+  }
+  if (selectedCapability.proposalId) {
+    return "Proposal review";
+  }
+  if (selectedCapability.candidateId) {
+    return "Candidate review";
+  }
+  if (selectedCapability.skillId) {
+    return "Skill lifecycle";
+  }
+  return "Setup required";
 }

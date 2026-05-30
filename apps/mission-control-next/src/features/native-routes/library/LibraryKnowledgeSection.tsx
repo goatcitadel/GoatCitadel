@@ -15,6 +15,7 @@ import {
 } from "../shared/native-helpers";
 import {
   LibraryActionList,
+  LibraryActionCardGrid,
   LibraryCodeBlock,
   LibraryEmptyState,
   LibraryLoadWarnings,
@@ -47,6 +48,8 @@ export function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePage
     const query = search.trim().toLowerCase();
     return (data?.files ?? []).filter((item) => !query || item.relativePath.toLowerCase().includes(query));
   }, [data?.files, search]);
+  const selectedFile = visibleFiles.find((item) => item.relativePath === selectedFilePath) ?? null;
+  const citationCount = data?.qmd?.recent.reduce((total, item) => total + item.citations.length, 0) ?? 0;
 
   useEffect(() => {
     if (!visibleFiles.length) {
@@ -130,6 +133,56 @@ export function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePage
           >
             {preview.loading ? <LibraryEmptyState label="Loading file preview…" /> : null}
             {preview.error ? <LibraryEmptyState label={preview.error} /> : null}
+            {selectedFilePath ? (
+              <LibraryActionCardGrid
+                items={[
+                  {
+                    id: "ingestion-health",
+                    label: "Ingestion health",
+                    value: preview.loading
+                      ? "Loading"
+                      : preview.error
+                        ? "Preview failed"
+                        : preview.data
+                          ? "Loaded"
+                          : "Queued",
+                    description: preview.error ?? "The source preview is fetched through the gateway file API.",
+                    meta: preview.data?.contentType ?? selectedFile?.relativePath ?? selectedFilePath,
+                    tone: preview.error ? "warning" : preview.data ? "success" : "info",
+                  },
+                  {
+                    id: "staleness",
+                    label: "Staleness",
+                    value: selectedFile?.modifiedAt ? formatDateTime(selectedFile.modifiedAt) : "Unknown",
+                    description: selectedFile?.modifiedAt
+                      ? "Use this timestamp before trusting the source for fresh answers."
+                      : "The file list did not return a modified timestamp for this source.",
+                    meta: selectedFile ? formatBytes(selectedFile.size) : "No size recorded",
+                    tone: selectedFile?.modifiedAt ? "info" : "warning",
+                  },
+                  {
+                    id: "retrieval-test",
+                    label: "Retrieval test",
+                    value: `${citationCount} citations`,
+                    description:
+                      citationCount > 0
+                        ? "Recent context packs below show source-to-answer evidence."
+                        : "No recent context pack citations are available for a live retrieval check.",
+                    meta: `${data?.qmd?.recent.length ?? 0} context packs`,
+                    tone: citationCount > 0 ? "success" : "warning",
+                  },
+                  {
+                    id: "attach-project",
+                    label: "Attach to project",
+                    value: "Manual today",
+                    description:
+                      "Project attachment for knowledge sources is not wired in this route yet; keep provenance visible when using it.",
+                    actionLabel: "Project flow pending",
+                    tone: "neutral",
+                  },
+                ]}
+              />
+            ) : null}
             {!preview.loading && !preview.error && preview.data ? (
               <LibraryCodeBlock label="Preview">{truncateText(preview.data.content, 2400)}</LibraryCodeBlock>
             ) : null}
@@ -162,7 +215,7 @@ export function LibraryKnowledgeSection({ activeWorkspaceName }: NativeRoutePage
                 {
                   label: "Context packs",
                   value: String(data?.qmd?.recent.length ?? 0),
-                  meta: `${data?.qmd?.recent.reduce((total, item) => total + item.citations.length, 0) ?? 0} citations visible`,
+                  meta: `${citationCount} citations visible`,
                 },
               ]}
             />

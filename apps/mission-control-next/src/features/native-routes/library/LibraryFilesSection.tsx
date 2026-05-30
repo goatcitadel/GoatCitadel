@@ -21,6 +21,7 @@ import {
 } from "../shared/native-helpers";
 import {
   LibraryActionList,
+  LibraryActionCardGrid,
   LibraryButtonRow,
   LibraryCodeBlock,
   LibraryEmptyState,
@@ -59,6 +60,7 @@ export function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesPro
     const query = search.trim().toLowerCase();
     return (data?.files ?? []).filter((item) => !query || item.relativePath.toLowerCase().includes(query));
   }, [data?.files, search]);
+  const selectedFile = visibleFiles.find((item) => item.relativePath === selectedFilePath) ?? null;
 
   useEffect(() => {
     if (!visibleFiles.length) {
@@ -169,6 +171,48 @@ export function LibraryFilesSection({ activeWorkspaceName }: NativeRoutePagesPro
           >
             {preview.loading ? <LibraryEmptyState label="Loading file preview…" /> : null}
             {preview.error ? <LibraryEmptyState label={preview.error} /> : null}
+            {selectedFilePath ? (
+              <LibraryActionCardGrid
+                items={[
+                  {
+                    id: "file-preview",
+                    label: "Preview health",
+                    value: preview.loading ? "Loading" : preview.error ? "Failed" : preview.data ? "Loaded" : "Queued",
+                    description: preview.error ?? "The selected file is read through the gateway file API.",
+                    meta: preview.data?.contentType ?? selectedFilePath,
+                    tone: preview.error ? "warning" : preview.data ? "success" : "info",
+                  },
+                  {
+                    id: "workspace-bind",
+                    label: "Workspace binding",
+                    value: activeWorkspaceName,
+                    description: selectedFile
+                      ? `${formatBytes(selectedFile.size)} · ${formatDateTime(selectedFile.modifiedAt)}`
+                      : "Selected file metadata is not visible in the current filter.",
+                    meta: selectedFilePath,
+                    tone: selectedFile ? "info" : "warning",
+                  },
+                  {
+                    id: "import-upload",
+                    label: "Import / upload",
+                    value: "Template-first",
+                    description:
+                      "This route can create files from governed templates; arbitrary upload/import is not exposed here yet.",
+                    actionLabel: "Use template",
+                    tone: "neutral",
+                  },
+                  {
+                    id: "project-link",
+                    label: "Link to project",
+                    value: "Manual today",
+                    description:
+                      "Project/file linking still needs an operator action surface before Library can attach this file directly.",
+                    actionLabel: "Project flow pending",
+                    tone: "neutral",
+                  },
+                ]}
+              />
+            ) : null}
             {!preview.loading && !preview.error && preview.data ? (
               <LibraryCodeBlock label="Preview">{truncateText(preview.data.content, 2600)}</LibraryCodeBlock>
             ) : null}

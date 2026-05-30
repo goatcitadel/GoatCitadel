@@ -44,8 +44,8 @@ describe("dev diagnostics store", () => {
     vi.stubGlobal("window", {
       location: {
         pathname: "/chat",
-        search: "?access_token=secret&ok=1",
-        hash: "#access_token=secret2&panel=trace",
+        search: "?access_token=secret&api_key=hidden&ok=1",
+        hash: "#access_token=secret2&client_secret=hidden2&panel=trace",
       },
       __goatcitadelDevDiagnostics: undefined,
     });
@@ -58,7 +58,7 @@ describe("dev diagnostics store", () => {
     expect(store.isDevDiagnosticsEnabled()).toBe(true);
     expect(store.getCurrentDiagnosticsRoute()).toBe("/chat?ok=1#panel=trace");
     store.setDevDiagnosticsCurrentRoute(
-      " https://example.test/settings?access_token=secret&tab=a#access_token=secret2&mode=b ",
+      " https://example.test/settings?access_token=secret&refresh_token=secret3&tab=a#access_token=secret2&session_token=secret4&mode=b ",
     );
     store.setDevDiagnosticsActiveChatSession(" session-1 ");
     store.setDevDiagnosticsCurrentEffectsMode(" compact ");

@@ -1601,6 +1601,115 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
   flex: 0 0 auto;
 }
 
+.mc-next-workbench-review-packet {
+  display: grid;
+  gap: 0.62rem;
+}
+
+.mc-next-code-review-packet-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.45rem;
+}
+
+.mc-next-code-review-packet-grid.is-compact {
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+}
+
+.mc-next-code-review-packet-card {
+  display: grid;
+  gap: 0.22rem;
+  min-width: 0;
+  padding: 0.52rem;
+  border-radius: 0.46rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-1) 94%, transparent);
+}
+
+.mc-next-code-review-packet-card[data-tone="good"] {
+  border-color: color-mix(in oklab, var(--gc-risk-safe) 38%, var(--border));
+}
+
+.mc-next-code-review-packet-card[data-tone="warning"] {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 42%, var(--border));
+}
+
+.mc-next-code-review-packet-card[data-tone="danger"] {
+  border-color: color-mix(in oklab, var(--gc-risk-danger) 42%, var(--border));
+}
+
+.mc-next-code-review-packet-card span,
+.mc-next-code-review-artifact-list span {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.mc-next-code-review-packet-card strong,
+.mc-next-code-review-artifact-list strong {
+  min-width: 0;
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-code-review-packet-card p,
+.mc-next-code-review-checklist p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-code-review-packet-section {
+  display: grid;
+  gap: 0.42rem;
+  min-width: 0;
+}
+
+.mc-next-code-review-artifact-list,
+.mc-next-code-review-checklist {
+  display: grid;
+  gap: 0.36rem;
+  min-width: 0;
+}
+
+.mc-next-code-review-artifact-list > div,
+.mc-next-code-review-checklist li {
+  display: grid;
+  gap: 0.16rem;
+  min-width: 0;
+  padding: 0.42rem 0.48rem;
+  border-radius: 0.42rem;
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  background: color-mix(in oklab, var(--card) 95%, transparent);
+}
+
+.mc-next-code-review-checklist {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-code-review-checklist li[data-tone="good"] {
+  border-color: color-mix(in oklab, var(--gc-risk-safe) 34%, var(--border));
+}
+
+.mc-next-code-review-checklist li[data-tone="warning"],
+.mc-next-code-review-checklist li[data-tone="danger"] {
+  border-color: color-mix(in oklab, var(--gc-risk-caution) 38%, var(--border));
+}
+
+.mc-next-code-review-checklist span {
+  color: color-mix(in oklab, var(--mc-area-color) 70%, var(--foreground));
+  font-size: var(--text-xs);
+  font-weight: 800;
+}
+
 .mc-next-code-session-inspector-slot {
   display: none;
   min-width: 0;
@@ -1933,6 +2042,126 @@ details.mc-next-thread-action-menu > .mc-next-thread-action-menu-summary {
   border-radius: 1rem;
   background: color-mix(in oklab, var(--mc-area-color) 12%, transparent);
   color: color-mix(in oklab, var(--mc-area-color) 72%, var(--foreground));
+}
+
+.mc-next-threaded-empty-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.46rem;
+  width: min(100%, 30rem);
+}
+
+.mc-next-threaded-empty-facts > span {
+  display: grid;
+  gap: 0.16rem;
+  min-width: 0;
+  padding: 0.52rem;
+  border-radius: 0.48rem;
+  border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-2) 88%, transparent);
+}
+
+.mc-next-threaded-empty-facts strong {
+  color: var(--foreground);
+  font-size: var(--text-lg);
+  line-height: 1;
+}
+
+.mc-next-threaded-empty-facts span span {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.mc-next-threaded-loading {
+  display: grid;
+  gap: 0.78rem;
+  min-height: min(32rem, calc(100dvh - 8rem));
+  align-content: center;
+  padding: 1rem;
+}
+
+.mc-next-threaded-loading-copy {
+  display: grid;
+  gap: 0.34rem;
+  max-width: 42rem;
+}
+
+.mc-next-threaded-loading-copy p {
+  margin: 0;
+  color: color-mix(in oklab, var(--mc-area-color) 64%, var(--foreground));
+  font-size: var(--text-xs);
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.mc-next-threaded-loading-copy h2 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: var(--text-xl);
+  line-height: 1.08;
+  letter-spacing: 0;
+}
+
+.mc-next-threaded-loading-copy span {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.mc-next-threaded-loading-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  max-width: 56rem;
+}
+
+.mc-next-threaded-loading-grid > span {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+  min-height: 4.4rem;
+  padding: 0.58rem;
+  border-radius: 0.48rem;
+  border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+  background: color-mix(in oklab, var(--mc-surface-2) 88%, transparent);
+}
+
+.mc-next-threaded-loading-grid strong {
+  min-width: 0;
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.mc-next-threaded-loading-grid span span {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.mc-next-threaded-loading-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mc-next-threaded-loading-steps li {
+  padding: 0.28rem 0.52rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--mc-area-color) 24%, var(--border));
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 700;
 }
 
 /*

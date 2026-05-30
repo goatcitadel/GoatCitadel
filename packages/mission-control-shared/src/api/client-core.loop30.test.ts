@@ -5,6 +5,7 @@ import {
   clearGatewayAuthState,
   consumeGatewayAccessBootstrapFromLocation,
   normalizeGatewayBaseUrl,
+  request,
   persistGatewayAuthState,
   readGatewayAuthHeaders,
   readStoredGatewayAuthState,
@@ -120,5 +121,20 @@ describe("client-core loop 30 branch matrix", () => {
     setGatewayAuthStorageMode("session");
     expect(window.localStorage.getItem("goatcitadel.gateway.auth")).toBeNull();
     expect(readStoredGatewayAuthState()).toMatchObject({ token: "local" });
+  });
+
+  it("does not clear stored auth or reload the shell for ordinary expected 401 probes", async () => {
+    const reload = vi.fn();
+    Object.defineProperty(window.location, "reload", { configurable: true, value: reload });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ error: "needs auth" }), { status: 401 })) as typeof fetch,
+    );
+    persistGatewayAuthState({ mode: "token", token: "still-valid-for-other-probes" }, "session");
+
+    await expect(request("/api/v1/auth/me")).rejects.toMatchObject({ status: 401 });
+
+    expect(readStoredGatewayAuthState()).toMatchObject({ token: "still-valid-for-other-probes" });
+    expect(reload).not.toHaveBeenCalled();
   });
 });

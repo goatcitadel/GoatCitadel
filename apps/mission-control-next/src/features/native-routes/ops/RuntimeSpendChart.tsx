@@ -5,13 +5,9 @@
  * canonical `--gc-risk-caution` token and announced in the chart's
  * descriptive `aria-label`.
  *
- * EMPTY STATE: the live `CostSummaryResponse` (see
- * `packages/mission-control-shared/src/api/types.ts:51-68`) returns only a
- * scope-aggregated `items` array keyed by provider — there is NO per-day
- * timeseries field on the response. Until the API surfaces a `dailySeries`
- * field (or equivalent), this chart renders an explicit empty state so
- * operators see the *shape* of the missing capability rather than a
- * fabricated bar chart.
+ * EMPTY STATE: when the live `CostSummaryResponse.dailySeries` is missing or
+ * all-zero, the chart renders an explicit empty state so operators see the
+ * absence of spend evidence rather than a fabricated trend.
  */
 import type { ReactNode } from "react";
 
@@ -235,7 +231,7 @@ export function RuntimeSpendChart({
   anomalyThreshold = DEFAULT_ANOMALY_THRESHOLD,
   ariaLabelOverride,
   emptyTitle = "No spend history available",
-  emptyDescription = "The cost API does not yet return a seven-day breakdown. Once the snapshot exposes a daily series, this chart will render real spend by provider with anomaly detection.",
+  emptyDescription = "No tracked provider spend landed in the current seven-day cost window. New usage rows will render here with anomaly detection.",
 }: RuntimeSpendChartProps) {
   const hasData =
     days.length > 0 && days.some((day) => day.segments.some((segment) => safePositive(segment.costUsd) > 0));

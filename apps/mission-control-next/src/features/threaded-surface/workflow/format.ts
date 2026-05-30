@@ -1,7 +1,14 @@
 import type { ChatSessionWorkbenchPackageManager, CodeModeRunRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedWorkflowPanel } from "@goatcitadel/threaded-surface-core";
 
-export type WorkbenchPaneId = "files" | "selected-diff" | "repo-diff" | "output" | "snippets" | "artifact";
+export type WorkbenchPaneId =
+  | "files"
+  | "selected-diff"
+  | "repo-diff"
+  | "review-packet"
+  | "output"
+  | "snippets"
+  | "artifact";
 
 export type AgenticControlItem = NonNullable<
   Extract<MissionThreadedWorkflowPanel, { kind: "cowork" }>["props"]["viewModel"]["agenticRuntime"]

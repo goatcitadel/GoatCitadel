@@ -366,13 +366,14 @@ function buildAgentScalabilityTracks(
       trackId: "a2a_protocol",
       label: "A2A protocol interoperability",
       kind: "agent_protocol",
-      status: "unavailable",
+      status: "blocked",
       callable: false,
-      implementationStatus: "missing",
-      summary: "A2A is not implemented as a protocol surface in this gateway availability snapshot.",
+      implementationStatus: "partial",
+      summary:
+        "A2A has gateway-owned Agent Card draft and task-export preview routes, but callable protocol traffic remains blocked.",
       reasons: [
-        "No A2A Agent Card contracts, discovery routes, or JSON-RPC handlers are registered.",
-        "Task lifecycle, context IDs, streaming, push notifications, authenticated extended cards, and authorization scoping are not available.",
+        "Operator-authenticated preview routes expose an unpublished Agent Card draft and A2A-style task envelope mapping without sending external traffic.",
+        "Inbound JSON-RPC handlers, outbound A2A client calls, streaming, push notifications, authenticated extended cards, and authorization scoping are not callable.",
         "A2A must remain a first-class interoperability protocol, not a provider template or MCP alias.",
       ],
       evidence: [
@@ -382,11 +383,23 @@ function buildAgentScalabilityTracks(
         },
         {
           label: "A2A specification",
-          url: "https://a2aproject.github.io/A2A/latest/specification/",
+          url: "https://a2a-protocol.org/latest/specification/",
         },
         {
-          label: "Gateway routes",
-          path: "apps/gateway/src/routes",
+          label: "Gateway A2A bridge routes",
+          path: "apps/gateway/src/routes/tasks.ts",
+        },
+        {
+          label: "Gateway A2A bridge service",
+          path: "apps/gateway/src/services/a2a-bridge-service.ts",
+        },
+        {
+          label: "A2A bridge contracts",
+          path: "packages/contracts/src/a2a.ts",
+        },
+        {
+          label: "Runtime availability route",
+          path: "apps/gateway/src/routes/tasks.ts",
         },
         {
           label: "Runtime contracts",
@@ -394,9 +407,9 @@ function buildAgentScalabilityTracks(
         },
       ],
       requiredNextSteps: [
-        "Add A2A contracts for Agent Cards, messages, tasks, artifacts, streaming events, and auth metadata",
-        "Add gateway-owned A2A server and client services with auth, SSRF-safe push webhooks, streaming, cancellation, and audit",
-        "Add storage only where durable replay or audit requires external task state",
+        "Add gateway-owned A2A JSON-RPC server and client services before marking callable",
+        "Add auth scoping, SSRF-safe push webhooks, streaming, cancellation, and durable task lifecycle audit",
+        "Add storage only where replay-safe external task state requires durable recovery",
       ],
       checkedAt,
     },

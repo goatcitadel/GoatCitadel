@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import type {
   McpInvokeRequest,
   McpNormalizedContentItem,
@@ -780,14 +781,28 @@ function createMcpAbortError(): Error {
   return error;
 }
 
-function resolveSpawnCommand(command: string): string {
-  if (process.platform !== "win32") {
-    return command;
-  }
+function resolveSpawnCommand(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+  exists: (path: string) => boolean = existsSync,
+): string {
   if (!command || /[\\/]/.test(command) || /\.[a-z0-9]+$/i.test(command)) {
     return command;
   }
   const normalized = command.toLowerCase();
+  if (platform !== "win32") {
+    if (
+      normalized === "node" ||
+      normalized === "npm" ||
+      normalized === "npx" ||
+      normalized === "pnpm" ||
+      normalized === "yarn"
+    ) {
+      const localBin = `/usr/local/bin/${command}`;
+      return exists(localBin) ? localBin : command;
+    }
+    return command;
+  }
   if (normalized === "npm" || normalized === "npx" || normalized === "pnpm" || normalized === "yarn") {
     return `${command}.cmd`;
   }
@@ -911,6 +926,7 @@ export const __internal = {
   MCP_TERMINATE_GRACE_MS,
   attachChildStdinErrorHandler,
   isChildStdinWritable,
+  resolveSpawnCommand,
   terminateChild,
   writeToChildStdin,
 };

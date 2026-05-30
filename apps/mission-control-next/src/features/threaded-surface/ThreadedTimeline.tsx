@@ -115,6 +115,107 @@ function ThreadCitationList({ citations }: { citations: ChatCitationRecord[] }) 
   );
 }
 
+const CHAT_STARTER_PROMPTS = [
+  {
+    label: "Orient me",
+    prompt: "Summarize the current workspace state and suggest the safest next step.",
+  },
+  {
+    label: "Plan a task",
+    prompt: "Turn this goal into a short plan with risks, open questions, and a first action.",
+  },
+  {
+    label: "Review context",
+    prompt: "Review the available context and call out what is known, missing, and uncertain.",
+  },
+] as const;
+
+function ChatFirstMessageCanvas({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
+  const readinessCards = buildChatReadinessCards(props);
+  const applyStarterPrompt = (prompt: string) => {
+    props.onDraftChange(prompt);
+    props.composerRef.current?.focus();
+  };
+
+  return (
+    <div className="mc-next-chat-start-canvas">
+      <div className="mc-next-chat-start-hero">
+        <p className="mc-next-thread-meta">
+          <strong>Chat ready</strong>
+        </p>
+        <h2>What should we tackle?</h2>
+        <p>Runtime, policy, and context are visible before the first send.</p>
+      </div>
+
+      <div className="mc-next-chat-start-readiness" aria-label="Chat readiness">
+        {readinessCards.map((card) => (
+          <article key={card.label} className={`mc-next-chat-start-card tone-${card.tone}`}>
+            <span>{card.label}</span>
+            <strong>{card.value}</strong>
+          </article>
+        ))}
+      </div>
+
+      <div className="mc-next-chat-start-section">
+        <h3>Starter prompts</h3>
+        <div className="mc-next-chat-start-prompts">
+          {CHAT_STARTER_PROMPTS.map((starter) => (
+            <button
+              key={starter.label}
+              type="button"
+              className="mc-next-chat-start-prompt"
+              onClick={() => applyStarterPrompt(starter.prompt)}
+            >
+              <strong>{starter.label}</strong>
+              <span>{starter.prompt}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="mc-next-chat-start-actions" aria-label="Chat handoff actions">
+        <button
+          type="button"
+          className="mc-next-thread-inline-button"
+          onClick={() => props.onNavigateSurface("cowork")}
+        >
+          Continue in Cowork
+        </button>
+        <button type="button" className="mc-next-thread-inline-button" onClick={() => props.onNavigateSurface("code")}>
+          Open in Code
+        </button>
+        <button type="button" className="mc-next-thread-inline-button" onClick={props.onAttachFiles}>
+          Attach files
+        </button>
+        {props.approvalsCount > 0 ? (
+          <button type="button" className="mc-next-thread-inline-button" onClick={props.onOpenApprovals}>
+            Approvals ({props.approvalsCount})
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function buildChatReadinessCards(props: MissionThreadedActiveSessionSurfaceProps) {
+  const contextValue = props.contextSelection
+    ? `${props.contextSelection.label} · ${props.contextSelection.turnCount} selected`
+    : props.outboundContext
+      ? props.outboundContext.sourceLabel
+        ? `${props.outboundContext.label} · ${props.outboundContext.sourceLabel}`
+        : props.outboundContext.label
+      : props.pendingAttachments.length > 0
+        ? `${props.pendingAttachments.length} attachment${props.pendingAttachments.length === 1 ? "" : "s"} pending`
+        : "No extra context selected";
+
+  return [
+    { label: "Model", value: props.trust.providerModelSummary, tone: "default" },
+    { label: "Runtime", value: props.trust.runtimeSummary, tone: props.trust.runtimeTone ?? "muted" },
+    { label: "Policy", value: props.trust.approvalsSummary, tone: props.approvalsCount > 0 ? "warning" : "muted" },
+    { label: "Context", value: contextValue, tone: props.contextSelection || props.outboundContext ? "live" : "muted" },
+  ] as const;
+}
+
 export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
   const shellRef = useRef<HTMLDivElement | null>(null);
   const [manualWindowStart, setManualWindowStart] = useState<number | null>(null);
@@ -211,6 +312,8 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
       <div ref={scrollRef} className="mc-next-thread-scroll" onScroll={handleThreadScroll}>
         {props.loading ? (
           <div className="mc-next-thread-empty">Loading thread...</div>
+        ) : props.mode === "chat" && props.thread && props.thread.turns.length === 0 ? (
+          <ChatFirstMessageCanvas props={props} />
         ) : !props.thread || props.thread.turns.length === 0 ? (
           <div className="mc-next-thread-empty">
             <p className="mc-next-thread-meta">

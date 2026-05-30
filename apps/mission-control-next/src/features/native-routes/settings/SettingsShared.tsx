@@ -801,7 +801,7 @@ export function descriptionForSettingsSection(section: string) {
     case "tools":
       return "Review the tool catalog and manage grants from one place.";
     case "addons":
-      return "Install and control optional add-on runtimes and their health.";
+      return "Inspect experimental local add-ons, lifecycle truth, trust posture, and the 1.0 graduation bar.";
     default:
       return "This settings deep link is not registered.";
   }

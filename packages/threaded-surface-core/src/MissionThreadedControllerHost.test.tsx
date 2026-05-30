@@ -1279,6 +1279,8 @@ describe("MissionThreadedControllerHost", () => {
     useChatSessionDataMock.mockReturnValue({
       ...useChatSessionDataMock(),
       loading: true,
+      projects: null,
+      sessions: null,
     });
     const workTrustSummary = vi.fn();
     const { renderer } = await renderHost({
@@ -1288,6 +1290,11 @@ describe("MissionThreadedControllerHost", () => {
     });
 
     expect(latestSurfaceInput).toBeNull();
+    const loadingMarkup = JSON.stringify(renderer.toJSON());
+    expect(loadingMarkup).toContain('Preparing ","Chat');
+    expect(loadingMarkup).toContain("Checking runtime posture");
+    expect(loadingMarkup).toContain("Mission Workspace");
+    expect(loadingMarkup).toContain("Loading");
     await act(async () => {
       renderer.unmount();
       await flushEffects();

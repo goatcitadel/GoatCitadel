@@ -2,8 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Archive,
   ArchiveRestore,
-  CheckCircle2,
-  CircleAlert,
   FolderPlus,
   MessageSquarePlus,
   Pencil,
@@ -29,12 +27,8 @@ import {
   updateChatProject,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { RecentCrossProjectSessionsRow } from "./RecentCrossProjectSessionsRow";
-import {
-  NewSessionButton,
-  ProjectGlyphButton,
-  ProjectHomeMetric,
-  filterEmptyLabel,
-} from "./ProjectsRoutePage.components";
+import { NewSessionButton, ProjectGlyphButton, filterEmptyLabel } from "./ProjectsRoutePage.components";
+import { ProjectHomeBasePanel } from "./ProjectHomeBasePanel";
 import type { AppRoute } from "@next/app/route-model";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayout";
@@ -43,7 +37,6 @@ import { readRouteDiagnosticNow, recordRouteAction, recordRouteDataLoad } from "
 import type { NativeRoutePagesProps } from "../types";
 import {
   SURFACES,
-  countHomeArtifacts,
   createEmptyCounts,
   dateValue,
   deriveProjectHome,
@@ -52,7 +45,8 @@ import {
   labelForMode,
   normalizeMode,
   type ProjectCounts,
-  type ProjectHome,
+  type ProjectIntakeMode,
+  type ProjectIntakeModeId,
 } from "./ProjectsRoutePage.helpers";
 import { PROJECT_FILTER_VIEWS, useProjectPinController, type ProjectFilterView } from "./use-project-pin-archive";
 import "../native-routes.css";
@@ -66,6 +60,12 @@ type ProjectsState = {
   projects: ChatProjectRecord[];
   sessions: ChatSessionRecord[];
   artifacts: ChatGeneratedArtifactRecord[];
+};
+
+type ProjectSessionStartOptions = {
+  title?: string;
+  tags?: string[];
+  intakeId?: ProjectIntakeModeId;
 };
 
 export function ProjectsRoutePage({
@@ -253,7 +253,7 @@ export function ProjectsRoutePage({
     [selectedProject, selectedSessions, state.artifacts],
   );
 
-  const handleNewSession = async (mode: ChatMode) => {
+  const handleNewSession = async (mode: ChatMode, options: ProjectSessionStartOptions = {}) => {
     if (!selectedProject) {
       return;
     }
@@ -265,12 +265,14 @@ export function ProjectsRoutePage({
           projectId: selectedProject.projectId,
           mode,
           origin: "operator",
-          title: `${labelForMode(mode)} - ${selectedProject.name}`,
+          title: options.title ?? `${labelForMode(mode)} - ${selectedProject.name}`,
+          tags: options.tags,
         },
         { originSurface: mode },
       );
-      recordRouteAction("projects", "session.created", {
+      recordRouteAction("projects", options.intakeId ? "session.intake.created" : "session.created", {
         mode,
+        intakeId: options.intakeId,
         projectId: selectedProject.projectId,
         sessionId: session.sessionId,
       });
@@ -285,6 +287,17 @@ export function ProjectsRoutePage({
         setActionError(getErrorMessage(error));
       }
     }
+  };
+
+  const handleStartIntake = async (intent: ProjectIntakeMode) => {
+    if (!selectedProject) {
+      return;
+    }
+    await handleNewSession(intent.mode, {
+      title: `${intent.titlePrefix} - ${selectedProject.name}`,
+      tags: ["project-intake", intent.tag],
+      intakeId: intent.id,
+    });
   };
 
   const handleContinueSession = async (mode: ChatMode) => {
@@ -614,7 +627,9 @@ export function ProjectsRoutePage({
             <ProjectHomeBasePanel
               home={projectHome}
               pendingApprovals={pendingApprovals}
+              projectName={selectedProject.name}
               onContinue={(mode) => void handleContinueSession(mode)}
+              onStartIntake={(intent) => void handleStartIntake(intent)}
               onOpenMemory={() => navigate({ area: "library", section: "memory", theme: route.theme })}
               onOpenArtifacts={() =>
                 navigate({
@@ -760,133 +775,6 @@ export function ProjectsRoutePage({
       </NativeGrid>
       <RecentCrossProjectSessionsRow workspaceId={activeWorkspaceId} route={route} navigate={navigate} />
     </NativePageFrame>
-  );
-}
-
-function ProjectHomeBasePanel({
-  home,
-  pendingApprovals,
-  onContinue,
-  onOpenMemory,
-  onOpenArtifacts,
-}: {
-  home: ProjectHome;
-  pendingApprovals: number;
-  onContinue: (mode: ChatMode) => void;
-  onOpenMemory: () => void;
-  onOpenArtifacts: () => void;
-}) {
-  return (
-    <section className="mc-next-project-home-base" aria-label="Project overview">
-      <div className="mc-next-project-home-head">
-        <div>
-          <span>Project overview</span>
-          <strong>{home.healthLabel}</strong>
-        </div>
-        <p>{home.healthDetail}</p>
-      </div>
-
-      <div className="mc-next-project-home-metrics">
-        <ProjectHomeMetric
-          label="Active threads"
-          value={String(home.activeCount)}
-          detail="Chat, Cowork, and Code work still in motion."
-        />
-        <ProjectHomeMetric
-          label="Artifacts"
-          value={String(home.artifactCount)}
-          detail={
-            home.artifactCountSource === "records"
-              ? "Generated outputs with project ownership recorded."
-              : "Generated outputs referenced by project threads."
-          }
-        />
-        <ProjectHomeMetric label="Approvals" value={String(pendingApprovals)} detail="Workspace-wide approval queue." />
-        <ProjectHomeMetric
-          label="Last activity"
-          value={home.lastActivityLabel}
-          detail="Most recent project thread update."
-        />
-      </div>
-
-      <div className="mc-next-project-continue-row">
-        {SURFACES.map((surface) => (
-          <button key={surface.mode} type="button" className="mc-next-button" onClick={() => onContinue(surface.mode)}>
-            <MessageSquarePlus className="h-4 w-4" />
-            {home.latestByMode[surface.mode] ? `Continue ${surface.label}` : `Start ${surface.label}`}
-          </button>
-        ))}
-      </div>
-
-      <div className="mc-next-project-lane-resume-shell">
-        <div className="mc-next-directory-lane-head">
-          <strong>Latest continuation</strong>
-          <span>Chat / Cowork / Code</span>
-        </div>
-        <div className="mc-next-project-lane-resume-list" aria-label="Latest project continuation points">
-          {SURFACES.map((surface) => {
-            const latest = home.latestByMode[surface.mode];
-            return (
-              <button
-                key={`latest-${surface.mode}`}
-                type="button"
-                className={`mc-next-project-lane-resume is-${surface.mode}`}
-                onClick={() => onContinue(surface.mode)}
-              >
-                <span>{surface.label}</span>
-                <strong>{latest ? latest.title?.trim() || latest.sessionKey : `Start ${surface.label}`}</strong>
-                <p>
-                  {latest
-                    ? `${formatDateTime(latest.lastActivityAt)} · ${latest.lifecycleStatus} · ${countHomeArtifacts(home, latest)} artifacts`
-                    : "No continuation point yet."}
-                </p>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="mc-next-project-readiness-list">
-        {home.readiness.map((item) => (
-          <div key={item.id} className={`mc-next-project-readiness-item is-${item.status}`}>
-            {item.status === "ready" ? <CheckCircle2 className="h-4 w-4" /> : <CircleAlert className="h-4 w-4" />}
-            <div>
-              <strong>{item.label}</strong>
-              <p>{item.detail}</p>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="mc-next-project-recent-list">
-        <div className="mc-next-directory-lane-head">
-          <strong>Recent work</strong>
-          <span>{home.recentSessions.length}</span>
-        </div>
-        {home.recentSessions.length ? (
-          home.recentSessions.map((session) => (
-            <div key={session.sessionId} className="mc-next-project-recent-item">
-              <span>{labelForMode(normalizeMode(session.mode))}</span>
-              <strong>{session.title?.trim() || session.sessionKey}</strong>
-              <p>
-                {formatDateTime(session.lastActivityAt)} · {countHomeArtifacts(home, session)} artifacts
-              </p>
-            </div>
-          ))
-        ) : (
-          <EmptyState size="compact" title="No recent project threads yet." />
-        )}
-      </div>
-
-      <div className="mc-next-settings-button-row">
-        <button type="button" className="mc-next-settings-filter" onClick={onOpenMemory}>
-          Review memory and provenance
-        </button>
-        <button type="button" className="mc-next-settings-filter" onClick={onOpenArtifacts}>
-          Reopen project artifacts
-        </button>
-      </div>
-    </section>
   );
 }
 

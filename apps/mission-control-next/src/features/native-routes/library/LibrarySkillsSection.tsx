@@ -47,6 +47,7 @@ import {
 } from "../shared/native-helpers";
 import {
   LibraryActionList,
+  LibraryActionCardGrid,
   LibraryButtonRow,
   LibraryCodeBlock,
   LibraryEmptyState,
@@ -169,6 +170,50 @@ export function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps)
                       meta: selectedSkill.capabilityCategory ?? "Capability category",
                     },
                     { label: "Requires", value: String(selectedSkill.requires.length), meta: selectedSkill.dir },
+                  ]}
+                />
+                <LibraryActionCardGrid
+                  items={[
+                    {
+                      id: "draft-import",
+                      label: "Draft / import",
+                      value: selectedSkill.source,
+                      description: selectedSkill.lifecycleState
+                        ? `Lifecycle state: ${selectedSkill.lifecycleState}.`
+                        : "Loaded from disk without a lifecycle record attached.",
+                      meta: selectedSkill.dir,
+                      tone: selectedSkill.lifecycleState ? "info" : "neutral",
+                    },
+                    {
+                      id: "validation-lane",
+                      label: "Validation lane",
+                      value: selectedSkill.callable ? "Callable" : "Needs eval",
+                      description: selectedSkill.callable
+                        ? "This skill can be selected by runtime skill resolution under policy."
+                        : "Run baseline and improvement checks before treating this skill as runtime-ready.",
+                      meta: selectedSkill.trustLabel ?? selectedSkill.note ?? "No trust label",
+                      tone: selectedSkill.callable ? "success" : "warning",
+                    },
+                    {
+                      id: "proposal-review",
+                      label: "Proposal review",
+                      value: selectedSkill.reviewWarning ? "Review needed" : "No warning",
+                      description:
+                        selectedSkill.reviewWarning ??
+                        "Use the workbench below to create proposals before mutation-capable lifecycle actions.",
+                      actionLabel: "Workbench below",
+                      tone: selectedSkill.reviewWarning ? "warning" : "neutral",
+                    },
+                    {
+                      id: "usage",
+                      label: "Recent usage",
+                      value: String(selectedSkill.usageCount ?? 0),
+                      description: selectedSkill.lastUsedAt
+                        ? `Last used ${formatDateTime(selectedSkill.lastUsedAt)}.`
+                        : "No recent usage has been recorded on this skill state.",
+                      meta: selectedSkill.pinned ? "Pinned" : "Not pinned",
+                      tone: selectedSkill.lastUsedAt ? "info" : "neutral",
+                    },
                   ]}
                 />
                 <LibraryCodeBlock label="Instruction body">

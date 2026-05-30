@@ -1,7 +1,7 @@
 import type { Storage } from "@goatcitadel/storage";
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
 
-export const costsRouteMethods = ["costSummary", "costUsageAvailability", "runCheaper"] as const;
+export const costsRouteMethods = ["costSummary", "costDailySeries", "costUsageAvailability", "runCheaper"] as const;
 
 export type CostsRouteMethod = (typeof costsRouteMethods)[number];
 export type CostsRoutePort = RoutePort<CostsRouteMethod>;
@@ -14,6 +14,7 @@ export interface CostsRoutePortDependencies {
 export function createCostsRoutePort(deps: CostsRoutePortDependencies): CostsRoutePort {
   return {
     costSummary: (scope, from, to) => deps.storage.costLedger.summary(scope, from, to),
+    costDailySeries: (from, to) => deps.storage.costLedger.dailySeries(from, to),
     costUsageAvailability: (from, to) => deps.storage.costLedger.usageAvailability(from, to),
     runCheaper: () => ({
       mode: "saver",

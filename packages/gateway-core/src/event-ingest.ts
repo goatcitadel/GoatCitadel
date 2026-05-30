@@ -109,6 +109,8 @@ export class EventIngestService {
         sessionId: route.sessionId,
         agentId: options.payload.actor.type === "agent" ? options.payload.actor.id : undefined,
         taskId: options.payload.taskId,
+        providerId: options.payload.usage?.providerId,
+        modelId: options.payload.usage?.model,
         tokenInput: options.payload.usage?.inputTokens,
         tokenOutput: options.payload.usage?.outputTokens,
         tokenCachedInput: options.payload.usage?.cachedInputTokens,

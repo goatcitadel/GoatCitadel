@@ -129,6 +129,7 @@ export function composeIntegrationChannelRouteDependencies(
           resolveConnectionSecret: (config, directKey, envKey) =>
             gateway.resolveConnectionSecret(config, directKey, envKey),
           publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
+          evidenceEnvelopeService: gateway.evidenceEnvelopeService,
         },
         connectionId,
         actionId,

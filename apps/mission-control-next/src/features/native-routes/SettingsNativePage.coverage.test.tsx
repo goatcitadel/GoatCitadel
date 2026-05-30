@@ -882,6 +882,8 @@ describe("SettingsNativePage broad native sections", () => {
 
     const access = await mount("access");
     expect(collectText(access.root)).toContain("Gateway access");
+    expect(collectText(access.root)).toContain("Desktop/mobile continuity");
+    expect(collectText(access.root)).toContain("Mobile approval path");
     await change(
       access.root.findByProps({ placeholder: "Only enter a new token when rotating credentials" }),
       "new-token",
@@ -1078,6 +1080,9 @@ describe("SettingsNativePage broad native sections", () => {
 
     const addons = await mount("addons");
     await flush();
+    expect(collectText(addons.root)).toContain("1.0 add-on posture");
+    expect(collectText(addons.root)).toContain("Experimental local extensions");
+    expect(collectText(addons.root)).toContain("Local-only boundary");
     expect(collectText(addons.root)).toContain("Add-on catalog");
     await click(findButton(addons.root, "Install"));
     await click(findButton(addons.root, "Update"));

@@ -138,6 +138,7 @@ Current shell posture for this map:
 
 - The published author boundary is the `@goatcitadel/extensions-sdk` package under [packages/extensions-sdk](../packages/extensions-sdk).
 - Package-level evidence for manifest and file-loading helpers lives in [packages/extensions-sdk/src/addons.test.ts](../packages/extensions-sdk/src/addons.test.ts) and [packages/extensions-sdk/src/integration-plugins.test.ts](../packages/extensions-sdk/src/integration-plugins.test.ts).
+- Package artifact evidence for the reference integration-plugin manifest lives in `pnpm verify:extensions:package` and [scripts/verify-extension-package-artifacts.mjs](../scripts/verify-extension-package-artifacts.mjs); the lane builds `@goatcitadel/extensions-sdk`, packs it, extracts the tarball, and validates the packaged manifest against the repo reference scaffold.
 - Starter-pack export and gateway-side author-contract evidence live in [apps/gateway/src/services/extension-starter-pack.test.ts](../apps/gateway/src/services/extension-starter-pack.test.ts) and [apps/gateway/src/services/integration-plugin-author-contract.test.ts](../apps/gateway/src/services/integration-plugin-author-contract.test.ts).
 - The current `1.0` claim is the published package contract plus tested reference scaffolds/export path, not a broader live install/enable/disable smoke guarantee for every extension shape.
 

@@ -39,6 +39,16 @@ const mocks = vi.hoisted(() => ({
     warnings: ["Provider advice is advisory only; no provider settings or keys were changed."],
   })),
   fetchDeviceAccessGrants: vi.fn(async (): Promise<DeviceAccessGrantListResponse> => ({ items: [] })),
+  fetchDaemonStatus: vi.fn(async () => ({
+    running: true,
+    pid: 4321,
+    uptimeSeconds: 120,
+    host: "localhost",
+    state: "running" as const,
+    supported: true,
+    controllable: true,
+    controlMessage: "Source checkout controls the gateway.",
+  })),
   fetchToolCatalog: vi.fn(async () => ({
     items: [
       {
@@ -547,6 +557,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     createToolGrant: mocks.createToolGrant,
     revokeToolGrant: mocks.revokeToolGrant,
     fetchDeviceAccessGrants: mocks.fetchDeviceAccessGrants,
+    fetchDaemonStatus: mocks.fetchDaemonStatus,
     fetchPermissionProfiles: mocks.fetchPermissionProfiles,
     fetchActiveLocalOperatorOverrides: mocks.fetchActiveLocalOperatorOverrides,
     fetchEffectivePermissionProfile: mocks.fetchEffectivePermissionProfile,
@@ -2292,6 +2303,8 @@ describe("SettingsNativePage providers", () => {
 
       const text = collectText(renderer!.root);
       expect(text).toContain("Approved devices");
+      expect(text).toContain("Desktop/mobile continuity");
+      expect(text).toContain("2 active mobile/tablet device grant(s)");
       expect(text).toContain("Android phone");
       expect(
         consoleErrorSpy.mock.calls.filter((call) =>
@@ -3233,6 +3246,8 @@ describe("SettingsNativePage access", () => {
       await act(async () => {
         renderer = renderPage("access");
       });
+      expect(collectText(renderer!.root)).toContain("Desktop runtime anchor");
+      expect(collectText(renderer!.root)).toContain("Operator tablet");
 
       await act(async () => {
         findFirstSelect(renderer!.root).props.onChange({ target: { value: "basic" } });

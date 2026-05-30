@@ -483,6 +483,8 @@ describe("EventIngestService", () => {
           outputTokens: 20,
           cachedInputTokens: 3,
           costUsd: 0.01,
+          providerId: "openai",
+          model: "gpt-5",
         },
       },
     });
@@ -502,6 +504,8 @@ describe("EventIngestService", () => {
       expect.objectContaining({
         agentId: "agent-1",
         taskId: "task-1",
+        providerId: "openai",
+        modelId: "gpt-5",
         tokenCachedInput: 3,
       }),
     );

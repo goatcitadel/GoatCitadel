@@ -295,19 +295,34 @@ function sanitizeDiagnosticRoute(route: string): string {
 
   try {
     const url = new URL(normalized, "http://goatcitadel.local");
-    url.searchParams.delete("access_token");
+    stripSensitiveRouteParams(url.searchParams);
 
     const rawHash = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
     if (rawHash.includes("=")) {
       const hashParams = new URLSearchParams(rawHash);
-      hashParams.delete("access_token");
+      stripSensitiveRouteParams(hashParams);
       const nextHash = hashParams.toString();
       url.hash = nextHash ? `#${nextHash}` : "";
     }
 
     return normalizeDiagnosticRouteInput(`${url.pathname}${url.search}${url.hash}`) ?? "";
   } catch {
-    return (normalized.replace(/([?#&])access_token=[^&#]*/giu, "$1").replace(/[?#&]$/u, "") || "").trim();
+    return (
+      normalized
+        .replace(
+          /([?#&])(?:access_token|auth_token|refresh_token|session_token|api_key|apikey|client_secret|password)=[^&#]*/giu,
+          "$1",
+        )
+        .replace(/[?#&]$/u, "") || ""
+    ).trim();
+  }
+}
+
+function stripSensitiveRouteParams(params: URLSearchParams): void {
+  for (const name of Array.from(params.keys())) {
+    if (/^(access_token|auth_token|refresh_token|session_token|api_key|apikey|client_secret|password)$/iu.test(name)) {
+      params.delete(name);
+    }
   }
 }
 

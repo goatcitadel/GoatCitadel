@@ -107,7 +107,18 @@ function buildProps(overrides: Partial<any> = {}): any {
     pendingApproval: null,
     pendingUserInput: null,
     workspaceId: "default",
+    trust: {
+      workspaceLabel: "Default workspace",
+      gatewayTone: "success",
+      gatewayLabel: "Gateway live",
+      approvalsSummary: "No approvals waiting",
+      activeModeLabel: "Chat",
+      providerModelSummary: "OpenAI / gpt-4.1",
+      runtimeSummary: "Runtime ready",
+      runtimeTone: "success",
+    },
     approvalPending: false,
+    approvalsCount: 0,
     userInputPending: false,
     onRefreshThread: vi.fn(),
     onBottomStateChange: vi.fn(),
@@ -122,6 +133,14 @@ function buildProps(overrides: Partial<any> = {}): any {
     onOpenGeneratedArtifact: vi.fn(),
     onCreateGeneratedArtifact: vi.fn(),
     onCreateGeneratedArtifactVersion: vi.fn(),
+    onNavigateSurface: vi.fn(),
+    onOpenApprovals: vi.fn(),
+    onAttachFiles: vi.fn(),
+    onDraftChange: vi.fn(),
+    composerRef: React.createRef<HTMLTextAreaElement>(),
+    contextSelection: null,
+    outboundContext: null,
+    pendingAttachments: [],
     onApprovePending: vi.fn(),
     onDenyPending: vi.fn(),
     onSubmitUserInput: vi.fn(),
@@ -443,7 +462,14 @@ describe("ThreadedTimeline", () => {
           props={buildProps({ mode: "chat", thread: { sessionId: "session-empty", turns: [] } }) as any}
         />,
       ),
-    ).toContain("Start with a plain request");
+    ).toContain("What should we tackle?");
+    expect(
+      renderToStaticMarkup(
+        <ThreadedTimeline
+          props={buildProps({ mode: "chat", thread: { sessionId: "session-empty", turns: [] } }) as any}
+        />,
+      ),
+    ).toContain("Starter prompts");
     expect(
       renderToStaticMarkup(
         <ThreadedTimeline
@@ -483,6 +509,52 @@ describe("ThreadedTimeline", () => {
     const renderer = TestRenderer.create(<ThreadedTimeline props={failed as any} />);
     expect(renderedText(renderer)).toContain("Provider timed out.");
     expect(renderedText(renderer)).toContain("Retry the turn");
+  });
+
+  it("fills the composer from the chat first-message canvas and routes handoffs", () => {
+    const onDraftChange = vi.fn();
+    const onNavigateSurface = vi.fn();
+    const onAttachFiles = vi.fn();
+    const onOpenApprovals = vi.fn();
+    const props = buildProps({
+      mode: "chat",
+      thread: { sessionId: "session-empty", turns: [] },
+      approvalsCount: 2,
+      contextSelection: { label: "Selected turns", turnCount: 2 },
+      onDraftChange,
+      onNavigateSurface,
+      onAttachFiles,
+      onOpenApprovals,
+    });
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+
+    const collectButtonText = (node: TestRenderer.ReactTestInstance): string =>
+      node.children
+        .map((child) =>
+          typeof child === "string" || typeof child === "number"
+            ? String(child)
+            : child && typeof child === "object"
+              ? collectButtonText(child as TestRenderer.ReactTestInstance)
+              : "",
+        )
+        .join(" ");
+    const findButton = (label: string) =>
+      renderer.root.findAll((node) => node.type === "button" && collectButtonText(node).includes(label))[0]!;
+
+    findButton("Orient me").props.onClick();
+    findButton("Continue in Cowork").props.onClick();
+    findButton("Open in Code").props.onClick();
+    findButton("Attach files").props.onClick();
+    findButton("Approvals").props.onClick();
+
+    expect(onDraftChange).toHaveBeenCalledWith(
+      "Summarize the current workspace state and suggest the safest next step.",
+    );
+    expect(onNavigateSurface).toHaveBeenCalledWith("cowork");
+    expect(onNavigateSurface).toHaveBeenCalledWith("code");
+    expect(onAttachFiles).toHaveBeenCalledTimes(1);
+    expect(onOpenApprovals).toHaveBeenCalledTimes(1);
+    expect(renderedText(renderer)).toContain("Selected turns · 2 selected");
   });
 
   it("handles turn selection, keyboard activation, branch switching, and artifact version actions", () => {

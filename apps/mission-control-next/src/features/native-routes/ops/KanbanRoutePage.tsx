@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, AlertTriangle, LayoutDashboard, RefreshCw } from "lucide-react";
-import { bulkTaskAction, fetchTasksByView } from "@goatcitadel/mission-control-shared/api/client";
-import type { TaskRecord } from "@goatcitadel/contracts";
+import { bulkTaskAction, fetchAgenticRuns } from "@goatcitadel/mission-control-shared/api/client";
+import type { AgenticRunListItem } from "@goatcitadel/contracts";
 import { NativePageFrame } from "../NativeRoutePageLayout";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
 import type { NativeRoutePagesProps } from "../types";
@@ -9,16 +9,16 @@ import { toKanbanCard, type KanbanCardModel, type KanbanColumnId } from "./kanba
 import "../native-routes.css";
 
 const COLUMNS: Array<{ id: KanbanColumnId; label: string }> = [
-  { id: "backlog", label: "Backlog" },
-  { id: "in_progress", label: "In Progress" },
-  { id: "blocked", label: "Blocked" },
-  { id: "done", label: "Done" },
+  { id: "queued", label: "Queued" },
+  { id: "running", label: "Running" },
+  { id: "needs_attention", label: "Needs Attention" },
+  { id: "closed", label: "Closed" },
 ];
 
 type BulkAction = "unblock" | "retry" | "close";
 
 export function KanbanRoutePage(props: NativeRoutePagesProps) {
-  const [tasks, setTasks] = useState<TaskRecord[] | null>(null);
+  const [runs, setRuns] = useState<AgenticRunListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -26,7 +26,7 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const isMounted = useIsMounted();
-  // Monotonic request id drops superseded/late `fetchTasksByView` responses so
+  // Monotonic request id drops superseded/late run-list responses so
   // a slow earlier load cannot overwrite a newer workspace's board, and so a
   // resolution after unmount is ignored (MCNEXT-006 + MCNEXT-012).
   const loadIdRef = useRef(0);
@@ -37,11 +37,11 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
     const isCurrentLoad = () => loadIdRef.current === loadId;
     setLoading(true);
     try {
-      const result = await fetchTasksByView("active", undefined, props.activeWorkspaceId);
+      const result = await fetchAgenticRuns({ workspaceId: props.activeWorkspaceId, limit: 200 });
       if (!isCurrentLoad()) {
         return;
       }
-      setTasks(result.items as TaskRecord[]);
+      setRuns(result.items);
       setError(null);
       setActionError(null);
     } catch (e) {
@@ -63,14 +63,14 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
     };
   }, [load]);
 
-  const cards = useMemo<KanbanCardModel[]>(() => (tasks ?? []).map((task) => toKanbanCard(task)), [tasks]);
+  const cards = useMemo<KanbanCardModel[]>(() => (runs ?? []).map((run) => toKanbanCard(run)), [runs]);
 
   const cardsByColumn = useMemo(() => {
     const groups: Record<KanbanColumnId, KanbanCardModel[]> = {
-      backlog: [],
-      in_progress: [],
-      blocked: [],
-      done: [],
+      queued: [],
+      running: [],
+      needs_attention: [],
+      closed: [],
     };
     for (const card of cards) {
       groups[card.column].push(card);
@@ -97,7 +97,9 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
         return;
       }
       const body =
-        action === "retry" ? { action, taskIds: ids, reason: "operator-bulk-retry" } : { action, taskIds: ids };
+        action === "retry"
+          ? { action, taskIds: ids, reason: "operator-bulk-retry", workspaceId: props.activeWorkspaceId }
+          : { action, taskIds: ids, workspaceId: props.activeWorkspaceId };
       setBulkBusy(true);
       setActionError(null);
       setNotice(null);
@@ -119,7 +121,7 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
         }
       }
     },
-    [isMounted, load, selected],
+    [isMounted, load, props.activeWorkspaceId, selected],
   );
 
   const hasSelection = selected.size > 0;
@@ -129,7 +131,7 @@ export function KanbanRoutePage(props: NativeRoutePagesProps) {
       icon={LayoutDashboard}
       kicker="Ops"
       title="Kanban"
-      description="Multi-agent board with distress signals, retry budgets, and bulk operator controls."
+      description="Agentic run board with stale-run detection, diagnostics, and bulk operator controls."
       loading={loading}
       error={actionError ?? error}
     >
@@ -182,14 +184,18 @@ function KanbanColumn({ column, cards, selected, onToggleSelect }: KanbanColumnP
         <span className="count">{cards.length}</span>
       </header>
       <ul>
-        {cards.map((card) => (
-          <KanbanCard
-            key={card.taskId}
-            card={card}
-            checked={selected.has(card.taskId)}
-            onToggleSelect={() => onToggleSelect(card.taskId)}
-          />
-        ))}
+        {cards.length > 0 ? (
+          cards.map((card) => (
+            <KanbanCard
+              key={`${card.runId}:${card.taskId}`}
+              card={card}
+              checked={selected.has(card.taskId)}
+              onToggleSelect={() => onToggleSelect(card.taskId)}
+            />
+          ))
+        ) : (
+          <li className="mc-next-kanban-empty">No runs in this lane.</li>
+        )}
       </ul>
     </section>
   );
@@ -203,34 +209,38 @@ interface KanbanCardProps {
 
 function KanbanCard({ card, checked, onToggleSelect }: KanbanCardProps) {
   return (
-    <li className="mc-next-kanban-card">
+    <li className={`mc-next-kanban-card tone-${card.statusTone}`}>
       <label>
         <input
           type="checkbox"
           data-testid={`kanban-select-${card.taskId}`}
           checked={checked}
           onChange={onToggleSelect}
+          aria-label={`Select ${card.title}`}
         />
         <span className="title">{card.title}</span>
       </label>
-      {card.assignedAgentId ? <small>{card.assignedAgentId}</small> : null}
-      {card.retryDisplay ? (
-        <span className="retry">
-          <RefreshCw className="h-3 w-3" /> {card.retryDisplay}
+      <div className="mc-next-kanban-card-meta">
+        <span>{card.surfaceLabel}</span>
+        <span>{card.updatedDisplay}</span>
+      </div>
+      <span className="mc-next-kanban-status">
+        <Activity className="h-3 w-3" /> {card.statusLabel}
+      </span>
+      {card.attentionReason ? <small>{card.attentionReason}</small> : null}
+      {card.contextMode || card.profileId ? (
+        <small>{[card.contextMode, card.profileId].filter(Boolean).join(" - ")}</small>
+      ) : null}
+      {card.diagnosticSummary.critical > 0 ? (
+        <span data-testid={`diagnostic-chip-${card.taskId}`} className="distress critical">
+          <AlertTriangle className="h-3 w-3" /> {card.diagnosticSummary.critical} critical
+        </span>
+      ) : card.diagnosticSummary.warning > 0 ? (
+        <span data-testid={`diagnostic-chip-${card.taskId}`} className="distress warn">
+          <Activity className="h-3 w-3" /> {card.diagnosticSummary.warning} warning
         </span>
       ) : null}
-      {card.distressSummary.critical > 0 ? (
-        <span data-testid={`distress-chip-${card.taskId}`} className="distress critical">
-          <AlertTriangle className="h-3 w-3" /> {card.distressSummary.critical} critical
-        </span>
-      ) : card.distressSummary.warn > 0 ? (
-        <span data-testid={`distress-chip-${card.taskId}`} className="distress warn">
-          <Activity className="h-3 w-3" /> {card.distressSummary.warn} warn
-        </span>
-      ) : null}
-      {typeof card.lastHeartbeatAgeSeconds === "number" ? (
-        <small className="heartbeat">{card.lastHeartbeatAgeSeconds}s ago</small>
-      ) : null}
+      <small className="run-id">Run {card.runId}</small>
     </li>
   );
 }

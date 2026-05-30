@@ -19,6 +19,7 @@ import {
   getRemainingChatCompletionTimeoutMs,
   normalizeChatCompletionAttemptError,
   normalizeToolProtocolRetryRequest,
+  shouldAttemptCrossProviderFallback,
   shouldRetryToolProtocolError,
   shouldRetryTransientProviderError,
 } from "./llm-completion-helpers.js";
@@ -313,7 +314,7 @@ export async function createChatCompletion(
     }
   }
 
-  if (!response && allowCrossProviderFallback) {
+  if (!response && allowCrossProviderFallback && (!lastError || shouldAttemptCrossProviderFallback(lastError))) {
     const fallbacks = host.resolveFallbackTargets(runtime, primaryProviderId, primaryModel);
     for (const fallback of fallbacks) {
       for (

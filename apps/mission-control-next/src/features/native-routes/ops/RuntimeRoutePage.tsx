@@ -6,7 +6,8 @@ import { createCronJob, draftAutomationRecipe } from "@goatcitadel/mission-contr
 import { fetchReviewReadiness } from "@goatcitadel/mission-control-shared/api/review-readiness";
 import { EmptyState, StatusChip, ThreePartChip, type ChipTone } from "../primitives";
 import { useOpsRuntimeSnapshot } from "@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot";
-import type { AppRoute } from "@next/app/route-model";
+import type { DaemonControlHandoff } from "@goatcitadel/mission-control-shared/api/types";
+import { ROUTE_RELEASE_SCOPE, type AppRoute, type RouteReleaseScope } from "@next/app/route-model";
 import {
   NativeCard,
   NativeGrid,
@@ -183,6 +184,8 @@ export function RuntimeRoutePage({
     const daemonSourceUnavailable = sourceFailed(data, "daemon");
     const healthSourceUnavailable = sourceFailed(data, "health");
     const daemonRuntimeUnavailable = daemonSourceUnavailable && healthSourceUnavailable;
+    const daemonControllable = data.daemon?.controllable ?? data.health?.daemonStatus.controllable ?? false;
+    const daemonHandoff = readDaemonControlHandoff(data);
     const daemonRunning = daemonRuntimeUnavailable
       ? null
       : (data.daemon?.running ?? data.health?.daemonStatus.running ?? null);
@@ -535,17 +538,13 @@ export function RuntimeRoutePage({
           </NativeGrid>
         );
       case "costs": {
-        // The live `CostSummaryResponse` (`packages/mission-control-shared/src/api/types.ts:51-68`)
-        // returns only scope-aggregated items keyed by provider — there is no
-        // per-day timeseries field. Until the snapshot exposes a daily series
-        // (e.g. `data.cost.dailySeries`), the chart receives an empty array and
-        // renders its explicit empty state. No fabricated data.
         const spendDays = readSpendDays(data);
         return (
           <NativeGrid>
             <NativeCard
               title="Spend — last 7 days"
               subtitle="Stacked daily spend by provider with anomaly highlight."
+              className="mc-next-spend-history-card"
               stats={[
                 { label: "Scope", value: data.cost?.scope ?? "day" },
                 { label: "Days", value: String(spendDays.length) },
@@ -623,6 +622,7 @@ export function RuntimeRoutePage({
               title="Runtime posture"
               subtitle="Daemon state, service-manager controls, and backup truth in one runtime view."
               density="compact"
+              className="mc-next-runtime-posture-card"
               stats={[
                 { label: "Approvals", value: String(data.dashboard?.pendingApprovals ?? pendingApprovals) },
                 { label: "MCP", value: String(data.mcpServers.length) },
@@ -660,10 +660,10 @@ export function RuntimeRoutePage({
                         ? "Backup present"
                         : "No backup"}
                 </StatusChip>
-                <StatusChip tone={data.daemon?.controllable ? "default" : "muted"}>
+                <StatusChip tone={daemonControllable ? "default" : "muted"}>
                   {sourceFailed(data, "daemon")
                     ? "Control status unavailable"
-                    : data.daemon?.controllable
+                    : daemonControllable
                       ? "Controllable"
                       : "Read only"}
                 </StatusChip>
@@ -687,7 +687,9 @@ export function RuntimeRoutePage({
                   },
                 ]}
               />
-              {!data.daemon?.controllable && data.daemon?.controlMessage ? (
+              {!daemonControllable && daemonHandoff ? (
+                <DaemonControlHandoffPanel handoff={daemonHandoff} />
+              ) : !daemonControllable && data.daemon?.controlMessage ? (
                 <EmptyState size="compact" title={data.daemon.controlMessage} />
               ) : null}
               <div className="mc-next-runtime-actions">
@@ -914,6 +916,12 @@ export function RuntimeRoutePage({
                 emptyLabel="No daemon logs available."
               />
             </NativeCard>
+            <ReleaseProofDashboardPanel
+              summary={reviewReadiness}
+              loading={reviewReadinessLoading}
+              error={reviewReadinessError}
+              onRefresh={loadReviewReadiness}
+            />
             <ReviewReadinessPanel
               summary={reviewReadiness}
               loading={reviewReadinessLoading}
@@ -1116,6 +1124,180 @@ export function RuntimeRoutePage({
   );
 }
 
+function ReleaseProofDashboardPanel({
+  summary,
+  loading,
+  error,
+  onRefresh,
+}: {
+  summary: ReviewReadinessSummary | null;
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => Promise<void>;
+}) {
+  const routeStats = summarizeReleaseScope(ROUTE_RELEASE_SCOPE);
+  const lanes = summary?.lanes ?? [];
+  const currentLanes = lanes.filter((lane) => lane.status === "current").length;
+  const missingOrStaleLanes = lanes.length - currentLanes;
+  const certificateTone = summary ? (missingOrStaleLanes === 0 ? "success" : "warning") : "muted";
+  const certificateLabel = summary
+    ? missingOrStaleLanes === 0
+      ? "Proof current"
+      : "Proof needs rerun"
+    : "No proof loaded";
+  const sourceLabel = summary ? `${summary.branch}@${summary.sha.slice(0, 8)}` : "Load readiness";
+  const docsProofCount = routeStats.docsCheckRoutes;
+  const visualProofCount = routeStats.visualRoutes;
+
+  return (
+    <NativeCard
+      title="Release proof dashboard"
+      subtitle="In-app release certificate for route scope, verification lanes, docs alignment, screenshots, and accepted debt."
+      density="compact"
+      className="mc-next-release-proof-dashboard"
+      stats={[
+        { label: "Certificate", value: certificateLabel },
+        { label: "Routes", value: `${routeStats.ship}/${routeStats.total} ship` },
+        { label: "Lanes", value: lanes.length ? `${currentLanes}/${lanes.length} current` : "not loaded" },
+      ]}
+      actions={
+        <button type="button" className="gc-button subtle" disabled={loading} onClick={() => void onRefresh()}>
+          <RefreshCw className="h-4 w-4" />
+          Refresh proof
+        </button>
+      }
+    >
+      <div className="mc-next-release-proof-status-row">
+        <StatusChip tone={certificateTone}>{certificateLabel}</StatusChip>
+        <StatusChip tone={routeStats.experimental > 0 ? "warning" : "success"}>
+          {routeStats.experimental} experimental
+        </StatusChip>
+        <StatusChip tone={missingOrStaleLanes > 0 ? "warning" : lanes.length ? "success" : "muted"}>
+          {missingOrStaleLanes} stale or missing lanes
+        </StatusChip>
+      </div>
+      {error ? (
+        <div className="mc-next-runtime-notice tone-error">
+          <span>{error}</span>
+        </div>
+      ) : null}
+      <div className="mc-next-release-proof-grid">
+        <ReleaseProofCard
+          label="Build identity"
+          value={sourceLabel}
+          body={
+            summary
+              ? `Generated ${formatDateTime(summary.generatedAt)} with ${summary.openFindings} open finding${summary.openFindings === 1 ? "" : "s"}.`
+              : "Diagnostics has not loaded review-readiness proof for the current checkout yet."
+          }
+          tone={summary ? "info" : "warning"}
+        />
+        <ReleaseProofCard
+          label="Route coverage"
+          value={`${routeStats.total} routes`}
+          body={`${routeStats.ship} ship, ${routeStats.experimental} experimental, ${routeStats.polish} need release polish, ${routeStats.hidden} hidden.`}
+          tone={routeStats.polish || routeStats.hidden ? "warning" : "success"}
+        />
+        <ReleaseProofCard
+          label="Verification lanes"
+          value={lanes.length ? `${currentLanes}/${lanes.length} current` : "Not loaded"}
+          body={
+            lanes.length
+              ? `${missingOrStaleLanes} lane${missingOrStaleLanes === 1 ? "" : "s"} still need rerun or evidence refresh.`
+              : "Review-readiness lanes load from the gateway diagnostics endpoint."
+          }
+          tone={missingOrStaleLanes > 0 || !lanes.length ? "warning" : "success"}
+        />
+        <ReleaseProofCard
+          label="Screenshot freshness"
+          value={`${visualProofCount} visual routes`}
+          body="Routes that require verify:surface:regression remain explicit; screenshot artifacts are not fabricated in-app."
+          tone="info"
+        />
+        <ReleaseProofCard
+          label="Docs alignment"
+          value={`${docsProofCount} docs lanes`}
+          body="Docs proof is anchored to docs:check, docs/1_0_CONTRACT.md, and docs/1_0_RELEASE_EVIDENCE.md."
+          tone={docsProofCount > 0 ? "success" : "warning"}
+        />
+        <ReleaseProofCard
+          label="Accepted debt"
+          value={`${routeStats.experimental + routeStats.polish} scoped`}
+          body="Experimental or polish-needed surfaces stay visible as scoped debt rather than release-complete claims."
+          tone={routeStats.experimental + routeStats.polish > 0 ? "warning" : "success"}
+        />
+      </div>
+      <NativeList
+        items={ROUTE_RELEASE_SCOPE.slice(0, 8).map((scope) => ({
+          title: `${scope.area}/${scope.section}`,
+          meta: scope.status,
+          body: `${scope.verification} · ${scope.note}`,
+        }))}
+        emptyLabel="No route release scope entries."
+        density="compact"
+        maxHeight="min(28vh, 14rem)"
+        ariaLabel="Release route proof scope"
+      />
+    </NativeCard>
+  );
+}
+
+function ReleaseProofCard({
+  label,
+  value,
+  body,
+  tone,
+}: {
+  label: string;
+  value: string;
+  body: string;
+  tone: "info" | "success" | "warning";
+}) {
+  return (
+    <article className="mc-next-release-proof-card" data-tone={tone}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <p>{body}</p>
+    </article>
+  );
+}
+
+function summarizeReleaseScope(scopes: readonly RouteReleaseScope[]) {
+  return scopes.reduce(
+    (summary, scope) => {
+      summary.total += 1;
+      if (scope.status === "ship") {
+        summary.ship += 1;
+      }
+      if (scope.status === "experimental") {
+        summary.experimental += 1;
+      }
+      if (scope.status === "needs_release_polish") {
+        summary.polish += 1;
+      }
+      if (scope.status === "hide") {
+        summary.hidden += 1;
+      }
+      if (/verify:surface:regression/.test(scope.verification)) {
+        summary.visualRoutes += 1;
+      }
+      if (/docs:check/.test(scope.verification)) {
+        summary.docsCheckRoutes += 1;
+      }
+      return summary;
+    },
+    {
+      total: 0,
+      ship: 0,
+      experimental: 0,
+      polish: 0,
+      hidden: 0,
+      visualRoutes: 0,
+      docsCheckRoutes: 0,
+    },
+  );
+}
+
 function ReviewReadinessPanel({
   summary,
   loading,
@@ -1239,6 +1421,37 @@ function MetricGrid({ items }: { items: Array<{ label: string; value: string; me
           {item.meta ? <p>{item.meta}</p> : null}
         </div>
       ))}
+    </div>
+  );
+}
+
+function DaemonControlHandoffPanel({ handoff }: { handoff: DaemonControlHandoff }) {
+  return (
+    <div className="mc-next-runtime-handoff" role="note" aria-label="Daemon control handoff">
+      <div className="mc-next-runtime-handoff-heading">
+        <span>Manual handoff</span>
+        <strong>{handoff.serviceName}</strong>
+        <p>{handoff.reason}</p>
+      </div>
+      <div className="mc-next-runtime-handoff-grid">
+        <div>
+          <span>Current owner</span>
+          <strong>{handoff.owner}</strong>
+        </div>
+        <div>
+          <span>Desktop control</span>
+          <strong>{handoff.desktopControl}</strong>
+        </div>
+      </div>
+      <div className="mc-next-runtime-handoff-commands" aria-label="Gateway handoff commands">
+        {handoff.commands.map((item) => (
+          <div key={`${item.label}-${item.command}`} className="mc-next-runtime-handoff-command">
+            <span>{item.label}</span>
+            <code>{item.command}</code>
+            <p>{item.description}</p>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1676,17 +1889,45 @@ export function sourceFailed(
   return data.sourceStatus[source]?.status === "error";
 }
 
+function readDaemonControlHandoff(data: OpsRuntimeData): DaemonControlHandoff | null {
+  const handoff = data.daemon?.controlHandoff ?? data.health?.daemonStatus.controlHandoff;
+  if (handoff && Array.isArray(handoff.commands)) {
+    return handoff;
+  }
+  const fallbackSource = data.daemon ?? data.health?.daemonStatus;
+  if (!fallbackSource || fallbackSource.controllable || !fallbackSource.controlMessage) {
+    return null;
+  }
+  const pid = fallbackSource.pid;
+  const inspectCommand =
+    typeof pid === "number" && pid > 0
+      ? `Get-Process -Id ${pid} -ErrorAction SilentlyContinue`
+      : "Get-Process node -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,Path";
+  return {
+    owner: "External service manager or launch terminal",
+    serviceName: "GoatCitadel Gateway",
+    reason: fallbackSource.controlMessage,
+    desktopControl:
+      "For packaged installs, open the Mission Control desktop tray; for source checkouts, use the terminal or service wrapper that launched the gateway.",
+    commands: [
+      {
+        label: "Inspect current process",
+        command: inspectCommand,
+        description: `Checks the gateway process currently reported on ${fallbackSource.host ?? "this host"}.`,
+      },
+      {
+        label: "Start local dev gateway",
+        command: "pnpm dev:gateway",
+        description: "Use from the repo root for source checkouts after stopping the existing gateway host.",
+      },
+    ],
+  };
+}
+
 /**
- * Returns the seven-day stacked spend series for the chart, or an empty array
- * when the live snapshot does not yet expose it.
- *
- * The current `CostSummaryResponse`
- * (`packages/mission-control-shared/src/api/types.ts:51-68`) only carries
- * scope-aggregated `items` and no per-day timeseries. We read defensively from
- * an optional `dailySeries` field so the chart will automatically render the
- * moment the API surface adds one — until then, the chart renders its
- * canonical empty state and no data is fabricated. The expected shape is
- * `Array<{ date, segments: Array<{ providerKey, label, costUsd }> }>`.
+ * Returns the seven-day stacked spend series for the chart. The parser remains
+ * defensive so stale gateways fail closed into the chart's empty state rather
+ * than fabricating cost trends.
  */
 export function readSpendDays(data: OpsRuntimeData): SpendDay[] {
   const candidate = (data.cost as { dailySeries?: unknown } | null | undefined)?.dailySeries;

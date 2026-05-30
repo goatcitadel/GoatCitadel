@@ -211,7 +211,7 @@ describe("buildAgenticRuntimeAvailability", () => {
         ["channel:telegram", "not_configured", false],
         ["scalability:openai_agents_sdk", "blocked", false],
         ["scalability:claude_agent_sdk", "unavailable", false],
-        ["scalability:a2a_protocol", "unavailable", false],
+        ["scalability:a2a_protocol", "blocked", false],
       ]),
     );
     expect(response.scalability).toEqual(
@@ -225,9 +225,9 @@ describe("buildAgenticRuntimeAvailability", () => {
         expect.objectContaining({
           trackId: "a2a_protocol",
           kind: "agent_protocol",
-          status: "unavailable",
+          status: "blocked",
           callable: false,
-          implementationStatus: "missing",
+          implementationStatus: "partial",
         }),
       ]),
     );
@@ -390,10 +390,10 @@ describe("buildAgenticRuntimeAvailability", () => {
         ],
         [
           "scalability:a2a_protocol",
-          "unavailable",
+          "blocked",
           false,
           expect.arrayContaining([
-            "A2A is not implemented as a protocol surface in this gateway availability snapshot.",
+            "A2A has gateway-owned Agent Card draft and task-export preview routes, but callable protocol traffic remains blocked.",
           ]),
         ],
       ]),

@@ -51,7 +51,7 @@ The repo may make these claims at `1.0`:
 
 - Code Mode is a governed trusted-code surface with explicit operator approval and bounded artifacts.
 - Code Mode host isolation is best-effort and fail-closed when required isolation is unavailable.
-- Durable execution owns the shipped mission-session Chat / Cowork / Code resumable flow set documented in [docs/CANONICAL_RUNTIME_STATE_MODEL.md](./CANONICAL_RUNTIME_STATE_MODEL.md). External writeback sessions remain visible, but they are explicitly one-shot and non-resumable until durable external envelopes land.
+- Durable execution owns the shipped mission-session Chat / Cowork / Code resumable flow set documented in [docs/CANONICAL_RUNTIME_STATE_MODEL.md](./CANONICAL_RUNTIME_STATE_MODEL.md). External writeback operator actions now record audit-only durable evidence envelopes, but external send/retry/edit/stream replay remains one-shot and non-resumable until a replay-safe external side-effect runner lands.
 - Approval follow-on work is surfaced through explicit approval effect records rather than inferred from scattered side tables or inline helper effects.
 - `MemoryLifecycleService` is the operator-facing memory lifecycle owner for context composition, learned-memory policy, and memory item list/edit/forget/history.
 - Provider secrets may persist in local env or config files when secure-store persistence is unavailable or disabled.
@@ -96,6 +96,8 @@ That means:
 - no visible `beta` or `native` non-channel integration may advertise read/write/search/capture capabilities without matching operator actions in the shipped runtime
 - no visible MCP transport may remain unsupported for runtime invocation
 - the public extension author story must stay aligned to the published `@goatcitadel/extensions-sdk` package contract, the reference scaffolds, and the tested starter-pack export path
+- Settings Add-ons remains an experimental local/operator-reviewed surface in `1.0`, not a public marketplace claim; graduation requires per-add-on permission grants, durable operator logs, rollback/version proof, runtime health, and explicit local-vs-marketplace boundaries.
+- Desktop/mobile continuity claims must remain anchored in gateway auth, signed device grants, desktop daemon/runtime state, and gateway-owned sessions/projects/artifacts/approvals. The product may show mobile companion readiness, but it must not imply an ungoverned mobile control plane.
 
 ## Release Gates
 

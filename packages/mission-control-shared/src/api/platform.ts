@@ -49,6 +49,7 @@ import type {
 } from "@goatcitadel/contracts";
 import type {
   LlmChatCompletionResponse,
+  DaemonControlHandoff,
   MeshLeaseRecord,
   MeshNodeRecord,
   MeshReplicationOffsetRecord,
@@ -618,6 +619,7 @@ export async function fetchDaemonStatus(): Promise<{
   supported: boolean;
   controllable: boolean;
   controlMessage: string;
+  controlHandoff?: DaemonControlHandoff;
 }> {
   return request<{
     running: boolean;
@@ -630,6 +632,7 @@ export async function fetchDaemonStatus(): Promise<{
     supported: boolean;
     controllable: boolean;
     controlMessage: string;
+    controlHandoff?: DaemonControlHandoff;
   }>("/api/v1/daemon/status");
 }
 

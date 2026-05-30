@@ -2,7 +2,9 @@ import type {
   IntegrationActionInvokeInput,
   IntegrationActionInvokeResult,
   IntegrationConnection,
+  IntegrationOperatorAction,
 } from "@goatcitadel/contracts";
+import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import { getIntegrationOperatorActions, isLocalBridgeCatalogId } from "./integration-action-registry.js";
 
 export interface IntegrationActionHost {
@@ -15,6 +17,7 @@ export interface IntegrationActionHost {
   readConnectionConfigValue(config: Record<string, unknown>, key: string): string | undefined;
   resolveConnectionSecret(config: Record<string, unknown>, directKey: string, envKey: string): string | undefined;
   publishRealtime(scope: string, channel: string, payload: Record<string, unknown>): void;
+  evidenceEnvelopeService?: Pick<EvidenceEnvelopeService, "createEnvelope">;
 }
 
 export async function invokeIntegrationConnectionAction(
@@ -53,6 +56,7 @@ export async function invokeIntegrationConnectionAction(
       checkedAt,
     };
   }
+  result = recordExternalWritebackEnvelope(host, connection, action, result, request, checkedAt);
 
   host.publishRealtime("system", "integrations", {
     type: "integration_operator_action_completed",
@@ -60,6 +64,8 @@ export async function invokeIntegrationConnectionAction(
     catalogId: connection.catalogId,
     actionId,
     status: result.status,
+    durableWritebackStatus: result.durableWriteback?.status,
+    durableWritebackEnvelopeId: result.durableWriteback?.envelopeId,
     checkedAt,
   });
   return result;
@@ -443,6 +449,91 @@ function failed(
     output,
     checkedAt,
   };
+}
+
+function recordExternalWritebackEnvelope(
+  host: IntegrationActionHost,
+  connection: IntegrationConnection,
+  action: IntegrationOperatorAction,
+  result: IntegrationActionInvokeResult,
+  request: IntegrationActionInvokeInput,
+  checkedAt: string,
+): IntegrationActionInvokeResult {
+  if (action.capability !== "write") {
+    return result;
+  }
+  const common = {
+    replayPolicy: "audit_only" as const,
+    resumable: false as const,
+    checkedAt,
+  };
+  if (!host.evidenceEnvelopeService) {
+    return {
+      ...result,
+      durableWriteback: {
+        ...common,
+        status: "unavailable",
+        reason: "evidence_service_unavailable",
+      },
+    };
+  }
+  try {
+    const envelope = host.evidenceEnvelopeService.createEnvelope({
+      eventKind: "external_writeback",
+      metadata: {
+        boundary: "integration_operator_action",
+        externalSideEffect: true,
+        replayPolicy: common.replayPolicy,
+        resumable: common.resumable,
+        connectionId: connection.connectionId,
+        catalogId: connection.catalogId,
+        integrationKey: connection.key,
+        actionId: action.actionId,
+        actionLabel: action.label,
+        actionCapability: action.capability,
+        status: result.status,
+        blockedReason: result.blockedReason,
+        inputKeys: Object.keys(request.input ?? {}).sort(),
+        outputKeys: isRecord(result.output) ? Object.keys(result.output).sort() : [],
+        externalReferenceId: readExternalReferenceId(result.output),
+        message: result.message,
+      },
+      createdAt: checkedAt,
+    });
+    return {
+      ...result,
+      durableWriteback: {
+        ...common,
+        status: "recorded",
+        envelopeId: envelope.envelopeId,
+        contentHash: envelope.contentHash,
+        signatureStatus: envelope.signatureStatus,
+        recordedAt: envelope.createdAt,
+      },
+    };
+  } catch (error) {
+    return {
+      ...result,
+      durableWriteback: {
+        ...common,
+        status: "failed",
+        reason: error instanceof Error ? error.message : "external_writeback_envelope_failed",
+      },
+    };
+  }
+}
+
+function readExternalReferenceId(output: Record<string, unknown> | undefined): string | undefined {
+  if (!isRecord(output)) {
+    return undefined;
+  }
+  for (const key of ["id", "messageId", "threadId", "url", "webUrl"]) {
+    const value = output[key];
+    if (typeof value === "string" && value.trim()) {
+      return `${key}:${value.trim().slice(0, 128)}`;
+    }
+  }
+  return undefined;
 }
 
 function resolveBearerAuth(host: IntegrationActionHost, config: Record<string, unknown>): string | undefined {

@@ -1,0 +1,7 @@
+{
+  "pluginId": "reference-integration-plugin",
+  "label": "Reference Integration Plugin",
+  "version": "0.1.0",
+  "description": "Machine-readable reference plugin scaffold for install, enable, disable, and reporting smoke tests.",
+  "capabilities": ["reference.install", "lifecycle.smoke"]
+}
