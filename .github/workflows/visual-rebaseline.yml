@@ -45,24 +45,4 @@ jobs:
       - name: Open rebaseline PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          if git diff --quiet -- scripts/verification/baselines/visual; then
-            echo "No baseline changes produced; nothing to do."
-            exit 0
-          fi
-          BRANCH="chore/visual-rebaseline-${GITHUB_RUN_ID}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
-          git add scripts/verification/baselines/visual
-          git commit -m "chore(verification): refresh Mission Control Next visual baselines
-
-Regenerated on the Ubuntu CI renderer via verify:visual:rebaseline so the
-visual-regression lane reflects the current Mission Control Next UI."
-          git push origin "$BRANCH"
-          gh pr create \
-            --base main \
-            --head "$BRANCH" \
-            --title "chore(verification): refresh visual baselines (mission-control-next)" \
-            --body "Automated rebaseline run (#${GITHUB_RUN_ID}). Regenerated the Mission Control Next visual-regression PNG baselines on the Ubuntu renderer. Review the image diff before merging."
+        run: bash scripts/ci/open-visual-rebaseline-pr.sh
