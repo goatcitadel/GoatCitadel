@@ -4,6 +4,7 @@ import { isIP } from "node:net";
 import path from "node:path";
 import { logger } from "@goatcitadel/gateway-core";
 import { assertHostAllowed } from "@goatcitadel/policy-engine";
+import { parseProviderJsonResponse } from "./llm-response-parsing.js";
 import { Agent, ProxyAgent } from "undici";
 import type { Dispatcher } from "undici";
 import type {
@@ -1934,23 +1935,9 @@ function buildHttpErrorFromText(action: string, status: number, statusText: stri
   return `${action} failed (${status} ${statusText}): ${snippet}`;
 }
 
-export async function parseProviderJsonResponse<T = Record<string, unknown>>(
-  action: string,
-  response: Response,
-): Promise<T> {
-  const text = await response.text();
-  try {
-    return JSON.parse(text) as T;
-  } catch (error) {
-    const snippet = text.slice(0, 400).replace(/\s+/g, " ").trim();
-    const detail = error instanceof Error ? error.message : String(error);
-    const suffix = snippet ? ` — body: ${snippet}` : "";
-    throw new Error(
-      `${action} returned malformed JSON (${response.status} ${response.statusText}): ${detail}${suffix}`,
-      { cause: error },
-    );
-  }
-}
+// Re-exported for backward compatibility; the implementation now lives in
+// ./llm-response-parsing.ts so provider adapters can import it without a cycle.
+export { parseProviderJsonResponse };
 
 function resolveRequestAuthSecret(
   auth: LlmProviderRequestAuthConfig,

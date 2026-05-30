@@ -226,6 +226,159 @@ describe("events stream route", () => {
     await afterDisconnect.body?.cancel();
   });
 
+  it("delivers events published during replay exactly once and in order (INFRA-003)", async () => {
+    app = Fastify();
+    await app.register(cors, { origin: true });
+    let liveListener: ((event: Record<string, unknown>) => void) | null = null;
+    const replayEvents = [
+      {
+        eventId: "event-1",
+        sequence: 1,
+        eventType: "system",
+        source: "tests",
+        timestamp: "2026-03-20T10:00:01.000Z",
+        payload: { n: 1 },
+      },
+      {
+        eventId: "event-2",
+        sequence: 2,
+        eventType: "system",
+        source: "tests",
+        timestamp: "2026-03-20T10:00:02.000Z",
+        payload: { n: 2 },
+      },
+    ];
+    decorateRealtimeEvents(app, {
+      // The snapshot read fires a live event *after* the listener has attached
+      // but *before* the snapshot is returned — exactly the gap window that used
+      // to silently drop events.
+      listRealtimeEvents: () => {
+        liveListener?.({
+          eventId: "event-3",
+          sequence: 3,
+          eventType: "system",
+          source: "tests",
+          timestamp: "2026-03-20T10:00:03.000Z",
+          payload: { n: 3 },
+        });
+        // Handler reverses the default-replay snapshot, so return descending.
+        return [...replayEvents].reverse();
+      },
+      listRealtimeEventsAfterSequence: () => [],
+      getRealtimeEventSequenceBounds: () => ({ oldestSequence: 1, newestSequence: 3 }),
+      subscribeRealtime: (listener: (event: Record<string, unknown>) => void) => {
+        liveListener = listener;
+        return () => {
+          liveListener = null;
+        };
+      },
+      openRealtimeStreamLease: () => ({
+        leaseId: "lease-gap",
+        clientId: "client-gap",
+        gatewayNodeId: "node-gap",
+      }),
+      touchRealtimeStreamLease: () => undefined,
+      closeRealtimeStreamLease: () => undefined,
+    });
+    await app.register(eventsRoutes);
+
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/v1/events/stream?replay=50`);
+    expect(response.status).toBe(200);
+
+    const text = await readSseUntil(response, (buffer) => buffer.includes('"n":3'));
+
+    // The event published during replay is delivered exactly once...
+    expect(occurrences(text, '"sequence":3')).toBe(1);
+    // ...after the two replayed events, preserving ascending order...
+    expect(text.indexOf('"sequence":1')).toBeLessThan(text.indexOf('"sequence":2'));
+    expect(text.indexOf('"sequence":2')).toBeLessThan(text.indexOf('"sequence":3'));
+    // ...and before stream-ready, which reports the buffered event in its tally.
+    expect(text.indexOf('"sequence":3')).toBeLessThan(text.indexOf("event: stream-ready"));
+    expect(text).toContain('"replayedEventCount":3');
+    expect(text).toContain('"lastSentSequence":3');
+  });
+
+  it("does not double-deliver an event present in both the snapshot and the live buffer", async () => {
+    app = Fastify();
+    await app.register(cors, { origin: true });
+    let liveListener: ((event: Record<string, unknown>) => void) | null = null;
+    const replayEvents = [
+      {
+        eventId: "event-11",
+        sequence: 11,
+        eventType: "system",
+        source: "tests",
+        timestamp: "2026-03-20T10:00:11.000Z",
+        payload: { n: 11 },
+      },
+      {
+        eventId: "event-12",
+        sequence: 12,
+        eventType: "system",
+        source: "tests",
+        timestamp: "2026-03-20T10:00:12.000Z",
+        payload: { n: 12 },
+      },
+    ];
+    decorateRealtimeEvents(app, {
+      listRealtimeEvents: () => [],
+      listRealtimeEventsAfterSequence: () => {
+        // seq 12 is already in the snapshot (overlap); seq 13 is genuinely new.
+        liveListener?.({
+          eventId: "event-12",
+          sequence: 12,
+          eventType: "system",
+          source: "tests",
+          timestamp: "2026-03-20T10:00:12.000Z",
+          payload: { n: 12 },
+        });
+        liveListener?.({
+          eventId: "event-13",
+          sequence: 13,
+          eventType: "system",
+          source: "tests",
+          timestamp: "2026-03-20T10:00:13.000Z",
+          payload: { n: 13 },
+        });
+        return replayEvents;
+      },
+      // Bounds are sampled before the snapshot/live publish, so newest is 12;
+      // seq 13 only exists because it was published during the snapshot read.
+      getRealtimeEventSequenceBounds: () => ({ oldestSequence: 10, newestSequence: 12 }),
+      subscribeRealtime: (listener: (event: Record<string, unknown>) => void) => {
+        liveListener = listener;
+        return () => {
+          liveListener = null;
+        };
+      },
+      openRealtimeStreamLease: () => ({
+        leaseId: "lease-dedup",
+        clientId: "client-dedup",
+        gatewayNodeId: "node-dedup",
+      }),
+      touchRealtimeStreamLease: () => undefined,
+      closeRealtimeStreamLease: () => undefined,
+    });
+    await app.register(eventsRoutes);
+
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/v1/events/stream?afterCursor=10`);
+    expect(response.status).toBe(200);
+
+    const text = await readSseUntil(response, (buffer) => buffer.includes('"n":13'));
+
+    // The overlapping event (seq 12) is delivered exactly once...
+    expect(occurrences(text, '"sequence":12')).toBe(1);
+    // ...the new buffered event (seq 13) exactly once...
+    expect(occurrences(text, '"sequence":13')).toBe(1);
+    // ...in ascending order, with seq 13 (flushed) before stream-ready.
+    expect(text.indexOf('"sequence":11')).toBeLessThan(text.indexOf('"sequence":12'));
+    expect(text.indexOf('"sequence":12')).toBeLessThan(text.indexOf('"sequence":13'));
+    expect(text.indexOf('"sequence":13')).toBeLessThan(text.indexOf("event: stream-ready"));
+    expect(text).toContain('"lastSentSequence":13');
+  });
+
   it("allows startup reconnect bursts above five active streams by default", async () => {
     delete process.env.GOATCITADEL_SSE_MAX_CONNECTIONS_PER_IP;
     app = Fastify();
@@ -275,4 +428,32 @@ async function readSseText(response: Response): Promise<string> {
     }
   }
   return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
+async function readSseUntil(response: Response, done: (buffer: string) => boolean): Promise<string> {
+  const reader = response.body?.getReader();
+  expect(reader).toBeDefined();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (let index = 0; index < 50; index += 1) {
+    const chunk = await reader!.read();
+    if (chunk.value) {
+      buffer += decoder.decode(chunk.value, { stream: true });
+    }
+    if (done(buffer) || chunk.done) {
+      break;
+    }
+  }
+  await reader!.cancel();
+  return buffer;
+}
+
+function occurrences(haystack: string, needle: string): number {
+  let count = 0;
+  let position = haystack.indexOf(needle);
+  while (position !== -1) {
+    count += 1;
+    position = haystack.indexOf(needle, position + needle.length);
+  }
+  return count;
 }

@@ -218,4 +218,39 @@ describe("skills routes", () => {
     expect(createSkillEvaluationProposal).toHaveBeenCalledWith("skill-eval-1");
     expect(response.json()).toMatchObject({ proposal: { proposalId: "proposal-1" } });
   });
+
+  it("rejects a leading-dash git_url source ref before reaching the service", async () => {
+    const validateSkillImport = vi.fn();
+    app = Fastify();
+    app.decorate("services", { skills: { validateSkillImport } } as never);
+    await app.register(skillsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/import/validate",
+      payload: { sourceRef: "--upload-pack=x", sourceType: "git_url" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(validateSkillImport).not.toHaveBeenCalled();
+  });
+
+  it("accepts an ordinary git_url source ref through the validate route", async () => {
+    const validateSkillImport = vi.fn(async () => ({ valid: true }));
+    app = Fastify();
+    app.decorate("services", { skills: { validateSkillImport } } as never);
+    await app.register(skillsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/import/validate",
+      payload: { sourceRef: "https://github.com/owner/repo.git", sourceType: "git_url" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(validateSkillImport).toHaveBeenCalledWith({
+      sourceRef: "https://github.com/owner/repo.git",
+      sourceType: "git_url",
+    });
+  });
 });

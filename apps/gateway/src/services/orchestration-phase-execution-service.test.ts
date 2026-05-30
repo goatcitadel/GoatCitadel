@@ -170,6 +170,53 @@ describe("OrchestrationPhaseExecutionService", () => {
     });
   });
 
+  it("reports the child dispatch linkage before and after the durable child run is launched", async () => {
+    const worktreePath = await makeTempDir();
+    await fs.writeFile(path.join(worktreePath, "spec.md"), "Validate the release blocker.", "utf8");
+    const dispatches: Array<{ phaseId: string; childSessionId?: string; childRunId?: string }> = [];
+    const agentSendChatMessage = vi.fn(async (_sessionId: string, _input: unknown, options?: unknown) => {
+      // The dispatch layer surfaces the launched durable child run id as soon as
+      // the child run row exists, before the (possibly long) turn settles.
+      (options as { onChildDurableRunLaunched?: (runId: string) => void } | undefined)?.onChildDurableRunLaunched?.(
+        "child-run-1",
+      );
+      return {
+        sessionId: "child-session-1",
+        userMessage: {} as never,
+        assistantMessage: { content: "Phase completed with evidence." } as never,
+        transport: "llm",
+        model: "gpt-test",
+        turnId: "turn-1",
+        trace: { status: "completed", durable: { runId: "child-run-1" } } as never,
+      } as ChatSendMessageResponse;
+    });
+    const service = new OrchestrationPhaseExecutionService({
+      rootDir: worktreePath,
+      createChatSession: vi.fn(() => ({ sessionId: "child-session-1" }) as ChatSessionRecord),
+      updateChatSessionPrefs: vi.fn(),
+      agentSendChatMessage,
+      normalizeWorkspaceId: (workspaceId) => workspaceId,
+    });
+
+    const result = await service.execute({
+      plan: buildPlan(),
+      run: buildRun(worktreePath),
+      phase: buildPhase(),
+      durableRun: buildDurableRun(),
+      onChildDispatched: (dispatch) => dispatches.push(dispatch),
+    });
+
+    expect(result.status).toBe("completed");
+    // First breadcrumb: session known before dispatch, run id not yet known.
+    expect(dispatches[0]).toEqual({ phaseId: "phase-1", childSessionId: "child-session-1" });
+    // Second breadcrumb: durable child run id surfaced the instant it is created.
+    expect(dispatches[1]).toEqual({
+      phaseId: "phase-1",
+      childSessionId: "child-session-1",
+      childRunId: "child-run-1",
+    });
+  });
+
   it("maps child session send failures to failed phase results", async () => {
     const worktreePath = await makeTempDir();
     const service = new OrchestrationPhaseExecutionService({

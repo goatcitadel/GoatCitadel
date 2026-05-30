@@ -40,6 +40,8 @@ interface OrchestrationRunRow {
   current_phase_id: string | null;
   total_cost_usd: number;
   total_iterations: number;
+  wave_cost_usd_by_wave_id: string | null;
+  stop_reason: string | null;
   workspace_id: string | null;
   durable_run_id: string | null;
   operator_id: string | null;
@@ -105,6 +107,7 @@ export class OrchestrationRepository {
       INSERT INTO orchestration_runs (
         run_id, plan_id, status, started_at, ended_at,
         current_wave_id, current_phase_id, total_cost_usd, total_iterations,
+        wave_cost_usd_by_wave_id, stop_reason,
         workspace_id, durable_run_id, operator_id, auth_actor_id,
         auth_actor_source, permission_profile_id, local_operator_override_id,
         execution_state, worktree_path,
@@ -113,6 +116,7 @@ export class OrchestrationRepository {
       ) VALUES (
         @runId, @planId, @status, @startedAt, @endedAt,
         @currentWaveId, @currentPhaseId, @totalCostUsd, @totalIterations,
+        @waveCostUsdByWaveId, @stopReason,
         @workspaceId, @durableRunId, @operatorId, @authActorId,
         @authActorSource, @permissionProfileId, @localOperatorOverrideId,
         @executionState, @worktreePath,
@@ -129,6 +133,8 @@ export class OrchestrationRepository {
         current_phase_id = @currentPhaseId,
         total_cost_usd = @totalCostUsd,
         total_iterations = @totalIterations,
+        wave_cost_usd_by_wave_id = @waveCostUsdByWaveId,
+        stop_reason = @stopReason,
         workspace_id = @workspaceId,
         durable_run_id = @durableRunId,
         operator_id = @operatorId,
@@ -155,6 +161,8 @@ export class OrchestrationRepository {
         current_phase_id = @currentPhaseId,
         total_cost_usd = @totalCostUsd,
         total_iterations = @totalIterations,
+        wave_cost_usd_by_wave_id = @waveCostUsdByWaveId,
+        stop_reason = @stopReason,
         workspace_id = @workspaceId,
         durable_run_id = @durableRunId,
         operator_id = @operatorId,
@@ -256,6 +264,8 @@ export class OrchestrationRepository {
       currentPhaseId: run.currentPhaseId ?? null,
       totalCostUsd: run.totalCostUsd,
       totalIterations: run.totalIterations,
+      waveCostUsdByWaveId: serializeWaveCostMap(run.waveCostUsdByWaveId),
+      stopReason: run.stopReason ?? null,
       workspaceId: run.workspaceId ?? null,
       durableRunId: run.durableRunId ?? null,
       operatorId: run.operatorId ?? null,
@@ -285,6 +295,8 @@ export class OrchestrationRepository {
       currentPhaseId: run.currentPhaseId ?? null,
       totalCostUsd: run.totalCostUsd,
       totalIterations: run.totalIterations,
+      waveCostUsdByWaveId: serializeWaveCostMap(run.waveCostUsdByWaveId),
+      stopReason: run.stopReason ?? null,
       workspaceId: run.workspaceId ?? null,
       durableRunId: run.durableRunId ?? null,
       operatorId: run.operatorId ?? null,
@@ -317,6 +329,8 @@ export class OrchestrationRepository {
       currentPhaseId: run.currentPhaseId ?? null,
       totalCostUsd: run.totalCostUsd,
       totalIterations: run.totalIterations,
+      waveCostUsdByWaveId: serializeWaveCostMap(run.waveCostUsdByWaveId),
+      stopReason: run.stopReason ?? null,
       workspaceId: run.workspaceId ?? null,
       durableRunId: run.durableRunId ?? null,
       operatorId: run.operatorId ?? null,
@@ -433,6 +447,8 @@ function mapRunRow(row: OrchestrationRunRow): OrchestrationRun {
     currentPhaseId: row.current_phase_id ?? undefined,
     totalCostUsd: row.total_cost_usd,
     totalIterations: row.total_iterations,
+    waveCostUsdByWaveId: deserializeWaveCostMap(row.wave_cost_usd_by_wave_id),
+    stopReason: toOrchestrationStopReason(row.stop_reason),
     workspaceId: row.workspace_id ?? undefined,
     durableRunId: row.durable_run_id ?? undefined,
     operatorId: row.operator_id ?? undefined,
@@ -480,6 +496,8 @@ function isOrchestrationRunRow(value: unknown): value is OrchestrationRunRow {
     (typeof value.current_phase_id === "string" || value.current_phase_id === null) &&
     typeof value.total_cost_usd === "number" &&
     typeof value.total_iterations === "number" &&
+    (typeof value.wave_cost_usd_by_wave_id === "string" || value.wave_cost_usd_by_wave_id === null) &&
+    (typeof value.stop_reason === "string" || value.stop_reason === null) &&
     (typeof value.workspace_id === "string" || value.workspace_id === null) &&
     (typeof value.durable_run_id === "string" || value.durable_run_id === null) &&
     (typeof value.operator_id === "string" || value.operator_id === null) &&
@@ -520,4 +538,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function normalizeWorkspaceId(value?: string): string {
   const trimmed = value?.trim();
   return trimmed ? trimmed : "default";
+}
+
+function serializeWaveCostMap(value: OrchestrationRun["waveCostUsdByWaveId"]): string | null {
+  if (!value || Object.keys(value).length === 0) {
+    return null;
+  }
+  return JSON.stringify(value);
+}
+
+function deserializeWaveCostMap(value: string | null): Record<string, number> | undefined {
+  if (value === null) {
+    return undefined;
+  }
+  const parsed = safeJsonParse<Record<string, unknown>>(value, {});
+  const entries = Object.entries(parsed).filter(
+    (entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1]),
+  );
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function toOrchestrationStopReason(value: string | null): OrchestrationRun["stopReason"] {
+  return value === "plan_limit" || value === "wave_budget_exceeded" ? value : undefined;
 }

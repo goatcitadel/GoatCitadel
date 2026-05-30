@@ -36,16 +36,27 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
   const sourceProviderSchema = z.enum(["agentskill", "skillsmp", "clawhub", "github", "local", "external"]);
   const skillExportTargetSchema = z.enum(["codex", "claude", "generic-markdown"]);
 
-  const validateImportSchema = z.object({
+  const importSourceObjectSchema = z.object({
     sourceRef: z.string().min(1),
     sourceType: importSourceTypeSchema.optional(),
     sourceProvider: sourceProviderSchema.optional(),
   });
 
-  const installImportSchema = validateImportSchema.extend({
-    force: z.boolean().optional(),
-    confirmHighRisk: z.boolean().optional(),
-  });
+  const refineGitSourceRef = (value: { sourceRef: string; sourceType?: string }): boolean =>
+    !(value.sourceType === "git_url" && value.sourceRef.trim().startsWith("-"));
+  const gitSourceRefIssue = {
+    message: "Git source ref must not begin with '-'.",
+    path: ["sourceRef"],
+  };
+
+  const validateImportSchema = importSourceObjectSchema.refine(refineGitSourceRef, gitSourceRefIssue);
+
+  const installImportSchema = importSourceObjectSchema
+    .extend({
+      force: z.boolean().optional(),
+      confirmHighRisk: z.boolean().optional(),
+    })
+    .refine(refineGitSourceRef, gitSourceRefIssue);
 
   const skillExportSchema = z.object({
     skillIds: z.array(z.string().min(1)).min(1).max(50),

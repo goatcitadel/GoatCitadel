@@ -480,6 +480,45 @@ describe("ChatThreadView", () => {
     expect(onCreateGeneratedArtifactVersion).toHaveBeenCalledWith("turn-1");
   });
 
+  it("exposes exactly one streaming live region and no redundant skeleton status", () => {
+    const thread = createThread("");
+    (thread.turns[0] as any).assistantMessage = undefined;
+    (thread.turns[0] as any).trace.status = "running";
+
+    let renderer!: TestRenderer.ReactTestRenderer;
+    TestRenderer.act(() => {
+      renderer = TestRenderer.create(
+        <ChatThreadView
+          {...buildThreadViewProps(thread)}
+          streamStatus="streaming"
+          queuedCount={0}
+          streamingPreview={{
+            sessionId: "sess-1",
+            turnId: "turn-1",
+            messageId: "assistant-1",
+            text: "",
+            visibleText: "",
+            isRunning: true,
+            updatedAt: 1,
+          }}
+          activeStreamingTurnId="turn-1"
+        />,
+      );
+    });
+
+    // The streaming skeleton renders (pending bubble) but is visual-only now.
+    const skeleton = renderer.root.findByProps({ className: "mc-next-assistant-streaming-skeleton" });
+    expect(skeleton.props.role).toBeUndefined();
+
+    // Exactly one element owns the streaming-status announcement: the status bar.
+    const liveRegions = renderer.root.findAll(
+      (node) => node.props.role === "status" || node.props["aria-live"] === "polite",
+    );
+    expect(liveRegions).toHaveLength(1);
+    expect(liveRegions[0]?.props.className).toContain("chat-stream-status-bar");
+    expect(liveRegions[0]?.props["aria-live"]).toBe("polite");
+  });
+
   it("renders stream status, thread notices, and follows the bottom marker", () => {
     const onBottomStateChange = vi.fn();
     const scrollIntoView = vi.fn();
@@ -539,7 +578,9 @@ describe("ChatThreadView", () => {
         return null;
       },
     });
-    onBottomStateChange.mockClear();
+    // Keep onBottomStateChange history: the hook de-duplicates repeated bottom
+    // states, so the pinned `true` is asserted from the initial follow tick while
+    // the post-update tick stays silent (still pinned, never reports `false`).
     scrollIntoView.mockClear();
 
     scrollElement.scrollHeight = 1200;

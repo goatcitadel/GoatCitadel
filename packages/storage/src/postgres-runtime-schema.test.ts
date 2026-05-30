@@ -1,6 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
 import type { SqliteSchemaTableBlueprint } from "./sqlite.js";
+import { createDatabase, createSqliteSchemaBlueprint } from "./sqlite.js";
 import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
 import { buildPostgresRuntimeSchemaSql } from "./postgres/runtime-schema.js";
 import {
@@ -35,6 +40,93 @@ describe("Postgres runtime schema generation", () => {
     );
     assert.match(sql, /CREATE TABLE IF NOT EXISTS mutation_idempotency \(/);
     assert.doesNotMatch(sql, /sqlite_autoindex_/);
+  });
+
+  it("preserves SQLite partial-index WHERE predicates on the generated Postgres schema", () => {
+    const sql = buildPostgresRuntimeSchemaSql();
+
+    // STORAGE-001: the improvement-candidate fingerprint index must stay OPEN-only on
+    // Postgres. Dropping the predicate turns it into a full unique index and breaks the
+    // candidate reopen/dedup flow (a new OPEN candidate sharing a CLOSED candidate's
+    // fingerprint would raise an unhandled unique-constraint violation).
+    assert.match(
+      sql,
+      /CREATE UNIQUE INDEX IF NOT EXISTS idx_improvement_candidates_open_fingerprint ON improvement_candidates\(workspace_id, kind, fingerprint\) WHERE status IN \('proposed', 'evaluating', 'ready_for_approval', 'approval_pending', 'approved'\);/,
+    );
+
+    // The nullable comms-delivery idempotency index is partial too: without the predicate
+    // multiple NULL idempotency keys would collide under the unique constraint.
+    assert.match(
+      sql,
+      /CREATE UNIQUE INDEX IF NOT EXISTS idx_comms_deliveries_idempotency ON comms_deliveries\(idempotency_key\) WHERE idempotency_key IS NOT NULL;/,
+    );
+
+    // Full (non-partial) unique indexes must not gain a WHERE clause.
+    assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_session_key_unique ON sessions\(session_key\);/);
+  });
+
+  it("renders the improvement-candidate fingerprint index as OPEN-only and allows a closed/open fingerprint to coexist", () => {
+    // DDL parity: the SQLite schema and the generated Postgres schema must carry the
+    // identical partial predicate, so the unique scope is OPEN-only on both backends.
+    const blueprint = createSqliteSchemaBlueprint();
+    const candidatesTable = blueprint.tables.find((table) => table.name === "improvement_candidates");
+    const fingerprintIndex = candidatesTable?.indexes.find(
+      (index) => index.name === "idx_improvement_candidates_open_fingerprint",
+    );
+    assert.ok(fingerprintIndex, "expected improvement_candidates fingerprint index in the SQLite blueprint");
+    assert.equal(fingerprintIndex?.unique, true);
+    assert.equal(
+      fingerprintIndex?.where,
+      "status IN ('proposed', 'evaluating', 'ready_for_approval', 'approval_pending', 'approved')",
+    );
+
+    // Behavioral regression: under the real SQLite schema, a CLOSED candidate and a new
+    // OPEN candidate that share a fingerprint must coexist (the unique index only spans
+    // open statuses). This is exactly the reopen/dedup flow STORAGE-001 protects.
+    const dbPath = path.join(os.tmpdir(), `goatcitadel-improvement-candidate-${randomUUID()}.db`);
+    try {
+      const client = createDatabase({ dbPath });
+      try {
+        const baseRow = {
+          workspaceId: "workspace-1",
+          kind: "skill_quality",
+          targetKey: "skill:example",
+          fingerprint: "fp-shared",
+          summary: "Example candidate",
+          createdAt: "2026-05-28T00:00:00.000Z",
+          updatedAt: "2026-05-28T00:00:00.000Z",
+        };
+        const insert = client.prepare(`
+          INSERT INTO improvement_candidates (
+            candidate_id, workspace_id, kind, status, target_key, fingerprint, summary, created_at, updated_at
+          ) VALUES (
+            @candidateId, @workspaceId, @kind, @status, @targetKey, @fingerprint, @summary, @createdAt, @updatedAt
+          )
+        `);
+
+        // A closed candidate followed by a new open candidate with the same fingerprint.
+        insert.run({ ...baseRow, candidateId: "cand-closed", status: "rejected" });
+        insert.run({ ...baseRow, candidateId: "cand-open", status: "proposed" });
+
+        const rows = client
+          .prepare(`SELECT candidate_id FROM improvement_candidates WHERE fingerprint = ? ORDER BY candidate_id`)
+          .all<{ candidate_id: string }>("fp-shared");
+        assert.deepEqual(
+          rows.map((row) => row.candidate_id),
+          ["cand-closed", "cand-open"],
+        );
+
+        // But two OPEN candidates with the same fingerprint must still collide.
+        assert.throws(
+          () => insert.run({ ...baseRow, candidateId: "cand-open-2", status: "evaluating" }),
+          /UNIQUE constraint failed/,
+        );
+      } finally {
+        client.close();
+      }
+    } finally {
+      fs.rmSync(dbPath, { force: true });
+    }
   });
 
   it("repairs stale runtime schemas that applied the canonical migration before inline unique indexes were preserved", () => {
@@ -351,9 +443,16 @@ describe("Postgres runtime schema generation", () => {
             },
           ],
           indexes: [
-            { name: "idx_parent_empty", unique: false, origin: "c", columns: [] },
-            { name: "sqlite_autoindex_parent_1", unique: true, origin: "pk", columns: ["id"] },
-            { name: "idx_parent_name", unique: true, origin: "c", columns: ["name"] },
+            { name: "idx_parent_empty", unique: false, origin: "c", columns: [], where: null },
+            { name: "sqlite_autoindex_parent_1", unique: true, origin: "pk", columns: ["id"], where: null },
+            { name: "idx_parent_name", unique: true, origin: "c", columns: ["name"], where: null },
+            {
+              name: "idx_parent_active_name",
+              unique: true,
+              origin: "c",
+              columns: ["name"],
+              where: "score IS NOT NULL AND name <> 'unknown'",
+            },
           ],
           seedRows: [
             {
@@ -408,6 +507,10 @@ describe("Postgres runtime schema generation", () => {
     assert.match(sql, /PRIMARY KEY \(parent_id, locale\)/);
     assert.match(sql, /FOREIGN KEY \(parent_id\) REFERENCES parent\(id\) ON DELETE CASCADE ON UPDATE CASCADE/);
     assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS idx_parent_name ON parent\(name\);/);
+    assert.match(
+      sql,
+      /CREATE UNIQUE INDEX IF NOT EXISTS idx_parent_active_name ON parent\(name\) WHERE score IS NOT NULL AND name <> 'unknown';/,
+    );
     assert.doesNotMatch(sql, /idx_parent_empty/);
     assert.doesNotMatch(sql, /sqlite_autoindex_parent_1/);
     assert.match(

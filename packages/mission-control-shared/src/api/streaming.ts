@@ -60,6 +60,13 @@ export async function* iterateSsePayloads(
     reader.releaseLock();
   }
   if (buffer.trim()) {
+    // A legal SSE stream may dispatch its final event at EOF without a trailing
+    // blank line; flush it if the residual buffer is a complete `data:` event.
+    const trailingDataText = extractSseDataText(buffer);
+    if (trailingDataText) {
+      yield trailingDataText;
+      return;
+    }
     throw new Error(`SSE stream ended with incomplete event data: ${previewSseText(buffer)}`);
   }
 }

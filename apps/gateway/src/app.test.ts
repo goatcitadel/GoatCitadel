@@ -184,3 +184,66 @@ describe("gateway app config helpers", () => {
     expect(__internal.isLoopbackRateLimitAllowlisted("192.168.1.5")).toBe(false);
   });
 });
+
+describe("applyBaselineSecurityHeaders (GWROUTES-001)", () => {
+  function createFakeReply(initialHeaders: Record<string, string> = {}) {
+    const headers = new Map<string, string>(
+      Object.entries(initialHeaders).map(([name, value]) => [name.toLowerCase(), value]),
+    );
+    return {
+      headers,
+      getHeader(name: string) {
+        return headers.get(name.toLowerCase());
+      },
+      header(name: string, value: string) {
+        headers.set(name.toLowerCase(), value);
+        return this;
+      },
+    };
+  }
+
+  it("sets the baseline CSP and unconditional security headers on a fresh response", () => {
+    const reply = createFakeReply();
+
+    __internal.applyBaselineSecurityHeaders(reply, { isNonLoopbackBind: false });
+
+    expect(reply.getHeader("Content-Security-Policy")).toBe(__internal.BASELINE_CONTENT_SECURITY_POLICY);
+    expect(reply.getHeader("Content-Security-Policy")).toContain("script-src 'self'");
+    expect(reply.getHeader("X-Content-Type-Options")).toBe("nosniff");
+    expect(reply.getHeader("X-Frame-Options")).toBe("DENY");
+    expect(reply.getHeader("Referrer-Policy")).toBe("strict-origin-when-cross-origin");
+    expect(reply.getHeader("Permissions-Policy")).toBe("camera=(), microphone=(), geolocation=()");
+    expect(reply.getHeader("Strict-Transport-Security")).toBeUndefined();
+  });
+
+  it("does NOT overwrite a route-set Content-Security-Policy (preview sandbox survives)", () => {
+    const routeCsp =
+      "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; script-src 'none'; style-src 'self'; img-src data: blob:; font-src 'none'; connect-src 'none'";
+    const reply = createFakeReply({ "Content-Security-Policy": routeCsp });
+
+    __internal.applyBaselineSecurityHeaders(reply, { isNonLoopbackBind: false });
+
+    // The route's hardened CSP must win over the baseline.
+    expect(reply.getHeader("Content-Security-Policy")).toBe(routeCsp);
+    expect(reply.getHeader("Content-Security-Policy")).toContain("script-src 'none'");
+    expect(reply.getHeader("Content-Security-Policy")).not.toBe(__internal.BASELINE_CONTENT_SECURITY_POLICY);
+    // Other baseline headers are still applied unconditionally.
+    expect(reply.getHeader("X-Content-Type-Options")).toBe("nosniff");
+  });
+
+  it("treats a blank route CSP as absent and falls back to the baseline", () => {
+    const reply = createFakeReply({ "Content-Security-Policy": "   " });
+
+    __internal.applyBaselineSecurityHeaders(reply, { isNonLoopbackBind: false });
+
+    expect(reply.getHeader("Content-Security-Policy")).toBe(__internal.BASELINE_CONTENT_SECURITY_POLICY);
+  });
+
+  it("adds HSTS only on non-loopback binds", () => {
+    const reply = createFakeReply();
+
+    __internal.applyBaselineSecurityHeaders(reply, { isNonLoopbackBind: true });
+
+    expect(reply.getHeader("Strict-Transport-Security")).toBe("max-age=63072000; includeSubDomains");
+  });
+});

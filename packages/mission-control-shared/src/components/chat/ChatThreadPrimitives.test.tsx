@@ -4,6 +4,7 @@ import type { ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import {
   ChatThreadDelegationSummary,
   ChatThreadTurnCard,
+  StreamingAssistantSkeleton,
   buildThreadWindow,
   handleTurnSurfaceKeyDown,
   isInteractiveChatEventTarget,
@@ -112,6 +113,14 @@ describe("ChatThreadPrimitives", () => {
     });
 
     const turnSurface = renderer.root.findByProps({ className: "mc-next-thread-turn-surface" });
+    // The activation affordance wraps interactive content (assistant links, copy button,
+    // citations), so it must NOT claim an interactive button role. A non-interactive
+    // labelled group keeps that nesting valid while remaining keyboard-activatable.
+    expect(turnSurface.props.role).toBe("group");
+    expect(turnSurface.props.tabIndex).toBe(0);
+    expect(turnSurface.props["aria-label"]).toBe("Select turn turn-1");
+    expect(turnSurface.props["aria-current"]).toBe("true");
+    expect(renderer.root.findAll((node) => node.props.role === "button")).toHaveLength(0);
     TestRenderer.act(() => {
       turnSurface.props.onClick({ target: { closest: () => null }, currentTarget });
       turnSurface.props.onClick({ target: { closest: () => ({ tagName: "A" }) }, currentTarget });
@@ -262,6 +271,42 @@ describe("ChatThreadPrimitives", () => {
     expect(visibleTurnIds).toEqual(expect.arrayContaining(["turn-5", "turn-50", "turn-70", "turn-99"]));
     expect(gaps.length).toBeGreaterThan(0);
     expect(gaps.some((gap) => gap.hiddenCount > 0)).toBe(true);
+  });
+
+  it("renders the streaming skeleton as a visual-only indicator without a live region", () => {
+    const renderer = TestRenderer.create(<StreamingAssistantSkeleton label="Working" />);
+    const skeleton = renderer.root.findByProps({ className: "mc-next-assistant-streaming-skeleton" });
+
+    // The skeleton keeps a visual label but must not duplicate the surface live region.
+    expect(skeleton.props["aria-label"]).toBe("Working");
+    expect(skeleton.props.role).toBeUndefined();
+    expect(skeleton.props["aria-live"]).toBeUndefined();
+    expect(renderer.root.findAll((node) => node.props.role === "status")).toHaveLength(0);
+  });
+
+  it("announces a streaming turn through aria-busy only, not a duplicate skeleton status", () => {
+    const renderer = renderTurn({
+      turn: createTurn({
+        assistantMessage: undefined,
+        trace: { ...createTurn().trace, status: "running" },
+      }),
+      streamingPreview: {
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        text: "",
+        visibleText: "",
+        isRunning: true,
+        updatedAt: 1,
+      },
+    });
+
+    // Streaming bubble is rendered with the skeleton...
+    expect(renderer.root.findByProps({ className: "mc-next-assistant-streaming-skeleton" })).toBeTruthy();
+    // ...and the only assistant-activity signal in the card is the bubble's aria-busy.
+    const busyBubbles = renderer.root.findAll((node) => node.props["aria-busy"] === true);
+    expect(busyBubbles.length).toBeGreaterThan(0);
+    expect(renderer.root.findAll((node) => node.props.role === "status")).toHaveLength(0);
   });
 
   it("exports surface event helpers", () => {
