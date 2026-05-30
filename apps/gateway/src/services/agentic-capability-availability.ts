@@ -13,6 +13,8 @@ import {
   runtimeStatusToCapabilityAvailability,
 } from "./plugin-provider-governance-service.js";
 
+const OPENAI_API_HOSTNAME = "api.openai.com";
+
 export type AgenticCapabilityFamily = AgenticCapabilityAvailability["family"];
 
 export interface AgenticCapabilityRuntimeAvailabilityInput {
@@ -416,13 +418,20 @@ function scalabilityTrackToCapabilityAvailability(input: AgenticScalabilityTrack
 function isOpenAiFamilyProvider(provider: LlmProviderSummary): boolean {
   const providerId = provider.providerId.trim().toLowerCase();
   const label = provider.label.trim().toLowerCase();
-  const baseUrl = provider.baseUrl.trim().toLowerCase();
   return (
     providerId === "openai" ||
     providerId.startsWith("openai-") ||
     label.includes("openai") ||
-    baseUrl.includes("api.openai.com")
+    isOpenAiApiBaseUrl(provider.baseUrl)
   );
+}
+
+function isOpenAiApiBaseUrl(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl.trim()).hostname.toLowerCase() === OPENAI_API_HOSTNAME;
+  } catch {
+    return false;
+  }
 }
 
 function isClaudeFamilyProvider(provider: LlmProviderSummary): boolean {

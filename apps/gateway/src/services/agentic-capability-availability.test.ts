@@ -400,6 +400,65 @@ describe("buildAgenticRuntimeAvailability", () => {
     );
   });
 
+  it("classifies OpenAI base URLs by parsed host instead of substring", () => {
+    const realOpenAi = buildAgenticRuntimeAvailability({
+      generatedAt: "2026-05-05T00:00:00.000Z",
+      providers: [
+        {
+          providerId: "custom",
+          label: "Custom provider",
+          baseUrl: "https://API.OpenAI.COM/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-5.1",
+          hasApiKey: false,
+          apiKeySource: "none",
+        },
+      ],
+    });
+    const spoofedOpenAi = buildAgenticRuntimeAvailability({
+      generatedAt: "2026-05-05T00:00:00.000Z",
+      providers: [
+        {
+          providerId: "custom",
+          label: "Custom provider",
+          baseUrl: "https://attacker.example/v1?upstream=api.openai.com",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-5.1",
+          hasApiKey: false,
+          apiKeySource: "none",
+        },
+        {
+          providerId: "custom-substring",
+          label: "Custom provider",
+          baseUrl: "https://api.openai.com.attacker.example/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "gpt-5.1",
+          hasApiKey: false,
+          apiKeySource: "none",
+        },
+      ],
+    });
+
+    expect(realOpenAi.scalability).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          trackId: "openai_agents_sdk",
+          status: "blocked",
+          implementationStatus: "partial",
+        }),
+      ]),
+    );
+    expect(spoofedOpenAi.scalability).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          trackId: "openai_agents_sdk",
+          status: "unavailable",
+          implementationStatus: "missing",
+        }),
+      ]),
+    );
+  });
+
   it("distinguishes Claude provider support from Claude Agent SDK availability", () => {
     const response = buildAgenticRuntimeAvailability({
       generatedAt: "2026-05-05T00:00:00.000Z",
