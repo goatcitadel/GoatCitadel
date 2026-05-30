@@ -430,20 +430,95 @@ async function fetchGuardedOnce(
   init: RequestInit & { dnsLookup?: DnsLookupFunction },
 ): Promise<Response> {
   const { dnsLookup, ...fetchInit } = init;
-  const dispatcher = createGuardedDispatcher(url, allowlist, dnsLookup);
+  // PERF (POLICY-003): The guarded dispatcher is reused across requests that
+  // share the same DNS-lookup function, target host:port, and allowlist
+  // signature instead of being constructed per request. Each `Agent` carries
+  // its own connection pool + keep-alive timers; rebuilding one on every HTTP
+  // GET/POST, redirect hop, browser fallback, comms send, and ingestion fetch
+  // churned handles/timers and defeated connection reuse on a long-lived
+  // gateway. The guarded DNS lookup (DNS-rebinding defense) and every other
+  // request option are preserved exactly — only the Agent lifecycle changes
+  // from per-request to a bounded shared cache. The dispatcher is intentionally
+  // NOT closed here: it is shared and long-lived. All callers buffer the
+  // response body immediately (`res.text()/json()/arrayBuffer()`), so reuse is
+  // safe; if streaming is added later, the body must be fully consumed before
+  // the shared Agent is destroyed.
+  const dispatcher = getGuardedDispatcher(url, allowlist, dnsLookup);
   try {
     return await fetch(url, {
       ...fetchInit,
       dispatcher,
     } as RequestInit & { dispatcher: Dispatcher });
   } catch (error) {
-    await dispatcher.close().catch(() => undefined);
     const cause = (error as { cause?: unknown }).cause;
     if (cause instanceof Error && cause.message.includes("resolved address is blocked")) {
       throw cause;
     }
     throw error;
   }
+}
+
+// Bound on guarded Agents retained per DNS-lookup function. Distinct
+// host:port + allowlist signatures each get their own Agent (so per-request
+// security context is preserved); the bound prevents the cache itself from
+// growing without limit on a long-lived process. When exceeded, the oldest
+// entry is evicted and its Agent destroyed.
+const MAX_GUARDED_DISPATCHERS_PER_LOOKUP = 64;
+
+// `dnsLookup` is part of the Agent's behavioral signature (it drives the
+// guarded resolution). Keying via a WeakMap lets per-test custom lookups be
+// reclaimed with their closures and keeps the production node lookup on its own
+// bucket without serializing function identity into a string key.
+const guardedDispatcherCache = new WeakMap<DnsLookupFunction, Map<string, Dispatcher>>();
+
+function getGuardedDispatcher(url: string, allowlist: string[], dnsLookup?: DnsLookupFunction): Dispatcher {
+  const resolvedLookup = dnsLookup ?? nodeDnsLookup;
+  const cacheKey = guardedDispatcherCacheKey(url, allowlist);
+  if (cacheKey === undefined) {
+    // Malformed/unparseable host (callers normally assert the host first, so
+    // this is a defensive fallback): do not cache — fall back to a fresh,
+    // request-scoped Agent to avoid an unbounded key space.
+    return createGuardedDispatcher(url, allowlist, resolvedLookup);
+  }
+  let byKey = guardedDispatcherCache.get(resolvedLookup);
+  if (!byKey) {
+    byKey = new Map<string, Dispatcher>();
+    guardedDispatcherCache.set(resolvedLookup, byKey);
+  }
+  const existing = byKey.get(cacheKey);
+  if (existing) {
+    return existing;
+  }
+  const dispatcher = createGuardedDispatcher(url, allowlist, resolvedLookup);
+  byKey.set(cacheKey, dispatcher);
+  if (byKey.size > MAX_GUARDED_DISPATCHERS_PER_LOOKUP) {
+    const oldestKey = byKey.keys().next().value;
+    if (oldestKey !== undefined) {
+      const evicted = byKey.get(oldestKey);
+      byKey.delete(oldestKey);
+      void evicted?.close().catch(() => undefined);
+    }
+  }
+  return dispatcher;
+}
+
+// The guarded lookup's behavior depends only on the target host:port and the
+// allowlist (never the path/query), so requests that differ only by path reuse
+// the same Agent. Returns `undefined` for hosts `parseHost` cannot resolve.
+function guardedDispatcherCacheKey(url: string, allowlist: string[]): string | undefined {
+  const parsed = parseHost(url);
+  if (parsed.invalidReason) {
+    return undefined;
+  }
+  const hostKey = (parsed.host || parsed.hostname).toLowerCase();
+  if (!hostKey) {
+    return undefined;
+  }
+  // A NUL byte cannot appear in a URL host or an allowlist pattern, so a NUL
+  // separator keeps the host/allowlist boundary unambiguous even if a caller
+  // supplies an unusual allowlist entry.
+  const separator = String.fromCharCode(0);
+  return `${hostKey}${separator}${allowlist.join(separator)}`;
 }
 
 function createGuardedDispatcher(url: string, allowlist: string[], dnsLookup?: DnsLookupFunction): Dispatcher {

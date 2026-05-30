@@ -16,6 +16,14 @@ export type OrchestrationExecutionState =
   | "cancelled";
 export type OrchestrationWorktreeStatus = "uninitialized" | "allocating" | "ready" | "blocked";
 
+/**
+ * Why an orchestration run reached the `stopped_by_limit` status.
+ *
+ * - `plan_limit`: a plan-level cap was reached (`maxIterations`, `maxRuntimeMinutes`, or `maxCostUsd`).
+ * - `wave_budget_exceeded`: a wave's accumulated cost reached or exceeded its `budgetUsd`.
+ */
+export type OrchestrationStopReason = "plan_limit" | "wave_budget_exceeded";
+
 export interface OrchestrationPhase {
   phaseId: string;
   ownerAgentId: string;
@@ -44,6 +52,23 @@ export interface OrchestrationPhaseExecutionResult {
   citations?: unknown[];
   artifacts?: unknown[];
   error?: string;
+}
+
+/**
+ * Linkage breadcrumb reported the moment an orchestration phase dispatches its
+ * child Cowork turn. Persisted into the parent durable run's metadata so that a
+ * crash mid-phase leaves enough state to harvest/reattach the existing child on
+ * resume instead of re-dispatching it (ORCH-002).
+ *
+ * The child session id is known synchronously before the turn is launched; the
+ * child durable run id only becomes known once the durable child run has been
+ * created, so it is reported in a second callback invocation.
+ */
+export interface OrchestrationPhaseChildDispatch {
+  phaseId: string;
+  childSessionId?: string;
+  childTurnId?: string;
+  childRunId?: string;
 }
 
 export interface OrchestrationWave {
@@ -83,6 +108,14 @@ export interface OrchestrationRun extends OrchestrationRunPolicyContext {
   currentPhaseId?: string;
   totalCostUsd: number;
   totalIterations: number;
+  /**
+   * Accumulated cost (USD) attributed to each wave, keyed by `waveId`. Used to enforce
+   * per-wave `budgetUsd` independently of the plan-level `maxCostUsd` cap. Persisted with
+   * the run so wave budgets remain enforced across durable resume.
+   */
+  waveCostUsdByWaveId?: Record<string, number>;
+  /** Populated only when `status` is `stopped_by_limit`, distinguishing plan vs wave caps. */
+  stopReason?: OrchestrationStopReason;
   workspaceId?: string;
   durableRunId?: string;
   executionState?: OrchestrationExecutionState;

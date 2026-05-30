@@ -38,6 +38,17 @@ export function normalizeMemoryForgetCriteria(input: MemoryForgetCriteriaInput =
   };
 }
 
+export function assertSafeGitPositionalArg(value: string, label: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`${label} must not be empty.`);
+  }
+  if (trimmed.startsWith("-")) {
+    throw new Error(`${label} must not begin with '-' (interpreted as a git option): ${trimmed}`);
+  }
+  return trimmed;
+}
+
 export function serializePathWithinRoot(
   rootDir: string,
   fullPath: string,
@@ -46,13 +57,7 @@ export function serializePathWithinRoot(
 ): string {
   const normalizedPath = path.resolve(fullPath);
   const relative = path.relative(rootDir, normalizedPath).replaceAll("\\", "/");
-  if (
-    relative
-    && relative !== "."
-    && !relative.startsWith("../")
-    && relative !== ".."
-    && !path.isAbsolute(relative)
-  ) {
+  if (relative && relative !== "." && !relative.startsWith("../") && relative !== ".." && !path.isAbsolute(relative)) {
     return relative.startsWith("./") ? relative : `./${relative}`;
   }
   const fingerprint = createHash("sha256").update(normalizedPath).digest("hex").slice(0, 12);

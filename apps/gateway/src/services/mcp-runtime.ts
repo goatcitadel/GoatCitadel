@@ -1,14 +1,20 @@
 import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import type {
   McpInvokeRequest,
   McpNormalizedContentItem,
   McpServerRecord,
   McpToolRecord,
 } from "@goatcitadel/contracts";
+import { logger } from "@goatcitadel/gateway-core";
 import { normalizeSafeEnvKeyNames } from "@goatcitadel/policy-engine";
+
+const log = logger.child("mcp-runtime");
 
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 const DEFAULT_STDIO_TIMEOUT_MS = 25000;
+/** Grace period before escalating a POSIX child from SIGTERM to SIGKILL. */
+const MCP_TERMINATE_GRACE_MS = 3000;
 const PLAYWRIGHT_SERVER_PATTERN = /\b(playwright)\b/i;
 const BROWSER_SERVER_PATTERN = /\b(browser|chrome|chromium|cdp|devtools)\b/i;
 const FETCH_SERVER_PATTERN = /\b(fetch|http|web)\b/i;
@@ -419,6 +425,155 @@ function buildMcpChildEnv(server: McpServerRecord): Record<string, string | unde
   return env;
 }
 
+/**
+ * Whether a child's stdin can still accept writes. A child that exited between
+ * spawn and write leaves stdin destroyed/ended; writing then emits EPIPE
+ * (or ERR_STREAM_DESTROYED) which — without an error listener — crashes the
+ * gateway as an unhandled stream error.
+ */
+function isChildStdinWritable(child: ChildProcess): boolean {
+  const stdin = child.stdin;
+  return Boolean(stdin) && !stdin!.destroyed && !stdin!.writableEnded && stdin!.writable !== false;
+}
+
+/**
+ * Write a JSON-RPC line to a child's stdin, tolerating a broken pipe.
+ *
+ * A child that has already exited makes the write throw EPIPE/ERR_STREAM_DESTROYED
+ * synchronously; combined with the stream-level error handler attached at spawn
+ * (see {@link attachChildStdinErrorHandler}), this surfaces a vanished child as a
+ * normal transport failure instead of an unhandled error that crashes the process.
+ *
+ * @returns `true` when the payload was handed to the stream, `false` when the
+ *   pipe was unwritable/broken (caller should treat this as a child disconnect).
+ */
+function writeToChildStdin(child: ChildProcess, server: McpServerRecord, payload: string): boolean {
+  if (!isChildStdinWritable(child)) {
+    log.warn("MCP child stdin unavailable; treating as disconnect", {
+      serverId: server.serverId,
+      label: server.label,
+    });
+    return false;
+  }
+  try {
+    child.stdin!.write(payload);
+    return true;
+  } catch (error) {
+    log.warn("MCP child stdin write failed; treating as disconnect", {
+      serverId: server.serverId,
+      label: server.label,
+      err: (error as Error).message,
+    });
+    return false;
+  }
+}
+
+/**
+ * Attach a one-time error handler to a child's stdin so a broken pipe (EPIPE /
+ * ERR_STREAM_DESTROYED) emitted asynchronously is caught and logged as a
+ * child-disconnect rather than escalating to an unhandled error event.
+ */
+function attachChildStdinErrorHandler(child: ChildProcess, server: McpServerRecord): void {
+  if (!child.stdin) {
+    return;
+  }
+  child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+    log.warn("MCP child stdin error", {
+      serverId: server.serverId,
+      label: server.label,
+      code: error.code,
+      err: error.message,
+    });
+  });
+}
+
+/**
+ * Terminate an MCP child process robustly across platforms.
+ *
+ * - Windows: a bare SIGTERM is not forwarded by `.cmd`/`.bat` shims or by
+ *   servers that spawn their own children (browser/Playwright MCP), orphaning
+ *   grandchildren. We kill the whole tree with `taskkill /pid <pid> /T /F`,
+ *   falling back to `child.kill()` if taskkill cannot be spawned.
+ * - POSIX: send SIGTERM, then escalate to SIGKILL after a short grace period if
+ *   the child has not exited. The escalation timer is cleared on normal exit so
+ *   no timer/listener leaks. These children are not spawned detached, so we
+ *   signal the child directly rather than guessing at a process group.
+ */
+function terminateChild(child: ChildProcess, server: McpServerRecord): void {
+  const pid = child.pid;
+  if (typeof pid !== "number" || child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+
+  if (process.platform === "win32") {
+    terminateWindowsChildTree(child, server, pid);
+    return;
+  }
+
+  sendPosixSignal(child, pid, "SIGTERM");
+
+  let killTimer: NodeJS.Timeout | undefined = setTimeout(() => {
+    killTimer = undefined;
+    if (child.exitCode === null && child.signalCode === null) {
+      sendPosixSignal(child, pid, "SIGKILL");
+    }
+  }, MCP_TERMINATE_GRACE_MS);
+  killTimer.unref?.();
+
+  child.once("exit", () => {
+    if (killTimer) {
+      clearTimeout(killTimer);
+      killTimer = undefined;
+    }
+  });
+}
+
+function sendPosixSignal(child: ChildProcess, pid: number, signal: NodeJS.Signals): void {
+  try {
+    child.kill(signal);
+  } catch (error) {
+    log.warn("MCP child signal failed", {
+      pid,
+      signal,
+      err: (error as Error).message,
+    });
+  }
+}
+
+function terminateWindowsChildTree(child: ChildProcess, server: McpServerRecord, pid: number): void {
+  try {
+    const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    killer.on("error", (error) => {
+      log.warn("MCP taskkill failed; falling back to child.kill", {
+        serverId: server.serverId,
+        label: server.label,
+        pid,
+        err: error.message,
+      });
+      try {
+        child.kill();
+      } catch {
+        // Best effort; the child may already be gone.
+      }
+    });
+  } catch (error) {
+    log.warn("MCP taskkill could not be spawned; falling back to child.kill", {
+      serverId: server.serverId,
+      label: server.label,
+      pid,
+      err: (error as Error).message,
+    });
+    try {
+      child.kill();
+    } catch {
+      // Best effort; the child may already be gone.
+    }
+  }
+}
+
 async function withStdioMcpClient<T>(
   server: McpServerRecord,
   timeoutMs: number,
@@ -433,6 +588,10 @@ async function withStdioMcpClient<T>(
     windowsHide: true,
     timeout: Math.ceil(timeoutMs * 1.5),
   });
+  // Catch EPIPE/ERR_STREAM_DESTROYED on stdin so a child that exits between
+  // spawn and write surfaces as a transport failure rather than crashing the
+  // gateway via an unhandled stream 'error' event.
+  attachChildStdinErrorHandler(child, server);
   const pending = new Map<
     number,
     {
@@ -518,7 +677,12 @@ async function withStdioMcpClient<T>(
       method,
       params,
     };
-    child.stdin.write(`${JSON.stringify(envelope)}\n`);
+    if (!writeToChildStdin(child, server, `${JSON.stringify(envelope)}\n`)) {
+      closed = true;
+      return Promise.reject(
+        new Error(`MCP server ${server.label} disconnected before the ${method} request could be sent.`),
+      );
+    }
     return new Promise<JsonRpcEnvelope>((resolve, reject) => {
       const cleanupAbort = () => {
         if (signal && onAbort) {
@@ -546,7 +710,7 @@ async function withStdioMcpClient<T>(
             clearTimeout(timer);
             wrappedReject(createMcpAbortError());
             if (!closed) {
-              child.kill();
+              terminateChild(child, server);
             }
           }
         : undefined;
@@ -570,7 +734,9 @@ async function withStdioMcpClient<T>(
       method,
       params,
     };
-    child.stdin.write(`${JSON.stringify(envelope)}\n`);
+    // Notifications are fire-and-forget; a broken pipe is logged inside the
+    // helper and simply means the child is gone.
+    writeToChildStdin(child, server, `${JSON.stringify(envelope)}\n`);
   };
 
   const client: StdioClient = {
@@ -578,7 +744,7 @@ async function withStdioMcpClient<T>(
     notify,
     close: () => {
       if (!closed) {
-        child.kill();
+        terminateChild(child, server);
       }
     },
     readStderr: () => stderrBuffer.trim(),
@@ -739,3 +905,12 @@ function stringifyUnknown(value: unknown): string | undefined {
     return String(value);
   }
 }
+
+/** Internal helpers exposed for focused lifecycle tests. Not part of the public API. */
+export const __internal = {
+  MCP_TERMINATE_GRACE_MS,
+  attachChildStdinErrorHandler,
+  isChildStdinWritable,
+  terminateChild,
+  writeToChildStdin,
+};

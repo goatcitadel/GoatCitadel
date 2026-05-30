@@ -609,3 +609,214 @@ describe("OrchestrationEngine", () => {
     ).toThrow("Phase missing-phase not found");
   });
 });
+
+const multiWaveBudgetPlan: OrchestrationPlan = {
+  planId: "plan-budget",
+  goal: "wave budget enforcement",
+  mode: "auto",
+  maxIterations: 100,
+  maxRuntimeMinutes: 1000,
+  maxCostUsd: 100,
+  waves: [
+    {
+      waveId: "wave-1",
+      verify: [],
+      budgetUsd: 1,
+      ownership: [{ agentId: "agent-a", paths: ["apps/**"] }],
+      phases: [
+        {
+          phaseId: "phase-1a",
+          ownerAgentId: "agent-a",
+          specPath: "phases/1a.md",
+          loopMode: "fresh-context",
+          requiresApproval: false,
+        },
+        {
+          phaseId: "phase-1b",
+          ownerAgentId: "agent-a",
+          specPath: "phases/1b.md",
+          loopMode: "fresh-context",
+          requiresApproval: false,
+        },
+      ],
+    },
+    {
+      waveId: "wave-2",
+      verify: [],
+      budgetUsd: 1,
+      ownership: [{ agentId: "agent-b", paths: ["packages/**"] }],
+      phases: [
+        {
+          phaseId: "phase-2a",
+          ownerAgentId: "agent-b",
+          specPath: "phases/2a.md",
+          loopMode: "fresh-context",
+          requiresApproval: false,
+        },
+      ],
+    },
+  ],
+};
+
+// Fixed clock equal to the run start time so runtime-minute limits never trip in these
+// cost-focused tests (the plan allows 1000 runtime minutes).
+const BUDGET_NOW = "2026-02-27T00:00:00.000Z";
+
+function runningRun(overrides: Partial<OrchestrationRun> = {}): OrchestrationRun {
+  return {
+    runId: "run-budget",
+    planId: multiWaveBudgetPlan.planId,
+    status: "running",
+    startedAt: BUDGET_NOW,
+    currentWaveId: "wave-1",
+    currentPhaseId: "phase-1a",
+    totalCostUsd: 0,
+    totalIterations: 0,
+    ...overrides,
+  };
+}
+
+describe("OrchestrationEngine plan-level cost cap (characterization)", () => {
+  it("stops by limit when the plan-level maxCostUsd is reached and tags the plan_limit reason", () => {
+    const engine = new OrchestrationEngine();
+    const plan: OrchestrationPlan = { ...multiWaveBudgetPlan, maxCostUsd: 0.25 };
+
+    const advanced = engine.advancePhase(plan, runningRun(), "phase-1a", { costIncrementUsd: 0.25, now: BUDGET_NOW });
+
+    expect(advanced.status).toBe("stopped_by_limit");
+    expect(advanced.stopReason).toBe("plan_limit");
+    expect(advanced.endedAt).toBeDefined();
+  });
+
+  it("does not stop on plan-level cost below maxCostUsd", () => {
+    const engine = new OrchestrationEngine();
+    const plan: OrchestrationPlan = { ...multiWaveBudgetPlan, maxCostUsd: 100 };
+
+    const advanced = engine.advancePhase(plan, runningRun(), "phase-1a", { costIncrementUsd: 0.5, now: BUDGET_NOW });
+
+    expect(advanced.status).toBe("running");
+    expect(advanced.stopReason).toBeUndefined();
+    expect(advanced.currentPhaseId).toBe("phase-1b");
+  });
+});
+
+describe("OrchestrationEngine per-wave budget enforcement", () => {
+  it("accumulates per-wave cost attributed to the phase's wave across phases", () => {
+    const engine = new OrchestrationEngine();
+    const plan: OrchestrationPlan = { ...multiWaveBudgetPlan, maxCostUsd: 100 };
+
+    // wave-1 budget is 1; first phase costs 0.4 -> still under budget, stays in wave-1.
+    const afterPhase1a = engine.advancePhase(plan, runningRun(), "phase-1a", {
+      costIncrementUsd: 0.4,
+      now: BUDGET_NOW,
+    });
+    expect(afterPhase1a.status).toBe("running");
+    expect(afterPhase1a.currentWaveId).toBe("wave-1");
+    expect(afterPhase1a.currentPhaseId).toBe("phase-1b");
+    expect(afterPhase1a.waveCostUsdByWaveId).toEqual({ "wave-1": 0.4 });
+    expect(afterPhase1a.totalCostUsd).toBeCloseTo(0.4, 10);
+  });
+
+  it("stops the wave with wave_budget_exceeded when accumulated cost reaches budgetUsd while plan cap is not hit", () => {
+    const engine = new OrchestrationEngine();
+    const plan: OrchestrationPlan = { ...multiWaveBudgetPlan, maxCostUsd: 100 };
+
+    // First phase already cost 0.6 toward wave-1's budget of 1.
+    const afterPhase1a = engine.advancePhase(plan, runningRun(), "phase-1a", {
+      costIncrementUsd: 0.6,
+      now: BUDGET_NOW,
+    });
+    expect(afterPhase1a.status).toBe("running");
+    expect(afterPhase1a.stopReason).toBeUndefined();
+
+    // Second phase pushes wave-1 to 1.1 >= budget 1, but total 1.1 << plan cap 100.
+    const afterPhase1b = engine.advancePhase(plan, afterPhase1a, "phase-1b", {
+      costIncrementUsd: 0.5,
+      now: BUDGET_NOW,
+    });
+    expect(afterPhase1b.status).toBe("stopped_by_limit");
+    expect(afterPhase1b.stopReason).toBe("wave_budget_exceeded");
+    expect(afterPhase1b.currentWaveId).toBe("wave-1");
+    expect(afterPhase1b.currentPhaseId).toBe("phase-1b");
+    expect(afterPhase1b.endedAt).toBeDefined();
+    expect(afterPhase1b.waveCostUsdByWaveId).toEqual({ "wave-1": 1.1 });
+    // Plan-level cap stays well below maxCostUsd, proving wave enforcement is independent.
+    expect(afterPhase1b.totalCostUsd).toBeLessThan(plan.maxCostUsd);
+  });
+
+  it("treats a wave with budgetUsd of 0 as unbounded (no per-wave enforcement)", () => {
+    const engine = new OrchestrationEngine();
+    const plan: OrchestrationPlan = {
+      ...multiWaveBudgetPlan,
+      maxCostUsd: 100,
+      waves: [{ ...multiWaveBudgetPlan.waves[0]!, budgetUsd: 0 }, multiWaveBudgetPlan.waves[1]!],
+    };
+
+    const afterPhase1a = engine.advancePhase(plan, runningRun(), "phase-1a", { costIncrementUsd: 5, now: BUDGET_NOW });
+    expect(afterPhase1a.status).toBe("running");
+    expect(afterPhase1a.stopReason).toBeUndefined();
+    expect(afterPhase1a.currentPhaseId).toBe("phase-1b");
+
+    const afterPhase1b = engine.advancePhase(plan, afterPhase1a, "phase-1b", { costIncrementUsd: 5, now: BUDGET_NOW });
+    expect(afterPhase1b.status).toBe("running");
+    expect(afterPhase1b.stopReason).toBeUndefined();
+    expect(afterPhase1b.currentWaveId).toBe("wave-2");
+    expect(afterPhase1b.waveCostUsdByWaveId).toEqual({ "wave-1": 10 });
+  });
+
+  it("tracks per-wave cost independently across waves and resets enforcement per wave", () => {
+    const engine = new OrchestrationEngine();
+    const plan: OrchestrationPlan = { ...multiWaveBudgetPlan, maxCostUsd: 100 };
+
+    // wave-1: two phases at 0.4 each -> 0.8 < budget 1, advances into wave-2.
+    const afterPhase1a = engine.advancePhase(plan, runningRun(), "phase-1a", {
+      costIncrementUsd: 0.4,
+      now: BUDGET_NOW,
+    });
+    const afterPhase1b = engine.advancePhase(plan, afterPhase1a, "phase-1b", {
+      costIncrementUsd: 0.4,
+      now: BUDGET_NOW,
+    });
+    expect(afterPhase1b.status).toBe("running");
+    expect(afterPhase1b.currentWaveId).toBe("wave-2");
+    expect(afterPhase1b.currentPhaseId).toBe("phase-2a");
+    expect(afterPhase1b.waveCostUsdByWaveId).toEqual({ "wave-1": 0.8 });
+
+    // wave-2: single phase at 1.5 >= budget 1 -> stops on wave_budget_exceeded; wave-1 untouched.
+    const afterPhase2a = engine.advancePhase(plan, afterPhase1b, "phase-2a", {
+      costIncrementUsd: 1.5,
+      now: BUDGET_NOW,
+    });
+    expect(afterPhase2a.status).toBe("stopped_by_limit");
+    expect(afterPhase2a.stopReason).toBe("wave_budget_exceeded");
+    expect(afterPhase2a.waveCostUsdByWaveId).toEqual({ "wave-1": 0.8, "wave-2": 1.5 });
+  });
+
+  it("preserves a persisted accumulator on resume and continues enforcing the wave budget", () => {
+    const engine = new OrchestrationEngine();
+    const plan: OrchestrationPlan = { ...multiWaveBudgetPlan, maxCostUsd: 100 };
+
+    // Simulate a durable resume: the run was rehydrated with prior wave-1 spend of 0.7.
+    const resumed = runningRun({
+      currentPhaseId: "phase-1b",
+      totalCostUsd: 0.7,
+      totalIterations: 1,
+      waveCostUsdByWaveId: { "wave-1": 0.7 },
+    });
+
+    const afterResume = engine.advancePhase(plan, resumed, "phase-1b", { costIncrementUsd: 0.4, now: BUDGET_NOW });
+    expect(afterResume.status).toBe("stopped_by_limit");
+    expect(afterResume.stopReason).toBe("wave_budget_exceeded");
+    expect(afterResume.waveCostUsdByWaveId).toEqual({ "wave-1": 1.1 });
+  });
+
+  it("leaves the accumulator and stop reason absent when no cost is applied", () => {
+    const engine = new OrchestrationEngine();
+    const plan: OrchestrationPlan = { ...multiWaveBudgetPlan, maxCostUsd: 100 };
+
+    const advanced = engine.advancePhase(plan, runningRun(), "phase-1a", { now: BUDGET_NOW });
+    expect(advanced.status).toBe("running");
+    expect(advanced.stopReason).toBeUndefined();
+    expect(advanced.waveCostUsdByWaveId).toEqual({ "wave-1": 0 });
+  });
+});

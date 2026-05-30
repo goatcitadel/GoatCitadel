@@ -340,6 +340,44 @@ describe("client event stream", () => {
     cleanup();
   });
 
+  it("normalizes payload-less frames and drops frames missing discriminant fields (MCSHARED-001)", async () => {
+    const events: Array<{ eventType?: string; payload?: unknown }> = [];
+
+    const cleanup = connectEventStream((event) => events.push(event as { eventType?: string; payload?: unknown }));
+    await flushAsync();
+    const source = FakeEventSource.instances[0]!;
+
+    // Valid frame without a `payload` field: must be forwarded with payload defaulted to {}.
+    source.onmessage?.({
+      data: JSON.stringify({
+        eventId: "evt-no-payload",
+        sequence: 3,
+        eventType: "workspace.updated",
+        source: "gateway",
+        timestamp: "2026-01-01T12:01:00.000Z",
+      }),
+    });
+    // Malformed frame missing eventType/source: must be dropped, not forwarded, and must not throw.
+    expect(() => source.onmessage?.({ data: JSON.stringify({ eventId: "evt-bad", sequence: 4 }) })).not.toThrow();
+    // A subsequent valid frame must still be processed after the dropped one.
+    source.onmessage?.({
+      data: JSON.stringify({
+        eventId: "evt-after",
+        sequence: 5,
+        eventType: "task.updated",
+        source: "gateway",
+        timestamp: "2026-01-01T12:02:00.000Z",
+        payload: { kind: "task" },
+      }),
+    });
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ eventType: "workspace.updated", payload: {} });
+    expect(events[1]).toMatchObject({ eventType: "task.updated", payload: { kind: "task" } });
+
+    cleanup();
+  });
+
   it("stays inert when the browser window is unavailable", async () => {
     vi.stubGlobal("window", undefined);
     const states: string[] = [];

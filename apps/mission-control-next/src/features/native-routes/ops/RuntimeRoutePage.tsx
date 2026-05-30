@@ -16,6 +16,7 @@ import {
   QuickJumpCard,
 } from "../NativeRoutePageLayout";
 import { recordRouteAction } from "../route-diagnostics";
+import { useIsMounted } from "@next/hooks/use-is-mounted";
 import { RuntimeSpendChart, type SpendDay } from "./RuntimeSpendChart";
 import type { NativeRoutePagesProps } from "../types";
 import "../native-routes.css";
@@ -75,18 +76,27 @@ export function RuntimeRoutePage({
   const [reviewReadiness, setReviewReadiness] = useState<ReviewReadinessSummary | null>(null);
   const [reviewReadinessLoading, setReviewReadinessLoading] = useState(false);
   const [reviewReadinessError, setReviewReadinessError] = useState<string | null>(null);
+  const isMounted = useIsMounted();
 
   const loadReviewReadiness = useCallback(async () => {
     setReviewReadinessLoading(true);
     try {
-      setReviewReadiness(await fetchReviewReadiness());
+      const summary = await fetchReviewReadiness();
+      if (!isMounted()) {
+        return;
+      }
+      setReviewReadiness(summary);
       setReviewReadinessError(null);
     } catch (error) {
-      setReviewReadinessError(error instanceof Error ? error.message : "Could not load review readiness.");
+      if (isMounted()) {
+        setReviewReadinessError(error instanceof Error ? error.message : "Could not load review readiness.");
+      }
     } finally {
-      setReviewReadinessLoading(false);
+      if (isMounted()) {
+        setReviewReadinessLoading(false);
+      }
     }
-  }, []);
+  }, [isMounted]);
 
   useEffect(() => {
     if (section === "diagnostics") {
@@ -111,6 +121,9 @@ export function RuntimeRoutePage({
         action: scheduleDraft.action,
         enabled: true,
       });
+      if (!isMounted()) {
+        return;
+      }
       recordRouteAction("ops/schedules", "schedule.created", {
         jobId: job.jobId,
         action: scheduleDraft.action,
@@ -119,9 +132,13 @@ export function RuntimeRoutePage({
       setScheduleNotice("Schedule created.");
       await runtime.reload();
     } catch (error) {
-      setScheduleNotice(error instanceof Error ? error.message : "Could not create schedule.");
+      if (isMounted()) {
+        setScheduleNotice(error instanceof Error ? error.message : "Could not create schedule.");
+      }
     } finally {
-      setScheduleCreating(false);
+      if (isMounted()) {
+        setScheduleCreating(false);
+      }
     }
   };
 
@@ -142,12 +159,19 @@ export function RuntimeRoutePage({
         constraints: splitDraftList(automationDraft.constraints),
         workspaceId: activeWorkspaceId,
       });
+      if (!isMounted()) {
+        return;
+      }
       setAutomationPreview(preview);
       setAutomationNotice("Automation recipe drafted. No cron job was created.");
     } catch (error) {
-      setAutomationNotice(error instanceof Error ? error.message : "Could not draft automation recipe.");
+      if (isMounted()) {
+        setAutomationNotice(error instanceof Error ? error.message : "Could not draft automation recipe.");
+      }
     } finally {
-      setAutomationBusy(false);
+      if (isMounted()) {
+        setAutomationBusy(false);
+      }
     }
   };
 

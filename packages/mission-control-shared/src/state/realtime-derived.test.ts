@@ -270,6 +270,23 @@ describe("realtime-derived", () => {
     expect(deriveRealtimeNotification(event({ eventType: "heartbeat" }))).toBeUndefined();
   });
 
+  it("does not throw when an event is missing its payload (MCSHARED-001 defense-in-depth)", () => {
+    // RealtimeEvent.payload is typed Record<string, unknown> but events that
+    // bypass the SSE boundary normalizer (e.g. DashboardStateResponse.recentEvents)
+    // could arrive without a payload; the pure derivers must not dereference it unsafely.
+    const malformed = {
+      eventId: "evt",
+      sequence: 1,
+      eventType: "task_updated",
+      source: "gateway",
+      timestamp: "",
+    } as unknown as RealtimeEvent;
+    expect(() => deriveRealtimeRefresh(malformed)).not.toThrow();
+    expect(() => deriveRealtimeNotification(malformed)).not.toThrow();
+    expect(() => deriveRealtimeEventTone(malformed)).not.toThrow();
+    expect(deriveRealtimeEventTone(malformed)).toBe("success");
+  });
+
   it("maps event tone from replay gaps, failures, task activity, live domains, and muted noise", () => {
     expect(deriveRealtimeEventTone(event({ payload: { kind: "replay_gap" } }))).toBe("warning");
     expect(deriveRealtimeEventTone(event({ eventType: "auth_device_requested" }))).toBe("warning");

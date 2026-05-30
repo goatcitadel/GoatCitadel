@@ -7,7 +7,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
 import { parseSkillMarkdown } from "@goatcitadel/skills";
-import { fetchAllowlisted } from "@goatcitadel/policy-engine";
+import { assertWritePathInJail, fetchAllowlisted } from "@goatcitadel/policy-engine";
+import { assertSafeGitPositionalArg } from "./security-utils.js";
 import type {
   SkillImportCandidate,
   SkillImportHistoryRecord,
@@ -931,7 +932,9 @@ export class SkillImportService {
       }
 
       const inferredId = validation.inferredSkillId || `import-${Date.now()}`;
-      const installedPath = path.resolve(this.rootDir, "skills", "extra", inferredId);
+      const skillsExtraRoot = path.resolve(this.rootDir, "skills", "extra");
+      const installedPath = path.resolve(skillsExtraRoot, inferredId);
+      assertWritePathInJail(installedPath, [skillsExtraRoot]);
       const targetExists = fsSync.existsSync(installedPath);
       if (targetExists && !input.force) {
         throw new Error(`Skill install target already exists: ${installedPath}`);
@@ -1331,10 +1334,11 @@ export class SkillImportService {
       };
     }
 
+    const safeSourceRef = assertSafeGitPositionalArg(sourceRef, "Git source ref");
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-skill-git-"));
     const cloneDir = path.join(tempRoot, "repo");
     try {
-      await execFileAsync("git", ["clone", "--depth", "1", sourceRef, cloneDir], {
+      await execFileAsync("git", ["clone", "--depth", "1", "--", safeSourceRef, cloneDir], {
         windowsHide: true,
       });
     } catch (error) {
@@ -2191,6 +2195,9 @@ function isMarketplaceListingUrl(value: string): boolean {
 // Test-only export for skill-import.marketplace-host.security.test.ts.
 export const __isMarketplaceListingUrlForTests = isMarketplaceListingUrl;
 
+// Test-only export for skill-id normalization coverage.
+export const __normalizeSkillIdForTests = normalizeSkillId;
+
 async function materializeHostedSkillBundle(sourceUrl: string, targetDir: string): Promise<void> {
   const bundleUrl = new URL(sourceUrl);
   const baseUrl = new URL(".", bundleUrl);
@@ -2484,10 +2491,16 @@ function summarizePathList(paths: string[], limit = 3): string {
 }
 
 function normalizeSkillId(name: string): string {
-  const normalized = name
-    .trim()
+  const trimmed = name.trim();
+  if (path.isAbsolute(trimmed) || /[/\\]/.test(trimmed)) {
+    throw new Error(`Skill name must not contain path separators: ${trimmed}`);
+  }
+  const normalized = trimmed
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return normalized || "imported-skill";
+    .replace(/^[.-]+|[.-]+$/g, "");
+  if (normalized.length === 0 || /^\.+$/.test(normalized) || normalized.includes("..")) {
+    throw new Error(`Skill name does not yield a safe skill id: ${trimmed}`);
+  }
+  return normalized;
 }

@@ -272,8 +272,12 @@ export function ChatThreadBranchSwitcher({
 }
 
 export function StreamingAssistantSkeleton({ label }: { label: string }) {
+  // Visual-only pending indicator. Streaming activity is announced by the single
+  // owning live region per surface (ThreadedTimeline's live region / ChatThreadView's
+  // status bar) and the enclosing assistant bubble's aria-busy, so this skeleton must
+  // NOT carry role="status" or it would duplicate that announcement to screen readers.
   return (
-    <div className="mc-next-assistant-streaming-skeleton" role="status" aria-label={label}>
+    <div className="mc-next-assistant-streaming-skeleton" aria-label={label}>
       <span aria-hidden="true" />
       <span aria-hidden="true" />
       <span aria-hidden="true" />
@@ -552,7 +556,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
     <article className={turnClassName}>
       <div
         className="mc-next-thread-turn-surface"
-        role="button"
+        role="group"
         tabIndex={0}
         aria-current={selected ? "true" : undefined}
         aria-label={`Select turn ${turn.turnId}`}

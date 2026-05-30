@@ -14,8 +14,9 @@ export function buildPostgresRuntimeSchemaSqlFromBlueprint(blueprint: SqliteSche
       if (index.columns.length === 0 || index.origin === "pk") {
         continue;
       }
+      const partialClause = index.where ? ` WHERE ${index.where}` : "";
       statements.push(
-        `CREATE ${index.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${index.name} ON ${table.name}(${index.columns.join(", ")});`,
+        `CREATE ${index.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${index.name} ON ${table.name}(${index.columns.join(", ")})${partialClause};`,
       );
     }
   }

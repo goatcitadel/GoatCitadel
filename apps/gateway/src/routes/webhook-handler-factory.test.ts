@@ -7,6 +7,7 @@ import {
   dispatchInboundWebhookMessage,
   type WebhookRawBodyRequest,
 } from "./webhook-handler-factory.js";
+import { ChannelBotLoopGuard } from "../services/channel-bot-loop-guard.js";
 
 function createReply() {
   const reply = {
@@ -163,6 +164,139 @@ describe("webhook-handler-factory contract behavior", () => {
     expect(reply.statusCode).toBe(200);
     expect(reply.payload).toEqual({ challenge: "ok" });
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("ignores inbound webhooks for a disabled connection without verifying or dispatching", async () => {
+    const verifySignature = vi.fn(() => ({ ok: true as const }));
+    const dispatch = vi.fn();
+    const handler = createWebhookHandler(
+      {
+        services: {
+          integrationWebhooks: {
+            getIntegrationConnection: vi.fn(() => ({ key: "telegram", enabled: false, config: {} })),
+          },
+        },
+      } as any,
+      {
+        source: "telegram",
+        connectorKey: "telegram",
+        connectorLabel: "Telegram",
+        rawBodyKey: "telegramRawBody",
+        missingRawBodyError: "raw body missing",
+        verifySignature,
+        parsePayload: () => ({ kind: "dispatch" as const, parsed: { ok: true } }),
+        dispatch,
+      },
+    );
+
+    const reply = createReply();
+    await handler(createRequest(), reply as any);
+
+    expect(reply.statusCode).toBe(200);
+    expect(reply.payload).toEqual({
+      accepted: true,
+      ignored: true,
+      eventType: undefined,
+      reason: "connection_disabled",
+    });
+    expect(verifySignature).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("ignores inbound webhooks for a disconnected connection", async () => {
+    const dispatch = vi.fn();
+    const handler = createWebhookHandler(
+      {
+        services: {
+          integrationWebhooks: {
+            getIntegrationConnection: vi.fn(() => ({ key: "telegram", status: "disconnected", config: {} })),
+          },
+        },
+      } as any,
+      {
+        source: "telegram",
+        connectorKey: "telegram",
+        connectorLabel: "Telegram",
+        rawBodyKey: "telegramRawBody",
+        missingRawBodyError: "raw body missing",
+        verifySignature: () => ({ ok: true as const }),
+        parsePayload: () => ({ kind: "dispatch" as const, parsed: { ok: true } }),
+        dispatch,
+      },
+    );
+
+    const reply = createReply();
+    await handler(createRequest(), reply as any);
+
+    expect(reply.statusCode).toBe(200);
+    expect(reply.payload).toEqual(
+      expect.objectContaining({ accepted: true, ignored: true, reason: "connection_disabled" }),
+    );
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("caps a runaway self-reply loop via the bot-loop guard and records a diagnostic", async () => {
+    let now = 1_000_000;
+    const guard = new ChannelBotLoopGuard(
+      { maxEventsPerWindow: 3, windowSeconds: 60, cooldownSeconds: 60, enabled: true },
+      () => now,
+    );
+    const recordDevDiagnostic = vi.fn();
+    const gateway = {
+      ingestChannelMessage: vi.fn(async () => ({
+        deduped: false,
+        session: { sessionId: "session-loop" },
+      })),
+      setChatSessionBinding: vi.fn(),
+      respondToExistingChatMessage: vi.fn(async () => ({ turnId: "turn-loop" })),
+      emitChannelActivity: vi.fn(async () => ({ effects: [] })),
+      recordDevDiagnostic,
+    };
+
+    const dispatchOnce = (eventId: string) =>
+      dispatchInboundWebhookMessage(
+        gateway as any,
+        {
+          channel: "slack",
+          connectionId: "11111111-1111-1111-1111-111111111111",
+          idempotencyKey: `slack:${eventId}`,
+          eventType: "message",
+          bindingTarget: "C1",
+          message: {
+            eventId,
+            account: "11111111-1111-1111-1111-111111111111",
+            room: "C1",
+            actorId: "U-BOT",
+            content: "loop",
+          },
+        },
+        guard,
+      );
+
+    for (let i = 0; i < 3; i++) {
+      now += 100;
+      const result = await dispatchOnce(`event-${i}`);
+      expect(result.replied).toBe(true);
+    }
+
+    now += 100;
+    const suppressed = await dispatchOnce("event-overflow");
+    expect(suppressed).toEqual(
+      expect.objectContaining({
+        accepted: true,
+        replied: false,
+        suppressed: true,
+        suppressedReason: "rate-cap",
+        sessionId: "session-loop",
+      }),
+    );
+
+    // The over-cap event is still ingested but never produces a reply turn.
+    expect(gateway.ingestChannelMessage).toHaveBeenCalledTimes(4);
+    expect(gateway.respondToExistingChatMessage).toHaveBeenCalledTimes(3);
+    expect(recordDevDiagnostic).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "channel.bot_loop_suppressed", category: "channels" }),
+    );
   });
 
   it("binds the chat session and replies only when the inbound webhook event is new", async () => {

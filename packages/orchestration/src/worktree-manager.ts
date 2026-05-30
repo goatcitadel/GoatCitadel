@@ -27,7 +27,19 @@ export class WorktreeManager {
 
   public async remove(worktreePath: string): Promise<void> {
     const resolvedPath = path.resolve(worktreePath);
-    await execFileAsync("git", ["worktree", "remove", resolvedPath], {
+    // Run-scoped orchestration worktrees are disposable, detached, and almost
+    // always dirty (agents write into them), so a plain `git worktree remove`
+    // fails. `--force` is safe here and lets the git-side removal succeed.
+    await execFileAsync("git", ["worktree", "remove", "--force", resolvedPath], {
+      cwd: this.options.repoRoot,
+    });
+  }
+
+  public async prune(): Promise<void> {
+    // Reclaim stale `.git/worktrees/<id>` administrative entries left behind
+    // when a worktree directory was removed outside of `git worktree remove`
+    // (e.g. a filesystem-level cleanup fallback).
+    await execFileAsync("git", ["worktree", "prune"], {
       cwd: this.options.repoRoot,
     });
   }

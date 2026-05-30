@@ -3,7 +3,7 @@
 // decomposition. Keep this file focused on layout/utility surface; section-
 // specific helpers (providers, personalities, channels, MCP, tools, addons)
 // stay in `../SettingsNativePage.tsx` until their dedicated section files land.
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   Cable,
@@ -152,17 +152,31 @@ export function useAsyncLoad<T>(loader: () => Promise<T>) {
     error: null,
     data: null,
   });
+  // Monotonic request id mirrors `useShellStatus.refreshIdRef`: a later reload
+  // bumps the id so an earlier (slower) response is dropped, and unmount bumps
+  // it so no in-flight response calls setState after teardown. This prevents
+  // last-writer-wins races on workspace switch and setState-after-unmount.
+  const requestIdRef = useRef(0);
 
   const reload = useCallback(async () => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    const isCurrentRequest = () => requestIdRef.current === requestId;
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
       const data = await loader();
+      if (!isCurrentRequest()) {
+        return;
+      }
       setState({
         loading: false,
         error: null,
         data,
       });
     } catch (error) {
+      if (!isCurrentRequest()) {
+        return;
+      }
       setState({
         loading: false,
         error: getErrorMessage(error),
@@ -173,6 +187,11 @@ export function useAsyncLoad<T>(loader: () => Promise<T>) {
 
   useEffect(() => {
     void reload();
+    return () => {
+      // Supersede any in-flight reload so its resolution is ignored once this
+      // effect (and typically the component) tears down.
+      requestIdRef.current += 1;
+    };
   }, [reload]);
 
   return {

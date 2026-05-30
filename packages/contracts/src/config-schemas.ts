@@ -4,6 +4,21 @@ import { z } from "zod";
 // Tool Policy
 // ---------------------------------------------------------------------------
 
+// A sandbox jail-root entry must be a non-empty path. An empty array of roots is
+// fail-closed (no filesystem access granted); a single empty-string entry is
+// fail-open because callers resolve roots with `path.resolve(rootDir, root)`, and
+// `path.resolve(rootDir, "")` collapses to `rootDir` itself -- granting the entire
+// project root for write / code-mode access. Reject empty and whitespace-only
+// entries here so that no jail-root array can silently widen to the working root.
+//
+// Note: relative entries (e.g. "./workspace") are intentionally accepted. The
+// gateway resolves every root against a trusted project `rootDir` before use, and
+// all shipped configs declare roots relative to that root. Constraining to
+// absolute-only here would reject those legitimate configs at parse time.
+const SandboxJailRootSchema = z.string().refine((value) => value.trim().length > 0, {
+  message: "Sandbox jail root must be a non-empty path (an empty string resolves to the working root).",
+});
+
 const ToolLoopDetectionConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -66,8 +81,8 @@ export const ToolPolicyConfigSchema = z
     agents: z.record(z.string(), z.unknown()).default({}),
     sandbox: z
       .object({
-        writeJailRoots: z.array(z.string()),
-        readOnlyRoots: z.array(z.string()),
+        writeJailRoots: z.array(SandboxJailRootSchema),
+        readOnlyRoots: z.array(SandboxJailRootSchema),
         readAccessMode: z.enum(["roots_only", "approval_required", "full_disk"]).default("roots_only"),
         networkAllowlist: z.array(z.string()).default([]),
         riskyShellPatterns: z.array(z.string()).default([]),

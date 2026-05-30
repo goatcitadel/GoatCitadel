@@ -22,7 +22,10 @@ export function AssistantMessageRenderer({
   streamPresentationMode?: AssistantStreamPresentationMode;
   className?: string;
 }) {
-  const displayContent = role === "assistant" ? normalizeAssistantDisplayText(content) : content;
+  const displayContent = useMemo(
+    () => (role === "assistant" ? normalizeAssistantDisplayText(content) : content),
+    [role, content],
+  );
 
   return (
     <div

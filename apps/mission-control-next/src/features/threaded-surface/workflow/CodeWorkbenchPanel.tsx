@@ -30,6 +30,7 @@ import { AgenticRuntimeVisibilityPanel } from "@goatcitadel/mission-control-shar
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { MonacoDiffEditor } from "@goatcitadel/mission-control-shared/components/MonacoDiffEditor";
 import { StatusChip } from "../../native-routes/primitives";
+import { useIsMounted } from "@next/hooks/use-is-mounted";
 import { WorkbenchFileTree } from "@goatcitadel/mission-control-shared/components/WorkbenchFileTree";
 import { WorkbenchMonacoEditor } from "@goatcitadel/mission-control-shared/components/WorkbenchMonacoEditor";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
@@ -683,6 +684,7 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const [fileActionPath, setFileActionPath] = useState("");
   const [fileActionTargetPath, setFileActionTargetPath] = useState("");
   const [fileActionNotice, setFileActionNotice] = useState<string | null>(null);
+  const isMounted = useIsMounted();
   const hasPatchDiff = Boolean(diff?.diff.trim());
   const activeBlock = codeBlocks[activeBlockIndex] ?? null;
   const activePatchBlock = activeBlock && isPendingPatchBlock(activeBlock) ? activeBlock : null;
@@ -1314,6 +1316,9 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
       targetPath: fileActionTargetRequired ? fileActionTargetPath.trim() : undefined,
     };
     const completed = await onFileOperation(input);
+    if (!isMounted()) {
+      return;
+    }
     if (completed === false) {
       setFileActionNotice("File action failed.");
       return;
@@ -1357,8 +1362,16 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
       void navigator.clipboard
         .writeText(runLogText)
-        .then(() => setRunLogCopyNotice("Run log copied."))
-        .catch(() => setRunLogCopyNotice("Run log copy failed."));
+        .then(() => {
+          if (isMounted()) {
+            setRunLogCopyNotice("Run log copied.");
+          }
+        })
+        .catch(() => {
+          if (isMounted()) {
+            setRunLogCopyNotice("Run log copy failed.");
+          }
+        });
       return;
     }
     setRunLogCopyNotice("Clipboard is not available in this environment.");
