@@ -1,0 +1,79 @@
+html,
+body,
+#demo-root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+}
+
+.demo-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  background: var(--bg-app);
+  color: var(--fg-primary);
+}
+
+.demo-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem 1.25rem;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface-2);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.demo-header-title {
+  letter-spacing: 0.01em;
+}
+
+.demo-header-theme {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: color-mix(in oklab, var(--area-chat) 70%, var(--fg-muted));
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.demo-stage {
+  display: grid;
+  place-items: start center;
+  padding: 1.5rem 2rem 3rem;
+  --mc-area-color: var(--area-chat);
+  --mc-surface-1: var(--bg-surface-1);
+  --mc-surface-2: var(--bg-surface-2);
+  --mc-border-subtle: var(--border-subtle);
+  --foreground: var(--fg-primary);
+  --background: var(--bg-app);
+  --border: var(--border-default);
+  --text-secondary: var(--fg-secondary);
+  --text-muted: var(--fg-muted);
+  --card: var(--bg-surface-1);
+  --gc-risk-safe: var(--risk-safe);
+  --gc-risk-caution: var(--risk-caution);
+  --gc-risk-danger: var(--risk-danger);
+  --mc-font-mono: var(--font-mono);
+  --mc-scrollbar-safe-gutter: 0px;
+}
+
+.demo-card {
+  width: min(880px, 100%);
+  display: grid;
+  gap: 0.6rem;
+  padding: 1rem 1.1rem;
+  border-radius: 0.9rem;
+  background: var(--bg-surface-1);
+  border: 1px solid var(--border-subtle);
+  box-shadow:
+    0 24px 60px rgba(0, 0, 0, 0.32),
+    0 0 0 1px color-mix(in oklab, var(--area-chat) 8%, transparent);
+}
+
+.demo-shell .mc-next-thread-scroll {
+  max-height: min(74vh, 56rem);
+}
