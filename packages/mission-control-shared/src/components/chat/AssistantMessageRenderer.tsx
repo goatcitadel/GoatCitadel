@@ -359,45 +359,59 @@ function StreamingMarkdown({
 }
 
 export function splitStreamingMarkdown(content: string): { stable: string; tail: string } {
-  let paragraphIndex = content.lastIndexOf("\n\n");
-  while (paragraphIndex > 0) {
-    const splitEnd = paragraphIndex + 2;
-    if (isMarkdownFenceBalanced(content.slice(0, splitEnd))) {
-      return {
-        stable: content.slice(0, splitEnd),
-        tail: content.slice(splitEnd),
-      };
-    }
-    paragraphIndex = content.lastIndexOf("\n\n", paragraphIndex - 1);
-  }
-  return { stable: "", tail: content };
-}
-
-function isMarkdownFenceBalanced(markdown: string): boolean {
+  // Single forward pass: walk the content line by line, tracking whether we are
+  // inside a ``` / ~~~ fence, and record the index just past the most recent
+  // "\n\n" paragraph boundary that occurs while NOT inside a fence. This yields
+  // the same split point as scanning every boundary backward and testing fence
+  // balance of the prefix, but in O(n) instead of O(n^2).
   let inFence = false;
   let fenceChar: "`" | "~" | null = null;
   let fenceLength = 0;
-  for (const line of markdown.split(/\r?\n/)) {
+  let bestSplitEnd = -1;
+  let lineStart = 0;
+
+  for (let index = 0; index <= content.length; index += 1) {
+    const atLineEnd = index === content.length || content[index] === "\n";
+    if (!atLineEnd) {
+      continue;
+    }
+    const line = content.slice(lineStart, index);
     const match = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-    if (!match) {
-      continue;
+    if (match) {
+      const marker = match[1]!;
+      const markerChar = marker[0] as "`" | "~";
+      if (!inFence) {
+        inFence = true;
+        fenceChar = markerChar;
+        fenceLength = marker.length;
+      } else {
+        const markerTail = line.slice(line.indexOf(marker) + marker.length);
+        if (markerChar === fenceChar && marker.length >= fenceLength && markerTail.trim().length === 0) {
+          inFence = false;
+          fenceChar = null;
+          fenceLength = 0;
+        }
+      }
     }
-    const marker = match[1]!;
-    const markerChar = marker[0] as "`" | "~";
-    if (!inFence) {
-      inFence = true;
-      fenceChar = markerChar;
-      fenceLength = marker.length;
-      continue;
+    // A "\n\n" boundary exists when the current line is empty and preceded by a
+    // newline (i.e. content[index - 1] === "\n"). The boundary char index is
+    // index - 1; the split point includes both newlines (index - 1 + 2 === index + 1).
+    if (!inFence && index < content.length && content[index] === "\n" && index > 0 && content[index - 1] === "\n") {
+      const paragraphIndex = index - 1;
+      if (paragraphIndex > 0) {
+        bestSplitEnd = paragraphIndex + 2;
+      }
     }
-    const markerTail = line.slice(line.indexOf(marker) + marker.length);
-    if (markerChar === fenceChar && marker.length >= fenceLength && markerTail.trim().length === 0) {
-      inFence = false;
-      fenceChar = null;
-      fenceLength = 0;
-    }
+    lineStart = index + 1;
   }
-  return !inFence;
+
+  if (bestSplitEnd <= 0) {
+    return { stable: "", tail: content };
+  }
+  return {
+    stable: content.slice(0, bestSplitEnd),
+    tail: content.slice(bestSplitEnd),
+  };
 }
 
 export async function copyTextToClipboard(content: string): Promise<void> {

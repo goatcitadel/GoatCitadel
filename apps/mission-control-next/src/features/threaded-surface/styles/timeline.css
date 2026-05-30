@@ -181,6 +181,14 @@
   background: transparent;
 }
 
+/*
+ * Caveat: content-visibility: auto lets the UA skip rendering off-screen turns,
+ * but its visibility heuristic is viewport-based and independent of the
+ * IntersectionObserver root used by the lazy-load / windowing logic elsewhere in
+ * the threaded surface. Inside a custom scroll container the two can disagree
+ * about what is "visible". Left unchanged intentionally; verify in a real browser
+ * before altering this rule.
+ */
 .mc-next-thread-turn:not(.selected):not(.streaming):not(.delegation):not(.context-pinned):not(:focus-within) {
   content-visibility: auto;
   contain-intrinsic-size: 14rem;
@@ -1036,6 +1044,14 @@
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
 }
 
+.chat-v11-attachment-image-trigger {
+  display: block;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: zoom-in;
+}
+
 .chat-v11-attachment-inline-video,
 .chat-v11-attachment-inline-audio {
   width: 100%;
@@ -1089,8 +1105,8 @@
   margin: 0;
   padding: 0;
   border: 0;
-  background: rgba(0, 0, 0, 0.82);
-  backdrop-filter: blur(4px);
+  /* Dimming lives on ::backdrop so we do not double-overlay the dialog surface. */
+  background: transparent;
   display: grid;
   place-items: center;
   z-index: 1000;
@@ -1099,6 +1115,14 @@
 .chat-v11-attachment-lightbox::backdrop {
   background: rgba(0, 0, 0, 0.82);
   backdrop-filter: blur(4px);
+}
+
+/* Fallback for very old engines without ::backdrop support: dim the dialog itself. */
+@supports not (selector(::backdrop)) {
+  .chat-v11-attachment-lightbox {
+    background: rgba(0, 0, 0, 0.82);
+    backdrop-filter: blur(4px);
+  }
 }
 
 .chat-v11-attachment-lightbox img {

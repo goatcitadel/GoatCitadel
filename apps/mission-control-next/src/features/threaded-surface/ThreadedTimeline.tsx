@@ -28,8 +28,6 @@ function ChannelActivityBadge({ activity }: { activity: ChannelActivitySnapshot 
       className={`mc-next-thread-channel-activity phase-${activity.phase}`}
       title={`${activity.label} on ${activity.channelKey ?? "channel"}`}
       aria-label={`Channel activity: ${activity.label}`}
-      role="status"
-      aria-live="polite"
     >
       <span aria-hidden="true">{activity.emoji}</span>
       <span>{activity.label}</span>
@@ -164,7 +162,7 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
     ],
   );
   const liveStatus =
-    props.streamError ??
+    props.streamError ||
     (props.streamStatus === "streaming"
       ? `${toTitleCase(props.mode)} response streaming${props.queuedCount > 0 ? ` with ${props.queuedCount} queued` : ""}.`
       : props.streamStatus === "queued"
