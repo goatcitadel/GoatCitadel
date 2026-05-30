@@ -1,0 +1,68 @@
+name: Visual Rebaseline (manual)
+
+# One-shot maintenance workflow: regenerates the Mission Control Next visual
+# baselines on the Ubuntu CI renderer (the only environment whose font/AA output
+# matches the verification lane) and opens a PR with the refreshed PNGs.
+# Trigger from the Actions tab or: gh workflow run visual-rebaseline.yml --ref main
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  visual-rebaseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.31.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install chromium
+
+      - name: Regenerate visual baselines
+        env:
+          GOATCITADEL_UI_PACKAGE: "@goatcitadel/mission-control-next"
+        run: pnpm verify:visual:rebaseline
+
+      - name: Open rebaseline PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- scripts/verification/baselines/visual; then
+            echo "No baseline changes produced; nothing to do."
+            exit 0
+          fi
+          BRANCH="chore/visual-rebaseline-${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add scripts/verification/baselines/visual
+          git commit -m "chore(verification): refresh Mission Control Next visual baselines
+
+Regenerated on the Ubuntu CI renderer via verify:visual:rebaseline so the
+visual-regression lane reflects the current Mission Control Next UI."
+          git push origin "$BRANCH"
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "chore(verification): refresh visual baselines (mission-control-next)" \
+            --body "Automated rebaseline run (#${GITHUB_RUN_ID}). Regenerated the Mission Control Next visual-regression PNG baselines on the Ubuntu renderer. Review the image diff before merging."
