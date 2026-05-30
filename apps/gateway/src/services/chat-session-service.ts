@@ -22,6 +22,7 @@ import {
   type ChatSessionPrefsRecord,
   type ChatSessionRecord,
   type ChatSessionSearchHitRecord,
+  type ChatSideChatRecord,
   type RecentCrossProjectSession,
   type SessionMeta,
 } from "@goatcitadel/contracts";
@@ -277,6 +278,76 @@ export function createChatSession(
   return created;
 }
 
+export function getChatSideChat(
+  deps: ChatSessionDependencies,
+  parentSessionId: string,
+): { item: ChatSideChatRecord | null; childSession?: ChatSessionRecord } {
+  const parent = deps.requireChatSession(parentSessionId);
+  const parentWorkspaceId = deps.normalizeWorkspaceId(parent.workspaceId);
+  const item = deps.storage.chatSideChats.getByParentSession(parent.sessionId);
+  if (!item || deps.normalizeWorkspaceId(item.workspaceId) !== parentWorkspaceId) {
+    return { item: null };
+  }
+  const childSession = deps.requireChatSession(item.childSessionId);
+  if (deps.normalizeWorkspaceId(childSession.workspaceId) !== parentWorkspaceId) {
+    throw new Error("Side chat child workspace does not match parent session workspace.");
+  }
+  return {
+    item,
+    childSession,
+  };
+}
+
+export function createChatSideChat(
+  deps: ChatSessionDependencies,
+  parentSessionId: string,
+  input: { createdFromSurface?: ChatSessionRecord["mode"]; sourceTurnId?: string } = {},
+): { item: ChatSideChatRecord; childSession: ChatSessionRecord } {
+  const parent = deps.requireChatSession(parentSessionId);
+  const parentWorkspaceId = deps.normalizeWorkspaceId(parent.workspaceId);
+  const existing = deps.storage.chatSideChats.getByParentSession(parent.sessionId);
+  if (existing && deps.normalizeWorkspaceId(existing.workspaceId) === parentWorkspaceId) {
+    const existingChildSession = deps.requireChatSession(existing.childSessionId);
+    if (deps.normalizeWorkspaceId(existingChildSession.workspaceId) !== parentWorkspaceId) {
+      throw new Error("Side chat child workspace does not match parent session workspace.");
+    }
+    return {
+      item: existing,
+      childSession: existingChildSession,
+    };
+  }
+
+  const parentTitle = parent.title?.trim() || `Chat ${parent.sessionId.slice(-6)}`;
+  const childSession = createChatSession(deps, {
+    workspaceId: parentWorkspaceId,
+    projectId: parent.projectId,
+    title: `Side chat - ${trimTitleForSideChat(parentTitle)}`,
+    mode: "chat",
+    origin: "operator",
+    includeInHistory: false,
+  });
+  const now = new Date().toISOString();
+  const item = deps.storage.chatSideChats.upsert(
+    {
+      sideChatId: `btw_${randomUUID().replaceAll("-", "").slice(0, 18)}`,
+      parentSessionId: parent.sessionId,
+      childSessionId: childSession.sessionId,
+      workspaceId: parentWorkspaceId,
+      createdFromSurface: input.createdFromSurface ?? parent.mode ?? "chat",
+      sourceTurnId: input.sourceTurnId,
+    },
+    now,
+  );
+  deps.operatorSummaryCache.invalidate();
+  deps.publishRealtime("chat_session_updated", "chat", {
+    type: "chat_side_chat_created",
+    sessionId: parent.sessionId,
+    sideChatId: item.sideChatId,
+    childSessionId: childSession.sessionId,
+  });
+  return { item, childSession };
+}
+
 export function updateChatSession(
   deps: ChatSessionDependencies,
   sessionId: string,
@@ -373,6 +444,20 @@ export async function deleteChatSession(
   sessionId: string,
 ): Promise<{ deleted: boolean; sessionId: string }> {
   deps.getSession(sessionId);
+  const sideChildSessionIds = [deps.storage.chatSideChats.getByParentSession(sessionId)?.childSessionId].filter(
+    (value): value is string => Boolean(value && value !== sessionId),
+  );
+  for (const childSessionId of sideChildSessionIds) {
+    try {
+      await deleteChatSession(deps, childSessionId);
+    } catch (error) {
+      log.warn("side chat child delete cleanup failed", {
+        sessionId,
+        childSessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   const result = deps.storage.deleteChatSessionData(sessionId);
   deps.clearChatTurnWriteLease(sessionId);
   deps.operatorSummaryCache.invalidate();
@@ -397,6 +482,14 @@ export async function deleteChatSession(
     deleted: result.deleted,
     sessionId,
   };
+}
+
+function trimTitleForSideChat(value: string): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length <= 60) {
+    return compact || "chat";
+  }
+  return `${compact.slice(0, 57).trimEnd()}...`;
 }
 
 export async function archiveChatSessionsBulk(

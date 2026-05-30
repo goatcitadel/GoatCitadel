@@ -88,6 +88,7 @@ import {
   getCapabilitySuggestionConfirmationCopy,
   getDeleteSessionConfirmationMessage,
   parseQueueCommand,
+  parseBtwCommand,
   resolveMidTurnDisposition,
   revealGeneratedArtifactInSurface,
   resolveSelectedTurnId,
@@ -123,6 +124,7 @@ import {
 import { useChatThreadController } from "./chat/useChatThreadController";
 import { detectImageGenerationIntent } from "./chat/chat-image-intent";
 import { useChatMultimodalControls } from "./chat/useChatMultimodalControls";
+import { useBtwSideChatController, type MissionThreadedBtwSideChatProps } from "./chat/useBtwSideChatController";
 import { useRouteGeneratedArtifactReveal } from "./chat/useRouteGeneratedArtifactReveal";
 import {
   formatSessionLabel,
@@ -279,6 +281,7 @@ export interface MissionThreadedRenderSurfaceInput {
   dropTargetProps: MissionThreadedDropTargetProps;
   workflowPanel: MissionThreadedWorkflowPanel;
   contextDockProps: ChatContextDockPanelsProps | null;
+  btwSideChatProps: MissionThreadedBtwSideChatProps;
 }
 
 export type MissionThreadedActiveSessionSurfaceProps = MissionControlActiveSessionSurfaceProps;
@@ -1133,6 +1136,20 @@ export function MissionThreadedControllerHost({
   const [acknowledgedRoutePreflightHashes, setAcknowledgedRoutePreflightHashes] = useState<Record<string, true>>({});
   const currentRoutePreflight = routePreflight.result;
   const currentRoutePreflightHash = routePreflight.resultHash;
+  const { panelProps: btwSideChatProps, openSideChat: openBtwSideChat } = useBtwSideChatController({
+    workspaceId,
+    selectedSession,
+    selectedSessionId,
+    selectedTurnId,
+    currentSurface: executionSurfaceMode,
+    prefs: executionRoutePrefs,
+    selectedProviderId,
+    selectedModel,
+    fullWebAccess,
+    ensureSession,
+    pushLocalNotice,
+    setUiError,
+  });
   const currentRouteBoundaryAcknowledged = Boolean(
     currentRoutePreflightHash && acknowledgedRoutePreflightHashes[currentRoutePreflightHash],
   );
@@ -1174,6 +1191,11 @@ export function MissionThreadedControllerHost({
 
   const handleCommandExecution = useCallback(
     async (sessionId: string, commandText: string) => {
+      const btwCommand = parseBtwCommand(commandText);
+      if (btwCommand) {
+        await openBtwSideChat(btwCommand.text);
+        return;
+      }
       const queueCommand = parseQueueCommand(commandText);
       if (queueCommand) {
         if (queueCommand.kind === "steer") {
@@ -1248,6 +1270,7 @@ export function MissionThreadedControllerHost({
     [
       loadSidebar,
       executionSurfaceMode,
+      openBtwSideChat,
       pushLocalNotice,
       setInstalledSkills,
       setMcpServers,
@@ -2713,6 +2736,12 @@ export function MissionThreadedControllerHost({
 
   const handleSendWithKnowledge = useCallback(async () => {
     const queueCommand = parseQueueCommand(draft);
+    const btwCommand = parseBtwCommand(draft);
+    if (btwCommand) {
+      await openBtwSideChat(btwCommand.text);
+      setDraft("");
+      return;
+    }
     const disposition = resolveMidTurnDisposition({
       hasActiveStream: Boolean(activeStreamRef.current),
       draft,
@@ -2792,6 +2821,7 @@ export function MissionThreadedControllerHost({
     imageBusy,
     imageGenerationAvailable,
     messageMode,
+    openBtwSideChat,
     pendingAttachments.length,
     pendingAttachments,
     pushLocalNotice,
@@ -3198,6 +3228,7 @@ export function MissionThreadedControllerHost({
       onDrop: handleDrop as DragEventHandler<HTMLElement>,
     },
     workflowPanel,
+    btwSideChatProps,
     contextDockProps: selectedSession
       ? {
           mode: messageMode,

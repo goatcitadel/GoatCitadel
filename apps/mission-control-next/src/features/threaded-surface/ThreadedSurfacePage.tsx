@@ -48,6 +48,7 @@ import {
 } from "@goatcitadel/mission-control-shared/components/ui";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { ThreadedComposer } from "./ThreadedComposer";
+import { ThreadedBtwSideChatPanel } from "./ThreadedBtwSideChatPanel";
 import { ThreadedContextDrawer } from "./ThreadedContextDrawer";
 import { ThreadedTimeline } from "./ThreadedTimeline";
 import { ThreadedWorkflowPanel } from "./ThreadedWorkflowPanel";
@@ -59,6 +60,7 @@ import "./styles/side-panels.css";
 import "./styles/timeline.css";
 import "./styles/composer.css";
 import "./styles/mobile.css";
+import "./styles/btw-side-chat.css";
 
 const MODE_META: Record<ChatMode, { label: string; icon: typeof MessageSquareText; helper: string }> = {
   chat: {
@@ -563,6 +565,7 @@ export function ThreadedSurfacePage({
         onCancel={() => setArchiveConfirmOpen(false)}
         onConfirm={handleArchiveWorkspaceConfirmed}
       />
+      <ThreadedBtwSideChatPanel sideChat={input.btwSideChatProps} />
     </div>
   );
 }

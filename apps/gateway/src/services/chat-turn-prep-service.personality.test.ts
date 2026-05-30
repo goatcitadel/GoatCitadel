@@ -53,6 +53,9 @@ function createHost(mode: ChatSessionPrefsRecord["mode"], prefsOverrides: Partia
       chatSessionProjects: {
         get: vi.fn(() => undefined),
       },
+      chatSideChats: {
+        getByChildSession: vi.fn(() => undefined),
+      },
       chatSpecialistCandidates: {
         listAutoRoutable: vi.fn(() => []),
       },
@@ -721,6 +724,91 @@ describe("prepareAgentChatTurn personality overlay", () => {
       expect.objectContaining({ stepId: "completed", status: "completed", summary: "done" }),
       expect.objectContaining({ stepId: "failed", status: "failed", error: "timeout" }),
     ]);
+  });
+
+  it("injects eligible parent-thread context for side chats without writing to the parent transcript", async () => {
+    const harness = createHost("chat");
+    const parentUser = {
+      messageId: "parent-user-1",
+      sessionId: "parent-1",
+      role: "user",
+      actorType: "user",
+      actorId: "operator",
+      content: "The parent thread says .env.local may not exist.",
+      timestamp: "2026-05-04T00:00:00.000Z",
+    } as ChatMessageRecord;
+    const parentAssistant = {
+      messageId: "parent-assistant-1",
+      sessionId: "parent-1",
+      role: "assistant",
+      actorType: "assistant",
+      actorId: "assistant",
+      content: "I will check the repo root and avoid mutating the parent transcript.",
+      timestamp: "2026-05-04T00:00:01.000Z",
+    } as ChatMessageRecord;
+    vi.mocked(harness.host.storage.chatSideChats.getByChildSession).mockReturnValue({
+      sideChatId: "btw-1",
+      parentSessionId: "parent-1",
+      childSessionId: "side-1",
+      workspaceId: "default",
+      createdFromSurface: "code",
+      createdAt: "2026-05-04T00:00:00.000Z",
+      updatedAt: "2026-05-04T00:00:00.000Z",
+    });
+    vi.mocked(harness.host.loadChatTurnSessionState).mockImplementation(async (sessionId) => {
+      if (sessionId !== "parent-1") {
+        return {
+          traces: [],
+          tracesById: new Map(),
+          messages: [],
+          messagesById: new Map(),
+          childrenByTurnId: new Map(),
+          turnLineageById: new Map(),
+        };
+      }
+      return {
+        traces: [
+          {
+            turnId: "parent-turn-1",
+            userMessageId: parentUser.messageId,
+            assistantMessageId: parentAssistant.messageId,
+          } as never,
+        ],
+        tracesById: new Map([
+          [
+            "parent-turn-1",
+            {
+              turnId: "parent-turn-1",
+              userMessageId: parentUser.messageId,
+              assistantMessageId: parentAssistant.messageId,
+            } as never,
+          ],
+        ]),
+        messages: [parentUser, parentAssistant],
+        messagesById: new Map([
+          [parentUser.messageId, parentUser],
+          [parentAssistant.messageId, parentAssistant],
+        ]),
+        childrenByTurnId: new Map(),
+        turnLineageById: new Map([["parent-turn-1", { turnId: "parent-turn-1" }]]),
+        activeLeafTurnId: "parent-turn-1",
+      };
+    });
+
+    await prepareAgentChatTurn(harness.host, "side-1", {
+      content: "aside question",
+      sideChatContext: {
+        parentSessionId: "parent-1",
+        originSurface: "code",
+        selectedTurnId: "parent-turn-1",
+      },
+    });
+
+    expect(harness.readGuidance()).toContain("GoatCitadel /btw side chat");
+    expect(harness.readGuidance()).toContain("Parent session: parent-1");
+    expect(harness.readGuidance()).toContain("The parent thread says .env.local may not exist.");
+    expect(harness.host.ingestEvent).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(vi.mocked(harness.host.ingestEvent).mock.calls[0]?.[1])).not.toContain("parent-1");
   });
 });
 

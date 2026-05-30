@@ -21,15 +21,20 @@ import {
 
 const attachThreadKnowledgeAttachmentMock = vi.fn();
 const createChatGeneratedArtifactMock = vi.fn();
+const createChatSideChatMock = vi.fn();
 const createChatSessionMock = vi.fn();
 const fetchAgentsMock = vi.fn();
 const fetchChatGeneratedArtifactMock = vi.fn();
+const fetchChatSideChatMock = vi.fn();
+const fetchChatThreadMock = vi.fn();
 const fetchMcpServersMock = vi.fn();
 const fetchMcpTemplatesMock = vi.fn();
 const fetchRuntimeLifecycleExportMock = vi.fn();
 const fetchSkillsMock = vi.fn();
 const parseChatCommandMock = vi.fn();
+const preflightChatRouteMock = vi.fn();
 const removeThreadKnowledgeAttachmentMock = vi.fn();
+const streamAgentChatMessageMock = vi.fn();
 const updateChatSessionPrefsMock = vi.fn();
 const fetchAgenticRunsMock = vi.fn();
 const fetchAgenticRunTreeMock = vi.fn();
@@ -161,15 +166,20 @@ const generatedArtifact = {
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   attachThreadKnowledgeAttachment: (...args: unknown[]) => attachThreadKnowledgeAttachmentMock(...args),
   createChatGeneratedArtifact: (...args: unknown[]) => createChatGeneratedArtifactMock(...args),
+  createChatSideChat: (...args: unknown[]) => createChatSideChatMock(...args),
   createChatSession: (...args: unknown[]) => createChatSessionMock(...args),
   fetchAgents: (...args: unknown[]) => fetchAgentsMock(...args),
   fetchChatGeneratedArtifact: (...args: unknown[]) => fetchChatGeneratedArtifactMock(...args),
+  fetchChatSideChat: (...args: unknown[]) => fetchChatSideChatMock(...args),
+  fetchChatThread: (...args: unknown[]) => fetchChatThreadMock(...args),
   fetchMcpServers: (...args: unknown[]) => fetchMcpServersMock(...args),
   fetchMcpTemplates: (...args: unknown[]) => fetchMcpTemplatesMock(...args),
   fetchRuntimeLifecycleExport: (...args: unknown[]) => fetchRuntimeLifecycleExportMock(...args),
   fetchSkills: (...args: unknown[]) => fetchSkillsMock(...args),
   parseChatCommand: (...args: unknown[]) => parseChatCommandMock(...args),
+  preflightChatRoute: (...args: unknown[]) => preflightChatRouteMock(...args),
   removeThreadKnowledgeAttachment: (...args: unknown[]) => removeThreadKnowledgeAttachmentMock(...args),
+  streamAgentChatMessage: (...args: unknown[]) => streamAgentChatMessageMock(...args),
   updateChatSessionPrefs: (...args: unknown[]) => updateChatSessionPrefsMock(...args),
 }));
 
@@ -412,6 +422,34 @@ function setupMocks() {
     item: { attachmentId: "knowledge-url", sourceRef: "https://docs.example.test", retrievalMode: "retrieval" },
   });
   removeThreadKnowledgeAttachmentMock.mockResolvedValue({ ok: true });
+  createChatSideChatMock.mockResolvedValue({
+    item: {
+      sideChatId: "btw-1",
+      parentSessionId: "session-1",
+      childSessionId: "session-btw",
+      workspaceId: "workspace-1",
+      createdFromSurface: "chat",
+      createdAt: "2026-05-01T00:00:00.000Z",
+      updatedAt: "2026-05-01T00:00:00.000Z",
+    },
+    childSession: {
+      ...selectedSession,
+      sessionId: "session-btw",
+      sessionKey: "session-btw",
+      mode: "chat",
+      includeInHistory: false,
+      title: "Side chat - Launch plan",
+    },
+  });
+  fetchChatSideChatMock.mockResolvedValue({ item: null });
+  fetchChatThreadMock.mockResolvedValue({ sessionId: "session-btw", turns: [] });
+  preflightChatRouteMock.mockResolvedValue({
+    blockedReason: undefined,
+    effectiveProviderId: "openai",
+    effectiveModel: "gpt-5.5",
+    decision: { providerId: "openai", model: "gpt-5.5" },
+  });
+  streamAgentChatMessageMock.mockImplementation(async () => undefined);
   createChatSessionMock.mockResolvedValue({
     ...selectedSession,
     sessionId: "session-new",
@@ -1404,6 +1442,31 @@ describe("MissionThreadedControllerHost", () => {
       await flushEffects();
     });
     expect(parseChatCommandMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await outboundInput.handleCommandExecution("session-1", "/btw quick aside");
+      await flushEffects(4);
+    });
+    expect(parseChatCommandMock).not.toHaveBeenCalled();
+    expect(createChatSideChatMock).toHaveBeenCalledWith(
+      "session-1",
+      { createdFromSurface: "cowork", sourceTurnId: undefined },
+      { originSurface: "cowork" },
+    );
+    expect(streamAgentChatMessageMock).toHaveBeenCalledWith(
+      "session-btw",
+      expect.objectContaining({
+        content: "quick aside",
+        mode: "chat",
+        sideChatContext: expect.objectContaining({
+          parentSessionId: "session-1",
+          originSurface: "cowork",
+        }),
+      }),
+      expect.any(Function),
+      { originSurface: "chat" },
+    );
+    expect(latestSurfaceInput?.btwSideChatProps.open).toBe(true);
 
     setupMocks();
     useChatSessionDataMock.mockReturnValue({

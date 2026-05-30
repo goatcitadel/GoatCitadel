@@ -1021,6 +1021,11 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
     name: "llm_runtime_measurement_and_eval_proof",
     up: createLlmRuntimeMeasurementSchema,
   },
+  {
+    version: 101,
+    name: "chat_side_chats",
+    up: createChatSideChatsSchema,
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -2339,6 +2344,22 @@ function createChatWorkspaceSchema(db: DatabaseSync): void {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS chat_side_chats (
+      side_chat_id TEXT PRIMARY KEY,
+      parent_session_id TEXT NOT NULL UNIQUE,
+      child_session_id TEXT NOT NULL UNIQUE,
+      workspace_id TEXT NOT NULL DEFAULT 'default',
+      created_from_surface TEXT NOT NULL DEFAULT 'chat',
+      source_turn_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(parent_session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
+      FOREIGN KEY(child_session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_side_chats_workspace_parent
+      ON chat_side_chats(workspace_id, parent_session_id);
 
     CREATE TABLE IF NOT EXISTS chat_attachments (
       attachment_id TEXT PRIMARY KEY,
@@ -4138,6 +4159,26 @@ function createLlmRuntimeMeasurementSchema(db: DatabaseSync): void {
       ON llm_eval_proof_runs(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_llm_eval_proof_runs_session
       ON llm_eval_proof_runs(session_id, created_at DESC);
+  `);
+}
+
+function createChatSideChatsSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_side_chats (
+      side_chat_id TEXT PRIMARY KEY,
+      parent_session_id TEXT NOT NULL UNIQUE,
+      child_session_id TEXT NOT NULL UNIQUE,
+      workspace_id TEXT NOT NULL DEFAULT 'default',
+      created_from_surface TEXT NOT NULL DEFAULT 'chat',
+      source_turn_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(parent_session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
+      FOREIGN KEY(child_session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chat_side_chats_workspace_parent
+      ON chat_side_chats(workspace_id, parent_session_id);
   `);
 }
 

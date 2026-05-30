@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildModelCommandSuggestions } from "./chat-command-suggestions";
+import { buildModelCommandSuggestions, buildOrchestrationCommandSuggestions } from "./chat-command-suggestions";
 
 const providers = [
   {
@@ -77,5 +77,23 @@ describe("buildModelCommandSuggestions", () => {
         providers,
       }).map((item) => item.command),
     ).toEqual(["/model anthropic/claude-sonnet-4.5", "/model anthropic/claude-opus-4.1"]);
+  });
+});
+
+describe("buildOrchestrationCommandSuggestions", () => {
+  it("returns /btw before other orchestration commands and preserves typed aside text", () => {
+    expect(buildOrchestrationCommandSuggestions({ draft: "/btw" })).toEqual([
+      {
+        key: "btw-side-chat",
+        command: "/btw <aside>",
+        description: "Open a small side chat tied to this thread without adding to the main transcript.",
+        applyValue: "/btw ",
+      },
+    ]);
+    expect(buildOrchestrationCommandSuggestions({ draft: "   /btw   keep this aside " })[0]).toMatchObject({
+      command: "/btw <aside>",
+      applyValue: "/btw keep this aside",
+    });
+    expect(buildOrchestrationCommandSuggestions({ draft: "/btween" })).toEqual([]);
   });
 });

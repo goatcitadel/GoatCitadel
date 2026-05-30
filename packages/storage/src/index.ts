@@ -45,6 +45,7 @@ import { ChatSessionProjectRepository } from "./chat-session-project-repo.js";
 import { ChatSessionWorkbenchRepository } from "./chat-session-workbench-repo.js";
 import { ChatSessionBranchStateRepository } from "./chat-session-branch-state-repo.js";
 import { ChatSessionBindingRepository } from "./chat-session-binding-repo.js";
+import { ChatSideChatRepository } from "./chat-side-chat-repo.js";
 import { ChatAttachmentRepository } from "./chat-attachment-repo.js";
 import { ChatSessionPrefsRepository } from "./chat-session-prefs-repo.js";
 import { SessionAutonomyPrefsRepository } from "./session-autonomy-prefs-repo.js";
@@ -148,6 +149,7 @@ export class Storage {
   public readonly chatSessionWorkbench: ChatSessionWorkbenchRepository;
   public readonly chatSessionBranchState: ChatSessionBranchStateRepository;
   public readonly chatSessionBindings: ChatSessionBindingRepository;
+  public readonly chatSideChats: ChatSideChatRepository;
   public readonly chatAttachments: ChatAttachmentRepository;
   public readonly chatSessionPrefs: ChatSessionPrefsRepository;
   public readonly sessionAutonomyPrefs: SessionAutonomyPrefsRepository;
@@ -251,6 +253,7 @@ export class Storage {
     this.chatSessionWorkbench = new ChatSessionWorkbenchRepository(this.db);
     this.chatSessionBranchState = new ChatSessionBranchStateRepository(this.db);
     this.chatSessionBindings = new ChatSessionBindingRepository(this.db);
+    this.chatSideChats = new ChatSideChatRepository(this.db);
     this.chatAttachments = new ChatAttachmentRepository(this.db);
     this.chatSessionPrefs = new ChatSessionPrefsRepository(this.db);
     this.sessionAutonomyPrefs = new SessionAutonomyPrefsRepository(this.db);
@@ -416,6 +419,7 @@ export class Storage {
 
       // All simple WHERE session_id = ? deletes in a single statement batch
       const sid = normalizedSessionId;
+      this.db.prepare("DELETE FROM chat_side_chats WHERE parent_session_id = ? OR child_session_id = ?").run(sid, sid);
       this.db.prepare("DELETE FROM research_runs WHERE session_id = ?").run(sid);
       this.db.prepare("DELETE FROM chat_delegation_runs WHERE session_id = ?").run(sid);
       const simpleSessionDeletes = [

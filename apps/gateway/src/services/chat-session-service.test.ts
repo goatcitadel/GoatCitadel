@@ -7,8 +7,10 @@ import {
   archiveChatSession,
   archiveChatSessionsBulk,
   assignChatSessionProject,
+  createChatSideChat,
   createChatSession,
   deleteChatSession,
+  getChatSideChat,
   getChatSessionBinding,
   getChatSessionPrefs,
   listChatSessions,
@@ -75,6 +77,70 @@ function createDeps(storage: Storage): ChatSessionDependencies {
 }
 
 describe("chat session service", () => {
+  it("creates one hidden durable side chat per parent session", () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      const deps = createDeps(storage);
+      const project = storage.chatProjects.create({
+        workspaceId: "default",
+        name: "Launch Project",
+        workspacePath: "apps/gateway",
+      });
+      const parent = createChatSession(deps, {
+        workspaceId: "default",
+        projectId: project.projectId,
+        title: "Parent Launch Room",
+        mode: "cowork",
+      });
+
+      const created = createChatSideChat(deps, parent.sessionId, {
+        createdFromSurface: "code",
+        sourceTurnId: "turn-1",
+      });
+
+      expect(created.item).toMatchObject({
+        parentSessionId: parent.sessionId,
+        childSessionId: created.childSession.sessionId,
+        workspaceId: "default",
+        createdFromSurface: "code",
+        sourceTurnId: "turn-1",
+      });
+      expect(created.childSession).toMatchObject({
+        mode: "chat",
+        origin: "operator",
+        includeInHistory: false,
+        projectId: project.projectId,
+      });
+      expect(
+        listChatSessions(deps, {
+          workspaceId: "default",
+          scope: "all",
+          view: "active",
+          includeHidden: false,
+        }).map((session) => session.sessionId),
+      ).not.toContain(created.childSession.sessionId);
+
+      const reused = createChatSideChat(deps, parent.sessionId, { createdFromSurface: "chat" });
+      expect(reused.item.sideChatId).toBe(created.item.sideChatId);
+      expect(reused.childSession.sessionId).toBe(created.childSession.sessionId);
+      expect(getChatSideChat(deps, parent.sessionId)).toMatchObject({
+        item: { sideChatId: created.item.sideChatId },
+        childSession: { sessionId: created.childSession.sessionId },
+      });
+      expect(deps.publishRealtime).toHaveBeenCalledWith(
+        "chat_session_updated",
+        "chat",
+        expect.objectContaining({
+          type: "chat_side_chat_created",
+          sessionId: parent.sessionId,
+          childSessionId: created.childSession.sessionId,
+        }),
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
   it("creates, updates, titles, pins, archives, restores, and patches prefs with realtime evidence", () => {
     const { storage, cleanup } = createStorage();
     try {

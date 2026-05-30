@@ -75,6 +75,23 @@ describe("chat session routes", () => {
       statusCode: 200,
     });
 
+    const sideChat = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat/sessions/sess-1/side-chats",
+      payload: { createdFromSurface: "code", sourceTurnId: "turn-1" },
+    });
+    expect(sideChat.statusCode).toBe(201);
+    expect(chatSessions.createChatSideChat).toHaveBeenCalledWith("sess-1", {
+      createdFromSurface: "code",
+      sourceTurnId: "turn-1",
+    });
+    const existingSideChat = await app.inject({
+      method: "GET",
+      url: "/api/v1/chat/sessions/sess-1/side-chats",
+    });
+    expect(existingSideChat.statusCode).toBe(200);
+    expect(chatSessions.getChatSideChat).toHaveBeenCalledWith("sess-1");
+
     const project = await app.inject({
       method: "POST",
       url: "/api/v1/chat/sessions/sess-1/project",
@@ -243,6 +260,13 @@ describe("chat session routes", () => {
       app.inject({ method: "POST", url: "/api/v1/chat/sessions", payload: { mode: "invalid" } }),
     ).resolves.toMatchObject({ statusCode: 400 });
     await expect(
+      app.inject({
+        method: "POST",
+        url: "/api/v1/chat/sessions/sess-1/side-chats",
+        payload: { createdFromSurface: "unknown" },
+      }),
+    ).resolves.toMatchObject({ statusCode: 400 });
+    await expect(
       app.inject({ method: "POST", url: "/api/v1/chat/sessions", payload: { title: "fails" } }),
     ).resolves.toMatchObject({ statusCode: 400 });
     await expect(
@@ -289,6 +313,14 @@ function createChatSessionsService(overrides: Record<string, unknown> = {}) {
     unpinChatSession: vi.fn(() => ({ sessionId: "sess-1", pinned: false })),
     archiveChatSession: vi.fn(() => ({ sessionId: "sess-1", lifecycleStatus: "archived" })),
     restoreChatSession: vi.fn(() => ({ sessionId: "sess-1", lifecycleStatus: "active" })),
+    getChatSideChat: vi.fn(() => ({
+      item: { sideChatId: "btw-1", parentSessionId: "sess-1", childSessionId: "sess-side" },
+      childSession: { sessionId: "sess-side" },
+    })),
+    createChatSideChat: vi.fn(() => ({
+      item: { sideChatId: "btw-1", parentSessionId: "sess-1", childSessionId: "sess-side" },
+      childSession: { sessionId: "sess-side" },
+    })),
     assignChatSessionProject: vi.fn(() => ({ sessionId: "sess-1", projectId: "project-1" })),
     setChatSessionBinding: vi.fn(() => ({ sessionId: "sess-1", transport: "integration" })),
     getChatSessionBinding: vi.fn(() => ({ sessionId: "sess-1", transport: "integration" })),

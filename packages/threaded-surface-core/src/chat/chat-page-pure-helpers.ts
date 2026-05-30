@@ -360,6 +360,18 @@ export function shouldExecuteLocalChatCommand(action: OutboundQueueItem["action"
   return action === "send" && content.trim().startsWith("/");
 }
 
+export interface BtwCommand {
+  text: string;
+}
+
+export function parseBtwCommand(draft: string): BtwCommand | null {
+  const match = draft.trimStart().match(/^\/btw(?:\s+([\s\S]*))?$/i);
+  if (!match) {
+    return null;
+  }
+  return { text: (match[1] ?? "").trim() };
+}
+
 export type MidTurnDisposition = "idle" | "steer" | "queue";
 
 export function resolveMidTurnDisposition(input: { hasActiveStream: boolean; draft: string }): MidTurnDisposition {

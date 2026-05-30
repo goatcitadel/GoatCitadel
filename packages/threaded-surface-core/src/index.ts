@@ -24,10 +24,13 @@ export {
 } from "./chat/chat-error-copy";
 export {
   parseGoalCommand,
+  parseBtwCommand,
   resolveMidTurnDisposition,
+  type BtwCommand,
   type GoalCommand,
   type MidTurnDisposition,
 } from "./chat/chat-page-pure-helpers";
+export type { MissionThreadedBtwSideChatProps } from "./chat/useBtwSideChatController";
 export { buildOrchestrationCommandSuggestions } from "./chat-command-suggestions";
 export type { ChatStreamingPreview, ChatVisualStreamMode } from "./chat/chat-streaming-preview";
 

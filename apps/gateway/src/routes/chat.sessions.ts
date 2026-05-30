@@ -47,6 +47,11 @@ const createSessionSchema = z.object({
   includeInHistory: z.boolean().optional(),
 });
 
+const createSideChatSchema = z.object({
+  createdFromSurface: z.enum(["chat", "cowork", "code"]).optional(),
+  sourceTurnId: z.string().min(1).optional(),
+});
+
 const bulkArchiveSessionsSchema = z.object({
   workspaceId: z.string().min(1).optional(),
   scope: z.enum(["mission", "external", "all"]).default("mission"),
@@ -321,6 +326,36 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
       return reply.send(
         fastify.services.chatSessions.assignChatSessionProject(params.data.sessionId, body.data.projectId),
       );
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/chat/sessions/:sessionId/side-chats", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ error: params.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.services.chatSessions.getChatSideChat(params.data.sessionId));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/chat/sessions/:sessionId/side-chats", async (request, reply) => {
+    const params = sessionParamsSchema.safeParse(request.params);
+    const body = createSideChatSchema.safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply.code(201).send(fastify.services.chatSessions.createChatSideChat(params.data.sessionId, body.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

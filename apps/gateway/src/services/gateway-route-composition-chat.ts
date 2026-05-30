@@ -102,6 +102,8 @@ export function composeChatRouteDependencies(
       chatThreadKnowledgeService.attachChatThreadKnowledgeAttachment(ChatThreadKnowledgeDependencies, sessionId, input),
     createChatGeneratedArtifactFromTurn: (input) =>
       chatGeneratedArtifactService.createChatGeneratedArtifactFromTurn(ChatGeneratedArtifactDependencies, input),
+    createChatSideChat: (sessionId, input) =>
+      chatSessionService.createChatSideChat(ChatSessionDependencies, sessionId, input),
     createChatSession: (input) => chatSessionService.createChatSession(ChatSessionDependencies, input),
     createChatSessionWorkbenchWorktree: (sessionId, input) =>
       chatWorkbenchService.createChatSessionWorkbenchWorktree(ChatWorkbenchDependencies, sessionId, input),
@@ -123,6 +125,7 @@ export function composeChatRouteDependencies(
       chatWorkbenchService.getChatSessionWorkbenchOutput(ChatWorkbenchDependencies, sessionId),
     getChatSessionWorkbenchTree: (sessionId) =>
       chatWorkbenchService.getChatSessionWorkbenchTree(ChatWorkbenchDependencies, sessionId),
+    getChatSideChat: (sessionId) => chatSessionService.getChatSideChat(ChatSessionDependencies, sessionId),
     listChatGeneratedArtifacts: (input) =>
       chatGeneratedArtifactService.listChatGeneratedArtifacts(ChatGeneratedArtifactDependencies, input),
     listChatSessions: (query) => chatSessionService.listChatSessions(ChatSessionDependencies, query),

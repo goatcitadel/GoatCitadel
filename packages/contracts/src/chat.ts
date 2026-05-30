@@ -139,6 +139,24 @@ export interface ChatSessionDelegationParentRecord {
   index: number;
 }
 
+export interface ChatSideChatRecord {
+  sideChatId: string;
+  parentSessionId: string;
+  childSessionId: string;
+  workspaceId: string;
+  createdFromSurface: ChatMode;
+  sourceTurnId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatSideChatContext {
+  parentSessionId: string;
+  originSurface: ChatMode;
+  selectedTurnId?: string;
+  recentTurnLimit?: number;
+}
+
 export type ChatGeneratedArtifactKind = "markdown" | "html" | "mermaid" | "code" | "text";
 
 export type ChatGeneratedArtifactSourceSurface = "chat" | "cowork" | "code";
@@ -1439,6 +1457,12 @@ export interface ChatSendMessageRequest {
    * the chat-delegation-service when spawning child sessions.
    */
   parentDelegationStepId?: string;
+  /**
+   * Request-scoped parent thread context for a hidden side-chat child session.
+   * The gateway validates the parent-child relation before adding this context
+   * to model input, and it is not written into the visible parent transcript.
+   */
+  sideChatContext?: ChatSideChatContext;
 }
 
 export type RoutingPreflightAction = "send" | "retry" | "edit";

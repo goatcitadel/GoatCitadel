@@ -110,11 +110,25 @@ interface BuildOrchestrationCommandSuggestionsInput {
 const STEER_PREFIX = /^\/steer(?:\s+(.*))?$/i;
 const QUEUE_PREFIX = /^\/queue(?:\s+(.*))?$/i;
 const GOAL_PREFIX = /^\/goal(?:\s+(.*))?$/i;
+const BTW_PREFIX = /^\/btw(?:\s+(.*))?$/i;
 
 export function buildOrchestrationCommandSuggestions({
   draft,
 }: BuildOrchestrationCommandSuggestionsInput): CommandSuggestionItem[] {
   const trimmed = draft.trimStart();
+  const btwMatch = trimmed.match(BTW_PREFIX);
+  if (btwMatch) {
+    const text = (btwMatch[1] ?? "").trim();
+    return [
+      {
+        key: "btw-side-chat",
+        command: "/btw <aside>",
+        description: "Open a small side chat tied to this thread without adding to the main transcript.",
+        applyValue: text ? `/btw ${text}` : "/btw ",
+      },
+    ];
+  }
+
   const steerMatch = trimmed.match(STEER_PREFIX);
   if (steerMatch) {
     const instruction = (steerMatch[1] ?? "").trim();

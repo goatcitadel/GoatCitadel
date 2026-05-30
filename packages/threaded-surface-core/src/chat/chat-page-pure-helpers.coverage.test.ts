@@ -4,6 +4,7 @@ import {
   getDeleteSessionConfirmationMessage,
   groupDelegatedSessionsForRail,
   isConfirmableCapabilityAction,
+  parseBtwCommand,
   resolveChatRefreshPlan,
   resolveOptimisticChatPrefs,
   resolveSelectedTurnId,
@@ -154,6 +155,16 @@ describe("chat-page-pure-helpers coverage", () => {
       "child-c",
       "child-d",
     ]);
+  });
+
+  it("parses /btw as a side chat command without requiring inline text", () => {
+    expect(parseBtwCommand("/btw")).toEqual({ text: "" });
+    expect(parseBtwCommand("   /BTW   note this outside the transcript  ")).toEqual({
+      text: "note this outside the transcript",
+    });
+    expect(parseBtwCommand("/btw\ncarry the newline")).toEqual({ text: "carry the newline" });
+    expect(parseBtwCommand("/btween this is not the command")).toBeNull();
+    expect(parseBtwCommand("hello /btw")).toBeNull();
   });
 
   it("resolves optimistic prefs, selected turns, and post-stream reconciliation", () => {

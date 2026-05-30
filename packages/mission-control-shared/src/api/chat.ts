@@ -21,6 +21,7 @@ import type {
   ChatProjectImportResult,
   ChatSendMessageRequest,
   ChatSendMessageResponse,
+  ChatSideChatRecord,
   ChatSessionBindingRecord,
   ChatSessionWorkbenchDiffResponse,
   ChatSessionWorkbenchCommandRunRequest,
@@ -97,6 +98,16 @@ export interface ChatSessionsResponse {
 
 export interface ChatMessagesResponse {
   items: ChatMessageRecord[];
+}
+
+export interface ChatSideChatResponse {
+  item: ChatSideChatRecord | null;
+  childSession?: ChatSessionRecord;
+}
+
+export interface ChatSideChatCreateResponse {
+  item: ChatSideChatRecord;
+  childSession: ChatSessionRecord;
 }
 
 export interface ChatToolArtifactResponse {
@@ -318,6 +329,25 @@ export async function assignChatSessionProject(sessionId: string, projectId?: st
   return request<ChatSessionRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/project`, {
     method: "POST",
     body: JSON.stringify({ projectId }),
+  });
+}
+
+export async function fetchChatSideChat(sessionId: string): Promise<ChatSideChatResponse> {
+  return request<ChatSideChatResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/side-chats`);
+}
+
+export async function createChatSideChat(
+  sessionId: string,
+  input?: {
+    createdFromSurface?: ChatMode;
+    sourceTurnId?: string;
+  },
+  options?: ChatRequestSurfaceOptions,
+): Promise<ChatSideChatCreateResponse> {
+  return request<ChatSideChatCreateResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/side-chats`, {
+    method: "POST",
+    ...originSurfaceInit(options),
+    body: JSON.stringify(input ?? {}),
   });
 }
 

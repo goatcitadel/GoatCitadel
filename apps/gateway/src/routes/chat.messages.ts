@@ -36,6 +36,13 @@ const routeDecisionSchema = z.object({
 
 const mobileCapabilityIdSchema = z.enum(MOBILE_NATIVE_CAPABILITY_IDS);
 
+const sideChatContextSchema = z.object({
+  parentSessionId: z.string().min(1),
+  originSurface: z.enum(["chat", "cowork", "code"]),
+  selectedTurnId: z.string().min(1).optional(),
+  recentTurnLimit: z.coerce.number().int().positive().max(12).optional(),
+});
+
 const mobileContextSchema = z.object({
   contextId: z.string().trim().min(1).optional(),
   capabilityId: mobileCapabilityIdSchema,
@@ -143,6 +150,7 @@ const sendMessageSchema = z.object({
       reflectionMode: z.enum(["off", "on"]).optional(),
     })
     .optional(),
+  sideChatContext: sideChatContextSchema.optional(),
 });
 
 const retryTurnSchema = sendMessageSchema.partial().extend({
