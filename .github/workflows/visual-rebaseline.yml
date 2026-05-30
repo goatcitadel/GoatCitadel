@@ -56,13 +56,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
           git add scripts/verification/baselines/visual
-          git commit -m "chore(verification): refresh Mission Control Next visual baselines
-
-Regenerated on the Ubuntu CI renderer via verify:visual:rebaseline so the
-visual-regression lane reflects the current Mission Control Next UI."
+          git commit -m "chore(verification): refresh mc-next visual baselines"
           git push origin "$BRANCH"
-          gh pr create \
-            --base main \
-            --head "$BRANCH" \
-            --title "chore(verification): refresh visual baselines (mission-control-next)" \
-            --body "Automated rebaseline run (#${GITHUB_RUN_ID}). Regenerated the Mission Control Next visual-regression PNG baselines on the Ubuntu renderer. Review the image diff before merging."
+          gh pr create --base main --head "$BRANCH" --title "chore(verification): refresh visual baselines (mc-next)" --body "Automated rebaseline run ${GITHUB_RUN_ID}. Review the image diff before merging."
