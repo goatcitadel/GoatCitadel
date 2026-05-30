@@ -98,6 +98,9 @@ export function ProjectsRoutePage({
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
       const nextData = await fetchProjectData(activeWorkspaceId);
+      if (!isMounted()) {
+        return;
+      }
       setState({ ...nextData, loading: false, error: null });
       recordRouteDataLoad({
         route: "projects",
@@ -107,13 +110,16 @@ export function ProjectsRoutePage({
         issueCount: nextData.artifactIssue ? 1 : 0,
       });
     } catch (error) {
+      if (!isMounted()) {
+        return;
+      }
       setState((current) => ({
         ...current,
         loading: false,
         error: getErrorMessage(error),
       }));
     }
-  }, [activeWorkspaceId]);
+  }, [activeWorkspaceId, isMounted]);
 
   useEffect(() => {
     let cancelled = false;

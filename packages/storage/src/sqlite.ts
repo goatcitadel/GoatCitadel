@@ -7,6 +7,16 @@ import type { DatabaseClient, DbStatement, DbTransactionMode } from "./db.js";
 import { hashPromptPackPolicyV2, stringifyPromptPackPolicyV2 } from "./prompt-pack-policy.js";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
+
+/**
+ * Quote a SQLite identifier (table/index name) for safe interpolation into
+ * PRAGMA statements, which do not accept bound parameters. Names are sourced
+ * from `sqlite_master`, but quoting keeps the statements robust if a name ever
+ * contains spaces or quotes. Embedded double quotes are doubled per SQLite rules.
+ */
+function quoteSqliteIdentifier(identifier: string): string {
+  return `"${identifier.replace(/"/g, '""')}"`;
+}
 const DEFAULT_PROMPT_PACK_POLICY_V2_JSON = stringifyPromptPackPolicyV2(DEFAULT_PROMPT_PACK_POLICY_V2);
 const DEFAULT_PROMPT_PACK_POLICY_V2_HASH = hashPromptPackPolicyV2(DEFAULT_PROMPT_PACK_POLICY_V2);
 
@@ -70,6 +80,15 @@ class SqliteDatabaseClient implements DatabaseClient {
     this.db.exec(beginSql);
     try {
       const result = callback();
+      if (
+        (typeof result === "object" || typeof result === "function") &&
+        result !== null &&
+        typeof (result as { then?: unknown }).then === "function"
+      ) {
+        // A thenable would COMMIT before it resolves, running async work outside
+        // the transaction boundary. This transaction wrapper is synchronous only.
+        throw new TypeError("transaction() callback must be synchronous; it must not return a Promise");
+      }
       this.db.exec("COMMIT");
       return result;
     } catch (error) {
@@ -1038,14 +1057,14 @@ function buildTableBlueprint(db: DatabaseSync, tableName: string, sql: string): 
       .map((match) => match[1])
       .filter((value): value is string => typeof value === "string"),
   );
-  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
+  const columns = db.prepare(`PRAGMA table_info(${quoteSqliteIdentifier(tableName)})`).all() as Array<{
     name: string;
     type: string;
     notnull: number;
     dflt_value: string | null;
     pk: number;
   }>;
-  const foreignKeys = db.prepare(`PRAGMA foreign_key_list(${tableName})`).all() as Array<{
+  const foreignKeys = db.prepare(`PRAGMA foreign_key_list(${quoteSqliteIdentifier(tableName)})`).all() as Array<{
     id: number;
     seq: number;
     table: string;
@@ -1063,14 +1082,14 @@ function buildTableBlueprint(db: DatabaseSync, tableName: string, sql: string): 
     ).map((row) => [row.name, row.sql]),
   );
   const indexes = (
-    db.prepare(`PRAGMA index_list(${tableName})`).all() as Array<{
+    db.prepare(`PRAGMA index_list(${quoteSqliteIdentifier(tableName)})`).all() as Array<{
       name: string;
       unique: number;
       origin: string;
     }>
   )
     .map((index) => {
-      const indexColumns = db.prepare(`PRAGMA index_info(${index.name})`).all() as Array<{
+      const indexColumns = db.prepare(`PRAGMA index_info(${quoteSqliteIdentifier(index.name)})`).all() as Array<{
         name: string;
       }>;
       const columns = indexColumns
@@ -5597,7 +5616,7 @@ function migrateOrchestrationPlanWorkspaceScope(db: DatabaseSync): void {
 }
 
 function addColumnIfMissing(db: DatabaseSync, tableName: string, columnName: string, columnSql: string): void {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+  const rows = db.prepare(`PRAGMA table_info(${quoteSqliteIdentifier(tableName)})`).all() as Array<{ name: string }>;
   const columns = new Set(rows.map((row) => row.name));
   if (!columns.has(columnName)) {
     db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnSql}`);

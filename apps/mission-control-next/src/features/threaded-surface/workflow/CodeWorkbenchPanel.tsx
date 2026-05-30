@@ -1315,7 +1315,16 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
       path: fileActionPath.trim(),
       targetPath: fileActionTargetRequired ? fileActionTargetPath.trim() : undefined,
     };
-    const completed = await onFileOperation(input);
+    let completed: boolean | void;
+    try {
+      completed = await onFileOperation(input);
+    } catch (error) {
+      if (!isMounted()) {
+        return;
+      }
+      setFileActionNotice(error instanceof Error ? `File action failed: ${error.message}` : "File action failed.");
+      return;
+    }
     if (!isMounted()) {
       return;
     }
