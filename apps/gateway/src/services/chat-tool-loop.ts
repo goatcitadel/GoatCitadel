@@ -58,7 +58,13 @@ export function detectToolLoopRisk(
   const candidates: ChatToolLoopGuardEventRecord[] = [];
   const now = new Date().toISOString();
 
-  if (state.config.detectors.repeated_same_call) {
+  // Polling-like tools are intentionally excluded from the args-only `repeated_same_call`
+  // detector: identical inputs are expected for polling, so counting `toolName:args`
+  // repetitions alone would suppress a legitimate poll whose results are still changing.
+  // The progress-aware `no_progress_polling` detector governs these tools instead — it
+  // already gates on `looksLikePollingTool(...)` and only trips when the result signature
+  // stops changing, so genuinely stuck polls (identical results) are still caught.
+  if (state.config.detectors.repeated_same_call && !looksLikePollingTool(toolName)) {
     const repetitionCount = recentHistory.filter((entry) => entry.signature === signature).length + 1;
     const severity = classifyToolLoopSeverity(state.config, repetitionCount);
     if (severity) {
