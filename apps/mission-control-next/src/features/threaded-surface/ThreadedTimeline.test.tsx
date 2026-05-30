@@ -725,7 +725,9 @@ describe("ThreadedTimeline", () => {
     });
     const scrollElement = container?.querySelector(".mc-next-thread-scroll") as HTMLElement;
     setScrollMetrics(scrollElement, { scrollHeight: 900, scrollTop: 500, clientHeight: 400 });
-    onBottomStateChange.mockClear();
+    // Keep onBottomStateChange history: the shared hook de-duplicates repeated
+    // bottom states, so the pinned `true` is asserted from the initial follow
+    // tick while the post-update tick stays silent (still pinned, never `false`).
     scrollIntoView.mockClear();
 
     const nextTurn = {

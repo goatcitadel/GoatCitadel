@@ -539,7 +539,9 @@ describe("ChatThreadView", () => {
         return null;
       },
     });
-    onBottomStateChange.mockClear();
+    // Keep onBottomStateChange history: the hook de-duplicates repeated bottom
+    // states, so the pinned `true` is asserted from the initial follow tick while
+    // the post-update tick stays silent (still pinned, never reports `false`).
     scrollIntoView.mockClear();
 
     scrollElement.scrollHeight = 1200;
