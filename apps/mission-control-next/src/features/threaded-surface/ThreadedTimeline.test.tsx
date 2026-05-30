@@ -547,12 +547,13 @@ describe("ThreadedTimeline", () => {
     ).toEqual(["Actions"]);
 
     const turnSurface = renderer.root.findByProps({ className: "mc-next-thread-turn-surface" });
-    // Corrected a11y contract: the turn surface wraps interactive content (links, copy
-    // button, citations), so it is a keyboard-activatable labelled group, not a button role.
-    expect(turnSurface.props.role).toBe("group");
+    // Corrected a11y contract: the turn surface is a toggle-like control (role="button")
+    // with a human-readable accessible name derived from the user message, reflecting
+    // selection via aria-pressed rather than aria-current.
+    expect(turnSurface.props.role).toBe("button");
     expect(turnSurface.props.tabIndex).toBe(0);
     expect(turnSurface.props["aria-current"]).toBeUndefined();
-    expect(turnSurface.props["aria-label"]).toBe("Select turn turn-1");
+    expect(turnSurface.props["aria-label"]?.startsWith("Open turn:")).toBe(true);
     const currentTarget = {};
     TestRenderer.act(() => {
       turnSurface.props.onClick({ target: { closest: () => null }, currentTarget });

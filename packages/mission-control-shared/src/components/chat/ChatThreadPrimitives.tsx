@@ -114,7 +114,7 @@ function mergeIndexRanges(ranges: Array<[number, number]>): Array<[number, numbe
       merged.push([...range] as [number, number]);
       continue;
     }
-    previous[1] = Math.max(previous[1], range[1]);
+    merged[merged.length - 1] = [previous[0], Math.max(previous[1], range[1])];
   }
   return merged;
 }
@@ -305,7 +305,7 @@ export function ChatThreadNotices({ notices }: { notices: ChatThreadNotice[] }) 
 
 export function ChatThreadWindowGap({ hiddenCount, onExpand }: { hiddenCount: number; onExpand: () => void }) {
   return (
-    <div className="mc-next-thread-window-gap" role="status">
+    <div className="mc-next-thread-window-gap">
       <span>
         {hiddenCount} earlier turn{hiddenCount === 1 ? "" : "s"} hidden for performance.
       </span>
@@ -555,14 +555,16 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
     .filter(Boolean)
     .join(" ");
 
+  const turnLabel = turn.userMessage.content?.trim().slice(0, 60) || "turn";
+
   return (
     <article className={turnClassName}>
       <div
         className="mc-next-thread-turn-surface"
-        role="group"
+        role="button"
         tabIndex={0}
-        aria-current={selected ? "true" : undefined}
-        aria-label={`Select turn ${turn.turnId}`}
+        aria-pressed={selected}
+        aria-label={`Open turn: ${turnLabel}`}
         onClick={(event: ReactMouseEvent<HTMLDivElement>) => {
           if (!isInteractiveChatEventTarget(event.target, event.currentTarget)) {
             onSelectTurn(turn.turnId);
@@ -643,8 +645,8 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
             ) : turn.trace.failure ? (
               <span>{turn.trace.failure.failureClass}</span>
             ) : null}
-            {routingSummary.map((item) => (
-              <span key={item}>{item}</span>
+            {routingSummary.map((item, index) => (
+              <span key={index}>{item}</span>
             ))}
             {turn.toolRuns.length > 0 ? (
               <span>

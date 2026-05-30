@@ -118,7 +118,7 @@ describe("ChatThreadView", () => {
       ]),
     );
 
-    const selectableTurn = renderer.root.findAll((node) => node.props["aria-label"] === "Select turn turn-1");
+    const selectableTurn = renderer.root.findAll((node) => node.props["aria-label"]?.startsWith("Open turn:") === true);
     expect(selectableTurn).toHaveLength(1);
   });
 
@@ -426,8 +426,9 @@ describe("ChatThreadView", () => {
     expect(renderedText(renderer)).toContain("Connect Gmail");
     expect(renderedText(renderer)).not.toContain("Enable memory");
 
-    const turnSurface = renderer.root.find((node) => node.props["aria-label"] === "Select turn turn-1");
+    const turnSurface = renderer.root.find((node) => node.props["aria-label"]?.startsWith("Open turn:") === true);
     expect(turnSurface.props["aria-current"]).toBeUndefined();
+    expect(turnSurface.props.role).toBe("button");
     const currentTarget = {};
     TestRenderer.act(() => {
       turnSurface.props.onClick({ target: { closest: () => null }, currentTarget });

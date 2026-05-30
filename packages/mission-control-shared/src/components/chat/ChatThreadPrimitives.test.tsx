@@ -113,14 +113,14 @@ describe("ChatThreadPrimitives", () => {
     });
 
     const turnSurface = renderer.root.findByProps({ className: "mc-next-thread-turn-surface" });
-    // The activation affordance wraps interactive content (assistant links, copy button,
-    // citations), so it must NOT claim an interactive button role. A non-interactive
-    // labelled group keeps that nesting valid while remaining keyboard-activatable.
-    expect(turnSurface.props.role).toBe("group");
+    // The activation affordance is a toggle-like control: clicking/keying it selects the
+    // turn. It carries role="button" with a human-readable accessible name derived from
+    // the user message (not the opaque turn UUID), and reflects selection via aria-pressed.
+    expect(turnSurface.props.role).toBe("button");
     expect(turnSurface.props.tabIndex).toBe(0);
-    expect(turnSurface.props["aria-label"]).toBe("Select turn turn-1");
-    expect(turnSurface.props["aria-current"]).toBe("true");
-    expect(renderer.root.findAll((node) => node.props.role === "button")).toHaveLength(0);
+    expect(turnSurface.props["aria-label"]).toBe("Open turn: Inspect the patch.");
+    expect(turnSurface.props["aria-pressed"]).toBe(true);
+    expect(turnSurface.props["aria-current"]).toBeUndefined();
     TestRenderer.act(() => {
       turnSurface.props.onClick({ target: { closest: () => null }, currentTarget });
       turnSurface.props.onClick({ target: { closest: () => ({ tagName: "A" }) }, currentTarget });

@@ -11,6 +11,34 @@ function formatArtifactTimestamp(value: string): string {
   return parsed.toLocaleString();
 }
 
+function hardenMermaidSvg(svg: string): string {
+  // Defence-in-depth on top of mermaid's securityLevel: "strict". When a DOM is
+  // available, strip scripting vectors from the rendered SVG before it is set via
+  // dangerouslySetInnerHTML. When no DOM is available (SSR), fall back to the raw
+  // mermaid-strict output, which is only ever set on the client anyway.
+  if (typeof window === "undefined") {
+    return svg;
+  }
+  try {
+    const parsed = new DOMParser().parseFromString(svg, "image/svg+xml");
+    const root = parsed.documentElement;
+    if (!root || parsed.getElementsByTagName("parsererror").length > 0) {
+      return svg;
+    }
+    root.querySelectorAll("script, foreignObject").forEach((node) => node.remove());
+    root.querySelectorAll("*").forEach((element) => {
+      for (const attribute of Array.from(element.attributes)) {
+        if (attribute.name.toLowerCase().startsWith("on")) {
+          element.removeAttribute(attribute.name);
+        }
+      }
+    });
+    return new XMLSerializer().serializeToString(root);
+  } catch {
+    return svg;
+  }
+}
+
 function MermaidArtifactRenderer({ source }: { source: string }) {
   const renderId = useId().replace(/[:]/g, "");
   const [svg, setSvg] = useState<string | null>(null);
@@ -30,7 +58,7 @@ function MermaidArtifactRenderer({ source }: { source: string }) {
         });
         const rendered = await mermaid.render(`generated-artifact-${renderId}`, source);
         if (!cancelled) {
-          setSvg(rendered.svg);
+          setSvg(hardenMermaidSvg(rendered.svg));
         }
       })
       .catch((cause) => {

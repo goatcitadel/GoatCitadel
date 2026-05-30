@@ -8,6 +8,9 @@ const ATTACHMENT_PREVIEW_CACHE_MAX_ENTRIES = 80;
 const ATTACHMENT_PREVIEW_RETRY_DELAY_MS = 5_000;
 const INLINE_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
 
+// TODO(cache): namespace by sessionId to avoid cross-session staleness. sessionId
+// is not currently threaded through ChatAttachmentPreviewStack/Card props, so wiring
+// it here would require a non-trivial prop refactor; deferred deliberately.
 const attachmentPreviewCache = new Map<
   string,
   {
@@ -143,7 +146,12 @@ function ChatAttachmentInlineMedia({
       });
     return () => {
       cancelled = true;
-      if (createdUrl) URL.revokeObjectURL(createdUrl);
+      if (createdUrl) {
+        URL.revokeObjectURL(createdUrl);
+        // Clear the now-revoked URL from state so a dead object URL is never
+        // rendered. This only runs in cleanup, so it cannot create a render loop.
+        setObjectUrl(null);
+      }
     };
   }, [activated, attachmentId, fileName, shouldLoad]);
 
@@ -170,21 +178,20 @@ function ChatAttachmentInlineMedia({
   if (kind === "image") {
     return (
       <>
-        <img
-          src={objectUrl}
-          alt={fileName}
-          className="chat-v11-attachment-inline-image"
-          loading="lazy"
-          decoding="async"
+        <button
+          type="button"
+          className="chat-v11-attachment-image-trigger"
+          aria-label={`Open ${fileName} in full view`}
           onClick={openLightbox}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              openLightbox();
-            }
-          }}
-          tabIndex={0}
-        />
+        >
+          <img
+            src={objectUrl}
+            alt={fileName}
+            className="chat-v11-attachment-inline-image"
+            loading="lazy"
+            decoding="async"
+          />
+        </button>
         {lightboxOpen ? <ImageLightbox src={objectUrl} alt={fileName} onClose={closeLightbox} /> : null}
       </>
     );
