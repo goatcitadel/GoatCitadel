@@ -70,6 +70,8 @@ import { buildUnifiedConfigPayload } from "../config-sync-lib.js";
 import { isLoopbackDevOrigin } from "../cors-origin-guard.js";
 import { createGatewayStorage } from "../storage-factory.js";
 import { DatabaseCutoverService } from "./database-cutover-service.js";
+import { startBackgroundInterval, type BackgroundIntervalHandle } from "./background-scheduler.js";
+import { getZonedDateParts, toDayKeyForTimezone, toHourKeyForTimezone } from "./scheduler-timing.js";
 import { suggestImportedCatalogEntries } from "./agency-agent-catalog-service.js";
 import { PersonalityCatalogService } from "./channel-personalities.js";
 import { ApprovalRuntimeService } from "./approval-runtime-service.js";
@@ -582,6 +584,12 @@ const UPDATE_REVIEW_DAILY_DEDUP_SETTING_KEY = "update_review_daily_last_day_key_
 const IMPROVEMENT_SCHEDULER_INTERVAL_MS = 60_000;
 const maintenanceSchedulerDisabled =
   process.env.GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER?.trim().toLowerCase() === "true";
+// Orphaned orchestration worktrees (no live/active run) accumulate unbounded
+// without periodic reaping. Reap hourly, with a short post-boot pass so a fresh
+// process reclaims stale worktrees promptly. reapOrphaned stays conservative
+// via its own active-run + min-age (~1h) + path-jail guards.
+const ORCHESTRATION_WORKTREE_REAP_INTERVAL_MS = 60 * 60 * 1000;
+const ORCHESTRATION_WORKTREE_REAP_BOOT_DELAY_MS = 30_000;
 const MEMORY_FLUSH_HISTORY_DAYS = 30;
 const MEMORY_FLUSH_EXPIRED_BATCH_LIMIT = 500;
 const MEMORY_FLUSH_EXPIRED_SAFETY_LIMIT = 10_000;
@@ -765,7 +773,8 @@ export class GatewayService {
   private lastChatStreamPurgeAt = 0;
   public readonly operatorSummaryCache = new OperatorSummaryCache(15_000);
   public readonly onboardingMarkerPath: string;
-  private maintenanceScheduler?: NodeJS.Timeout;
+  private maintenanceScheduler?: BackgroundIntervalHandle;
+  private orchestrationWorktreeReapScheduler?: BackgroundIntervalHandle;
   private closing = false;
   public onboardingMarker: { completedAt?: string; completedBy?: string } = {};
   private criticalInitComplete = false;
@@ -1809,6 +1818,7 @@ export class GatewayService {
     this.improvementService.startScheduler();
     if (!maintenanceSchedulerDisabled) {
       this.startMaintenanceScheduler();
+      this.startOrchestrationWorktreeReapScheduler();
     }
     this.durableRunService.startWorker();
     this.approvalEffectsService.startWorker();
@@ -2204,17 +2214,24 @@ export class GatewayService {
 
   // runWeeklyImprovementSchedulerIfDue moved to ImprovementService
 
+  /** Tracks an in-flight background task so {@link close} can await its drain. */
+  private registerBackgroundTask(task: Promise<void>): void {
+    this.backgroundTasks.add(task);
+    task.finally(() => this.backgroundTasks.delete(task));
+  }
+
   private startMaintenanceScheduler(): void {
     if (this.maintenanceScheduler) {
       return;
     }
-    this.maintenanceScheduler = setInterval(() => {
-      const task = this.runMaintenanceSchedulerTick().catch((error) => {
-        log.error("maintenance scheduler tick failed", error);
-      });
-      this.backgroundTasks.add(task);
-      task.finally(() => this.backgroundTasks.delete(task));
-    }, IMPROVEMENT_SCHEDULER_INTERVAL_MS);
+    this.maintenanceScheduler = startBackgroundInterval({
+      label: "maintenance scheduler",
+      intervalMs: IMPROVEMENT_SCHEDULER_INTERVAL_MS,
+      task: () => this.runMaintenanceSchedulerTick(),
+      isClosing: () => this.closing,
+      registerInflight: (task) => this.registerBackgroundTask(task),
+      onError: (error) => log.error("maintenance scheduler tick failed", error),
+    });
   }
 
   private async runMaintenanceSchedulerTick(): Promise<void> {
@@ -2229,6 +2246,43 @@ export class GatewayService {
     await this.cronAutomationService.runDueTaskCronJobs();
     await this.memoryLifecycleService.runDueEvaluation();
     await this.drainDueChannelDeliveries();
+  }
+
+  /**
+   * Periodically reclaim orphaned orchestration worktrees (no live/active run):
+   * a short post-boot pass, then hourly. Timer/unref/failure-isolation plumbing
+   * lives in {@link startBackgroundInterval}.
+   */
+  private startOrchestrationWorktreeReapScheduler(): void {
+    if (this.orchestrationWorktreeReapScheduler) {
+      return;
+    }
+    this.orchestrationWorktreeReapScheduler = startBackgroundInterval({
+      label: "orchestration worktree reaper",
+      intervalMs: ORCHESTRATION_WORKTREE_REAP_INTERVAL_MS,
+      bootDelayMs: ORCHESTRATION_WORKTREE_REAP_BOOT_DELAY_MS,
+      task: () => this.runOrchestrationWorktreeReapTick(),
+      isClosing: () => this.closing,
+      registerInflight: (task) => this.registerBackgroundTask(task),
+      onError: (error) =>
+        log.warn("orchestration worktree reaper tick failed", {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+    });
+  }
+
+  private async runOrchestrationWorktreeReapTick(): Promise<void> {
+    if (this.closing) {
+      return;
+    }
+    const result = await this.orchestrationWorktreeService.reapOrphaned({ dryRun: false });
+    if (result.removed.length > 0) {
+      log.info("reaped orphaned orchestration worktrees", {
+        scanned: result.scanned,
+        removed: result.removed.length,
+        skippedActive: result.skippedActive.length,
+      });
+    }
   }
 
   private async runCronWatchdog(job: CronJobRecord): Promise<CronWatchdogRunResult> {
@@ -2379,8 +2433,7 @@ export class GatewayService {
     const task = this.memoryLifecycleService.noteSuccessfulRootTurn(sessionId).catch((error) => {
       log.error("memory maintenance post-turn evaluation failed", error);
     });
-    this.backgroundTasks.add(task);
-    task.finally(() => this.backgroundTasks.delete(task));
+    this.registerBackgroundTask(task);
   }
 
   public scheduleChatMemoryContextPrewarm(input: {
@@ -2402,8 +2455,7 @@ export class GatewayService {
     }).catch((error) => {
       log.error("chat memory prewarm failed", error);
     });
-    this.backgroundTasks.add(task);
-    task.finally(() => this.backgroundTasks.delete(task));
+    this.registerBackgroundTask(task);
   }
 
   private async runPrivateBetaBackupSchedulerIfDue(options: { force?: boolean } = {}): Promise<void> {
@@ -6303,8 +6355,7 @@ export class GatewayService {
           error: error instanceof Error ? error.message : String(error),
         });
       });
-    this.backgroundTasks.add(task);
-    task.finally(() => this.backgroundTasks.delete(task));
+    this.registerBackgroundTask(task);
   }
 
   private async sendQueuedChannelDelivery(
@@ -7059,8 +7110,12 @@ export class GatewayService {
     this.durableRunService.stopWorker();
     this.approvalEffectsService.stopWorker();
     if (this.maintenanceScheduler) {
-      clearInterval(this.maintenanceScheduler);
+      this.maintenanceScheduler.stop();
       this.maintenanceScheduler = undefined;
+    }
+    if (this.orchestrationWorktreeReapScheduler) {
+      this.orchestrationWorktreeReapScheduler.stop();
+      this.orchestrationWorktreeReapScheduler = undefined;
     }
     if (this.backgroundTasks.size > 0) {
       const tasks = [...this.backgroundTasks];
@@ -8110,70 +8165,6 @@ export function splitChatPrefsPatch(input: ChatSessionPrefsPatch): {
       reflectionMode: input.reflectionMode,
     },
   };
-}
-
-function getZonedDateParts(
-  date: Date,
-  timeZone: string,
-): {
-  year: number;
-  month: number;
-  day: number;
-  weekday: number;
-  hour: number;
-  minute: number;
-} {
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    weekday: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-  const parts = formatter.formatToParts(date);
-  const read = (type: string): string => parts.find((part) => part.type === type)?.value ?? "";
-  const weekdayRaw = read("weekday").toLowerCase();
-  const weekday = weekdayRaw.startsWith("sun")
-    ? 0
-    : weekdayRaw.startsWith("mon")
-      ? 1
-      : weekdayRaw.startsWith("tue")
-        ? 2
-        : weekdayRaw.startsWith("wed")
-          ? 3
-          : weekdayRaw.startsWith("thu")
-            ? 4
-            : weekdayRaw.startsWith("fri")
-              ? 5
-              : 6;
-  return {
-    year: Number.parseInt(read("year"), 10),
-    month: Number.parseInt(read("month"), 10),
-    day: Number.parseInt(read("day"), 10),
-    weekday,
-    hour: Number.parseInt(read("hour"), 10),
-    minute: Number.parseInt(read("minute"), 10),
-  };
-}
-
-function toDayKeyForTimezone(date: Date, timeZone: string): string {
-  const parts = getZonedDateParts(date, timeZone);
-  const yyyy = String(parts.year).padStart(4, "0");
-  const mm = String(parts.month).padStart(2, "0");
-  const dd = String(parts.day).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-function toHourKeyForTimezone(date: Date, timeZone: string): string {
-  const parts = getZonedDateParts(date, timeZone);
-  const yyyy = String(parts.year).padStart(4, "0");
-  const mm = String(parts.month).padStart(2, "0");
-  const dd = String(parts.day).padStart(2, "0");
-  const hh = String(parts.hour).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}-${hh}`;
 }
 
 function isCronJobDueNow(

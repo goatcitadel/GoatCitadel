@@ -1,6 +1,58 @@
 {
-  "generatedAt": "2026-05-29T00:21:13.415Z",
-  "gatewayLineCount": 8991,
+  "generatedAt": "2026-05-30T00:58:59.105Z",
+  "gatewayLineCount": 8966,
+  "largeServiceDebt": [
+    {
+      "path": "apps/gateway/src/services/chat-agent-orchestrator.ts",
+      "lineCount": 15199,
+      "bytes": 692975
+    },
+    {
+      "path": "apps/gateway/src/services/prompt-pack-service.ts",
+      "lineCount": 9248,
+      "bytes": 394266
+    },
+    {
+      "path": "apps/gateway/src/services/gateway-service.ts",
+      "lineCount": 8966,
+      "bytes": 353781
+    },
+    {
+      "path": "apps/gateway/src/services/improvement-service.ts",
+      "lineCount": 5738,
+      "bytes": 216942
+    },
+    {
+      "path": "apps/gateway/src/services/capability-system-service.ts",
+      "lineCount": 3499,
+      "bytes": 130436
+    },
+    {
+      "path": "apps/gateway/src/services/llm-service.ts",
+      "lineCount": 3249,
+      "bytes": 117664
+    },
+    {
+      "path": "apps/gateway/src/services/skill-import-service.ts",
+      "lineCount": 2507,
+      "bytes": 93536
+    },
+    {
+      "path": "apps/gateway/src/services/chat-proactive-service.ts",
+      "lineCount": 2317,
+      "bytes": 82575
+    },
+    {
+      "path": "apps/gateway/src/services/settings-auth-service.ts",
+      "lineCount": 2162,
+      "bytes": 71664
+    },
+    {
+      "path": "apps/gateway/src/services/chat-workbench-service.ts",
+      "lineCount": 2087,
+      "bytes": 75016
+    }
+  ],
   "gatewayPublicMethodCount": 254,
   "gatewayPublicMethodsByRegion": {
     "approvals": 18,
@@ -56,7 +108,7 @@
   "gatewayRouteCompositionPortMemberCount": 154,
   "legacyRouteServiceFactoryVariadicAnyCount": 2,
   "legacyRoutePortAliasCount": 38,
-  "totalHostCallbacks": 775,
+  "totalHostCallbacks": 778,
   "hostCallbacksByFile": {
     "apps/gateway/src/services/approval-code-mode-terminal.ts": 7,
     "apps/gateway/src/services/approval-lifecycle-service.ts": 68,
@@ -86,7 +138,7 @@
     "apps/gateway/src/services/memory-item-helpers.ts": 3,
     "apps/gateway/src/services/memory-lifecycle-service.ts": 1,
     "apps/gateway/src/services/onboarding-marker-helpers.ts": 7,
-    "apps/gateway/src/services/orchestration-lifecycle-service.ts": 74,
+    "apps/gateway/src/services/orchestration-lifecycle-service.ts": 77,
     "apps/gateway/src/services/orchestration-realtime-helpers.ts": 1,
     "apps/gateway/src/services/runtime-lifecycle-export-service.ts": 3,
     "apps/gateway/src/services/runtime-lifecycle-read-service.ts": 24,

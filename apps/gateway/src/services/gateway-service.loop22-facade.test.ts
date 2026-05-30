@@ -216,6 +216,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
   it("stops schedulers, clears maintenance interval, waits background work, and closes runtimes", async () => {
     vi.useFakeTimers();
     const backgroundTask = Promise.resolve();
+    const maintenanceStop = vi.fn();
     const gateway = createGatewayHarness({
       approvalEffectsService: { stopWorker: vi.fn() },
       assemblyService: { close: vi.fn(async () => undefined) },
@@ -225,7 +226,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
       durableRunService: { stopWorker: vi.fn() },
       improvementService: { stopScheduler: vi.fn() },
       llamaCppRuntime: { close: vi.fn(async () => undefined) },
-      maintenanceScheduler: setInterval(() => undefined, 1_000),
+      maintenanceScheduler: { stop: maintenanceStop },
       npuSidecar: { close: vi.fn(async () => undefined) },
       storage: { close: vi.fn() },
     });
@@ -237,6 +238,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
     expect(gateway.improvementService.stopScheduler).toHaveBeenCalled();
     expect(gateway.durableRunService.stopWorker).toHaveBeenCalled();
     expect(gateway.approvalEffectsService.stopWorker).toHaveBeenCalled();
+    expect(maintenanceStop).toHaveBeenCalledTimes(1);
     expect(gateway.maintenanceScheduler).toBeUndefined();
     expect(gateway.backgroundTasks.size).toBe(0);
     expect(gateway.discordRuntimeService.close).toHaveBeenCalled();
