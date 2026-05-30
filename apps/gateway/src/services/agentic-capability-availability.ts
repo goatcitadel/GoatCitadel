@@ -3,6 +3,7 @@ import type {
   AgenticHarnessAvailabilityRecord,
   AgenticPluginProviderRuntimeStatus,
   AgenticRuntimeAvailabilityResponse,
+  AgenticScalabilityTrackRecord,
 } from "@goatcitadel/contracts";
 import type { IntegrationCatalogEntry, IntegrationConnection } from "@goatcitadel/contracts";
 import type { LlmProviderSummary } from "@goatcitadel/contracts";
@@ -85,15 +86,18 @@ export function buildAgenticRuntimeAvailability(
   input: AgenticRuntimeAvailabilityBuildInput,
 ): AgenticRuntimeAvailabilityResponse {
   const generatedAt = input.generatedAt ?? new Date().toISOString();
+  const providerSummaries = input.providers ?? [];
   const harnesses = input.harnesses ?? [];
-  const providers = (input.providers ?? []).map((provider) => providerSummaryToRuntimeStatus(provider, generatedAt));
+  const providers = providerSummaries.map((provider) => providerSummaryToRuntimeStatus(provider, generatedAt));
   const plugins = (input.plugins ?? []).map((plugin) => integrationPluginToRuntimeStatus(plugin, generatedAt));
   const channels = buildChannelAvailability(input.channelCatalog ?? [], input.channelConnections ?? [], generatedAt);
+  const scalability = buildAgentScalabilityTracks(providerSummaries, generatedAt);
   const items = [
     ...harnesses.map(harnessAvailabilityToCapabilityAvailability),
     ...providers.map(runtimeStatusToCapabilityAvailability),
     ...plugins.map(runtimeStatusToCapabilityAvailability),
     ...channels,
+    ...scalability.map(scalabilityTrackToCapabilityAvailability),
   ];
 
   return {
@@ -103,6 +107,7 @@ export function buildAgenticRuntimeAvailability(
     plugins,
     providers,
     channels,
+    scalability,
   };
 }
 
@@ -262,4 +267,173 @@ function buildChannelAvailability(
         checkedAt,
       });
     });
+}
+
+function buildAgentScalabilityTracks(
+  providers: LlmProviderSummary[],
+  checkedAt: string,
+): AgenticScalabilityTrackRecord[] {
+  const openAiProviders = providers.filter(isOpenAiFamilyProvider);
+  const openAiResponsesProvider = openAiProviders.find((provider) =>
+    ["openai-responses", "openai-codex-responses"].includes(provider.resolvedApiStyle ?? provider.apiStyle),
+  );
+  const claudeProviders = providers.filter(isClaudeFamilyProvider);
+
+  return [
+    {
+      trackId: "openai_agents_sdk",
+      label: "OpenAI Agents SDK",
+      kind: "agent_sdk",
+      status: openAiProviders.length > 0 ? "blocked" : "unavailable",
+      callable: false,
+      implementationStatus: openAiProviders.length > 0 ? "partial" : "missing",
+      summary:
+        openAiProviders.length > 0
+          ? "OpenAI-family provider paths are visible, but no SDK-backed Agents adapter is registered."
+          : "No OpenAI-family provider path is visible in this runtime availability snapshot.",
+      reasons: normalizeReasons([
+        openAiResponsesProvider
+          ? `Responses-style provider path is present through ${openAiResponsesProvider.label}.`
+          : openAiProviders.length > 0
+            ? "Visible OpenAI-family provider support does not prove an Agents SDK runtime adapter."
+            : undefined,
+        "No @openai/agents dependency or SDK-backed gateway adapter is registered.",
+        "Agent handoffs, guardrails, human review, tracing, and eval loops are not exposed as an OpenAI Agents SDK runtime.",
+      ]),
+      evidence: [
+        {
+          label: "OpenAI Agents guide",
+          url: "https://developers.openai.com/api/docs/guides/agents",
+        },
+        {
+          label: "Gateway provider execution",
+          path: "apps/gateway/src/services/llm-service.ts",
+        },
+        {
+          label: "Built-in provider template",
+          path: "packages/contracts/src/provider-templates.ts",
+        },
+      ],
+      requiredNextSteps: [
+        "Add an adapter behind gateway-owned durable execution before marking callable",
+        "Route SDK tools, handoffs, guardrails, traces, and approvals through existing policy boundaries",
+        "Add focused SDK adapter and eval-loop tests",
+      ],
+      checkedAt,
+    },
+    {
+      trackId: "claude_agent_sdk",
+      label: "Claude Agent SDK",
+      kind: "agent_sdk",
+      status: claudeProviders.length > 0 ? "blocked" : "unavailable",
+      callable: false,
+      implementationStatus: claudeProviders.length > 0 ? "partial" : "missing",
+      summary:
+        claudeProviders.length > 0
+          ? "Claude/Anthropic provider paths are visible, but no Claude Agent SDK loop is registered."
+          : "No Claude/Anthropic provider path is visible in this runtime availability snapshot.",
+      reasons: normalizeReasons([
+        claudeProviders.length > 0
+          ? `Provider API path is visible through ${claudeProviders.map((provider) => provider.label).join(", ")}.`
+          : undefined,
+        "No @anthropic-ai/claude-agent-sdk dependency or SDK-backed gateway adapter is registered.",
+        "SDK sessions, subagents, allowed tools, hooks, MCP wiring, and .claude configuration boundaries are not exposed as a callable runtime.",
+      ]),
+      evidence: [
+        {
+          label: "Claude Agent SDK overview",
+          url: "https://code.claude.com/docs/en/agent-sdk/overview",
+        },
+        {
+          label: "Anthropic provider adapter",
+          path: "apps/gateway/src/services/llm-provider-anthropic.ts",
+        },
+        {
+          label: "Built-in provider template",
+          path: "packages/contracts/src/provider-templates.ts",
+        },
+      ],
+      requiredNextSteps: [
+        "Add an adapter behind gateway-owned durable execution before marking callable",
+        "Map SDK permissions, hooks, subagent lineage, sessions, costs, and MCP configuration into policy-governed records",
+        "Constrain .claude configuration loading to approved workspace boundaries",
+      ],
+      checkedAt,
+    },
+    {
+      trackId: "a2a_protocol",
+      label: "A2A protocol interoperability",
+      kind: "agent_protocol",
+      status: "unavailable",
+      callable: false,
+      implementationStatus: "missing",
+      summary: "A2A is not implemented as a protocol surface in this gateway availability snapshot.",
+      reasons: [
+        "No A2A Agent Card contracts, discovery routes, or JSON-RPC handlers are registered.",
+        "Task lifecycle, context IDs, streaming, push notifications, authenticated extended cards, and authorization scoping are not available.",
+        "A2A must remain a first-class interoperability protocol, not a provider template or MCP alias.",
+      ],
+      evidence: [
+        {
+          label: "A2A project",
+          url: "https://github.com/a2aproject/A2A",
+        },
+        {
+          label: "A2A specification",
+          url: "https://a2aproject.github.io/A2A/latest/specification/",
+        },
+        {
+          label: "Gateway routes",
+          path: "apps/gateway/src/routes",
+        },
+        {
+          label: "Runtime contracts",
+          path: "packages/contracts/src",
+        },
+      ],
+      requiredNextSteps: [
+        "Add A2A contracts for Agent Cards, messages, tasks, artifacts, streaming events, and auth metadata",
+        "Add gateway-owned A2A server and client services with auth, SSRF-safe push webhooks, streaming, cancellation, and audit",
+        "Add storage only where durable replay or audit requires external task state",
+      ],
+      checkedAt,
+    },
+  ];
+}
+
+function scalabilityTrackToCapabilityAvailability(input: AgenticScalabilityTrackRecord): AgenticCapabilityAvailability {
+  return {
+    capabilityId: `scalability:${input.trackId}`,
+    label: input.label,
+    family: input.kind,
+    status: input.status,
+    callable: input.callable && input.status === "callable",
+    reasons: normalizeReasons([input.summary, ...input.reasons]),
+    checkedAt: input.checkedAt,
+  };
+}
+
+function isOpenAiFamilyProvider(provider: LlmProviderSummary): boolean {
+  const providerId = provider.providerId.trim().toLowerCase();
+  const label = provider.label.trim().toLowerCase();
+  const baseUrl = provider.baseUrl.trim().toLowerCase();
+  return (
+    providerId === "openai" ||
+    providerId.startsWith("openai-") ||
+    label.includes("openai") ||
+    baseUrl.includes("api.openai.com")
+  );
+}
+
+function isClaudeFamilyProvider(provider: LlmProviderSummary): boolean {
+  const providerId = provider.providerId.trim().toLowerCase();
+  const label = provider.label.trim().toLowerCase();
+  return (
+    providerId === "anthropic" ||
+    providerId === "claude-code" ||
+    label.includes("anthropic") ||
+    label.includes("claude") ||
+    provider.apiStyle === "anthropic-messages" ||
+    provider.resolvedApiStyle === "anthropic-messages"
+  );
 }

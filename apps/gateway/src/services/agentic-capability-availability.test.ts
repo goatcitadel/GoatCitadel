@@ -203,12 +203,34 @@ describe("buildAgenticRuntimeAvailability", () => {
       channelConnections: [],
     });
 
-    expect(response.items.map((item) => [item.capabilityId, item.status, item.callable])).toEqual([
-      ["harness:codex_cli", "unavailable", false],
-      ["provider:openai", "not_configured", false],
-      ["plugin:broken", "unavailable", false],
-      ["channel:telegram", "not_configured", false],
-    ]);
+    expect(response.items.map((item) => [item.capabilityId, item.status, item.callable])).toEqual(
+      expect.arrayContaining([
+        ["harness:codex_cli", "unavailable", false],
+        ["provider:openai", "not_configured", false],
+        ["plugin:broken", "unavailable", false],
+        ["channel:telegram", "not_configured", false],
+        ["scalability:openai_agents_sdk", "blocked", false],
+        ["scalability:claude_agent_sdk", "unavailable", false],
+        ["scalability:a2a_protocol", "unavailable", false],
+      ]),
+    );
+    expect(response.scalability).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          trackId: "openai_agents_sdk",
+          status: "blocked",
+          callable: false,
+          implementationStatus: "partial",
+        }),
+        expect.objectContaining({
+          trackId: "a2a_protocol",
+          kind: "agent_protocol",
+          status: "unavailable",
+          callable: false,
+          implementationStatus: "missing",
+        }),
+      ]),
+    );
   });
 
   it("preserves callable OAuth providers, plugin trust posture, and blocked channel reasons", () => {
@@ -339,32 +361,74 @@ describe("buildAgenticRuntimeAvailability", () => {
       ],
     });
 
-    expect(response.items.map((item) => [item.capabilityId, item.status, item.callable, item.reasons])).toEqual([
-      ["provider:codex", "callable", true, []],
-      ["plugin:local", "callable", true, []],
-      [
-        "plugin:unknown",
-        "blocked",
-        false,
-        ["Integrity: unverified", "Runtime status: blocked", "Runtime health probe has not passed."],
-      ],
-      [
-        "plugin:critical",
-        "not_configured",
-        false,
+    expect(response.items.map((item) => [item.capabilityId, item.status, item.callable, item.reasons])).toEqual(
+      expect.arrayContaining([
+        ["provider:codex", "callable", true, []],
+        ["plugin:local", "callable", true, []],
         [
-          "Runtime status: not_configured",
-          "Plugin has a critical trust warning and is excluded from callable runtime.",
+          "plugin:unknown",
+          "blocked",
+          false,
+          ["Integrity: unverified", "Runtime status: blocked", "Runtime health probe has not passed."],
         ],
+        [
+          "plugin:critical",
+          "not_configured",
+          false,
+          [
+            "Runtime status: not_configured",
+            "Plugin has a critical trust warning and is excluded from callable runtime.",
+          ],
+        ],
+        ["channel:slack", "blocked", false, ["Channel connection is disabled."]],
+        ["channel:discord", "blocked", false, ["Token rejected."]],
+        [
+          "channel:web",
+          "unavailable",
+          false,
+          ["Channel runtime is catalog-only or blocked.", "No channel connection is configured."],
+        ],
+        [
+          "scalability:a2a_protocol",
+          "unavailable",
+          false,
+          expect.arrayContaining([
+            "A2A is not implemented as a protocol surface in this gateway availability snapshot.",
+          ]),
+        ],
+      ]),
+    );
+  });
+
+  it("distinguishes Claude provider support from Claude Agent SDK availability", () => {
+    const response = buildAgenticRuntimeAvailability({
+      generatedAt: "2026-05-05T00:00:00.000Z",
+      providers: [
+        {
+          providerId: "claude-code",
+          label: "Claude Code",
+          baseUrl: "https://api.anthropic.com/v1",
+          apiStyle: "anthropic-messages",
+          defaultModel: "claude-sonnet-4-6",
+          hasApiKey: false,
+          apiKeySource: "none",
+          oauthStatus: { connected: true },
+        },
       ],
-      ["channel:slack", "blocked", false, ["Channel connection is disabled."]],
-      ["channel:discord", "blocked", false, ["Token rejected."]],
-      [
-        "channel:web",
-        "unavailable",
-        false,
-        ["Channel runtime is catalog-only or blocked.", "No channel connection is configured."],
-      ],
-    ]);
+    });
+
+    expect(response.scalability).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          trackId: "claude_agent_sdk",
+          status: "blocked",
+          callable: false,
+          implementationStatus: "partial",
+          reasons: expect.arrayContaining([
+            "No @anthropic-ai/claude-agent-sdk dependency or SDK-backed gateway adapter is registered.",
+          ]),
+        }),
+      ]),
+    );
   });
 });

@@ -238,6 +238,7 @@ describe("ThreadedWorkflowPanel", () => {
     mockedFetchAgenticRuntimeAvailability.mockResolvedValue({
       generatedAt: "2026-05-05T12:00:00.000Z",
       items: [],
+      scalability: [],
       harnesses: [
         {
           harnessId: "codex",

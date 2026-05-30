@@ -46,6 +46,23 @@ describe("AgenticRuntimeVisibilityPanel", () => {
     vi.clearAllMocks();
     apiMocks.fetchAgenticRuntimeAvailability.mockResolvedValue({
       generatedAt: "2026-01-01T00:00:00.000Z",
+      scalability: [
+        {
+          trackId: "a2a_protocol",
+          label: "A2A protocol interoperability",
+          kind: "agent_protocol",
+          status: "unavailable",
+          callable: false,
+          implementationStatus: "missing",
+          summary: "A2A is not implemented as a protocol surface.",
+          reasons: ["No A2A Agent Card contracts, discovery routes, or JSON-RPC handlers are registered."],
+          evidence: [],
+          requiredNextSteps: [
+            "Add A2A contracts for Agent Cards, messages, tasks, artifacts, streaming events, and auth metadata",
+          ],
+          checkedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
       harnesses: [
         {
           harnessId: "playwright",
@@ -168,6 +185,10 @@ describe("AgenticRuntimeVisibilityPanel", () => {
     expect(rendered).toContain("Code runtime availability");
     expect(rendered).toContain("Generated");
     expect(rendered).toContain("2026-01-01T00:00:00.000Z");
+    expect(rendered).toContain("Scalability");
+    expect(rendered).toContain("A2A protocol interoperability");
+    expect(rendered).toContain("Protocol missing.");
+    expect(rendered).toContain("No A2A Agent Card contracts");
     expect(rendered).toContain("Sandbox posture is not satisfied.");
     expect(rendered).toContain("Executable pwsh.exe.");
     expect(rendered).toContain("Manual harness");
@@ -189,6 +210,7 @@ describe("AgenticRuntimeVisibilityPanel", () => {
   it("renders empty loading groups and surfaces load failures", async () => {
     apiMocks.fetchAgenticRuntimeAvailability.mockResolvedValueOnce({
       generatedAt: "2026-01-01T00:00:00.000Z",
+      scalability: [],
       harnesses: [],
       plugins: [],
       providers: [],
@@ -198,6 +220,7 @@ describe("AgenticRuntimeVisibilityPanel", () => {
     renderer = create(<AgenticRuntimeVisibilityPanel surface="cowork" />);
     expect(textOf(renderer.toJSON())).toContain("Loading channel delivery state");
     await flush();
+    expect(textOf(renderer.toJSON())).toContain("No scalability tracks are reported yet.");
     expect(textOf(renderer.toJSON())).toContain("harnesses");
     expect(textOf(renderer.toJSON())).toContain("are reported yet.");
     expect(textOf(renderer.toJSON())).toContain("No queued or historical channel deliveries are visible.");

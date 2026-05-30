@@ -330,7 +330,17 @@ export type AgenticCapabilityAvailabilityStatus = "callable" | "blocked" | "not_
 export interface AgenticCapabilityAvailability {
   capabilityId: string;
   label: string;
-  family: "tool" | "mcp" | "skill" | "plugin" | "provider" | "harness" | "channel" | "self_improvement";
+  family:
+    | "tool"
+    | "mcp"
+    | "skill"
+    | "plugin"
+    | "provider"
+    | "harness"
+    | "channel"
+    | "self_improvement"
+    | "agent_sdk"
+    | "agent_protocol";
   status: AgenticCapabilityAvailabilityStatus;
   callable: boolean;
   reasons: string[];
@@ -408,6 +418,32 @@ export interface AgenticPluginProviderRuntimeStatus {
   healthMessage?: string;
 }
 
+export type AgenticScalabilityTrackId = "openai_agents_sdk" | "claude_agent_sdk" | "a2a_protocol";
+
+export type AgenticScalabilityTrackKind = "agent_sdk" | "agent_protocol";
+
+export type AgenticScalabilityImplementationStatus = "implemented" | "partial" | "missing";
+
+export interface AgenticScalabilityEvidenceRef {
+  label: string;
+  path?: string;
+  url?: string;
+}
+
+export interface AgenticScalabilityTrackRecord {
+  trackId: AgenticScalabilityTrackId;
+  label: string;
+  kind: AgenticScalabilityTrackKind;
+  status: AgenticCapabilityAvailabilityStatus;
+  callable: boolean;
+  implementationStatus: AgenticScalabilityImplementationStatus;
+  summary: string;
+  reasons: string[];
+  evidence: AgenticScalabilityEvidenceRef[];
+  requiredNextSteps: string[];
+  checkedAt: string;
+}
+
 export interface AgenticRuntimeAvailabilityResponse {
   generatedAt: string;
   items: AgenticCapabilityAvailability[];
@@ -415,6 +451,7 @@ export interface AgenticRuntimeAvailabilityResponse {
   plugins: AgenticPluginProviderRuntimeStatus[];
   providers: AgenticPluginProviderRuntimeStatus[];
   channels: AgenticCapabilityAvailability[];
+  scalability: AgenticScalabilityTrackRecord[];
 }
 
 export interface AgentProfileFileRecord {

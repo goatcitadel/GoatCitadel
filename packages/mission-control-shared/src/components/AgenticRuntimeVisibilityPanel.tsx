@@ -4,6 +4,7 @@ import type {
   AgenticCapabilityAvailabilityStatus,
   AgenticPluginProviderRuntimeStatus,
   AgenticRuntimeAvailabilityResponse,
+  AgenticScalabilityTrackRecord,
 } from "@goatcitadel/contracts";
 import {
   fetchAgenticChannelDeliveries,
@@ -103,7 +104,7 @@ export function AgenticRuntimeVisibilityPanel({
                 ))}
               </ul>
             ) : (
-              <p className="chat-cowork-section-copy">No {group.title.toLowerCase()} are reported yet.</p>
+              <p className="chat-cowork-section-copy">{emptyRuntimeGroupMessage(group.title)}</p>
             )}
           </section>
         ))}
@@ -148,6 +149,7 @@ function buildRuntimePostureGroups(availability: AgenticRuntimeAvailabilityRespo
 }> {
   if (!availability) {
     return [
+      { title: "Scalability", items: [] },
       { title: "Harnesses", items: [] },
       { title: "Plugins", items: [] },
       { title: "Providers", items: [] },
@@ -155,6 +157,7 @@ function buildRuntimePostureGroups(availability: AgenticRuntimeAvailabilityRespo
     ];
   }
   return [
+    { title: "Scalability", items: (availability.scalability ?? []).map(scalabilityTrackToPostureItem) },
     {
       title: "Harnesses",
       items: availability.harnesses.map((item) => ({
@@ -184,6 +187,24 @@ function capabilityToPostureItem(item: AgenticCapabilityAvailability): RuntimePo
     status: item.status,
     callable: item.callable,
     reasons: item.reasons,
+  };
+}
+
+function emptyRuntimeGroupMessage(title: string): string {
+  if (title === "Scalability") {
+    return "No scalability tracks are reported yet.";
+  }
+  return `No ${title.toLowerCase()} are reported yet.`;
+}
+
+function scalabilityTrackToPostureItem(item: AgenticScalabilityTrackRecord): RuntimePostureItem {
+  return {
+    id: item.trackId,
+    label: item.label,
+    status: item.status,
+    callable: item.callable,
+    reasons: [item.summary, ...item.reasons, ...item.requiredNextSteps.map((step) => `Next: ${step}.`)],
+    meta: `${item.kind === "agent_protocol" ? "Protocol" : "SDK"} ${item.implementationStatus}.`,
   };
 }
 

@@ -115,6 +115,20 @@ describe("tasks routes", () => {
       providers: [expect.objectContaining({ runtimeId: "provider-openai", status: "not_configured" })],
       plugins: [expect.objectContaining({ runtimeId: "plugin-corrupt", status: "unavailable" })],
       channels: [expect.objectContaining({ capabilityId: "channel:telegram", status: "callable", callable: true })],
+      scalability: expect.arrayContaining([
+        expect.objectContaining({
+          trackId: "openai_agents_sdk",
+          status: "blocked",
+          callable: false,
+          implementationStatus: "partial",
+        }),
+        expect.objectContaining({
+          trackId: "a2a_protocol",
+          status: "unavailable",
+          callable: false,
+          implementationStatus: "missing",
+        }),
+      ]),
     });
     expect(response.json().items).toEqual(
       expect.arrayContaining([
@@ -124,6 +138,12 @@ describe("tasks routes", () => {
           callable: false,
         }),
         expect.objectContaining({ capabilityId: "plugin:plugin-corrupt", status: "unavailable", callable: false }),
+        expect.objectContaining({
+          capabilityId: "scalability:a2a_protocol",
+          family: "agent_protocol",
+          status: "unavailable",
+          callable: false,
+        }),
       ]),
     );
   }, 15_000);
