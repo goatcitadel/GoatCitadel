@@ -1,16 +1,16 @@
 {
-  "generatedAt": "2026-05-30T00:58:59.105Z",
+  "generatedAt": "2026-05-30T01:11:17.106Z",
   "gatewayLineCount": 8966,
   "largeServiceDebt": [
     {
       "path": "apps/gateway/src/services/chat-agent-orchestrator.ts",
-      "lineCount": 15199,
-      "bytes": 692975
+      "lineCount": 15204,
+      "bytes": 693338
     },
     {
       "path": "apps/gateway/src/services/prompt-pack-service.ts",
       "lineCount": 9248,
-      "bytes": 394266
+      "bytes": 385019
     },
     {
       "path": "apps/gateway/src/services/gateway-service.ts",
@@ -20,12 +20,12 @@
     {
       "path": "apps/gateway/src/services/improvement-service.ts",
       "lineCount": 5738,
-      "bytes": 216942
+      "bytes": 211205
     },
     {
       "path": "apps/gateway/src/services/capability-system-service.ts",
       "lineCount": 3499,
-      "bytes": 130436
+      "bytes": 126938
     },
     {
       "path": "apps/gateway/src/services/llm-service.ts",
@@ -40,12 +40,12 @@
     {
       "path": "apps/gateway/src/services/chat-proactive-service.ts",
       "lineCount": 2317,
-      "bytes": 82575
+      "bytes": 80259
     },
     {
       "path": "apps/gateway/src/services/settings-auth-service.ts",
       "lineCount": 2162,
-      "bytes": 71664
+      "bytes": 69503
     },
     {
       "path": "apps/gateway/src/services/chat-workbench-service.ts",
