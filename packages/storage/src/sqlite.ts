@@ -170,6 +170,15 @@ export interface SqliteSchemaIndexBlueprint {
   unique: boolean;
   origin: string;
   columns: string[];
+  /**
+   * Partial-index predicate (the `WHERE <expr>` tail of `CREATE INDEX ... WHERE ...`),
+   * without the leading `WHERE` keyword. `null` for full (non-partial) indexes.
+   *
+   * SQLite stores this only in `sqlite_master.sql` — `PRAGMA index_list`/`index_info`
+   * do not expose it — so it must be threaded through explicitly to keep partial
+   * indexes partial when the blueprint is rendered to other dialects (e.g. Postgres).
+   */
+  where: string | null;
 }
 
 export interface SqliteSchemaTableBlueprint {
@@ -1037,6 +1046,14 @@ function buildTableBlueprint(db: DatabaseSync, tableName: string, sql: string): 
     on_update: string;
     on_delete: string;
   }>;
+  const indexSqlByName = new Map(
+    (
+      db.prepare(`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ?`).all(tableName) as Array<{
+        name: string;
+        sql: string | null;
+      }>
+    ).map((row) => [row.name, row.sql]),
+  );
   const indexes = (
     db.prepare(`PRAGMA index_list(${tableName})`).all() as Array<{
       name: string;
@@ -1058,6 +1075,7 @@ function buildTableBlueprint(db: DatabaseSync, tableName: string, sql: string): 
         unique: index.unique === 1,
         origin: index.origin,
         columns,
+        where: extractIndexPredicate(indexSqlByName.get(index.name) ?? null),
       } satisfies SqliteSchemaIndexBlueprint;
     })
     .filter((index) => index.origin !== "pk");
@@ -1096,6 +1114,27 @@ function buildGeneratedIndexName(tableName: string, columns: string[], unique: b
   const suffix = unique ? "unique" : "index";
   const columnPart = columns.length > 0 ? columns.join("_") : "constraint";
   return `idx_${tableName}_${columnPart}_${suffix}`;
+}
+
+/**
+ * Extract the partial-index predicate from an index's `CREATE INDEX ... WHERE <expr>` DDL.
+ *
+ * Returns the predicate expression (without the leading `WHERE` keyword) or `null` when
+ * the index is full (no `WHERE` clause) or has no stored SQL (auto-generated UNIQUE indexes
+ * report `sql = NULL` in `sqlite_master`). The predicate is the tail of the statement, so a
+ * greedy match from the introducing `WHERE` captures the full expression even when it
+ * contains string literals.
+ */
+function extractIndexPredicate(indexSql: string | null): string | null {
+  if (indexSql === null) {
+    return null;
+  }
+  const match = /\sWHERE\s+([\s\S]+)$/i.exec(indexSql.trim());
+  if (!match || typeof match[1] !== "string") {
+    return null;
+  }
+  const predicate = match[1].trim();
+  return predicate.length > 0 ? predicate : null;
 }
 
 function createBaseSchema(db: DatabaseSync): void {
