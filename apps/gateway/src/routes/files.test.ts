@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import { NotFoundError, PayloadTooLargeError } from "@goatcitadel/contracts";
+import { __internal as appInternal } from "../app.js";
 import { MAX_HTML_PREVIEW_BYTES, MAX_INLINE_FILE_DOWNLOAD_BYTES } from "../services/files-route-service.js";
 import { filesRoutes } from "./files.js";
 
@@ -143,5 +144,50 @@ describe("files routes", () => {
     expect(response.headers["content-security-policy"]).not.toContain("unsafe-inline");
     expect(response.headers["x-content-type-options"]).toBe("nosniff");
     expect(downloadWorkspaceFile).toHaveBeenCalledWith("workspace/report.html", { maxBytes: MAX_HTML_PREVIEW_BYTES });
+  });
+
+  // Regression coverage for GWROUTES-001: the global onSend security-headers
+  // hook used to unconditionally set a baseline CSP (`script-src 'self'`),
+  // clobbering the preview route's hardened sandbox (`script-src 'none'`). This
+  // wires the real hook ahead of the route so the production ordering — route
+  // sets CSP, then onSend runs — is reproduced.
+  it("keeps the preview sandbox CSP after the global security-headers hook runs", async () => {
+    const downloadWorkspaceFile = vi.fn(async () => ({
+      relativePath: "workspace/report.html",
+      fullPath: "./workspace/report.html",
+      size: 32,
+      modifiedAt: "2026-03-04T18:00:00.000Z",
+      contentType: "text/html",
+      isText: true,
+      content: "<h1>Report</h1>",
+    }));
+    app = Fastify();
+    app.addHook("onSend", async (_request, reply) => {
+      appInternal.applyBaselineSecurityHeaders(reply, { isNonLoopbackBind: false });
+    });
+    app.decorate("services", {
+      files: {
+        downloadWorkspaceFile,
+        listFileTemplates: vi.fn(() => []),
+      },
+    } as never);
+    await app.register(filesRoutes);
+
+    const previewResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/files/preview?relativePath=workspace/report.html",
+    });
+
+    // The route's hardened CSP survives the global hook.
+    expect(previewResponse.statusCode).toBe(200);
+    expect(previewResponse.headers["content-security-policy"]).toContain("script-src 'none'");
+    expect(previewResponse.headers["content-security-policy"]).not.toContain("script-src 'self'");
+    expect(previewResponse.headers["content-security-policy"]).not.toBe(appInternal.BASELINE_CONTENT_SECURITY_POLICY);
+
+    // An ordinary response that does not set its own CSP still receives the baseline.
+    const listResponse = await app.inject({ method: "GET", url: "/api/v1/files/templates" });
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.headers["content-security-policy"]).toBe(appInternal.BASELINE_CONTENT_SECURITY_POLICY);
+    expect(listResponse.headers["content-security-policy"]).toContain("script-src 'self'");
   });
 });
