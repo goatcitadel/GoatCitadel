@@ -25,10 +25,16 @@ import type {
   EvidenceEnvelope,
   EvidenceEnvelopeListQuery,
   LlmModelDiscoverySource,
+  LlmEvalProofRunRequest,
+  LlmEvalProofRunResponse,
+  LlmEvalProofRunsResponse,
+  LlmLocalEngineCatalogResponse,
   LlmProviderAdviceRequest,
   LlmProviderAdviceResponse,
   LlmProviderConfig,
   LlmProviderRequestConfig,
+  LlmRuntimeMeasurementsQuery,
+  LlmRuntimeMeasurementsResponse,
   LlamaCppAdvisorRecommendation,
   LlamaCppAdvisorRequest,
   LlamaCppModelsResponse,
@@ -334,6 +340,34 @@ export async function fetchLlmProviderAdvice(input: LlmProviderAdviceRequest = {
   });
 }
 
+export async function fetchLlmRuntimeMeasurements(
+  input: LlmRuntimeMeasurementsQuery = {},
+): Promise<LlmRuntimeMeasurementsResponse> {
+  const search = new URLSearchParams();
+  if (input.providerId) search.set("providerId", input.providerId);
+  if (input.model) search.set("model", input.model);
+  if (input.source) search.set("source", input.source);
+  if (input.status) search.set("status", input.status);
+  if (input.limit) search.set("limit", String(input.limit));
+  const query = search.toString();
+  return request<LlmRuntimeMeasurementsResponse>(`/api/v1/llm/runtime-measurements${query ? `?${query}` : ""}`);
+}
+
+export async function fetchLlmLocalEngines(): Promise<LlmLocalEngineCatalogResponse> {
+  return request<LlmLocalEngineCatalogResponse>("/api/v1/llm/local-engines");
+}
+
+export async function fetchLlmEvalProofRuns(limit = 20): Promise<LlmEvalProofRunsResponse> {
+  return request<LlmEvalProofRunsResponse>(`/api/v1/llm/eval-proof?limit=${Math.max(1, Math.min(limit, 200))}`);
+}
+
+export async function runLlmEvalProof(input: LlmEvalProofRunRequest): Promise<LlmEvalProofRunResponse> {
+  return request<LlmEvalProofRunResponse>("/api/v1/llm/eval-proof", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function fetchAssemblyRuns(limit = 50): Promise<{ items: AssemblyRunRecord[] }> {
   return request(`/api/v1/assembly/runs?limit=${limit}`);
 }
@@ -397,6 +431,7 @@ export async function createLlmChatCompletion(input: {
     mode?: "qmd" | "off";
     sessionId?: string;
     taskId?: string;
+    runId?: string;
     workspace?: string;
     maxContextTokens?: number;
     forceRefresh?: boolean;

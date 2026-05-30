@@ -236,10 +236,152 @@ export interface LlmModelPreviewResponse {
 }
 
 export interface LlmProviderAdviceRequest {
-  preference?: "low_cost" | "balanced" | "capability_fit";
+  preference?: "low_cost" | "balanced" | "capability_fit" | "runtime_fit";
   taskHint?: string;
   requireConfiguredKey?: boolean;
   maxCandidates?: number;
+}
+
+export type LlmRuntimeMeasurementSource = "live" | "cached" | "estimated" | "unavailable";
+export type LlmRuntimeEngineKind =
+  | "remote_api"
+  | "openai_compatible"
+  | "ollama"
+  | "lmstudio"
+  | "llama_cpp"
+  | "vllm"
+  | "sglang"
+  | "mlx"
+  | "lemonade"
+  | "apple_foundation_models"
+  | "litellm"
+  | "npu_sidecar"
+  | "unknown";
+export type LlmRuntimeMeasurementStatus = "completed" | "failed" | "partial";
+
+export interface LlmRuntimeMeasurementMetrics {
+  latencyMs?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  outputTokensPerSecond?: number;
+  estimatedCostUsd?: number;
+  powerWatts?: number;
+  energyJoules?: number;
+  cpuPercent?: number;
+  gpuPercent?: number;
+  npuPercent?: number;
+  memoryBytes?: number;
+}
+
+export interface LlmRuntimeMeasurementRecord {
+  measurementId: string;
+  providerId: string;
+  model: string;
+  engineKind: LlmRuntimeEngineKind;
+  source: LlmRuntimeMeasurementSource;
+  status: LlmRuntimeMeasurementStatus;
+  stream: boolean;
+  sessionId?: string;
+  taskId?: string;
+  runId?: string;
+  collectedAt: string;
+  metrics: LlmRuntimeMeasurementMetrics;
+  provenance: {
+    collector: "gateway" | "eval_runner" | "operator_import";
+    path: "chat_completion" | "chat_completion_stream" | "runtime_probe" | "eval_proof";
+    notes?: string[];
+  };
+  error?: string;
+}
+
+export interface LlmRuntimeMeasurementsQuery {
+  providerId?: string;
+  model?: string;
+  source?: LlmRuntimeMeasurementSource;
+  status?: LlmRuntimeMeasurementStatus;
+  limit?: number;
+}
+
+export interface LlmRuntimeMeasurementsResponse {
+  generatedAt: string;
+  items: LlmRuntimeMeasurementRecord[];
+  warnings: string[];
+}
+
+export interface LlmLocalEngineRecord {
+  engineKind: LlmRuntimeEngineKind;
+  label: string;
+  configured: boolean;
+  invocation: "native" | "openai_compatible" | "advisory_only" | "unavailable";
+  providerIds: string[];
+  measurementSource: LlmRuntimeMeasurementSource;
+  latestMeasurement?: LlmRuntimeMeasurementRecord;
+  fit: "strong" | "ok" | "weak" | "unknown";
+  notes: string[];
+}
+
+export interface LlmLocalEngineCatalogResponse {
+  generatedAt: string;
+  items: LlmLocalEngineRecord[];
+  warnings: string[];
+}
+
+export interface LlmProviderRuntimeFit {
+  engineKind: LlmRuntimeEngineKind;
+  fit: "strong" | "ok" | "weak" | "unknown";
+  measurementSource: LlmRuntimeMeasurementSource;
+  latestMeasurementId?: string;
+  latencyMs?: number;
+  outputTokensPerSecond?: number;
+  estimatedCostUsd?: number;
+  notes: string[];
+}
+
+export interface LlmEvalProofCandidate {
+  providerId: string;
+  model: string;
+  qualityScore?: number;
+}
+
+export interface LlmEvalProofRunRequest {
+  prompt: string;
+  sessionId?: string;
+  taskId?: string;
+  candidates?: LlmEvalProofCandidate[];
+}
+
+export interface LlmEvalProofCandidateResult extends LlmEvalProofCandidate {
+  measurementSource: LlmRuntimeMeasurementSource;
+  latestMeasurement?: LlmRuntimeMeasurementRecord;
+  qualityScoreSource: "operator" | "unavailable";
+  latencyMs?: number;
+  estimatedCostUsd?: number;
+  energyJoules?: number;
+  paretoOptimal: boolean;
+  notes: string[];
+}
+
+export interface LlmEvalProofRunRecord {
+  runId: string;
+  promptHash: string;
+  sessionId?: string;
+  taskId?: string;
+  status: "completed" | "completed_with_warnings";
+  createdAt: string;
+  candidates: LlmEvalProofCandidate[];
+  results: LlmEvalProofCandidateResult[];
+  warnings: string[];
+}
+
+export interface LlmEvalProofRunResponse {
+  generatedAt: string;
+  run: LlmEvalProofRunRecord;
+}
+
+export interface LlmEvalProofRunsResponse {
+  generatedAt: string;
+  items: LlmEvalProofRunRecord[];
 }
 
 export interface LlmProviderAdviceCandidate {
@@ -252,6 +394,9 @@ export interface LlmProviderAdviceCandidate {
   fitScore: number;
   riskNotes: string[];
   requiredKeys: string[];
+  measurementSource?: LlmRuntimeMeasurementSource;
+  hardwareFit?: "strong" | "ok" | "weak" | "unknown";
+  localRuntimeFit?: LlmProviderRuntimeFit;
 }
 
 export interface LlmProviderAdviceResponse {
@@ -287,6 +432,7 @@ export interface ChatCompletionRequest {
     turnId?: string;
     sessionId?: string;
     taskId?: string;
+    runId?: string;
     workspace?: string;
     relationScope?: import("./memory.js").MemoryRelationScope;
     maxContextTokens?: number;

@@ -8,6 +8,7 @@ import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { deleteProviderApiKeyWithFallback, persistProviderApiKeyWithFallback } from "./provider-secret-persistence.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
 import { buildLlmProviderAdvice } from "./llm-provider-advice-service.js";
+import { inferRuntimeEngineKind, LlmRuntimeTruthService } from "./llm-runtime-truth-service.js";
 import * as mcpDiagnosticsService from "./mcp-diagnostics-service.js";
 import * as mcpServerAdminService from "./mcp-server-admin-service.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
@@ -39,6 +40,10 @@ export function composeToolsMcpRouteDependencies(
     recordConnectorHealthRun: (report) =>
       connectorDiagnosticsHelpers.recordConnectorHealthRun({ gatewaySql: gateway.storage.gatewaySql }, report),
   };
+  const llmRuntimeTruth = new LlmRuntimeTruthService({
+    storage: gateway.storage,
+    listProviders: () => gateway.llmService.listProviders(),
+  });
 
   return {
     llm: {
@@ -49,11 +54,19 @@ export function composeToolsMcpRouteDependencies(
         ...getLlmConfigForGateway(gateway),
         providerConfigs: gateway.llmService.exportConfigFile().providers,
       }),
-      getProviderAdvice: (input) => buildLlmProviderAdvice(input, gateway.llmService.listProviders()),
+      getProviderAdvice: (input) =>
+        buildLlmProviderAdvice(input, gateway.llmService.listProviders(), {
+          latestMeasurement: (providerId, model) => llmRuntimeTruth.latestMeasurement(providerId, model),
+          inferEngineKind: inferRuntimeEngineKind,
+        }),
+      listLlmEvalProofRuns: (limit) => llmRuntimeTruth.listEvalProofRuns(limit),
+      listLlmLocalEngines: () => llmRuntimeTruth.listLocalEngines(),
       listLlmModels: (providerId) => gateway.llmService.listModelsWithSource(providerId),
       listLlmProviders: () => gateway.llmService.listProviders(),
+      listLlmRuntimeMeasurements: (query) => llmRuntimeTruth.listMeasurements(query),
       pollOpenAICodexOAuthDeviceFlow: (flowId) => gateway.llmService.pollOpenAICodexOAuthDeviceFlow(flowId),
       previewLlmModels: (input) => gateway.llmService.previewModels(input),
+      runLlmEvalProof: (input) => llmRuntimeTruth.runEvalProof(input),
       startOpenAICodexOAuthDeviceFlow: () => gateway.llmService.startOpenAICodexOAuthDeviceFlow(),
       deleteOpenAICodexOAuthCredential: () => gateway.llmService.deleteOpenAICodexOAuthCredential(),
       updateLlmConfig: (input) => {

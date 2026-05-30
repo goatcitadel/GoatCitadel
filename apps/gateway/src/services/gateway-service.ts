@@ -218,6 +218,7 @@ import type {
   LlmModelRecord,
   LlmProviderRequestConfig,
   LlmRuntimeConfig,
+  LlmRuntimeMeasurementRecord,
   LlamaCppAdvisorRecommendation,
   LlamaCppAdvisorRequest,
   LlamaCppModelManifest,
@@ -6458,6 +6459,32 @@ export class GatewayService {
 
   public async *createChatCompletionStream(request: ChatCompletionRequest): AsyncGenerator<Record<string, unknown>> {
     yield* llmCompletionService.createChatCompletionStream(this, request);
+  }
+
+  /** @internal */ public recordLlmRuntimeMeasurement(record: LlmRuntimeMeasurementRecord): void {
+    try {
+      this.storage.llmRuntimeMeasurements.insert(record);
+    } catch (error) {
+      const runtimeError = error instanceof Error ? error : new Error(String(error));
+      this.recordDevDiagnostic({
+        level: "warn",
+        category: "runtime_truth",
+        event: "llm.runtime_measurement.persist_failed",
+        message: "Failed to persist LLM runtime measurement",
+        sessionId: record.sessionId,
+        taskId: record.taskId,
+        runId: record.runId,
+        providerId: record.providerId,
+        modelId: record.model,
+        runtimeKind: "runtime.telemetry",
+        runtimeStatus: "degraded",
+        runtimeError: {
+          name: runtimeError.name,
+          message: runtimeError.message,
+          retryable: false,
+        },
+      });
+    }
   }
 
   /** @internal */ public resolveFallbackTargets(

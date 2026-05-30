@@ -646,6 +646,37 @@ const STARTER_TEMPLATES: WorkflowRecipeTemplateRecord[] = [
     "Collect schedule, urgent decisions, and open loops.",
     "Draft a brief with priorities, risks, and approvals.",
   ]),
+  template("deep-research-brief", "Deep research brief", "Produce a sourced research brief with synthesis caveats.", [
+    "Collect source evidence, confidence labels, and unresolved questions.",
+    "Synthesize findings, cite provenance, and flag claims needing operator judgment.",
+  ]),
+  template(
+    "scheduled-monitor-review",
+    "Scheduled monitor review",
+    "Review a recurring monitor and recommend governed follow-up actions.",
+    [
+      "Inspect latest monitor signals, failures, and drift from expected thresholds.",
+      "Summarize action candidates, approval needs, and safe next checks.",
+    ],
+  ),
+  template(
+    "morning-operator-digest",
+    "Morning operator digest",
+    "Create a daily operator digest from runtime, schedule, memory, and approval signals.",
+    [
+      "Gather overnight activity, pending approvals, schedule pressure, and runtime warnings.",
+      "Draft a concise digest with priorities, blockers, and decisions due today.",
+    ],
+  ),
+  template(
+    "code-assistant-proof-loop",
+    "Code assistant proof loop",
+    "Plan a code change with focused implementation and validation evidence.",
+    [
+      "Read the relevant code owner, current implementation, and user-facing contract.",
+      "Define the smallest patch, focused tests, and proof lane before implementation.",
+    ],
+  ),
 ];
 
 function template(

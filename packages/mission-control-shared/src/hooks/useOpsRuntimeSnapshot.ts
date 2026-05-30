@@ -4,6 +4,9 @@ import {
   fetchDaemonStatus,
   fetchDashboardState,
   fetchHealthSummary,
+  fetchLlmEvalProofRuns,
+  fetchLlmLocalEngines,
+  fetchLlmRuntimeMeasurements,
   fetchMcpServers,
   fetchSessions,
   fetchTimelineSummary,
@@ -25,6 +28,9 @@ type RuntimeSnapshotData = {
   backups: Awaited<ReturnType<typeof listBackups>>["items"];
   sessions: Awaited<ReturnType<typeof fetchSessions>>["items"];
   mcpServers: Awaited<ReturnType<typeof fetchMcpServers>>["items"];
+  runtimeMeasurements: Awaited<ReturnType<typeof fetchLlmRuntimeMeasurements>>["items"];
+  localEngines: Awaited<ReturnType<typeof fetchLlmLocalEngines>>["items"];
+  evalProofRuns: Awaited<ReturnType<typeof fetchLlmEvalProofRuns>>["items"];
   sourceStatus: RuntimeSnapshotSourceStatusMap;
 };
 
@@ -41,7 +47,10 @@ type RuntimeSnapshotSourceKey =
   | "daemon"
   | "backups"
   | "sessions"
-  | "mcpServers";
+  | "mcpServers"
+  | "runtimeMeasurements"
+  | "localEngines"
+  | "evalProofRuns";
 
 export type RuntimeSnapshotSourceStatus =
   | { status: "ok" }
@@ -66,7 +75,19 @@ export function useOpsRuntimeSnapshot() {
   const loadSequenceRef = useRef(0);
 
   const load = useCallback(async () => {
-    const [dashboard, timeline, health, cost, daemon, backups, sessions, mcpServers] = await Promise.all([
+    const [
+      dashboard,
+      timeline,
+      health,
+      cost,
+      daemon,
+      backups,
+      sessions,
+      mcpServers,
+      runtimeMeasurements,
+      localEngines,
+      evalProofRuns,
+    ] = await Promise.all([
       captureRuntimeSource(() => fetchDashboardState()),
       captureRuntimeSource(() => fetchTimelineSummary()),
       captureRuntimeSource(() => fetchHealthSummary()),
@@ -75,6 +96,9 @@ export function useOpsRuntimeSnapshot() {
       captureRuntimeSource(() => listBackups(10)),
       captureRuntimeSource(() => fetchSessions()),
       captureRuntimeSource(() => fetchMcpServers()),
+      captureRuntimeSource(() => fetchLlmRuntimeMeasurements({ limit: 20 })),
+      captureRuntimeSource(() => fetchLlmLocalEngines()),
+      captureRuntimeSource(() => fetchLlmEvalProofRuns(10)),
     ]);
 
     return {
@@ -86,6 +110,9 @@ export function useOpsRuntimeSnapshot() {
       backups: readRuntimeSourceData(backups, { items: [] }).items,
       sessions: readRuntimeSourceData(sessions, { items: [] }).items,
       mcpServers: readRuntimeSourceData(mcpServers, { items: [] }).items,
+      runtimeMeasurements: readRuntimeSourceData(runtimeMeasurements, { items: [] }).items,
+      localEngines: readRuntimeSourceData(localEngines, { items: [] }).items,
+      evalProofRuns: readRuntimeSourceData(evalProofRuns, { items: [] }).items,
       sourceStatus: {
         dashboard: readRuntimeSourceStatus(dashboard),
         timeline: readRuntimeSourceStatus(timeline),
@@ -95,6 +122,9 @@ export function useOpsRuntimeSnapshot() {
         backups: readRuntimeSourceStatus(backups),
         sessions: readRuntimeSourceStatus(sessions),
         mcpServers: readRuntimeSourceStatus(mcpServers),
+        runtimeMeasurements: readRuntimeSourceStatus(runtimeMeasurements),
+        localEngines: readRuntimeSourceStatus(localEngines),
+        evalProofRuns: readRuntimeSourceStatus(evalProofRuns),
       },
     } satisfies RuntimeSnapshotData;
   }, []);

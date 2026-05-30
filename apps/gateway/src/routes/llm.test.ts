@@ -407,6 +407,69 @@ describe("llm routes", () => {
     });
   });
 
+  it("exposes runtime measurements, local engines, and eval proof records", async () => {
+    const listLlmRuntimeMeasurements = vi.fn(() => ({
+      generatedAt: "2026-05-29T00:00:00.000Z",
+      items: [{ measurementId: "measure-1", providerId: "openai", model: "gpt-5", metrics: {} }],
+      warnings: [],
+    }));
+    const listLlmLocalEngines = vi.fn(() => ({
+      generatedAt: "2026-05-29T00:00:00.000Z",
+      items: [{ engineKind: "ollama", label: "Ollama", configured: true }],
+      warnings: [],
+    }));
+    const listLlmEvalProofRuns = vi.fn(() => ({
+      generatedAt: "2026-05-29T00:00:00.000Z",
+      items: [{ runId: "proof-1", status: "completed" }],
+    }));
+    const runLlmEvalProof = vi.fn(() => ({
+      generatedAt: "2026-05-29T00:00:00.000Z",
+      run: { runId: "proof-2", status: "completed", results: [] },
+    }));
+
+    app = Fastify();
+    app.decorate("services", {
+      llm: {
+        createChatCompletion: vi.fn(),
+        getLlmConfig: vi.fn(),
+        listLlmProviders: vi.fn(),
+        updateLlmConfig: vi.fn(),
+        listLlmModels: vi.fn(),
+        previewLlmModels: vi.fn(),
+        listLlmRuntimeMeasurements,
+        listLlmLocalEngines,
+        listLlmEvalProofRuns,
+        runLlmEvalProof,
+      },
+    } as never);
+    await app.register(llmRoutes);
+
+    const measurements = await app.inject({
+      method: "GET",
+      url: "/api/v1/llm/runtime-measurements?providerId=openai&limit=3",
+    });
+    const engines = await app.inject({ method: "GET", url: "/api/v1/llm/local-engines" });
+    const proofRuns = await app.inject({ method: "GET", url: "/api/v1/llm/eval-proof?limit=2" });
+    const proofRun = await app.inject({
+      method: "POST",
+      url: "/api/v1/llm/eval-proof",
+      headers: { "Content-Type": "application/json" },
+      payload: JSON.stringify({ prompt: "compare", candidates: [{ providerId: "openai", model: "gpt-5" }] }),
+    });
+
+    expect(measurements.statusCode).toBe(200);
+    expect(listLlmRuntimeMeasurements).toHaveBeenCalledWith({ providerId: "openai", limit: 3 });
+    expect(engines.statusCode).toBe(200);
+    expect(listLlmLocalEngines).toHaveBeenCalledTimes(1);
+    expect(proofRuns.statusCode).toBe(200);
+    expect(listLlmEvalProofRuns).toHaveBeenCalledWith(2);
+    expect(proofRun.statusCode).toBe(200);
+    expect(runLlmEvalProof).toHaveBeenCalledWith({
+      prompt: "compare",
+      candidates: [{ providerId: "openai", model: "gpt-5" }],
+    });
+  });
+
   it("accepts image generation requests", async () => {
     const generateImage = vi.fn(async (request) => ({
       operation: "edit",

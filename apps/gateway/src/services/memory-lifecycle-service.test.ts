@@ -75,7 +75,19 @@ describe("MemoryLifecycleService", () => {
 
   it("forwards context, learned-memory, and maintenance accessors with caller arguments", async () => {
     const context = {
-      compose: vi.fn(async () => ({ contextId: "ctx-compose" })),
+      compose: vi.fn(async () => ({
+        contextId: "ctx-compose",
+        scope: "chat",
+        queryHash: "query",
+        sourcesHash: "sources",
+        contextText: "GoatCitadel runtime truth records provider latency and memory provenance.",
+        citations: [{ candidateId: "c-1", sourceType: "file", sourceRef: "memory.md", score: 0.9 }],
+        quality: { status: "generated" },
+        originalTokenEstimate: 120,
+        distilledTokenEstimate: 40,
+        createdAt: "2026-05-29T00:00:00.000Z",
+        expiresAt: "2026-05-30T00:00:00.000Z",
+      })),
       get: vi.fn(() => ({ contextId: "ctx-get" })),
       listByRun: vi.fn(() => [{ contextId: "ctx-run" }]),
       listRecent: vi.fn(() => [{ contextId: "ctx-recent" }]),
@@ -127,6 +139,21 @@ describe("MemoryLifecycleService", () => {
     expect(service.listRunContexts("run-1")).toEqual([{ contextId: "ctx-run" }]);
     expect(service.listRecentContexts(7)).toEqual([{ contextId: "ctx-recent" }]);
     expect(service.getContextStats("2026-05-01", "2026-05-14")).toEqual({ totalRuns: 2 });
+    await expect(
+      service.runRetrievalBenchmark({
+        prompts: ["runtime truth provider latency"],
+        workspace: "workspace-1",
+      }),
+    ).resolves.toMatchObject({
+      itemCount: 1,
+      items: [
+        {
+          status: "completed",
+          citationsCount: 1,
+          qmdStatus: "generated",
+        },
+      ],
+    });
     expect(service.updateSessionLearnedMemory("session-1", "learned-1", { content: "updated" } as never)).toEqual({
       itemId: "learned-1",
       content: "updated",

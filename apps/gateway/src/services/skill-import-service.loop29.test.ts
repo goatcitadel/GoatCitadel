@@ -96,7 +96,7 @@ describe("SkillImportService loop 29 runtime behavior", () => {
           action: "install",
           outcome: "accepted",
           skillId: "safe-skill",
-          details: { installedPath: "skills/extra/safe-skill" },
+          details: expect.objectContaining({ installedPath: "skills/extra/safe-skill" }),
         }),
         expect.objectContaining({
           action: "install",

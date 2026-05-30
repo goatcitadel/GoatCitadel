@@ -235,6 +235,58 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () =>
               },
             ],
             mcpServers: [{ serverId: "srv-1", label: "GitHub", transport: "stdio", enabled: true, category: "code" }],
+            runtimeMeasurements: [
+              {
+                measurementId: "measure-1",
+                providerId: "openai",
+                model: "gpt-5",
+                engineKind: "remote_api",
+                source: "live",
+                status: "completed",
+                stream: false,
+                collectedAt: "2026-04-22T00:00:00.000Z",
+                metrics: {
+                  latencyMs: 800,
+                  outputTokensPerSecond: 22,
+                  estimatedCostUsd: 0.0123,
+                },
+                provenance: { collector: "gateway", path: "chat_completion" },
+              },
+            ],
+            localEngines: [
+              {
+                engineKind: "ollama",
+                label: "Ollama",
+                configured: true,
+                invocation: "openai_compatible",
+                providerIds: ["ollama"],
+                measurementSource: "cached",
+                fit: "ok",
+                notes: ["Measured through an OpenAI-compatible provider."],
+              },
+            ],
+            evalProofRuns: [
+              {
+                runId: "eval-proof-run-1",
+                promptHash: "hash-1",
+                status: "completed",
+                createdAt: "2026-04-22T00:00:00.000Z",
+                candidates: [{ providerId: "openai", model: "gpt-5" }],
+                results: [
+                  {
+                    providerId: "openai",
+                    model: "gpt-5",
+                    measurementSource: "live",
+                    qualityScoreSource: "operator",
+                    latencyMs: 800,
+                    estimatedCostUsd: 0.0123,
+                    paretoOptimal: true,
+                    notes: [],
+                  },
+                ],
+                warnings: [],
+              },
+            ],
             sourceStatus: {
               dashboard: { status: "ok" },
               timeline: { status: "ok" },
@@ -244,6 +296,9 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot", () =>
               backups: { status: "ok" },
               sessions: { status: "ok" },
               mcpServers: { status: "ok" },
+              runtimeMeasurements: { status: "ok" },
+              localEngines: { status: "ok" },
+              evalProofRuns: { status: "ok" },
               ...(runtimeSnapshotOverrides.sourceStatus ?? {}),
             },
           }
@@ -331,6 +386,9 @@ describe("RuntimeRoutePage", () => {
     expect(markup).toContain("Daemon running");
     expect(markup).toContain("Start daemon");
     expect(markup).toContain("Restart daemon");
+    expect(markup).toContain("LLM runtime efficiency");
+    expect(markup).toContain("Local engine fit");
+    expect(markup).toContain("Eval evidence");
   });
 
   it("covers runtime route formatting and schedule helper edges", () => {
@@ -957,7 +1015,7 @@ describe("RuntimeRoutePage", () => {
     expect(markup).toContain("Daemon unavailable");
     expect(markup).toContain("Backup status unavailable");
     expect(markup).toContain("unavailable");
-    expect(markup).not.toContain("<strong>0</strong>");
+    expect(markup).toContain("<strong>unavailable</strong>");
     expect(markup).not.toContain("<strong>0 B</strong>");
   });
 

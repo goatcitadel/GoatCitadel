@@ -11,7 +11,10 @@ import { assertWritePathInJail, fetchAllowlisted } from "@goatcitadel/policy-eng
 import { assertSafeGitPositionalArg } from "./security-utils.js";
 import type {
   SkillImportCandidate,
+  SkillImportExternalToolMapping,
   SkillImportHistoryRecord,
+  SkillImportProvenance,
+  SkillImportScriptDisposition,
   SkillImportSourceType,
   SkillImportValidationResult,
   SkillSourceLookupParsedSource,
@@ -852,6 +855,9 @@ export class SkillImportService {
         details: {
           errors: validation.errors,
           warnings: validation.warnings,
+          provenance: validation.provenance,
+          externalToolMappings: validation.externalToolMappings,
+          scriptDisposition: validation.scriptDisposition,
         },
         createdAt: new Date().toISOString(),
       });
@@ -906,6 +912,9 @@ export class SkillImportService {
           riskLevel: validation.riskLevel,
           details: {
             errors: validation.errors,
+            provenance: validation.provenance,
+            externalToolMappings: validation.externalToolMappings,
+            scriptDisposition: validation.scriptDisposition,
           },
           createdAt: new Date().toISOString(),
         });
@@ -925,6 +934,9 @@ export class SkillImportService {
           riskLevel: validation.riskLevel,
           details: {
             error: "high_risk_confirmation_required",
+            provenance: validation.provenance,
+            externalToolMappings: validation.externalToolMappings,
+            scriptDisposition: validation.scriptDisposition,
           },
           createdAt: new Date().toISOString(),
         });
@@ -986,6 +998,9 @@ export class SkillImportService {
             riskLevel: validation.riskLevel,
             warnings: validation.warnings,
             checks: validation.checks,
+            provenance: validation.provenance,
+            externalToolMappings: validation.externalToolMappings,
+            scriptDisposition: validation.scriptDisposition,
           },
           null,
           2,
@@ -1006,6 +1021,9 @@ export class SkillImportService {
         riskLevel: validation.riskLevel,
         details: {
           installedPath: path.relative(this.rootDir, installedPath).replaceAll("\\", "/"),
+          provenance: validation.provenance,
+          externalToolMappings: validation.externalToolMappings,
+          scriptDisposition: validation.scriptDisposition,
         },
         createdAt: new Date().toISOString(),
       });
@@ -1402,9 +1420,15 @@ export class SkillImportService {
     const networkIndicators = scan.networkSignals.length > 0;
     const licenseDetected = scan.licenseFiles.length > 0;
     const scanIncomplete = scan.skippedLargeFiles.length > 0 || scan.truncated;
+    const provenance = buildSkillImportProvenance(source.candidate);
+    const externalToolMappings = mapImportedSkillTools(declaredTools);
+    const scriptDisposition = buildScriptDisposition(scan.scriptFiles, scan.suspiciousSignals);
 
     if (suspiciousScripts) {
       warnings.push("Potentially risky script indicators detected.");
+    }
+    if (scriptDisposition.action !== "none") {
+      warnings.push("Imported scripts remain non-callable until reviewed and activated.");
     }
     if (networkIndicators) {
       warnings.push("Network usage indicators detected in skill files.");
@@ -1468,7 +1492,12 @@ export class SkillImportService {
         networkIndicators,
         licenseDetected,
       },
-      candidate: source.candidate,
+      candidate: {
+        ...source.candidate,
+        provenance,
+        externalToolMappings,
+        scriptDisposition,
+      },
       inferredSkillName,
       inferredSkillId,
       installPath: inferredSkillId ? `skills/extra/${inferredSkillId}` : undefined,
@@ -1478,6 +1507,9 @@ export class SkillImportService {
       suspiciousSignals: scan.suspiciousSignals,
       licenseFiles: scan.licenseFiles,
       instructionPreview,
+      externalToolMappings,
+      scriptDisposition,
+      provenance,
       nativeOverlaps,
     };
   }
@@ -2381,12 +2413,14 @@ async function scanSkillDirectory(dir: string): Promise<{
   suspiciousSignals: string[];
   networkSignals: string[];
   licenseFiles: string[];
+  scriptFiles: string[];
   skippedLargeFiles: string[];
   truncated: boolean;
 }> {
   const suspiciousSignals = new Set<string>();
   const networkSignals = new Set<string>();
   const licenseFiles = new Set<string>();
+  const scriptFiles = new Set<string>();
   const skippedLargeFiles = new Set<string>();
   const queue = [dir];
   let scannedFiles = 0;
@@ -2420,6 +2454,9 @@ async function scanSkillDirectory(dir: string): Promise<{
       if (/^(license|copying)(\..*)?$/i.test(entry.name)) {
         licenseFiles.add(path.relative(dir, fullPath).replaceAll("\\", "/"));
       }
+      if (/\.(ps1|bat|cmd|sh|bash|zsh|py|js|mjs|cjs|ts)$/i.test(entry.name)) {
+        scriptFiles.add(path.relative(dir, fullPath).replaceAll("\\", "/"));
+      }
       if (scannedFiles > 220) {
         truncated = true;
         break;
@@ -2448,8 +2485,75 @@ async function scanSkillDirectory(dir: string): Promise<{
     suspiciousSignals: [...suspiciousSignals],
     networkSignals: [...networkSignals],
     licenseFiles: [...licenseFiles],
+    scriptFiles: [...scriptFiles],
     skippedLargeFiles: [...skippedLargeFiles],
     truncated,
+  };
+}
+
+function buildSkillImportProvenance(candidate: SkillImportCandidate): SkillImportProvenance {
+  return {
+    sourceProvider: candidate.sourceProvider,
+    sourceRef: candidate.sourceRef,
+    sourceType: candidate.sourceType,
+    sourceUrl: candidate.sourceUrl,
+    repositoryUrl: candidate.repositoryUrl,
+    capturedAt: new Date().toISOString(),
+    nonCallableUntilActivated: true,
+  };
+}
+
+function mapImportedSkillTools(declaredTools: string[]): SkillImportExternalToolMapping[] {
+  const nativeToolAliases = new Map<string, { capabilityId: string; label: string }>([
+    ["browser", { capabilityId: "tool:browser.search", label: "browser.search" }],
+    ["browser.search", { capabilityId: "tool:browser.search", label: "browser.search" }],
+    ["web_search", { capabilityId: "tool:browser.search", label: "browser.search" }],
+    ["search", { capabilityId: "tool:browser.search", label: "browser.search" }],
+    ["http", { capabilityId: "tool:http.get", label: "http.get" }],
+    ["http.get", { capabilityId: "tool:http.get", label: "http.get" }],
+    ["memory", { capabilityId: "tool:memory.read", label: "memory.read" }],
+    ["memory.read", { capabilityId: "tool:memory.read", label: "memory.read" }],
+    ["file.read", { capabilityId: "tool:file.read_range", label: "file.read_range" }],
+    ["fs.read", { capabilityId: "tool:fs.read", label: "fs.read" }],
+    ["shell", { capabilityId: "tool:shell.exec", label: "shell.exec" }],
+    ["shell.exec", { capabilityId: "tool:shell.exec", label: "shell.exec" }],
+  ]);
+  return Array.from(new Set(declaredTools.map((tool) => tool.trim()).filter(Boolean))).map((declaredTool) => {
+    const mapped = nativeToolAliases.get(declaredTool.toLowerCase());
+    if (mapped) {
+      return {
+        declaredTool,
+        mappedCapabilityId: mapped.capabilityId,
+        mappedCapabilityLabel: mapped.label,
+        disposition: "mapped",
+        reason: "Matched to a governed GoatCitadel tool name; activation policy still controls callability.",
+      };
+    }
+    return {
+      declaredTool,
+      disposition: "unmapped",
+      reason: "No native tool mapping was inferred; review before activation.",
+    };
+  });
+}
+
+function buildScriptDisposition(scriptFiles: string[], suspiciousSignals: string[]): SkillImportScriptDisposition {
+  if (scriptFiles.length === 0) {
+    return {
+      action: "none",
+      scriptFiles: [],
+      notes: ["No script files were detected during import scan."],
+    };
+  }
+  const suspicious = new Set(suspiciousSignals);
+  return {
+    action: suspiciousSignals.length > 0 ? "review_required" : "blocked_until_activation",
+    scriptFiles,
+    notes: scriptFiles.map((file) =>
+      suspicious.has(file)
+        ? `${file} contains high-risk script indicators and requires manual review.`
+        : `${file} is recorded as non-callable until governed activation.`,
+    ),
   };
 }
 

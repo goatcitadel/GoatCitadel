@@ -1996,7 +1996,7 @@ describe("SettingsNativePage providers", () => {
 
     const text = collectText(renderer!.root);
     expect(mocks.fetchLlmProviderAdvice).toHaveBeenCalledWith({
-      preference: "balanced",
+      preference: "runtime_fit",
       taskHint: "general GoatCitadel chat, code, and orchestration routing",
       maxCandidates: 5,
     });

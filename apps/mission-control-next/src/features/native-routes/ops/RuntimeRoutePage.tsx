@@ -240,6 +240,17 @@ export function RuntimeRoutePage({
       return true;
     });
     const needsAttentionItems = buildNeedsAttentionItems(data, pendingApprovals, route.theme);
+    const runtimeMeasurements = data.runtimeMeasurements ?? [];
+    const localEngines = data.localEngines ?? [];
+    const evalProofRuns = data.evalProofRuns ?? [];
+    const completedRuntimeMeasurements = runtimeMeasurements.filter((item) => item.status === "completed");
+    const latestRuntimeMeasurement = runtimeMeasurements[0];
+    const averageRuntimeLatencyMs = averageNumbers(
+      completedRuntimeMeasurements.map((item) => item.metrics.latencyMs).filter(isFiniteNumber),
+    );
+    const configuredLocalEngines = localEngines.filter((item) => item.configured);
+    const fittedLocalEngines = localEngines.filter((item) => item.fit === "strong" || item.fit === "ok");
+    const latestEvalRun = evalProofRuns[0];
 
     switch (section) {
       case "sessions":
@@ -709,6 +720,120 @@ export function RuntimeRoutePage({
                   Refresh
                 </button>
               </div>
+            </NativeCard>
+            <NativeCard
+              title="LLM runtime efficiency"
+              subtitle="Live and cached model-call measurements from gateway runtime paths."
+              density="compact"
+              scrollBody
+              bodyMaxHeight="min(46vh, 24rem)"
+              stats={[
+                { label: "Measurements", value: String(runtimeMeasurements.length) },
+                {
+                  label: "Source",
+                  value: sourceFailed(data, "runtimeMeasurements") ? "unavailable" : "measured/cached",
+                },
+              ]}
+            >
+              <MetricGrid
+                items={[
+                  {
+                    label: "Avg latency",
+                    value: formatMilliseconds(averageRuntimeLatencyMs),
+                    meta: "Completed samples",
+                  },
+                  {
+                    label: "Latest TPS",
+                    value: formatOptionalNumber(latestRuntimeMeasurement?.metrics.outputTokensPerSecond, "/s"),
+                    meta: latestRuntimeMeasurement?.source ?? "unavailable",
+                  },
+                  {
+                    label: "Latest cost",
+                    value: formatOptionalUsd(latestRuntimeMeasurement?.metrics.estimatedCostUsd),
+                    meta: latestRuntimeMeasurement?.engineKind ?? "engine unknown",
+                  },
+                ]}
+              />
+              <NativeList
+                items={runtimeMeasurements.slice(0, 5).map((item) => ({
+                  title: `${item.providerId} · ${item.model}`,
+                  meta: `${item.source} · ${item.status}`,
+                  body: `${formatMilliseconds(item.metrics.latencyMs)} · ${formatOptionalUsd(
+                    item.metrics.estimatedCostUsd,
+                  )} · ${formatDateTime(item.collectedAt)}`,
+                }))}
+                emptyLabel="No LLM runtime measurements have been recorded yet."
+                density="compact"
+                maxHeight="min(30vh, 16rem)"
+                ariaLabel="LLM runtime measurements"
+              />
+            </NativeCard>
+            <NativeCard
+              title="Local engine fit"
+              subtitle="Configured local and OpenAI-compatible engines with measured, cached, or unavailable proof labels."
+              density="compact"
+              scrollBody
+              bodyMaxHeight="min(46vh, 24rem)"
+              stats={[
+                { label: "Configured", value: String(configuredLocalEngines.length) },
+                { label: "Fit", value: `${fittedLocalEngines.length}/${localEngines.length}` },
+              ]}
+            >
+              <NativeList
+                items={localEngines.map((item) => ({
+                  title: item.label,
+                  meta: `${item.fit} · ${item.measurementSource}`,
+                  body: `${item.invocation} · ${
+                    item.providerIds.length ? item.providerIds.join(", ") : "no providers"
+                  } · ${item.notes[0] ?? "No measurement note."}`,
+                }))}
+                emptyLabel="No local engine catalog entries are available."
+                density="compact"
+                maxHeight="min(34vh, 18rem)"
+                ariaLabel="Local engine fit"
+              />
+            </NativeCard>
+            <NativeCard
+              title="Eval evidence"
+              subtitle="Pareto proof records compare model candidates without pretending to invoke unsupported engines."
+              density="compact"
+              scrollBody
+              bodyMaxHeight="min(46vh, 24rem)"
+              stats={[
+                { label: "Runs", value: String(evalProofRuns.length) },
+                { label: "Latest", value: latestEvalRun?.status ?? "none" },
+              ]}
+            >
+              <MetricGrid
+                items={[
+                  {
+                    label: "Latest run",
+                    value: formatShortRunId(latestEvalRun?.runId),
+                    meta: latestEvalRun ? formatDateTime(latestEvalRun.createdAt) : "No proof run",
+                  },
+                  {
+                    label: "Pareto providers",
+                    value: formatParetoProviders(latestEvalRun?.results),
+                    meta: "Latency/cost/quality frontier",
+                  },
+                  {
+                    label: "Warnings",
+                    value: String(latestEvalRun?.warnings.length ?? 0),
+                    meta: "Measurement gaps remain visible",
+                  },
+                ]}
+              />
+              <NativeList
+                items={evalProofRuns.slice(0, 5).map((item) => ({
+                  title: formatShortRunId(item.runId),
+                  meta: `${item.status} · ${item.results.length} candidates`,
+                  body: `${formatParetoProviders(item.results)} · ${formatDateTime(item.createdAt)}`,
+                }))}
+                emptyLabel="No eval proof records have been produced yet."
+                density="compact"
+                maxHeight="min(30vh, 16rem)"
+                ariaLabel="Eval evidence"
+              />
             </NativeCard>
             <NativeCard
               title="Backup posture"
@@ -1489,6 +1614,59 @@ export function formatDateTime(value?: string | null) {
       ? `${get("month")}/${get("day")}`
       : `${get("month")}/${get("day")}/${get("year")}`;
   return `${datePart} ${get("hour")}:${get("minute")} ${get("dayPeriod")}`.trim();
+}
+
+function formatShortRunId(value?: string) {
+  if (!value) {
+    return "none";
+  }
+  return value.length > 12 ? `${value.slice(0, 8)}...` : value;
+}
+
+function formatMilliseconds(value?: number) {
+  if (!isFiniteNumber(value)) {
+    return "unavailable";
+  }
+  if (value >= 1000) {
+    return `${(value / 1000).toFixed(value >= 10_000 ? 1 : 2)}s`;
+  }
+  return `${Math.round(value)}ms`;
+}
+
+function formatOptionalNumber(value?: number, suffix = "") {
+  if (!isFiniteNumber(value)) {
+    return "unavailable";
+  }
+  return `${value.toFixed(value >= 10 ? 1 : 2)}${suffix}`;
+}
+
+function formatOptionalUsd(value?: number) {
+  if (!isFiniteNumber(value)) {
+    return "unavailable";
+  }
+  return formatUsd(value);
+}
+
+function formatParetoProviders(results?: OpsRuntimeData["evalProofRuns"][number]["results"]) {
+  const labels = (results ?? [])
+    .filter((item) => item.paretoOptimal)
+    .map((item) => `${item.providerId}/${item.model}`)
+    .slice(0, 2);
+  if (labels.length === 0) {
+    return "none";
+  }
+  return labels.length === 2 ? `${labels.join(", ")}${(results ?? []).length > 2 ? "..." : ""}` : labels[0]!;
+}
+
+function averageNumbers(values: number[]) {
+  if (values.length === 0) {
+    return undefined;
+  }
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 export function sourceFailed(

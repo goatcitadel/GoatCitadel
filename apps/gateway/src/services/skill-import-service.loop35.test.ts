@@ -250,7 +250,7 @@ describe("SkillImportService loop 35 import behavior", () => {
         action: "install",
         outcome: "accepted",
         skillId: "hosted-bundle",
-        details: { installedPath: "skills/extra/hosted-bundle" },
+        details: expect.objectContaining({ installedPath: "skills/extra/hosted-bundle" }),
       }),
     ]);
   });

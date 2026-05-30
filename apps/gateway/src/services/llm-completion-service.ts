@@ -6,17 +6,8 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type {
-  ChatCompletionRequest,
-  ChatCompletionResponse,
-  ChatTurnTraceRecord,
-  MemoryContextPack,
-} from "@goatcitadel/contracts";
-import type { GatewayRuntimeConfig } from "../config.js";
+import type { ChatCompletionRequest, ChatCompletionResponse, ChatTurnTraceRecord } from "@goatcitadel/contracts";
 import { shouldAllowCrossProviderFallback } from "./chat-session-utils.js";
-import type { HooksService } from "./hooks-service.js";
-import type { LlmService } from "./llm-service.js";
-import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import {
   CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT,
   applyNonStreamingTransformLlmOutput,
@@ -25,7 +16,6 @@ import {
   calculateSavings,
   createChatCompletionDeadline,
   delayChatCompletionRetry,
-  extractPromptFromMessages,
   getRemainingChatCompletionTimeoutMs,
   normalizeChatCompletionAttemptError,
   normalizeToolProtocolRetryRequest,
@@ -38,55 +28,24 @@ import {
   parseLlmModelSelectHookPatch,
   parseLlmRequestHookPatch,
 } from "./hook-patch-helpers.js";
+import type { LlmCompletionHost } from "./llm-completion-host.js";
+import {
+  composeChatCompletionMemoryContext,
+  shouldUseChatCompletionMemoryContext,
+} from "./llm-completion-memory-context.js";
+import {
+  recordCompletedChatRuntime,
+  recordFailedChatRuntime,
+  recordStreamRuntime,
+} from "./llm-completion-runtime-measurements.js";
 import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
+
+export type { LlmCompletionHost } from "./llm-completion-host.js";
 
 // Retry after normalizing provider tool-call output into GoatCitadel's expected protocol shape.
 const TOOL_PROTOCOL_RETRY_NORMALIZED = 1;
 // Retry with minimal provider reasoning metadata to reduce tool-call compatibility friction.
 const TOOL_PROTOCOL_RETRY_MINIMAL_THINKING = 2;
-
-export interface LlmCompletionHost {
-  readonly config: Pick<GatewayRuntimeConfig, "assistant">;
-  readonly memoryLifecycleService: Pick<MemoryLifecycleService, "composeContext">;
-  readonly hooksService: Pick<HooksService, "runInlineHooks" | "enqueueAfterHooks" | "hasMutateHook">;
-  readonly llmService: Pick<
-    LlmService,
-    "chatCompletions" | "chatCompletionsStream" | "getRuntimeConfig" | "resolveExecutionApiStyle"
-  >;
-  resolveMemoryWorkspaceRelativeDir(workspace: string | undefined, sessionId: string | undefined): string;
-  resolveChatCompletionHookWorkspaceId(request: ChatCompletionRequest): string;
-  persistContextManifestForCompletionRequest(input: {
-    request: ChatCompletionRequest;
-    memoryContext?: MemoryContextPack;
-  }): void;
-  resolveFallbackTargets(
-    runtime: ReturnType<LlmService["getRuntimeConfig"]>,
-    primaryProviderId: string,
-    primaryModel: string,
-  ): Array<{ providerId: string; model: string }>;
-  recordDevDiagnostic(input: {
-    level: "debug" | "info" | "warn" | "error";
-    category: string;
-    event: string;
-    message: string;
-    sessionId?: string;
-    taskId?: string;
-    runId?: string;
-    providerId?: string;
-    modelId?: string;
-    durationMs?: number;
-    runtimeKind?: string;
-    runtimeStatus?: "started" | "running" | "completed" | "failed" | "cancelled" | "blocked" | "degraded";
-    runtimeError?: {
-      name?: string;
-      message: string;
-      code?: string;
-      retryable?: boolean;
-    };
-    context?: Record<string, unknown>;
-  }): void;
-  publishRealtime(channel: string, topic: string, payload: Record<string, unknown>): void;
-}
 
 export async function createChatCompletion(
   host: LlmCompletionHost,
@@ -109,31 +68,10 @@ export async function createChatCompletion(
       stream: request.stream ?? false,
     },
   });
-  let response: ChatCompletionResponse | undefined;
-  let memoryContext: MemoryContextPack | undefined;
   const memoryInput = request.memory;
-  const useQmd =
-    host.config.assistant.memory.enabled &&
-    host.config.assistant.memory.qmd.enabled &&
-    host.config.assistant.memory.qmd.applyToChat &&
-    memoryInput?.mode !== "off" &&
-    (memoryInput?.enabled ?? true);
-
-  if (useQmd) {
-    const prompt = extractPromptFromMessages(request.messages);
-    if (prompt.trim()) {
-      memoryContext = await host.memoryLifecycleService.composeContext({
-        scope: "chat",
-        prompt,
-        sessionId: memoryInput?.sessionId,
-        taskId: memoryInput?.taskId,
-        workspace: host.resolveMemoryWorkspaceRelativeDir(memoryInput?.workspace, memoryInput?.sessionId),
-        relationScope: memoryInput?.relationScope,
-        maxContextTokens: memoryInput?.maxContextTokens,
-        forceRefresh: memoryInput?.forceRefresh,
-      });
-    }
-  }
+  const useMemoryContext = shouldUseChatCompletionMemoryContext(host, memoryInput);
+  let response: ChatCompletionResponse | undefined;
+  const memoryContext = await composeChatCompletionMemoryContext(host, request, memoryInput);
 
   const withContext = memoryContext
     ? {
@@ -164,7 +102,7 @@ export async function createChatCompletion(
       providerId: request.providerId,
       model: request.model,
       messageCount: request.messages.length,
-      memoryEnabled: useQmd,
+      memoryEnabled: useMemoryContext,
       hasMemoryContext: Boolean(memoryContext),
     },
   });
@@ -274,6 +212,7 @@ export async function createChatCompletion(
   const primaryProviderId = hookableRequest.providerId ?? runtime.activeProviderId;
   const primaryProvider = runtime.providers.find((item) => item.providerId === primaryProviderId);
   const primaryModel = hookableRequest.model ?? primaryProvider?.defaultModel ?? runtime.activeModel;
+  const primaryRuntimeTarget = { providerId: primaryProviderId, model: primaryModel, provider: primaryProvider };
   const primaryApiStyle = host.llmService.resolveExecutionApiStyle(primaryProviderId, primaryModel);
   const allowCrossProviderFallback = shouldAllowCrossProviderFallback(hookableRequest);
   const routing: ChatTurnTraceRecord["routing"] = {
@@ -285,6 +224,11 @@ export async function createChatCompletion(
     effectiveApiStyle: primaryApiStyle,
     fallbackUsed: false,
   };
+  const effectiveRuntimeTarget = () => ({
+    providerId: routing.effectiveProviderId ?? primaryProviderId,
+    model: routing.effectiveModel ?? primaryModel,
+    providers: runtime.providers,
+  });
 
   const retryAttempts = [
     hookableRequest,
@@ -431,6 +375,7 @@ export async function createChatCompletion(
   }
 
   if (!response) {
+    const completedAt = Date.now();
     host.recordDevDiagnostic({
       level: "error",
       category: "chat",
@@ -454,8 +399,10 @@ export async function createChatCompletion(
         error: lastError?.message,
       },
     });
+    recordFailedChatRuntime(host, request, primaryRuntimeTarget, completionStartedAt, completedAt, lastError?.message);
     throw lastError ?? new Error("chat completion failed");
   }
+  const completionCompletedAt = Date.now();
   host.recordDevDiagnostic({
     level: "info",
     category: "chat",
@@ -472,6 +419,14 @@ export async function createChatCompletion(
       fallbackUsed: routing.fallbackUsed,
     },
   });
+  recordCompletedChatRuntime(
+    host,
+    request,
+    effectiveRuntimeTarget(),
+    response,
+    completionStartedAt,
+    completionCompletedAt,
+  );
 
   // transform_llm_output runs before publishRealtime/after-hooks so downstream observers see
   // the post-transform content. Hook llm_output (observe-only) for the raw provider response.
@@ -554,8 +509,8 @@ export async function* createChatCompletionStream(
   const completionStartedAt = Date.now();
   const chatHookWorkspaceId = host.resolveChatCompletionHookWorkspaceId(request);
   const chatHookEntityId = request.memory?.sessionId?.trim() || randomUUID();
-  let memoryContext: MemoryContextPack | undefined;
   const memoryInput = request.memory;
+  const useMemoryContext = shouldUseChatCompletionMemoryContext(host, memoryInput);
   host.recordDevDiagnostic({
     level: "debug",
     category: "chat",
@@ -572,28 +527,7 @@ export async function* createChatCompletionStream(
       stream: true,
     },
   });
-  const useQmd =
-    host.config.assistant.memory.enabled &&
-    host.config.assistant.memory.qmd.enabled &&
-    host.config.assistant.memory.qmd.applyToChat &&
-    memoryInput?.mode !== "off" &&
-    (memoryInput?.enabled ?? true);
-
-  if (useQmd) {
-    const prompt = extractPromptFromMessages(request.messages);
-    if (prompt.trim()) {
-      memoryContext = await host.memoryLifecycleService.composeContext({
-        scope: "chat",
-        prompt,
-        sessionId: memoryInput?.sessionId,
-        taskId: memoryInput?.taskId,
-        workspace: host.resolveMemoryWorkspaceRelativeDir(memoryInput?.workspace, memoryInput?.sessionId),
-        relationScope: memoryInput?.relationScope,
-        maxContextTokens: memoryInput?.maxContextTokens,
-        forceRefresh: memoryInput?.forceRefresh,
-      });
-    }
-  }
+  const memoryContext = await composeChatCompletionMemoryContext(host, request, memoryInput);
 
   const withContext = memoryContext
     ? {
@@ -619,7 +553,7 @@ export async function* createChatCompletionStream(
       providerId: request.providerId,
       model: request.model,
       messageCount: request.messages.length,
-      memoryEnabled: useQmd,
+      memoryEnabled: useMemoryContext,
       hasMemoryContext: Boolean(memoryContext),
     },
   });
@@ -668,6 +602,7 @@ export async function* createChatCompletionStream(
   const primaryProviderId = withContext.providerId ?? runtime.activeProviderId;
   const primaryProvider = runtime.providers.find((item) => item.providerId === primaryProviderId);
   const primaryModel = withContext.model ?? primaryProvider?.defaultModel ?? runtime.activeModel;
+  const primaryRuntimeTarget = { providerId: primaryProviderId, model: primaryModel, provider: primaryProvider };
   const primaryApiStyle = host.llmService.resolveExecutionApiStyle(primaryProviderId, primaryModel);
   const allowCrossProviderFallback = shouldAllowCrossProviderFallback(withContext);
   const routing: ChatTurnTraceRecord["routing"] = {
@@ -679,9 +614,15 @@ export async function* createChatCompletionStream(
     effectiveApiStyle: primaryApiStyle,
     fallbackUsed: false,
   };
+  const effectiveRuntimeTarget = () => ({
+    providerId: routing.effectiveProviderId ?? primaryProviderId,
+    model: routing.effectiveModel ?? primaryModel,
+    providers: runtime.providers,
+  });
 
   const shouldBufferForTransform = host.hooksService.hasMutateHook(chatHookWorkspaceId, "transform_llm_output");
   const bufferedChunks: Array<Record<string, unknown>> = [];
+  const telemetryChunks: Array<Record<string, unknown>> = [];
   const retryAttempts = [
     withContext,
     normalizeToolProtocolRetryRequest(withContext, TOOL_PROTOCOL_RETRY_NORMALIZED),
@@ -709,6 +650,7 @@ export async function* createChatCompletionStream(
         })) {
           attemptStreamed = true;
           streamed = true;
+          appendTelemetryChunk(telemetryChunks, chunk);
           if (shouldBufferForTransform) {
             bufferedChunks.push(chunk);
           } else {
@@ -779,6 +721,7 @@ export async function* createChatCompletionStream(
   }
 
   if (streamFailedAfterEmit) {
+    const completedAt = Date.now();
     host.recordDevDiagnostic({
       level: "error",
       category: "chat",
@@ -799,6 +742,16 @@ export async function* createChatCompletionStream(
           }
         : undefined,
     });
+    recordStreamRuntime(
+      host,
+      memoryInput,
+      effectiveRuntimeTarget(),
+      telemetryChunks,
+      completionStartedAt,
+      completedAt,
+      "partial",
+      lastError?.message,
+    );
     throw lastError ?? new Error("chat completion stream failed after emitting output");
   }
 
@@ -822,6 +775,7 @@ export async function* createChatCompletionStream(
           })) {
             attemptStreamed = true;
             streamed = true;
+            appendTelemetryChunk(telemetryChunks, chunk);
             if (shouldBufferForTransform) {
               bufferedChunks.push(chunk);
             } else {
@@ -881,6 +835,7 @@ export async function* createChatCompletionStream(
   }
 
   if (streamFailedAfterEmit) {
+    const completedAt = Date.now();
     host.recordDevDiagnostic({
       level: "error",
       category: "chat",
@@ -901,10 +856,21 @@ export async function* createChatCompletionStream(
           }
         : undefined,
     });
+    recordStreamRuntime(
+      host,
+      memoryInput,
+      effectiveRuntimeTarget(),
+      telemetryChunks,
+      completionStartedAt,
+      completedAt,
+      "partial",
+      lastError?.message,
+    );
     throw lastError ?? new Error("chat completion stream failed after emitting output");
   }
 
   if (!streamed) {
+    const completedAt = Date.now();
     host.recordDevDiagnostic({
       level: "error",
       category: "chat",
@@ -925,6 +891,16 @@ export async function* createChatCompletionStream(
           }
         : undefined,
     });
+    recordStreamRuntime(
+      host,
+      memoryInput,
+      primaryRuntimeTarget,
+      telemetryChunks,
+      completionStartedAt,
+      completedAt,
+      "failed",
+      lastError?.message,
+    );
     throw lastError ?? new Error("chat completion stream failed");
   }
 
@@ -974,6 +950,7 @@ export async function* createChatCompletionStream(
     yield chunk;
   }
 
+  const streamCompletedAt = Date.now();
   host.recordDevDiagnostic({
     level: "info",
     category: "chat",
@@ -990,6 +967,15 @@ export async function* createChatCompletionStream(
       fallbackUsed: routing.fallbackUsed,
     },
   });
+  recordStreamRuntime(
+    host,
+    memoryInput,
+    effectiveRuntimeTarget(),
+    telemetryChunks,
+    completionStartedAt,
+    streamCompletedAt,
+    "completed",
+  );
 
   host.publishRealtime("system", "llm", {
     type: "chat_completion_stream",
@@ -1037,4 +1023,11 @@ export async function* createChatCompletionStream(
     };
   }
   yield finalChunk;
+}
+
+function appendTelemetryChunk(target: Array<Record<string, unknown>>, chunk: Record<string, unknown>): void {
+  target.push(chunk);
+  if (target.length > 20) {
+    target.shift();
+  }
 }

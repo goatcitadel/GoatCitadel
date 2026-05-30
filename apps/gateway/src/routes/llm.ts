@@ -109,10 +109,37 @@ const modelQuerySchema = z.object({
 });
 
 const providerAdviceSchema = z.object({
-  preference: z.enum(["low_cost", "balanced", "capability_fit"]).optional(),
+  preference: z.enum(["low_cost", "balanced", "capability_fit", "runtime_fit"]).optional(),
   taskHint: z.string().trim().min(1).optional(),
   requireConfiguredKey: z.boolean().optional(),
   maxCandidates: z.number().int().positive().max(20).optional(),
+});
+
+const runtimeMeasurementQuerySchema = z.object({
+  providerId: z.string().trim().min(1).optional(),
+  model: z.string().trim().min(1).optional(),
+  source: z.enum(["live", "cached", "estimated", "unavailable"]).optional(),
+  status: z.enum(["completed", "failed", "partial"]).optional(),
+  limit: z.coerce.number().int().positive().max(500).optional(),
+});
+
+const evalProofQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(200).optional(),
+});
+
+const evalProofRunSchema = z.object({
+  prompt: z.string().min(1),
+  sessionId: z.string().trim().min(1).optional(),
+  taskId: z.string().trim().min(1).optional(),
+  candidates: z
+    .array(
+      z.object({
+        providerId: z.string().trim().min(1),
+        model: z.string().trim().min(1),
+        qualityScore: z.number().min(0).max(1).optional(),
+      }),
+    )
+    .optional(),
 });
 
 const modelPreviewSchema = z.object({
@@ -170,6 +197,7 @@ const chatCompletionSchema = z.object({
       mode: z.enum(["qmd", "off"]).optional(),
       sessionId: z.string().min(1).optional(),
       taskId: z.string().min(1).optional(),
+      runId: z.string().min(1).optional(),
       workspace: z.string().min(1).optional(),
       maxContextTokens: z.number().int().positive().optional(),
       forceRefresh: z.boolean().optional(),
@@ -302,6 +330,50 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(fastify.services.llm.getProviderAdvice(parsed.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/llm/runtime-measurements", async (request, reply) => {
+    const parsed = runtimeMeasurementQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.services.llm.listLlmRuntimeMeasurements(parsed.data));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/llm/local-engines", async (_request, reply) => {
+    try {
+      return reply.send(fastify.services.llm.listLlmLocalEngines());
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/llm/eval-proof", async (request, reply) => {
+    const parsed = evalProofQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.services.llm.listLlmEvalProofRuns(parsed.data.limit));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.post("/api/v1/llm/eval-proof", async (request, reply) => {
+    const parsed = evalProofRunSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.services.llm.runLlmEvalProof(parsed.data));
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { LlmProviderSummary } from "@goatcitadel/contracts";
+import type { LlmProviderSummary, LlmRuntimeMeasurementRecord } from "@goatcitadel/contracts";
 import { buildLlmProviderAdvice } from "./llm-provider-advice-service.js";
 
 describe("buildLlmProviderAdvice", () => {
@@ -98,5 +98,57 @@ describe("buildLlmProviderAdvice", () => {
 
     expect(advice.candidates.map((candidate) => candidate.providerId)).toEqual(["configured"]);
     expect(advice.mutationPerformed).toBe(false);
+  });
+
+  it("labels runtime-fit advice with measurement provenance", () => {
+    const measurement: LlmRuntimeMeasurementRecord = {
+      measurementId: "measure-1",
+      providerId: "local",
+      model: "llama-local",
+      engineKind: "ollama",
+      source: "live",
+      status: "completed",
+      stream: false,
+      collectedAt: "2026-05-29T00:00:00.000Z",
+      metrics: {
+        latencyMs: 1200,
+        outputTokensPerSecond: 30,
+        estimatedCostUsd: 0,
+      },
+      provenance: {
+        collector: "gateway",
+        path: "chat_completion",
+      },
+    };
+    const advice = buildLlmProviderAdvice(
+      { preference: "runtime_fit" },
+      [
+        {
+          providerId: "local",
+          label: "Local",
+          baseUrl: "http://localhost:11434/v1",
+          apiStyle: "openai-chat-completions",
+          defaultModel: "llama-local",
+          authMode: "none",
+          hasApiKey: false,
+          apiKeySource: "none",
+        },
+      ],
+      {
+        latestMeasurement: () => measurement,
+        inferEngineKind: () => "ollama",
+      },
+    );
+
+    expect(advice.candidates[0]).toMatchObject({
+      providerId: "local",
+      measurementSource: "live",
+      hardwareFit: "strong",
+      localRuntimeFit: {
+        engineKind: "ollama",
+        latestMeasurementId: "measure-1",
+        measurementSource: "live",
+      },
+    });
   });
 });

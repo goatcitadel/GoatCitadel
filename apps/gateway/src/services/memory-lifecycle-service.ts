@@ -37,6 +37,9 @@ import type {
   MemoryRelationInput,
   MemoryRelationRecord,
   MemoryQmdStatsResponse,
+  MemoryRetrievalBenchmarkItem,
+  MemoryRetrievalBenchmarkRequest,
+  MemoryRetrievalBenchmarkResponse,
   StructuredMemoryAuthority,
   StructuredMemoryScope,
   StructuredMemorySourceRef,
@@ -1149,6 +1152,72 @@ export class MemoryLifecycleService {
     return this.deps.context.stats(from, to);
   }
 
+  public async runRetrievalBenchmark(
+    input: MemoryRetrievalBenchmarkRequest,
+  ): Promise<MemoryRetrievalBenchmarkResponse> {
+    const requestedPrompts = input.prompts.map((prompt) => prompt.trim()).filter(Boolean);
+    const prompts = Array.from(new Set(requestedPrompts)).slice(0, 25);
+    if (prompts.length === 0) {
+      throw new ValidationError({ code: "FIELD_REQUIRED", field: "prompts" });
+    }
+    const warnings: string[] = [];
+    if (requestedPrompts.length !== input.prompts.length) {
+      warnings.push("Blank benchmark prompts were ignored.");
+    }
+    if (requestedPrompts.length > prompts.length) {
+      warnings.push("Duplicate or excess benchmark prompts were ignored.");
+    }
+    const items: MemoryRetrievalBenchmarkItem[] = [];
+    for (const prompt of prompts) {
+      const startedAt = Date.now();
+      try {
+        const pack = await this.composeContext({
+          scope: "chat",
+          prompt,
+          workspace: input.workspace,
+          relationScope: input.relationScope,
+          maxContextTokens: input.maxContextTokens,
+          forceRefresh: true,
+        });
+        const sourceText = [pack.contextText, ...pack.citations.map((citation) => citation.snippet ?? "")]
+          .filter(Boolean)
+          .join("\n");
+        items.push({
+          prompt,
+          status: "completed",
+          latencyMs: Date.now() - startedAt,
+          contextId: pack.contextId,
+          citationsCount: pack.citations.length,
+          originalTokenEstimate: pack.originalTokenEstimate,
+          distilledTokenEstimate: pack.distilledTokenEstimate,
+          overlapScore: calculateLexicalOverlap(prompt, sourceText),
+          qmdStatus: pack.quality.status,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        warnings.push(`Benchmark prompt failed: ${message}`);
+        items.push({
+          prompt,
+          status: "failed",
+          latencyMs: Date.now() - startedAt,
+          citationsCount: 0,
+          originalTokenEstimate: 0,
+          distilledTokenEstimate: 0,
+          overlapScore: 0,
+          error: message,
+        });
+      }
+    }
+    return {
+      generatedAt: new Date().toISOString(),
+      itemCount: items.length,
+      avgLatencyMs: average(items.map((item) => item.latencyMs)),
+      avgOverlapScore: average(items.filter((item) => item.status === "completed").map((item) => item.overlapScore)),
+      items,
+      warnings,
+    };
+  }
+
   public extractLearnedMemory(
     sessionId: string,
     content: string,
@@ -1804,6 +1873,62 @@ function normalizeConfidence(value: number | undefined): number {
 
 function normalizeStringArray(value: string[] | undefined): string[] {
   return Array.from(new Set((value ?? []).map((item) => item.trim()).filter(Boolean)));
+}
+
+function calculateLexicalOverlap(prompt: string, contextText: string): number {
+  const promptTerms = significantTerms(prompt);
+  if (promptTerms.size === 0) {
+    return 0;
+  }
+  const contextTerms = significantTerms(contextText);
+  let matches = 0;
+  for (const term of promptTerms) {
+    if (contextTerms.has(term)) {
+      matches += 1;
+    }
+  }
+  return Number((matches / promptTerms.size).toFixed(3));
+}
+
+function significantTerms(value: string): Set<string> {
+  const stopWords = new Set([
+    "about",
+    "after",
+    "again",
+    "also",
+    "and",
+    "are",
+    "but",
+    "for",
+    "from",
+    "has",
+    "have",
+    "how",
+    "into",
+    "that",
+    "the",
+    "this",
+    "was",
+    "what",
+    "when",
+    "where",
+    "with",
+    "you",
+  ]);
+  return new Set(
+    value
+      .toLowerCase()
+      .split(/[^a-z0-9._-]+/u)
+      .map((term) => term.trim())
+      .filter((term) => term.length >= 3 && !stopWords.has(term)),
+  );
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) {
+    return 0;
+  }
+  return Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(3));
 }
 
 function normalizeSourceRefs(
