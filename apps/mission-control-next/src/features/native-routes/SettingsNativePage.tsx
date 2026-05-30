@@ -2177,7 +2177,7 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
     setProviderAdvice({ loading: true, error: null, data: null });
     try {
       const advice = await fetchLlmProviderAdvice({
-        preference: "balanced",
+        preference: "runtime_fit",
         taskHint: "general GoatCitadel chat, code, and orchestration routing",
         maxCandidates: 5,
       });
@@ -2665,7 +2665,9 @@ function ProvidersSection({ activeWorkspaceId }: SettingsSectionProps) {
                         Fit {candidate.fitScore} · Cost{" "}
                         {candidate.estimatedCostUsd === undefined
                           ? "unknown"
-                          : `$${candidate.estimatedCostUsd.toFixed(4)}`}
+                          : `$${candidate.estimatedCostUsd.toFixed(4)}`}{" "}
+                        · Runtime {candidate.localRuntimeFit?.fit ?? "unknown"} (
+                        {candidate.measurementSource ?? "unavailable"})
                       </span>
                       <p>{candidate.riskNotes.join(" ")}</p>
                     </li>

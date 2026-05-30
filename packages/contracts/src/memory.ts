@@ -91,6 +91,35 @@ export interface MemoryQmdStatsResponse {
   efficiencyLabel: "reduced" | "expanded" | "neutral";
 }
 
+export interface MemoryRetrievalBenchmarkRequest {
+  prompts: string[];
+  workspace?: string;
+  relationScope?: MemoryRelationScope;
+  maxContextTokens?: number;
+}
+
+export interface MemoryRetrievalBenchmarkItem {
+  prompt: string;
+  status: "completed" | "failed";
+  latencyMs: number;
+  contextId?: string;
+  citationsCount: number;
+  originalTokenEstimate: number;
+  distilledTokenEstimate: number;
+  overlapScore: number;
+  qmdStatus?: MemoryQmdStatus;
+  error?: string;
+}
+
+export interface MemoryRetrievalBenchmarkResponse {
+  generatedAt: string;
+  itemCount: number;
+  avgLatencyMs: number;
+  avgOverlapScore: number;
+  items: MemoryRetrievalBenchmarkItem[];
+  warnings: string[];
+}
+
 export type ContextManifestScope = "chat_turn";
 export type ContextManifestEntryKind = "system_message" | "memory_context";
 

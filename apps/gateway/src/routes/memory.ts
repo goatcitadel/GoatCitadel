@@ -22,6 +22,13 @@ const statsQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(200).default(60),
 });
 
+const retrievalBenchmarkSchema = z.object({
+  prompts: z.array(z.string().trim().min(1)).min(1).max(25),
+  workspace: z.string().trim().min(1).optional(),
+  relationScope: z.enum(["self", "peer", "project"]).optional(),
+  maxContextTokens: z.number().int().positive().optional(),
+});
+
 const itemParamsSchema = z.object({
   itemId: z.string().trim().min(1),
 });
@@ -422,6 +429,18 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       ...stats,
       recent,
     });
+  });
+
+  fastify.post("/api/v1/memory/retrieval-benchmark", operatorOnly, async (request, reply) => {
+    const parsed = retrievalBenchmarkSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(await memory.runRetrievalBenchmark(parsed.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 
   fastify.get("/api/v1/memory/items", operatorOnly, async (request, reply) => {

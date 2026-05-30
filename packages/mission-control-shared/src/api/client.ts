@@ -590,6 +590,7 @@ export {
   patchMemoryMaintenancePolicy,
   rejectMemoryMaintenanceRecommendation,
   runMemoryMaintenanceNow,
+  runMemoryRetrievalBenchmark,
 } from "./memory.js";
 export {
   createToolGrant,
@@ -735,8 +736,11 @@ export {
   fetchDaemonStatus,
   fetchInstalledAddons,
   fetchLlmConfig,
+  fetchLlmEvalProofRuns,
+  fetchLlmLocalEngines,
   fetchLlmModels,
   fetchLlmProviderAdvice,
+  fetchLlmRuntimeMeasurements,
   fetchOpenAICodexOAuthStatus,
   fetchMeshLeases,
   fetchMeshNodes,
@@ -769,6 +773,7 @@ export {
   refreshNpuRuntime,
   restartDaemon,
   runCurator,
+  runLlmEvalProof,
   saveProviderSecret,
   startOpenAICodexOAuthDeviceFlow,
   startLlamaCppHuggingFaceDownload,

@@ -36,6 +36,7 @@ type MemoryRoutePort = Pick<
   | "patchMemoryItem"
   | "rejectMaintenanceRecommendation"
   | "runMaintenanceNow"
+  | "runRetrievalBenchmark"
 >;
 
 export class MemoryRouteService {
@@ -90,6 +91,10 @@ export class MemoryRouteService {
 
   public getQmdStats(from: string, to: string) {
     return this.memory.getContextStats(from, to);
+  }
+
+  public runRetrievalBenchmark(input: Parameters<MemoryRoutePort["runRetrievalBenchmark"]>[0]) {
+    return this.memory.runRetrievalBenchmark(input);
   }
 
   public listRecentContexts(limit: number) {

@@ -11,6 +11,8 @@ import { PostgresTranscriptLog } from "./postgres-transcript-log.js";
 import { PostgresAuditLog } from "./postgres-audit-log.js";
 import { ApprovalRepository } from "./approval-repo.js";
 import { CostLedgerRepository } from "./cost-ledger-repo.js";
+import { LlmEvalProofRepository } from "./llm-eval-proof-repo.js";
+import { LlmRuntimeMeasurementRepository } from "./llm-runtime-measurement-repo.js";
 import { ApprovalEventRepository } from "./approval-event-repo.js";
 import { PendingApprovalActionRepository } from "./pending-approval-action-repo.js";
 import { RemoteActionTokenRepository } from "./remote-action-token-repo.js";
@@ -118,6 +120,8 @@ export class Storage {
   public readonly approvalEffects: ApprovalEffectRepository;
   public readonly approvalWaitRuns: ApprovalWaitRunRepository;
   public readonly costLedger: CostLedgerRepository;
+  public readonly llmRuntimeMeasurements: LlmRuntimeMeasurementRepository;
+  public readonly llmEvalProofRuns: LlmEvalProofRepository;
   public readonly orchestration: OrchestrationRepository;
   public readonly tasks: TaskRepository;
   public readonly taskActivities: TaskActivityRepository;
@@ -219,6 +223,8 @@ export class Storage {
     this.approvalEffects = new ApprovalEffectRepository(this.db);
     this.approvalWaitRuns = new ApprovalWaitRunRepository(this.db);
     this.costLedger = new CostLedgerRepository(this.db);
+    this.llmRuntimeMeasurements = new LlmRuntimeMeasurementRepository(this.db);
+    this.llmEvalProofRuns = new LlmEvalProofRepository(this.db);
     this.orchestration = new OrchestrationRepository(this.db);
     this.tasks = new TaskRepository(this.db, { quarantine: this.stateValidationQuarantine });
     this.taskActivities = new TaskActivityRepository(this.db);
@@ -422,6 +428,8 @@ export class Storage {
         "memory_context_packs",
         "context_manifests",
         "memory_qmd_runs",
+        "llm_runtime_measurements",
+        "llm_eval_proof_runs",
         "chat_execution_plans",
         "chat_conversation_summaries",
         "tool_access_decisions",

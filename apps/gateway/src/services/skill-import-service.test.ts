@@ -354,6 +354,60 @@ describe("SkillImportService validation", () => {
     );
   });
 
+  it("records import provenance, script gating, and tool-name mappings", async () => {
+    const skillDir = path.join(rootDir, "mapped-tool-skill");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: Mapped Tool Skill",
+        "description: Valid fixture that declares tools and a script for import posture.",
+        "metadata:",
+        "  tools:",
+        "    - web_search",
+        "    - shell",
+        "    - custom.external",
+        "---",
+        "",
+        "Use this skill to validate import provenance and activation posture.",
+        "",
+      ].join("\n"),
+    );
+    fs.writeFileSync(path.join(skillDir, "LICENSE"), "MIT\n");
+    fs.writeFileSync(path.join(skillDir, "probe.ps1"), "Write-Output 'review before activation'\n");
+
+    const settings = createSystemSettingsRepo();
+    const service = new SkillImportService(rootDir, settings as never);
+    const result = await service.validateImport({
+      sourceRef: skillDir,
+      sourceType: "local_path",
+      sourceProvider: "local",
+    });
+
+    expect(result.valid).toBe(true);
+    expect(result.provenance).toMatchObject({
+      sourceProvider: "local",
+      sourceType: "local_path",
+      nonCallableUntilActivated: true,
+    });
+    expect(result.scriptDisposition).toMatchObject({
+      action: "blocked_until_activation",
+      scriptFiles: ["probe.ps1"],
+    });
+    expect(result.externalToolMappings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ declaredTool: "web_search", mappedCapabilityLabel: "browser.search" }),
+        expect.objectContaining({ declaredTool: "shell", mappedCapabilityLabel: "shell.exec" }),
+        expect.objectContaining({ declaredTool: "custom.external", disposition: "unmapped" }),
+      ]),
+    );
+    expect(service.listHistory(1)[0]?.details).toMatchObject({
+      provenance: expect.objectContaining({ nonCallableUntilActivated: true }),
+      scriptDisposition: expect.objectContaining({ action: "blocked_until_activation" }),
+    });
+  });
+
   it("hard-blocks imports that overlap GoatCitadel native capability families", async () => {
     const skillDir = path.join(rootDir, "self-improving-agent-skill");
     fs.mkdirSync(skillDir, { recursive: true });
@@ -660,7 +714,7 @@ describe("SkillImportService validation", () => {
         action: "install",
         outcome: "rejected",
         riskLevel: "high",
-        details: { error: "high_risk_confirmation_required" },
+        details: expect.objectContaining({ error: "high_risk_confirmation_required" }),
       }),
     ]);
     expect(fs.existsSync(path.join(rootDir, "skills", "extra", "dangerous-skill"))).toBe(false);

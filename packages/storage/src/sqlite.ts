@@ -1016,6 +1016,11 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       addColumnIfMissingIfTableExists(db, "orchestration_runs", "stop_reason", "TEXT");
     },
   },
+  {
+    version: 100,
+    name: "llm_runtime_measurement_and_eval_proof",
+    up: createLlmRuntimeMeasurementSchema,
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -4090,6 +4095,51 @@ export const __sqliteInternals = {
   getPromptPackBenchmarkDedupTimestampForTest,
   getPromptPackBenchmarkDedupOrdinalForTest,
 };
+
+function createLlmRuntimeMeasurementSchema(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS llm_runtime_measurements (
+      measurement_id TEXT PRIMARY KEY,
+      provider_id TEXT NOT NULL,
+      model TEXT NOT NULL,
+      engine_kind TEXT NOT NULL,
+      source TEXT NOT NULL,
+      status TEXT NOT NULL,
+      stream INTEGER NOT NULL DEFAULT 0,
+      session_id TEXT,
+      task_id TEXT,
+      run_id TEXT,
+      metrics_json TEXT NOT NULL DEFAULT '{}',
+      provenance_json TEXT NOT NULL DEFAULT '{}',
+      error_text TEXT,
+      collected_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_llm_runtime_measurements_provider_model_collected
+      ON llm_runtime_measurements(provider_id, model, collected_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_llm_runtime_measurements_session
+      ON llm_runtime_measurements(session_id, collected_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_llm_runtime_measurements_source_status
+      ON llm_runtime_measurements(source, status, collected_at DESC);
+
+    CREATE TABLE IF NOT EXISTS llm_eval_proof_runs (
+      run_id TEXT PRIMARY KEY,
+      prompt_hash TEXT NOT NULL,
+      session_id TEXT,
+      task_id TEXT,
+      status TEXT NOT NULL,
+      candidates_json TEXT NOT NULL DEFAULT '[]',
+      results_json TEXT NOT NULL DEFAULT '[]',
+      warnings_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_llm_eval_proof_runs_created
+      ON llm_eval_proof_runs(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_llm_eval_proof_runs_session
+      ON llm_eval_proof_runs(session_id, created_at DESC);
+  `);
+}
 
 function createWorkspaceIsolationSchema(db: DatabaseSync): void {
   db.exec(`

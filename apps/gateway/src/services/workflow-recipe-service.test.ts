@@ -122,6 +122,20 @@ limits:
     expect(draft.proofChecklist.join(" ")).toContain("Only then create or enable");
     expect(draft.missingCapabilities).toContain("automation-workflows");
   });
+
+  it("includes governed operator workflow starter templates", () => {
+    const service = createService();
+    const templates = service.listTemplates().map((item) => item.templateId);
+
+    expect(templates).toEqual(
+      expect.arrayContaining([
+        "deep-research-brief",
+        "scheduled-monitor-review",
+        "morning-operator-digest",
+        "code-assistant-proof-loop",
+      ]),
+    );
+  });
 });
 
 function createService(createOrchestrationPlan = vi.fn()) {

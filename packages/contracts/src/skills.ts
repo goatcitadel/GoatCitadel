@@ -105,6 +105,34 @@ export interface SkillImportCandidate {
   repositoryUrl?: string;
   canonicalKey: string;
   skillRootPath?: string;
+  provenance?: SkillImportProvenance;
+  externalToolMappings?: SkillImportExternalToolMapping[];
+  scriptDisposition?: SkillImportScriptDisposition;
+}
+
+export interface SkillImportProvenance {
+  sourceProvider: SkillSourceProvider;
+  sourceRef: string;
+  sourceType: SkillImportSourceType;
+  capturedAt: string;
+  repositoryUrl?: string;
+  sourceUrl?: string;
+  commitSha?: string;
+  nonCallableUntilActivated: true;
+}
+
+export interface SkillImportExternalToolMapping {
+  declaredTool: string;
+  mappedCapabilityId?: string;
+  mappedCapabilityLabel?: string;
+  disposition: "mapped" | "unmapped";
+  reason: string;
+}
+
+export interface SkillImportScriptDisposition {
+  action: "none" | "blocked_until_activation" | "review_required";
+  scriptFiles: string[];
+  notes: string[];
 }
 
 export interface SkillSourceSearchRecord {
@@ -194,6 +222,9 @@ export interface SkillImportValidationResult {
   suspiciousSignals: string[];
   licenseFiles: string[];
   instructionPreview?: string;
+  externalToolMappings?: SkillImportExternalToolMapping[];
+  scriptDisposition?: SkillImportScriptDisposition;
+  provenance?: SkillImportProvenance;
   nativeOverlaps?: Array<{
     overlapFamily: string;
     nativeAlternativeName: string;

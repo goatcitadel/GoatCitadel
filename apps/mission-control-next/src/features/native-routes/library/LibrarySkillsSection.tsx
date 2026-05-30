@@ -240,7 +240,7 @@ export function LibrarySkillsSection({ route, navigate }: NativeRoutePagesProps)
               items={(data?.history ?? []).slice(0, 5).map((item) => ({
                 id: item.importId,
                 label: item.sourceRef,
-                description: `${item.action} · ${item.outcome}`,
+                description: `${item.action} · ${item.outcome} · ${formatSkillImportPosture(item.details)}`,
                 meta: `${item.sourceProvider} · ${formatDateTime(item.createdAt)}`,
               }))}
               emptyLabel="No import history yet."
@@ -793,4 +793,19 @@ function describeSkillSourceDisposition(item: {
     return "Native overlap";
   }
   return "Reference only";
+}
+
+function formatSkillImportPosture(details: unknown) {
+  const record = readRecord(details);
+  const disposition = readRecord(record.scriptDisposition);
+  const scriptAction = typeof disposition.action === "string" ? disposition.action : "none";
+  const mappings = Array.isArray(record.externalToolMappings) ? record.externalToolMappings : [];
+  const mappedCount = mappings.filter((item) => readRecord(item).disposition === "mapped").length;
+  const provenance = readRecord(record.provenance);
+  const nonCallable = provenance.nonCallableUntilActivated === true ? "non-callable" : "provenance pending";
+  return `${nonCallable}; scripts ${scriptAction}; tools ${mappedCount}/${mappings.length} mapped`;
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }

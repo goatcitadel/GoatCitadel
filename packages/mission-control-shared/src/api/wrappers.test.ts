@@ -237,6 +237,11 @@ describe("shared API wrappers", () => {
     await expectCall(memory.fetchMemoryContext("ctx/1"), "/api/v1/memory/context/ctx%2F1");
     await expectCall(memory.fetchMemoryQmdStats("a", "b", 10), "/api/v1/memory/qmd/stats?from=a&to=b&limit=10");
     await expectCall(
+      memory.runMemoryRetrievalBenchmark({ prompts: ["runtime truth"], workspace: "goatcitadel" }),
+      "/api/v1/memory/retrieval-benchmark",
+      { method: "POST" },
+    );
+    await expectCall(
       memory.fetchMemoryItems({ namespace: "n", status: "active", query: "q", limit: 999 }),
       "/api/v1/memory/items?namespace=n&status=active&query=q&limit=500",
     );
@@ -614,6 +619,15 @@ describe("shared API wrappers", () => {
         method: "POST",
       },
     );
+    await expectCall(
+      platform.fetchLlmRuntimeMeasurements({ providerId: "openai", model: "gpt 5", limit: 2 }),
+      "/api/v1/llm/runtime-measurements?providerId=openai&model=gpt+5&limit=2",
+    );
+    await expectCall(platform.fetchLlmLocalEngines(), "/api/v1/llm/local-engines");
+    await expectCall(platform.fetchLlmEvalProofRuns(999), "/api/v1/llm/eval-proof?limit=200");
+    await expectCall(platform.runLlmEvalProof({ prompt: "compare" }), "/api/v1/llm/eval-proof", {
+      method: "POST",
+    });
     await expectCall(platform.fetchAssemblyRuns(25), "/api/v1/assembly/runs?limit=25");
     await expectCall(platform.createAssemblyRun({} as never), "/api/v1/assembly/runs", { method: "POST" });
     await expectCall(platform.fetchAssemblyRunDetail("run/1"), "/api/v1/assembly/runs/run%2F1");

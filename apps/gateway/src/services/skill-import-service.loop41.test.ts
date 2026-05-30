@@ -87,7 +87,7 @@ describe("SkillImportService loop41 zip install behavior", () => {
         action: "install",
         outcome: "accepted",
         sourceRef: secondZip,
-        details: { installedPath: "skills/extra/zip-runtime-tool" },
+        details: expect.objectContaining({ installedPath: "skills/extra/zip-runtime-tool" }),
       }),
       expect.objectContaining({
         action: "install",

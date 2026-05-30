@@ -21,6 +21,8 @@ import type {
   MemoryRelationInput,
   MemoryRelationRecord,
   MemoryQmdStatsResponse,
+  MemoryRetrievalBenchmarkRequest,
+  MemoryRetrievalBenchmarkResponse,
   MemorySearchQuery,
   MemoryWriteInput,
   ToolInvokeResult,
@@ -112,6 +114,15 @@ export async function fetchMemoryQmdStats(
   return request<MemoryQmdStatsResponse & { recent: MemoryContextPack[] }>(
     `/api/v1/memory/qmd/stats?${search.toString()}`,
   );
+}
+
+export async function runMemoryRetrievalBenchmark(
+  input: MemoryRetrievalBenchmarkRequest,
+): Promise<MemoryRetrievalBenchmarkResponse> {
+  return request<MemoryRetrievalBenchmarkResponse>("/api/v1/memory/retrieval-benchmark", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function fetchMemoryItems(input?: {
