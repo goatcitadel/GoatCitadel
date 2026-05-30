@@ -345,13 +345,14 @@ export function createToolCatalog(toolNames: string[] = ["browser.search"]): Too
         pack: "core",
       };
     }
-    if (toolName === "shell.exec") {
+    if (toolName === "shell.exec" || toolName === "shell.exec_background") {
       return {
-        toolName: "shell.exec",
+        toolName,
         category: "shell",
         riskLevel: "danger",
         requiresApproval: true,
-        description: "Execute a shell command",
+        description:
+          toolName === "shell.exec" ? "Execute a shell command" : "Execute a shell command in the background",
         argSchema: {
           type: "object",
           properties: {
@@ -363,6 +364,52 @@ export function createToolCatalog(toolNames: string[] = ["browser.search"]): Too
         pack: "devops",
         recommendedContexts: ["code"],
         preferredForIntents: ["run_command", "project_inspection"],
+      };
+    }
+    if (toolName === "git.exec") {
+      return {
+        toolName: "git.exec",
+        category: "shell",
+        riskLevel: "danger",
+        requiresApproval: true,
+        description: "Execute a git command",
+        argSchema: {
+          type: "object",
+          properties: {
+            command: { type: "string" },
+          },
+          required: ["command"],
+        },
+        examples: [],
+        pack: "devops",
+        recommendedContexts: ["code"],
+        preferredForIntents: ["run_command", "project_inspection"],
+      };
+    }
+    if (toolName === "browser.context.configure") {
+      return {
+        toolName: "browser.context.configure",
+        category: "research",
+        riskLevel: "caution",
+        requiresApproval: true,
+        description: "Configure browser context state",
+        argSchema: {
+          type: "object",
+          properties: {
+            viewport: {
+              type: "object",
+              properties: {
+                width: { type: "integer" },
+                height: { type: "integer" },
+              },
+            },
+          },
+          required: [],
+        },
+        examples: [],
+        pack: "core",
+        recommendedContexts: ["chat", "cowork", "code"],
+        preferredForIntents: ["fetch_url", "web_lookup"],
       };
     }
     if (toolName === "time.now") {
