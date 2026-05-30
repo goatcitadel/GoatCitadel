@@ -25,10 +25,26 @@ const PROMPT_LAB_MIN_MAX_TOKENS = {
   code: 2400,
 } as const satisfies Record<ChatMode, number>;
 
-// Temporary testing override: use effectively-unbounded turn/completion budgets
-// so model speed differences do not truncate evaluation quality mid-run.
-export const TESTING_CHAT_TURN_BUDGET_MS = 30 * 60 * 1000;
-export const TESTING_CHAT_COMPLETION_TIMEOUT_MS = 30 * 60 * 1000;
+// Generous-but-bounded per-web-mode turn and completion budgets. Each pair keeps
+// completionTimeoutMs <= turnBudgetMs and stays above the branch's
+// minSynthesisReserveMs / expensiveToolMinimumRemainingMs so a hung provider call
+// cannot block a turn indefinitely.
+export const CHAT_TURN_BUDGET_MS_BY_MODE = {
+  quick: 120000,
+  off: 120000,
+  liveData: 240000,
+  deep: 480000,
+  coworkResearchList: 480000,
+  default: 240000,
+} as const;
+export const CHAT_COMPLETION_TIMEOUT_MS_BY_MODE = {
+  quick: 60000,
+  off: 90000,
+  liveData: 150000,
+  deep: 240000,
+  coworkResearchList: 240000,
+  default: 150000,
+} as const;
 
 export interface ChatExecutionBudget {
   readonly turnBudgetMs: number;
@@ -84,8 +100,8 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
   if (shouldUseCoworkResearchListBudget(input)) {
     budget = applyPromptLabExplicitToolBudget(
       {
-        turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
-        completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
+        turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.coworkResearchList,
+        completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.coworkResearchList,
         maxToolLoops: COWORK_RESEARCH_LIST_MAX_TOOL_LOOPS,
         maxToolRunsPerTurn: COWORK_RESEARCH_LIST_MAX_TOOL_RUNS_PER_TURN,
         searchMaxResults: COWORK_RESEARCH_LIST_SEARCH_MAX_RESULTS,
@@ -98,8 +114,8 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
   } else if (input.webMode === "deep") {
     budget = applyPromptLabExplicitToolBudget(
       {
-        turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
-        completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
+        turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.deep,
+        completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.deep,
         maxToolLoops: MAX_TOOL_LOOPS,
         maxToolRunsPerTurn: MAX_TOOL_RUNS_PER_TURN,
         searchMaxResults: 8,
@@ -112,8 +128,8 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
   } else if (input.webMode === "quick") {
     budget = applyPromptLabExplicitToolBudget(
       {
-        turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
-        completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
+        turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.quick,
+        completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.quick,
         maxToolLoops: 2,
         maxToolRunsPerTurn: 3,
         searchMaxResults: 4,
@@ -126,8 +142,8 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
   } else if (input.webMode === "off") {
     budget = applyPromptLabExplicitToolBudget(
       {
-        turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
-        completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
+        turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.off,
+        completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.off,
         maxToolLoops: 2,
         maxToolRunsPerTurn: 4,
         searchMaxResults: 0,
@@ -140,8 +156,8 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
   } else if (input.liveDataIntent) {
     budget = applyPromptLabExplicitToolBudget(
       {
-        turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
-        completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
+        turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.liveData,
+        completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.liveData,
         maxToolLoops: 5,
         maxToolRunsPerTurn: 8,
         searchMaxResults: 6,
@@ -154,8 +170,8 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
   } else {
     budget = applyPromptLabExplicitToolBudget(
       {
-        turnBudgetMs: TESTING_CHAT_TURN_BUDGET_MS,
-        completionTimeoutMs: TESTING_CHAT_COMPLETION_TIMEOUT_MS,
+        turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.default,
+        completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.default,
         maxToolLoops: 4,
         maxToolRunsPerTurn: 7,
         searchMaxResults: 5,

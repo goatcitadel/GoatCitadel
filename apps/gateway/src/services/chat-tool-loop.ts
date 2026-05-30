@@ -29,7 +29,7 @@ export function createLoopGuardTrace(state: ToolLoopGuardRuntimeState): ChatTurn
 export function initializeToolLoopGuardState(config?: ToolLoopDetectionConfig): ToolLoopGuardRuntimeState {
   return {
     config: {
-      enabled: config?.enabled ?? false,
+      enabled: config?.enabled ?? true,
       historySize: Math.max(2, config?.historySize ?? 8),
       warningThreshold: Math.max(2, config?.warningThreshold ?? 3),
       criticalThreshold: Math.max(2, config?.criticalThreshold ?? 4),
