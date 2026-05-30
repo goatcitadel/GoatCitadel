@@ -73,6 +73,7 @@ import { DatabaseCutoverService } from "./database-cutover-service.js";
 import { suggestImportedCatalogEntries } from "./agency-agent-catalog-service.js";
 import { PersonalityCatalogService } from "./channel-personalities.js";
 import { ApprovalRuntimeService } from "./approval-runtime-service.js";
+import { wait } from "./wait.js";
 import type {
   DatabaseCutoverProfile,
   DatabaseCutoverResponse,
@@ -8970,21 +8971,4 @@ function toSkillStateRows(value: unknown): SkillStateRecord[] {
           (typeof row.firstAutoApprovedAt === "string" || row.firstAutoApprovedAt === null),
       )
     : [];
-}
-
-function wait(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, Math.max(0, ms));
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
-  });
 }
