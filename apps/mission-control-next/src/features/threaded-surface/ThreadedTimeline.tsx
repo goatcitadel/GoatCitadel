@@ -46,6 +46,22 @@ function isSafeCitationHref(url: string): boolean {
   }
 }
 
+const GROUPING_WINDOW_MS = 2 * 60 * 1000;
+
+function isTurnGroupedWith(previous: ChatThreadTurnRecord, current: ChatThreadTurnRecord): boolean {
+  const previousActor = previous.userMessage.actorId;
+  const currentActor = current.userMessage.actorId;
+  if (!previousActor || previousActor !== currentActor) {
+    return false;
+  }
+  const previousTime = Date.parse(previous.userMessage.timestamp);
+  const currentTime = Date.parse(current.userMessage.timestamp);
+  if (Number.isNaN(previousTime) || Number.isNaN(currentTime)) {
+    return false;
+  }
+  return Math.abs(currentTime - previousTime) <= GROUPING_WINDOW_MS;
+}
+
 function formatCitationSource(citation: ChatCitationRecord): string {
   if (citation.knowledge) {
     return citation.knowledge.retrievalMode === "full_text" ? "knowledge full text" : "knowledge retrieval";
@@ -225,16 +241,23 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
                 mode={props.mode}
                 onOpenRunDetails={props.onOpenRunDetails}
               />
-              {windowedThreadItems.map((item) =>
-                item.kind === "gap" ? (
-                  <ChatThreadWindowGap key={item.key} hiddenCount={item.hiddenCount} onExpand={showHiddenTurns} />
-                ) : (
+              {windowedThreadItems.map((item, itemIndex) => {
+                if (item.kind === "gap") {
+                  return (
+                    <ChatThreadWindowGap key={item.key} hiddenCount={item.hiddenCount} onExpand={showHiddenTurns} />
+                  );
+                }
+                const previousItem = itemIndex > 0 ? windowedThreadItems[itemIndex - 1] : null;
+                const previousTurn = previousItem && previousItem.kind === "turn" ? previousItem.turn : null;
+                const groupedWithPrevious = previousTurn ? isTurnGroupedWith(previousTurn, item.turn) : false;
+                return (
                   <ChatThreadTurnCard
                     key={item.turn.turnId}
                     mode={props.mode}
                     turn={item.turn}
                     selected={props.selectedTurnId === item.turn.turnId}
                     contextSelected={selectedContextTurnIdSet.has(item.turn.turnId)}
+                    groupedWithPrevious={groupedWithPrevious}
                     streamingPreview={
                       props.streamingPreview?.turnId === item.turn.turnId ? props.streamingPreview : null
                     }
@@ -251,8 +274,8 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
                     onCreateGeneratedArtifact={props.onCreateGeneratedArtifact}
                     onCreateGeneratedArtifactVersion={props.onCreateGeneratedArtifactVersion}
                   />
-                ),
-              )}
+                );
+              })}
               <ChatThreadNotices notices={props.notices} />
               <div ref={threadEndRef} aria-hidden="true" />
             </div>

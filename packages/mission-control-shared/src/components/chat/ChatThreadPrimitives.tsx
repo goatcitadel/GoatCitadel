@@ -464,6 +464,7 @@ export interface ChatThreadTurnCardProps {
   turn: ChatThreadTurnRecord;
   selected: boolean;
   contextSelected?: boolean;
+  groupedWithPrevious?: boolean;
   streamingPreview?: ChatStreamingPreview | null;
   visualStreamMode?: AssistantStreamPresentationMode;
   renderUserMetaAddon?: (turn: ChatThreadTurnRecord) => ReactNode;
@@ -485,6 +486,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
   turn,
   selected,
   contextSelected = false,
+  groupedWithPrevious = false,
   streamingPreview,
   visualStreamMode = "smooth",
   renderUserMetaAddon,
@@ -548,6 +550,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
     contextSelected ? "context-pinned" : "",
     isStreamingTurn ? "streaming" : "",
     isRoutineChatTurn ? "routine-chat" : "",
+    groupedWithPrevious ? "grouped" : "",
   ]
     .filter(Boolean)
     .join(" ");
