@@ -146,7 +146,7 @@ export async function agentSendChatMessage(
   host: ChatTurnEntryHost,
   sessionId: string,
   input: ChatSendMessageRequest,
-  options?: { abortSignal?: AbortSignal },
+  options?: { abortSignal?: AbortSignal; onChildDurableRunLaunched?: (runId: string) => void },
 ): Promise<ChatSendMessageResponse> {
   return host.withChatTurnWriteLease(sessionId, "agent-send", async () => {
     const routeDescriptor = resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
@@ -223,7 +223,7 @@ export async function agentSendChatMessage(
         prepared,
         "chat_thread_turn_appended",
         modeOrchestration,
-        { abortSignal: options?.abortSignal },
+        { abortSignal: options?.abortSignal, onChildDurableRunLaunched: options?.onChildDurableRunLaunched },
       );
     }
     if (chatTurnDispatchService.shouldUseDurableExecution(host, prepared, input)) {
@@ -234,7 +234,7 @@ export async function agentSendChatMessage(
         prepared,
         "chat_thread_turn_appended",
         undefined,
-        { abortSignal: options?.abortSignal },
+        { abortSignal: options?.abortSignal, onChildDurableRunLaunched: options?.onChildDurableRunLaunched },
       );
     }
     return runAgentSendChatMessageLlmPath(host, sessionId, input, prepared, options);

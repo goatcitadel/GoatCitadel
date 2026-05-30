@@ -314,6 +314,46 @@ describe("useOpsRuntimeSnapshot", () => {
     expect(latest).toBe(observedBeforeFailure);
   });
 
+  it("ignores a reload() that resolves after unmount (MCSHARED-005)", async () => {
+    await act(async () => {
+      renderer = create(
+        <Harness
+          onValue={(value) => {
+            latest = value;
+          }}
+        />,
+      );
+    });
+    await flush();
+    expect(latest?.data?.dashboard?.pendingApprovals).toBe(2);
+
+    // Start a reload whose dashboard fetch is deferred, then unmount before it resolves.
+    const lateReload = createDeferred<Awaited<ReturnType<typeof apiMocks.fetchDashboardState>>>();
+    apiMocks.fetchDashboardState.mockReturnValueOnce(lateReload.promise);
+    const reloadPromise = latest?.reload();
+    const observedBeforeUnmount = latest;
+    act(() => {
+      renderer?.unmount();
+      renderer = null;
+    });
+    await act(async () => {
+      lateReload.resolve({
+        timestamp: "2026-04-22T00:00:00.000Z",
+        sessions: [],
+        pendingApprovals: 999,
+        activeSubagents: 0,
+        taskStatusCounts: [],
+        recentEvents: [],
+        dailyCostUsd: 0,
+      });
+      await reloadPromise;
+      await Promise.resolve();
+    });
+    // The superseded reload must not have written the new (999) snapshot.
+    expect(latest).toBe(observedBeforeUnmount);
+    expect(latest?.data?.dashboard?.pendingApprovals).toBe(2);
+  });
+
   it("surfaces daemon warnings, clears notices, and reports non-error action failures", async () => {
     apiMocks.startDaemon.mockResolvedValueOnce({
       accepted: false,

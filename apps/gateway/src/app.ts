@@ -78,6 +78,19 @@ const BROWSER_MUTATION_INTENT_HEADER = "x-goatcitadel-browser-intent";
 const BROWSER_MUTATION_INTENT_VALUE = "mutation";
 const DEFAULT_FASTIFY_PLUGIN_TIMEOUT_MS = 120_000;
 
+/**
+ * Baseline Content-Security-Policy applied to responses that do not set their
+ * own. It permits same-origin scripts so the Mission Control SPA can boot.
+ *
+ * Routes that serve user/file content (e.g. `/api/v1/files/preview`,
+ * chat attachments) deliberately set a stricter, sandboxed CSP — most notably
+ * `script-src 'none'` — to neutralize active content. Those route-set policies
+ * MUST survive: see `applyBaselineSecurityHeaders`, which only installs this
+ * baseline when no CSP is already present on the reply.
+ */
+const BASELINE_CONTENT_SECURITY_POLICY =
+  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
+
 export async function buildApp() {
   const verbose = isVerboseLoggingEnabled();
   const app = Fastify({
@@ -138,18 +151,7 @@ export async function buildApp() {
   const isNonLoopbackBind = !["127.0.0.1", "::1", "localhost"].includes(process.env.GATEWAY_HOST ?? "127.0.0.1");
 
   app.addHook("onSend", async (_request, reply) => {
-    reply.header("X-Content-Type-Options", "nosniff");
-    reply.header("X-Frame-Options", "DENY");
-    reply.header("Referrer-Policy", "strict-origin-when-cross-origin");
-    reply.header("X-XSS-Protection", "0");
-    reply.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-    reply.header(
-      "Content-Security-Policy",
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
-    );
-    if (isNonLoopbackBind) {
-      reply.header("Strict-Transport-Security", "max-age=63072000; includeSubDomains");
-    }
+    applyBaselineSecurityHeaders(reply, { isNonLoopbackBind });
   });
 
   app.addHook("onRequest", async (request, reply) => {
@@ -375,6 +377,45 @@ export async function buildApp() {
   return app;
 }
 
+/**
+ * Minimal structural view of the Fastify reply used by the security-headers
+ * hook. Captures only the header accessors so the baseline logic can be unit
+ * tested with a lightweight fake.
+ */
+interface SecurityHeaderReply {
+  getHeader(name: string): unknown;
+  header(name: string, value: string): unknown;
+}
+
+/**
+ * Applies the baseline security headers to a response. The baseline CSP is only
+ * installed when the route has not already set its own `Content-Security-Policy`
+ * — routes that serve user/file content set a stricter, sandboxed policy
+ * (`script-src 'none'`) and must not be downgraded to the baseline
+ * `script-src 'self'`. All other headers are unconditional.
+ */
+function applyBaselineSecurityHeaders(reply: SecurityHeaderReply, options: { isNonLoopbackBind: boolean }): void {
+  reply.header("X-Content-Type-Options", "nosniff");
+  reply.header("X-Frame-Options", "DENY");
+  reply.header("Referrer-Policy", "strict-origin-when-cross-origin");
+  reply.header("X-XSS-Protection", "0");
+  reply.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  if (!hasContentSecurityPolicy(reply)) {
+    reply.header("Content-Security-Policy", BASELINE_CONTENT_SECURITY_POLICY);
+  }
+  if (options.isNonLoopbackBind) {
+    reply.header("Strict-Transport-Security", "max-age=63072000; includeSubDomains");
+  }
+}
+
+function hasContentSecurityPolicy(reply: SecurityHeaderReply): boolean {
+  const existing = reply.getHeader("Content-Security-Policy");
+  if (typeof existing === "string") {
+    return existing.trim().length > 0;
+  }
+  return existing !== undefined && existing !== null;
+}
+
 function resolveFastifyPluginTimeoutMs(): number {
   const raw = process.env.GOATCITADEL_FASTIFY_PLUGIN_TIMEOUT_MS?.trim();
   if (!raw) {
@@ -525,4 +566,6 @@ export const __internal = {
   isLoopbackRateLimitAllowlisted,
   normalizeConfiguredOrigin,
   resolveAllowedOrigins,
+  applyBaselineSecurityHeaders,
+  BASELINE_CONTENT_SECURITY_POLICY,
 };

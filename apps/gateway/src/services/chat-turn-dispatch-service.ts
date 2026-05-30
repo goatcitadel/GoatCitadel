@@ -92,7 +92,7 @@ export async function consumePreparedAgentChatTurn(
   prepared: PreparedAgentChatTurn,
   threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
   resolvedOrchestration?: PreparedChatExecutionPlanResolution,
-  options?: { abortSignal?: AbortSignal },
+  options?: { abortSignal?: AbortSignal; onChildDurableRunLaunched?: (runId: string) => void },
 ): Promise<ChatSendMessageResponse> {
   let assistantMessage: ChatMessageRecord | undefined;
   let trace: ChatTurnTraceRecord | undefined;
@@ -108,6 +108,12 @@ export async function consumePreparedAgentChatTurn(
       threadEventType,
       resolvedOrchestration,
     );
+    if (launchedDurableRunId && options?.onChildDurableRunLaunched) {
+      // Report the launched durable child run id to interested callers (e.g.
+      // orchestration phase dispatch) the moment the child run row exists, so a
+      // crash mid-turn leaves a harvestable linkage instead of a re-dispatch.
+      options.onChildDurableRunLaunched(launchedDurableRunId);
+    }
   }
   // Wire the external abort signal to both the in-process turn controller
   // (used by the inline orchestration path that registers via

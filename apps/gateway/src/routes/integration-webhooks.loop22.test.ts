@@ -59,6 +59,15 @@ describe("integration webhook route tails", () => {
       "Invalid WhatsApp webhook verify token",
     );
 
+    // Equal-length-but-wrong token still rejected: exercises the constant-time
+    // comparison path (timingSafeStringEqual) rather than a short-circuit.
+    await expectError(
+      "GET",
+      `${WHATSAPP_URL}?hub.mode=subscribe&hub.verify_token=verifx-token&hub.challenge=abc`,
+      401,
+      "Invalid WhatsApp webhook verify token",
+    );
+
     const challenge = await app.inject({
       method: "GET",
       url: `${WHATSAPP_URL}?hub.mode=subscribe&hub.verify_token=verify-token&hub.challenge=challenge-123`,

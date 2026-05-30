@@ -1859,6 +1859,98 @@ describe("useChatOutboundExecution", () => {
     vi.useRealTimers();
   });
 
+  it("clears deferred approval-resolve refresh timers on unmount (MCSHARED-003)", async () => {
+    vi.useFakeTimers();
+    const loadSessionCoreState = vi.fn(async () => undefined);
+    approveChatToolMock.mockResolvedValueOnce({ resumed: false });
+
+    let renderer!: ReturnType<typeof create>;
+    await act(async () => {
+      renderer = create(<Harness loadSessionCoreState={loadSessionCoreState} />);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      latest?.setPendingApproval({
+        approvalId: "approval-timer",
+        kind: "tool",
+        toolName: "shell.exec",
+        reason: "Run",
+        remainingCount: 1,
+      });
+      await Promise.resolve();
+    });
+
+    // Resolve the approval: this fires the immediate refresh AND schedules the
+    // deferred APPROVAL_FALLBACK_REFRESH_DELAYS_MS (500/1500/3000ms) timers.
+    await act(async () => {
+      await latest?.approve("once");
+    });
+
+    // Drop the immediate-refresh calls; we only care about the deferred timers now.
+    loadSessionCoreState.mockClear();
+    fetchChatPendingApprovalsMock.mockClear();
+
+    await act(async () => {
+      renderer.unmount();
+    });
+
+    // Advance well past the longest deferred delay (3000ms).
+    await act(async () => {
+      vi.advanceTimersByTime(3500);
+      await Promise.resolve();
+    });
+
+    // None of the deferred timer callbacks should have fired after unmount.
+    expect(loadSessionCoreState).not.toHaveBeenCalled();
+    expect(fetchChatPendingApprovalsMock).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("clears deferred approval-resolve refresh timers when the session switches (MCSHARED-003)", async () => {
+    vi.useFakeTimers();
+    const loadSessionCoreState = vi.fn(async () => undefined);
+    approveChatToolMock.mockResolvedValueOnce({ resumed: false });
+
+    let renderer!: ReturnType<typeof create>;
+    await act(async () => {
+      renderer = create(<Harness loadSessionCoreState={loadSessionCoreState} />);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      latest?.setPendingApproval({
+        approvalId: "approval-switch",
+        kind: "tool",
+        toolName: "shell.exec",
+        reason: "Run",
+        remainingCount: 1,
+      });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await latest?.approve("once");
+    });
+
+    loadSessionCoreState.mockClear();
+    fetchChatPendingApprovalsMock.mockClear();
+
+    // Switch to a different session before the deferred timers fire.
+    await act(async () => {
+      renderer.update(<Harness selectedSessionId="session-2" loadSessionCoreState={loadSessionCoreState} />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(3500);
+      await Promise.resolve();
+    });
+
+    // The timers scheduled for the previous session must not have fired.
+    expect(loadSessionCoreState).not.toHaveBeenCalled();
+    expect(fetchChatPendingApprovalsMock).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
   it("covers fetched-thread reconciliation fallbacks without a live active stream", async () => {
     await act(async () => {
       create(<Harness />);

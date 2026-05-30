@@ -378,7 +378,11 @@ describe("streaming and HTTP helpers", () => {
     await expect(
       consumeSseResponse(sseStream(['data: {"type":"error","error":"bad"}\n\n']), () => undefined),
     ).rejects.toThrow("bad");
-    await expect(collectSsePayloads(sseStream(['data: {"unfinished":true}']))).rejects.toThrow("incomplete");
+    // A final `data:` event not terminated by a blank line is flushed at EOF
+    // (legal SSE) rather than thrown away as incomplete.
+    await expect(collectSsePayloads(sseStream(['data: {"final":true}']))).resolves.toEqual(['{"final":true}']);
+    // Residual bytes with no `data:` line are still treated as incomplete.
+    await expect(collectSsePayloads(sseStream(["event: chunk\nid: 1"]))).rejects.toThrow("incomplete");
     await expect(() => parseSseJson("{not json")).toThrow("Malformed SSE event payload");
   });
 

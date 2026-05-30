@@ -12,6 +12,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import type { TaskDeliverableRecord, TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame, QuickJumpCard } from "../NativeRoutePageLayout";
+import { useIsMounted } from "@next/hooks/use-is-mounted";
 import { EmptyState } from "../primitives";
 import { readRouteDiagnosticNow, recordRouteAction, recordRouteDataLoad } from "../route-diagnostics";
 import type { NativeRoutePagesProps } from "../types";
@@ -90,6 +91,7 @@ export function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName
     error: null,
     data: [],
   });
+  const isMounted = useIsMounted();
 
   const loadCowork = useCallback(async () => {
     const startedAt = readRouteDiagnosticNow();
@@ -106,6 +108,12 @@ export function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName
       nativeLoad("Operators", fetchOperators(), { items: [] }),
     ]);
     const issues = nativeLoadIssues([tasks, deletedTasks, operators]);
+    // Drop the result if the surface unmounted mid-flight. The mount effect
+    // below also guards with `cancelled`; this additionally covers the
+    // imperative `refreshCowork()` path used by the mutation handlers.
+    if (!isMounted()) {
+      return;
+    }
     setState({
       loading: false,
       error: null,
@@ -123,7 +131,7 @@ export function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName
       itemCount: tasks.data.items.length + deletedTasks.data.items.length + operators.data.items.length,
       issueCount: issues.length,
     });
-  }, [activeWorkspaceId, section]);
+  }, [activeWorkspaceId, isMounted, section]);
 
   useEffect(() => {
     let cancelled = false;
@@ -219,7 +227,9 @@ export function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName
     try {
       await loadCowork();
     } catch (error) {
-      setNotice({ tone: "error", message: getErrorMessage(error) });
+      if (isMounted()) {
+        setNotice({ tone: "error", message: getErrorMessage(error) });
+      }
     }
   };
 
@@ -235,6 +245,9 @@ export function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName
         description: createDraft.description.trim() || undefined,
         priority: createDraft.priority,
       });
+      if (!isMounted()) {
+        return;
+      }
       recordRouteAction("cowork/tasks", "task.created", {
         taskId: created.taskId,
         priority: createDraft.priority,
@@ -242,9 +255,14 @@ export function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName
       setNotice({ tone: "success", message: `Task ${created.title} created.` });
       setCreateDraft({ title: "", description: "", priority: "normal" });
       await refreshCowork();
+      if (!isMounted()) {
+        return;
+      }
       setSelectedTaskId(created.taskId);
     } catch (error) {
-      setNotice({ tone: "error", message: getErrorMessage(error) });
+      if (isMounted()) {
+        setNotice({ tone: "error", message: getErrorMessage(error) });
+      }
     }
   };
 
@@ -260,6 +278,9 @@ export function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName
         status: detailDraft.status,
         priority: detailDraft.priority,
       });
+      if (!isMounted()) {
+        return;
+      }
       recordRouteAction("cowork/tasks", "task.updated", {
         taskId: selectedTask.taskId,
         status: detailDraft.status,
@@ -268,7 +289,9 @@ export function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName
       setNotice({ tone: "success", message: "Task updated." });
       await refreshCowork();
     } catch (error) {
-      setNotice({ tone: "error", message: getErrorMessage(error) });
+      if (isMounted()) {
+        setNotice({ tone: "error", message: getErrorMessage(error) });
+      }
     }
   };
 
@@ -288,6 +311,9 @@ export function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName
         path: deliverableDraft.path.trim() || undefined,
         description: deliverableDraft.description.trim() || undefined,
       });
+      if (!isMounted()) {
+        return;
+      }
       recordRouteAction("cowork/tasks", "task.deliverable_added", {
         taskId: selectedTask.taskId,
         deliverableType: deliverableDraft.deliverableType,
@@ -295,9 +321,14 @@ export function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName
       setNotice({ tone: "success", message: "Deliverable added." });
       setDeliverableDraft({ title: "", deliverableType: "artifact", path: "", description: "" });
       const result = await fetchTaskDeliverables(selectedTask.taskId, selectedTask.workspaceId ?? activeWorkspaceId);
+      if (!isMounted()) {
+        return;
+      }
       setDeliverables({ loading: false, error: null, data: result.items });
     } catch (error) {
-      setNotice({ tone: "error", message: getErrorMessage(error) });
+      if (isMounted()) {
+        setNotice({ tone: "error", message: getErrorMessage(error) });
+      }
     }
   };
 
@@ -311,11 +342,16 @@ export function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName
         deletedBy: "operator",
         workspaceId: selectedTask.workspaceId ?? activeWorkspaceId,
       });
+      if (!isMounted()) {
+        return;
+      }
       recordRouteAction("cowork/tasks", "task.archived", { taskId: selectedTask.taskId });
       setNotice({ tone: "success", message: "Task moved to trash." });
       await refreshCowork();
     } catch (error) {
-      setNotice({ tone: "error", message: getErrorMessage(error) });
+      if (isMounted()) {
+        setNotice({ tone: "error", message: getErrorMessage(error) });
+      }
     }
   };
 
@@ -325,11 +361,16 @@ export function CoworkNativePage({ route, activeWorkspaceId, activeWorkspaceName
     }
     try {
       await restoreTask(selectedTask.taskId, selectedTask.workspaceId ?? activeWorkspaceId);
+      if (!isMounted()) {
+        return;
+      }
       recordRouteAction("cowork/tasks", "task.restored", { taskId: selectedTask.taskId });
       setNotice({ tone: "success", message: "Task restored." });
       await refreshCowork();
     } catch (error) {
-      setNotice({ tone: "error", message: getErrorMessage(error) });
+      if (isMounted()) {
+        setNotice({ tone: "error", message: getErrorMessage(error) });
+      }
     }
   };
 

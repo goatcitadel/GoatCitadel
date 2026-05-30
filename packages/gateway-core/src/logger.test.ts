@@ -24,6 +24,77 @@ describe("gateway-core logger", () => {
     expect(output).not.toContain("refresh-token");
   });
 
+  it("redacts keys that contain credential indicators anywhere in the key", () => {
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    logger.info("credential keys", {
+      authToken: "auth-token-secret",
+      apiKey: "api-key-secret",
+      api_key: "api-key-snake-secret",
+      apiKeyHash: "api-key-hash-secret",
+      secretValue: "secret-value-secret",
+      clientSecret: "client-secret-secret",
+      password: "password-secret",
+      "x-api-key": "x-api-key-secret",
+      accessToken: "access-token-secret",
+      refreshToken: "refresh-token-secret",
+      nested: {
+        sessionToken: "session-token-secret",
+      },
+    });
+
+    const output = String(writeSpy.mock.calls.at(-1)?.[0] ?? "");
+    const entry = JSON.parse(output) as Record<string, unknown>;
+
+    expect(entry.authToken).toBe("[redacted]");
+    expect(entry.apiKey).toBe("[redacted]");
+    expect(entry.api_key).toBe("[redacted]");
+    expect(entry.apiKeyHash).toBe("[redacted]");
+    expect(entry.secretValue).toBe("[redacted]");
+    expect(entry.clientSecret).toBe("[redacted]");
+    expect(entry.password).toBe("[redacted]");
+    expect(entry["x-api-key"]).toBe("[redacted]");
+    expect(entry.accessToken).toBe("[redacted]");
+    expect(entry.refreshToken).toBe("[redacted]");
+    expect(entry.nested).toMatchObject({ sessionToken: "[redacted]" });
+    expect(output).not.toContain("-secret");
+  });
+
+  it("does not redact usage, count, limit, or tokenizer fields", () => {
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    logger.info("usage metrics", {
+      prompt_tokens: 12,
+      completion_tokens: 34,
+      total_tokens: 46,
+      max_tokens: 1000,
+      maxTokens: 2000,
+      tokenizer: "cl100k_base",
+      tokenCount: 7,
+      model: "claude-3",
+      durationMs: 420,
+      usage: {
+        cached_tokens: 5,
+        tokensUsed: 99,
+      },
+    });
+
+    const output = String(writeSpy.mock.calls.at(-1)?.[0] ?? "");
+    const entry = JSON.parse(output) as Record<string, unknown>;
+
+    expect(entry.prompt_tokens).toBe(12);
+    expect(entry.completion_tokens).toBe(34);
+    expect(entry.total_tokens).toBe(46);
+    expect(entry.max_tokens).toBe(1000);
+    expect(entry.maxTokens).toBe(2000);
+    expect(entry.tokenizer).toBe("cl100k_base");
+    expect(entry.tokenCount).toBe(7);
+    expect(entry.model).toBe("claude-3");
+    expect(entry.durationMs).toBe(420);
+    expect(entry.usage).toMatchObject({ cached_tokens: 5, tokensUsed: 99 });
+    expect(output).not.toContain("[redacted]");
+  });
+
   it("does not throw on circular metadata", () => {
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const circular: Record<string, unknown> = {

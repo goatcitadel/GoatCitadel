@@ -3,8 +3,33 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { ChannelActivityInput, ChannelActivityResult } from "@goatcitadel/contracts";
 import type { ChatCommandOptions } from "../services/chat-command-service.js";
+import { ChannelBotLoopGuard, type BotLoopGuardConfig } from "../services/channel-bot-loop-guard.js";
 
 export const CHANNEL_INBOUND_MAX_BYTES = 256 * 1024;
+
+/**
+ * Default rate-cap/cooldown for the inbound bot-loop guard. Values follow the
+ * channel-bot-loop-guard spec: at most 20 inbound replies per (actor,
+ * connection, conversation) per 60s, then a 60s cooldown. This caps a runaway
+ * self/bot reply loop without affecting ordinary human chat bursts.
+ */
+export const DEFAULT_INBOUND_BOT_LOOP_GUARD_CONFIG: BotLoopGuardConfig = {
+  maxEventsPerWindow: 20,
+  windowSeconds: 60,
+  cooldownSeconds: 60,
+  enabled: true,
+};
+
+/**
+ * Process-wide guard shared by every inbound webhook dispatch so its in-memory
+ * rate buckets accumulate across the five provider routes. Tests may pass their
+ * own guard to dispatchInboundWebhookMessage.
+ */
+const sharedInboundBotLoopGuard = new ChannelBotLoopGuard(DEFAULT_INBOUND_BOT_LOOP_GUARD_CONFIG);
+
+export function getInboundBotLoopGuard(): ChannelBotLoopGuard {
+  return sharedInboundBotLoopGuard;
+}
 
 const connectionParamsSchema = z.object({
   connectionId: z.string().uuid(),
@@ -214,6 +239,15 @@ export function createWebhookHandler<TParsed>(
       return reply.code(400).send({ error: `Integration connection is not a ${options.connectorLabel} connector` });
     }
 
+    // A disabled or disconnected connection must not ingest inbound traffic.
+    // The platform webhook subscription is independent of the local enabled
+    // flag, so without this guard "disable" is not an effective inbound kill
+    // switch. Reply 200-ignored (rather than a non-2xx) so providers such as
+    // Slack/Meta do not auto-disable the subscription on repeated failures.
+    if (connection.enabled === false || (connection.status !== undefined && connection.status !== "connected")) {
+      return reply.send(createIgnoredWebhookReply(undefined, "connection_disabled"));
+    }
+
     const rawBody = request[options.rawBodyKey];
     if (!rawBody) {
       return reply.code(400).send({ error: options.missingRawBodyError });
@@ -279,6 +313,7 @@ export async function dispatchInboundWebhookMessage(
       channelSystemInstruction?: string;
     };
   },
+  loopGuard: ChannelBotLoopGuard = sharedInboundBotLoopGuard,
 ) {
   const ingestResult = await integrationWebhooks.ingestChannelMessage(
     options.channel,
@@ -295,6 +330,42 @@ export async function dispatchInboundWebhookMessage(
 
   let responseTurnId: string | undefined;
   if (!ingestResult.deduped) {
+    // Bot-loop rate cap: a runaway self/bot reply loop repeatedly hits the same
+    // (actor, connection, conversation) bucket. Once the cap is exceeded the
+    // guard suppresses the reply for the cooldown window. The session binding
+    // and ingest above are preserved so the inbound message is still recorded.
+    const guardDecision = loopGuard.decide({
+      scope: options.connectionId,
+      conversation: options.message.room ?? options.message.peer ?? options.message.account,
+      participantA: options.message.actorId,
+      participantB: options.connectionId,
+    });
+    if (guardDecision.action === "suppress") {
+      integrationWebhooks.recordDevDiagnostic?.({
+        level: "warn",
+        category: "channels",
+        event: "channel.bot_loop_suppressed",
+        message: "Suppressed an inbound channel reply because the bot-loop rate cap was reached.",
+        context: {
+          channel: options.channel,
+          connectionId: options.connectionId,
+          actorId: options.message.actorId,
+          sessionId: ingestResult.session.sessionId,
+          reason: guardDecision.reason,
+          cooldownExpiresAt: guardDecision.cooldownExpiresAt,
+        },
+      });
+      return {
+        accepted: true,
+        deduped: ingestResult.deduped,
+        replied: false,
+        suppressed: true as const,
+        suppressedReason: guardDecision.reason,
+        sessionId: ingestResult.session.sessionId,
+        turnId: undefined,
+        eventType: options.eventType,
+      };
+    }
     await emitInboundWebhookActivity(integrationWebhooks, options, ingestResult.session.sessionId, "seen");
     try {
       await emitInboundWebhookActivity(integrationWebhooks, options, ingestResult.session.sessionId, "thinking");

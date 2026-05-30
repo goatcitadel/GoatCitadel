@@ -9,6 +9,7 @@ import type {
   ChatSessionRecord,
   DurableRunRecord,
   OrchestrationPhase,
+  OrchestrationPhaseChildDispatch,
   OrchestrationPhaseExecutionResult,
   OrchestrationPlan,
   OrchestrationRun,
@@ -24,7 +25,7 @@ export interface OrchestrationPhaseExecutionServiceDeps {
   agentSendChatMessage(
     sessionId: string,
     input: ChatSendMessageRequest,
-    options?: { abortSignal?: AbortSignal },
+    options?: { abortSignal?: AbortSignal; onChildDurableRunLaunched?: (runId: string) => void },
   ): Promise<ChatSendMessageResponse>;
   normalizeWorkspaceId(workspaceId: string): string;
 }
@@ -36,6 +37,13 @@ export interface OrchestrationPhaseExecutionInput {
   durableRun: DurableRunRecord;
   policyContext?: OrchestrationRunPolicyContext;
   signal?: AbortSignal;
+  /**
+   * Reported the moment the phase dispatches its child Cowork turn so the
+   * caller can persist a crash-safe linkage breadcrumb (ORCH-002). Invoked once
+   * with the child session id before the turn is launched, and again with the
+   * child durable run id once the durable child run has been created.
+   */
+  onChildDispatched?: (dispatch: OrchestrationPhaseChildDispatch) => void;
 }
 
 export class OrchestrationPhaseExecutionService {
@@ -52,6 +60,12 @@ export class OrchestrationPhaseExecutionService {
       origin: "system",
       includeInHistory: false,
       title: `[Orchestration] ${input.run.runId}/${input.phase.phaseId}`,
+    });
+    // Crash-safe breadcrumb #1: record the child session before the turn is
+    // dispatched, so an interruption mid-turn never re-dispatches this phase.
+    input.onChildDispatched?.({
+      phaseId: input.phase.phaseId,
+      childSessionId: childSession.sessionId,
     });
     this.deps.updateChatSessionPrefs(childSession.sessionId, {
       mode: "cowork",
@@ -108,7 +122,20 @@ export class OrchestrationPhaseExecutionService {
           policyTaskId: input.phase.phaseId,
           signal: input.signal,
         },
-        input.signal ? { abortSignal: input.signal } : undefined,
+        {
+          ...(input.signal ? { abortSignal: input.signal } : {}),
+          // Crash-safe breadcrumb #2: enrich the linkage with the durable child
+          // run id the instant the child run is created, before the (possibly
+          // long-running) turn settles. This is what resume harvests/reattaches.
+          onChildDurableRunLaunched: input.onChildDispatched
+            ? (runId) =>
+                input.onChildDispatched?.({
+                  phaseId: input.phase.phaseId,
+                  childSessionId: childSession.sessionId,
+                  childRunId: runId,
+                })
+            : undefined,
+        },
       );
       throwIfPhaseAborted(input.signal);
       const assistantText = response.assistantMessage?.content?.trim() ?? "";

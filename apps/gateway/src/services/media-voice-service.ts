@@ -2,8 +2,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { promisify } from "node:util";
 import type {
   ChatAttachmentMediaType,
   ChatAttachmentPreviewResponse,
@@ -40,6 +41,19 @@ const VOICE_STATUS_SETTING_KEY = "voice_status_v1";
 const VOICE_WAKE_STATUS_SETTING_KEY = "voice_wake_status_v1";
 const GOOGLE_MEET_SESSIONS_SETTING_KEY = "google_meet_voice_sessions_v1";
 const DEFAULT_VOICE_PROVIDER: VoiceTranscribeResponse["provider"] = "whisper.cpp";
+
+/**
+ * Bound external-process work so a hung tool cannot block the request path
+ * forever. ffmpeg only re-muxes a short clip to 16kHz mono WAV, so a tight
+ * bound is fine; whisper transcription can legitimately run for a while, so it
+ * gets a generous-but-finite ceiling. On timeout `execFile` kills the child
+ * and rejects, which we surface as a clean transcription error.
+ */
+const FFMPEG_CONVERT_TIMEOUT_MS = 30_000;
+const WHISPER_TRANSCRIBE_TIMEOUT_MS = 120_000;
+const EXTERNAL_PROCESS_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+
+const execFileAsync = promisify(execFile);
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -436,6 +450,20 @@ function extFromMimeType(mimeType?: string): string {
   return ".bin";
 }
 
+/**
+ * Node's `execFile`/`promisify(execFile)` rejects with `killed === true` when
+ * the `timeout` option fires (the child is sent the kill signal). Detect that
+ * shape so callers can surface an explicit timeout message instead of a raw
+ * "Command failed" / signal string.
+ */
+function isProcessTimeoutError(error: unknown): boolean {
+  return (
+    isRecord(error) &&
+    (error as { killed?: unknown }).killed === true &&
+    typeof (error as { signal?: unknown }).signal === "string"
+  );
+}
+
 function parseVoiceCliArgs(rawValue?: string): string[] {
   if (!rawValue?.trim()) {
     return [];
@@ -459,11 +487,20 @@ async function normalizeAudioForWhisper(input: {
   if (!input.ffmpegPath) {
     throw new Error("Audio normalization helper is not configured for non-WAV input.");
   }
-  execFileSync(
-    input.ffmpegPath,
-    ["-y", "-i", input.inputPath, "-ac", "1", "-ar", "16000", "-f", "wav", input.outputPath],
-    { stdio: "pipe" },
-  );
+  try {
+    await execFileAsync(
+      input.ffmpegPath,
+      ["-y", "-i", input.inputPath, "-ac", "1", "-ar", "16000", "-f", "wav", input.outputPath],
+      { timeout: FFMPEG_CONVERT_TIMEOUT_MS, windowsHide: true, maxBuffer: EXTERNAL_PROCESS_MAX_BUFFER_BYTES },
+    );
+  } catch (error) {
+    if (isProcessTimeoutError(error)) {
+      throw new Error(`Audio normalization timed out after ${FFMPEG_CONVERT_TIMEOUT_MS}ms and was terminated.`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
   return input.outputPath;
 }
 
@@ -1363,7 +1400,11 @@ export class MediaVoiceService {
       if (language?.trim()) {
         args.push("-l", language.trim());
       }
-      execFileSync(binPath, args, { stdio: "pipe" });
+      await execFileAsync(binPath, args, {
+        timeout: WHISPER_TRANSCRIBE_TIMEOUT_MS,
+        windowsHide: true,
+        maxBuffer: EXTERNAL_PROCESS_MAX_BUFFER_BYTES,
+      });
       const text = (await fs.readFile(outputPath, "utf8")).trim();
       const now = new Date().toISOString();
       this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
@@ -1381,15 +1422,18 @@ export class MediaVoiceService {
       };
     } catch (error) {
       const now = new Date().toISOString();
+      const detail = isProcessTimeoutError(error)
+        ? `Transcription timed out after ${WHISPER_TRANSCRIBE_TIMEOUT_MS}ms and was terminated.`
+        : (error as Error).message;
       this.deps.storage.systemSettings.set(VOICE_STATUS_SETTING_KEY, {
         state: "error",
         provider: DEFAULT_VOICE_PROVIDER,
         modelId: runtime.selectedModelId,
         runtimeReady: false,
-        lastError: (error as Error).message,
+        lastError: detail,
         updatedAt: now,
       });
-      throw new Error(`Local STT failed: ${(error as Error).message}`, { cause: error });
+      throw new Error(`Local STT failed: ${detail}`, { cause: error });
     } finally {
       await Promise.allSettled([
         fs.rm(inputPath, { force: true }),
