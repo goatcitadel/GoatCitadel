@@ -8635,10 +8635,45 @@ function isChatCitationRecord(value: unknown): value is ChatCitationRecord {
         (value.knowledge.chunkId === undefined || typeof value.knowledge.chunkId === "string") &&
         (value.knowledge.excerpt === undefined || typeof value.knowledge.excerpt === "string") &&
         (value.knowledge.retrievalMode === "full_text" || value.knowledge.retrievalMode === "retrieval"))) &&
+    (value.provenance === undefined || isMemoryCitationProvenanceRecord(value.provenance)) &&
     (value.sourceType === undefined ||
       value.sourceType === "web" ||
       value.sourceType === "file" ||
-      value.sourceType === "tool")
+      value.sourceType === "tool" ||
+      value.sourceType === "memory")
+  );
+}
+
+function isMemoryCitationProvenanceRecord(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    (value.relationScope === "self" || value.relationScope === "peer" || value.relationScope === "project") &&
+    (value.freshness === "fresh" ||
+      value.freshness === "recent" ||
+      value.freshness === "stale" ||
+      value.freshness === "unknown") &&
+    typeof value.selectionReason === "string" &&
+    (value.retrievalStrategy === undefined ||
+      value.retrievalStrategy === "lexical_recency" ||
+      value.retrievalStrategy === "semantic_hints") &&
+    (value.matchSignals === undefined || isMemoryRetrievalMatchSignalsRecord(value.matchSignals)) &&
+    (value.sourceTimestamp === undefined || typeof value.sourceTimestamp === "string")
+  );
+}
+
+function isMemoryRetrievalMatchSignalsRecord(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.lexicalScore === "number" &&
+    Number.isFinite(value.lexicalScore) &&
+    typeof value.semanticHintScore === "number" &&
+    Number.isFinite(value.semanticHintScore) &&
+    typeof value.recencyScore === "number" &&
+    Number.isFinite(value.recencyScore) &&
+    typeof value.diversityScore === "number" &&
+    Number.isFinite(value.diversityScore) &&
+    typeof value.totalScore === "number" &&
+    Number.isFinite(value.totalScore)
   );
 }
 

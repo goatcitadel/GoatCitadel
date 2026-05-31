@@ -1,3 +1,5 @@
+import type { MemoryCitationProvenance } from "./memory.js";
+
 export type LlmApiStyle =
   | "openai-chat-completions"
   | "openai-responses"
@@ -510,7 +512,8 @@ export interface ChatCompletionResponse {
     title?: string;
     url: string;
     snippet?: string;
-    sourceType?: "web" | "file" | "tool";
+    sourceType?: "web" | "file" | "tool" | "memory";
+    provenance?: MemoryCitationProvenance;
   }>;
   [key: string]: unknown;
 }

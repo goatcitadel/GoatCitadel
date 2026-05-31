@@ -1183,6 +1183,16 @@
   transform: translateY(-1px);
 }
 
+.mc-next-thread-citations > article.is-memory {
+  display: grid;
+  align-items: start;
+  gap: 0.25rem;
+  min-width: min(100%, 18rem);
+  border-radius: 0.65rem;
+  border-color: color-mix(in oklab, var(--mc-area-color) 34%, var(--border));
+  background: color-mix(in oklab, var(--mc-area-color) 8%, var(--mc-surface-2));
+}
+
 .mc-next-thread-citations > article > div {
   display: inline-flex;
   align-items: center;
@@ -1221,6 +1231,19 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 14rem;
+}
+
+.mc-next-thread-citations > article.is-memory > p.citation-memory-reason,
+.mc-next-thread-citations > article.is-memory > p.citation-memory-meta {
+  max-width: min(34rem, 100%);
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.35;
+}
+
+.mc-next-thread-citations > article.is-memory > p.citation-memory-reason {
+  color: var(--text-secondary);
 }
 
 .mc-next-thread-citations-toggle {

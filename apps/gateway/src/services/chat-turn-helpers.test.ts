@@ -148,6 +148,19 @@ describe("chat-turn-helpers", () => {
         citationId: "citation-4",
         url: "memory://chunk-1-copy",
         title: "Knowledge copy",
+        provenance: {
+          relationScope: "self",
+          freshness: "recent",
+          selectionReason: "selected by semantic-hint retrieval score 0.956",
+          retrievalStrategy: "semantic_hints",
+          matchSignals: {
+            lexicalScore: 0.4,
+            semanticHintScore: 0.2,
+            recencyScore: 0.3,
+            diversityScore: 0.056,
+            totalScore: 0.956,
+          },
+        },
         knowledge: {
           attachmentId: "attachment-1",
           chunkId: "chunk-1",
@@ -168,6 +181,19 @@ describe("chat-turn-helpers", () => {
         citationId: "citation-3",
         url: "memory://chunk-1",
         title: "Knowledge copy",
+        provenance: {
+          relationScope: "self",
+          freshness: "recent",
+          selectionReason: "selected by semantic-hint retrieval score 0.956",
+          retrievalStrategy: "semantic_hints",
+          matchSignals: {
+            lexicalScore: 0.4,
+            semanticHintScore: 0.2,
+            recencyScore: 0.3,
+            diversityScore: 0.056,
+            totalScore: 0.956,
+          },
+        },
         knowledge: {
           attachmentId: "attachment-1",
           chunkId: "chunk-1",

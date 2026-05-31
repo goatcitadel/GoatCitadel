@@ -165,6 +165,17 @@ function renderedText(renderer: TestRenderer.ReactTestRenderer): string {
     .join(" ");
 }
 
+function collectNodeText(node: TestRenderer.ReactTestInstance): string {
+  return node.children
+    .map((child) => {
+      if (typeof child === "string" || typeof child === "number") {
+        return String(child);
+      }
+      return collectNodeText(child);
+    })
+    .join("");
+}
+
 function setScrollMetrics(
   element: HTMLElement,
   metrics: { scrollHeight: number; scrollTop: number; clientHeight: number },
@@ -265,6 +276,53 @@ describe("ThreadedTimeline", () => {
     expect(renderer.root.findAllByType("a").map((link) => link.props.href)).toEqual([
       "https://example.test/launch-notes",
     ]);
+  });
+
+  it("shows why memory citations were used without adding why-used copy to ordinary citations", () => {
+    const props = buildProps();
+    props.thread.turns[0].citations = [
+      {
+        citationId: "memory-1",
+        title: "Preference memory",
+        url: "memory://preference-1",
+        snippet: "User prefers concise reviews.",
+        sourceType: "memory",
+        provenance: {
+          relationScope: "self",
+          freshness: "recent",
+          selectionReason:
+            "selected by semantic-hint retrieval score 0.956 (lexical 0.400, semantic hint 0.200, recency 0.300, diversity 0.056)",
+          retrievalStrategy: "semantic_hints",
+          matchSignals: {
+            lexicalScore: 0.4,
+            semanticHintScore: 0.2,
+            recencyScore: 0.3,
+            diversityScore: 0.056,
+            totalScore: 0.956,
+          },
+          sourceTimestamp: "2026-05-30T00:00:00.000Z",
+        },
+      },
+      {
+        citationId: "web-1",
+        title: "External source",
+        url: "https://example.test/source",
+        sourceType: "web",
+      },
+    ];
+
+    const renderer = TestRenderer.create(<ThreadedTimeline props={props as any} />);
+    const text = renderedText(renderer);
+
+    expect(text).toContain("Preference memory");
+    expect(text).toContain("memory · User prefers concise reviews.");
+    expect(text).toContain("Why used: selected by semantic-hint retrieval score 0.956");
+    expect(text).toContain("semantic hints · self · recent · source 2026-05-30T00:00:00.000Z");
+    expect(text).toContain("total 0.956 · lexical 0.400 · hint 0.200 · recency 0.300");
+    expect(text).toContain("External source");
+    expect(
+      renderer.root.findAll((node) => node.type === "p" && collectNodeText(node).startsWith("Why used:")),
+    ).toHaveLength(1);
   });
 
   it("shows external channel activity on the source message bubble", () => {

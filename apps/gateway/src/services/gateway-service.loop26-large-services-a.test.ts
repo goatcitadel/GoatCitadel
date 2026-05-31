@@ -165,6 +165,84 @@ describe("GatewayService loop 26 stream and runtime behavior", () => {
     ]);
   });
 
+  it("replays memory citation provenance from persisted stream events", async () => {
+    const gateway = createGatewayHarness({
+      storage: {
+        chatStreamEvents: {
+          getByEventId: vi.fn(),
+          listByTurn: vi.fn((_turnId: string, afterSequence: number) => {
+            if (afterSequence === 0) {
+              return [
+                {
+                  sequence: 1,
+                  payload: {
+                    type: "citation",
+                    sessionId: "session-1",
+                    eventId: "event-1",
+                    sequence: 1,
+                    turnId: "turn-1",
+                    citation: {
+                      citationId: "memory-1",
+                      title: "Preference memory",
+                      url: "memory://preference-1",
+                      sourceType: "memory",
+                      provenance: {
+                        relationScope: "self",
+                        freshness: "recent",
+                        selectionReason: "selected by semantic-hint retrieval score 0.956",
+                        retrievalStrategy: "semantic_hints",
+                        matchSignals: {
+                          lexicalScore: 0.4,
+                          semanticHintScore: 0.2,
+                          recencyScore: 0.3,
+                          diversityScore: 0.056,
+                          totalScore: 0.956,
+                        },
+                      },
+                    },
+                  },
+                },
+              ];
+            }
+            if (afterSequence === 1) {
+              return [
+                {
+                  sequence: 2,
+                  payload: {
+                    type: "done",
+                    sessionId: "session-1",
+                    eventId: "event-2",
+                    sequence: 2,
+                    turnId: "turn-1",
+                    messageId: "message-1",
+                  },
+                },
+              ];
+            }
+            return [];
+          }),
+        },
+      },
+    });
+
+    const chunks = await collect(
+      GatewayService.prototype.streamPersistedChatTurnEvents.call(gateway, "session-1", "turn-1"),
+    );
+
+    expect(chunks[0]).toEqual(
+      expect.objectContaining({
+        type: "citation",
+        citation: expect.objectContaining({
+          sourceType: "memory",
+          provenance: expect.objectContaining({
+            selectionReason: "selected by semantic-hint retrieval score 0.956",
+            retrievalStrategy: "semantic_hints",
+          }),
+        }),
+      }),
+    );
+  });
+
   it("falls back to durable turn state when a resume cursor belongs to another turn", async () => {
     const trace = {
       turnId: "turn-1",

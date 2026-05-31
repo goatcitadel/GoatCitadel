@@ -443,6 +443,12 @@ describe("chat-thread-reducer", () => {
               citationId: "knowledge-2",
               url: "memory://duplicate",
               sourceType: "memory",
+              provenance: {
+                relationScope: "self",
+                freshness: "recent",
+                selectionReason: "selected by semantic-hint retrieval score 0.956",
+                retrievalStrategy: "semantic_hints",
+              },
               knowledge: {
                 attachmentId: "attachment-1",
                 sourceRef: "source-1",
@@ -461,6 +467,9 @@ describe("chat-thread-reducer", () => {
     expect(withTrace.turns[1]?.assistantMessage?.messageId).toBe("assistant-trace");
     expect(withTrace.turns[1]?.trace.routing).toEqual({ fallbackUsed: true });
     expect(withTrace.turns[1]?.citations).toHaveLength(1);
+    expect(withTrace.turns[1]?.citations[0]?.provenance?.selectionReason).toBe(
+      "selected by semantic-hint retrieval score 0.956",
+    );
 
     const noAssistantTrace = updateThreadFromStreamChunk(
       {

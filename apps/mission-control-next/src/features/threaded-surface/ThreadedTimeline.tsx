@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { type ChatCitationRecord, type ChatThreadTurnRecord } from "@goatcitadel/contracts";
+import {
+  type ChatCitationRecord,
+  type ChatThreadTurnRecord,
+  type MemoryCitationProvenance,
+  type MemoryRetrievalMatchSignals,
+} from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { ChatStreamStatusBar } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
 import { SurfaceReconnectBanner } from "@goatcitadel/mission-control-shared/components/chat/SurfaceReconnectBanner";
@@ -61,10 +66,67 @@ function isTurnGroupedWith(previous: ChatThreadTurnRecord, current: ChatThreadTu
 }
 
 function formatCitationSource(citation: ChatCitationRecord): string {
+  if (isMemoryCitation(citation)) {
+    if (citation.knowledge) {
+      return citation.knowledge.retrievalMode === "full_text" ? "memory full text" : "memory retrieval";
+    }
+    return "memory";
+  }
   if (citation.knowledge) {
     return citation.knowledge.retrievalMode === "full_text" ? "knowledge full text" : "knowledge retrieval";
   }
   return citation.sourceType ?? "source";
+}
+
+function isMemoryCitation(citation: ChatCitationRecord): boolean {
+  return citation.sourceType === "memory" || citation.url.startsWith("memory://") || Boolean(citation.provenance);
+}
+
+function formatMemoryRetrievalStrategy(value: MemoryCitationProvenance["retrievalStrategy"]): string | null {
+  switch (value) {
+    case "semantic_hints":
+      return "semantic hints";
+    case "lexical_recency":
+      return "lexical/recency";
+    default:
+      return null;
+  }
+}
+
+function formatMemoryScore(value: number | undefined): string | null {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : null;
+}
+
+function formatMemorySignals(signals: MemoryRetrievalMatchSignals | undefined): string | null {
+  if (!signals) {
+    return null;
+  }
+  return [
+    ["total", signals.totalScore],
+    ["lexical", signals.lexicalScore],
+    ["hint", signals.semanticHintScore],
+    ["recency", signals.recencyScore],
+  ]
+    .map(([label, value]) => {
+      const score = typeof value === "number" ? formatMemoryScore(value) : null;
+      return score ? `${label} ${score}` : null;
+    })
+    .filter((value): value is string => Boolean(value))
+    .join(" · ");
+}
+
+function formatMemoryCitationMeta(provenance: MemoryCitationProvenance | undefined): string | null {
+  if (!provenance) {
+    return null;
+  }
+  return [
+    formatMemoryRetrievalStrategy(provenance.retrievalStrategy),
+    provenance.relationScope,
+    provenance.freshness,
+    provenance.sourceTimestamp ? `source ${provenance.sourceTimestamp}` : null,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" · ");
 }
 
 function ThreadCitationList({ citations }: { citations: ChatCitationRecord[] }) {
@@ -82,8 +144,17 @@ function ThreadCitationList({ citations }: { citations: ChatCitationRecord[] }) 
         const snippet = normalizeCitationDisplayText(citation.snippet);
         const source = formatCitationSource(citation);
         const safeHref = isSafeCitationHref(citation.url);
+        const memoryWhyUsed = isMemoryCitation(citation)
+          ? (citation.provenance?.selectionReason ?? "Memory selection reason was not recorded.")
+          : null;
+        const memoryMeta = formatMemoryCitationMeta(citation.provenance);
+        const memorySignals = formatMemorySignals(citation.provenance?.matchSignals);
+        const memoryCitation = isMemoryCitation(citation);
         return (
-          <article key={citation.citationId || `${citation.url}-${index}`}>
+          <article
+            key={citation.citationId || `${citation.url}-${index}`}
+            className={memoryCitation ? "is-memory" : undefined}
+          >
             <div>
               <strong>{index + 1}</strong>
               {safeHref ? (
@@ -98,6 +169,9 @@ function ThreadCitationList({ citations }: { citations: ChatCitationRecord[] }) 
               {source}
               {snippet ? ` · ${snippet}` : ""}
             </p>
+            {memoryWhyUsed ? <p className="citation-memory-reason">Why used: {memoryWhyUsed}</p> : null}
+            {memoryMeta ? <p className="citation-memory-meta">{memoryMeta}</p> : null}
+            {memorySignals ? <p className="citation-memory-meta">{memorySignals}</p> : null}
           </article>
         );
       })}

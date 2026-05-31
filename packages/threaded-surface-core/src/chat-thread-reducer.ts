@@ -322,6 +322,7 @@ function dedupeCitations(citations: ChatThreadTurnRecord["citations"]): ChatThre
       snippet: existing.snippet ?? citation.snippet,
       sourceType: existing.sourceType ?? citation.sourceType,
       knowledge: existing.knowledge ?? citation.knowledge,
+      provenance: existing.provenance ?? citation.provenance,
     };
   }
   return deduped;
