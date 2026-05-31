@@ -462,20 +462,52 @@ function getMemoryContextItems(record: RunTracePayload): NativeListItem[] {
   const memoryItems = readArray(readRecord(record, "memory")?.items);
   const contextItems = readArray(readRecord(record, "context")?.items);
   const memoryContextItems = readArray(readRecord(record, "memoryContext")?.items);
-  return [...memoryItems, ...contextItems, ...memoryContextItems].map((item, index) => {
+  return [...memoryItems, ...contextItems, ...memoryContextItems].flatMap((item, index) => {
     const entry = asRecord(item) ?? {};
     const label =
-      readString(entry.title) ?? readString(entry.label) ?? readString(entry.id) ?? `Context item ${index + 1}`;
+      readString(entry.title) ??
+      readString(entry.label) ??
+      readString(entry.contextId) ??
+      readString(entry.id) ??
+      `Context item ${index + 1}`;
     const source = readString(entry.source) ?? readString(entry.sourceRef) ?? readString(entry.kind);
-    return {
+    const baseItem = {
       title: label,
-      meta: ["context", source, readString(entry.status)].filter(Boolean).join(" · "),
+      meta: ["context", source, readString(entry.status) ?? readString(readRecord(entry, "quality")?.status)]
+        .filter(Boolean)
+        .join(" · "),
       body:
         readString(entry.summary) ??
         readString(entry.content) ??
+        readString(entry.contextText) ??
         (entry.metadata ? JSON.stringify(entry.metadata) : undefined),
     };
+    const citationItems = readArray(entry.citations).map((citation, citationIndex) =>
+      buildMemoryCitationItem(citation, label, citationIndex),
+    );
+    return [baseItem, ...citationItems];
   });
+}
+
+function buildMemoryCitationItem(citation: unknown, contextLabel: string, index: number): NativeListItem {
+  const entry = asRecord(citation) ?? {};
+  const provenance = readRecord(entry, "provenance");
+  const sourceRef = readString(entry.sourceRef) ?? readString(entry.candidateId) ?? `citation ${index + 1}`;
+  const whyUsed = readString(provenance?.selectionReason) ?? "No selection reason was recorded.";
+  const snippet = readString(entry.snippet);
+  return {
+    title: `Why used: ${sourceRef}`,
+    meta: [
+      contextLabel,
+      readString(entry.sourceType),
+      formatScore(readNumber(entry.score)),
+      readString(provenance?.freshness),
+      readString(provenance?.relationScope),
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    body: snippet ? `${whyUsed} · ${truncateText(snippet, 220)}` : whyUsed,
+  };
 }
 
 function getToolItems(record: RunTracePayload, trace?: RunTracePayload): NativeListItem[] {
@@ -631,6 +663,10 @@ function formatCost(value?: number): string {
 
 function formatDuration(value?: number): string {
   return typeof value === "number" && Number.isFinite(value) ? `${Math.round(value)} ms` : "Unknown";
+}
+
+function formatScore(value?: number): string | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? `score ${value.toFixed(3)}` : undefined;
 }
 
 function isStableSurface(value: unknown): value is "chat" | "cowork" | "code" {

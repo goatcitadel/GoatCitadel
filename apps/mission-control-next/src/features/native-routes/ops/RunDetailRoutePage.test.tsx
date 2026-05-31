@@ -73,6 +73,53 @@ describe("RunDetailRoutePage", () => {
     expect(text).toContain("No artifacts are attached to this run.");
   });
 
+  it("shows why memory citations were used when trace evidence includes provenance", async () => {
+    runTraceHarness.fetchObserveRunTrace.mockResolvedValueOnce({
+      runId: "run-memory-why",
+      status: "completed",
+      mode: "cowork",
+      request: { summary: "Use project memory.", requestedAt: "2026-05-02T19:00:00.000Z" },
+      memoryContext: {
+        state: "available",
+        items: [
+          {
+            contextId: "ctx-1",
+            contextText: "Distilled context.",
+            quality: { status: "generated" },
+            citations: [
+              {
+                candidateId: "memory:item-1",
+                sourceType: "memory_item",
+                sourceRef: "memory://item-1",
+                snippet: "The operator prefers small verified changes.",
+                score: 0.8764,
+                provenance: {
+                  relationScope: "project",
+                  freshness: "recent",
+                  selectionReason: "selected for lexical/recency score 0.876",
+                },
+              },
+            ],
+          },
+        ],
+      },
+      artifacts: [],
+      timeline: [],
+      tools: [],
+      approvals: [],
+      sideEffects: [],
+      errors: [],
+    });
+
+    const text = await renderText("run-memory-why");
+
+    expect(text).toContain("ctx-1");
+    expect(text).toContain("Why used: memory://item-1");
+    expect(text).toContain("selected for lexical/recency score 0.876");
+    expect(text).toContain("score 0.876");
+    expect(text).toContain("project");
+  });
+
   it("shows failed run errors without claiming an automatic retry path", async () => {
     runTraceHarness.fetchObserveRunTrace.mockResolvedValueOnce({
       runId: "run-failed",
