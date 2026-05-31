@@ -51,6 +51,7 @@ import {
   CodeModeExecutionBackendUnavailableError,
   createCodeModeExecutionBackendRunner,
 } from "./code-mode-execution-backend-runner.js";
+import { parseCodeModeAiderAdapterResultEnvelope } from "./code-mode-aider-result-contract.js";
 import { buildCodeModeExecutionBackends, buildCodeModeRunExecutionBackendRef } from "./code-mode-execution-backends.js";
 import { assertCodeModeSandboxAvailable, resolveCodeModeSandboxMetadata } from "./code-mode-sandbox-runner.js";
 
@@ -2661,9 +2662,91 @@ function selectCodeModeRunArtifact(
         label: "Code Mode stderr artifact",
         truncated: run.stderrTruncated,
       };
+    case "aider_request":
+      return {
+        artifact: selectAiderAdapterArtifact(run, "requestArtifact", "Aider request artifact"),
+        label: "Code Mode Aider request artifact",
+        truncated: false,
+      };
+    case "aider_invocation_plan":
+      return {
+        artifact: selectAiderAdapterArtifact(run, "invocationPlanArtifact", "Aider invocation plan artifact"),
+        label: "Code Mode Aider invocation plan artifact",
+        truncated: false,
+      };
+    case "aider_result_envelope":
+      return {
+        artifact: selectAiderAdapterArtifact(run, "resultEnvelopeArtifact", "Aider result envelope artifact"),
+        label: "Code Mode Aider result envelope artifact",
+        truncated: false,
+      };
+    case "aider_patch":
+      return {
+        artifact: selectAiderEnvelopeArtifact(run, "patchArtifact", "Aider patch artifact"),
+        label: "Code Mode Aider patch artifact",
+        truncated: false,
+      };
+    case "aider_stdout":
+      return {
+        artifact: selectAiderEnvelopeArtifact(run, "stdoutArtifact", "Aider stdout artifact"),
+        label: "Code Mode Aider stdout artifact",
+        truncated: false,
+      };
+    case "aider_stderr":
+      return {
+        artifact: selectAiderEnvelopeArtifact(run, "stderrArtifact", "Aider stderr artifact"),
+        label: "Code Mode Aider stderr artifact",
+        truncated: false,
+      };
     default:
       throw new ValidationError({ message: `Unsupported Code Mode artifact kind: ${artifactKind}` });
   }
+}
+
+function selectAiderAdapterArtifact(
+  run: CodeModeRunRecord,
+  key: "requestArtifact" | "invocationPlanArtifact" | "resultEnvelopeArtifact",
+  label: string,
+): CapabilityArtifactRecord {
+  const adapter = readAiderAdapterResult(run);
+  return readCapabilityArtifactRecord(adapter[key], run.runId, label);
+}
+
+function selectAiderEnvelopeArtifact(
+  run: CodeModeRunRecord,
+  key: "patchArtifact" | "stdoutArtifact" | "stderrArtifact",
+  label: string,
+): CapabilityArtifactRecord {
+  const adapter = readAiderAdapterResult(run);
+  const envelope = parseCodeModeAiderAdapterResultEnvelope(adapter.envelope);
+  if (key === "patchArtifact") {
+    return readCapabilityArtifactRecord(envelope.patchArtifact?.artifact, run.runId, label);
+  }
+  return readCapabilityArtifactRecord(envelope[key], run.runId, label);
+}
+
+function readAiderAdapterResult(run: CodeModeRunRecord): Record<string, unknown> {
+  const result = run.result;
+  const adapter = isRecord(result) ? result.aiderAdapter : undefined;
+  if (!isRecord(adapter)) {
+    throw new NotFoundError({ entity: "code mode aider artifact", id: run.runId });
+  }
+  return adapter;
+}
+
+function readCapabilityArtifactRecord(value: unknown, runId: string, label: string): CapabilityArtifactRecord {
+  if (!isRecord(value)) {
+    throw new NotFoundError({ entity: label.toLowerCase(), id: runId });
+  }
+  for (const key of ["artifactId", "relPath", "sha256", "mimeType", "createdAt"]) {
+    if (typeof value[key] !== "string" || !value[key]) {
+      throw new ConflictError({ message: `${label} metadata is invalid; refusing to inspect Code Mode run.` });
+    }
+  }
+  if (typeof value.bytes !== "number" || !Number.isFinite(value.bytes) || value.bytes < 0) {
+    throw new ConflictError({ message: `${label} byte metadata is invalid; refusing to inspect Code Mode run.` });
+  }
+  return value as unknown as CapabilityArtifactRecord;
 }
 
 function summarizeCodeModeRunForComparison(run: CodeModeRunRecord): CodeModeRunComparisonRecord["run"] {

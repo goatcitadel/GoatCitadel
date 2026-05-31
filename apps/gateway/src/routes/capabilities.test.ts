@@ -624,14 +624,24 @@ describe("capabilities routes", () => {
       method: "GET",
       url: "/api/v1/code-mode/runs/code-run-1/artifacts/source?sessionId=session-1&turnId=turn-1&workspaceId=workspace-1",
     });
+    const aiderArtifactResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/code-mode/runs/code-run-1/artifacts/aider_result_envelope?sessionId=session-1&turnId=turn-1&workspaceId=workspace-1",
+    });
     const comparisonResponse = await app!.inject({
       method: "GET",
       url: "/api/v1/code-mode/runs/code-run-1/compare/code-run-0?sessionId=session-1&turnId=turn-1&workspaceId=workspace-1",
     });
 
     expect(artifactResponse.statusCode).toBe(200);
+    expect(aiderArtifactResponse.statusCode).toBe(200);
     expect(comparisonResponse.statusCode).toBe(200);
     expect(service.getCodeModeRunArtifactPreview).toHaveBeenCalledWith("code-run-1", "source", {
+      sessionId: "session-1",
+      turnId: "turn-1",
+      workspaceId: "workspace-1",
+    });
+    expect(service.getCodeModeRunArtifactPreview).toHaveBeenCalledWith("code-run-1", "aider_result_envelope", {
       sessionId: "session-1",
       turnId: "turn-1",
       workspaceId: "workspace-1",

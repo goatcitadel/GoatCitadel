@@ -64,6 +64,12 @@ const CODE_MODE_ARTIFACT_KINDS: Array<{ kind: CodeModeRunArtifactKind; label: st
   { kind: "policy_snapshot", label: "Policy" },
   { kind: "stdout", label: "Stdout" },
   { kind: "stderr", label: "Stderr" },
+  { kind: "aider_request", label: "Aider request" },
+  { kind: "aider_invocation_plan", label: "Aider plan" },
+  { kind: "aider_result_envelope", label: "Aider result" },
+  { kind: "aider_patch", label: "Aider patch" },
+  { kind: "aider_stdout", label: "Aider stdout" },
+  { kind: "aider_stderr", label: "Aider stderr" },
 ];
 
 function readStoredFilePanePercent(): number {
@@ -520,7 +526,54 @@ function isCodeModeArtifactAvailable(run: CodeModeRunRecord, artifactKind: CodeM
   if (artifactKind === "stderr") {
     return Boolean(run.stderrArtifact);
   }
+  if (artifactKind.startsWith("aider_")) {
+    return isAiderArtifactAvailable(run, artifactKind);
+  }
   return true;
+}
+
+function isAiderArtifactAvailable(run: CodeModeRunRecord, artifactKind: CodeModeRunArtifactKind): boolean {
+  const adapter = readAiderAdapterResult(run);
+  if (!adapter) {
+    return false;
+  }
+  if (artifactKind === "aider_request") {
+    return isRecord(adapter.requestArtifact);
+  }
+  if (artifactKind === "aider_invocation_plan") {
+    return isRecord(adapter.invocationPlanArtifact);
+  }
+  if (artifactKind === "aider_result_envelope") {
+    return isRecord(adapter.resultEnvelopeArtifact);
+  }
+  const envelope = isRecord(adapter.envelope) ? adapter.envelope : undefined;
+  if (!envelope) {
+    return false;
+  }
+  if (artifactKind === "aider_patch") {
+    const patch = envelope.patchArtifact;
+    return isRecord(patch) && isRecord(patch.artifact);
+  }
+  if (artifactKind === "aider_stdout") {
+    return isRecord(envelope.stdoutArtifact);
+  }
+  if (artifactKind === "aider_stderr") {
+    return isRecord(envelope.stderrArtifact);
+  }
+  return false;
+}
+
+function readAiderAdapterResult(run: CodeModeRunRecord): Record<string, unknown> | undefined {
+  const result = run.result;
+  if (!isRecord(result)) {
+    return undefined;
+  }
+  const adapter = result.aiderAdapter;
+  return isRecord(adapter) ? adapter : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function formatCodeModeArtifactKind(artifactKind: CodeModeRunArtifactKind): string {
@@ -533,6 +586,15 @@ function codeModeArtifactLanguage(run: CodeModeRunRecord, artifactKind: CodeMode
   }
   if (artifactKind === "wrapper_manifest" || artifactKind === "policy_snapshot") {
     return "json";
+  }
+  if (artifactKind === "aider_request") {
+    return "markdown";
+  }
+  if (artifactKind === "aider_invocation_plan" || artifactKind === "aider_result_envelope") {
+    return "json";
+  }
+  if (artifactKind === "aider_patch") {
+    return "diff";
   }
   return "text";
 }

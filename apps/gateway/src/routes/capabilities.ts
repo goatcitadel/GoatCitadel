@@ -56,7 +56,19 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
   });
   const runArtifactParamsSchema = z.object({
     runId: z.string().min(1),
-    artifactKind: z.enum(["source", "wrapper_manifest", "policy_snapshot", "stdout", "stderr"]),
+    artifactKind: z.enum([
+      "source",
+      "wrapper_manifest",
+      "policy_snapshot",
+      "stdout",
+      "stderr",
+      "aider_request",
+      "aider_invocation_plan",
+      "aider_result_envelope",
+      "aider_patch",
+      "aider_stdout",
+      "aider_stderr",
+    ]),
   });
   const runComparisonParamsSchema = z.object({
     runId: z.string().min(1),

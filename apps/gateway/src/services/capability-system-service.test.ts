@@ -165,6 +165,97 @@ describe("CapabilitySystemService", () => {
     expect(comparison.baseline.capabilitySnapshotId).toBe(baseline.capabilitySnapshotId);
   });
 
+  it("exposes audit-only Aider evidence artifacts through Code Mode artifact previews", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { run: 'aider-preview' };",
+      originSurface: "code",
+      sessionId: "session-a",
+      workspaceId: "workspace-a",
+    });
+    const bundleRoot = `data/code-mode-artifacts/${run.runId}/aider`;
+    const requestArtifact = await createManagedArtifact(
+      harness.rootDir,
+      bundleRoot,
+      "request.md",
+      "Implement the approved task.",
+      "text/markdown",
+    );
+    const invocationPlanArtifact = await createManagedArtifact(harness.rootDir, bundleRoot, "invocation-plan.json", {
+      contractVersion: 1,
+      adapterId: "aider-cli-adapter",
+    });
+    const patchArtifact = await createManagedArtifact(
+      harness.rootDir,
+      bundleRoot,
+      "aider.patch",
+      "diff --git a/file.ts b/file.ts\n",
+      "text/x-diff",
+    );
+    const envelope = {
+      contractVersion: 1,
+      adapterId: "aider-cli-adapter",
+      outcome: "patch_produced",
+      command: {
+        argvRedacted: ["aider", "--yes"],
+      },
+      patchArtifact: {
+        kind: "unified_diff",
+        artifact: patchArtifact,
+      },
+      replay: {
+        replaySafe: false,
+        policy: "audit_only",
+        reason: "Aider workspace mutation replay requires a separate side-effect runner.",
+      },
+    };
+    const resultEnvelopeArtifact = await createManagedArtifact(
+      harness.rootDir,
+      bundleRoot,
+      "result-envelope.json",
+      envelope,
+    );
+    harness.storage.codeModeRuns.upsert({
+      ...harness.storage.codeModeRuns.get(run.runId),
+      result: {
+        aiderAdapter: {
+          requestArtifact,
+          invocationPlanArtifact,
+          resultEnvelopeArtifact,
+          envelope,
+        },
+      },
+    });
+
+    const requestPreview = await harness.service.getCodeModeRunArtifactPreview(run.runId, "aider_request", {
+      sessionId: "session-a",
+      workspaceId: "workspace-a",
+    });
+    const patchPreview = await harness.service.getCodeModeRunArtifactPreview(run.runId, "aider_patch", {
+      sessionId: "session-a",
+      workspaceId: "workspace-a",
+    });
+
+    expect(requestPreview).toMatchObject({
+      runId: run.runId,
+      artifactKind: "aider_request",
+      content: "Implement the approved task.",
+      sha256: requestArtifact.sha256,
+    });
+    expect(patchPreview).toMatchObject({
+      runId: run.runId,
+      artifactKind: "aider_patch",
+      content: "diff --git a/file.ts b/file.ts\n",
+      sha256: patchArtifact.sha256,
+    });
+  });
+
   it("fails Code Mode JSON artifact previews closed when managed artifact content is not JSON", async () => {
     const harness = await createHarness({
       sandboxConfig: {

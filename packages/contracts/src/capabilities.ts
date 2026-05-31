@@ -17,7 +17,18 @@ export type CapabilityCatalogScope = "inspectable" | "callable";
 export type CapabilityProposalKind = "skill" | "tool";
 export type CodeModeLanguage = "javascript" | "typescript";
 export type CandidateLifecycleAction = "promote" | "revoke" | "rollback";
-export type CodeModeRunArtifactKind = "source" | "wrapper_manifest" | "policy_snapshot" | "stdout" | "stderr";
+export type CodeModeRunArtifactKind =
+  | "source"
+  | "wrapper_manifest"
+  | "policy_snapshot"
+  | "stdout"
+  | "stderr"
+  | "aider_request"
+  | "aider_invocation_plan"
+  | "aider_result_envelope"
+  | "aider_patch"
+  | "aider_stdout"
+  | "aider_stderr";
 
 export type CodeModeRunStatus =
   | "approval_pending"
