@@ -424,7 +424,12 @@ describe("external-side-effect-runner-service", () => {
       checkedAt: "2026-05-31T00:00:00.000Z",
       payload: { name: "Durable card" },
       label: "Trello card create",
-      execute: async () => ({ output: { id: "card-1", name: "Durable card" } }),
+      execute: async (claim) => {
+        expect(claim.externalCallStarted).toBe(false);
+        claim.markExternalCallStarted();
+        expect(claim.externalCallStarted).toBe(true);
+        return { output: { id: "card-1", name: "Durable card" } };
+      },
     });
 
     expect(executed.status).toBe("executed");
@@ -473,7 +478,8 @@ describe("external-side-effect-runner-service", () => {
       checkedAt: "2026-05-31T00:00:00.000Z",
       payload: { name: "Durable card" },
       label: "Trello card create",
-      execute: async () => {
+      execute: async (claim) => {
+        claim.markExternalCallStarted();
         throw new Error("provider failed");
       },
     });
@@ -484,6 +490,54 @@ describe("external-side-effect-runner-service", () => {
       {
         status: "unknown_external_outcome",
         errorText: "provider failed",
+      },
+      "2026-05-31T00:00:00.000Z",
+    );
+  });
+
+  it("marks claimed side-effect runs failed before the boundary when execution never starts the external call", async () => {
+    const sideEffectRunStore = createSideEffectRunStore();
+
+    const result = await runIdempotentExternalSideEffect({
+      mutationStore: {
+        claim: vi.fn(() => ({
+          outcome: "claimed" as const,
+          claimKind: "new" as const,
+          record: {
+            method: "POST",
+            routePath: "external",
+            idempotencyKey: "operator-key",
+            actorScope: "conn-1",
+            payloadHash: "hash",
+            status: "pending" as const,
+            createdAt: "2026-05-31T00:00:00.000Z",
+            updatedAt: "2026-05-31T00:00:00.000Z",
+          },
+        })),
+        markCompleted: vi.fn(),
+        markFailed: vi.fn(),
+      },
+      sideEffectRunStore,
+      boundary: "integration_operator_action",
+      catalogId: "automation.activepieces",
+      connectionId: "conn-1",
+      actionId: "trigger_webhook",
+      idempotencyKey: "operator-key",
+      checkedAt: "2026-05-31T00:00:00.000Z",
+      payload: { message: "preflight failed" },
+      label: "Activepieces webhook trigger",
+      execute: async () => {
+        throw new Error("request build failed");
+      },
+    });
+
+    expect(result.status).toBe("failed");
+    expect(sideEffectRunStore.markExternalCallStarted).not.toHaveBeenCalled();
+    expect(sideEffectRunStore.markFailure).toHaveBeenCalledWith(
+      "extfx-1",
+      {
+        status: "failed_before_boundary",
+        errorText: "request build failed",
       },
       "2026-05-31T00:00:00.000Z",
     );

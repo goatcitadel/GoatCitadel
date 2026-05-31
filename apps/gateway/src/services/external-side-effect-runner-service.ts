@@ -172,10 +172,16 @@ export interface ExternalSideEffectClaimResult {
   sideEffectRunId?: string;
 }
 
+export interface ExternalSideEffectExecutionContext extends ExternalSideEffectClaimResult {
+  readonly externalCallStarted: boolean;
+  /** Call immediately before the provider or bridge request crosses the external side-effect boundary. */
+  markExternalCallStarted(): void;
+}
+
 export interface IdempotentExternalSideEffectRunInput<TValue> extends ExternalSideEffectClaimInput {
   label: string;
   output?: Record<string, unknown>;
-  execute(claim: ExternalSideEffectClaimResult): Promise<TValue>;
+  execute(claim: ExternalSideEffectExecutionContext): Promise<TValue>;
 }
 
 export type IdempotentExternalSideEffectRunResult<TValue> =
@@ -261,9 +267,24 @@ export async function runIdempotentExternalSideEffect<TValue>(
     };
   }
 
+  let externalCallStarted = false;
+  const markExternalCallStarted = () => {
+    if (!externalCallStarted) {
+      markExternalSideEffectRunStarted(input.sideEffectRunStore, claim, input.checkedAt);
+      externalCallStarted = true;
+    }
+  };
+  const executionClaim: ExternalSideEffectExecutionContext = {
+    ...claim,
+    get externalCallStarted() {
+      return externalCallStarted;
+    },
+    markExternalCallStarted,
+  };
+
   try {
-    markExternalSideEffectRunStarted(input.sideEffectRunStore, claim, input.checkedAt);
-    const value = await input.execute(claim);
+    const value = await input.execute(executionClaim);
+    markExternalCallStarted();
     markIdempotentExternalSideEffectCompleted(input.mutationStore, claim, input.checkedAt);
     markExternalSideEffectRunCompleted(input.sideEffectRunStore, claim, value, input.checkedAt);
     return {
@@ -277,7 +298,7 @@ export async function runIdempotentExternalSideEffect<TValue>(
     };
   } catch (error) {
     markIdempotentExternalSideEffectFailed(input.mutationStore, claim, input.checkedAt);
-    markExternalSideEffectRunFailed(input.sideEffectRunStore, claim, error, input.checkedAt);
+    markExternalSideEffectRunFailed(input.sideEffectRunStore, claim, error, externalCallStarted, input.checkedAt);
     const failedClaim = {
       ...claim,
       resumable: false,
@@ -406,13 +427,14 @@ function markExternalSideEffectRunFailed(
   store: ExternalSideEffectRunStore | undefined,
   claim: ExternalSideEffectClaimResult,
   error: unknown,
+  externalCallStarted: boolean,
   checkedAt: string,
 ): void {
   if (claim.sideEffectRunId) {
     store?.markFailure(
       claim.sideEffectRunId,
       {
-        status: "unknown_external_outcome",
+        status: externalCallStarted ? "unknown_external_outcome" : "failed_before_boundary",
         errorText: error instanceof Error ? error.message : "external_side_effect_failed",
       },
       checkedAt,

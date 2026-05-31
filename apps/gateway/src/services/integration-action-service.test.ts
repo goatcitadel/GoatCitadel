@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { invokeIntegrationConnectionAction, type IntegrationActionHost } from "./integration-action-service.js";
+import type { ExternalSideEffectRunStore } from "./external-side-effect-runner-service.js";
 
 function createConnection(overrides: Partial<IntegrationConnection> = {}): IntegrationConnection {
   return {
@@ -60,6 +61,71 @@ function createHost(
       markFailed: vi.fn(),
     },
     ...overrides,
+  };
+}
+
+function createSideEffectRunStore(): ExternalSideEffectRunStore & {
+  createOrGet: ReturnType<typeof vi.fn>;
+  markExternalCallStarted: ReturnType<typeof vi.fn>;
+  markCompleted: ReturnType<typeof vi.fn>;
+  markFailure: ReturnType<typeof vi.fn>;
+} {
+  return {
+    createOrGet: vi.fn((input, now) => ({
+      runId: "extfx-provider-failure",
+      workspaceId: input.workspaceId ?? "default",
+      boundary: input.boundary,
+      routePath: input.routePath,
+      catalogId: input.catalogId,
+      connectionId: input.connectionId,
+      actionId: input.actionId,
+      actorScope: input.actorScope ?? "",
+      idempotencyKey: input.idempotencyKey,
+      payloadHash: input.payloadHash,
+      status: input.status ?? "claimed_not_sent",
+      replayPolicy: "idempotent_external" as const,
+      replayOutcome: input.replayOutcome,
+      replayAttempt: input.replayAttempt,
+      resumeState: "not_resumable" as const,
+      requestPayload: input.requestPayload,
+      attemptCount: 0,
+      createdAt: now ?? "2026-04-10T12:00:00.000Z",
+      updatedAt: now ?? "2026-04-10T12:00:00.000Z",
+    })),
+    markExternalCallStarted: vi.fn((runId, _input, now) => ({
+      runId,
+      workspaceId: "default",
+      boundary: "integration_operator_action",
+      routePath: "external",
+      actorScope: "11111111-1111-1111-1111-111111111111",
+      idempotencyKey: "operator-key",
+      payloadHash: "hash",
+      status: "external_call_started" as const,
+      replayPolicy: "idempotent_external" as const,
+      resumeState: "in_progress" as const,
+      attemptCount: 1,
+      externalCallStartedAt: now,
+      createdAt: now ?? "2026-04-10T12:00:00.000Z",
+      updatedAt: now ?? "2026-04-10T12:00:00.000Z",
+    })),
+    markCompleted: vi.fn(),
+    markFailure: vi.fn((runId, input, now) => ({
+      runId,
+      workspaceId: "default",
+      boundary: "integration_operator_action",
+      routePath: "external",
+      actorScope: "11111111-1111-1111-1111-111111111111",
+      idempotencyKey: "operator-key",
+      payloadHash: "hash",
+      status: input.status,
+      replayPolicy: "idempotent_external" as const,
+      resumeState: "manual_retry_after_recorded_failure" as const,
+      errorText: input.errorText,
+      attemptCount: 1,
+      completedAt: now,
+      createdAt: now ?? "2026-04-10T12:00:00.000Z",
+      updatedAt: now ?? "2026-04-10T12:00:00.000Z",
+    })),
   };
 }
 
@@ -489,8 +555,10 @@ describe("integration-action-service", () => {
       },
     });
     const markFailed = vi.fn();
+    const sideEffectRunStore = createSideEffectRunStore();
     const host = createHost(connection, {
       fetchWithDiagnosticsTimeout: vi.fn(async () => new Response("board archived", { status: 409 })),
+      sideEffectRunStore,
       mutationStore: {
         claim: vi.fn((input) => ({
           outcome: "claimed" as const,
@@ -539,6 +607,19 @@ describe("integration-action-service", () => {
         idempotencyKey: "operator-key",
         actorScope: connection.connectionId,
       }),
+    );
+    expect(sideEffectRunStore.markExternalCallStarted).toHaveBeenCalledWith(
+      "extfx-provider-failure",
+      undefined,
+      expect.any(String),
+    );
+    expect(sideEffectRunStore.markFailure).toHaveBeenCalledWith(
+      "extfx-provider-failure",
+      {
+        status: "unknown_external_outcome",
+        errorText: "board archived",
+      },
+      expect.any(String),
     );
     expect(host.mutationStore?.markCompleted).not.toHaveBeenCalled();
   });

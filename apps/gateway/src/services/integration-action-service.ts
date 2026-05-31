@@ -149,7 +149,8 @@ async function invokeLocalBridgeAction(
         catalogId: connection.catalogId,
         actionId: action.actionId,
       },
-      execute: async () => {
+      execute: async (claim) => {
+        claim.markExternalCallStarted();
         const result = await executeBridge();
         if (result.status === "failed") {
           throw new Error(result.message);
@@ -293,7 +294,8 @@ async function invokeActivepiecesAction(
       provider: "activepieces",
       ...(flowId ? { flowId } : {}),
     },
-    execute: async () => {
+    execute: async (claim) => {
+      claim.markExternalCallStarted();
       const response = await host.fetchWithDiagnosticsTimeout(target, {
         method: "POST",
         headers: {
@@ -428,7 +430,8 @@ async function invokeTrelloAction(
         listId,
         name,
       },
-      execute: async () => {
+      execute: async (claim) => {
+        claim.markExternalCallStarted();
         const response = await host.fetchWithDiagnosticsTimeout(url.toString(), { method: "POST" });
         const parsed = await parseResponse(response);
         if (!response.ok) {
@@ -562,7 +565,8 @@ async function invokeGmailAction(
         to,
         subject,
       },
-      execute: async () => {
+      execute: async (claim) => {
+        claim.markExternalCallStarted();
         const response = await host.fetchWithDiagnosticsTimeout(
           new URL("/gmail/v1/users/me/messages/send", resolveGmailApiBaseUrl()).toString(),
           {
