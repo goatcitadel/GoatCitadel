@@ -84,6 +84,116 @@ describe("demo routes", () => {
     expect(services.__state.sessions).toHaveLength(3);
     expect(services.__state.tasks).toHaveLength(2);
     expect(services.knowledge.knowledgeMemoryWrite).toHaveBeenCalledTimes(1);
+    expect(services.approvals.createApproval).toHaveBeenCalledTimes(1);
+    expect(services.tasks.updateTask).toHaveBeenCalledTimes(1);
+    expect(services.__state.durableRuns).toHaveLength(1);
+    expect(services.__state.tasks[0]).toMatchObject({
+      agenticContext: {
+        runId: "approval-wait-run-1",
+        durableRunId: "approval-wait-run-1",
+        parentSessionId: "session-2",
+        surface: "cowork",
+        status: "approval_required",
+      },
+    });
+  });
+
+  it("reuses the existing approval wait run when checkpoint task linking is retried", async () => {
+    const services = createDemoServices();
+    const normalUpdateTask = services.tasks.updateTask.getMockImplementation();
+    services.tasks.updateTask.mockImplementationOnce(() => {
+      throw new Error("task update failed");
+    });
+    app = Fastify();
+    app.decorate("services", services as never);
+    await app.register(demoRoutes);
+
+    const failed = await app.inject({
+      method: "POST",
+      url: "/api/v1/demo/bootstrap",
+    });
+
+    expect(failed.statusCode).toBe(500);
+    expect(services.approvals.createApproval).toHaveBeenCalledTimes(1);
+    expect(services.__state.approvals).toHaveLength(1);
+    expect(services.__state.durableRuns).toHaveLength(1);
+
+    services.tasks.updateTask.mockImplementation(normalUpdateTask!);
+    const retry = await app.inject({
+      method: "POST",
+      url: "/api/v1/demo/bootstrap",
+    });
+
+    expect(retry.statusCode).toBe(200);
+    expect(services.approvals.createApproval).toHaveBeenCalledTimes(1);
+    expect(services.__state.approvals).toHaveLength(1);
+    expect(services.__state.durableRuns).toHaveLength(1);
+    expect(services.tasks.updateTask).toHaveBeenCalledTimes(2);
+    expect(services.__state.tasks[0]).toMatchObject({
+      agenticContext: {
+        runId: "approval-wait-run-1",
+        durableRunId: "approval-wait-run-1",
+        status: "approval_required",
+      },
+    });
+  });
+
+  it("reuses resolved first-run approvals when repairing checkpoint task linkage", async () => {
+    const services = createDemoServices();
+    const normalUpdateTask = services.tasks.updateTask.getMockImplementation();
+    services.tasks.updateTask.mockImplementationOnce(() => {
+      throw new Error("task update failed");
+    });
+    app = Fastify();
+    app.decorate("services", services as never);
+    await app.register(demoRoutes);
+
+    const failed = await app.inject({ method: "POST", url: "/api/v1/demo/bootstrap" });
+    expect(failed.statusCode).toBe(500);
+    services.__state.approvals[0]!.status = "approved";
+    services.__state.approvals[0]!.resolvedAt = "2026-05-10T00:02:00.000Z";
+    services.tasks.updateTask.mockImplementation(normalUpdateTask!);
+
+    const retry = await app.inject({ method: "POST", url: "/api/v1/demo/bootstrap" });
+
+    expect(retry.statusCode).toBe(200);
+    expect(services.approvals.createApproval).toHaveBeenCalledTimes(1);
+    expect(services.__state.durableRuns).toHaveLength(1);
+    expect(services.__state.tasks[0]).toMatchObject({
+      status: "review",
+      agenticContext: {
+        runId: "approval-wait-run-1",
+        durableRunId: "approval-wait-run-1",
+        status: "completed",
+      },
+    });
+    expect(services.tasks.appendTaskActivity).toHaveBeenLastCalledWith(
+      "task-1",
+      expect.objectContaining({
+        message: "First-run governed checkpoint is linked to a resolved approval and ready for inspection.",
+        metadata: expect.objectContaining({ approvalStatus: "approved" }),
+      }),
+    );
+  });
+
+  it("does not claim durable-backed first-run evidence when approval wait linkage is unavailable", async () => {
+    const services = createDemoServices({ linkApprovalsToDurableRuns: false });
+    app = Fastify();
+    app.decorate("services", services as never);
+    await app.register(demoRoutes);
+
+    const response = await app.inject({ method: "POST", url: "/api/v1/demo/bootstrap" });
+
+    expect(response.statusCode).toBe(207);
+    expect(response.json()).toMatchObject({
+      status: "partial",
+      notes: expect.arrayContaining([
+        "First-run approval checkpoint is missing durable-run linkage because durable execution is unavailable.",
+      ]),
+    });
+    expect(services.approvals.createApproval).toHaveBeenCalledTimes(1);
+    expect(services.__state.durableRuns).toHaveLength(0);
+    expect(services.tasks.updateTask).not.toHaveBeenCalled();
   });
 
   it("restores archived demo workspaces and reports state as partial until required artifacts exist", async () => {
@@ -152,18 +262,21 @@ describe("demo routes", () => {
         codeTask: true,
         memorySeed: false,
       },
-      notes: ["Memory seed skipped: secure memory unavailable"],
+      notes: expect.arrayContaining(["Memory seed skipped: secure memory unavailable"]),
     });
   });
 });
 
-function createDemoServices() {
+function createDemoServices(options: { linkApprovalsToDurableRuns?: boolean } = {}) {
+  const linkApprovalsToDurableRuns = options.linkApprovalsToDurableRuns ?? true;
   const state = {
     workspaces: [] as Array<Record<string, unknown>>,
     projects: [] as Array<Record<string, unknown>>,
     sessions: [] as Array<Record<string, unknown>>,
     tasks: [] as Array<Record<string, unknown>>,
     memories: [] as Array<Record<string, unknown>>,
+    approvals: [] as Array<Record<string, unknown>>,
+    durableRuns: [] as Array<Record<string, unknown>>,
   };
   return {
     __state: state,
@@ -253,8 +366,53 @@ function createDemoServices() {
         state.tasks.push(task);
         return task;
       }),
+      updateTask: vi.fn((taskId: string, input: Record<string, unknown>) => {
+        const task = state.tasks.find((item) => item.taskId === taskId);
+        if (!task) {
+          throw new Error(`Task ${taskId} not found`);
+        }
+        Object.assign(task, input, { updatedAt: "2026-05-10T00:01:00.000Z" });
+        return task;
+      }),
       appendTaskActivity: vi.fn(),
       appendTaskDeliverable: vi.fn(),
+    },
+    approvals: {
+      createApproval: vi.fn(async (input: Record<string, unknown>) => {
+        const durableRunId = `approval-wait-run-${state.durableRuns.length + 1}`;
+        const linkage = {
+          ...((input.linkage as Record<string, unknown> | undefined) ?? {}),
+          ...(linkApprovalsToDurableRuns ? { durableRunId } : {}),
+        };
+        const approval = {
+          approvalId: `approval-${state.approvals.length + 1}`,
+          status: "pending",
+          createdAt: "2026-05-10T00:00:00.000Z",
+          expiresAt: input.expiresAt ?? undefined,
+          explanationStatus: "not_requested",
+          ...input,
+          linkage,
+        };
+        state.approvals.push(approval);
+        if (linkApprovalsToDurableRuns) {
+          state.durableRuns.push({
+            runId: durableRunId,
+            workflowKey: "approval.wait",
+            status: "waiting",
+            payload: {
+              version: "approval.wait.v1",
+              approvalId: approval.approvalId,
+              approvalKind: approval.kind,
+              createdAt: approval.createdAt,
+            },
+            metadata: { approvalId: approval.approvalId, approvalKind: approval.kind },
+          });
+        }
+        return approval;
+      }),
+      listApprovals: vi.fn((status?: string) =>
+        state.approvals.filter((approval) => !status || approval.status === status),
+      ),
     },
     memory: {
       listItems: vi.fn((query: Record<string, unknown>) =>

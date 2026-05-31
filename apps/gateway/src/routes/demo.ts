@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import type {
+  ApprovalRequest,
   ChatProjectRecord,
   ChatSessionRecord,
   DemoBootstrapResponse,
@@ -147,6 +148,14 @@ async function bootstrapDemo(fastify: FastifyInstance): Promise<DemoBootstrapRes
       message: "Demo task created to show Cowork planning, blockers, and deliverables.",
     });
   }
+  const governedJob = await ensureFirstRunGovernedJob(fastify, workspace, coworkSession, coworkTask.task);
+  if (governedJob.created && governedJob.durableBacked) {
+    notes.push("Created a first-run approval checkpoint backed by a durable run; approve it only after inspection.");
+  } else if (!governedJob.durableBacked) {
+    notes.push(
+      "First-run approval checkpoint is missing durable-run linkage because durable execution is unavailable.",
+    );
+  }
 
   const codeTask = ensureDemoTask(fastify, workspace.workspaceId, {
     title: "Demo Code mission: validate a small change",
@@ -193,7 +202,8 @@ async function bootstrapDemo(fastify: FastifyInstance): Promise<DemoBootstrapRes
     notes.push(`Memory seed skipped: ${(error as Error).message}`);
   }
 
-  const status = created.memorySeed || notes.length === 0 ? "ready" : "partial";
+  const hasPartialNote = notes.some((note) => /skipped|unavailable|without durable-run linkage/i.test(note));
+  const status = hasPartialNote ? "partial" : "ready";
 
   return {
     status,
@@ -336,6 +346,135 @@ function ensureDemoTask(
     }) as TaskRecord,
     created: true,
   };
+}
+
+async function ensureFirstRunGovernedJob(
+  fastify: FastifyInstance,
+  workspace: WorkspaceRecord,
+  session: ChatSessionRecord,
+  task: TaskRecord,
+): Promise<{ task: TaskRecord; created: boolean; durableBacked: boolean }> {
+  const existingRunId = task.agenticContext?.runId?.trim();
+  if (existingRunId) {
+    return { task, created: false, durableBacked: true };
+  }
+
+  const existingApproval = findFirstRunDemoApproval(fastify, task.taskId);
+  const approval =
+    existingApproval ??
+    (await fastify.services.approvals.createApproval({
+      kind: "demo.first_run",
+      riskLevel: "safe",
+      payload: {
+        workspaceId: workspace.workspaceId,
+        sessionId: session.sessionId,
+        taskId: task.taskId,
+        action: "inspect_demo_first_run",
+        note: "Local demo checkpoint only; approving this does not call a provider or execute external side effects.",
+      },
+      preview: {
+        title: "First-run demo checkpoint",
+        surface: "cowork",
+        workspace: workspace.name,
+        task: task.title,
+      },
+      linkage: {
+        workspaceId: workspace.workspaceId,
+        sessionId: session.sessionId,
+        taskId: task.taskId,
+        originSurface: "cowork",
+        actionType: "demo.first_run",
+      },
+      expiresAt: null,
+    }));
+  const durableRunId = approval.linkage?.durableRunId ?? approval.linkage?.runId;
+  if (!durableRunId) {
+    fastify.services.tasks.appendTaskActivity(task.taskId, {
+      activityType: "control",
+      agentId: "demo-bootstrap",
+      message:
+        "First-run approval checkpoint created without durable-run linkage because durable execution is unavailable.",
+      metadata: {
+        approvalId: approval.approvalId,
+        surface: "cowork",
+        sideEffectPosture: "local_demo_only",
+      },
+    });
+    return { task, created: !existingApproval, durableBacked: false };
+  }
+
+  const agenticStatus = mapDemoApprovalStatusToAgenticStatus(approval.status);
+  const taskStatus = mapDemoApprovalStatusToTaskStatus(approval.status);
+  const updated = fastify.services.tasks.updateTask(task.taskId, {
+    status: taskStatus,
+    agenticContext: {
+      ...(task.agenticContext ?? {}),
+      boardId: "cowork:demo",
+      runId: durableRunId,
+      durableRunId,
+      parentSessionId: session.sessionId,
+      surface: "cowork",
+      status: agenticStatus,
+      contextMode: "isolated",
+      workspaceScope: { kind: "session" },
+      diagnostics: task.agenticContext?.diagnostics ?? [],
+    },
+  });
+  fastify.services.tasks.appendTaskActivity(task.taskId, {
+    activityType: "control",
+    agentId: "demo-bootstrap",
+    message: getDemoApprovalActivityMessage(approval.status),
+    metadata: {
+      runId: durableRunId,
+      approvalId: approval.approvalId,
+      approvalStatus: approval.status,
+      surface: "cowork",
+      sideEffectPosture: "local_demo_only",
+    },
+  });
+
+  return { task: updated as TaskRecord, created: !existingApproval, durableBacked: true };
+}
+
+function findFirstRunDemoApproval(fastify: FastifyInstance, taskId: string): ApprovalRequest | undefined {
+  return fastify.services.approvals
+    .listApprovals(undefined, 500)
+    .find(
+      (approval) =>
+        approval.kind === "demo.first_run" &&
+        approval.linkage?.taskId === taskId &&
+        approval.linkage?.actionType === "demo.first_run",
+    );
+}
+
+function mapDemoApprovalStatusToAgenticStatus(status: ApprovalRequest["status"]) {
+  if (status === "pending") {
+    return "approval_required";
+  }
+  if (status === "rejected") {
+    return "cancelled";
+  }
+  return "completed";
+}
+
+function mapDemoApprovalStatusToTaskStatus(status: ApprovalRequest["status"]): TaskRecord["status"] {
+  if (status === "pending") {
+    return "planning";
+  }
+  if (status === "rejected") {
+    return "blocked";
+  }
+  return "review";
+}
+
+function getDemoApprovalActivityMessage(status: ApprovalRequest["status"]) {
+  if (status === "pending") {
+    return "First-run governed checkpoint created; waiting for operator approval before treating proof as complete.";
+  }
+  if (status === "rejected") {
+    return "First-run governed checkpoint is linked to a rejected approval and remains blocked.";
+  }
+  return "First-run governed checkpoint is linked to a resolved approval and ready for inspection.";
 }
 
 function pickWorkspace(workspace: WorkspaceRecord): DemoBootstrapStateResponse["workspace"] {
