@@ -1,10 +1,94 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   claimIdempotentExternalSideEffect,
+  type ExternalSideEffectRunStore,
   markIdempotentExternalSideEffectCompleted,
   recordAuditOnlyExternalSideEffectIntent,
   runIdempotentExternalSideEffect,
 } from "./external-side-effect-runner-service.js";
+
+function createSideEffectRunStore(): ExternalSideEffectRunStore & {
+  createOrGet: ReturnType<typeof vi.fn>;
+  markExternalCallStarted: ReturnType<typeof vi.fn>;
+  markCompleted: ReturnType<typeof vi.fn>;
+  markFailure: ReturnType<typeof vi.fn>;
+} {
+  return {
+    createOrGet: vi.fn((input, now) => ({
+      runId: "extfx-1",
+      workspaceId: input.workspaceId ?? "default",
+      boundary: input.boundary,
+      routePath: input.routePath,
+      catalogId: input.catalogId,
+      connectionId: input.connectionId,
+      actionId: input.actionId,
+      actorScope: input.actorScope ?? "",
+      idempotencyKey: input.idempotencyKey,
+      payloadHash: input.payloadHash,
+      status: input.status ?? "claimed_not_sent",
+      replayPolicy: "idempotent_external",
+      replayOutcome: input.replayOutcome,
+      replayAttempt: input.replayAttempt,
+      resumeState: "not_resumable",
+      requestPayload: input.requestPayload,
+      attemptCount: 0,
+      createdAt: now ?? "2026-05-31T00:00:00.000Z",
+      updatedAt: now ?? "2026-05-31T00:00:00.000Z",
+    })),
+    markExternalCallStarted: vi.fn((runId, _input, now) => ({
+      runId,
+      workspaceId: "default",
+      boundary: "integration_operator_action",
+      routePath: "external",
+      actorScope: "conn-1",
+      idempotencyKey: "operator-key",
+      payloadHash: "hash",
+      status: "external_call_started",
+      replayPolicy: "idempotent_external",
+      resumeState: "in_progress",
+      attemptCount: 1,
+      externalCallStartedAt: now,
+      createdAt: now ?? "2026-05-31T00:00:00.000Z",
+      updatedAt: now ?? "2026-05-31T00:00:00.000Z",
+    })),
+    markCompleted: vi.fn((runId, input, now) => ({
+      runId,
+      workspaceId: "default",
+      boundary: "integration_operator_action",
+      routePath: "external",
+      actorScope: "conn-1",
+      idempotencyKey: "operator-key",
+      payloadHash: "hash",
+      status: "completed",
+      replayPolicy: "idempotent_external",
+      replayOutcome: input?.replayOutcome,
+      resumeState: "completed",
+      responsePayload: input?.responsePayload,
+      externalReferenceId: input?.externalReferenceId,
+      attemptCount: 1,
+      completedAt: now,
+      createdAt: now ?? "2026-05-31T00:00:00.000Z",
+      updatedAt: now ?? "2026-05-31T00:00:00.000Z",
+    })),
+    markFailure: vi.fn((runId, input, now) => ({
+      runId,
+      workspaceId: "default",
+      boundary: "integration_operator_action",
+      routePath: "external",
+      actorScope: "conn-1",
+      idempotencyKey: "operator-key",
+      payloadHash: "hash",
+      status: input.status,
+      replayPolicy: "idempotent_external",
+      resumeState: "not_resumable",
+      errorText: input.errorText,
+      attemptCount: 1,
+      completedAt: now,
+      createdAt: now ?? "2026-05-31T00:00:00.000Z",
+      updatedAt: now ?? "2026-05-31T00:00:00.000Z",
+    })),
+  };
+}
 
 describe("external-side-effect-runner-service", () => {
   it("records audit-only external side-effect intents with replay posture", () => {
@@ -139,6 +223,56 @@ describe("external-side-effect-runner-service", () => {
     );
   });
 
+  it("records a durable side-effect run without persisting raw request payload values", () => {
+    const sideEffectRunStore = createSideEffectRunStore();
+    const result = claimIdempotentExternalSideEffect({
+      mutationStore: {
+        claim: vi.fn(() => ({
+          outcome: "claimed" as const,
+          claimKind: "new" as const,
+          record: {
+            method: "POST",
+            routePath: "external",
+            idempotencyKey: "operator-key",
+            actorScope: "conn-1",
+            payloadHash: "hash",
+            status: "pending" as const,
+            createdAt: "2026-05-31T00:00:00.000Z",
+            updatedAt: "2026-05-31T00:00:00.000Z",
+          },
+        })),
+        markCompleted: vi.fn(),
+        markFailed: vi.fn(),
+      },
+      sideEffectRunStore,
+      workspaceId: "workspace-1",
+      boundary: "integration_operator_action",
+      catalogId: "automation.gmail",
+      connectionId: "conn-1",
+      actionId: "write",
+      idempotencyKey: "operator-key",
+      checkedAt: "2026-05-31T00:00:00.000Z",
+      payload: { provider: "gmail", to: "private@example.test", bodyText: "secret body" },
+    });
+
+    expect(result).toMatchObject({
+      sideEffectRunId: "extfx-1",
+      replayOutcome: "claimed",
+    });
+    expect(sideEffectRunStore.createOrGet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "workspace-1",
+        status: "claimed_not_sent",
+        requestPayload: {
+          valueKind: "object",
+          keys: ["bodyText", "provider", "to"],
+        },
+      }),
+      "2026-05-31T00:00:00.000Z",
+    );
+    expect(JSON.stringify(sideEffectRunStore.createOrGet.mock.calls[0]?.[0])).not.toContain("secret body");
+  });
+
   it("reports unavailable idempotency without claiming replay safety", () => {
     const result = claimIdempotentExternalSideEffect({
       boundary: "integration_operator_action",
@@ -255,6 +389,103 @@ describe("external-side-effect-runner-service", () => {
         idempotencyKey: "operator-key",
         actorScope: "conn-1",
       }),
+    );
+  });
+
+  it("marks durable side-effect runs started, completed, or unknown after the boundary", async () => {
+    const sideEffectRunStore = createSideEffectRunStore();
+    const mutationStore = {
+      claim: vi.fn(() => ({
+        outcome: "claimed" as const,
+        claimKind: "new" as const,
+        record: {
+          method: "POST",
+          routePath: "external",
+          idempotencyKey: "operator-key",
+          actorScope: "conn-1",
+          payloadHash: "hash",
+          status: "pending" as const,
+          createdAt: "2026-05-31T00:00:00.000Z",
+          updatedAt: "2026-05-31T00:00:00.000Z",
+        },
+      })),
+      markCompleted: vi.fn(),
+      markFailed: vi.fn(),
+    };
+
+    const executed = await runIdempotentExternalSideEffect({
+      mutationStore,
+      sideEffectRunStore,
+      boundary: "integration_operator_action",
+      catalogId: "productivity.trello",
+      connectionId: "conn-1",
+      actionId: "write",
+      idempotencyKey: "operator-key",
+      checkedAt: "2026-05-31T00:00:00.000Z",
+      payload: { name: "Durable card" },
+      label: "Trello card create",
+      execute: async () => ({ output: { id: "card-1", name: "Durable card" } }),
+    });
+
+    expect(executed.status).toBe("executed");
+    expect(sideEffectRunStore.markExternalCallStarted).toHaveBeenCalledWith(
+      "extfx-1",
+      undefined,
+      "2026-05-31T00:00:00.000Z",
+    );
+    expect(sideEffectRunStore.markCompleted).toHaveBeenCalledWith(
+      "extfx-1",
+      expect.objectContaining({
+        responsePayload: {
+          valueKind: "object",
+          keys: ["output"],
+        },
+        externalReferenceId: "id:card-1",
+      }),
+      "2026-05-31T00:00:00.000Z",
+    );
+
+    const failingStore = createSideEffectRunStore();
+    const failed = await runIdempotentExternalSideEffect({
+      mutationStore: {
+        ...mutationStore,
+        claim: vi.fn(() => ({
+          outcome: "claimed" as const,
+          claimKind: "new" as const,
+          record: {
+            method: "POST",
+            routePath: "external",
+            idempotencyKey: "operator-key-2",
+            actorScope: "conn-1",
+            payloadHash: "hash",
+            status: "pending" as const,
+            createdAt: "2026-05-31T00:00:00.000Z",
+            updatedAt: "2026-05-31T00:00:00.000Z",
+          },
+        })),
+      },
+      sideEffectRunStore: failingStore,
+      boundary: "integration_operator_action",
+      catalogId: "productivity.trello",
+      connectionId: "conn-1",
+      actionId: "write",
+      idempotencyKey: "operator-key-2",
+      checkedAt: "2026-05-31T00:00:00.000Z",
+      payload: { name: "Durable card" },
+      label: "Trello card create",
+      execute: async () => {
+        throw new Error("provider failed");
+      },
+    });
+
+    expect(failed.status).toBe("failed");
+    expect(failingStore.markFailure).toHaveBeenCalledWith(
+      "extfx-1",
+      {
+        status: "unknown_external_outcome",
+        errorText: "provider failed",
+      },
+      "2026-05-31T00:00:00.000Z",
     );
   });
 

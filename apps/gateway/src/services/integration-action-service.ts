@@ -9,6 +9,7 @@ import type {
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import {
   buildExternalSideEffectReplayOutput,
+  type ExternalSideEffectRunStore,
   recordAuditOnlyExternalSideEffectIntent,
   runIdempotentExternalSideEffect,
 } from "./external-side-effect-runner-service.js";
@@ -27,6 +28,7 @@ export interface IntegrationActionHost {
   publishRealtime(scope: string, channel: string, payload: Record<string, unknown>): void;
   evidenceEnvelopeService?: Pick<EvidenceEnvelopeService, "createEnvelope">;
   mutationStore?: MutationIdempotencyStore;
+  sideEffectRunStore?: ExternalSideEffectRunStore;
 }
 
 export async function invokeIntegrationConnectionAction(
@@ -128,6 +130,7 @@ async function invokeLocalBridgeAction(
   if (action.capability === "write") {
     const replayRun = await runIdempotentExternalSideEffect({
       mutationStore: host.mutationStore,
+      sideEffectRunStore: host.sideEffectRunStore,
       boundary: "integration_local_bridge_action",
       catalogId: connection.catalogId,
       connectionId: connection.connectionId,
@@ -273,6 +276,7 @@ async function invokeActivepiecesAction(
   const payload = readActivepiecesPayload(request.input);
   const replayRun = await runIdempotentExternalSideEffect({
     mutationStore: host.mutationStore,
+    sideEffectRunStore: host.sideEffectRunStore,
     boundary: "integration_operator_action",
     catalogId: connection.catalogId,
     connectionId: connection.connectionId,
@@ -405,6 +409,7 @@ async function invokeTrelloAction(
     url.searchParams.set("desc", desc);
     const replayRun = await runIdempotentExternalSideEffect({
       mutationStore: host.mutationStore,
+      sideEffectRunStore: host.sideEffectRunStore,
       boundary: "integration_operator_action",
       catalogId: connection.catalogId,
       connectionId: connection.connectionId,
@@ -538,6 +543,7 @@ async function invokeGmailAction(
     ].join("\r\n");
     const replayRun = await runIdempotentExternalSideEffect({
       mutationStore: host.mutationStore,
+      sideEffectRunStore: host.sideEffectRunStore,
       boundary: "integration_operator_action",
       catalogId: connection.catalogId,
       connectionId: connection.connectionId,

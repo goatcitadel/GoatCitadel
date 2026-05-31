@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
+  ExternalSideEffectRunRecord,
+  ExternalSideEffectRunStatus,
   IntegrationExternalWritebackEnvelope,
   IntegrationExternalWritebackResumeState,
   IntegrationExternalWritebackReplayOutcome,
@@ -7,6 +9,47 @@ import type {
 } from "@goatcitadel/contracts";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
+
+export interface ExternalSideEffectRunStore {
+  createOrGet(
+    input: {
+      workspaceId?: string;
+      boundary: string;
+      routePath: string;
+      catalogId?: string;
+      connectionId?: string;
+      actionId?: string;
+      actorScope?: string;
+      idempotencyKey: string;
+      payloadHash: string;
+      status?: ExternalSideEffectRunStatus;
+      replayOutcome?: IntegrationExternalWritebackReplayOutcome;
+      replayAttempt?: ExternalSideEffectClaimResult["replayAttempt"];
+      requestPayload?: Record<string, unknown>;
+    },
+    now?: string,
+  ): ExternalSideEffectRunRecord;
+  markExternalCallStarted(runId: string, input?: { attemptCount?: number }, now?: string): ExternalSideEffectRunRecord;
+  markCompleted(
+    runId: string,
+    input?: {
+      replayOutcome?: IntegrationExternalWritebackReplayOutcome;
+      responsePayload?: Record<string, unknown>;
+      externalReferenceId?: string;
+      envelopeId?: string;
+    },
+    now?: string,
+  ): ExternalSideEffectRunRecord;
+  markFailure(
+    runId: string,
+    input: {
+      status: "failed_before_boundary" | "unknown_external_outcome";
+      errorText: string;
+      responsePayload?: Record<string, unknown>;
+    },
+    now?: string,
+  ): ExternalSideEffectRunRecord;
+}
 
 export interface ExternalSideEffectIntentInput {
   evidenceEnvelopeService?: Pick<EvidenceEnvelopeService, "createEnvelope">;
@@ -104,6 +147,8 @@ export function recordAuditOnlyExternalSideEffectIntent(
 
 export interface ExternalSideEffectClaimInput {
   mutationStore?: MutationIdempotencyStore;
+  sideEffectRunStore?: ExternalSideEffectRunStore;
+  workspaceId?: string;
   boundary: string;
   catalogId?: string;
   connectionId?: string;
@@ -124,6 +169,7 @@ export interface ExternalSideEffectClaimResult {
   payloadHash: string;
   actorScope: string;
   routePath: string;
+  sideEffectRunId?: string;
 }
 
 export interface IdempotentExternalSideEffectRunInput<TValue> extends ExternalSideEffectClaimInput {
@@ -167,7 +213,7 @@ export function claimIdempotentExternalSideEffect(input: ExternalSideEffectClaim
   ].join(":");
 
   if (!input.mutationStore) {
-    return {
+    return recordExternalSideEffectRun(input, {
       replayPolicy: "idempotent_external",
       replayOutcome: "idempotency_unavailable",
       replayAttempt: "unavailable",
@@ -177,7 +223,7 @@ export function claimIdempotentExternalSideEffect(input: ExternalSideEffectClaim
       payloadHash,
       actorScope,
       routePath,
-    };
+    });
   }
 
   const claim = input.mutationStore.claim({
@@ -188,7 +234,7 @@ export function claimIdempotentExternalSideEffect(input: ExternalSideEffectClaim
     payloadHash,
     now: input.checkedAt,
   });
-  return {
+  return recordExternalSideEffectRun(input, {
     replayPolicy: "idempotent_external",
     replayOutcome: claim.outcome,
     replayAttempt: claim.outcome === "claimed" ? (claim.claimKind ?? "new") : "blocked",
@@ -198,7 +244,7 @@ export function claimIdempotentExternalSideEffect(input: ExternalSideEffectClaim
     payloadHash,
     actorScope,
     routePath,
-  };
+  });
 }
 
 export async function runIdempotentExternalSideEffect<TValue>(
@@ -216,8 +262,10 @@ export async function runIdempotentExternalSideEffect<TValue>(
   }
 
   try {
+    markExternalSideEffectRunStarted(input.sideEffectRunStore, claim, input.checkedAt);
     const value = await input.execute(claim);
     markIdempotentExternalSideEffectCompleted(input.mutationStore, claim, input.checkedAt);
+    markExternalSideEffectRunCompleted(input.sideEffectRunStore, claim, value, input.checkedAt);
     return {
       status: "executed",
       claim: {
@@ -229,6 +277,7 @@ export async function runIdempotentExternalSideEffect<TValue>(
     };
   } catch (error) {
     markIdempotentExternalSideEffectFailed(input.mutationStore, claim, input.checkedAt);
+    markExternalSideEffectRunFailed(input.sideEffectRunStore, claim, error, input.checkedAt);
     const failedClaim = {
       ...claim,
       resumable: false,
@@ -254,6 +303,7 @@ export function buildExternalSideEffectReplayOutput(
     replayAttempt: claim.replayAttempt,
     resumable: claim.resumable,
     resumeState: claim.resumeState,
+    ...(claim.sideEffectRunId ? { sideEffectRunId: claim.sideEffectRunId } : {}),
     idempotencyKey: claim.idempotencyKey,
     payloadHash: claim.payloadHash,
   };
@@ -275,6 +325,132 @@ function mapExternalSideEffectResumeState(
     return "idempotency_unavailable";
   }
   return "not_resumable";
+}
+
+function recordExternalSideEffectRun(
+  input: ExternalSideEffectClaimInput,
+  claim: ExternalSideEffectClaimResult,
+): ExternalSideEffectClaimResult {
+  if (!input.sideEffectRunStore) {
+    return claim;
+  }
+  const run = input.sideEffectRunStore.createOrGet(
+    {
+      workspaceId: input.workspaceId,
+      boundary: input.boundary,
+      routePath: claim.routePath,
+      catalogId: input.catalogId,
+      connectionId: input.connectionId,
+      actionId: input.actionId,
+      actorScope: claim.actorScope,
+      idempotencyKey: claim.idempotencyKey,
+      payloadHash: claim.payloadHash,
+      status: externalRunStatusForReplayOutcome(claim.replayOutcome),
+      replayOutcome: claim.replayOutcome,
+      replayAttempt: claim.replayAttempt,
+      requestPayload: summarizeExternalSideEffectPayload(input.payload),
+    },
+    input.checkedAt,
+  );
+  return {
+    ...claim,
+    sideEffectRunId: run.runId,
+  };
+}
+
+function externalRunStatusForReplayOutcome(
+  outcome: IntegrationExternalWritebackReplayOutcome,
+): ExternalSideEffectRunStatus {
+  if (outcome === "duplicate") {
+    return "blocked_duplicate";
+  }
+  if (outcome === "payload_mismatch") {
+    return "payload_mismatch";
+  }
+  if (outcome === "idempotency_unavailable") {
+    return "idempotency_unavailable";
+  }
+  return "claimed_not_sent";
+}
+
+function markExternalSideEffectRunStarted(
+  store: ExternalSideEffectRunStore | undefined,
+  claim: ExternalSideEffectClaimResult,
+  checkedAt: string,
+): void {
+  if (claim.sideEffectRunId) {
+    store?.markExternalCallStarted(claim.sideEffectRunId, undefined, checkedAt);
+  }
+}
+
+function markExternalSideEffectRunCompleted(
+  store: ExternalSideEffectRunStore | undefined,
+  claim: ExternalSideEffectClaimResult,
+  value: unknown,
+  checkedAt: string,
+): void {
+  if (claim.sideEffectRunId) {
+    store?.markCompleted(
+      claim.sideEffectRunId,
+      {
+        replayOutcome: claim.replayOutcome,
+        responsePayload: summarizeExternalSideEffectPayload(value),
+        externalReferenceId: readExternalReferenceId(value),
+      },
+      checkedAt,
+    );
+  }
+}
+
+function markExternalSideEffectRunFailed(
+  store: ExternalSideEffectRunStore | undefined,
+  claim: ExternalSideEffectClaimResult,
+  error: unknown,
+  checkedAt: string,
+): void {
+  if (claim.sideEffectRunId) {
+    store?.markFailure(
+      claim.sideEffectRunId,
+      {
+        status: "unknown_external_outcome",
+        errorText: error instanceof Error ? error.message : "external_side_effect_failed",
+      },
+      checkedAt,
+    );
+  }
+}
+
+function summarizeExternalSideEffectPayload(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    return { valueKind: typeof value };
+  }
+  if (Array.isArray(value)) {
+    return { valueKind: "array", itemCount: value.length };
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    valueKind: "object",
+    keys: Object.keys(record).sort(),
+  };
+}
+
+function readExternalReferenceId(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const output =
+    record.output && typeof record.output === "object" && !Array.isArray(record.output) ? record.output : record;
+  if (!output || typeof output !== "object" || Array.isArray(output)) {
+    return undefined;
+  }
+  for (const key of ["id", "messageId", "threadId", "url", "webUrl"]) {
+    const field = (output as Record<string, unknown>)[key];
+    if (typeof field === "string" && field.trim()) {
+      return `${key}:${field.trim().slice(0, 128)}`;
+    }
+  }
+  return undefined;
 }
 
 export function markIdempotentExternalSideEffectCompleted(

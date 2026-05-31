@@ -131,6 +131,7 @@ export function composeIntegrationChannelRouteDependencies(
           publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
           evidenceEnvelopeService: gateway.evidenceEnvelopeService,
           mutationStore: gateway.mutationIdempotencyStore,
+          sideEffectRunStore: gateway.storage.externalSideEffectRuns,
         },
         connectionId,
         actionId,
