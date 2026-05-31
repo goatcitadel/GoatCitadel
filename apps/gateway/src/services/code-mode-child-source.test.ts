@@ -68,6 +68,37 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
     expect(close.signal).toBeNull();
   });
 
+  it("supports stdio JSON-RPC transport without mixing protocol and console stdout", async () => {
+    const child = await spawnHarness({ transport: "stdio_jsonrpc" });
+
+    child.stdin?.write(
+      `${JSON.stringify({
+        jsonrpc: "2.0",
+        id: "run-stdio-transport",
+        method: "run.execute",
+        params: {
+          runId: "run-stdio-transport",
+          source: `
+            console.log("guest log on stderr");
+            return { ok: true };
+          `,
+          input: {},
+          wrapperManifest: { wrappers: [] },
+          deadlineAt: Date.now() + 2000,
+        },
+      })}\n`,
+    );
+
+    const response = await waitForStdioChildMessage(
+      child,
+      (message) => isResponseMessage(message) && message.id === "run-stdio-transport",
+    );
+    const close = await waitForClose(child);
+
+    expect(response.result).toMatchObject({ ok: true });
+    expect(close.code).toBe(0);
+  });
+
   it("rejects oversized inbound IPC messages with a structured error", async () => {
     const child = await spawnHarness();
 
@@ -342,11 +373,15 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
   });
 });
 
-async function spawnHarness(): Promise<ChildProcess> {
+async function spawnHarness(options: { transport?: "node_ipc" | "stdio_jsonrpc" } = {}): Promise<ChildProcess> {
   const harnessPath = await createHarnessPath();
   const child = spawn(process.execPath, [harnessPath], {
     shell: false,
-    stdio: ["ignore", "pipe", "pipe", "ipc"],
+    stdio: options.transport === "stdio_jsonrpc" ? ["pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe", "ipc"],
+    env: {
+      ...process.env,
+      ...(options.transport === "stdio_jsonrpc" ? { GOATCITADEL_CODE_MODE_TRANSPORT: "stdio_jsonrpc" } : {}),
+    },
   });
   CHILD_CLOSES.set(
     child,
@@ -355,6 +390,59 @@ async function spawnHarness(): Promise<ChildProcess> {
     }),
   );
   return child;
+}
+
+function waitForStdioChildMessage(
+  child: ChildProcess,
+  predicate: (message: JsonRpcMessage) => boolean,
+  timeoutMs = 5000,
+): Promise<JsonRpcMessage> {
+  return new Promise((resolve, reject) => {
+    let buffer = "";
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error("Timed out waiting for Code Mode stdio child message."));
+    }, timeoutMs);
+
+    const onData = (chunk: Buffer | string) => {
+      buffer += String(chunk);
+      let newlineIndex = buffer.indexOf("\n");
+      while (newlineIndex >= 0) {
+        const line = buffer.slice(0, newlineIndex).trim();
+        buffer = buffer.slice(newlineIndex + 1);
+        if (line.length > 0) {
+          const parsed = JSON.parse(line) as unknown;
+          if (isJsonRpcMessage(parsed) && predicate(parsed)) {
+            cleanup();
+            resolve(parsed);
+            return;
+          }
+        }
+        newlineIndex = buffer.indexOf("\n");
+      }
+    };
+
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+
+    const onClose = () => {
+      cleanup();
+      reject(new Error("Code Mode stdio child closed before emitting the expected message."));
+    };
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      child.stdout?.off("data", onData);
+      child.off("error", onError);
+      child.off("close", onClose);
+    };
+
+    child.stdout?.on("data", onData);
+    child.once("error", onError);
+    child.once("close", onClose);
+  });
 }
 
 function waitForChildMessage(

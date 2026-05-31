@@ -1,5 +1,6 @@
 export const CODE_MODE_CHILD_SOURCE = String.raw`import vm from "node:vm";
 const MAX_MESSAGE_BYTES = 131072;
+const TRANSPORT = process.env.GOATCITADEL_CODE_MODE_TRANSPORT === "stdio_jsonrpc" ? "stdio_jsonrpc" : "node_ipc";
 const pendingRpc = new Map();
 let currentRunPromise = null;
 let inFlightWrapperCall = null;
@@ -21,6 +22,19 @@ function createMessageTooLargeError(details = {}) {
 }
 
 function sendRpc(message) {
+  if (TRANSPORT === "stdio_jsonrpc") {
+    const bytes = encodeMessageBytes(message);
+    if (bytes > MAX_MESSAGE_BYTES) {
+      throw createMessageTooLargeError({
+        bytes,
+        direction: "child_to_parent",
+        id: typeof message?.id === "string" ? message.id : undefined,
+        method: typeof message?.method === "string" ? message.method : undefined,
+      });
+    }
+    process.stdout.write(JSON.stringify(message) + "\n");
+    return;
+  }
   if (!process.send) {
     throw new Error("Code Mode IPC channel is unavailable.");
   }
@@ -70,7 +84,7 @@ function sendRpcBestEffort(message) {
 }
 
 function closeAfterRun() {
-  if (typeof process.disconnect === "function" && process.connected) {
+  if (TRANSPORT === "node_ipc" && typeof process.disconnect === "function" && process.connected) {
     process.disconnect();
   }
   setTimeout(() => process.exit(0), 100);
@@ -117,8 +131,8 @@ function writeConsoleLine(stream, args) {
 }
 
 const consoleFacade = Object.freeze({
-  log: (...args) => writeConsoleLine(process.stdout, args),
-  info: (...args) => writeConsoleLine(process.stdout, args),
+  log: (...args) => writeConsoleLine(TRANSPORT === "stdio_jsonrpc" ? process.stderr : process.stdout, args),
+  info: (...args) => writeConsoleLine(TRANSPORT === "stdio_jsonrpc" ? process.stderr : process.stdout, args),
   warn: (...args) => writeConsoleLine(process.stderr, args),
   error: (...args) => writeConsoleLine(process.stderr, args),
 });
@@ -354,16 +368,7 @@ function rejectPendingRpc(error) {
   pendingRpc.clear();
 }
 
-process.on("disconnect", () => {
-  cancelledReason = "Parent IPC channel disconnected.";
-  rejectPendingRpc({
-    code: "IPC_DISCONNECTED",
-    message: cancelledReason,
-  });
-  process.exit(0);
-});
-
-process.on("message", async (message) => {
+async function handleParentMessage(message) {
   if (!message || typeof message !== "object") {
     return;
   }
@@ -440,5 +445,54 @@ process.on("message", async (message) => {
     .finally(() => {
       currentRunPromise = null;
     });
-});
+}
+
+if (TRANSPORT === "node_ipc") {
+  process.on("disconnect", () => {
+    cancelledReason = "Parent IPC channel disconnected.";
+    rejectPendingRpc({
+      code: "IPC_DISCONNECTED",
+      message: cancelledReason,
+    });
+    process.exit(0);
+  });
+
+  process.on("message", (message) => {
+    void handleParentMessage(message);
+  });
+} else {
+  let stdinBuffer = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => {
+    stdinBuffer += chunk;
+    let newlineIndex = stdinBuffer.indexOf("\n");
+    while (newlineIndex >= 0) {
+      const line = stdinBuffer.slice(0, newlineIndex).trim();
+      stdinBuffer = stdinBuffer.slice(newlineIndex + 1);
+      if (line.length > 0) {
+        try {
+          void handleParentMessage(JSON.parse(line));
+        } catch (error) {
+          sendRpcBestEffort({
+            jsonrpc: "2.0",
+            id: null,
+            error: {
+              code: "INVALID_STDIN_JSON",
+              message: error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
+      }
+      newlineIndex = stdinBuffer.indexOf("\n");
+    }
+  });
+  process.stdin.on("end", () => {
+    cancelledReason = "Parent stdio channel closed.";
+    rejectPendingRpc({
+      code: "STDIO_DISCONNECTED",
+      message: cancelledReason,
+    });
+    process.exit(0);
+  });
+}
 `;

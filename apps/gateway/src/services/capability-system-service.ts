@@ -2057,11 +2057,6 @@ export class CapabilitySystemService {
         heapMb: CODE_MODE_HEAP_MB,
         env: createMinimalSyntheticEnv(),
       });
-      if (preparedSandbox.launch.transport !== "node_ipc") {
-        throw new CodeModeExecutionBackendUnavailableError(
-          `Code Mode execution transport ${preparedSandbox.launch.transport} is not supported by this runner yet.`,
-        );
-      }
     } catch (error) {
       if (error instanceof CodeModeExecutionBackendUnavailableError) {
         throw error;
@@ -2072,15 +2067,17 @@ export class CapabilitySystemService {
       );
     }
 
+    const launchTransport = preparedSandbox.launch.transport;
     const child = spawn(preparedSandbox.launch.executable, preparedSandbox.launch.args, {
       shell: preparedSandbox.launch.shell,
       cwd: preparedSandbox.launch.cwd,
       env: preparedSandbox.launch.env,
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
+      stdio: launchTransport === "node_ipc" ? ["ignore", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe"],
     });
 
     const stdout = createBoundedCapture();
     const stderr = createBoundedCapture();
+    let stdioJsonBuffer = "";
     const runAbortController = new AbortController();
     const abortChild = (reason?: string) => {
       const message = reason ?? `Code Mode run ${input.runId} was aborted.`;
@@ -2100,7 +2097,6 @@ export class CapabilitySystemService {
         }
       }, 200).unref();
     };
-    child.stdout?.on("data", (chunk: Buffer | string) => stdout.append(chunk));
     child.stderr?.on("data", (chunk: Buffer | string) => stderr.append(chunk));
 
     const pendingRequests = new Map<
@@ -2113,6 +2109,19 @@ export class CapabilitySystemService {
     const activeWrapperTasks = new Set<Promise<void>>();
 
     const sendMessageToChild = (message: Record<string, unknown>): boolean => {
+      if (launchTransport === "stdio_jsonrpc") {
+        if (!child.stdin?.writable) {
+          return false;
+        }
+        try {
+          child.stdin.write(`${JSON.stringify(message)}\n`, () => {
+            // The child may exit while an async wrapper call is finishing.
+          });
+          return true;
+        } catch {
+          return false;
+        }
+      }
       if (!child.connected) {
         return false;
       }
@@ -2129,7 +2138,10 @@ export class CapabilitySystemService {
     };
 
     const replyToChild = (message: Record<string, unknown>): boolean => {
-      if (!child.connected) {
+      if (launchTransport === "node_ipc" && !child.connected) {
+        return false;
+      }
+      if (launchTransport === "stdio_jsonrpc" && !child.stdin?.writable) {
         return false;
       }
       const bytes = Buffer.byteLength(JSON.stringify(message), "utf8");
@@ -2153,7 +2165,7 @@ export class CapabilitySystemService {
       pendingRequests.clear();
     };
 
-    child.on("message", (message: unknown) => {
+    const handleChildMessage = (message: unknown) => {
       if (!isRecord(message)) {
         return;
       }
@@ -2253,7 +2265,33 @@ export class CapabilitySystemService {
       })();
       activeWrapperTasks.add(wrapperTask);
       void wrapperTask.finally(() => activeWrapperTasks.delete(wrapperTask));
-    });
+    };
+
+    if (launchTransport === "node_ipc") {
+      child.stdout?.on("data", (chunk: Buffer | string) => stdout.append(chunk));
+      child.on("message", handleChildMessage);
+    } else {
+      child.stdout?.on("data", (chunk: Buffer | string) => {
+        stdioJsonBuffer += String(chunk);
+        let newlineIndex = stdioJsonBuffer.indexOf("\n");
+        while (newlineIndex >= 0) {
+          const line = stdioJsonBuffer.slice(0, newlineIndex).trim();
+          stdioJsonBuffer = stdioJsonBuffer.slice(newlineIndex + 1);
+          if (line.length > 0) {
+            try {
+              handleChildMessage(JSON.parse(line));
+            } catch (error) {
+              settlePending({
+                code: "INVALID_STDIO_JSON",
+                message: error instanceof Error ? error.message : String(error),
+              });
+              child.kill();
+            }
+          }
+          newlineIndex = stdioJsonBuffer.indexOf("\n");
+        }
+      });
+    }
 
     const exitPromise = new Promise<void>((resolve, reject) => {
       child.once("error", reject);
