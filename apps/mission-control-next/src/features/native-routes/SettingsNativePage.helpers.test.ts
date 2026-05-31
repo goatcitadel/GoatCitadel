@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyIntegrationDefaults,
+  buildFirstRunEvidenceSnapshot,
   buildChatGptOAuthProviderDraft,
   buildProviderEditorDraft,
   collectDefinitionFieldHints,
@@ -301,6 +302,58 @@ describe("SettingsNativePage helpers", () => {
         ],
       }),
     ).toBe("proof-complete");
+
+    expect(
+      buildFirstRunEvidenceSnapshot(
+        [
+          {
+            taskId: "task-1",
+            runId: "run-1",
+            title: "First run",
+            taskStatus: "done",
+            status: "completed",
+            updatedAt: "2026-05-30T00:00:00.000Z",
+          } as any,
+        ],
+        [
+          {
+            envelopeId: "env-unrelated",
+            eventKind: "memory_write",
+            contentHash: "hash",
+            payloadHash: "payload",
+            toolCallHashes: [],
+            memoryLineage: [],
+            signatureStatus: "unsigned_local",
+            metadata: {},
+            createdAt: "2026-05-30T00:00:00.000Z",
+          },
+          {
+            envelopeId: "env-other-run",
+            eventKind: "durable_checkpoint",
+            runId: "run-other",
+            contentHash: "hash",
+            payloadHash: "payload",
+            toolCallHashes: [],
+            memoryLineage: [],
+            signatureStatus: "unsigned_local",
+            metadata: {},
+            createdAt: "2026-05-30T00:00:00.000Z",
+          },
+          {
+            envelopeId: "env-run-1",
+            eventKind: "durable_checkpoint",
+            runId: "run-1",
+            contentHash: "hash",
+            payloadHash: "payload",
+            toolCallHashes: [],
+            memoryLineage: [],
+            signatureStatus: "unsigned_local",
+            metadata: {},
+            createdAt: "2026-05-30T00:00:00.000Z",
+          },
+        ] as any,
+      ).evidenceEnvelopes.map((envelope) => envelope.envelopeId),
+    ).toEqual(["env-run-1"]);
   });
 
   it("orders ecosystem proof lanes without over-claiming blocked parity", () => {

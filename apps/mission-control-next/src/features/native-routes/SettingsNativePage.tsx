@@ -275,6 +275,22 @@ export type FirstRunEvidenceSnapshot = {
   evidenceEnvelopes: EvidenceEnvelope[];
 };
 
+export function buildFirstRunEvidenceSnapshot(
+  recentRuns: AgenticRunListItem[],
+  evidenceEnvelopes: EvidenceEnvelope[],
+): FirstRunEvidenceSnapshot {
+  const runIds = new Set(recentRuns.map((run) => run.runId).filter((runId): runId is string => Boolean(runId)));
+  return {
+    recentRuns,
+    evidenceEnvelopes: evidenceEnvelopes.filter((envelope) => {
+      if (!envelope.runId) {
+        return false;
+      }
+      return runIds.size === 0 || runIds.has(envelope.runId);
+    }),
+  };
+}
+
 export function SettingsNativePage(props: SettingsNativePageProps) {
   const section = props.route.section ? String(props.route.section) : "general";
 
@@ -637,10 +653,7 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
       ...onboarding,
       runtimeSettings,
       demoState,
-      firstRunEvidence: {
-        recentRuns: agenticRuns.items,
-        evidenceEnvelopes: evidenceEnvelopes.items,
-      },
+      firstRunEvidence: buildFirstRunEvidenceSnapshot(agenticRuns.items, evidenceEnvelopes.items),
     } satisfies OnboardingPageState;
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load);
