@@ -6,6 +6,9 @@ import type {
   SkillListItem,
   AutomationRecipeDraftRequest,
   AutomationRecipeDraftResponse,
+  WorkflowRecipeActivepiecesTemplate,
+  WorkflowRecipeActivepiecesTemplateExportRequest,
+  WorkflowRecipeActivepiecesTemplateExportResponse,
   WorkflowRecipeAgent,
   WorkflowRecipeApproval,
   WorkflowRecipeLimits,
@@ -100,6 +103,50 @@ export class WorkflowRecipeService {
       missingCapabilities: [...preview.missingSkills, ...preview.missingTools],
     };
   }
+
+  public exportActivepiecesTemplate(
+    input: WorkflowRecipeActivepiecesTemplateExportRequest,
+    generatedAt = new Date().toISOString(),
+  ): WorkflowRecipeActivepiecesTemplateExportResponse {
+    const preview = this.previewRecipe(input);
+    const activepiecesTemplate = buildActivepiecesTemplate(preview, input);
+    const filename = `${slugify(activepiecesTemplate.name)}-activepieces-template.json`;
+    const posture = {
+      readOnly: true,
+      sideEffectPosture: "not_executed",
+      importRequired: true,
+      execution: "operator_import_required",
+    } as const;
+    const payload = {
+      version: "workflow_recipe.activepieces_template_export.v1" as const,
+      generatedAt,
+      filename,
+      contentType: "application/json" as const,
+      posture,
+      recipe: preview.recipe,
+      plan: preview.plan,
+      warnings: [
+        ...preview.warnings,
+        "Activepieces template export is a read-only planning artifact; it does not create a flow or trigger a webhook.",
+      ],
+      requiredApprovals: preview.requiredApprovals,
+      missingTools: preview.missingTools,
+      missingSkills: preview.missingSkills,
+      estimatedLimits: preview.estimatedLimits,
+      activepiecesTemplate,
+    };
+    return {
+      ...preview,
+      warnings: payload.warnings,
+      version: payload.version,
+      generatedAt,
+      filename,
+      contentType: payload.contentType,
+      activepiecesTemplate,
+      posture,
+      content: JSON.stringify(payload, null, 2),
+    };
+  }
 }
 
 function buildAutomationDraftRecipe(input: AutomationRecipeDraftRequest): WorkflowRecipeRecord {
@@ -191,6 +238,39 @@ function buildAutomationProofChecklist(input: AutomationRecipeDraftRequest): str
     "Run once manually and inspect artifacts.",
     "Only then create or enable a recurring automation.",
   ];
+}
+
+function buildActivepiecesTemplate(
+  preview: WorkflowRecipePreviewResponse,
+  input: WorkflowRecipeActivepiecesTemplateExportRequest,
+): WorkflowRecipeActivepiecesTemplate {
+  const recipe = preview.recipe;
+  const flowName = optionalText(input.flowName) ?? `${recipe.name} - GoatCitadel review`;
+  const webhookPath = optionalText(input.webhookPath) ?? `/goatcitadel/${slugify(recipe.name)}`;
+  return {
+    name: flowName,
+    description: recipe.goal,
+    trigger: {
+      type: "webhook",
+      path: webhookPath,
+      method: "POST",
+    },
+    steps: recipe.steps.map((step) => ({
+      id: step.id,
+      displayName: step.title,
+      agent: step.agent,
+      prompt: step.prompt,
+      requiresApproval: preview.requiredApprovals.includes(step.id) || step.requiresApproval === true,
+      dependsOn: step.dependsOn ?? [],
+    })),
+    metadata: {
+      source: "goatcitadel.workflow_recipe",
+      planId: preview.plan.planId,
+      approvalMode: preview.requiredApprovals.length > 0 ? "human_in_the_loop" : "none",
+      ...(recipe.scheduleIntent ? { scheduleIntent: recipe.scheduleIntent } : {}),
+      ...(recipe.channelIntent ? { channelIntent: recipe.channelIntent } : {}),
+    },
+  };
 }
 
 function parseRecipeInput(input: WorkflowRecipePreviewRequest): unknown {

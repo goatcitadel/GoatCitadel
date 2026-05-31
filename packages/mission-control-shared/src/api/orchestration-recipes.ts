@@ -4,6 +4,8 @@ import type {
   WorkflowRecipePreviewRequest,
   WorkflowRecipePreviewResponse,
   WorkflowRecipeTemplatesResponse,
+  WorkflowRecipeActivepiecesTemplateExportRequest,
+  WorkflowRecipeActivepiecesTemplateExportResponse,
   AutomationRecipeDraftRequest,
   AutomationRecipeDraftResponse,
 } from "@goatcitadel/contracts";
@@ -38,4 +40,16 @@ export async function draftAutomationRecipe(
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export async function exportActivepiecesWorkflowTemplate(
+  input: WorkflowRecipeActivepiecesTemplateExportRequest,
+): Promise<WorkflowRecipeActivepiecesTemplateExportResponse> {
+  return request<WorkflowRecipeActivepiecesTemplateExportResponse>(
+    "/api/v1/orchestration/recipes/activepieces-template/export",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
 }

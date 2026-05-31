@@ -136,6 +136,62 @@ limits:
       ]),
     );
   });
+
+  it("exports Activepieces webhook templates as read-only planning artifacts", () => {
+    const createOrchestrationPlan = vi.fn();
+    const service = createService(createOrchestrationPlan);
+
+    const exported = service.exportActivepiecesTemplate(
+      {
+        flowName: "GoatCitadel provider spend review",
+        webhookPath: "/goatcitadel/provider-spend-review",
+        recipe: {
+          name: "Provider spend review",
+          goal: "Review provider spend and draft an operator note.",
+          process: "sequential",
+          agents: [{ id: "analyst", role: "Analyst" }],
+          steps: [
+            {
+              id: "review-spend",
+              title: "Review spend",
+              agent: "analyst",
+              prompt: "Review provider spend evidence.",
+              requiresApproval: true,
+            },
+          ],
+          scheduleIntent: "weekday 9am",
+        },
+      },
+      "2026-05-31T12:00:00.000Z",
+    );
+
+    expect(createOrchestrationPlan).not.toHaveBeenCalled();
+    expect(exported.version).toBe("workflow_recipe.activepieces_template_export.v1");
+    expect(exported.posture).toMatchObject({
+      readOnly: true,
+      sideEffectPosture: "not_executed",
+      importRequired: true,
+    });
+    expect(exported.activepiecesTemplate).toMatchObject({
+      name: "GoatCitadel provider spend review",
+      trigger: { type: "webhook", path: "/goatcitadel/provider-spend-review", method: "POST" },
+      metadata: {
+        source: "goatcitadel.workflow_recipe",
+        approvalMode: "human_in_the_loop",
+        scheduleIntent: "weekday 9am",
+      },
+    });
+    expect(exported.activepiecesTemplate.steps[0]).toMatchObject({
+      id: "review-spend",
+      requiresApproval: true,
+    });
+    expect(JSON.parse(exported.content)).toMatchObject({
+      version: "workflow_recipe.activepieces_template_export.v1",
+      activepiecesTemplate: { name: "GoatCitadel provider spend review" },
+      posture: { sideEffectPosture: "not_executed" },
+    });
+    expect(exported.warnings.join(" ")).toContain("does not create a flow or trigger a webhook");
+  });
 });
 
 function createService(createOrchestrationPlan = vi.fn()) {

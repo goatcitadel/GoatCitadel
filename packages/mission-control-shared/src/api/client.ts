@@ -671,6 +671,7 @@ export type {
 export {
   createWorkflowRecipePlan,
   draftAutomationRecipe,
+  exportActivepiecesWorkflowTemplate,
   fetchWorkflowRecipeTemplates,
   previewWorkflowRecipe,
 } from "./orchestration-recipes.js";

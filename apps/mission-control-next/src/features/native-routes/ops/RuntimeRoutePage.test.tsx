@@ -23,6 +23,7 @@ import {
 const runtimeApiMocks = vi.hoisted(() => ({
   createCronJob: vi.fn(),
   draftAutomationRecipe: vi.fn(),
+  exportActivepiecesWorkflowTemplate: vi.fn(),
 }));
 
 const reviewReadinessApiMocks = vi.hoisted(() => ({
@@ -60,6 +61,7 @@ const runtimeSnapshotOverrides = vi.hoisted(() => ({
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   createCronJob: runtimeApiMocks.createCronJob,
   draftAutomationRecipe: runtimeApiMocks.draftAutomationRecipe,
+  exportActivepiecesWorkflowTemplate: runtimeApiMocks.exportActivepiecesWorkflowTemplate,
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/review-readiness", () => ({
@@ -382,6 +384,7 @@ describe("RuntimeRoutePage", () => {
     runtimeSnapshotOverrides.notice = undefined;
     runtimeApiMocks.createCronJob.mockReset();
     runtimeApiMocks.draftAutomationRecipe.mockReset();
+    runtimeApiMocks.exportActivepiecesWorkflowTemplate.mockReset();
     reviewReadinessApiMocks.fetchReviewReadiness.mockClear();
     runtimeSnapshotOverrides.reload.mockClear();
     runtimeSnapshotOverrides.runDaemonAction.mockClear();
@@ -575,6 +578,49 @@ describe("RuntimeRoutePage", () => {
       proofChecklist: ["Review generated recipe", "Validate schedule intent", "Confirm no cron job was created"],
       missingCapabilities: [],
     });
+    runtimeApiMocks.exportActivepiecesWorkflowTemplate.mockResolvedValue({
+      version: "workflow_recipe.activepieces_template_export.v1",
+      generatedAt: "2026-05-31T12:00:00.000Z",
+      filename: "provider-spend-review-activepieces-template.json",
+      contentType: "application/json",
+      content: '{"version":"workflow_recipe.activepieces_template_export.v1"}',
+      recipe: {
+        name: "Provider spend review automation",
+        goal: "Review provider spend and prepare an operator note.",
+        process: "sequential",
+        agents: [],
+        steps: [],
+      },
+      plan: { planId: "recipe-provider-spend-review" },
+      warnings: [],
+      requiredApprovals: [],
+      missingTools: [],
+      missingSkills: [],
+      estimatedLimits: { maxIterations: 2, maxRuntimeMinutes: 20, maxCostUsd: 1 },
+      activepiecesTemplate: {
+        name: "Provider spend review automation - GoatCitadel review",
+        description: "Review provider spend and prepare an operator note.",
+        trigger: { type: "webhook", path: "/goatcitadel/provider-spend-review", method: "POST" },
+        steps: [],
+        metadata: {
+          source: "goatcitadel.workflow_recipe",
+          planId: "recipe-provider-spend-review",
+          approvalMode: "none",
+        },
+      },
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "not_executed",
+        importRequired: true,
+        execution: "operator_import_required",
+      },
+    });
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: vi.fn().mockResolvedValue(undefined),
+      },
+    });
     let renderer: ReactTestRenderer | null = null;
 
     await act(async () => {
@@ -624,6 +670,21 @@ describe("RuntimeRoutePage", () => {
     expect(collectText(renderer!.root)).toContain("Automation recipe drafted. No cron job was created.");
     expect(collectText(renderer!.root)).toContain("Provider spend review automation");
     expect(collectText(renderer!.root)).toContain("Confirm no cron job was created");
+
+    await act(async () => {
+      findButton(renderer!.root, "Copy Activepieces template").props.onClick();
+    });
+
+    expect(runtimeApiMocks.exportActivepiecesWorkflowTemplate).toHaveBeenCalledWith({
+      recipe: expect.objectContaining({ name: "Provider spend review automation" }),
+    });
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      '{"version":"workflow_recipe.activepieces_template_export.v1"}',
+    );
+    expect(collectText(renderer!.root)).toContain(
+      "Copied Activepieces template export provider-spend-review-activepieces-template.json.",
+    );
+    expect(collectText(renderer!.root)).toContain("No webhook trigger");
   });
 
   it("surfaces schedule creation failures without clearing the draft", async () => {

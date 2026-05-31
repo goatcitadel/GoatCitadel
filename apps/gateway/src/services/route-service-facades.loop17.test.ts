@@ -175,6 +175,7 @@ describe("route service facades", () => {
       "approvePhase",
       "createOrchestrationPlan",
       "createPlanFromRecipe",
+      "exportActivepiecesTemplate",
       "getRun",
       "listRecipeTemplates",
       "listRunCheckpoints",
@@ -194,6 +195,10 @@ describe("route service facades", () => {
     });
     await expect(service.createPlanFromRecipe({ recipeId: "recipe-1" } as never)).resolves.toEqual({
       method: "createPlanFromRecipe",
+      args: [{ recipeId: "recipe-1" }],
+    });
+    expect(service.exportActivepiecesTemplate({ recipeId: "recipe-1" } as never)).toEqual({
+      method: "exportActivepiecesTemplate",
       args: [{ recipeId: "recipe-1" }],
     });
     expect(service.listRecipeTemplates()).toEqual({ method: "listRecipeTemplates", args: [] });

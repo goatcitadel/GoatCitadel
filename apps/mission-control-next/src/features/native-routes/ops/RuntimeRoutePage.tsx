@@ -1,8 +1,16 @@
 /* eslint-disable max-lines -- RuntimeRoutePage co-locates Ops route panels while native route extraction continues. */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import type { AutomationRecipeDraftResponse, ReviewReadinessSummary } from "@goatcitadel/contracts";
-import { createCronJob, draftAutomationRecipe } from "@goatcitadel/mission-control-shared/api/client";
+import type {
+  AutomationRecipeDraftResponse,
+  ReviewReadinessSummary,
+  WorkflowRecipeActivepiecesTemplateExportResponse,
+} from "@goatcitadel/contracts";
+import {
+  createCronJob,
+  draftAutomationRecipe,
+  exportActivepiecesWorkflowTemplate,
+} from "@goatcitadel/mission-control-shared/api/client";
 import { fetchReviewReadiness } from "@goatcitadel/mission-control-shared/api/review-readiness";
 import { EmptyState, StatusChip, ThreePartChip, type ChipTone } from "../primitives";
 import { useOpsRuntimeSnapshot } from "@goatcitadel/mission-control-shared/hooks/useOpsRuntimeSnapshot";
@@ -72,6 +80,9 @@ export function RuntimeRoutePage({
     constraints: "",
   });
   const [automationPreview, setAutomationPreview] = useState<AutomationRecipeDraftResponse | null>(null);
+  const [automationTemplateExport, setAutomationTemplateExport] =
+    useState<WorkflowRecipeActivepiecesTemplateExportResponse | null>(null);
+  const [automationTemplateExporting, setAutomationTemplateExporting] = useState(false);
   const [automationBusy, setAutomationBusy] = useState(false);
   const [automationNotice, setAutomationNotice] = useState<string | null>(null);
   const [reviewReadiness, setReviewReadiness] = useState<ReviewReadinessSummary | null>(null);
@@ -164,6 +175,7 @@ export function RuntimeRoutePage({
         return;
       }
       setAutomationPreview(preview);
+      setAutomationTemplateExport(null);
       setAutomationNotice("Automation recipe drafted. No cron job was created.");
     } catch (error) {
       if (isMounted()) {
@@ -172,6 +184,38 @@ export function RuntimeRoutePage({
     } finally {
       if (isMounted()) {
         setAutomationBusy(false);
+      }
+    }
+  };
+
+  const handleExportActivepiecesTemplate = async () => {
+    if (!automationPreview) {
+      setAutomationNotice("Draft a recipe before exporting an Activepieces template.");
+      return;
+    }
+    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+      setAutomationNotice("Clipboard is unavailable in this browser.");
+      return;
+    }
+    setAutomationTemplateExporting(true);
+    setAutomationNotice(null);
+    try {
+      const exported = await exportActivepiecesWorkflowTemplate({
+        recipe: automationPreview.recipe,
+      });
+      await navigator.clipboard.writeText(exported.content);
+      if (!isMounted()) {
+        return;
+      }
+      setAutomationTemplateExport(exported);
+      setAutomationNotice(`Copied Activepieces template export ${exported.filename}.`);
+    } catch (error) {
+      if (isMounted()) {
+        setAutomationNotice(error instanceof Error ? error.message : "Could not export Activepieces template.");
+      }
+    } finally {
+      if (isMounted()) {
+        setAutomationTemplateExporting(false);
       }
     }
   };
@@ -494,6 +538,26 @@ export function RuntimeRoutePage({
                       <li key={item}>{item}</li>
                     ))}
                   </ul>
+                  <div className="mc-next-runtime-actions">
+                    <button
+                      type="button"
+                      className="mc-next-directory-action"
+                      onClick={() => void handleExportActivepiecesTemplate()}
+                      disabled={automationTemplateExporting}
+                    >
+                      <span>{automationTemplateExporting ? "Exporting..." : "Copy Activepieces template"}</span>
+                    </button>
+                  </div>
+                  {automationTemplateExport ? (
+                    <div className="mc-next-approvals-chip-row">
+                      <StatusChip tone="success">Read-only export</StatusChip>
+                      <StatusChip tone="muted">No webhook trigger</StatusChip>
+                      <StatusChip tone="warning">Operator import required</StatusChip>
+                      <StatusChip tone="muted">
+                        {automationTemplateExport.activepiecesTemplate.trigger.method}
+                      </StatusChip>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </NativeCard>
@@ -1103,6 +1167,8 @@ export function RuntimeRoutePage({
     automationDraft,
     automationNotice,
     automationPreview,
+    automationTemplateExport,
+    automationTemplateExporting,
     data,
     navigate,
     pendingApprovals,

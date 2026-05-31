@@ -103,3 +103,50 @@ export interface AutomationRecipeDraftResponse extends WorkflowRecipePreviewResp
   proofChecklist: string[];
   missingCapabilities: string[];
 }
+
+export interface WorkflowRecipeActivepiecesTemplateExportRequest extends WorkflowRecipePreviewRequest {
+  flowName?: string;
+  webhookPath?: string;
+}
+
+export interface WorkflowRecipeActivepiecesTemplateStep {
+  id: string;
+  displayName: string;
+  agent: string;
+  prompt: string;
+  requiresApproval: boolean;
+  dependsOn: string[];
+}
+
+export interface WorkflowRecipeActivepiecesTemplate {
+  name: string;
+  description: string;
+  trigger: {
+    type: "webhook";
+    path: string;
+    method: "POST";
+  };
+  steps: WorkflowRecipeActivepiecesTemplateStep[];
+  metadata: {
+    source: "goatcitadel.workflow_recipe";
+    planId: string;
+    approvalMode: "none" | "human_in_the_loop";
+    scheduleIntent?: string;
+    channelIntent?: string;
+  };
+}
+
+export interface WorkflowRecipeActivepiecesTemplateExportResponse extends WorkflowRecipePreviewResponse {
+  version: "workflow_recipe.activepieces_template_export.v1";
+  generatedAt: string;
+  filename: string;
+  contentType: "application/json";
+  activepiecesTemplate: WorkflowRecipeActivepiecesTemplate;
+  posture: {
+    readOnly: true;
+    sideEffectPosture: "not_executed";
+    importRequired: true;
+    execution: "operator_import_required";
+  };
+  content: string;
+}

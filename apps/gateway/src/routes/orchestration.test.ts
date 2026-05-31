@@ -293,6 +293,81 @@ describe("orchestration routes", () => {
     });
   });
 
+  it("exports Activepieces recipe templates without creating plans or webhooks", async () => {
+    const exportActivepiecesTemplate = vi.fn(() => ({
+      version: "workflow_recipe.activepieces_template_export.v1",
+      generatedAt: "2026-05-31T12:00:00.000Z",
+      filename: "weekly-review-activepieces-template.json",
+      contentType: "application/json",
+      recipe: {
+        name: "Weekly review",
+        goal: "Review weekly signals.",
+        process: "sequential",
+        agents: [{ id: "analyst", role: "Analyst" }],
+        steps: [{ id: "review", title: "Review", agent: "analyst", prompt: "Review it." }],
+      },
+      plan: { planId: "recipe-weekly-review-abc" },
+      warnings: ["read-only export"],
+      requiredApprovals: [],
+      missingTools: [],
+      missingSkills: [],
+      estimatedLimits: { maxIterations: 3, maxRuntimeMinutes: 30, maxCostUsd: 3 },
+      activepiecesTemplate: {
+        name: "Weekly review flow",
+        description: "Review weekly signals.",
+        trigger: { type: "webhook", path: "/goatcitadel/weekly-review", method: "POST" },
+        steps: [],
+        metadata: {
+          source: "goatcitadel.workflow_recipe",
+          planId: "recipe-weekly-review-abc",
+          approvalMode: "none",
+        },
+      },
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "not_executed",
+        importRequired: true,
+        execution: "operator_import_required",
+      },
+      content: '{"version":"workflow_recipe.activepieces_template_export.v1"}',
+    }));
+    const createPlanFromRecipe = vi.fn();
+    app = Fastify();
+    app.decorate("services", { orchestration: { createPlanFromRecipe, exportActivepiecesTemplate } } as never);
+    app.decorate("requireOperatorAuth", vi.fn(async () => undefined) as never);
+    await app.register(orchestrationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/orchestration/recipes/activepieces-template/export",
+      payload: {
+        flowName: "Weekly review flow",
+        webhookPath: "/goatcitadel/weekly-review",
+        recipe: {
+          name: "Weekly review",
+          goal: "Review weekly signals.",
+          process: "sequential",
+          agents: [{ id: "analyst", role: "Analyst" }],
+          steps: [{ id: "review", title: "Review", agent: "analyst", prompt: "Review it." }],
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(exportActivepiecesTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        flowName: "Weekly review flow",
+        webhookPath: "/goatcitadel/weekly-review",
+        recipe: expect.objectContaining({ name: "Weekly review" }),
+      }),
+    );
+    expect(createPlanFromRecipe).not.toHaveBeenCalled();
+    expect(response.json()).toMatchObject({
+      version: "workflow_recipe.activepieces_template_export.v1",
+      posture: { sideEffectPosture: "not_executed", importRequired: true },
+    });
+  });
+
   it("creates recipe plans through the existing plan creation route service", async () => {
     const createPlanFromRecipe = vi.fn(async () => ({
       recipe: {
