@@ -30,6 +30,7 @@ const settingsMocks = vi.hoisted(() => {
     fetchAgenticRuns: fn(),
     fetchCapabilityPackPreview: fn(),
     fetchCapabilityPacks: fn(),
+    fetchLocalCapabilityPackPreview: fn(),
     fetchChannelSetupDefinitions: fn(),
     fetchChannelSetupDrafts: fn(),
     fetchDaemonStatus: fn(),
@@ -64,6 +65,7 @@ const settingsMocks = vi.hoisted(() => {
     getCachedModelProbe: vi.fn(),
     installAddon: fn(),
     installCapabilityPack: fn(),
+    installLocalCapabilityPack: fn(),
     installVoiceRuntime: fn(),
     invokeIntegrationConnectionAction: fn(),
     launchAddon: fn(),
@@ -150,6 +152,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchAgenticRuns: settingsMocks.fetchAgenticRuns,
   fetchCapabilityPackPreview: settingsMocks.fetchCapabilityPackPreview,
   fetchCapabilityPacks: settingsMocks.fetchCapabilityPacks,
+  fetchLocalCapabilityPackPreview: settingsMocks.fetchLocalCapabilityPackPreview,
   fetchChannelSetupDefinitions: settingsMocks.fetchChannelSetupDefinitions,
   fetchChannelSetupDrafts: settingsMocks.fetchChannelSetupDrafts,
   fetchDaemonStatus: settingsMocks.fetchDaemonStatus,
@@ -183,6 +186,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   finalizeChannelSetupDraft: settingsMocks.finalizeChannelSetupDraft,
   installAddon: settingsMocks.installAddon,
   installCapabilityPack: settingsMocks.installCapabilityPack,
+  installLocalCapabilityPack: settingsMocks.installLocalCapabilityPack,
   installVoiceRuntime: settingsMocks.installVoiceRuntime,
   invokeIntegrationConnectionAction: settingsMocks.invokeIntegrationConnectionAction,
   launchAddon: settingsMocks.launchAddon,
@@ -711,14 +715,44 @@ function setupResponses() {
     manifest: {
       packId: "operator-pack",
       trustTier: "trusted",
+      name: "Operator Pack",
       installWarnings: ["Review before install."],
+      provenance: { source: "bundled" },
     },
     reviewRequired: true,
     policyChanges: { redactionMode: "basic" },
     unsupportedAssets: [],
     installPlan: [{ kind: "skill", assetId: "skill-1", reason: "Adds workflow", outcome: "stage" }],
   });
+  settingsMocks.fetchLocalCapabilityPackPreview.mockResolvedValue({
+    manifest: {
+      packId: "local-pack",
+      name: "Local Pack",
+      trustTier: "community",
+      installWarnings: ["Review local assets."],
+      provenance: { source: "local_file" },
+    },
+    reviewRequired: true,
+    policyChanges: { redactionMode: "strict" },
+    unsupportedAssets: [],
+    installPlan: [{ kind: "addon", assetId: "addon:local", reason: "Review required", outcome: "review_required" }],
+  });
   settingsMocks.installCapabilityPack.mockResolvedValue({ ok: true });
+  settingsMocks.installLocalCapabilityPack.mockResolvedValue({
+    preview: {
+      manifest: {
+        packId: "local-pack",
+        name: "Local Pack",
+        trustTier: "community",
+        installWarnings: ["Review local assets."],
+        provenance: { source: "local_file" },
+      },
+      reviewRequired: true,
+      policyChanges: { redactionMode: "strict" },
+      unsupportedAssets: [],
+      installPlan: [{ kind: "addon", assetId: "addon:local", reason: "Review required", outcome: "review_required" }],
+    },
+  });
   settingsMocks.fetchDemoState.mockResolvedValue({
     status: "empty",
     workspace: null,
@@ -1114,6 +1148,41 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(addons.root, "Stop"));
     await click(findButton(addons.root, "Uninstall"));
     await click(findButton(addons.root, "Install pack"));
+    const portableManifest = {
+      packId: "local-pack",
+      name: "Local Pack",
+      description: "Local portable pack",
+      version: "1.0.0",
+      trustTier: "community",
+      tags: ["local"],
+      assets: [
+        {
+          kind: "addon",
+          id: "addon:local",
+          label: "Local add-on",
+          runtimeSupport: "requires_configuration",
+          installMode: "enabled",
+        },
+      ],
+      policyDefaults: {
+        requireFirstUseApproval: true,
+        memoryWriteAuthority: "operator_controlled",
+        redactionMode: "strict",
+        autoRunEnabled: false,
+      },
+      provenance: { source: "local_file", publisher: "Workspace" },
+      installWarnings: ["Review local assets."],
+    };
+    await change(
+      addons.root
+        .findAllByType("textarea")
+        .find((textarea) => textarea.props.placeholder?.includes('"packId":"local-pack"'))!,
+      JSON.stringify(portableManifest),
+    );
+    await click(findButton(addons.root, "Preview local pack"));
+    await flush();
+    expect(collectText(addons.root)).toContain("Local Pack");
+    await click(findButton(addons.root, "Stage local pack"));
     expect(settingsMocks.installAddon).toHaveBeenCalledWith("pixel-office", {
       actorId: "operator",
       confirmRepoDownload: true,
@@ -1124,6 +1193,8 @@ describe("SettingsNativePage broad native sections", () => {
     expect(settingsMocks.stopAddon).toHaveBeenCalledWith("pixel-office");
     expect(settingsMocks.uninstallAddon).toHaveBeenCalledWith("pixel-office");
     expect(settingsMocks.installCapabilityPack).toHaveBeenCalledWith("operator-pack", { actorId: "operator" });
+    expect(settingsMocks.fetchLocalCapabilityPackPreview).toHaveBeenCalledWith(portableManifest);
+    expect(settingsMocks.installLocalCapabilityPack).toHaveBeenCalledWith(portableManifest, { actorId: "operator" });
   });
 
   it("renders gateway auth credential-plan warnings on the access page", async () => {

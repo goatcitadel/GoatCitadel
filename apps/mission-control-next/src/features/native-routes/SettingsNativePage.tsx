@@ -83,6 +83,7 @@ import {
   bootstrapDemo,
   fetchCapabilityPackPreview,
   fetchCapabilityPacks,
+  fetchLocalCapabilityPackPreview,
   fetchChannelSetupDefinitions,
   fetchChannelSetupDrafts,
   discoverTelegramTargets,
@@ -121,6 +122,7 @@ import {
   finalizeChannelSetupDraft,
   installAddon,
   installCapabilityPack,
+  installLocalCapabilityPack,
   installVoiceRuntime,
   invokeIntegrationConnectionAction,
   launchAddon,
@@ -7028,6 +7030,12 @@ function AddonsSection(_props: SettingsSectionProps) {
     error: null,
     data: null,
   });
+  const [localPackText, setLocalPackText] = useState("");
+  const [localPackPreview, setLocalPackPreview] = useState<LoadState<CapabilityPackPreview>>({
+    loading: false,
+    error: null,
+    data: null,
+  });
 
   const installedById = useMemo(
     () => new Map((data?.installed ?? []).map((item) => [item.addonId, item])),
@@ -7137,6 +7145,43 @@ function AddonsSection(_props: SettingsSectionProps) {
       }
     } catch (actionError) {
       setNotice({ tone: "error", message: getErrorMessage(actionError) });
+    }
+  };
+
+  const readLocalPackManifest = (): CapabilityPackManifest => {
+    try {
+      const parsed = JSON.parse(localPackText) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("Manifest must be a JSON object.");
+      }
+      return parsed as CapabilityPackManifest;
+    } catch (parseError) {
+      throw new Error(parseError instanceof Error ? parseError.message : "Invalid capability pack JSON.", {
+        cause: parseError,
+      });
+    }
+  };
+
+  const previewLocalPack = async () => {
+    setLocalPackPreview({ loading: true, error: null, data: null });
+    try {
+      const result = await fetchLocalCapabilityPackPreview(readLocalPackManifest());
+      setLocalPackPreview({ loading: false, error: null, data: result });
+      setNotice({ tone: "success", message: `${result.manifest.name} preview ready.` });
+    } catch (previewError) {
+      setLocalPackPreview({ loading: false, error: getErrorMessage(previewError), data: null });
+      setNotice({ tone: "error", message: getErrorMessage(previewError) });
+    }
+  };
+
+  const stageLocalPack = async () => {
+    try {
+      const result = await installLocalCapabilityPack(readLocalPackManifest(), { actorId: "operator" });
+      setNotice({ tone: "success", message: `${result.preview.manifest.name} staged for review.` });
+      setLocalPackPreview({ loading: false, error: null, data: result.preview });
+      await reload();
+    } catch (installError) {
+      setNotice({ tone: "error", message: getErrorMessage(installError) });
     }
   };
 
@@ -7433,6 +7478,88 @@ function AddonsSection(_props: SettingsSectionProps) {
             ) : (
               <SettingsEmptyState label="Choose a capability pack to preview." />
             )}
+          </SettingsPanel>
+          <SettingsPanel
+            title="Portable pack"
+            subtitle="Local-file manifests are staged for review; skills and add-ons are not auto-enabled."
+            scrollBody
+            bodyMaxHeight="min(72vh, 42rem)"
+          >
+            <SettingsFieldGrid>
+              <SettingsField label="Manifest JSON" span={2}>
+                <textarea
+                  className="mc-next-settings-textarea mc-next-settings-code"
+                  value={localPackText}
+                  rows={12}
+                  placeholder='{"packId":"local-pack","name":"Local pack","description":"Operator-reviewed local bundle","version":"1.0.0","trustTier":"community","tags":["local"],"assets":[],"policyDefaults":{"requireFirstUseApproval":true,"memoryWriteAuthority":"operator_controlled","redactionMode":"strict","autoRunEnabled":false},"provenance":{"source":"local_file","publisher":"Workspace"},"installWarnings":["Review before staging."]}'
+                  onChange={(event) => {
+                    setLocalPackText(event.target.value);
+                    setLocalPackPreview({ loading: false, error: null, data: null });
+                  }}
+                />
+              </SettingsField>
+            </SettingsFieldGrid>
+            <SettingsButtonRow>
+              <button
+                type="button"
+                className="mc-next-button-secondary"
+                disabled={localPackPreview.loading || !localPackText.trim()}
+                onClick={() => void previewLocalPack()}
+              >
+                <ShieldCheck size={16} />
+                Preview local pack
+              </button>
+              <button
+                type="button"
+                className="mc-next-button"
+                disabled={localPackPreview.loading || !localPackPreview.data}
+                onClick={() => void stageLocalPack()}
+              >
+                <Plus size={16} />
+                Stage local pack
+              </button>
+            </SettingsButtonRow>
+            {localPackPreview.error ? <SettingsEmptyState label={`Preview failed: ${localPackPreview.error}`} /> : null}
+            {localPackPreview.data ? (
+              <>
+                <SettingsMetricGrid
+                  items={[
+                    {
+                      label: "Pack",
+                      value: localPackPreview.data.manifest.name,
+                      meta: localPackPreview.data.manifest.provenance.source,
+                    },
+                    {
+                      label: "Review",
+                      value: localPackPreview.data.reviewRequired ? "required" : "not required",
+                      meta: localPackPreview.data.policyChanges.redactionMode,
+                    },
+                    {
+                      label: "Assets",
+                      value: String(localPackPreview.data.installPlan.length),
+                      meta: `${localPackPreview.data.unsupportedAssets.length} unsupported`,
+                    },
+                  ]}
+                />
+                <SettingsActionList
+                  items={localPackPreview.data.installPlan.map((item) => ({
+                    label: `${item.kind}: ${item.assetId}`,
+                    description: item.reason,
+                    meta: item.outcome,
+                  }))}
+                  emptyLabel="No staged assets in this portable pack."
+                />
+                <SettingsActionList
+                  items={localPackPreview.data.manifest.installWarnings.map((warning, index) => ({
+                    id: `${localPackPreview.data?.manifest.packId}-local-warning-${index}`,
+                    label: "Warning",
+                    description: warning,
+                    meta: "review",
+                  }))}
+                  emptyLabel="No warnings for this portable pack."
+                />
+              </>
+            ) : null}
           </SettingsPanel>
         </SettingsGrid>
       ) : null}
