@@ -476,6 +476,62 @@ describe("external-side-effect-runner-service", () => {
       "2026-05-31T00:00:00.000Z",
     );
 
+    const workflowEvidenceStore = createSideEffectRunStore();
+    await runIdempotentExternalSideEffect({
+      mutationStore: {
+        ...mutationStore,
+        claim: vi.fn(() => ({
+          outcome: "claimed" as const,
+          claimKind: "new" as const,
+          record: {
+            method: "POST",
+            routePath: "external",
+            idempotencyKey: "activepieces-key",
+            actorScope: "conn-1",
+            payloadHash: "hash",
+            status: "pending" as const,
+            createdAt: "2026-05-31T00:00:00.000Z",
+            updatedAt: "2026-05-31T00:00:00.000Z",
+          },
+        })),
+      },
+      sideEffectRunStore: workflowEvidenceStore,
+      boundary: "integration_operator_action",
+      catalogId: "automation.activepieces",
+      connectionId: "conn-1",
+      actionId: "trigger_webhook",
+      idempotencyKey: "activepieces-key",
+      checkedAt: "2026-05-31T00:00:00.000Z",
+      payload: { message: "hello" },
+      label: "Activepieces webhook trigger",
+      execute: async (claim) => {
+        claim.markExternalCallStarted();
+        return {
+          output: {
+            workflowRunId: "run-123",
+            workflowRunStatus: "RUNNING",
+            workflowRunUrl: "https://activepieces.example.test/runs/run-123?token=secret#debug",
+          },
+        };
+      },
+    });
+
+    expect(workflowEvidenceStore.markCompleted).toHaveBeenCalledWith(
+      "extfx-1",
+      expect.objectContaining({
+        responsePayload: {
+          valueKind: "object",
+          keys: ["output"],
+          workflowRunId: "run-123",
+          workflowRunStatus: "RUNNING",
+          workflowRunStatusSource: "webhook_response",
+          workflowRunUrl: "https://activepieces.example.test/runs/run-123",
+        },
+        externalReferenceId: "workflowRunId:run-123",
+      }),
+      "2026-05-31T00:00:00.000Z",
+    );
+
     const failingStore = createSideEffectRunStore();
     const failed = await runIdempotentExternalSideEffect({
       mutationStore: {

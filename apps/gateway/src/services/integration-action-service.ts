@@ -825,13 +825,14 @@ function normalizeActivepiecesWebhookOutput(
   const source = isRecord(normalized.output) ? normalized.output : normalized;
   const workflowRunId = readFirstString(source, ["workflowRunId", "flowRunId", "runId", "run_id", "id"]);
   const workflowRunStatus = readFirstString(source, ["workflowRunStatus", "flowRunStatus", "status"]);
-  const workflowRunUrl = readFirstString(source, ["workflowRunUrl", "flowRunUrl", "webUrl", "url"]);
+  const workflowRunUrl = sanitizeReturnedWorkflowUrl(
+    readFirstString(source, ["workflowRunUrl", "flowRunUrl", "webUrl", "url"]),
+  );
   return {
     ...(workflowRunId ? { workflowRunId } : {}),
     ...(workflowRunStatus ? { workflowRunStatus } : {}),
     ...(workflowRunUrl ? { workflowRunUrl } : {}),
     workflowRunStatusSource: workflowRunStatus ? "webhook_response" : "not_available",
-    response: normalized,
   };
 }
 
@@ -843,6 +844,23 @@ function readFirstString(record: Record<string, unknown>, keys: string[]): strin
     }
   }
   return undefined;
+}
+
+function sanitizeReturnedWorkflowUrl(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return undefined;
+    }
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return undefined;
+  }
 }
 
 function resolveBearerAuth(host: IntegrationActionHost, config: Record<string, unknown>): string | undefined {

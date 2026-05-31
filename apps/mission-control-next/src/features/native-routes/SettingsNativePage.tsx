@@ -5088,24 +5088,28 @@ function ExternalSideEffectLedgerPanel({
       ]}
     >
       <SettingsActionList
-        items={visibleRuns.map((run) => ({
-          id: run.runId,
-          label: `${labelForExternalSideEffectStatus(run.status)} · ${run.actionId ?? run.boundary}`,
-          description: [
-            run.connectionId ? `Connection ${run.connectionId}` : "No connection recorded",
-            run.catalogId ?? "Unknown catalog",
-            `Attempts ${run.attemptCount}`,
-            `Updated ${formatDateTime(run.updatedAt)}`,
-          ].join(" · "),
-          meta: [
-            `Resume: ${labelForExternalSideEffectResumeState(run.resumeState)}`,
-            `Replay: ${run.replayOutcome ?? "not recorded"}`,
-            run.errorText ? `Error: ${run.errorText}` : undefined,
-          ]
-            .filter(Boolean)
-            .join(" | "),
-          actionLabel: labelForExternalSideEffectStatus(run.status),
-        }))}
+        items={visibleRuns.map((run) => {
+          const workflowEvidence = formatActivepiecesWorkflowEvidence(run);
+          return {
+            id: run.runId,
+            label: `${labelForExternalSideEffectStatus(run.status)} · ${run.actionId ?? run.boundary}`,
+            description: [
+              run.connectionId ? `Connection ${run.connectionId}` : "No connection recorded",
+              run.catalogId ?? "Unknown catalog",
+              `Attempts ${run.attemptCount}`,
+              `Updated ${formatDateTime(run.updatedAt)}`,
+            ].join(" · "),
+            meta: [
+              `Resume: ${labelForExternalSideEffectResumeState(run.resumeState)}`,
+              `Replay: ${run.replayOutcome ?? "not recorded"}`,
+              ...workflowEvidence,
+              run.errorText ? `Error: ${run.errorText}` : undefined,
+            ]
+              .filter(Boolean)
+              .join(" | "),
+            actionLabel: labelForExternalSideEffectStatus(run.status),
+          };
+        })}
         emptyLabel="No external side-effect run records are available."
         maxHeight="min(34vh, 20rem)"
       />
@@ -5191,6 +5195,64 @@ function labelForExternalSideEffectResumeState(state: ExternalSideEffectRunRecor
       return "completed";
     default:
       return "not resumable";
+  }
+}
+
+function formatActivepiecesWorkflowEvidence(run: ExternalSideEffectRunRecord): string[] {
+  if (run.catalogId !== "automation.activepieces" && !run.routePath.includes("automation.activepieces")) {
+    return [];
+  }
+  const payload = run.responsePayload ?? {};
+  const workflowRunId =
+    readOutputText(payload, "workflowRunId") ?? readExternalReferenceValue(run.externalReferenceId, "workflowRunId");
+  const workflowRunStatus = readOutputText(payload, "workflowRunStatus");
+  const workflowRunUrl = formatDisplayedWorkflowUrl(readOutputText(payload, "workflowRunUrl"));
+  const workflowRunStatusSource =
+    readOutputText(payload, "workflowRunStatusSource") ??
+    (workflowRunId || workflowRunStatus || workflowRunUrl ? "webhook_response" : undefined);
+  if (!workflowRunId && !workflowRunStatus && !workflowRunUrl) {
+    return [];
+  }
+  return [
+    workflowRunId ? `Workflow: ${workflowRunId}` : undefined,
+    workflowRunStatus ? `Status: ${workflowRunStatus}` : undefined,
+    workflowRunStatusSource ? `Source: ${labelForWorkflowStatusSource(workflowRunStatusSource)}` : undefined,
+    workflowRunUrl ? `URL: ${workflowRunUrl}` : undefined,
+    "Status sync: webhook response only",
+  ].filter((item): item is string => Boolean(item));
+}
+
+function readExternalReferenceValue(referenceId: string | undefined, expectedKey: string): string | undefined {
+  if (!referenceId) {
+    return undefined;
+  }
+  const separatorIndex = referenceId.indexOf(":");
+  if (separatorIndex <= 0) {
+    return undefined;
+  }
+  const key = referenceId.slice(0, separatorIndex);
+  const value = referenceId.slice(separatorIndex + 1).trim();
+  return key === expectedKey && value ? value : undefined;
+}
+
+function labelForWorkflowStatusSource(source: string): string {
+  return source === "webhook_response" ? "webhook response" : source;
+}
+
+function formatDisplayedWorkflowUrl(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return undefined;
+    }
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return undefined;
   }
 }
 

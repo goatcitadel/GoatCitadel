@@ -757,7 +757,7 @@ describe("integration-action-service", () => {
             JSON.stringify({
               runId: "run-123",
               status: "RUNNING",
-              url: "https://activepieces.example.test/runs/run-123",
+              url: "https://activepieces.example.test/runs/run-123?token=secret#debug",
             }),
             {
               status: 200,
@@ -826,6 +826,7 @@ describe("integration-action-service", () => {
         }),
       }),
     );
+    expect(result.output && "response" in result.output).toBe(false);
   });
 
   it("does not resend Activepieces webhooks when the idempotency claim is duplicate", async () => {

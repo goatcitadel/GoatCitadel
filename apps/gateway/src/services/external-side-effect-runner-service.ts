@@ -619,9 +619,22 @@ function summarizeExternalSideEffectPayload(value: unknown): Record<string, unkn
     return { valueKind: "array", itemCount: value.length };
   }
   const record = value as Record<string, unknown>;
+  const source =
+    record.output && typeof record.output === "object" && !Array.isArray(record.output)
+      ? (record.output as Record<string, unknown>)
+      : record;
+  const workflowRunId = readFirstExternalSideEffectString(source, ["workflowRunId", "flowRunId", "runId", "run_id"]);
+  const workflowRunStatus = readFirstExternalSideEffectString(source, ["workflowRunStatus", "flowRunStatus", "status"]);
+  const workflowRunUrl = sanitizeExternalSideEffectUrl(
+    readFirstExternalSideEffectString(source, ["workflowRunUrl", "flowRunUrl", "webUrl", "url"]),
+  );
   return {
     valueKind: "object",
     keys: Object.keys(record).sort(),
+    ...(workflowRunId ? { workflowRunId } : {}),
+    ...(workflowRunStatus ? { workflowRunStatus } : {}),
+    ...(workflowRunUrl ? { workflowRunUrl } : {}),
+    ...(workflowRunStatus ? { workflowRunStatusSource: "webhook_response" } : {}),
   };
 }
 
@@ -635,13 +648,40 @@ function readExternalReferenceId(value: unknown): string | undefined {
   if (!output || typeof output !== "object" || Array.isArray(output)) {
     return undefined;
   }
-  for (const key of ["id", "messageId", "threadId", "url", "webUrl"]) {
+  for (const key of ["workflowRunId", "flowRunId", "runId", "run_id", "id", "messageId", "threadId", "url", "webUrl"]) {
     const field = (output as Record<string, unknown>)[key];
     if (typeof field === "string" && field.trim()) {
       return `${key}:${field.trim().slice(0, 128)}`;
     }
   }
   return undefined;
+}
+
+function readFirstExternalSideEffectString(record: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim().slice(0, 512);
+    }
+  }
+  return undefined;
+}
+
+function sanitizeExternalSideEffectUrl(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return undefined;
+    }
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return undefined;
+  }
 }
 
 export function markIdempotentExternalSideEffectCompleted(

@@ -3947,6 +3947,75 @@ describe("SettingsNativePage integrations", () => {
     });
   });
 
+  it("surfaces Activepieces workflow-run evidence from the external side-effect ledger without polling", async () => {
+    mocks.fetchIntegrationConnections.mockResolvedValueOnce({
+      items: [
+        {
+          connectionId: "conn-activepieces",
+          catalogId: "automation.activepieces",
+          key: "activepieces",
+          label: "Activepieces",
+          kind: "automation",
+          enabled: true,
+          status: "connected",
+          config: {},
+          createdAt: "2026-05-31T10:00:00.000Z",
+          updatedAt: "2026-05-31T10:00:00.000Z",
+        },
+      ],
+    } as any);
+    mocks.fetchExternalSideEffectRuns.mockResolvedValueOnce({
+      items: [
+        {
+          runId: "extfx_activepieces_completed",
+          workspaceId: "default",
+          boundary: "integration_operator_action",
+          routePath:
+            "external_side_effect:integration_operator_action:automation.activepieces:conn-activepieces:trigger_webhook",
+          catalogId: "automation.activepieces",
+          connectionId: "conn-activepieces",
+          actionId: "trigger_webhook",
+          actorScope: "conn-activepieces",
+          idempotencyKey: "operator-key",
+          payloadHash: "payload-hash",
+          status: "completed",
+          replayPolicy: "idempotent_external",
+          replayOutcome: "claimed",
+          replayAttempt: "new",
+          resumeState: "completed",
+          attemptCount: 1,
+          responsePayload: {
+            valueKind: "object",
+            keys: ["output"],
+            workflowRunId: "run-123",
+            workflowRunStatus: "RUNNING",
+            workflowRunStatusSource: "webhook_response",
+            workflowRunUrl: "https://activepieces.example.test/runs/run-123?token=secret#debug",
+          },
+          externalReferenceId: "workflowRunId:run-123",
+          createdAt: "2026-05-31T10:00:00.000Z",
+          updatedAt: "2026-05-31T10:00:03.000Z",
+        },
+      ],
+    } as any);
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderPage("integrations");
+    });
+    await act(async () => undefined);
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("Completed · trigger_webhook");
+    expect(text).toContain("Workflow: run-123");
+    expect(text).toContain("Status: RUNNING");
+    expect(text).toContain("Source: webhook response");
+    expect(text).toContain("URL: https://activepieces.example.test/runs/run-123");
+    expect(text).toContain("Status sync: webhook response only");
+    expect(text).not.toContain("token=secret");
+    expect(text).not.toContain("Refresh Activepieces status");
+  });
+
   it("runs Activepieces actions with guided payload, idempotency, and inline evidence", async () => {
     const activepiecesCatalog = {
       items: [
