@@ -96,6 +96,7 @@ export const NEXT_RELEASE_SURFACE_STATUS_BY_SLUG = {
   "settings-personalities": "experimental",
   "settings-access": "ship",
   "settings-permissions": "ship",
+  "settings-trust-policy": "ship",
   "settings-runtime": "ship",
   "settings-workspaces": "ship",
   "settings-budget": "ship",
@@ -353,6 +354,14 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
     readyText: "Permission profiles",
     expectedArea: "settings",
     expectedSection: "permissions",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "settings-trust-policy",
+    href: "/settings/trust-policy",
+    readyText: "Trust & Policy snapshot",
+    expectedArea: "settings",
+    expectedSection: "trust-policy",
     interaction: "open-inspector",
   },
   {

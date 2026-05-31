@@ -550,6 +550,9 @@ Operator-facing mutating JSON endpoints require `Idempotency-Key` and block dupl
 - `GET /api/v1/tools/grants`
 - `POST /api/v1/tools/grants`
 - `POST /api/v1/tools/grants/:grantId/revoke`
+- `GET /api/v1/trust/policy-snapshot`
+  - Read-only Trust & Policy projection for operator dashboards. It explains current capability, grant, MCP, skill,
+    add-on, override, and last-use posture without creating policy mutation semantics.
 
 ### Approvals
 
@@ -601,6 +604,9 @@ Operator-facing mutating JSON endpoints require `Idempotency-Key` and block dupl
 ### Dashboard and Ops
 
 - `GET /api/v1/dashboard/state`
+- `GET /api/v1/observe/runs/:runId/trace`
+  - Read-only Universal Run Detail projection. Missing approvals, artifacts, memory, provider cost, or replay evidence
+    should be reported as unavailable/unknown rather than inferred.
 - `GET /api/v1/system/vitals`
 - `GET /api/v1/cron/jobs`
 - `GET /api/v1/operators`

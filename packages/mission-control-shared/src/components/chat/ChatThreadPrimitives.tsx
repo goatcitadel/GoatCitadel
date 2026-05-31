@@ -476,6 +476,7 @@ export interface ChatThreadTurnCardProps {
   onRetryTurn: (turnId: string) => void;
   onEditTurn?: (turnId: string) => void;
   onOpenRunDetails: (turnId: string) => void;
+  onOpenUniversalRunDetail?: (runId: string) => void;
   onOpenGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifact: (turnId: string) => void;
   onCreateGeneratedArtifactVersion: (turnId: string) => void;
@@ -498,6 +499,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
   onRetryTurn,
   onEditTurn,
   onOpenRunDetails,
+  onOpenUniversalRunDetail,
   onOpenGeneratedArtifact,
   onCreateGeneratedArtifact,
   onCreateGeneratedArtifactVersion,
@@ -506,6 +508,7 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
   const recoveryLabel = getRecoveryStripLabel(turn);
   const routingSummary = summarizeTurnRouting(turn, { effectiveVerb: "used" });
   const hasGeneratedArtifact = (turn.generatedArtifacts?.length ?? 0) > 0;
+  const durableRunId = turn.trace.durable?.runId;
   const isStreamingTurn = Boolean(streamingPreview?.isRunning && streamingPreview.turnId === turn.turnId);
   const assistantContent = isStreamingTurn
     ? (streamingPreview?.visibleText ?? "")
@@ -669,6 +672,16 @@ export const ChatThreadTurnCard = memo(function ChatThreadTurnCard({
         >
           {mode === "cowork" ? "Run details" : "Details"}
         </button>
+        {durableRunId && onOpenUniversalRunDetail ? (
+          <button
+            type="button"
+            className="mc-next-thread-inline-button"
+            aria-label={`Open durable run trace ${durableRunId}`}
+            onClick={() => onOpenUniversalRunDetail(durableRunId)}
+          >
+            Run trace
+          </button>
+        ) : null}
       </div>
       {showActions ? (
         <div className="mc-next-thread-actions">

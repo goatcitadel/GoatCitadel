@@ -132,4 +132,76 @@ describe("dashboard observe aggregate routes", () => {
       },
     });
   });
+
+  it("returns a universal run trace through the observe route", async () => {
+    const getObserveRunTrace = vi.fn(async () => ({
+      version: "observe.run_trace.v1",
+      generatedAt: "2026-05-30T00:00:00.000Z",
+      runId: "run-1",
+      run: { runId: "run-1", status: "completed" },
+      durable: {
+        checkpoints: { state: "not_available", items: [] },
+        timeline: { state: "not_available", items: [] },
+      },
+      lifecycle: { state: "not_available" },
+      session: { state: "not_available" },
+      thread: { state: "not_available", turns: [] },
+      approvals: { state: "not_available", items: [], missingIds: [] },
+      toolCalls: { state: "not_available", items: [] },
+      memoryContext: { state: "not_available", items: [] },
+      providerUsage: { state: "not_available", items: [], totals: {} },
+      artifacts: { state: "not_available", items: [] },
+      errors: { state: "not_available", items: [] },
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "audit_only",
+        audit: { state: "available", note: "read-only" },
+        replay: { state: "not_available", checkpointIds: [], note: "none" },
+        resume: { state: "not_available", eligible: false, note: "none" },
+      },
+    }));
+    app = Fastify();
+    app.decorate("services", {
+      dashboard: {
+        getObserveRunTrace,
+      },
+    } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/observe/runs/run%2F1/trace",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(getObserveRunTrace).toHaveBeenCalledWith("run/1");
+    expect(response.json()).toMatchObject({
+      version: "observe.run_trace.v1",
+      runId: "run-1",
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "audit_only",
+      },
+    });
+  });
+
+  it("maps a missing observed run trace to 404", async () => {
+    app = Fastify();
+    app.decorate("services", {
+      dashboard: {
+        getObserveRunTrace: vi.fn(async () => {
+          throw new Error("Durable run not found: missing-run");
+        }),
+      },
+    } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/observe/runs/missing-run/trace",
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: "Durable run not found: missing-run" });
+  });
 });

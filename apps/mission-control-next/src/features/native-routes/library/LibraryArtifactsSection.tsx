@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { FileText, RefreshCw, Workflow } from "lucide-react";
+import { FileText, RefreshCw, Waypoints, Workflow } from "lucide-react";
 import type { ChatGeneratedArtifactRecord } from "@goatcitadel/contracts";
 import { fetchChatGeneratedArtifacts } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard } from "../NativeRoutePageLayout";
@@ -77,6 +77,7 @@ export function LibraryArtifactsSection({ activeWorkspaceId, route, navigate }: 
   const selectedArtifactValidationStatus = selectedArtifact
     ? readArtifactValidationStatus(selectedArtifact)
     : undefined;
+  const selectedArtifactRunId = selectedArtifact ? readArtifactRunId(selectedArtifact) : undefined;
 
   return (
     <LibrarySectionShell loading={loading} error={error}>
@@ -276,6 +277,28 @@ export function LibraryArtifactsSection({ activeWorkspaceId, route, navigate }: 
                     <FileText className="h-4 w-4" />
                     Reopen artifact
                   </button>
+                  {selectedArtifactRunId ? (
+                    <button
+                      type="button"
+                      className="mc-next-button-secondary"
+                      onClick={() =>
+                        navigate({
+                          area: "ops",
+                          section: "sessions",
+                          view: "run-detail",
+                          runId: selectedArtifactRunId,
+                          artifactId: selectedArtifact.artifactId,
+                          sessionId: selectedArtifact.sessionId,
+                          turnId: selectedArtifact.turnId,
+                          ...(selectedArtifact.projectId ? { projectId: selectedArtifact.projectId } : {}),
+                          theme: route.theme,
+                        })
+                      }
+                    >
+                      <Waypoints className="h-4 w-4" />
+                      Open run detail
+                    </button>
+                  ) : null}
                 </LibraryButtonRow>
                 <LibraryCodeBlock label="Artifact provenance">
                   {formatArtifactProvenance(selectedArtifact)}
@@ -314,4 +337,19 @@ function describeArtifactViewer(kind: ChatGeneratedArtifactRecord["kind"]) {
 function readArtifactValidationStatus(artifact: ChatGeneratedArtifactRecord) {
   const record = artifact as ChatGeneratedArtifactRecord & { validationStatus?: string };
   return record.validationStatus;
+}
+
+function readArtifactRunId(artifact: ChatGeneratedArtifactRecord): string | undefined {
+  const record = artifact as ChatGeneratedArtifactRecord & {
+    runId?: string;
+    durableRunId?: string;
+    trace?: { durable?: { runId?: string }; durableRunId?: string; runId?: string };
+  };
+  return (
+    record.runId ??
+    record.durableRunId ??
+    record.trace?.durable?.runId ??
+    record.trace?.durableRunId ??
+    record.trace?.runId
+  );
 }

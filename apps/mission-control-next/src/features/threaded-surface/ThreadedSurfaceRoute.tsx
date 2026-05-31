@@ -17,6 +17,7 @@ export function ThreadedSurfaceRoute({
   onOpenCode,
   onOpenTasks,
   onOpenApprovals,
+  onOpenUniversalRunDetail,
   onNavigateSurface,
 }: {
   surface: ChatMode;
@@ -28,6 +29,7 @@ export function ThreadedSurfaceRoute({
   onOpenCode?: () => void;
   onOpenTasks?: () => void;
   onOpenApprovals?: (approvalId?: string) => void;
+  onOpenUniversalRunDetail?: (runId: string) => void;
   onNavigateSurface?: (
     surface: ChatMode,
     options?: { sessionId?: string | null; turnId?: string | null; artifactId?: string | null },
@@ -46,7 +48,12 @@ export function ThreadedSurfaceRoute({
       onOpenApprovals={onOpenApprovals}
       onNavigateSurface={onNavigateSurface}
       renderSurface={(input: MissionThreadedRenderSurfaceInput) => (
-        <ThreadedSurfacePermissionBridge surface={surface} workspaceId={workspaceId} input={input} />
+        <ThreadedSurfacePermissionBridge
+          surface={surface}
+          workspaceId={workspaceId}
+          input={input}
+          onOpenUniversalRunDetail={onOpenUniversalRunDetail}
+        />
       )}
     />
   );
@@ -56,10 +63,12 @@ function ThreadedSurfacePermissionBridge({
   surface,
   workspaceId,
   input,
+  onOpenUniversalRunDetail,
 }: {
   surface: ChatMode;
   workspaceId: string;
   input: MissionThreadedRenderSurfaceInput;
+  onOpenUniversalRunDetail?: (runId: string) => void;
 }) {
   const selectedSessionId =
     input.activeSessionSurfaceProps?.selectedSessionId ?? input.contextDockProps?.selectedSessionId ?? undefined;
@@ -96,7 +105,14 @@ function ThreadedSurfacePermissionBridge({
     };
   }, [permissionQuery]);
 
-  return <ThreadedSurfacePage surface={surface} input={input} permissionState={permissionState} />;
+  return (
+    <ThreadedSurfacePage
+      surface={surface}
+      input={input}
+      permissionState={permissionState}
+      onOpenUniversalRunDetail={onOpenUniversalRunDetail}
+    />
+  );
 }
 
 export function resolveThreadedPermissionQuery({

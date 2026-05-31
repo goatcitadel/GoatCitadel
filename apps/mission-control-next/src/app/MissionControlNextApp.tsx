@@ -897,6 +897,9 @@ export function renderRouteContent(input: {
         onOpenApprovals={(approvalId?: string) =>
           input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
         }
+        onOpenUniversalRunDetail={(runId) =>
+          input.navigate({ area: "ops", section: "sessions", view: "run-detail", runId, theme: route.theme })
+        }
         onNavigateSurface={(surface, options) =>
           input.navigate({
             area: surface,
@@ -926,6 +929,9 @@ export function renderRouteContent(input: {
         onOpenApprovals={(approvalId?: string) =>
           input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
         }
+        onOpenUniversalRunDetail={(runId) =>
+          input.navigate({ area: "ops", section: "sessions", view: "run-detail", runId, theme: route.theme })
+        }
         onNavigateSurface={(surface, options) =>
           input.navigate({
             area: surface,
@@ -951,6 +957,9 @@ export function renderRouteContent(input: {
         onOpenTasks={() => input.navigate({ area: "cowork", section: "tasks", theme: route.theme })}
         onOpenApprovals={(approvalId?: string) =>
           input.navigate({ area: "ops", section: "approvals", theme: route.theme, approvalId })
+        }
+        onOpenUniversalRunDetail={(runId) =>
+          input.navigate({ area: "ops", section: "sessions", view: "run-detail", runId, theme: route.theme })
         }
         onNavigateSurface={(surface, options) =>
           input.navigate({
@@ -1002,8 +1011,9 @@ export function RouteSurfaceFallback({ label, description }: { label: string; de
 export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSection[] {
   if (area === "settings") {
     /*
-     * H-13 (ship punchlist): Settings IA rail target is 14 → 12 leaves to fit
-     * one screen on a 13" laptop. Two leaves are intentionally NOT surfaced
+     * H-13 (ship punchlist): Settings IA keeps one-time and overlap routes
+     * out of grouped rail navigation so the ongoing configuration surface
+     * stays scannable. Two leaves are intentionally NOT surfaced
      * in any group:
      *   - "permissions": semantic overlap with "access" — both are
      *     authorization. Folded into Access in spirit; the route still
@@ -1011,8 +1021,9 @@ export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSec
      *   - "onboarding" ("Start Here"): a one-time first-run flow rather
      *     than ongoing settings; deserves its own discoverable entry point
      *     elsewhere (W3.2 follow-up).
-     * Net distribution: Foundations(2) / Identity(3) / Surfaces(4) /
-     * Operations(3) = 12, matching brand-spec.md.
+     * Net distribution: Foundations(2) / Identity(4) / Surfaces(4) /
+     * Operations(3) = 13 with Trust & Policy promoted as an ongoing
+     * governance dashboard.
      */
     return [
       {
@@ -1024,7 +1035,11 @@ export function buildRailSections(area: PrimaryArea, items: RailItem[]): RailSec
         id: "settings-identity",
         label: "Identity",
         items: items.filter(
-          (item) => item.section === "access" || item.section === "personalities" || item.section === "providers",
+          (item) =>
+            item.section === "access" ||
+            item.section === "personalities" ||
+            item.section === "providers" ||
+            item.section === "trust-policy",
         ),
       },
       {

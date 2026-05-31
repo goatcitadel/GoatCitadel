@@ -683,6 +683,37 @@ describe("ThreadedTimeline", () => {
     expect(props.onCreateGeneratedArtifactVersion).toHaveBeenCalledWith("turn-1");
   });
 
+  it("opens Universal Run Detail only from durable-linked turns", () => {
+    const onOpenUniversalRunDetail = vi.fn();
+    const baseProps = buildProps();
+    const props = buildProps({
+      thread: {
+        ...baseProps.thread,
+        turns: [
+          {
+            ...baseProps.thread.turns[0],
+            trace: {
+              ...baseProps.thread.turns[0].trace,
+              durable: { runId: "durable-run-1" },
+              orchestration: { runId: "orchestration-run-1" },
+            },
+          },
+        ],
+      },
+    });
+    const renderer = TestRenderer.create(
+      <ThreadedTimeline props={props as any} onOpenUniversalRunDetail={onOpenUniversalRunDetail} />,
+    );
+
+    const traceButton = renderer.root.find((node) => node.type === "button" && node.children.join("") === "Run trace");
+    TestRenderer.act(() => {
+      traceButton.props.onClick();
+    });
+
+    expect(onOpenUniversalRunDetail).toHaveBeenCalledWith("durable-run-1");
+    expect(onOpenUniversalRunDetail).not.toHaveBeenCalledWith("orchestration-run-1");
+  });
+
   it("distinguishes create and open artifact actions", () => {
     const onCreateGeneratedArtifact = vi.fn();
     const onOpenGeneratedArtifact = vi.fn();

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { buildAppHref, buildNavigationTarget, parseAppRoute, RAIL_ITEMS, getRouteLabel } from "./route-model";
+import {
+  buildAppHref,
+  buildNavigationTarget,
+  getRouteLabel,
+  getRouteReleaseScope,
+  parseAppRoute,
+  RAIL_ITEMS,
+} from "./route-model";
 
 describe("mission-control-next route model loop 26 tails", () => {
   it("keeps generic area paths deterministic when a section is omitted", () => {
@@ -13,6 +20,26 @@ describe("mission-control-next route model loop 26 tails", () => {
     expect(parseAppRoute("http://goatcitadel.local/projects?projectId=query-project")).toMatchObject({
       area: "projects",
       projectId: "query-project",
+    });
+  });
+
+  it("keeps universal run detail ids in the route query", () => {
+    const href = buildAppHref({
+      area: "ops",
+      section: "sessions",
+      view: "run-detail",
+      runId: "run-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
+    });
+    expect(href).toBe("/ops/sessions?sessionId=session-1&turnId=turn-1&runId=run-1&view=run-detail");
+    expect(parseAppRoute(href)).toMatchObject({
+      area: "ops",
+      section: "sessions",
+      view: "run-detail",
+      runId: "run-1",
+      sessionId: "session-1",
+      turnId: "turn-1",
     });
   });
 
@@ -73,5 +100,17 @@ describe("library/curator route", () => {
     const entry = RAIL_ITEMS.library.find((item) => item.id === "library-curator");
     expect(entry?.section).toBe("curator");
     expect(getRouteLabel({ area: "library", section: "curator" })).toBe("Skill Curator");
+  });
+});
+
+describe("settings/trust-policy route", () => {
+  it("parses, labels, and marks the Trust & Policy dashboard as release-bearing", () => {
+    const route = parseAppRoute("/settings/trust-policy");
+    expect(route.area).toBe("settings");
+    expect(route.section).toBe("trust-policy");
+    expect(buildAppHref(route)).toBe("/settings/trust-policy");
+    expect(getRouteLabel(route)).toBe("Trust & Policy");
+    expect(RAIL_ITEMS.settings.find((item) => item.id === "settings-trust-policy")?.section).toBe("trust-policy");
+    expect(getRouteReleaseScope(route).status).toBe("ship");
   });
 });

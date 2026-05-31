@@ -63,6 +63,7 @@ import { workspacesRoutes } from "./routes/workspaces.js";
 import { hooksRoutes } from "./routes/hooks.js";
 import { durableRoutes } from "./routes/durable.js";
 import { connectorsRoutes } from "./routes/connectors.js";
+import { trustRoutes } from "./routes/trust.js";
 import { createGatewayLogger, isVerboseLoggingEnabled } from "./runtime-ux.js";
 import { isLoopbackDevOrigin, isTailnetDevOrigin, resolveTailnetShortHostAllowlist } from "./cors-origin-guard.js";
 import { assertDeploymentProfileStartupSafety } from "./deployment-profile-guard.js";
@@ -366,6 +367,7 @@ export async function buildApp() {
   await app.register(hooksRoutes);
   await app.register(durableRoutes);
   await app.register(connectorsRoutes);
+  await app.register(trustRoutes);
   await app.register(addonsRoutes);
   await app.register(capabilityPacksRoutes);
   await app.register(evidenceRoutes);

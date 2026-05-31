@@ -334,6 +334,7 @@ export function readBtwSideChatPosition(workspaceId: string): BtwSideChatPanelPo
     const parsed = JSON.parse(raw) as Partial<BtwSideChatPanelPosition>;
     return normalizeBtwSideChatPosition(parsed);
   } catch {
+    // Optional browser-local preference only.
     return null;
   }
 }
@@ -346,7 +347,7 @@ export function writeBtwSideChatPosition(workspaceId: string, position: BtwSideC
     }
     window.localStorage.setItem(getBtwSideChatStorageKey(workspaceId), JSON.stringify(normalized));
   } catch {
-    // Browser-local preference only.
+    // Optional browser-local preference only.
   }
 }
 
@@ -357,7 +358,7 @@ export function removeBtwSideChatPosition(workspaceId: string): void {
     }
     window.localStorage.removeItem(getBtwSideChatStorageKey(workspaceId));
   } catch {
-    // Browser-local preference only.
+    // Optional browser-local preference only.
   }
 }
 

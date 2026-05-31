@@ -5,6 +5,7 @@ import { CuratorRoutePage } from "./library/CuratorRoutePage";
 import { MemoryRoutePage } from "./library/MemoryRoutePage";
 import { ApprovalsRoutePage } from "./ops/ApprovalsRoutePage";
 import { KanbanRoutePage } from "./ops/KanbanRoutePage";
+import { RunDetailRoutePage } from "./ops/RunDetailRoutePage";
 import { RuntimeRoutePage } from "./ops/RuntimeRoutePage";
 import { ProjectsRoutePage } from "./projects/ProjectsRoutePage";
 import { CoworkNativePage } from "./cowork/CoworkNativePage";
@@ -60,6 +61,9 @@ export function NativeRoutePages(props: NativeRoutePagesProps) {
   }
   if (route.area === "ops") {
     const section = route.section ?? "activity";
+    if (route.view === "run-detail" || route.runId) {
+      return <RunDetailRoutePage {...props} />;
+    }
     if (section === "approvals") {
       return <ApprovalsRoutePage {...props} />;
     }

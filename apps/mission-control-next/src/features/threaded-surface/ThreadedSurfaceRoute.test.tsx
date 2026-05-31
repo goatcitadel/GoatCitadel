@@ -46,6 +46,7 @@ describe("ThreadedSurfaceRoute", () => {
     const onOpenCode = vi.fn();
     const onOpenTasks = vi.fn();
     const onOpenApprovals = vi.fn();
+    const onOpenUniversalRunDetail = vi.fn();
     const onNavigateSurface = vi.fn();
 
     const renderer = create(
@@ -59,6 +60,7 @@ describe("ThreadedSurfaceRoute", () => {
         onOpenCode,
         onOpenTasks,
         onOpenApprovals,
+        onOpenUniversalRunDetail,
         onNavigateSurface,
       }),
     );
@@ -80,6 +82,7 @@ describe("ThreadedSurfaceRoute", () => {
       surface: "code",
       input: { controller: "ready" },
       permissionState: { loading: true },
+      onOpenUniversalRunDetail,
     });
   });
 

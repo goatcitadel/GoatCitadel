@@ -152,10 +152,12 @@ export function ThreadedSurfacePage({
   surface,
   input,
   permissionState,
+  onOpenUniversalRunDetail,
 }: {
   surface: ChatMode;
   input: MissionThreadedRenderSurfaceInput;
   permissionState?: ThreadedPermissionState;
+  onOpenUniversalRunDetail?: (runId: string) => void;
 }) {
   const railDrawerLayout = useMediaQuery("(max-width: 1023px)");
   const railPane = useHorizontalPaneResize({
@@ -489,6 +491,7 @@ export function ThreadedSurfacePage({
                 workflowPanel?.kind === "code" ? () => setCodeWorkbenchOpen((current) => !current) : undefined
               }
               permissionState={permissionState}
+              onOpenUniversalRunDetail={onOpenUniversalRunDetail}
             />
           ) : (
             <ThreadEmptyState
@@ -581,6 +584,7 @@ function ThreadConversationSurface({
   codeWorkbenchOpen,
   onToggleCodeWorkbench,
   permissionState,
+  onOpenUniversalRunDetail,
 }: {
   surface: ChatMode;
   props: MissionThreadedActiveSessionSurfaceProps;
@@ -592,6 +596,7 @@ function ThreadConversationSurface({
   codeWorkbenchOpen: boolean;
   onToggleCodeWorkbench?: () => void;
   permissionState?: ThreadedPermissionState;
+  onOpenUniversalRunDetail?: (runId: string) => void;
 }) {
   const compactArtifactSheet = useMediaQuery("(max-width: 840px)");
   const actions = useMemo(() => {
@@ -700,7 +705,7 @@ function ThreadConversationSurface({
 
       <section className="mc-next-threaded-conversation">
         <div className="mc-next-threaded-thread-card">
-          <ThreadedTimeline props={props} />
+          <ThreadedTimeline props={props} onOpenUniversalRunDetail={onOpenUniversalRunDetail} />
         </div>
         <div className="mc-next-threaded-composer-card">
           <ThreadedComposer props={props} />

@@ -61,6 +61,89 @@ const mocks = vi.hoisted(() => ({
     ],
   })),
   fetchToolGrants: vi.fn(async () => ({ items: [] })),
+  fetchTrustPolicySnapshot: vi.fn(async () => ({
+    generatedAt: "2026-05-30T18:00:00.000Z",
+    readOnly: true,
+    mutationSemantics: "none",
+    enforcementSources: ["tools.permissionProfiles", "capabilities.catalog", "mcp.servers"],
+    sources: [],
+    permissionProfiles: [
+      {
+        profileId: "safe",
+        label: "Safe profile",
+        builtin: true,
+        status: "active",
+        posture: "callable",
+        approvalMode: "approve_all",
+        source: "tools.permissionProfiles",
+      },
+    ],
+    toolGrants: [
+      {
+        grantId: "grant-danger",
+        toolPattern: "Dangerous shell",
+        decision: "deny",
+        posture: "blocked",
+        scope: "workspace",
+        grantType: "persistent",
+        source: "tools.grants",
+      },
+    ],
+    localOperatorOverrides: [],
+    capabilities: {
+      inspectable: [
+        {
+          capabilityId: "browser.search",
+          kind: "tool",
+          category: "browser",
+          title: "Browser search",
+          summary: "Search the web",
+          callable: true,
+          posture: "callable",
+          source: "capabilities.catalog",
+          trustLabel: "trusted",
+          declaredTools: ["browser.search"],
+        },
+      ],
+      callable: [
+        {
+          capabilityId: "browser.search",
+          kind: "tool",
+          category: "browser",
+          title: "Browser search",
+          summary: "Search the web",
+          callable: true,
+          posture: "callable",
+          source: "capabilities.catalog",
+          trustLabel: "trusted",
+          declaredTools: ["browser.search"],
+        },
+      ],
+    },
+    mcpServers: [
+      {
+        serverId: "mcp-quarantined",
+        label: "Quarantined MCP",
+        enabled: true,
+        status: "connected",
+        trustTier: "quarantined",
+        posture: "quarantined",
+        source: "mcp.servers",
+        tools: [{ toolName: "mcp.inspect", enabled: true, posture: "quarantined", source: "mcp.tools" }],
+      },
+    ],
+    skills: [],
+    addons: [],
+    lastUseEvidence: [
+      {
+        source: "mcp.servers",
+        subjectType: "mcp_server",
+        subjectId: "mcp-quarantined",
+        lastConnectedAt: "2026-05-30T17:45:00.000Z",
+        status: "connected",
+      },
+    ],
+  })),
   createToolGrant: vi.fn(async (input) => ({
     grantId: "grant-ttl",
     createdAt: "2026-05-02T18:00:00.000Z",
@@ -386,20 +469,24 @@ const mocks = vi.hoisted(() => ({
       },
     },
   })),
-  fetchDemoState: vi.fn(async () => ({
-    status: "ready",
-    workspace: { workspaceId: "demo-workspace", name: "Demo", slug: "demo" },
-    project: { projectId: "demo-project", name: "Demo Project", workspacePath: "F:\\code\\demo" },
-    sessions: [
-      { sessionId: "chat-demo", title: "Chat demo", mode: "chat", projectId: "demo-project" },
-      { sessionId: "cowork-demo", title: "Cowork demo", mode: "cowork", projectId: "demo-project" },
-    ],
-    tasks: [],
-    starterPrompts: [],
-    memorySeeds: [],
-    nextRoute: "/chat",
-    notes: [],
-  })),
+  fetchDemoState: vi.fn(
+    async (): Promise<any> => ({
+      status: "ready",
+      workspace: { workspaceId: "demo-workspace", name: "Demo", slug: "demo" },
+      project: { projectId: "demo-project", name: "Demo Project", workspacePath: "F:\\code\\demo" },
+      sessions: [
+        { sessionId: "chat-demo", title: "Chat demo", mode: "chat", projectId: "demo-project" },
+        { sessionId: "cowork-demo", title: "Cowork demo", mode: "cowork", projectId: "demo-project" },
+      ],
+      tasks: [],
+      starterPrompts: [],
+      memorySeeds: [],
+      nextRoute: "/chat",
+      notes: [],
+    }),
+  ),
+  fetchAgenticRuns: vi.fn(async (): Promise<any> => ({ items: [] })),
+  fetchEvidenceEnvelopes: vi.fn(async (): Promise<any> => ({ items: [] })),
   bootstrapDemo: vi.fn(async () => ({
     status: "ready",
     workspace: { workspaceId: "demo-workspace", name: "Demo", slug: "demo" },
@@ -573,6 +660,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     completeOnboarding: mocks.completeOnboarding,
     fetchOnboardingState: mocks.fetchOnboardingState,
     fetchDemoState: mocks.fetchDemoState,
+    fetchAgenticRuns: mocks.fetchAgenticRuns,
+    fetchEvidenceEnvelopes: mocks.fetchEvidenceEnvelopes,
     bootstrapDemo: mocks.bootstrapDemo,
     fetchIntegrationCatalog: mocks.fetchIntegrationCatalog,
     fetchIntegrationConnections: mocks.fetchIntegrationConnections,
@@ -598,6 +687,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     deleteOpenAICodexOAuthCredential: mocks.deleteOpenAICodexOAuthCredential,
   };
 });
+
+vi.mock("@goatcitadel/mission-control-shared/api/trust", () => ({
+  fetchTrustPolicySnapshot: mocks.fetchTrustPolicySnapshot,
+}));
 
 vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () => ({
   useProviderModelCatalog: () => ({
@@ -962,6 +1055,8 @@ beforeEach(async () => {
       },
     },
   });
+  mocks.fetchAgenticRuns.mockResolvedValue({ items: [] });
+  mocks.fetchEvidenceEnvelopes.mockResolvedValue({ items: [] });
   mocks.bootstrapOnboarding.mockResolvedValue({
     state: await mocks.fetchOnboardingState(),
     appliedAt: "2026-05-02T19:00:00.000Z",
@@ -2026,7 +2121,8 @@ describe("SettingsNativePage providers", () => {
     let text = collectText(renderer!.root);
     expect(text).toContain("First-run setup");
     expect(text).toContain("First trusted outcome");
-    expect(text).toContain("Model discovery checked");
+    expect(text).toContain("Provider-ready path");
+    expect(text).toContain("first-task-pending");
     expect(text).toContain("Ecosystem proof lanes");
     expect(text).toContain("Voice Wake / Talk Mode");
     expect(text).toContain("Provider configured");
@@ -2094,6 +2190,122 @@ describe("SettingsNativePage providers", () => {
     expect(text).toContain("Unknown settings section");
     expect(text).toContain("Open General");
     expect(text).not.toContain("Mission Control posture");
+  });
+
+  it("offers a truthful demo/local path when no provider is configured", async () => {
+    mocks.fetchOnboardingState.mockResolvedValueOnce({
+      completed: false,
+      checklist: [
+        { id: "llm", label: "Provider configured", status: "needs_input", detail: "Select an active provider." },
+        { id: "runtime", label: "Runtime ready", status: "complete", detail: "Gateway is reachable." },
+      ],
+      settings: {
+        defaultToolProfile: "standard",
+        budgetMode: "balanced",
+        networkAllowlist: [],
+        auth: {
+          mode: "none",
+          allowLoopbackBypass: true,
+          tokenConfigured: false,
+          basicConfigured: false,
+        },
+        llm: {
+          activeProviderId: "",
+          activeModel: "",
+          providers: [],
+        },
+        mesh: {
+          enabled: false,
+          mode: "lan",
+          nodeId: "",
+          mdns: true,
+          staticPeers: [],
+          requireMtls: false,
+          tailnetEnabled: false,
+        },
+      },
+    });
+    mocks.fetchDemoState.mockResolvedValueOnce({
+      status: "not_started",
+      sessions: [],
+      tasks: [],
+      starterPrompts: [],
+      memorySeeds: [],
+      nextRoute: "/settings/onboarding",
+      notes: [],
+    } as any);
+
+    let renderer: ReactTestRenderer | null = null;
+    await act(async () => {
+      renderer = renderPage("onboarding");
+    });
+    await flushAsyncUpdates();
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("provider-missing");
+    expect(text).toContain("demo/local");
+    expect(text).toContain("No provider or local endpoint is configured");
+    expect(text).toContain("does not send work to a cloud provider");
+    expect(text).not.toContain("hostile-code sandboxing");
+    expect(text).not.toContain("autonomous high-risk");
+  });
+
+  it("marks proof complete from evidence and links to the run surface", async () => {
+    mocks.fetchAgenticRuns.mockResolvedValueOnce({
+      items: [
+        {
+          taskId: "task-1",
+          runId: "run-first-proof",
+          title: "First governed task",
+          taskStatus: "done",
+          status: "completed",
+          surface: "cowork",
+          parentSessionId: "cowork-session",
+          updatedAt: "2026-05-30T00:00:00.000Z",
+        },
+      ],
+    } as any);
+    mocks.fetchEvidenceEnvelopes.mockResolvedValueOnce({
+      items: [
+        {
+          envelopeId: "evidence-envelope-1",
+          eventKind: "durable_checkpoint",
+          runId: "run-first-proof",
+          contentHash: "content-hash",
+          payloadHash: "payload-hash",
+          toolCallHashes: [],
+          memoryLineage: [],
+          signatureStatus: "unsigned_local",
+          metadata: {},
+          createdAt: "2026-05-30T00:00:00.000Z",
+        },
+      ],
+    } as any);
+    const navigate = vi.fn();
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <SettingsNativePage
+          route={{ area: "settings", section: "onboarding", theme: "ops" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          navigate={navigate}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+    });
+    await flushAsyncUpdates();
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("proof-complete");
+    expect(text).toContain("Evidence envelope evidence");
+
+    await act(async () => {
+      findButton(renderer!.root, "Open Run Detail").props.onClick();
+    });
+
+    expect(navigate).toHaveBeenCalledWith({ area: "cowork", sessionId: "cowork-session", theme: "ops" });
   });
 
   it("keeps budget evidence navigation and retry visible when budget settings fail to load", async () => {
@@ -3296,6 +3508,59 @@ describe("SettingsNativePage access", () => {
     } finally {
       Object.assign(globalThis, { window: previousWindow });
     }
+  });
+});
+
+describe("SettingsNativePage Trust & Policy", () => {
+  it("renders the unified trust matrix without replacing owner editors", async () => {
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderPage("trust-policy");
+    });
+    await act(async () => undefined);
+
+    let text = collectText(renderer!.root);
+    expect(mocks.fetchTrustPolicySnapshot).toHaveBeenCalledTimes(1);
+    expect(text).toContain("Trust & Policy snapshot");
+    expect(text).toContain("Trust matrix");
+    expect(text).toContain("Browser search");
+    expect(text).toContain("Dangerous shell");
+    expect(text).toContain("Ready");
+    expect(text).toContain("Approval required");
+    expect(text).toContain("Quarantined");
+    expect(text).toContain("Not callable");
+    expect(text).toContain("Permissions");
+    expect(text).toContain("Tools");
+    expect(text).toContain("MCP");
+    expect(text).toContain("Skills");
+    expect(text).toContain("Capabilities");
+    expect(text).toContain("Approvals");
+
+    await act(async () => {
+      findInputByPlaceholder(renderer!.root, "Search trust, grants, blockers, or source").props.onChange({
+        target: { value: "Dangerous shell" },
+      });
+    });
+    text = collectText(renderer!.root);
+    expect(text).toMatch(/Showing\s+1\s+of\s+5/);
+    expect(text).toContain("Dangerous shell");
+    expect(text).not.toContain("Browser search");
+  });
+
+  it("fails closed into warnings and an empty dashboard when the snapshot API is absent", async () => {
+    mocks.fetchTrustPolicySnapshot.mockRejectedValueOnce(new Error("snapshot route missing"));
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderPage("trust-policy");
+    });
+    await act(async () => undefined);
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("Some data could not load");
+    expect(text).toContain("snapshot route missing");
+    expect(text).toContain("Trust & Policy snapshot is unavailable");
   });
 });
 

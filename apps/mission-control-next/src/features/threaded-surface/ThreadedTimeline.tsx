@@ -216,7 +216,13 @@ function buildChatReadinessCards(props: MissionThreadedActiveSessionSurfaceProps
   ] as const;
 }
 
-export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessionSurfaceProps }) {
+export function ThreadedTimeline({
+  props,
+  onOpenUniversalRunDetail,
+}: {
+  props: MissionThreadedActiveSessionSurfaceProps;
+  onOpenUniversalRunDetail?: (runId: string) => void;
+}) {
   const shellRef = useRef<HTMLDivElement | null>(null);
   const [manualWindowStart, setManualWindowStart] = useState<number | null>(null);
   const lastTurn = props.thread?.turns.at(-1) ?? null;
@@ -371,6 +377,7 @@ export function ThreadedTimeline({ props }: { props: MissionThreadedActiveSessio
                     onSwitchBranch={props.onSwitchBranch}
                     onRetryTurn={props.onRetryTurn}
                     onOpenRunDetails={props.onOpenRunDetails}
+                    onOpenUniversalRunDetail={onOpenUniversalRunDetail}
                     onOpenGeneratedArtifact={props.onOpenGeneratedArtifact}
                     onCreateGeneratedArtifact={props.onCreateGeneratedArtifact}
                     onCreateGeneratedArtifactVersion={props.onCreateGeneratedArtifactVersion}

@@ -27,12 +27,14 @@ const settingsMocks = vi.hoisted(() => {
     discoverTelegramTargets: fn(),
     fetchAddonStatus: fn(),
     fetchAddonsCatalog: fn(),
+    fetchAgenticRuns: fn(),
     fetchCapabilityPackPreview: fn(),
     fetchCapabilityPacks: fn(),
     fetchChannelSetupDefinitions: fn(),
     fetchChannelSetupDrafts: fn(),
     fetchDaemonStatus: fn(),
     fetchDemoState: fn(),
+    fetchEvidenceEnvelopes: fn(),
     fetchDeviceAccessGrants: fn(),
     fetchGoogleMeetPrerequisiteStatus: fn(),
     fetchGoogleMeetSessions: fn(),
@@ -144,12 +146,14 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   discoverTelegramTargets: settingsMocks.discoverTelegramTargets,
   fetchAddonStatus: settingsMocks.fetchAddonStatus,
   fetchAddonsCatalog: settingsMocks.fetchAddonsCatalog,
+  fetchAgenticRuns: settingsMocks.fetchAgenticRuns,
   fetchCapabilityPackPreview: settingsMocks.fetchCapabilityPackPreview,
   fetchCapabilityPacks: settingsMocks.fetchCapabilityPacks,
   fetchChannelSetupDefinitions: settingsMocks.fetchChannelSetupDefinitions,
   fetchChannelSetupDrafts: settingsMocks.fetchChannelSetupDrafts,
   fetchDaemonStatus: settingsMocks.fetchDaemonStatus,
   fetchDemoState: settingsMocks.fetchDemoState,
+  fetchEvidenceEnvelopes: settingsMocks.fetchEvidenceEnvelopes,
   fetchDeviceAccessGrants: settingsMocks.fetchDeviceAccessGrants,
   fetchGoogleMeetPrerequisiteStatus: settingsMocks.fetchGoogleMeetPrerequisiteStatus,
   fetchGoogleMeetSessions: settingsMocks.fetchGoogleMeetSessions,
@@ -498,6 +502,8 @@ function setupResponses() {
       },
     },
   });
+  settingsMocks.fetchAgenticRuns.mockResolvedValue({ items: [] });
+  settingsMocks.fetchEvidenceEnvelopes.mockResolvedValue({ items: [] });
   settingsMocks.fetchMcpServers.mockResolvedValue({
     items: [
       {
@@ -834,7 +840,7 @@ describe("SettingsNativePage broad native sections", () => {
     expect(generalText).toContain("No active provider");
 
     const quickRouteButtons = buttons(general.root, "Open");
-    expect(quickRouteButtons).toHaveLength(17);
+    expect(quickRouteButtons).toHaveLength(18);
     for (const button of quickRouteButtons) {
       await click(button);
     }
@@ -1223,21 +1229,14 @@ describe("SettingsNativePage broad native sections", () => {
     expect(settingsMocks.completeOnboarding).toHaveBeenCalledWith("operator");
     expect(collectText(onboarding.root)).toContain("complete failed");
 
-    const openButtons = buttons(onboarding.root, "Open");
-    await click(openButtons[0]!);
-    await click(openButtons[1]!);
-    await click(openButtons[2]!);
-    await click(openButtons[3]!);
-    await click(openButtons[4]!);
-    await click(openButtons[5]!);
-    await click(openButtons[6]!);
+    await click(findButton(onboarding.root, "Configure"));
+    await click(findButton(onboarding.root, "Start demo/local"));
+    await click(findButton(onboarding.root, "Open Cowork"));
     await click(findButton(onboarding.root, "Inspect proof"));
     await click(findButton(onboarding.root, "Access"));
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "providers", theme: "ops" });
-    expect(navigate).toHaveBeenCalledWith({ area: "chat", theme: "ops" });
+    expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "onboarding", theme: "ops" });
     expect(navigate).toHaveBeenCalledWith({ area: "cowork", theme: "ops" });
-    expect(navigate).toHaveBeenCalledWith({ area: "projects", theme: "ops" });
-    expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "runtime", theme: "ops" });
     expect(navigate).toHaveBeenCalledWith({ area: "library", section: "artifacts", theme: "ops" });
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "access", theme: "ops" });
 

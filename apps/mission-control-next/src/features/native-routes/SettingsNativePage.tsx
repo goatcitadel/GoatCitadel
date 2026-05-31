@@ -4,9 +4,11 @@ import {
   providerTemplates,
   type AddonCatalogEntry,
   type AddonInstalledRecord,
+  type AgenticRunListItem,
   type CapabilityPackManifest,
   type CapabilityPackPreview,
   type DemoBootstrapStateResponse,
+  type EvidenceEnvelope,
   type DeviceAccessGrantRecord,
   type LlmProviderAdviceResponse,
   type LlmProviderRequestConfig,
@@ -76,6 +78,7 @@ import {
   enableAddon,
   fetchAddonStatus,
   fetchAddonsCatalog,
+  fetchAgenticRuns,
   bootstrapDemo,
   fetchCapabilityPackPreview,
   fetchCapabilityPacks,
@@ -107,6 +110,7 @@ import {
   fetchPermissionProfiles,
   fetchDemoState,
   fetchProviderSecretStatus,
+  fetchEvidenceEnvelopes,
   fetchSettings,
   fetchToolCatalog,
   fetchToolGrants,
@@ -177,6 +181,7 @@ import {
 } from "./library/use-form-dirty";
 import "./native-routes.css";
 import { BudgetSection } from "./settings/sections/BudgetSection";
+import { TrustPolicySection } from "./settings/sections/TrustPolicySection";
 import { UnknownSettingsSection } from "./settings/sections/UnknownSettingsSection";
 import {
   SettingsActionList,
@@ -249,6 +254,12 @@ const INTERNAL_APPROVAL_INBOX_URL = "goatcitadel://approval-inbox";
 type OnboardingPageState = OnboardingState & {
   runtimeSettings: Awaited<ReturnType<typeof fetchSettings>> | null;
   demoState: DemoBootstrapStateResponse | null;
+  firstRunEvidence: FirstRunEvidenceSnapshot;
+};
+
+export type FirstRunEvidenceSnapshot = {
+  recentRuns: AgenticRunListItem[];
+  evidenceEnvelopes: EvidenceEnvelope[];
 };
 
 export function SettingsNativePage(props: SettingsNativePageProps) {
@@ -314,6 +325,8 @@ function renderSettingsSection(props: SettingsSectionProps) {
       return <AccessSection {...props} />;
     case "permissions":
       return <PermissionsSection {...props} />;
+    case "trust-policy":
+      return <TrustPolicySection {...props} />;
     case "runtime":
       return <RuntimeSection {...props} />;
     case "workspaces":
@@ -416,7 +429,8 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
               items={[
                 {
                   label: "Beginner path",
-                  description: "Provider, model smoke, first Chat/Cowork/Code outcome, and one proof artifact.",
+                  description:
+                    "Provider/local path, first Chat/Cowork/Code task, retained evidence, and Run Detail inspection.",
                   actionLabel: "Start Here",
                   onClick: () => navigate({ area: "settings", section: "onboarding", theme: route.theme }),
                 },
@@ -489,6 +503,11 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
                   label: "Permissions",
                   description: "Choose operator profiles, defaults, and Local Operator Override state.",
                   onClick: () => navigate({ area: "settings", section: "permissions", theme: route.theme }),
+                },
+                {
+                  label: "Trust & Policy",
+                  description: "Review capability, tool, and source posture before opening editor surfaces.",
+                  onClick: () => navigate({ area: "settings", section: "trust-policy", theme: route.theme }),
                 },
                 {
                   label: "Add-ons",
@@ -594,12 +613,22 @@ function GeneralSection({ activeWorkspaceName, route, navigate }: SettingsSectio
 
 function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [onboarding, runtimeSettings, demoState] = await Promise.all([
+    const [onboarding, runtimeSettings, demoState, agenticRuns, evidenceEnvelopes] = await Promise.all([
       fetchOnboardingState(),
       fetchSettings().catch(() => null),
       fetchDemoState().catch(() => null),
+      fetchAgenticRuns({ limit: 10 }).catch(() => ({ items: [] })),
+      fetchEvidenceEnvelopes({ limit: 10 }).catch(() => ({ items: [] })),
     ]);
-    return { ...onboarding, runtimeSettings, demoState } satisfies OnboardingPageState;
+    return {
+      ...onboarding,
+      runtimeSettings,
+      demoState,
+      firstRunEvidence: {
+        recentRuns: agenticRuns.items,
+        evidenceEnvelopes: evidenceEnvelopes.items,
+      },
+    } satisfies OnboardingPageState;
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -674,7 +703,13 @@ function OnboardingSection({ route, navigate, setActiveWorkspaceId }: SettingsSe
       {data ? (
         <SettingsGrid variant="detail-wide">
           <DemoStartPanel route={route} navigate={navigate} setActiveWorkspaceId={setActiveWorkspaceId} />
-          <FirstOutcomePathPanel route={route} navigate={navigate} onboarding={data} demoState={data.demoState} />
+          <FirstOutcomePathPanel
+            route={route}
+            navigate={navigate}
+            onboarding={data}
+            demoState={data.demoState}
+            firstRunEvidence={data.firstRunEvidence}
+          />
           <ProviderSmokeEvidencePanel route={route} navigate={navigate} onboarding={data} />
           <SetupCenterPanel route={route} navigate={navigate} onboarding={data} />
           <EcosystemProofLanePanel route={route} navigate={navigate} />
@@ -951,21 +986,25 @@ function FirstOutcomePathPanel({
   navigate,
   onboarding,
   demoState,
+  firstRunEvidence,
 }: {
   route: AppRoute;
   navigate: SettingsNativePageProps["navigate"];
   onboarding: OnboardingState;
   demoState: DemoBootstrapStateResponse | null;
+  firstRunEvidence: FirstRunEvidenceSnapshot;
 }) {
-  const items = deriveFirstOutcomePathItems(onboarding, demoState);
+  const items = deriveFirstOutcomePathItems(onboarding, demoState, firstRunEvidence);
   const completeCount = items.filter((item) => item.state === "complete").length;
   const nextItem = items.find((item) => item.state !== "complete") ?? items[items.length - 1];
+  const pathState = deriveFirstRunGovernedJobState(onboarding, demoState, firstRunEvidence);
 
   return (
     <SettingsPanel
       title="First trusted outcome"
       subtitle="Follow one path from provider readiness to a proof-backed Chat, Cowork, or Code result."
       stats={[
+        { label: "Path state", value: pathState },
         { label: "Progress", value: `${completeCount}/${items.length}` },
         { label: "Next", value: nextItem?.label ?? "Ready" },
         { label: "Evidence", value: items.at(-1)?.state === "complete" ? "Produced" : "Needed" },
@@ -7582,6 +7621,13 @@ type FirstOutcomePathItem = {
   route: AppRoute;
 };
 
+export type FirstRunGovernedJobState =
+  | "provider-ready"
+  | "provider-missing"
+  | "demo/local"
+  | "first-task-pending"
+  | "proof-complete";
+
 type OnboardingProviderSmokeEvidenceItem = {
   id: string;
   label: string;
@@ -7661,110 +7707,163 @@ export function deriveEcosystemProofLaneItems(): EcosystemProofLaneItem[] {
 export function deriveFirstOutcomePathItems(
   onboarding: OnboardingState,
   demoState: DemoBootstrapStateResponse | null,
+  firstRunEvidence: FirstRunEvidenceSnapshot = EMPTY_FIRST_RUN_EVIDENCE,
 ): FirstOutcomePathItem[] {
   const activeProvider = onboarding.settings.llm.providers.find(
     (provider) => provider.providerId === onboarding.settings.llm.activeProviderId,
   );
   const activeModel = onboarding.settings.llm.activeModel.trim();
-  const providerCredentialReady = Boolean(
-    activeProvider && (activeProvider.hasApiKey || isLikelyLocalProviderBaseUrl(activeProvider.baseUrl)),
-  );
+  const localEndpointReady = Boolean(activeProvider && isLikelyLocalProviderBaseUrl(activeProvider.baseUrl));
+  const cloudProviderReady = Boolean(activeProvider?.hasApiKey);
+  const providerCredentialReady = Boolean(activeProvider && (cloudProviderReady || localEndpointReady));
   const providerConnected = Boolean(activeProvider && activeModel && providerCredentialReady);
   const demoSessions = demoState?.sessions ?? [];
   const demoTasks = demoState?.tasks ?? [];
+  const demoReady = demoState?.status === "ready";
   const hasChatStart = demoSessions.some((session) => session.mode === "chat");
-  const hasCoworkStart = Boolean(
-    demoSessions.some((session) => session.mode === "cowork") ||
-    demoTasks.some((task) => task.title.toLowerCase().includes("cowork")),
+  const hasCoworkStart = demoSessions.some((session) => session.mode === "cowork");
+  const hasCodeStart = demoSessions.some((session) => session.mode === "code");
+  const hasTaskStart = Boolean(
+    firstRunEvidence.recentRuns.length > 0 || demoTasks.length > 0 || hasChatStart || hasCoworkStart || hasCodeStart,
   );
   const hasProjectCreation = Boolean(demoState?.project?.projectId || demoState?.project?.workspacePath);
   const providerFailure = describeProviderReadinessFailure(onboarding);
+  const latestProof = firstRunEvidence.evidenceEnvelopes[0];
+  const proofRun = findRunForEvidence(firstRunEvidence.recentRuns, latestProof);
+  const proofRoute = routeForFirstRunEvidence(proofRun);
 
   return [
     {
-      id: "provider-key",
-      label: "Provider key ready",
-      description: providerCredentialReady
-        ? `${activeProvider?.label ?? onboarding.settings.llm.activeProviderId} has a provider key or local endpoint.`
+      id: "provider-ready",
+      label: "Provider-ready path",
+      description: providerConnected
+        ? `${activeProvider?.label ?? onboarding.settings.llm.activeProviderId} is selected with ${activeModel}; risky actions still stay approval-governed.`
         : providerFailure,
-      actionDescription: "Open Providers & Models to choose a provider, model, and secret source.",
+      actionDescription: "Open Providers & Models to choose a provider, model, secret source, or local endpoint.",
       state: providerCredentialReady ? "complete" : "active",
-      meta: providerCredentialReady ? "Credential ready" : "Needs provider setup",
+      meta: providerConnected ? "provider-ready" : "provider-missing",
       actionLabel: "Configure",
       route: { area: "settings", section: "providers" },
     },
     {
-      id: "model-discovery",
-      label: "Model discovery checked",
-      description: providerConnected
-        ? `Refresh model discovery for ${activeProvider?.label ?? onboarding.settings.llm.activeProviderId}; ${activeModel} is the selected model.`
-        : "Connect a provider and choose a model before checking live account-visible models.",
-      actionDescription: "Open Providers & Models, then use Refresh models for the configured provider.",
-      state: providerConnected ? "active" : "pending",
-      meta: providerConnected ? "Refresh required" : "Blocked by provider",
-      actionLabel: "Refresh models",
-      route: { area: "settings", section: "providers" },
+      id: "provider-missing",
+      label: "Provider missing fallback",
+      description:
+        providerCredentialReady || demoReady
+          ? "The fallback remains available for local inspection without provider credentials."
+          : "No provider or local endpoint is configured. Use the safe demo/local path before cloud-backed sends.",
+      actionDescription:
+        "Start or reopen the safe local demo path; it seeds inspectable data and does not send work to a cloud provider.",
+      state: providerCredentialReady ? "pending" : demoReady ? "complete" : "active",
+      meta: providerCredentialReady ? "provider-ready" : "provider-missing",
+      actionLabel: "Start demo/local",
+      route: { area: "settings", section: "onboarding" },
     },
     {
-      id: "provider-smoke",
-      label: "Provider smoke evidence",
-      description: providerConnected
-        ? "Run a configured-provider smoke check and keep the pass/fail evidence before release claims."
-        : "Connect a provider first; smoke cannot run without a provider, model, and credential or local endpoint.",
-      actionDescription: "Open provider diagnostics and run the configured model check when credentials are ready.",
-      state: providerConnected ? "active" : "pending",
-      meta: providerConnected ? "Evidence required" : "Blocked by provider",
-      actionLabel: "Open checks",
-      route: { area: "settings", section: "providers" },
+      id: "demo-local",
+      label: "Demo/local path",
+      description:
+        demoReady || localEndpointReady
+          ? "A demo workspace or local endpoint is available for truthful first-run inspection."
+          : "Start the safe demo or configure a local OpenAI-compatible endpoint when no provider key is available.",
+      actionDescription: "Open the local-first path for sample Chat, Cowork, Code, memory, and project context.",
+      state: demoReady || localEndpointReady ? "complete" : providerCredentialReady ? "pending" : "active",
+      meta: "demo/local",
+      actionLabel: demoReady ? "Open demo" : "Start demo",
+      route: { area: "settings", section: "onboarding" },
     },
     {
-      id: "first-chat",
-      label: "First Chat sent",
-      description: hasChatStart
-        ? "A starter Chat thread is available; send or inspect the first user outcome there."
-        : "Open Chat and send the first low-risk prompt after provider smoke evidence is ready.",
-      actionDescription: "Open Chat for the first normal response and runtime-context inspection.",
-      state: hasChatStart ? "complete" : providerConnected ? "active" : "pending",
-      meta: hasChatStart ? "Starter thread ready" : "Needs first send",
-      actionLabel: "Open Chat",
-      route: { area: "chat" },
-    },
-    {
-      id: "first-cowork",
-      label: "First Cowork run",
-      description: hasCoworkStart
-        ? "A starter Cowork run or task exists for supervised multi-step work."
-        : "Start a Cowork run so blockers, approvals, checkpoints, and evidence become inspectable.",
-      actionDescription: "Open Cowork to start or resume the first supervised run.",
-      state: hasCoworkStart ? "complete" : hasChatStart ? "active" : "pending",
-      meta: hasCoworkStart ? "Starter run ready" : "Needs run",
+      id: "first-task-pending",
+      label: "First Chat/Cowork/Code task",
+      description: hasTaskStart
+        ? "A starter or governed task exists; inspect the surface before treating the first run as complete."
+        : "Create the first low-risk Chat, Cowork, or Code task after provider/local readiness is explicit.",
+      actionDescription:
+        "Open Cowork for the first supervised task, or switch to Chat/Code from the same runtime shell.",
+      state: hasTaskStart ? "complete" : providerConnected || demoReady || localEndpointReady ? "active" : "pending",
+      meta: hasTaskStart ? "task-found" : "first-task-pending",
       actionLabel: "Open Cowork",
       route: { area: "cowork" },
     },
     {
-      id: "project-created",
-      label: "Project created",
-      description: hasProjectCreation
-        ? "A project exists for the first outcome and can group Chat, Cowork, Code, and artifacts."
-        : "Create or bind a project so the first outcome has a durable workspace container.",
-      actionDescription: "Open Projects to create or inspect the workspace container for the first outcome.",
-      state: hasProjectCreation ? "complete" : hasCoworkStart ? "active" : "pending",
-      meta: hasProjectCreation ? "Project ready" : "Needs project",
-      actionLabel: "Open Projects",
-      route: { area: "projects" },
-    },
-    {
-      id: "proof-artifact",
-      label: "Proof artifact produced",
-      description:
-        "Run validation or inspect generated artifacts after the first outcome; this is the evidence that makes setup trustworthy.",
-      actionDescription: "Open generated artifacts or Code validation history to inspect proof.",
-      state: hasProjectCreation ? "active" : "pending",
-      meta: "Proof required",
-      actionLabel: "Inspect proof",
-      route: { area: "library", section: "artifacts" },
+      id: "proof-complete",
+      label: "Proof artifact or trace",
+      description: latestProof
+        ? `Evidence envelope ${shortEvidenceId(latestProof.envelopeId)} records ${latestProof.eventKind}${
+            latestProof.runId ? ` for run ${shortEvidenceId(latestProof.runId)}` : ""
+          }.`
+        : "No proof artifact or trace is recorded yet. A first-run task is not complete until evidence exists.",
+      actionDescription: latestProof
+        ? "Open the linked run surface and use Run details or artifacts to inspect retained evidence."
+        : "Open generated artifacts or the Code/Cowork run panel after a governed task records evidence.",
+      state: latestProof ? "complete" : hasTaskStart || hasProjectCreation ? "active" : "pending",
+      meta: latestProof ? "proof-complete" : "proof-needed",
+      actionLabel: latestProof ? "Open Run Detail" : "Inspect proof",
+      route: latestProof ? proofRoute : { area: "library", section: "artifacts" },
     },
   ];
+}
+
+const EMPTY_FIRST_RUN_EVIDENCE: FirstRunEvidenceSnapshot = {
+  recentRuns: [],
+  evidenceEnvelopes: [],
+};
+
+export function deriveFirstRunGovernedJobState(
+  onboarding: OnboardingState,
+  demoState: DemoBootstrapStateResponse | null,
+  firstRunEvidence: FirstRunEvidenceSnapshot = EMPTY_FIRST_RUN_EVIDENCE,
+): FirstRunGovernedJobState {
+  if (firstRunEvidence.evidenceEnvelopes.length > 0) {
+    return "proof-complete";
+  }
+  const activeProvider = onboarding.settings.llm.providers.find(
+    (provider) => provider.providerId === onboarding.settings.llm.activeProviderId,
+  );
+  const activeModel = onboarding.settings.llm.activeModel.trim();
+  const providerReady = Boolean(
+    activeProvider && activeModel && (activeProvider.hasApiKey || isLikelyLocalProviderBaseUrl(activeProvider.baseUrl)),
+  );
+  const demoReady = demoState?.status === "ready";
+  const demoTaskCount = demoState?.tasks?.length ?? 0;
+  const demoHasThread = Boolean(
+    demoState?.sessions?.some(
+      (session) => session.mode === "chat" || session.mode === "cowork" || session.mode === "code",
+    ),
+  );
+  const taskStarted = Boolean(firstRunEvidence.recentRuns.length > 0 || demoTaskCount > 0 || demoHasThread);
+  if (taskStarted && (providerReady || demoReady)) {
+    return "first-task-pending";
+  }
+  if (activeProvider && activeModel && isLikelyLocalProviderBaseUrl(activeProvider.baseUrl)) {
+    return "demo/local";
+  }
+  if (providerReady) {
+    return "provider-ready";
+  }
+  return demoReady ? "demo/local" : "provider-missing";
+}
+
+function findRunForEvidence(runs: AgenticRunListItem[], evidence: EvidenceEnvelope | undefined) {
+  if (!evidence?.runId) {
+    return undefined;
+  }
+  return runs.find((run) => run.runId === evidence.runId);
+}
+
+function routeForFirstRunEvidence(run: AgenticRunListItem | undefined): AppRoute {
+  if (run?.surface) {
+    const route: AppRoute = { area: run.surface };
+    if (run.parentSessionId) {
+      route.sessionId = run.parentSessionId;
+    }
+    return route;
+  }
+  return { area: "ops", section: "sessions" };
+}
+
+function shortEvidenceId(value: string): string {
+  return value.length > 12 ? `${value.slice(0, 8)}...` : value;
 }
 
 export function deriveOnboardingProviderSmokeEvidenceItems(

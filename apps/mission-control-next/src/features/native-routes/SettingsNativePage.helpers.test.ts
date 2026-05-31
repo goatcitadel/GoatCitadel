@@ -13,6 +13,7 @@ import {
   deriveDesktopMobileContinuityItems,
   deriveEcosystemProofLaneItems,
   deriveFirstOutcomePathItems,
+  deriveFirstRunGovernedJobState,
   deriveLlamaCppAlias,
   deriveOnboardingProviderSmokeEvidenceItems,
   deriveProviderSmokeEvidenceItems,
@@ -210,13 +211,12 @@ describe("SettingsNativePage helpers", () => {
     );
     expect(deriveFirstOutcomePathItems(missingProviderOnboarding, null).map((item) => item.state)).toEqual([
       "active",
-      "pending",
-      "pending",
-      "pending",
-      "pending",
+      "active",
+      "active",
       "pending",
       "pending",
     ]);
+    expect(deriveFirstRunGovernedJobState(missingProviderOnboarding, null)).toBe("provider-missing");
 
     const readyProviderOnboarding = {
       checklist: [],
@@ -233,25 +233,16 @@ describe("SettingsNativePage helpers", () => {
 
     const providerItems = deriveFirstOutcomePathItems(readyProviderOnboarding, null);
     expect(providerItems.map((item) => item.label)).toEqual([
-      "Provider key ready",
-      "Model discovery checked",
-      "Provider smoke evidence",
-      "First Chat sent",
-      "First Cowork run",
-      "Project created",
-      "Proof artifact produced",
+      "Provider-ready path",
+      "Provider missing fallback",
+      "Demo/local path",
+      "First Chat/Cowork/Code task",
+      "Proof artifact or trace",
     ]);
-    expect(providerItems.map((item) => item.state)).toEqual([
-      "complete",
-      "active",
-      "active",
-      "active",
-      "pending",
-      "pending",
-      "pending",
-    ]);
-    expect(providerItems[1]!.description).toContain("Refresh model discovery");
-    expect(providerItems[2]!.meta).toBe("Evidence required");
+    expect(providerItems.map((item) => item.state)).toEqual(["complete", "pending", "pending", "active", "pending"]);
+    expect(providerItems[0]!.description).toContain("risky actions still stay approval-governed");
+    expect(providerItems[3]!.meta).toBe("first-task-pending");
+    expect(deriveFirstRunGovernedJobState(readyProviderOnboarding, null)).toBe("provider-ready");
     expect(deriveOnboardingProviderSmokeEvidenceItems(readyProviderOnboarding).map((item) => item.label)).toEqual([
       "Provider configured",
       "Smoke ready",
@@ -278,16 +269,38 @@ describe("SettingsNativePage helpers", () => {
       nextRoute: "/chat",
       notes: [],
     } as any);
-    expect(demoItems.map((item) => item.state)).toEqual([
-      "complete",
-      "active",
-      "active",
-      "complete",
-      "complete",
-      "complete",
-      "active",
-    ]);
-    expect(demoItems.at(-1)!.meta).toBe("Proof required");
+    expect(demoItems.map((item) => item.state)).toEqual(["complete", "pending", "complete", "complete", "active"]);
+    expect(demoItems.at(-1)!.meta).toBe("proof-needed");
+    expect(
+      deriveFirstRunGovernedJobState(readyProviderOnboarding, null, {
+        recentRuns: [
+          {
+            taskId: "task-1",
+            runId: "run-1",
+            title: "First run",
+            taskStatus: "done",
+            status: "completed",
+            surface: "cowork",
+            parentSessionId: "cowork-1",
+            updatedAt: "2026-05-30T00:00:00.000Z",
+          },
+        ],
+        evidenceEnvelopes: [
+          {
+            envelopeId: "env-1",
+            eventKind: "durable_checkpoint",
+            runId: "run-1",
+            contentHash: "hash",
+            payloadHash: "payload",
+            toolCallHashes: [],
+            memoryLineage: [],
+            signatureStatus: "unsigned_local",
+            metadata: {},
+            createdAt: "2026-05-30T00:00:00.000Z",
+          },
+        ],
+      }),
+    ).toBe("proof-complete");
   });
 
   it("orders ecosystem proof lanes without over-claiming blocked parity", () => {

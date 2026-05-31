@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "./app.js";
 
 const TOKEN = "security-review-token-1234567890";
+const RATE_LIMIT_TEST_TIMEOUT_MS = 45_000;
 const ENV_KEYS = [
   "GATEWAY_HOST",
   "GOATCITADEL_ALLOWED_ORIGINS",
@@ -24,7 +26,7 @@ const originalEnv = new Map<string, string | undefined>(ENV_KEYS.map((key) => [k
 const tempRoots: string[] = [];
 
 describe("gateway route rate limits", () => {
-  afterEach(() => {
+  afterEach(async () => {
     for (const key of ENV_KEYS) {
       const original = originalEnv.get(key);
       if (original === undefined) {
@@ -34,88 +36,100 @@ describe("gateway route rate limits", () => {
       }
     }
     for (const root of tempRoots.splice(0)) {
-      fs.rmSync(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
-  it("applies mutation rate limits to security-sensitive control-plane routes", async () => {
-    configureRateLimitedGateway();
-    const app = await buildApp();
-    try {
-      await expectMutationRouteToRateLimit(
-        app,
-        "/api/v1/llm/providers/openai-codex/oauth/device/start",
-        "203.0.113.41",
-      );
-      await expectMutationRouteToRateLimit(app, "/api/v1/approvals", "203.0.113.42");
-    } finally {
-      await app.close();
-    }
-  });
+  it(
+    "applies mutation rate limits to security-sensitive control-plane routes",
+    async () => {
+      configureRateLimitedGateway();
+      const app = await buildApp();
+      try {
+        await expectMutationRouteToRateLimit(
+          app,
+          "/api/v1/llm/providers/openai-codex/oauth/device/start",
+          "203.0.113.41",
+        );
+        await expectMutationRouteToRateLimit(app, "/api/v1/approvals", "203.0.113.42");
+      } finally {
+        await app.close();
+      }
+    },
+    RATE_LIMIT_TEST_TIMEOUT_MS,
+  );
 
-  it("applies explicit rate limits to Slack OAuth routes", async () => {
-    configureRateLimitedGateway();
-    const app = await buildApp();
-    try {
-      await expectRouteToRateLimit(app, "GET", "/api/v1/integrations/slack/oauth/status", "203.0.113.51", 200);
-      await expectRouteToRateLimit(app, "POST", "/api/v1/integrations/slack/oauth/start", "203.0.113.52", 400);
-      await expectRouteToRateLimit(app, "GET", "/api/v1/integrations/slack/oauth/callback", "203.0.113.53", 400);
-      await expectRouteToRateLimit(app, "POST", "/api/v1/integrations/slack/oauth/disconnect", "203.0.113.54", 400);
-    } finally {
-      await app.close();
-    }
-  });
+  it(
+    "applies explicit rate limits to Slack OAuth routes",
+    async () => {
+      configureRateLimitedGateway();
+      const app = await buildApp();
+      try {
+        await expectRouteToRateLimit(app, "GET", "/api/v1/integrations/slack/oauth/status", "203.0.113.51", 200);
+        await expectRouteToRateLimit(app, "POST", "/api/v1/integrations/slack/oauth/start", "203.0.113.52", 400);
+        await expectRouteToRateLimit(app, "GET", "/api/v1/integrations/slack/oauth/callback", "203.0.113.53", 400);
+        await expectRouteToRateLimit(app, "POST", "/api/v1/integrations/slack/oauth/disconnect", "203.0.113.54", 400);
+      } finally {
+        await app.close();
+      }
+    },
+    RATE_LIMIT_TEST_TIMEOUT_MS,
+  );
 
-  it("applies explicit rate limits to provider webhook routes", async () => {
-    configureRateLimitedGateway();
-    const app = await buildApp();
-    try {
-      await expectRouteToRateLimit(
-        app,
-        "POST",
-        "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/slack/webhook",
-        "203.0.113.61",
-        404,
-      );
-      await expectRouteToRateLimit(
-        app,
-        "POST",
-        "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/telegram/webhook",
-        "203.0.113.62",
-        404,
-      );
-      await expectRouteToRateLimit(
-        app,
-        "GET",
-        "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/whatsapp/webhook",
-        "203.0.113.63",
-        404,
-      );
-      await expectRouteToRateLimit(
-        app,
-        "POST",
-        "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/whatsapp/webhook",
-        "203.0.113.64",
-        404,
-      );
-      await expectRouteToRateLimit(
-        app,
-        "POST",
-        "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/line/webhook",
-        "203.0.113.65",
-        404,
-      );
-      await expectRouteToRateLimit(
-        app,
-        "POST",
-        "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/nextcloud-talk/webhook",
-        "203.0.113.66",
-        404,
-      );
-    } finally {
-      await app.close();
-    }
-  });
+  it(
+    "applies explicit rate limits to provider webhook routes",
+    async () => {
+      configureRateLimitedGateway();
+      const app = await buildApp();
+      try {
+        await expectRouteToRateLimit(
+          app,
+          "POST",
+          "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/slack/webhook",
+          "203.0.113.61",
+          404,
+        );
+        await expectRouteToRateLimit(
+          app,
+          "POST",
+          "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/telegram/webhook",
+          "203.0.113.62",
+          404,
+        );
+        await expectRouteToRateLimit(
+          app,
+          "GET",
+          "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/whatsapp/webhook",
+          "203.0.113.63",
+          404,
+        );
+        await expectRouteToRateLimit(
+          app,
+          "POST",
+          "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/whatsapp/webhook",
+          "203.0.113.64",
+          404,
+        );
+        await expectRouteToRateLimit(
+          app,
+          "POST",
+          "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/line/webhook",
+          "203.0.113.65",
+          404,
+        );
+        await expectRouteToRateLimit(
+          app,
+          "POST",
+          "/api/v1/integrations/connections/11111111-1111-1111-1111-111111111111/nextcloud-talk/webhook",
+          "203.0.113.66",
+          404,
+        );
+      } finally {
+        await app.close();
+      }
+    },
+    RATE_LIMIT_TEST_TIMEOUT_MS,
+  );
 });
 
 function configureRateLimitedGateway(): void {
@@ -139,6 +153,29 @@ function createIsolatedConfigRoot(): string {
   fs.cpSync(path.join(repoRoot, "config"), path.join(root, "config"), { recursive: true });
   tempRoots.push(root);
   return root;
+}
+
+async function removeTempRoot(root: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fs.promises.rm(root, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (!isRetriableWindowsCleanupError(error) || attempt === 4) {
+        throw error;
+      }
+      await delay(100 * (attempt + 1));
+    }
+  }
+}
+
+function isRetriableWindowsCleanupError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code !== undefined &&
+    ["EBUSY", "EMFILE", "ENFILE", "ENOTEMPTY", "EPERM"].includes(String((error as NodeJS.ErrnoException).code))
+  );
 }
 
 async function expectMutationRouteToRateLimit(app: Awaited<ReturnType<typeof buildApp>>, url: string, ip: string) {

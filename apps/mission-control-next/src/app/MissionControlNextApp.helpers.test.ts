@@ -21,14 +21,14 @@ describe("MissionControlNextApp shell helpers", () => {
       { id: "settings-surfaces", label: "Surfaces", items: [item("channels"), item("tools")] },
     ]);
     // H-13 (ship punchlist): "onboarding" and "permissions" are intentionally
-    // hidden from the rail groups (target 14 → 12 leaves per brand-spec). They
-    // remain in RAIL_ITEMS for deep-link route resolution but no group filter
-    // selects them, so they fall out here.
+    // hidden from the rail groups. They remain in RAIL_ITEMS for deep-link route
+    // resolution but no group filter selects them, so they fall out here.
     expect(
       buildRailSections("settings", [
         item("onboarding"),
         item("permissions"),
         item("providers"),
+        item("trust-policy"),
         item("personalities"),
         item("access"),
         item("runtime"),
@@ -39,7 +39,7 @@ describe("MissionControlNextApp shell helpers", () => {
       ]).map((group) => group.items.map((entry) => entry.section)),
     ).toEqual([
       ["workspaces"],
-      ["providers", "personalities", "access"],
+      ["providers", "trust-policy", "personalities", "access"],
       ["integrations", "mcp"],
       ["runtime", "addons"],
     ]);
@@ -71,9 +71,8 @@ describe("MissionControlNextApp shell helpers", () => {
   it("renders every declared grouped rail item exactly once", () => {
     /*
      * H-13: settings carries two RAIL_ITEMS entries that are deliberately
-     * not in any group ("settings-onboarding", "settings-permissions") so
-     * the rail surfaces 12 of the 14 catalog entries. Library + ops still
-     * surface every declared rail item.
+     * not in any group ("settings-onboarding", "settings-permissions").
+     * Library + ops still surface every declared rail item.
      */
     const settingsHiddenFromGroups = new Set(["settings-onboarding", "settings-permissions"]);
 

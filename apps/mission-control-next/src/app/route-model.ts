@@ -1,4 +1,4 @@
-/* eslint-disable max-lines -- Route metadata intentionally centralizes the 39-route release surface contract. */
+/* eslint-disable max-lines -- Route metadata intentionally centralizes the 40-route release surface contract. */
 export type PrimaryArea = "chat" | "cowork" | "code" | "projects" | "library" | "ops" | "settings";
 export type CoworkSection = "workspace" | "tasks" | "board";
 export type LibrarySection =
@@ -36,7 +36,8 @@ export type SettingsSection =
   | "integrations"
   | "channels"
   | "mcp"
-  | "tools";
+  | "tools"
+  | "trust-policy";
 export type ReleaseSurfaceStatus = "ship" | "hide" | "experimental" | "needs_release_polish";
 
 export interface AppRoute {
@@ -45,6 +46,7 @@ export interface AppRoute {
   view?: string;
   sessionId?: string;
   turnId?: string;
+  runId?: string;
   artifactId?: string;
   approvalId?: string;
   projectId?: string;
@@ -416,6 +418,13 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       section: "permissions",
     },
     {
+      id: "settings-trust-policy",
+      label: "Trust & Policy",
+      description: "Unified dashboard for capability, tool, and source trust posture.",
+      area: "settings",
+      section: "trust-policy",
+    },
+    {
       id: "settings-runtime",
       label: "Runtime",
       description: "Mesh, local runtimes, backups, and serving posture.",
@@ -718,6 +727,15 @@ export const ROUTE_RELEASE_SCOPE = [
   },
   {
     area: "settings",
+    section: "trust-policy",
+    status: "ship",
+    releaseAction:
+      "Inspect the unified Trust & Policy matrix, then jump to Permissions, Tools, MCP, Skills, Capabilities, or Approvals for edits.",
+    verification: "verify:surface:regression, verify:agentic:governance",
+    note: "Trust & Policy is a dashboard-only release surface and fails closed when the snapshot API is unavailable.",
+  },
+  {
+    area: "settings",
     section: "budget",
     status: "ship",
     releaseAction: "Set budget mode and review cost evidence.",
@@ -728,9 +746,10 @@ export const ROUTE_RELEASE_SCOPE = [
     area: "settings",
     section: "onboarding",
     status: "ship",
-    releaseAction: "Follow Start Here readiness through provider, model, first Chat, Cowork, project, and proof steps.",
+    releaseAction:
+      "Follow Start Here readiness through provider/local path, first Chat/Cowork/Code task, evidence, and Run Detail steps.",
     verification: "verify:install, verify:surface:regression",
-    note: "Start Here is release-bearing as the first-run checklist through setup, first work, and proof artifact.",
+    note: "Start Here is release-bearing as the first-run checklist through setup, first work, proof artifact, and run evidence.",
   },
   {
     area: "settings",
@@ -798,6 +817,7 @@ export function normalizeAppRoute(route: AppRoute): AppRoute {
     area: route.area,
     sessionId: route.sessionId,
     turnId: route.turnId,
+    runId: route.runId,
     artifactId: route.artifactId,
     approvalId: route.approvalId,
     projectId: route.projectId,
@@ -857,6 +877,7 @@ export function parseAppRoute(input: string | URL): AppRoute {
     section: routeArea === "projects" ? undefined : (routeSection as AppRoute["section"]),
     sessionId: readParam(params, "sessionId"),
     turnId: readParam(params, "turnId"),
+    runId: readParam(params, "runId"),
     artifactId: readParam(params, "artifactId"),
     approvalId: readParam(params, "approvalId"),
     projectId:
@@ -874,6 +895,7 @@ export function buildAppHref(route: AppRoute): string {
   const params = new URLSearchParams();
   writeParam(params, "sessionId", next.sessionId);
   writeParam(params, "turnId", next.turnId);
+  writeParam(params, "runId", next.runId);
   writeParam(params, "artifactId", next.artifactId);
   writeParam(params, "approvalId", next.approvalId);
   if (next.area !== "projects") {
@@ -985,6 +1007,7 @@ export function buildNavigationTarget(current: AppRoute, item: RailItem): AppRou
     section: item.section,
     sessionId: preserveThread ? current.sessionId : undefined,
     turnId: preserveThread ? current.turnId : undefined,
+    runId: preserveThread ? current.runId : undefined,
     artifactId: preserveThread ? current.artifactId : undefined,
     approvalId: preserveThread ? current.approvalId : undefined,
     projectId: item.area === "projects" ? current.projectId : undefined,

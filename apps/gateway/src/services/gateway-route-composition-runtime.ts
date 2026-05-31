@@ -103,10 +103,12 @@ export function composeRuntimeAdminRouteDependencies(
     cron: createCronRoutePort(gateway.cronAutomationService),
     dashboard: createDashboardRoutePort({
       backupRetentionService: gateway.backupRetentionService,
+      durableOperatorService: gateway.durableOperatorService,
       isFeatureEnabled: (flag) => gateway.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
       memoryLifecycleService: gateway.memoryLifecycleService,
       operatorSummaryCache: gateway.operatorSummaryCache,
       realtimeEventService: gateway.realtimeEventService,
+      runtimeLifecycleReadService: gateway.runtimeLifecycleReadService,
       storage: gateway.storage,
     }),
     daemon: {

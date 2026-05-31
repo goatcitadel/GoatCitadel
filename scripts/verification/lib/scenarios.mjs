@@ -2789,6 +2789,16 @@ export async function runVisualRegressionLane(context, options = {}) {
   const updateBaselines = maybeParseBool(options.updateBaselines, false);
   const scenarioLane = updateBaselines ? "visual-rebaseline" : "visual-regression";
   const scenarioTitleSuffix = updateBaselines ? "baseline refresh" : "baseline renders";
+  const visualRoutes = filterVisualItemsBySlug(
+    verificationTarget.visualRoutes,
+    process.env.GOATCITADEL_VERIFY_VISUAL_ROUTE_SLUGS,
+    "visual route",
+  );
+  const visualVariants = filterVisualItemsBySlug(
+    verificationTarget.visualVariants,
+    process.env.GOATCITADEL_VERIFY_VISUAL_VARIANT_SLUGS,
+    "visual variant",
+  );
   if (!updateBaselines) {
     await assertVisualBaselineCoverage(context, { packageName: verificationTarget.packageName });
   }
@@ -2815,7 +2825,7 @@ export async function runVisualRegressionLane(context, options = {}) {
     const manualProofArtifacts = [];
     const browser = await chromium.launch({ headless: true });
     try {
-      for (const variant of verificationTarget.visualVariants) {
+      for (const variant of visualVariants) {
         const browserContext = await browser.newContext({
           viewport: variant.viewport,
           colorScheme: variant.colorScheme,
@@ -2827,7 +2837,7 @@ export async function runVisualRegressionLane(context, options = {}) {
         try {
           const page = await browserContext.newPage();
           const browserLog = attachBrowserLogging(page);
-          for (const route of verificationTarget.visualRoutes) {
+          for (const route of visualRoutes) {
             const scenarioRecord = await runScenario(
               context,
               {
@@ -2934,6 +2944,23 @@ export async function runVisualRegressionLane(context, options = {}) {
   } finally {
     await stopVerificationStack(stack);
   }
+}
+
+function filterVisualItemsBySlug(items, rawSlugs, label) {
+  const slugs = String(rawSlugs ?? "")
+    .split(",")
+    .map((slug) => slug.trim())
+    .filter(Boolean);
+  if (slugs.length === 0) {
+    return items;
+  }
+  const selected = items.filter((item) => slugs.includes(item.slug));
+  const selectedSlugs = new Set(selected.map((item) => item.slug));
+  const missing = slugs.filter((slug) => !selectedSlugs.has(slug));
+  if (missing.length > 0) {
+    throw new Error(`Unknown ${label} slug(s): ${missing.join(", ")}`);
+  }
+  return selected;
 }
 
 export async function runDeepEcosystemLane(context, options = {}) {

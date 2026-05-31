@@ -632,6 +632,7 @@ export {
 export {
   createDurableRun,
   fetchDurableRun,
+  fetchObserveRunTrace,
   fetchDurableRunTimeline,
   pauseDurableRun,
   resumeDurableRun,
@@ -639,6 +640,13 @@ export {
   retryDurableRun,
   wakeDurableRun,
   recoverDurableDeadLetter,
+} from "./durable.js";
+export type {
+  ObserveRunTraceArtifact,
+  ObserveRunTraceError,
+  ObserveRunTraceProviderUsageItem,
+  ObserveRunTraceResponse,
+  RunTraceAvailabilityState,
 } from "./durable.js";
 export {
   createWorkflowRecipePlan,

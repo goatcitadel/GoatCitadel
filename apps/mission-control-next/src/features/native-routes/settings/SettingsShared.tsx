@@ -718,6 +718,8 @@ export function iconForSettingsSection(section: string) {
       return ShieldCheck;
     case "permissions":
       return ShieldCheck;
+    case "trust-policy":
+      return ShieldCheck;
     case "runtime":
       return Gauge;
     case "workspaces":
@@ -753,6 +755,8 @@ export function labelForSettingsSection(section: string) {
       return "Access";
     case "permissions":
       return "Permissions";
+    case "trust-policy":
+      return "Trust & Policy";
     case "runtime":
       return "Runtime";
     case "workspaces":
@@ -788,6 +792,8 @@ export function descriptionForSettingsSection(section: string) {
       return "Manage gateway auth posture, install tokens, and device access.";
     case "permissions":
       return "Manage permission profiles, active defaults, and time-boxed local override controls with operator evidence.";
+    case "trust-policy":
+      return "Inspect capability, tool, and source trust posture before opening the dedicated editor surfaces.";
     case "runtime":
       return "Configure local runtimes and control the processes behind them.";
     case "workspaces":

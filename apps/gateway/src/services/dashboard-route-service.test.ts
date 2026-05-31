@@ -70,12 +70,242 @@ describe("dashboard route service", () => {
       processHeapUsedBytes: expect.any(Number),
     });
   });
+
+  it("builds a universal run trace projection from durable, lifecycle, memory, provider, approval, and artifact truth", async () => {
+    const deps = createDeps();
+    deps.durableOperatorService.getRun.mockReturnValue({
+      runId: "run-1",
+      workflowKey: "chat.turn.execute",
+      status: "failed",
+      attemptCount: 1,
+      maxAttempts: 3,
+      version: 2,
+      payload: { sessionId: "session-1", turnId: "turn-1" },
+      metadata: {},
+      lastError: "provider failed",
+      createdAt: "2026-05-30T00:00:00.000Z",
+      updatedAt: "2026-05-30T00:02:00.000Z",
+    });
+    deps.durableOperatorService.listRunCheckpoints.mockReturnValue([
+      {
+        checkpointId: "checkpoint-1",
+        runId: "run-1",
+        checkpointKind: "manual_replay_requested",
+        state: { replayedBy: "operator" },
+        createdAt: "2026-05-30T00:01:00.000Z",
+      },
+    ]);
+    deps.durableOperatorService.listRunTimeline.mockReturnValue([
+      {
+        eventId: "event-1",
+        runId: "run-1",
+        eventType: "run_failed",
+        payload: { error: "timeline failure" },
+        createdAt: "2026-05-30T00:02:00.000Z",
+      },
+    ]);
+    deps.runtimeLifecycleReadService.getRuntimeLifecycle.mockResolvedValue({
+      query: { runId: "run-1" },
+      canonical: { runId: "run-1", sessionId: "session-1", turnId: "turn-1", approvalId: "approval-1" },
+      linked: {
+        sessionIds: ["session-1"],
+        turnIds: ["turn-1"],
+        runIds: ["run-1"],
+        proactiveRunIds: [],
+        approvalIds: ["approval-1"],
+        taskIds: [],
+        workspaceIds: ["workspace-1"],
+      },
+      session: { sessionId: "session-1", channel: "chat" },
+      sessionSummary: { transcriptEventCount: 2 },
+      turns: [
+        {
+          turnId: "turn-1",
+          sessionId: "session-1",
+          userMessageId: "message-1",
+          status: "failed",
+          mode: "chat",
+          startedAt: "2026-05-30T00:00:00.000Z",
+          durableRunId: "run-1",
+          routing: { effectiveProviderId: "openai", effectiveModel: "gpt-5" },
+          completion: {
+            status: "interrupted",
+            repaired: false,
+            usage: { inputTokens: 10, outputTokens: 20, cachedInputTokens: 3, costUsd: 0.04, costSource: "estimated" },
+            latencyMs: 1200,
+            providerCallCount: 1,
+          },
+          failure: { failureClass: "unknown", message: "turn failure" },
+        },
+      ],
+      toolRuns: [
+        {
+          toolRunId: "tool-1",
+          turnId: "turn-1",
+          sessionId: "session-1",
+          toolName: "memory.search",
+          status: "executed",
+          approvalId: "approval-1",
+          startedAt: "2026-05-30T00:00:10.000Z",
+        },
+      ],
+    });
+    deps.storage.approvals.get.mockReturnValue({ approvalId: "approval-1", status: "pending" });
+    deps.storage.memoryContexts.listByRun.mockReturnValue([{ contextId: "context-1", runId: "run-1" }]);
+    deps.storage.chatGeneratedArtifacts.listByTurnIds.mockReturnValue(
+      new Map([
+        [
+          "turn-1",
+          [
+            {
+              artifactId: "artifact-1",
+              sessionId: "session-1",
+              turnId: "turn-1",
+              title: "Trace report",
+              kind: "markdown",
+              content: "large content not projected",
+              sourceSurface: "chat",
+              version: 1,
+              contentHash: "sha256:abc",
+              createdAt: "2026-05-30T00:03:00.000Z",
+              updatedAt: "2026-05-30T00:03:00.000Z",
+            },
+          ],
+        ],
+      ]),
+    );
+    const service = createDashboardRouteService(createDashboardRoutePort(deps as never));
+
+    const trace = await service.getObserveRunTrace("run-1");
+
+    expect(trace).toMatchObject({
+      version: "observe.run_trace.v1",
+      runId: "run-1",
+      durable: {
+        checkpoints: { state: "available" },
+        timeline: { state: "available" },
+      },
+      lifecycle: { state: "available" },
+      session: { state: "available" },
+      thread: { state: "available" },
+      approvals: { state: "available", items: [{ approvalId: "approval-1" }], missingIds: [] },
+      toolCalls: { state: "available", items: [{ toolRunId: "tool-1" }] },
+      memoryContext: { state: "available", items: [{ contextId: "context-1" }] },
+      providerUsage: {
+        state: "available",
+        totals: { inputTokens: 10, outputTokens: 20, cachedInputTokens: 3, costUsd: 0.04 },
+      },
+      artifacts: { state: "available", items: [{ artifactId: "artifact-1", contentHash: "sha256:abc" }] },
+      errors: { state: "available" },
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "audit_only",
+        replay: { state: "available", checkpointIds: ["checkpoint-1"] },
+      },
+    });
+    expect(trace.artifacts.items[0]).not.toHaveProperty("content");
+  });
+
+  it("returns a partial run trace with explicit unknown and not_available states when optional stores fail", async () => {
+    const deps = createDeps();
+    deps.durableOperatorService.getRun.mockReturnValue({
+      runId: "run-partial",
+      workflowKey: "approval.wait",
+      status: "waiting",
+      attemptCount: 1,
+      maxAttempts: 3,
+      version: 1,
+      payload: { approvalId: "approval-missing" },
+      metadata: {},
+      createdAt: "2026-05-30T00:00:00.000Z",
+      updatedAt: "2026-05-30T00:00:00.000Z",
+    });
+    deps.durableOperatorService.listRunCheckpoints.mockReturnValue([]);
+    deps.durableOperatorService.listRunTimeline.mockReturnValue([]);
+    deps.runtimeLifecycleReadService.getRuntimeLifecycle.mockRejectedValue(new Error("linked session missing"));
+    deps.storage.approvals.get.mockImplementation(() => {
+      throw new Error("approval not found");
+    });
+    deps.storage.memoryContexts.listByRun.mockImplementation(() => {
+      throw new Error("memory context unavailable");
+    });
+
+    const service = createDashboardRouteService(createDashboardRoutePort(deps as never));
+    const trace = await service.getObserveRunTrace("run-partial");
+
+    expect(trace).toMatchObject({
+      runId: "run-partial",
+      lifecycle: { state: "unknown", error: "linked session missing" },
+      session: { state: "unknown" },
+      approvals: { state: "unknown", items: [], missingIds: ["approval-missing"] },
+      toolCalls: { state: "unknown", items: [] },
+      memoryContext: { state: "unknown", error: "memory context unavailable", items: [] },
+      artifacts: { state: "not_available", items: [] },
+      durable: {
+        checkpoints: { state: "not_available", items: [] },
+        timeline: { state: "not_available", items: [] },
+      },
+    });
+  });
+
+  it("keeps trace reads audit-only even when a paused run can be resumed elsewhere", async () => {
+    const deps = createDeps();
+    deps.durableOperatorService.getRun.mockReturnValue({
+      runId: "run-paused",
+      workflowKey: "chat.turn.execute",
+      status: "paused",
+      attemptCount: 1,
+      maxAttempts: 3,
+      version: 1,
+      payload: {},
+      metadata: {},
+      createdAt: "2026-05-30T00:00:00.000Z",
+      updatedAt: "2026-05-30T00:00:00.000Z",
+    });
+    deps.durableOperatorService.listRunCheckpoints.mockReturnValue([]);
+    deps.durableOperatorService.listRunTimeline.mockReturnValue([]);
+    deps.runtimeLifecycleReadService.getRuntimeLifecycle.mockResolvedValue({
+      query: { runId: "run-paused" },
+      canonical: { runId: "run-paused" },
+      linked: {
+        sessionIds: [],
+        turnIds: [],
+        runIds: ["run-paused"],
+        proactiveRunIds: [],
+        approvalIds: [],
+        taskIds: [],
+        workspaceIds: [],
+      },
+      turns: [],
+      toolRuns: [],
+    });
+    const service = createDashboardRouteService(createDashboardRoutePort(deps as never));
+
+    const trace = await service.getObserveRunTrace("run-paused");
+
+    expect(trace.posture).toMatchObject({
+      readOnly: true,
+      sideEffectPosture: "audit_only",
+      audit: { state: "available" },
+      resume: {
+        state: "available",
+        eligible: true,
+        endpoint: "/api/v1/durable/runs/run-paused/resume",
+      },
+    });
+    expect(deps.durableOperatorService.getRun).toHaveBeenCalledWith("run-paused");
+  });
 });
 
 function createDeps() {
   return {
     backupRetentionService: {
       listBackups: vi.fn(() => [{ backupId: "backup-1" }]),
+    },
+    durableOperatorService: {
+      getRun: vi.fn(),
+      listRunCheckpoints: vi.fn(() => []),
+      listRunTimeline: vi.fn(() => []),
     },
     memoryLifecycleService: {
       getContextStats: vi.fn(() => ({ totalRuns: 2 })),
@@ -97,6 +327,7 @@ function createDeps() {
         listOperatorSummaries: vi.fn(() => [{ operatorId: "operator-1" }]),
       },
       approvals: {
+        get: vi.fn(),
         list: vi.fn(() => [
           { approvalId: "approval-1", expiresAt: "2999-01-01T00:00:00.000Z" },
           { approvalId: "approval-2", expiresAt: "2000-01-01T00:00:00.000Z" },
@@ -111,6 +342,15 @@ function createDeps() {
       realtimeEvents: {
         list: vi.fn(() => [{ eventId: "recent-1" }]),
       },
+      memoryContexts: {
+        listByRun: vi.fn(() => []),
+      },
+      chatGeneratedArtifacts: {
+        listByTurnIds: vi.fn(() => new Map()),
+      },
+    },
+    runtimeLifecycleReadService: {
+      getRuntimeLifecycle: vi.fn(),
     },
     isFeatureEnabled: vi.fn(() => true),
   };

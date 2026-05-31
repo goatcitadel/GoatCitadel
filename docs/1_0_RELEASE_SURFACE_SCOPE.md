@@ -44,7 +44,7 @@ Status meanings:
 | `/settings/access` | `ship` | Inspect auth posture, secret storage truth, and access boundaries. |
 | `/settings/permissions` | `ship` | Configure permission profiles and local operator override evidence. |
 | `/settings/budget` | `ship` | Set budget mode and review cost evidence. |
-| `/settings/onboarding` | `ship` | Complete Start Here: provider, model, first Chat, Cowork, project, and proof artifact. |
+| `/settings/onboarding` | `ship` | Complete Start Here: provider/local path, first Chat/Cowork/Code task, retained evidence, and Run Detail inspection. |
 | `/settings/runtime` | `ship` | Configure runtime posture while experimental sidecars stay labeled. |
 | `/settings/workspaces` | `ship` | Configure workspace context, guidance, and extension posture. |
 | `/settings/addons` | `experimental` | Add-on posture only; no full marketplace/install lifecycle claim. |

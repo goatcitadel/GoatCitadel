@@ -1,3 +1,4 @@
+/* eslint-disable max-lines */
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { AlertTriangle, Clock, History, Play, RefreshCw, Waypoints } from "lucide-react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
@@ -33,6 +34,11 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
 
   const selectedApproval = approvals.selectedApproval;
   const liveLaneRoute = selectedApproval ? buildLiveLaneRoute(selectedApproval) : null;
+  const selectedLifecycle = selectedApproval ? approvals.lifecycleByApprovalId[selectedApproval.approvalId] : undefined;
+  const selectedDurable = selectedApproval ? approvals.durableByApprovalId[selectedApproval.approvalId] : undefined;
+  const runDetailRoute = selectedApproval
+    ? buildApprovalRunDetailRoute(selectedApproval, selectedLifecycle, selectedDurable, route.theme)
+    : null;
   const queueCounts = useMemo(
     () => ({
       pending: approvals.pendingItems.length,
@@ -299,8 +305,8 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
               <ApprovalInspectorCard
                 approval={selectedApproval}
                 replay={approvals.replayById[selectedApproval.approvalId]}
-                lifecycle={approvals.lifecycleByApprovalId[selectedApproval.approvalId]}
-                durable={approvals.durableByApprovalId[selectedApproval.approvalId]}
+                lifecycle={selectedLifecycle}
+                durable={selectedDurable}
                 durableBusy={Boolean(approvals.durableBusyByApprovalId[selectedApproval.approvalId])}
                 tracePreview={approvals.tracePreviewByApprovalId[selectedApproval.approvalId]}
                 resolvePending={approvals.resolvePending}
@@ -338,6 +344,18 @@ export function ApprovalsRoutePage({ route, activeWorkspaceName, pendingApproval
                     : undefined
                 }
                 liveLaneRoute={liveLaneRoute}
+                runDetailRoute={runDetailRoute}
+                onOpenRunDetail={
+                  runDetailRoute
+                    ? (event) => {
+                        if (!shouldHandleClientNavigation(event)) {
+                          return;
+                        }
+                        event.preventDefault();
+                        navigate(runDetailRoute);
+                      }
+                    : undefined
+                }
               />
             ) : (
               <EmptyState size="compact" title="Select a queue item to inspect its replay trail and recovery state." />
@@ -464,7 +482,9 @@ function ApprovalInspectorCard(props: {
   onLoadDurableStatus: () => void;
   onResumeCheckpoint: () => void;
   liveLaneRoute: AppRoute | null;
+  runDetailRoute: AppRoute | null;
   onOpenLiveLane?: (event: MouseEvent<HTMLAnchorElement>) => void;
+  onOpenRunDetail?: (event: MouseEvent<HTMLAnchorElement>) => void;
 }) {
   const {
     approval,
@@ -481,7 +501,9 @@ function ApprovalInspectorCard(props: {
     onLoadDurableStatus,
     onResumeCheckpoint,
     liveLaneRoute,
+    runDetailRoute,
     onOpenLiveLane,
+    onOpenRunDetail,
   } = props;
   const expired = isExpiredApproval(approval);
   const effectiveStatus = expired ? "expired" : approval.status;
@@ -502,6 +524,7 @@ function ApprovalInspectorCard(props: {
           findTraceMetadata(approval.payload) ??
           findTraceMetadata(approval.preview));
   const liveLaneHref = liveLaneRoute ? buildAppHref(liveLaneRoute) : null;
+  const runDetailHref = runDetailRoute ? buildAppHref(runDetailRoute) : null;
 
   return (
     <div className="mc-next-approvals-inspector">
@@ -578,6 +601,11 @@ function ApprovalInspectorCard(props: {
           {liveLaneHref && onOpenLiveLane ? (
             <a href={liveLaneHref} className="mc-next-approvals-link-button" onClick={onOpenLiveLane}>
               Open live session
+            </a>
+          ) : null}
+          {runDetailHref && onOpenRunDetail ? (
+            <a href={runDetailHref} className="mc-next-approvals-link-button" onClick={onOpenRunDetail}>
+              Open run detail
             </a>
           ) : null}
         </div>
@@ -983,6 +1011,34 @@ function buildLiveLaneRoute(approval: ApprovalRequest): AppRoute | null {
     sessionId: approval.linkage.sessionId,
     turnId: approval.linkage.turnId,
     approvalId: approval.approvalId,
+  };
+}
+
+function buildApprovalRunDetailRoute(
+  approval: ApprovalRequest,
+  lifecycle: ReturnType<typeof useApprovalQueue>["lifecycleByApprovalId"][string] | undefined,
+  durable: ReturnType<typeof useApprovalQueue>["durableByApprovalId"][string] | undefined,
+  theme?: string,
+): AppRoute | null {
+  const followUpRunId =
+    approval.followUp?.targetKind === "durable_run" && approval.followUp.targetId
+      ? approval.followUp.targetId
+      : undefined;
+  const canonicalRunId = lifecycle ? getCanonicalDurableRunId(lifecycle) : undefined;
+  const runId =
+    durable?.runId ?? canonicalRunId ?? approval.linkage?.durableRunId ?? approval.linkage?.runId ?? followUpRunId;
+  if (!runId) {
+    return null;
+  }
+  return {
+    area: "ops",
+    section: "sessions",
+    view: "run-detail",
+    runId,
+    approvalId: approval.approvalId,
+    sessionId: approval.linkage?.sessionId,
+    turnId: approval.linkage?.turnId,
+    theme,
   };
 }
 
