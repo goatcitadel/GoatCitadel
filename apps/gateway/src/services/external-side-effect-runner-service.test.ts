@@ -5,6 +5,7 @@ import {
   markIdempotentExternalSideEffectCompleted,
   recordAuditOnlyExternalSideEffectIntent,
   runIdempotentExternalSideEffect,
+  runReplaySafeExternalSideEffectWorker,
 } from "./external-side-effect-runner-service.js";
 
 function createSideEffectRunStore(): ExternalSideEffectRunStore & {
@@ -87,6 +88,31 @@ function createSideEffectRunStore(): ExternalSideEffectRunStore & {
       createdAt: now ?? "2026-05-31T00:00:00.000Z",
       updatedAt: now ?? "2026-05-31T00:00:00.000Z",
     })),
+  };
+}
+
+function sideEffectRun(overrides: Partial<ReturnType<ExternalSideEffectRunStore["createOrGet"]>> = {}) {
+  return {
+    runId: "extfx-1",
+    workspaceId: "default",
+    boundary: "integration_operator_action",
+    routePath: "external_side_effect:integration_operator_action:automation.activepieces:conn-1:trigger_webhook",
+    catalogId: "automation.activepieces",
+    connectionId: "conn-1",
+    actionId: "trigger_webhook",
+    actorScope: "conn-1",
+    idempotencyKey: "operator-key",
+    payloadHash: "payload-hash",
+    status: "failed_before_boundary" as const,
+    replayPolicy: "idempotent_external" as const,
+    replayOutcome: "claimed" as const,
+    replayAttempt: "new" as const,
+    resumeState: "manual_retry_after_recorded_failure" as const,
+    requestPayload: { valueKind: "object", keys: ["message"] },
+    attemptCount: 1,
+    createdAt: "2026-05-31T00:00:00.000Z",
+    updatedAt: "2026-05-31T00:01:00.000Z",
+    ...overrides,
   };
 }
 
@@ -580,5 +606,186 @@ describe("external-side-effect-runner-service", () => {
       resumeState: "not_resumable",
       idempotencyKey: "operator-key",
     });
+  });
+
+  it("replays only pre-boundary side-effect failures through caller-supplied jobs", async () => {
+    const markFailed = vi.fn();
+    const markCompleted = vi.fn();
+    const execute = vi.fn(async (claim) => {
+      claim.markExternalCallStarted();
+      return { output: { id: "flow-run-1" } };
+    });
+    const sideEffectRunStore = createSideEffectRunStore();
+    const mutationStore = {
+      claim: vi.fn(() => ({
+        outcome: "claimed" as const,
+        claimKind: "retry_after_failure" as const,
+        record: {
+          method: "POST",
+          routePath: "external",
+          idempotencyKey: "operator-key",
+          actorScope: "conn-1",
+          payloadHash: "payload-hash",
+          status: "pending" as const,
+          createdAt: "2026-05-31T00:00:00.000Z",
+          updatedAt: "2026-05-31T00:02:00.000Z",
+        },
+      })),
+      markCompleted,
+      markFailed,
+    };
+    const runs = [
+      sideEffectRun(),
+      sideEffectRun({
+        runId: "extfx-unknown",
+        status: "unknown_external_outcome",
+        resumeState: "not_resumable",
+      }),
+    ];
+
+    const results = await runReplaySafeExternalSideEffectWorker({
+      runs,
+      checkedAt: "2026-05-31T00:02:00.000Z",
+      buildJob: (run) =>
+        run.runId === "extfx-1"
+          ? {
+              mutationStore,
+              sideEffectRunStore,
+              boundary: run.boundary,
+              catalogId: run.catalogId,
+              connectionId: run.connectionId,
+              actionId: run.actionId,
+              checkedAt: "2026-05-31T00:02:00.000Z",
+              idempotencyKey: run.idempotencyKey,
+              payload: { provider: "activepieces", message: "safe retry" },
+              label: "Activepieces webhook trigger",
+              execute,
+            }
+          : undefined,
+    });
+
+    expect(results).toMatchObject([
+      {
+        status: "executed",
+        run: { runId: "extfx-1" },
+        result: { status: "executed", claim: { replayAttempt: "retry_after_failure" } },
+      },
+      {
+        status: "skipped",
+        run: { runId: "extfx-unknown" },
+        reason: "external_boundary_already_crossed",
+      },
+    ]);
+    expect(markFailed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        routePath: runs[0].routePath,
+        idempotencyKey: "operator-key",
+        actorScope: "conn-1",
+        updatedAt: "2026-05-31T00:02:00.000Z",
+      }),
+    );
+    expect(execute).toHaveBeenCalledOnce();
+    expect(markCompleted).toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: "operator-key" }));
+  });
+
+  it("retries stale claimed-not-sent runs but leaves fresh claims alone", async () => {
+    const execute = vi.fn(async (claim) => {
+      claim.markExternalCallStarted();
+      return { output: { id: "retry-1" } };
+    });
+    const mutationStore = {
+      claim: vi.fn(() => ({
+        outcome: "claimed" as const,
+        claimKind: "retry_after_failure" as const,
+        record: {
+          method: "POST",
+          routePath: "external",
+          idempotencyKey: "operator-key",
+          actorScope: "conn-1",
+          payloadHash: "payload-hash",
+          status: "pending" as const,
+          createdAt: "2026-05-31T00:00:00.000Z",
+          updatedAt: "2026-05-31T00:10:00.000Z",
+        },
+      })),
+      markCompleted: vi.fn(),
+      markFailed: vi.fn(),
+    };
+
+    const results = await runReplaySafeExternalSideEffectWorker({
+      runs: [
+        sideEffectRun({
+          runId: "extfx-stale",
+          status: "claimed_not_sent",
+          resumeState: "not_resumable",
+          updatedAt: "2026-05-31T00:00:00.000Z",
+        }),
+        sideEffectRun({
+          runId: "extfx-fresh",
+          status: "claimed_not_sent",
+          resumeState: "not_resumable",
+          updatedAt: "2026-05-31T00:09:30.000Z",
+        }),
+      ],
+      checkedAt: "2026-05-31T00:10:00.000Z",
+      staleClaimedNotSentAfterMs: 60_000,
+      buildJob: (run) => ({
+        mutationStore,
+        sideEffectRunStore: createSideEffectRunStore(),
+        boundary: run.boundary,
+        catalogId: run.catalogId,
+        connectionId: run.connectionId,
+        actionId: run.actionId,
+        checkedAt: "2026-05-31T00:10:00.000Z",
+        idempotencyKey: run.idempotencyKey,
+        payload: { provider: "activepieces", message: "safe retry" },
+        label: "Activepieces webhook trigger",
+        execute,
+      }),
+    });
+
+    expect(results).toMatchObject([
+      { status: "executed", run: { runId: "extfx-stale" } },
+      { status: "skipped", run: { runId: "extfx-fresh" }, reason: "claimed_not_sent_not_stale" },
+    ]);
+    expect(mutationStore.markFailed).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("refuses replay jobs that do not preserve the recorded side-effect identity", async () => {
+    const execute = vi.fn();
+    const mutationStore = {
+      claim: vi.fn(),
+      markCompleted: vi.fn(),
+      markFailed: vi.fn(),
+    };
+
+    const results = await runReplaySafeExternalSideEffectWorker({
+      runs: [sideEffectRun()],
+      checkedAt: "2026-05-31T00:10:00.000Z",
+      buildJob: (run) => ({
+        mutationStore,
+        sideEffectRunStore: createSideEffectRunStore(),
+        boundary: run.boundary,
+        catalogId: run.catalogId,
+        connectionId: "different-connection",
+        actionId: run.actionId,
+        checkedAt: "2026-05-31T00:10:00.000Z",
+        idempotencyKey: run.idempotencyKey,
+        payload: { provider: "activepieces", message: "wrong target" },
+        label: "Activepieces webhook trigger",
+        execute,
+      }),
+    });
+
+    expect(results).toMatchObject([
+      {
+        status: "skipped",
+        reason: "job_identity_mismatch",
+      },
+    ]);
+    expect(mutationStore.markFailed).not.toHaveBeenCalled();
+    expect(mutationStore.claim).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
   });
 });

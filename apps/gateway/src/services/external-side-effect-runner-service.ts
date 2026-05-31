@@ -204,6 +204,46 @@ export type IdempotentExternalSideEffectRunResult<TValue> =
       output: Record<string, unknown>;
     };
 
+export type ExternalSideEffectReplayWorkerSkipReason =
+  | "claimed_not_sent_not_stale"
+  | "completed"
+  | "external_boundary_already_crossed"
+  | "blocked_or_unrecoverable"
+  | "idempotency_unavailable"
+  | "job_unavailable"
+  | "job_identity_mismatch";
+
+export type ExternalSideEffectReplayWorkerResult<TValue> =
+  | {
+      status: "executed";
+      run: ExternalSideEffectRunRecord;
+      result: Extract<IdempotentExternalSideEffectRunResult<TValue>, { status: "executed" }>;
+    }
+  | {
+      status: "blocked";
+      run: ExternalSideEffectRunRecord;
+      result: Extract<IdempotentExternalSideEffectRunResult<TValue>, { status: "blocked" }>;
+    }
+  | {
+      status: "failed";
+      run: ExternalSideEffectRunRecord;
+      result: Extract<IdempotentExternalSideEffectRunResult<TValue>, { status: "failed" }>;
+    }
+  | {
+      status: "skipped";
+      run: ExternalSideEffectRunRecord;
+      reason: ExternalSideEffectReplayWorkerSkipReason;
+      message: string;
+    };
+
+export interface ExternalSideEffectReplayWorkerInput<TValue> {
+  runs: ExternalSideEffectRunRecord[];
+  checkedAt: string;
+  staleClaimedNotSentAfterMs?: number;
+  limit?: number;
+  buildJob(run: ExternalSideEffectRunRecord): IdempotentExternalSideEffectRunInput<TValue> | undefined;
+}
+
 export function claimIdempotentExternalSideEffect(input: ExternalSideEffectClaimInput): ExternalSideEffectClaimResult {
   const payloadHash = hashStableJson(input.payload);
   const idempotencyKey =
@@ -251,6 +291,56 @@ export function claimIdempotentExternalSideEffect(input: ExternalSideEffectClaim
     actorScope,
     routePath,
   });
+}
+
+export async function runReplaySafeExternalSideEffectWorker<TValue>(
+  input: ExternalSideEffectReplayWorkerInput<TValue>,
+): Promise<Array<ExternalSideEffectReplayWorkerResult<TValue>>> {
+  const limit = clampReplayWorkerLimit(input.limit ?? input.runs.length);
+  const results: Array<ExternalSideEffectReplayWorkerResult<TValue>> = [];
+  for (const run of input.runs.slice(0, limit)) {
+    const eligibility = readExternalSideEffectReplayEligibility(run, input.checkedAt, input.staleClaimedNotSentAfterMs);
+    if (!eligibility.eligible) {
+      results.push({
+        status: "skipped",
+        run,
+        reason: eligibility.reason,
+        message: eligibility.message,
+      });
+      continue;
+    }
+    const job = input.buildJob(run);
+    if (!job) {
+      results.push({
+        status: "skipped",
+        run,
+        reason: "job_unavailable",
+        message:
+          "External side-effect replay requires the owning integration to reconstruct the original safe payload; no replay job was available.",
+      });
+      continue;
+    }
+    const identityMismatch = readReplayJobIdentityMismatch(run, job);
+    if (identityMismatch) {
+      results.push({
+        status: "skipped",
+        run,
+        reason: "job_identity_mismatch",
+        message: identityMismatch,
+      });
+      continue;
+    }
+    markPreBoundaryReplayReady(job.mutationStore, run, input.checkedAt);
+    const result = await runIdempotentExternalSideEffect(job);
+    if (result.status === "executed") {
+      results.push({ status: "executed", run, result });
+    } else if (result.status === "blocked") {
+      results.push({ status: "blocked", run, result });
+    } else {
+      results.push({ status: "failed", run, result });
+    }
+  }
+  return results;
 }
 
 export async function runIdempotentExternalSideEffect<TValue>(
@@ -311,6 +401,85 @@ export async function runIdempotentExternalSideEffect<TValue>(
       output: buildExternalSideEffectReplayOutput(failedClaim, input.output),
     };
   }
+}
+
+function readExternalSideEffectReplayEligibility(
+  run: ExternalSideEffectRunRecord,
+  checkedAt: string,
+  staleClaimedNotSentAfterMs = 5 * 60 * 1000,
+): { eligible: true } | { eligible: false; reason: ExternalSideEffectReplayWorkerSkipReason; message: string } {
+  if (run.status === "failed_before_boundary") {
+    return { eligible: true };
+  }
+  if (run.status === "claimed_not_sent") {
+    const updatedAt = Date.parse(run.updatedAt);
+    const now = Date.parse(checkedAt);
+    if (Number.isFinite(updatedAt) && Number.isFinite(now) && now - updatedAt >= staleClaimedNotSentAfterMs) {
+      return { eligible: true };
+    }
+    return {
+      eligible: false,
+      reason: "claimed_not_sent_not_stale",
+      message: "Pre-boundary claim is still recent; the worker left it alone to avoid racing a live request.",
+    };
+  }
+  if (run.status === "completed" || run.status === "blocked_duplicate") {
+    return {
+      eligible: false,
+      reason: "completed",
+      message: "External side-effect run is already completed or blocked as a duplicate.",
+    };
+  }
+  if (run.status === "external_call_started" || run.status === "unknown_external_outcome") {
+    return {
+      eligible: false,
+      reason: "external_boundary_already_crossed",
+      message:
+        "External boundary was already crossed; replay is blocked until an operator reconciles the external system.",
+    };
+  }
+  if (run.status === "idempotency_unavailable") {
+    return {
+      eligible: false,
+      reason: "idempotency_unavailable",
+      message: "Replay-safe idempotency was unavailable for this run, so the worker will not retry it.",
+    };
+  }
+  return {
+    eligible: false,
+    reason: "blocked_or_unrecoverable",
+    message: "External side-effect run is not recoverable by the replay worker.",
+  };
+}
+
+function markPreBoundaryReplayReady(
+  mutationStore: MutationIdempotencyStore | undefined,
+  run: ExternalSideEffectRunRecord,
+  checkedAt: string,
+): void {
+  mutationStore?.markFailed({
+    method: "POST",
+    routePath: run.routePath,
+    idempotencyKey: run.idempotencyKey,
+    actorScope: run.actorScope,
+    updatedAt: checkedAt,
+  });
+}
+
+function readReplayJobIdentityMismatch<TValue>(
+  run: ExternalSideEffectRunRecord,
+  job: IdempotentExternalSideEffectRunInput<TValue>,
+): string | undefined {
+  if (job.idempotencyKey !== run.idempotencyKey) {
+    return "Replay job must preserve the original external side-effect idempotency key.";
+  }
+  if (job.boundary !== run.boundary) {
+    return "Replay job boundary does not match the recorded external side-effect run.";
+  }
+  if (job.catalogId !== run.catalogId || job.connectionId !== run.connectionId || job.actionId !== run.actionId) {
+    return "Replay job capability identity does not match the recorded external side-effect run.";
+  }
+  return undefined;
 }
 
 export function buildExternalSideEffectReplayOutput(
@@ -557,4 +726,11 @@ function stableStringify(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value) ?? "undefined";
+}
+
+function clampReplayWorkerLimit(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 100;
+  }
+  return Math.max(0, Math.min(500, Math.floor(value)));
 }
