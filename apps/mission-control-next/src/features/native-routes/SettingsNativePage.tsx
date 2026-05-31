@@ -5,8 +5,10 @@ import {
   type AddonCatalogEntry,
   type AddonInstalledRecord,
   type AgenticRunListItem,
+  type CapabilityPackExportResponse,
   type CapabilityPackManifest,
   type CapabilityPackPreview,
+  type CapabilityPackStagedRecord,
   type DemoBootstrapStateResponse,
   type EvidenceEnvelope,
   type DeviceAccessGrantRecord,
@@ -78,12 +80,14 @@ import {
   disableAddon,
   disconnectMcpServer,
   enableAddon,
+  exportCapabilityPack,
   fetchAddonStatus,
   fetchAddonsCatalog,
   fetchAgenticRuns,
   bootstrapDemo,
   fetchCapabilityPackPreview,
   fetchCapabilityPacks,
+  fetchStagedCapabilityPacks,
   fetchLocalCapabilityPackPreview,
   fetchChannelSetupDefinitions,
   fetchChannelSetupDrafts,
@@ -6951,6 +6955,7 @@ function buildAddonProductPosture(data: {
   catalog: AddonCatalogEntry[];
   installed: AddonInstalledRecord[];
   capabilityPacks: CapabilityPackManifest[];
+  stagedPacks: CapabilityPackStagedRecord[];
 }): AddonProductPosture {
   const catalogCount = data.catalog.length;
   const installedCount = data.installed.length;
@@ -6965,6 +6970,7 @@ function buildAddonProductPosture(data: {
   const reviewFirstPackCount = data.capabilityPacks.filter((pack) =>
     pack.assets.some((asset) => asset.installMode === "review_required" || asset.installMode === "disabled"),
   ).length;
+  const stagedPackCount = data.stagedPacks.length;
   const criteria: AddonProductPostureCriterion[] = [
     {
       id: "catalog-provenance",
@@ -7028,9 +7034,11 @@ function buildAddonProductPosture(data: {
       id: "local-boundary",
       label: "Local-only boundary",
       description:
-        reviewFirstPackCount > 0
-          ? `${reviewFirstPackCount} capability packs still stage assets for review instead of implying marketplace install.`
-          : "The product posture remains local/operator-reviewed, with no public marketplace claim.",
+        stagedPackCount > 0
+          ? `${stagedPackCount} staged pack records preserve review evidence without activating assets.`
+          : reviewFirstPackCount > 0
+            ? `${reviewFirstPackCount} capability packs still stage assets for review instead of implying marketplace install.`
+            : "The product posture remains local/operator-reviewed, with no public marketplace claim.",
       meta: "Proven",
     },
   ];
@@ -7040,6 +7048,7 @@ function buildAddonProductPosture(data: {
       { label: "1.0 posture", value: "Experimental" },
       { label: "Marketplace", value: "Out of 1.0" },
       { label: "Installed proof", value: `${installedCount}/${catalogCount}` },
+      { label: "Pack stages", value: String(stagedPackCount) },
       { label: "Graduation", value: `${provenCount}/${criteria.length}` },
     ],
     criteria,
@@ -7048,16 +7057,18 @@ function buildAddonProductPosture(data: {
 
 function AddonsSection(_props: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [catalog, installed, capabilityPacks] = await Promise.all([
+    const [catalog, installed, capabilityPacks, stagedPacks] = await Promise.all([
       nativeLoad("Add-on catalog", fetchAddonsCatalog(), { items: [] }),
       nativeLoad("Installed add-ons", fetchInstalledAddons(), { items: [] }),
       nativeLoad("Capability packs", fetchCapabilityPacks(), { items: [] }),
+      nativeLoad("Staged capability packs", fetchStagedCapabilityPacks(), { items: [] }),
     ]);
     return {
-      issues: nativeLoadIssues([catalog, installed, capabilityPacks]),
+      issues: nativeLoadIssues([catalog, installed, capabilityPacks, stagedPacks]),
       catalog: catalog.data.items,
       installed: installed.data.items,
       capabilityPacks: capabilityPacks.data.items,
+      stagedPacks: stagedPacks.data.items,
     };
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load);
@@ -7076,6 +7087,11 @@ function AddonsSection(_props: SettingsSectionProps) {
   });
   const [localPackText, setLocalPackText] = useState("");
   const [localPackPreview, setLocalPackPreview] = useState<LoadState<CapabilityPackPreview>>({
+    loading: false,
+    error: null,
+    data: null,
+  });
+  const [packExport, setPackExport] = useState<LoadState<CapabilityPackExportResponse>>({
     loading: false,
     error: null,
     data: null,
@@ -7105,6 +7121,7 @@ function AddonsSection(_props: SettingsSectionProps) {
             catalog: data.catalog,
             installed: data.installed,
             capabilityPacks: data.capabilityPacks,
+            stagedPacks: data.stagedPacks,
           })
         : null,
     [data],
@@ -7178,6 +7195,10 @@ function AddonsSection(_props: SettingsSectionProps) {
     };
   }, [selectedPack]);
 
+  useEffect(() => {
+    setPackExport({ loading: false, error: null, data: null });
+  }, [selectedPackId]);
+
   const runAddonAction = async (operation: () => Promise<unknown>, successMessage: string) => {
     try {
       await operation();
@@ -7226,6 +7247,21 @@ function AddonsSection(_props: SettingsSectionProps) {
       await reload();
     } catch (installError) {
       setNotice({ tone: "error", message: getErrorMessage(installError) });
+    }
+  };
+
+  const exportSelectedPack = async () => {
+    if (!selectedPack) {
+      return;
+    }
+    setPackExport({ loading: true, error: null, data: null });
+    try {
+      const result = await exportCapabilityPack(selectedPack.packId);
+      setPackExport({ loading: false, error: null, data: result });
+      setNotice({ tone: "success", message: `${result.manifest.name} export projection ready.` });
+    } catch (exportError) {
+      setPackExport({ loading: false, error: getErrorMessage(exportError), data: null });
+      setNotice({ tone: "error", message: getErrorMessage(exportError) });
     }
   };
 
@@ -7442,6 +7478,7 @@ function AddonsSection(_props: SettingsSectionProps) {
             bodyMaxHeight="min(72vh, 42rem)"
             stats={[
               { label: "Packs", value: String(data.capabilityPacks.length) },
+              { label: "Staged", value: String(data.stagedPacks.length) },
               { label: "Selected", value: selectedPack?.trustTier ?? "none" },
             ]}
           >
@@ -7509,9 +7546,25 @@ function AddonsSection(_props: SettingsSectionProps) {
                         }
                       >
                         <ShieldCheck size={16} />
-                        Install pack
+                        Stage pack
+                      </button>
+                      <button
+                        type="button"
+                        className="mc-next-button-secondary"
+                        disabled={packExport.loading}
+                        onClick={() => void exportSelectedPack()}
+                      >
+                        <ExternalLink size={16} />
+                        Export manifest
                       </button>
                     </SettingsButtonRow>
+                    {packExport.error ? (
+                      <SettingsEmptyState label={`Export failed: ${packExport.error}`} />
+                    ) : packExport.data ? (
+                      <SettingsCodeBlock label="Read-only export">
+                        {JSON.stringify(packExport.data, null, 2)}
+                      </SettingsCodeBlock>
+                    ) : null}
                   </>
                 ) : (
                   <SettingsEmptyState
@@ -7522,6 +7575,16 @@ function AddonsSection(_props: SettingsSectionProps) {
             ) : (
               <SettingsEmptyState label="Choose a capability pack to preview." />
             )}
+            <SettingsActionList
+              items={data.stagedPacks.map((item) => ({
+                id: item.evidenceEnvelopeId ?? item.packId,
+                label: item.name,
+                description: `${item.version} · ${item.stagedAssets.length} review-gated assets · ${item.source}`,
+                meta: item.evidenceEnvelopeId ?? item.status,
+              }))}
+              emptyLabel="No staged capability pack evidence yet."
+              maxHeight="min(24vh, 14rem)"
+            />
           </SettingsPanel>
           <SettingsPanel
             title="Portable pack"

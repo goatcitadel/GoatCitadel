@@ -47,7 +47,7 @@ Status meanings:
 | `/settings/onboarding` | `ship` | Complete Start Here: provider/local path, first Chat/Cowork/Code task, retained evidence, and Run Detail inspection. |
 | `/settings/runtime` | `ship` | Configure runtime posture while experimental sidecars stay labeled. |
 | `/settings/workspaces` | `ship` | Configure workspace context, guidance, and extension posture. |
-| `/settings/addons` | `experimental` | Add-on posture only; no full marketplace/install lifecycle claim. |
+| `/settings/addons` | `experimental` | Add-on posture plus staged/exportable capability-pack evidence; no full marketplace or asset-activation lifecycle claim. |
 | `/settings/integrations` | `ship` | Each visible connector has a setup/action path or explicit blocked/incomplete copy. |
 | `/settings/channels` | `ship` | Each visible channel has guided setup with live-auth/send diagnostics or blocked copy. |
 | `/settings/mcp` | `ship` | Local stdio and Approval Inbox paths are visible; remote http/sse preview is read-only and remains blocked/experimental for generic invocation. |

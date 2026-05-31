@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { CapabilityPackManifest } from "@goatcitadel/contracts";
+import type { CapabilityPackManifest, EvidenceEnvelope } from "@goatcitadel/contracts";
 import { CapabilityPackService } from "./capability-pack-service.js";
 
 describe("CapabilityPackService portable packs", () => {
@@ -55,6 +55,9 @@ describe("CapabilityPackService portable packs", () => {
         eventKind: "capability_pack_install",
         metadata: expect.objectContaining({
           packId: "local-review-pack",
+          manifest: expect.objectContaining({ packId: "local-review-pack" }),
+          reviewRequired: true,
+          status: "staged_for_review",
           provenance: expect.objectContaining({ source: "local_file" }),
         }),
       }),
@@ -64,6 +67,97 @@ describe("CapabilityPackService portable packs", () => {
       "settings",
       expect.objectContaining({ packId: "local-review-pack", actorId: "operator:test" }),
     );
+  });
+
+  it("lists staged pack records from install evidence without activating assets", () => {
+    const envelope = capabilityPackEnvelope({
+      envelopeId: "env-local-pack",
+      createdAt: "2026-05-31T00:00:00.000Z",
+      metadata: {
+        packId: "local-review-pack",
+        actorId: "operator:test",
+        name: "Local Review Pack",
+        version: "1.0.0",
+        trustTier: "community",
+        reviewRequired: true,
+        status: "staged_for_review",
+        provenance: { source: "local_file", contentHash: "sha256:local" },
+        installPlan: [{ assetId: "addon:notes", kind: "addon", outcome: "review_required", reason: "Review first" }],
+        manifest: { ...localPackManifest(), provenance: { source: "local_file", publisher: "Workspace Operator" } },
+      },
+    });
+    const service = new CapabilityPackService({
+      evidenceEnvelopeService: {
+        createEnvelope: vi.fn(),
+        listEnvelopes: vi.fn(() => [envelope]),
+      },
+    });
+
+    expect(service.listStagedPacks()).toEqual([
+      expect.objectContaining({
+        packId: "local-review-pack",
+        status: "staged_for_review",
+        reviewRequired: true,
+        source: "local_file",
+        evidenceEnvelopeId: "env-local-pack",
+        stagedAssets: [{ assetId: "addon:notes", kind: "addon", outcome: "review_required", reason: "Review first" }],
+      }),
+    ]);
+  });
+
+  it("exports staged local manifests as read-only portable evidence", () => {
+    const manifest = localPackManifest();
+    const service = new CapabilityPackService({
+      evidenceEnvelopeService: {
+        createEnvelope: vi.fn(),
+        listEnvelopes: vi.fn(() => [
+          capabilityPackEnvelope({
+            envelopeId: "env-export",
+            metadata: {
+              packId: manifest.packId,
+              actorId: "operator:test",
+              name: manifest.name,
+              version: manifest.version,
+              trustTier: manifest.trustTier,
+              reviewRequired: true,
+              status: "staged_for_review",
+              provenance: { source: "local_file", contentHash: "sha256:local" },
+              installPlan: [
+                { assetId: "skill:triage", kind: "skill", outcome: "review_required", reason: "Review first" },
+              ],
+              manifest,
+            },
+          }),
+        ]),
+      },
+    });
+
+    expect(service.exportPack(manifest.packId)).toMatchObject({
+      readOnly: true,
+      mutationSemantics: "none",
+      manifest: expect.objectContaining({ packId: manifest.packId }),
+      staged: expect.objectContaining({ evidenceEnvelopeId: "env-export" }),
+      evidence: { source: "staged_evidence", evidenceEnvelopeId: "env-export" },
+      limitations: expect.arrayContaining([
+        "Capability pack export is read-only and does not install, enable, launch, or grant tools.",
+      ]),
+    });
+  });
+
+  it("exports bundled manifests without claiming staged evidence", () => {
+    const service = new CapabilityPackService({
+      evidenceEnvelopeService: {
+        createEnvelope: vi.fn(),
+        listEnvelopes: vi.fn(() => []),
+      },
+    });
+
+    expect(service.exportPack("cowork-reliability")).toMatchObject({
+      readOnly: true,
+      mutationSemantics: "none",
+      manifest: expect.objectContaining({ packId: "cowork-reliability" }),
+      evidence: { source: "bundled_catalog" },
+    });
   });
 
   it("rejects malformed portable pack manifests before staging", () => {
@@ -86,6 +180,24 @@ describe("CapabilityPackService portable packs", () => {
     ).toThrow("must declare at least one asset");
   });
 });
+
+function capabilityPackEnvelope(input: {
+  envelopeId: string;
+  createdAt?: string;
+  metadata: Record<string, unknown>;
+}): EvidenceEnvelope {
+  return {
+    envelopeId: input.envelopeId,
+    eventKind: "capability_pack_install",
+    contentHash: "sha256:content",
+    payloadHash: "sha256:payload",
+    toolCallHashes: [],
+    memoryLineage: [],
+    signatureStatus: "unsigned_local",
+    metadata: input.metadata,
+    createdAt: input.createdAt ?? "2026-05-31T00:00:00.000Z",
+  };
+}
 
 function localPackManifest(): CapabilityPackManifest {
   return {

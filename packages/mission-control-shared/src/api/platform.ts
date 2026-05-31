@@ -7,11 +7,13 @@ import type {
   AddonInstallRequest,
   AddonStatusRecord,
   AddonUninstallResponse,
+  CapabilityPackExportResponse,
   AssemblyRunDetailResponse,
   AssemblyRunRecord,
   CapabilityPackInstallResult,
   CapabilityPackManifest,
   CapabilityPackPreview,
+  CapabilityPackStagedResponse,
   ChangeRiskEvaluationResponse,
   CreateAssemblyRunInput,
   CuratorArchiveRequest,
@@ -230,8 +232,16 @@ export async function fetchCapabilityPacks(): Promise<{ items: CapabilityPackMan
   return request<{ items: CapabilityPackManifest[] }>("/api/v1/capability-packs");
 }
 
+export async function fetchStagedCapabilityPacks(): Promise<CapabilityPackStagedResponse> {
+  return request<CapabilityPackStagedResponse>("/api/v1/capability-packs/staged");
+}
+
 export async function fetchCapabilityPackPreview(packId: string): Promise<CapabilityPackPreview> {
   return request<CapabilityPackPreview>(`/api/v1/capability-packs/${encodeURIComponent(packId)}/preview`);
+}
+
+export async function exportCapabilityPack(packId: string): Promise<CapabilityPackExportResponse> {
+  return request<CapabilityPackExportResponse>(`/api/v1/capability-packs/${encodeURIComponent(packId)}/export`);
 }
 
 export async function fetchLocalCapabilityPackPreview(

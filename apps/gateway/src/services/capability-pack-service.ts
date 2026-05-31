@@ -1,7 +1,10 @@
 import type {
+  CapabilityPackExportResponse,
   CapabilityPackInstallResult,
   CapabilityPackManifest,
   CapabilityPackPreview,
+  CapabilityPackStagedRecord,
+  EvidenceEnvelope,
 } from "@goatcitadel/contracts";
 import { createHash } from "node:crypto";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
@@ -16,7 +19,7 @@ export interface LocalCapabilityPackInput extends CapabilityPackInstallInput {
 }
 
 export interface CapabilityPackServiceDependencies {
-  evidenceEnvelopeService: EvidenceEnvelopeService;
+  evidenceEnvelopeService: Pick<EvidenceEnvelopeService, "createEnvelope" | "listEnvelopes">;
   publishRealtime?: (eventType: string, source: string, payload: Record<string, unknown>) => void;
 }
 
@@ -157,6 +160,41 @@ export class CapabilityPackService {
     return buildCapabilityPackPreview(normalizePortableCapabilityPackManifest(manifest));
   }
 
+  public listStagedPacks(limit = 100): CapabilityPackStagedRecord[] {
+    return this.deps.evidenceEnvelopeService
+      .listEnvelopes({ limit: Math.max(1, Math.min(500, Math.floor(limit))) })
+      .filter((envelope) => envelope.eventKind === "capability_pack_install")
+      .map(readCapabilityPackStagedRecord)
+      .filter((record): record is CapabilityPackStagedRecord => Boolean(record))
+      .sort((left, right) => right.stagedAt.localeCompare(left.stagedAt));
+  }
+
+  public exportPack(packId: string): CapabilityPackExportResponse {
+    const staged = this.listStagedPacks(500).find((record) => record.packId === packId);
+    const envelope = staged?.evidenceEnvelopeId
+      ? this.deps.evidenceEnvelopeService
+          .listEnvelopes({ limit: 500 })
+          .find((item) => item.envelopeId === staged.evidenceEnvelopeId)
+      : undefined;
+    const manifest = readCapabilityPackManifestFromEnvelope(envelope) ?? this.requirePack(packId);
+    return {
+      exportedAt: new Date().toISOString(),
+      readOnly: true,
+      mutationSemantics: "none",
+      manifest,
+      staged,
+      evidence: {
+        source: staged ? "staged_evidence" : "bundled_catalog",
+        evidenceEnvelopeId: staged?.evidenceEnvelopeId,
+        contentHash: manifest.provenance.contentHash,
+      },
+      limitations: [
+        "Capability pack export is read-only and does not install, enable, launch, or grant tools.",
+        "Re-import uses the local portable pack preview/install path and remains staged for operator review.",
+      ],
+    };
+  }
+
   public installPack(packId: string, input: CapabilityPackInstallInput = {}): CapabilityPackInstallResult {
     const preview = this.previewPack(packId);
     return this.stagePreview(preview, input);
@@ -178,6 +216,11 @@ export class CapabilityPackService {
         packId: preview.manifest.packId,
         actorId,
         trustTier: preview.manifest.trustTier,
+        name: preview.manifest.name,
+        version: preview.manifest.version,
+        manifest: preview.manifest,
+        reviewRequired: preview.reviewRequired,
+        status: "staged_for_review",
         installPlan: preview.installPlan,
         provenance: preview.manifest.provenance,
       },
@@ -206,6 +249,101 @@ export class CapabilityPackService {
     }
     return structuredClone(pack);
   }
+}
+
+function readCapabilityPackStagedRecord(envelope: EvidenceEnvelope): CapabilityPackStagedRecord | undefined {
+  const metadata = envelope.metadata;
+  const packId = readString(metadata.packId);
+  const actorId = readString(metadata.actorId);
+  if (!packId || !actorId) {
+    return undefined;
+  }
+  const manifest = readCapabilityPackManifestFromEnvelope(envelope);
+  const provenance = readRecord(metadata.provenance);
+  return {
+    packId,
+    name: readString(metadata.name) ?? manifest?.name ?? packId,
+    version: readString(metadata.version) ?? manifest?.version ?? "unknown",
+    trustTier: readTrustTier(metadata.trustTier) ?? manifest?.trustTier ?? "community",
+    source: readProvenanceSource(provenance?.source) ?? manifest?.provenance.source ?? "local_file",
+    actorId,
+    stagedAt: envelope.createdAt,
+    status: "staged_for_review",
+    reviewRequired: readBoolean(metadata.reviewRequired) ?? true,
+    stagedAssets: readInstallPlan(metadata.installPlan),
+    evidenceEnvelopeId: envelope.envelopeId,
+    contentHash: readString(provenance?.contentHash) ?? manifest?.provenance.contentHash,
+  };
+}
+
+function readCapabilityPackManifestFromEnvelope(
+  envelope: EvidenceEnvelope | undefined,
+): CapabilityPackManifest | undefined {
+  const manifest = readRecord(envelope?.metadata.manifest);
+  if (!manifest) {
+    return undefined;
+  }
+  try {
+    validateCapabilityPackManifest(manifest as unknown as CapabilityPackManifest);
+    return structuredClone(manifest as unknown as CapabilityPackManifest);
+  } catch {
+    return undefined;
+  }
+}
+
+function readInstallPlan(value: unknown): CapabilityPackPreview["installPlan"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => {
+      const record = readRecord(item);
+      const assetId = readString(record?.assetId);
+      const kind = readAssetKind(record?.kind);
+      const outcome = readInstallMode(record?.outcome);
+      const reason = readString(record?.reason);
+      if (!assetId || !kind || !outcome || !reason) {
+        return undefined;
+      }
+      return { assetId, kind, outcome, reason };
+    })
+    .filter((item): item is CapabilityPackPreview["installPlan"][number] => Boolean(item));
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readTrustTier(value: unknown): CapabilityPackManifest["trustTier"] | undefined {
+  return value === "trusted" || value === "restricted" || value === "community" ? value : undefined;
+}
+
+function readProvenanceSource(value: unknown): CapabilityPackManifest["provenance"]["source"] | undefined {
+  return value === "bundled" || value === "local_file" ? value : undefined;
+}
+
+function readAssetKind(value: unknown): CapabilityPackPreview["installPlan"][number]["kind"] | undefined {
+  return value === "skill" ||
+    value === "addon" ||
+    value === "mcp_template" ||
+    value === "plugin" ||
+    value === "runtime_preset"
+    ? value
+    : undefined;
+}
+
+function readInstallMode(value: unknown): CapabilityPackPreview["installPlan"][number]["outcome"] | undefined {
+  return value === "enabled" || value === "disabled" || value === "review_required" || value === "unsupported"
+    ? value
+    : undefined;
 }
 
 function hasMcpTemplate(templateId: string): boolean {

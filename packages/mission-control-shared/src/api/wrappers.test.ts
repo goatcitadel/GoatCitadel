@@ -597,7 +597,9 @@ describe("shared API wrappers", () => {
     await expectCall(platform.stopAddon("addon/1"), "/api/v1/addons/addon%2F1/stop", { method: "POST" });
     await expectCall(platform.uninstallAddon("addon/1"), "/api/v1/addons/addon%2F1/uninstall", { method: "DELETE" });
     await expectCall(platform.fetchCapabilityPacks(), "/api/v1/capability-packs");
+    await expectCall(platform.fetchStagedCapabilityPacks(), "/api/v1/capability-packs/staged");
     await expectCall(platform.fetchCapabilityPackPreview("pack/1"), "/api/v1/capability-packs/pack%2F1/preview");
+    await expectCall(platform.exportCapabilityPack("pack/1"), "/api/v1/capability-packs/pack%2F1/export");
     await expectCall(
       platform.fetchLocalCapabilityPackPreview({ packId: "local-pack" } as never),
       "/api/v1/capability-packs/local/preview",

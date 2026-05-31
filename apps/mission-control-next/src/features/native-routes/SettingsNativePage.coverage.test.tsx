@@ -24,12 +24,14 @@ const settingsMocks = vi.hoisted(() => {
     disableAddon: fn(),
     disconnectMcpServer: fn(),
     enableAddon: fn(),
+    exportCapabilityPack: fn(),
     discoverTelegramTargets: fn(),
     fetchAddonStatus: fn(),
     fetchAddonsCatalog: fn(),
     fetchAgenticRuns: fn(),
     fetchCapabilityPackPreview: fn(),
     fetchCapabilityPacks: fn(),
+    fetchStagedCapabilityPacks: fn(),
     fetchLocalCapabilityPackPreview: fn(),
     fetchChannelSetupDefinitions: fn(),
     fetchChannelSetupDrafts: fn(),
@@ -47,6 +49,7 @@ const settingsMocks = vi.hoisted(() => {
     fetchIntegrationPlugins: fn(),
     fetchLlamaCppModels: fn(),
     fetchMcpRemotePreview: fn(),
+    fetchMcpServerModeManifest: fn(),
     fetchMcpServers: fn(),
     fetchMcpTemplates: fn(),
     fetchMcpTools: fn(),
@@ -146,12 +149,14 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   disableAddon: settingsMocks.disableAddon,
   disconnectMcpServer: settingsMocks.disconnectMcpServer,
   enableAddon: settingsMocks.enableAddon,
+  exportCapabilityPack: settingsMocks.exportCapabilityPack,
   discoverTelegramTargets: settingsMocks.discoverTelegramTargets,
   fetchAddonStatus: settingsMocks.fetchAddonStatus,
   fetchAddonsCatalog: settingsMocks.fetchAddonsCatalog,
   fetchAgenticRuns: settingsMocks.fetchAgenticRuns,
   fetchCapabilityPackPreview: settingsMocks.fetchCapabilityPackPreview,
   fetchCapabilityPacks: settingsMocks.fetchCapabilityPacks,
+  fetchStagedCapabilityPacks: settingsMocks.fetchStagedCapabilityPacks,
   fetchLocalCapabilityPackPreview: settingsMocks.fetchLocalCapabilityPackPreview,
   fetchChannelSetupDefinitions: settingsMocks.fetchChannelSetupDefinitions,
   fetchChannelSetupDrafts: settingsMocks.fetchChannelSetupDrafts,
@@ -169,6 +174,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchIntegrationPlugins: settingsMocks.fetchIntegrationPlugins,
   fetchLlamaCppModels: settingsMocks.fetchLlamaCppModels,
   fetchMcpRemotePreview: settingsMocks.fetchMcpRemotePreview,
+  fetchMcpServerModeManifest: settingsMocks.fetchMcpServerModeManifest,
   fetchMcpServers: settingsMocks.fetchMcpServers,
   fetchMcpTemplates: settingsMocks.fetchMcpTemplates,
   fetchMcpTools: settingsMocks.fetchMcpTools,
@@ -550,6 +556,44 @@ function setupResponses() {
     },
     items: [],
   });
+  settingsMocks.fetchMcpServerModeManifest.mockResolvedValue({
+    generatedAt: "2026-05-31T00:00:00.000Z",
+    readOnly: true,
+    mutationSemantics: "none",
+    status: "preview",
+    protocol: "mcp",
+    runtimeSupport: "call_preview",
+    server: {
+      name: "goatcitadel",
+      label: "GoatCitadel governed capability export",
+      version: "1.0.0",
+      transport: "stdio",
+    },
+    launch: { supported: false, reason: "Preview only" },
+    runtime: {
+      callPreview: {
+        supported: true,
+        endpoint: "/api/v1/mcp/server-mode/call",
+        requiresGatewayAuth: true,
+        readOnlyOnly: true,
+        requiredCallContext: ["agentId", "sessionId"],
+      },
+      stdio: { supported: false, reason: "No launchable stdio server." },
+    },
+    summary: {
+      inspectableCapabilities: 1,
+      gatewayCallableCapabilities: 1,
+      exportedToolDescriptors: 1,
+      blockedDescriptors: 0,
+    },
+    tools: [],
+    governance: [],
+    limitations: ["Preview only"],
+    evidence: {
+      catalogScope: "callable",
+      catalogSnapshot: [],
+    },
+  });
   settingsMocks.fetchMcpTools.mockResolvedValue({ items: [] });
   settingsMocks.fetchChannelSetupDefinitions.mockResolvedValue({
     items: [
@@ -711,6 +755,23 @@ function setupResponses() {
       },
     ],
   });
+  settingsMocks.fetchStagedCapabilityPacks.mockResolvedValue({
+    items: [
+      {
+        packId: "operator-pack",
+        name: "Operator Pack",
+        version: "1.0.0",
+        trustTier: "trusted",
+        source: "bundled",
+        actorId: "operator",
+        stagedAt: "2026-05-31T00:00:00.000Z",
+        status: "staged_for_review",
+        reviewRequired: true,
+        stagedAssets: [{ kind: "skill", assetId: "skill-1", reason: "Review required", outcome: "review_required" }],
+        evidenceEnvelopeId: "env-pack",
+      },
+    ],
+  });
   settingsMocks.fetchCapabilityPackPreview.mockResolvedValue({
     manifest: {
       packId: "operator-pack",
@@ -738,6 +799,30 @@ function setupResponses() {
     installPlan: [{ kind: "addon", assetId: "addon:local", reason: "Review required", outcome: "review_required" }],
   });
   settingsMocks.installCapabilityPack.mockResolvedValue({ ok: true });
+  settingsMocks.exportCapabilityPack.mockResolvedValue({
+    exportedAt: "2026-05-31T00:00:00.000Z",
+    readOnly: true,
+    mutationSemantics: "none",
+    manifest: {
+      packId: "operator-pack",
+      name: "Operator Pack",
+      version: "1.0.0",
+      description: "Adds operator-facing capabilities",
+      trustTier: "trusted",
+      tags: ["ops"],
+      assets: [],
+      policyDefaults: {
+        requireFirstUseApproval: true,
+        memoryWriteAuthority: "operator_controlled",
+        redactionMode: "strict",
+        autoRunEnabled: false,
+      },
+      provenance: { source: "bundled", publisher: "goatcitadel" },
+      installWarnings: [],
+    },
+    evidence: { source: "staged_evidence", evidenceEnvelopeId: "env-pack" },
+    limitations: ["read-only"],
+  });
   settingsMocks.installLocalCapabilityPack.mockResolvedValue({
     preview: {
       manifest: {
@@ -1147,7 +1232,8 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(addons.root, "Launch"));
     await click(findButton(addons.root, "Stop"));
     await click(findButton(addons.root, "Uninstall"));
-    await click(findButton(addons.root, "Install pack"));
+    await click(findButton(addons.root, "Stage pack"));
+    await click(findButton(addons.root, "Export manifest"));
     const portableManifest = {
       packId: "local-pack",
       name: "Local Pack",
@@ -1193,6 +1279,7 @@ describe("SettingsNativePage broad native sections", () => {
     expect(settingsMocks.stopAddon).toHaveBeenCalledWith("pixel-office");
     expect(settingsMocks.uninstallAddon).toHaveBeenCalledWith("pixel-office");
     expect(settingsMocks.installCapabilityPack).toHaveBeenCalledWith("operator-pack", { actorId: "operator" });
+    expect(settingsMocks.exportCapabilityPack).toHaveBeenCalledWith("operator-pack");
     expect(settingsMocks.fetchLocalCapabilityPackPreview).toHaveBeenCalledWith(portableManifest);
     expect(settingsMocks.installLocalCapabilityPack).toHaveBeenCalledWith(portableManifest, { actorId: "operator" });
   });

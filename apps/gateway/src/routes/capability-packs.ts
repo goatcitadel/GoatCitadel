@@ -23,6 +23,10 @@ export const capabilityPacksRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({ items: fastify.services.capabilityPacks.listPacks() });
   });
 
+  fastify.get("/api/v1/capability-packs/staged", operatorOnly, async (_request, reply) => {
+    return reply.send({ items: fastify.services.capabilityPacks.listStagedPacks() });
+  });
+
   fastify.post("/api/v1/capability-packs/local/preview", operatorOnly, async (request, reply) => {
     const body = localPackSchema.safeParse(request.body ?? {});
     if (!body.success) {
@@ -44,6 +48,18 @@ export const capabilityPacksRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(fastify.services.capabilityPacks.previewPack(parsed.data.packId));
+    } catch (error) {
+      return reply.code(404).send({ error: (error as Error).message });
+    }
+  });
+
+  fastify.get("/api/v1/capability-packs/:packId/export", operatorOnly, async (request, reply) => {
+    const parsed = paramsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.services.capabilityPacks.exportPack(parsed.data.packId));
     } catch (error) {
       return reply.code(404).send({ error: (error as Error).message });
     }

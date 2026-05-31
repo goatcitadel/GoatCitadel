@@ -22,7 +22,9 @@ export function composeMemoryKnowledgeRouteDependencies(
     capabilityPacks: {
       installLocalPack: (input) => gateway.capabilityPackService.installLocalPack(input),
       installPack: (packId, input) => gateway.capabilityPackService.installPack(packId, input),
+      exportPack: (packId) => gateway.capabilityPackService.exportPack(packId),
       listPacks: () => gateway.capabilityPackService.listPacks(),
+      listStagedPacks: () => gateway.capabilityPackService.listStagedPacks(),
       previewLocalPack: (manifest) => gateway.capabilityPackService.previewLocalPack(manifest),
       previewPack: (packId) => gateway.capabilityPackService.previewPack(packId),
     },

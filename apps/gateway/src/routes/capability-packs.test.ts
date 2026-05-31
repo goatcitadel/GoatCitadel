@@ -54,6 +54,26 @@ describe("capability pack routes", () => {
     expect(previewPack).toHaveBeenCalledWith("memory-core");
   });
 
+  it("lists staged capability pack records before dynamic pack routes", async () => {
+    const listStagedPacks = vi.fn(() => [{ packId: "local-pack", status: "staged_for_review" }]);
+    const previewPack = vi.fn();
+    app = buildApp({
+      listStagedPacks,
+      previewPack,
+    });
+    await app.register(capabilityPacksRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/capability-packs/staged",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ items: [{ packId: "local-pack", status: "staged_for_review" }] });
+    expect(listStagedPacks).toHaveBeenCalledTimes(1);
+    expect(previewPack).not.toHaveBeenCalled();
+  });
+
   it("previews local portable packs through route services before dynamic pack routes", async () => {
     const manifest = { packId: "local-pack" };
     const previewLocalPack = vi.fn(() => ({ manifest, reviewRequired: true }));
@@ -88,6 +108,41 @@ describe("capability pack routes", () => {
     const response = await app.inject({
       method: "GET",
       url: "/api/v1/capability-packs/missing/preview",
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: "Unknown capability pack: missing" });
+  });
+
+  it("exports capability pack manifests through route services", async () => {
+    const exportPack = vi.fn(() => ({ readOnly: true, manifest: { packId: "memory-core" } }));
+    app = buildApp({
+      exportPack,
+    });
+    await app.register(capabilityPacksRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/capability-packs/memory-core/export",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ readOnly: true, manifest: { packId: "memory-core" } });
+    expect(exportPack).toHaveBeenCalledWith("memory-core");
+  });
+
+  it("returns 404 when export service rejects the pack", async () => {
+    const exportPack = vi.fn(() => {
+      throw new Error("Unknown capability pack: missing");
+    });
+    app = buildApp({
+      exportPack,
+    });
+    await app.register(capabilityPacksRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/capability-packs/missing/export",
     });
 
     expect(response.statusCode).toBe(404);
