@@ -50,6 +50,7 @@ export const connectionActionParamsSchema = z.object({
 
 export const connectionActionBodySchema = z.object({
   input: z.record(z.unknown()).optional(),
+  idempotencyKey: z.string().trim().min(8).max(200).optional(),
 });
 
 export const discordPairingParamsSchema = z.object({

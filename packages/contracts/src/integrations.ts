@@ -120,16 +120,26 @@ export interface IntegrationConnectionUpdateInput {
 
 export interface IntegrationActionInvokeInput {
   input?: Record<string, unknown>;
+  idempotencyKey?: string;
 }
 
 export type IntegrationActionInvokeStatus = "executed" | "blocked" | "failed";
 export type IntegrationExternalWritebackEnvelopeStatus = "recorded" | "unavailable" | "failed";
+export type IntegrationExternalWritebackReplayPolicy = "audit_only" | "idempotent_external";
+export type IntegrationExternalWritebackReplayOutcome =
+  | "claimed"
+  | "duplicate"
+  | "in_progress"
+  | "payload_mismatch"
+  | "idempotency_unavailable";
 
 export interface IntegrationExternalWritebackEnvelope {
   status: IntegrationExternalWritebackEnvelopeStatus;
   intentId?: string;
   idempotencyKey?: string;
-  replayPolicy: "audit_only";
+  replayPolicy: IntegrationExternalWritebackReplayPolicy;
+  replayOutcome?: IntegrationExternalWritebackReplayOutcome;
+  payloadHash?: string;
   resumable: false;
   checkedAt: string;
   envelopeId?: string;

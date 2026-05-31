@@ -245,6 +245,23 @@ describe("integration-action-service", () => {
     const host = createHost(connection, {
       fetchWithDiagnosticsTimeout: fetchMock,
       evidenceEnvelopeService: { createEnvelope } as never,
+      mutationStore: {
+        claim: vi.fn(() => ({
+          outcome: "claimed" as const,
+          record: {
+            method: "POST",
+            routePath: "external",
+            idempotencyKey: "activepieces-key",
+            actorScope: connection.connectionId,
+            payloadHash: "payload-hash",
+            status: "pending" as const,
+            createdAt: "2026-04-10T12:00:00.000Z",
+            updatedAt: "2026-04-10T12:00:00.000Z",
+          },
+        })),
+        markCompleted: vi.fn(),
+        markFailed: vi.fn(),
+      },
     });
 
     const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "trigger_webhook", {
@@ -263,7 +280,8 @@ describe("integration-action-service", () => {
       },
       durableWriteback: {
         status: "recorded",
-        replayPolicy: "audit_only",
+        replayPolicy: "idempotent_external",
+        replayOutcome: "claimed",
         resumable: false,
         envelopeId: "env-activepieces-1",
       },
@@ -293,13 +311,164 @@ describe("integration-action-service", () => {
           catalogId: "automation.activepieces",
           integrationKey: "activepieces",
           actionId: "trigger_webhook",
-          replayPolicy: "audit_only",
+          replayPolicy: "idempotent_external",
+          replayOutcome: "claimed",
+          payloadHash: expect.any(String),
           resumable: false,
           externalReferenceId: "id:run-1",
         }),
       }),
     );
+    expect(host.mutationStore?.markCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: expect.any(String),
+        actorScope: connection.connectionId,
+      }),
+    );
   });
+
+  it("does not resend Activepieces webhooks when the idempotency claim is duplicate", async () => {
+    const connection = createConnection({
+      catalogId: "automation.activepieces",
+      key: "activepieces",
+      label: "Activepieces",
+      config: {
+        webhookUrl: "https://activepieces.example.test/hooks/flow-1",
+        defaultFlowId: "flow-1",
+      },
+    });
+    const fetchMock = vi.fn();
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: fetchMock,
+      evidenceEnvelopeService: {
+        createEnvelope: vi.fn(() => ({
+          envelopeId: "env-activepieces-duplicate",
+          eventKind: "external_writeback",
+          contentHash: "content-hash",
+          payloadHash: "payload-hash",
+          toolCallHashes: [],
+          memoryLineage: [],
+          signatureStatus: "unsigned_local",
+          metadata: {},
+          createdAt: "2026-04-10T12:00:00.000Z",
+        })),
+      } as never,
+      mutationStore: {
+        claim: vi.fn(() => ({
+          outcome: "duplicate" as const,
+          record: {
+            method: "POST",
+            routePath: "external",
+            idempotencyKey: "operator-key",
+            actorScope: connection.connectionId,
+            payloadHash: "payload-hash",
+            status: "completed" as const,
+            createdAt: "2026-04-10T12:00:00.000Z",
+            updatedAt: "2026-04-10T12:00:01.000Z",
+          },
+        })),
+        markCompleted: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    });
+
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "trigger_webhook", {
+      idempotencyKey: "operator-key",
+      input: {
+        payload: '{"message":"Operator approved flow trigger"}',
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "blocked",
+      blockedReason: "external_side_effect_duplicate",
+      output: {
+        replayPolicy: "idempotent_external",
+        replayOutcome: "duplicate",
+        idempotencyKey: "operator-key",
+      },
+      durableWriteback: {
+        status: "recorded",
+        replayPolicy: "idempotent_external",
+        replayOutcome: "duplicate",
+      },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(host.mutationStore?.markCompleted).not.toHaveBeenCalled();
+  });
+
+  it.each(["in_progress", "payload_mismatch"] as const)(
+    "does not resend Activepieces webhooks when the idempotency claim is %s",
+    async (outcome) => {
+      const connection = createConnection({
+        catalogId: "automation.activepieces",
+        key: "activepieces",
+        label: "Activepieces",
+        config: {
+          webhookUrl: "https://activepieces.example.test/hooks/flow-1",
+          defaultFlowId: "flow-1",
+        },
+      });
+      const fetchMock = vi.fn();
+      const host = createHost(connection, {
+        fetchWithDiagnosticsTimeout: fetchMock,
+        evidenceEnvelopeService: {
+          createEnvelope: vi.fn(() => ({
+            envelopeId: `env-activepieces-${outcome}`,
+            eventKind: "external_writeback",
+            contentHash: "content-hash",
+            payloadHash: "payload-hash",
+            toolCallHashes: [],
+            memoryLineage: [],
+            signatureStatus: "unsigned_local",
+            metadata: {},
+            createdAt: "2026-04-10T12:00:00.000Z",
+          })),
+        } as never,
+        mutationStore: {
+          claim: vi.fn(() => ({
+            outcome,
+            record: {
+              method: "POST",
+              routePath: "external",
+              idempotencyKey: "operator-key",
+              actorScope: connection.connectionId,
+              payloadHash: "payload-hash",
+              status: outcome === "in_progress" ? ("pending" as const) : ("completed" as const),
+              createdAt: "2026-04-10T12:00:00.000Z",
+              updatedAt: "2026-04-10T12:00:01.000Z",
+            },
+          })),
+          markCompleted: vi.fn(),
+          markFailed: vi.fn(),
+        },
+      });
+
+      const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "trigger_webhook", {
+        idempotencyKey: "operator-key",
+        input: {
+          payload: '{"message":"Operator approved flow trigger"}',
+        },
+      });
+
+      expect(result).toMatchObject({
+        status: "blocked",
+        blockedReason: `external_side_effect_${outcome}`,
+        output: {
+          replayPolicy: "idempotent_external",
+          replayOutcome: outcome,
+          idempotencyKey: "operator-key",
+        },
+        durableWriteback: {
+          status: "recorded",
+          replayPolicy: "idempotent_external",
+          replayOutcome: outcome,
+        },
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(host.mutationStore?.markCompleted).not.toHaveBeenCalled();
+    },
+  );
 
   it("blocks Activepieces webhook triggers until a webhook URL is configured", async () => {
     const connection = createConnection({

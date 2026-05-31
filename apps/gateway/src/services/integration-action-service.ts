@@ -2,11 +2,18 @@ import type {
   IntegrationActionInvokeInput,
   IntegrationActionInvokeResult,
   IntegrationConnection,
+  IntegrationExternalWritebackReplayOutcome,
   IntegrationOperatorAction,
 } from "@goatcitadel/contracts";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
-import { recordAuditOnlyExternalSideEffectIntent } from "./external-side-effect-runner-service.js";
+import {
+  claimIdempotentExternalSideEffect,
+  markIdempotentExternalSideEffectCompleted,
+  markIdempotentExternalSideEffectFailed,
+  recordAuditOnlyExternalSideEffectIntent,
+} from "./external-side-effect-runner-service.js";
 import { getIntegrationOperatorActions, isLocalBridgeCatalogId } from "./integration-action-registry.js";
+import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 
 export interface IntegrationActionHost {
   storage: {
@@ -19,6 +26,7 @@ export interface IntegrationActionHost {
   resolveConnectionSecret(config: Record<string, unknown>, directKey: string, envKey: string): string | undefined;
   publishRealtime(scope: string, channel: string, payload: Record<string, unknown>): void;
   evidenceEnvelopeService?: Pick<EvidenceEnvelopeService, "createEnvelope">;
+  mutationStore?: MutationIdempotencyStore;
 }
 
 export async function invokeIntegrationConnectionAction(
@@ -183,21 +191,66 @@ async function invokeActivepiecesAction(
   const flowId =
     readStringInput(request.input, "flowId") ?? host.readConnectionConfigValue(connection.config, "defaultFlowId");
   const payload = readActivepiecesPayload(request.input);
-  const response = await host.fetchWithDiagnosticsTimeout(target, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...(authHeader ? { authorization: authHeader } : {}),
-    },
-    body: JSON.stringify({
-      source: "goatcitadel",
-      checkedAt,
-      ...(flowId ? { flowId } : {}),
+  const replayClaim = claimIdempotentExternalSideEffect({
+    mutationStore: host.mutationStore,
+    boundary: "integration_operator_action",
+    catalogId: connection.catalogId,
+    connectionId: connection.connectionId,
+    actionId,
+    checkedAt,
+    idempotencyKey: request.idempotencyKey,
+    payload: {
+      provider: "activepieces",
+      flowId,
       payload,
-    }),
+    },
   });
+  if (replayClaim.replayOutcome !== "claimed") {
+    return blocked(
+      connection,
+      actionId,
+      checkedAt,
+      formatActivepiecesReplayBlockMessage(replayClaim.replayOutcome),
+      `external_side_effect_${replayClaim.replayOutcome}`,
+      {
+        provider: "activepieces",
+        ...(flowId ? { flowId } : {}),
+        replayPolicy: replayClaim.replayPolicy,
+        replayOutcome: replayClaim.replayOutcome,
+        idempotencyKey: replayClaim.idempotencyKey,
+        payloadHash: replayClaim.payloadHash,
+      },
+    );
+  }
+  let response: Response;
+  try {
+    response = await host.fetchWithDiagnosticsTimeout(target, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(authHeader ? { authorization: authHeader } : {}),
+      },
+      body: JSON.stringify({
+        source: "goatcitadel",
+        checkedAt,
+        ...(flowId ? { flowId } : {}),
+        payload,
+      }),
+    });
+  } catch (error) {
+    markIdempotentExternalSideEffectFailed(host.mutationStore, replayClaim, checkedAt);
+    return failed(connection, actionId, checkedAt, (error as Error).message, {
+      provider: "activepieces",
+      ...(flowId ? { flowId } : {}),
+      replayPolicy: replayClaim.replayPolicy,
+      replayOutcome: replayClaim.replayOutcome,
+      idempotencyKey: replayClaim.idempotencyKey,
+      payloadHash: replayClaim.payloadHash,
+    });
+  }
   const parsed = await parseResponse(response);
   if (!response.ok) {
+    markIdempotentExternalSideEffectFailed(host.mutationStore, replayClaim, checkedAt);
     return failed(
       connection,
       actionId,
@@ -206,9 +259,14 @@ async function invokeActivepiecesAction(
       {
         provider: "activepieces",
         ...(flowId ? { flowId } : {}),
+        replayPolicy: replayClaim.replayPolicy,
+        replayOutcome: replayClaim.replayOutcome,
+        idempotencyKey: replayClaim.idempotencyKey,
+        payloadHash: replayClaim.payloadHash,
       },
     );
   }
+  markIdempotentExternalSideEffectCompleted(host.mutationStore, replayClaim, checkedAt);
   const responseOutput = isRecord(parsed.output) ? parsed.output : undefined;
   const responseId =
     typeof responseOutput?.id === "string" && responseOutput.id.trim() ? responseOutput.id.trim() : undefined;
@@ -222,10 +280,27 @@ async function invokeActivepiecesAction(
       provider: "activepieces",
       ...(flowId ? { flowId } : {}),
       ...(responseId ? { id: responseId } : {}),
+      replayPolicy: replayClaim.replayPolicy,
+      replayOutcome: replayClaim.replayOutcome,
+      idempotencyKey: replayClaim.idempotencyKey,
+      payloadHash: replayClaim.payloadHash,
       response: responseOutput ?? parsed.output,
     },
     checkedAt,
   };
+}
+
+function formatActivepiecesReplayBlockMessage(outcome: string): string {
+  if (outcome === "duplicate") {
+    return "Activepieces webhook trigger already completed for this idempotency key; the webhook was not sent again.";
+  }
+  if (outcome === "in_progress") {
+    return "Activepieces webhook trigger is already in progress for this idempotency key; the webhook was not sent again.";
+  }
+  if (outcome === "payload_mismatch") {
+    return "Activepieces idempotency key was reused with different payload; the webhook was not sent.";
+  }
+  return "Activepieces replay-safe idempotency is unavailable; the webhook was not sent.";
 }
 
 async function invokeTrelloAction(
@@ -500,6 +575,7 @@ function blocked(
   checkedAt: string,
   message: string,
   blockedReason: string,
+  output?: Record<string, unknown>,
 ): IntegrationActionInvokeResult {
   return {
     connectionId: connection.connectionId,
@@ -508,6 +584,7 @@ function blocked(
     status: "blocked",
     message,
     blockedReason,
+    output,
     checkedAt,
   };
 }
@@ -552,6 +629,11 @@ function recordExternalWritebackEnvelope(
       actionId: action.actionId,
       actionLabel: action.label,
       actionCapability: action.capability,
+      replayPolicy:
+        readOutputString(result.output, "replayPolicy") === "idempotent_external" ? "idempotent_external" : undefined,
+      replayOutcome: readExternalReplayOutcome(result.output),
+      idempotencyKey: readOutputString(result.output, "idempotencyKey") ?? request.idempotencyKey,
+      payloadHash: readOutputString(result.output, "payloadHash"),
       status: result.status,
       blockedReason: result.blockedReason,
       inputKeys: Object.keys(request.input ?? {}).sort(),
@@ -561,6 +643,27 @@ function recordExternalWritebackEnvelope(
       checkedAt,
     }),
   };
+}
+
+function readExternalReplayOutcome(
+  output: Record<string, unknown> | undefined,
+): IntegrationExternalWritebackReplayOutcome | undefined {
+  const value = readOutputString(output, "replayOutcome");
+  return value === "claimed" ||
+    value === "duplicate" ||
+    value === "in_progress" ||
+    value === "payload_mismatch" ||
+    value === "idempotency_unavailable"
+    ? value
+    : undefined;
+}
+
+function readOutputString(output: Record<string, unknown> | undefined, key: string): string | undefined {
+  if (!isRecord(output)) {
+    return undefined;
+  }
+  const value = output[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function readExternalReferenceId(output: Record<string, unknown> | undefined): string | undefined {

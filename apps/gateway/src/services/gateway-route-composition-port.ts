@@ -36,6 +36,7 @@ import type { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
 import type { LlmService } from "./llm-service.js";
 import type { MediaVoiceService } from "./media-voice-service.js";
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
+import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
 import type { NpuSidecarService } from "./npu-sidecar-service.js";
 import type { ObsidianVaultService } from "./obsidian-vault-service.js";
 import type { OperatorSummaryCache } from "./gateway/operator-summary-cache.js";
@@ -82,6 +83,7 @@ export interface GatewayRouteCompositionPort {
   readonly mediaVoiceService: MediaVoiceService;
   get memoryLifecycleService(): MemoryLifecycleService;
   readonly meshService: MeshService;
+  readonly mutationIdempotencyStore: MutationIdempotencyStore;
   readonly npuSidecar: NpuSidecarService;
   readonly obsidianVaultService: ObsidianVaultService;
   readonly onboardingStateHost: onboardingStateService.OnboardingStateHost;
@@ -293,6 +295,7 @@ export function createGatewayRouteCompositionPort(
     llmService: gateway.llmService,
     memoryLifecycleService: gateway.memoryLifecycleService,
     meshService: gateway.meshService,
+    mutationIdempotencyStore: gateway.mutationIdempotencyStore,
     npuSidecar: gateway.npuSidecar,
     operatorSummaryCache: gateway.operatorSummaryCache,
     personalityCatalogService: gateway.personalityCatalogService,
