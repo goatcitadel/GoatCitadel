@@ -160,6 +160,7 @@ describe("Postgres runtime schema generation", () => {
     assert.equal(repairMigration?.name, "code_mode_run_sandbox_schema_parity");
     assert.match(repairMigration?.sql ?? "", /CREATE TABLE IF NOT EXISTS code_mode_runs \(/);
     assert.match(repairMigration?.sql ?? "", /sandbox_json TEXT/);
+    assert.match(repairMigration?.sql ?? "", /execution_backend_json TEXT/);
     assert.match(repairMigration?.sql ?? "", /error_details_json TEXT/);
     assert.match(repairMigration?.sql ?? "", /idx_code_mode_runs_approval/);
   });

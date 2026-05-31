@@ -1152,6 +1152,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         session_id TEXT,
         turn_id TEXT,
         sandbox_json TEXT,
+        execution_backend_json TEXT,
         code_artifact_json TEXT NOT NULL,
         wrapper_manifest_artifact_json TEXT NOT NULL,
         policy_snapshot_artifact_json TEXT NOT NULL,
@@ -1179,6 +1180,7 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
         ADD COLUMN IF NOT EXISTS local_operator_override_id TEXT,
         ADD COLUMN IF NOT EXISTS code_mode_input_hash TEXT,
         ADD COLUMN IF NOT EXISTS sandbox_json TEXT,
+        ADD COLUMN IF NOT EXISTS execution_backend_json TEXT,
         ADD COLUMN IF NOT EXISTS error_code TEXT,
         ADD COLUMN IF NOT EXISTS error_details_json TEXT;
 
@@ -1542,6 +1544,14 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
 
       CREATE INDEX IF NOT EXISTS idx_chat_side_chats_workspace_parent
         ON chat_side_chats(workspace_id, parent_session_id);
+    `,
+  },
+  {
+    version: 56,
+    name: "code_mode_execution_backend_identity",
+    sql: `
+      ALTER TABLE IF EXISTS code_mode_runs
+        ADD COLUMN IF NOT EXISTS execution_backend_json TEXT;
     `,
   },
 ];

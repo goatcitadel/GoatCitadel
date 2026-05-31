@@ -1040,6 +1040,13 @@ const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       }
     },
   },
+  {
+    version: 103,
+    name: "code_mode_execution_backend_identity",
+    up: (db) => {
+      addColumnIfMissingIfTableExists(db, "code_mode_runs", "execution_backend_json", "TEXT");
+    },
+  },
 ];
 
 export function createSqliteSchemaBlueprint(): SqliteSchemaBlueprint {
@@ -3019,6 +3026,7 @@ function createCapabilitySystemV1Schema(db: DatabaseSync): void {
       approval_id TEXT,
       session_id TEXT,
       turn_id TEXT,
+      execution_backend_json TEXT,
       code_artifact_json TEXT NOT NULL,
       wrapper_manifest_artifact_json TEXT NOT NULL,
       policy_snapshot_artifact_json TEXT NOT NULL,
@@ -3124,6 +3132,7 @@ function createPermissionProfilesAndOverrideSchema(db: DatabaseSync): void {
   addColumnIfMissingIfTableExists(db, "code_mode_runs", "permission_profile_id", "TEXT");
   addColumnIfMissingIfTableExists(db, "code_mode_runs", "permission_profile_label", "TEXT");
   addColumnIfMissingIfTableExists(db, "code_mode_runs", "local_operator_override_id", "TEXT");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "execution_backend_json", "TEXT");
   addColumnIfMissingIfTableExists(db, "code_mode_runs", "code_mode_input_hash", "TEXT");
   addColumnIfMissingIfTableExists(db, "code_mode_runs", "error_code", "TEXT");
   addColumnIfMissingIfTableExists(db, "code_mode_runs", "error_details_json", "TEXT");
@@ -3142,6 +3151,7 @@ function ensureCodeModeRunSandboxSchemaParity(db: DatabaseSync): void {
   addColumnIfMissingIfTableExists(db, "code_mode_runs", "permission_profile_label", "TEXT");
   addColumnIfMissingIfTableExists(db, "code_mode_runs", "local_operator_override_id", "TEXT");
   addColumnIfMissingIfTableExists(db, "code_mode_runs", "sandbox_json", "TEXT");
+  addColumnIfMissingIfTableExists(db, "code_mode_runs", "execution_backend_json", "TEXT");
   addColumnIfMissingIfTableExists(db, "code_mode_runs", "code_mode_input_hash", "TEXT");
   addColumnIfMissingIfTableExists(db, "code_mode_runs", "error_code", "TEXT");
   addColumnIfMissingIfTableExists(db, "code_mode_runs", "error_details_json", "TEXT");

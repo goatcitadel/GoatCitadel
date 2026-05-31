@@ -24,6 +24,7 @@ interface CodeModeRunRow {
   session_id: string | null;
   turn_id: string | null;
   sandbox_json: string | null;
+  execution_backend_json: string | null;
   code_artifact_json: string;
   wrapper_manifest_artifact_json: string;
   policy_snapshot_artifact_json: string;
@@ -60,14 +61,14 @@ export class CodeModeRunRepository {
       INSERT INTO code_mode_runs (
         run_id, status, language, origin_surface, workspace_id, operator_id, permission_profile_id, permission_profile_label,
         local_operator_override_id, requested_output_intent, save_candidate_on_success, capability_snapshot_id,
-        code_mode_input_hash, wrapper_manifest_hash, policy_snapshot_hash, code_hash, approval_id, session_id, turn_id, sandbox_json, code_artifact_json,
+        code_mode_input_hash, wrapper_manifest_hash, policy_snapshot_hash, code_hash, approval_id, session_id, turn_id, sandbox_json, execution_backend_json, code_artifact_json,
         wrapper_manifest_artifact_json, policy_snapshot_artifact_json, stdout_artifact_json, stderr_artifact_json,
         stdout_preview, stderr_preview, stdout_truncated, stderr_truncated, result_json, error_text, error_code,
         error_details_json, created_at, started_at, finished_at
       ) VALUES (
         @runId, @status, @language, @originSurface, @workspaceId, @operatorId, @permissionProfileId, @permissionProfileLabel,
         @localOperatorOverrideId, @requestedOutputIntent, @saveCandidateOnSuccess, @capabilitySnapshotId,
-        @codeModeInputHash, @wrapperManifestHash, @policySnapshotHash, @codeHash, @approvalId, @sessionId, @turnId, @sandboxJson, @codeArtifactJson,
+        @codeModeInputHash, @wrapperManifestHash, @policySnapshotHash, @codeHash, @approvalId, @sessionId, @turnId, @sandboxJson, @executionBackendJson, @codeArtifactJson,
         @wrapperManifestArtifactJson, @policySnapshotArtifactJson, @stdoutArtifactJson, @stderrArtifactJson,
         @stdoutPreview, @stderrPreview, @stdoutTruncated, @stderrTruncated, @resultJson, @errorText, @errorCode,
         @errorDetailsJson, @createdAt, @startedAt, @finishedAt
@@ -193,6 +194,7 @@ export class CodeModeRunRepository {
       sessionId: input.sessionId ?? null,
       turnId: input.turnId ?? null,
       sandboxJson: input.sandbox ? JSON.stringify(input.sandbox) : null,
+      executionBackendJson: input.executionBackend ? JSON.stringify(input.executionBackend) : null,
       codeArtifactJson: JSON.stringify(input.codeArtifact),
       wrapperManifestArtifactJson: JSON.stringify(input.wrapperManifestArtifact),
       policySnapshotArtifactJson: JSON.stringify(input.policySnapshotArtifact),
@@ -425,6 +427,13 @@ function mapCodeModeRunRow(row: CodeModeRunRow): CodeModeRunRecord {
     turnId: row.turn_id ?? undefined,
     sandbox: row.sandbox_json
       ? parseCodeModeJson<CodeModeRunRecord["sandbox"]>(row, "sandbox_json", row.sandbox_json)
+      : undefined,
+    executionBackend: row.execution_backend_json
+      ? parseCodeModeJson<CodeModeRunRecord["executionBackend"]>(
+          row,
+          "execution_backend_json",
+          row.execution_backend_json,
+        )
       : undefined,
     codeArtifact: parseRequiredCodeModeJson<CapabilityArtifactRecord>(
       row,

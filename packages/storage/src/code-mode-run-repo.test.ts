@@ -72,6 +72,14 @@ function run(overrides: Partial<CodeModeRunRecord> = {}): CodeModeRunRecord {
       checksPassed: ["enabled"],
       checksFailed: [],
     },
+    executionBackend: {
+      backendId: "trusted-code-host",
+      kind: "host",
+      label: "Trusted-code host runner",
+      status: "active",
+      runtimeSupport: "active_runner",
+      isolationProfile: "firejail",
+    },
     codeArtifact: artifact("code"),
     wrapperManifestArtifact: artifact("wrapper"),
     policySnapshotArtifact: artifact("policy"),
@@ -112,6 +120,7 @@ describe("CodeModeRunRepository", () => {
         sessionId: undefined,
         turnId: undefined,
         sandbox: undefined,
+        executionBackend: undefined,
         stdoutArtifact: undefined,
         stderrArtifact: undefined,
         stdoutPreview: undefined,
@@ -132,6 +141,8 @@ describe("CodeModeRunRepository", () => {
     assert.equal(first.originSurface, "code");
     assert.equal(first.saveCandidateOnSuccess, true);
     assert.equal(first.sandbox?.runnerId, "runner-a");
+    assert.equal(first.executionBackend?.backendId, "trusted-code-host");
+    assert.equal(first.executionBackend?.isolationProfile, "firejail");
     assert.equal(first.stdoutArtifact?.artifactId, "stdout-artifact");
     assert.equal(first.stderrArtifact?.artifactId, "stderr-artifact");
     assert.equal(first.stdoutTruncated, true);
@@ -144,6 +155,7 @@ describe("CodeModeRunRepository", () => {
     assert.equal(minimal.originSurface, undefined);
     assert.equal(minimal.saveCandidateOnSuccess, false);
     assert.equal(minimal.sandbox, undefined);
+    assert.equal(minimal.executionBackend, undefined);
     assert.equal(minimal.stdoutArtifact, undefined);
     assert.equal(minimal.stderrArtifact, undefined);
     assert.equal(minimal.result, undefined);
@@ -187,6 +199,7 @@ describe("CodeModeRunRepository", () => {
     assert.equal(completed.wrapperManifestHash, "wrapper-sha");
     assert.equal(completed.policySnapshotHash, "policy-sha");
     assert.equal(completed.codeHash, "code-sha");
+    assert.equal(completed.executionBackend?.backendId, "trusted-code-host");
     assert.deepEqual(completed.result, { ok: true });
     assert.equal(completed.stdoutTruncated, false);
 
@@ -374,6 +387,7 @@ describe("CodeModeRunRepository", () => {
     assert.equal(currentFinish?.status, "completed");
     assert.deepEqual(currentFinish?.result, { ok: true });
     assert.equal(currentFinish?.sandbox?.runnerId, "runner-b");
+    assert.equal(currentFinish?.executionBackend?.backendId, "trusted-code-host");
   });
 
   it("surfaces malformed stored JSON payloads as failed ledger records", () => {
@@ -390,6 +404,7 @@ describe("CodeModeRunRepository", () => {
     };
 
     corrupt("run-sandbox", "sandbox_json", /corrupt sandbox_json metadata/);
+    corrupt("run-execution-backend", "execution_backend_json", /corrupt execution_backend_json metadata/);
     corrupt("run-code", "code_artifact_json", /corrupt code_artifact_json metadata/);
     corrupt("run-wrapper", "wrapper_manifest_artifact_json", /corrupt wrapper_manifest_artifact_json metadata/);
     corrupt("run-policy", "policy_snapshot_artifact_json", /corrupt policy_snapshot_artifact_json metadata/);
@@ -399,7 +414,7 @@ describe("CodeModeRunRepository", () => {
     corrupt("run-error-details", "error_details_json", /corrupt error_details_json metadata/);
     repo.upsert(run({ runId: "run-healthy", createdAt: "2026-03-26T00:10:00.000Z" }));
     const listedRunIds = repo.listFiltered({ workspaceId: "workspace-a", limit: 20 }).map((item) => item.runId);
-    assert.equal(listedRunIds.length, 9);
+    assert.equal(listedRunIds.length, 10);
     assert.equal(listedRunIds[0], "run-healthy");
     assert.equal(new Set(listedRunIds).has("run-code"), true);
     assert.equal(new Set(listedRunIds).has("run-error-details"), true);
