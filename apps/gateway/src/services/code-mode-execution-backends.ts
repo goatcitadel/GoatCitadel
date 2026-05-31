@@ -141,7 +141,7 @@ function buildAiderPreviewAdapter(env: NodeJS.ProcessEnv): CodeModeExecutionBack
     callable: false,
     description: "Planned adapter for routing approved Code Mode tasks into Aider-compatible workflows.",
     blockers: [
-      "Aider result envelope contract exists, but the adapter is not connected to Code Mode run creation, Docker execution, or artifact ingestion yet.",
+      "Aider invocation planner and result envelope contract exist, but the adapter is not connected to Code Mode run creation, Docker execution, or artifact ingestion yet.",
       "No replay-safe patch application runner has been promoted.",
     ],
     governance: [
