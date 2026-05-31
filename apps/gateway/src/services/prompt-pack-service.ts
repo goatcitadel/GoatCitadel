@@ -3358,8 +3358,8 @@ function resolveSecurityRedTeamPackPath(rootDir: string): string | undefined {
 }
 
 function isSecurityRedTeamPack(pack: PromptPackRecord): boolean {
-  const haystack = `${pack.name} ${pack.sourceLabel ?? ""}`.toLowerCase();
-  return haystack.includes("security") && (haystack.includes("red_team") || haystack.includes("red team"));
+  const haystack = `${pack.name} ${pack.sourceLabel ?? ""}`.toLowerCase().replace(/[-_]+/g, " ");
+  return haystack.includes("security") && haystack.includes("red team");
 }
 
 function countPromptPackModes(tests: Array<{ mode?: string }>): PromptPackSecurityEvalPackRecord["modeCounts"] {

@@ -684,6 +684,144 @@ describe("prompt-pack parser, import, export, and reports", () => {
     expect(gates.items[0]?.blockers.join(" ")).toContain("Run the imported defensive security prompt-pack tests");
   });
 
+  it("recognizes the imported built-in security pack by canonical pack id and hyphenated source label", () => {
+    const importedPack = {
+      packId: "security-red-team-v6",
+      name: "Defensive Security Evaluation",
+      sourceLabel: "goatcitadel-prompt-pack-v6-security-red-team.md",
+      testCount: 18,
+      createdAt: "2026-05-30T00:00:00.000Z",
+      updatedAt: "2026-05-30T00:00:00.000Z",
+    };
+    const securityTests = parsePromptPackTests(
+      fs.readFileSync(
+        path.resolve(process.cwd(), "..", "..", "goatcitadel_prompt_pack_v6_security_red_team.md"),
+        "utf8",
+      ),
+    ).map((test) => ({
+      ...test,
+      packId: importedPack.packId,
+    }));
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            listPacks: () => [importedPack],
+            getPack: () => importedPack,
+            listTests: () => securityTests,
+          },
+          promptPackRuns: { listByPack: () => [] },
+          promptPackScores: { listByPack: () => [] },
+          promptPackAutoScoresV2: { listByPack: () => [] },
+          promptPackHumanReviewsV2: { listByPack: () => [] },
+        },
+        config: {
+          rootDir: process.cwd(),
+          assistant: {
+            workspaceDir: ".",
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        },
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+
+    const projection = service.listSecurityEvalPacks();
+    expect(projection.items[0]).toMatchObject({
+      packKey: "security-red-team-v6",
+      status: "imported",
+      importedPackId: "security-red-team-v6",
+      blockers: [],
+    });
+
+    const gates = service.listSecurityQualityGates();
+    expect(gates.items[0]).toMatchObject({
+      status: "not_run",
+      packId: "security-red-team-v6",
+      evidence: {
+        definitionStatus: "imported",
+      },
+    });
+    expect(gates.items[0]?.nextActions).not.toContain(
+      "Import the defensive security prompt pack from Ops Quality or Library Prompt Packs.",
+    );
+  });
+
+  it("does not treat a spoofed canonical security pack id as imported release evidence", () => {
+    const spoofedPack = {
+      packId: "security-red-team-v6",
+      name: "Custom Operator Checks",
+      sourceLabel: "custom-pack.md",
+      testCount: 1,
+      createdAt: "2026-05-30T00:00:00.000Z",
+      updatedAt: "2026-05-30T00:00:00.000Z",
+    };
+    const service = new PromptPackService(
+      {
+        storage: {
+          promptPacks: {
+            listPacks: () => [spoofedPack],
+            getPack: () => spoofedPack,
+            listTests: () => [],
+          },
+          promptPackRuns: { listByPack: () => [] },
+          promptPackScores: { listByPack: () => [] },
+          promptPackAutoScoresV2: { listByPack: () => [] },
+          promptPackHumanReviewsV2: { listByPack: () => [] },
+        },
+        config: {
+          rootDir: process.cwd(),
+          assistant: {
+            workspaceDir: ".",
+            durable: {
+              enabled: true,
+              executionEnabled: true,
+              chatAutoPromoteEnabled: true,
+            },
+          },
+        },
+      } as never,
+      {
+        createChatSession: vi.fn(),
+        agentSendChatMessage: vi.fn(),
+        createChatCompletion: vi.fn(),
+        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+        backgroundTasks: new Set(),
+      },
+    );
+
+    const projection = service.listSecurityEvalPacks();
+    expect(projection.items[0]).toMatchObject({
+      packKey: "security-red-team-v6",
+      status: "available",
+      importedPackId: undefined,
+    });
+
+    const gates = service.listSecurityQualityGates();
+    expect(gates.items[0]).toMatchObject({
+      status: "not_imported",
+      evidence: {
+        definitionStatus: "available",
+      },
+    });
+    expect(gates.items[0]?.packId).toBeUndefined();
+    expect(gates.items[0]?.nextActions).toContain(
+      "Import the defensive security prompt pack from Ops Quality or Library Prompt Packs.",
+    );
+  });
+
   it("parses dotted manual test codes so they survive import refreshes", () => {
     const markdown = [
       "## 2.6 Baseline sanity check",
