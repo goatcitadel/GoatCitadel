@@ -688,6 +688,8 @@ describe("integration-action-service", () => {
       output: {
         provider: "activepieces",
         flowId: "flow-1",
+        workflowRunId: "run-1",
+        workflowRunStatusSource: "not_available",
       },
       durableWriteback: {
         status: "recorded",
@@ -726,7 +728,7 @@ describe("integration-action-service", () => {
           replayOutcome: "claimed",
           payloadHash: expect.any(String),
           resumable: false,
-          externalReferenceId: "id:run-1",
+          externalReferenceId: "workflowRunId:run-1",
         }),
       }),
     );
@@ -734,6 +736,94 @@ describe("integration-action-service", () => {
       expect.objectContaining({
         idempotencyKey: expect.any(String),
         actorScope: connection.connectionId,
+      }),
+    );
+  });
+
+  it("preserves Activepieces workflow run status and URL evidence from the webhook response", async () => {
+    const connection = createConnection({
+      catalogId: "automation.activepieces",
+      key: "activepieces",
+      label: "Activepieces",
+      config: {
+        webhookUrl: "https://activepieces.example.test/hooks/flow-1",
+        defaultFlowId: "flow-1",
+      },
+    });
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              runId: "run-123",
+              status: "RUNNING",
+              url: "https://activepieces.example.test/runs/run-123",
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          ),
+      ),
+      evidenceEnvelopeService: {
+        createEnvelope: vi.fn(() => ({
+          envelopeId: "env-activepieces-run-status",
+          eventKind: "external_writeback",
+          contentHash: "content-hash",
+          payloadHash: "payload-hash",
+          toolCallHashes: [],
+          memoryLineage: [],
+          signatureStatus: "unsigned_local",
+          metadata: {},
+          createdAt: "2026-04-10T12:00:00.000Z",
+        })),
+      } as never,
+      mutationStore: {
+        claim: vi.fn(() => ({
+          outcome: "claimed" as const,
+          record: {
+            method: "POST",
+            routePath: "external",
+            idempotencyKey: "activepieces-key",
+            actorScope: connection.connectionId,
+            payloadHash: "payload-hash",
+            status: "pending" as const,
+            createdAt: "2026-04-10T12:00:00.000Z",
+            updatedAt: "2026-04-10T12:00:00.000Z",
+          },
+        })),
+        markCompleted: vi.fn(),
+        markFailed: vi.fn(),
+      },
+    });
+
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "trigger_webhook", {
+      idempotencyKey: "activepieces-key",
+      input: {
+        payload: '{"message":"Operator approved flow trigger"}',
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "executed",
+      output: {
+        provider: "activepieces",
+        flowId: "flow-1",
+        workflowRunId: "run-123",
+        workflowRunStatus: "RUNNING",
+        workflowRunUrl: "https://activepieces.example.test/runs/run-123",
+        workflowRunStatusSource: "webhook_response",
+      },
+      durableWriteback: {
+        status: "recorded",
+      },
+    });
+    expect(host.evidenceEnvelopeService?.createEnvelope).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          externalReferenceId: "workflowRunId:run-123",
+          outputKeys: expect.arrayContaining(["workflowRunStatus", "workflowRunUrl"]),
+        }),
       }),
     );
   });

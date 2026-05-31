@@ -323,9 +323,7 @@ async function invokeActivepiecesAction(
     return failed(connection, actionId, checkedAt, replayRun.error.message, replayRun.output);
   }
   const parsed = replayRun.value;
-  const responseOutput = isRecord(parsed.output) ? parsed.output : undefined;
-  const responseId =
-    typeof responseOutput?.id === "string" && responseOutput.id.trim() ? responseOutput.id.trim() : undefined;
+  const activepiecesOutput = normalizeActivepiecesWebhookOutput(parsed.output);
   return {
     connectionId: connection.connectionId,
     catalogId: connection.catalogId,
@@ -335,8 +333,7 @@ async function invokeActivepiecesAction(
     output: buildExternalSideEffectReplayOutput(replayRun.claim, {
       provider: "activepieces",
       ...(flowId ? { flowId } : {}),
-      ...(responseId ? { id: responseId } : {}),
-      response: responseOutput ?? parsed.output,
+      ...activepiecesOutput,
     }),
     checkedAt,
   };
@@ -796,7 +793,7 @@ function readExternalReferenceId(output: Record<string, unknown> | undefined): s
   if (!isRecord(output)) {
     return undefined;
   }
-  for (const key of ["id", "messageId", "threadId", "url", "webUrl"]) {
+  for (const key of ["workflowRunId", "flowRunId", "runId", "id", "messageId", "threadId", "url", "webUrl"]) {
     const value = output[key];
     if (typeof value === "string" && value.trim()) {
       return `${key}:${value.trim().slice(0, 128)}`;
@@ -819,6 +816,33 @@ function normalizeLocalBridgeOutput(output: Record<string, unknown> | unknown[] 
     return output.output;
   }
   return isRecord(output) ? output : output !== undefined ? { raw: output } : undefined;
+}
+
+function normalizeActivepiecesWebhookOutput(
+  output: Record<string, unknown> | unknown[] | string | undefined,
+): Record<string, unknown> {
+  const normalized = normalizeProviderOutput(output);
+  const source = isRecord(normalized.output) ? normalized.output : normalized;
+  const workflowRunId = readFirstString(source, ["workflowRunId", "flowRunId", "runId", "run_id", "id"]);
+  const workflowRunStatus = readFirstString(source, ["workflowRunStatus", "flowRunStatus", "status"]);
+  const workflowRunUrl = readFirstString(source, ["workflowRunUrl", "flowRunUrl", "webUrl", "url"]);
+  return {
+    ...(workflowRunId ? { workflowRunId } : {}),
+    ...(workflowRunStatus ? { workflowRunStatus } : {}),
+    ...(workflowRunUrl ? { workflowRunUrl } : {}),
+    workflowRunStatusSource: workflowRunStatus ? "webhook_response" : "not_available",
+    response: normalized,
+  };
+}
+
+function readFirstString(record: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
 }
 
 function resolveBearerAuth(host: IntegrationActionHost, config: Record<string, unknown>): string | undefined {

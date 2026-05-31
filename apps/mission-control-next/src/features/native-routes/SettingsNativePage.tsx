@@ -41,8 +41,10 @@ import type {
   ConnectorDiagnosticReport,
   GoogleMeetPrerequisiteStatusResponse,
   GoogleMeetSessionRecord,
+  IntegrationActionInvokeResult,
   IntegrationPluginRecord,
   IntegrationFormSchema,
+  IntegrationOperatorAction,
   McpRemotePreviewResponse,
   McpServerModeManifestResponse,
   McpServerRecord,
@@ -4443,6 +4445,11 @@ function IntegrationsSection({ activeWorkspaceId }: SettingsSectionProps) {
   const [detailSchema, setDetailSchema] = useState<IntegrationFormSchema | undefined>();
   const [showDetailJson, setShowDetailJson] = useState(false);
   const [diagnostics, setDiagnostics] = useState<ConnectorDiagnosticReport | null>(null);
+  const [operatorActionInputs, setOperatorActionInputs] = useState<Record<string, Record<string, unknown>>>({});
+  const [operatorActionIdempotencyKeys, setOperatorActionIdempotencyKeys] = useState<Record<string, string>>({});
+  const [lastOperatorActionResult, setLastOperatorActionResult] = useState<
+    (IntegrationActionInvokeResult & { actionLabel: string }) | null
+  >(null);
   const selectedConnection =
     data?.connections.find((item) => item.connectionId === selectedConnectionId) ?? data?.connections[0] ?? null;
   const selectedCatalog =
@@ -4602,16 +4609,25 @@ function IntegrationsSection({ activeWorkspaceId }: SettingsSectionProps) {
     }
   };
 
-  const handleOperatorAction = async (actionId: string) => {
+  const handleOperatorAction = async (action: IntegrationOperatorAction) => {
     if (!selectedConnection) {
       return;
     }
+    const input = action.formSchema
+      ? applyIntegrationDefaults(action.formSchema, operatorActionInputs[action.actionId] ?? {})
+      : undefined;
+    const idempotencyKey = operatorActionIdempotencyKeys[action.actionId]?.trim();
     try {
-      const result = await invokeIntegrationConnectionAction(selectedConnection.connectionId, actionId, {});
+      const result = await invokeIntegrationConnectionAction(selectedConnection.connectionId, action.actionId, {
+        ...(input ? { input } : {}),
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+      });
+      setLastOperatorActionResult({ ...result, actionLabel: action.label });
       setNotice({
         tone: result.status === "failed" ? "error" : result.status === "blocked" ? "warning" : "success",
         message: result.message,
       });
+      await reload();
     } catch (actionError) {
       setNotice({ tone: "error", message: getErrorMessage(actionError) });
     }
@@ -4716,6 +4732,7 @@ function IntegrationsSection({ activeWorkspaceId }: SettingsSectionProps) {
                 onSelect={(connectionId) => {
                   setSelectedConnectionId(connectionId);
                   setDiagnostics(null);
+                  setLastOperatorActionResult(null);
                 }}
                 emptyLabel="No integration connections yet."
                 maxHeight="min(36vh, 21rem)"
@@ -4823,15 +4840,61 @@ function IntegrationsSection({ activeWorkspaceId }: SettingsSectionProps) {
                   </button>
                 </SettingsButtonRow>
                 {selectedCatalog?.operatorActions?.length ? (
-                  <SettingsActionList
-                    items={selectedCatalog.operatorActions.map((action) => ({
-                      label: action.label,
-                      description: action.description,
-                      meta: action.capability,
-                      onClick: () => void handleOperatorAction(action.actionId),
-                      actionLabel: "Run",
-                    }))}
-                  />
+                  <div className="mc-next-settings-stack">
+                    {selectedCatalog.operatorActions.map((action) => {
+                      const actionInput = action.formSchema
+                        ? applyIntegrationDefaults(action.formSchema, operatorActionInputs[action.actionId] ?? {})
+                        : {};
+                      return (
+                        <div key={action.actionId} className="mc-next-settings-panel-body">
+                          <SettingsMetricGrid
+                            items={[
+                              { label: "Action", value: action.label, meta: action.description },
+                              { label: "Capability", value: action.capability, meta: action.actionId },
+                            ]}
+                          />
+                          {action.formSchema ? (
+                            <ConfigFormBuilder
+                              schema={action.formSchema}
+                              value={actionInput}
+                              onChange={(next) =>
+                                setOperatorActionInputs((current) => ({
+                                  ...current,
+                                  [action.actionId]: next,
+                                }))
+                              }
+                            />
+                          ) : null}
+                          {action.capability === "write" ? (
+                            <SettingsField label="Idempotency key">
+                              <input
+                                className="mc-next-settings-input"
+                                value={operatorActionIdempotencyKeys[action.actionId] ?? ""}
+                                onChange={(event) =>
+                                  setOperatorActionIdempotencyKeys((current) => ({
+                                    ...current,
+                                    [action.actionId]: event.target.value,
+                                  }))
+                                }
+                                placeholder="Optional explicit key for a replay-safe write"
+                              />
+                            </SettingsField>
+                          ) : null}
+                          <SettingsButtonRow>
+                            <button
+                              type="button"
+                              className="mc-next-button"
+                              onClick={() => void handleOperatorAction(action)}
+                            >
+                              <Play size={16} />
+                              Run
+                            </button>
+                          </SettingsButtonRow>
+                        </div>
+                      );
+                    })}
+                    {lastOperatorActionResult ? <OperatorActionResultPanel result={lastOperatorActionResult} /> : null}
+                  </div>
                 ) : (
                   <SettingsNotice
                     notice={{
@@ -4861,6 +4924,56 @@ function IntegrationsSection({ activeWorkspaceId }: SettingsSectionProps) {
         </SettingsGrid>
       ) : null}
     </SettingsSectionShell>
+  );
+}
+
+function OperatorActionResultPanel({ result }: { result: IntegrationActionInvokeResult & { actionLabel: string } }) {
+  const output = result.output ?? {};
+  const durableWriteback = result.durableWriteback;
+  return (
+    <div className="mc-next-settings-panel-body">
+      <SettingsNotice
+        notice={{
+          tone: result.status === "failed" ? "error" : result.status === "blocked" ? "warning" : "success",
+          message: `${result.actionLabel}: ${result.message}`,
+        }}
+      />
+      <SettingsMetricGrid
+        items={[
+          { label: "Action", value: result.actionLabel, meta: result.actionId },
+          { label: "Status", value: result.status, meta: result.message },
+          {
+            label: "Envelope",
+            value: durableWriteback?.envelopeId ?? "not recorded",
+            meta: durableWriteback?.status ?? "no durable writeback",
+          },
+          {
+            label: "Replay",
+            value: durableWriteback?.replayOutcome ?? readOutputText(output, "replayOutcome") ?? "not recorded",
+            meta: `Resume: ${durableWriteback?.resumeState ?? readOutputText(output, "resumeState") ?? "unknown"}`,
+          },
+          {
+            label: "Idempotency",
+            value: durableWriteback?.idempotencyKey ?? readOutputText(output, "idempotencyKey") ?? "not recorded",
+            meta: readOutputText(output, "sideEffectRunId") ?? "No side-effect run id in response",
+          },
+          {
+            label: "Workflow evidence",
+            value: readOutputText(output, "workflowRunId") ?? "not returned",
+            meta: [
+              readOutputText(output, "workflowRunStatus")
+                ? `Status ${readOutputText(output, "workflowRunStatus")}`
+                : undefined,
+              readOutputText(output, "workflowRunStatusSource")
+                ? `Source ${readOutputText(output, "workflowRunStatusSource")}`
+                : undefined,
+            ]
+              .filter(Boolean)
+              .join(" · "),
+          },
+        ]}
+      />
+    </div>
   );
 }
 
@@ -5003,6 +5116,11 @@ function labelForExternalSideEffectResumeState(state: ExternalSideEffectRunRecor
     default:
       return "not resumable";
   }
+}
+
+function readOutputText(output: Record<string, unknown>, key: string): string | undefined {
+  const value = output[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function GoogleMeetStatusPanel({

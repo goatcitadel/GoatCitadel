@@ -361,6 +361,23 @@ const mocks = vi.hoisted(() => ({
     createdAt: "2026-04-24T12:00:00.000Z",
     updatedAt: "2026-04-24T12:00:00.000Z",
   })),
+  updateIntegrationConnection: vi.fn(async () => ({})),
+  deleteIntegrationConnection: vi.fn(async () => ({ deleted: true })),
+  fetchIntegrationConnectionDiagnostics: vi.fn(async () => ({
+    connectionId: "conn-1",
+    status: "ok",
+    checkedAt: "2026-04-24T12:00:00.000Z",
+    checks: [],
+  })),
+  invokeIntegrationConnectionAction: vi.fn(async () => ({
+    connectionId: "conn-1",
+    catalogId: "github",
+    actionId: "read",
+    status: "executed",
+    message: "Action completed.",
+    output: {},
+    checkedAt: "2026-04-24T12:00:00.000Z",
+  })),
   fetchSlackOAuthStatus: vi.fn(async () => ({
     configured: true,
     mode: "self_owned",
@@ -797,6 +814,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     fetchExternalSideEffectRuns: mocks.fetchExternalSideEffectRuns,
     fetchIntegrationFormSchema: mocks.fetchIntegrationFormSchema,
     createIntegrationConnection: mocks.createIntegrationConnection,
+    updateIntegrationConnection: mocks.updateIntegrationConnection,
+    deleteIntegrationConnection: mocks.deleteIntegrationConnection,
+    fetchIntegrationConnectionDiagnostics: mocks.fetchIntegrationConnectionDiagnostics,
+    invokeIntegrationConnectionAction: mocks.invokeIntegrationConnectionAction,
     fetchSlackOAuthStatus: mocks.fetchSlackOAuthStatus,
     startSlackOAuth: mocks.startSlackOAuth,
     discoverTelegramTargets: mocks.discoverTelegramTargets,
@@ -1218,6 +1239,23 @@ beforeEach(async () => {
     config: { tokenEnv: "GITHUB_TOKEN" },
     createdAt: "2026-04-24T12:00:00.000Z",
     updatedAt: "2026-04-24T12:00:00.000Z",
+  });
+  mocks.updateIntegrationConnection.mockResolvedValue({});
+  mocks.deleteIntegrationConnection.mockResolvedValue({ deleted: true });
+  mocks.fetchIntegrationConnectionDiagnostics.mockResolvedValue({
+    connectionId: "conn-1",
+    status: "ok",
+    checkedAt: "2026-04-24T12:00:00.000Z",
+    checks: [],
+  });
+  mocks.invokeIntegrationConnectionAction.mockResolvedValue({
+    connectionId: "conn-1",
+    catalogId: "github",
+    actionId: "read",
+    status: "executed",
+    message: "Action completed.",
+    output: {},
+    checkedAt: "2026-04-24T12:00:00.000Z",
   });
   mocks.revokeDeviceAccessGrant.mockResolvedValue({
     grant: {
@@ -3807,6 +3845,134 @@ describe("SettingsNativePage integrations", () => {
     expect(text).toContain("connection reset after request started");
     expect(text).not.toContain("Replay run");
     expect(text).not.toContain("Retry side effect");
+  });
+
+  it("runs Activepieces actions with guided payload, idempotency, and inline evidence", async () => {
+    const activepiecesCatalog = {
+      items: [
+        {
+          catalogId: "automation.activepieces",
+          key: "activepieces",
+          label: "Activepieces",
+          kind: "automation",
+          capabilities: ["write"],
+          authMethods: ["webhook"],
+          operatorActions: [
+            {
+              actionId: "trigger_webhook",
+              label: "Trigger Flow",
+              description: "Trigger a configured Activepieces webhook flow with an explicit operator payload.",
+              capability: "write",
+              formSchema: {
+                catalogId: "action:automation.activepieces.trigger_webhook",
+                title: "Trigger Activepieces flow",
+                allowAdvancedJson: false,
+                fields: [
+                  { key: "flowId", label: "Flow ID", type: "text" },
+                  { key: "payload", label: "Payload", type: "textarea", defaultValue: '{"message":"hello"}' },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    } as any;
+    mocks.fetchIntegrationCatalog.mockResolvedValueOnce(activepiecesCatalog).mockResolvedValueOnce(activepiecesCatalog);
+    const activepiecesConnections = {
+      items: [
+        {
+          connectionId: "conn-activepieces",
+          catalogId: "automation.activepieces",
+          key: "activepieces",
+          label: "Activepieces",
+          kind: "automation",
+          enabled: true,
+          status: "connected",
+          config: { webhookUrl: "https://activepieces.example.test/hooks/flow-1" },
+          createdAt: "2026-05-31T10:00:00.000Z",
+          updatedAt: "2026-05-31T10:00:00.000Z",
+        },
+      ],
+    } as any;
+    mocks.fetchIntegrationConnections
+      .mockResolvedValueOnce(activepiecesConnections)
+      .mockResolvedValueOnce(activepiecesConnections);
+    const activepiecesSchema = {
+      catalogId: "automation.activepieces",
+      title: "Activepieces setup",
+      fields: [{ key: "webhookUrl", label: "Webhook URL", type: "url" }],
+    } as any;
+    mocks.fetchIntegrationFormSchema
+      .mockResolvedValueOnce(activepiecesSchema)
+      .mockResolvedValueOnce(activepiecesSchema);
+    mocks.invokeIntegrationConnectionAction.mockResolvedValueOnce({
+      connectionId: "conn-activepieces",
+      catalogId: "automation.activepieces",
+      actionId: "trigger_webhook",
+      status: "executed",
+      message: "Triggered the configured Activepieces webhook flow.",
+      output: {
+        provider: "activepieces",
+        flowId: "flow-1",
+        workflowRunId: "run-123",
+        workflowRunStatus: "RUNNING",
+        workflowRunStatusSource: "webhook_response",
+        sideEffectRunId: "extfx-123",
+        idempotencyKey: "idem-123",
+        replayOutcome: "claimed",
+        resumeState: "completed",
+      },
+      durableWriteback: {
+        status: "recorded",
+        envelopeId: "env-123",
+        replayPolicy: "idempotent_external",
+        replayOutcome: "claimed",
+        idempotencyKey: "idem-123",
+        resumable: false,
+        resumeState: "completed",
+        checkedAt: "2026-05-31T10:00:00.000Z",
+      },
+      checkedAt: "2026-05-31T10:00:00.000Z",
+    } as any);
+
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderPage("integrations");
+    });
+    await act(async () => undefined);
+
+    const root = renderer!.root;
+    const payloadInput = root.findAll(
+      (node) => node.type === "textarea" && node.props?.id === "integration-field-payload",
+    )[0];
+    const idempotencyInput = findInputByPlaceholder(root, "Optional explicit key for a replay-safe write");
+    expect(payloadInput).toBeDefined();
+
+    await act(async () => {
+      payloadInput!.props.onChange({ target: { value: '{"message":"Operator approved flow trigger"}' } });
+      idempotencyInput.props.onChange({ target: { value: "idem-123" } });
+    });
+    const runButton = root.findAll((node) => node.type === "button" && collectText(node).trim() === "Run")[0];
+    await act(async () => {
+      await runButton!.props.onClick();
+    });
+    await act(async () => undefined);
+
+    expect(mocks.invokeIntegrationConnectionAction).toHaveBeenCalledWith("conn-activepieces", "trigger_webhook", {
+      input: {
+        payload: '{"message":"Operator approved flow trigger"}',
+      },
+      idempotencyKey: "idem-123",
+    });
+    const text = collectText(renderer!.root);
+    expect(text).toContain("Triggered the configured Activepieces webhook flow.");
+    expect(text).toContain("env-123");
+    expect(text).toContain("claimed");
+    expect(text).toContain("idem-123");
+    expect(text).toContain("extfx-123");
+    expect(text).toContain("run-123");
+    expect(text).toContain("Status RUNNING");
   });
 
   it("creates integration connections from guided schema fields by default", async () => {
