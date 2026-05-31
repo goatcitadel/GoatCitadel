@@ -424,6 +424,9 @@ function projectSkillLastUseEvidence(skill: unknown): Record<string, unknown> | 
     subjectId: readString(record?.skillId),
     lastUsedAt,
     usageCount,
+    runId: readString(record?.runId) ?? readString(record?.lastRunId),
+    approvalId: readString(record?.approvalId) ?? readString(record?.lastApprovalId),
+    evidenceRef: readString(record?.evidenceRef) ?? readString(record?.lastEvidenceRef),
   });
 }
 
@@ -444,6 +447,9 @@ function projectMcpLastUseEvidence(server: unknown, tools: unknown[]): Record<st
     subjectId: readString(record?.serverId),
     lastConnectedAt,
     latestToolUpdatedAt,
+    runId: readString(record?.runId) ?? readString(record?.lastRunId),
+    approvalId: readString(record?.approvalId) ?? readString(record?.lastApprovalId),
+    evidenceRef: readString(record?.evidenceRef) ?? readString(record?.lastEvidenceRef),
   });
 }
 
@@ -459,6 +465,9 @@ function projectAddonLastUseEvidence(addon: unknown): Record<string, unknown> | 
     subjectId: readString(record?.addonId),
     updatedAt,
     status: readString(record?.runtimeStatus),
+    runId: readString(record?.runId) ?? readString(record?.lastRunId),
+    approvalId: readString(record?.approvalId) ?? readString(record?.lastApprovalId),
+    evidenceRef: readString(record?.evidenceRef) ?? readString(record?.lastEvidenceRef),
   });
 }
 

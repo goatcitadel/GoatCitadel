@@ -228,4 +228,54 @@ describe("trust routes", () => {
       ]),
     );
   });
+
+  it("keeps concrete last-use evidence references when sources provide them", async () => {
+    await registerTrustServices({
+      tools: {
+        listPermissionProfiles: vi.fn(() => []),
+        listToolGrants: vi.fn(() => []),
+        listActiveLocalOperatorOverrides: vi.fn(() => []),
+      },
+      capabilities: {
+        listCapabilityCatalog: vi.fn(() => []),
+      },
+      mcp: {
+        listMcpServers: vi.fn(() => []),
+      },
+      skills: {
+        listSkills: vi.fn(() => [
+          {
+            skillId: "skill-1",
+            name: "Skill one",
+            state: "enabled",
+            lastUsedAt: "2026-05-30T17:30:00.000Z",
+            usageCount: 2,
+            lastRunId: "run-skill-1",
+            lastApprovalId: "approval-skill-1",
+            lastEvidenceRef: "evidence-skill-1",
+          },
+        ]),
+      },
+      addons: {
+        listAddonsCatalog: vi.fn(() => []),
+        listInstalledAddons: vi.fn(async () => []),
+      },
+    });
+
+    const response = await app!.inject({
+      method: "GET",
+      url: "/api/v1/trust/policy-snapshot",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().lastUseEvidence).toEqual([
+      expect.objectContaining({
+        subjectType: "skill",
+        subjectId: "skill-1",
+        runId: "run-skill-1",
+        approvalId: "approval-skill-1",
+        evidenceRef: "evidence-skill-1",
+      }),
+    ]);
+  });
 });

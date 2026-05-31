@@ -77,6 +77,16 @@ const mocks = vi.hoisted(() => ({
         approvalMode: "approve_all",
         source: "tools.permissionProfiles",
       },
+      {
+        profileId: "archived-profile",
+        label: "Archived profile",
+        builtin: false,
+        status: "archived",
+        posture: "disabled",
+        approvalMode: "bypass",
+        source: "tools.permissionProfiles",
+        archivedAt: "2026-05-30T17:00:00.000Z",
+      },
     ],
     toolGrants: [
       {
@@ -141,6 +151,9 @@ const mocks = vi.hoisted(() => ({
         subjectId: "mcp-quarantined",
         lastConnectedAt: "2026-05-30T17:45:00.000Z",
         status: "connected",
+        runId: "run-trust-1",
+        approvalId: "approval-trust-1",
+        evidenceRef: "evidence-trust-1",
       },
     ],
   })),
@@ -3636,6 +3649,11 @@ describe("SettingsNativePage Trust & Policy", () => {
     expect(text).toContain("Trust matrix");
     expect(text).toContain("Browser search");
     expect(text).toContain("Dangerous shell");
+    expect(text).toContain("Archived profile");
+    expect(text).toContain("Archived");
+    expect(text).toContain("run run-trust-1");
+    expect(text).toContain("approval approval-trust-1");
+    expect(text).toContain("evidence-trust-1");
     expect(text).toContain("Ready");
     expect(text).toContain("Approval required");
     expect(text).toContain("Quarantined");
@@ -3646,6 +3664,13 @@ describe("SettingsNativePage Trust & Policy", () => {
     expect(text).toContain("Skills");
     expect(text).toContain("Capabilities");
     expect(text).toContain("Approvals");
+    const safeProfileRow = renderer!.root
+      .findAll((node) => node.type === "tr")
+      .find((node) => collectText(node).includes("Safe profile"));
+    expect(safeProfileRow).toBeDefined();
+    const safeProfileRowText = collectText(safeProfileRow!);
+    expect(safeProfileRowText).toContain("Approval required");
+    expect(safeProfileRowText).not.toContain("Ready");
 
     await act(async () => {
       findInputByPlaceholder(renderer!.root, "Search trust, grants, blockers, or source").props.onChange({
@@ -3653,7 +3678,7 @@ describe("SettingsNativePage Trust & Policy", () => {
       });
     });
     text = collectText(renderer!.root);
-    expect(text).toMatch(/Showing\s+1\s+of\s+5/);
+    expect(text).toMatch(/Showing\s+1\s+of\s+6/);
     expect(text).toContain("Dangerous shell");
     expect(text).not.toContain("Browser search");
   });

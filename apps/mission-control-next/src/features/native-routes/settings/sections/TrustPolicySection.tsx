@@ -480,15 +480,26 @@ function buildTrustPolicyRows(snapshot: TrustPolicySnapshot | null | undefined):
     });
   }
   for (const profile of snapshot.permissionProfiles) {
+    const profileCallable = profile.posture === "callable";
+    const profileCallableState = profileCallable
+      ? profile.approvalMode === "approve_all"
+        ? "approval_required"
+        : "callable"
+      : profile.posture === "non_callable" || profile.posture === "not_installed"
+        ? "not_callable"
+        : "blocked";
     rows.push({
       id: `permission-profile:${profile.profileId ?? profile.label ?? rows.length}`,
       kind: "source",
       label: profile.label ?? profile.profileId ?? "Permission profile",
       source: profile.source,
-      status: profile.approvalMode === "approve_all" ? "approval_required" : statusForPosture(profile.posture),
+      status:
+        profileCallable && profile.approvalMode === "approve_all"
+          ? "approval_required"
+          : statusForPosture(profile.posture),
       trustState: profile.status,
-      callable: profile.posture === "callable",
-      callableState: profile.approvalMode === "approve_all" ? "approval_required" : "callable",
+      callable: profileCallable,
+      callableState: profileCallableState,
       grants: [profile.scope, profile.approvalMode, ...(profile.allow ?? [])].filter((item): item is string =>
         Boolean(item),
       ),
@@ -555,7 +566,9 @@ function evidenceToLastUse(evidence: TrustPolicyLastUseEvidence | undefined): Tr
   return {
     at: evidence.lastUsedAt ?? evidence.lastConnectedAt ?? evidence.latestToolUpdatedAt ?? evidence.updatedAt,
     label: evidence.status ?? (evidence.usageCount !== undefined ? `${evidence.usageCount} uses` : evidence.source),
-    evidenceRef: evidence.subjectId,
+    runId: evidence.runId,
+    approvalId: evidence.approvalId,
+    evidenceRef: evidence.evidenceRef,
   };
 }
 
@@ -650,9 +663,6 @@ function labelForKind(kind: TrustPolicyMatrixRow["kind"]): string {
 }
 
 function labelForCallableState(row: TrustPolicyMatrixRow): string {
-  if (row.callable === true || row.callableState === "callable") {
-    return "Ready";
-  }
   if (row.callableState === "approval_required") {
     return "Approval required";
   }
@@ -664,6 +674,9 @@ function labelForCallableState(row: TrustPolicyMatrixRow): string {
   }
   if (row.callable === false || row.callableState === "not_callable") {
     return "Not callable";
+  }
+  if (row.callable === true || row.callableState === "callable") {
+    return "Ready";
   }
   return "Unknown";
 }

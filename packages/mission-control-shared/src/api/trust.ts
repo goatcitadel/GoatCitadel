@@ -186,6 +186,9 @@ export interface TrustPolicyLastUseEvidence {
   latestToolUpdatedAt?: string;
   updatedAt?: string;
   status?: string;
+  runId?: string;
+  approvalId?: string;
+  evidenceRef?: string;
 }
 
 export interface TrustPolicySnapshot {
