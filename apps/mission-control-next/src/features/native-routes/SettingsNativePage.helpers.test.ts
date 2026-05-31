@@ -270,8 +270,54 @@ describe("SettingsNativePage helpers", () => {
       nextRoute: "/chat",
       notes: [],
     } as any);
-    expect(demoItems.map((item) => item.state)).toEqual(["complete", "pending", "complete", "complete", "active"]);
+    expect(demoItems.map((item) => item.state)).toEqual(["complete", "pending", "complete", "active", "active"]);
+    expect(demoItems[3]!.meta).toBe("starter-ready");
     expect(demoItems.at(-1)!.meta).toBe("proof-needed");
+    expect(demoItems[3]!.actionLabel).toBe("Open Cowork");
+    expect(demoItems[3]!.route).toEqual({ area: "cowork", sessionId: "cowork-1", projectId: "project-1" });
+
+    const durableTaskItems = deriveFirstOutcomePathItems(readyProviderOnboarding, null, {
+      recentRuns: [
+        {
+          taskId: "task-1",
+          runId: "run-no-proof-yet",
+          title: "First run",
+          taskStatus: "running",
+          status: "running",
+          surface: "code",
+          parentSessionId: "code-session-1",
+          updatedAt: "2026-05-30T00:00:00.000Z",
+        },
+      ],
+      evidenceEnvelopes: [],
+    });
+    expect(durableTaskItems[3]!.description).toContain("recent durable code exists");
+    expect(durableTaskItems[3]!.actionLabel).toBe("Open Run Detail");
+    expect(durableTaskItems[3]!.route).toEqual({
+      area: "ops",
+      section: "sessions",
+      view: "run-detail",
+      runId: "run-no-proof-yet",
+      sessionId: "code-session-1",
+    });
+
+    const unknownSurfaceItems = deriveFirstOutcomePathItems(readyProviderOnboarding, null, {
+      recentRuns: [
+        {
+          taskId: "task-1",
+          runId: "run-unknown-surface",
+          title: "First run",
+          taskStatus: "running",
+          status: "running",
+          parentSessionId: "session-1",
+          updatedAt: "2026-05-30T00:00:00.000Z",
+        },
+      ],
+      evidenceEnvelopes: [],
+    });
+    expect(unknownSurfaceItems[3]!.description).toContain("recent durable run exists");
+    expect(unknownSurfaceItems[3]!.description).not.toContain("Cowork run");
+
     expect(
       deriveFirstRunGovernedJobState(readyProviderOnboarding, null, {
         recentRuns: [

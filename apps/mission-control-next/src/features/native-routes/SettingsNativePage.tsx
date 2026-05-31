@@ -8181,14 +8181,20 @@ export function deriveFirstOutcomePathItems(
   const hasChatStart = demoSessions.some((session) => session.mode === "chat");
   const hasCoworkStart = demoSessions.some((session) => session.mode === "cowork");
   const hasCodeStart = demoSessions.some((session) => session.mode === "code");
-  const hasTaskStart = Boolean(
-    firstRunEvidence.recentRuns.length > 0 || demoTasks.length > 0 || hasChatStart || hasCoworkStart || hasCodeStart,
-  );
+  const hasSeededStartContext = Boolean(demoTasks.length > 0 || hasChatStart || hasCoworkStart || hasCodeStart);
   const hasProjectCreation = Boolean(demoState?.project?.projectId || demoState?.project?.workspacePath);
   const providerFailure = describeProviderReadinessFailure(onboarding);
   const latestProof = firstRunEvidence.evidenceEnvelopes[0];
   const proofRun = findRunForEvidence(firstRunEvidence.recentRuns, latestProof);
   const proofRoute = routeForFirstRunEvidence(proofRun, latestProof);
+  const firstTaskRun = findFirstRunTaskCandidate(firstRunEvidence.recentRuns, demoSessions, demoTasks);
+  const firstTaskSession = pickFirstRunDemoSession(demoSessions);
+  const firstTaskRoute = routeForFirstTask(firstTaskRun, firstTaskSession);
+  const firstTaskActionLabel = firstTaskRun?.runId
+    ? "Open Run Detail"
+    : firstTaskSession
+      ? `Open ${surfaceLabel(firstTaskSession.mode)}`
+      : "Open Cowork";
 
   return [
     {
@@ -8233,15 +8239,22 @@ export function deriveFirstOutcomePathItems(
     {
       id: "first-task-pending",
       label: "First Chat/Cowork/Code task",
-      description: hasTaskStart
-        ? "A starter or governed task exists; inspect the surface before treating the first run as complete."
-        : "Create the first low-risk Chat, Cowork, or Code task after provider/local readiness is explicit.",
-      actionDescription:
-        "Open Cowork for the first supervised task, or switch to Chat/Code from the same runtime shell.",
-      state: hasTaskStart ? "complete" : providerConnected || demoReady || localEndpointReady ? "active" : "pending",
-      meta: hasTaskStart ? "task-found" : "first-task-pending",
-      actionLabel: "Open Cowork",
-      route: { area: "cowork" },
+      description: firstTaskRun
+        ? `A recent durable ${surfaceLabel(firstTaskRun.surface).toLowerCase()} exists; inspect Run Detail before treating proof as complete.`
+        : firstTaskSession
+          ? `A safe demo ${surfaceLabel(firstTaskSession.mode)} thread exists; open it and run the first supervised task from seeded context.`
+          : hasSeededStartContext
+            ? "Starter context exists; run a governed Chat, Cowork, or Code task before treating this step as complete."
+            : "Create the first low-risk Chat, Cowork, or Code task after provider/local readiness is explicit.",
+      actionDescription: firstTaskRun
+        ? "Open the durable run detail projection for timeline, approvals, tools, artifacts, and remaining proof gaps."
+        : firstTaskSession
+          ? "Open the seeded demo thread; it is local/sample context and does not count as proof until a run records evidence."
+          : "Open Cowork for the first supervised task, or switch to Chat/Code from the same runtime shell.",
+      state: firstTaskRun ? "complete" : providerConnected || demoReady || localEndpointReady ? "active" : "pending",
+      meta: firstTaskRun ? "recent-run-found" : hasSeededStartContext ? "starter-ready" : "first-task-pending",
+      actionLabel: firstTaskActionLabel,
+      route: firstTaskRoute,
     },
     {
       id: "proof-complete",
@@ -8254,7 +8267,7 @@ export function deriveFirstOutcomePathItems(
       actionDescription: latestProof
         ? "Open the linked run surface and use Run details or artifacts to inspect retained evidence."
         : "Open generated artifacts or the Code/Cowork run panel after a governed task records evidence.",
-      state: latestProof ? "complete" : hasTaskStart || hasProjectCreation ? "active" : "pending",
+      state: latestProof ? "complete" : firstTaskRun || hasProjectCreation ? "active" : "pending",
       meta: latestProof ? "proof-complete" : "proof-needed",
       actionLabel: latestProof ? "Open Run Detail" : "Inspect proof",
       route: latestProof ? proofRoute : { area: "library", section: "artifacts" },
@@ -8283,13 +8296,7 @@ export function deriveFirstRunGovernedJobState(
     activeProvider && activeModel && (activeProvider.hasApiKey || isLikelyLocalProviderBaseUrl(activeProvider.baseUrl)),
   );
   const demoReady = demoState?.status === "ready";
-  const demoTaskCount = demoState?.tasks?.length ?? 0;
-  const demoHasThread = Boolean(
-    demoState?.sessions?.some(
-      (session) => session.mode === "chat" || session.mode === "cowork" || session.mode === "code",
-    ),
-  );
-  const taskStarted = Boolean(firstRunEvidence.recentRuns.length > 0 || demoTaskCount > 0 || demoHasThread);
+  const taskStarted = firstRunEvidence.recentRuns.length > 0;
   if (taskStarted && (providerReady || demoReady)) {
     return "first-task-pending";
   }
@@ -8309,6 +8316,51 @@ function findRunForEvidence(runs: AgenticRunListItem[], evidence: EvidenceEnvelo
   return runs.find((run) => run.runId === evidence.runId);
 }
 
+function findFirstRunTaskCandidate(
+  runs: AgenticRunListItem[],
+  sessions: DemoBootstrapStateResponse["sessions"][number][],
+  tasks: DemoBootstrapStateResponse["tasks"],
+) {
+  const sessionIds = new Set(sessions.map((session) => session.sessionId).filter(Boolean));
+  const taskIds = new Set(tasks.map((task) => task.taskId).filter(Boolean));
+  return (
+    runs.find((run) => run.parentSessionId && sessionIds.has(run.parentSessionId)) ??
+    runs.find((run) => run.taskId && taskIds.has(run.taskId)) ??
+    runs[0]
+  );
+}
+
+function pickFirstRunDemoSession(sessions: DemoBootstrapStateResponse["sessions"][number][]) {
+  return (
+    sessions.find((session) => session.mode === "cowork") ??
+    sessions.find((session) => session.mode === "code") ??
+    sessions.find((session) => session.mode === "chat")
+  );
+}
+
+function routeForFirstTask(
+  run: AgenticRunListItem | undefined,
+  session: DemoBootstrapStateResponse["sessions"][number] | undefined,
+): AppRoute {
+  if (run?.runId) {
+    const route: AppRoute = { area: "ops", section: "sessions", view: "run-detail", runId: run.runId };
+    if (run.parentSessionId) {
+      route.sessionId = run.parentSessionId;
+    }
+    return route;
+  }
+  if (session) {
+    const area =
+      session.mode === "chat" || session.mode === "code" || session.mode === "cowork" ? session.mode : "cowork";
+    return {
+      area,
+      sessionId: session.sessionId,
+      ...(session.projectId ? { projectId: session.projectId } : {}),
+    };
+  }
+  return { area: "cowork" };
+}
+
 function routeForFirstRunEvidence(
   run: AgenticRunListItem | undefined,
   evidence: EvidenceEnvelope | undefined,
@@ -8326,6 +8378,21 @@ function routeForFirstRunEvidence(
 
 function shortEvidenceId(value: string): string {
   return value.length > 12 ? `${value.slice(0, 8)}...` : value;
+}
+
+function surfaceLabel(
+  surface: AgenticRunListItem["surface"] | DemoBootstrapStateResponse["sessions"][number]["mode"] | undefined,
+) {
+  switch (surface) {
+    case "chat":
+      return "Chat";
+    case "code":
+      return "Code";
+    case "cowork":
+      return "Cowork";
+    default:
+      return "run";
+  }
 }
 
 export function deriveOnboardingProviderSmokeEvidenceItems(
