@@ -643,6 +643,7 @@ export {
 export type { BrowserSessionGrantListQuery, BrowserSessionListQuery } from "./browser-sessions.js";
 export {
   createDurableRun,
+  exportObserveRunTrace,
   fetchDurableRun,
   fetchObserveRunTrace,
   fetchDurableRunTimeline,
@@ -656,6 +657,7 @@ export {
 export type {
   ObserveRunTraceArtifact,
   ObserveRunTraceError,
+  ObserveRunTraceExportResponse,
   ObserveRunTraceProviderUsageItem,
   ObserveRunTraceResponse,
   RunTraceAvailabilityState,

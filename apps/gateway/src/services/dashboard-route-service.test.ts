@@ -295,6 +295,63 @@ describe("dashboard route service", () => {
     });
     expect(deps.durableOperatorService.getRun).toHaveBeenCalledWith("run-paused");
   });
+
+  it("exports universal run traces as read-only JSON snapshots", async () => {
+    const deps = createDeps();
+    deps.durableOperatorService.getRun.mockReturnValue({
+      runId: "run/export 1",
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      attemptCount: 1,
+      maxAttempts: 3,
+      version: 1,
+      payload: {},
+      metadata: {},
+      createdAt: "2026-05-30T00:00:00.000Z",
+      updatedAt: "2026-05-30T00:01:00.000Z",
+    });
+    deps.runtimeLifecycleReadService.getRuntimeLifecycle.mockResolvedValue({
+      query: { runId: "run/export 1" },
+      canonical: { runId: "run/export 1" },
+      linked: {
+        sessionIds: [],
+        turnIds: [],
+        runIds: ["run/export 1"],
+        proactiveRunIds: [],
+        approvalIds: [],
+        taskIds: [],
+        workspaceIds: [],
+      },
+      turns: [],
+      toolRuns: [],
+    });
+    const service = createDashboardRouteService(createDashboardRoutePort(deps as never));
+
+    const exported = await service.getObserveRunTraceExport("run/export 1");
+    const content = JSON.parse(exported.content);
+
+    expect(exported).toMatchObject({
+      version: "observe.run_trace_export.v1",
+      runId: "run/export 1",
+      format: "json",
+      contentType: "application/json",
+      filename: "goatcitadel-run-trace-run-export-1.json",
+      sourceEndpoint: "/api/v1/observe/runs/run%2Fexport%201/trace",
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "audit_only",
+      },
+    });
+    expect(content.trace).toMatchObject({
+      version: "observe.run_trace.v1",
+      runId: "run/export 1",
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "audit_only",
+      },
+    });
+    expect(content).not.toHaveProperty("content");
+  });
 });
 
 function createDeps() {

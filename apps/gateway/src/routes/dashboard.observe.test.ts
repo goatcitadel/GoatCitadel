@@ -185,6 +185,49 @@ describe("dashboard observe aggregate routes", () => {
     });
   });
 
+  it("returns a read-only universal run trace export through the observe route", async () => {
+    const getObserveRunTraceExport = vi.fn(async () => ({
+      version: "observe.run_trace_export.v1",
+      generatedAt: "2026-05-30T00:00:00.000Z",
+      runId: "run-1",
+      format: "json",
+      contentType: "application/json",
+      filename: "goatcitadel-run-trace-run-1.json",
+      sourceEndpoint: "/api/v1/observe/runs/run-1/trace",
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "audit_only",
+        note: "read-only",
+      },
+      trace: { version: "observe.run_trace.v1", runId: "run-1" },
+      content: "{}",
+    }));
+    app = Fastify();
+    app.decorate("services", {
+      dashboard: {
+        getObserveRunTraceExport,
+      },
+    } as never);
+    await app.register(dashboardRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/observe/runs/run%2F1/trace/export",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(getObserveRunTraceExport).toHaveBeenCalledWith("run/1");
+    expect(response.json()).toMatchObject({
+      version: "observe.run_trace_export.v1",
+      runId: "run-1",
+      contentType: "application/json",
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "audit_only",
+      },
+    });
+  });
+
   it("maps a missing observed run trace to 404", async () => {
     app = Fastify();
     app.decorate("services", {

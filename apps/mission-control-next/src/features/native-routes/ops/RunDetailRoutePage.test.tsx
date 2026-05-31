@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RunDetailRoutePage } from "./RunDetailRoutePage";
 
 const runTraceHarness = vi.hoisted(() => ({
+  exportObserveRunTrace: vi.fn(),
   fetchObserveRunTrace: vi.fn(),
 }));
 
@@ -12,12 +13,20 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
   );
   return {
     ...actual,
+    exportObserveRunTrace: runTraceHarness.exportObserveRunTrace,
     fetchObserveRunTrace: runTraceHarness.fetchObserveRunTrace,
   };
 });
 
 beforeEach(() => {
+  runTraceHarness.exportObserveRunTrace.mockReset();
   runTraceHarness.fetchObserveRunTrace.mockReset();
+  Object.defineProperty(globalThis.navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: vi.fn().mockResolvedValue(undefined),
+    },
+  });
 });
 
 describe("RunDetailRoutePage", () => {
@@ -117,6 +126,62 @@ describe("RunDetailRoutePage", () => {
     expect(text).toContain("Recorded connector delivery check.");
     expect(text).toContain("Audit-only");
   });
+
+  it("copies a read-only run trace export without replaying the run", async () => {
+    runTraceHarness.fetchObserveRunTrace.mockResolvedValueOnce({
+      runId: "run-export",
+      status: "completed",
+      mode: "chat",
+      request: { summary: "Export evidence.", requestedAt: "2026-05-02T19:00:00.000Z" },
+      artifacts: [],
+      errors: [],
+    });
+    runTraceHarness.exportObserveRunTrace.mockResolvedValueOnce({
+      version: "observe.run_trace_export.v1",
+      generatedAt: "2026-05-02T19:01:00.000Z",
+      runId: "run-export",
+      format: "json",
+      contentType: "application/json",
+      filename: "goatcitadel-run-trace-run-export.json",
+      sourceEndpoint: "/api/v1/observe/runs/run-export/trace",
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "audit_only",
+        note: "read-only",
+      },
+      trace: {} as never,
+      content: '{"runId":"run-export"}',
+    });
+
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(
+        <RunDetailRoutePage
+          route={{ area: "ops", section: "sessions", view: "run-detail", runId: "run-export", theme: "ops" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={0}
+          navigate={vi.fn()}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      findButton(renderer!.root, "Copy trace export").props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(runTraceHarness.exportObserveRunTrace).toHaveBeenCalledWith("run-export");
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('{"runId":"run-export"}');
+    expect(collectText(renderer!.root)).toContain("Copied trace export goatcitadel-run-trace-run-export.json.");
+    act(() => {
+      renderer!.unmount();
+    });
+  });
 });
 
 async function renderText(runId: string): Promise<string> {
@@ -150,4 +215,8 @@ function collectText(node: ReactTestInstance | unknown): string {
     return "";
   }
   return (node as ReactTestInstance).children.map(collectText).join(" ");
+}
+
+function findButton(root: ReactTestInstance, label: string): ReactTestInstance {
+  return root.findAll((node) => node.type === "button" && collectText(node).includes(label))[0]!;
 }

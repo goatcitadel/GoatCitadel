@@ -27,6 +27,7 @@ export const dashboardRouteMethods = [
   "getDashboardState",
   "getMemoryQmdStats",
   "getObserveRunTrace",
+  "getObserveRunTraceExport",
   "getSystemVitals",
   "isFeatureEnabled",
   "listBackups",
@@ -175,6 +176,23 @@ export interface ObserveRunTraceResponse {
   };
 }
 
+export interface ObserveRunTraceExportResponse {
+  version: "observe.run_trace_export.v1";
+  generatedAt: string;
+  runId: string;
+  format: "json";
+  contentType: "application/json";
+  filename: string;
+  sourceEndpoint: string;
+  posture: {
+    readOnly: true;
+    sideEffectPosture: "audit_only";
+    note: string;
+  };
+  trace: ObserveRunTraceResponse;
+  content: string;
+}
+
 export function createDashboardRoutePort(deps: DashboardRoutePortDependencies): DashboardRoutePort {
   return {
     costSummary: (scope, from, to) => deps.storage.costLedger.summary(scope, from, to),
@@ -205,6 +223,7 @@ export function createDashboardRoutePort(deps: DashboardRoutePortDependencies): 
     },
     getMemoryQmdStats: (from, to) => deps.memoryLifecycleService.getContextStats(from, to),
     getObserveRunTrace: (runId) => buildObserveRunTrace(deps, String(runId)),
+    getObserveRunTraceExport: (runId) => buildObserveRunTraceExport(deps, String(runId)),
     getSystemVitals: () => {
       const total = os.totalmem();
       const free = os.freemem();
@@ -237,6 +256,34 @@ export function createDashboardRoutePort(deps: DashboardRoutePortDependencies): 
 
 export function createDashboardRouteService(port: DashboardRoutePort): DashboardRouteService {
   return createRouteService(port, dashboardRouteMethods);
+}
+
+async function buildObserveRunTraceExport(
+  deps: DashboardRoutePortDependencies,
+  runId: string,
+): Promise<ObserveRunTraceExportResponse> {
+  const trace = await buildObserveRunTrace(deps, runId);
+  const generatedAt = new Date().toISOString();
+  const sourceEndpoint = `/api/v1/observe/runs/${encodeURIComponent(runId)}/trace`;
+  const exportPayload = {
+    version: "observe.run_trace_export.v1" as const,
+    generatedAt,
+    runId,
+    format: "json" as const,
+    contentType: "application/json" as const,
+    sourceEndpoint,
+    posture: {
+      readOnly: true as const,
+      sideEffectPosture: "audit_only" as const,
+      note: "Trace export is a read-only serialization of the observe projection and does not replay, resume, approve, or execute work.",
+    },
+    trace,
+  };
+  return {
+    ...exportPayload,
+    filename: `goatcitadel-run-trace-${safeRunTraceFilenameSegment(runId)}.json`,
+    content: JSON.stringify(exportPayload, null, 2),
+  };
 }
 
 async function buildObserveRunTrace(
@@ -340,6 +387,15 @@ async function buildObserveRunTrace(
       },
     },
   };
+}
+
+function safeRunTraceFilenameSegment(value: string): string {
+  const safe = value
+    .trim()
+    .replace(/[^a-z0-9._-]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return safe || "unknown";
 }
 
 function loadApprovals(

@@ -1,5 +1,6 @@
-import { Database, FileText, GitBranch, RefreshCw } from "lucide-react";
-import { fetchObserveRunTrace } from "@goatcitadel/mission-control-shared/api/client";
+import { useState } from "react";
+import { ClipboardCopy, Database, FileText, GitBranch, RefreshCw } from "lucide-react";
+import { exportObserveRunTrace, fetchObserveRunTrace } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, StatusChip } from "../primitives";
 import type { NativeRoutePagesProps } from "../types";
@@ -44,6 +45,9 @@ interface RunDetailModel {
 
 export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: NativeRoutePagesProps) {
   const runId = route.runId?.trim();
+  const [exporting, setExporting] = useState(false);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const { loading, error, data, reload } = useAsyncLoad(async () => {
     if (!runId) {
       return {
@@ -63,6 +67,29 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
   }, [runId]);
   const detail = buildRunDetailModel(data?.trace ?? buildEmptyRunTrace(runId ?? "unknown"), runId ?? "unknown");
 
+  const copyTraceExport = async () => {
+    if (!runId) {
+      return;
+    }
+    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+      setExportError("Clipboard export is not available in this environment.");
+      setExportNotice(null);
+      return;
+    }
+    setExporting(true);
+    setExportError(null);
+    setExportNotice(null);
+    try {
+      const exported = await exportObserveRunTrace(runId);
+      await navigator.clipboard.writeText(exported.content);
+      setExportNotice(`Copied trace export ${exported.filename}.`);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <NativePageFrame
       area="ops"
@@ -78,13 +105,26 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
         { label: "Artifacts", value: String(detail.artifacts.length) },
       ]}
       actions={
-        <button type="button" className="mc-next-secondary-button" onClick={() => void reload()}>
-          <RefreshCw className="h-4 w-4" />
-          Refresh
-        </button>
+        <>
+          <button
+            type="button"
+            className="mc-next-secondary-button"
+            onClick={() => void copyTraceExport()}
+            disabled={!runId || exporting}
+          >
+            <ClipboardCopy className="h-4 w-4" />
+            {exporting ? "Exporting..." : "Copy trace export"}
+          </button>
+          <button type="button" className="mc-next-secondary-button" onClick={() => void reload()}>
+            <RefreshCw className="h-4 w-4" />
+            Refresh
+          </button>
+        </>
       }
     >
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
+      {exportNotice ? <div className="mc-next-runtime-notice tone-success">{exportNotice}</div> : null}
+      {exportError ? <div className="mc-next-directory-alert">{exportError}</div> : null}
       <NativeGrid className="mc-next-run-detail-grid">
         <NativeCard
           title="Request"

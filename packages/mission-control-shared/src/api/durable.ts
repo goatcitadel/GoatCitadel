@@ -137,6 +137,23 @@ export interface ObserveRunTraceResponse {
   };
 }
 
+export interface ObserveRunTraceExportResponse {
+  version: "observe.run_trace_export.v1";
+  generatedAt: string;
+  runId: string;
+  format: "json";
+  contentType: "application/json";
+  filename: string;
+  sourceEndpoint: string;
+  posture: {
+    readOnly: true;
+    sideEffectPosture: "audit_only";
+    note: string;
+  };
+  trace: ObserveRunTraceResponse;
+  content: string;
+}
+
 export async function createDurableRun(input: DurableRunCreateRequest): Promise<DurableRunRecord> {
   return request<DurableRunRecord>("/api/v1/durable/runs", {
     method: "POST",
@@ -150,6 +167,10 @@ export async function fetchDurableRun(runId: string): Promise<DurableRunRecord> 
 
 export async function fetchObserveRunTrace(runId: string): Promise<ObserveRunTraceResponse> {
   return request<ObserveRunTraceResponse>(`/api/v1/observe/runs/${encodeURIComponent(runId)}/trace`);
+}
+
+export async function exportObserveRunTrace(runId: string): Promise<ObserveRunTraceExportResponse> {
+  return request<ObserveRunTraceExportResponse>(`/api/v1/observe/runs/${encodeURIComponent(runId)}/trace/export`);
 }
 
 export async function fetchDurableRunTimeline(

@@ -150,6 +150,7 @@ describe("additional shared API wrappers", () => {
     await expectCall(durable.createDurableRun({ kind: "chat" } as never), "/api/v1/durable/runs", { method: "POST" });
     await expectCall(durable.fetchDurableRun("run/1"), "/api/v1/durable/runs/run%2F1");
     await expectCall(durable.fetchObserveRunTrace("run/1"), "/api/v1/observe/runs/run%2F1/trace");
+    await expectCall(durable.exportObserveRunTrace("run/1"), "/api/v1/observe/runs/run%2F1/trace/export");
     await expectCall(
       durable.fetchDurableRunTimeline("run/1", 9999),
       "/api/v1/durable/runs/run%2F1/timeline?limit=2000",

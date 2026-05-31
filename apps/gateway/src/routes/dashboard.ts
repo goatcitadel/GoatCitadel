@@ -322,6 +322,20 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  fastify.get("/api/v1/observe/runs/:runId/trace/export", async (request, reply) => {
+    const parsed = observeRunParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(await fastify.services.dashboard.getObserveRunTraceExport(parsed.data.runId));
+    } catch (error) {
+      const message = (error as Error).message;
+      const notFound = message.toLowerCase().includes("not found");
+      return reply.code(notFound ? 404 : 409).send({ error: message });
+    }
+  });
+
   fastify.get("/api/v1/cron/jobs", async (_request, reply) => {
     return reply.send({ items: fastify.services.cron.listCronJobs() });
   });
