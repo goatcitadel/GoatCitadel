@@ -768,9 +768,11 @@ Before running the manual plan:
 - Steps:
   1. inspect one visible non-channel integration entry
   2. attempt a real operator action if configured
+  3. for Activepieces, configure an API base URL plus API token env var and use `Check Run Status` with a known flow-run id
 - Expected:
   - visible actions correspond to real runtime handlers
   - failure mode is operationally readable
+  - Activepieces status evidence is shown as an explicit operator read, not background polling or managed flow lifecycle
 
 #### INT-03 Webhook and connector diagnostics
 

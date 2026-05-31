@@ -296,6 +296,21 @@ describe("integration-catalog", () => {
       );
     }
   });
+
+  it("advertises Activepieces webhook trigger and explicit run-status read actions", () => {
+    const entry = requireCatalogEntry("automation.activepieces");
+    const actionIds = (entry.operatorActions ?? []).map((action) => action.actionId);
+    const fieldKeys = getIntegrationFormSchema("automation.activepieces")?.fields.map((field) => field.key) ?? [];
+
+    expect(actionIds).toEqual(expect.arrayContaining(["trigger_webhook", "check_run_status"]));
+    expect(fieldKeys).toEqual(expect.arrayContaining(["webhookUrl", "apiBaseUrl", "apiTokenEnv"]));
+    expect(entry.operatorActions?.find((action) => action.actionId === "check_run_status")).toMatchObject({
+      capability: "read",
+      formSchema: expect.objectContaining({
+        catalogId: "action:automation.activepieces.check_run_status",
+      }),
+    });
+  });
 });
 
 function requireCatalogEntry(catalogId: string): IntegrationCatalogEntry {

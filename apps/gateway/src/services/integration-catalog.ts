@@ -498,6 +498,15 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
         secretRef: true,
         advanced: true,
       }),
+      url("apiBaseUrl", "API Base URL", {
+        placeholder: "https://cloud.activepieces.com",
+        advanced: true,
+      }),
+      text("apiTokenEnv", "API Token ENV Var", {
+        placeholder: "ACTIVEPIECES_API_KEY",
+        secretRef: true,
+        advanced: true,
+      }),
       text("defaultFlowId", "Default Flow ID", {
         placeholder: "flow-id",
         advanced: true,

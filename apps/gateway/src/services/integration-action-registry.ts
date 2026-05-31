@@ -130,6 +130,18 @@ const OPERATOR_ACTIONS_BY_CATALOG_ID: Record<string, IntegrationOperatorAction[]
         }),
       ]),
     ),
+    action(
+      "check_run_status",
+      "Check Run Status",
+      "Fetch a specific Activepieces flow-run status through the configured API token.",
+      "read",
+      formSchema("action:automation.activepieces.check_run_status", "Check Activepieces run status", [
+        text("workflowRunId", "Workflow Run ID", {
+          placeholder: "Flow run id returned by Activepieces",
+          required: true,
+        }),
+      ]),
+    ),
   ],
   "automation.gmail": [
     action(

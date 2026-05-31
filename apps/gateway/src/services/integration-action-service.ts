@@ -7,6 +7,7 @@ import type {
   IntegrationOperatorAction,
 } from "@goatcitadel/contracts";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
+import { invokeActivepiecesRunStatusAction } from "./activepieces-run-status-action.js";
 import {
   buildExternalSideEffectReplayOutput,
   type ExternalSideEffectRunStore,
@@ -251,6 +252,9 @@ async function invokeActivepiecesAction(
   request: IntegrationActionInvokeInput,
   checkedAt: string,
 ): Promise<IntegrationActionInvokeResult> {
+  if (actionId === "check_run_status") {
+    return invokeActivepiecesRunStatusAction(host, connection, request, checkedAt);
+  }
   if (actionId !== "trigger_webhook") {
     return blocked(
       connection,

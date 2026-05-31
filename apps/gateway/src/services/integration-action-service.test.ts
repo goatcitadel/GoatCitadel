@@ -829,6 +829,116 @@ describe("integration-action-service", () => {
     expect(result.output && "response" in result.output).toBe(false);
   });
 
+  it("checks Activepieces flow-run status through an explicit operator read action", async () => {
+    const connection = createConnection({
+      catalogId: "automation.activepieces",
+      key: "activepieces",
+      label: "Activepieces",
+      config: {
+        webhookUrl: "https://activepieces.example.test/hooks/flow-1",
+        apiBaseUrl: "https://cloud.activepieces.com",
+        apiTokenEnv: "resolved-api-token",
+      },
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: "run-123",
+            status: "SUCCEEDED",
+            url: "https://cloud.activepieces.com/runs/run-123?token=secret#debug",
+            steps: { first: { output: { secret: "not-returned" } } },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    );
+    const host = createHost(connection, { fetchWithDiagnosticsTimeout: fetchMock });
+
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "check_run_status", {
+      input: { workflowRunId: "run-123" },
+    });
+
+    expect(result).toMatchObject({
+      status: "executed",
+      catalogId: "automation.activepieces",
+      actionId: "check_run_status",
+      message: "Fetched Activepieces flow-run status: SUCCEEDED.",
+      output: {
+        provider: "activepieces",
+        workflowRunId: "run-123",
+        workflowRunStatus: "SUCCEEDED",
+        workflowRunStatusSource: "activepieces_api",
+        workflowRunUrl: "https://cloud.activepieces.com/runs/run-123",
+        checkedEndpoint: "/api/v1/flow-runs/{id}",
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://cloud.activepieces.com/api/v1/flow-runs/run-123",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          authorization: "Bearer resolved-api-token",
+        }),
+      }),
+    );
+    expect(result.output && "steps" in result.output).toBe(false);
+    expect(result.durableWriteback).toBeUndefined();
+    expect(host.mutationStore?.claim).not.toHaveBeenCalled();
+  });
+
+  it("blocks Activepieces flow-run status checks without API configuration", async () => {
+    const connection = createConnection({
+      catalogId: "automation.activepieces",
+      key: "activepieces",
+      label: "Activepieces",
+      config: {
+        webhookUrl: "https://activepieces.example.test/hooks/flow-1",
+      },
+    });
+    const fetchMock = vi.fn();
+    const host = createHost(connection, { fetchWithDiagnosticsTimeout: fetchMock });
+
+    await expect(
+      invokeIntegrationConnectionAction(host, connection.connectionId, "check_run_status", {
+        input: { workflowRunId: "run-123" },
+      }),
+    ).resolves.toMatchObject({
+      status: "blocked",
+      blockedReason: "activepieces_api_base_url_missing",
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks Activepieces flow-run status checks with an invalid API base URL", async () => {
+    const connection = createConnection({
+      catalogId: "automation.activepieces",
+      key: "activepieces",
+      label: "Activepieces",
+      config: {
+        apiBaseUrl: "file:///tmp/activepieces",
+        apiTokenEnv: "resolved-api-token",
+      },
+    });
+    const fetchMock = vi.fn();
+    const host = createHost(connection, { fetchWithDiagnosticsTimeout: fetchMock });
+
+    await expect(
+      invokeIntegrationConnectionAction(host, connection.connectionId, "check_run_status", {
+        input: { workflowRunId: "run-123" },
+      }),
+    ).resolves.toMatchObject({
+      status: "blocked",
+      blockedReason: "activepieces_api_base_url_invalid",
+      message: "Activepieces API base URL must be an http or https URL.",
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("does not resend Activepieces webhooks when the idempotency claim is duplicate", async () => {
     const connection = createConnection({
       catalogId: "automation.activepieces",

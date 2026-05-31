@@ -4927,7 +4927,6 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
                         </div>
                       );
                     })}
-                    {lastOperatorActionResult ? <OperatorActionResultPanel result={lastOperatorActionResult} /> : null}
                   </div>
                 ) : (
                   <SettingsNotice
@@ -4938,6 +4937,7 @@ function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionPro
                     }}
                   />
                 )}
+                {lastOperatorActionResult ? <OperatorActionResultPanel result={lastOperatorActionResult} /> : null}
                 {diagnostics ? <DiagnosticsPanel report={diagnostics} /> : null}
               </>
             ) : (
@@ -4999,7 +4999,7 @@ function OperatorActionResultPanel({ result }: { result: IntegrationActionInvoke
                 ? `Status ${readOutputText(output, "workflowRunStatus")}`
                 : undefined,
               readOutputText(output, "workflowRunStatusSource")
-                ? `Source ${readOutputText(output, "workflowRunStatusSource")}`
+                ? `Source ${labelForWorkflowStatusSource(readOutputText(output, "workflowRunStatusSource") ?? "")}`
                 : undefined,
             ]
               .filter(Boolean)
@@ -5236,7 +5236,13 @@ function readExternalReferenceValue(referenceId: string | undefined, expectedKey
 }
 
 function labelForWorkflowStatusSource(source: string): string {
-  return source === "webhook_response" ? "webhook response" : source;
+  if (source === "webhook_response") {
+    return "webhook response";
+  }
+  if (source === "activepieces_api") {
+    return "Activepieces API";
+  }
+  return source;
 }
 
 function formatDisplayedWorkflowUrl(value: string | undefined): string | undefined {

@@ -4144,6 +4144,109 @@ describe("SettingsNativePage integrations", () => {
     expect(text).toContain("Status RUNNING");
   });
 
+  it("runs Activepieces run-status checks as read-only operator evidence", async () => {
+    const activepiecesCatalog = {
+      items: [
+        {
+          catalogId: "automation.activepieces",
+          key: "activepieces",
+          label: "Activepieces",
+          kind: "automation",
+          capabilities: ["read"],
+          authMethods: ["webhook"],
+          operatorActions: [
+            {
+              actionId: "check_run_status",
+              label: "Check Run Status",
+              description: "Fetch a specific Activepieces flow-run status through the configured API token.",
+              capability: "read",
+              formSchema: {
+                catalogId: "action:automation.activepieces.check_run_status",
+                title: "Check Activepieces run status",
+                allowAdvancedJson: false,
+                fields: [{ key: "workflowRunId", label: "Workflow Run ID", type: "text" }],
+              },
+            },
+          ],
+        },
+      ],
+    } as any;
+    mocks.fetchIntegrationCatalog.mockResolvedValueOnce(activepiecesCatalog);
+    const activepiecesConnections = {
+      items: [
+        {
+          connectionId: "conn-activepieces",
+          catalogId: "automation.activepieces",
+          key: "activepieces",
+          label: "Activepieces",
+          kind: "automation",
+          enabled: true,
+          status: "connected",
+          config: {
+            webhookUrl: "https://activepieces.example.test/hooks/flow-1",
+            apiBaseUrl: "https://cloud.activepieces.com",
+            apiTokenEnv: "ACTIVEPIECES_API_KEY",
+          },
+          createdAt: "2026-05-31T10:00:00.000Z",
+          updatedAt: "2026-05-31T10:00:00.000Z",
+        },
+      ],
+    } as any;
+    mocks.fetchIntegrationConnections
+      .mockResolvedValueOnce(activepiecesConnections)
+      .mockResolvedValueOnce(activepiecesConnections);
+    mocks.invokeIntegrationConnectionAction.mockResolvedValueOnce({
+      connectionId: "conn-activepieces",
+      catalogId: "automation.activepieces",
+      actionId: "check_run_status",
+      status: "executed",
+      message: "Fetched Activepieces flow-run status: SUCCEEDED.",
+      output: {
+        provider: "activepieces",
+        workflowRunId: "run-123",
+        workflowRunStatus: "SUCCEEDED",
+        workflowRunStatusSource: "activepieces_api",
+      },
+      checkedAt: "2026-05-31T10:00:00.000Z",
+    } as any);
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderPage("integrations");
+    });
+    await act(async () => undefined);
+
+    const root = renderer!.root;
+    const runIdInput = root.findAll(
+      (node) => node.type === "input" && node.props?.id === "integration-field-workflowRunId",
+    )[0];
+    expect(runIdInput).toBeDefined();
+
+    await act(async () => {
+      runIdInput!.props.onChange({ target: { value: "run-123" } });
+    });
+    await act(async () => {
+      const operatorRunButton = renderer!.root.findAll(
+        (node) => node.type === "button" && collectText(node).trim() === "Run",
+      )[0];
+      await operatorRunButton!.props.onClick();
+    });
+    await act(async () => undefined);
+
+    expect(mocks.invokeIntegrationConnectionAction).toHaveBeenCalledWith("conn-activepieces", "check_run_status", {
+      input: {
+        workflowRunId: "run-123",
+      },
+      idempotencyKey: undefined,
+    });
+    const text = collectText(renderer!.root);
+    expect(text).toContain("Fetched Activepieces flow-run status: SUCCEEDED.");
+    expect(text).toContain("run-123");
+    expect(text).toContain("Status SUCCEEDED");
+    expect(text).toContain("Source Activepieces API");
+    expect(text).not.toContain("Replay audit durable run");
+  });
+
   it("creates integration connections from guided schema fields by default", async () => {
     let renderer: ReactTestRenderer | null = null;
 
