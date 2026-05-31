@@ -2,6 +2,7 @@ import type {
   IntegrationActionInvokeInput,
   IntegrationActionInvokeResult,
   IntegrationConnection,
+  IntegrationExternalWritebackResumeState,
   IntegrationExternalWritebackReplayOutcome,
   IntegrationOperatorAction,
 } from "@goatcitadel/contracts";
@@ -724,6 +725,8 @@ function recordExternalWritebackEnvelope(
       replayPolicy:
         readOutputString(result.output, "replayPolicy") === "idempotent_external" ? "idempotent_external" : undefined,
       replayOutcome: readExternalReplayOutcome(result.output),
+      resumable: readOutputBoolean(result.output, "resumable"),
+      resumeState: readExternalResumeState(result.output),
       idempotencyKey: readOutputString(result.output, "idempotencyKey") ?? request.idempotencyKey,
       payloadHash: readOutputString(result.output, "payloadHash"),
       status: result.status,
@@ -748,6 +751,27 @@ function readExternalReplayOutcome(
     value === "idempotency_unavailable"
     ? value
     : undefined;
+}
+
+function readExternalResumeState(
+  output: Record<string, unknown> | undefined,
+): IntegrationExternalWritebackResumeState | undefined {
+  const value = readOutputString(output, "resumeState");
+  return value === "not_resumable" ||
+    value === "completed" ||
+    value === "manual_retry_after_recorded_failure" ||
+    value === "in_progress" ||
+    value === "payload_mismatch" ||
+    value === "idempotency_unavailable"
+    ? value
+    : undefined;
+}
+
+function readOutputBoolean(output: Record<string, unknown> | undefined, key: string): boolean | undefined {
+  if (!isRecord(output)) {
+    return undefined;
+  }
+  return typeof output[key] === "boolean" ? output[key] : undefined;
 }
 
 function readOutputString(output: Record<string, unknown> | undefined, key: string): string | undefined {

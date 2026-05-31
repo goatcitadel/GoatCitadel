@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   IntegrationExternalWritebackEnvelope,
+  IntegrationExternalWritebackResumeState,
   IntegrationExternalWritebackReplayOutcome,
   IntegrationExternalWritebackReplayPolicy,
 } from "@goatcitadel/contracts";
@@ -22,6 +23,8 @@ export interface ExternalSideEffectIntentInput {
   actionCapability?: string;
   replayPolicy?: IntegrationExternalWritebackReplayPolicy;
   replayOutcome?: IntegrationExternalWritebackReplayOutcome;
+  resumable?: boolean;
+  resumeState?: IntegrationExternalWritebackResumeState;
   idempotencyKey?: string;
   payloadHash?: string;
   inputKeys?: string[];
@@ -35,13 +38,16 @@ export function recordAuditOnlyExternalSideEffectIntent(
   const intentId = buildExternalSideEffectIntentId(input);
   const idempotencyKey = input.idempotencyKey ?? buildExternalSideEffectIdempotencyKey(input);
   const replayPolicy = input.replayPolicy ?? "audit_only";
+  const resumable = input.resumable ?? false;
+  const resumeState = input.resumeState ?? "not_resumable";
   const common = {
     intentId,
     idempotencyKey,
     replayPolicy,
     replayOutcome: input.replayOutcome,
     payloadHash: input.payloadHash,
-    resumable: false as const,
+    resumable,
+    resumeState,
     checkedAt: input.checkedAt,
   };
   if (!input.evidenceEnvelopeService) {
@@ -62,7 +68,8 @@ export function recordAuditOnlyExternalSideEffectIntent(
         replayPolicy,
         replayOutcome: input.replayOutcome,
         payloadHash: input.payloadHash,
-        resumable: common.resumable,
+        resumable,
+        resumeState,
         connectionId: input.connectionId,
         catalogId: input.catalogId,
         integrationKey: input.integrationKey,
@@ -110,6 +117,9 @@ export interface ExternalSideEffectClaimInput {
 export interface ExternalSideEffectClaimResult {
   replayPolicy: "idempotent_external";
   replayOutcome: IntegrationExternalWritebackReplayOutcome;
+  replayAttempt: "new" | "retry_after_failure" | "blocked" | "unavailable";
+  resumable: boolean;
+  resumeState: IntegrationExternalWritebackResumeState;
   idempotencyKey: string;
   payloadHash: string;
   actorScope: string;
@@ -160,6 +170,9 @@ export function claimIdempotentExternalSideEffect(input: ExternalSideEffectClaim
     return {
       replayPolicy: "idempotent_external",
       replayOutcome: "idempotency_unavailable",
+      replayAttempt: "unavailable",
+      resumable: false,
+      resumeState: "idempotency_unavailable",
       idempotencyKey,
       payloadHash,
       actorScope,
@@ -178,6 +191,9 @@ export function claimIdempotentExternalSideEffect(input: ExternalSideEffectClaim
   return {
     replayPolicy: "idempotent_external",
     replayOutcome: claim.outcome,
+    replayAttempt: claim.outcome === "claimed" ? (claim.claimKind ?? "new") : "blocked",
+    resumable: false,
+    resumeState: mapExternalSideEffectResumeState(claim.outcome),
     idempotencyKey,
     payloadHash,
     actorScope,
@@ -204,16 +220,25 @@ export async function runIdempotentExternalSideEffect<TValue>(
     markIdempotentExternalSideEffectCompleted(input.mutationStore, claim, input.checkedAt);
     return {
       status: "executed",
-      claim,
+      claim: {
+        ...claim,
+        resumable: false,
+        resumeState: "completed",
+      },
       value,
     };
   } catch (error) {
     markIdempotentExternalSideEffectFailed(input.mutationStore, claim, input.checkedAt);
+    const failedClaim = {
+      ...claim,
+      resumable: false,
+      resumeState: "manual_retry_after_recorded_failure" as const,
+    };
     return {
       status: "failed",
-      claim,
+      claim: failedClaim,
       error: error instanceof Error ? error : new Error("external_side_effect_failed"),
-      output: buildExternalSideEffectReplayOutput(claim, input.output),
+      output: buildExternalSideEffectReplayOutput(failedClaim, input.output),
     };
   }
 }
@@ -226,9 +251,30 @@ export function buildExternalSideEffectReplayOutput(
     ...output,
     replayPolicy: claim.replayPolicy,
     replayOutcome: claim.replayOutcome,
+    replayAttempt: claim.replayAttempt,
+    resumable: claim.resumable,
+    resumeState: claim.resumeState,
     idempotencyKey: claim.idempotencyKey,
     payloadHash: claim.payloadHash,
   };
+}
+
+function mapExternalSideEffectResumeState(
+  outcome: IntegrationExternalWritebackReplayOutcome,
+): IntegrationExternalWritebackResumeState {
+  if (outcome === "duplicate") {
+    return "completed";
+  }
+  if (outcome === "in_progress") {
+    return "in_progress";
+  }
+  if (outcome === "payload_mismatch") {
+    return "payload_mismatch";
+  }
+  if (outcome === "idempotency_unavailable") {
+    return "idempotency_unavailable";
+  }
+  return "not_resumable";
 }
 
 export function markIdempotentExternalSideEffectCompleted(

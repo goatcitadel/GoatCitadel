@@ -25,7 +25,7 @@ interface MutationIdempotencyRow {
 }
 
 export type MutationIdempotencyClaimResult =
-  | { outcome: "claimed"; record: MutationIdempotencyRecord }
+  | { outcome: "claimed"; record: MutationIdempotencyRecord; claimKind: "new" | "retry_after_failure" }
   | { outcome: "in_progress"; record: MutationIdempotencyRecord }
   | { outcome: "duplicate"; record: MutationIdempotencyRecord }
   | { outcome: "payload_mismatch"; record: MutationIdempotencyRecord };
@@ -129,6 +129,7 @@ export class MutationIdempotencyRepository {
         });
         return {
           outcome: "claimed" as const,
+          claimKind: "new" as const,
           record: this.get(identity)!,
         };
       }
@@ -146,6 +147,7 @@ export class MutationIdempotencyRepository {
         });
         return {
           outcome: "claimed" as const,
+          claimKind: "retry_after_failure" as const,
           record: this.get(identity)!,
         };
       }

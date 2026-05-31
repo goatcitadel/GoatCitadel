@@ -132,6 +132,13 @@ export type IntegrationExternalWritebackReplayOutcome =
   | "in_progress"
   | "payload_mismatch"
   | "idempotency_unavailable";
+export type IntegrationExternalWritebackResumeState =
+  | "not_resumable"
+  | "completed"
+  | "manual_retry_after_recorded_failure"
+  | "in_progress"
+  | "payload_mismatch"
+  | "idempotency_unavailable";
 
 export interface IntegrationExternalWritebackEnvelope {
   status: IntegrationExternalWritebackEnvelopeStatus;
@@ -140,7 +147,8 @@ export interface IntegrationExternalWritebackEnvelope {
   replayPolicy: IntegrationExternalWritebackReplayPolicy;
   replayOutcome?: IntegrationExternalWritebackReplayOutcome;
   payloadHash?: string;
-  resumable: false;
+  resumable: boolean;
+  resumeState?: IntegrationExternalWritebackResumeState;
   checkedAt: string;
   envelopeId?: string;
   contentHash?: string;

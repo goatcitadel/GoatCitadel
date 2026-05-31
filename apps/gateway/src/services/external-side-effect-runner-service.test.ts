@@ -113,6 +113,9 @@ describe("external-side-effect-runner-service", () => {
     expect(result).toMatchObject({
       replayPolicy: "idempotent_external",
       replayOutcome: "claimed",
+      replayAttempt: "new",
+      resumable: false,
+      resumeState: "not_resumable",
       idempotencyKey: "operator-key",
       payloadHash: expect.any(String),
       actorScope: "conn-1",
@@ -193,6 +196,9 @@ describe("external-side-effect-runner-service", () => {
         provider: "trello",
         replayPolicy: "idempotent_external",
         replayOutcome: "duplicate",
+        replayAttempt: "blocked",
+        resumable: false,
+        resumeState: "completed",
         idempotencyKey: "operator-key",
       },
     });
@@ -238,6 +244,9 @@ describe("external-side-effect-runner-service", () => {
       output: {
         replayPolicy: "idempotent_external",
         replayOutcome: "claimed",
+        replayAttempt: "new",
+        resumable: false,
+        resumeState: "manual_retry_after_recorded_failure",
         idempotencyKey: "operator-key",
       },
     });
@@ -247,5 +256,44 @@ describe("external-side-effect-runner-service", () => {
         actorScope: "conn-1",
       }),
     );
+  });
+
+  it("marks retries from failed idempotency claims as retry attempts", () => {
+    const result = claimIdempotentExternalSideEffect({
+      mutationStore: {
+        claim: vi.fn(() => ({
+          outcome: "claimed" as const,
+          claimKind: "retry_after_failure" as const,
+          record: {
+            method: "POST",
+            routePath: "external",
+            idempotencyKey: "operator-key",
+            actorScope: "conn-1",
+            payloadHash: "hash",
+            status: "pending" as const,
+            createdAt: "2026-05-31T00:00:00.000Z",
+            updatedAt: "2026-05-31T00:00:05.000Z",
+          },
+        })),
+        markCompleted: vi.fn(),
+        markFailed: vi.fn(),
+      },
+      boundary: "integration_operator_action",
+      catalogId: "automation.activepieces",
+      connectionId: "conn-1",
+      actionId: "trigger_webhook",
+      idempotencyKey: "operator-key",
+      checkedAt: "2026-05-31T00:00:10.000Z",
+      payload: { message: "retry" },
+    });
+
+    expect(result).toMatchObject({
+      replayPolicy: "idempotent_external",
+      replayOutcome: "claimed",
+      replayAttempt: "retry_after_failure",
+      resumable: false,
+      resumeState: "not_resumable",
+      idempotencyKey: "operator-key",
+    });
   });
 });

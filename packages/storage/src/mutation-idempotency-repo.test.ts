@@ -42,6 +42,7 @@ describe("MutationIdempotencyRepository", () => {
 
     const claimed = repo.claim(input);
     assert.equal(claimed.outcome, "claimed");
+    assert.equal(claimed.claimKind, "new");
     assert.equal(claimed.record.status, "pending");
 
     const inProgress = repo.claim(input);
@@ -57,6 +58,7 @@ describe("MutationIdempotencyRepository", () => {
       now: "2026-04-19T00:00:10.000Z",
     });
     assert.equal(retried.outcome, "claimed");
+    assert.equal(retried.claimKind, "retry_after_failure");
     assert.equal(retried.record.status, "pending");
   });
 

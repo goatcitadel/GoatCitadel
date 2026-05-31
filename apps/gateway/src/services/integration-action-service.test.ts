@@ -521,12 +521,17 @@ describe("integration-action-service", () => {
       output: {
         replayPolicy: "idempotent_external",
         replayOutcome: "claimed",
+        replayAttempt: "new",
+        resumable: false,
+        resumeState: "manual_retry_after_recorded_failure",
         idempotencyKey: "operator-key",
       },
       durableWriteback: {
         status: "unavailable",
         replayPolicy: "idempotent_external",
         replayOutcome: "claimed",
+        resumable: false,
+        resumeState: "manual_retry_after_recorded_failure",
       },
     });
     expect(markFailed).toHaveBeenCalledWith(
