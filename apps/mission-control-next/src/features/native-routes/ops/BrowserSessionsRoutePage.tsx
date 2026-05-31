@@ -72,9 +72,12 @@ export function BrowserSessionsRoutePage({ activeWorkspaceId, activeWorkspaceNam
     setNotice(null);
     try {
       const created = await createBrowserSession({ workspaceId: activeWorkspaceId, label });
+      setFilter("active");
       setSelectedSessionId(created.sessionId);
       setNotice("Browser session created. Create a scoped grant before tools can use it.");
-      await reload();
+      if (filter === "active") {
+        await reload();
+      }
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
     } finally {

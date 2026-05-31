@@ -130,6 +130,73 @@ describe("BrowserSessionsRoutePage", () => {
     });
   });
 
+  it("returns to the active filter after creating a session from another filter", async () => {
+    browserSessionMocks.fetchBrowserSessions.mockImplementation(async ({ status }: { status: string }) =>
+      status === "closed"
+        ? [
+            {
+              sessionId: "browser-session-closed",
+              workspaceId: "default",
+              label: "Closed browser",
+              status: "closed",
+              createdBy: "operator",
+              createdAt: "2026-05-30T17:00:00.000Z",
+              updatedAt: "2026-05-30T17:05:00.000Z",
+              closedAt: "2026-05-30T17:05:00.000Z",
+            },
+          ]
+        : [
+            {
+              sessionId: "browser-session-2",
+              workspaceId: "default",
+              label: "New browser",
+              status: "active",
+              createdBy: "operator",
+              createdAt: "2026-05-30T18:10:00.000Z",
+              updatedAt: "2026-05-30T18:10:00.000Z",
+            },
+          ],
+    );
+    browserSessionMocks.createBrowserSession.mockResolvedValueOnce({
+      sessionId: "browser-session-2",
+      workspaceId: "default",
+      label: "New browser",
+      status: "active",
+      createdBy: "operator",
+      createdAt: "2026-05-30T18:10:00.000Z",
+      updatedAt: "2026-05-30T18:10:00.000Z",
+    });
+    const renderer = await renderPage();
+
+    await act(async () => {
+      findExactButton(renderer.root, "Closed").props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      findInput(renderer.root, "Research browser").props.onChange({ target: { value: "New browser" } });
+    });
+    await act(async () => {
+      findButton(renderer.root, "Create governed session").props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(browserSessionMocks.createBrowserSession).toHaveBeenCalledWith({
+      workspaceId: "default",
+      label: "New browser",
+    });
+    expect(browserSessionMocks.fetchBrowserSessions).toHaveBeenLastCalledWith({
+      workspaceId: "default",
+      status: "active",
+      limit: 100,
+    });
+    expect(findExactButton(renderer.root, "Active").props["aria-pressed"]).toBe(true);
+    expect(collectText(renderer.root)).toContain("New browser");
+    expect(collectText(renderer.root)).toContain("Browser session created");
+  });
+
   it("closes sessions and rotates or revokes active scoped grants", async () => {
     browserSessionMocks.closeBrowserSession.mockResolvedValueOnce({
       sessionId: "browser-session-1",
