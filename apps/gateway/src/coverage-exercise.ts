@@ -580,6 +580,8 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
 
   await requestNotServerError(app, "GET", "/api/v1/mcp/templates");
   await requestNotServerError(app, "GET", "/api/v1/mcp/templates/discovery");
+  await requestNotServerError(app, "GET", "/api/v1/mcp/remote-preview");
+  await requestNotServerError(app, "GET", "/api/v1/mcp/server-mode/manifest");
   const mcpServer = await requestJson<{ serverId?: string }>(app, "POST", "/api/v1/mcp/servers", {
     label: "Coverage MCP",
     transport: "stdio",

@@ -1,7 +1,10 @@
 import type { FastifyPluginAsync } from "fastify";
 import type {
+  CapabilityCatalogEntry,
   McpRemotePreviewItem,
   McpRemotePreviewResponse,
+  McpServerModeManifestResponse,
+  McpServerModeToolDescriptor,
   McpServerRecord,
   McpServerTemplateRecord,
 } from "@goatcitadel/contracts";
@@ -123,6 +126,15 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       buildMcpRemotePreview({
         servers: fastify.services.mcp.listMcpServers(),
         templates: fastify.services.mcp.listMcpTemplates(),
+      }),
+    );
+  });
+
+  fastify.get("/api/v1/mcp/server-mode/manifest", READ_ROUTE_OPTIONS, async (_request, reply) => {
+    return reply.send(
+      buildMcpServerModeManifest({
+        inspectableCatalog: fastify.services.capabilities.listCapabilityCatalog("inspectable"),
+        callableCatalog: fastify.services.capabilities.listCapabilityCatalog("callable"),
       }),
     );
   });
@@ -411,4 +423,117 @@ function isRemoteMcpDefinition(
   item: Pick<McpServerRecord | McpServerTemplateRecord, "transport">,
 ): item is McpServerRecord | McpServerTemplateRecord {
   return item.transport === "http" || item.transport === "sse";
+}
+
+export function buildMcpServerModeManifest(input: {
+  inspectableCatalog: CapabilityCatalogEntry[];
+  callableCatalog: CapabilityCatalogEntry[];
+}): McpServerModeManifestResponse {
+  const tools = input.callableCatalog.map(buildServerModeToolDescriptor);
+  return {
+    generatedAt: new Date().toISOString(),
+    readOnly: true,
+    mutationSemantics: "none",
+    status: "preview",
+    protocol: "mcp",
+    runtimeSupport: "manifest_only",
+    server: {
+      name: "goatcitadel",
+      label: "GoatCitadel governed capability export",
+      version: "1.0.0",
+      transport: "stdio",
+    },
+    launch: {
+      supported: false,
+      command: "goatcitadel",
+      args: ["mcp-server"],
+      reason: "MCP server protocol execution is not wired in this prototype; this endpoint is a descriptor manifest.",
+    },
+    summary: {
+      inspectableCapabilities: input.inspectableCatalog.length,
+      gatewayCallableCapabilities: input.callableCatalog.length,
+      exportedToolDescriptors: tools.length,
+      blockedDescriptors: tools.filter((tool) => tool.serverModeState === "blocked").length,
+    },
+    tools,
+    governance: [
+      "This projection is read-only and does not mutate capability, MCP, approval, or tool policy state.",
+      "Any future MCP server execution must re-enter Gateway-owned deny-wins policy, approvals, path jails, and memory governance.",
+      "Only the callable capability catalog is described as exportable; inspectable-only candidates and proposals are withheld.",
+    ],
+    limitations: [
+      "MCP server protocol serving is not available from this endpoint.",
+      "Tool descriptors are intentionally conservative and do not grant external clients new authority.",
+      "Remote MCP transport invocation remains governed separately by the existing MCP client/runtime surfaces.",
+    ],
+    evidence: {
+      catalogScope: "callable",
+      catalogSnapshot: input.callableCatalog.map((entry) => ({
+        capabilityId: entry.capabilityId,
+        kind: entry.kind,
+        callable: entry.callable,
+      })),
+    },
+  };
+}
+
+function buildServerModeToolDescriptor(entry: CapabilityCatalogEntry): McpServerModeToolDescriptor {
+  const name = normalizeServerModeToolName(entry);
+  const governance = [
+    `Gateway callable state: ${entry.callable ? "callable" : "not callable"}.`,
+    "External MCP server invocation is descriptor-only until the protocol runner is implemented.",
+  ];
+  if (entry.lifecycleState) {
+    governance.push(`Lifecycle state: ${entry.lifecycleState}.`);
+  }
+  if (entry.trustLabel) {
+    governance.push(`Trust label: ${entry.trustLabel}.`);
+  }
+  if (entry.reviewWarning) {
+    governance.push(`Review warning: ${entry.reviewWarning}`);
+  }
+  return {
+    name,
+    title: entry.title,
+    description: entry.summary,
+    capabilityId: entry.capabilityId,
+    capabilityKind: entry.kind,
+    sourceRef: entry.sourceRef ?? entry.toolName ?? entry.skillId,
+    inputSchema: buildServerModeInputSchema(entry),
+    gatewayCallable: entry.callable,
+    serverModeState: entry.callable ? "descriptor_only" : "blocked",
+    blockers: entry.callable
+      ? ["MCP server protocol execution is not wired in this prototype."]
+      : ["Capability is not callable in the Gateway catalog."],
+    governance,
+    annotations: {
+      readOnlyHint: Boolean(entry.wrapperVisibility?.readOnly),
+      destructiveHint: !entry.wrapperVisibility?.readOnly,
+      openWorldHint: entry.kind === "tool",
+    },
+  };
+}
+
+function buildServerModeInputSchema(entry: CapabilityCatalogEntry): Record<string, unknown> {
+  return {
+    type: "object",
+    additionalProperties: true,
+    properties: {
+      arguments: {
+        type: "object",
+        description: `Arguments passed through Gateway governance for ${entry.title}.`,
+        additionalProperties: true,
+      },
+    },
+  };
+}
+
+function normalizeServerModeToolName(entry: Pick<CapabilityCatalogEntry, "capabilityId" | "toolName" | "skillId">) {
+  const raw = entry.toolName ?? entry.skillId ?? entry.capabilityId;
+  const normalized = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return `goatcitadel.${normalized || "capability"}`;
 }

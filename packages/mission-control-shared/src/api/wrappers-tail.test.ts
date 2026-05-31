@@ -180,6 +180,8 @@ describe("shared API wrapper tail coverage", () => {
     await expectCall(mcp.fetchMcpServers(), "/api/v1/mcp/servers");
     await expectCall(mcp.fetchMcpTemplates(), "/api/v1/mcp/templates");
     await expectCall(mcp.fetchMcpTemplateDiscovery(), "/api/v1/mcp/templates/discovery");
+    await expectCall(mcp.fetchMcpRemotePreview(), "/api/v1/mcp/remote-preview");
+    await expectCall(mcp.fetchMcpServerModeManifest(), "/api/v1/mcp/server-mode/manifest");
     await expectCall(mcp.createMcpServer({ label: "Local", transport: "stdio" }), "/api/v1/mcp/servers", {
       method: "POST",
     });

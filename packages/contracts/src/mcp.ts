@@ -1,4 +1,5 @@
 import type { ChannelProbeReport } from "./channel-probes.js";
+import type { CapabilityCatalogEntry, CapabilityKind } from "./capabilities.js";
 import type { PermissionSurface, ToolPolicyActorContext } from "./policy.js";
 
 export type McpTransport = "stdio" | "http" | "sse";
@@ -210,6 +211,63 @@ export interface McpRemotePreviewResponse {
     configuredOnly: number;
   };
   items: McpRemotePreviewItem[];
+}
+
+export type McpServerModeStatus = "preview";
+export type McpServerModeRuntimeSupport = "manifest_only" | "not_available";
+export type McpServerModeToolState = "descriptor_only" | "blocked";
+
+export interface McpServerModeToolDescriptor {
+  name: string;
+  title: string;
+  description: string;
+  capabilityId: string;
+  capabilityKind: CapabilityKind;
+  sourceRef?: string;
+  inputSchema: Record<string, unknown>;
+  gatewayCallable: boolean;
+  serverModeState: McpServerModeToolState;
+  blockers: string[];
+  governance: string[];
+  annotations: {
+    readOnlyHint: boolean;
+    destructiveHint: boolean;
+    openWorldHint: boolean;
+  };
+}
+
+export interface McpServerModeManifestResponse {
+  generatedAt: string;
+  readOnly: true;
+  mutationSemantics: "none";
+  status: McpServerModeStatus;
+  protocol: "mcp";
+  runtimeSupport: McpServerModeRuntimeSupport;
+  server: {
+    name: "goatcitadel";
+    label: string;
+    version: string;
+    transport: Extract<McpTransport, "stdio">;
+  };
+  launch: {
+    supported: false;
+    command?: string;
+    args?: string[];
+    reason: string;
+  };
+  summary: {
+    inspectableCapabilities: number;
+    gatewayCallableCapabilities: number;
+    exportedToolDescriptors: number;
+    blockedDescriptors: number;
+  };
+  tools: McpServerModeToolDescriptor[];
+  governance: string[];
+  limitations: string[];
+  evidence: {
+    catalogScope: "callable";
+    catalogSnapshot?: Pick<CapabilityCatalogEntry, "capabilityId" | "kind" | "callable">[];
+  };
 }
 
 export interface ConnectorDiagnosticReport {

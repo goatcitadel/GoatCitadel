@@ -730,6 +730,7 @@ export {
   deleteMcpServer,
   disconnectMcpServer,
   fetchMcpRemotePreview,
+  fetchMcpServerModeManifest,
   fetchMcpServers,
   fetchMcpTemplateDiscovery,
   fetchMcpTemplates,

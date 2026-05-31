@@ -496,6 +496,102 @@ describe("mcp routes", () => {
     });
   });
 
+  it("serves a read-only MCP server-mode manifest from the callable capability catalog", async () => {
+    const mcp = createMcpService();
+    const listCapabilityCatalog = vi.fn((scope: "inspectable" | "callable") =>
+      scope === "inspectable"
+        ? [
+            {
+              capabilityId: "tool:fs.read",
+              kind: "tool",
+              category: "built_in",
+              title: "Read file",
+              summary: "Read a file through Gateway policy.",
+              callable: true,
+              toolName: "fs.read",
+              wrapperVisibility: { readOnly: true, deterministic: true, codeModeAllowed: true },
+            },
+            {
+              capabilityId: "candidate:unsafe",
+              kind: "candidate_skill",
+              category: "self_generated",
+              title: "Unsafe candidate",
+              summary: "Inspectable only.",
+              callable: false,
+            },
+          ]
+        : [
+            {
+              capabilityId: "tool:fs.read",
+              kind: "tool",
+              category: "built_in",
+              title: "Read file",
+              summary: "Read a file through Gateway policy.",
+              callable: true,
+              toolName: "fs.read",
+              wrapperVisibility: { readOnly: true, deterministic: true, codeModeAllowed: true },
+            },
+          ],
+    );
+
+    app = Fastify();
+    app.decorate("services", {
+      mcp,
+      capabilities: {
+        listCapabilityCatalog,
+      },
+    } as never);
+    await app.register(mcpRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/mcp/server-mode/manifest",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(listCapabilityCatalog).toHaveBeenCalledWith("inspectable");
+    expect(listCapabilityCatalog).toHaveBeenCalledWith("callable");
+    expect(response.json()).toMatchObject({
+      readOnly: true,
+      mutationSemantics: "none",
+      status: "preview",
+      protocol: "mcp",
+      runtimeSupport: "manifest_only",
+      launch: {
+        supported: false,
+        reason: expect.stringContaining("not wired"),
+      },
+      summary: {
+        inspectableCapabilities: 2,
+        gatewayCallableCapabilities: 1,
+        exportedToolDescriptors: 1,
+        blockedDescriptors: 0,
+      },
+      tools: [
+        expect.objectContaining({
+          name: "goatcitadel.fs.read",
+          capabilityId: "tool:fs.read",
+          gatewayCallable: true,
+          serverModeState: "descriptor_only",
+          blockers: [expect.stringContaining("not wired")],
+          annotations: expect.objectContaining({
+            readOnlyHint: true,
+            destructiveHint: false,
+          }),
+        }),
+      ],
+      governance: expect.arrayContaining([
+        expect.stringContaining("read-only"),
+        expect.stringContaining("Gateway-owned"),
+      ]),
+      limitations: expect.arrayContaining([expect.stringContaining("not available")]),
+      evidence: {
+        catalogScope: "callable",
+        catalogSnapshot: [{ capabilityId: "tool:fs.read", kind: "tool", callable: true }],
+      },
+    });
+  });
+
   it("maps MCP template discovery conflicts to 409", async () => {
     await registerMcpService({
       listMcpTemplateDiscovery: vi.fn(() => {
