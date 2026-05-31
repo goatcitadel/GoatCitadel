@@ -964,9 +964,11 @@ export function renderRouteContent(input: {
     if (route.section === "prompt-packs") {
       return (
         <LazyPromptPacksWorkbenchPage
+          key={route.view ?? "prompt-packs"}
           workspaceId={input.activeWorkspaceId}
           variant="library"
           navigate={input.navigate}
+          initialPackId={parsePromptPackFocusView(route.view)}
         />
       );
     }
@@ -978,6 +980,15 @@ export function renderRouteContent(input: {
   }
 
   return <LazyNativeRoutePages {...input} route={route} />;
+}
+
+function parsePromptPackFocusView(view: string | undefined): string | undefined {
+  const prefix = "pack:";
+  if (!view?.startsWith(prefix)) {
+    return undefined;
+  }
+  const packId = view.slice(prefix.length).trim();
+  return packId || undefined;
 }
 
 export function RouteSurfaceFallback({ label, description }: { label: string; description: string }) {

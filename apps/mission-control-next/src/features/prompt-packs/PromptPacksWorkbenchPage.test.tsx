@@ -710,6 +710,19 @@ describe("PromptPacksWorkbenchPage", () => {
     expect(promptPackMocks.fetchPromptPackTrends).toHaveBeenCalledWith("pack-1");
   });
 
+  it("opens a requested prompt pack from route focus", async () => {
+    const renderer = await renderWorkbench({ initialPackId: "pack-2" });
+
+    expect(promptPackMocks.fetchPromptPackTests).toHaveBeenCalledWith("pack-2");
+    expect(promptPackMocks.fetchPromptPackReport).toHaveBeenCalledWith("pack-2");
+    expect(readNodeText(renderer.root)).toContain("Secondary pack");
+
+    await click(findButton(renderer, "Operator trust pack"));
+
+    expect(promptPackMocks.fetchPromptPackTests).toHaveBeenLastCalledWith("pack-1");
+    expect(promptPackMocks.fetchPromptPackReport).toHaveBeenLastCalledWith("pack-1");
+  });
+
   it("surfaces load, copy, validation, and ops import failures", async () => {
     promptPackMocks.fetchPromptPacks.mockRejectedValueOnce(new Error("Gateway offline"));
     const loadErrorRenderer = await renderWorkbench();

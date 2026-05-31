@@ -44,14 +44,16 @@ interface PromptPacksWorkbenchPageProps {
   workspaceId?: string;
   variant?: "library" | "ops";
   navigate?: (route: AppRoute, options?: { replace?: boolean }) => void;
+  initialPackId?: string;
 }
 
 export function PromptPacksWorkbenchPage({
   workspaceId: _workspaceId,
   variant = "library",
   navigate,
+  initialPackId,
 }: PromptPacksWorkbenchPageProps) {
-  const state = usePromptPacksWorkbenchState({ variant: variant ?? "library", navigate });
+  const state = usePromptPacksWorkbenchState({ variant: variant ?? "library", navigate, initialPackId });
 
   if (state.initialLoading) {
     return (

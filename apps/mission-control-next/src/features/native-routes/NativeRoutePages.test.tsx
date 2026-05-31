@@ -618,7 +618,8 @@ describe("NativeRoutePages Ops quality dashboard", () => {
     );
     expect(text).toContain("Red-team tests");
     expect(text).toContain("Available · 18 tests · Chat 6 · Cowork 6 · Code 6");
-    expect(text).toContain("Import defensive security pack");
+    expect(text).toContain("Import and open defensive security pack");
+    expect(text).toContain("Review security pack scoring");
     expect(text).toContain("Eval proof");
     expect(text).toContain("Eval proof JSON export");
     expect(text).toContain("Run trace JSON");
@@ -635,11 +636,17 @@ describe("NativeRoutePages Ops quality dashboard", () => {
     );
 
     await act(async () => {
-      findButton(renderer!.root, "Import defensive security pack").props.onClick();
+      findButton(renderer!.root, "Import and open defensive security pack").props.onClick();
       await Promise.resolve();
       await Promise.resolve();
     });
     expect(mocks.importBuiltinPromptPack).toHaveBeenCalledWith("security-red-team-v6");
+    expect(navigate).toHaveBeenCalledWith({
+      area: "library",
+      section: "prompt-packs",
+      view: "pack:security-red-team-v6",
+      theme: "ops",
+    });
 
     await act(async () => {
       findButton(renderer!.root, "Copy prompt-pack export path").props.onClick();
@@ -652,7 +659,12 @@ describe("NativeRoutePages Ops quality dashboard", () => {
     await act(async () => {
       findButton(renderer!.root, "Open prompt packs").props.onClick();
     });
-    expect(navigate).toHaveBeenCalledWith({ area: "library", section: "prompt-packs", theme: "ops" });
+    expect(navigate).toHaveBeenCalledWith({
+      area: "library",
+      section: "prompt-packs",
+      view: undefined,
+      theme: "ops",
+    });
   });
 });
 

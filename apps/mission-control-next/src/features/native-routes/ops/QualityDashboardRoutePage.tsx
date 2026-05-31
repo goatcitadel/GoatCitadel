@@ -149,6 +149,15 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
     }
   };
 
+  const openPromptPackWorkbench = (packId?: string) => {
+    navigate({
+      area: "library",
+      section: "prompt-packs",
+      view: packId ? `pack:${packId}` : undefined,
+      theme: route.theme,
+    });
+  };
+
   const importSecurityEvalPack = async (packKey: string) => {
     setImportingPackKey(packKey);
     setExportError(null);
@@ -157,6 +166,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
       const imported = await importBuiltinPromptPack(packKey);
       setExportNotice(`Imported ${imported.pack.name} with ${imported.tests.length} tests.`);
       await reload();
+      openPromptPackWorkbench(imported.pack.packId);
     } catch (err) {
       setExportError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -317,7 +327,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
                 <button
                   type="button"
                   className="mc-next-secondary-button"
-                  onClick={() => navigate({ area: "library", section: "prompt-packs", theme: route.theme })}
+                  onClick={() => openPromptPackWorkbench(selectedPack?.packId)}
                 >
                   Open selected pack
                 </button>
@@ -360,19 +370,27 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
             emptyLabel="No security eval pack definitions are visible."
             maxHeight="min(38vh, 24rem)"
           />
-          {securityEvalPacks.some((pack) => pack.status === "available") ? (
+          {securityEvalPacks.some((pack) => pack.status === "available" || pack.importedPackId) ? (
             <div className="mc-next-approvals-inline-actions">
               {securityEvalPacks
-                .filter((pack) => pack.status === "available")
+                .filter((pack) => pack.status === "available" || pack.importedPackId)
                 .map((pack) => (
                   <button
                     key={pack.packKey}
                     type="button"
                     className="mc-next-secondary-button"
-                    onClick={() => void importSecurityEvalPack(pack.packKey)}
-                    disabled={importingPackKey === pack.packKey}
+                    onClick={() =>
+                      pack.importedPackId
+                        ? openPromptPackWorkbench(pack.importedPackId)
+                        : void importSecurityEvalPack(pack.packKey)
+                    }
+                    disabled={pack.status === "available" && importingPackKey === pack.packKey}
                   >
-                    {importingPackKey === pack.packKey ? "Importing..." : "Import defensive security pack"}
+                    {pack.importedPackId
+                      ? "Open defensive security pack"
+                      : importingPackKey === pack.packKey
+                        ? "Importing..."
+                        : "Import and open defensive security pack"}
                   </button>
                 ))}
             </div>
@@ -380,7 +398,9 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
           <button
             type="button"
             className="mc-next-directory-action"
-            onClick={() => navigate({ area: "library", section: "prompt-packs", theme: route.theme })}
+            onClick={() =>
+              openPromptPackWorkbench(securityEvalPacks.find((pack) => pack.importedPackId)?.importedPackId)
+            }
           >
             <span>Open prompt packs</span>
           </button>
@@ -422,6 +442,23 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
             <StatusChip tone="muted">Stored evidence</StatusChip>
             <StatusChip tone="muted">No provider calls</StatusChip>
           </div>
+          {securityGates.some((gate) => gate.packId) ? (
+            <div className="mc-next-approvals-inline-actions">
+              {securityGates
+                .filter((gate) => gate.packId)
+                .slice(0, 2)
+                .map((gate) => (
+                  <button
+                    key={gate.gateId}
+                    type="button"
+                    className="mc-next-secondary-button"
+                    onClick={() => openPromptPackWorkbench(gate.packId)}
+                  >
+                    Review security pack scoring
+                  </button>
+                ))}
+            </div>
+          ) : null}
         </NativeCard>
 
         <NativeCard

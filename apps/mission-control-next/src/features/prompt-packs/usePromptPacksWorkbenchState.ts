@@ -68,9 +68,14 @@ import {
 export interface UsePromptPacksWorkbenchStateOptions {
   variant: "library" | "ops";
   navigate?: (route: AppRoute, options?: { replace?: boolean }) => void;
+  initialPackId?: string;
 }
 
-export function usePromptPacksWorkbenchState({ variant, navigate }: UsePromptPacksWorkbenchStateOptions) {
+export function usePromptPacksWorkbenchState({
+  variant,
+  navigate,
+  initialPackId,
+}: UsePromptPacksWorkbenchStateOptions) {
   const isOpsVariant = variant === "ops";
   const v2UiEnabled = isPromptPackV2UiEnabled();
   const hasLoadedOnceRef = useRef(false);
@@ -200,10 +205,13 @@ export function usePromptPacksWorkbenchState({ variant, navigate }: UsePromptPac
           })),
         );
         const currentSelectedPackId = selectedPackIdRef.current;
+        const requestedPackId = initialPackId?.trim();
         const resolvedPackId =
           currentSelectedPackId && response.items.some((item) => item.packId === currentSelectedPackId)
             ? currentSelectedPackId
-            : (response.items[0]?.packId ?? null);
+            : requestedPackId && response.items.some((item) => item.packId === requestedPackId)
+              ? requestedPackId
+              : (response.items[0]?.packId ?? null);
         setSelectedPackId(resolvedPackId);
         if (resolvedPackId) {
           await loadPack(resolvedPackId);
@@ -224,7 +232,7 @@ export function usePromptPacksWorkbenchState({ variant, navigate }: UsePromptPac
         }
       }
     },
-    [loadPack],
+    [initialPackId, loadPack],
   );
 
   useEffect(() => {
