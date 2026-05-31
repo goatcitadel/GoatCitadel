@@ -15,6 +15,8 @@ Two catalog views now exist:
 
 Only `callableCatalog` may feed planning, wrapper generation, or runtime selection.
 
+Portable capability-pack materialization receipts do not add entries to `callableCatalog`. They record operator review evidence for staged assets only; each asset still becomes callable solely through its existing governed Skills, Add-ons, MCP, Plugins, Tools, or policy lifecycle.
+
 Primary lifecycle/trust concepts:
 
 - categories: `built_in`, `optional`, `project_local`, `self_generated`, `community_imported`

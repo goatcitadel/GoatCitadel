@@ -16,6 +16,17 @@ const localPackSchema = z.object({
   manifest: z.unknown(),
 });
 
+const materializeParamsSchema = z.object({
+  evidenceEnvelopeId: z.string().trim().min(1),
+});
+
+const materializeSchema = z.object({
+  actorId: z.string().trim().min(1).optional(),
+  confirmReview: z.literal(true),
+  assetIds: z.array(z.string().trim().min(1)).optional(),
+  note: z.string().trim().min(1).optional(),
+});
+
 export const capabilityPacksRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorOnly = withRouteAccess(fastify, "operator");
 
@@ -26,6 +37,38 @@ export const capabilityPacksRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/api/v1/capability-packs/staged", operatorOnly, async (_request, reply) => {
     return reply.send({ items: fastify.services.capabilityPacks.listStagedPacks() });
   });
+
+  fastify.post(
+    "/api/v1/capability-packs/staged/:evidenceEnvelopeId/materialize",
+    operatorOnly,
+    async (request, reply) => {
+      const params = materializeParamsSchema.safeParse(request.params);
+      const body = materializeSchema.safeParse(request.body ?? {});
+      if (!params.success || !body.success) {
+        return reply.code(400).send({
+          error: {
+            params: params.success ? undefined : params.error.flatten(),
+            body: body.success ? undefined : body.error.flatten(),
+          },
+        });
+      }
+      try {
+        const actorId =
+          body.data.actorId ??
+          (typeof request.authActorId === "string" && request.authActorId.trim()
+            ? request.authActorId.trim()
+            : undefined);
+        return reply.send(
+          fastify.services.capabilityPacks.materializeStagedPack(params.data.evidenceEnvelopeId, {
+            ...body.data,
+            actorId,
+          }),
+        );
+      } catch (error) {
+        return reply.code(400).send({ error: (error as Error).message });
+      }
+    },
+  );
 
   fastify.post("/api/v1/capability-packs/local/preview", operatorOnly, async (request, reply) => {
     const body = localPackSchema.safeParse(request.body ?? {});

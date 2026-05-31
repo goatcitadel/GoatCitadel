@@ -185,6 +185,7 @@ function createGateway() {
     capabilityPackService: {
       installLocalPack: fn((input: unknown) => ({ input, local: true })),
       installPack: fn((packId: string, input: unknown) => ({ packId, input })),
+      materializeStagedPack: fn((evidenceEnvelopeId: string, input: unknown) => ({ evidenceEnvelopeId, input })),
       listPacks: fn(() => [{ packId: "pack-1" }]),
       previewLocalPack: fn((manifest: unknown) => ({ manifest, localPreview: true })),
       previewPack: fn((packId: string) => ({ packId, preview: true })),
@@ -320,6 +321,10 @@ describe("route composition loop 15 delegates", () => {
     expect(deps.capabilityPacks.installLocalPack({ manifest: { packId: "local" } })).toEqual({
       input: { manifest: { packId: "local" } },
       local: true,
+    });
+    expect(deps.capabilityPacks.materializeStagedPack("env-1", { confirmReview: true })).toEqual({
+      evidenceEnvelopeId: "env-1",
+      input: { confirmReview: true },
     });
     expect(deps.capabilityPacks.listPacks()).toEqual([{ packId: "pack-1" }]);
     expect(deps.capabilityPacks.previewLocalPack({ packId: "local" })).toEqual({

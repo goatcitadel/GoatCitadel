@@ -12,6 +12,8 @@ import type {
   AssemblyRunRecord,
   CapabilityPackInstallResult,
   CapabilityPackManifest,
+  CapabilityPackMaterializeRequest,
+  CapabilityPackMaterializeResult,
   CapabilityPackPreview,
   CapabilityPackStagedResponse,
   ChangeRiskEvaluationResponse,
@@ -271,6 +273,19 @@ export async function installLocalCapabilityPack(
     method: "POST",
     body: JSON.stringify({ ...input, manifest }),
   });
+}
+
+export async function materializeStagedCapabilityPack(
+  evidenceEnvelopeId: string,
+  input: CapabilityPackMaterializeRequest,
+): Promise<CapabilityPackMaterializeResult> {
+  return request<CapabilityPackMaterializeResult>(
+    `/api/v1/capability-packs/staged/${encodeURIComponent(evidenceEnvelopeId)}/materialize`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 export async function fetchEvidenceEnvelopes(

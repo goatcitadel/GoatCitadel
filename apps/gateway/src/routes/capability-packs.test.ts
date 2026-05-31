@@ -74,6 +74,62 @@ describe("capability pack routes", () => {
     expect(previewPack).not.toHaveBeenCalled();
   });
 
+  it("materializes staged capability pack evidence before dynamic pack routes", async () => {
+    const materializeStagedPack = vi.fn(() => ({
+      packId: "local-pack",
+      status: "materialization_recorded",
+      evidenceEnvelopeId: "env-materialized",
+    }));
+    const previewPack = vi.fn();
+    app = buildApp({
+      materializeStagedPack,
+      previewPack,
+    });
+    await app.register(capabilityPacksRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/capability-packs/staged/env%2Fsource/materialize",
+      payload: {
+        actorId: "operator:test",
+        confirmReview: true,
+        assetIds: ["preset:one"],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      packId: "local-pack",
+      status: "materialization_recorded",
+      evidenceEnvelopeId: "env-materialized",
+    });
+    expect(materializeStagedPack).toHaveBeenCalledWith("env/source", {
+      actorId: "operator:test",
+      confirmReview: true,
+      assetIds: ["preset:one"],
+    });
+    expect(previewPack).not.toHaveBeenCalled();
+  });
+
+  it("requires explicit review confirmation before materializing staged evidence", async () => {
+    const materializeStagedPack = vi.fn();
+    app = buildApp({
+      materializeStagedPack,
+    });
+    await app.register(capabilityPacksRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/capability-packs/staged/env-source/materialize",
+      payload: {
+        confirmReview: false,
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(materializeStagedPack).not.toHaveBeenCalled();
+  });
+
   it("previews local portable packs through route services before dynamic pack routes", async () => {
     const manifest = { packId: "local-pack" };
     const previewLocalPack = vi.fn(() => ({ manifest, reviewRequired: true }));

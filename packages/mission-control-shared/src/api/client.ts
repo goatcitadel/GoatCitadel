@@ -797,6 +797,7 @@ export {
   installCapabilityPack,
   installLocalCapabilityPack,
   installAddon,
+  materializeStagedCapabilityPack,
   disableAddon,
   enableAddon,
   launchAddon,

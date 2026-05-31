@@ -132,6 +132,7 @@ import {
   installVoiceRuntime,
   invokeIntegrationConnectionAction,
   launchAddon,
+  materializeStagedCapabilityPack,
   patchSettings,
   pollOpenAICodexOAuthDeviceFlow,
   refreshLlamaCppRuntime,
@@ -7265,6 +7266,28 @@ function AddonsSection(_props: SettingsSectionProps) {
     }
   };
 
+  const recordStagedPackMaterialization = async (record: CapabilityPackStagedRecord) => {
+    if (!record.evidenceEnvelopeId) {
+      setNotice({ tone: "error", message: "Staged pack evidence id is missing." });
+      return;
+    }
+    try {
+      const result = await materializeStagedCapabilityPack(record.evidenceEnvelopeId, {
+        actorId: "operator",
+        confirmReview: true,
+        assetIds: record.stagedAssets.map((asset) => asset.assetId),
+        note: "Operator recorded reviewed materialization from Settings Add-ons.",
+      });
+      setNotice({
+        tone: "success",
+        message: `${record.name} review recorded for ${result.assets.filter((asset) => asset.requested).length} assets.`,
+      });
+      await reload();
+    } catch (materializeError) {
+      setNotice({ tone: "error", message: getErrorMessage(materializeError) });
+    }
+  };
+
   return (
     <SettingsSectionShell loading={loading} error={error}>
       {notice ? <SettingsNotice notice={notice} /> : null}
@@ -7579,11 +7602,34 @@ function AddonsSection(_props: SettingsSectionProps) {
               items={data.stagedPacks.map((item) => ({
                 id: item.evidenceEnvelopeId ?? item.packId,
                 label: item.name,
-                description: `${item.version} · ${item.stagedAssets.length} review-gated assets · ${item.source}`,
-                meta: item.evidenceEnvelopeId ?? item.status,
+                description: item.latestMaterialization
+                  ? `${item.version} · ${item.stagedAssets.length} review-gated assets · last reviewed ${item.latestMaterialization.materializedAt}`
+                  : `${item.version} · ${item.stagedAssets.length} review-gated assets · ${item.source}`,
+                meta: item.latestMaterialization?.evidenceEnvelopeId ?? item.evidenceEnvelopeId ?? item.status,
+                actionLabel: item.latestMaterialization ? "Re-record review" : "Record review",
+                onClick: item.evidenceEnvelopeId ? () => void recordStagedPackMaterialization(item) : undefined,
               }))}
               emptyLabel="No staged capability pack evidence yet."
               maxHeight="min(24vh, 14rem)"
+            />
+            <SettingsActionList
+              items={[
+                {
+                  id: "pack-materialization-evidence-only",
+                  label: "Materialization receipt",
+                  description:
+                    "Recording review creates durable evidence only; it does not grant tools, enable skills, launch add-ons, or call MCP servers.",
+                  meta: "evidence only",
+                },
+                {
+                  id: "pack-materialization-existing-surfaces",
+                  label: "Activation boundary",
+                  description:
+                    "Assets that need runtime configuration still move through Skills, Add-ons, MCP, Plugins, Tools, or policy settings.",
+                  meta: "governed surfaces",
+                },
+              ]}
+              maxHeight=""
             />
           </SettingsPanel>
           <SettingsPanel

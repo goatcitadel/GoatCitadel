@@ -4,6 +4,7 @@ export type EvidenceEnvelopeEventKind =
   | "durable_checkpoint"
   | "memory_write"
   | "capability_pack_install"
+  | "capability_pack_materialization"
   | "continuation_gate"
   | "skill_export"
   | "browser_content_guard"

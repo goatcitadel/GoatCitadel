@@ -2,6 +2,9 @@ import type {
   CapabilityPackExportResponse,
   CapabilityPackInstallResult,
   CapabilityPackManifest,
+  CapabilityPackMaterializationSummary,
+  CapabilityPackMaterializeRequest,
+  CapabilityPackMaterializeResult,
   CapabilityPackPreview,
   CapabilityPackStagedRecord,
   EvidenceEnvelope,
@@ -17,6 +20,8 @@ export interface CapabilityPackInstallInput {
 export interface LocalCapabilityPackInput extends CapabilityPackInstallInput {
   manifest: CapabilityPackManifest;
 }
+
+export type CapabilityPackMaterializeInput = CapabilityPackMaterializeRequest;
 
 export interface CapabilityPackServiceDependencies {
   evidenceEnvelopeService: Pick<EvidenceEnvelopeService, "createEnvelope" | "listEnvelopes">;
@@ -161,10 +166,13 @@ export class CapabilityPackService {
   }
 
   public listStagedPacks(limit = 100): CapabilityPackStagedRecord[] {
-    return this.deps.evidenceEnvelopeService
-      .listEnvelopes({ limit: Math.max(1, Math.min(500, Math.floor(limit))) })
+    const envelopes = this.deps.evidenceEnvelopeService.listEnvelopes({
+      limit: Math.max(1, Math.min(500, Math.floor(limit))),
+    });
+    const materializationsBySource = buildLatestMaterializationIndex(envelopes);
+    return envelopes
       .filter((envelope) => envelope.eventKind === "capability_pack_install")
-      .map(readCapabilityPackStagedRecord)
+      .map((envelope) => readCapabilityPackStagedRecord(envelope, materializationsBySource.get(envelope.envelopeId)))
       .filter((record): record is CapabilityPackStagedRecord => Boolean(record))
       .sort((left, right) => right.stagedAt.localeCompare(left.stagedAt));
   }
@@ -203,6 +211,111 @@ export class CapabilityPackService {
   public installLocalPack(input: LocalCapabilityPackInput): CapabilityPackInstallResult {
     const preview = this.previewLocalPack(input.manifest);
     return this.stagePreview(preview, input);
+  }
+
+  public materializeStagedPack(
+    sourceEvidenceEnvelopeId: string,
+    input: CapabilityPackMaterializeInput,
+  ): CapabilityPackMaterializeResult {
+    const envelope = this.requireStagedEnvelope(sourceEvidenceEnvelopeId);
+    if (!input.confirmReview) {
+      throw new Error("Capability pack materialization requires explicit operator review confirmation.");
+    }
+    const staged = readCapabilityPackStagedRecord(envelope);
+    if (!staged) {
+      throw new Error(`Capability pack staged evidence is incomplete: ${sourceEvidenceEnvelopeId}`);
+    }
+    const manifest = readCapabilityPackManifestFromEnvelope(envelope);
+    if (!manifest) {
+      throw new Error(`Capability pack staged manifest is unavailable: ${sourceEvidenceEnvelopeId}`);
+    }
+    const requestedAssetIds = normalizeRequestedAssetIds(
+      input.assetIds,
+      staged.stagedAssets.map((asset) => asset.assetId),
+    );
+    const assets = staged.stagedAssets.map((asset) => {
+      const requested = requestedAssetIds.has(asset.assetId);
+      if (!requested) {
+        return {
+          assetId: asset.assetId,
+          kind: asset.kind,
+          requested,
+          outcome: "skipped" as const,
+          reason: "Asset was not included in the operator materialization request.",
+          callableState: "unchanged" as const,
+          activationSemantics: "none" as const,
+        };
+      }
+      if (asset.outcome === "unsupported") {
+        return {
+          assetId: asset.assetId,
+          kind: asset.kind,
+          requested,
+          outcome: "blocked" as const,
+          reason: "Runtime support is unavailable, so this asset remains blocked.",
+          callableState: "unchanged" as const,
+          activationSemantics: "blocked" as const,
+        };
+      }
+      if (asset.kind === "runtime_preset") {
+        return {
+          assetId: asset.assetId,
+          kind: asset.kind,
+          requested,
+          outcome: "evidence_recorded" as const,
+          reason:
+            "Runtime preset review was recorded as materialization evidence; runtime policy remains unchanged until an existing settings surface applies it.",
+          callableState: "unchanged" as const,
+          activationSemantics: "evidence_only" as const,
+        };
+      }
+      return {
+        assetId: asset.assetId,
+        kind: asset.kind,
+        requested,
+        outcome: "review_recorded" as const,
+        reason:
+          "Operator review was recorded; activate this asset through its existing Skills, Add-ons, MCP, Plugins, or Tools surface.",
+        callableState: "unchanged" as const,
+        activationSemantics: "requires_existing_surface" as const,
+      };
+    });
+    const actorId = input.actorId?.trim() || "operator";
+    const envelopeResult = this.deps.evidenceEnvelopeService.createEnvelope({
+      eventKind: "capability_pack_materialization",
+      metadata: {
+        packId: staged.packId,
+        actorId,
+        status: "materialization_recorded",
+        sourceEvidenceEnvelopeId,
+        sourceContentHash: staged.contentHash,
+        name: staged.name,
+        version: staged.version,
+        trustTier: staged.trustTier,
+        provenance: manifest.provenance,
+        note: input.note?.trim() || undefined,
+        assets,
+        limitations: CAPABILITY_PACK_MATERIALIZATION_LIMITATIONS,
+      },
+    });
+    const result: CapabilityPackMaterializeResult = {
+      packId: staged.packId,
+      actorId,
+      materializedAt: envelopeResult.createdAt,
+      status: "materialization_recorded",
+      sourceEvidenceEnvelopeId,
+      evidenceEnvelopeId: envelopeResult.envelopeId,
+      assets,
+      limitations: [...CAPABILITY_PACK_MATERIALIZATION_LIMITATIONS],
+    };
+    this.deps.publishRealtime?.("capability_pack_materialized", "settings", {
+      packId: staged.packId,
+      actorId,
+      sourceEvidenceEnvelopeId,
+      evidenceEnvelopeId: envelopeResult.envelopeId,
+      assetCount: assets.filter((asset) => asset.requested).length,
+    });
+    return result;
   }
 
   private stagePreview(
@@ -249,9 +362,32 @@ export class CapabilityPackService {
     }
     return structuredClone(pack);
   }
+
+  private requireStagedEnvelope(sourceEvidenceEnvelopeId: string): EvidenceEnvelope {
+    const envelopeId = sourceEvidenceEnvelopeId.trim();
+    if (!envelopeId) {
+      throw new Error("Capability pack staged evidence id is required.");
+    }
+    const envelope = this.deps.evidenceEnvelopeService
+      .listEnvelopes({ limit: 500 })
+      .find((item) => item.envelopeId === envelopeId);
+    if (!envelope || envelope.eventKind !== "capability_pack_install") {
+      throw new Error(`Unknown staged capability pack evidence: ${envelopeId}`);
+    }
+    return envelope;
+  }
 }
 
-function readCapabilityPackStagedRecord(envelope: EvidenceEnvelope): CapabilityPackStagedRecord | undefined {
+const CAPABILITY_PACK_MATERIALIZATION_LIMITATIONS = [
+  "Materialization records operator review evidence only; it does not grant tools, launch add-ons, call MCP servers, or enable skills.",
+  "Assets that need runtime configuration must still be activated through their existing governed surface.",
+  "Unsupported assets remain blocked even when included in a materialization request.",
+];
+
+function readCapabilityPackStagedRecord(
+  envelope: EvidenceEnvelope,
+  latestMaterialization?: CapabilityPackMaterializationSummary,
+): CapabilityPackStagedRecord | undefined {
   const metadata = envelope.metadata;
   const packId = readString(metadata.packId);
   const actorId = readString(metadata.actorId);
@@ -273,7 +409,38 @@ function readCapabilityPackStagedRecord(envelope: EvidenceEnvelope): CapabilityP
     stagedAssets: readInstallPlan(metadata.installPlan),
     evidenceEnvelopeId: envelope.envelopeId,
     contentHash: readString(provenance?.contentHash) ?? manifest?.provenance.contentHash,
+    latestMaterialization,
   };
+}
+
+function buildLatestMaterializationIndex(
+  envelopes: EvidenceEnvelope[],
+): Map<string, CapabilityPackMaterializationSummary> {
+  const bySource = new Map<string, CapabilityPackMaterializationSummary>();
+  for (const envelope of envelopes) {
+    if (envelope.eventKind !== "capability_pack_materialization") {
+      continue;
+    }
+    const sourceEvidenceEnvelopeId = readString(envelope.metadata.sourceEvidenceEnvelopeId);
+    const actorId = readString(envelope.metadata.actorId);
+    const status = readMaterializationStatus(envelope.metadata.status);
+    if (!sourceEvidenceEnvelopeId || !actorId || !status) {
+      continue;
+    }
+    const assets = readMaterializedAssets(envelope.metadata.assets);
+    const summary: CapabilityPackMaterializationSummary = {
+      evidenceEnvelopeId: envelope.envelopeId,
+      materializedAt: envelope.createdAt,
+      actorId,
+      status,
+      assetCount: assets.filter((asset) => asset.requested).length,
+    };
+    const previous = bySource.get(sourceEvidenceEnvelopeId);
+    if (!previous || previous.materializedAt.localeCompare(summary.materializedAt) < 0) {
+      bySource.set(sourceEvidenceEnvelopeId, summary);
+    }
+  }
+  return bySource;
 }
 
 function readCapabilityPackManifestFromEnvelope(
@@ -344,6 +511,36 @@ function readInstallMode(value: unknown): CapabilityPackPreview["installPlan"][n
   return value === "enabled" || value === "disabled" || value === "review_required" || value === "unsupported"
     ? value
     : undefined;
+}
+
+function readMaterializationStatus(value: unknown): CapabilityPackMaterializationSummary["status"] | undefined {
+  return value === "materialization_recorded" ? value : undefined;
+}
+
+function readMaterializedAssets(value: unknown): Array<{ requested: boolean }> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => {
+      const record = readRecord(item);
+      const requested = record?.requested;
+      return typeof requested === "boolean" ? { requested } : undefined;
+    })
+    .filter((item): item is { requested: boolean } => Boolean(item));
+}
+
+function normalizeRequestedAssetIds(input: string[] | undefined, knownAssetIds: string[]): Set<string> {
+  const known = new Set(knownAssetIds);
+  const requested = input?.length ? input.map((item) => item.trim()).filter(Boolean) : knownAssetIds;
+  if (!requested.length) {
+    throw new Error("Capability pack materialization requires at least one asset.");
+  }
+  const unknown = requested.filter((assetId) => !known.has(assetId));
+  if (unknown.length) {
+    throw new Error(`Capability pack materialization requested unknown assets: ${unknown.join(", ")}`);
+  }
+  return new Set(requested);
 }
 
 function hasMcpTemplate(templateId: string): boolean {

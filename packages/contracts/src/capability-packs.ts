@@ -62,6 +62,49 @@ export interface CapabilityPackInstallResult {
 }
 
 export type CapabilityPackLifecycleStatus = "staged_for_review";
+export type CapabilityPackMaterializationStatus = "materialization_recorded";
+export type CapabilityPackMaterializedAssetOutcome = "evidence_recorded" | "review_recorded" | "blocked" | "skipped";
+export type CapabilityPackMaterializedAssetActivationSemantics =
+  | "evidence_only"
+  | "requires_existing_surface"
+  | "blocked"
+  | "none";
+
+export interface CapabilityPackMaterializeRequest {
+  actorId?: string;
+  confirmReview: boolean;
+  assetIds?: string[];
+  note?: string;
+}
+
+export interface CapabilityPackMaterializedAsset {
+  assetId: string;
+  kind: CapabilityPackAssetKind;
+  requested: boolean;
+  outcome: CapabilityPackMaterializedAssetOutcome;
+  reason: string;
+  callableState: "unchanged";
+  activationSemantics: CapabilityPackMaterializedAssetActivationSemantics;
+}
+
+export interface CapabilityPackMaterializationSummary {
+  evidenceEnvelopeId?: string;
+  materializedAt: string;
+  actorId: string;
+  status: CapabilityPackMaterializationStatus;
+  assetCount: number;
+}
+
+export interface CapabilityPackMaterializeResult {
+  packId: string;
+  actorId: string;
+  materializedAt: string;
+  status: CapabilityPackMaterializationStatus;
+  sourceEvidenceEnvelopeId: string;
+  evidenceEnvelopeId?: string;
+  assets: CapabilityPackMaterializedAsset[];
+  limitations: string[];
+}
 
 export interface CapabilityPackStagedRecord {
   packId: string;
@@ -76,6 +119,7 @@ export interface CapabilityPackStagedRecord {
   stagedAssets: CapabilityPackPreview["installPlan"];
   evidenceEnvelopeId?: string;
   contentHash?: string;
+  latestMaterialization?: CapabilityPackMaterializationSummary;
 }
 
 export interface CapabilityPackStagedResponse {

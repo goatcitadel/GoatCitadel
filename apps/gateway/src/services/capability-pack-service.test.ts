@@ -105,6 +105,202 @@ describe("CapabilityPackService portable packs", () => {
     ]);
   });
 
+  it("records operator-reviewed materialization evidence without changing callable state", () => {
+    const manifest = {
+      ...localPackManifest(),
+      assets: [
+        ...localPackManifest().assets,
+        {
+          kind: "runtime_preset" as const,
+          id: "preset:gate",
+          label: "Gate preset",
+          runtimeSupport: "available" as const,
+          installMode: "review_required" as const,
+        },
+      ],
+    };
+    const sourceEnvelope = capabilityPackEnvelope({
+      envelopeId: "env-local-pack",
+      createdAt: "2026-05-31T00:00:00.000Z",
+      metadata: {
+        packId: manifest.packId,
+        actorId: "operator:test",
+        name: manifest.name,
+        version: manifest.version,
+        trustTier: manifest.trustTier,
+        reviewRequired: true,
+        status: "staged_for_review",
+        provenance: { source: "local_file", contentHash: "sha256:local" },
+        installPlan: [
+          { assetId: "skill:triage", kind: "skill", outcome: "review_required", reason: "Review first" },
+          { assetId: "addon:notes", kind: "addon", outcome: "review_required", reason: "Review first" },
+          { assetId: "preset:gate", kind: "runtime_preset", outcome: "review_required", reason: "Review first" },
+        ],
+        manifest,
+      },
+    });
+    const createEnvelope = vi.fn(() => ({
+      envelopeId: "env-materialized",
+      createdAt: "2026-05-31T00:01:00.000Z",
+    }));
+    const publishRealtime = vi.fn();
+    const service = new CapabilityPackService({
+      evidenceEnvelopeService: {
+        createEnvelope,
+        listEnvelopes: vi.fn(() => [sourceEnvelope]),
+      },
+      publishRealtime,
+    });
+
+    const result = service.materializeStagedPack("env-local-pack", {
+      actorId: "operator:reviewer",
+      confirmReview: true,
+      assetIds: ["skill:triage", "preset:gate"],
+      note: "Reviewed in Settings.",
+    });
+
+    expect(result).toMatchObject({
+      packId: "local-review-pack",
+      actorId: "operator:reviewer",
+      status: "materialization_recorded",
+      sourceEvidenceEnvelopeId: "env-local-pack",
+      evidenceEnvelopeId: "env-materialized",
+    });
+    expect(result.assets).toEqual([
+      expect.objectContaining({
+        assetId: "skill:triage",
+        requested: true,
+        outcome: "review_recorded",
+        callableState: "unchanged",
+        activationSemantics: "requires_existing_surface",
+      }),
+      expect.objectContaining({
+        assetId: "addon:notes",
+        requested: false,
+        outcome: "skipped",
+        callableState: "unchanged",
+        activationSemantics: "none",
+      }),
+      expect.objectContaining({
+        assetId: "preset:gate",
+        requested: true,
+        outcome: "evidence_recorded",
+        callableState: "unchanged",
+        activationSemantics: "evidence_only",
+      }),
+    ]);
+    expect(createEnvelope).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventKind: "capability_pack_materialization",
+        metadata: expect.objectContaining({
+          packId: "local-review-pack",
+          sourceEvidenceEnvelopeId: "env-local-pack",
+          status: "materialization_recorded",
+          note: "Reviewed in Settings.",
+          assets: result.assets,
+        }),
+      }),
+    );
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "capability_pack_materialized",
+      "settings",
+      expect.objectContaining({
+        packId: "local-review-pack",
+        sourceEvidenceEnvelopeId: "env-local-pack",
+        evidenceEnvelopeId: "env-materialized",
+        assetCount: 2,
+      }),
+    );
+  });
+
+  it("attaches the latest materialization summary to staged pack records", () => {
+    const sourceEnvelope = capabilityPackEnvelope({
+      envelopeId: "env-local-pack",
+      createdAt: "2026-05-31T00:00:00.000Z",
+      metadata: {
+        packId: "local-review-pack",
+        actorId: "operator:test",
+        name: "Local Review Pack",
+        version: "1.0.0",
+        trustTier: "community",
+        reviewRequired: true,
+        status: "staged_for_review",
+        provenance: { source: "local_file", contentHash: "sha256:local" },
+        installPlan: [{ assetId: "addon:notes", kind: "addon", outcome: "review_required", reason: "Review first" }],
+        manifest: { ...localPackManifest(), provenance: { source: "local_file", publisher: "Workspace Operator" } },
+      },
+    });
+    const service = new CapabilityPackService({
+      evidenceEnvelopeService: {
+        createEnvelope: vi.fn(),
+        listEnvelopes: vi.fn(() => [
+          sourceEnvelope,
+          capabilityPackEnvelope({
+            envelopeId: "env-materialized",
+            eventKind: "capability_pack_materialization",
+            createdAt: "2026-05-31T00:02:00.000Z",
+            metadata: {
+              packId: "local-review-pack",
+              actorId: "operator:reviewer",
+              status: "materialization_recorded",
+              sourceEvidenceEnvelopeId: "env-local-pack",
+              assets: [{ assetId: "addon:notes", requested: true }],
+            },
+          }),
+        ]),
+      },
+    });
+
+    expect(service.listStagedPacks()).toEqual([
+      expect.objectContaining({
+        evidenceEnvelopeId: "env-local-pack",
+        latestMaterialization: {
+          evidenceEnvelopeId: "env-materialized",
+          materializedAt: "2026-05-31T00:02:00.000Z",
+          actorId: "operator:reviewer",
+          status: "materialization_recorded",
+          assetCount: 1,
+        },
+      }),
+    ]);
+  });
+
+  it("fails closed when materialization review or asset identity is invalid", () => {
+    const sourceEnvelope = capabilityPackEnvelope({
+      envelopeId: "env-local-pack",
+      metadata: {
+        packId: "local-review-pack",
+        actorId: "operator:test",
+        name: "Local Review Pack",
+        version: "1.0.0",
+        trustTier: "community",
+        reviewRequired: true,
+        status: "staged_for_review",
+        provenance: { source: "local_file", contentHash: "sha256:local" },
+        installPlan: [{ assetId: "addon:notes", kind: "addon", outcome: "review_required", reason: "Review first" }],
+        manifest: localPackManifest(),
+      },
+    });
+    const service = new CapabilityPackService({
+      evidenceEnvelopeService: {
+        createEnvelope: vi.fn(),
+        listEnvelopes: vi.fn(() => [sourceEnvelope]),
+      },
+    });
+
+    expect(() =>
+      service.materializeStagedPack("env-local-pack", {
+        confirmReview: false,
+      }),
+    ).toThrow("requires explicit operator review confirmation");
+    expect(() =>
+      service.materializeStagedPack("env-local-pack", {
+        confirmReview: true,
+        assetIds: ["missing"],
+      }),
+    ).toThrow("requested unknown assets: missing");
+  });
+
   it("exports staged local manifests as read-only portable evidence", () => {
     const manifest = localPackManifest();
     const service = new CapabilityPackService({
@@ -183,12 +379,13 @@ describe("CapabilityPackService portable packs", () => {
 
 function capabilityPackEnvelope(input: {
   envelopeId: string;
+  eventKind?: EvidenceEnvelope["eventKind"];
   createdAt?: string;
   metadata: Record<string, unknown>;
 }): EvidenceEnvelope {
   return {
     envelopeId: input.envelopeId,
-    eventKind: "capability_pack_install",
+    eventKind: input.eventKind ?? "capability_pack_install",
     contentHash: "sha256:content",
     payloadHash: "sha256:payload",
     toolCallHashes: [],

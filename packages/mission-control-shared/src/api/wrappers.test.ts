@@ -614,6 +614,11 @@ describe("shared API wrappers", () => {
       { method: "POST" },
     );
     await expectCall(
+      platform.materializeStagedCapabilityPack("env/1", { confirmReview: true }),
+      "/api/v1/capability-packs/staged/env%2F1/materialize",
+      { method: "POST" },
+    );
+    await expectCall(
       platform.fetchEvidenceEnvelopes({ sessionId: "s", turnId: "t", runId: "r", limit: 7 }),
       "/api/v1/evidence/envelopes?sessionId=s&turnId=t&runId=r&limit=7",
     );

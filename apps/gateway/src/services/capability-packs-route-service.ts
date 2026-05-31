@@ -3,6 +3,7 @@ import type { CapabilityPackService } from "./capability-pack-service.js";
 export const capabilityPacksRouteMethods = [
   "installLocalPack",
   "installPack",
+  "materializeStagedPack",
   "exportPack",
   "listPacks",
   "listStagedPacks",
@@ -18,6 +19,7 @@ export function createCapabilityPacksRouteService(port: CapabilityPacksRoutePort
   return Object.freeze({
     installLocalPack: (input) => port.installLocalPack(input),
     installPack: (packId, input) => port.installPack(packId, input),
+    materializeStagedPack: (evidenceEnvelopeId, input) => port.materializeStagedPack(evidenceEnvelopeId, input),
     exportPack: (packId) => port.exportPack(packId),
     listPacks: () => port.listPacks(),
     listStagedPacks: () => port.listStagedPacks(),

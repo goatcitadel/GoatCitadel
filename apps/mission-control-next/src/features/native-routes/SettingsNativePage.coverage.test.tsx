@@ -72,6 +72,7 @@ const settingsMocks = vi.hoisted(() => {
     installVoiceRuntime: fn(),
     invokeIntegrationConnectionAction: fn(),
     launchAddon: fn(),
+    materializeStagedCapabilityPack: fn(),
     loadModelsForProvider: fn(["gpt-5.4-mini"]),
     patchSettings: fn(),
     pollOpenAICodexOAuthDeviceFlow: fn(),
@@ -196,6 +197,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   installVoiceRuntime: settingsMocks.installVoiceRuntime,
   invokeIntegrationConnectionAction: settingsMocks.invokeIntegrationConnectionAction,
   launchAddon: settingsMocks.launchAddon,
+  materializeStagedCapabilityPack: settingsMocks.materializeStagedCapabilityPack,
   patchSettings: settingsMocks.patchSettings,
   pollOpenAICodexOAuthDeviceFlow: settingsMocks.pollOpenAICodexOAuthDeviceFlow,
   refreshLlamaCppRuntime: settingsMocks.refreshLlamaCppRuntime,
@@ -799,6 +801,16 @@ function setupResponses() {
     installPlan: [{ kind: "addon", assetId: "addon:local", reason: "Review required", outcome: "review_required" }],
   });
   settingsMocks.installCapabilityPack.mockResolvedValue({ ok: true });
+  settingsMocks.materializeStagedCapabilityPack.mockResolvedValue({
+    packId: "operator-pack",
+    actorId: "operator",
+    materializedAt: "2026-05-31T00:02:00.000Z",
+    status: "materialization_recorded",
+    sourceEvidenceEnvelopeId: "env-pack",
+    evidenceEnvelopeId: "env-materialized",
+    assets: [{ assetId: "skill-1", kind: "skill", requested: true, outcome: "review_recorded" }],
+    limitations: ["evidence only"],
+  });
   settingsMocks.exportCapabilityPack.mockResolvedValue({
     exportedAt: "2026-05-31T00:00:00.000Z",
     readOnly: true,
@@ -1234,6 +1246,7 @@ describe("SettingsNativePage broad native sections", () => {
     await click(findButton(addons.root, "Uninstall"));
     await click(findButton(addons.root, "Stage pack"));
     await click(findButton(addons.root, "Export manifest"));
+    await click(findButton(addons.root, "Record review"));
     const portableManifest = {
       packId: "local-pack",
       name: "Local Pack",
@@ -1280,6 +1293,12 @@ describe("SettingsNativePage broad native sections", () => {
     expect(settingsMocks.uninstallAddon).toHaveBeenCalledWith("pixel-office");
     expect(settingsMocks.installCapabilityPack).toHaveBeenCalledWith("operator-pack", { actorId: "operator" });
     expect(settingsMocks.exportCapabilityPack).toHaveBeenCalledWith("operator-pack");
+    expect(settingsMocks.materializeStagedCapabilityPack).toHaveBeenCalledWith("env-pack", {
+      actorId: "operator",
+      confirmReview: true,
+      assetIds: ["skill-1"],
+      note: "Operator recorded reviewed materialization from Settings Add-ons.",
+    });
     expect(settingsMocks.fetchLocalCapabilityPackPreview).toHaveBeenCalledWith(portableManifest);
     expect(settingsMocks.installLocalCapabilityPack).toHaveBeenCalledWith(portableManifest, { actorId: "operator" });
   });
