@@ -38,6 +38,8 @@ describe("BrowserSessionRuntimeService", () => {
         actorId: "agent",
         requiredScope: "read",
         host: "https://example.com/page",
+        toolName: "browser.navigate",
+        runId: "run-browser-1",
       }),
     ).not.toThrow();
     expect(() =>
@@ -54,10 +56,22 @@ describe("BrowserSessionRuntimeService", () => {
     const grantCreatedEvent = service
       .listEvents(session.sessionId)
       .find((event) => event.eventType === "grant_created" && event.payload.grantId === grant.grantId);
+    const toolAccessEvent = service
+      .listEvents(session.sessionId)
+      .find((event) => event.eventType === "tool_access_granted");
     expect(grantCreatedEvent).toMatchObject({
       actorId: "operator",
       payload: {
         grantActorId: "agent",
+      },
+    });
+    expect(toolAccessEvent).toMatchObject({
+      actorId: "agent",
+      payload: {
+        requiredScope: "read",
+        host: "example.com",
+        toolName: "browser.navigate",
+        runId: "run-browser-1",
       },
     });
   });
@@ -72,7 +86,26 @@ describe("BrowserSessionRuntimeService", () => {
 
     expect(service.getSession(session.sessionId)).toMatchObject({ status: "closed" });
     expect(() =>
-      service.assertAccess({ sessionId: session.sessionId, actorId: "agent", requiredScope: "read" }),
+      service.assertAccess({
+        sessionId: session.sessionId,
+        actorId: "agent",
+        requiredScope: "read",
+        toolName: "browser.extract",
+        runId: "run-closed-browser",
+      }),
     ).toThrow(/closed/i);
+    expect(service.listEvents(session.sessionId)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "tool_guard_blocked",
+          actorId: "agent",
+          payload: expect.objectContaining({
+            reason: "closed_session",
+            toolName: "browser.extract",
+            runId: "run-closed-browser",
+          }),
+        }),
+      ]),
+    );
   });
 });

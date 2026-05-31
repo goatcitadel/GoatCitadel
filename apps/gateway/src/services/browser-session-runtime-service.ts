@@ -302,11 +302,18 @@ export class BrowserSessionRuntimeService {
 
   public assertAccess(check: BrowserSessionAccessCheck): void {
     const session = this.requireSession(check.sessionId);
+    const host = check.host ? normalizeHost(check.host) : undefined;
     if (session.status !== "active") {
+      this.recordEvent(check.sessionId, "tool_guard_blocked", check.actorId, {
+        requiredScope: check.requiredScope,
+        host,
+        toolName: check.toolName,
+        runId: check.runId,
+        reason: "closed_session",
+      });
       throw new PolicyViolationError({ message: "Browser session is closed." });
     }
     const activeGrants = this.listActiveGrants(check.sessionId, check.actorId);
-    const host = check.host ? normalizeHost(check.host) : undefined;
     const allowed = activeGrants.some((grant) => {
       const hasScope = grant.scopes.some((scope) => SCOPE_RANK[scope] >= SCOPE_RANK[check.requiredScope]);
       const hasHost = !host || grant.allowedHosts.length === 0 || grant.allowedHosts.includes(host);
@@ -316,11 +323,19 @@ export class BrowserSessionRuntimeService {
       this.recordEvent(check.sessionId, "tool_guard_blocked", check.actorId, {
         requiredScope: check.requiredScope,
         host,
+        toolName: check.toolName,
+        runId: check.runId,
       });
       throw new PolicyViolationError({
         message: `Browser session ${check.sessionId} does not grant ${check.requiredScope} access to ${check.actorId}.`,
       });
     }
+    this.recordEvent(check.sessionId, "tool_access_granted", check.actorId, {
+      requiredScope: check.requiredScope,
+      host,
+      toolName: check.toolName,
+      runId: check.runId,
+    });
   }
 
   private listActiveGrants(sessionId: string, actorId: string): BrowserSessionGrantRecord[] {

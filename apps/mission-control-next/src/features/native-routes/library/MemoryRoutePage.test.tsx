@@ -93,7 +93,29 @@ const memorySnapshot = vi.hoisted(() => ({
           scope: "chat",
           createdAt: "2026-04-22T00:00:00.000Z",
           quality: { status: "ok" },
-          citations: [],
+          citations: [
+            {
+              candidateId: "mem-1",
+              sourceType: "memory_item",
+              sourceRef: "Deployment note",
+              snippet: "Ship after verification.",
+              score: 0.91,
+              provenance: {
+                relationScope: "self",
+                freshness: "fresh",
+                selectionReason: "selected for release checklist and verification cadence hints",
+                retrievalStrategy: "semantic_hints",
+                matchSignals: {
+                  lexicalScore: 0.4,
+                  semanticHintScore: 0.8,
+                  recencyScore: 0.7,
+                  diversityScore: 0.2,
+                  totalScore: 0.91,
+                },
+                sourceTimestamp: "2026-04-22T00:00:00.000Z",
+              },
+            },
+          ],
         },
       ],
     },
@@ -376,6 +398,9 @@ describe("MemoryRoutePage", () => {
     expect(markup).toContain("Run maintenance now");
     expect(markup).toContain("Tighten cadence for fresh context.");
     expect(markup).toContain("Memory files");
+    expect(markup).toContain("Why-used citations");
+    expect(markup).toContain("selected for release checklist and verification cadence hints");
+    expect(markup).toContain("semantic_hints");
     expect(markup).toContain("Provenance map");
     expect(markup).toContain("Memory entities");
     expect(markup).toContain("Relations");

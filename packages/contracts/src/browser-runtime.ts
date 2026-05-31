@@ -6,6 +6,7 @@ export type BrowserSessionEventType =
   | "grant_created"
   | "grant_revoked"
   | "grant_rotated"
+  | "tool_access_granted"
   | "tool_guard_blocked";
 
 export interface BrowserSessionRecord {
@@ -57,6 +58,8 @@ export interface BrowserSessionAccessCheck {
   actorId: string;
   requiredScope: BrowserSessionGrantScope;
   host?: string;
+  toolName?: string;
+  runId?: string;
 }
 
 export interface UntrustedContentEnvelope {

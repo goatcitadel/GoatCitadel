@@ -148,6 +148,7 @@ export async function executeTool(
       matchedGrantAllowedHosts: resolveExecutionGrantAllowedHosts(request, storage),
       fullWebAccess: hasFullWebAccess(request),
       actorId: resolveToolActorId(request),
+      ...(request.runId ? { runId: request.runId } : {}),
       assertBrowserSessionAccess: runtimeHooks.assertBrowserSessionAccess,
     });
     return finalizeToolResult(rawResult);

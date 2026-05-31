@@ -317,7 +317,7 @@ export function BrowserSessionsRoutePage({ activeWorkspaceId, activeWorkspaceNam
                 items={[
                   { label: "Active grants", value: String(posture.activeGrantCount), meta: posture.highestScope },
                   { label: "Hosts", value: posture.hostPosture, meta: posture.hostSummary },
-                  { label: "Latest tool", value: posture.latestToolEvidence, meta: "from retained events" },
+                  { label: "Latest access", value: posture.latestToolEvidence, meta: "from retained events" },
                   { label: "State values", value: "Hidden", meta: "cookies, storage, and page values are not exposed" },
                 ]}
               />
@@ -581,6 +581,9 @@ function buildBrowserSessionPosture(
 
 function readLatestBrowserToolEvidence(events: BrowserSessionEventRecord[]): string {
   for (const event of events) {
+    if (event.eventType !== "tool_access_granted") {
+      continue;
+    }
     const toolName = readPayloadString(event.payload, "toolName") ?? readPayloadString(event.payload, "tool");
     const runId = readPayloadString(event.payload, "runId");
     const toolCallId = readPayloadString(event.payload, "toolCallId");
@@ -595,7 +598,7 @@ function readLatestBrowserToolEvidence(events: BrowserSessionEventRecord[]): str
       return evidence;
     }
   }
-  return "No linked tool event";
+  return "No granted access event";
 }
 
 function readPayloadString(payload: Record<string, unknown>, key: string): string | undefined {

@@ -15,7 +15,8 @@ import {
 } from "@goatcitadel/mission-control-shared/content/memory-helpers";
 import { useMemoryOperatorSnapshot } from "@goatcitadel/mission-control-shared/hooks/useMemoryOperatorSnapshot";
 import { useIsMounted } from "@next/hooks/use-is-mounted";
-import { NativeCard, NativeGrid, NativePageFrame, QuickJumpCard } from "../NativeRoutePageLayout";
+import { NativeCard, NativeGrid, NativeList, NativePageFrame, QuickJumpCard } from "../NativeRoutePageLayout";
+import { formatKnowledgeCitationAction, formatKnowledgeCitationSummary } from "../shared/native-helpers";
 import type { NativeRoutePagesProps } from "../types";
 import {
   buildProvenanceCoverage,
@@ -198,6 +199,19 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   const memoryCanMutate = memoryAdminState === "enabled";
   const maintenanceControlsReady = Boolean(memory.data?.maintenanceEnabled && memory.data.maintenanceDurableReady);
   const memoryWriteEnvelopes = evidence.items.filter((item) => item.eventKind === "memory_write");
+  const recentContextPacks = memory.data?.qmdStats?.recent ?? [];
+  const whyUsedRows = useMemo(
+    () =>
+      recentContextPacks
+        .flatMap((pack) =>
+          pack.citations
+            .slice(0, 3)
+            .map((citation, index) => formatKnowledgeCitationAction(citation, pack.contextId, index)),
+        )
+        .slice(0, 8),
+    [recentContextPacks],
+  );
+  const recentCitationCount = recentContextPacks.reduce((sum, pack) => sum + pack.citations.length, 0);
   const provenanceCoverage = useMemo(
     () =>
       buildProvenanceCoverage({
@@ -1093,19 +1107,39 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               <p>{(memory.data?.qmdStats?.compressionPercent ?? 0).toFixed(1)}% compression</p>
             </div>
           </div>
-          {(memory.data?.qmdStats?.recent.length ?? 0) > 0 ? (
+          {recentContextPacks.length > 0 ? (
             <ul className="mc-next-approvals-compact-list">
-              {memory.data?.qmdStats?.recent.slice(0, 6).map((item) => (
+              {recentContextPacks.slice(0, 6).map((item) => (
                 <li key={item.contextId}>
                   <strong>{item.scope}</strong>
                   {" · "}
                   {formatShortDateTime(item.createdAt)}
+                  {" · "}
+                  {formatKnowledgeCitationSummary(item.citations)}
                 </li>
               ))}
             </ul>
           ) : (
             <EmptyState size="compact" title="No recent context packs." />
           )}
+          <div className="mc-next-runtime-metric-grid">
+            <div className="mc-next-runtime-metric">
+              <span>Why-used citations</span>
+              <strong>{String(recentCitationCount)}</strong>
+              <p>Recent context-pack provenance</p>
+            </div>
+          </div>
+          <NativeList
+            density="compact"
+            items={whyUsedRows.map((item) => ({
+              title: item.label,
+              meta: item.meta,
+              body: item.description,
+            }))}
+            emptyLabel="No citation-level why-used evidence is attached to recent context packs."
+            maxHeight="min(32vh, 18rem)"
+            ariaLabel="Memory why-used citations"
+          />
         </NativeCard>
         <NativeCard
           title="Memory files"

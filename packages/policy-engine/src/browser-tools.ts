@@ -27,6 +27,7 @@ type BrowserToolName =
 export interface BrowserExecutionContext {
   sessionId?: string;
   actorId?: string;
+  runId?: string;
   signal?: AbortSignal;
   matchedGrantAllowedHosts?: string[];
   fullWebAccess?: boolean;
@@ -1049,6 +1050,8 @@ function assertBrowserSessionScope(
     actorId: executionContext.actorId ?? "agent",
     requiredScope: requiredBrowserSessionScope(toolName),
     host: resolveBrowserSessionGrantHost(args),
+    toolName,
+    runId: executionContext.runId,
   });
 }
 

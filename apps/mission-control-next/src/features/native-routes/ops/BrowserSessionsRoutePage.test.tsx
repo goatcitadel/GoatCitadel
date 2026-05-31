@@ -49,13 +49,38 @@ beforeEach(() => {
     {
       eventId: "event-1",
       sessionId: "browser-session-1",
+      eventType: "tool_guard_blocked",
+      actorId: "agent-1",
+      payload: {
+        toolName: "browser.storage.get",
+        runId: "run-blocked-latest",
+        host: "blocked.example",
+      },
+      createdAt: "2026-05-30T18:04:00.000Z",
+    },
+    {
+      eventId: "event-2",
+      sessionId: "browser-session-1",
+      eventType: "tool_access_granted",
+      actorId: "agent-1",
+      payload: {
+        toolName: "browser.navigate",
+        runId: "run-browser-session-posture",
+        host: "example.com",
+        requiredScope: "read",
+      },
+      createdAt: "2026-05-30T18:03:00.000Z",
+    },
+    {
+      eventId: "event-3",
+      sessionId: "browser-session-1",
       eventType: "grant_created",
       actorId: "agent-1",
       payload: { scopes: ["read", "state"], allowedHosts: ["example.com"] },
       createdAt: "2026-05-30T18:01:00.000Z",
     },
     {
-      eventId: "event-2",
+      eventId: "event-4",
       sessionId: "browser-session-1",
       eventType: "tool_guard_blocked",
       actorId: "agent-1",
@@ -91,8 +116,11 @@ describe("BrowserSessionsRoutePage", () => {
     expect(text).toContain("grant_created");
     expect(text).toContain("State and tool posture");
     expect(text).toContain("Governed grants ready");
+    expect(text).toContain("tool_access_granted");
+    expect(text).toContain("Latest access");
     expect(text).toContain("guard blocks");
     expect(text).toContain("browser.navigate");
+    expect(text).toContain("browser.storage.get");
     expect(text).toContain("browser state values hidden");
     expect(text).toContain("cookie or storage values are not shown");
     expect(text).not.toContain("secret-cookie");

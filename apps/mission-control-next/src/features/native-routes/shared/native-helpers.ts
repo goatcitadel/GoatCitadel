@@ -413,6 +413,7 @@ export function formatKnowledgeCitationAction(citation: unknown, contextId: stri
   const mode = readPayloadString(citation, ["retrievalMode", "sourceType", "kind"]) ?? "source";
   const score = readPayloadString(citation, ["score", "confidence"]);
   const whyUsed = readPayloadString(citation, ["provenance.selectionReason"]);
+  const retrievalStrategy = readPayloadString(citation, ["provenance.retrievalStrategy"]);
   const freshness = readPayloadString(citation, ["provenance.freshness"]);
   const relationScope = readPayloadString(citation, ["provenance.relationScope"]);
   const sourceTimestamp = readPayloadString(citation, ["provenance.sourceTimestamp"]);
@@ -424,6 +425,7 @@ export function formatKnowledgeCitationAction(citation: unknown, contextId: stri
     meta: [
       mode,
       score ? `score ${score}` : undefined,
+      retrievalStrategy,
       relationScope,
       freshness,
       sourceTimestamp ? `source ${formatDateTime(sourceTimestamp)}` : undefined,
