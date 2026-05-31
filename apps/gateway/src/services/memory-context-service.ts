@@ -505,12 +505,21 @@ function enrichMemoryCitations(
 }
 
 function buildMemorySelectionReason(signals: MemoryRetrievalMatchSignals): string {
-  const method = signals.semanticHintScore > 0 ? "semantic-hint retrieval" : "lexical/recency retrieval";
-  return `selected by ${method} score ${signals.totalScore.toFixed(3)} (lexical ${signals.lexicalScore.toFixed(
-    3,
-  )}, semantic hint ${signals.semanticHintScore.toFixed(3)}, recency ${signals.recencyScore.toFixed(
-    3,
-  )}, diversity ${signals.diversityScore.toFixed(3)})`;
+  const method =
+    signals.semanticVectorScore !== undefined && signals.semanticVectorScore > 0
+      ? "semantic-vector retrieval"
+      : signals.semanticHintScore > 0
+        ? "semantic-hint retrieval"
+        : "lexical/recency retrieval";
+  return [
+    `selected by ${method} score ${signals.totalScore.toFixed(3)} (lexical ${signals.lexicalScore.toFixed(3)}`,
+    signals.semanticVectorScore !== undefined ? `vector ${signals.semanticVectorScore.toFixed(3)}` : undefined,
+    `semantic hint ${signals.semanticHintScore.toFixed(3)}`,
+    `recency ${signals.recencyScore.toFixed(3)}`,
+    `diversity ${signals.diversityScore.toFixed(3)})`,
+  ]
+    .filter(Boolean)
+    .join(", ");
 }
 
 function resolveCitationRetrievalStrategy(
@@ -522,6 +531,9 @@ function resolveCitationRetrievalStrategy(
     | undefined,
 ): MemoryRetrievalStrategy | undefined {
   if (candidate?.rankSignals) {
+    if ((candidate.rankSignals.semanticVectorScore ?? 0) > 0) {
+      return "semantic_vector";
+    }
     return candidate.rankSignals.semanticHintScore > 0 ? "semantic_hints" : "lexical_recency";
   }
   return candidate?.rankScore !== undefined ? "lexical_recency" : undefined;

@@ -8671,7 +8671,8 @@ function isMemoryCitationProvenanceRecord(value: unknown): boolean {
     typeof value.selectionReason === "string" &&
     (value.retrievalStrategy === undefined ||
       value.retrievalStrategy === "lexical_recency" ||
-      value.retrievalStrategy === "semantic_hints") &&
+      value.retrievalStrategy === "semantic_hints" ||
+      value.retrievalStrategy === "semantic_vector") &&
     (value.matchSignals === undefined || isMemoryRetrievalMatchSignalsRecord(value.matchSignals)) &&
     (value.sourceTimestamp === undefined || typeof value.sourceTimestamp === "string")
   );
@@ -8684,6 +8685,8 @@ function isMemoryRetrievalMatchSignalsRecord(value: unknown): boolean {
     Number.isFinite(value.lexicalScore) &&
     typeof value.semanticHintScore === "number" &&
     Number.isFinite(value.semanticHintScore) &&
+    (value.semanticVectorScore === undefined ||
+      (typeof value.semanticVectorScore === "number" && Number.isFinite(value.semanticVectorScore))) &&
     typeof value.recencyScore === "number" &&
     Number.isFinite(value.recencyScore) &&
     typeof value.diversityScore === "number" &&

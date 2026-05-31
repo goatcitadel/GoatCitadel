@@ -1910,6 +1910,9 @@ function buildMemoryBenchmarkCoverageNote(pack: MemoryContextPack): string {
       .map((citation) => citation.provenance?.retrievalStrategy)
       .filter((strategy): strategy is MemoryRetrievalStrategy => Boolean(strategy)),
   );
+  if (strategies.has("semantic_vector")) {
+    return "Context used semantic vector scoring over active memory items plus lexical/recency provenance.";
+  }
   if (strategies.has("semantic_hints")) {
     return "Context used operator-visible semantic hints plus lexical/recency scoring; vector semantic search was not used.";
   }

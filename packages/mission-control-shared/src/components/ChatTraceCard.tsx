@@ -80,6 +80,8 @@ function isMemoryCitation(citation: ChatCitationRecord): boolean {
 
 function formatMemoryRetrievalStrategy(value: MemoryCitationProvenance["retrievalStrategy"]): string | null {
   switch (value) {
+    case "semantic_vector":
+      return "semantic vector";
     case "semantic_hints":
       return "semantic hints";
     case "lexical_recency":
@@ -100,6 +102,7 @@ function formatMemorySignals(signals: MemoryRetrievalMatchSignals | undefined): 
   return [
     ["total", signals.totalScore],
     ["lexical", signals.lexicalScore],
+    ["vector", signals.semanticVectorScore],
     ["hint", signals.semanticHintScore],
     ["recency", signals.recencyScore],
     ["diversity", signals.diversityScore],

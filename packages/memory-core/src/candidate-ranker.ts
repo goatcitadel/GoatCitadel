@@ -16,15 +16,17 @@ export function rankMemoryCandidates(
   const scored = candidates.map((candidate) => {
     const lexical = lexicalScore(terms, candidate.text);
     const semanticHint = semanticHintScore(terms, candidate.retrievalHints);
+    const semanticVector = semanticVectorScore(prompt, candidate);
     const recency = recencyScore(now, candidate.timestamp);
     const diversity = candidate.sourceType === "transcript" ? 0.1 : candidate.sourceType === "memory_item" ? 0.08 : 0;
-    const rankScore = lexical + semanticHint + recency + diversity;
+    const rankScore = lexical + semanticHint + semanticVector + recency + diversity;
     return {
       ...candidate,
       rankScore,
       rankSignals: {
         lexicalScore: roundScore(lexical),
         semanticHintScore: roundScore(semanticHint),
+        ...(semanticVector > 0 ? { semanticVectorScore: roundScore(semanticVector) } : {}),
         recencyScore: roundScore(recency),
         diversityScore: roundScore(diversity),
         totalScore: roundScore(rankScore),
@@ -91,6 +93,17 @@ function semanticHintScore(terms: string[], hints?: string[]): number {
   return Math.min(0.2, (hits / terms.length) * 0.2);
 }
 
+function semanticVectorScore(prompt: string, candidate: MemoryCandidate): number {
+  if (candidate.sourceType !== "memory_item") {
+    return 0;
+  }
+  const similarity = cosine(pseudoEmbedding(prompt), pseudoEmbedding(candidate.text));
+  if (similarity < 0.82) {
+    return 0;
+  }
+  return Math.min(0.35, ((similarity - 0.82) / 0.18) * 0.35);
+}
+
 function recencyScore(nowMs: number, timestamp?: string): number {
   if (!timestamp) {
     return 0;
@@ -111,4 +124,30 @@ function recencyScore(nowMs: number, timestamp?: string): number {
     return 0.05;
   }
   return 0;
+}
+
+function pseudoEmbedding(text: string, dimensions = 64): number[] {
+  const vector = new Array<number>(dimensions).fill(0);
+  const lower = text.toLowerCase();
+  for (let index = 0; index < lower.length; index += 1) {
+    const bucket = lower.charCodeAt(index) % dimensions;
+    vector[bucket] = (vector[bucket] ?? 0) + 1;
+  }
+  const magnitude = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0)) || 1;
+  return vector.map((value) => value / magnitude);
+}
+
+function cosine(left: number[], right: number[]): number {
+  const length = Math.min(left.length, right.length);
+  let dot = 0;
+  let leftMagnitude = 0;
+  let rightMagnitude = 0;
+  for (let index = 0; index < length; index += 1) {
+    const leftValue = left[index] ?? 0;
+    const rightValue = right[index] ?? 0;
+    dot += leftValue * rightValue;
+    leftMagnitude += leftValue * leftValue;
+    rightMagnitude += rightValue * rightValue;
+  }
+  return dot / (Math.sqrt(leftMagnitude) * Math.sqrt(rightMagnitude) || 1);
 }

@@ -745,6 +745,9 @@ function formatMemoryRetrievalStrategy(value?: string): string | undefined {
   if (value === "semantic_hints") {
     return "semantic hints";
   }
+  if (value === "semantic_vector") {
+    return "semantic vector";
+  }
   if (value === "lexical_recency") {
     return "lexical/recency";
   }
@@ -757,6 +760,7 @@ function formatMemoryMatchSignals(signals?: RunTracePayload): string | undefined
   }
   const parts = [
     formatSignalValue("lexical", readNumber(signals.lexicalScore)),
+    formatSignalValue("vector", readNumber(signals.semanticVectorScore)),
     formatSignalValue("hint", readNumber(signals.semanticHintScore)),
     formatSignalValue("recency", readNumber(signals.recencyScore)),
     formatSignalValue("diversity", readNumber(signals.diversityScore)),

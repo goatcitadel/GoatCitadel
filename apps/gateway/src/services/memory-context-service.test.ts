@@ -282,7 +282,7 @@ describe("MemoryContextService", () => {
     );
   });
 
-  it("includes active lifecycle memory items as retrieval candidates", async () => {
+  it("includes active lifecycle memory items as semantic-vector retrieval candidates", async () => {
     const rootDir = await createWorkspaceRoot();
     const storage = createStorage({
       memoryItems: [
@@ -361,10 +361,11 @@ describe("MemoryContextService", () => {
         sourceRef: "mem-browser",
         provenance: expect.objectContaining({
           relationScope: "self",
-          retrievalStrategy: "semantic_hints",
-          selectionReason: expect.stringContaining("semantic-hint retrieval score"),
+          retrievalStrategy: "semantic_vector",
+          selectionReason: expect.stringContaining("semantic-vector retrieval score"),
           matchSignals: expect.objectContaining({
             lexicalScore: expect.any(Number),
+            semanticVectorScore: expect.any(Number),
             semanticHintScore: expect.any(Number),
             recencyScore: expect.any(Number),
             diversityScore: expect.any(Number),

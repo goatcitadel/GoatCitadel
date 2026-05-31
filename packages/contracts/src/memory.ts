@@ -2,11 +2,12 @@ export type MemoryContextScope = "chat" | "orchestration";
 export type MemoryQmdStatus = "generated" | "cache_hit" | "fallback" | "failed";
 export type MemoryRelationScope = "self" | "peer" | "project";
 export type MemoryFreshness = "fresh" | "recent" | "stale" | "unknown";
-export type MemoryRetrievalStrategy = "lexical_recency" | "semantic_hints";
+export type MemoryRetrievalStrategy = "lexical_recency" | "semantic_hints" | "semantic_vector";
 
 export interface MemoryRetrievalMatchSignals {
   lexicalScore: number;
   semanticHintScore: number;
+  semanticVectorScore?: number;
   recencyScore: number;
   diversityScore: number;
   totalScore: number;

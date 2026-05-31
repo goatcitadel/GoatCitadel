@@ -273,6 +273,41 @@ describe("memory ranking and citations", () => {
     expect(ranked[1]?.rankSignals.semanticHintScore).toBe(0.2);
   });
 
+  it("adds semantic vector scoring only for active memory-item candidates", () => {
+    const ranked = rankMemoryCandidates(
+      "external browsing supervision",
+      [
+        {
+          candidateId: "m:browser",
+          sourceType: "memory_item",
+          sourceRef: "mem-browser",
+          text: "Use governed browser sessions for external research.",
+          timestamp: "2026-05-01T00:00:00.000Z",
+        },
+        {
+          candidateId: "f:same-text",
+          sourceType: "file",
+          sourceRef: "notes.md",
+          text: "Use governed browser sessions for external research.",
+          timestamp: "2026-05-01T00:00:00.000Z",
+        },
+        {
+          candidateId: "m:unrelated",
+          sourceType: "memory_item",
+          sourceRef: "mem-cake",
+          text: "Cake recipe sugar butter flour.",
+          timestamp: "2026-05-01T00:00:00.000Z",
+        },
+      ],
+      { maxCandidates: 10, nowIso: "2026-05-01T12:00:00.000Z" },
+    );
+
+    expect(ranked[0]?.candidateId).toBe("m:browser");
+    expect(ranked[0]?.rankSignals.semanticVectorScore).toBeGreaterThan(0);
+    expect(ranked.find((item) => item.candidateId === "f:same-text")?.rankSignals.semanticVectorScore).toBeUndefined();
+    expect(ranked.find((item) => item.candidateId === "m:unrelated")?.rankSignals.semanticVectorScore).toBeUndefined();
+  });
+
   it("uses at least one candidate limit and supports no lexical terms", () => {
     const ranked = rankMemoryCandidates(
       "a b",
