@@ -185,12 +185,74 @@ limits:
       id: "review-spend",
       requiresApproval: true,
     });
+    expect(exported.validation).toMatchObject({
+      status: "ready_for_operator_import_review",
+      nativeImportCompatibility: "not_verified",
+      checks: expect.arrayContaining([
+        expect.objectContaining({ id: "webhook-trigger", status: "passed" }),
+        expect.objectContaining({ id: "step-graph", status: "passed" }),
+        expect.objectContaining({ id: "execution-posture", status: "passed" }),
+        expect.objectContaining({ id: "native-activepieces-import", status: "warning" }),
+      ]),
+    });
     expect(JSON.parse(exported.content)).toMatchObject({
       version: "workflow_recipe.activepieces_template_export.v1",
       activepiecesTemplate: { name: "GoatCitadel provider spend review" },
+      validation: {
+        status: "ready_for_operator_import_review",
+        nativeImportCompatibility: "not_verified",
+      },
       posture: { sideEffectPosture: "not_executed" },
     });
     expect(exported.warnings.join(" ")).toContain("does not create a flow or trigger a webhook");
+  });
+
+  it("blocks Activepieces template import readiness when the exported step graph is invalid", () => {
+    const service = createService();
+
+    const exported = service.exportActivepiecesTemplate({
+      recipe: {
+        name: "Broken dependency review",
+        goal: "Show invalid template graph evidence.",
+        process: "sequential",
+        agents: [{ id: "analyst", role: "Analyst" }],
+        steps: [
+          {
+            id: "review",
+            title: "Review",
+            agent: "analyst",
+            prompt: "Review evidence.",
+          },
+          {
+            id: "review",
+            title: "Summarize",
+            agent: "analyst",
+            prompt: "Summarize evidence.",
+            dependsOn: ["missing-step"],
+          },
+        ],
+      },
+    });
+
+    expect(exported.validation.status).toBe("blocked");
+    expect(exported.validation.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "step-graph",
+          status: "blocked",
+          detail: expect.stringContaining("Duplicate step IDs: review."),
+        }),
+      ]),
+    );
+    expect(exported.validation.checks.find((check) => check.id === "step-graph")?.detail).toContain(
+      "Dangling dependencies: review->missing-step.",
+    );
+    expect(JSON.parse(exported.content)).toMatchObject({
+      validation: {
+        status: "blocked",
+        checks: expect.arrayContaining([expect.objectContaining({ id: "step-graph", status: "blocked" })]),
+      },
+    });
   });
 });
 

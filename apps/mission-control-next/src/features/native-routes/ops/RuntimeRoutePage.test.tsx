@@ -608,6 +608,25 @@ describe("RuntimeRoutePage", () => {
           approvalMode: "none",
         },
       },
+      validation: {
+        status: "ready_for_operator_import_review",
+        nativeImportCompatibility: "not_verified",
+        checks: [
+          {
+            id: "webhook-trigger",
+            label: "Webhook trigger",
+            status: "passed",
+            detail: "Template declares a POST webhook path for operator import.",
+          },
+          {
+            id: "native-activepieces-import",
+            label: "Native Activepieces import",
+            status: "warning",
+            detail: "Native Activepieces import-schema compatibility has not been verified by GoatCitadel.",
+          },
+        ],
+        notes: ["Validate inside Activepieces before enabling a flow."],
+      },
       posture: {
         readOnly: true,
         sideEffectPosture: "not_executed",
@@ -684,6 +703,10 @@ describe("RuntimeRoutePage", () => {
     expect(collectText(renderer!.root)).toContain(
       "Copied Activepieces template export provider-spend-review-activepieces-template.json.",
     );
+    expect(collectText(renderer!.root)).toContain("Template checks");
+    expect(collectText(renderer!.root)).toContain("ready_for_operator_import_review");
+    expect(collectText(renderer!.root)).toContain("Native import");
+    expect(collectText(renderer!.root)).toContain("not verified");
     expect(collectText(renderer!.root)).toContain("No webhook trigger");
   });
 

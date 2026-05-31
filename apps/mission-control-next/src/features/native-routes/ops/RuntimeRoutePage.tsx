@@ -551,8 +551,22 @@ export function RuntimeRoutePage({
                   {automationTemplateExport ? (
                     <div className="mc-next-approvals-chip-row">
                       <StatusChip tone="success">Read-only export</StatusChip>
+                      <StatusChip
+                        tone={
+                          automationTemplateExport.validation.status === "blocked"
+                            ? "critical"
+                            : automationTemplateExport.validation.checks.some((check) => check.status === "warning")
+                              ? "warning"
+                              : "success"
+                        }
+                      >
+                        Template checks {automationTemplateExport.validation.status}
+                      </StatusChip>
                       <StatusChip tone="muted">No webhook trigger</StatusChip>
                       <StatusChip tone="warning">Operator import required</StatusChip>
+                      <StatusChip tone="warning">
+                        Native import {automationTemplateExport.validation.nativeImportCompatibility.replace("_", " ")}
+                      </StatusChip>
                       <StatusChip tone="muted">
                         {automationTemplateExport.activepiecesTemplate.trigger.method}
                       </StatusChip>

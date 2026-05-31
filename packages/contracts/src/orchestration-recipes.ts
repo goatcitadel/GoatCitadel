@@ -136,12 +136,29 @@ export interface WorkflowRecipeActivepiecesTemplate {
   };
 }
 
+export type WorkflowRecipeActivepiecesTemplateValidationStatus = "passed" | "warning" | "blocked";
+
+export interface WorkflowRecipeActivepiecesTemplateValidationCheck {
+  id: string;
+  label: string;
+  status: WorkflowRecipeActivepiecesTemplateValidationStatus;
+  detail: string;
+}
+
+export interface WorkflowRecipeActivepiecesTemplateValidation {
+  status: "ready_for_operator_import_review" | "blocked";
+  nativeImportCompatibility: "not_verified";
+  checks: WorkflowRecipeActivepiecesTemplateValidationCheck[];
+  notes: string[];
+}
+
 export interface WorkflowRecipeActivepiecesTemplateExportResponse extends WorkflowRecipePreviewResponse {
   version: "workflow_recipe.activepieces_template_export.v1";
   generatedAt: string;
   filename: string;
   contentType: "application/json";
   activepiecesTemplate: WorkflowRecipeActivepiecesTemplate;
+  validation: WorkflowRecipeActivepiecesTemplateValidation;
   posture: {
     readOnly: true;
     sideEffectPosture: "not_executed";

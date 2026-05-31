@@ -9,6 +9,8 @@ import type {
   WorkflowRecipeActivepiecesTemplate,
   WorkflowRecipeActivepiecesTemplateExportRequest,
   WorkflowRecipeActivepiecesTemplateExportResponse,
+  WorkflowRecipeActivepiecesTemplateValidation,
+  WorkflowRecipeActivepiecesTemplateValidationCheck,
   WorkflowRecipeAgent,
   WorkflowRecipeApproval,
   WorkflowRecipeLimits,
@@ -110,6 +112,7 @@ export class WorkflowRecipeService {
   ): WorkflowRecipeActivepiecesTemplateExportResponse {
     const preview = this.previewRecipe(input);
     const activepiecesTemplate = buildActivepiecesTemplate(preview, input);
+    const validation = validateActivepiecesTemplateExport(activepiecesTemplate);
     const filename = `${slugify(activepiecesTemplate.name)}-activepieces-template.json`;
     const posture = {
       readOnly: true,
@@ -134,6 +137,7 @@ export class WorkflowRecipeService {
       missingSkills: preview.missingSkills,
       estimatedLimits: preview.estimatedLimits,
       activepiecesTemplate,
+      validation,
     };
     return {
       ...preview,
@@ -143,10 +147,110 @@ export class WorkflowRecipeService {
       filename,
       contentType: payload.contentType,
       activepiecesTemplate,
+      validation,
       posture,
       content: JSON.stringify(payload, null, 2),
     };
   }
+}
+
+function validateActivepiecesTemplateExport(
+  template: WorkflowRecipeActivepiecesTemplate,
+): WorkflowRecipeActivepiecesTemplateValidation {
+  const checks: WorkflowRecipeActivepiecesTemplateValidationCheck[] = [
+    template.trigger.type === "webhook" &&
+    template.trigger.method === "POST" &&
+    template.trigger.path.startsWith("/") &&
+    template.trigger.path.length > 1
+      ? {
+          id: "webhook-trigger",
+          label: "Webhook trigger",
+          status: "passed",
+          detail: "Template declares a POST webhook path for operator import.",
+        }
+      : {
+          id: "webhook-trigger",
+          label: "Webhook trigger",
+          status: "blocked",
+          detail: "Template export requires a non-root POST webhook path.",
+        },
+    template.steps.length > 0
+      ? {
+          id: "step-plan",
+          label: "Step plan",
+          status: "passed",
+          detail: `${template.steps.length} GoatCitadel review step${template.steps.length === 1 ? "" : "s"} included as planning metadata.`,
+        }
+      : {
+          id: "step-plan",
+          label: "Step plan",
+          status: "warning",
+          detail: "No workflow steps were included; operator import would create trigger-only planning evidence.",
+        },
+    buildActivepiecesStepGraphCheck(template),
+    {
+      id: "execution-posture",
+      label: "Execution posture",
+      status: "passed",
+      detail: "Export contains prompts and metadata only; it does not create a flow, call a webhook, or run tools.",
+    },
+    {
+      id: "native-activepieces-import",
+      label: "Native Activepieces import",
+      status: "warning",
+      detail: "Native Activepieces import-schema compatibility has not been verified by GoatCitadel.",
+    },
+  ];
+  return {
+    status: checks.some((check) => check.status === "blocked") ? "blocked" : "ready_for_operator_import_review",
+    nativeImportCompatibility: "not_verified",
+    checks,
+    notes: [
+      "Use this JSON as operator-import planning evidence, then validate it inside Activepieces before enabling a flow.",
+      "GoatCitadel does not poll Activepieces or manage Activepieces flow lifecycle from this export.",
+    ],
+  };
+}
+
+function buildActivepiecesStepGraphCheck(
+  template: WorkflowRecipeActivepiecesTemplate,
+): WorkflowRecipeActivepiecesTemplateValidationCheck {
+  const stepIds = new Set<string>();
+  const duplicateStepIds = new Set<string>();
+  for (const step of template.steps) {
+    if (stepIds.has(step.id)) {
+      duplicateStepIds.add(step.id);
+    }
+    stepIds.add(step.id);
+  }
+  const danglingDependencies = new Set<string>();
+  for (const step of template.steps) {
+    for (const dependency of step.dependsOn) {
+      if (!stepIds.has(dependency)) {
+        danglingDependencies.add(`${step.id}->${dependency}`);
+      }
+    }
+  }
+  if (duplicateStepIds.size === 0 && danglingDependencies.size === 0) {
+    return {
+      id: "step-graph",
+      label: "Step graph",
+      status: "passed",
+      detail: "All step IDs are unique and dependency references resolve inside the exported planning template.",
+    };
+  }
+  return {
+    id: "step-graph",
+    label: "Step graph",
+    status: "blocked",
+    detail: [
+      duplicateStepIds.size ? `Duplicate step IDs: ${[...duplicateStepIds].join(", ")}.` : undefined,
+      danglingDependencies.size ? `Dangling dependencies: ${[...danglingDependencies].join(", ")}.` : undefined,
+      "Review the recipe before operator import.",
+    ]
+      .filter(Boolean)
+      .join(" "),
+  };
 }
 
 function buildAutomationDraftRecipe(input: AutomationRecipeDraftRequest): WorkflowRecipeRecord {
