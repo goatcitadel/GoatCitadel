@@ -25,6 +25,7 @@ export interface CodeModeSandboxLaunchInput {
 }
 
 export interface CodeModeSandboxLaunchSpec {
+  transport: "node_ipc" | "stdio_jsonrpc";
   executable: string;
   args: string[];
   cwd: string;
@@ -101,6 +102,7 @@ export function assertLaunchable(metadata: CodeModeSandboxMetadata): void {
 
 export function buildAdvisoryUnsandboxedLaunchSpec(input: CodeModeSandboxLaunchInput): CodeModeSandboxLaunchSpec {
   return {
+    transport: "node_ipc",
     executable: input.nodePath,
     args: [`--max-old-space-size=${input.heapMb}`, input.harnessPath],
     cwd: input.runTempRoot,

@@ -86,6 +86,7 @@ export class WindowsAppContainerSandboxAdapter implements CodeModeHostSandboxAda
     await fs.writeFile(launcherPath, buildPowerShellLauncher(input), "utf8");
 
     return {
+      transport: "node_ipc",
       executable: launchPowerShellPath,
       args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", launcherPath],
       cwd: input.runTempRoot,

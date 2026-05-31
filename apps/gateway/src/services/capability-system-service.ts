@@ -2057,6 +2057,11 @@ export class CapabilitySystemService {
         heapMb: CODE_MODE_HEAP_MB,
         env: createMinimalSyntheticEnv(),
       });
+      if (preparedSandbox.launch.transport !== "node_ipc") {
+        throw new CodeModeExecutionBackendUnavailableError(
+          `Code Mode execution transport ${preparedSandbox.launch.transport} is not supported by this runner yet.`,
+        );
+      }
     } catch (error) {
       if (error instanceof CodeModeExecutionBackendUnavailableError) {
         throw error;

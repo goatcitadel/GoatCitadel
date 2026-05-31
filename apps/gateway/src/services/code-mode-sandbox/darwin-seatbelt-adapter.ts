@@ -66,6 +66,7 @@ export class DarwinSeatbeltSandboxAdapter implements CodeModeHostSandboxAdapter 
     await fs.writeFile(profilePath, buildSeatbeltProfile(input), "utf8");
 
     return {
+      transport: "node_ipc",
       executable: sandboxExecPath,
       args: ["-f", profilePath, input.nodePath, `--max-old-space-size=${input.heapMb}`, input.harnessPath],
       cwd: input.runTempRoot,

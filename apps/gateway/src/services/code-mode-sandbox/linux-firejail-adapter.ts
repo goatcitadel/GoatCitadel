@@ -68,6 +68,7 @@ export class LinuxFirejailSandboxAdapter implements CodeModeHostSandboxAdapter {
     await fs.writeFile(profilePath, buildFirejailProfile(input.runTempRoot), "utf8");
 
     return {
+      transport: "node_ipc",
       executable: firejailPath,
       args: [
         "--quiet",

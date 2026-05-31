@@ -9,6 +9,7 @@ describe("code-mode-execution-backend-runner", () => {
     const prepareHostLaunch = vi.fn(async (_config, launchInput, options) => ({
       metadata: options.metadata ?? sandboxMetadata(),
       launch: {
+        transport: "node_ipc",
         executable: launchInput.nodePath,
         args: [launchInput.harnessPath],
         cwd: launchInput.runTempRoot,

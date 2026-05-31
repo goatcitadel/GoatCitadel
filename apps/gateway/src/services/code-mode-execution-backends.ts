@@ -86,6 +86,7 @@ function buildDockerPreviewBackend(env: NodeJS.ProcessEnv): CodeModeExecutionBac
     blockers: [
       "Docker backend is not wired to Code Mode launch or approval execution yet.",
       "No container image, volume policy, network policy, or artifact-return contract has been promoted.",
+      "Current launch transport is node_ipc; Docker requires a separately proven stdio_jsonrpc bridge.",
     ],
     governance: [
       "Must preserve deny-wins policy, path jails, approval linkage, immutable artifact hashes, and runtime truth.",
