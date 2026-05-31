@@ -25,6 +25,12 @@ import type { NativeRoutePagesProps } from "../types";
 
 type BrowserSessionFilter = BrowserSessionStatus | "all";
 const GRANT_SCOPES: BrowserSessionGrantScope[] = ["read", "interact", "state", "admin"];
+const GRANT_SCOPE_RANK: Record<BrowserSessionGrantScope, number> = {
+  read: 1,
+  interact: 2,
+  state: 3,
+  admin: 4,
+};
 
 export function BrowserSessionsRoutePage({ activeWorkspaceId, activeWorkspaceName }: NativeRoutePagesProps) {
   const [filter, setFilter] = useState<BrowserSessionFilter>("active");
@@ -60,6 +66,7 @@ export function BrowserSessionsRoutePage({ activeWorkspaceId, activeWorkspaceNam
   }, [sessions]);
 
   const detail = useBrowserSessionDetail(selectedSession?.sessionId ?? "");
+  const posture = selectedSession ? buildBrowserSessionPosture(selectedSession, detail.grants, detail.events) : null;
 
   const createSession = async () => {
     const label = sessionDraft.label.trim();
@@ -291,6 +298,37 @@ export function BrowserSessionsRoutePage({ activeWorkspaceId, activeWorkspaceNam
         </NativeCard>
 
         <NativeCard
+          title="State and tool posture"
+          subtitle="Derived from session records, scoped grants, and retained guard events; browser state values remain hidden."
+          stats={[
+            { label: "Callable", value: posture?.callableState ?? "none" },
+            { label: "Host posture", value: posture?.hostPosture ?? "unknown" },
+          ]}
+        >
+          {posture ? (
+            <>
+              <div className="mc-next-approvals-chip-row">
+                <StatusChip tone={posture.callableTone}>{posture.callableState}</StatusChip>
+                <StatusChip tone={posture.guardBlockCount > 0 ? "warning" : "muted"}>
+                  {posture.guardBlockCount} guard blocks
+                </StatusChip>
+              </div>
+              <LibraryMetricGrid
+                items={[
+                  { label: "Active grants", value: String(posture.activeGrantCount), meta: posture.highestScope },
+                  { label: "Hosts", value: posture.hostPosture, meta: posture.hostSummary },
+                  { label: "Latest tool", value: posture.latestToolEvidence, meta: "from retained events" },
+                  { label: "State values", value: "Hidden", meta: "cookies, storage, and page values are not exposed" },
+                ]}
+              />
+              <p className="mc-next-settings-field-note">{posture.summary}</p>
+            </>
+          ) : (
+            <EmptyState size="compact" title="Select a browser session to inspect posture." />
+          )}
+        </NativeCard>
+
+        <NativeCard
           title="Scoped grants"
           subtitle="Grants are actor-scoped and optionally host-scoped; they do not enable unrestricted browser control."
           scrollBody
@@ -495,6 +533,76 @@ function isGrantActive(grant: BrowserSessionGrantRecord): boolean {
   return !grant.expiresAt || Date.parse(grant.expiresAt) > Date.now();
 }
 
+function buildBrowserSessionPosture(
+  session: BrowserSessionRecord,
+  grants: BrowserSessionGrantRecord[],
+  events: BrowserSessionEventRecord[],
+) {
+  const activeGrants = grants.filter(isGrantActive);
+  const highestScope = activeGrants
+    .flatMap((grant) => grant.scopes)
+    .sort((a, b) => GRANT_SCOPE_RANK[b] - GRANT_SCOPE_RANK[a])[0];
+  const activeHosts = new Set(activeGrants.flatMap((grant) => grant.allowedHosts));
+  const hasAllHostsGrant = activeGrants.some((grant) => grant.allowedHosts.length === 0);
+  const guardBlockCount = events.filter((event) => event.eventType === "tool_guard_blocked").length;
+  const latestToolEvidence = readLatestBrowserToolEvidence(events);
+  const callableState =
+    session.status === "closed" ? "Closed" : activeGrants.length > 0 ? "Governed grants ready" : "Grant required";
+  const callableTone = session.status === "closed" ? "muted" : activeGrants.length > 0 ? "success" : "warning";
+  const hostPosture =
+    activeGrants.length === 0 ? "No active hosts" : hasAllHostsGrant ? "All hosts grant" : `${activeHosts.size} hosts`;
+  const hostSummary =
+    activeHosts.size > 0 ? [...activeHosts].slice(0, 4).join(", ") : hasAllHostsGrant ? "not host-scoped" : "none";
+  return {
+    activeGrantCount: activeGrants.length,
+    callableState,
+    callableTone,
+    guardBlockCount,
+    highestScope: highestScope ? `highest scope: ${highestScope}` : "no active scopes",
+    hostPosture,
+    hostSummary,
+    latestToolEvidence,
+    summary:
+      activeGrants.length > 0
+        ? "Tools still need an actor grant, host posture, policy checks, and guardrail pass before browser state changes."
+        : "No callable browser-session grant is active; tools cannot use this session yet.",
+  } satisfies {
+    activeGrantCount: number;
+    callableState: string;
+    callableTone: "success" | "warning" | "muted";
+    guardBlockCount: number;
+    highestScope: string;
+    hostPosture: string;
+    hostSummary: string;
+    latestToolEvidence: string;
+    summary: string;
+  };
+}
+
+function readLatestBrowserToolEvidence(events: BrowserSessionEventRecord[]): string {
+  for (const event of events) {
+    const toolName = readPayloadString(event.payload, "toolName") ?? readPayloadString(event.payload, "tool");
+    const runId = readPayloadString(event.payload, "runId");
+    const toolCallId = readPayloadString(event.payload, "toolCallId");
+    const evidence = [
+      toolName,
+      runId ? `run ${shortId(runId)}` : undefined,
+      toolCallId ? `call ${shortId(toolCallId)}` : undefined,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    if (evidence) {
+      return evidence;
+    }
+  }
+  return "No linked tool event";
+}
+
+function readPayloadString(payload: Record<string, unknown>, key: string): string | undefined {
+  const value = payload[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 function parseHostList(value: string): string[] {
   return value
     .split(",")
@@ -514,9 +622,18 @@ function labelForFilter(filter: BrowserSessionFilter): string {
 
 function formatEventPayload(event: BrowserSessionEventRecord): string {
   const entries = Object.entries(event.payload)
-    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .filter(
+      ([key, value]) =>
+        !isSensitiveBrowserStatePayloadKey(key) && value !== undefined && value !== null && value !== "",
+    )
     .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`);
-  return entries.length ? entries.join(" · ") : "No payload detail recorded.";
+  const hiddenCount = Object.keys(event.payload).filter(isSensitiveBrowserStatePayloadKey).length;
+  const hidden = hiddenCount > 0 ? [`${hiddenCount} browser state value${hiddenCount === 1 ? "" : "s"} hidden`] : [];
+  return [...entries, ...hidden].length ? [...entries, ...hidden].join(" · ") : "No payload detail recorded.";
+}
+
+function isSensitiveBrowserStatePayloadKey(key: string): boolean {
+  return /cookie|storage|localstorage|sessionstorage|domvalue|pagevalue|screenshot|html|content/i.test(key);
 }
 
 function shortId(value: string): string {

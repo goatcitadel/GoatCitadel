@@ -54,6 +54,20 @@ beforeEach(() => {
       payload: { scopes: ["read", "state"], allowedHosts: ["example.com"] },
       createdAt: "2026-05-30T18:01:00.000Z",
     },
+    {
+      eventId: "event-2",
+      sessionId: "browser-session-1",
+      eventType: "tool_guard_blocked",
+      actorId: "agent-1",
+      payload: {
+        toolName: "browser.navigate",
+        runId: "run-browser-session-posture",
+        host: "blocked.example",
+        cookieValue: "secret-cookie",
+        localStorage: { token: "secret-token" },
+      },
+      createdAt: "2026-05-30T18:02:00.000Z",
+    },
   ]);
 });
 
@@ -75,7 +89,14 @@ describe("BrowserSessionsRoutePage", () => {
     expect(text).toContain("Research browser");
     expect(text).toContain("agent-1");
     expect(text).toContain("grant_created");
+    expect(text).toContain("State and tool posture");
+    expect(text).toContain("Governed grants ready");
+    expect(text).toContain("guard blocks");
+    expect(text).toContain("browser.navigate");
+    expect(text).toContain("browser state values hidden");
     expect(text).toContain("cookie or storage values are not shown");
+    expect(text).not.toContain("secret-cookie");
+    expect(text).not.toContain("secret-token");
   });
 
   it("creates sessions and scoped grants with explicit host and TTL input", async () => {
