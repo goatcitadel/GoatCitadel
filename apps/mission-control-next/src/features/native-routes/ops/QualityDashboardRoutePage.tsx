@@ -1,16 +1,24 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BarChart3, ClipboardCopy } from "lucide-react";
-import type { LlmEvalProofRunRecord, PromptPackRecord, PromptPackSecurityEvalPackRecord } from "@goatcitadel/contracts";
+import type {
+  LlmEvalProofRunRecord,
+  PromptPackExportRecord,
+  PromptPackRecord,
+  PromptPackReportRecord,
+  PromptPackSecurityEvalPackRecord,
+} from "@goatcitadel/contracts";
 import {
   exportLlmEvalProofRuns,
   fetchLlmEvalProofRuns,
   fetchPromptPackBuiltins,
+  fetchPromptPackExport,
+  fetchPromptPackReport,
   fetchPromptPacks,
   importBuiltinPromptPack,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, StatusChip } from "../primitives";
-import { formatDateTime, nativeLoad, nativeLoadIssues, useAsyncLoad } from "../shared/native-helpers";
+import { formatBytes, formatDateTime, nativeLoad, nativeLoadIssues, useAsyncLoad } from "../shared/native-helpers";
 import { LibraryLoadWarnings, LibraryMetricGrid } from "../shared/library-primitives";
 import type { NativeRoutePagesProps } from "../types";
 
@@ -19,6 +27,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
   const [exportNotice, setExportNotice] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const [importingPackKey, setImportingPackKey] = useState<string | null>(null);
+  const [selectedPackId, setSelectedPackId] = useState<string | null>(null);
   const { loading, error, data, reload } = useAsyncLoad(async () => {
     const [packs, evalRuns, securityEvalPacks] = await Promise.all([
       nativeLoad("Prompt packs", fetchPromptPacks(200), { items: [] as PromptPackRecord[] }),
@@ -44,10 +53,49 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
   const packs = data?.packs ?? [];
   const evalRuns = data?.evalRuns ?? [];
   const securityEvalPacks = data?.securityEvalPacks ?? [];
+  const selectedPack = packs.find((pack) => pack.packId === selectedPackId) ?? packs[0] ?? null;
   const totalTests = packs.reduce((sum, pack) => sum + (pack.testCount ?? 0), 0);
   const securityEvalTests = securityEvalPacks.reduce((sum, pack) => sum + pack.testCount, 0);
   const latestEval = evalRuns[0];
   const paretoModels = evalRuns.flatMap((run) => run.results.filter((result) => result.paretoOptimal));
+  const selectedPackEvidence = useAsyncLoad(async () => {
+    if (!selectedPack?.packId) {
+      return {
+        issues: [],
+        report: null as PromptPackReportRecord | null,
+        exportInfo: null as PromptPackExportRecord | null,
+      };
+    }
+    const [report, exportInfo] = await Promise.all([
+      nativeLoad(
+        "Prompt-pack report",
+        fetchPromptPackReport(selectedPack.packId),
+        null as PromptPackReportRecord | null,
+      ),
+      nativeLoad(
+        "Prompt-pack export",
+        fetchPromptPackExport(selectedPack.packId),
+        null as PromptPackExportRecord | null,
+      ),
+    ]);
+    return {
+      issues: nativeLoadIssues([report, exportInfo]),
+      report: report.data,
+      exportInfo: exportInfo.data,
+    };
+  }, [selectedPack?.packId]);
+  const selectedReport = selectedPackEvidence.data?.report;
+  const selectedExport = selectedPackEvidence.data?.exportInfo;
+
+  useEffect(() => {
+    if (!packs.length) {
+      setSelectedPackId(null);
+      return;
+    }
+    setSelectedPackId((current) =>
+      current && packs.some((pack) => pack.packId === current) ? current : packs[0]!.packId,
+    );
+  }, [packs]);
 
   const copyEvalProofExport = async () => {
     if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
@@ -66,6 +114,28 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
       setExportError(err instanceof Error ? err.message : String(err));
     } finally {
       setExporting(false);
+    }
+  };
+
+  const copyPromptPackExportPath = async () => {
+    const exportPath = selectedExport?.latestSnapshotPath ?? selectedExport?.latestPath ?? selectedExport?.path;
+    if (!exportPath) {
+      setExportError("No prompt-pack export path is recorded for the selected pack.");
+      setExportNotice(null);
+      return;
+    }
+    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+      setExportError("Clipboard export is not available in this environment.");
+      setExportNotice(null);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(exportPath);
+      setExportNotice(`Copied prompt-pack export path for ${selectedPack?.name ?? "selected pack"}.`);
+      setExportError(null);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : String(err));
+      setExportNotice(null);
     }
   };
 
@@ -131,16 +201,30 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
           ]}
         >
           {packs.length > 0 ? (
-            <NativeList
-              density="compact"
-              items={packs.slice(0, 6).map((pack) => ({
-                title: pack.name,
-                meta: `${pack.testCount} tests`,
-                body: pack.sourceLabel ? `Source: ${pack.sourceLabel}` : "Source label not recorded.",
-              }))}
-              emptyLabel="No prompt packs are available."
-              maxHeight="min(38vh, 24rem)"
-            />
+            <>
+              <NativeList
+                density="compact"
+                items={packs.slice(0, 6).map((pack) => ({
+                  title: pack.name,
+                  meta: `${pack.testCount} tests${pack.packId === selectedPack?.packId ? " · selected" : ""}`,
+                  body: pack.sourceLabel ? `Source: ${pack.sourceLabel}` : "Source label not recorded.",
+                }))}
+                emptyLabel="No prompt packs are available."
+                maxHeight="min(30vh, 18rem)"
+              />
+              <div className="mc-next-approvals-inline-actions">
+                {packs.slice(0, 6).map((pack) => (
+                  <button
+                    key={pack.packId}
+                    type="button"
+                    className={pack.packId === selectedPack?.packId ? "mc-next-button" : "mc-next-secondary-button"}
+                    onClick={() => setSelectedPackId(pack.packId)}
+                  >
+                    {pack.name}
+                  </button>
+                ))}
+              </div>
+            </>
           ) : (
             <EmptyState size="compact" title="No prompt packs are available." />
           )}
@@ -151,6 +235,89 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
           >
             <span>Open prompt packs</span>
           </button>
+        </NativeCard>
+
+        <NativeCard
+          title="Prompt-pack gate evidence"
+          subtitle="Stored report, score, and export state for the selected pack; this panel does not run tests."
+          stats={[
+            { label: "Selected", value: selectedPack?.name ?? "none" },
+            {
+              label: "Pass rate",
+              value: selectedReport ? formatScore(selectedReport.summary.effectivePassRate) : "unknown",
+            },
+            {
+              label: "Needs score",
+              value: String(selectedReport?.summary.needsScoreCount ?? 0),
+            },
+          ]}
+        >
+          <LibraryLoadWarnings issues={selectedPackEvidence.data?.issues ?? []} onRetry={selectedPackEvidence.reload} />
+          {selectedPackEvidence.loading ? (
+            <EmptyState size="compact" title="Loading prompt-pack evidence..." />
+          ) : selectedReport ? (
+            <>
+              <LibraryMetricGrid
+                items={[
+                  {
+                    label: "Tests",
+                    value: String(selectedReport.summary.totalTests),
+                    meta: selectedReport.pack.packId,
+                  },
+                  { label: "Completed", value: String(selectedReport.summary.completedRuns), meta: "stored runs" },
+                  { label: "Failed runs", value: String(selectedReport.summary.failedRuns) },
+                  { label: "Review", value: formatScore(selectedReport.summary.reviewRate), meta: "human review rate" },
+                  { label: "Judge fallback", value: String(selectedReport.summary.judgeFallbackCount) },
+                  { label: "Degraded", value: String(selectedReport.summary.degradedScoreCount) },
+                ]}
+              />
+              <NativeList
+                density="compact"
+                items={[
+                  {
+                    title: "Scoring schema",
+                    meta: selectedReport.summary.activeScoringSchemaVersion,
+                    body: `Threshold ${selectedReport.summary.passThreshold}; average weighted score ${Math.round(
+                      selectedReport.summary.averageWeightedScore,
+                    )}.`,
+                  },
+                  {
+                    title: "Failing codes",
+                    meta: selectedReport.summary.failingCodes.length ? "needs review" : "none recorded",
+                    body:
+                      selectedReport.summary.failingCodes.slice(0, 8).join(", ") || "No failing test codes recorded.",
+                  },
+                  {
+                    title: "Export snapshot",
+                    meta: selectedExport?.exists ? "available" : "not recorded",
+                    body: formatPromptPackExport(selectedExport),
+                  },
+                ]}
+              />
+              <div className="mc-next-approvals-inline-actions">
+                <button
+                  type="button"
+                  className="mc-next-secondary-button"
+                  onClick={() => void copyPromptPackExportPath()}
+                  disabled={!selectedExport}
+                >
+                  <ClipboardCopy className="h-4 w-4" />
+                  Copy prompt-pack export path
+                </button>
+                <button
+                  type="button"
+                  className="mc-next-secondary-button"
+                  onClick={() => navigate({ area: "library", section: "prompt-packs", theme: route.theme })}
+                >
+                  Open selected pack
+                </button>
+              </div>
+            </>
+          ) : selectedPackEvidence.error ? (
+            <EmptyState size="compact" title={`Prompt-pack evidence failed: ${selectedPackEvidence.error}`} />
+          ) : (
+            <EmptyState size="compact" title="No stored prompt-pack report is available for the selected pack." />
+          )}
         </NativeCard>
 
         <NativeCard
@@ -358,6 +525,23 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
 
 function formatScore(value: number): string {
   return value <= 1 ? `${Math.round(value * 100)}%` : value.toFixed(2);
+}
+
+function formatPromptPackExport(exportInfo: PromptPackExportRecord | null | undefined): string {
+  if (!exportInfo) {
+    return "Export metadata is unavailable.";
+  }
+  const path = exportInfo.latestSnapshotPath ?? exportInfo.latestPath ?? exportInfo.path;
+  const size = exportInfo.latestSnapshotSizeBytes ?? exportInfo.sizeBytes;
+  const updated = exportInfo.latestSnapshotUpdatedAt ?? exportInfo.updatedAt;
+  return [
+    path,
+    exportInfo.snapshotCount !== undefined ? `${exportInfo.snapshotCount} snapshots` : undefined,
+    size !== undefined ? formatBytes(size) : undefined,
+    updated ? `updated ${formatDateTime(updated)}` : undefined,
+  ]
+    .filter((item): item is string => Boolean(item))
+    .join(" · ");
 }
 
 function formatSecurityEvalStatus(status: PromptPackSecurityEvalPackRecord["status"]): string {

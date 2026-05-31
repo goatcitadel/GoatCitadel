@@ -79,6 +79,60 @@ const mocks = vi.hoisted(() => ({
       },
     ],
   })),
+  fetchPromptPackReport: vi.fn(async () => ({
+    pack: {
+      packId: "pack-1",
+      name: "Security Red Team",
+      testCount: 18,
+      sourceLabel: "goatcitadel_prompt_pack_v6_security_red_team.md",
+      createdAt: "2026-05-02T18:00:00.000Z",
+      updatedAt: "2026-05-02T20:00:00.000Z",
+    },
+    tests: [],
+    runs: [],
+    scores: [],
+    autoScoresV2: [],
+    humanReviewsV2: [],
+    latestAssessments: [],
+    summary: {
+      totalTests: 18,
+      completedRuns: 12,
+      failedRuns: 2,
+      runFailureCount: 2,
+      invalidLatestRuns: 1,
+      scoreFailureCount: 0,
+      needsScoreCount: 3,
+      staleLatestAutoScoreCount: 1,
+      judgeFallbackCount: 1,
+      judgeErrorCount: 0,
+      autoScoredRuns: 9,
+      humanReviewedRuns: 2,
+      degradedScoreCount: 1,
+      passCount: 8,
+      failCount: 2,
+      reviewCount: 2,
+      effectivePassRate: 0.67,
+      reviewRate: 0.17,
+      activeScoringSchemaVersion: "v3",
+      passThreshold: 75,
+      averageTotalScore: 72,
+      averageWeightedScore: 78,
+      passRate: 0.67,
+      failingCodes: ["SEC-003", "SEC-007"],
+    },
+  })),
+  fetchPromptPackExport: vi.fn(async () => ({
+    packId: "pack-1",
+    path: "artifacts/prompt-packs/latest/security-red-team.json",
+    exists: true,
+    sizeBytes: 2048,
+    updatedAt: "2026-05-02T20:00:00.000Z",
+    latestSnapshotPath: "artifacts/prompt-packs/archive/security-red-team-2026-05-02.json",
+    latestSnapshotExists: true,
+    latestSnapshotSizeBytes: 4096,
+    latestSnapshotUpdatedAt: "2026-05-02T20:05:00.000Z",
+    snapshotCount: 4,
+  })),
   fetchPromptPackBuiltins: vi.fn(async () => ({
     generatedAt: "2026-05-02T20:00:00.000Z",
     warnings: [
@@ -329,6 +383,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     fetchOperators: mocks.fetchOperators,
     fetchLlmEvalProofRuns: mocks.fetchLlmEvalProofRuns,
     fetchPromptPacks: mocks.fetchPromptPacks,
+    fetchPromptPackExport: mocks.fetchPromptPackExport,
+    fetchPromptPackReport: mocks.fetchPromptPackReport,
     fetchPromptPackBuiltins: mocks.fetchPromptPackBuiltins,
     importBuiltinPromptPack: mocks.importBuiltinPromptPack,
     fetchChatGeneratedArtifacts: mocks.fetchChatGeneratedArtifacts,
@@ -500,9 +556,17 @@ describe("NativeRoutePages Ops quality dashboard", () => {
 
     const text = collectText(renderer!.root);
     expect(mocks.fetchPromptPacks).toHaveBeenCalledWith(200);
+    expect(mocks.fetchPromptPackReport).toHaveBeenCalledWith("pack-1");
+    expect(mocks.fetchPromptPackExport).toHaveBeenCalledWith("pack-1");
     expect(mocks.fetchLlmEvalProofRuns).toHaveBeenCalledWith(25);
     expect(mocks.fetchPromptPackBuiltins).toHaveBeenCalledWith();
     expect(text).toContain("Quality Dashboard");
+    expect(text).toContain("Prompt-pack gate evidence");
+    expect(text).toContain("Pass rate");
+    expect(text).toContain("67%");
+    expect(text).toContain("SEC-003, SEC-007");
+    expect(text).toContain("Export snapshot");
+    expect(text).toContain("artifacts/prompt-packs/archive/security-red-team-2026-05-02.json");
     expect(text).toContain("Security Red Team");
     expect(text).toContain("Defensive Security Evaluation");
     expect(text).toContain("Security eval packs");
@@ -530,6 +594,14 @@ describe("NativeRoutePages Ops quality dashboard", () => {
       await Promise.resolve();
     });
     expect(mocks.importBuiltinPromptPack).toHaveBeenCalledWith("security-red-team-v6");
+
+    await act(async () => {
+      findButton(renderer!.root, "Copy prompt-pack export path").props.onClick();
+      await Promise.resolve();
+    });
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      "artifacts/prompt-packs/archive/security-red-team-2026-05-02.json",
+    );
 
     await act(async () => {
       findButton(renderer!.root, "Open prompt packs").props.onClick();
