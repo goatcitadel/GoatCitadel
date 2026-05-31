@@ -434,6 +434,27 @@ describe("mcp routes", () => {
           createdAt: "2026-05-30T00:00:00.000Z",
           updatedAt: "2026-05-30T00:00:00.000Z",
         },
+        {
+          serverId: "srv-approval-inbox-quarantined",
+          label: "Approval Inbox Quarantined",
+          transport: "http",
+          url: MCP_APPROVAL_INBOX_URL,
+          authType: "none",
+          enabled: true,
+          status: "connected",
+          category: "orchestration",
+          trustTier: "quarantined",
+          costTier: "free",
+          policy: {
+            requireFirstToolApproval: true,
+            redactionMode: "basic",
+            allowedToolPatterns: [],
+            blockedToolPatterns: [],
+            notes: "trust review required",
+          },
+          createdAt: "2026-05-30T00:00:00.000Z",
+          updatedAt: "2026-05-30T00:00:00.000Z",
+        },
       ]),
       listMcpTemplates: vi.fn(() => [
         {
@@ -472,28 +493,114 @@ describe("mcp routes", () => {
       experimentalRemoteRecordsAllowed: false,
       runtimeSupport: "internal_approval_inbox_only",
       summary: {
-        remoteServers: 1,
+        remoteServers: 2,
         remoteTemplates: 1,
         runtimeSupported: 0,
-        blocked: 1,
+        blocked: 2,
         configuredOnly: 1,
+        notCallable: 3,
+        experimentalRecords: 0,
+        quarantined: 1,
+        needsAuth: 2,
       },
       items: [
+        expect.objectContaining({
+          label: "Approval Inbox Quarantined",
+          posture: "blocked",
+          callableState: "not_callable",
+          invocationState: "quarantined",
+          runtimePath: "internal_approval_inbox",
+          transportRuntimeSupported: true,
+          runtimeSupported: false,
+          blockers: [expect.stringContaining("quarantined")],
+        }),
         expect.objectContaining({
           label: "Remote HTTP",
           posture: "configured_only",
           callableState: "not_callable",
+          invocationState: "configured_not_callable",
+          runtimePath: "generic_remote_http_sse",
+          transportRuntimeSupported: false,
           runtimeSupported: false,
+          operatorNextAction: expect.stringContaining("Keep configured"),
           blockers: [expect.stringContaining("not supported")],
         }),
         expect.objectContaining({
           label: "Remote template",
           posture: "blocked",
           callableState: "not_callable",
+          invocationState: "blocked",
           createAllowed: false,
+          operatorNextAction: expect.stringContaining("not installable"),
         }),
       ],
     });
+  });
+
+  it("keeps experimental remote MCP records non-callable in the preview", async () => {
+    const previous = process.env.GOATCITADEL_EXPERIMENTAL_REMOTE_MCP_TRANSPORTS;
+    process.env.GOATCITADEL_EXPERIMENTAL_REMOTE_MCP_TRANSPORTS = "true";
+    try {
+      await registerMcpService({
+        listMcpServers: vi.fn(() => []),
+        listMcpTemplates: vi.fn(() => [
+          {
+            templateId: "remote-template",
+            label: "Experimental remote template",
+            description: "Remote MCP template",
+            transport: "http",
+            url: "https://mcp.example.test/events",
+            authType: "token",
+            category: "research",
+            trustTier: "restricted",
+            costTier: "unknown",
+            enabledByDefault: false,
+            installed: false,
+            policy: {
+              requireFirstToolApproval: true,
+              redactionMode: "strict",
+              allowedToolPatterns: [],
+              blockedToolPatterns: [],
+            },
+          },
+        ]),
+      });
+
+      const response = await app!.inject({
+        method: "GET",
+        url: "/api/v1/mcp/remote-preview",
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        experimentalRemoteRecordsAllowed: true,
+        runtimeSupport: "experimental_records_only",
+        summary: {
+          runtimeSupported: 0,
+          notCallable: 1,
+          experimentalRecords: 1,
+          needsAuth: 1,
+        },
+        items: [
+          expect.objectContaining({
+            label: "Experimental remote template",
+            posture: "experimental_record_allowed",
+            callableState: "not_callable",
+            invocationState: "experimental_record_only",
+            createAllowed: true,
+            transportRuntimeSupported: false,
+            runtimeSupported: false,
+            operatorNextAction: expect.stringContaining("experimental record only"),
+          }),
+        ],
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.GOATCITADEL_EXPERIMENTAL_REMOTE_MCP_TRANSPORTS;
+      } else {
+        process.env.GOATCITADEL_EXPERIMENTAL_REMOTE_MCP_TRANSPORTS = previous;
+      }
+    }
   });
 
   it("serves a read-only MCP server-mode manifest from the callable capability catalog", async () => {

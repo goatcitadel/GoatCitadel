@@ -558,6 +558,10 @@ function setupResponses() {
       runtimeSupported: 0,
       blocked: 0,
       configuredOnly: 0,
+      notCallable: 0,
+      experimentalRecords: 0,
+      quarantined: 0,
+      needsAuth: 0,
     },
     items: [],
   });

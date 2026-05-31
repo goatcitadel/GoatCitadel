@@ -171,6 +171,13 @@ export type McpRemotePreviewPosture =
   | "experimental_record_allowed"
   | "blocked";
 export type McpRemotePreviewCallableState = "runtime_invokable" | "not_callable";
+export type McpRemotePreviewRuntimePath = "internal_approval_inbox" | "generic_remote_http_sse";
+export type McpRemotePreviewInvocationState =
+  | "runtime_invokable"
+  | "configured_not_callable"
+  | "experimental_record_only"
+  | "blocked"
+  | "quarantined";
 
 export interface McpRemotePreviewItem {
   source: "server" | "template";
@@ -185,8 +192,12 @@ export interface McpRemotePreviewItem {
   installed?: boolean;
   posture: McpRemotePreviewPosture;
   callableState: McpRemotePreviewCallableState;
+  invocationState: McpRemotePreviewInvocationState;
+  runtimePath: McpRemotePreviewRuntimePath;
   createAllowed: boolean;
+  transportRuntimeSupported: boolean;
   runtimeSupported: boolean;
+  operatorNextAction: string;
   blockers: string[];
   governance: string[];
   evidence: {
@@ -209,6 +220,10 @@ export interface McpRemotePreviewResponse {
     runtimeSupported: number;
     blocked: number;
     configuredOnly: number;
+    notCallable: number;
+    experimentalRecords: number;
+    quarantined: number;
+    needsAuth: number;
   };
   items: McpRemotePreviewItem[];
 }

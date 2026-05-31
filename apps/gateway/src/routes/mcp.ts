@@ -477,6 +477,10 @@ export function buildMcpRemotePreview(input: {
       runtimeSupported: items.filter((item) => item.runtimeSupported).length,
       blocked: items.filter((item) => item.posture === "blocked").length,
       configuredOnly: items.filter((item) => item.posture === "configured_only").length,
+      notCallable: items.filter((item) => item.callableState === "not_callable").length,
+      experimentalRecords: items.filter((item) => item.invocationState === "experimental_record_only").length,
+      quarantined: items.filter((item) => item.invocationState === "quarantined").length,
+      needsAuth: items.filter((item) => item.authType !== "none").length,
     },
     items,
   };
@@ -487,18 +491,32 @@ function buildRemotePreviewBase(
   experimentalRemoteRecordsAllowed: boolean,
   source: "server" | "template",
 ): Omit<McpRemotePreviewItem, "source" | "id" | "evidence"> {
-  const runtimeSupported = isRuntimeSupportedMcpDefinition(item);
+  const transportRuntimeSupported = isRuntimeSupportedMcpDefinition(item);
   const createAllowed = isAllowedMcpDefinitionForCreate(item);
-  const posture = runtimeSupported
-    ? "runtime_supported"
+  const quarantined = item.trustTier === "quarantined";
+  const runtimeSupported = transportRuntimeSupported && !quarantined;
+  const posture = transportRuntimeSupported
+    ? runtimeSupported
+      ? "runtime_supported"
+      : "blocked"
     : source === "server"
       ? "configured_only"
       : experimentalRemoteRecordsAllowed
         ? "experimental_record_allowed"
         : "blocked";
-  const blockers = runtimeSupported
-    ? []
-    : ["Generic remote http/sse MCP runtime invocation is not supported in this shell."];
+  const blockers = buildMcpRemotePreviewBlockers({
+    transportRuntimeSupported,
+    createAllowed,
+    quarantined,
+    source,
+  });
+  const invocationState = buildMcpRemotePreviewInvocationState({
+    runtimeSupported,
+    transportRuntimeSupported,
+    experimentalRemoteRecordsAllowed,
+    source,
+    quarantined,
+  });
   const governance = [
     "Deny-wins tool policy and MCP approval gates still apply before invocation.",
     item.authType === "none"
@@ -514,11 +532,82 @@ function buildRemotePreviewBase(
     trustTier: item.trustTier,
     posture,
     callableState: runtimeSupported ? "runtime_invokable" : "not_callable",
+    invocationState,
+    runtimePath: transportRuntimeSupported ? "internal_approval_inbox" : "generic_remote_http_sse",
     createAllowed,
+    transportRuntimeSupported,
     runtimeSupported,
+    operatorNextAction: buildMcpRemotePreviewNextAction({
+      invocationState,
+      source,
+      transportRuntimeSupported,
+      createAllowed,
+    }),
     blockers,
     governance,
   };
+}
+
+function buildMcpRemotePreviewBlockers(input: {
+  transportRuntimeSupported: boolean;
+  createAllowed: boolean;
+  quarantined: boolean;
+  source: "server" | "template";
+}): string[] {
+  const blockers: string[] = [];
+  if (input.quarantined) {
+    blockers.push("MCP trust tier is quarantined; deny-wins trust posture keeps this record non-callable.");
+  }
+  if (!input.transportRuntimeSupported) {
+    blockers.push("Generic remote http/sse MCP runtime invocation is not supported in this shell.");
+  }
+  if (input.source === "template" && !input.createAllowed) {
+    blockers.push("Creating generic remote MCP records is disabled unless experimental remote records are enabled.");
+  }
+  return blockers;
+}
+
+function buildMcpRemotePreviewInvocationState(input: {
+  runtimeSupported: boolean;
+  transportRuntimeSupported: boolean;
+  experimentalRemoteRecordsAllowed: boolean;
+  source: "server" | "template";
+  quarantined: boolean;
+}): McpRemotePreviewItem["invocationState"] {
+  if (input.quarantined) {
+    return "quarantined";
+  }
+  if (input.runtimeSupported) {
+    return "runtime_invokable";
+  }
+  if (input.source === "server") {
+    return input.transportRuntimeSupported ? "blocked" : "configured_not_callable";
+  }
+  return input.experimentalRemoteRecordsAllowed ? "experimental_record_only" : "blocked";
+}
+
+function buildMcpRemotePreviewNextAction(input: {
+  invocationState: McpRemotePreviewItem["invocationState"];
+  source: "server" | "template";
+  transportRuntimeSupported: boolean;
+  createAllowed: boolean;
+}): string {
+  if (input.invocationState === "runtime_invokable") {
+    return "Use the built-in Approval Inbox path; Gateway policy, approvals, and audit still apply.";
+  }
+  if (input.invocationState === "quarantined") {
+    return "Review trust posture before treating this MCP record as callable.";
+  }
+  if (input.invocationState === "experimental_record_only") {
+    return "Keep as an experimental record only until a governed remote runtime bridge is shipped and proven.";
+  }
+  if (input.source === "server") {
+    return "Keep configured for review, or replace it with local stdio or the built-in Approval Inbox path.";
+  }
+  if (!input.createAllowed) {
+    return "Use local stdio or Approval Inbox templates for runtime work; this remote template is not installable by default.";
+  }
+  return "Creating the record is allowed only as experimental metadata, not runtime invocation.";
 }
 
 function isRemoteMcpDefinition(

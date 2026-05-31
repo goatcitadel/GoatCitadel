@@ -5561,7 +5561,14 @@ function McpSection(_props: SettingsSectionProps) {
   const [tools, setTools] = useState<Array<{ toolName: string; description?: string }>>([]);
   const [healthReport, setHealthReport] = useState<ConnectorDiagnosticReport | null>(null);
   const selectedServer = data?.servers.find((item) => item.serverId === selectedServerId) ?? data?.servers[0] ?? null;
-  const selectedServerRuntimeReady = selectedServer ? isRuntimeInvokableMcpServer(selectedServer) : false;
+  const selectedRemotePreviewItem = selectedServer
+    ? data?.remotePreview.items.find((item) => item.source === "server" && item.id === selectedServer.serverId)
+    : undefined;
+  const selectedServerRuntimeReady = selectedRemotePreviewItem
+    ? selectedRemotePreviewItem.runtimeSupported
+    : selectedServer
+      ? isRuntimeInvokableMcpServer(selectedServer)
+      : false;
 
   useEffect(() => {
     if (!data?.servers.length) {
@@ -5827,6 +5834,16 @@ function McpSection(_props: SettingsSectionProps) {
                     value: String(data.remotePreview.summary.blocked),
                     meta: data.remotePreview.experimentalRemoteRecordsAllowed ? "experimental records" : "default",
                   },
+                  {
+                    label: "Not callable",
+                    value: String(data.remotePreview.summary.notCallable),
+                    meta: `${data.remotePreview.summary.quarantined} quarantined`,
+                  },
+                  {
+                    label: "Needs auth",
+                    value: String(data.remotePreview.summary.needsAuth),
+                    meta: `${data.remotePreview.summary.experimentalRecords} experimental`,
+                  },
                 ]}
               />
               <SettingsNotice
@@ -5839,8 +5856,14 @@ function McpSection(_props: SettingsSectionProps) {
               <SettingsActionList
                 items={data.remotePreview.items.map((item) => ({
                   label: item.label,
-                  meta: `${item.source} · ${item.transport} · ${item.callableState.replaceAll("_", " ")}`,
+                  meta: [
+                    item.source,
+                    item.transport,
+                    item.invocationState.replaceAll("_", " "),
+                    item.transportRuntimeSupported ? "transport supported" : "no runtime bridge",
+                  ].join(" · "),
                   description: formatMcpRemotePreviewItem(item),
+                  actionLabel: item.runtimeSupported ? "Runtime path" : "Preview only",
                 }))}
                 emptyLabel="No remote MCP records or templates are visible."
               />
@@ -5915,8 +5938,9 @@ function McpSection(_props: SettingsSectionProps) {
                   <SettingsNotice
                     notice={{
                       tone: "warning",
-                      message:
-                        "This MCP server is configured for visibility only. Generic http/sse runtime invocation is not supported in this shell.",
+                      message: selectedRemotePreviewItem
+                        ? `${selectedRemotePreviewItem.operatorNextAction} ${selectedRemotePreviewItem.blockers[0] ?? ""}`.trim()
+                        : "This MCP server is configured for visibility only. Generic http/sse runtime invocation is not supported in this shell.",
                     }}
                   />
                 ) : null}
@@ -5927,6 +5951,15 @@ function McpSection(_props: SettingsSectionProps) {
                       label: "Status",
                       value: selectedServer.status,
                       meta: selectedServer.lastError || "No recent error",
+                    },
+                    {
+                      label: "Invocation",
+                      value: selectedRemotePreviewItem
+                        ? selectedRemotePreviewItem.invocationState.replaceAll("_", " ")
+                        : selectedServerRuntimeReady
+                          ? "runtime invokable"
+                          : "not callable",
+                      meta: selectedRemotePreviewItem?.runtimePath.replaceAll("_", " ") ?? "local stdio",
                     },
                   ]}
                 />
@@ -8805,8 +8838,11 @@ export function applyIntegrationDefaults(
   );
 }
 
-export function isRuntimeInvokableMcpServer(server: { transport: string; url?: string }) {
-  return server.transport === "stdio" || server.url?.trim().toLowerCase() === INTERNAL_APPROVAL_INBOX_URL;
+export function isRuntimeInvokableMcpServer(server: { transport: string; url?: string; trustTier?: string }) {
+  return (
+    server.trustTier !== "quarantined" &&
+    (server.transport === "stdio" || server.url?.trim().toLowerCase() === INTERNAL_APPROVAL_INBOX_URL)
+  );
 }
 
 export function createEmptyMcpRemotePreview(): McpRemotePreviewResponse {
@@ -8822,6 +8858,10 @@ export function createEmptyMcpRemotePreview(): McpRemotePreviewResponse {
       runtimeSupported: 0,
       blocked: 0,
       configuredOnly: 0,
+      notCallable: 0,
+      experimentalRecords: 0,
+      quarantined: 0,
+      needsAuth: 0,
     },
     items: [],
   };
@@ -8878,7 +8918,7 @@ export function createEmptyMcpServerModeManifest(): McpServerModeManifestRespons
 export function formatMcpRemotePreviewItem(item: McpRemotePreviewResponse["items"][number]): string {
   const blocker = item.blockers[0] ?? "No runtime blocker recorded.";
   const governance = item.governance[0] ?? "No governance note recorded.";
-  return `${item.posture.replaceAll("_", " ")} · ${blocker} · ${governance}`;
+  return `${item.posture.replaceAll("_", " ")} · ${item.operatorNextAction} · ${blocker} · ${governance}`;
 }
 
 export function readDraftString(record: Record<string, unknown>, key: string): string | undefined {

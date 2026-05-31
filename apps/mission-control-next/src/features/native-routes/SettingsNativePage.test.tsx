@@ -578,6 +578,10 @@ const mocks = vi.hoisted(() => ({
       runtimeSupported: 0,
       blocked: 1,
       configuredOnly: 1,
+      notCallable: 1,
+      experimentalRecords: 0,
+      quarantined: 0,
+      needsAuth: 0,
     },
     items: [
       {
@@ -592,8 +596,13 @@ const mocks = vi.hoisted(() => ({
         enabled: false,
         posture: "configured_only",
         callableState: "not_callable",
+        invocationState: "configured_not_callable",
+        runtimePath: "generic_remote_http_sse",
         createAllowed: false,
+        transportRuntimeSupported: false,
         runtimeSupported: false,
+        operatorNextAction:
+          "Keep configured for review, or replace it with local stdio or the built-in Approval Inbox path.",
         blockers: ["Generic remote http/sse MCP runtime invocation is not supported in this shell."],
         governance: ["Deny-wins tool policy and MCP approval gates still apply before invocation."],
         evidence: {},
@@ -2238,7 +2247,7 @@ describe("SettingsNativePage providers", () => {
     expect(text).toContain("First-run setup");
     expect(text).toContain("First trusted outcome");
     expect(text).toContain("Provider-ready path");
-    expect(text).toContain("first-task-pending");
+    expect(text).toContain("starter-ready");
     expect(text).toContain("Ecosystem proof lanes");
     expect(text).toContain("Voice Wake / Talk Mode");
     expect(text).toContain("Provider configured");
@@ -3835,10 +3844,13 @@ describe("SettingsNativePage MCP", () => {
 
     const text = collectText(renderer!.root);
     expect(text).toContain("Configured only; runtime actions are disabled.");
-    expect(text).toContain("Generic http/sse runtime invocation is not supported");
+    expect(text).toContain("Generic remote http/sse MCP runtime invocation is not supported");
     expect(text).toContain("Remote MCP preview");
     expect(text).toContain("Generic remote http/sse MCP remains not callable here.");
     expect(text).toContain("Remote HTTP");
+    expect(text).toContain("configured not callable");
+    expect(text).toContain("Preview only");
+    expect(text).toContain("Keep configured for review");
     expect(text).toContain("Server mode preview");
     expect(text).toContain("Read-only, closed-world descriptors can re-enter Gateway policy");
     expect(text).toContain("goatcitadel.fs.read");
