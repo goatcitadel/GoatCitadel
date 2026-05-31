@@ -649,6 +649,7 @@ export {
 export type { BrowserSessionGrantListQuery, BrowserSessionListQuery } from "./browser-sessions.js";
 export {
   createDurableRun,
+  createExternalSideEffectReplayAuditRun,
   exportObserveRunTrace,
   fetchDurableRun,
   fetchObserveRunTrace,

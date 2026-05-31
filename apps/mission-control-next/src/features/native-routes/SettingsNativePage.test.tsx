@@ -337,6 +337,15 @@ const mocks = vi.hoisted(() => ({
   })),
   fetchIntegrationConnections: vi.fn(async () => ({ items: [] })),
   fetchExternalSideEffectRuns: vi.fn(async () => ({ items: [] })),
+  createExternalSideEffectReplayAuditRun: vi.fn(async () => ({
+    runId: "durable-replay-audit-1",
+    workflowKey: "external_side_effect.replay",
+    status: "queued",
+    attemptCount: 0,
+    maxAttempts: 3,
+    createdAt: "2026-05-31T20:00:00.000Z",
+    updatedAt: "2026-05-31T20:00:00.000Z",
+  })),
   fetchIntegrationFormSchema: vi.fn(async () => ({
     catalogId: "github",
     title: "GitHub setup",
@@ -812,6 +821,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     fetchIntegrationCatalog: mocks.fetchIntegrationCatalog,
     fetchIntegrationConnections: mocks.fetchIntegrationConnections,
     fetchExternalSideEffectRuns: mocks.fetchExternalSideEffectRuns,
+    createExternalSideEffectReplayAuditRun: mocks.createExternalSideEffectReplayAuditRun,
     fetchIntegrationFormSchema: mocks.fetchIntegrationFormSchema,
     createIntegrationConnection: mocks.createIntegrationConnection,
     updateIntegrationConnection: mocks.updateIntegrationConnection,
@@ -854,13 +864,13 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () 
   }),
 }));
 
-function renderPage(section = "providers"): ReactTestRenderer {
+function renderPage(section = "providers", navigate = vi.fn()): ReactTestRenderer {
   return create(
     <SettingsNativePage
       route={{ area: "settings", section, theme: "ops" } as any}
       activeWorkspaceId="default"
       activeWorkspaceName="Default"
-      navigate={vi.fn()}
+      navigate={navigate}
       setActiveWorkspaceId={vi.fn()}
     />,
   );
@@ -1211,6 +1221,15 @@ beforeEach(async () => {
   mocks.fetchAgenticRuns.mockResolvedValue({ items: [] });
   mocks.fetchEvidenceEnvelopes.mockResolvedValue({ items: [] });
   mocks.fetchExternalSideEffectRuns.mockResolvedValue({ items: [] });
+  mocks.createExternalSideEffectReplayAuditRun.mockResolvedValue({
+    runId: "durable-replay-audit-1",
+    workflowKey: "external_side_effect.replay",
+    status: "queued",
+    attemptCount: 0,
+    maxAttempts: 3,
+    createdAt: "2026-05-31T20:00:00.000Z",
+    updatedAt: "2026-05-31T20:00:00.000Z",
+  });
   mocks.bootstrapOnboarding.mockResolvedValue({
     state: await mocks.fetchOnboardingState(),
     appliedAt: "2026-05-02T19:00:00.000Z",
@@ -3787,7 +3806,7 @@ describe("SettingsNativePage integrations", () => {
     expect(text).toContain("No external side-effect run records are available.");
   });
 
-  it("shows external side-effect ledger outcomes without offering replay actions", async () => {
+  it("shows manual posture for post-boundary side-effect outcomes", async () => {
     mocks.fetchIntegrationConnections.mockResolvedValueOnce({
       items: [
         {
@@ -3843,8 +3862,89 @@ describe("SettingsNativePage integrations", () => {
     expect(text).toContain("Resume: not resumable");
     expect(text).toContain("Replay: unknown");
     expect(text).toContain("connection reset after request started");
-    expect(text).not.toContain("Replay run");
+    expect(text).toContain("No replay-audit candidates are visible.");
+    expect(findButton(renderer!.root, "Start replay audit").props.disabled).toBe(true);
     expect(text).not.toContain("Retry side effect");
+  });
+
+  it("starts a durable replay audit for eligible pre-boundary side-effect runs", async () => {
+    const navigate = vi.fn();
+    mocks.fetchIntegrationConnections.mockResolvedValueOnce({
+      items: [
+        {
+          connectionId: "11111111-1111-1111-1111-111111111111",
+          catalogId: "automation.activepieces",
+          key: "activepieces",
+          label: "Activepieces",
+          kind: "automation",
+          enabled: true,
+          status: "connected",
+          config: {},
+          createdAt: "2026-05-31T10:00:00.000Z",
+          updatedAt: "2026-05-31T10:00:00.000Z",
+        },
+      ],
+    } as any);
+    mocks.fetchExternalSideEffectRuns.mockResolvedValue({
+      items: [
+        {
+          runId: "extfx_failed_before_boundary",
+          workspaceId: "default",
+          boundary: "integration_operator_action",
+          routePath:
+            "external_side_effect:integration_operator_action:automation.activepieces:11111111:trigger_webhook",
+          catalogId: "automation.activepieces",
+          connectionId: "11111111-1111-1111-1111-111111111111",
+          actionId: "trigger_webhook",
+          actorScope: "11111111-1111-1111-1111-111111111111",
+          idempotencyKey: "operator-key",
+          payloadHash: "payload-hash",
+          status: "failed_before_boundary",
+          replayPolicy: "idempotent_external",
+          replayOutcome: "failed_before_boundary",
+          replayAttempt: "new",
+          resumeState: "manual_retry_after_recorded_failure",
+          attemptCount: 1,
+          errorText: "DNS failure before request started",
+          createdAt: "2026-05-31T10:00:00.000Z",
+          updatedAt: "2026-05-31T10:00:03.000Z",
+        },
+      ],
+    } as any);
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderPage("integrations", navigate);
+    });
+    await act(async () => undefined);
+
+    expect(collectText(renderer!.root)).toContain("Failed before boundary");
+    expect(findButton(renderer!.root, "Start replay audit").props.disabled).toBe(false);
+
+    await act(async () => {
+      findButton(renderer!.root, "Start replay audit").props.onClick();
+    });
+    await act(async () => undefined);
+
+    expect(mocks.createExternalSideEffectReplayAuditRun).toHaveBeenCalledWith({
+      workspaceId: "default",
+      requestedBy: "operator",
+      runIds: ["extfx_failed_before_boundary"],
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      limit: 1,
+    });
+    expect(collectText(renderer!.root)).toContain("Replay audit durable run durable-replay-audit-1 created.");
+
+    await act(async () => {
+      findButton(renderer!.root, "Open replay audit").props.onClick();
+    });
+
+    expect(navigate).toHaveBeenCalledWith({
+      area: "ops",
+      section: "sessions",
+      view: "run-detail",
+      runId: "durable-replay-audit-1",
+    });
   });
 
   it("runs Activepieces actions with guided payload, idempotency, and inline evidence", async () => {

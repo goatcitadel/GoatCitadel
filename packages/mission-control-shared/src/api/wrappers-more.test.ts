@@ -149,6 +149,32 @@ describe("additional shared API wrappers", () => {
     });
 
     await expectCall(durable.createDurableRun({ kind: "chat" } as never), "/api/v1/durable/runs", { method: "POST" });
+    await durable.createExternalSideEffectReplayAuditRun({
+      workspaceId: "workspace/1",
+      requestedBy: "operator",
+      requestedAt: "2026-05-31T20:00:00.000Z",
+      runIds: ["extfx/1"],
+    });
+    {
+      const [actualPath, actualInit] = apiMocks.request.mock.calls.at(-1) ?? [];
+      expect(actualPath).toBe("/api/v1/durable/runs");
+      expect(actualInit).toMatchObject({ method: "POST" });
+      expect(JSON.parse(String(actualInit?.body))).toMatchObject({
+        workflowKey: "external_side_effect.replay",
+        payload: {
+          version: "external_side_effect.replay.v1",
+          workspaceId: "workspace/1",
+          requestedBy: "operator",
+          requestedAt: "2026-05-31T20:00:00.000Z",
+          runIds: ["extfx/1"],
+        },
+        metadata: {
+          source: "mission-control.settings.external-side-effects",
+          posture: "replay_audit",
+          sideEffectPosture: "eligibility_check",
+        },
+      });
+    }
     await expectCall(durable.fetchDurableRun("run/1"), "/api/v1/durable/runs/run%2F1");
     await expectCall(durable.fetchObserveRunTrace("run/1"), "/api/v1/observe/runs/run%2F1/trace");
     await expectCall(durable.exportObserveRunTrace("run/1"), "/api/v1/observe/runs/run%2F1/trace/export");

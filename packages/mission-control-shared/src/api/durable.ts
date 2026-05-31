@@ -2,6 +2,7 @@ import type {
   ApprovalRequest,
   ChatStreamUsageRecord,
   DurableCheckpointRecord,
+  ExternalSideEffectReplayWorkflowPayload,
   DurableRunCreateRequest,
   DurableRunRecord,
   DurableRunTimelineEvent,
@@ -158,6 +159,25 @@ export async function createDurableRun(input: DurableRunCreateRequest): Promise<
   return request<DurableRunRecord>("/api/v1/durable/runs", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export async function createExternalSideEffectReplayAuditRun(
+  input: Omit<ExternalSideEffectReplayWorkflowPayload, "version" | "requestedAt"> & { requestedAt?: string },
+): Promise<DurableRunRecord> {
+  const { requestedAt, ...payload } = input;
+  return createDurableRun({
+    workflowKey: "external_side_effect.replay",
+    payload: {
+      version: "external_side_effect.replay.v1",
+      ...payload,
+      requestedAt: requestedAt ?? new Date().toISOString(),
+    },
+    metadata: {
+      source: "mission-control.settings.external-side-effects",
+      posture: "replay_audit",
+      sideEffectPosture: "eligibility_check",
+    },
   });
 }
 

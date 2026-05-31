@@ -69,6 +69,7 @@ import {
   connectMcpServer,
   createChannelSetupDraft,
   createIntegrationConnection,
+  createExternalSideEffectReplayAuditRun,
   createMcpServer,
   createPersonality,
   createLocalOperatorOverride,
@@ -4400,7 +4401,7 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
   );
 }
 
-function IntegrationsSection({ activeWorkspaceId }: SettingsSectionProps) {
+function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionProps) {
   const load = useCallback(async () => {
     const [catalog, connections, plugins, meetStatus, meetSessions, sideEffectRuns] = await Promise.all([
       nativeLoad("Integration catalog", fetchIntegrationCatalog(), { items: [] }),
@@ -4447,6 +4448,8 @@ function IntegrationsSection({ activeWorkspaceId }: SettingsSectionProps) {
   const [diagnostics, setDiagnostics] = useState<ConnectorDiagnosticReport | null>(null);
   const [operatorActionInputs, setOperatorActionInputs] = useState<Record<string, Record<string, unknown>>>({});
   const [operatorActionIdempotencyKeys, setOperatorActionIdempotencyKeys] = useState<Record<string, string>>({});
+  const [replayAuditBusy, setReplayAuditBusy] = useState(false);
+  const [lastReplayAuditRunId, setLastReplayAuditRunId] = useState<string | null>(null);
   const [lastOperatorActionResult, setLastOperatorActionResult] = useState<
     (IntegrationActionInvokeResult & { actionLabel: string }) | null
   >(null);
@@ -4633,6 +4636,33 @@ function IntegrationsSection({ activeWorkspaceId }: SettingsSectionProps) {
     }
   };
 
+  const handleStartReplayAudit = async (run?: ExternalSideEffectRunRecord) => {
+    if (!run) {
+      setNotice({ tone: "warning", message: "Choose a pre-boundary or stale claimed side-effect run first." });
+      return;
+    }
+    setReplayAuditBusy(true);
+    try {
+      const durableRun = await createExternalSideEffectReplayAuditRun({
+        workspaceId: activeWorkspaceId,
+        requestedBy: "operator",
+        runIds: [run.runId],
+        ...(run.connectionId ? { connectionId: run.connectionId } : {}),
+        limit: 1,
+      });
+      setLastReplayAuditRunId(durableRun.runId);
+      setNotice({
+        tone: "success",
+        message: `Replay audit durable run ${durableRun.runId} created. It checks eligibility only; unknown post-boundary outcomes stay manual.`,
+      });
+      await reload();
+    } catch (replayError) {
+      setNotice({ tone: "error", message: getErrorMessage(replayError) });
+    } finally {
+      setReplayAuditBusy(false);
+    }
+  };
+
   return (
     <SettingsSectionShell loading={loading} error={error}>
       {notice ? <SettingsNotice notice={notice} /> : null}
@@ -4744,6 +4774,10 @@ function IntegrationsSection({ activeWorkspaceId }: SettingsSectionProps) {
             <ExternalSideEffectLedgerPanel
               runs={data.sideEffectRuns}
               selectedConnectionId={selectedConnection?.connectionId}
+              busy={replayAuditBusy}
+              onStartReplayAudit={(run) => void handleStartReplayAudit(run)}
+              lastReplayAuditRunId={lastReplayAuditRunId}
+              onOpenReplayAudit={(runId) => navigate({ area: "ops", section: "sessions", view: "run-detail", runId })}
             />
             <GoogleMeetStatusPanel status={data.meetStatus} sessions={data.meetSessions} />
           </SettingsStack>
@@ -5018,9 +5052,17 @@ function PluginTrustPanel({ plugins }: { plugins: IntegrationPluginRecord[] }) {
 function ExternalSideEffectLedgerPanel({
   runs,
   selectedConnectionId,
+  busy,
+  onStartReplayAudit,
+  lastReplayAuditRunId,
+  onOpenReplayAudit,
 }: {
   runs: ExternalSideEffectRunRecord[];
   selectedConnectionId?: string;
+  busy?: boolean;
+  onStartReplayAudit: (run?: ExternalSideEffectRunRecord) => void;
+  lastReplayAuditRunId?: string | null;
+  onOpenReplayAudit: (runId: string) => void;
 }) {
   const selectedConnectionRuns = selectedConnectionId
     ? runs.filter((run) => run.connectionId === selectedConnectionId)
@@ -5033,6 +5075,7 @@ function ExternalSideEffectLedgerPanel({
       run.status === "idempotency_unavailable",
   ).length;
   const visibleRuns = selectedConnectionRuns.length ? selectedConnectionRuns : runs;
+  const replayAuditCandidates = visibleRuns.filter(isExternalSideEffectReplayAuditCandidate);
 
   return (
     <SettingsPanel
@@ -5066,6 +5109,35 @@ function ExternalSideEffectLedgerPanel({
         emptyLabel="No external side-effect run records are available."
         maxHeight="min(34vh, 20rem)"
       />
+      <SettingsButtonRow>
+        <button
+          type="button"
+          className="mc-next-button-secondary"
+          disabled={busy || replayAuditCandidates.length === 0}
+          onClick={() => onStartReplayAudit(replayAuditCandidates[0])}
+        >
+          <RefreshCw size={16} />
+          Start replay audit
+        </button>
+        {lastReplayAuditRunId ? (
+          <button
+            type="button"
+            className="mc-next-button-secondary"
+            onClick={() => onOpenReplayAudit(lastReplayAuditRunId)}
+          >
+            <ExternalLink size={16} />
+            Open replay audit
+          </button>
+        ) : null}
+      </SettingsButtonRow>
+      <SettingsNotice
+        notice={{
+          tone: replayAuditCandidates.length ? "info" : "warning",
+          message: replayAuditCandidates.length
+            ? "Replay audits create a durable eligibility check for pre-boundary or stale claimed-not-sent runs; they do not retry unknown post-boundary outcomes."
+            : "No replay-audit candidates are visible. Started, completed, blocked, and unknown external outcomes remain manual reconciliation.",
+        }}
+      />
       {selectedConnectionId && !selectedConnectionRuns.length && runs.length ? (
         <SettingsNotice
           notice={{
@@ -5076,6 +5148,10 @@ function ExternalSideEffectLedgerPanel({
       ) : null}
     </SettingsPanel>
   );
+}
+
+function isExternalSideEffectReplayAuditCandidate(run: ExternalSideEffectRunRecord): boolean {
+  return run.status === "failed_before_boundary" || run.status === "claimed_not_sent";
 }
 
 function labelForExternalSideEffectStatus(status: ExternalSideEffectRunRecord["status"]): string {
