@@ -213,6 +213,116 @@ describe("integration-action-service", () => {
     );
   });
 
+  it("triggers Activepieces webhooks as one-shot audit-only external writebacks", async () => {
+    const connection = createConnection({
+      catalogId: "automation.activepieces",
+      key: "activepieces",
+      label: "Activepieces",
+      config: {
+        webhookUrl: "https://activepieces.example.test/hooks/flow-1",
+        authToken: "secret-token",
+        defaultFlowId: "flow-1",
+      },
+    });
+    const createEnvelope = vi.fn(() => ({
+      envelopeId: "env-activepieces-1",
+      eventKind: "external_writeback",
+      contentHash: "content-hash",
+      payloadHash: "payload-hash",
+      toolCallHashes: [],
+      memoryLineage: [],
+      signatureStatus: "unsigned_local",
+      metadata: {},
+      createdAt: "2026-04-10T12:00:00.000Z",
+    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ id: "run-1", message: "flow accepted" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const host = createHost(connection, {
+      fetchWithDiagnosticsTimeout: fetchMock,
+      evidenceEnvelopeService: { createEnvelope } as never,
+    });
+
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "trigger_webhook", {
+      input: {
+        payload: '{"message":"Operator approved flow trigger"}',
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "executed",
+      catalogId: "automation.activepieces",
+      actionId: "trigger_webhook",
+      output: {
+        provider: "activepieces",
+        flowId: "flow-1",
+      },
+      durableWriteback: {
+        status: "recorded",
+        replayPolicy: "audit_only",
+        resumable: false,
+        envelopeId: "env-activepieces-1",
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://activepieces.example.test/hooks/flow-1",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          authorization: "Bearer secret-token",
+        }),
+      }),
+    );
+    const requestBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+    expect(requestBody).toMatchObject({
+      source: "goatcitadel",
+      checkedAt: expect.any(String),
+      flowId: "flow-1",
+      payload: {
+        message: "Operator approved flow trigger",
+      },
+    });
+    expect(createEnvelope).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventKind: "external_writeback",
+        metadata: expect.objectContaining({
+          catalogId: "automation.activepieces",
+          integrationKey: "activepieces",
+          actionId: "trigger_webhook",
+          replayPolicy: "audit_only",
+          resumable: false,
+          externalReferenceId: "id:run-1",
+        }),
+      }),
+    );
+  });
+
+  it("blocks Activepieces webhook triggers until a webhook URL is configured", async () => {
+    const connection = createConnection({
+      catalogId: "automation.activepieces",
+      key: "activepieces",
+      label: "Activepieces",
+    });
+    const host = createHost(connection);
+
+    const result = await invokeIntegrationConnectionAction(host, connection.connectionId, "trigger_webhook");
+
+    expect(result).toMatchObject({
+      status: "blocked",
+      blockedReason: "activepieces_webhook_missing",
+      durableWriteback: {
+        status: "unavailable",
+        replayPolicy: "audit_only",
+        resumable: false,
+      },
+    });
+    expect(host.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+  });
+
   it("falls back between local bridge endpoints and reports the final bridge failure context", async () => {
     const connection = createConnection({
       config: {

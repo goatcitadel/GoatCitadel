@@ -481,6 +481,30 @@ const FORM_SCHEMA_OVERRIDES: Record<string, IntegrationFormSchema> = {
       bool("enabled", "Enabled", true),
     ],
   },
+  "automation.activepieces": {
+    catalogId: "automation.activepieces",
+    title: "Activepieces Bridge",
+    description: "Configure an Activepieces webhook trigger for explicit operator-run automation flows.",
+    allowAdvancedJson: true,
+    fields: [
+      text("label", "Connection Label", { defaultValue: "Activepieces" }),
+      url("webhookUrl", "Webhook URL", {
+        placeholder: "https://cloud.activepieces.com/api/v1/webhooks/...",
+        required: true,
+        secretRef: true,
+      }),
+      text("authTokenEnv", "Bearer Token ENV Var", {
+        placeholder: "ACTIVEPIECES_WEBHOOK_TOKEN",
+        secretRef: true,
+        advanced: true,
+      }),
+      text("defaultFlowId", "Default Flow ID", {
+        placeholder: "flow-id",
+        advanced: true,
+      }),
+      bool("enabled", "Enabled", true),
+    ],
+  },
   "automation.gmail": {
     catalogId: "automation.gmail",
     title: "Gmail Connection",
@@ -1089,6 +1113,15 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "native",
     ["token"],
     ["events", "automation"],
+  ),
+  entry(
+    "automation",
+    "activepieces",
+    "Activepieces",
+    "Activepieces webhook bridge for explicit operator-run flows.",
+    "beta",
+    ["webhook"],
+    ["trigger"],
   ),
   entry("automation", "weather", "Weather", "Weather data integration.", "native", ["none"], ["data"]),
   entry(

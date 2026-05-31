@@ -113,6 +113,24 @@ const OPERATOR_ACTIONS_BY_CATALOG_ID: Record<string, IntegrationOperatorAction[]
       ]),
     ),
   ],
+  "automation.activepieces": [
+    action(
+      "trigger_webhook",
+      "Trigger Flow",
+      "Trigger a configured Activepieces webhook flow with an explicit operator payload.",
+      "write",
+      formSchema("action:automation.activepieces.trigger_webhook", "Trigger Activepieces flow", [
+        text("flowId", "Flow ID", {
+          placeholder: "Optional flow identifier for evidence",
+          advanced: true,
+        }),
+        textarea("payload", "Payload", {
+          placeholder: '{"message":"Operator approved flow trigger"}',
+          required: true,
+        }),
+      ]),
+    ),
+  ],
   "automation.gmail": [
     action(
       "read",

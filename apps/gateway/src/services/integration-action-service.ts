@@ -44,6 +44,8 @@ export async function invokeIntegrationConnectionAction(
     result = await invokeTrelloAction(host, connection, actionId, request, checkedAt);
   } else if (connection.catalogId === "automation.gmail") {
     result = await invokeGmailAction(host, connection, actionId, request, checkedAt);
+  } else if (connection.catalogId === "automation.activepieces") {
+    result = await invokeActivepiecesAction(host, connection, actionId, request, checkedAt);
   } else if (connection.catalogId === "automation.gif-search") {
     result = await invokeGifSearchAction(host, connection, actionId, request, checkedAt);
   } else {
@@ -145,6 +147,82 @@ async function invokeLocalBridgeAction(
     message: lastFailure ?? "The configured local bridge did not accept the action request.",
     output: {
       bridgeUrl,
+    },
+    checkedAt,
+  };
+}
+
+async function invokeActivepiecesAction(
+  host: IntegrationActionHost,
+  connection: IntegrationConnection,
+  actionId: string,
+  request: IntegrationActionInvokeInput,
+  checkedAt: string,
+): Promise<IntegrationActionInvokeResult> {
+  if (actionId !== "trigger_webhook") {
+    return blocked(
+      connection,
+      actionId,
+      checkedAt,
+      `Unsupported Activepieces operator action: ${actionId}.`,
+      "action_unsupported",
+    );
+  }
+  const webhookUrl = host.readConnectionConfigValue(connection.config, "webhookUrl");
+  if (!webhookUrl) {
+    return blocked(
+      connection,
+      actionId,
+      checkedAt,
+      "Configure an Activepieces webhook URL before triggering a flow.",
+      "activepieces_webhook_missing",
+    );
+  }
+  const target = parseHttpUrl(webhookUrl, "Activepieces webhook URL");
+  const authHeader = resolveBearerAuth(host, connection.config);
+  const flowId =
+    readStringInput(request.input, "flowId") ?? host.readConnectionConfigValue(connection.config, "defaultFlowId");
+  const payload = readActivepiecesPayload(request.input);
+  const response = await host.fetchWithDiagnosticsTimeout(target, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(authHeader ? { authorization: authHeader } : {}),
+    },
+    body: JSON.stringify({
+      source: "goatcitadel",
+      checkedAt,
+      ...(flowId ? { flowId } : {}),
+      payload,
+    }),
+  });
+  const parsed = await parseResponse(response);
+  if (!response.ok) {
+    return failed(
+      connection,
+      actionId,
+      checkedAt,
+      parsed.message ?? `Activepieces webhook trigger failed (${response.status}).`,
+      {
+        provider: "activepieces",
+        ...(flowId ? { flowId } : {}),
+      },
+    );
+  }
+  const responseOutput = isRecord(parsed.output) ? parsed.output : undefined;
+  const responseId =
+    typeof responseOutput?.id === "string" && responseOutput.id.trim() ? responseOutput.id.trim() : undefined;
+  return {
+    connectionId: connection.connectionId,
+    catalogId: connection.catalogId,
+    actionId,
+    status: "executed",
+    message: parsed.message ?? "Triggered the configured Activepieces webhook flow.",
+    output: {
+      provider: "activepieces",
+      ...(flowId ? { flowId } : {}),
+      ...(responseId ? { id: responseId } : {}),
+      response: responseOutput ?? parsed.output,
     },
     checkedAt,
   };
@@ -539,6 +617,40 @@ async function parseResponse(
 function readStringInput(input: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = input?.[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readActivepiecesPayload(input: Record<string, unknown> | undefined): Record<string, unknown> {
+  const payload = input?.payload;
+  if (isRecord(payload)) {
+    return payload;
+  }
+  if (typeof payload === "string" && payload.trim()) {
+    try {
+      const parsed = JSON.parse(payload) as unknown;
+      if (isRecord(parsed)) {
+        return parsed;
+      }
+    } catch {
+      return { text: payload.trim() };
+    }
+    return { text: payload.trim() };
+  }
+  const fallback = { ...(input ?? {}) };
+  delete fallback.flowId;
+  delete fallback.payload;
+  return fallback;
+}
+
+function parseHttpUrl(value: string, label: string): string {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      throw new Error("unsupported protocol");
+    }
+    return parsed.toString();
+  } catch {
+    throw new Error(`${label} must be an http or https URL.`);
+  }
 }
 
 function buildTenorUrl(apiKey: string, query: string, locale: string): string {

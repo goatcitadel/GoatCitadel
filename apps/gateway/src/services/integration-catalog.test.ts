@@ -276,6 +276,7 @@ describe("integration-catalog", () => {
       "productivity.bear",
       "productivity.trello",
       "automation.gmail",
+      "automation.activepieces",
       "automation.gif-search",
       "automation.peekaboo-screen",
       "automation.camera-photo-video",
