@@ -367,6 +367,18 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  fastify.get("/api/v1/llm/eval-proof/export", async (request, reply) => {
+    const parsed = evalProofQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(fastify.services.llm.exportLlmEvalProofRuns(parsed.data.limit));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
+  });
+
   fastify.post("/api/v1/llm/eval-proof", async (request, reply) => {
     const parsed = evalProofRunSchema.safeParse(request.body);
     if (!parsed.success) {

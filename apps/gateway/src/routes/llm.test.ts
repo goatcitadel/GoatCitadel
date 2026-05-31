@@ -422,6 +422,21 @@ describe("llm routes", () => {
       generatedAt: "2026-05-29T00:00:00.000Z",
       items: [{ runId: "proof-1", status: "completed" }],
     }));
+    const exportLlmEvalProofRuns = vi.fn(() => ({
+      version: "llm.eval_proof_export.v1",
+      generatedAt: "2026-05-29T00:00:00.000Z",
+      format: "json",
+      contentType: "application/json",
+      filename: "goatcitadel-llm-eval-proof.json",
+      sourceEndpoint: "/api/v1/llm/eval-proof?limit=2",
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "audit_only",
+        note: "read-only",
+      },
+      runs: [{ runId: "proof-1", status: "completed" }],
+      content: "{}",
+    }));
     const runLlmEvalProof = vi.fn(() => ({
       generatedAt: "2026-05-29T00:00:00.000Z",
       run: { runId: "proof-2", status: "completed", results: [] },
@@ -439,6 +454,7 @@ describe("llm routes", () => {
         listLlmRuntimeMeasurements,
         listLlmLocalEngines,
         listLlmEvalProofRuns,
+        exportLlmEvalProofRuns,
         runLlmEvalProof,
       },
     } as never);
@@ -450,6 +466,7 @@ describe("llm routes", () => {
     });
     const engines = await app.inject({ method: "GET", url: "/api/v1/llm/local-engines" });
     const proofRuns = await app.inject({ method: "GET", url: "/api/v1/llm/eval-proof?limit=2" });
+    const proofExport = await app.inject({ method: "GET", url: "/api/v1/llm/eval-proof/export?limit=2" });
     const proofRun = await app.inject({
       method: "POST",
       url: "/api/v1/llm/eval-proof",
@@ -463,6 +480,12 @@ describe("llm routes", () => {
     expect(listLlmLocalEngines).toHaveBeenCalledTimes(1);
     expect(proofRuns.statusCode).toBe(200);
     expect(listLlmEvalProofRuns).toHaveBeenCalledWith(2);
+    expect(proofExport.statusCode).toBe(200);
+    expect(exportLlmEvalProofRuns).toHaveBeenCalledWith(2);
+    expect(proofExport.json()).toMatchObject({
+      version: "llm.eval_proof_export.v1",
+      posture: { readOnly: true, sideEffectPosture: "audit_only" },
+    });
     expect(proofRun.statusCode).toBe(200);
     expect(runLlmEvalProof).toHaveBeenCalledWith({
       prompt: "compare",

@@ -1,6 +1,11 @@
-import { BarChart3 } from "lucide-react";
+import { useState } from "react";
+import { BarChart3, ClipboardCopy } from "lucide-react";
 import type { LlmEvalProofRunRecord, PromptPackRecord } from "@goatcitadel/contracts";
-import { fetchLlmEvalProofRuns, fetchPromptPacks } from "@goatcitadel/mission-control-shared/api/client";
+import {
+  exportLlmEvalProofRuns,
+  fetchLlmEvalProofRuns,
+  fetchPromptPacks,
+} from "@goatcitadel/mission-control-shared/api/client";
 import { NativeCard, NativeGrid, NativeList, NativePageFrame } from "../NativeRoutePageLayout";
 import { EmptyState, StatusChip } from "../primitives";
 import { formatDateTime, nativeLoad, nativeLoadIssues, useAsyncLoad } from "../shared/native-helpers";
@@ -8,6 +13,9 @@ import { LibraryLoadWarnings, LibraryMetricGrid } from "../shared/library-primit
 import type { NativeRoutePagesProps } from "../types";
 
 export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route }: NativeRoutePagesProps) {
+  const [exporting, setExporting] = useState(false);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const { loading, error, data, reload } = useAsyncLoad(async () => {
     const [packs, evalRuns] = await Promise.all([
       nativeLoad("Prompt packs", fetchPromptPacks(200), { items: [] as PromptPackRecord[] }),
@@ -29,6 +37,26 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
   const latestEval = evalRuns[0];
   const paretoModels = evalRuns.flatMap((run) => run.results.filter((result) => result.paretoOptimal));
 
+  const copyEvalProofExport = async () => {
+    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+      setExportError("Clipboard export is not available in this environment.");
+      setExportNotice(null);
+      return;
+    }
+    setExporting(true);
+    setExportError(null);
+    setExportNotice(null);
+    try {
+      const exported = await exportLlmEvalProofRuns(50);
+      await navigator.clipboard.writeText(exported.content);
+      setExportNotice(`Copied eval proof export ${exported.filename}.`);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <NativePageFrame
       area="ops"
@@ -45,13 +73,26 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
         { label: "Pareto models", value: String(paretoModels.length) },
       ]}
       actions={
-        <button type="button" className="mc-next-secondary-button" onClick={() => void reload()}>
-          <BarChart3 className="h-4 w-4" />
-          Refresh
-        </button>
+        <>
+          <button
+            type="button"
+            className="mc-next-secondary-button"
+            onClick={() => void copyEvalProofExport()}
+            disabled={exporting}
+          >
+            <ClipboardCopy className="h-4 w-4" />
+            {exporting ? "Exporting..." : "Copy eval proof export"}
+          </button>
+          <button type="button" className="mc-next-secondary-button" onClick={() => void reload()}>
+            <BarChart3 className="h-4 w-4" />
+            Refresh
+          </button>
+        </>
       }
     >
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
+      {exportNotice ? <div className="mc-next-runtime-notice tone-success">{exportNotice}</div> : null}
+      {exportError ? <div className="mc-next-directory-alert">{exportError}</div> : null}
       <NativeGrid>
         <NativeCard
           title="Quality gates"
@@ -140,6 +181,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
           <div className="mc-next-approvals-chip-row">
             <StatusChip tone="success">Prompt-pack report export</StatusChip>
             <StatusChip tone="success">Run trace JSON export</StatusChip>
+            <StatusChip tone="success">Eval proof JSON export</StatusChip>
             <StatusChip tone="muted">Audit-only</StatusChip>
           </div>
           <NativeList
@@ -149,6 +191,11 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
                 title: "Prompt-pack report",
                 meta: "Library · Prompt Packs",
                 body: "Exports the stored report and snapshot path from the prompt-pack workbench.",
+              },
+              {
+                title: "Eval proof JSON",
+                meta: "Ops · Quality",
+                body: "Copies stored runtime measurement and operator quality-score evidence without calling providers.",
               },
               {
                 title: "Run trace JSON",

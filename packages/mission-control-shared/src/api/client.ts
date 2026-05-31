@@ -748,6 +748,7 @@ export {
   deleteOpenAICodexOAuthCredential,
   createAssemblyRun,
   deleteProviderSecret,
+  exportLlmEvalProofRuns,
   evaluateUiChangeRisk,
   cancelLlamaCppHuggingFaceDownload,
   fetchCapabilityPackPreview,

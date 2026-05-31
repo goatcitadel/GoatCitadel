@@ -118,6 +118,21 @@ describe("LlmRuntimeTruthService", () => {
     expect(proof.run.results.find((item) => item.providerId === "ollama")?.paretoOptimal).toBe(true);
     expect(proof.run.results.find((item) => item.providerId === "remote")?.paretoOptimal).toBe(false);
     expect(proof.run.warnings.join(" ")).toContain("does not call providers");
+
+    const exported = service.exportEvalProofRuns(5);
+    expect(exported).toMatchObject({
+      version: "llm.eval_proof_export.v1",
+      format: "json",
+      contentType: "application/json",
+      sourceEndpoint: "/api/v1/llm/eval-proof?limit=5",
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "audit_only",
+      },
+      runs: [expect.objectContaining({ runId: proof.run.runId })],
+    });
+    expect(exported.content).toContain('"version": "llm.eval_proof_export.v1"');
+    expect(exported.content).toContain("does not call providers");
   });
 
   it("infers known local engine kinds conservatively", () => {

@@ -637,6 +637,7 @@ describe("shared API wrappers", () => {
     );
     await expectCall(platform.fetchLlmLocalEngines(), "/api/v1/llm/local-engines");
     await expectCall(platform.fetchLlmEvalProofRuns(999), "/api/v1/llm/eval-proof?limit=200");
+    await expectCall(platform.exportLlmEvalProofRuns(999), "/api/v1/llm/eval-proof/export?limit=200");
     await expectCall(platform.runLlmEvalProof({ prompt: "compare" }), "/api/v1/llm/eval-proof", {
       method: "POST",
     });

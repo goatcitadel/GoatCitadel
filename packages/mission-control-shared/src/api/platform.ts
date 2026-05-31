@@ -28,6 +28,7 @@ import type {
   LlmEvalProofRunRequest,
   LlmEvalProofRunResponse,
   LlmEvalProofRunsResponse,
+  LlmEvalProofExportResponse,
   LlmLocalEngineCatalogResponse,
   LlmProviderAdviceRequest,
   LlmProviderAdviceResponse,
@@ -379,6 +380,12 @@ export async function fetchLlmLocalEngines(): Promise<LlmLocalEngineCatalogRespo
 
 export async function fetchLlmEvalProofRuns(limit = 20): Promise<LlmEvalProofRunsResponse> {
   return request<LlmEvalProofRunsResponse>(`/api/v1/llm/eval-proof?limit=${Math.max(1, Math.min(limit, 200))}`);
+}
+
+export async function exportLlmEvalProofRuns(limit = 20): Promise<LlmEvalProofExportResponse> {
+  return request<LlmEvalProofExportResponse>(
+    `/api/v1/llm/eval-proof/export?limit=${Math.max(1, Math.min(limit, 200))}`,
+  );
 }
 
 export async function runLlmEvalProof(input: LlmEvalProofRunRequest): Promise<LlmEvalProofRunResponse> {

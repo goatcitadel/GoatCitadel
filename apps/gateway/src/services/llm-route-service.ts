@@ -6,6 +6,7 @@ export const llmRouteMethods = [
   "getLlmConfigWithDetails",
   "getOpenAICodexOAuthStatus",
   "getProviderAdvice",
+  "exportLlmEvalProofRuns",
   "listLlmEvalProofRuns",
   "listLlmLocalEngines",
   "listLlmModels",

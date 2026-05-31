@@ -3,6 +3,7 @@ import type {
   ChatCompletionResponse,
   LlmEvalProofCandidate,
   LlmEvalProofCandidateResult,
+  LlmEvalProofExportResponse,
   LlmEvalProofRunRecord,
   LlmEvalProofRunRequest,
   LlmEvalProofRunResponse,
@@ -150,6 +151,29 @@ export class LlmRuntimeTruthService {
     return {
       generatedAt: new Date().toISOString(),
       items: this.storage.llmEvalProofRuns.list(limit),
+    };
+  }
+
+  public exportEvalProofRuns(limit = 20): LlmEvalProofExportResponse {
+    const generatedAt = new Date().toISOString();
+    const runs = this.storage.llmEvalProofRuns.list(limit);
+    const payload = {
+      version: "llm.eval_proof_export.v1" as const,
+      generatedAt,
+      sourceEndpoint: `/api/v1/llm/eval-proof?limit=${limit}`,
+      runs,
+      posture: {
+        readOnly: true as const,
+        sideEffectPosture: "audit_only" as const,
+        note: "Eval proof export uses stored runtime measurements and operator quality scores; it does not call providers.",
+      },
+    };
+    return {
+      ...payload,
+      format: "json",
+      contentType: "application/json",
+      filename: `goatcitadel-llm-eval-proof-${generatedAt.replace(/[:.]/g, "-")}.json`,
+      content: JSON.stringify(payload, null, 2),
     };
   }
 

@@ -27,6 +27,21 @@ const mocks = vi.hoisted(() => ({
         : [],
   })),
   fetchAgenticRuns: vi.fn(async () => ({ items: [] })),
+  exportLlmEvalProofRuns: vi.fn(async () => ({
+    version: "llm.eval_proof_export.v1",
+    generatedAt: "2026-05-02T20:05:00.000Z",
+    format: "json",
+    contentType: "application/json",
+    filename: "goatcitadel-llm-eval-proof-2026-05-02T20-05-00-000Z.json",
+    sourceEndpoint: "/api/v1/llm/eval-proof?limit=50",
+    posture: {
+      readOnly: true,
+      sideEffectPosture: "audit_only",
+      note: "read-only",
+    },
+    runs: [],
+    content: '{"version":"llm.eval_proof_export.v1"}',
+  })),
   fetchLlmEvalProofRuns: vi.fn(async () => ({
     generatedAt: "2026-05-02T20:00:00.000Z",
     items: [
@@ -274,6 +289,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     addTaskDeliverable: mocks.addTaskDeliverable,
     createTask: mocks.createTask,
     deleteTask: mocks.deleteTask,
+    exportLlmEvalProofRuns: mocks.exportLlmEvalProofRuns,
     fetchOperators: mocks.fetchOperators,
     fetchLlmEvalProofRuns: mocks.fetchLlmEvalProofRuns,
     fetchPromptPacks: mocks.fetchPromptPacks,
@@ -431,6 +447,12 @@ describe("NativeRoutePages Ops quality dashboard", () => {
   it("renders prompt-pack, eval proof, and export posture without redirecting to Library", async () => {
     let renderer: ReactTestRenderer | null = null;
     const navigate = vi.fn();
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: vi.fn().mockResolvedValue(undefined),
+      },
+    });
 
     await act(async () => {
       renderer = renderOpsQuality(navigate);
@@ -444,7 +466,19 @@ describe("NativeRoutePages Ops quality dashboard", () => {
     expect(text).toContain("Quality Dashboard");
     expect(text).toContain("Security Red Team");
     expect(text).toContain("Eval proof");
+    expect(text).toContain("Eval proof JSON export");
     expect(text).toContain("Run trace JSON");
+
+    await act(async () => {
+      findButton(renderer!.root, "Copy eval proof export").props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mocks.exportLlmEvalProofRuns).toHaveBeenCalledWith(50);
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('{"version":"llm.eval_proof_export.v1"}');
+    expect(collectText(renderer!.root)).toContain(
+      "Copied eval proof export goatcitadel-llm-eval-proof-2026-05-02T20-05-00-000Z.json.",
+    );
 
     await act(async () => {
       findButton(renderer!.root, "Open prompt packs").props.onClick();

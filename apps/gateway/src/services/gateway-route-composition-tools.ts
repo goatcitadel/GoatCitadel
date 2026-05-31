@@ -59,6 +59,7 @@ export function composeToolsMcpRouteDependencies(
           latestMeasurement: (providerId, model) => llmRuntimeTruth.latestMeasurement(providerId, model),
           inferEngineKind: inferRuntimeEngineKind,
         }),
+      exportLlmEvalProofRuns: (limit) => llmRuntimeTruth.exportEvalProofRuns(limit),
       listLlmEvalProofRuns: (limit) => llmRuntimeTruth.listEvalProofRuns(limit),
       listLlmLocalEngines: () => llmRuntimeTruth.listLocalEngines(),
       listLlmModels: (providerId) => gateway.llmService.listModelsWithSource(providerId),

@@ -384,6 +384,22 @@ export interface LlmEvalProofRunsResponse {
   items: LlmEvalProofRunRecord[];
 }
 
+export interface LlmEvalProofExportResponse {
+  version: "llm.eval_proof_export.v1";
+  generatedAt: string;
+  format: "json";
+  contentType: "application/json";
+  filename: string;
+  sourceEndpoint: string;
+  posture: {
+    readOnly: true;
+    sideEffectPosture: "audit_only";
+    note: string;
+  };
+  runs: LlmEvalProofRunRecord[];
+  content: string;
+}
+
 export interface LlmProviderAdviceCandidate {
   providerId: string;
   providerLabel: string;
