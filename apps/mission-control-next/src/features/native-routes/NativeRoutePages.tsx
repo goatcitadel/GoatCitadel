@@ -6,6 +6,7 @@ import { MemoryRoutePage } from "./library/MemoryRoutePage";
 import { ApprovalsRoutePage } from "./ops/ApprovalsRoutePage";
 import { BrowserSessionsRoutePage } from "./ops/BrowserSessionsRoutePage";
 import { KanbanRoutePage } from "./ops/KanbanRoutePage";
+import { QualityDashboardRoutePage } from "./ops/QualityDashboardRoutePage";
 import { RunDetailRoutePage } from "./ops/RunDetailRoutePage";
 import { RuntimeRoutePage } from "./ops/RuntimeRoutePage";
 import { ProjectsRoutePage } from "./projects/ProjectsRoutePage";
@@ -73,6 +74,9 @@ export function NativeRoutePages(props: NativeRoutePagesProps) {
     }
     if (section === "kanban") {
       return <KanbanRoutePage {...props} />;
+    }
+    if (section === "quality") {
+      return <QualityDashboardRoutePage {...props} />;
     }
     return <RuntimeRoutePage {...props} />;
   }

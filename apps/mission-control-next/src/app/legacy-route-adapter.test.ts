@@ -39,9 +39,7 @@ describe("legacy route adapter", () => {
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=observe&page=artifacts&tab=files")).toBe(
       "/library/files",
     );
-    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=observe&page=quality")).toBe(
-      "/library/prompt-packs",
-    );
+    expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=observe&page=quality")).toBe("/ops/quality");
     expect(coerceLegacyHrefToNext("http://goatcitadel.local/?space=observe&page=activity&tab=scheduler")).toBe(
       "/ops/schedules",
     );
@@ -363,7 +361,7 @@ describe("mission-control-next route model", () => {
     expect(ROUTE_RELEASE_SCOPE.map((scope) => scope.status)).not.toContain(
       "needs_release_polish" satisfies ReleaseSurfaceStatus,
     );
-    expect(ROUTE_RELEASE_SCOPE.filter((scope) => scope.status === "ship")).toHaveLength(35);
+    expect(ROUTE_RELEASE_SCOPE.filter((scope) => scope.status === "ship")).toHaveLength(36);
     expect(ROUTE_RELEASE_SCOPE.filter((scope) => scope.status === "experimental")).toHaveLength(5);
     expect(describeReleaseScopeForOperator(getRouteReleaseScope({ area: "settings", section: "providers" }))).toBe(
       "Release-ready. Action: Configure provider credentials and run provider/model smoke evidence. Verification: verify:surface:regression, provider exercise paths. Constraint: Provider setup is release-bearing with smoke evidence, model discovery state, and plain failure copy.",

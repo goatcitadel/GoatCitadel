@@ -75,7 +75,7 @@ export function adaptLegacyUrl(input: string | URL): AppRoute | null {
   }
 
   if (space === "observe" && page === "quality") {
-    return normalizeAppRoute({ area: "library", section: "prompt-packs", ...ids });
+    return normalizeAppRoute({ area: "ops", section: "quality", ...ids });
   }
 
   if (space === "configure" && page === "settings") {

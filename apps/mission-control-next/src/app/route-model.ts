@@ -19,6 +19,7 @@ export type OpsSection =
   | "notifications"
   | "approvals"
   | "costs"
+  | "quality"
   | "runtime"
   | "diagnostics"
   | "kanban";
@@ -353,6 +354,13 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       section: "costs",
     },
     {
+      id: "ops-quality",
+      label: "Quality",
+      description: "Eval proof, prompt-pack gates, and export posture.",
+      area: "ops",
+      section: "quality",
+    },
+    {
       id: "ops-runtime",
       label: "Runtime",
       description: "Gateway health, daemon posture, host vitals, and backups.",
@@ -663,6 +671,14 @@ export const ROUTE_RELEASE_SCOPE = [
   },
   {
     area: "ops",
+    section: "quality",
+    status: "ship",
+    releaseAction: "Inspect eval proof, prompt-pack gate posture, and read-only trace/report export paths.",
+    verification: "verify:surface:regression, prompt:gates",
+    note: "Quality is release-bearing as an evidence dashboard and does not replace prompt-pack review or named verification lanes.",
+  },
+  {
+    area: "ops",
     section: "runtime",
     status: "ship",
     releaseAction: "Inspect gateway health, daemon posture, host vitals, and backup state.",
@@ -869,9 +885,8 @@ export function parseAppRoute(input: string | URL): AppRoute {
   const params = url.searchParams;
   const area = (parts[0] as PrimaryArea | undefined) ?? "chat";
   const normalizedArea = isPrimaryArea(area) ? area : "chat";
-  const normalizedSection = area === "settings" && parts[1] === "safety" ? "permissions" : parts[1];
-  const routeArea = normalizedArea === "ops" && normalizedSection === "quality" ? "library" : normalizedArea;
-  const routeSection = normalizedArea === "ops" && normalizedSection === "quality" ? "prompt-packs" : normalizedSection;
+  const routeArea = normalizedArea;
+  const routeSection = area === "settings" && parts[1] === "safety" ? "permissions" : parts[1];
   const nextRoute: AppRoute = normalizeAppRoute({
     area: routeArea,
     section: routeArea === "projects" ? undefined : (routeSection as AppRoute["section"]),

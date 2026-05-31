@@ -102,6 +102,18 @@ describe("ops/kanban route", () => {
   });
 });
 
+describe("ops/quality route", () => {
+  it("parses /ops/quality as the native Ops quality dashboard", () => {
+    const route = parseAppRoute("/ops/quality");
+    expect(route.area).toBe("ops");
+    expect(route.section).toBe("quality");
+    expect(buildAppHref(route)).toBe("/ops/quality");
+    expect(RAIL_ITEMS.ops.find((item) => item.id === "ops-quality")?.section).toBe("quality");
+    expect(getRouteLabel(route)).toBe("Quality");
+    expect(getRouteReleaseScope(route).status).toBe("ship");
+  });
+});
+
 describe("library/curator route", () => {
   it("parses /library/curator and exposes it in the Library rail", () => {
     const route = parseAppRoute("/library/curator");

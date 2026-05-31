@@ -27,7 +27,43 @@ const mocks = vi.hoisted(() => ({
         : [],
   })),
   fetchAgenticRuns: vi.fn(async () => ({ items: [] })),
+  fetchLlmEvalProofRuns: vi.fn(async () => ({
+    generatedAt: "2026-05-02T20:00:00.000Z",
+    items: [
+      {
+        runId: "eval-proof-1",
+        promptHash: "abcdef1234567890",
+        status: "completed",
+        createdAt: "2026-05-02T19:00:00.000Z",
+        candidates: [{ providerId: "openai", model: "gpt-5", qualityScore: 0.91 }],
+        results: [
+          {
+            providerId: "openai",
+            model: "gpt-5",
+            qualityScore: 0.91,
+            measurementSource: "live",
+            qualityScoreSource: "operator",
+            latencyMs: 1200,
+            estimatedCostUsd: 0.04,
+            paretoOptimal: true,
+            notes: ["strong quality frontier"],
+          },
+        ],
+        warnings: [],
+      },
+    ],
+  })),
   fetchOperators: vi.fn(async () => ({ items: [] })),
+  fetchPromptPacks: vi.fn(async () => ({
+    items: [
+      {
+        packId: "pack-1",
+        name: "Security Red Team",
+        testCount: 18,
+        sourceLabel: "goatcitadel_prompt_pack_v6_security_red_team.md",
+      },
+    ],
+  })),
   fetchTaskDeliverables: vi.fn(async () => ({ items: [] })),
   createTask: vi.fn(async () => ({
     taskId: "task-2",
@@ -239,6 +275,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     createTask: mocks.createTask,
     deleteTask: mocks.deleteTask,
     fetchOperators: mocks.fetchOperators,
+    fetchLlmEvalProofRuns: mocks.fetchLlmEvalProofRuns,
+    fetchPromptPacks: mocks.fetchPromptPacks,
     fetchChatGeneratedArtifacts: mocks.fetchChatGeneratedArtifacts,
     fetchAgenticRuns: mocks.fetchAgenticRuns,
     fetchTaskDeliverables: mocks.fetchTaskDeliverables,
@@ -386,6 +424,32 @@ describe("NativeRoutePages Cowork task board", () => {
     });
 
     expect(mocks.restoreTask).toHaveBeenCalledWith("task-1", "default");
+  });
+});
+
+describe("NativeRoutePages Ops quality dashboard", () => {
+  it("renders prompt-pack, eval proof, and export posture without redirecting to Library", async () => {
+    let renderer: ReactTestRenderer | null = null;
+    const navigate = vi.fn();
+
+    await act(async () => {
+      renderer = renderOpsQuality(navigate);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const text = collectText(renderer!.root);
+    expect(mocks.fetchPromptPacks).toHaveBeenCalledWith(200);
+    expect(mocks.fetchLlmEvalProofRuns).toHaveBeenCalledWith(25);
+    expect(text).toContain("Quality Dashboard");
+    expect(text).toContain("Security Red Team");
+    expect(text).toContain("Eval proof");
+    expect(text).toContain("Run trace JSON");
+
+    await act(async () => {
+      findButton(renderer!.root, "Open prompt packs").props.onClick();
+    });
+    expect(navigate).toHaveBeenCalledWith({ area: "library", section: "prompt-packs", theme: "ops" });
   });
 });
 
@@ -594,6 +658,19 @@ function renderLibraryArtifacts(navigate = vi.fn()): ReactTestRenderer {
   return create(
     <NativeRoutePages
       route={{ area: "library", section: "artifacts", artifactId: "artifact-1", theme: "ops" } as any}
+      activeWorkspaceId="default"
+      activeWorkspaceName="Default"
+      pendingApprovals={0}
+      navigate={navigate}
+      setActiveWorkspaceId={vi.fn()}
+    />,
+  );
+}
+
+function renderOpsQuality(navigate = vi.fn()): ReactTestRenderer {
+  return create(
+    <NativeRoutePages
+      route={{ area: "ops", section: "quality", theme: "ops" } as any}
       activeWorkspaceId="default"
       activeWorkspaceName="Default"
       pendingApprovals={0}

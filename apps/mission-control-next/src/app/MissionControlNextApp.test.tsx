@@ -767,8 +767,8 @@ describe("MissionControlNextApp", () => {
     expect(JSON.stringify(workspaceRenderer.toJSON())).toContain("Native settings/access");
     workspaceRenderer.unmount();
 
-    const redirectRenderer = await renderApp("http://localhost:5173/ops/quality?sessionId=session-1&theme=light");
-    expect(window.location.pathname).toBe("/library/prompt-packs");
-    expect(JSON.stringify(redirectRenderer.toJSON())).toContain("Prompt packs library");
+    const qualityRenderer = await renderApp("http://localhost:5173/ops/quality?sessionId=session-1&theme=light");
+    expect(window.location.pathname).toBe("/ops/quality");
+    expect(JSON.stringify(qualityRenderer.toJSON())).toContain("Native ops/quality");
   });
 });

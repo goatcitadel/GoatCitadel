@@ -411,24 +411,6 @@ export function MissionControlNextApp() {
   }, []);
 
   useEffect(() => {
-    if (window.location.pathname.toLowerCase() === "/ops/quality") {
-      navigate(
-        {
-          area: "library",
-          section: "prompt-packs",
-          sessionId: route.sessionId,
-          turnId: route.turnId,
-          artifactId: route.artifactId,
-          approvalId: route.approvalId,
-          view: route.view,
-          theme: route.theme,
-        },
-        { replace: true },
-      );
-    }
-  }, [navigate, route]);
-
-  useEffect(() => {
     if (route.area === "chat" || route.area === "cowork" || route.area === "code") {
       void preloadThreadedSurfaceRoute();
     }

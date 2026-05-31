@@ -87,6 +87,7 @@ export const NEXT_RELEASE_SURFACE_STATUS_BY_SLUG = {
   "ops-notifications": "ship",
   "ops-approvals": "ship",
   "ops-costs": "ship",
+  "ops-quality": "ship",
   "ops-runtime": "ship",
   "ops-diagnostics": "ship",
   "ops-kanban": "experimental",
@@ -282,6 +283,14 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
     readyText: "Costs",
     expectedArea: "ops",
     expectedSection: "costs",
+    interaction: "open-inspector",
+  },
+  {
+    slug: "ops-quality",
+    href: "/ops/quality",
+    readyText: "Quality Dashboard",
+    expectedArea: "ops",
+    expectedSection: "quality",
     interaction: "open-inspector",
   },
   {
@@ -508,7 +517,7 @@ export const NEXT_LEGACY_REDIRECT_MANIFEST = [
   {
     slug: "legacy-space-quality",
     href: "/?space=observe&page=quality",
-    expectedPath: "/library/prompt-packs",
+    expectedPath: "/ops/quality",
     interaction: "open-inspector",
   },
   {
