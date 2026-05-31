@@ -184,6 +184,84 @@ describe("RunDetailRoutePage", () => {
     expect(text).toContain("Audit-only");
   });
 
+  it("surfaces missing and unavailable evidence states outside raw JSON", async () => {
+    runTraceHarness.fetchObserveRunTrace.mockResolvedValueOnce({
+      version: "observe.run_trace.v1",
+      generatedAt: "2026-05-02T19:00:00.000Z",
+      runId: "run-partial-evidence",
+      run: { runId: "run-partial-evidence", status: "completed", workflowKey: "cowork" },
+      durable: {
+        checkpoints: { state: "available", items: [] },
+        timeline: { state: "available", items: [] },
+      },
+      lifecycle: { state: "unknown", error: "Lifecycle trace not retained." },
+      session: { state: "not_available" },
+      thread: { state: "available", turns: [] },
+      approvals: { state: "unknown", items: [], missingIds: ["approval-missing-1"] },
+      toolCalls: { state: "available", items: [] },
+      memoryContext: { state: "not_available", items: [], error: "Memory context repo offline." },
+      providerUsage: { state: "unknown", items: [], totals: {} },
+      artifacts: { state: "not_available", items: [], error: "Artifact index unavailable." },
+      errors: { state: "available", items: [] },
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "audit_only",
+        audit: { state: "available", note: "read-only" },
+        replay: { state: "not_available", checkpointIds: [], note: "No replay." },
+        resume: { eligible: false, note: "No resume." },
+      },
+    });
+
+    const text = await renderText("run-partial-evidence");
+
+    expect(text).toContain("Evidence availability");
+    expect(text).toContain("Approvals unknown");
+    expect(text).toContain("Missing approval evidence");
+    expect(text).toContain("approval-missing-1");
+    expect(text).toContain("Memory context not available");
+    expect(text).toContain("Memory context repo offline.");
+    expect(text).toContain("Artifacts not available");
+    expect(text).toContain("Artifact index unavailable.");
+    expect(text).toContain("Lifecycle trace not retained.");
+  });
+
+  it("does not treat normal empty trace groups as unavailable evidence", async () => {
+    runTraceHarness.fetchObserveRunTrace.mockResolvedValueOnce({
+      version: "observe.run_trace.v1",
+      generatedAt: "2026-05-02T19:00:00.000Z",
+      runId: "run-empty-optionals",
+      run: { runId: "run-empty-optionals", status: "completed", workflowKey: "chat" },
+      durable: {
+        checkpoints: { state: "not_available", items: [] },
+        timeline: { state: "not_available", items: [] },
+      },
+      lifecycle: { state: "available", response: { turns: [], toolRuns: [] } },
+      session: { state: "not_available" },
+      thread: { state: "not_available", turns: [] },
+      approvals: { state: "not_available", items: [], missingIds: [] },
+      toolCalls: { state: "not_available", items: [] },
+      memoryContext: { state: "not_available", items: [] },
+      providerUsage: { state: "not_available", items: [], totals: {} },
+      artifacts: { state: "not_available", items: [] },
+      errors: { state: "not_available", items: [] },
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "audit_only",
+        audit: { state: "available", note: "read-only" },
+        replay: { state: "not_available", checkpointIds: [], note: "No replay." },
+        resume: { eligible: false, note: "No resume." },
+      },
+    });
+
+    const text = await renderText("run-empty-optionals");
+
+    expect(text).toContain("Evidence availability");
+    expect(text).toContain("No missing, unknown, or error-qualified evidence groups need attention.");
+    expect(text).not.toContain("Errors not available");
+    expect(text).not.toContain("Artifacts not available");
+    expect(text).not.toContain("Approvals not available");
+  });
+
   it("copies a read-only run trace export without replaying the run", async () => {
     runTraceHarness.fetchObserveRunTrace.mockResolvedValueOnce({
       runId: "run-export",

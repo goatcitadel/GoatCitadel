@@ -31,6 +31,7 @@ interface RunDetailModel {
   approvals: NativeListItem[];
   sideEffects: NativeListItem[];
   errors: NativeListItem[];
+  evidenceStates: NativeListItem[];
   inputTokens?: number;
   outputTokens?: number;
   costUsd?: number;
@@ -179,6 +180,18 @@ export function RunDetailRoutePage({ route, activeWorkspaceName, navigate }: Nat
             density="compact"
             items={detail.approvals}
             emptyLabel="No approval checkpoints are attached to this run."
+          />
+        </NativeCard>
+
+        <NativeCard
+          title="Evidence availability"
+          subtitle="Missing or unavailable trace groups stay visible without relying on raw JSON."
+        >
+          <NativeList
+            density="compact"
+            items={detail.evidenceStates}
+            emptyLabel="No missing, unknown, or error-qualified evidence groups need attention."
+            maxHeight="min(34vh, 20rem)"
           />
         </NativeCard>
 
@@ -379,6 +392,7 @@ function buildRunDetailModel(raw: unknown, fallbackRunId: string): RunDetailMode
     approvals: getApprovalItems(record, trace),
     sideEffects: getSideEffectItems(record),
     errors: getErrorItems(record, trace, firstTurn, run),
+    evidenceStates: getEvidenceStateItems(record),
     inputTokens: readNumber(cost?.inputTokens) ?? readNumber(providerTotals?.inputTokens),
     outputTokens: readNumber(cost?.outputTokens) ?? readNumber(providerTotals?.outputTokens),
     costUsd:
@@ -588,6 +602,58 @@ function getSideEffectItems(record: RunTracePayload): NativeListItem[] {
         .join(" · "),
     };
   });
+}
+
+function getEvidenceStateItems(record: RunTracePayload): NativeListItem[] {
+  const items: NativeListItem[] = [];
+  addAvailabilityItem(items, "Durable checkpoints", readRecord(readRecord(record, "durable"), "checkpoints"));
+  addAvailabilityItem(items, "Durable timeline", readRecord(readRecord(record, "durable"), "timeline"));
+  addAvailabilityItem(items, "Lifecycle", readRecord(record, "lifecycle"));
+  addAvailabilityItem(items, "Session", readRecord(record, "session"));
+  addAvailabilityItem(items, "Thread", readRecord(record, "thread"));
+  addAvailabilityItem(items, "Approvals", readRecord(record, "approvals"));
+  addAvailabilityItem(items, "Tool calls", readRecord(record, "toolCalls"));
+  addAvailabilityItem(items, "Memory context", readRecord(record, "memoryContext"));
+  addAvailabilityItem(items, "Provider usage", readRecord(record, "providerUsage"));
+  addAvailabilityItem(items, "Artifacts", readRecord(record, "artifacts"));
+  addAvailabilityItem(items, "Errors", readRecord(record, "errors"));
+
+  const approvals = readRecord(record, "approvals");
+  const missingApprovalIds = readArray(approvals?.missingIds)
+    .map((value) => readString(value))
+    .filter((value): value is string => Boolean(value));
+  if (missingApprovalIds.length > 0) {
+    items.push({
+      title: "Missing approval evidence",
+      meta: "approvals · missing ids",
+      body: missingApprovalIds.join(", "),
+    });
+  }
+
+  return items;
+}
+
+function addAvailabilityItem(items: NativeListItem[], label: string, section?: RunTracePayload): void {
+  const state = readString(section?.state);
+  const detail = readString(section?.error) ?? readString(section?.note);
+  if (!state || state === "available") {
+    return;
+  }
+  if (state === "not_available" && !detail) {
+    return;
+  }
+  items.push({
+    title: `${label} ${formatAvailabilityState(state)}`,
+    meta: state,
+    body: detail ?? "The trace explicitly marked this evidence group as unavailable or unknown.",
+  });
+}
+
+function formatAvailabilityState(state: string): string {
+  if (state === "not_available") {
+    return "not available";
+  }
+  return state;
 }
 
 function getErrorItems(
