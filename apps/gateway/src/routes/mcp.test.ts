@@ -673,12 +673,18 @@ describe("mcp routes", () => {
           requiredCallContext: ["agentId", "sessionId"],
         },
         stdio: {
-          supported: false,
+          supported: true,
+          command: "goatcitadel",
+          args: ["mcp-server"],
+          requiresGatewayAuth: true,
+          gatewayEndpoint: "/api/v1/mcp/server-mode/manifest",
         },
       },
       launch: {
-        supported: false,
-        reason: expect.stringContaining("not wired"),
+        supported: true,
+        command: "goatcitadel",
+        args: ["mcp-server"],
+        reason: expect.stringContaining("stdio MCP protocol proxy"),
       },
       summary: {
         inspectableCapabilities: 2,
@@ -692,7 +698,7 @@ describe("mcp routes", () => {
           capabilityId: "tool:fs.read",
           gatewayCallable: true,
           serverModeState: "descriptor_only",
-          blockers: [expect.stringContaining("not wired")],
+          blockers: [expect.stringContaining("tools/call is not available")],
           annotations: expect.objectContaining({
             readOnlyHint: true,
             destructiveHint: false,
@@ -703,7 +709,7 @@ describe("mcp routes", () => {
         expect.stringContaining("read-only"),
         expect.stringContaining("Gateway-owned"),
       ]),
-      limitations: expect.arrayContaining([expect.stringContaining("not available")]),
+      limitations: expect.arrayContaining([expect.stringContaining("Gateway-backed proxy")]),
       evidence: {
         catalogScope: "callable",
         catalogSnapshot: [{ capabilityId: "tool:fs.read", kind: "tool", callable: true }],
@@ -764,8 +770,17 @@ describe("mcp routes", () => {
     const manifest = await app.inject({ method: "GET", url: "/api/v1/mcp/server-mode/manifest" });
     expect(manifest.statusCode).toBe(200);
     expect(manifest.json()).toMatchObject({
-      runtimeSupport: "call_preview",
-      runtime: { callPreview: { supported: true } },
+      runtimeSupport: "stdio_proxy",
+      runtime: {
+        callPreview: { supported: true },
+        stdio: {
+          supported: true,
+          command: "goatcitadel",
+          args: ["mcp-server"],
+          requiresGatewayAuth: true,
+        },
+      },
+      launch: { supported: true },
       tools: [expect.objectContaining({ name: "goatcitadel.fs.read", serverModeState: "call_preview" })],
     });
 

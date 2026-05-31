@@ -229,7 +229,7 @@ export interface McpRemotePreviewResponse {
 }
 
 export type McpServerModeStatus = "preview";
-export type McpServerModeRuntimeSupport = "call_preview" | "manifest_only" | "not_available";
+export type McpServerModeRuntimeSupport = "stdio_proxy" | "call_preview" | "manifest_only" | "not_available";
 export type McpServerModeToolState = "call_preview" | "descriptor_only" | "blocked";
 
 export interface McpServerModeToolDescriptor {
@@ -265,7 +265,7 @@ export interface McpServerModeManifestResponse {
     transport: Extract<McpTransport, "stdio">;
   };
   launch: {
-    supported: false;
+    supported: boolean;
     command?: string;
     args?: string[];
     reason: string;
@@ -280,7 +280,11 @@ export interface McpServerModeManifestResponse {
       reason?: string;
     };
     stdio: {
-      supported: false;
+      supported: boolean;
+      command?: string;
+      args?: string[];
+      requiresGatewayAuth?: boolean;
+      gatewayEndpoint?: "/api/v1/mcp/server-mode/manifest";
       reason: string;
     };
   };

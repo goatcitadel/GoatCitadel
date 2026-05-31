@@ -615,7 +615,7 @@ const mocks = vi.hoisted(() => ({
     mutationSemantics: "none",
     status: "preview",
     protocol: "mcp",
-    runtimeSupport: "call_preview",
+    runtimeSupport: "stdio_proxy",
     server: {
       name: "goatcitadel",
       label: "GoatCitadel governed capability export",
@@ -623,10 +623,11 @@ const mocks = vi.hoisted(() => ({
       transport: "stdio",
     },
     launch: {
-      supported: false,
+      supported: true,
       command: "goatcitadel",
       args: ["mcp-server"],
-      reason: "MCP protocol serving and stdio launch are not wired yet.",
+      reason:
+        "Launches the stdio MCP protocol proxy, which re-enters authenticated Gateway server-mode manifest and call-preview endpoints.",
     },
     runtime: {
       callPreview: {
@@ -637,8 +638,13 @@ const mocks = vi.hoisted(() => ({
         requiredCallContext: ["agentId", "sessionId"],
       },
       stdio: {
-        supported: false,
-        reason: "No launchable MCP stdio server has been shipped or proven.",
+        supported: true,
+        command: "goatcitadel",
+        args: ["mcp-server"],
+        requiresGatewayAuth: true,
+        gatewayEndpoint: "/api/v1/mcp/server-mode/manifest",
+        reason:
+          "The stdio proxy is shipped as a launcher command; it lists and calls only read-only, closed-world Gateway descriptors through authenticated Gateway APIs.",
       },
     },
     summary: {
@@ -657,8 +663,10 @@ const mocks = vi.hoisted(() => ({
         inputSchema: {},
         gatewayCallable: true,
         serverModeState: "call_preview",
-        blockers: ["MCP protocol serving and stdio launch are not wired yet."],
-        governance: ["Eligible for the operator-authenticated server-mode call preview."],
+        blockers: [
+          "Only the Gateway-backed stdio proxy and HTTP call preview are available; no standalone MCP server is exposed.",
+        ],
+        governance: ["Eligible for the operator-authenticated server-mode stdio proxy and HTTP call preview."],
         annotations: {
           readOnlyHint: true,
           destructiveHint: false,

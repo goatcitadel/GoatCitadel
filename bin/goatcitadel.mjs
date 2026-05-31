@@ -122,6 +122,11 @@ async function main() {
     return;
   }
 
+  if (command === "mcp-server") {
+    await runMcpServerModeStdio(rest);
+    return;
+  }
+
   if (!isPackagedInstall() && !fs.existsSync(path.join(appDir, "package.json"))) {
     console.log("GoatCitadel is not installed yet. Bootstrapping now...");
     installOrUpdate();
@@ -769,6 +774,356 @@ function readLauncherOperatorAuthHeaders() {
     return { Authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}` };
   }
   return {};
+}
+
+async function runMcpServerModeStdio(argv) {
+  const options = parseMcpServerArgs(argv);
+  const state = {
+    gatewayUrl: normalizeLauncherGatewayUrl(
+      options.gatewayUrl || process.env.GOATCITADEL_GATEWAY_URL || defaultGatewayUrl,
+    ),
+    agentId: options.agentId || process.env.GOATCITADEL_MCP_AGENT_ID || "mcp-stdio-client",
+    sessionId:
+      options.sessionId ||
+      process.env.GOATCITADEL_MCP_SESSION_ID ||
+      `mcp-stdio-${process.pid}-${Date.now().toString(36)}`,
+    workspaceId: options.workspaceId || process.env.GOATCITADEL_MCP_WORKSPACE_ID,
+    permissionProfileId: options.permissionProfileId || process.env.GOATCITADEL_MCP_PERMISSION_PROFILE_ID,
+    localOperatorOverrideId:
+      options.localOperatorOverrideId || process.env.GOATCITADEL_MCP_LOCAL_OPERATOR_OVERRIDE_ID,
+  };
+  process.stderr.write(
+    `[goatcitadel:mcp-server] Gateway-backed stdio proxy started for ${state.gatewayUrl}. Tools remain Gateway-governed.\n`,
+  );
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    crlfDelay: Infinity,
+  });
+
+  for await (const line of rl) {
+    const raw = line.trim();
+    if (!raw) {
+      continue;
+    }
+    let message;
+    try {
+      message = JSON.parse(raw);
+    } catch (error) {
+      writeJsonRpcResponse({
+        jsonrpc: "2.0",
+        id: null,
+        error: buildJsonRpcError(-32700, `Parse error: ${error.message}`),
+      });
+      continue;
+    }
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      writeJsonRpcResponse({
+        jsonrpc: "2.0",
+        id: null,
+        error: buildJsonRpcError(-32600, "Invalid JSON-RPC request."),
+      });
+      continue;
+    }
+    if (message.id === undefined) {
+      await handleMcpServerNotification(message, state);
+      continue;
+    }
+    try {
+      writeJsonRpcResponse(await handleMcpServerRequest(message, state));
+    } catch (error) {
+      writeJsonRpcResponse({
+        jsonrpc: "2.0",
+        id: message.id ?? null,
+        error: buildJsonRpcError(-32603, sanitizeLauncherError(error)),
+      });
+    }
+  }
+}
+
+function parseMcpServerArgs(argv) {
+  const options = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--gateway-url") {
+      options.gatewayUrl = readRequiredCliValue(argv, (index += 1), arg);
+      continue;
+    }
+    if (arg === "--agent-id") {
+      options.agentId = readRequiredCliValue(argv, (index += 1), arg);
+      continue;
+    }
+    if (arg === "--session-id") {
+      options.sessionId = readRequiredCliValue(argv, (index += 1), arg);
+      continue;
+    }
+    if (arg === "--workspace-id") {
+      options.workspaceId = readRequiredCliValue(argv, (index += 1), arg);
+      continue;
+    }
+    if (arg === "--permission-profile-id") {
+      options.permissionProfileId = readRequiredCliValue(argv, (index += 1), arg);
+      continue;
+    }
+    if (arg === "--local-operator-override-id") {
+      options.localOperatorOverrideId = readRequiredCliValue(argv, (index += 1), arg);
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      printMcpServerHelp();
+      process.exit(0);
+    }
+    throw new Error(`Unsupported mcp-server option: ${arg}`);
+  }
+  return options;
+}
+
+function readRequiredCliValue(argv, index, flag) {
+  const value = argv[index]?.trim();
+  if (!value) {
+    throw new Error(`Missing value for ${flag}.`);
+  }
+  return value;
+}
+
+function printMcpServerHelp() {
+  console.log(`GoatCitadel MCP server-mode stdio proxy
+
+Usage:
+  goatcitadel mcp-server [--gateway-url <url>] [--agent-id <id>] [--session-id <id>] [--workspace-id <id>]
+
+Environment:
+  GOATCITADEL_GATEWAY_URL                     Gateway base URL (default ${defaultGatewayUrl})
+  GOATCITADEL_AUTH_TOKEN                      Bearer token for Gateway auth
+  GOATCITADEL_AUTH_BASIC_USERNAME/PASSWORD    Basic auth credentials
+  GOATCITADEL_MCP_AGENT_ID                    Agent id recorded in Gateway policy/audit
+  GOATCITADEL_MCP_SESSION_ID                  Session id recorded in Gateway policy/audit
+  GOATCITADEL_MCP_WORKSPACE_ID                Optional workspace id
+
+This command speaks JSON-RPC over stdio and proxies only read-only, closed-world
+server-mode descriptors through Gateway-owned policy, approvals, and audit.
+`);
+}
+
+async function handleMcpServerNotification(message, state) {
+  if (message.method === "notifications/initialized" || message.method === "$/cancelRequest") {
+    return;
+  }
+  process.stderr.write(`[goatcitadel:mcp-server] Ignored notification ${String(message.method ?? "unknown")}.\n`);
+}
+
+async function handleMcpServerRequest(message, state) {
+  const id = message.id ?? null;
+  if (message.jsonrpc !== "2.0" || typeof message.method !== "string") {
+    return {
+      jsonrpc: "2.0",
+      id,
+      error: buildJsonRpcError(-32600, "Invalid JSON-RPC request."),
+    };
+  }
+  if (message.method === "initialize") {
+    return {
+      jsonrpc: "2.0",
+      id,
+      result: {
+        protocolVersion: readMcpProtocolVersion(message.params) || "2024-11-05",
+        capabilities: {
+          tools: {},
+        },
+        serverInfo: {
+          name: "goatcitadel",
+          version: "1.0.0",
+        },
+      },
+    };
+  }
+  if (message.method === "tools/list") {
+    const manifest = await fetchMcpServerModeManifestForStdio(state);
+    const manifestTools = Array.isArray(manifest.tools) ? manifest.tools : [];
+    return {
+      jsonrpc: "2.0",
+      id,
+      result: {
+        tools: manifestTools.filter(isMcpStdioToolCallable).map(toMcpStdioToolDescriptor),
+      },
+    };
+  }
+  if (message.method === "tools/call") {
+    const result = await callMcpServerModeToolForStdio(state, message.params);
+    return {
+      jsonrpc: "2.0",
+      id,
+      result,
+    };
+  }
+  return {
+    jsonrpc: "2.0",
+    id,
+    error: buildJsonRpcError(-32601, `Unsupported MCP method: ${message.method}`),
+  };
+}
+
+function readMcpProtocolVersion(params) {
+  return params && typeof params === "object" && typeof params.protocolVersion === "string"
+    ? params.protocolVersion
+    : undefined;
+}
+
+async function fetchMcpServerModeManifestForStdio(state) {
+  return launcherGatewayRequest(state, "/api/v1/mcp/server-mode/manifest");
+}
+
+async function callMcpServerModeToolForStdio(state, params) {
+  const call = normalizeMcpToolCallParams(params);
+  const response = await launcherGatewayRequest(state, "/api/v1/mcp/server-mode/call", {
+    method: "POST",
+    body: JSON.stringify({
+      descriptorName: call.name,
+      args: call.arguments,
+      agentId: state.agentId,
+      sessionId: state.sessionId,
+      workspaceId: state.workspaceId,
+      permissionProfileId: state.permissionProfileId,
+      localOperatorOverrideId: state.localOperatorOverrideId,
+    }),
+  });
+  return toMcpToolCallResult(response);
+}
+
+async function launcherGatewayRequest(state, apiPath, init = {}) {
+  const url = new URL(apiPath, `${state.gatewayUrl}/`).toString();
+  const response = await fetch(url, {
+    ...init,
+    method: init.method || "GET",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goatcitadel-origin-surface": "mcp",
+      "x-goatcitadel-correlation-id": `mcp-stdio:${randomUUID()}`,
+      ...(init.method && init.method !== "GET" ? { "Idempotency-Key": `mcp-stdio:${randomUUID()}` } : {}),
+      ...readLauncherOperatorAuthHeaders(),
+      ...(init.headers ?? {}),
+    },
+  });
+  const text = await response.text();
+  let body = {};
+  if (text) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      throw new Error(`Gateway request ${apiPath} returned non-JSON response with HTTP ${response.status}.`);
+    }
+  }
+  if (!response.ok) {
+    const errorMessage =
+      typeof body?.error === "string" ? body.error : `Gateway request ${apiPath} failed with HTTP ${response.status}.`;
+    throw new Error(errorMessage);
+  }
+  return body;
+}
+
+function normalizeMcpToolCallParams(params) {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    throw new Error("tools/call params must be an object.");
+  }
+  const name = typeof params.name === "string" ? params.name.trim() : "";
+  if (!name) {
+    throw new Error("tools/call params.name is required.");
+  }
+  const args = params.arguments && typeof params.arguments === "object" && !Array.isArray(params.arguments)
+    ? params.arguments
+    : {};
+  return { name, arguments: args };
+}
+
+function isMcpStdioToolCallable(tool) {
+  return (
+    tool &&
+    typeof tool === "object" &&
+    tool.serverModeState === "call_preview" &&
+    tool.gatewayCallable === true &&
+    tool.annotations?.readOnlyHint === true &&
+    tool.annotations?.destructiveHint !== true &&
+    tool.annotations?.openWorldHint !== true
+  );
+}
+
+function toMcpStdioToolDescriptor(tool) {
+  return {
+    name: tool.name,
+    title: tool.title,
+    description: tool.description,
+    inputSchema: simplifyMcpServerModeInputSchema(tool.inputSchema),
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+    },
+  };
+}
+
+function simplifyMcpServerModeInputSchema(inputSchema) {
+  if (!inputSchema || typeof inputSchema !== "object" || Array.isArray(inputSchema)) {
+    return { type: "object", additionalProperties: true };
+  }
+  const properties = inputSchema.properties && typeof inputSchema.properties === "object" ? inputSchema.properties : {};
+  const argsSchema = properties.args && typeof properties.args === "object" ? properties.args : undefined;
+  return argsSchema ?? { type: "object", additionalProperties: true };
+}
+
+function toMcpToolCallResult(response) {
+  const ok = response?.outcome === "executed";
+  return {
+    content: [
+      {
+        type: "text",
+        text: ok ? stringifyMcpToolResult(response.result) : response?.policyReason || "MCP tool call was blocked.",
+      },
+    ],
+    isError: !ok,
+    _meta: {
+      outcome: response?.outcome,
+      policyReason: response?.policyReason,
+      auditEventId: response?.auditEventId,
+      approvalId: response?.approvalId,
+      capabilityId: response?.capabilityId,
+      toolName: response?.toolName,
+    },
+  };
+}
+
+function stringifyMcpToolResult(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === undefined) {
+    return "Tool completed without a structured result.";
+  }
+  return JSON.stringify(value, null, 2);
+}
+
+function writeJsonRpcResponse(payload) {
+  process.stdout.write(`${JSON.stringify(payload)}\n`);
+}
+
+function buildJsonRpcError(code, message, data) {
+  return {
+    code,
+    message,
+    ...(data === undefined ? {} : { data }),
+  };
+}
+
+function sanitizeLauncherError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .replace(/\b(Bearer|token|api[-_]?key|authorization)\s*[:=]\s*[A-Za-z0-9._~+/=-]{12,}/gi, "$1=[REDACTED]")
+    .replace(/\b[A-Za-z0-9._%+-]+:[A-Za-z0-9._~+/=-]{12,}@/g, "[REDACTED]@")
+    .slice(0, 1000);
+}
+
+function normalizeLauncherGatewayUrl(value) {
+  const trimmed = value.trim();
+  return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
 }
 
 function readManagedPid(filePath) {
@@ -1545,6 +1900,7 @@ Commands:
   onboard    Run TUI onboarding wizard
   tui        Run terminal Mission Control
   tools      Tool access CLI (catalog/grants/invoke)
+  mcp-server Gateway-backed MCP server-mode stdio proxy (initialize/tools/list/tools/call)
   secrets    Generate deployment secrets (generate --docker-env)
   voice      Managed local voice runtime (install/status/models/select/remove)
   verify     Unattended verification lanes (fast/install/all/review/soak/deep:core/deep:ecosystem)
@@ -1581,6 +1937,8 @@ function resolveTaskTitle(currentCommand) {
       return "Onboarding";
     case "tui":
       return "TUI";
+    case "mcp-server":
+      return "MCP Server";
     case "doctor":
       return "Doctor";
     case "secrets":

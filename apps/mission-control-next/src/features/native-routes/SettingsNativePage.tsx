@@ -5795,8 +5795,8 @@ function McpSection(_props: SettingsSectionProps) {
                 notice={{
                   tone: data.serverMode.runtime.callPreview.supported ? "success" : "info",
                   message: data.serverMode.runtime.callPreview.supported
-                    ? "Read-only, closed-world descriptors can re-enter Gateway policy through the server-mode call preview. MCP protocol serving and stdio launch are still not shipped."
-                    : "MCP server-mode protocol serving is not available. The manifest remains descriptor-only in this runtime.",
+                    ? "Read-only, closed-world descriptors can re-enter Gateway policy through the server-mode stdio proxy or HTTP call preview."
+                    : "The MCP stdio proxy can expose the manifest, but tools/call remains unavailable until Gateway tool invocation services are present.",
                 }}
               />
               <SettingsActionList
@@ -8882,7 +8882,9 @@ export function createEmptyMcpServerModeManifest(): McpServerModeManifestRespons
       transport: "stdio",
     },
     launch: {
-      supported: false,
+      supported: true,
+      command: "goatcitadel",
+      args: ["mcp-server"],
       reason: "MCP server-mode manifest is unavailable.",
     },
     runtime: {
@@ -8895,8 +8897,12 @@ export function createEmptyMcpServerModeManifest(): McpServerModeManifestRespons
         reason: "MCP server-mode manifest is unavailable.",
       },
       stdio: {
-        supported: false,
-        reason: "No launchable MCP stdio server has been shipped or proven.",
+        supported: true,
+        command: "goatcitadel",
+        args: ["mcp-server"],
+        requiresGatewayAuth: true,
+        gatewayEndpoint: "/api/v1/mcp/server-mode/manifest",
+        reason: "The stdio proxy command is available, but the manifest could not be loaded.",
       },
     },
     summary: {

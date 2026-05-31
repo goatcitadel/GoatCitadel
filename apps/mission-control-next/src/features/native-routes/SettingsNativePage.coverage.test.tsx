@@ -571,14 +571,19 @@ function setupResponses() {
     mutationSemantics: "none",
     status: "preview",
     protocol: "mcp",
-    runtimeSupport: "call_preview",
+    runtimeSupport: "stdio_proxy",
     server: {
       name: "goatcitadel",
       label: "GoatCitadel governed capability export",
       version: "1.0.0",
       transport: "stdio",
     },
-    launch: { supported: false, reason: "Preview only" },
+    launch: {
+      supported: true,
+      command: "goatcitadel",
+      args: ["mcp-server"],
+      reason: "Preview only",
+    },
     runtime: {
       callPreview: {
         supported: true,
@@ -587,7 +592,14 @@ function setupResponses() {
         readOnlyOnly: true,
         requiredCallContext: ["agentId", "sessionId"],
       },
-      stdio: { supported: false, reason: "No launchable stdio server." },
+      stdio: {
+        supported: true,
+        command: "goatcitadel",
+        args: ["mcp-server"],
+        requiresGatewayAuth: true,
+        gatewayEndpoint: "/api/v1/mcp/server-mode/manifest",
+        reason: "Gateway-backed stdio proxy.",
+      },
     },
     summary: {
       inspectableCapabilities: 1,

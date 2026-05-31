@@ -629,7 +629,7 @@ export function buildMcpServerModeManifest(input: {
     mutationSemantics: "none",
     status: "preview",
     protocol: "mcp",
-    runtimeSupport: callPreviewAvailable ? "call_preview" : "manifest_only",
+    runtimeSupport: callPreviewAvailable ? "stdio_proxy" : "manifest_only",
     server: {
       name: "goatcitadel",
       label: "GoatCitadel governed capability export",
@@ -637,11 +637,12 @@ export function buildMcpServerModeManifest(input: {
       transport: "stdio",
     },
     launch: {
-      supported: false,
+      supported: true,
       command: "goatcitadel",
       args: ["mcp-server"],
-      reason:
-        "MCP protocol serving and stdio launch are not wired yet; the Gateway exposes only an operator-authenticated call preview endpoint.",
+      reason: callPreviewAvailable
+        ? "Launches the stdio MCP protocol proxy, which re-enters authenticated Gateway server-mode manifest and call-preview endpoints."
+        : "Launches the stdio MCP protocol proxy for manifest listing; tools/call remains unavailable until Gateway tool invocation services are exposed.",
     },
     runtime: {
       callPreview: {
@@ -655,8 +656,14 @@ export function buildMcpServerModeManifest(input: {
           : "Gateway tool invocation services were not available when this manifest was generated.",
       },
       stdio: {
-        supported: false,
-        reason: "No launchable MCP stdio server has been shipped or proven.",
+        supported: true,
+        command: "goatcitadel",
+        args: ["mcp-server"],
+        requiresGatewayAuth: true,
+        gatewayEndpoint: "/api/v1/mcp/server-mode/manifest",
+        reason: callPreviewAvailable
+          ? "The stdio proxy is shipped as a launcher command; it lists and calls only read-only, closed-world Gateway descriptors through authenticated Gateway APIs."
+          : "The stdio proxy is shipped as a launcher command; this runtime can list the manifest but cannot execute tools/call until Gateway tool invocation services are present.",
       },
     },
     summary: {
@@ -672,8 +679,8 @@ export function buildMcpServerModeManifest(input: {
       "Only the callable capability catalog is described as exportable; inspectable-only candidates and proposals are withheld.",
     ],
     limitations: [
-      "MCP server protocol serving and stdio launch are not available from this endpoint.",
-      "The call preview is limited to read-only, closed-world Gateway tool descriptors and requires Gateway authentication.",
+      "The stdio server is a Gateway-backed proxy, not a standalone Gateway-free MCP server.",
+      "The stdio proxy and HTTP call preview are limited to read-only, closed-world Gateway tool descriptors and require Gateway authentication.",
       "Remote MCP transport invocation remains governed separately by the existing MCP client/runtime surfaces.",
     ],
     evidence: {
@@ -697,9 +704,9 @@ function buildServerModeToolDescriptor(
   const governance = [
     `Gateway callable state: ${entry.callable ? "callable" : "not callable"}.`,
     callPreviewEligible
-      ? "Eligible for the operator-authenticated server-mode call preview; MCP protocol serving is still not launched."
+      ? "Eligible for the operator-authenticated server-mode stdio proxy and HTTP call preview."
       : eligibleForCallPreview
-        ? "Eligible for a future server-mode call preview, but this runtime has not exposed the preview route."
+        ? "Descriptor can be listed through the stdio proxy, but this runtime has not exposed Gateway tool invocation for tools/call."
         : "Descriptor-only until the protocol runner or a safer capability-specific adapter is implemented.",
   ];
   if (entry.lifecycleState) {
@@ -723,9 +730,13 @@ function buildServerModeToolDescriptor(
     serverModeState: entry.callable ? (callPreviewEligible ? "call_preview" : "descriptor_only") : "blocked",
     blockers: entry.callable
       ? callPreviewEligible
-        ? ["MCP protocol serving and stdio launch are not wired yet; only the Gateway call preview is available."]
+        ? [
+            "Only the Gateway-backed stdio proxy and HTTP call preview are available; no standalone MCP server is exposed.",
+          ]
         : eligibleForCallPreview
-          ? ["MCP server-mode call preview is not available in this runtime; MCP protocol serving is not wired."]
+          ? [
+              "MCP server-mode tools/call is not available in this runtime because Gateway tool invocation is not exposed.",
+            ]
           : ["Server-mode call preview is limited to read-only, closed-world Gateway tool descriptors."]
       : ["Capability is not callable in the Gateway catalog."],
     governance,
@@ -844,7 +855,7 @@ function buildMcpServerModeCallGovernance(): string[] {
 function buildMcpServerModeCallLimitations(): string[] {
   return [
     "Only read-only, closed-world Gateway tool descriptors are eligible.",
-    "MCP protocol serving and stdio launch remain unavailable until separately implemented and proven.",
+    "The MCP stdio path is a Gateway-backed proxy; it is not a standalone Gateway-free server.",
   ];
 }
 
