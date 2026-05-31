@@ -5,6 +5,7 @@ import type {
   IntegrationOperatorAction,
 } from "@goatcitadel/contracts";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
+import { recordAuditOnlyExternalSideEffectIntent } from "./external-side-effect-runner-service.js";
 import { getIntegrationOperatorActions, isLocalBridgeCatalogId } from "./integration-action-registry.js";
 
 export interface IntegrationActionHost {
@@ -462,65 +463,26 @@ function recordExternalWritebackEnvelope(
   if (action.capability !== "write") {
     return result;
   }
-  const common = {
-    replayPolicy: "audit_only" as const,
-    resumable: false as const,
-    checkedAt,
+  return {
+    ...result,
+    durableWriteback: recordAuditOnlyExternalSideEffectIntent({
+      evidenceEnvelopeService: host.evidenceEnvelopeService,
+      boundary: "integration_operator_action",
+      connectionId: connection.connectionId,
+      catalogId: connection.catalogId,
+      integrationKey: connection.key,
+      actionId: action.actionId,
+      actionLabel: action.label,
+      actionCapability: action.capability,
+      status: result.status,
+      blockedReason: result.blockedReason,
+      inputKeys: Object.keys(request.input ?? {}).sort(),
+      outputKeys: isRecord(result.output) ? Object.keys(result.output).sort() : [],
+      externalReferenceId: readExternalReferenceId(result.output),
+      message: result.message,
+      checkedAt,
+    }),
   };
-  if (!host.evidenceEnvelopeService) {
-    return {
-      ...result,
-      durableWriteback: {
-        ...common,
-        status: "unavailable",
-        reason: "evidence_service_unavailable",
-      },
-    };
-  }
-  try {
-    const envelope = host.evidenceEnvelopeService.createEnvelope({
-      eventKind: "external_writeback",
-      metadata: {
-        boundary: "integration_operator_action",
-        externalSideEffect: true,
-        replayPolicy: common.replayPolicy,
-        resumable: common.resumable,
-        connectionId: connection.connectionId,
-        catalogId: connection.catalogId,
-        integrationKey: connection.key,
-        actionId: action.actionId,
-        actionLabel: action.label,
-        actionCapability: action.capability,
-        status: result.status,
-        blockedReason: result.blockedReason,
-        inputKeys: Object.keys(request.input ?? {}).sort(),
-        outputKeys: isRecord(result.output) ? Object.keys(result.output).sort() : [],
-        externalReferenceId: readExternalReferenceId(result.output),
-        message: result.message,
-      },
-      createdAt: checkedAt,
-    });
-    return {
-      ...result,
-      durableWriteback: {
-        ...common,
-        status: "recorded",
-        envelopeId: envelope.envelopeId,
-        contentHash: envelope.contentHash,
-        signatureStatus: envelope.signatureStatus,
-        recordedAt: envelope.createdAt,
-      },
-    };
-  } catch (error) {
-    return {
-      ...result,
-      durableWriteback: {
-        ...common,
-        status: "failed",
-        reason: error instanceof Error ? error.message : "external_writeback_envelope_failed",
-      },
-    };
-  }
 }
 
 function readExternalReferenceId(output: Record<string, unknown> | undefined): string | undefined {

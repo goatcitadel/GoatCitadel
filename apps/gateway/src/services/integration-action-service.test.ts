@@ -179,6 +179,8 @@ describe("integration-action-service", () => {
         envelopeId: "env-writeback-1",
         contentHash: "content-hash",
         signatureStatus: "unsigned_local",
+        intentId: expect.stringMatching(/^external-side-effect-/),
+        idempotencyKey: expect.any(String),
       }),
     );
     expect(createEnvelope).toHaveBeenCalledWith(
@@ -187,6 +189,8 @@ describe("integration-action-service", () => {
         metadata: expect.objectContaining({
           boundary: "integration_operator_action",
           externalSideEffect: true,
+          externalSideEffectIntentId: expect.stringMatching(/^external-side-effect-/),
+          externalSideEffectIdempotencyKey: expect.any(String),
           replayPolicy: "audit_only",
           resumable: false,
           connectionId: connection.connectionId,

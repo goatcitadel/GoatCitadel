@@ -127,6 +127,8 @@ export type IntegrationExternalWritebackEnvelopeStatus = "recorded" | "unavailab
 
 export interface IntegrationExternalWritebackEnvelope {
   status: IntegrationExternalWritebackEnvelopeStatus;
+  intentId?: string;
+  idempotencyKey?: string;
   replayPolicy: "audit_only";
   resumable: false;
   checkedAt: string;
