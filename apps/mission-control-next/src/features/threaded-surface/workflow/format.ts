@@ -130,6 +130,15 @@ export function formatSandboxPosture(value?: CodeModeRunRecord["sandbox"]): stri
   } · ${value.available ? "available" : "unavailable"}${failed}${failClosed}${advisory}`;
 }
 
+export function formatExecutionBackend(value?: CodeModeRunRecord["executionBackend"]): string {
+  if (!value) {
+    return "not recorded";
+  }
+  const adapter = value.adapterForBackendId ? ` · adapter for ${value.adapterForBackendId}` : "";
+  const isolation = value.isolationProfile ? ` · ${value.isolationProfile}` : "";
+  return `${value.label} · ${value.kind} · ${value.status} · ${value.runtimeSupport}${isolation}${adapter}`;
+}
+
 export function formatRunPermissionProfile(value: CodeModeRunRecord): string {
   const label = value.permissionProfileLabel?.trim();
   const id = value.permissionProfileId?.trim();

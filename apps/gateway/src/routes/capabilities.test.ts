@@ -65,6 +65,41 @@ describe("capabilities routes", () => {
           workspaceId: typeof input === "number" ? undefined : input.workspaceId,
         },
       ]),
+      listCodeModeExecutionBackends: vi.fn(() => ({
+        generatedAt: "2026-05-31T00:00:00.000Z",
+        readOnly: true,
+        mutationSemantics: "none",
+        defaultBackendId: "trusted-code-host",
+        activeBackendId: "trusted-code-host",
+        items: [
+          {
+            backendId: "trusted-code-host",
+            kind: "host",
+            label: "Trusted-code host runner",
+            status: "active",
+            runtimeSupport: "active_runner",
+            default: true,
+            callable: true,
+            description: "Current runner",
+            blockers: [],
+            governance: ["approval required"],
+            evidence: {},
+          },
+          {
+            backendId: "docker-container",
+            kind: "docker",
+            label: "Docker execution backend",
+            status: "preview",
+            runtimeSupport: "preview_only",
+            default: false,
+            callable: false,
+            description: "Preview only",
+            blockers: ["not wired"],
+            governance: ["preserve policy"],
+            evidence: {},
+          },
+        ],
+      })),
       getCodeModeRun: vi.fn((runId: string) => ({
         runId,
         status: "completed",
@@ -467,19 +502,33 @@ describe("capabilities routes", () => {
       method: "GET",
       url: "/api/v1/code-mode/runs?limit=3",
     });
+    const backendsResponse = await app!.inject({
+      method: "GET",
+      url: "/api/v1/code-mode/execution-backends",
+    });
 
     expect(catalogResponse.statusCode).toBe(200);
     expect(proposalsResponse.statusCode).toBe(200);
     expect(runsResponse.statusCode).toBe(200);
+    expect(backendsResponse.statusCode).toBe(200);
     expect(service.listCapabilityCatalog).toHaveBeenCalledWith("inspectable");
     expect(service.listCapabilityProposals).toHaveBeenCalledWith(2);
     expect(service.listCodeModeRuns).toHaveBeenCalledWith({ limit: 3, workspaceId: "default" });
+    expect(service.listCodeModeExecutionBackends).toHaveBeenCalledWith();
     expect(catalogResponse.json()).toMatchObject({
       scope: "inspectable",
       items: [{ capabilityId: "cap-inspectable" }],
     });
     expect(proposalsResponse.json()).toEqual({ items: [{ proposalId: "proposal-2" }] });
     expect(runsResponse.json()).toEqual({ items: [{ runId: "code-run-3", workspaceId: "default" }] });
+    expect(backendsResponse.json()).toMatchObject({
+      readOnly: true,
+      defaultBackendId: "trusted-code-host",
+      items: [
+        expect.objectContaining({ backendId: "trusted-code-host", callable: true }),
+        expect.objectContaining({ backendId: "docker-container", callable: false }),
+      ],
+    });
   });
 
   it("forwards Code Mode run filters when listing runs", async () => {

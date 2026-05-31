@@ -17,7 +17,7 @@ Status meanings:
 | `/cowork` | `ship` | Start/resume durable Cowork work; inspect next action, blockers, approvals, and evidence truth. |
 | `/cowork/tasks` | `ship` | Review tasks/deliverables, continuation state, and blocker hierarchy. |
 | `/cowork/board` | `ship` | Inspect agent posture without implying autonomous live-control parity. |
-| `/code` | `ship` | Bind source, edit, validate, inspect diffs, and preserve Code Mode proof truth. |
+| `/code` | `ship` | Bind source, edit, validate, inspect diffs, and preserve Code Mode proof truth, including execution backend posture. |
 | `/projects` | `ship` | Continue Chat/Cowork/Code work from a project home base. |
 | `/library/agents` | `ship` | Inspect reusable agent profiles and catalog controls. |
 | `/library/skills` | `ship` | Review skill activation posture and lifecycle evidence. |

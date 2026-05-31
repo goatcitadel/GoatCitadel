@@ -63,6 +63,12 @@ describe("CapabilitySystemService", () => {
       required: true,
       available: false,
     });
+    expect(run.executionBackend).toMatchObject({
+      backendId: "trusted-code-host",
+      kind: "host",
+      runtimeSupport: "not_available",
+      status: "blocked",
+    });
     expect(run.sandbox?.checksFailed).toContain("best_effort_host_disabled");
     expect(harness.createApproval).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -70,6 +76,10 @@ describe("CapabilitySystemService", () => {
           originSurface: "code",
           sandbox: expect.objectContaining({
             available: false,
+          }),
+          executionBackend: expect.objectContaining({
+            backendId: "trusted-code-host",
+            status: "blocked",
           }),
         }),
         linkage: expect.objectContaining({
@@ -229,6 +239,44 @@ describe("CapabilitySystemService", () => {
         }),
       }),
     );
+  });
+
+  it("lists Code Mode execution backends without promoting Docker or Aider as callable", async () => {
+    const harness = await createHarness({
+      sandboxConfig: {
+        required: false,
+        bestEffortHostEnabled: false,
+      },
+    });
+
+    const response = harness.service.listCodeModeExecutionBackends();
+
+    expect(response).toMatchObject({
+      readOnly: true,
+      mutationSemantics: "none",
+      defaultBackendId: "trusted-code-host",
+      activeBackendId: "trusted-code-host",
+      items: [
+        expect.objectContaining({
+          backendId: "trusted-code-host",
+          kind: "host",
+          callable: true,
+          runtimeSupport: "active_runner",
+        }),
+        expect.objectContaining({
+          backendId: "docker-container",
+          kind: "docker",
+          callable: false,
+          runtimeSupport: "preview_only",
+        }),
+        expect.objectContaining({
+          backendId: "aider-cli-adapter",
+          kind: "aider_adapter",
+          callable: false,
+          adapterForBackendId: "docker-container",
+        }),
+      ],
+    });
   });
 
   it("rejects Code Mode runs for missing sessions or mismatched turn traces", async () => {

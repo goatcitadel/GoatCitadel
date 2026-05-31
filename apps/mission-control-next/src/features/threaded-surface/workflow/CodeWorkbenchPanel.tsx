@@ -17,11 +17,13 @@ import type {
   CodeModeRunArtifactKind,
   CodeModeRunArtifactPreview,
   CodeModeRunComparisonRecord,
+  CodeModeExecutionBackendsResponse,
   CodeModeRunRecord,
 } from "@goatcitadel/contracts";
 import type { MissionThreadedWorkflowPanel } from "@goatcitadel/threaded-surface-core";
 import {
   compareCodeModeRuns,
+  fetchCodeModeExecutionBackends,
   fetchCodeModeRun,
   fetchCodeModeRunArtifact,
   fetchCodeModeRuns,
@@ -41,6 +43,7 @@ import {
   extractCodeBlocks,
   formatArtifactPath,
   formatOriginSurface,
+  formatExecutionBackend,
   formatRunPermissionProfile,
   formatRunTimestamp,
   formatSandboxPosture,
@@ -711,6 +714,8 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const [runList, setRunList] = useState<CodeModeRunRecord[]>([]);
   const [runListLoading, setRunListLoading] = useState(false);
   const [runListError, setRunListError] = useState<string | null>(null);
+  const [executionBackends, setExecutionBackends] = useState<CodeModeExecutionBackendsResponse | null>(null);
+  const [executionBackendsError, setExecutionBackendsError] = useState<string | null>(null);
   const [runDetail, setRunDetail] = useState<CodeModeRunRecord | null>(null);
   const [runDetailLoading, setRunDetailLoading] = useState(false);
   const [runDetailError, setRunDetailError] = useState<string | null>(null);
@@ -1280,6 +1285,28 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
       cancelled = true;
     };
   }, [codeLedgerSessionId, codeLedgerTurnId, codeLedgerWorkspaceId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setExecutionBackendsError(null);
+    fetchCodeModeExecutionBackends()
+      .then((response) => {
+        if (!cancelled) {
+          setExecutionBackends(response);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setExecutionBackends(null);
+          setExecutionBackendsError(
+            error instanceof Error ? error.message : "Unable to load Code Mode execution backends.",
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!selectedRunSummary?.runId) {
@@ -2227,6 +2254,29 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
                 </div>
               </div>
               {runLogCopyNotice ? <p className="mc-next-workbench-empty">{runLogCopyNotice}</p> : null}
+              {executionBackendsError ? (
+                <div className="mc-next-panel-banner warning">{executionBackendsError}</div>
+              ) : null}
+              {executionBackends ? (
+                <section className="mc-next-workbench-run-detail">
+                  <div className="mc-next-panel-list-head">
+                    <strong>Execution backends</strong>
+                    <span>{executionBackends.items.length} visible</span>
+                  </div>
+                  <ul className="mc-next-context-list">
+                    {executionBackends.items.map((backend) => (
+                      <li key={backend.backendId}>
+                        <strong>{backend.label}</strong>
+                        <p>
+                          {backend.kind} · {backend.status} · {backend.runtimeSupport}
+                          {backend.default ? " · default" : ""}
+                        </p>
+                        <p>{backend.callable ? "Callable for approved Code Mode runs." : backend.blockers[0]}</p>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
               {output?.output && !runLogCleared ? (
                 runLogViewMode === "raw" ? (
                   <pre className="mc-next-workbench-raw-output">{output.output}</pre>
@@ -2337,6 +2387,10 @@ export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
                         <li>
                           <strong>Sandbox posture</strong>
                           <p>{formatSandboxPosture(selectedRunDetail.sandbox)}</p>
+                        </li>
+                        <li>
+                          <strong>Execution backend</strong>
+                          <p>{formatExecutionBackend(selectedRunDetail.executionBackend)}</p>
                         </li>
                         <li>
                           <strong>Source hash</strong>

@@ -9,6 +9,7 @@ import type {
   CodeModeRunArtifactKind,
   CodeModeRunArtifactPreview,
   CodeModeRunComparisonRecord,
+  CodeModeExecutionBackendsResponse,
   CodeModeRunListOptions,
   CodeModeRunRecord,
   CodeModeRunRequest,
@@ -100,6 +101,10 @@ export async function fetchCodeModeRuns(
     params.set("status", options.status);
   }
   return request(`/api/v1/code-mode/runs?${params.toString()}`);
+}
+
+export async function fetchCodeModeExecutionBackends(): Promise<CodeModeExecutionBackendsResponse> {
+  return request("/api/v1/code-mode/execution-backends");
 }
 
 export async function fetchCodeModeRun(

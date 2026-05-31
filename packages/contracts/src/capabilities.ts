@@ -139,6 +139,42 @@ export interface CodeModeSandboxMetadata {
   advisoryUnsandboxedReason?: string;
 }
 
+export type CodeModeExecutionBackendKind = "host" | "docker" | "aider_adapter";
+export type CodeModeExecutionBackendStatus = "active" | "available" | "preview" | "blocked" | "unknown";
+export type CodeModeExecutionRuntimeSupport = "active_runner" | "preview_only" | "not_available";
+
+export interface CodeModeRunExecutionBackendRef {
+  backendId: string;
+  kind: CodeModeExecutionBackendKind;
+  label: string;
+  status: CodeModeExecutionBackendStatus;
+  runtimeSupport: CodeModeExecutionRuntimeSupport;
+  isolationProfile?: string;
+  adapterForBackendId?: string;
+}
+
+export interface CodeModeExecutionBackendRecord extends CodeModeRunExecutionBackendRef {
+  default: boolean;
+  callable: boolean;
+  description: string;
+  blockers: string[];
+  governance: string[];
+  evidence: {
+    sandbox?: CodeModeSandboxMetadata;
+    detectedCommand?: string;
+    envFlag?: string;
+  };
+}
+
+export interface CodeModeExecutionBackendsResponse {
+  generatedAt: string;
+  readOnly: true;
+  mutationSemantics: "none";
+  defaultBackendId: string;
+  activeBackendId: string;
+  items: CodeModeExecutionBackendRecord[];
+}
+
 export interface CodeModeRunRecord {
   runId: string;
   status: CodeModeRunStatus;
@@ -160,6 +196,7 @@ export interface CodeModeRunRecord {
   sessionId?: string;
   turnId?: string;
   sandbox?: CodeModeSandboxMetadata;
+  executionBackend?: CodeModeRunExecutionBackendRef;
   codeArtifact: CapabilityArtifactRecord;
   wrapperManifestArtifact: CapabilityArtifactRecord;
   policySnapshotArtifact: CapabilityArtifactRecord;

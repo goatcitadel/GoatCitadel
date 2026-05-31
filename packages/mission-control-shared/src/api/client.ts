@@ -471,6 +471,7 @@ export {
   fetchCapabilityCatalogSnapshot,
   fetchCapabilityProposal,
   fetchCapabilityProposals,
+  fetchCodeModeExecutionBackends,
   fetchCodeModeRun,
   fetchCodeModeRuns,
   promoteCapabilityCandidate,

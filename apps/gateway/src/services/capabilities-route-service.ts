@@ -12,6 +12,7 @@ export type CapabilitiesRoutePort = Pick<
   | "getCodeModeRunInScope"
   | "getProposalDetail"
   | "listCatalog"
+  | "listCodeModeExecutionBackends"
   | "listCodeModeRuns"
   | "compareCodeModeRuns"
   | "listProposals"
@@ -61,6 +62,10 @@ export class CapabilitiesRouteService {
 
   public listCodeModeRuns(input: Parameters<CapabilitiesRoutePort["listCodeModeRuns"]>[0] = 100) {
     return this.capabilities.listCodeModeRuns(input);
+  }
+
+  public listCodeModeExecutionBackends() {
+    return this.capabilities.listCodeModeExecutionBackends();
   }
 
   public getCodeModeRun(runId: string) {

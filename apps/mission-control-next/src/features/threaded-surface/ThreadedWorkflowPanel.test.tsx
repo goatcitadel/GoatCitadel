@@ -7,6 +7,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/agentic";
 import {
   compareCodeModeRuns,
+  fetchCodeModeExecutionBackends,
   fetchCodeModeRun,
   fetchCodeModeRuns,
   fetchCodeModeRunArtifact,
@@ -29,6 +30,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/agentic", () => ({
 
 vi.mock("@goatcitadel/mission-control-shared/api/capabilities", () => ({
   compareCodeModeRuns: vi.fn(),
+  fetchCodeModeExecutionBackends: vi.fn(),
   fetchCodeModeRun: vi.fn(),
   fetchCodeModeRuns: vi.fn(),
   fetchCodeModeRunArtifact: vi.fn(),
@@ -37,6 +39,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/capabilities", () => ({
 const mockedFetchAgenticRuntimeAvailability = vi.mocked(fetchAgenticRuntimeAvailability);
 const mockedFetchAgenticChannelDeliveries = vi.mocked(fetchAgenticChannelDeliveries);
 const mockedFetchCodeModeRun = vi.mocked(fetchCodeModeRun);
+const mockedFetchCodeModeExecutionBackends = vi.mocked(fetchCodeModeExecutionBackends);
 const mockedFetchCodeModeRuns = vi.mocked(fetchCodeModeRuns);
 const mockedFetchCodeModeRunArtifact = vi.mocked(fetchCodeModeRunArtifact);
 const mockedCompareCodeModeRuns = vi.mocked(compareCodeModeRuns);
@@ -358,6 +361,41 @@ describe("ThreadedWorkflowPanel", () => {
         },
       ],
     });
+    mockedFetchCodeModeExecutionBackends.mockResolvedValue({
+      generatedAt: "2026-05-31T00:00:00.000Z",
+      readOnly: true,
+      mutationSemantics: "none",
+      defaultBackendId: "trusted-code-host",
+      activeBackendId: "trusted-code-host",
+      items: [
+        {
+          backendId: "trusted-code-host",
+          kind: "host",
+          label: "Trusted-code host runner",
+          status: "active",
+          runtimeSupport: "active_runner",
+          default: true,
+          callable: true,
+          description: "Current runner",
+          blockers: [],
+          governance: ["approval required"],
+          evidence: {},
+        },
+        {
+          backendId: "docker-container",
+          kind: "docker",
+          label: "Docker execution backend",
+          status: "preview",
+          runtimeSupport: "preview_only",
+          default: false,
+          callable: false,
+          description: "Preview only",
+          blockers: ["Docker backend is not wired to Code Mode launch yet."],
+          governance: ["preserve policy"],
+          evidence: {},
+        },
+      ],
+    });
     mockedFetchCodeModeRun.mockResolvedValue({
       runId: "helper-1",
       status: "completed",
@@ -385,6 +423,14 @@ describe("ThreadedWorkflowPanel", () => {
         available: true,
         checksPassed: ["sandbox_ready"],
         checksFailed: [],
+      },
+      executionBackend: {
+        backendId: "trusted-code-host",
+        kind: "host",
+        label: "Trusted-code host runner",
+        status: "active",
+        runtimeSupport: "active_runner",
+        isolationProfile: "trusted-code execution",
       },
       codeArtifact: {
         artifactId: "artifact-code",
@@ -1499,6 +1545,7 @@ describe("ThreadedWorkflowPanel", () => {
       turnId: "turn-1",
       limit: 25,
     });
+    expect(mockedFetchCodeModeExecutionBackends).toHaveBeenCalledWith();
     expect(mockedFetchCodeModeRun).toHaveBeenCalledWith("helper-1", {
       sessionId: "session-1",
       turnId: "turn-1",
@@ -1517,6 +1564,10 @@ describe("ThreadedWorkflowPanel", () => {
     expect(JSON.stringify(renderer!.toJSON())).toContain("override-1");
     expect(JSON.stringify(renderer!.toJSON())).toContain("Code");
     expect(JSON.stringify(renderer!.toJSON())).toContain("Sandbox posture");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Execution backends");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Docker execution backend");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Execution backend");
+    expect(JSON.stringify(renderer!.toJSON())).toContain("Trusted-code host runner");
     expect(JSON.stringify(renderer!.toJSON())).toContain("trusted-code execution");
     expect(JSON.stringify(renderer!.toJSON())).toContain("Input hash");
     expect(JSON.stringify(renderer!.toJSON())).toContain("input-...7890");

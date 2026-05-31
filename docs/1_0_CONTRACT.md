@@ -51,6 +51,7 @@ The repo may make these claims at `1.0`:
 
 - Code Mode is a governed trusted-code surface with explicit operator approval and bounded artifacts.
 - Code Mode host isolation is best-effort and fail-closed when required isolation is unavailable.
+- Code Mode execution backend truth is inspectable. The trusted-code host runner is the active backend; Docker and Aider remain preview/non-callable until their launch, artifact, replay, and policy contracts are separately proven.
 - Durable execution owns the shipped mission-session Chat / Cowork / Code resumable flow set documented in [docs/CANONICAL_RUNTIME_STATE_MODEL.md](./CANONICAL_RUNTIME_STATE_MODEL.md). External writeback operator actions now record audit-only durable evidence envelopes, but external send/retry/edit/stream replay remains one-shot and non-resumable until a replay-safe external side-effect runner lands.
 - Approval follow-on work is surfaced through explicit approval effect records rather than inferred from scattered side tables or inline helper effects.
 - `MemoryLifecycleService` is the operator-facing memory lifecycle owner for context composition, learned-memory policy, and memory item list/edit/forget/history.
@@ -59,6 +60,7 @@ The repo may make these claims at `1.0`:
 The repo must not claim these at `1.0` unless separately proven and documented:
 
 - hostile-code sandboxing
+- Docker or Aider Code Mode execution parity beyond the current preview/non-callable backend registry
 - silent or autonomous high-risk tool activation
 - `packages/mesh-core` as a readiness-bearing `1.0` subsystem while it only has targeted service coverage rather than full release evidence
 - `apps/npu-sidecar` as a maturity signal for local inference completeness while it remains optional experimental infrastructure

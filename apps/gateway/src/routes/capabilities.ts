@@ -221,6 +221,10 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     });
   });
 
+  fastify.get("/api/v1/code-mode/execution-backends", async (_request, reply) => {
+    return reply.send(fastify.services.capabilities.listCodeModeExecutionBackends());
+  });
+
   fastify.get("/api/v1/code-mode/runs/:runId", async (request, reply) => {
     const parsed = runParamsSchema.safeParse(request.params);
     const query = runDetailQuerySchema.safeParse(request.query);

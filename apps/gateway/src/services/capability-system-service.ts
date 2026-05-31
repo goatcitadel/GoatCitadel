@@ -28,6 +28,7 @@ import type {
   CodeModeRunRecord,
   CodeModeRunRequest,
   CodeModeRunListOptions,
+  CodeModeRunExecutionBackendRef,
   LoadedSkill,
   PendingApprovalAction,
   SkillLifecycleRecord,
@@ -46,6 +47,7 @@ import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/cont
 import type { Storage } from "@goatcitadel/storage";
 import type { CapabilityRuntimeConfig, FeatureFlagsConfig } from "../config.js";
 import { CODE_MODE_CHILD_SOURCE } from "./code-mode-child-source.js";
+import { buildCodeModeExecutionBackends, buildCodeModeRunExecutionBackendRef } from "./code-mode-execution-backends.js";
 import {
   assertCodeModeSandboxAvailable,
   prepareCodeModeSandboxLaunch,
@@ -199,6 +201,13 @@ export class CapabilitySystemService {
     this.ensureSkillLifecycleBackfill();
     const inspectable = this.buildInspectableCatalog();
     return scope === "callable" ? inspectable.filter((entry) => entry.callable) : inspectable;
+  }
+
+  public listCodeModeExecutionBackends() {
+    return buildCodeModeExecutionBackends({
+      codeModeEnabled: this.options.readFeatureFlags().codeModeV1Enabled,
+      sandbox: this.resolveCurrentSandboxMetadata(),
+    });
   }
 
   public freezeCatalogSnapshot(): CapabilityCatalogSnapshotRecord {
@@ -646,6 +655,7 @@ export class CapabilitySystemService {
     const runInput = request.input ?? {};
     const runInputHash = sha256Text(JSON.stringify(runInput));
     const sandbox = this.resolveCurrentSandboxMetadata();
+    const executionBackend = buildCodeModeRunExecutionBackendRef(sandbox);
     const originSurface = normalizeCodeModeOriginSurface(request.originSurface);
     const sessionId = request.sessionId?.trim() || undefined;
     const turnId = request.turnId?.trim() || undefined;
@@ -741,6 +751,7 @@ export class CapabilitySystemService {
       permissionProfileId: policyContext?.permissionProfileId,
       permissionProfileLabel: policyContext?.permissionProfile?.label,
       localOperatorOverrideId: policyContext?.localOperatorOverrideId,
+      executionBackend,
     });
     const approvalLinkage = buildCodeModeApprovalLinkage({
       workspaceId,
@@ -782,6 +793,7 @@ export class CapabilitySystemService {
         sessionId,
         turnId,
         sandbox,
+        executionBackend,
         codeArtifact,
         wrapperManifestArtifact,
         policySnapshotArtifact,
@@ -855,6 +867,7 @@ export class CapabilitySystemService {
       sessionId,
       turnId,
       sandbox,
+      executionBackend,
       codeArtifact,
       wrapperManifestArtifact,
       policySnapshotArtifact,
@@ -959,6 +972,7 @@ export class CapabilitySystemService {
       codeHash: stored.codeHash,
       originSurface,
       sandbox,
+      executionBackend,
       permissionProfileId: stored.permissionProfileId,
       localOperatorOverrideId: stored.localOperatorOverrideId,
     });
@@ -3218,6 +3232,7 @@ function buildCodeModeApprovalPayload(input: {
   workspaceId?: string;
   originSurface?: CodeModeOriginSurface;
   sandbox: CodeModeSandboxMetadata;
+  executionBackend: CodeModeRunExecutionBackendRef;
   permissionProfileId?: string;
   permissionProfileLabel?: string;
   localOperatorOverrideId?: string;
@@ -3241,6 +3256,7 @@ function buildCodeModeApprovalPayload(input: {
     requestedOutputIntent: input.requestedOutputIntent,
     saveCandidateOnSuccess: input.saveCandidateOnSuccess,
     sandbox: input.sandbox,
+    executionBackend: input.executionBackend,
     permissionProfileId: input.permissionProfileId,
     permissionProfileLabel: input.permissionProfileLabel,
     localOperatorOverrideId: input.localOperatorOverrideId,

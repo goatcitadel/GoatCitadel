@@ -125,4 +125,24 @@ describe("capabilities API", () => {
       "/api/v1/code-mode/runs/run%2F1/compare/run%2F0?sessionId=session-1&workspaceId=workspace-1",
     );
   });
+
+  it("fetches the read-only Code Mode execution backend registry", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        readOnly: true,
+        defaultBackendId: "trusted-code-host",
+        items: [],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { fetchCodeModeExecutionBackends } = await import("./capabilities");
+
+    const response = await fetchCodeModeExecutionBackends();
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/v1/code-mode/execution-backends");
+    expect(response).toMatchObject({
+      readOnly: true,
+      defaultBackendId: "trusted-code-host",
+    });
+  });
 });

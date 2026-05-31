@@ -114,6 +114,7 @@ describe("route service facades", () => {
       "getCodeModeRunInScope",
       "getProposalDetail",
       "listCatalog",
+      "listCodeModeExecutionBackends",
       "listCodeModeRuns",
       "listProposals",
       "promoteCandidate",
@@ -158,6 +159,10 @@ describe("route service facades", () => {
     expect(service.getCodeModeRunInScope("run-1", { workspaceId: "default" })).toEqual({
       method: "getCodeModeRunInScope",
       args: ["run-1", { workspaceId: "default" }],
+    });
+    expect(service.listCodeModeExecutionBackends()).toEqual({
+      method: "listCodeModeExecutionBackends",
+      args: [],
     });
     expect(service.createCodeModeRun({ workspaceId: "workspace-1" } as never)).toEqual({
       method: "createCodeModeRun",
