@@ -8,7 +8,10 @@ import type {
   DurableRunRecord,
   DurableRunTimelineEvent,
   MemoryContextPack,
+  OpsQualitySecurityExecutionItem,
   OpsQualitySnapshotResponse,
+  PromptPackSecurityEvalPackRecord,
+  PromptPackSecurityQualityGateRecord,
   RuntimeLifecycleResponse,
   RuntimeLifecycleTurnSummary,
   RuntimeLifecycleToolRunSummary,
@@ -281,6 +284,7 @@ function buildOpsQualitySnapshot(
   const evalProofRuns = evalProofResult.value ?? [];
   const securityEvalPacks = securityEvalPacksResult.value?.items ?? [];
   const securityQualityGates = securityQualityGatesResult.value?.items ?? [];
+  const securityExecution = buildSecurityExecutionItems(securityEvalPacks, securityQualityGates);
   const warnings = [
     ...(securityEvalPacksResult.value?.warnings ?? []),
     ...(securityQualityGatesResult.value?.warnings ?? []),
@@ -313,6 +317,8 @@ function buildOpsQualitySnapshot(
       ),
       securityGateCount: securityQualityGates.length,
       passingSecurityGateCount: securityQualityGates.filter((gate) => gate.status === "passed").length,
+      securityExecutionReadyCount: securityExecution.filter((item) => item.state === "passing").length,
+      securityExecutionBlockedCount: securityExecution.filter((item) => item.blockers.length > 0).length,
     },
     promptPacks: {
       state: promptPacksResult.error ? "unknown" : promptPacks.length > 0 ? "available" : "not_available",
@@ -340,6 +346,25 @@ function buildOpsQualitySnapshot(
       warnings: securityQualityGatesResult.value?.warnings ?? [],
       ...(securityQualityGatesResult.error ? { error: securityQualityGatesResult.error.message } : {}),
     },
+    securityExecution: {
+      state:
+        securityEvalPacksResult.error || securityQualityGatesResult.error
+          ? "unknown"
+          : securityExecution.length > 0
+            ? "available"
+            : "not_available",
+      items: securityExecution,
+      warnings: [
+        "Security execution depth is computed from stored defensive-security prompt-pack reports; it does not run providers or score tests.",
+      ],
+      ...(securityEvalPacksResult.error || securityQualityGatesResult.error
+        ? {
+            error: [securityEvalPacksResult.error?.message, securityQualityGatesResult.error?.message]
+              .filter(Boolean)
+              .join("; "),
+          }
+        : {}),
+    },
     warnings,
     nextChecks: [
       {
@@ -359,6 +384,83 @@ function buildOpsQualitySnapshot(
       },
     ],
   };
+}
+
+function buildSecurityExecutionItems(
+  packs: PromptPackSecurityEvalPackRecord[],
+  gates: PromptPackSecurityQualityGateRecord[],
+): OpsQualitySecurityExecutionItem[] {
+  const gatesByPackKey = new Map(gates.map((gate) => [gate.packKey, gate]));
+  return packs.map((pack) => {
+    const gate = gatesByPackKey.get(pack.packKey);
+    const evidence = gate?.evidence;
+    const testCount = evidence?.testCount ?? pack.testCount;
+    const completedRuns = evidence?.completedRuns ?? 0;
+    const scoredRuns = Math.max(0, completedRuns - (evidence?.needsScoreCount ?? completedRuns));
+    const runCoverage = testCount > 0 ? completedRuns / testCount : 0;
+    const scoredCoverage = testCount > 0 ? scoredRuns / testCount : 0;
+    const state = mapSecurityExecutionState(pack, gate);
+    return {
+      packKey: pack.packKey,
+      title: pack.title,
+      state,
+      importedPackId: pack.importedPackId,
+      testCount,
+      completedRuns,
+      failedRuns: evidence?.failedRuns ?? 0,
+      needsScoreCount: evidence?.needsScoreCount ?? testCount,
+      passCount: evidence?.passCount ?? 0,
+      failCount: evidence?.failCount ?? 0,
+      reviewCount: evidence?.reviewCount ?? 0,
+      runCoverage,
+      scoredCoverage,
+      effectivePassRate: evidence?.effectivePassRate ?? 0,
+      passThreshold: evidence?.passThreshold ?? 75,
+      modeCounts: pack.modeCounts,
+      toolTierCounts: pack.toolTierCounts,
+      capabilityTargets: pack.capabilityTargets,
+      likelyFailureClasses: pack.likelyFailureClasses,
+      failingCodes: evidence?.failingCodes ?? [],
+      blockers: gate?.blockers?.length ? gate.blockers : (pack.blockers ?? []),
+      nextActions: gate?.nextActions ?? [],
+      posture: {
+        readOnly: true,
+        sideEffectPosture: "audit_only",
+        source: "stored_prompt_pack_report",
+        callsProviders: false,
+        mutationPerformed: false,
+        note: "Security execution depth summarizes stored defensive-security prompt-pack run and scoring evidence; it does not run providers, score tests, approve releases, or certify security.",
+      },
+    };
+  });
+}
+
+function mapSecurityExecutionState(
+  pack: PromptPackSecurityEvalPackRecord,
+  gate?: PromptPackSecurityQualityGateRecord,
+): OpsQualitySecurityExecutionItem["state"] {
+  if (pack.status === "unavailable") {
+    return "definition_missing";
+  }
+  if (!gate || gate.status === "not_imported") {
+    return "definition_only";
+  }
+  if (gate.status === "not_run") {
+    return "run_required";
+  }
+  if (gate.status === "needs_score") {
+    return "scoring_required";
+  }
+  if (gate.status === "review") {
+    return "review_required";
+  }
+  if (gate.status === "failed") {
+    return "failing";
+  }
+  if (gate.status === "passed") {
+    return "passing";
+  }
+  return "unknown";
 }
 
 async function buildObserveRunTraceExport(

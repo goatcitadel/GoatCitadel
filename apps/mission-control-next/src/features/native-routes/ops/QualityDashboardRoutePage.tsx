@@ -63,6 +63,8 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
           paretoModelCount: 0,
           securityGateCount: 0,
           passingSecurityGateCount: 0,
+          securityExecutionReadyCount: 0,
+          securityExecutionBlockedCount: 0,
         },
         promptPacks: { state: "not_available", items: [] as PromptPackRecord[] },
         evalProof: { state: "not_available", items: [] as LlmEvalProofRunRecord[] },
@@ -74,6 +76,11 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
         securityQualityGates: {
           state: "not_available",
           items: [] as PromptPackSecurityQualityGateRecord[],
+          warnings: [],
+        },
+        securityExecution: {
+          state: "not_available",
+          items: [],
           warnings: [],
         },
         warnings: [],
@@ -90,6 +97,8 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
       securityEvalWarnings: quality.securityEvalPacks.warnings,
       securityGates: quality.securityQualityGates.items,
       securityGateWarnings: quality.securityQualityGates.warnings,
+      securityExecution: quality.securityExecution.items,
+      securityExecutionWarnings: quality.securityExecution.warnings,
     };
   }, []);
 
@@ -97,6 +106,7 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
   const evalRuns = data?.evalRuns ?? [];
   const securityEvalPacks = data?.securityEvalPacks ?? [];
   const securityGates = data?.securityGates ?? [];
+  const securityExecution = data?.securityExecution ?? [];
   const quality = data?.quality;
   const selectedPack = packs.find((pack) => pack.packId === selectedPackId) ?? packs[0] ?? null;
   const totalTests =
@@ -499,6 +509,55 @@ export function QualityDashboardRoutePage({ activeWorkspaceName, navigate, route
         </NativeCard>
 
         <NativeCard
+          title="Security execution depth"
+          subtitle="Stored defensive-security run coverage, scoring coverage, and pass posture by pack."
+          stats={[
+            { label: "Rows", value: String(securityExecution.length) },
+            { label: "Ready", value: String(quality?.metrics.securityExecutionReadyCount ?? 0) },
+            { label: "Blocked", value: String(quality?.metrics.securityExecutionBlockedCount ?? 0) },
+          ]}
+        >
+          {data?.securityExecutionWarnings?.[0] ? (
+            <div className="mc-next-runtime-notice tone-info">{data.securityExecutionWarnings[0]}</div>
+          ) : null}
+          <NativeList
+            density="compact"
+            items={securityExecution.map((item) => ({
+              title: item.title,
+              meta: [
+                formatSecurityExecutionState(item.state),
+                `${formatScore(item.runCoverage)} run coverage`,
+                `${formatScore(item.scoredCoverage)} scored`,
+                `${formatScore(item.effectivePassRate)} pass`,
+              ].join(" · "),
+              body:
+                item.blockers[0] ??
+                item.nextActions[0] ??
+                `${formatSecurityModeCounts(item.modeCounts)} · ${formatSecurityToolTierCounts(item.toolTierCounts)}`,
+            }))}
+            emptyLabel="No security execution depth rows are available."
+            maxHeight="min(34vh, 22rem)"
+          />
+          <NativeList
+            density="compact"
+            items={securityExecution.slice(0, 3).map((item) => ({
+              title: `${item.packKey} coverage`,
+              meta: `${item.completedRuns}/${item.testCount} runs · ${item.needsScoreCount} need score`,
+              body:
+                item.failingCodes.length > 0
+                  ? `Failing codes: ${item.failingCodes.slice(0, 8).join(", ")}`
+                  : `${item.capabilityTargets.slice(0, 5).join(", ") || "No capability targets recorded."}`,
+            }))}
+            emptyLabel="No security coverage details are available."
+          />
+          <div className="mc-next-approvals-chip-row">
+            <StatusChip tone="muted">Audit-only</StatusChip>
+            <StatusChip tone="muted">No provider calls</StatusChip>
+            <StatusChip tone="muted">Stored evidence</StatusChip>
+          </div>
+        </NativeCard>
+
+        <NativeCard
           title="Eval proof"
           subtitle="Provider/model quality evidence only appears when proof runs have been recorded."
           stats={[
@@ -670,6 +729,33 @@ function formatSecurityGateStatus(status: PromptPackSecurityQualityGateRecord["s
   return "Passed";
 }
 
+function formatSecurityExecutionState(
+  state: OpsQualitySnapshotResponse["securityExecution"]["items"][number]["state"],
+) {
+  if (state === "definition_missing") return "Definition missing";
+  if (state === "definition_only") return "Definition only";
+  if (state === "run_required") return "Run required";
+  if (state === "scoring_required") return "Scoring required";
+  if (state === "review_required") return "Review required";
+  if (state === "failing") return "Failing";
+  if (state === "passing") return "Passing";
+  return "Unknown";
+}
+
+function formatSecurityModeCounts(
+  counts: OpsQualitySnapshotResponse["securityExecution"]["items"][number]["modeCounts"],
+): string {
+  return `Chat ${counts.chat ?? 0} · Cowork ${counts.cowork ?? 0} · Code ${counts.code ?? 0}`;
+}
+
+function formatSecurityToolTierCounts(
+  counts: OpsQualitySnapshotResponse["securityExecution"]["items"][number]["toolTierCounts"],
+): string {
+  return `No-tools ${counts["no-tools"] ?? 0} · Implicit ${counts["implicit-tools"] ?? 0} · Explicit ${
+    counts["explicit-tools"] ?? 0
+  }`;
+}
+
 function qualitySnapshotIssues(snapshot: OpsQualitySnapshotResponse): NativeLoadIssue[] {
   return [
     snapshot.promptPacks.error ? { label: "Prompt packs", message: snapshot.promptPacks.error } : null,
@@ -679,6 +765,9 @@ function qualitySnapshotIssues(snapshot: OpsQualitySnapshotResponse): NativeLoad
       : null,
     snapshot.securityQualityGates.error
       ? { label: "Security quality gates", message: snapshot.securityQualityGates.error }
+      : null,
+    snapshot.securityExecution.error
+      ? { label: "Security execution depth", message: snapshot.securityExecution.error }
       : null,
   ].filter((issue): issue is NativeLoadIssue => Boolean(issue));
 }

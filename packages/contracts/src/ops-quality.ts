@@ -7,6 +7,49 @@ import type { LlmEvalProofRunRecord } from "./llm.js";
 
 export type OpsQualityAvailabilityState = "available" | "not_available" | "unknown";
 
+export type OpsQualitySecurityExecutionState =
+  | "definition_missing"
+  | "definition_only"
+  | "run_required"
+  | "scoring_required"
+  | "review_required"
+  | "failing"
+  | "passing"
+  | "unknown";
+
+export interface OpsQualitySecurityExecutionItem {
+  packKey: string;
+  title: string;
+  state: OpsQualitySecurityExecutionState;
+  importedPackId?: string;
+  testCount: number;
+  completedRuns: number;
+  failedRuns: number;
+  needsScoreCount: number;
+  passCount: number;
+  failCount: number;
+  reviewCount: number;
+  runCoverage: number;
+  scoredCoverage: number;
+  effectivePassRate: number;
+  passThreshold: number;
+  modeCounts: PromptPackSecurityEvalPackRecord["modeCounts"];
+  toolTierCounts: PromptPackSecurityEvalPackRecord["toolTierCounts"];
+  capabilityTargets: string[];
+  likelyFailureClasses: string[];
+  failingCodes: string[];
+  blockers: string[];
+  nextActions: string[];
+  posture: {
+    readOnly: true;
+    sideEffectPosture: "audit_only";
+    source: "stored_prompt_pack_report";
+    callsProviders: false;
+    mutationPerformed: false;
+    note: string;
+  };
+}
+
 export interface OpsQualitySnapshotResponse {
   version: "ops.quality_snapshot.v1";
   generatedAt: string;
@@ -31,6 +74,8 @@ export interface OpsQualitySnapshotResponse {
     paretoModelCount: number;
     securityGateCount: number;
     passingSecurityGateCount: number;
+    securityExecutionReadyCount: number;
+    securityExecutionBlockedCount: number;
   };
   promptPacks: {
     state: OpsQualityAvailabilityState;
@@ -51,6 +96,12 @@ export interface OpsQualitySnapshotResponse {
   securityQualityGates: {
     state: OpsQualityAvailabilityState;
     items: PromptPackSecurityQualityGateRecord[];
+    warnings: string[];
+    error?: string;
+  };
+  securityExecution: {
+    state: OpsQualityAvailabilityState;
+    items: OpsQualitySecurityExecutionItem[];
     warnings: string[];
     error?: string;
   };

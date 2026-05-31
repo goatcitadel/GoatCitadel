@@ -42,12 +42,28 @@ describe("dashboard route service", () => {
         paretoModelCount: 1,
         securityGateCount: 1,
         passingSecurityGateCount: 1,
+        securityExecutionReadyCount: 1,
+        securityExecutionBlockedCount: 0,
       },
       posture: { readOnly: true, sideEffectPosture: "audit_only" },
       promptPacks: { state: "available" },
       evalProof: { state: "available" },
       securityEvalPacks: { state: "available", warnings: ["Security packs are stored evidence."] },
       securityQualityGates: { state: "available", warnings: ["Security gates are read-only."] },
+      securityExecution: {
+        state: "available",
+        items: [
+          {
+            packKey: "security",
+            state: "passing",
+            testCount: 4,
+            completedRuns: 4,
+            runCoverage: 1,
+            scoredCoverage: 1,
+            posture: { readOnly: true, sideEffectPosture: "audit_only", callsProviders: false },
+          },
+        ],
+      },
     });
 
     expect(deps.storage.costLedger.summary).toHaveBeenCalledWith("month", "from", "to");
@@ -81,6 +97,18 @@ describe("dashboard route service", () => {
       state: "unknown",
       items: [],
       warnings: [],
+      error: "security gate store unavailable",
+    });
+    expect(snapshot.securityExecution).toMatchObject({
+      state: "unknown",
+      items: [
+        {
+          packKey: "security",
+          state: "definition_only",
+          runCoverage: 0,
+          scoredCoverage: 0,
+        },
+      ],
       error: "security gate store unavailable",
     });
     expect(snapshot.posture).toMatchObject({ readOnly: true, sideEffectPosture: "audit_only" });
@@ -589,7 +617,29 @@ function createDeps() {
       })),
       listSecurityQualityGates: vi.fn(() => ({
         generatedAt: "2026-05-31T00:00:00.000Z",
-        items: [{ gateId: "gate-1", title: "Gate", status: "passed" }],
+        items: [
+          {
+            gateId: "gate-1",
+            packKey: "security",
+            title: "Gate",
+            status: "passed",
+            evidence: {
+              definitionStatus: "imported",
+              testCount: 4,
+              completedRuns: 4,
+              failedRuns: 0,
+              needsScoreCount: 0,
+              passCount: 4,
+              failCount: 0,
+              reviewCount: 0,
+              effectivePassRate: 1,
+              passThreshold: 75,
+              failingCodes: [],
+            },
+            blockers: [],
+            nextActions: ["Keep this stored gate evidence."],
+          },
+        ],
         warnings: ["Security gates are read-only."],
       })),
     },

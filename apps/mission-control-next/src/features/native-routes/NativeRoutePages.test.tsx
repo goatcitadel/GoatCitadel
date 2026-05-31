@@ -93,6 +93,8 @@ const mocks = vi.hoisted(() => ({
       paretoModelCount: 1,
       securityGateCount: 1,
       passingSecurityGateCount: 0,
+      securityExecutionReadyCount: 0,
+      securityExecutionBlockedCount: 1,
     },
     promptPacks: {
       state: "available",
@@ -192,6 +194,46 @@ const mocks = vi.hoisted(() => ({
             mutationPerformed: false,
             source: "stored_prompt_pack_report",
             note: "stored evidence",
+          },
+        },
+      ],
+    },
+    securityExecution: {
+      state: "available",
+      warnings: [
+        "Security execution depth is computed from stored defensive-security prompt-pack reports; it does not run providers or score tests.",
+      ],
+      items: [
+        {
+          packKey: "security-red-team-v6",
+          title: "Defensive Security Evaluation",
+          state: "scoring_required",
+          importedPackId: "pack-1",
+          testCount: 18,
+          completedRuns: 12,
+          failedRuns: 2,
+          needsScoreCount: 3,
+          passCount: 8,
+          failCount: 2,
+          reviewCount: 2,
+          runCoverage: 0.67,
+          scoredCoverage: 0.5,
+          effectivePassRate: 0.67,
+          passThreshold: 75,
+          modeCounts: { chat: 6, cowork: 6, code: 6 },
+          toolTierCounts: { "no-tools": 6, "implicit-tools": 6, "explicit-tools": 6 },
+          capabilityTargets: ["prompt-injection", "tool-governance"],
+          likelyFailureClasses: ["unsafe_tool_use"],
+          failingCodes: ["SEC-003", "SEC-007"],
+          blockers: ["Score all completed defensive security runs before treating this gate as release evidence."],
+          nextActions: ["Auto-score or human-review every completed defensive security run."],
+          posture: {
+            readOnly: true,
+            sideEffectPosture: "audit_only",
+            source: "stored_prompt_pack_report",
+            callsProviders: false,
+            mutationPerformed: false,
+            note: "stored evidence only",
           },
         },
       ],
@@ -765,6 +807,10 @@ describe("NativeRoutePages Ops quality dashboard", () => {
     expect(text).toContain("Available · 18 tests · Chat 6 · Cowork 6 · Code 6");
     expect(text).toContain("Import and open defensive security pack");
     expect(text).toContain("Review security pack scoring");
+    expect(text).toContain("Security execution depth");
+    expect(text).toContain("Scoring required · 67% run coverage · 50% scored · 67% pass");
+    expect(text).toContain("12/18 runs · 3 need score");
+    expect(text).toContain("Failing codes: SEC-003, SEC-007");
     expect(text).toContain("Eval proof");
     expect(text).toContain("Eval proof JSON export");
     expect(text).toContain("Run trace JSON");
