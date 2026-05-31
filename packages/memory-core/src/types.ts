@@ -1,4 +1,4 @@
-import type { TranscriptEvent } from "@goatcitadel/contracts";
+import type { MemoryRetrievalMatchSignals, TranscriptEvent } from "@goatcitadel/contracts";
 
 export interface MemoryTranscriptSource {
   type: "transcript";
@@ -20,6 +20,7 @@ export interface MemoryItemSource {
   content: string;
   updatedAt: string;
   pinned?: boolean;
+  retrievalHints?: string[];
 }
 
 export type MemorySourceInput = MemoryTranscriptSource | MemoryFileSource | MemoryItemSource;
@@ -30,10 +31,12 @@ export interface MemoryCandidate {
   sourceRef: string;
   text: string;
   timestamp?: string;
+  retrievalHints?: string[];
 }
 
 export interface RankedMemoryCandidate extends MemoryCandidate {
   rankScore: number;
+  rankSignals: MemoryRetrievalMatchSignals;
 }
 
 export interface DistillationPayload {

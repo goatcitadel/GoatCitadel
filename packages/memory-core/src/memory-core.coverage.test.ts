@@ -45,6 +45,13 @@ function candidate(
     sourceRef: "notes.md",
     text,
     rankScore: 0.5,
+    rankSignals: {
+      lexicalScore: 0.2,
+      semanticHintScore: 0,
+      recencyScore: 0.2,
+      diversityScore: 0.1,
+      totalScore: 0.5,
+    },
     timestamp: "2026-05-01T00:00:00.000Z",
     ...overrides,
   };
@@ -155,6 +162,7 @@ describe("memory candidate collection", () => {
           content: "Use governed browser sessions for external research.",
           updatedAt: "2026-05-02T00:00:00.000Z",
           pinned: true,
+          retrievalHints: ["browser automation", "external research"],
         },
         {
           type: "memory_item",
@@ -175,6 +183,7 @@ describe("memory candidate collection", () => {
         sourceRef: "mem-1",
         text: expect.stringContaining("Launch decision (workspace/default)"),
         timestamp: "2026-05-02T00:00:00.000Z",
+        retrievalHints: ["browser automation", "external research"],
       }),
     ]);
     expect(collected[0]?.text).toContain("Pinned memory");
@@ -227,7 +236,41 @@ describe("memory ranking and citations", () => {
     );
 
     expect(ranked[0]?.candidateId).toBe("t:recent");
+    expect(ranked[0]?.rankSignals).toEqual({
+      lexicalScore: 1,
+      semanticHintScore: 0,
+      recencyScore: 0.25,
+      diversityScore: 0.1,
+      totalScore: 1.35,
+    });
     expect(ranked.map((item) => item.candidateId)).toEqual(["t:recent", "f:old", "f:invalid", "f:none"]);
+  });
+
+  it("uses bounded semantic hints without overpowering lexical matches", () => {
+    const ranked = rankMemoryCandidates(
+      "browser research",
+      [
+        {
+          candidateId: "m:hints",
+          sourceType: "memory_item",
+          sourceRef: "mem-1",
+          text: "Operator preference.",
+          retrievalHints: ["browser automation", "external research"],
+          timestamp: "2026-05-01T11:30:00.000Z",
+        },
+        {
+          candidateId: "f:lexical",
+          sourceType: "file",
+          sourceRef: "notes.md",
+          text: "browser research",
+          timestamp: "2026-05-01T11:30:00.000Z",
+        },
+      ],
+      { maxCandidates: 10, nowIso: "2026-05-01T12:00:00.000Z" },
+    );
+
+    expect(ranked.map((item) => item.candidateId)).toEqual(["f:lexical", "m:hints"]);
+    expect(ranked[1]?.rankSignals.semanticHintScore).toBe(0.2);
   });
 
   it("uses at least one candidate limit and supports no lexical terms", () => {

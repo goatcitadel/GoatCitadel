@@ -55,6 +55,7 @@ The repo may make these claims at `1.0`:
 - Durable execution owns the shipped mission-session Chat / Cowork / Code resumable flow set documented in [docs/CANONICAL_RUNTIME_STATE_MODEL.md](./CANONICAL_RUNTIME_STATE_MODEL.md). External writeback operator actions now record audit-only durable evidence envelopes, but external send/retry/edit/stream replay remains one-shot and non-resumable until a replay-safe external side-effect runner lands.
 - Approval follow-on work is surfaced through explicit approval effect records rather than inferred from scattered side tables or inline helper effects.
 - `MemoryLifecycleService` is the operator-facing memory lifecycle owner for context composition, learned-memory policy, and memory item list/edit/forget/history.
+- Memory retrieval evidence is lexical/recency plus optional semantic-hint scoring from operator-visible memory item metadata. `1.0` must not describe this as vector search or hidden autonomous memory promotion.
 - Provider secrets may persist in local env or config files when secure-store persistence is unavailable or disabled.
 
 The repo must not claim these at `1.0` unless separately proven and documented:

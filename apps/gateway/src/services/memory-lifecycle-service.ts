@@ -40,6 +40,7 @@ import type {
   MemoryRetrievalBenchmarkItem,
   MemoryRetrievalBenchmarkRequest,
   MemoryRetrievalBenchmarkResponse,
+  MemoryRetrievalStrategy,
   StructuredMemoryAuthority,
   StructuredMemoryScope,
   StructuredMemorySourceRef,
@@ -1191,6 +1192,8 @@ export class MemoryLifecycleService {
           originalTokenEstimate: pack.originalTokenEstimate,
           distilledTokenEstimate: pack.distilledTokenEstimate,
           overlapScore: calculateLexicalOverlap(prompt, sourceText),
+          retrievalStrategy: resolveBenchmarkRetrievalStrategy(pack),
+          semanticCoverageNote: buildMemoryBenchmarkCoverageNote(pack),
           qmdStatus: pack.quality.status,
         });
       } catch (error) {
@@ -1213,6 +1216,13 @@ export class MemoryLifecycleService {
       itemCount: items.length,
       avgLatencyMs: average(items.map((item) => item.latencyMs)),
       avgOverlapScore: average(items.filter((item) => item.status === "completed").map((item) => item.overlapScore)),
+      retrievalStrategies: Array.from(
+        new Set(
+          items.map((item) => item.retrievalStrategy).filter((item): item is MemoryRetrievalStrategy => Boolean(item)),
+        ),
+      ),
+      semanticCoverageNote:
+        "Retrieval benchmark overlap is lexical and provenance-aware. Semantic-hint scores only use operator-visible metadata; vector/embedding semantic search is not claimed here.",
       items,
       warnings,
     };
@@ -1888,6 +1898,28 @@ function calculateLexicalOverlap(prompt: string, contextText: string): number {
     }
   }
   return Number((matches / promptTerms.size).toFixed(3));
+}
+
+function resolveBenchmarkRetrievalStrategy(pack: MemoryContextPack): MemoryRetrievalStrategy | undefined {
+  return pack.citations.find((citation) => citation.provenance?.retrievalStrategy)?.provenance?.retrievalStrategy;
+}
+
+function buildMemoryBenchmarkCoverageNote(pack: MemoryContextPack): string {
+  const strategies = new Set(
+    pack.citations
+      .map((citation) => citation.provenance?.retrievalStrategy)
+      .filter((strategy): strategy is MemoryRetrievalStrategy => Boolean(strategy)),
+  );
+  if (strategies.has("semantic_hints")) {
+    return "Context used operator-visible semantic hints plus lexical/recency scoring; vector semantic search was not used.";
+  }
+  if (strategies.has("lexical_recency")) {
+    return "Context was selected with lexical/recency provenance; vector semantic search was not used.";
+  }
+  if (pack.citations.length === 0) {
+    return "No citations were selected, so retrieval strategy coverage is unavailable.";
+  }
+  return "Citation provenance did not record a retrieval strategy.";
 }
 
 function significantTerms(value: string): Set<string> {

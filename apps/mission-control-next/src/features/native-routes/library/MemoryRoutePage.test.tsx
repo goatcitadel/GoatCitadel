@@ -114,6 +114,7 @@ const memorySnapshot = vi.hoisted(() => ({
           confidence: "high",
           lastUsedAt: "2026-04-22T00:10:00.000Z",
           workspaceId: "default",
+          retrievalHints: ["release checklist", "verification cadence"],
         },
       },
     ],
@@ -369,6 +370,8 @@ describe("MemoryRoutePage", () => {
     );
 
     expect(markup).toContain("Memory items");
+    expect(markup).toContain("Retrieval hints");
+    expect(markup).toContain("release checklist, verification cadence");
     expect(markup).toContain("Lifecycle");
     expect(markup).toContain("Run maintenance now");
     expect(markup).toContain("Tighten cadence for fresh context.");

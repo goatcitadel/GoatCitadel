@@ -1171,9 +1171,14 @@ function MemoryProvenancePanel({ item, writeEnvelopeCount }: { item: MemoryItemR
     readMetadataString(item.metadata, "source") ??
     readMetadataString(item.metadata, "sourceRef") ??
     "local memory store";
+  const retrievalHints = collectMemoryRetrievalHints(item.metadata);
   const provenanceRows = [
     { label: "Why it may be used", value: reason },
     { label: "Source", value: source },
+    {
+      label: "Retrieval hints",
+      value: retrievalHints.length > 0 ? retrievalHints.join(", ") : "not recorded",
+    },
     { label: "Namespace", value: item.namespace },
     { label: "Confidence", value: readMetadataString(item.metadata, "confidence") ?? "not recorded" },
     { label: "Last used", value: readMetadataString(item.metadata, "lastUsedAt") ?? "not recorded" },
@@ -1211,6 +1216,16 @@ function MemoryProvenancePanel({ item, writeEnvelopeCount }: { item: MemoryItemR
       </dl>
     </div>
   );
+}
+
+function collectMemoryRetrievalHints(metadata: unknown): string[] {
+  const hints = new Set<string>();
+  for (const key of ["retrievalHints", "semanticTerms", "tags", "aliases", "keywords"]) {
+    for (const value of readMetadataStringList(metadata, key)) {
+      hints.add(value);
+    }
+  }
+  return [...hints];
 }
 
 function SectionTruthNotice({ message }: { message: string | null | undefined }) {

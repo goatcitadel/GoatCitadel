@@ -202,6 +202,7 @@ Implementation status:
 - QMD composition, distillation, and caching: complete.
 - Memory maintenance (retention, compaction, recommendations): feature-flagged behind `memoryMaintenanceV1Enabled`.
 - Learned-memory promotion, dedupe, workspace scope resolution, maintenance recommendation suppression, memory item list/edit/forget/history, and shared write-policy decisions now route through lifecycle-owned policy helpers coordinated by `MemoryLifecycleService`.
+- Memory context citations carry retrieval strategy and match-signal provenance. Current retrieval is lexical/recency plus optional operator-visible semantic hints from memory item metadata; this is not a vector/embedding semantic search claim.
 
 Notes:
 - `MemoryLifecycleService` is the operator-facing lifecycle owner for context composition, learned-memory entry points, maintenance policy/run orchestration, memory item list/edit/forget/history, and shared dedupe/scope/write policy decisions.

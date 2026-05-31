@@ -8,6 +8,8 @@ import type {
   MemoryFreshness,
   MemoryQmdStatsResponse,
   MemoryRelationScope,
+  MemoryRetrievalMatchSignals,
+  MemoryRetrievalStrategy,
 } from "@goatcitadel/contracts";
 import {
   buildCacheKey,
@@ -421,6 +423,7 @@ export class MemoryContextService {
           content: item.content,
           updatedAt: item.updatedAt,
           pinned: item.pinned,
+          retrievalHints: extractMemoryRetrievalHints(item.metadata),
         }));
     } catch {
       return [];
@@ -451,7 +454,12 @@ function enrichMemoryPack(
   relationScope: MemoryRelationScope,
   candidatesById: Map<
     string,
-    { sourceType: "transcript" | "file" | "memory_item"; timestamp?: string; rankScore?: number }
+    {
+      sourceType: "transcript" | "file" | "memory_item";
+      timestamp?: string;
+      rankScore?: number;
+      rankSignals?: MemoryRetrievalMatchSignals;
+    }
   >,
 ): MemoryContextPack {
   return {
@@ -466,25 +474,57 @@ function enrichMemoryCitations(
   relationScope: MemoryRelationScope,
   candidatesById: Map<
     string,
-    { sourceType: "transcript" | "file" | "memory_item"; timestamp?: string; rankScore?: number }
+    {
+      sourceType: "transcript" | "file" | "memory_item";
+      timestamp?: string;
+      rankScore?: number;
+      rankSignals?: MemoryRetrievalMatchSignals;
+    }
   >,
 ): MemoryCitation[] {
   return citations.map((citation) => {
     const candidate = candidatesById.get(citation.candidateId);
     const selectionReason =
-      candidate?.rankScore !== undefined
-        ? `selected for lexical/recency score ${candidate.rankScore.toFixed(3)}`
-        : (citation.provenance?.selectionReason ?? "selected from reusable cached context");
+      candidate?.rankSignals !== undefined
+        ? buildMemorySelectionReason(candidate.rankSignals)
+        : candidate?.rankScore !== undefined
+          ? `selected by lexical/recency retrieval score ${candidate.rankScore.toFixed(3)}`
+          : (citation.provenance?.selectionReason ?? "selected from reusable cached context");
     return {
       ...citation,
       provenance: {
         relationScope: citation.provenance?.relationScope ?? relationScope,
         freshness: citation.provenance?.freshness ?? classifyMemoryFreshness(candidate?.timestamp),
         selectionReason,
+        retrievalStrategy: citation.provenance?.retrievalStrategy ?? resolveCitationRetrievalStrategy(candidate),
+        matchSignals: citation.provenance?.matchSignals ?? candidate?.rankSignals,
         sourceTimestamp: citation.provenance?.sourceTimestamp ?? candidate?.timestamp,
       },
     };
   });
+}
+
+function buildMemorySelectionReason(signals: MemoryRetrievalMatchSignals): string {
+  const method = signals.semanticHintScore > 0 ? "semantic-hint retrieval" : "lexical/recency retrieval";
+  return `selected by ${method} score ${signals.totalScore.toFixed(3)} (lexical ${signals.lexicalScore.toFixed(
+    3,
+  )}, semantic hint ${signals.semanticHintScore.toFixed(3)}, recency ${signals.recencyScore.toFixed(
+    3,
+  )}, diversity ${signals.diversityScore.toFixed(3)})`;
+}
+
+function resolveCitationRetrievalStrategy(
+  candidate:
+    | {
+        rankSignals?: MemoryRetrievalMatchSignals;
+        rankScore?: number;
+      }
+    | undefined,
+): MemoryRetrievalStrategy | undefined {
+  if (candidate?.rankSignals) {
+    return candidate.rankSignals.semanticHintScore > 0 ? "semantic_hints" : "lexical_recency";
+  }
+  return candidate?.rankScore !== undefined ? "lexical_recency" : undefined;
 }
 
 function toCandidateMap(
@@ -493,9 +533,33 @@ function toCandidateMap(
     sourceType: "transcript" | "file" | "memory_item";
     timestamp?: string;
     rankScore?: number;
+    rankSignals?: MemoryRetrievalMatchSignals;
   }>,
 ) {
   return new Map(candidates.map((candidate) => [candidate.candidateId, candidate] as const));
+}
+
+function extractMemoryRetrievalHints(metadata: Record<string, unknown>): string[] | undefined {
+  const hints = new Set<string>();
+  for (const key of ["retrievalHints", "semanticTerms", "tags", "aliases", "keywords"]) {
+    for (const value of readStringList(metadata[key])) {
+      hints.add(value);
+    }
+  }
+  return hints.size > 0 ? [...hints] : undefined;
+}
+
+function readStringList(value: unknown): string[] {
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean);
 }
 
 function resolveMemoryRelationScope(input: MemoryContextComposeRequest): MemoryRelationScope {

@@ -15,11 +15,20 @@ export function rankMemoryCandidates(
 
   const scored = candidates.map((candidate) => {
     const lexical = lexicalScore(terms, candidate.text);
+    const semanticHint = semanticHintScore(terms, candidate.retrievalHints);
     const recency = recencyScore(now, candidate.timestamp);
     const diversity = candidate.sourceType === "transcript" ? 0.1 : candidate.sourceType === "memory_item" ? 0.08 : 0;
+    const rankScore = lexical + semanticHint + recency + diversity;
     return {
       ...candidate,
-      rankScore: lexical + recency + diversity,
+      rankScore,
+      rankSignals: {
+        lexicalScore: roundScore(lexical),
+        semanticHintScore: roundScore(semanticHint),
+        recencyScore: roundScore(recency),
+        diversityScore: roundScore(diversity),
+        totalScore: roundScore(rankScore),
+      },
     } satisfies RankedMemoryCandidate;
   });
 
@@ -37,6 +46,10 @@ export function rankMemoryCandidates(
     return 0;
   });
   return scored.slice(0, Math.max(1, options.maxCandidates));
+}
+
+function roundScore(value: number): number {
+  return Number(value.toFixed(3));
 }
 
 function tokenize(input: string): string[] {
@@ -59,6 +72,23 @@ function lexicalScore(terms: string[], content: string): number {
     }
   }
   return hits / terms.length;
+}
+
+function semanticHintScore(terms: string[], hints?: string[]): number {
+  if (terms.length === 0 || !hints?.length) {
+    return 0;
+  }
+  const hintTerms = hints.flatMap((hint) => tokenize(hint));
+  if (hintTerms.length === 0) {
+    return 0;
+  }
+  let hits = 0;
+  for (const term of terms) {
+    if (hintTerms.some((hint) => hint.includes(term) || term.includes(hint))) {
+      hits += 1;
+    }
+  }
+  return Math.min(0.2, (hits / terms.length) * 0.2);
 }
 
 function recencyScore(nowMs: number, timestamp?: string): number {

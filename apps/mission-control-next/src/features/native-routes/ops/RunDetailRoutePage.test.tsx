@@ -96,7 +96,15 @@ describe("RunDetailRoutePage", () => {
                 provenance: {
                   relationScope: "project",
                   freshness: "recent",
-                  selectionReason: "selected for lexical/recency score 0.876",
+                  retrievalStrategy: "semantic_hints",
+                  selectionReason: "selected by semantic-hint retrieval score 0.956",
+                  matchSignals: {
+                    lexicalScore: 0.606,
+                    semanticHintScore: 0.2,
+                    recencyScore: 0.1,
+                    diversityScore: 0.05,
+                    totalScore: 0.956,
+                  },
                 },
               },
             ],
@@ -115,7 +123,9 @@ describe("RunDetailRoutePage", () => {
 
     expect(text).toContain("ctx-1");
     expect(text).toContain("Why used: memory://item-1");
-    expect(text).toContain("selected for lexical/recency score 0.876");
+    expect(text).toContain("selected by semantic-hint retrieval score 0.956");
+    expect(text).toContain("semantic hints");
+    expect(text).toContain("signals lexical 0.606, hint 0.200, recency 0.100, diversity 0.050");
     expect(text).toContain("score 0.876");
     expect(text).toContain("project");
   });

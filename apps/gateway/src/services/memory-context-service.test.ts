@@ -184,7 +184,15 @@ describe("MemoryContextService", () => {
         provenance: expect.objectContaining({
           relationScope: "project",
           freshness: "fresh",
-          selectionReason: expect.stringContaining("lexical/recency score"),
+          retrievalStrategy: "lexical_recency",
+          selectionReason: expect.stringContaining("lexical/recency retrieval score"),
+          matchSignals: expect.objectContaining({
+            lexicalScore: expect.any(Number),
+            semanticHintScore: 0,
+            recencyScore: expect.any(Number),
+            diversityScore: expect.any(Number),
+            totalScore: expect.any(Number),
+          }),
         }),
       }),
     ]);
@@ -283,7 +291,7 @@ describe("MemoryContextService", () => {
           namespace: "workspace/default",
           title: "Browser governance",
           content: "Browser sessions require scoped grants before tool access.",
-          metadata: {},
+          metadata: { retrievalHints: ["browser automation", "external research"] },
           pinned: true,
           status: "active",
           lifecycleState: "active",
@@ -353,7 +361,15 @@ describe("MemoryContextService", () => {
         sourceRef: "mem-browser",
         provenance: expect.objectContaining({
           relationScope: "self",
-          selectionReason: expect.stringContaining("lexical/recency score"),
+          retrievalStrategy: "semantic_hints",
+          selectionReason: expect.stringContaining("semantic-hint retrieval score"),
+          matchSignals: expect.objectContaining({
+            lexicalScore: expect.any(Number),
+            semanticHintScore: expect.any(Number),
+            recencyScore: expect.any(Number),
+            diversityScore: expect.any(Number),
+            totalScore: expect.any(Number),
+          }),
           sourceTimestamp: "2026-05-30T18:05:00.000Z",
         }),
       }),

@@ -2,6 +2,15 @@ export type MemoryContextScope = "chat" | "orchestration";
 export type MemoryQmdStatus = "generated" | "cache_hit" | "fallback" | "failed";
 export type MemoryRelationScope = "self" | "peer" | "project";
 export type MemoryFreshness = "fresh" | "recent" | "stale" | "unknown";
+export type MemoryRetrievalStrategy = "lexical_recency" | "semantic_hints";
+
+export interface MemoryRetrievalMatchSignals {
+  lexicalScore: number;
+  semanticHintScore: number;
+  recencyScore: number;
+  diversityScore: number;
+  totalScore: number;
+}
 
 export interface MemoryContextComposeRequest {
   scope: MemoryContextScope;
@@ -20,6 +29,8 @@ export interface MemoryCitationProvenance {
   relationScope: MemoryRelationScope;
   freshness: MemoryFreshness;
   selectionReason: string;
+  retrievalStrategy?: MemoryRetrievalStrategy;
+  matchSignals?: MemoryRetrievalMatchSignals;
   sourceTimestamp?: string;
 }
 
@@ -107,6 +118,8 @@ export interface MemoryRetrievalBenchmarkItem {
   originalTokenEstimate: number;
   distilledTokenEstimate: number;
   overlapScore: number;
+  retrievalStrategy?: MemoryRetrievalStrategy;
+  semanticCoverageNote?: string;
   qmdStatus?: MemoryQmdStatus;
   error?: string;
 }
@@ -116,6 +129,8 @@ export interface MemoryRetrievalBenchmarkResponse {
   itemCount: number;
   avgLatencyMs: number;
   avgOverlapScore: number;
+  retrievalStrategies: MemoryRetrievalStrategy[];
+  semanticCoverageNote: string;
   items: MemoryRetrievalBenchmarkItem[];
   warnings: string[];
 }

@@ -495,18 +495,21 @@ function buildMemoryCitationItem(citation: unknown, contextLabel: string, index:
   const sourceRef = readString(entry.sourceRef) ?? readString(entry.candidateId) ?? `citation ${index + 1}`;
   const whyUsed = readString(provenance?.selectionReason) ?? "No selection reason was recorded.";
   const snippet = readString(entry.snippet);
+  const matchSignals = readRecord(provenance, "matchSignals");
+  const matchSignalText = formatMemoryMatchSignals(matchSignals);
   return {
     title: `Why used: ${sourceRef}`,
     meta: [
       contextLabel,
       readString(entry.sourceType),
       formatScore(readNumber(entry.score)),
+      formatMemoryRetrievalStrategy(readString(provenance?.retrievalStrategy)),
       readString(provenance?.freshness),
       readString(provenance?.relationScope),
     ]
       .filter(Boolean)
       .join(" · "),
-    body: snippet ? `${whyUsed} · ${truncateText(snippet, 220)}` : whyUsed,
+    body: [whyUsed, matchSignalText, snippet ? truncateText(snippet, 220) : undefined].filter(Boolean).join(" · "),
   };
 }
 
@@ -667,6 +670,36 @@ function formatDuration(value?: number): string {
 
 function formatScore(value?: number): string | undefined {
   return typeof value === "number" && Number.isFinite(value) ? `score ${value.toFixed(3)}` : undefined;
+}
+
+function formatMemoryRetrievalStrategy(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (value === "semantic_hints") {
+    return "semantic hints";
+  }
+  if (value === "lexical_recency") {
+    return "lexical/recency";
+  }
+  return value;
+}
+
+function formatMemoryMatchSignals(signals?: RunTracePayload): string | undefined {
+  if (!signals) {
+    return undefined;
+  }
+  const parts = [
+    formatSignalValue("lexical", readNumber(signals.lexicalScore)),
+    formatSignalValue("hint", readNumber(signals.semanticHintScore)),
+    formatSignalValue("recency", readNumber(signals.recencyScore)),
+    formatSignalValue("diversity", readNumber(signals.diversityScore)),
+  ].filter(Boolean);
+  return parts.length > 0 ? `signals ${parts.join(", ")}` : undefined;
+}
+
+function formatSignalValue(label: string, value?: number): string | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? `${label} ${value.toFixed(3)}` : undefined;
 }
 
 function isStableSurface(value: unknown): value is "chat" | "cowork" | "code" {

@@ -81,7 +81,27 @@ describe("MemoryLifecycleService", () => {
         queryHash: "query",
         sourcesHash: "sources",
         contextText: "GoatCitadel runtime truth records provider latency and memory provenance.",
-        citations: [{ candidateId: "c-1", sourceType: "file", sourceRef: "memory.md", score: 0.9 }],
+        citations: [
+          {
+            candidateId: "c-1",
+            sourceType: "file",
+            sourceRef: "memory.md",
+            score: 0.9,
+            provenance: {
+              relationScope: "self",
+              freshness: "fresh",
+              selectionReason: "selected by semantic-hint retrieval score 1.050",
+              retrievalStrategy: "semantic_hints",
+              matchSignals: {
+                lexicalScore: 0.8,
+                semanticHintScore: 0.2,
+                recencyScore: 0.05,
+                diversityScore: 0,
+                totalScore: 1.05,
+              },
+            },
+          },
+        ],
         quality: { status: "generated" },
         originalTokenEstimate: 120,
         distilledTokenEstimate: 40,
@@ -146,10 +166,14 @@ describe("MemoryLifecycleService", () => {
       }),
     ).resolves.toMatchObject({
       itemCount: 1,
+      retrievalStrategies: ["semantic_hints"],
+      semanticCoverageNote: expect.stringContaining("Semantic-hint scores only use operator-visible metadata"),
       items: [
         {
           status: "completed",
           citationsCount: 1,
+          retrievalStrategy: "semantic_hints",
+          semanticCoverageNote: expect.stringContaining("operator-visible semantic hints"),
           qmdStatus: "generated",
         },
       ],
