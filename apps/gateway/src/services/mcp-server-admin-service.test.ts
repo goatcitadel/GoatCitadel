@@ -173,6 +173,27 @@ describe("mcp-server-admin-service", () => {
     });
   });
 
+  it("refuses to connect unsupported remote records before mutating connection state", async () => {
+    const remote = createServer({
+      serverId: "remote-1",
+      transport: "sse",
+      command: undefined,
+      args: undefined,
+      url: "https://remote.example.test/mcp",
+      status: "disconnected",
+    });
+    const host = createHost({ servers: [remote] });
+
+    await expect(connectMcpServer(host, "remote-1")).rejects.toThrow(
+      "MCP transport sse is not part of the 1.0 runtime-invokable surface",
+    );
+
+    expect(host.servers[0]).toEqual(remote);
+    expect(host.patchMcpServerState).not.toHaveBeenCalled();
+    expect(host.resolveConnectedMcpTools).not.toHaveBeenCalled();
+    expect(host.writeMcpTools).not.toHaveBeenCalled();
+  });
+
   it("persists connection errors before rethrowing", async () => {
     const host = createHost({
       servers: [createServer({ serverId: "server-1" })],

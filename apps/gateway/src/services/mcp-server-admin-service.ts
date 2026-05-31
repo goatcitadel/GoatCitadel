@@ -9,7 +9,11 @@ import type {
 } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { inferMcpCategory, normalizeMcpPolicy } from "./mcp-server-policy.js";
-import { buildUnsupportedMcpTransportMessage, isAllowedMcpDefinitionForCreate } from "./mcp-template-visibility.js";
+import {
+  buildUnsupportedMcpTransportMessage,
+  isAllowedMcpDefinitionForCreate,
+  isRuntimeSupportedMcpDefinition,
+} from "./mcp-template-visibility.js";
 
 interface McpAuthStateRecord {
   accessTokenRef?: string;
@@ -114,6 +118,10 @@ export function updateMcpServerPolicy(
 }
 
 export async function connectMcpServer(host: McpServerAdminHost, serverId: string): Promise<McpServerRecord> {
+  const server = host.requireMcpServer(serverId);
+  if (!isRuntimeSupportedMcpDefinition(server)) {
+    throw new Error(buildUnsupportedMcpTransportMessage(server.transport));
+  }
   const connecting = host.patchMcpServerState(serverId, {
     status: "connecting",
     lastError: undefined,
