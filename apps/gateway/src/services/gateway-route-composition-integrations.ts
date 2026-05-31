@@ -1,4 +1,9 @@
-import type { IntegrationCatalogEntry, IntegrationConnection, IntegrationKind } from "@goatcitadel/contracts";
+import type {
+  ExternalSideEffectRunListQuery,
+  IntegrationCatalogEntry,
+  IntegrationConnection,
+  IntegrationKind,
+} from "@goatcitadel/contracts";
 import { createChannelSetupRoutePort } from "./channel-setup-route-service.js";
 import { createCommsRoutePort } from "./comms-route-service.js";
 import { createIntegrationRoutePort } from "./integration-route-service.js";
@@ -138,6 +143,13 @@ export function composeIntegrationChannelRouteDependencies(
         input,
       ),
     listDiscordPairings: (connectionId) => integrationChannel.listDiscordPairings(connectionId),
+    listExternalSideEffectRuns: (query: ExternalSideEffectRunListQuery = {}) =>
+      query.connectionId
+        ? gateway.storage.externalSideEffectRuns.listByConnection(query.connectionId, {
+            workspaceId: query.workspaceId,
+            limit: query.limit,
+          })
+        : gateway.storage.externalSideEffectRuns.listByWorkspace(query.workspaceId ?? "default", query.limit),
     listIntegrationCatalog,
     listIntegrationConnections: (kind, limit) => integrationChannel.listIntegrationConnections(kind, limit),
     listIntegrationPlugins: () => integrationChannel.listIntegrationPlugins(),

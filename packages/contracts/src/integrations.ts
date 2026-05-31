@@ -177,6 +177,16 @@ export interface ExternalSideEffectRunRecord {
   updatedAt: string;
 }
 
+export interface ExternalSideEffectRunListQuery {
+  workspaceId?: string;
+  connectionId?: string;
+  limit?: number;
+}
+
+export interface ExternalSideEffectRunListResponse {
+  items: ExternalSideEffectRunRecord[];
+}
+
 export interface IntegrationExternalWritebackEnvelope {
   status: IntegrationExternalWritebackEnvelopeStatus;
   intentId?: string;

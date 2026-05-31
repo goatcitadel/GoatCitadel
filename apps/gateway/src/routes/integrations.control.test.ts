@@ -177,6 +177,57 @@ describe("integrations control routes", () => {
     );
   });
 
+  it("lists external side-effect run ledger records through a read-only projection", async () => {
+    const listExternalSideEffectRuns = vi.fn(() => [
+      {
+        runId: "extfx_111111111111111111111111",
+        workspaceId: "workspace-1",
+        boundary: "integration_operator_action",
+        routePath: "external_side_effect:integration_operator_action:productivity.trello:conn-1:write",
+        catalogId: "productivity.trello",
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        actionId: "write",
+        actorScope: "11111111-1111-1111-1111-111111111111",
+        idempotencyKey: "operator-key",
+        payloadHash: "payload-hash",
+        status: "unknown_external_outcome",
+        replayPolicy: "idempotent_external",
+        replayAttempt: "new",
+        resumeState: "not_resumable",
+        attemptCount: 1,
+        externalCallStartedAt: "2026-05-31T10:00:02.000Z",
+        createdAt: "2026-05-31T10:00:00.000Z",
+        updatedAt: "2026-05-31T10:00:03.000Z",
+      },
+    ]);
+    app = Fastify();
+    decorateIntegrationServices(app, {
+      listExternalSideEffectRuns,
+    });
+    await app.register(integrationsRoutes);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/integrations/external-side-effects?workspaceId=workspace-1&connectionId=11111111-1111-1111-1111-111111111111&limit=25",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(listExternalSideEffectRuns).toHaveBeenCalledWith({
+      workspaceId: "workspace-1",
+      connectionId: "11111111-1111-1111-1111-111111111111",
+      limit: 25,
+    });
+    expect(response.json()).toEqual({
+      items: [
+        expect.objectContaining({
+          runId: "extfx_111111111111111111111111",
+          status: "unknown_external_outcome",
+          resumeState: "not_resumable",
+        }),
+      ],
+    });
+  });
+
   it("forwards the request idempotency key into integration operator actions", async () => {
     const invokeIntegrationConnectionAction = vi.fn(async () => ({
       connectionId: "11111111-1111-1111-1111-111111111111",

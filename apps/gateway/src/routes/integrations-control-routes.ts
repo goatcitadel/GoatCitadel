@@ -8,6 +8,7 @@ import {
   connectionsQuerySchema,
   createConnectionSchema,
   discordPairingParamsSchema,
+  externalSideEffectRunsQuerySchema,
   pluginInstallSchema,
   pluginParamsSchema,
   updateConnectionSchema,
@@ -41,6 +42,16 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
     }
     return reply.send({
       items: fastify.services.integrations.listIntegrationConnections(parsed.data.kind, parsed.data.limit),
+    });
+  });
+
+  fastify.get("/api/v1/integrations/external-side-effects", async (request, reply) => {
+    const parsed = externalSideEffectRunsQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    return reply.send({
+      items: fastify.services.integrations.listExternalSideEffectRuns(parsed.data),
     });
   });
 

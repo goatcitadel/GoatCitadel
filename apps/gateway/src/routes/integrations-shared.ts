@@ -22,6 +22,12 @@ export const connectionsQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(500).default(200),
 });
 
+export const externalSideEffectRunsQuerySchema = z.object({
+  workspaceId: z.string().trim().min(1).max(200).optional(),
+  connectionId: z.string().trim().min(1).max(200).optional(),
+  limit: z.coerce.number().int().positive().max(500).default(200),
+});
+
 export const createConnectionSchema = z.object({
   catalogId: z.string().min(3),
   label: z.string().min(1).max(120).optional(),

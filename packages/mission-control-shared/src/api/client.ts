@@ -429,6 +429,7 @@ export {
   discoverTelegramTargets,
   fetchConnectorRecords,
   fetchDiscordPairings,
+  fetchExternalSideEffectRuns,
   fetchSlackOAuthStatus,
   fetchIntegrationCatalog,
   fetchIntegrationConnectionDiagnostics,

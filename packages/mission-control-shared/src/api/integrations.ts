@@ -22,6 +22,8 @@ import type {
   ConnectorRecord,
   DiscordPairingRecord,
   DiscordRuntimeStatus,
+  ExternalSideEffectRunListQuery,
+  ExternalSideEffectRunListResponse,
   GmailReadQuery,
   GmailSendInput,
   IntegrationActionInvokeInput,
@@ -197,6 +199,23 @@ export async function fetchIntegrationConnections(
 ): Promise<{ items: IntegrationConnection[] }> {
   const query = kind ? `?kind=${encodeURIComponent(kind)}&limit=300` : "?limit=300";
   return request(`/api/v1/integrations/connections${query}`);
+}
+
+export async function fetchExternalSideEffectRuns(
+  query?: ExternalSideEffectRunListQuery,
+): Promise<ExternalSideEffectRunListResponse> {
+  const params = new URLSearchParams();
+  if (query?.workspaceId) {
+    params.set("workspaceId", query.workspaceId);
+  }
+  if (query?.connectionId) {
+    params.set("connectionId", query.connectionId);
+  }
+  if (typeof query?.limit === "number") {
+    params.set("limit", String(Math.min(Math.max(Math.trunc(query.limit), 1), 500)));
+  }
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  return request<ExternalSideEffectRunListResponse>(`/api/v1/integrations/external-side-effects${suffix}`);
 }
 
 export async function fetchConnectorRecords(

@@ -7,6 +7,7 @@ import * as capabilities from "./capabilities";
 import * as cron from "./cron";
 import * as demo from "./demo";
 import * as durable from "./durable";
+import * as integrations from "./integrations";
 import * as recipes from "./orchestration-recipes";
 import * as researchSearch from "./research-search";
 import * as sessions from "./sessions";
@@ -219,6 +220,14 @@ describe("additional shared API wrappers", () => {
     await expectCall(cron.deleteCronJob("job/1"), "/api/v1/cron/jobs/job%2F1", { method: "DELETE" });
     await expectCall(demo.fetchDemoState(), "/api/v1/demo/state");
     await expectCall(demo.bootstrapDemo(), "/api/v1/demo/bootstrap", { method: "POST" });
+    await expectCall(
+      integrations.fetchExternalSideEffectRuns({
+        workspaceId: "workspace/1",
+        connectionId: "connection/1",
+        limit: 999,
+      }),
+      "/api/v1/integrations/external-side-effects?workspaceId=workspace%2F1&connectionId=connection%2F1&limit=500",
+    );
     await expectCall(
       browserSessions.fetchBrowserSessions({ workspaceId: "workspace/1", status: "active", limit: 999 }),
       "/api/v1/browser-sessions?workspaceId=workspace%2F1&status=active&limit=500",

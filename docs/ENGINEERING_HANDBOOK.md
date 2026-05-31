@@ -646,6 +646,9 @@ Operator-facing mutating JSON endpoints require `Idempotency-Key` and block dupl
 
 - `GET /api/v1/integrations/catalog`
 - `GET /api/v1/integrations/connections`
+- `GET /api/v1/integrations/external-side-effects`
+  - Read-only external side-effect run ledger projection. Supports `workspaceId`, `connectionId`, and `limit`;
+    it reports recorded boundary/post-boundary state and does not retry, replay, or mutate external systems.
 - `POST /api/v1/integrations/connections`
 - `PATCH /api/v1/integrations/connections/:connectionId`
 - `DELETE /api/v1/integrations/connections/:connectionId`

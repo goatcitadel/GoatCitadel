@@ -40,6 +40,7 @@ export class ExternalSideEffectRunRepository {
   private readonly getStmt;
   private readonly findByIdempotencyStmt;
   private readonly listByWorkspaceStmt;
+  private readonly listByConnectionStmt;
   private readonly markExternalCallStartedStmt;
   private readonly markCompletedStmt;
   private readonly markFailureStmt;
@@ -72,6 +73,14 @@ export class ExternalSideEffectRunRepository {
       SELECT *
       FROM external_side_effect_runs
       WHERE workspace_id = @workspaceId
+      ORDER BY created_at DESC, run_id DESC
+      LIMIT @limit
+    `);
+    this.listByConnectionStmt = db.prepare(`
+      SELECT *
+      FROM external_side_effect_runs
+      WHERE workspace_id = @workspaceId
+        AND connection_id = @connectionId
       ORDER BY created_at DESC, run_id DESC
       LIMIT @limit
     `);
@@ -196,6 +205,20 @@ export class ExternalSideEffectRunRepository {
       this.listByWorkspaceStmt.all({
         workspaceId,
         limit: clampLimit(limit),
+      }),
+    );
+    return rows.map(mapExternalSideEffectRunRow);
+  }
+
+  public listByConnection(
+    connectionId: string,
+    input: { workspaceId?: string; limit?: number } = {},
+  ): ExternalSideEffectRunRecord[] {
+    const rows = toExternalSideEffectRunRows(
+      this.listByConnectionStmt.all({
+        workspaceId: input.workspaceId ?? "default",
+        connectionId,
+        limit: clampLimit(input.limit ?? 200),
       }),
     );
     return rows.map(mapExternalSideEffectRunRow);

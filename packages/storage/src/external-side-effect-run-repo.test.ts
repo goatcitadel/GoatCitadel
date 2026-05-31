@@ -126,4 +126,59 @@ describe("ExternalSideEffectRunRepository", () => {
     const attached = repo.attachEnvelope(run.runId, "env-2", "2026-05-31T10:00:05.000Z");
     assert.equal(attached.envelopeId, "env-2");
   });
+
+  it("lists side-effect runs by connection within a workspace", () => {
+    const repo = createRepo();
+    const first = repo.createOrGet(
+      {
+        workspaceId: "workspace-1",
+        boundary: "integration_operator_action",
+        routePath: "external_side_effect:integration_operator_action:productivity.trello:conn-a:write",
+        catalogId: "productivity.trello",
+        connectionId: "conn-a",
+        actionId: "write",
+        actorScope: "conn-a",
+        idempotencyKey: "trello-key-a",
+        payloadHash: "payload-hash-a",
+      },
+      "2026-05-31T10:00:00.000Z",
+    );
+    const second = repo.createOrGet(
+      {
+        workspaceId: "workspace-1",
+        boundary: "integration_operator_action",
+        routePath: "external_side_effect:integration_operator_action:productivity.trello:conn-b:write",
+        catalogId: "productivity.trello",
+        connectionId: "conn-b",
+        actionId: "write",
+        actorScope: "conn-b",
+        idempotencyKey: "trello-key-b",
+        payloadHash: "payload-hash-b",
+      },
+      "2026-05-31T10:00:01.000Z",
+    );
+    repo.createOrGet(
+      {
+        workspaceId: "workspace-2",
+        boundary: "integration_operator_action",
+        routePath: "external_side_effect:integration_operator_action:productivity.trello:conn-a:write",
+        catalogId: "productivity.trello",
+        connectionId: "conn-a",
+        actionId: "write",
+        actorScope: "conn-a",
+        idempotencyKey: "trello-key-c",
+        payloadHash: "payload-hash-c",
+      },
+      "2026-05-31T10:00:02.000Z",
+    );
+
+    assert.deepEqual(
+      repo.listByConnection("conn-a", { workspaceId: "workspace-1" }).map((item) => item.runId),
+      [first.runId],
+    );
+    assert.deepEqual(
+      repo.listByWorkspace("workspace-1").map((item) => item.runId),
+      [second.runId, first.runId],
+    );
+  });
 });
