@@ -11,6 +11,8 @@ import {
   type BrowserSessionGrantRecord,
   type BrowserSessionGrantScope,
   type BrowserSessionRecord,
+  type BrowserSessionStateProjection,
+  type BrowserSessionStateSummary,
 } from "@goatcitadel/contracts";
 
 type SqlStatement = {
@@ -26,6 +28,7 @@ interface BrowserSessionSql {
 export interface BrowserSessionRuntimeDependencies {
   gatewaySql: BrowserSessionSql;
   publishRealtime?(eventType: string, source: string, payload: Record<string, unknown>): void;
+  describeState?(sessionId: string): BrowserSessionStateSummary;
 }
 
 interface BrowserSessionRow {
@@ -135,6 +138,16 @@ export class BrowserSessionRuntimeService {
 
   public getSession(sessionId: string): BrowserSessionRecord {
     return this.requireSession(sessionId);
+  }
+
+  public getStateProjection(sessionId: string): BrowserSessionStateProjection {
+    const session = this.requireSession(sessionId);
+    const recentEvents = this.listEvents(sessionId, 100);
+    return {
+      session,
+      state: this.deps.describeState?.(sessionId) ?? createUnavailableBrowserSessionStateSummary(),
+      eventSummary: summarizeBrowserSessionEvents(recentEvents),
+    };
   }
 
   public closeSession(sessionId: string, actorId = "operator"): BrowserSessionRecord {
@@ -518,6 +531,58 @@ function mapEventRow(sql: BrowserSessionSql, row: BrowserSessionEventRow): Brows
     payload: parseJson(sql, row.payload_json, {}),
     createdAt: row.created_at,
   };
+}
+
+function createUnavailableBrowserSessionStateSummary(): BrowserSessionStateSummary {
+  return {
+    availability: "not_available",
+    source: "policy_engine_memory",
+    retention: "volatile",
+    valuesHidden: true,
+    cookies: { count: 0, domains: [] },
+    localStorage: { originCount: 0, keyCount: 0, origins: [] },
+    sessionStorage: { originCount: 0, keyCount: 0, origins: [] },
+    context: {
+      geolocationConfigured: false,
+      extraHTTPHeadersCount: 0,
+      httpCredentialsConfigured: false,
+    },
+  };
+}
+
+function summarizeBrowserSessionEvents(
+  events: BrowserSessionEventRecord[],
+): BrowserSessionStateProjection["eventSummary"] {
+  const lastAccessAt = events.find((event) => event.eventType === "tool_access_granted")?.createdAt;
+  const lastStateMutationAt = events.find(isBrowserSessionStateMutationEvidence)?.createdAt;
+  return {
+    recentEventCount: events.length,
+    guardBlockCount: events.filter((event) => event.eventType === "tool_guard_blocked").length,
+    grantedAccessCount: events.filter((event) => event.eventType === "tool_access_granted").length,
+    lastAccessAt,
+    lastStateMutationAt,
+  };
+}
+
+function isBrowserSessionStateMutationEvidence(event: BrowserSessionEventRecord): boolean {
+  if (event.eventType === "session_created" || event.eventType === "session_closed") {
+    return true;
+  }
+  if (event.eventType !== "tool_access_granted") {
+    return false;
+  }
+  const toolName = typeof event.payload.toolName === "string" ? event.payload.toolName : undefined;
+  return Boolean(
+    toolName &&
+    [
+      "browser.interact",
+      "browser.cookies.set",
+      "browser.cookies.clear",
+      "browser.storage.set",
+      "browser.storage.clear",
+      "browser.context.configure",
+    ].includes(toolName),
+  );
 }
 
 function normalizeScopes(scopes: BrowserSessionGrantScope[]): BrowserSessionGrantScope[] {

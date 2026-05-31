@@ -19,7 +19,7 @@ vi.mock("node:child_process", () => ({
   spawnSync: mocked.spawnSync,
 }));
 
-import { executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
+import { describeBrowserSessionState, executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
 
 const EXAMPLE_HOST = new URL("https://example.com").hostname;
 const DUCKDUCKGO_HOST = new URL("https://duckduckgo.com").hostname;
@@ -2397,6 +2397,36 @@ describe("browser tools coverage sweep", () => {
     expect(storage.localStorage).toEqual({ theme: "mapped" });
     expect(storage.sessionStorage).toEqual({ token: "mapped-session" });
     expect(cookies.cookies).toEqual([expect.objectContaining({ name: "mapped" })]);
+    const summary = describeBrowserSessionState("sess-browser-mapped-state");
+    expect(summary).toMatchObject({
+      availability: "present",
+      valuesHidden: true,
+      cookies: { count: 1, domains: ["example.com"] },
+      localStorage: { originCount: 1, keyCount: 1, origins: ["https://example.com"] },
+      sessionStorage: { originCount: 1, keyCount: 1, origins: ["https://example.com"] },
+      context: {
+        geolocationConfigured: true,
+        extraHTTPHeadersCount: 0,
+        httpCredentialsConfigured: true,
+      },
+    });
+    expect(JSON.stringify(summary)).not.toContain("mapped-session");
+    expect(JSON.stringify(summary)).not.toContain("citadel");
+  });
+
+  it("returns explicit unavailable state when no in-memory browser session state exists", () => {
+    expect(describeBrowserSessionState("missing-browser-state")).toMatchObject({
+      availability: "not_available",
+      valuesHidden: true,
+      cookies: { count: 0, domains: [] },
+      localStorage: { originCount: 0, keyCount: 0, origins: [] },
+      sessionStorage: { originCount: 0, keyCount: 0, origins: [] },
+      context: {
+        geolocationConfigured: false,
+        extraHTTPHeadersCount: 0,
+        httpCredentialsConfigured: false,
+      },
+    });
   });
 
   it("closes the browser from the abort handler when a signal aborts after launch", async () => {

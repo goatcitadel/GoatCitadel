@@ -7,6 +7,7 @@ const browserSessionMocks = vi.hoisted(() => ({
   createBrowserSessionGrant: vi.fn(),
   fetchBrowserSessionEvents: vi.fn(),
   fetchBrowserSessionGrants: vi.fn(),
+  fetchBrowserSessionState: vi.fn(),
   fetchBrowserSessions: vi.fn(),
   revokeBrowserSessionGrant: vi.fn(),
   rotateBrowserSessionGrant: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => browserSessionMo
 beforeEach(() => {
   browserSessionMocks.fetchBrowserSessions.mockReset();
   browserSessionMocks.fetchBrowserSessionGrants.mockReset();
+  browserSessionMocks.fetchBrowserSessionState.mockReset();
   browserSessionMocks.fetchBrowserSessionEvents.mockReset();
   browserSessionMocks.createBrowserSession.mockReset();
   browserSessionMocks.createBrowserSessionGrant.mockReset();
@@ -45,6 +47,41 @@ beforeEach(() => {
       expiresAt: "2099-05-30T18:16:00.000Z",
     },
   ]);
+  browserSessionMocks.fetchBrowserSessionState.mockResolvedValue({
+    session: {
+      sessionId: "browser-session-1",
+      workspaceId: "default",
+      label: "Research browser",
+      status: "active",
+      createdBy: "operator",
+      createdAt: "2026-05-30T18:00:00.000Z",
+      updatedAt: "2026-05-30T18:05:00.000Z",
+    },
+    state: {
+      availability: "present",
+      source: "policy_engine_memory",
+      retention: "volatile",
+      valuesHidden: true,
+      updatedAt: "2026-05-30T18:06:00.000Z",
+      cookies: { count: 2, domains: ["example.com"] },
+      localStorage: { originCount: 1, keyCount: 2, origins: ["https://example.com"] },
+      sessionStorage: { originCount: 1, keyCount: 1, origins: ["https://example.com"] },
+      context: {
+        locale: "en-US",
+        timezoneId: "America/Los_Angeles",
+        geolocationConfigured: true,
+        extraHTTPHeadersCount: 1,
+        httpCredentialsConfigured: true,
+      },
+    },
+    eventSummary: {
+      recentEventCount: 4,
+      guardBlockCount: 2,
+      grantedAccessCount: 1,
+      lastAccessAt: "2026-05-30T18:03:00.000Z",
+      lastStateMutationAt: "2026-05-30T18:01:00.000Z",
+    },
+  });
   browserSessionMocks.fetchBrowserSessionEvents.mockResolvedValue([
     {
       eventId: "event-1",
@@ -110,6 +147,7 @@ describe("BrowserSessionsRoutePage", () => {
       status: "all",
       limit: 100,
     });
+    expect(browserSessionMocks.fetchBrowserSessionState).toHaveBeenCalledWith("browser-session-1");
     expect(text).toContain("Browser Sessions");
     expect(text).toContain("Research browser");
     expect(text).toContain("agent-1");
@@ -119,6 +157,11 @@ describe("BrowserSessionsRoutePage", () => {
     expect(text).toContain("tool_access_granted");
     expect(text).toContain("Latest access");
     expect(text).toContain("guard blocks");
+    expect(text).toContain("Read-only state projection");
+    expect(text).toContain("State retained");
+    expect(text).toContain("2 keys");
+    expect(text).toContain("locale en-US");
+    expect(text).toContain("credentials configured");
     expect(text).toContain("browser.navigate");
     expect(text).toContain("browser.storage.get");
     expect(text).toContain("browser state values hidden");
@@ -323,6 +366,45 @@ describe("BrowserSessionsRoutePage", () => {
     expect(text).toContain("Research browser");
     expect(text).toContain("Some data could not load");
     expect(text).toContain("events offline");
+  });
+
+  it("labels absent volatile state as not retained instead of empty", async () => {
+    browserSessionMocks.fetchBrowserSessionState.mockResolvedValueOnce({
+      session: {
+        sessionId: "browser-session-1",
+        workspaceId: "default",
+        label: "Research browser",
+        status: "active",
+        createdBy: "operator",
+        createdAt: "2026-05-30T18:00:00.000Z",
+        updatedAt: "2026-05-30T18:05:00.000Z",
+      },
+      state: {
+        availability: "not_available",
+        source: "policy_engine_memory",
+        retention: "volatile",
+        valuesHidden: true,
+        cookies: { count: 0, domains: [] },
+        localStorage: { originCount: 0, keyCount: 0, origins: [] },
+        sessionStorage: { originCount: 0, keyCount: 0, origins: [] },
+        context: {
+          geolocationConfigured: false,
+          extraHTTPHeadersCount: 0,
+          httpCredentialsConfigured: false,
+        },
+      },
+      eventSummary: {
+        recentEventCount: 0,
+        guardBlockCount: 0,
+        grantedAccessCount: 0,
+      },
+    });
+    const renderer = await renderPage();
+    const text = collectText(renderer.root);
+
+    expect(text).toContain("Not retained");
+    expect(text).toContain("no domains");
+    expect(text).not.toContain("Empty state");
   });
 });
 

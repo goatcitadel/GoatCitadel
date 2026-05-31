@@ -2,7 +2,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import type { BrowserSessionAccessCheck, BrowserSessionGrantScope, ToolPolicyConfig } from "@goatcitadel/contracts";
+import type {
+  BrowserSessionAccessCheck,
+  BrowserSessionGrantScope,
+  BrowserSessionStateSummary,
+  ToolPolicyConfig,
+} from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
 import { createUntrustedContentEnvelope } from "./browser-content-guard.js";
 import { stripHtmlNoiseTags, stripHtmlTags } from "./html-noise.js";
@@ -128,6 +133,31 @@ type BrowserPageStateMode = "stateless" | "session";
 let playwrightChromiumInstallPromise: Promise<void> | null = null;
 const browserSessionStates = new Map<string, { state: BrowserSessionState; lastAccess: number }>();
 const MAX_BROWSER_SESSION_STATES = 128;
+
+export function describeBrowserSessionState(sessionId: string): BrowserSessionStateSummary {
+  const entry = browserSessionStates.get(sessionId);
+  if (!entry) {
+    return createUnavailableBrowserSessionStateSummary();
+  }
+  const state = entry.state;
+  return {
+    availability: isBrowserSessionStateEmpty(state) ? "empty" : "present",
+    source: "policy_engine_memory",
+    retention: "volatile",
+    valuesHidden: true,
+    updatedAt: new Date(state.updatedAt).toISOString(),
+    cookies: summarizeBrowserCookies(state.cookies),
+    localStorage: summarizeBrowserStorage(state.localStorage),
+    sessionStorage: summarizeBrowserStorage(state.sessionStorage),
+    context: {
+      locale: state.locale,
+      timezoneId: state.timezoneId,
+      geolocationConfigured: Boolean(state.geolocation),
+      extraHTTPHeadersCount: Object.keys(state.extraHTTPHeaders ?? {}).length,
+      httpCredentialsConfigured: Boolean(state.httpCredentials),
+    },
+  };
+}
 
 export function isBrowserToolName(name: string): name is BrowserToolName {
   return (
@@ -979,6 +1009,72 @@ function createEmptyBrowserSessionState(): BrowserSessionState {
     sessionStorage: {},
     updatedAt: Date.now(),
   };
+}
+
+function createUnavailableBrowserSessionStateSummary(): BrowserSessionStateSummary {
+  return {
+    availability: "not_available",
+    source: "policy_engine_memory",
+    retention: "volatile",
+    valuesHidden: true,
+    cookies: { count: 0, domains: [] },
+    localStorage: { originCount: 0, keyCount: 0, origins: [] },
+    sessionStorage: { originCount: 0, keyCount: 0, origins: [] },
+    context: {
+      geolocationConfigured: false,
+      extraHTTPHeadersCount: 0,
+      httpCredentialsConfigured: false,
+    },
+  };
+}
+
+function isBrowserSessionStateEmpty(state: BrowserSessionState): boolean {
+  return (
+    state.cookies.length === 0 &&
+    Object.keys(state.localStorage).length === 0 &&
+    Object.keys(state.sessionStorage).length === 0 &&
+    !state.locale &&
+    !state.timezoneId &&
+    !state.geolocation &&
+    Object.keys(state.extraHTTPHeaders ?? {}).length === 0 &&
+    !state.httpCredentials
+  );
+}
+
+function summarizeBrowserCookies(cookies: BrowserCookieRecord[]): BrowserSessionStateSummary["cookies"] {
+  const domains = [
+    ...new Set(
+      cookies
+        .map((cookie) => cookie.domain || cookie.url)
+        .map((value) => (value ? normalizeBrowserStateHost(value) : ""))
+        .filter(Boolean),
+    ),
+  ].sort();
+  return {
+    count: cookies.length,
+    domains: domains.slice(0, 20),
+  };
+}
+
+function summarizeBrowserStorage(storage: BrowserStorageBucket): BrowserSessionStateSummary["localStorage"] {
+  const origins = Object.keys(storage).sort();
+  return {
+    originCount: origins.length,
+    keyCount: Object.values(storage).reduce((total, entries) => total + Object.keys(entries).length, 0),
+    origins: origins.slice(0, 20),
+  };
+}
+
+function normalizeBrowserStateHost(raw: string): string {
+  const value = raw.trim().toLowerCase();
+  if (!value) {
+    return "";
+  }
+  try {
+    return new URL(value.includes("://") ? value : `https://${value}`).hostname.toLowerCase();
+  } catch {
+    return value.replace(/^\./, "");
+  }
 }
 
 function cloneBrowserSessionState(state: BrowserSessionState): BrowserSessionState {

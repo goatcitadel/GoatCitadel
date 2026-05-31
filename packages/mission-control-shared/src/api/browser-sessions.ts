@@ -4,6 +4,7 @@ import type {
   BrowserSessionGrantInput,
   BrowserSessionGrantRecord,
   BrowserSessionRecord,
+  BrowserSessionStateProjection,
   BrowserSessionStatus,
 } from "@goatcitadel/contracts";
 import { request } from "./client-core.js";
@@ -43,6 +44,10 @@ export function createBrowserSession(input: BrowserSessionCreateInput): Promise<
 
 export function fetchBrowserSession(sessionId: string): Promise<BrowserSessionRecord> {
   return request<BrowserSessionRecord>(`/api/v1/browser-sessions/${encodeURIComponent(sessionId)}`);
+}
+
+export function fetchBrowserSessionState(sessionId: string): Promise<BrowserSessionStateProjection> {
+  return request<BrowserSessionStateProjection>(`/api/v1/browser-sessions/${encodeURIComponent(sessionId)}/state`);
 }
 
 export function closeBrowserSession(sessionId: string): Promise<BrowserSessionRecord> {

@@ -5,6 +5,7 @@ import type {
   BrowserSessionGrantRecord,
   BrowserSessionGrantScope,
   BrowserSessionRecord,
+  BrowserSessionStateProjection,
   BrowserSessionStatus,
 } from "@goatcitadel/contracts";
 import {
@@ -13,6 +14,7 @@ import {
   createBrowserSessionGrant,
   fetchBrowserSessionEvents,
   fetchBrowserSessionGrants,
+  fetchBrowserSessionState,
   fetchBrowserSessions,
   revokeBrowserSessionGrant,
   rotateBrowserSessionGrant,
@@ -67,6 +69,7 @@ export function BrowserSessionsRoutePage({ activeWorkspaceId, activeWorkspaceNam
 
   const detail = useBrowserSessionDetail(selectedSession?.sessionId ?? "");
   const posture = selectedSession ? buildBrowserSessionPosture(selectedSession, detail.grants, detail.events) : null;
+  const stateProjection = detail.stateProjection;
 
   const createSession = async () => {
     const label = sessionDraft.label.trim();
@@ -302,7 +305,7 @@ export function BrowserSessionsRoutePage({ activeWorkspaceId, activeWorkspaceNam
           subtitle="Derived from session records, scoped grants, and retained guard events; browser state values remain hidden."
           stats={[
             { label: "Callable", value: posture?.callableState ?? "none" },
-            { label: "Host posture", value: posture?.hostPosture ?? "unknown" },
+            { label: "State", value: stateProjection?.state.availability ?? "unknown" },
           ]}
         >
           {posture ? (
@@ -318,13 +321,92 @@ export function BrowserSessionsRoutePage({ activeWorkspaceId, activeWorkspaceNam
                   { label: "Active grants", value: String(posture.activeGrantCount), meta: posture.highestScope },
                   { label: "Hosts", value: posture.hostPosture, meta: posture.hostSummary },
                   { label: "Latest access", value: posture.latestToolEvidence, meta: "from retained events" },
-                  { label: "State values", value: "Hidden", meta: "cookies, storage, and page values are not exposed" },
+                  {
+                    label: "State values",
+                    value: "Hidden",
+                    meta: stateProjection
+                      ? `${stateProjection.state.retention} ${stateProjection.state.source}`
+                      : "cookies, storage, and page values are not exposed",
+                  },
                 ]}
               />
               <p className="mc-next-settings-field-note">{posture.summary}</p>
             </>
           ) : (
             <EmptyState size="compact" title="Select a browser session to inspect posture." />
+          )}
+        </NativeCard>
+
+        <NativeCard
+          title="Read-only state projection"
+          subtitle="Counts and origins come from volatile browser-session memory; sensitive values stay hidden."
+          stats={[
+            { label: "Availability", value: stateProjection?.state.availability ?? "unknown" },
+            {
+              label: "Updated",
+              value: stateProjection?.state.updatedAt
+                ? formatDateTime(stateProjection.state.updatedAt)
+                : "Not retained",
+            },
+          ]}
+        >
+          {stateProjection ? (
+            <>
+              <div className="mc-next-approvals-chip-row">
+                <StatusChip tone={stateProjection.state.availability === "present" ? "success" : "muted"}>
+                  {formatStateAvailability(stateProjection.state.availability)}
+                </StatusChip>
+                <StatusChip tone="muted">values hidden</StatusChip>
+              </div>
+              <LibraryMetricGrid
+                items={[
+                  {
+                    label: "Cookies",
+                    value: String(stateProjection.state.cookies.count),
+                    meta: formatLimitedList(stateProjection.state.cookies.domains, "domains"),
+                  },
+                  {
+                    label: "Local storage",
+                    value: `${stateProjection.state.localStorage.originCount} origins`,
+                    meta: `${stateProjection.state.localStorage.keyCount} keys`,
+                  },
+                  {
+                    label: "Session storage",
+                    value: `${stateProjection.state.sessionStorage.originCount} origins`,
+                    meta: `${stateProjection.state.sessionStorage.keyCount} keys`,
+                  },
+                  {
+                    label: "Recent events",
+                    value: String(stateProjection.eventSummary.recentEventCount),
+                    meta: `${stateProjection.eventSummary.grantedAccessCount} granted · ${stateProjection.eventSummary.guardBlockCount} blocked`,
+                  },
+                ]}
+              />
+              <NativeList
+                density="compact"
+                items={[
+                  {
+                    title: "Local storage origins",
+                    meta: formatLimitedList(stateProjection.state.localStorage.origins, "origins"),
+                    body: "Keys are counted but values are not exposed.",
+                  },
+                  {
+                    title: "Session storage origins",
+                    meta: formatLimitedList(stateProjection.state.sessionStorage.origins, "origins"),
+                    body: "Session storage is volatile and may disappear after restart.",
+                  },
+                  {
+                    title: "Context",
+                    meta: formatBrowserContextSummary(stateProjection),
+                    body: "Locale and timezone are shown when configured; headers, credentials, and geolocation values remain hidden.",
+                  },
+                ]}
+                emptyLabel="No state projection detail is available."
+                ariaLabel="Browser session state projection"
+              />
+            </>
+          ) : (
+            <EmptyState size="compact" title="Select a browser session to inspect retained state." />
           )}
         </NativeCard>
 
@@ -372,8 +454,18 @@ export function BrowserSessionsRoutePage({ activeWorkspaceId, activeWorkspaceNam
 function useBrowserSessionDetail(sessionId: string) {
   const load = useCallback(async () => {
     if (!sessionId) {
-      return { issues: [], grants: [] as BrowserSessionGrantRecord[], events: [] as BrowserSessionEventRecord[] };
+      return {
+        issues: [],
+        stateProjection: null as BrowserSessionStateProjection | null,
+        grants: [] as BrowserSessionGrantRecord[],
+        events: [] as BrowserSessionEventRecord[],
+      };
     }
+    const stateProjection = await nativeLoad(
+      "Browser session state",
+      fetchBrowserSessionState(sessionId),
+      null as BrowserSessionStateProjection | null,
+    );
     const grants = await nativeLoad(
       "Browser session grants",
       fetchBrowserSessionGrants(sessionId, { status: "all", limit: 100 }),
@@ -384,10 +476,21 @@ function useBrowserSessionDetail(sessionId: string) {
       fetchBrowserSessionEvents(sessionId, 100),
       [] as BrowserSessionEventRecord[],
     );
-    return { issues: nativeLoadIssues([grants, events]), grants: grants.data, events: events.data };
+    return {
+      issues: nativeLoadIssues([stateProjection, grants, events]),
+      stateProjection: stateProjection.data,
+      grants: grants.data,
+      events: events.data,
+    };
   }, [sessionId]);
   const { data, reload } = useAsyncLoad(load, [load]);
-  return { issues: data?.issues ?? [], grants: data?.grants ?? [], events: data?.events ?? [], reload };
+  return {
+    issues: data?.issues ?? [],
+    stateProjection: data?.stateProjection ?? null,
+    grants: data?.grants ?? [],
+    events: data?.events ?? [],
+    reload,
+  };
 }
 
 function BrowserGrantForm({
@@ -604,6 +707,40 @@ function readLatestBrowserToolEvidence(events: BrowserSessionEventRecord[]): str
 function readPayloadString(payload: Record<string, unknown>, key: string): string | undefined {
   const value = payload[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function formatStateAvailability(availability: BrowserSessionStateProjection["state"]["availability"]): string {
+  if (availability === "present") {
+    return "State retained";
+  }
+  if (availability === "empty") {
+    return "Empty state";
+  }
+  return "Not retained";
+}
+
+function formatLimitedList(values: string[], fallbackLabel: string): string {
+  if (values.length === 0) {
+    return `no ${fallbackLabel}`;
+  }
+  const visible = values.slice(0, 3).join(", ");
+  const remaining = values.length > 3 ? ` +${values.length - 3}` : "";
+  return `${visible}${remaining}`;
+}
+
+function formatBrowserContextSummary(projection: BrowserSessionStateProjection): string {
+  const context = projection.state.context;
+  return (
+    [
+      context.locale ? `locale ${context.locale}` : undefined,
+      context.timezoneId ? `timezone ${context.timezoneId}` : undefined,
+      context.geolocationConfigured ? "geolocation configured" : undefined,
+      context.extraHTTPHeadersCount > 0 ? `${context.extraHTTPHeadersCount} headers configured` : undefined,
+      context.httpCredentialsConfigured ? "credentials configured" : undefined,
+    ]
+      .filter(Boolean)
+      .join(" · ") || "No browser context overrides"
+  );
 }
 
 function parseHostList(value: string): string[] {

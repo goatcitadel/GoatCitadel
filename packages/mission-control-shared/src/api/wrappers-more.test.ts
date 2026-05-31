@@ -238,6 +238,10 @@ describe("additional shared API wrappers", () => {
       { method: "POST" },
     );
     await expectCall(browserSessions.fetchBrowserSession("session/1"), "/api/v1/browser-sessions/session%2F1");
+    await expectCall(
+      browserSessions.fetchBrowserSessionState("session/1"),
+      "/api/v1/browser-sessions/session%2F1/state",
+    );
     await expectCall(browserSessions.closeBrowserSession("session/1"), "/api/v1/browser-sessions/session%2F1", {
       method: "DELETE",
     });

@@ -76,6 +76,15 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  fastify.get("/api/v1/browser-sessions/:sessionId/state", operatorOnly, async (request, reply) => {
+    try {
+      const { sessionId } = sessionParamsSchema.parse(request.params);
+      return reply.send(fastify.gatewayRuntime.browserSessionRuntimeService.getStateProjection(sessionId));
+    } catch (error) {
+      return sendBrowserSessionRouteError(reply, error, request.log);
+    }
+  });
+
   fastify.delete("/api/v1/browser-sessions/:sessionId", operatorOnly, async (request, reply) => {
     try {
       const { sessionId } = sessionParamsSchema.parse(request.params);

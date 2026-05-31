@@ -49,7 +49,12 @@ async function traceInitStep<T>(stepName: string, fn: () => Promise<T> | T): Pro
 }
 import { MeshService } from "@goatcitadel/mesh-core";
 import { OrchestrationEngine, type TurnRuntime } from "@goatcitadel/orchestration";
-import { ToolPolicyEngine, assertWritePathInJail, fetchAllowlisted } from "@goatcitadel/policy-engine";
+import {
+  ToolPolicyEngine,
+  assertWritePathInJail,
+  describeBrowserSessionState,
+  fetchAllowlisted,
+} from "@goatcitadel/policy-engine";
 import { listSkillExportTargets, renderSkillExportPreview, SkillsService } from "@goatcitadel/skills";
 import {
   type Storage,
@@ -854,6 +859,7 @@ export class GatewayService {
       publishRealtime: (eventType, source, payload) => {
         this.publishRealtime(eventType, source, payload);
       },
+      describeState: describeBrowserSessionState,
     });
     this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),

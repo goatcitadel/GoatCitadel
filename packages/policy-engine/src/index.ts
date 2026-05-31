@@ -5,6 +5,7 @@ export * from "./engine.js";
 export * from "./tool-executor.js";
 export * from "./tool-security.js";
 export * from "./browser-content-guard.js";
+export { describeBrowserSessionState } from "./browser-tools.js";
 export * from "./tool-patterns.js";
 export * from "./safe-env-name.js";
 export * from "./ingestion-backends.js";

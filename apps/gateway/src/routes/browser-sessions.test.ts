@@ -77,6 +77,25 @@ describe("browser session routes", () => {
         grantActorId: "agent-1",
       },
     });
+
+    const state = await fastify.inject({
+      method: "GET",
+      url: `/api/v1/browser-sessions/${session.sessionId}/state`,
+    });
+    expect(state.statusCode).toBe(200);
+    expect(state.json()).toMatchObject({
+      session: { sessionId: session.sessionId, label: "Research browser" },
+      state: {
+        availability: "not_available",
+        valuesHidden: true,
+        cookies: { count: 0, domains: [] },
+      },
+      eventSummary: {
+        recentEventCount: expect.any(Number),
+        guardBlockCount: 0,
+        grantedAccessCount: 0,
+      },
+    });
   });
 
   it("rejects invalid grant scopes without creating runtime state", async () => {
@@ -89,5 +108,15 @@ describe("browser session routes", () => {
     });
 
     expect(response.statusCode).toBe(400);
+  });
+
+  it("returns 404 for a missing browser session state projection", async () => {
+    const fastify = await buildApp();
+    const response = await fastify.inject({
+      method: "GET",
+      url: "/api/v1/browser-sessions/missing-session/state",
+    });
+
+    expect(response.statusCode).toBe(404);
   });
 });

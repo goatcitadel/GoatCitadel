@@ -108,4 +108,74 @@ describe("BrowserSessionRuntimeService", () => {
       ]),
     );
   });
+
+  it("projects volatile browser state without exposing stored values", () => {
+    db = new DatabaseSync(":memory:");
+    const service = new BrowserSessionRuntimeService({
+      gatewaySql: db,
+      describeState: () => ({
+        availability: "present",
+        source: "policy_engine_memory",
+        retention: "volatile",
+        valuesHidden: true,
+        updatedAt: "2026-05-30T18:06:00.000Z",
+        cookies: { count: 2, domains: ["example.com"] },
+        localStorage: { originCount: 1, keyCount: 3, origins: ["https://example.com"] },
+        sessionStorage: { originCount: 1, keyCount: 1, origins: ["https://example.com"] },
+        context: {
+          locale: "en-US",
+          timezoneId: "America/Los_Angeles",
+          geolocationConfigured: true,
+          extraHTTPHeadersCount: 1,
+          httpCredentialsConfigured: true,
+        },
+      }),
+    });
+    const session = service.createSession({ actorId: "operator", label: "State browser" });
+    service.createGrant(session.sessionId, { actorId: "agent", scopes: ["state"], allowedHosts: ["example.com"] });
+    service.assertAccess({
+      sessionId: session.sessionId,
+      actorId: "agent",
+      requiredScope: "state",
+      host: "example.com",
+      toolName: "browser.storage.set",
+      runId: "run-state",
+    });
+
+    const projection = service.getStateProjection(session.sessionId);
+
+    expect(projection.session).toMatchObject({ sessionId: session.sessionId, label: "State browser" });
+    expect(projection.state).toMatchObject({
+      availability: "present",
+      valuesHidden: true,
+      cookies: { count: 2, domains: ["example.com"] },
+      localStorage: { originCount: 1, keyCount: 3, origins: ["https://example.com"] },
+      context: {
+        locale: "en-US",
+        timezoneId: "America/Los_Angeles",
+        geolocationConfigured: true,
+        extraHTTPHeadersCount: 1,
+        httpCredentialsConfigured: true,
+      },
+    });
+    expect(projection.eventSummary).toMatchObject({
+      recentEventCount: 3,
+      guardBlockCount: 0,
+      grantedAccessCount: 1,
+    });
+    expect(JSON.stringify(projection)).not.toContain("secret");
+  });
+
+  it("returns an explicit unavailable state when volatile state is absent", () => {
+    db = new DatabaseSync(":memory:");
+    const service = new BrowserSessionRuntimeService({ gatewaySql: db });
+    const session = service.createSession({ actorId: "operator" });
+
+    expect(service.getStateProjection(session.sessionId).state).toMatchObject({
+      availability: "not_available",
+      valuesHidden: true,
+      cookies: { count: 0, domains: [] },
+      localStorage: { originCount: 0, keyCount: 0, origins: [] },
+    });
+  });
 });

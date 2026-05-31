@@ -40,6 +40,53 @@ export interface BrowserSessionEventRecord {
   createdAt: string;
 }
 
+export type BrowserSessionStateAvailability = "present" | "empty" | "not_available";
+
+export interface BrowserSessionStorageSummary {
+  originCount: number;
+  keyCount: number;
+  origins: string[];
+}
+
+export interface BrowserSessionCookieSummary {
+  count: number;
+  domains: string[];
+}
+
+export interface BrowserSessionContextSummary {
+  locale?: string;
+  timezoneId?: string;
+  geolocationConfigured: boolean;
+  extraHTTPHeadersCount: number;
+  httpCredentialsConfigured: boolean;
+}
+
+export interface BrowserSessionStateSummary {
+  availability: BrowserSessionStateAvailability;
+  source: "policy_engine_memory";
+  retention: "volatile";
+  valuesHidden: true;
+  updatedAt?: string;
+  cookies: BrowserSessionCookieSummary;
+  localStorage: BrowserSessionStorageSummary;
+  sessionStorage: BrowserSessionStorageSummary;
+  context: BrowserSessionContextSummary;
+}
+
+export interface BrowserSessionEventSummary {
+  recentEventCount: number;
+  guardBlockCount: number;
+  grantedAccessCount: number;
+  lastAccessAt?: string;
+  lastStateMutationAt?: string;
+}
+
+export interface BrowserSessionStateProjection {
+  session: BrowserSessionRecord;
+  state: BrowserSessionStateSummary;
+  eventSummary: BrowserSessionEventSummary;
+}
+
 export interface BrowserSessionCreateInput {
   workspaceId?: string;
   label?: string;

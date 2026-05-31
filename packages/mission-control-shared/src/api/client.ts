@@ -641,6 +641,7 @@ export {
   fetchBrowserSession,
   fetchBrowserSessionEvents,
   fetchBrowserSessionGrants,
+  fetchBrowserSessionState,
   fetchBrowserSessions,
   revokeBrowserSessionGrant,
   rotateBrowserSessionGrant,
