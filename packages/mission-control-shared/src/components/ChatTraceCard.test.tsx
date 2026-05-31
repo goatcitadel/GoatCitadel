@@ -216,6 +216,68 @@ describe("ChatTraceCard", () => {
     expect(text).not.toContain("<!-- raw -->");
   });
 
+  it("renders memory citation why-used provenance and semantic-hint match signals", async () => {
+    const trace = {
+      ...makeTrace(),
+      citations: [
+        {
+          citationId: "memory-semantic",
+          title: "Release memory",
+          url: "memory://release-checklist",
+          snippet: "Use the release checklist and verification cadence.",
+          sourceType: "memory",
+          knowledge: {
+            sourceRef: "memory:release-checklist",
+            sectionLabel: "Verification",
+            retrievalMode: "semantic",
+          },
+          provenance: {
+            relationScope: "project",
+            freshness: "fresh",
+            selectionReason: "selected by semantic-hint retrieval score 0.956",
+            retrievalStrategy: "semantic_hints",
+            sourceTimestamp: "2026-05-30T18:00:00.000Z",
+            matchSignals: {
+              totalScore: 0.956,
+              lexicalScore: 0.416,
+              semanticHintScore: 0.2,
+              recencyScore: 0.14,
+              diversityScore: 0.2,
+            },
+          },
+        },
+        {
+          citationId: "external",
+          title: "External",
+          url: "https://example.test/source",
+          snippet: "External evidence.",
+        },
+        {
+          citationId: "memory-missing-provenance",
+          url: "memory://legacy-note",
+          sourceType: "memory",
+          snippet: "Older memory without retrieval provenance.",
+        },
+      ],
+    } as ChatTurnTraceRecord;
+
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChatTraceCard trace={trace} workspaceId="default" defaultCollapsed={false} />);
+    });
+    const text = collectText(renderer.toJSON()).replace(/\s+/g, " ").trim();
+
+    expect(text).toContain("memory:release-checklist · Verification · retrieval");
+    expect(text).toContain("Why used: selected by semantic-hint retrieval score 0.956");
+    expect(text).toContain("semantic hints · project · fresh · source 2026-05-30T18:00:00.000Z");
+    expect(text).toContain("total 0.956 · lexical 0.416 · hint 0.200 · recency 0.140 · diversity 0.200");
+    expect(text).toContain("External evidence.");
+    expect(text).toContain("memory://legacy-note");
+    expect(text).toContain("Older memory without retrieval provenance.");
+    expect(text).toContain("Why used: Memory selection reason was not recorded.");
+    expect(text).not.toContain("Why used: External evidence.");
+  });
+
   it("surfaces requested versus effective routing in the collapsed header", async () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {

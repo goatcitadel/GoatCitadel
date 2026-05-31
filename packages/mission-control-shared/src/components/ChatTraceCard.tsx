@@ -2,8 +2,11 @@ import { useState } from "react";
 import {
   getChatTurnRecoveryActionLabel,
   getChatTurnRecoveryActionSummary,
+  type ChatCitationRecord,
   type ChatUsageCostSource,
   type ChatTurnTraceRecord,
+  type MemoryCitationProvenance,
+  type MemoryRetrievalMatchSignals,
 } from "@goatcitadel/contracts";
 import { ChatToolArtifactInspector } from "./chat/ChatToolArtifactInspector";
 import { getChatToolRunDiagnostics, getTraceFallbackAttemptCount } from "./chat/chat-tool-diagnostics";
@@ -67,6 +70,60 @@ function formatCostSource(value: ChatUsageCostSource | undefined): string {
     default:
       return "not recorded";
   }
+}
+
+function isMemoryCitation(citation: ChatCitationRecord): boolean {
+  return (
+    citation.sourceType === "memory" || citation.url?.startsWith("memory://") === true || Boolean(citation.provenance)
+  );
+}
+
+function formatMemoryRetrievalStrategy(value: MemoryCitationProvenance["retrievalStrategy"]): string | null {
+  switch (value) {
+    case "semantic_hints":
+      return "semantic hints";
+    case "lexical_recency":
+      return "lexical/recency";
+    default:
+      return null;
+  }
+}
+
+function formatMemoryScore(value: number | undefined): string | null {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : null;
+}
+
+function formatMemorySignals(signals: MemoryRetrievalMatchSignals | undefined): string | null {
+  if (!signals) {
+    return null;
+  }
+  return [
+    ["total", signals.totalScore],
+    ["lexical", signals.lexicalScore],
+    ["hint", signals.semanticHintScore],
+    ["recency", signals.recencyScore],
+    ["diversity", signals.diversityScore],
+  ]
+    .map(([label, value]) => {
+      const score = typeof value === "number" ? formatMemoryScore(value) : null;
+      return score ? `${label} ${score}` : null;
+    })
+    .filter((value): value is string => Boolean(value))
+    .join(" · ");
+}
+
+function formatMemoryCitationMeta(provenance: MemoryCitationProvenance | undefined): string | null {
+  if (!provenance) {
+    return null;
+  }
+  return [
+    formatMemoryRetrievalStrategy(provenance.retrievalStrategy),
+    provenance.relationScope,
+    provenance.freshness,
+    provenance.sourceTimestamp ? `source ${provenance.sourceTimestamp}` : null,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" · ");
 }
 
 function summarizeTraceRouting(trace: ChatTurnTraceRecord): {
@@ -272,14 +329,23 @@ export function ChatTraceCard({
                 {trace.citations.map((citation) => {
                   const title = normalizeCitationDisplayText(citation.title);
                   const snippet = normalizeCitationDisplayText(citation.snippet);
+                  const memoryCitation = isMemoryCitation(citation);
+                  const citationLabel =
+                    title ??
+                    (memoryCitation ? (citation.knowledge?.sourceRef ?? citation.url) : (citation.url ?? "source"));
+                  const memoryWhyUsed = memoryCitation
+                    ? (citation.provenance?.selectionReason ?? "Memory selection reason was not recorded.")
+                    : null;
+                  const memoryMeta = formatMemoryCitationMeta(citation.provenance);
+                  const memorySignals = formatMemorySignals(citation.provenance?.matchSignals);
                   return (
-                    <li key={citation.citationId}>
+                    <li key={citation.citationId} className={memoryCitation ? "is-memory" : undefined}>
                       {isExternalCitationUrl(citation.url) ? (
                         <a href={citation.url} target="_blank" rel="noreferrer">
-                          {title || citation.url}
+                          {citationLabel || citation.url}
                         </a>
                       ) : (
-                        <span>{title ?? "source"}</span>
+                        <span>{citationLabel}</span>
                       )}
                       {citation.knowledge ? (
                         <p className="chat-trace-meta">
@@ -289,6 +355,9 @@ export function ChatTraceCard({
                         </p>
                       ) : null}
                       {snippet ? <p>{snippet}</p> : null}
+                      {memoryWhyUsed ? <p>Why used: {memoryWhyUsed}</p> : null}
+                      {memoryMeta ? <p>{memoryMeta}</p> : null}
+                      {memorySignals ? <p>{memorySignals}</p> : null}
                     </li>
                   );
                 })}
