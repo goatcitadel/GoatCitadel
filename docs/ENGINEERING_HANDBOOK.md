@@ -27,6 +27,7 @@ Implementation process guidance lives in `docs/GOATCITADEL_AGENTIC_CODING_WORKFL
 - `packages/mesh-core` has targeted service coverage but does not count toward the `1.0` readiness bar until it has full release evidence.
 - `apps/npu-sidecar` is optional experimental infrastructure and is not part of the current `1.0` bar.
 - Visible `beta` and `native` non-channel integrations derive their advertised capabilities from the operator-action runtime registry; Mission Control should not surface diagnostics-only shells for those entries.
+- MCP server-mode is currently an operator-authenticated call preview for read-only, closed-world callable descriptors. Do not describe it as a launchable MCP protocol server until `initialize`, `tools/list`, `tools/call`, transport launch, authz, and audit proof are shipped together.
 - Filesystem-backed backup restore is offline-only for `1.0`; operators must stop any gateway serving the same runtime root before invoking the CLI restore, and the live admin restore route must fail closed with `offline_restore_required` while the gateway is serving.
 - Backup verify now carries two truths for `1.0`: archive integrity (`verified`) and minimum-set contract coverage (`contractVerified`).
 - Surface-regression and visual-regression derive from the same canonical Mission Control Next release-surface manifest, covering the current `Chat / Cowork / Code / Projects / Library / Ops / Settings` operator navigation while legacy `Work / Observe / Tune` remains release taxonomy only.

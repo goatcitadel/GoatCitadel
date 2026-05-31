@@ -3,6 +3,8 @@ import type {
   McpInvokeResponse,
   McpOAuthStartResponse,
   McpRemotePreviewResponse,
+  McpServerModeCallRequest,
+  McpServerModeCallResponse,
   McpServerModeManifestResponse,
   McpServerRecord,
   McpServerTemplateRecord,
@@ -29,6 +31,13 @@ export async function fetchMcpRemotePreview(): Promise<McpRemotePreviewResponse>
 
 export async function fetchMcpServerModeManifest(): Promise<McpServerModeManifestResponse> {
   return request<McpServerModeManifestResponse>("/api/v1/mcp/server-mode/manifest");
+}
+
+export async function callMcpServerModePreview(input: McpServerModeCallRequest): Promise<McpServerModeCallResponse> {
+  return request<McpServerModeCallResponse>("/api/v1/mcp/server-mode/call", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function createMcpServer(input: {

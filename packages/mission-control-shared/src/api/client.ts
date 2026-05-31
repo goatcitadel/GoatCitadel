@@ -726,6 +726,7 @@ export {
 } from "./tasks.js";
 export type { BulkTaskActionInput, EmitTaskDistressBody } from "./tasks.js";
 export {
+  callMcpServerModePreview,
   createMcpServer,
   completeMcpOAuth,
   connectMcpServer,

@@ -3,10 +3,12 @@ import type {
   CapabilityCatalogEntry,
   McpRemotePreviewItem,
   McpRemotePreviewResponse,
+  McpServerModeCallResponse,
   McpServerModeManifestResponse,
   McpServerModeToolDescriptor,
   McpServerRecord,
   McpServerTemplateRecord,
+  ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import { z } from "zod";
 import {
@@ -88,6 +90,18 @@ const invokeSchema = z.object({
   surface: z.enum(["chat", "cowork", "code", "tools", "mcp", "all"]).optional(),
 });
 
+const serverModeCallSchema = z.object({
+  descriptorName: z.string().min(1),
+  args: z.record(z.unknown()).optional(),
+  agentId: z.string().min(1),
+  sessionId: z.string().min(1),
+  workspaceId: z.string().optional(),
+  taskId: z.string().optional(),
+  runId: z.string().optional(),
+  permissionProfileId: z.string().optional(),
+  localOperatorOverrideId: z.string().optional(),
+});
+
 const READ_ROUTE_OPTIONS = {
   config: {
     rateLimit: {
@@ -135,8 +149,96 @@ export const mcpRoutes: FastifyPluginAsync = async (fastify) => {
       buildMcpServerModeManifest({
         inspectableCatalog: fastify.services.capabilities.listCapabilityCatalog("inspectable"),
         callableCatalog: fastify.services.capabilities.listCapabilityCatalog("callable"),
+        callPreviewAvailable: isMcpServerModeCallPreviewAvailable(fastify.services),
       }),
     );
+  });
+
+  fastify.post("/api/v1/mcp/server-mode/call", MUTATION_ROUTE_OPTIONS, async (request, reply) => {
+    const parsed = serverModeCallSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    if (!isMcpServerModeCallPreviewAvailable(fastify.services)) {
+      return reply.code(409).send({
+        error: "MCP server-mode call preview is not available in this Gateway runtime.",
+      });
+    }
+
+    const callableCatalog = fastify.services.capabilities.listCapabilityCatalog("callable");
+    const descriptor = findServerModeToolDescriptor(callableCatalog, parsed.data.descriptorName);
+    if (!descriptor) {
+      return reply.code(404).send({
+        error: `Unknown MCP server-mode descriptor ${parsed.data.descriptorName}.`,
+      });
+    }
+    if (!isServerModeDescriptorCallablePreview(descriptor)) {
+      return reply
+        .code(409)
+        .send(
+          buildMcpServerModeBlockedResponse(parsed.data.descriptorName, descriptor, [
+            "Server-mode call preview only executes read-only, closed-world Gateway tool descriptors.",
+          ]),
+        );
+    }
+
+    const entry = callableCatalog.find((candidate) => candidate.capabilityId === descriptor.capabilityId);
+    const toolName = entry?.toolName;
+    if (!toolName) {
+      return reply
+        .code(409)
+        .send(
+          buildMcpServerModeBlockedResponse(parsed.data.descriptorName, descriptor, [
+            "Descriptor does not map to a Gateway toolName that can be invoked by the tool coordinator.",
+          ]),
+        );
+    }
+
+    try {
+      const actorId = request.authActorId?.trim() || "operator";
+      const policyContext = fastify.services.tools.resolveToolPolicyContext({
+        operatorId: actorId,
+        authActorId: actorId,
+        authActorSource: request.authActorSource,
+        workspaceId: parsed.data.workspaceId,
+        sessionId: parsed.data.sessionId,
+        taskId: parsed.data.taskId,
+        runId: parsed.data.runId,
+        surface: "mcp",
+        permissionProfileId: parsed.data.permissionProfileId,
+        localOperatorOverrideId: parsed.data.localOperatorOverrideId,
+      });
+      const result = await fastify.services.toolsInvoke.invokeTool({
+        toolName,
+        args: parsed.data.args ?? {},
+        agentId: parsed.data.agentId,
+        sessionId: parsed.data.sessionId,
+        workspaceId: parsed.data.workspaceId,
+        taskId: parsed.data.taskId,
+        runId: parsed.data.runId,
+        permissionProfileId: parsed.data.permissionProfileId,
+        localOperatorOverrideId: parsed.data.localOperatorOverrideId,
+        surface: "mcp",
+        externalRuntime: true,
+        sourceAttribution: [
+          {
+            sourceType: "mcp",
+            sourceRef: "mcp_server_mode_preview",
+            title: "MCP server-mode call preview",
+            trustLevel: "trusted_workspace",
+          },
+        ],
+        consentContext: {
+          operatorId: actorId,
+          source: "agent",
+          reason: "mcp.server-mode.call-preview",
+        },
+        policyContext,
+      });
+      return reply.send(buildMcpServerModeCallResponse(parsed.data.descriptorName, descriptor, result, toolName));
+    } catch (error) {
+      return reply.code(400).send({ error: (error as Error).message });
+    }
   });
 
   fastify.post("/api/v1/mcp/servers", MUTATION_ROUTE_OPTIONS, async (request, reply) => {
@@ -428,15 +530,17 @@ function isRemoteMcpDefinition(
 export function buildMcpServerModeManifest(input: {
   inspectableCatalog: CapabilityCatalogEntry[];
   callableCatalog: CapabilityCatalogEntry[];
+  callPreviewAvailable?: boolean;
 }): McpServerModeManifestResponse {
-  const tools = input.callableCatalog.map(buildServerModeToolDescriptor);
+  const callPreviewAvailable = Boolean(input.callPreviewAvailable);
+  const tools = input.callableCatalog.map((entry) => buildServerModeToolDescriptor(entry, callPreviewAvailable));
   return {
     generatedAt: new Date().toISOString(),
     readOnly: true,
     mutationSemantics: "none",
     status: "preview",
     protocol: "mcp",
-    runtimeSupport: "manifest_only",
+    runtimeSupport: callPreviewAvailable ? "call_preview" : "manifest_only",
     server: {
       name: "goatcitadel",
       label: "GoatCitadel governed capability export",
@@ -447,7 +551,24 @@ export function buildMcpServerModeManifest(input: {
       supported: false,
       command: "goatcitadel",
       args: ["mcp-server"],
-      reason: "MCP server protocol execution is not wired in this prototype; this endpoint is a descriptor manifest.",
+      reason:
+        "MCP protocol serving and stdio launch are not wired yet; the Gateway exposes only an operator-authenticated call preview endpoint.",
+    },
+    runtime: {
+      callPreview: {
+        supported: callPreviewAvailable,
+        endpoint: "/api/v1/mcp/server-mode/call",
+        requiresGatewayAuth: true,
+        readOnlyOnly: true,
+        requiredCallContext: ["agentId", "sessionId"],
+        reason: callPreviewAvailable
+          ? "Read-only, closed-world Gateway tool descriptors can re-enter the tool coordinator through this preview."
+          : "Gateway tool invocation services were not available when this manifest was generated.",
+      },
+      stdio: {
+        supported: false,
+        reason: "No launchable MCP stdio server has been shipped or proven.",
+      },
     },
     summary: {
       inspectableCapabilities: input.inspectableCatalog.length,
@@ -458,12 +579,12 @@ export function buildMcpServerModeManifest(input: {
     tools,
     governance: [
       "This projection is read-only and does not mutate capability, MCP, approval, or tool policy state.",
-      "Any future MCP server execution must re-enter Gateway-owned deny-wins policy, approvals, path jails, and memory governance.",
+      "The call preview re-enters Gateway-owned deny-wins policy, approvals, path jails, and memory governance for eligible descriptors.",
       "Only the callable capability catalog is described as exportable; inspectable-only candidates and proposals are withheld.",
     ],
     limitations: [
-      "MCP server protocol serving is not available from this endpoint.",
-      "Tool descriptors are intentionally conservative and do not grant external clients new authority.",
+      "MCP server protocol serving and stdio launch are not available from this endpoint.",
+      "The call preview is limited to read-only, closed-world Gateway tool descriptors and requires Gateway authentication.",
       "Remote MCP transport invocation remains governed separately by the existing MCP client/runtime surfaces.",
     ],
     evidence: {
@@ -477,11 +598,20 @@ export function buildMcpServerModeManifest(input: {
   };
 }
 
-function buildServerModeToolDescriptor(entry: CapabilityCatalogEntry): McpServerModeToolDescriptor {
+function buildServerModeToolDescriptor(
+  entry: CapabilityCatalogEntry,
+  callPreviewAvailable = true,
+): McpServerModeToolDescriptor {
   const name = normalizeServerModeToolName(entry);
+  const eligibleForCallPreview = isCapabilityEntryCallPreviewEligible(entry);
+  const callPreviewEligible = callPreviewAvailable && eligibleForCallPreview;
   const governance = [
     `Gateway callable state: ${entry.callable ? "callable" : "not callable"}.`,
-    "External MCP server invocation is descriptor-only until the protocol runner is implemented.",
+    callPreviewEligible
+      ? "Eligible for the operator-authenticated server-mode call preview; MCP protocol serving is still not launched."
+      : eligibleForCallPreview
+        ? "Eligible for a future server-mode call preview, but this runtime has not exposed the preview route."
+        : "Descriptor-only until the protocol runner or a safer capability-specific adapter is implemented.",
   ];
   if (entry.lifecycleState) {
     governance.push(`Lifecycle state: ${entry.lifecycleState}.`);
@@ -501,29 +631,152 @@ function buildServerModeToolDescriptor(entry: CapabilityCatalogEntry): McpServer
     sourceRef: entry.sourceRef ?? entry.toolName ?? entry.skillId,
     inputSchema: buildServerModeInputSchema(entry),
     gatewayCallable: entry.callable,
-    serverModeState: entry.callable ? "descriptor_only" : "blocked",
+    serverModeState: entry.callable ? (callPreviewEligible ? "call_preview" : "descriptor_only") : "blocked",
     blockers: entry.callable
-      ? ["MCP server protocol execution is not wired in this prototype."]
+      ? callPreviewEligible
+        ? ["MCP protocol serving and stdio launch are not wired yet; only the Gateway call preview is available."]
+        : eligibleForCallPreview
+          ? ["MCP server-mode call preview is not available in this runtime; MCP protocol serving is not wired."]
+          : ["Server-mode call preview is limited to read-only, closed-world Gateway tool descriptors."]
       : ["Capability is not callable in the Gateway catalog."],
     governance,
     annotations: {
       readOnlyHint: Boolean(entry.wrapperVisibility?.readOnly),
       destructiveHint: !entry.wrapperVisibility?.readOnly,
-      openWorldHint: entry.kind === "tool",
+      openWorldHint: isServerModeOpenWorldCapability(entry),
     },
   };
+}
+
+function isMcpServerModeCallPreviewAvailable(services: {
+  tools?: { resolveToolPolicyContext?: unknown };
+  toolsInvoke?: { invokeTool?: unknown };
+}): boolean {
+  return (
+    typeof services.tools?.resolveToolPolicyContext === "function" &&
+    typeof services.toolsInvoke?.invokeTool === "function"
+  );
+}
+
+function findServerModeToolDescriptor(
+  callableCatalog: CapabilityCatalogEntry[],
+  descriptorName: string,
+): McpServerModeToolDescriptor | undefined {
+  return callableCatalog
+    .map((entry) => buildServerModeToolDescriptor(entry, true))
+    .find((descriptor) => descriptor.name === descriptorName);
+}
+
+function isCapabilityEntryCallPreviewEligible(entry: CapabilityCatalogEntry): boolean {
+  return (
+    entry.kind === "tool" &&
+    Boolean(entry.toolName) &&
+    entry.callable &&
+    Boolean(entry.wrapperVisibility?.readOnly) &&
+    !isServerModeOpenWorldCapability(entry)
+  );
+}
+
+function isServerModeDescriptorCallablePreview(descriptor: McpServerModeToolDescriptor): boolean {
+  return (
+    descriptor.serverModeState === "call_preview" &&
+    descriptor.gatewayCallable &&
+    descriptor.annotations.readOnlyHint &&
+    !descriptor.annotations.destructiveHint &&
+    !descriptor.annotations.openWorldHint
+  );
+}
+
+function isServerModeOpenWorldCapability(entry: CapabilityCatalogEntry): boolean {
+  const toolName = (entry.toolName ?? "").toLowerCase();
+  return Boolean(entry.wrapperVisibility && !entry.wrapperVisibility.deterministic) || toolName.includes("search");
+}
+
+function buildMcpServerModeBlockedResponse(
+  descriptorName: string,
+  descriptor: McpServerModeToolDescriptor,
+  blockers: string[],
+): McpServerModeCallResponse {
+  return {
+    readOnly: true,
+    mutationSemantics: "governed_tool_invocation",
+    descriptorName,
+    capabilityId: descriptor.capabilityId,
+    outcome: "blocked",
+    policyReason: blockers.join(" "),
+    governance: buildMcpServerModeCallGovernance(),
+    limitations: buildMcpServerModeCallLimitations(),
+    evidence: {
+      serverModeState: descriptor.serverModeState,
+      gatewayCallable: descriptor.gatewayCallable,
+      readOnlyHint: descriptor.annotations.readOnlyHint,
+      destructiveHint: descriptor.annotations.destructiveHint,
+      openWorldHint: descriptor.annotations.openWorldHint,
+    },
+  };
+}
+
+function buildMcpServerModeCallResponse(
+  descriptorName: string,
+  descriptor: McpServerModeToolDescriptor,
+  result: ToolInvokeResult,
+  toolName: string,
+): McpServerModeCallResponse {
+  return {
+    readOnly: true,
+    mutationSemantics: "governed_tool_invocation",
+    descriptorName,
+    capabilityId: descriptor.capabilityId,
+    toolName,
+    outcome: result.outcome,
+    policyReason: result.policyReason,
+    auditEventId: result.auditEventId,
+    approvalId: result.approvalId,
+    result: result.result,
+    governance: buildMcpServerModeCallGovernance(),
+    limitations: buildMcpServerModeCallLimitations(),
+    evidence: {
+      serverModeState: descriptor.serverModeState,
+      gatewayCallable: descriptor.gatewayCallable,
+      readOnlyHint: descriptor.annotations.readOnlyHint,
+      destructiveHint: descriptor.annotations.destructiveHint,
+      openWorldHint: descriptor.annotations.openWorldHint,
+    },
+  };
+}
+
+function buildMcpServerModeCallGovernance(): string[] {
+  return [
+    "This preview re-enters Gateway tool invocation, deny-wins policy, approval gates, and audit evidence.",
+    "It does not grant unauthenticated or direct MCP protocol access.",
+  ];
+}
+
+function buildMcpServerModeCallLimitations(): string[] {
+  return [
+    "Only read-only, closed-world Gateway tool descriptors are eligible.",
+    "MCP protocol serving and stdio launch remain unavailable until separately implemented and proven.",
+  ];
 }
 
 function buildServerModeInputSchema(entry: CapabilityCatalogEntry): Record<string, unknown> {
   return {
     type: "object",
-    additionalProperties: true,
+    additionalProperties: false,
+    required: ["agentId", "sessionId"],
     properties: {
-      arguments: {
+      args: {
         type: "object",
-        description: `Arguments passed through Gateway governance for ${entry.title}.`,
+        description: `Tool arguments passed through Gateway governance for ${entry.title}.`,
         additionalProperties: true,
       },
+      agentId: { type: "string", description: "Calling agent identity recorded in Gateway policy/audit." },
+      sessionId: { type: "string", description: "Gateway session id used for policy, approvals, and audit." },
+      workspaceId: { type: "string" },
+      taskId: { type: "string" },
+      runId: { type: "string" },
+      permissionProfileId: { type: "string" },
+      localOperatorOverrideId: { type: "string" },
     },
   };
 }

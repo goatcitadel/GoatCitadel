@@ -586,6 +586,70 @@ const mocks = vi.hoisted(() => ({
       },
     ],
   })),
+  fetchMcpServerModeManifest: vi.fn(async () => ({
+    generatedAt: "2026-05-30T00:00:00.000Z",
+    readOnly: true,
+    mutationSemantics: "none",
+    status: "preview",
+    protocol: "mcp",
+    runtimeSupport: "call_preview",
+    server: {
+      name: "goatcitadel",
+      label: "GoatCitadel governed capability export",
+      version: "1.0.0",
+      transport: "stdio",
+    },
+    launch: {
+      supported: false,
+      command: "goatcitadel",
+      args: ["mcp-server"],
+      reason: "MCP protocol serving and stdio launch are not wired yet.",
+    },
+    runtime: {
+      callPreview: {
+        supported: true,
+        endpoint: "/api/v1/mcp/server-mode/call",
+        requiresGatewayAuth: true,
+        readOnlyOnly: true,
+        requiredCallContext: ["agentId", "sessionId"],
+      },
+      stdio: {
+        supported: false,
+        reason: "No launchable MCP stdio server has been shipped or proven.",
+      },
+    },
+    summary: {
+      inspectableCapabilities: 2,
+      gatewayCallableCapabilities: 1,
+      exportedToolDescriptors: 1,
+      blockedDescriptors: 0,
+    },
+    tools: [
+      {
+        name: "goatcitadel.fs.read",
+        title: "Read file",
+        description: "Read a file through Gateway policy.",
+        capabilityId: "tool:fs.read",
+        capabilityKind: "tool",
+        inputSchema: {},
+        gatewayCallable: true,
+        serverModeState: "call_preview",
+        blockers: ["MCP protocol serving and stdio launch are not wired yet."],
+        governance: ["Eligible for the operator-authenticated server-mode call preview."],
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+      },
+    ],
+    governance: [],
+    limitations: [],
+    evidence: {
+      catalogScope: "callable",
+      catalogSnapshot: [{ capabilityId: "tool:fs.read", kind: "tool", callable: true }],
+    },
+  })),
   fetchMcpTools: vi.fn(async () => ({ items: [] })),
   createMcpServer: vi.fn(async () => ({
     serverId: "srv-stdio",
@@ -709,6 +773,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     fetchGoogleMeetSessions: mocks.fetchGoogleMeetSessions,
     fetchMcpServers: mocks.fetchMcpServers,
     fetchMcpRemotePreview: mocks.fetchMcpRemotePreview,
+    fetchMcpServerModeManifest: mocks.fetchMcpServerModeManifest,
     fetchMcpTemplates: mocks.fetchMcpTemplates,
     fetchMcpTools: mocks.fetchMcpTools,
     createMcpServer: mocks.createMcpServer,
@@ -3676,6 +3741,9 @@ describe("SettingsNativePage MCP", () => {
     expect(text).toContain("Remote MCP preview");
     expect(text).toContain("Generic remote http/sse MCP remains not callable here.");
     expect(text).toContain("Remote HTTP");
+    expect(text).toContain("Server mode preview");
+    expect(text).toContain("Read-only, closed-world descriptors can re-enter Gateway policy");
+    expect(text).toContain("goatcitadel.fs.read");
     expect(findButton(renderer!.root, "Connect").props.disabled).toBe(true);
     expect(findButton(renderer!.root, "Health check").props.disabled).toBe(true);
   });

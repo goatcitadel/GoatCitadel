@@ -557,6 +557,18 @@ describe("mcp routes", () => {
       status: "preview",
       protocol: "mcp",
       runtimeSupport: "manifest_only",
+      runtime: {
+        callPreview: {
+          supported: false,
+          endpoint: "/api/v1/mcp/server-mode/call",
+          requiresGatewayAuth: true,
+          readOnlyOnly: true,
+          requiredCallContext: ["agentId", "sessionId"],
+        },
+        stdio: {
+          supported: false,
+        },
+      },
       launch: {
         supported: false,
         reason: expect.stringContaining("not wired"),
@@ -588,6 +600,172 @@ describe("mcp routes", () => {
       evidence: {
         catalogScope: "callable",
         catalogSnapshot: [{ capabilityId: "tool:fs.read", kind: "tool", callable: true }],
+      },
+    });
+  });
+
+  it("routes MCP server-mode call preview through Gateway tool invocation for eligible read-only descriptors", async () => {
+    const invokeTool = vi.fn(async () => ({
+      outcome: "executed",
+      policyReason: "allowed by test profile",
+      auditEventId: "audit-1",
+      result: { content: "ok" },
+    }));
+    const resolveToolPolicyContext = vi.fn(() => ({
+      operatorId: "operator",
+      authActorId: "operator",
+      surface: "mcp",
+      sessionId: "session-1",
+    }));
+    const listCapabilityCatalog = vi.fn((scope: "inspectable" | "callable") =>
+      scope === "inspectable"
+        ? [
+            {
+              capabilityId: "tool:fs.read",
+              kind: "tool",
+              category: "built_in",
+              title: "Read file",
+              summary: "Read a file through Gateway policy.",
+              callable: true,
+              toolName: "fs.read",
+              wrapperVisibility: { readOnly: true, deterministic: true, codeModeAllowed: true },
+            },
+          ]
+        : [
+            {
+              capabilityId: "tool:fs.read",
+              kind: "tool",
+              category: "built_in",
+              title: "Read file",
+              summary: "Read a file through Gateway policy.",
+              callable: true,
+              toolName: "fs.read",
+              wrapperVisibility: { readOnly: true, deterministic: true, codeModeAllowed: true },
+            },
+          ],
+    );
+
+    app = Fastify();
+    app.decorate("services", {
+      mcp: createMcpService(),
+      capabilities: { listCapabilityCatalog },
+      tools: { resolveToolPolicyContext },
+      toolsInvoke: { invokeTool },
+    } as never);
+    await app.register(mcpRoutes);
+
+    const manifest = await app.inject({ method: "GET", url: "/api/v1/mcp/server-mode/manifest" });
+    expect(manifest.statusCode).toBe(200);
+    expect(manifest.json()).toMatchObject({
+      runtimeSupport: "call_preview",
+      runtime: { callPreview: { supported: true } },
+      tools: [expect.objectContaining({ name: "goatcitadel.fs.read", serverModeState: "call_preview" })],
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/mcp/server-mode/call",
+      payload: {
+        descriptorName: "goatcitadel.fs.read",
+        args: { path: "README.md" },
+        agentId: "agent-1",
+        sessionId: "session-1",
+        workspaceId: "default",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(resolveToolPolicyContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authActorId: "operator",
+        workspaceId: "default",
+        sessionId: "session-1",
+        surface: "mcp",
+      }),
+    );
+    expect(invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "fs.read",
+        args: { path: "README.md" },
+        agentId: "agent-1",
+        sessionId: "session-1",
+        workspaceId: "default",
+        surface: "mcp",
+        externalRuntime: true,
+        sourceAttribution: [
+          expect.objectContaining({
+            sourceType: "mcp",
+            sourceRef: "mcp_server_mode_preview",
+          }),
+        ],
+        consentContext: expect.objectContaining({
+          operatorId: "operator",
+          source: "agent",
+          reason: "mcp.server-mode.call-preview",
+        }),
+      }),
+    );
+    expect(response.json()).toMatchObject({
+      readOnly: true,
+      mutationSemantics: "governed_tool_invocation",
+      descriptorName: "goatcitadel.fs.read",
+      capabilityId: "tool:fs.read",
+      toolName: "fs.read",
+      outcome: "executed",
+      policyReason: "allowed by test profile",
+      auditEventId: "audit-1",
+      result: { content: "ok" },
+      evidence: {
+        serverModeState: "call_preview",
+        gatewayCallable: true,
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    });
+  });
+
+  it("blocks MCP server-mode call preview for open-world or non-tool descriptors", async () => {
+    app = Fastify();
+    app.decorate("services", {
+      mcp: createMcpService(),
+      capabilities: {
+        listCapabilityCatalog: vi.fn(() => [
+          {
+            capabilityId: "tool:web.search",
+            kind: "tool",
+            category: "built_in",
+            title: "Web Search",
+            summary: "Search the web.",
+            callable: true,
+            toolName: "web.search",
+            wrapperVisibility: { readOnly: true, deterministic: false, codeModeAllowed: false },
+          },
+        ]),
+      },
+      tools: { resolveToolPolicyContext: vi.fn(() => ({})) },
+      toolsInvoke: { invokeTool: vi.fn() },
+    } as never);
+    await app.register(mcpRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/mcp/server-mode/call",
+      payload: {
+        descriptorName: "goatcitadel.web.search",
+        args: { q: "goatcitadel" },
+        agentId: "agent-1",
+        sessionId: "session-1",
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      outcome: "blocked",
+      policyReason: expect.stringContaining("read-only, closed-world"),
+      evidence: {
+        serverModeState: "descriptor_only",
+        openWorldHint: true,
       },
     });
   });

@@ -214,8 +214,8 @@ export interface McpRemotePreviewResponse {
 }
 
 export type McpServerModeStatus = "preview";
-export type McpServerModeRuntimeSupport = "manifest_only" | "not_available";
-export type McpServerModeToolState = "descriptor_only" | "blocked";
+export type McpServerModeRuntimeSupport = "call_preview" | "manifest_only" | "not_available";
+export type McpServerModeToolState = "call_preview" | "descriptor_only" | "blocked";
 
 export interface McpServerModeToolDescriptor {
   name: string;
@@ -255,6 +255,20 @@ export interface McpServerModeManifestResponse {
     args?: string[];
     reason: string;
   };
+  runtime: {
+    callPreview: {
+      supported: boolean;
+      endpoint: "/api/v1/mcp/server-mode/call";
+      requiresGatewayAuth: true;
+      readOnlyOnly: true;
+      requiredCallContext: Array<"agentId" | "sessionId">;
+      reason?: string;
+    };
+    stdio: {
+      supported: false;
+      reason: string;
+    };
+  };
   summary: {
     inspectableCapabilities: number;
     gatewayCallableCapabilities: number;
@@ -267,6 +281,40 @@ export interface McpServerModeManifestResponse {
   evidence: {
     catalogScope: "callable";
     catalogSnapshot?: Pick<CapabilityCatalogEntry, "capabilityId" | "kind" | "callable">[];
+  };
+}
+
+export interface McpServerModeCallRequest {
+  descriptorName: string;
+  args?: Record<string, unknown>;
+  agentId: string;
+  sessionId: string;
+  workspaceId?: string;
+  taskId?: string;
+  runId?: string;
+  permissionProfileId?: string;
+  localOperatorOverrideId?: string;
+}
+
+export interface McpServerModeCallResponse {
+  readOnly: true;
+  mutationSemantics: "governed_tool_invocation";
+  descriptorName: string;
+  capabilityId?: string;
+  toolName?: string;
+  outcome: "executed" | "approval_required" | "blocked";
+  policyReason: string;
+  auditEventId?: string;
+  approvalId?: string;
+  result?: Record<string, unknown>;
+  governance: string[];
+  limitations: string[];
+  evidence: {
+    serverModeState?: McpServerModeToolState;
+    gatewayCallable?: boolean;
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+    openWorldHint?: boolean;
   };
 }
 

@@ -41,6 +41,7 @@ import type {
   IntegrationPluginRecord,
   IntegrationFormSchema,
   McpRemotePreviewResponse,
+  McpServerModeManifestResponse,
   McpServerRecord,
   OnboardingState,
   FilesystemReadAccessMode,
@@ -101,6 +102,7 @@ import {
   fetchSlackOAuthStatus,
   fetchLlamaCppModels,
   fetchMcpRemotePreview,
+  fetchMcpServerModeManifest,
   fetchMcpServers,
   fetchMcpTemplates,
   fetchMcpTools,
@@ -5390,16 +5392,18 @@ function ChannelsSection(_props: SettingsSectionProps) {
 
 function McpSection(_props: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [servers, templates, remotePreview] = await Promise.all([
+    const [servers, templates, remotePreview, serverMode] = await Promise.all([
       nativeLoad("MCP servers", fetchMcpServers(), { items: [] }),
       nativeLoad("MCP templates", fetchMcpTemplates(), { items: [] }),
       nativeLoad("MCP remote preview", fetchMcpRemotePreview(), createEmptyMcpRemotePreview()),
+      nativeLoad("MCP server mode", fetchMcpServerModeManifest(), createEmptyMcpServerModeManifest()),
     ]);
     return {
-      issues: nativeLoadIssues([servers, templates, remotePreview]),
+      issues: nativeLoadIssues([servers, templates, remotePreview, serverMode]),
       servers: servers.data.items,
       templates: templates.data.items,
       remotePreview: remotePreview.data,
+      serverMode: serverMode.data,
     };
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load);
@@ -5621,6 +5625,46 @@ function McpSection(_props: SettingsSectionProps) {
                   }))}
                 />
               ) : null}
+            </SettingsPanel>
+            <SettingsPanel
+              title="Server mode preview"
+              subtitle="Operator-authenticated export posture for agents that may call GoatCitadel in the future."
+            >
+              <SettingsMetricGrid
+                items={[
+                  {
+                    label: "Runtime",
+                    value: data.serverMode.runtimeSupport.replaceAll("_", " "),
+                    meta: data.serverMode.status,
+                  },
+                  {
+                    label: "Descriptors",
+                    value: String(data.serverMode.summary.exportedToolDescriptors),
+                    meta: `${data.serverMode.summary.blockedDescriptors} blocked`,
+                  },
+                  {
+                    label: "Call preview",
+                    value: data.serverMode.runtime.callPreview.supported ? "available" : "not available",
+                    meta: data.serverMode.runtime.callPreview.readOnlyOnly ? "read-only only" : "not scoped",
+                  },
+                ]}
+              />
+              <SettingsNotice
+                notice={{
+                  tone: data.serverMode.runtime.callPreview.supported ? "success" : "info",
+                  message: data.serverMode.runtime.callPreview.supported
+                    ? "Read-only, closed-world descriptors can re-enter Gateway policy through the server-mode call preview. MCP protocol serving and stdio launch are still not shipped."
+                    : "MCP server-mode protocol serving is not available. The manifest remains descriptor-only in this runtime.",
+                }}
+              />
+              <SettingsActionList
+                items={data.serverMode.tools.slice(0, 8).map((item) => ({
+                  label: item.name,
+                  meta: `${item.serverModeState.replaceAll("_", " ")} · ${item.capabilityKind}`,
+                  description: `${item.title} · ${item.blockers[0] ?? item.governance[0] ?? "No blocker recorded."}`,
+                }))}
+                emptyLabel="No callable capability descriptors are exported."
+              />
             </SettingsPanel>
             <SettingsPanel
               title="Remote MCP preview"
@@ -8470,6 +8514,54 @@ export function createEmptyMcpRemotePreview(): McpRemotePreviewResponse {
       configuredOnly: 0,
     },
     items: [],
+  };
+}
+
+export function createEmptyMcpServerModeManifest(): McpServerModeManifestResponse {
+  return {
+    generatedAt: new Date(0).toISOString(),
+    readOnly: true,
+    mutationSemantics: "none",
+    status: "preview",
+    protocol: "mcp",
+    runtimeSupport: "not_available",
+    server: {
+      name: "goatcitadel",
+      label: "GoatCitadel governed capability export",
+      version: "1.0.0",
+      transport: "stdio",
+    },
+    launch: {
+      supported: false,
+      reason: "MCP server-mode manifest is unavailable.",
+    },
+    runtime: {
+      callPreview: {
+        supported: false,
+        endpoint: "/api/v1/mcp/server-mode/call",
+        requiresGatewayAuth: true,
+        readOnlyOnly: true,
+        requiredCallContext: ["agentId", "sessionId"],
+        reason: "MCP server-mode manifest is unavailable.",
+      },
+      stdio: {
+        supported: false,
+        reason: "No launchable MCP stdio server has been shipped or proven.",
+      },
+    },
+    summary: {
+      inspectableCapabilities: 0,
+      gatewayCallableCapabilities: 0,
+      exportedToolDescriptors: 0,
+      blockedDescriptors: 0,
+    },
+    tools: [],
+    governance: [],
+    limitations: ["MCP server-mode manifest is unavailable."],
+    evidence: {
+      catalogScope: "callable",
+      catalogSnapshot: [],
+    },
   };
 }
 

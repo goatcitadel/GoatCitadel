@@ -182,6 +182,16 @@ describe("shared API wrapper tail coverage", () => {
     await expectCall(mcp.fetchMcpTemplateDiscovery(), "/api/v1/mcp/templates/discovery");
     await expectCall(mcp.fetchMcpRemotePreview(), "/api/v1/mcp/remote-preview");
     await expectCall(mcp.fetchMcpServerModeManifest(), "/api/v1/mcp/server-mode/manifest");
+    await expectCall(
+      mcp.callMcpServerModePreview({
+        descriptorName: "goatcitadel.fs.read",
+        args: {},
+        agentId: "agent",
+        sessionId: "session",
+      }),
+      "/api/v1/mcp/server-mode/call",
+      { method: "POST" },
+    );
     await expectCall(mcp.createMcpServer({ label: "Local", transport: "stdio" }), "/api/v1/mcp/servers", {
       method: "POST",
     });

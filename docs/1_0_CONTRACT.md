@@ -101,6 +101,7 @@ That means:
 - the public extension author story must stay aligned to the published `@goatcitadel/extensions-sdk` package contract, the reference scaffolds, and the tested starter-pack export path
 - Settings Add-ons remains an experimental local/operator-reviewed surface in `1.0`, not a public marketplace claim; graduation requires per-add-on permission grants, durable operator logs, rollback/version proof, runtime health, and explicit local-vs-marketplace boundaries.
 - Desktop/mobile continuity claims must remain anchored in gateway auth, signed device grants, desktop daemon/runtime state, and gateway-owned sessions/projects/artifacts/approvals. The product may show mobile companion readiness, but it must not imply an ungoverned mobile control plane.
+- MCP server-mode call preview may be described only as an operator-authenticated Gateway route for read-only, closed-world callable descriptors. It is not proof that GoatCitadel already serves the MCP protocol or exposes a launchable stdio server.
 
 ## Release Gates
 
