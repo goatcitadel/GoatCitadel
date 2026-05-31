@@ -12,6 +12,7 @@ import {
   type DemoBootstrapStateResponse,
   type EvidenceEnvelope,
   type DeviceAccessGrantRecord,
+  type ExternalSideEffectRunRecord,
   type LlmProviderAdviceResponse,
   type LlmProviderRequestConfig,
 } from "@goatcitadel/contracts";
@@ -120,6 +121,7 @@ import {
   fetchDemoState,
   fetchProviderSecretStatus,
   fetchEvidenceEnvelopes,
+  fetchExternalSideEffectRuns,
   fetchSettings,
   fetchToolCatalog,
   fetchToolGrants,
@@ -4383,24 +4385,32 @@ function WorkspacesSection({ activeWorkspaceId, setActiveWorkspaceId }: Settings
   );
 }
 
-function IntegrationsSection(_props: SettingsSectionProps) {
+function IntegrationsSection({ activeWorkspaceId }: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [catalog, connections, plugins, meetStatus, meetSessions] = await Promise.all([
+    const [catalog, connections, plugins, meetStatus, meetSessions, sideEffectRuns] = await Promise.all([
       nativeLoad("Integration catalog", fetchIntegrationCatalog(), { items: [] }),
       nativeLoad("Integration connections", fetchIntegrationConnections(), { items: [] }),
       nativeLoad("Integration plugins", fetchIntegrationPlugins(), { items: [] }),
       nativeLoad("Google Meet prerequisites", fetchGoogleMeetPrerequisiteStatus(), null),
       nativeLoad("Google Meet sessions", fetchGoogleMeetSessions(6), []),
+      nativeLoad(
+        "External side-effect runs",
+        fetchExternalSideEffectRuns({ workspaceId: activeWorkspaceId, limit: 25 }),
+        {
+          items: [],
+        },
+      ),
     ]);
     return {
-      issues: nativeLoadIssues([catalog, connections, plugins, meetStatus, meetSessions]),
+      issues: nativeLoadIssues([catalog, connections, plugins, meetStatus, meetSessions, sideEffectRuns]),
       catalog: catalog.data.items.filter((item) => item.kind !== "channel"),
       connections: connections.data.items.filter((item) => item.kind !== "channel"),
       plugins: plugins.data.items,
       meetStatus: meetStatus.data,
       meetSessions: meetSessions.data,
+      sideEffectRuns: sideEffectRuns.data.items,
     };
-  }, []);
+  }, [activeWorkspaceId]);
   const { loading, error, data, reload } = useAsyncLoad(load);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [selectedConnectionId, setSelectedConnectionId] = useState("");
@@ -4701,6 +4711,10 @@ function IntegrationsSection(_props: SettingsSectionProps) {
           </SettingsStack>
           <SettingsStack>
             <PluginTrustPanel plugins={data.plugins} />
+            <ExternalSideEffectLedgerPanel
+              runs={data.sideEffectRuns}
+              selectedConnectionId={selectedConnection?.connectionId}
+            />
             <GoogleMeetStatusPanel status={data.meetStatus} sessions={data.meetSessions} />
           </SettingsStack>
           <SettingsPanel
@@ -4873,6 +4887,109 @@ function PluginTrustPanel({ plugins }: { plugins: IntegrationPluginRecord[] }) {
       />
     </SettingsPanel>
   );
+}
+
+function ExternalSideEffectLedgerPanel({
+  runs,
+  selectedConnectionId,
+}: {
+  runs: ExternalSideEffectRunRecord[];
+  selectedConnectionId?: string;
+}) {
+  const selectedConnectionRuns = selectedConnectionId
+    ? runs.filter((run) => run.connectionId === selectedConnectionId)
+    : runs;
+  const unknownCount = runs.filter((run) => run.status === "unknown_external_outcome").length;
+  const blockedCount = runs.filter(
+    (run) =>
+      run.status === "blocked_duplicate" ||
+      run.status === "payload_mismatch" ||
+      run.status === "idempotency_unavailable",
+  ).length;
+  const visibleRuns = selectedConnectionRuns.length ? selectedConnectionRuns : runs;
+
+  return (
+    <SettingsPanel
+      title="External side effects"
+      subtitle="Read-only ledger for integration writebacks that crossed, or prepared to cross, an external boundary."
+      stats={[
+        { label: "Recent", value: String(runs.length) },
+        { label: "Unknown", value: String(unknownCount) },
+        { label: "Blocked", value: String(blockedCount) },
+      ]}
+    >
+      <SettingsActionList
+        items={visibleRuns.map((run) => ({
+          id: run.runId,
+          label: `${labelForExternalSideEffectStatus(run.status)} · ${run.actionId ?? run.boundary}`,
+          description: [
+            run.connectionId ? `Connection ${run.connectionId}` : "No connection recorded",
+            run.catalogId ?? "Unknown catalog",
+            `Attempts ${run.attemptCount}`,
+            `Updated ${formatDateTime(run.updatedAt)}`,
+          ].join(" · "),
+          meta: [
+            `Resume: ${labelForExternalSideEffectResumeState(run.resumeState)}`,
+            `Replay: ${run.replayOutcome ?? "not recorded"}`,
+            run.errorText ? `Error: ${run.errorText}` : undefined,
+          ]
+            .filter(Boolean)
+            .join(" | "),
+          actionLabel: labelForExternalSideEffectStatus(run.status),
+        }))}
+        emptyLabel="No external side-effect run records are available."
+        maxHeight="min(34vh, 20rem)"
+      />
+      {selectedConnectionId && !selectedConnectionRuns.length && runs.length ? (
+        <SettingsNotice
+          notice={{
+            tone: "info",
+            message: "The selected connection has no side-effect ledger records in the recent workspace window.",
+          }}
+        />
+      ) : null}
+    </SettingsPanel>
+  );
+}
+
+function labelForExternalSideEffectStatus(status: ExternalSideEffectRunRecord["status"]): string {
+  switch (status) {
+    case "claimed_not_sent":
+      return "Claimed";
+    case "external_call_started":
+      return "Started";
+    case "completed":
+      return "Completed";
+    case "failed_before_boundary":
+      return "Failed before boundary";
+    case "unknown_external_outcome":
+      return "Unknown outcome";
+    case "blocked_duplicate":
+      return "Duplicate blocked";
+    case "payload_mismatch":
+      return "Payload mismatch";
+    case "idempotency_unavailable":
+      return "Idempotency unavailable";
+    default:
+      return "Unknown";
+  }
+}
+
+function labelForExternalSideEffectResumeState(state: ExternalSideEffectRunRecord["resumeState"]): string {
+  switch (state) {
+    case "manual_retry_after_recorded_failure":
+      return "manual retry";
+    case "in_progress":
+      return "in progress";
+    case "payload_mismatch":
+      return "payload mismatch";
+    case "idempotency_unavailable":
+      return "idempotency unavailable";
+    case "completed":
+      return "completed";
+    default:
+      return "not resumable";
+  }
 }
 
 function GoogleMeetStatusPanel({

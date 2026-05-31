@@ -323,6 +323,7 @@ const mocks = vi.hoisted(() => ({
     ],
   })),
   fetchIntegrationConnections: vi.fn(async () => ({ items: [] })),
+  fetchExternalSideEffectRuns: vi.fn(async () => ({ items: [] })),
   fetchIntegrationFormSchema: vi.fn(async () => ({
     catalogId: "github",
     title: "GitHub setup",
@@ -763,6 +764,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     bootstrapDemo: mocks.bootstrapDemo,
     fetchIntegrationCatalog: mocks.fetchIntegrationCatalog,
     fetchIntegrationConnections: mocks.fetchIntegrationConnections,
+    fetchExternalSideEffectRuns: mocks.fetchExternalSideEffectRuns,
     fetchIntegrationFormSchema: mocks.fetchIntegrationFormSchema,
     createIntegrationConnection: mocks.createIntegrationConnection,
     fetchSlackOAuthStatus: mocks.fetchSlackOAuthStatus,
@@ -1157,6 +1159,7 @@ beforeEach(async () => {
   });
   mocks.fetchAgenticRuns.mockResolvedValue({ items: [] });
   mocks.fetchEvidenceEnvelopes.mockResolvedValue({ items: [] });
+  mocks.fetchExternalSideEffectRuns.mockResolvedValue({ items: [] });
   mocks.bootstrapOnboarding.mockResolvedValue({
     state: await mocks.fetchOnboardingState(),
     appliedAt: "2026-05-02T19:00:00.000Z",
@@ -3680,6 +3683,7 @@ describe("SettingsNativePage integrations", () => {
     const text = collectText(renderer!.root);
 
     expect(mocks.fetchIntegrationPlugins).toHaveBeenCalledTimes(1);
+    expect(mocks.fetchExternalSideEffectRuns).toHaveBeenCalledWith({ workspaceId: "default", limit: 25 });
     expect(mocks.fetchIntegrationFormSchema).toHaveBeenCalledWith("github");
     expect(mocks.fetchGoogleMeetPrerequisiteStatus).toHaveBeenCalledTimes(1);
     expect(text).toContain("GitHub setup");
@@ -3692,6 +3696,68 @@ describe("SettingsNativePage integrations", () => {
     expect(text).toContain("Google Meet voice");
     expect(text).toContain("OAuth profile");
     expect(text).toContain("Blocked");
+    expect(text).toContain("External side effects");
+    expect(text).toContain("No external side-effect run records are available.");
+  });
+
+  it("shows external side-effect ledger outcomes without offering replay actions", async () => {
+    mocks.fetchIntegrationConnections.mockResolvedValueOnce({
+      items: [
+        {
+          connectionId: "11111111-1111-1111-1111-111111111111",
+          catalogId: "productivity.trello",
+          key: "trello",
+          label: "Trello",
+          kind: "productivity",
+          enabled: true,
+          status: "connected",
+          config: {},
+          createdAt: "2026-05-31T10:00:00.000Z",
+          updatedAt: "2026-05-31T10:00:00.000Z",
+        },
+      ],
+    } as any);
+    mocks.fetchExternalSideEffectRuns.mockResolvedValueOnce({
+      items: [
+        {
+          runId: "extfx_111111111111111111111111",
+          workspaceId: "default",
+          boundary: "integration_operator_action",
+          routePath: "external_side_effect:integration_operator_action:productivity.trello:11111111:write",
+          catalogId: "productivity.trello",
+          connectionId: "11111111-1111-1111-1111-111111111111",
+          actionId: "write",
+          actorScope: "11111111-1111-1111-1111-111111111111",
+          idempotencyKey: "operator-key",
+          payloadHash: "payload-hash",
+          status: "unknown_external_outcome",
+          replayPolicy: "idempotent_external",
+          replayOutcome: "unknown",
+          replayAttempt: "new",
+          resumeState: "not_resumable",
+          attemptCount: 1,
+          errorText: "connection reset after request started",
+          externalCallStartedAt: "2026-05-31T10:00:02.000Z",
+          createdAt: "2026-05-31T10:00:00.000Z",
+          updatedAt: "2026-05-31T10:00:03.000Z",
+        },
+      ],
+    } as any);
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = renderPage("integrations");
+    });
+    await act(async () => undefined);
+
+    const text = collectText(renderer!.root);
+    expect(text).toContain("External side effects");
+    expect(text).toContain("Unknown outcome");
+    expect(text).toContain("Resume: not resumable");
+    expect(text).toContain("Replay: unknown");
+    expect(text).toContain("connection reset after request started");
+    expect(text).not.toContain("Replay run");
+    expect(text).not.toContain("Retry side effect");
   });
 
   it("creates integration connections from guided schema fields by default", async () => {

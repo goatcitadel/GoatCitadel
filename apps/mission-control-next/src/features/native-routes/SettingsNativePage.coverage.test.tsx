@@ -38,6 +38,7 @@ const settingsMocks = vi.hoisted(() => {
     fetchDaemonStatus: fn(),
     fetchDemoState: fn(),
     fetchEvidenceEnvelopes: fn(),
+    fetchExternalSideEffectRuns: fn(),
     fetchDeviceAccessGrants: fn(),
     fetchGoogleMeetPrerequisiteStatus: fn(),
     fetchGoogleMeetSessions: fn(),
@@ -164,6 +165,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchDaemonStatus: settingsMocks.fetchDaemonStatus,
   fetchDemoState: settingsMocks.fetchDemoState,
   fetchEvidenceEnvelopes: settingsMocks.fetchEvidenceEnvelopes,
+  fetchExternalSideEffectRuns: settingsMocks.fetchExternalSideEffectRuns,
   fetchDeviceAccessGrants: settingsMocks.fetchDeviceAccessGrants,
   fetchGoogleMeetPrerequisiteStatus: settingsMocks.fetchGoogleMeetPrerequisiteStatus,
   fetchGoogleMeetSessions: settingsMocks.fetchGoogleMeetSessions,
@@ -412,6 +414,7 @@ function setupResponses() {
   });
   settingsMocks.invokeIntegrationConnectionAction.mockResolvedValue({ message: "Synced issues." });
   settingsMocks.fetchIntegrationPlugins.mockResolvedValue({ items: [] });
+  settingsMocks.fetchExternalSideEffectRuns.mockResolvedValue({ items: [] });
   settingsMocks.fetchGoogleMeetPrerequisiteStatus.mockResolvedValue({
     ready: true,
     state: "ready",
