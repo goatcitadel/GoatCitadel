@@ -19,11 +19,15 @@ describe("BrowserSessionRuntimeService", () => {
       service.assertAccess({ sessionId: session.sessionId, actorId: "agent", requiredScope: "read" }),
     ).toThrow(/does not grant read access/i);
 
-    const grant = service.createGrant(session.sessionId, {
-      actorId: "agent",
-      scopes: ["read"],
-      allowedHosts: ["example.com"],
-    });
+    const grant = service.createGrant(
+      session.sessionId,
+      {
+        actorId: "agent",
+        scopes: ["read"],
+        allowedHosts: ["example.com"],
+      },
+      "operator",
+    );
 
     expect(grant.allowedHosts).toEqual(["example.com"]);
     expect(service.listGrants(session.sessionId, { status: "active" })).toHaveLength(1);
@@ -47,7 +51,15 @@ describe("BrowserSessionRuntimeService", () => {
     service.revokeGrant(session.sessionId, grant.grantId, "operator");
     expect(service.listGrants(session.sessionId, { status: "active" })).toHaveLength(0);
     expect(service.listGrants(session.sessionId, { status: "revoked" })).toHaveLength(1);
-    expect(service.listEvents(session.sessionId).map((event) => event.eventType)).toContain("grant_created");
+    const grantCreatedEvent = service
+      .listEvents(session.sessionId)
+      .find((event) => event.eventType === "grant_created" && event.payload.grantId === grant.grantId);
+    expect(grantCreatedEvent).toMatchObject({
+      actorId: "operator",
+      payload: {
+        grantActorId: "agent",
+      },
+    });
   });
 
   it("revokes active grants when a session closes", () => {

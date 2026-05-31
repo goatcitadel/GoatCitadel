@@ -91,7 +91,11 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       const { sessionId } = sessionParamsSchema.parse(request.params);
       const body = grantSchema.parse(request.body);
-      return reply.code(201).send(fastify.gatewayRuntime.browserSessionRuntimeService.createGrant(sessionId, body));
+      return reply
+        .code(201)
+        .send(
+          fastify.gatewayRuntime.browserSessionRuntimeService.createGrant(sessionId, body, resolveActorId(request)),
+        );
     } catch (error) {
       return sendBrowserSessionRouteError(reply, error, request.log);
     }

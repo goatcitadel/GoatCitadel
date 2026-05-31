@@ -166,7 +166,11 @@ export class BrowserSessionRuntimeService {
     return this.requireSession(sessionId);
   }
 
-  public createGrant(sessionId: string, input: BrowserSessionGrantInput): BrowserSessionGrantRecord {
+  public createGrant(
+    sessionId: string,
+    input: BrowserSessionGrantInput,
+    actorId = "operator",
+  ): BrowserSessionGrantRecord {
     const session = this.requireSession(sessionId);
     if (session.status !== "active") {
       throw new ValidationError({ message: "Cannot create a grant for a closed browser session." });
@@ -202,8 +206,9 @@ export class BrowserSessionRuntimeService {
         createdAt: grant.createdAt,
         expiresAt: grant.expiresAt ?? null,
       });
-    this.recordEvent(sessionId, "grant_created", grant.actorId, {
+    this.recordEvent(sessionId, "grant_created", actorId, {
       grantId: grant.grantId,
+      grantActorId: grant.actorId,
       scopes: grant.scopes,
       allowedHosts: grant.allowedHosts,
     });
@@ -237,12 +242,16 @@ export class BrowserSessionRuntimeService {
     const remainingTtlSeconds = current.expiresAt
       ? Math.floor((new Date(current.expiresAt).getTime() - Date.now()) / 1000)
       : undefined;
-    const rotated = this.createGrant(sessionId, {
-      actorId: current.actorId,
-      scopes: current.scopes,
-      allowedHosts: current.allowedHosts,
-      ttlSeconds: remainingTtlSeconds && remainingTtlSeconds > 0 ? remainingTtlSeconds : undefined,
-    });
+    const rotated = this.createGrant(
+      sessionId,
+      {
+        actorId: current.actorId,
+        scopes: current.scopes,
+        allowedHosts: current.allowedHosts,
+        ttlSeconds: remainingTtlSeconds && remainingTtlSeconds > 0 ? remainingTtlSeconds : undefined,
+      },
+      actorId,
+    );
     this.recordEvent(sessionId, "grant_rotated", actorId, { previousGrantId: grantId, grantId: rotated.grantId });
     return rotated;
   }

@@ -65,7 +65,18 @@ describe("browser session routes", () => {
       url: `/api/v1/browser-sessions/${session.sessionId}/events?limit=10`,
     });
     expect(events.statusCode).toBe(200);
-    expect(events.json().map((item: { eventType: string }) => item.eventType)).toContain("grant_rotated");
+    const eventBody = events.json();
+    expect(eventBody.map((item: { eventType: string }) => item.eventType)).toContain("grant_rotated");
+    const createdGrantEvent = eventBody.find(
+      (item: { eventType: string; payload?: { grantId?: string } }) =>
+        item.eventType === "grant_created" && item.payload?.grantId === grantBody.grantId,
+    );
+    expect(createdGrantEvent).toMatchObject({
+      actorId: "operator-test",
+      payload: {
+        grantActorId: "agent-1",
+      },
+    });
   });
 
   it("rejects invalid grant scopes without creating runtime state", async () => {
