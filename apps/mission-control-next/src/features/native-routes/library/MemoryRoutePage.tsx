@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- MemoryRoutePage coordinates memory list, search, namespace filter, edit form, and maintenance verbs in one orchestrator while decomposition lands (plan W3.5 in local decomposition notes). */
 import { useEffect, useId, useMemo, useState } from "react";
-import { RefreshCw, ShieldCheck } from "lucide-react";
+import { RefreshCw, ShieldCheck, Waypoints } from "lucide-react";
 import type { EvidenceEnvelope, MemoryDecisionRecord, MemoryItemRecord } from "@goatcitadel/contracts";
 import { fetchEvidenceEnvelopes } from "@goatcitadel/mission-control-shared/api/client";
 import { EmptyState, FilterPillGroup, StatusChip, type FilterPillOption } from "../primitives";
@@ -1011,6 +1011,26 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
                       {memory.selectedRun.status} · {formatMaybeDateTime(memory.selectedRun.updatedAt)}
                     </p>
                     <p>Durable run: {memory.selectedRun.durableRunId ?? "none"}</p>
+                    {memory.selectedRun.durableRunId ? (
+                      <div className="mc-next-runtime-actions" role="group" aria-label="Memory run trace actions">
+                        <button
+                          type="button"
+                          className="mc-next-button-secondary"
+                          onClick={() =>
+                            navigate({
+                              area: "ops",
+                              section: "sessions",
+                              view: "run-detail",
+                              runId: memory.selectedRun?.durableRunId,
+                              theme: route.theme,
+                            })
+                          }
+                        >
+                          <Waypoints className="h-4 w-4" />
+                          Open Run Detail
+                        </button>
+                      </div>
+                    ) : null}
                     <p>
                       Sources {memory.data?.selectedRunProvenance?.sources.length ?? 0} · Changes{" "}
                       {memory.data?.selectedRunProvenance?.changes.length ?? 0}

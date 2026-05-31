@@ -8175,7 +8175,7 @@ export function deriveFirstOutcomePathItems(
   const providerFailure = describeProviderReadinessFailure(onboarding);
   const latestProof = firstRunEvidence.evidenceEnvelopes[0];
   const proofRun = findRunForEvidence(firstRunEvidence.recentRuns, latestProof);
-  const proofRoute = routeForFirstRunEvidence(proofRun);
+  const proofRoute = routeForFirstRunEvidence(proofRun, latestProof);
 
   return [
     {
@@ -8296,10 +8296,14 @@ function findRunForEvidence(runs: AgenticRunListItem[], evidence: EvidenceEnvelo
   return runs.find((run) => run.runId === evidence.runId);
 }
 
-function routeForFirstRunEvidence(run: AgenticRunListItem | undefined): AppRoute {
-  if (run?.surface) {
-    const route: AppRoute = { area: run.surface };
-    if (run.parentSessionId) {
+function routeForFirstRunEvidence(
+  run: AgenticRunListItem | undefined,
+  evidence: EvidenceEnvelope | undefined,
+): AppRoute {
+  const runId = evidence?.runId ?? run?.runId;
+  if (runId) {
+    const route: AppRoute = { area: "ops", section: "sessions", view: "run-detail", runId };
+    if (run?.parentSessionId) {
       route.sessionId = run.parentSessionId;
     }
     return route;

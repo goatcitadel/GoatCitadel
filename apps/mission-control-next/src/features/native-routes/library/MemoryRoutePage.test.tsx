@@ -427,6 +427,74 @@ describe("MemoryRoutePage", () => {
     expect(navigate.mock.calls[0]?.[0]).not.toHaveProperty("page");
   });
 
+  it("links selected maintenance durable runs to universal run detail", async () => {
+    const navigate = vi.fn();
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = create(
+        <MemoryRoutePage
+          route={{ area: "library", section: "memory", theme: "library" } as any}
+          activeWorkspaceId="default"
+          activeWorkspaceName="Default"
+          pendingApprovals={0}
+          navigate={navigate}
+          setActiveWorkspaceId={vi.fn()}
+        />,
+      );
+    });
+
+    const button = findButton(renderer!.root, "Open Run Detail");
+
+    act(() => {
+      button.props.onClick();
+    });
+
+    expect(navigate).toHaveBeenCalledWith({
+      area: "ops",
+      section: "sessions",
+      view: "run-detail",
+      runId: "durable-1",
+      theme: "library",
+    });
+  });
+
+  it("does not link stale durable detail when the selected maintenance run has no durable id", async () => {
+    const original = {
+      selectedRun: memorySnapshot.selectedRun,
+      data: memorySnapshot.data,
+    };
+
+    try {
+      memorySnapshot.selectedRun = {
+        ...original.selectedRun,
+        durableRunId: undefined,
+      } as any;
+      memorySnapshot.data = {
+        ...original.data,
+        selectedDurableRun: { runId: "previous-durable-run", status: "completed" },
+      } as any;
+
+      let renderer: ReactTestRenderer | null = null;
+      await act(async () => {
+        renderer = create(
+          <MemoryRoutePage
+            route={{ area: "library", section: "memory", theme: "library" } as any}
+            activeWorkspaceId="default"
+            activeWorkspaceName="Default"
+            pendingApprovals={0}
+            navigate={vi.fn()}
+            setActiveWorkspaceId={vi.fn()}
+          />,
+        );
+      });
+
+      expect(findButtons(renderer!.root, "Open Run Detail")).toHaveLength(0);
+    } finally {
+      Object.assign(memorySnapshot, original);
+    }
+  });
+
   it("wires decision retrospective actions through the memory snapshot owner", async () => {
     let renderer: ReactTestRenderer | null = null;
 

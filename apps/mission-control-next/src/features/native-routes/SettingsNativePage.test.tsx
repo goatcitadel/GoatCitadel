@@ -2353,7 +2353,7 @@ describe("SettingsNativePage providers", () => {
     expect(text).not.toContain("autonomous high-risk");
   });
 
-  it("marks proof complete from evidence and links to the run surface", async () => {
+  it("marks proof complete from evidence and links to run detail", async () => {
     mocks.fetchAgenticRuns.mockResolvedValueOnce({
       items: [
         {
@@ -2408,7 +2408,14 @@ describe("SettingsNativePage providers", () => {
       findButton(renderer!.root, "Open Run Detail").props.onClick();
     });
 
-    expect(navigate).toHaveBeenCalledWith({ area: "cowork", sessionId: "cowork-session", theme: "ops" });
+    expect(navigate).toHaveBeenCalledWith({
+      area: "ops",
+      section: "sessions",
+      view: "run-detail",
+      runId: "run-first-proof",
+      sessionId: "cowork-session",
+      theme: "ops",
+    });
   });
 
   it("keeps budget evidence navigation and retry visible when budget settings fail to load", async () => {
