@@ -17,6 +17,8 @@ Only `callableCatalog` may feed planning, wrapper generation, or runtime selecti
 
 Portable capability-pack materialization receipts do not add entries to `callableCatalog`. They record operator review evidence for staged assets only; each asset still becomes callable solely through its existing governed Skills, Add-ons, MCP, Plugins, Tools, or policy lifecycle.
 
+Portable skill bundle manifests use the same truth-preserving posture. A `goatcitadel.skill-bundle.json` file can declare `goatcitadel.skill-bundle.v1` assets with per-file `sha256` hashes and `scriptDisposition: review_only_non_callable`; the skill import path validates those assets and records the result on the candidate/source receipt. This makes hosted and local skill bundles easier to review and re-export, but it does not add scripts to `callableCatalog`, activate skills, or grant tools.
+
 Primary lifecycle/trust concepts:
 
 - categories: `built_in`, `optional`, `project_local`, `self_generated`, `community_imported`

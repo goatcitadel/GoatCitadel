@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -255,6 +256,165 @@ describe("SkillImportService loop 35 import behavior", () => {
     ]);
   });
 
+  it("validates portable hosted skill bundle manifests and keeps scripts non-callable", async () => {
+    const skill = [
+      "---",
+      "name: Portable Hosted Bundle",
+      "description: Portable hosted bundle fixture with manifest hash coverage.",
+      "---",
+      "",
+      "Review the manifest-backed bundle before activation.",
+      "",
+    ].join("\n");
+    const reference = "# Operator Notes\n";
+    const script = "Write-Output 'review only'\n";
+    const manifest = {
+      manifestVersion: "goatcitadel.skill-bundle.v1",
+      name: "Portable Hosted Bundle",
+      allowedDirectories: ["references", "templates", "scripts"],
+      scriptDisposition: "review_only_non_callable",
+      assets: [
+        { path: "SKILL.md", kind: "skill", sha256: sha256(skill), bytes: Buffer.byteLength(skill) },
+        { path: "references/operator.md", kind: "reference", sha256: sha256(reference) },
+        { path: "scripts/review.ps1", kind: "script", sha256: sha256(script), callable: false },
+      ],
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url === "https://example.test/skill.md") {
+          return new Response(skill, { status: 200 });
+        }
+        if (url === "https://example.test/goatcitadel.skill-bundle.json") {
+          return new Response(JSON.stringify(manifest), { status: 200 });
+        }
+        if (url === "https://example.test/references/operator.md") {
+          return new Response(reference, { status: 200 });
+        }
+        if (url === "https://example.test/scripts/review.ps1") {
+          return new Response(script, { status: 200 });
+        }
+        return new Response("", { status: 404 });
+      }),
+    );
+
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const result = await service.validateImport({
+      sourceRef: "https://example.test/skill.md",
+      sourceType: "remote_bundle",
+      sourceProvider: "external",
+    });
+
+    expect(result.valid).toBe(true);
+    expect(result.bundleManifest).toMatchObject({
+      status: "valid",
+      assetsVerified: 3,
+      assetPaths: ["SKILL.md", "references/operator.md", "scripts/review.ps1"],
+      scriptDisposition: "review_only_non_callable",
+    });
+    expect(result.scriptDisposition).toMatchObject({
+      action: "blocked_until_activation",
+      scriptFiles: ["scripts/review.ps1"],
+    });
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Portable skill bundle manifest verified"),
+        expect.stringContaining("Imported scripts remain non-callable"),
+      ]),
+    );
+  });
+
+  it("rejects portable skill bundle manifests with mismatched asset hashes", async () => {
+    const skill = [
+      "---",
+      "name: Hash Mismatch Bundle",
+      "description: Portable hosted bundle fixture with mismatched hashes.",
+      "---",
+      "",
+      "Review the manifest-backed bundle before activation.",
+      "",
+    ].join("\n");
+    const manifest = {
+      manifestVersion: "goatcitadel.skill-bundle.v1",
+      scriptDisposition: "review_only_non_callable",
+      assets: [
+        { path: "SKILL.md", kind: "skill", sha256: "0".repeat(64) },
+        { path: "references/operator.md", kind: "reference", sha256: "1".repeat(64) },
+      ],
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url === "https://example.test/skill.md") {
+          return new Response(skill, { status: 200 });
+        }
+        if (url === "https://example.test/goatcitadel.skill-bundle.json") {
+          return new Response(JSON.stringify(manifest), { status: 200 });
+        }
+        if (url === "https://example.test/references/operator.md") {
+          return new Response("# Operator Notes\n", { status: 200 });
+        }
+        return new Response("", { status: 404 });
+      }),
+    );
+
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const result = await service.validateImport({
+      sourceRef: "https://example.test/skill.md",
+      sourceType: "remote_bundle",
+      sourceProvider: "external",
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.bundleManifest).toMatchObject({
+      status: "invalid",
+      assetsVerified: 0,
+    });
+    expect(result.errors).toEqual(expect.arrayContaining([expect.stringContaining("sha256 does not match manifest")]));
+  });
+
+  it("rejects portable skill bundle manifests that escape allowed paths", async () => {
+    const skillDir = path.join(rootDir, "portable-local");
+    fs.mkdirSync(skillDir, { recursive: true });
+    const skill = [
+      "---",
+      "name: Escaping Bundle",
+      "description: Portable local bundle fixture with escaping paths.",
+      "---",
+      "",
+      "Review the manifest-backed bundle before activation.",
+      "",
+    ].join("\n");
+    fs.writeFileSync(path.join(skillDir, "SKILL.md"), skill, "utf8");
+    fs.writeFileSync(
+      path.join(skillDir, "goatcitadel.skill-bundle.json"),
+      JSON.stringify({
+        manifestVersion: "goatcitadel.skill-bundle.v1",
+        scriptDisposition: "review_only_non_callable",
+        assets: [
+          { path: "SKILL.md", kind: "skill", sha256: sha256(skill) },
+          { path: "../evil.ps1", kind: "script", sha256: "2".repeat(64), callable: false },
+        ],
+      }),
+      "utf8",
+    );
+
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const result = await service.validateImport({
+      sourceRef: skillDir,
+      sourceType: "local_path",
+      sourceProvider: "local",
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.bundleManifest).toMatchObject({ status: "invalid" });
+    expect(result.errors).toEqual(expect.arrayContaining([expect.stringContaining("asset path may not traverse")]));
+  });
+
   it("classifies direct ssh git, generic reference, and local zip lookup sources", async () => {
     const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
 
@@ -303,4 +463,8 @@ function createSystemSettingsRepo() {
       values.set(key, { value });
     },
   };
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }

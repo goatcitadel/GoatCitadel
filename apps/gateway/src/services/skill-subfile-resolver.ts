@@ -11,18 +11,21 @@ export interface ResolveSkillSubfilesResult {
   totalBytes: number;
 }
 
-const ALLOWED_DIRS = ["references", "templates"];
+const ROOT_FILES = ["SKILL.md", "goatcitadel.skill-bundle.json"];
+const ALLOWED_DIRS = ["references", "templates", "scripts"];
 
 export async function resolveSkillSubfiles(skillDir: string): Promise<ResolveSkillSubfilesResult> {
   const files: SkillSubfileEntry[] = [];
-  const main = path.join(skillDir, "SKILL.md");
-  try {
-    const stat = await fs.stat(main);
-    if (stat.isFile()) {
-      files.push({ relativePath: "SKILL.md", bytes: stat.size });
+  for (const file of ROOT_FILES) {
+    const fullPath = path.join(skillDir, file);
+    try {
+      const stat = await fs.stat(fullPath);
+      if (stat.isFile()) {
+        files.push({ relativePath: file, bytes: stat.size });
+      }
+    } catch {
+      /* ignore missing root files */
     }
-  } catch {
-    /* ignore missing main */
   }
   for (const sub of ALLOWED_DIRS) {
     const dir = path.join(skillDir, sub);

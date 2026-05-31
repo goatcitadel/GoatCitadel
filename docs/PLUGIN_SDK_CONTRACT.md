@@ -66,6 +66,12 @@ Skill bundles are not the same as add-ons or integration plugins, but they are p
 Current repo-native baseline:
 
 - `apps/gateway/src/services/skill-import-service.ts`
+- Optional portable manifest: `goatcitadel.skill-bundle.json`
+- Manifest version: `goatcitadel.skill-bundle.v1`
+- Allowed asset locations: `SKILL.md`, `references/`, `templates/`, `scripts/`, plus known root metadata files such as `HEARTBEAT.md`, `MESSAGING.md`, `RULES.md`, and `skill.json`
+- Required asset evidence: per-asset `sha256`; scripts must declare `callable: false` and the manifest-level `scriptDisposition` must be `review_only_non_callable`
+
+This manifest is a review and portability contract. It lets GoatCitadel validate hosted or local skill bundle assets and preserve source evidence, but it does not make scripts callable, enable a skill, grant tools, install an add-on, or bypass approvals.
 
 ## Author Surface Vs Operator Surface
 

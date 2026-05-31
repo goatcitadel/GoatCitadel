@@ -108,6 +108,7 @@ export interface SkillImportCandidate {
   provenance?: SkillImportProvenance;
   externalToolMappings?: SkillImportExternalToolMapping[];
   scriptDisposition?: SkillImportScriptDisposition;
+  bundleManifest?: SkillBundleManifestValidation;
 }
 
 export interface SkillImportProvenance {
@@ -133,6 +134,36 @@ export interface SkillImportScriptDisposition {
   action: "none" | "blocked_until_activation" | "review_required";
   scriptFiles: string[];
   notes: string[];
+}
+
+export type SkillBundleAssetKind = "skill" | "reference" | "template" | "script" | "metadata";
+
+export interface SkillBundleManifestAsset {
+  path: string;
+  sha256: string;
+  kind: SkillBundleAssetKind;
+  bytes?: number;
+  callable?: false;
+}
+
+export interface SkillBundleManifest {
+  manifestVersion: "goatcitadel.skill-bundle.v1";
+  skillId?: string;
+  name?: string;
+  generatedAt?: string;
+  allowedDirectories?: string[];
+  scriptDisposition: "review_only_non_callable";
+  assets: SkillBundleManifestAsset[];
+}
+
+export interface SkillBundleManifestValidation {
+  status: "absent" | "valid" | "invalid";
+  manifestPath?: string;
+  assetsVerified: number;
+  assetPaths: string[];
+  scriptDisposition?: SkillBundleManifest["scriptDisposition"];
+  warnings: string[];
+  errors: string[];
 }
 
 export interface SkillSourceSearchRecord {
@@ -225,6 +256,7 @@ export interface SkillImportValidationResult {
   externalToolMappings?: SkillImportExternalToolMapping[];
   scriptDisposition?: SkillImportScriptDisposition;
   provenance?: SkillImportProvenance;
+  bundleManifest?: SkillBundleManifestValidation;
   nativeOverlaps?: Array<{
     overlapFamily: string;
     nativeAlternativeName: string;

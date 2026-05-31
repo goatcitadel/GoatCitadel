@@ -9,6 +9,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { parseSkillMarkdown } from "@goatcitadel/skills";
 import { assertWritePathInJail, fetchAllowlisted } from "@goatcitadel/policy-engine";
 import { assertSafeGitPositionalArg } from "./security-utils.js";
+import {
+  SKILL_BUNDLE_MANIFEST_FILENAME,
+  isSkillBundleAssetLocationAllowed,
+  normalizeSkillBundleAssetPath,
+  parseSkillBundleManifest,
+  validateSkillBundleManifestDirectory,
+} from "./skill-bundle-manifest.js";
 import type {
   SkillImportCandidate,
   SkillImportExternalToolMapping,
@@ -80,6 +87,7 @@ interface SkillInstallDuplicateMatch {
 
 const HOSTED_SKILL_BUNDLE_FILES = [
   { remoteName: "skill.md", localName: "SKILL.md", required: true },
+  { remoteName: SKILL_BUNDLE_MANIFEST_FILENAME, localName: SKILL_BUNDLE_MANIFEST_FILENAME, required: false },
   { remoteName: "heartbeat.md", localName: "HEARTBEAT.md", required: false },
   { remoteName: "messaging.md", localName: "MESSAGING.md", required: false },
   { remoteName: "rules.md", localName: "RULES.md", required: false },
@@ -858,6 +866,7 @@ export class SkillImportService {
           provenance: validation.provenance,
           externalToolMappings: validation.externalToolMappings,
           scriptDisposition: validation.scriptDisposition,
+          bundleManifest: validation.bundleManifest,
         },
         createdAt: new Date().toISOString(),
       });
@@ -915,6 +924,7 @@ export class SkillImportService {
             provenance: validation.provenance,
             externalToolMappings: validation.externalToolMappings,
             scriptDisposition: validation.scriptDisposition,
+            bundleManifest: validation.bundleManifest,
           },
           createdAt: new Date().toISOString(),
         });
@@ -937,6 +947,7 @@ export class SkillImportService {
             provenance: validation.provenance,
             externalToolMappings: validation.externalToolMappings,
             scriptDisposition: validation.scriptDisposition,
+            bundleManifest: validation.bundleManifest,
           },
           createdAt: new Date().toISOString(),
         });
@@ -1001,6 +1012,7 @@ export class SkillImportService {
             provenance: validation.provenance,
             externalToolMappings: validation.externalToolMappings,
             scriptDisposition: validation.scriptDisposition,
+            bundleManifest: validation.bundleManifest,
           },
           null,
           2,
@@ -1024,6 +1036,7 @@ export class SkillImportService {
           provenance: validation.provenance,
           externalToolMappings: validation.externalToolMappings,
           scriptDisposition: validation.scriptDisposition,
+          bundleManifest: validation.bundleManifest,
         },
         createdAt: new Date().toISOString(),
       });
@@ -1423,6 +1436,7 @@ export class SkillImportService {
     const provenance = buildSkillImportProvenance(source.candidate);
     const externalToolMappings = mapImportedSkillTools(declaredTools);
     const scriptDisposition = buildScriptDisposition(scan.scriptFiles, scan.suspiciousSignals);
+    const bundleManifest = await validateSkillBundleManifestDirectory(source.skillDir);
 
     if (suspiciousScripts) {
       warnings.push("Potentially risky script indicators detected.");
@@ -1441,6 +1455,13 @@ export class SkillImportService {
     }
     if (!licenseDetected) {
       warnings.push("No license file detected.");
+    }
+    if (bundleManifest.status === "valid") {
+      warnings.push("Portable skill bundle manifest verified; scripts remain non-callable until governed activation.");
+    }
+    if (bundleManifest.status === "invalid") {
+      errors.push(...bundleManifest.errors);
+      warnings.push(...bundleManifest.warnings);
     }
 
     const reviewPolicy = deriveReviewPolicy({
@@ -1497,6 +1518,7 @@ export class SkillImportService {
         provenance,
         externalToolMappings,
         scriptDisposition,
+        bundleManifest,
       },
       inferredSkillName,
       inferredSkillId,
@@ -1509,6 +1531,7 @@ export class SkillImportService {
       instructionPreview,
       externalToolMappings,
       scriptDisposition,
+      bundleManifest,
       provenance,
       nativeOverlaps,
     };
@@ -2262,6 +2285,8 @@ async function materializeHostedSkillBundle(sourceUrl: string, targetDir: string
   if (!primaryFetched) {
     throw new Error(`Hosted skill bundle is missing required SKILL.md content: ${sourceUrl}`);
   }
+
+  await materializeHostedSkillBundleManifestAssets(baseUrl, targetDir);
 }
 
 async function fetchHostedSkillBundleFile(url: string): Promise<Response> {
@@ -2274,6 +2299,48 @@ async function fetchHostedSkillBundleFile(url: string): Promise<Response> {
       },
     },
   });
+}
+
+async function materializeHostedSkillBundleManifestAssets(baseUrl: URL, targetDir: string): Promise<void> {
+  const manifestPath = path.join(targetDir, SKILL_BUNDLE_MANIFEST_FILENAME);
+  const manifestRaw = await fs.readFile(manifestPath, "utf8").catch(() => undefined);
+  if (!manifestRaw) {
+    return;
+  }
+  const manifest = parseSkillBundleManifest(manifestRaw);
+  for (const asset of manifest.assets) {
+    const normalized = normalizeSkillBundleAssetPath(asset.path);
+    if (!isSkillBundleAssetLocationAllowed(normalized, asset.kind)) {
+      throw new Error(`Hosted skill bundle asset ${normalized} is outside the allowed bundle paths.`);
+    }
+    if (fsSync.existsSync(path.join(targetDir, ...normalized.split("/")))) {
+      continue;
+    }
+    const assetUrl = new URL(toHostedBundleRemotePath(normalized), baseUrl);
+    const response = await fetchHostedSkillBundleFile(assetUrl.toString());
+    if (!response.ok) {
+      throw new Error(`Failed to fetch hosted skill bundle asset ${normalized}: HTTP ${response.status}`);
+    }
+    const content = Buffer.from(await response.arrayBuffer());
+    const targetPath = path.join(targetDir, ...normalized.split("/"));
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, content);
+  }
+}
+
+function toHostedBundleRemotePath(relativePath: string): string {
+  switch (relativePath) {
+    case "SKILL.md":
+      return "skill.md";
+    case "HEARTBEAT.md":
+      return "heartbeat.md";
+    case "MESSAGING.md":
+      return "messaging.md";
+    case "RULES.md":
+      return "rules.md";
+    default:
+      return relativePath;
+  }
 }
 
 function getProviderLabel(provider: SkillSourceProvider): string {
