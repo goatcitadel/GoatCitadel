@@ -5,9 +5,9 @@ import type {
   CodeModeSandboxMetadata,
 } from "@goatcitadel/contracts";
 
-const HOST_BACKEND_ID = "trusted-code-host";
-const DOCKER_BACKEND_ID = "docker-container";
-const AIDER_ADAPTER_ID = "aider-cli-adapter";
+export const CODE_MODE_HOST_BACKEND_ID = "trusted-code-host";
+export const CODE_MODE_DOCKER_BACKEND_ID = "docker-container";
+export const CODE_MODE_AIDER_ADAPTER_ID = "aider-cli-adapter";
 
 export function buildCodeModeExecutionBackends(input: {
   codeModeEnabled: boolean;
@@ -21,8 +21,8 @@ export function buildCodeModeExecutionBackends(input: {
     generatedAt: new Date().toISOString(),
     readOnly: true,
     mutationSemantics: "none",
-    defaultBackendId: HOST_BACKEND_ID,
-    activeBackendId: HOST_BACKEND_ID,
+    defaultBackendId: CODE_MODE_HOST_BACKEND_ID,
+    activeBackendId: CODE_MODE_HOST_BACKEND_ID,
     items: [host, docker, aider],
   };
 }
@@ -45,7 +45,7 @@ function buildTrustedCodeHostBackend(
 ): CodeModeExecutionBackendRecord {
   const blocked = !codeModeEnabled || (sandbox.required && !sandbox.available);
   return {
-    backendId: HOST_BACKEND_ID,
+    backendId: CODE_MODE_HOST_BACKEND_ID,
     kind: "host",
     label: "Trusted-code host runner",
     status: blocked ? "blocked" : "active",
@@ -75,7 +75,7 @@ function buildDockerPreviewBackend(env: NodeJS.ProcessEnv): CodeModeExecutionBac
   const envFlag = "GOATCITADEL_CODE_MODE_DOCKER_BACKEND_ENABLED";
   const requested = isTruthyEnv(env[envFlag]);
   return {
-    backendId: DOCKER_BACKEND_ID,
+    backendId: CODE_MODE_DOCKER_BACKEND_ID,
     kind: "docker",
     label: "Docker execution backend",
     status: "preview",
@@ -101,12 +101,12 @@ function buildAiderPreviewAdapter(env: NodeJS.ProcessEnv): CodeModeExecutionBack
   const envFlag = "GOATCITADEL_CODE_MODE_AIDER_ADAPTER_ENABLED";
   const requested = isTruthyEnv(env[envFlag]);
   return {
-    backendId: AIDER_ADAPTER_ID,
+    backendId: CODE_MODE_AIDER_ADAPTER_ID,
     kind: "aider_adapter",
     label: "Aider CLI adapter",
     status: "preview",
     runtimeSupport: "preview_only",
-    adapterForBackendId: DOCKER_BACKEND_ID,
+    adapterForBackendId: CODE_MODE_DOCKER_BACKEND_ID,
     default: false,
     callable: false,
     description: "Planned adapter for routing approved Code Mode tasks into Aider-compatible workflows.",

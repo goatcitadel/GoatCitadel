@@ -47,12 +47,12 @@ import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/cont
 import type { Storage } from "@goatcitadel/storage";
 import type { CapabilityRuntimeConfig, FeatureFlagsConfig } from "../config.js";
 import { CODE_MODE_CHILD_SOURCE } from "./code-mode-child-source.js";
-import { buildCodeModeExecutionBackends, buildCodeModeRunExecutionBackendRef } from "./code-mode-execution-backends.js";
 import {
-  assertCodeModeSandboxAvailable,
-  prepareCodeModeSandboxLaunch,
-  resolveCodeModeSandboxMetadata,
-} from "./code-mode-sandbox-runner.js";
+  CodeModeExecutionBackendUnavailableError,
+  createCodeModeExecutionBackendRunner,
+} from "./code-mode-execution-backend-runner.js";
+import { buildCodeModeExecutionBackends, buildCodeModeRunExecutionBackendRef } from "./code-mode-execution-backends.js";
+import { assertCodeModeSandboxAvailable, resolveCodeModeSandboxMetadata } from "./code-mode-sandbox-runner.js";
 
 const CODE_MODE_RUN_TIMEOUT_MS = 15_000;
 const CODE_MODE_WRAPPER_SETTLE_TIMEOUT_MS = 500;
@@ -1264,6 +1264,7 @@ export class CapabilitySystemService {
       const execution = await this.executeChildHarness({
         runId,
         sandbox,
+        executionBackend: finalRun.executionBackend,
         source: compiledSource,
         input: runInput,
         requestedOutputIntent: finalRun.requestedOutputIntent,
@@ -2020,6 +2021,7 @@ export class CapabilitySystemService {
   private async executeChildHarness(input: {
     runId: string;
     sandbox: CodeModeSandboxMetadata;
+    executionBackend?: CodeModeRunExecutionBackendRef;
     source: string;
     input: Record<string, unknown>;
     requestedOutputIntent?: string;
@@ -2038,22 +2040,27 @@ export class CapabilitySystemService {
     stderr: BoundedCaptureState;
   }> {
     const runTempRoot = path.join(this.tempRoot, input.runId);
-    let preparedSandbox: Awaited<ReturnType<typeof prepareCodeModeSandboxLaunch>>;
+    const backendRunner = createCodeModeExecutionBackendRunner({
+      sandbox: input.sandbox,
+      sandboxConfig: this.options.runtimeConfig.codeModeSandbox,
+      executionBackend: input.executionBackend,
+    });
+    let preparedSandbox: Awaited<ReturnType<typeof backendRunner.prepareLaunch>>;
     try {
       const harnessPath = await this.prepareRunHarnessFile(runTempRoot);
-      preparedSandbox = await prepareCodeModeSandboxLaunch(
-        this.options.runtimeConfig.codeModeSandbox,
-        {
-          runId: input.runId,
-          nodePath: process.execPath,
-          harnessPath,
-          runTempRoot,
-          heapMb: CODE_MODE_HEAP_MB,
-          env: createMinimalSyntheticEnv(),
-        },
-        { metadata: input.sandbox },
-      );
+      preparedSandbox = await backendRunner.prepareLaunch({
+        sandbox: input.sandbox,
+        runId: input.runId,
+        nodePath: process.execPath,
+        harnessPath,
+        runTempRoot,
+        heapMb: CODE_MODE_HEAP_MB,
+        env: createMinimalSyntheticEnv(),
+      });
     } catch (error) {
+      if (error instanceof CodeModeExecutionBackendUnavailableError) {
+        throw error;
+      }
       throw new CodeModeSandboxLaunchFailure(
         error instanceof Error ? error.message : String(error),
         buildCodeModeSandboxLaunchFailureMetadata(input.sandbox, error),
