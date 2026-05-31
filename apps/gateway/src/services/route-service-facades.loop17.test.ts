@@ -22,6 +22,12 @@ describe("route service facades", () => {
       "composeContext",
       "forgetMemory",
       "forgetMemoryItem",
+      "listMemoryFeedback",
+      "listTraceMemoryCandidates",
+      "proposeTraceMemoryCandidate",
+      "promoteTraceMemoryCandidate",
+      "recallMemory",
+      "recordMemoryFeedback",
       "getContext",
       "getContextStats",
       "getMaintenancePolicy",
@@ -82,6 +88,30 @@ describe("route service facades", () => {
       args: ["2026-05-01", "2026-05-14"],
     });
     expect(service.listRecentContexts(7)).toEqual({ method: "listRecentContexts", args: [7] });
+    expect(service.recall({ mode: "summary" } as never)).toEqual({
+      method: "recallMemory",
+      args: [{ mode: "summary" }],
+    });
+    expect(service.listFeedback({ workspaceId: "workspace-1" } as never)).toEqual({
+      method: "listMemoryFeedback",
+      args: [{ workspaceId: "workspace-1" }],
+    });
+    expect(service.recordFeedback({ kind: "useful" } as never, "operator")).toEqual({
+      method: "recordMemoryFeedback",
+      args: [{ kind: "useful" }, "operator"],
+    });
+    expect(service.listTraceCandidates({ status: "proposed" } as never)).toEqual({
+      method: "listTraceMemoryCandidates",
+      args: [{ status: "proposed" }],
+    });
+    expect(service.proposeTraceCandidate({ proposedInsight: "remember this" } as never, "agent")).toEqual({
+      method: "proposeTraceMemoryCandidate",
+      args: [{ proposedInsight: "remember this" }, "agent"],
+    });
+    expect(service.promoteTraceCandidate("trace-1", "operator")).toEqual({
+      method: "promoteTraceMemoryCandidate",
+      args: ["trace-1", "operator"],
+    });
     expect(service.listItems({ workspaceId: "workspace-1" } as never)).toEqual({
       method: "listMemoryItems",
       args: [{ workspaceId: "workspace-1" }],

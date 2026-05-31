@@ -202,10 +202,13 @@ Implementation status:
 - QMD composition, distillation, and caching: complete.
 - Memory maintenance (retention, compaction, recommendations): feature-flagged behind `memoryMaintenanceV1Enabled`.
 - Learned-memory promotion, dedupe, workspace scope resolution, maintenance recommendation suppression, memory item list/edit/forget/history, and shared write-policy decisions now route through lifecycle-owned policy helpers coordinated by `MemoryLifecycleService`.
-- Memory context citations carry retrieval strategy and match-signal provenance. Current retrieval is lexical/recency plus optional operator-visible semantic hints from memory item metadata and bounded semantic-vector scoring for active lifecycle memory items; provenance distinguishes these strategies rather than hiding them behind a generic semantic-search claim.
+- Memory context citations carry retrieval strategy and match-signal provenance. Current retrieval is native hybrid ranking: BM25-style lexical scoring, optional operator-visible semantic hints from memory item metadata, optional caller-supplied embedding similarity when embeddings are present, recency, and source diversity. Provenance distinguishes `lexical_recency`, `semantic_hints`, `semantic_vector`, and `hybrid_rank` rather than hiding them behind a generic semantic-search claim.
+- Trace-derived memory capture is proposal-only. Durable run/chat/tool traces can create `agent_proposed` trace memory candidates behind `MemoryLifecycleService`, but promotion into trusted memory still re-enters operator authority, write-gate policy, browser-content guard, and evidence-envelope rules. Raw logs, raw tool outputs, and secret-like payloads are rejected.
+- Explicit recall modes are part of the memory route layer: targeted recall, broad summary recall, and post-compaction resume context. These return inspectable context/quality/provenance records to callers; they are not invisible automatic prompt injection.
+- Memory quality feedback records track useful, stale, missing, and irrelevant recall outcomes for Library/Memory and Ops diagnostics.
 
 Notes:
-- `MemoryLifecycleService` is the operator-facing lifecycle owner for context composition, learned-memory entry points, maintenance policy/run orchestration, memory item list/edit/forget/history, and shared dedupe/scope/write policy decisions.
+- `MemoryLifecycleService` is the operator-facing lifecycle owner for context composition, explicit recall, trace-candidate proposal, recall-quality feedback, learned-memory entry points, maintenance policy/run orchestration, memory item list/edit/forget/history, and shared dedupe/scope/write policy decisions.
 - `MemoryContextService`, `ChatLearnedMemoryService`, and `MemoryMaintenanceService` remain focused collaborators behind that owner.
 - `ChatLearnedMemoryService` is storage-repo backed for learned-memory item persistence.
 - Remaining direct-SQL owners in core runtime-adjacent code no longer include `GatewayService` for `memory_items` lifecycle flows; selected migration and ops services may still touch adjacent stores outside the memory lifecycle owner boundary.

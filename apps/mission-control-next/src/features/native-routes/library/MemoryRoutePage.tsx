@@ -108,6 +108,8 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
   const memoryListCountId = useId();
 
   const memoryItems = memory.data?.memoryItems ?? [];
+  const memoryFeedback = memory.data?.memoryFeedback ?? [];
+  const traceMemoryCandidates = memory.data?.traceMemoryCandidates ?? [];
 
   const namespacePillOptions = useMemo<FilterPillOption[]>(() => {
     const counts = new Map<string, number>();
@@ -212,6 +214,9 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
     [recentContextPacks],
   );
   const recentCitationCount = recentContextPacks.reduce((sum, pack) => sum + pack.citations.length, 0);
+  const usefulFeedbackCount = memoryFeedback.filter((item) => item.kind === "useful").length;
+  const openFeedbackCount = memoryFeedback.filter((item) => item.status === "open").length;
+  const proposedTraceCandidateCount = traceMemoryCandidates.filter((item) => item.status === "proposed").length;
   const provenanceCoverage = useMemo(
     () =>
       buildProvenanceCoverage({
@@ -616,6 +621,64 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
               Refresh evidence
             </button>
           </div>
+        </NativeCard>
+        <NativeCard
+          title="Recall quality"
+          subtitle="Recent feedback on stale, missing, irrelevant, and useful memory selections."
+          stats={[
+            { label: "Feedback", value: String(memoryFeedback.length) },
+            { label: "Open", value: String(openFeedbackCount) },
+          ]}
+        >
+          <SectionTruthNotice message={sectionErrors?.memoryFeedback ?? null} />
+          <div className="mc-next-approvals-risk-strip">
+            <StatusChip tone="success">Useful {usefulFeedbackCount}</StatusChip>
+            <StatusChip tone={openFeedbackCount > 0 ? "warning" : "muted"}>Open {openFeedbackCount}</StatusChip>
+            <StatusChip tone="muted">Issues {Math.max(0, memoryFeedback.length - usefulFeedbackCount)}</StatusChip>
+          </div>
+          {memoryFeedback.length > 0 ? (
+            <ul className="mc-next-approvals-compact-list">
+              {memoryFeedback.slice(0, 6).map((item) => (
+                <li key={item.feedbackId}>
+                  <strong>{item.kind}</strong>
+                  {" · "}
+                  {item.status}
+                  {" · "}
+                  {formatFeedbackTarget(item.targetKind, item.targetRef ?? item.contextId ?? item.citationId)}
+                  {item.note ? <p>{item.note}</p> : null}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState size="compact" title="No recall feedback has been recorded yet." />
+          )}
+        </NativeCard>
+        <NativeCard
+          title="Trace candidates"
+          subtitle="Trace-derived memory stays proposed until promotion passes operator authority and write-gate checks."
+          stats={[
+            { label: "Candidates", value: String(traceMemoryCandidates.length) },
+            { label: "Proposed", value: String(proposedTraceCandidateCount) },
+          ]}
+        >
+          <SectionTruthNotice message={sectionErrors?.traceMemoryCandidates ?? null} />
+          {(traceMemoryCandidates.length ?? 0) > 0 ? (
+            <ul className="mc-next-approvals-compact-list">
+              {traceMemoryCandidates.slice(0, 6).map((item) => (
+                <li key={item.candidateId}>
+                  <strong>{item.candidateType}</strong>
+                  {" · "}
+                  {item.status}
+                  {" · "}
+                  {formatConfidence(item.confidence)}
+                  <p>{item.proposedInsight}</p>
+                  <span>{formatSourceRefCount(item.sourceRefs.length)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState size="compact" title="No trace-derived candidates are waiting for review." />
+          )}
         </NativeCard>
       </NativeGrid>
       <NativeGrid>
@@ -1178,6 +1241,17 @@ export function MemoryRoutePage({ route, activeWorkspaceName, navigate, activeWo
       </NativeGrid>
     </NativePageFrame>
   );
+}
+
+function formatFeedbackTarget(kind: string, ref: string | undefined): string {
+  return ref ? `${kind}:${shortId(ref)}` : kind;
+}
+
+function formatSourceRefCount(count: number): string {
+  if (count === 0) {
+    return "no source refs";
+  }
+  return `${count} source ${count === 1 ? "ref" : "refs"}`;
 }
 
 function DecisionJournalFacts({ decision }: { decision: MemoryDecisionRecord }) {

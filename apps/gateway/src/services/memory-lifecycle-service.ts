@@ -19,6 +19,11 @@ import type {
   MemoryDecisionRetrospectiveInput,
   MemoryEntityInput,
   MemoryEntityRecord,
+  MemoryFeedbackInput,
+  MemoryFeedbackKind,
+  MemoryFeedbackRecord,
+  MemoryFeedbackStatus,
+  MemoryFeedbackTargetKind,
   MemoryItemRecord,
   MemoryLearningInput,
   MemoryLearningRecord,
@@ -41,10 +46,17 @@ import type {
   MemoryRetrievalBenchmarkRequest,
   MemoryRetrievalBenchmarkResponse,
   MemoryRetrievalStrategy,
+  MemoryRecallRequest,
+  MemoryRecallResponse,
   StructuredMemoryAuthority,
+  StructuredMemoryLineage,
   StructuredMemoryScope,
   StructuredMemorySourceRef,
   StructuredMemoryStatus,
+  TraceMemoryCandidateInput,
+  TraceMemoryCandidateRecord,
+  TraceMemoryCandidateStatus,
+  TraceMemoryCandidateType,
   TranscriptEvent,
 } from "@goatcitadel/contracts";
 import {
@@ -1153,6 +1165,314 @@ export class MemoryLifecycleService {
     return this.deps.context.stats(from, to);
   }
 
+  public listMemoryFeedback(
+    input: {
+      workspaceId?: string;
+      kind?: MemoryFeedbackKind | "all";
+      status?: MemoryFeedbackStatus | "all";
+      targetKind?: MemoryFeedbackTargetKind;
+      limit?: number;
+    } = {},
+  ): MemoryFeedbackRecord[] {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    this.ensureFeedbackSchema();
+    const clauses = ["workspace_id = @workspaceId"];
+    const params: Record<string, string | number> = {
+      workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
+      limit: normalizeStructuredLimit(input.limit),
+    };
+    if (input.kind && input.kind !== "all") {
+      clauses.push("kind = @kind");
+      params.kind = input.kind;
+    }
+    if (input.status && input.status !== "all") {
+      clauses.push("status = @status");
+      params.status = input.status;
+    }
+    if (input.targetKind) {
+      clauses.push("target_kind = @targetKind");
+      params.targetKind = input.targetKind;
+    }
+    const rows = this.deps.admin.gatewaySql
+      .prepare(
+        `
+      SELECT *
+      FROM memory_feedback
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY updated_at DESC
+      LIMIT @limit
+    `,
+      )
+      .all(params) as MemoryFeedbackRow[];
+    return rows.map((row) => mapMemoryFeedbackRow(this.deps.admin, row));
+  }
+
+  public recordMemoryFeedback(input: MemoryFeedbackInput, actorId = "operator"): MemoryFeedbackRecord {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    this.ensureFeedbackSchema();
+    this.assertMemoryFeedbackContentAllowed(
+      JSON.stringify({
+        note: input.note ?? "",
+        metadata: input.metadata ?? {},
+      }),
+    );
+    const now = new Date().toISOString();
+    const feedback: MemoryFeedbackRecord = {
+      feedbackId: randomUUID(),
+      workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
+      kind: normalizeMemoryFeedbackKind(input.kind),
+      status: "open",
+      targetKind: normalizeMemoryFeedbackTargetKind(input.targetKind),
+      targetRef: optionalTrimmedText(input.targetRef),
+      contextId: optionalTrimmedText(input.contextId),
+      citationId: optionalTrimmedText(input.citationId),
+      note: optionalTrimmedText(input.note),
+      metadata: input.metadata ?? {},
+      actorId: optionalTrimmedText(actorId),
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.deps.admin.gatewaySql
+      .prepare(
+        `
+      INSERT INTO memory_feedback (
+        feedback_id, workspace_id, kind, status, target_kind, target_ref, context_id, citation_id,
+        note, metadata_json, actor_id, created_at, updated_at
+      ) VALUES (
+        @feedbackId, @workspaceId, @kind, @status, @targetKind, @targetRef, @contextId, @citationId,
+        @note, @metadataJson, @actorId, @createdAt, @updatedAt
+      )
+    `,
+      )
+      .run({
+        feedbackId: feedback.feedbackId,
+        workspaceId: feedback.workspaceId,
+        kind: feedback.kind,
+        status: feedback.status,
+        targetKind: feedback.targetKind,
+        targetRef: feedback.targetRef ?? null,
+        contextId: feedback.contextId ?? null,
+        citationId: feedback.citationId ?? null,
+        note: feedback.note ?? null,
+        metadataJson: JSON.stringify(feedback.metadata ?? {}),
+        actorId: feedback.actorId ?? null,
+        createdAt: now,
+        updatedAt: now,
+      });
+    this.deps.admin.publishRealtime("system", "memory", {
+      type: "memory_feedback_recorded",
+      feedbackId: feedback.feedbackId,
+      kind: feedback.kind,
+      targetKind: feedback.targetKind,
+    });
+    return feedback;
+  }
+
+  public listTraceMemoryCandidates(
+    input: {
+      workspaceId?: string;
+      status?: TraceMemoryCandidateStatus | "all";
+      limit?: number;
+    } = {},
+  ): TraceMemoryCandidateRecord[] {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    this.ensureTraceCandidateSchema();
+    const clauses = ["workspace_id = @workspaceId"];
+    const params: Record<string, string | number> = {
+      workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
+      limit: normalizeStructuredLimit(input.limit),
+    };
+    if (input.status && input.status !== "all") {
+      clauses.push("status = @status");
+      params.status = input.status;
+    }
+    const rows = this.deps.admin.gatewaySql
+      .prepare(
+        `
+      SELECT *
+      FROM memory_trace_candidates
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY updated_at DESC
+      LIMIT @limit
+    `,
+      )
+      .all(params) as TraceMemoryCandidateRow[];
+    return rows.map((row) => mapTraceMemoryCandidateRow(this.deps.admin, row));
+  }
+
+  public async proposeTraceMemoryCandidate(
+    input: TraceMemoryCandidateInput,
+    actorId = "agent",
+  ): Promise<TraceMemoryCandidateRecord> {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    this.ensureTraceCandidateSchema();
+    const sourceText = normalizeTraceCandidateText(
+      await this.resolveTraceCandidateSourceText(input),
+      "sourceText",
+      1_200,
+    );
+    const proposedInsight = normalizeTraceCandidateText(input.proposedInsight, "proposedInsight", 1_000);
+    const contentForGuard = JSON.stringify({
+      sourceText,
+      proposedInsight,
+      sourceRefs: input.sourceRefs ?? [],
+      metadata: input.metadata ?? {},
+    });
+    this.assertTraceCandidateContentAllowed(contentForGuard);
+    const now = new Date().toISOString();
+    const candidate: TraceMemoryCandidateRecord = {
+      candidateId: randomUUID(),
+      workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
+      candidateType: normalizeTraceCandidateType(input.candidateType),
+      status: "proposed",
+      sourceText,
+      proposedInsight,
+      confidence: normalizeConfidence(input.confidence),
+      sourceRefs: normalizeTraceCandidateSourceRefs(input, actorId),
+      metadata: input.metadata ?? {},
+      authority: "agent_proposed",
+      actorId: optionalTrimmedText(actorId),
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.deps.admin.gatewaySql
+      .prepare(
+        `
+      INSERT INTO memory_trace_candidates (
+        candidate_id, workspace_id, candidate_type, status, source_text, proposed_insight, confidence,
+        source_refs_json, metadata_json, authority, actor_id, promoted_learning_id, created_at, updated_at
+      ) VALUES (
+        @candidateId, @workspaceId, @candidateType, @status, @sourceText, @proposedInsight, @confidence,
+        @sourceRefsJson, @metadataJson, @authority, @actorId, NULL, @createdAt, @updatedAt
+      )
+    `,
+      )
+      .run({
+        candidateId: candidate.candidateId,
+        workspaceId: candidate.workspaceId,
+        candidateType: candidate.candidateType,
+        status: candidate.status,
+        sourceText: candidate.sourceText,
+        proposedInsight: candidate.proposedInsight,
+        confidence: candidate.confidence,
+        sourceRefsJson: JSON.stringify(candidate.sourceRefs),
+        metadataJson: JSON.stringify(candidate.metadata ?? {}),
+        authority: candidate.authority,
+        actorId: candidate.actorId ?? null,
+        createdAt: now,
+        updatedAt: now,
+      });
+    this.deps.evidence?.createEnvelope({
+      eventKind: "memory_write",
+      metadata: {
+        traceMemoryCandidate: true,
+        authority: candidate.authority,
+        status: candidate.status,
+        candidateType: candidate.candidateType,
+        claimPreview: candidate.proposedInsight.slice(0, 240),
+      },
+    });
+    this.deps.admin.publishRealtime("system", "memory", {
+      type: "memory_trace_candidate_proposed",
+      candidateId: candidate.candidateId,
+      candidateType: candidate.candidateType,
+    });
+    return candidate;
+  }
+
+  public promoteTraceMemoryCandidate(candidateId: string, actorId = "operator"): MemoryLearningRecord {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    this.ensureTraceCandidateSchema();
+    const candidate = this.requireTraceMemoryCandidate(candidateId);
+    if (candidate.status !== "proposed") {
+      throw new ValidationError({ message: "Only proposed trace memory candidates can be promoted." });
+    }
+    const key =
+      readRecordString(candidate.metadata ?? {}, "key") ?? `trace.${candidate.candidateType}.${candidate.candidateId}`;
+    const learning = this.createMemoryLearning(
+      {
+        workspaceId: candidate.workspaceId,
+        key,
+        type: mapTraceCandidateToLearningType(candidate.candidateType),
+        insight: candidate.proposedInsight,
+        confidence: candidate.confidence,
+        sourceRefs: candidate.sourceRefs,
+        authority: "operator",
+      },
+      actorId,
+    );
+    const now = new Date().toISOString();
+    this.deps.admin.gatewaySql
+      .prepare(
+        `
+      UPDATE memory_trace_candidates
+      SET status = 'promoted',
+          promoted_learning_id = @learningId,
+          updated_at = @updatedAt
+      WHERE candidate_id = @candidateId
+    `,
+      )
+      .run({ candidateId, learningId: learning.learningId, updatedAt: now });
+    this.deps.admin.publishRealtime("system", "memory", {
+      type: "memory_trace_candidate_promoted",
+      candidateId,
+      learningId: learning.learningId,
+    });
+    return learning;
+  }
+
+  public async recallMemory(input: MemoryRecallRequest): Promise<MemoryRecallResponse> {
+    this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
+    const limit = Math.max(1, Math.min(25, Math.floor(input.limit ?? 8)));
+    const workspaceId = normalizeStructuredWorkspaceId(input.workspaceId ?? input.workspace);
+    const feedback = this.listMemoryFeedback({ workspaceId, limit: 12 });
+    const traceCandidates = this.listTraceMemoryCandidates({ workspaceId, status: "proposed", limit: 12 });
+    const recentContexts = this.listRecentContexts(limit);
+    const warnings: string[] = [];
+    if (input.mode === "targeted") {
+      const prompt = requireTrimmedText(input.prompt, "prompt");
+      const context = await this.composeContext({
+        scope: input.scope ?? "chat",
+        prompt,
+        sessionId: input.sessionId,
+        taskId: input.taskId,
+        runId: input.runId,
+        phaseId: input.phaseId,
+        workspace: input.workspace,
+        relationScope: input.relationScope,
+        maxContextTokens: input.maxContextTokens,
+        queryEmbedding: input.queryEmbedding,
+      });
+      return {
+        mode: input.mode,
+        generatedAt: new Date().toISOString(),
+        summary: `Targeted recall selected ${context.citations.length} cited memories. Context is returned for the caller to inspect; it is not automatically injected.`,
+        context,
+        recentContexts: [context, ...recentContexts.filter((item) => item.contextId !== context.contextId)].slice(
+          0,
+          limit,
+        ),
+        feedback,
+        traceCandidates,
+        warnings,
+      };
+    }
+    if (input.mode === "post_compaction_resume") {
+      warnings.push(
+        "Post-compaction recall is explicit context for resume planning; callers must choose what to reuse.",
+      );
+    }
+    return {
+      mode: input.mode,
+      generatedAt: new Date().toISOString(),
+      summary: buildRecallSummary(input.mode, recentContexts, feedback, traceCandidates),
+      recentContexts,
+      feedback,
+      traceCandidates,
+      warnings,
+    };
+  }
+
   public async runRetrievalBenchmark(
     input: MemoryRetrievalBenchmarkRequest,
   ): Promise<MemoryRetrievalBenchmarkResponse> {
@@ -1222,7 +1542,7 @@ export class MemoryLifecycleService {
         ),
       ),
       semanticCoverageNote:
-        "Retrieval benchmark overlap is lexical and provenance-aware. Semantic-hint scores only use operator-visible metadata; vector/embedding semantic search is not claimed here.",
+        "Retrieval benchmark overlap is lexical and provenance-aware. Hybrid ranking uses BM25-style lexical signals, operator-visible semantic hints, optional caller-supplied embeddings, recency, and source diversity.",
       items,
       warnings,
     };
@@ -1584,6 +1904,173 @@ export class MemoryLifecycleService {
       .run();
   }
 
+  private ensureFeedbackSchema(): void {
+    this.deps.admin.gatewaySql
+      .prepare(
+        `
+      CREATE TABLE IF NOT EXISTS memory_feedback (
+        feedback_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        target_kind TEXT NOT NULL,
+        target_ref TEXT,
+        context_id TEXT,
+        citation_id TEXT,
+        note TEXT,
+        metadata_json TEXT NOT NULL,
+        actor_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `,
+      )
+      .run();
+    this.deps.admin.gatewaySql
+      .prepare(
+        "CREATE INDEX IF NOT EXISTS idx_memory_feedback_workspace_status ON memory_feedback(workspace_id, status)",
+      )
+      .run();
+    this.deps.admin.gatewaySql
+      .prepare("CREATE INDEX IF NOT EXISTS idx_memory_feedback_target ON memory_feedback(target_kind, target_ref)")
+      .run();
+  }
+
+  private ensureTraceCandidateSchema(): void {
+    this.deps.admin.gatewaySql
+      .prepare(
+        `
+      CREATE TABLE IF NOT EXISTS memory_trace_candidates (
+        candidate_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        candidate_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        source_text TEXT NOT NULL,
+        proposed_insight TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        source_refs_json TEXT NOT NULL,
+        metadata_json TEXT NOT NULL,
+        authority TEXT NOT NULL,
+        actor_id TEXT,
+        promoted_learning_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `,
+      )
+      .run();
+    this.deps.admin.gatewaySql
+      .prepare(
+        "CREATE INDEX IF NOT EXISTS idx_memory_trace_candidates_workspace_status ON memory_trace_candidates(workspace_id, status)",
+      )
+      .run();
+  }
+
+  private requireTraceMemoryCandidate(candidateId: string): TraceMemoryCandidateRecord {
+    const row = this.deps.admin.gatewaySql
+      .prepare("SELECT * FROM memory_trace_candidates WHERE candidate_id = ?")
+      .get(candidateId) as TraceMemoryCandidateRow | undefined;
+    if (!row) {
+      throw new NotFoundError({ entity: "memory_trace_candidate", id: candidateId });
+    }
+    return mapTraceMemoryCandidateRow(this.deps.admin, row);
+  }
+
+  private async resolveTraceCandidateSourceText(input: TraceMemoryCandidateInput): Promise<string> {
+    if (input.sourceText?.trim()) {
+      return input.sourceText;
+    }
+    const sessionId =
+      input.sourceSessionId?.trim() ||
+      input.sourceRefs?.find((ref) => ref.sourceType === "session")?.sourceRef.trim() ||
+      undefined;
+    if (sessionId) {
+      const events = await this.deps.readTranscriptOrEmpty(sessionId);
+      const turnId =
+        input.sourceTurnId?.trim() || input.sourceRefs?.find((ref) => ref.sourceType === "turn")?.sourceRef;
+      const relevant = turnId
+        ? events.filter((event) => event.eventId === turnId || event.actionId === turnId)
+        : events;
+      const summarized = relevant
+        .slice(-6)
+        .map((event) => summarizeTranscriptEventForMemory(event))
+        .filter(Boolean)
+        .join("\n");
+      if (summarized.trim()) {
+        return summarized;
+      }
+    }
+    const runId =
+      input.sourceRunId?.trim() || input.sourceRefs?.find((ref) => ref.sourceType === "run")?.sourceRef.trim() || "";
+    if (runId) {
+      const summarized = this.listRunContexts(runId)
+        .slice(0, 3)
+        .map((context) => `${context.scope} context ${context.contextId}: ${context.quality.status}`)
+        .join("\n");
+      if (summarized.trim()) {
+        return summarized;
+      }
+    }
+    throw new ValidationError({
+      field: "sourceText",
+      message: "Trace memory candidates require sourceText or a resolvable session/run/turn source reference.",
+    });
+  }
+
+  private assertTraceCandidateContentAllowed(content: string): void {
+    if (SECRET_LIKE_TRACE_PATTERN.test(content)) {
+      this.deps.evidence?.createEnvelope({
+        eventKind: "memory_write",
+        metadata: {
+          traceMemoryCandidate: true,
+          decision: "blocked_secret_like_content",
+          claimPreview: "[redacted]",
+        },
+      });
+      throw new PolicyViolationError({
+        message: "Trace-derived memory candidates cannot store secret-like payloads.",
+      });
+    }
+    const browserContentGuard = this.scanBrowserContentGuardForMemory(content, {
+      structuredMemory: true,
+      traceMemoryCandidate: true,
+      authority: "agent_proposed",
+    });
+    if (browserContentGuard.blocked) {
+      throw new PolicyViolationError({
+        message: "Browser content guard blocked trace-derived memory candidate.",
+        details: { browserContentGuard },
+      });
+    }
+  }
+
+  private assertMemoryFeedbackContentAllowed(content: string): void {
+    if (SECRET_LIKE_TRACE_PATTERN.test(content)) {
+      this.deps.evidence?.createEnvelope({
+        eventKind: "memory_write",
+        metadata: {
+          memoryFeedback: true,
+          decision: "blocked_secret_like_content",
+          claimPreview: "[redacted]",
+        },
+      });
+      throw new PolicyViolationError({
+        message: "Memory feedback cannot store secret-like payloads.",
+      });
+    }
+    const browserContentGuard = this.scanBrowserContentGuardForMemory(content, {
+      structuredMemory: true,
+      memoryFeedback: true,
+      authority: "operator",
+    });
+    if (browserContentGuard.blocked) {
+      throw new PolicyViolationError({
+        message: "Browser content guard blocked memory feedback.",
+        details: { browserContentGuard },
+      });
+    }
+  }
+
   private assertStructuredMemoryWriteAllowed(authority: StructuredMemoryAuthority, content: string): void {
     const browserContentGuard = this.scanBrowserContentGuardForMemory(content, {
       structuredMemory: true,
@@ -1699,6 +2186,39 @@ interface MemoryLearningRow {
   updated_at: string;
 }
 
+interface MemoryFeedbackRow {
+  feedback_id: string;
+  workspace_id: string;
+  kind: string;
+  status: string;
+  target_kind: string;
+  target_ref: string | null;
+  context_id: string | null;
+  citation_id: string | null;
+  note: string | null;
+  metadata_json: string | null;
+  actor_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface TraceMemoryCandidateRow {
+  candidate_id: string;
+  workspace_id: string;
+  candidate_type: string;
+  status: string;
+  source_text: string;
+  proposed_insight: string;
+  confidence: number;
+  source_refs_json: string | null;
+  metadata_json: string | null;
+  authority: string;
+  actor_id: string | null;
+  promoted_learning_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 interface MemoryRelationRow {
   relation_id: string;
   workspace_id: string;
@@ -1747,6 +2267,8 @@ interface MemoryDecisionRow {
 }
 
 function mapMemoryEntityRow(host: MemoryLifecycleAdminDependencies, row: MemoryEntityRow): MemoryEntityRecord {
+  const sourceRefs = parseMemoryJson<StructuredMemorySourceRef[]>(host, row.source_refs_json, []);
+  const metadata = parseMemoryJson<Record<string, unknown>>(host, row.metadata_json, {});
   return {
     id: row.entity_id,
     workspaceId: row.workspace_id,
@@ -1757,9 +2279,10 @@ function mapMemoryEntityRow(host: MemoryLifecycleAdminDependencies, row: MemoryE
     summary: row.summary ?? undefined,
     status: normalizeStructuredStatus(row.status),
     confidence: normalizeConfidence(row.confidence),
-    sourceRefs: parseMemoryJson(host, row.source_refs_json, []),
-    metadata: parseMemoryJson(host, row.metadata_json, {}),
+    sourceRefs,
+    metadata,
     authority: normalizeAuthority(row.authority),
+    lineage: extractStructuredLineage(metadata, sourceRefs),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     forgottenAt: row.forgotten_at ?? undefined,
@@ -1785,7 +2308,49 @@ function mapLearningRow(host: MemoryLifecycleAdminDependencies, row: MemoryLearn
   };
 }
 
+function mapMemoryFeedbackRow(host: MemoryLifecycleAdminDependencies, row: MemoryFeedbackRow): MemoryFeedbackRecord {
+  return {
+    feedbackId: row.feedback_id,
+    workspaceId: row.workspace_id,
+    kind: normalizeMemoryFeedbackKind(row.kind),
+    status: normalizeMemoryFeedbackStatus(row.status),
+    targetKind: normalizeMemoryFeedbackTargetKind(row.target_kind),
+    targetRef: row.target_ref ?? undefined,
+    contextId: row.context_id ?? undefined,
+    citationId: row.citation_id ?? undefined,
+    note: row.note ?? undefined,
+    metadata: parseMemoryJson(host, row.metadata_json, {}),
+    actorId: row.actor_id ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapTraceMemoryCandidateRow(
+  host: MemoryLifecycleAdminDependencies,
+  row: TraceMemoryCandidateRow,
+): TraceMemoryCandidateRecord {
+  return {
+    candidateId: row.candidate_id,
+    workspaceId: row.workspace_id,
+    candidateType: normalizeTraceCandidateType(row.candidate_type),
+    status: normalizeTraceCandidateStatus(row.status),
+    sourceText: row.source_text,
+    proposedInsight: row.proposed_insight,
+    confidence: normalizeConfidence(row.confidence),
+    sourceRefs: parseMemoryJson(host, row.source_refs_json, []),
+    metadata: parseMemoryJson(host, row.metadata_json, {}),
+    authority: "agent_proposed",
+    actorId: row.actor_id ?? undefined,
+    promotedLearningId: row.promoted_learning_id ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function mapMemoryRelationRow(host: MemoryLifecycleAdminDependencies, row: MemoryRelationRow): MemoryRelationRecord {
+  const sourceRefs = parseMemoryJson<StructuredMemorySourceRef[]>(host, row.source_refs_json, []);
+  const metadata = parseMemoryJson<Record<string, unknown>>(host, row.metadata_json, {});
   return {
     id: row.relation_id,
     workspaceId: row.workspace_id,
@@ -1796,9 +2361,10 @@ function mapMemoryRelationRow(host: MemoryLifecycleAdminDependencies, row: Memor
     relationType: row.relation_type,
     status: normalizeStructuredStatus(row.status),
     confidence: normalizeConfidence(row.confidence),
-    sourceRefs: parseMemoryJson(host, row.source_refs_json, []),
-    metadata: parseMemoryJson(host, row.metadata_json, {}),
+    sourceRefs,
+    metadata,
     authority: normalizeAuthority(row.authority),
+    lineage: extractStructuredLineage(metadata, sourceRefs),
     degradedReason: row.degraded_reason ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -1808,6 +2374,8 @@ function mapMemoryRelationRow(host: MemoryLifecycleAdminDependencies, row: Memor
 }
 
 function mapMemoryDecisionRow(host: MemoryLifecycleAdminDependencies, row: MemoryDecisionRow): MemoryDecisionRecord {
+  const sourceRefs = parseMemoryJson<StructuredMemorySourceRef[]>(host, row.source_refs_json, []);
+  const metadata = parseMemoryJson<Record<string, unknown>>(host, row.metadata_json, {});
   return {
     id: row.decision_id,
     workspaceId: row.workspace_id,
@@ -1826,9 +2394,10 @@ function mapMemoryDecisionRow(host: MemoryLifecycleAdminDependencies, row: Memor
     improvementCandidateId: row.improvement_candidate_id ?? undefined,
     status: normalizeStructuredStatus(row.status),
     confidence: normalizeConfidence(row.confidence),
-    sourceRefs: parseMemoryJson(host, row.source_refs_json, []),
-    metadata: parseMemoryJson(host, row.metadata_json, {}),
+    sourceRefs,
+    metadata,
     authority: normalizeAuthority(row.authority),
+    lineage: extractStructuredLineage(metadata, sourceRefs, row.run_id ?? undefined),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     forgottenAt: row.forgotten_at ?? undefined,
@@ -1864,6 +2433,41 @@ function normalizeLearningType(value: string | undefined): MemoryLearningType {
     value === "tooling"
     ? value
     : "repo_fact";
+}
+
+function normalizeMemoryFeedbackKind(value: string | undefined): MemoryFeedbackKind {
+  return value === "stale" || value === "missing" || value === "irrelevant" || value === "useful" ? value : "useful";
+}
+
+function normalizeMemoryFeedbackStatus(value: string | undefined): MemoryFeedbackStatus {
+  return value === "reviewed" || value === "dismissed" ? value : "open";
+}
+
+function normalizeMemoryFeedbackTargetKind(value: string | undefined): MemoryFeedbackTargetKind {
+  return value === "context" ||
+    value === "citation" ||
+    value === "memory_item" ||
+    value === "entity" ||
+    value === "relation" ||
+    value === "decision" ||
+    value === "learning" ||
+    value === "trace_candidate"
+    ? value
+    : "context";
+}
+
+function normalizeTraceCandidateType(value: string | undefined): TraceMemoryCandidateType {
+  return value === "decision" ||
+    value === "tool_outcome" ||
+    value === "operator_preference" ||
+    value === "repo_fact" ||
+    value === "workflow"
+    ? value
+    : "fact";
+}
+
+function normalizeTraceCandidateStatus(value: string | undefined): TraceMemoryCandidateStatus {
+  return value === "rejected" || value === "promoted" ? value : "proposed";
 }
 
 function normalizeAuthority(value: string | undefined): StructuredMemoryAuthority {
@@ -1910,8 +2514,11 @@ function buildMemoryBenchmarkCoverageNote(pack: MemoryContextPack): string {
       .map((citation) => citation.provenance?.retrievalStrategy)
       .filter((strategy): strategy is MemoryRetrievalStrategy => Boolean(strategy)),
   );
+  if (strategies.has("hybrid_rank")) {
+    return "Context used hybrid BM25, optional embedding, semantic hint, recency, and source-diversity scoring.";
+  }
   if (strategies.has("semantic_vector")) {
-    return "Context used semantic vector scoring over active memory items plus lexical/recency provenance.";
+    return "Context used caller-supplied embedding similarity over active memory items plus lexical/recency provenance.";
   }
   if (strategies.has("semantic_hints")) {
     return "Context used operator-visible semantic hints plus lexical/recency scoring; vector semantic search was not used.";
@@ -1966,6 +2573,9 @@ function average(values: number[]): number {
   return Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(3));
 }
 
+const SECRET_LIKE_TRACE_PATTERN =
+  /(?:(?:api[_-]?key|auth|cookie|credential|password|secret|token)\s*[:=]\s*["']?[a-z0-9._/-]{8,}|sk-[a-z0-9_-]{16,}|ghp_[a-z0-9_]{16,}|xox[baprs]-[a-z0-9-]{16,}|bearer\s+[a-z0-9._-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)/i;
+
 function normalizeSourceRefs(
   value: StructuredMemorySourceRef[] | undefined,
   actorId: string,
@@ -1981,6 +2591,134 @@ function normalizeSourceRefs(
     return normalized;
   }
   return [{ sourceType: "manual", sourceRef: actorId?.trim() || "operator" }];
+}
+
+function normalizeTraceCandidateSourceRefs(
+  input: TraceMemoryCandidateInput,
+  actorId: string,
+): StructuredMemorySourceRef[] {
+  const refs: StructuredMemorySourceRef[] = [...(input.sourceRefs ?? [])];
+  if (input.sourceSessionId?.trim()) {
+    refs.push({ sourceType: "session", sourceRef: input.sourceSessionId.trim() });
+  }
+  if (input.sourceRunId?.trim()) {
+    refs.push({ sourceType: "run", sourceRef: input.sourceRunId.trim() });
+  }
+  if (input.sourceTurnId?.trim()) {
+    refs.push({ sourceType: "turn", sourceRef: input.sourceTurnId.trim() });
+  }
+  return normalizeSourceRefs(refs, actorId);
+}
+
+function normalizeTraceCandidateText(value: string | undefined, field: string, maxLength: number): string {
+  const text = requireTrimmedText(value, field);
+  const lineCount = text.split(/\r?\n/u).length;
+  if (text.length > maxLength || lineCount > 20) {
+    throw new ValidationError({
+      field,
+      message: "Trace memory candidates must be concise extracted insights, not raw tool outputs or logs.",
+    });
+  }
+  return text;
+}
+
+function summarizeTranscriptEventForMemory(event: TranscriptEvent): string | undefined {
+  const payload = event.payload ?? {};
+  const candidate =
+    readRecordString(payload, "summary") ??
+    readRecordString(payload, "message") ??
+    readRecordString(payload, "content") ??
+    readRecordString(payload, "status") ??
+    readRecordString(payload, "toolName");
+  if (!candidate) {
+    return undefined;
+  }
+  const prefix = `${event.type} ${event.eventId}`;
+  return `${prefix}: ${candidate.slice(0, 220)}`;
+}
+
+function mapTraceCandidateToLearningType(candidateType: TraceMemoryCandidateType): MemoryLearningType {
+  if (candidateType === "operator_preference") {
+    return "operator_preference";
+  }
+  if (candidateType === "tool_outcome") {
+    return "tooling";
+  }
+  if (candidateType === "workflow") {
+    return "workflow";
+  }
+  return "repo_fact";
+}
+
+function readRecordString(value: Record<string, unknown>, key: string): string | undefined {
+  const item = value[key];
+  return typeof item === "string" && item.trim() ? item.trim() : undefined;
+}
+
+function extractStructuredLineage(
+  metadata: Record<string, unknown>,
+  sourceRefs: StructuredMemorySourceRef[],
+  fallbackRunId?: string,
+): StructuredMemoryLineage | undefined {
+  const sourceTurnId = readRecordString(metadata, "sourceTurnId") ?? firstSourceRefOfType(sourceRefs, "turn");
+  const sourceRunId =
+    readRecordString(metadata, "sourceRunId") ?? fallbackRunId ?? firstSourceRefOfType(sourceRefs, "run");
+  const sourceSummaryRef =
+    readRecordString(metadata, "sourceSummaryRef") ?? firstSourceRefOfType(sourceRefs, "summary");
+  const mentionCount = readPositiveInteger(metadata.mentionCount);
+  const freshness = normalizeMemoryFreshness(readRecordString(metadata, "freshness"));
+  const supersedesIds = readStringArray(metadata.supersedesIds);
+  const forgottenByChangeId = readRecordString(metadata, "forgottenByChangeId");
+  const lineage: StructuredMemoryLineage = {
+    sourceTurnId,
+    sourceRunId,
+    sourceSummaryRef,
+    mentionCount,
+    freshness,
+    supersedesIds: supersedesIds.length > 0 ? supersedesIds : undefined,
+    forgottenByChangeId,
+  };
+  return Object.values(lineage).some((value) => value !== undefined) ? lineage : undefined;
+}
+
+function firstSourceRefOfType(
+  sourceRefs: StructuredMemorySourceRef[],
+  sourceType: StructuredMemorySourceRef["sourceType"],
+) {
+  return sourceRefs.find((ref) => ref.sourceType === sourceType)?.sourceRef;
+}
+
+function readPositiveInteger(value: unknown): number | undefined {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
+    .map((item) => item.trim());
+}
+
+function normalizeMemoryFreshness(value: string | undefined) {
+  return value === "fresh" || value === "recent" || value === "stale" || value === "unknown" ? value : undefined;
+}
+
+function buildRecallSummary(
+  mode: MemoryRecallRequest["mode"],
+  recentContexts: MemoryContextPack[],
+  feedback: MemoryFeedbackRecord[],
+  traceCandidates: TraceMemoryCandidateRecord[],
+): string {
+  const citationCount = recentContexts.reduce((sum, context) => sum + context.citations.length, 0);
+  const usefulCount = feedback.filter((item) => item.kind === "useful").length;
+  const issueCount = feedback.length - usefulCount;
+  if (mode === "post_compaction_resume") {
+    return `${recentContexts.length} recent context packs with ${citationCount} citations are available for explicit resume context. ${traceCandidates.length} trace-derived candidates remain proposed.`;
+  }
+  return `${recentContexts.length} recent context packs, ${citationCount} citations, ${usefulCount} useful feedback records, and ${issueCount} quality issues are available for explicit summary recall.`;
 }
 
 function requireTrimmedText(value: string | undefined, field: string): string {

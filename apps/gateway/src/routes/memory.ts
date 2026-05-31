@@ -15,6 +15,7 @@ const composeSchema = z.object({
   relationScope: z.enum(["self", "peer", "project"]).optional(),
   maxContextTokens: z.number().int().positive().optional(),
   forceRefresh: z.boolean().optional(),
+  queryEmbedding: z.array(z.number()).min(1).max(4096).optional(),
 });
 
 const statsQuerySchema = z.object({
@@ -45,6 +46,10 @@ const structuredHistoryParamsSchema = z.object({
 
 const contextParamsSchema = z.object({
   contextId: z.string().trim().min(1),
+});
+
+const traceCandidateParamsSchema = z.object({
+  candidateId: z.string().trim().min(1),
 });
 
 const workspaceQuerySchema = z.object({
@@ -106,10 +111,31 @@ const structuredAuthoritySchema = z.enum(["operator", "agent_proposed", "trusted
 const learningStatusQuerySchema = z.enum(["proposed", "trusted", "superseded", "forgotten", "all"]);
 const learningTypeSchema = z.enum(["workflow", "bug_pattern", "operator_preference", "repo_fact", "tooling"]);
 const structuredSourceRefSchema = z.object({
-  sourceType: z.enum(["manual", "memory_item", "session", "run", "artifact", "external"]),
+  sourceType: z.enum(["manual", "memory_item", "session", "run", "artifact", "summary", "turn", "external"]),
   sourceRef: z.string().trim().min(1),
   title: z.string().trim().min(1).optional(),
 });
+const memoryFeedbackKindSchema = z.enum(["stale", "missing", "irrelevant", "useful"]);
+const memoryFeedbackStatusQuerySchema = z.enum(["open", "reviewed", "dismissed", "all"]);
+const memoryFeedbackTargetKindSchema = z.enum([
+  "context",
+  "citation",
+  "memory_item",
+  "entity",
+  "relation",
+  "decision",
+  "learning",
+  "trace_candidate",
+]);
+const traceCandidateTypeSchema = z.enum([
+  "fact",
+  "decision",
+  "tool_outcome",
+  "operator_preference",
+  "repo_fact",
+  "workflow",
+]);
+const traceCandidateStatusQuerySchema = z.enum(["proposed", "rejected", "promoted", "all"]);
 
 const queryBooleanSchema = z.preprocess((value) => {
   if (typeof value !== "string") {
@@ -140,6 +166,61 @@ const learningListQuerySchema = z.object({
   query: z.string().trim().min(1).optional(),
   key: z.string().trim().min(1).optional(),
   limit: z.coerce.number().int().positive().max(500).default(100),
+});
+
+const memoryRecallSchema = z.object({
+  mode: z.enum(["targeted", "summary", "post_compaction_resume"]),
+  scope: z.enum(["chat", "orchestration"]).optional(),
+  prompt: z.string().trim().min(1).optional(),
+  sessionId: z.string().trim().min(1).optional(),
+  taskId: z.string().trim().min(1).optional(),
+  runId: z.string().trim().min(1).optional(),
+  phaseId: z.string().trim().min(1).optional(),
+  workspace: z.string().trim().min(1).optional(),
+  workspaceId: z.string().trim().min(1).optional(),
+  relationScope: z.enum(["self", "peer", "project"]).optional(),
+  maxContextTokens: z.number().int().positive().optional(),
+  limit: z.number().int().positive().max(25).optional(),
+  queryEmbedding: z.array(z.number()).min(1).max(4096).optional(),
+});
+
+const feedbackListQuerySchema = z.object({
+  workspaceId: z.string().trim().min(1).optional(),
+  kind: z.union([memoryFeedbackKindSchema, z.literal("all")]).optional(),
+  status: memoryFeedbackStatusQuerySchema.optional(),
+  targetKind: memoryFeedbackTargetKindSchema.optional(),
+  limit: z.coerce.number().int().positive().max(500).default(100),
+});
+
+const feedbackCreateSchema = z.object({
+  workspaceId: z.string().trim().min(1).optional(),
+  kind: memoryFeedbackKindSchema,
+  targetKind: memoryFeedbackTargetKindSchema,
+  targetRef: z.string().trim().min(1).optional(),
+  contextId: z.string().trim().min(1).optional(),
+  citationId: z.string().trim().min(1).optional(),
+  note: z.string().trim().min(1).optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+const traceCandidateListQuerySchema = z.object({
+  workspaceId: z.string().trim().min(1).optional(),
+  status: traceCandidateStatusQuerySchema.optional(),
+  limit: z.coerce.number().int().positive().max(500).default(100),
+});
+
+const traceCandidateCreateSchema = z.object({
+  workspaceId: z.string().trim().min(1).optional(),
+  candidateType: traceCandidateTypeSchema.optional(),
+  sourceText: z.string().trim().min(1).optional(),
+  sourceSessionId: z.string().trim().min(1).optional(),
+  sourceRunId: z.string().trim().min(1).optional(),
+  sourceTurnId: z.string().trim().min(1).optional(),
+  toolCallId: z.string().trim().min(1).optional(),
+  proposedInsight: z.string().trim().min(1),
+  confidence: z.number().min(0).max(1).optional(),
+  sourceRefs: z.array(structuredSourceRefSchema).optional(),
+  metadata: z.record(z.unknown()).optional(),
 });
 
 const learningFileRefSchema = z.object({
@@ -439,6 +520,78 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
     try {
       return reply.send(await memory.runRetrievalBenchmark(parsed.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/memory/recall", withRouteAccess(fastify, "authenticated-read"), async (request, reply) => {
+    const parsed = memoryRecallSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(await memory.recall(parsed.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/memory/feedback", operatorOnly, async (request, reply) => {
+    const parsed = feedbackListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send({ items: memory.listFeedback(parsed.data) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/memory/feedback", operatorOnly, async (request, reply) => {
+    const parsed = feedbackCreateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(201).send(memory.recordFeedback(parsed.data, resolveActorId(request)));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.get("/api/v1/memory/trace-candidates", operatorOnly, async (request, reply) => {
+    const parsed = traceCandidateListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send({ items: memory.listTraceCandidates(parsed.data) });
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/memory/trace-candidates", operatorOnly, async (request, reply) => {
+    const parsed = traceCandidateCreateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.code(202).send(await memory.proposeTraceCandidate(parsed.data, resolveActorId(request)));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/memory/trace-candidates/:candidateId/promote", operatorOnly, async (request, reply) => {
+    const parsed = traceCandidateParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    try {
+      return reply.send(memory.promoteTraceCandidate(parsed.data.candidateId, resolveActorId(request)));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

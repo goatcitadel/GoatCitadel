@@ -167,7 +167,7 @@ describe("MemoryLifecycleService", () => {
     ).resolves.toMatchObject({
       itemCount: 1,
       retrievalStrategies: ["semantic_hints"],
-      semanticCoverageNote: expect.stringContaining("Semantic-hint scores only use operator-visible metadata"),
+      semanticCoverageNote: expect.stringContaining("Hybrid ranking uses BM25-style lexical signals"),
       items: [
         {
           status: "completed",
@@ -1032,6 +1032,170 @@ describe("MemoryLifecycleService", () => {
     } finally {
       database.close();
       await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records recall feedback and keeps trace-derived memory as proposals until promoted", async () => {
+    const database = new DatabaseSync(":memory:");
+    const publishRealtime = vi.fn();
+    const createEnvelope = vi.fn();
+    const service = new MemoryLifecycleService({
+      context: {
+        compose: vi.fn(async () => ({
+          contextId: "ctx-targeted",
+          scope: "chat",
+          queryHash: "query",
+          sourcesHash: "sources",
+          contextText: "Selected explicit recall context.",
+          citations: [],
+          quality: { status: "generated" },
+          originalTokenEstimate: 10,
+          distilledTokenEstimate: 5,
+          createdAt: "2026-05-31T00:00:00.000Z",
+          expiresAt: "2026-06-01T00:00:00.000Z",
+        })),
+        get: vi.fn(),
+        listByRun: vi.fn(() => []),
+        listRecent: vi.fn(() => [
+          {
+            contextId: "ctx-recent",
+            scope: "chat",
+            citations: [{ candidateId: "mem-1" }],
+          },
+        ]),
+        stats: vi.fn(),
+      } as never,
+      learned: {} as never,
+      maintenance: {} as never,
+      admin: {
+        gatewaySql: database as never,
+        tryParseJson: vi.fn((raw, fallback) => {
+          try {
+            return raw ? JSON.parse(String(raw)) : fallback;
+          } catch {
+            return fallback;
+          }
+        }),
+        requireFeatureEnabled: vi.fn(),
+        publishRealtime,
+      },
+      resolveLearnedMemoryPolicy: vi.fn(() => ({ allowWrite: true, reason: "allowed" })),
+      evidence: { createEnvelope } as never,
+      readTranscriptOrEmpty: vi.fn(async () => [
+        {
+          eventId: "turn-1",
+          actionId: "action-1",
+          idempotencyKey: "idem-1",
+          sessionId: "session-1",
+          sessionKey: "chat:session-1",
+          timestamp: "2026-05-31T00:00:00.000Z",
+          type: "message.user",
+          actorType: "user",
+          actorId: "operator",
+          payload: { message: "Remember that docs checks stay proposed before write-gate approval." },
+        },
+      ]),
+    });
+
+    try {
+      const feedback = service.recordMemoryFeedback(
+        {
+          workspaceId: "default",
+          kind: "useful",
+          targetKind: "citation",
+          targetRef: "mem-1",
+          contextId: "ctx-recent",
+          note: "Useful release recall.",
+        },
+        "operator-1",
+      );
+      expect(feedback).toMatchObject({ kind: "useful", status: "open", targetKind: "citation" });
+      expect(service.listMemoryFeedback({ workspaceId: "default" })).toHaveLength(1);
+      expect(() =>
+        service.recordMemoryFeedback(
+          {
+            kind: "missing",
+            targetKind: "context",
+            note: "The missing memory included api_key sk-secretsecretsecret123456.",
+          },
+          "operator-1",
+        ),
+      ).toThrow(/secret-like payloads/);
+
+      const candidate = await service.proposeTraceMemoryCandidate(
+        {
+          workspaceId: "default",
+          candidateType: "tool_outcome",
+          sourceText: "Tool run completed docs check before release.",
+          proposedInsight: "Docs check completion is useful release verification context.",
+          confidence: 0.82,
+          sourceRefs: [{ sourceType: "run", sourceRef: "run-1" }],
+          metadata: { key: "release.docs_check" },
+        },
+        "agent-1",
+      );
+      expect(candidate).toMatchObject({ status: "proposed", authority: "agent_proposed" });
+      expect(createEnvelope).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventKind: "memory_write",
+          metadata: expect.objectContaining({ traceMemoryCandidate: true, status: "proposed" }),
+        }),
+      );
+      await expect(
+        service.proposeTraceMemoryCandidate(
+          {
+            sourceText: "tool output",
+            proposedInsight: "Remember api_key sk-secretsecretsecret123456.",
+          },
+          "agent-1",
+        ),
+      ).rejects.toThrow(/secret-like payloads/);
+      await expect(
+        service.proposeTraceMemoryCandidate(
+          {
+            sourceText: Array.from({ length: 22 }, (_, index) => `line ${index}`).join("\n"),
+            proposedInsight: "Raw logs should not become durable memory.",
+          },
+          "agent-1",
+        ),
+      ).rejects.toThrow(/not raw tool outputs or logs/);
+
+      const traceBacked = await service.proposeTraceMemoryCandidate(
+        {
+          workspaceId: "default",
+          candidateType: "fact",
+          sourceSessionId: "session-1",
+          proposedInsight: "Transcript summaries can become proposed memory only.",
+        },
+        "agent-1",
+      );
+      expect(traceBacked.sourceText).toContain("message.user");
+      expect(traceBacked.sourceRefs).toEqual([{ sourceType: "session", sourceRef: "session-1" }]);
+
+      await expect(service.recallMemory({ mode: "summary", workspaceId: "default" })).resolves.toMatchObject({
+        mode: "summary",
+        feedback: [expect.objectContaining({ feedbackId: feedback.feedbackId })],
+        traceCandidates: expect.arrayContaining([expect.objectContaining({ candidateId: candidate.candidateId })]),
+      });
+      await expect(
+        service.recallMemory({ mode: "targeted", prompt: "release docs", workspaceId: "default" }),
+      ).resolves.toMatchObject({
+        mode: "targeted",
+        context: expect.objectContaining({ contextId: "ctx-targeted" }),
+      });
+
+      const learning = service.promoteTraceMemoryCandidate(candidate.candidateId, "operator-1");
+      expect(learning).toMatchObject({
+        key: "release.docs_check",
+        status: "trusted",
+        insight: "Docs check completion is useful release verification context.",
+      });
+      expect(service.listTraceMemoryCandidates({ workspaceId: "default", status: "all" })[0]).toMatchObject({
+        status: "promoted",
+        promotedLearningId: learning.learningId,
+      });
+    } finally {
+      database.close();
     }
   });
 });

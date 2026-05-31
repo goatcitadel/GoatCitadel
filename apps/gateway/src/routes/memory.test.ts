@@ -175,6 +175,91 @@ describe("memory routes", () => {
     expect(invalid.statusCode).toBe(400);
   });
 
+  it("routes explicit recall, feedback, and trace-memory candidate flows through the memory service", async () => {
+    const recall = vi.fn(async () => ({ mode: "summary", feedback: [], traceCandidates: [] }));
+    const listFeedback = vi.fn(() => [{ feedbackId: "fb-1" }]);
+    const recordFeedback = vi.fn(() => ({ feedbackId: "fb-2" }));
+    const listTraceCandidates = vi.fn(() => [{ candidateId: "trace-1" }]);
+    const proposeTraceCandidate = vi.fn(() => ({ candidateId: "trace-2", status: "proposed" }));
+    const promoteTraceCandidate = vi.fn(() => ({ learningId: "learn-1" }));
+    const built = buildApp({
+      recall,
+      listFeedback,
+      recordFeedback,
+      listTraceCandidates,
+      proposeTraceCandidate,
+      promoteTraceCandidate,
+    });
+    app = built.app;
+    await app.register(memoryRoutes);
+
+    const recallResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory/recall",
+      payload: {
+        mode: "summary",
+        workspaceId: "default",
+      },
+    });
+    const feedbackResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory/feedback",
+      payload: {
+        kind: "useful",
+        targetKind: "citation",
+        targetRef: "mem-1",
+      },
+    });
+    const feedbackListResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/memory/feedback?status=open",
+    });
+    const candidateResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory/trace-candidates",
+      payload: {
+        candidateType: "tool_outcome",
+        sourceText: "Tool outcome summary.",
+        proposedInsight: "Tool outcome summary is useful.",
+      },
+    });
+    const candidateListResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/memory/trace-candidates",
+    });
+    const promoteResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory/trace-candidates/trace-2/promote",
+    });
+
+    expect(recallResponse.statusCode).toBe(200);
+    expect(feedbackResponse.statusCode).toBe(201);
+    expect(feedbackListResponse.statusCode).toBe(200);
+    expect(candidateResponse.statusCode).toBe(202);
+    expect(candidateListResponse.statusCode).toBe(200);
+    expect(promoteResponse.statusCode).toBe(200);
+    expect(recall).toHaveBeenCalledWith({ mode: "summary", workspaceId: "default" });
+    expect(listFeedback).toHaveBeenCalledWith({ limit: 100, status: "open" });
+    expect(recordFeedback).toHaveBeenCalledWith(
+      {
+        kind: "useful",
+        targetKind: "citation",
+        targetRef: "mem-1",
+      },
+      expect.stringMatching(/^ip:/),
+    );
+    expect(listTraceCandidates).toHaveBeenCalledWith({ limit: 100 });
+    expect(proposeTraceCandidate).toHaveBeenCalledWith(
+      {
+        candidateType: "tool_outcome",
+        sourceText: "Tool outcome summary.",
+        proposedInsight: "Tool outcome summary is useful.",
+      },
+      expect.stringMatching(/^ip:/),
+    );
+    expect(promoteTraceCandidate).toHaveBeenCalledWith("trace-2", expect.stringMatching(/^ip:/));
+  });
+
   it("accepts memory maintenance run-now on both the canonical and compatibility paths", async () => {
     const runMemoryMaintenanceNow = vi.fn(() => ({
       runId: "mmrun_123",

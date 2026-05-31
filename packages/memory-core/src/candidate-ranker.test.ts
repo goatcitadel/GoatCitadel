@@ -3,6 +3,142 @@ import { rankMemoryCandidates } from "./candidate-ranker.js";
 import type { MemoryCandidate } from "./types.js";
 
 describe("rankMemoryCandidates", () => {
+  it("ranks lexical-only candidates with BM25-style signals", () => {
+    const ranked = rankMemoryCandidates(
+      "release verification checklist",
+      [
+        {
+          candidateId: "m:release",
+          sourceType: "memory_item",
+          sourceRef: "release",
+          text: "Release verification checklist requires docs check and smoke proof.",
+          timestamp: "2026-05-07T12:00:00.000Z",
+        },
+        {
+          candidateId: "m:meeting",
+          sourceType: "memory_item",
+          sourceRef: "meeting",
+          text: "Meeting notes about design polish.",
+          timestamp: "2026-05-07T12:00:00.000Z",
+        },
+      ],
+      { maxCandidates: 2, nowIso: "2026-05-07T12:00:00.000Z" },
+    );
+
+    expect(ranked[0]?.candidateId).toBe("m:release");
+    expect(ranked[0]?.rankSignals).toMatchObject({
+      lexicalScore: expect.any(Number),
+      lexicalBm25Score: expect.any(Number),
+      recencyScore: 0.25,
+      diversityScore: 0.08,
+    });
+    expect(ranked[0]?.rankSignals.embeddingScore).toBeUndefined();
+  });
+
+  it("uses explicit embeddings when both query and candidate vectors are present", () => {
+    const ranked = rankMemoryCandidates(
+      "deployment rollout validation",
+      [
+        {
+          candidateId: "m:embedding-match",
+          sourceType: "memory_item",
+          sourceRef: "embedding-match",
+          text: "Unrelated maintenance note.",
+          embedding: [1, 0, 0],
+        },
+        {
+          candidateId: "m:lexical-match",
+          sourceType: "memory_item",
+          sourceRef: "lexical-match",
+          text: "Deployment notes.",
+          embedding: [0, 1, 0],
+        },
+      ],
+      { maxCandidates: 2, queryEmbedding: [1, 0, 0], nowIso: "2026-05-07T12:00:00.000Z" },
+    );
+
+    expect(ranked[0]?.candidateId).toBe("m:embedding-match");
+    expect(ranked[0]?.rankSignals).toMatchObject({
+      embeddingScore: 0.35,
+      semanticVectorScore: 0.35,
+    });
+  });
+
+  it("falls back cleanly when embeddings are missing or incompatible", () => {
+    const ranked = rankMemoryCandidates(
+      "approval evidence",
+      [
+        {
+          candidateId: "m:missing",
+          sourceType: "memory_item",
+          sourceRef: "missing",
+          text: "Approval evidence envelope.",
+        },
+        {
+          candidateId: "m:wrong-dimensions",
+          sourceType: "memory_item",
+          sourceRef: "wrong",
+          text: "Other note.",
+          embedding: [1, 0],
+        },
+      ],
+      { maxCandidates: 2, queryEmbedding: [1, 0, 0], nowIso: "2026-05-07T12:00:00.000Z" },
+    );
+
+    expect(ranked[0]?.candidateId).toBe("m:missing");
+    expect(ranked.every((candidate) => candidate.rankSignals.embeddingScore === undefined)).toBe(true);
+  });
+
+  it("uses recency as a transparent tie-break signal", () => {
+    const ranked = rankMemoryCandidates(
+      "launch",
+      [
+        {
+          candidateId: "old",
+          sourceType: "file",
+          sourceRef: "old.md",
+          text: "launch",
+          timestamp: "2026-04-01T00:00:00.000Z",
+        },
+        {
+          candidateId: "fresh",
+          sourceType: "file",
+          sourceRef: "fresh.md",
+          text: "launch",
+          timestamp: "2026-05-07T12:00:00.000Z",
+        },
+      ],
+      { maxCandidates: 2, nowIso: "2026-05-07T12:00:00.000Z" },
+    );
+
+    expect(ranked.map((candidate) => candidate.candidateId)).toEqual(["fresh", "old"]);
+    expect(ranked[0]?.rankSignals.recencyScore).toBe(0.25);
+  });
+
+  it("keeps source diversity visible in rank signals", () => {
+    const ranked = rankMemoryCandidates(
+      "operator approval",
+      [
+        {
+          candidateId: "m:memory",
+          sourceType: "memory_item",
+          sourceRef: "memory",
+          text: "operator approval",
+        },
+        {
+          candidateId: "f:file",
+          sourceType: "file",
+          sourceRef: "file.md",
+          text: "operator approval",
+        },
+      ],
+      { maxCandidates: 2, nowIso: "2026-05-07T12:00:00.000Z" },
+    );
+
+    expect(ranked[0]?.candidateId).toBe("m:memory");
+    expect(ranked[0]?.rankSignals.diversityScore).toBe(0.08);
+  });
+
   it("uses candidateId as a deterministic tiebreaker", () => {
     const candidates: MemoryCandidate[] = [
       {
@@ -53,7 +189,9 @@ describe("rankMemoryCandidates", () => {
 
     expect(ranked[0]).toMatchObject({
       candidateId: "future",
-      rankScore: 1.25,
+      rankSignals: expect.objectContaining({
+        recencyScore: 0.25,
+      }),
     });
   });
 

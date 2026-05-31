@@ -12,14 +12,17 @@ export interface CacheKeyInput {
   relationScope?: MemoryRelationScope;
   maxContextTokens: number;
   candidates: RankedMemoryCandidate[];
+  queryEmbedding?: number[];
 }
 
 export function hashText(input: string): string {
   return createHash("sha256").update(input).digest("hex");
 }
 
-export function buildQueryHash(prompt: string): string {
-  return hashText(prompt.trim().toLowerCase());
+export function buildQueryHash(prompt: string, queryEmbedding?: number[]): string {
+  const normalizedPrompt = prompt.trim().toLowerCase();
+  const embeddingFingerprint = normalizeEmbeddingFingerprint(queryEmbedding);
+  return hashText(embeddingFingerprint ? `${normalizedPrompt}|embedding:${embeddingFingerprint}` : normalizedPrompt);
 }
 
 export function buildSourcesHash(candidates: RankedMemoryCandidate[]): string {
@@ -38,8 +41,19 @@ export function buildCacheKey(input: CacheKeyInput): string {
     input.phaseId ?? "",
     input.relationScope ?? "",
     String(input.maxContextTokens),
-    buildQueryHash(input.prompt),
+    buildQueryHash(input.prompt, input.queryEmbedding),
     buildSourcesHash(input.candidates),
   ].join("|");
   return hashText(basis);
+}
+
+function normalizeEmbeddingFingerprint(queryEmbedding?: number[]): string | undefined {
+  if (!Array.isArray(queryEmbedding) || queryEmbedding.length === 0) {
+    return undefined;
+  }
+  const values = queryEmbedding.filter((value) => Number.isFinite(value));
+  if (values.length !== queryEmbedding.length) {
+    return undefined;
+  }
+  return hashText(values.map((value) => value.toFixed(6)).join(","));
 }

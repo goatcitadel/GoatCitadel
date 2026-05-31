@@ -61,6 +61,7 @@ export function collectMemoryCandidates(
         text,
         timestamp: source.updatedAt,
         retrievalHints: source.retrievalHints,
+        embedding: source.embedding,
       });
       memoryItemCount += 1;
       continue;

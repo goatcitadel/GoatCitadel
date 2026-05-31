@@ -6,6 +6,7 @@ import {
   fetchDurableRunTimeline,
   fetchMemoryDecisions,
   fetchMemoryEntities,
+  fetchMemoryFeedback,
   fetchMemoryFiles,
   fetchMemoryItemHistory,
   fetchMemoryItems,
@@ -15,6 +16,7 @@ import {
   fetchMemoryMaintenanceStatus,
   fetchMemoryRelations,
   fetchMemoryQmdStats,
+  fetchTraceMemoryCandidates,
   fetchSettings,
   forgetMemoryItem,
   patchMemoryItem,
@@ -43,6 +45,8 @@ type MemoryOperatorSectionErrors = {
   memoryEntities: string | null;
   memoryRelations: string | null;
   memoryDecisions: string | null;
+  memoryFeedback: string | null;
+  traceMemoryCandidates: string | null;
   memoryHistory: string | null;
   maintenanceStatus: string | null;
   maintenanceRuns: string | null;
@@ -59,6 +63,8 @@ type MemoryOperatorSnapshot = {
   memoryEntities: Awaited<ReturnType<typeof fetchMemoryEntities>>["items"];
   memoryRelations: Awaited<ReturnType<typeof fetchMemoryRelations>>["items"];
   memoryDecisions: Awaited<ReturnType<typeof fetchMemoryDecisions>>["items"];
+  memoryFeedback: Awaited<ReturnType<typeof fetchMemoryFeedback>>["items"];
+  traceMemoryCandidates: Awaited<ReturnType<typeof fetchTraceMemoryCandidates>>["items"];
   memoryHistory: Awaited<ReturnType<typeof fetchMemoryItemHistory>>["items"];
   maintenanceStatus: Awaited<ReturnType<typeof fetchMemoryMaintenanceStatus>> | null;
   maintenanceRuns: Awaited<ReturnType<typeof fetchMemoryMaintenanceRuns>>["items"];
@@ -114,7 +120,7 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
     const maintenanceEnabled = settings?.features.memoryMaintenanceV1Enabled ?? false;
     const maintenanceDurableReady = settings?.features.durableKernelV1Enabled ?? false;
 
-    const [itemsRes, entitiesRes, relationsRes, decisionsRes] = memoryAdminEnabled
+    const [itemsRes, entitiesRes, relationsRes, decisionsRes, feedbackRes, traceCandidatesRes] = memoryAdminEnabled
       ? await Promise.all([
           fetchMemoryItems({ limit: 200, status: "all" }).catch((itemsError) => {
             sectionErrors.memoryItems = getErrorMessage(itemsError);
@@ -132,8 +138,16 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
             sectionErrors.memoryDecisions = getErrorMessage(decisionsError);
             return { items: [] };
           }),
+          fetchMemoryFeedback({ workspaceId, status: "all", limit: 40 }).catch((feedbackError) => {
+            sectionErrors.memoryFeedback = getErrorMessage(feedbackError);
+            return { items: [] };
+          }),
+          fetchTraceMemoryCandidates({ workspaceId, status: "all", limit: 40 }).catch((traceError) => {
+            sectionErrors.traceMemoryCandidates = getErrorMessage(traceError);
+            return { items: [] };
+          }),
         ])
-      : [{ items: [] }, { items: [] }, { items: [] }, { items: [] }];
+      : [{ items: [] }, { items: [] }, { items: [] }, { items: [] }, { items: [] }, { items: [] }];
 
     const [maintenanceStatusRes, maintenanceRunsRes, maintenanceRecommendationsRes] =
       maintenanceEnabled && maintenanceDurableReady
@@ -160,6 +174,8 @@ export function useMemoryOperatorSnapshot(workspaceId = "default") {
       memoryEntities: memoryAdminEnabled ? entitiesRes.items : [],
       memoryRelations: memoryAdminEnabled ? relationsRes.items : [],
       memoryDecisions: memoryAdminEnabled ? decisionsRes.items : [],
+      memoryFeedback: memoryAdminEnabled ? feedbackRes.items : [],
+      traceMemoryCandidates: memoryAdminEnabled ? traceCandidatesRes.items : [],
       memoryHistory: [],
       maintenanceStatus: maintenanceStatusRes,
       maintenanceRuns: maintenanceRunsRes.items,
@@ -553,6 +569,8 @@ function createEmptySectionErrors(): MemoryOperatorSectionErrors {
     memoryEntities: null,
     memoryRelations: null,
     memoryDecisions: null,
+    memoryFeedback: null,
+    traceMemoryCandidates: null,
     memoryHistory: null,
     maintenanceStatus: null,
     maintenanceRuns: null,

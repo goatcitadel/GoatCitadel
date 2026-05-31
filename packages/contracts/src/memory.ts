@@ -2,12 +2,14 @@ export type MemoryContextScope = "chat" | "orchestration";
 export type MemoryQmdStatus = "generated" | "cache_hit" | "fallback" | "failed";
 export type MemoryRelationScope = "self" | "peer" | "project";
 export type MemoryFreshness = "fresh" | "recent" | "stale" | "unknown";
-export type MemoryRetrievalStrategy = "lexical_recency" | "semantic_hints" | "semantic_vector";
+export type MemoryRetrievalStrategy = "lexical_recency" | "semantic_hints" | "semantic_vector" | "hybrid_rank";
 
 export interface MemoryRetrievalMatchSignals {
   lexicalScore: number;
+  lexicalBm25Score?: number;
   semanticHintScore: number;
   semanticVectorScore?: number;
+  embeddingScore?: number;
   recencyScore: number;
   diversityScore: number;
   totalScore: number;
@@ -24,6 +26,7 @@ export interface MemoryContextComposeRequest {
   relationScope?: MemoryRelationScope;
   maxContextTokens?: number;
   forceRefresh?: boolean;
+  queryEmbedding?: number[];
 }
 
 export interface MemoryCitationProvenance {
@@ -175,9 +178,19 @@ export type StructuredMemoryStatus = "active" | "forgotten" | "superseded";
 export type StructuredMemoryAuthority = "operator" | "agent_proposed" | "trusted_lifecycle" | "imported_skill";
 
 export interface StructuredMemorySourceRef {
-  sourceType: "manual" | "memory_item" | "session" | "run" | "artifact" | "external";
+  sourceType: "manual" | "memory_item" | "session" | "run" | "artifact" | "summary" | "turn" | "external";
   sourceRef: string;
   title?: string;
+}
+
+export interface StructuredMemoryLineage {
+  sourceTurnId?: string;
+  sourceRunId?: string;
+  sourceSummaryRef?: string;
+  mentionCount?: number;
+  freshness?: MemoryFreshness;
+  supersedesIds?: string[];
+  forgottenByChangeId?: string;
 }
 
 export interface StructuredMemoryBaseRecord {
@@ -190,6 +203,7 @@ export interface StructuredMemoryBaseRecord {
   sourceRefs: StructuredMemorySourceRef[];
   metadata: Record<string, unknown>;
   authority: StructuredMemoryAuthority;
+  lineage?: StructuredMemoryLineage;
   createdAt: string;
   updatedAt: string;
   forgottenAt?: string;
@@ -326,6 +340,105 @@ export interface MemoryLearningStalenessIssue {
 export interface MemoryLearningStalenessReport {
   checkedAt: string;
   issues: MemoryLearningStalenessIssue[];
+}
+
+export type MemoryFeedbackKind = "stale" | "missing" | "irrelevant" | "useful";
+export type MemoryFeedbackStatus = "open" | "reviewed" | "dismissed";
+export type MemoryFeedbackTargetKind =
+  | "context"
+  | "citation"
+  | "memory_item"
+  | "entity"
+  | "relation"
+  | "decision"
+  | "learning"
+  | "trace_candidate";
+
+export interface MemoryFeedbackInput {
+  workspaceId?: string;
+  kind: MemoryFeedbackKind;
+  targetKind: MemoryFeedbackTargetKind;
+  targetRef?: string;
+  contextId?: string;
+  citationId?: string;
+  note?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface MemoryFeedbackRecord extends MemoryFeedbackInput {
+  feedbackId: string;
+  workspaceId: string;
+  status: MemoryFeedbackStatus;
+  actorId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type TraceMemoryCandidateType =
+  | "fact"
+  | "decision"
+  | "tool_outcome"
+  | "operator_preference"
+  | "repo_fact"
+  | "workflow";
+export type TraceMemoryCandidateStatus = "proposed" | "rejected" | "promoted";
+
+export interface TraceMemoryCandidateInput {
+  workspaceId?: string;
+  candidateType?: TraceMemoryCandidateType;
+  sourceText?: string;
+  sourceSessionId?: string;
+  sourceRunId?: string;
+  sourceTurnId?: string;
+  toolCallId?: string;
+  proposedInsight: string;
+  confidence?: number;
+  sourceRefs?: StructuredMemorySourceRef[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface TraceMemoryCandidateRecord extends TraceMemoryCandidateInput {
+  candidateId: string;
+  workspaceId: string;
+  candidateType: TraceMemoryCandidateType;
+  status: TraceMemoryCandidateStatus;
+  sourceText: string;
+  confidence: number;
+  sourceRefs: StructuredMemorySourceRef[];
+  authority: Extract<StructuredMemoryAuthority, "agent_proposed">;
+  actorId?: string;
+  promotedLearningId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type MemoryRecallMode = "targeted" | "summary" | "post_compaction_resume";
+
+export interface MemoryRecallRequest {
+  mode: MemoryRecallMode;
+  scope?: MemoryContextScope;
+  prompt?: string;
+  workspace?: string;
+  workspaceId?: string;
+  sessionId?: string;
+  taskId?: string;
+  runId?: string;
+  phaseId?: string;
+  relationScope?: MemoryRelationScope;
+  maxContextTokens?: number;
+  limit?: number;
+  queryEmbedding?: number[];
+}
+
+export interface MemoryRecallResponse {
+  mode: MemoryRecallMode;
+  generatedAt: string;
+  summary: string;
+  context?: MemoryContextPack;
+  recentContexts: MemoryContextPack[];
+  feedback: MemoryFeedbackRecord[];
+  traceCandidates: TraceMemoryCandidateRecord[];
+  warnings: string[];
 }
 
 export interface MemoryItemRecord {

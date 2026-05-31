@@ -197,6 +197,39 @@ const memorySnapshot = vi.hoisted(() => ({
         updatedAt: "2026-04-22T00:00:00.000Z",
       },
     ],
+    memoryFeedback: [
+      {
+        feedbackId: "fb-1",
+        workspaceId: "default",
+        kind: "useful",
+        status: "open",
+        targetKind: "citation",
+        targetRef: "mem-1",
+        contextId: "ctx-1",
+        note: "Release checklist citation helped the operator.",
+        metadata: {},
+        actorId: "operator:test",
+        createdAt: "2026-04-22T00:00:00.000Z",
+        updatedAt: "2026-04-22T00:00:00.000Z",
+      },
+    ],
+    traceMemoryCandidates: [
+      {
+        candidateId: "trace-1",
+        workspaceId: "default",
+        candidateType: "tool_outcome",
+        status: "proposed",
+        sourceText: "Tool outcome noted docs check is required.",
+        proposedInsight: "Docs check should stay attached to release verification memory.",
+        confidence: 0.82,
+        sourceRefs: [{ sourceType: "run", sourceRef: "run-1" }],
+        metadata: {},
+        authority: "agent_proposed",
+        actorId: "agent:test",
+        createdAt: "2026-04-22T00:00:00.000Z",
+        updatedAt: "2026-04-22T00:00:00.000Z",
+      },
+    ],
     memoryHistory: [
       { changeId: "chg-1", changeType: "updated", createdAt: "2026-04-22T00:00:00.000Z", actorId: "operator:test" },
     ],
@@ -263,6 +296,8 @@ const memorySnapshot = vi.hoisted(() => ({
       memoryEntities: null,
       memoryRelations: null,
       memoryDecisions: null,
+      memoryFeedback: null,
+      traceMemoryCandidates: null,
       memoryHistory: null,
       maintenanceStatus: null,
       maintenanceRuns: null,
@@ -401,6 +436,10 @@ describe("MemoryRoutePage", () => {
     expect(markup).toContain("Why-used citations");
     expect(markup).toContain("selected for release checklist and verification cadence hints");
     expect(markup).toContain("semantic_hints");
+    expect(markup).toContain("Recall quality");
+    expect(markup).toContain("Release checklist citation helped the operator.");
+    expect(markup).toContain("Trace candidates");
+    expect(markup).toContain("Docs check should stay attached to release verification memory.");
     expect(markup).toContain("Provenance map");
     expect(markup).toContain("Memory entities");
     expect(markup).toContain("Relations");

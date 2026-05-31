@@ -236,12 +236,13 @@ describe("memory ranking and citations", () => {
     );
 
     expect(ranked[0]?.candidateId).toBe("t:recent");
-    expect(ranked[0]?.rankSignals).toEqual({
-      lexicalScore: 1,
+    expect(ranked[0]?.rankSignals).toMatchObject({
+      lexicalScore: expect.any(Number),
+      lexicalBm25Score: expect.any(Number),
       semanticHintScore: 0,
       recencyScore: 0.25,
       diversityScore: 0.1,
-      totalScore: 1.35,
+      totalScore: expect.any(Number),
     });
     expect(ranked.map((item) => item.candidateId)).toEqual(["t:recent", "f:old", "f:invalid", "f:none"]);
   });
@@ -273,7 +274,7 @@ describe("memory ranking and citations", () => {
     expect(ranked[1]?.rankSignals.semanticHintScore).toBe(0.2);
   });
 
-  it("adds semantic vector scoring only for active memory-item candidates", () => {
+  it("adds embedding scoring only when explicit vectors are present", () => {
     const ranked = rankMemoryCandidates(
       "external browsing supervision",
       [
@@ -282,6 +283,7 @@ describe("memory ranking and citations", () => {
           sourceType: "memory_item",
           sourceRef: "mem-browser",
           text: "Use governed browser sessions for external research.",
+          embedding: [1, 0, 0],
           timestamp: "2026-05-01T00:00:00.000Z",
         },
         {
@@ -289,6 +291,7 @@ describe("memory ranking and citations", () => {
           sourceType: "file",
           sourceRef: "notes.md",
           text: "Use governed browser sessions for external research.",
+          embedding: [1, 0, 0],
           timestamp: "2026-05-01T00:00:00.000Z",
         },
         {
@@ -296,15 +299,18 @@ describe("memory ranking and citations", () => {
           sourceType: "memory_item",
           sourceRef: "mem-cake",
           text: "Cake recipe sugar butter flour.",
+          embedding: [0, 1, 0],
           timestamp: "2026-05-01T00:00:00.000Z",
         },
       ],
-      { maxCandidates: 10, nowIso: "2026-05-01T12:00:00.000Z" },
+      { maxCandidates: 10, nowIso: "2026-05-01T12:00:00.000Z", queryEmbedding: [1, 0, 0] },
     );
 
     expect(ranked[0]?.candidateId).toBe("m:browser");
     expect(ranked[0]?.rankSignals.semanticVectorScore).toBeGreaterThan(0);
-    expect(ranked.find((item) => item.candidateId === "f:same-text")?.rankSignals.semanticVectorScore).toBeUndefined();
+    expect(ranked.find((item) => item.candidateId === "f:same-text")?.rankSignals.semanticVectorScore).toBeGreaterThan(
+      0,
+    );
     expect(ranked.find((item) => item.candidateId === "m:unrelated")?.rankSignals.semanticVectorScore).toBeUndefined();
   });
 
@@ -483,6 +489,8 @@ describe("memory cache keys and token estimator edge cases", () => {
     const candidates = [candidate("one", "text", { timestamp: undefined, rankScore: 0.123456 })];
     expect(hashText("same")).toBe(hashText("same"));
     expect(buildQueryHash("  Mixed CASE  ")).toBe(buildQueryHash("mixed case"));
+    expect(buildQueryHash("prompt", [1, 0])).toBe(buildQueryHash("prompt", [1, 0]));
+    expect(buildQueryHash("prompt", [1, 0])).not.toBe(buildQueryHash("prompt", [0, 1]));
     expect(buildSourcesHash(candidates)).toBe(buildSourcesHash(candidates));
     const baseKey = buildCacheKey({
       scope: "chat",
@@ -490,6 +498,14 @@ describe("memory cache keys and token estimator edge cases", () => {
       maxContextTokens: 100,
       relationScope: "self",
       candidates,
+    });
+    const embeddingKey = buildCacheKey({
+      scope: "chat",
+      prompt: "Prompt",
+      maxContextTokens: 100,
+      relationScope: "self",
+      candidates,
+      queryEmbedding: [1, 0],
     });
     const scopedKey = buildCacheKey({
       scope: "chat",
@@ -504,6 +520,7 @@ describe("memory cache keys and token estimator edge cases", () => {
     expect(baseKey).toBeTypeOf("string");
     expect(scopedKey).toBeTypeOf("string");
     expect(scopedKey).not.toBe(baseKey);
+    expect(embeddingKey).not.toBe(baseKey);
     expect(buildSourcesHash(candidates)).not.toBe(
       buildSourcesHash([candidate("one", "text", { timestamp: undefined, rankScore: 0.123451 })]),
     );

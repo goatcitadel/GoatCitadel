@@ -9,7 +9,13 @@ import type {
   MemoryDecisionRetrospectiveInput,
   MemoryEntityInput,
   MemoryEntityRecord,
+  MemoryFeedbackInput,
+  MemoryFeedbackKind,
+  MemoryFeedbackRecord,
+  MemoryFeedbackStatus,
+  MemoryFeedbackTargetKind,
   MemoryItemRecord,
+  MemoryLearningRecord,
   MemoryLifecyclePatch,
   MemoryMaintenancePolicyPatchInput,
   MemoryMaintenancePolicyRecord,
@@ -23,9 +29,14 @@ import type {
   MemoryQmdStatsResponse,
   MemoryRetrievalBenchmarkRequest,
   MemoryRetrievalBenchmarkResponse,
+  MemoryRecallRequest,
+  MemoryRecallResponse,
   MemorySearchQuery,
   MemoryWriteInput,
   ToolInvokeResult,
+  TraceMemoryCandidateInput,
+  TraceMemoryCandidateRecord,
+  TraceMemoryCandidateStatus,
 } from "@goatcitadel/contracts";
 
 import { request } from "./client-core.js";
@@ -92,6 +103,7 @@ export async function composeMemoryContext(input: {
   relationScope?: "self" | "peer" | "project";
   maxContextTokens?: number;
   forceRefresh?: boolean;
+  queryEmbedding?: number[];
 }): Promise<MemoryContextPack> {
   return request<MemoryContextPack>("/api/v1/memory/context/compose", {
     method: "POST",
@@ -123,6 +135,63 @@ export async function runMemoryRetrievalBenchmark(
   return request<MemoryRetrievalBenchmarkResponse>("/api/v1/memory/retrieval-benchmark", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export async function recallMemory(input: MemoryRecallRequest): Promise<MemoryRecallResponse> {
+  return request<MemoryRecallResponse>("/api/v1/memory/recall", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchMemoryFeedback(input?: {
+  workspaceId?: string;
+  kind?: MemoryFeedbackKind | "all";
+  status?: MemoryFeedbackStatus | "all";
+  targetKind?: MemoryFeedbackTargetKind;
+  limit?: number;
+}): Promise<{ items: MemoryFeedbackRecord[] }> {
+  const params = new URLSearchParams();
+  if (input?.workspaceId) params.set("workspaceId", input.workspaceId);
+  if (input?.kind) params.set("kind", input.kind);
+  if (input?.status) params.set("status", input.status);
+  if (input?.targetKind) params.set("targetKind", input.targetKind);
+  params.set("limit", String(Math.max(1, Math.min(input?.limit ?? 100, 500))));
+  return request<{ items: MemoryFeedbackRecord[] }>(`/api/v1/memory/feedback?${params.toString()}`);
+}
+
+export async function recordMemoryFeedback(input: MemoryFeedbackInput): Promise<MemoryFeedbackRecord> {
+  return request<MemoryFeedbackRecord>("/api/v1/memory/feedback", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchTraceMemoryCandidates(input?: {
+  workspaceId?: string;
+  status?: TraceMemoryCandidateStatus | "all";
+  limit?: number;
+}): Promise<{ items: TraceMemoryCandidateRecord[] }> {
+  const params = new URLSearchParams();
+  if (input?.workspaceId) params.set("workspaceId", input.workspaceId);
+  if (input?.status) params.set("status", input.status);
+  params.set("limit", String(Math.max(1, Math.min(input?.limit ?? 100, 500))));
+  return request<{ items: TraceMemoryCandidateRecord[] }>(`/api/v1/memory/trace-candidates?${params.toString()}`);
+}
+
+export async function proposeTraceMemoryCandidate(
+  input: TraceMemoryCandidateInput,
+): Promise<TraceMemoryCandidateRecord> {
+  return request<TraceMemoryCandidateRecord>("/api/v1/memory/trace-candidates", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function promoteTraceMemoryCandidate(candidateId: string): Promise<MemoryLearningRecord> {
+  return request<MemoryLearningRecord>(`/api/v1/memory/trace-candidates/${encodeURIComponent(candidateId)}/promote`, {
+    method: "POST",
   });
 }
 

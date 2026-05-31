@@ -85,24 +85,28 @@ export function buildProvenanceCoverage(input: {
 export function formatEntityProvenanceSummary(entity: MemoryEntityRecord): string {
   const source = formatSourceRefs(entity.sourceRefs);
   const summary = entity.summary ? `${entity.summary} · ` : "";
+  const lineage = formatLineage(entity.lineage);
   return `${summary}${source} · ${formatConfidence(entity.confidence)} confidence · updated ${formatMaybeDateTime(
     entity.updatedAt,
-  )}`;
+  )}${lineage}`;
 }
 
 export function formatRelationProvenanceSummary(relation: MemoryRelationRecord): string {
   const source = formatSourceRefs(relation.sourceRefs);
   const degraded = relation.degradedReason ? ` · degraded: ${relation.degradedReason}` : "";
+  const lineage = formatLineage(relation.lineage);
   return `${shortId(relation.fromEntityId)} to ${shortId(relation.toEntityId)} · ${formatConfidence(
     relation.confidence,
-  )} confidence · ${source}${degraded}`;
+  )} confidence · ${source}${degraded}${lineage}`;
 }
 
 export function formatDecisionProvenanceSummary(decision: MemoryDecisionRecord): string {
   const linkCount = decision.linkedEntityIds.length + decision.linkedRelationIds.length;
   const run = decision.runId ? ` · run ${shortId(decision.runId)}` : "";
   const session = decision.sessionId ? ` · session ${shortId(decision.sessionId)}` : "";
-  return `${linkCount} linked records · ${formatSourceRefs(decision.sourceRefs)}${run}${session}`;
+  return `${linkCount} linked records · ${formatSourceRefs(decision.sourceRefs)}${run}${session}${formatLineage(
+    decision.lineage,
+  )}`;
 }
 
 export function readMetadataString(metadata: unknown, key: string): string | undefined {
@@ -174,6 +178,19 @@ function formatSourceRefs(sourceRefs: StructuredMemorySourceRef[]): string {
   }
   const first = sourceRefs[0]!;
   return `${sourceRefs.length} source refs; primary ${first.title ?? `${first.sourceType}:${first.sourceRef}`}`;
+}
+
+function formatLineage(lineage: MemoryEntityRecord["lineage"]): string {
+  if (!lineage) {
+    return "";
+  }
+  const parts = [
+    lineage.freshness ? `freshness ${lineage.freshness}` : undefined,
+    lineage.mentionCount ? `${lineage.mentionCount} mentions` : undefined,
+    lineage.sourceRunId ? `source run ${shortId(lineage.sourceRunId)}` : undefined,
+    lineage.sourceSummaryRef ? `summary ${shortId(lineage.sourceSummaryRef)}` : undefined,
+  ].filter(Boolean);
+  return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
 }
 
 export function formatConfidence(confidence: number): string {

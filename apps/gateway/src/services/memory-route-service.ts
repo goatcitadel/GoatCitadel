@@ -27,6 +27,12 @@ type MemoryRoutePort = Pick<
   | "listMemoryItems"
   | "listMemoryLearnings"
   | "createMemoryLearning"
+  | "listMemoryFeedback"
+  | "recordMemoryFeedback"
+  | "listTraceMemoryCandidates"
+  | "proposeTraceMemoryCandidate"
+  | "promoteTraceMemoryCandidate"
+  | "recallMemory"
   | "proposeMemoryLearning"
   | "supersedeMemoryLearning"
   | "forgetMemoryLearning"
@@ -99,6 +105,30 @@ export class MemoryRouteService {
 
   public listRecentContexts(limit: number) {
     return this.memory.listRecentContexts(limit);
+  }
+
+  public recall(input: Parameters<MemoryRoutePort["recallMemory"]>[0]) {
+    return this.memory.recallMemory(input);
+  }
+
+  public listFeedback(input: Parameters<MemoryRoutePort["listMemoryFeedback"]>[0]) {
+    return this.memory.listMemoryFeedback(input);
+  }
+
+  public recordFeedback(input: Parameters<MemoryRoutePort["recordMemoryFeedback"]>[0], actorId: string) {
+    return this.memory.recordMemoryFeedback(input, actorId);
+  }
+
+  public listTraceCandidates(input: Parameters<MemoryRoutePort["listTraceMemoryCandidates"]>[0]) {
+    return this.memory.listTraceMemoryCandidates(input);
+  }
+
+  public proposeTraceCandidate(input: Parameters<MemoryRoutePort["proposeTraceMemoryCandidate"]>[0], actorId: string) {
+    return this.memory.proposeTraceMemoryCandidate(input, actorId);
+  }
+
+  public promoteTraceCandidate(candidateId: string, actorId: string) {
+    return this.memory.promoteTraceMemoryCandidate(candidateId, actorId);
   }
 
   public listItems(input: Parameters<MemoryRoutePort["listMemoryItems"]>[0]) {

@@ -49,7 +49,7 @@ export class MemoryContextService {
     const prompt = input.prompt.trim();
     const relationScope = resolveMemoryRelationScope(input);
     const shouldShortCircuit = !memoryConfig.enabled || !qmd.enabled || prompt.length < qmd.minPromptChars;
-    const queryHash = buildQueryHash(prompt);
+    const queryHash = buildQueryHash(prompt, input.queryEmbedding);
     if (shouldShortCircuit) {
       const fallback = composeFallbackContext([], maxContextTokens);
       const cacheKey = buildCacheKey({
@@ -62,6 +62,7 @@ export class MemoryContextService {
         relationScope,
         maxContextTokens,
         candidates: [],
+        queryEmbedding: input.queryEmbedding,
       });
       const pack = this.storage.memoryContexts.upsert({
         cacheKey,
@@ -114,7 +115,7 @@ export class MemoryContextService {
         maxMemoryItems: qmd.maxMemoryFiles,
         maxCharsPerCandidate: 1400,
       }),
-      { maxCandidates: 40 },
+      { maxCandidates: 40, queryEmbedding: input.queryEmbedding },
     );
 
     const sourcesHash = buildSourcesHash(candidates);
@@ -128,6 +129,7 @@ export class MemoryContextService {
       relationScope,
       maxContextTokens,
       candidates,
+      queryEmbedding: input.queryEmbedding,
     });
 
     if (!input.forceRefresh) {
@@ -424,6 +426,7 @@ export class MemoryContextService {
           updatedAt: item.updatedAt,
           pinned: item.pinned,
           retrievalHints: extractMemoryRetrievalHints(item.metadata),
+          embedding: extractMemoryEmbedding(item.metadata),
         }));
     } catch {
       return [];
@@ -505,15 +508,19 @@ function enrichMemoryCitations(
 }
 
 function buildMemorySelectionReason(signals: MemoryRetrievalMatchSignals): string {
+  const lexical = signals.lexicalBm25Score ?? signals.lexicalScore;
+  const embedding = signals.embeddingScore ?? signals.semanticVectorScore ?? 0;
   const method =
-    signals.semanticVectorScore !== undefined && signals.semanticVectorScore > 0
-      ? "semantic-vector retrieval"
-      : signals.semanticHintScore > 0
-        ? "semantic-hint retrieval"
-        : "lexical/recency retrieval";
+    embedding > 0 && lexical > 0
+      ? "hybrid retrieval"
+      : embedding > 0
+        ? "semantic-vector retrieval"
+        : signals.semanticHintScore > 0
+          ? "semantic-hint retrieval"
+          : "lexical/recency retrieval";
   return [
-    `selected by ${method} score ${signals.totalScore.toFixed(3)} (lexical ${signals.lexicalScore.toFixed(3)}`,
-    signals.semanticVectorScore !== undefined ? `vector ${signals.semanticVectorScore.toFixed(3)}` : undefined,
+    `selected by ${method} score ${signals.totalScore.toFixed(3)} (BM25 ${lexical.toFixed(3)}`,
+    embedding > 0 ? `embedding ${embedding.toFixed(3)}` : undefined,
     `semantic hint ${signals.semanticHintScore.toFixed(3)}`,
     `recency ${signals.recencyScore.toFixed(3)}`,
     `diversity ${signals.diversityScore.toFixed(3)})`,
@@ -531,7 +538,12 @@ function resolveCitationRetrievalStrategy(
     | undefined,
 ): MemoryRetrievalStrategy | undefined {
   if (candidate?.rankSignals) {
-    if ((candidate.rankSignals.semanticVectorScore ?? 0) > 0) {
+    const lexical = candidate.rankSignals.lexicalBm25Score ?? candidate.rankSignals.lexicalScore;
+    const embedding = candidate.rankSignals.embeddingScore ?? candidate.rankSignals.semanticVectorScore ?? 0;
+    if (embedding > 0 && lexical > 0) {
+      return "hybrid_rank";
+    }
+    if (embedding > 0) {
       return "semantic_vector";
     }
     return candidate.rankSignals.semanticHintScore > 0 ? "semantic_hints" : "lexical_recency";
@@ -559,6 +571,16 @@ function extractMemoryRetrievalHints(metadata: Record<string, unknown>): string[
     }
   }
   return hints.size > 0 ? [...hints] : undefined;
+}
+
+function extractMemoryEmbedding(metadata: Record<string, unknown>): number[] | undefined {
+  for (const key of ["embedding", "contentEmbedding", "semanticEmbedding"]) {
+    const value = metadata[key];
+    if (Array.isArray(value) && value.length > 0 && value.every((item) => Number.isFinite(item))) {
+      return value.map((item) => Number(item));
+    }
+  }
+  return undefined;
 }
 
 function readStringList(value: unknown): string[] {

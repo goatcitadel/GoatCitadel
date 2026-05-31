@@ -3,6 +3,7 @@ import type { MemoryCandidate, RankedMemoryCandidate } from "./types.js";
 export interface CandidateRankerOptions {
   maxCandidates: number;
   nowIso?: string;
+  queryEmbedding?: number[];
 }
 
 export function rankMemoryCandidates(
@@ -12,21 +13,24 @@ export function rankMemoryCandidates(
 ): RankedMemoryCandidate[] {
   const terms = tokenize(prompt);
   const now = Date.parse(options.nowIso ?? new Date().toISOString());
+  const bm25 = calculateBm25Scores(terms, candidates);
+  const sourceCounts = countSourceRefs(candidates);
 
-  const scored = candidates.map((candidate) => {
-    const lexical = lexicalScore(terms, candidate.text);
+  const scored = candidates.map((candidate, index) => {
+    const lexical = bm25[index] ?? 0;
     const semanticHint = semanticHintScore(terms, candidate.retrievalHints);
-    const semanticVector = semanticVectorScore(prompt, candidate);
+    const embedding = embeddingScore(options.queryEmbedding, candidate.embedding);
     const recency = recencyScore(now, candidate.timestamp);
-    const diversity = candidate.sourceType === "transcript" ? 0.1 : candidate.sourceType === "memory_item" ? 0.08 : 0;
-    const rankScore = lexical + semanticHint + semanticVector + recency + diversity;
+    const diversity = sourceDiversityScore(candidate, sourceCounts);
+    const rankScore = lexical + semanticHint + embedding + recency + diversity;
     return {
       ...candidate,
       rankScore,
       rankSignals: {
         lexicalScore: roundScore(lexical),
+        lexicalBm25Score: roundScore(lexical),
         semanticHintScore: roundScore(semanticHint),
-        ...(semanticVector > 0 ? { semanticVectorScore: roundScore(semanticVector) } : {}),
+        ...(embedding > 0 ? { semanticVectorScore: roundScore(embedding), embeddingScore: roundScore(embedding) } : {}),
         recencyScore: roundScore(recency),
         diversityScore: roundScore(diversity),
         totalScore: roundScore(rankScore),
@@ -62,20 +66,6 @@ function tokenize(input: string): string[] {
     .filter((token) => token.length >= 3);
 }
 
-function lexicalScore(terms: string[], content: string): number {
-  if (terms.length === 0) {
-    return 0;
-  }
-  const normalized = content.toLowerCase();
-  let hits = 0;
-  for (const term of terms) {
-    if (normalized.includes(term)) {
-      hits += 1;
-    }
-  }
-  return hits / terms.length;
-}
-
 function semanticHintScore(terms: string[], hints?: string[]): number {
   if (terms.length === 0 || !hints?.length) {
     return 0;
@@ -93,15 +83,53 @@ function semanticHintScore(terms: string[], hints?: string[]): number {
   return Math.min(0.2, (hits / terms.length) * 0.2);
 }
 
-function semanticVectorScore(prompt: string, candidate: MemoryCandidate): number {
-  if (candidate.sourceType !== "memory_item") {
+function calculateBm25Scores(queryTerms: string[], candidates: MemoryCandidate[]): number[] {
+  if (queryTerms.length === 0 || candidates.length === 0) {
+    return candidates.map(() => 0);
+  }
+  const uniqueQueryTerms = Array.from(new Set(queryTerms));
+  const documents = candidates.map((candidate) => tokenize(candidate.text));
+  const averageLength = documents.reduce((sum, doc) => sum + doc.length, 0) / documents.length || 1;
+  const documentFrequencies = new Map<string, number>();
+  for (const term of uniqueQueryTerms) {
+    documentFrequencies.set(
+      term,
+      documents.filter((doc) => doc.some((token) => token === term || token.includes(term) || term.includes(token)))
+        .length,
+    );
+  }
+  const k1 = 1.2;
+  const b = 0.75;
+  return documents.map((doc) => {
+    if (doc.length === 0) {
+      return 0;
+    }
+    let rawScore = 0;
+    for (const term of uniqueQueryTerms) {
+      const termFrequency = doc.filter(
+        (token) => token === term || token.includes(term) || term.includes(token),
+      ).length;
+      if (termFrequency === 0) {
+        continue;
+      }
+      const df = documentFrequencies.get(term) ?? 0;
+      const idf = Math.log(1 + (candidates.length - df + 0.5) / (df + 0.5));
+      rawScore +=
+        idf * ((termFrequency * (k1 + 1)) / (termFrequency + k1 * (1 - b + b * (doc.length / averageLength))));
+    }
+    return Math.min(1, rawScore / Math.max(1, uniqueQueryTerms.length * 1.5));
+  });
+}
+
+function embeddingScore(queryEmbedding?: number[], candidateEmbedding?: number[]): number {
+  if (!isUsableEmbedding(queryEmbedding) || !isUsableEmbedding(candidateEmbedding)) {
     return 0;
   }
-  const similarity = cosine(pseudoEmbedding(prompt), pseudoEmbedding(candidate.text));
-  if (similarity < 0.82) {
+  const similarity = cosine(queryEmbedding, candidateEmbedding);
+  if (similarity < 0.65) {
     return 0;
   }
-  return Math.min(0.35, ((similarity - 0.82) / 0.18) * 0.35);
+  return Math.min(0.35, ((similarity - 0.65) / 0.35) * 0.35);
 }
 
 function recencyScore(nowMs: number, timestamp?: string): number {
@@ -126,18 +154,32 @@ function recencyScore(nowMs: number, timestamp?: string): number {
   return 0;
 }
 
-function pseudoEmbedding(text: string, dimensions = 64): number[] {
-  const vector = new Array<number>(dimensions).fill(0);
-  const lower = text.toLowerCase();
-  for (let index = 0; index < lower.length; index += 1) {
-    const bucket = lower.charCodeAt(index) % dimensions;
-    vector[bucket] = (vector[bucket] ?? 0) + 1;
+function sourceDiversityScore(candidate: MemoryCandidate, sourceCounts: Map<string, number>): number {
+  const base = candidate.sourceType === "transcript" ? 0.1 : candidate.sourceType === "memory_item" ? 0.08 : 0;
+  if (base === 0) {
+    return 0;
   }
-  const magnitude = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0)) || 1;
-  return vector.map((value) => value / magnitude);
+  const count = sourceCounts.get(`${candidate.sourceType}:${candidate.sourceRef}`) ?? 1;
+  return base / Math.sqrt(count);
+}
+
+function countSourceRefs(candidates: MemoryCandidate[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const candidate of candidates) {
+    const key = `${candidate.sourceType}:${candidate.sourceRef}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function isUsableEmbedding(value: number[] | undefined): value is number[] {
+  return Array.isArray(value) && value.length > 0 && value.every((item) => Number.isFinite(item));
 }
 
 function cosine(left: number[], right: number[]): number {
+  if (left.length !== right.length) {
+    return 0;
+  }
   const length = Math.min(left.length, right.length);
   let dot = 0;
   let leftMagnitude = 0;

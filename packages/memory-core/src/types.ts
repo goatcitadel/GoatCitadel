@@ -21,6 +21,7 @@ export interface MemoryItemSource {
   updatedAt: string;
   pinned?: boolean;
   retrievalHints?: string[];
+  embedding?: number[];
 }
 
 export type MemorySourceInput = MemoryTranscriptSource | MemoryFileSource | MemoryItemSource;
@@ -32,6 +33,7 @@ export interface MemoryCandidate {
   text: string;
   timestamp?: string;
   retrievalHints?: string[];
+  embedding?: number[];
 }
 
 export interface RankedMemoryCandidate extends MemoryCandidate {
